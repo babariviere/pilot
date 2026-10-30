@@ -252,6 +252,29 @@ pub(super) fn pending_send_row(row: &Message, height: Pixels, cx: &App) -> AnyEl
 }
 
 impl LocalViewer {
+    /// Only an admitted, local ordinary submit can arm arrival. Echo matching
+    /// below is presentation-only, so never transfer motion by matching text.
+    pub(super) fn sent_arrival(
+        &mut self,
+        chat: &str,
+        id: u64,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.page != Page::Chat || self.selected.as_deref() != Some(chat) {
+            return;
+        }
+        self.transcript.update(cx, |view, cx| {
+            if view
+                .rows()
+                .iter()
+                .any(|r| r.id() == id && is_sending_row(r))
+            {
+                view.arrive(id, w, cx);
+            }
+        });
+    }
+
     fn current_sending(&self, cx: &App) -> Option<(String, Sending)> {
         let chat = self.selected.clone()?;
         let sending = self.editor.read(cx).sending(&chat)?;

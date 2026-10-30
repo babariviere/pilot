@@ -18,11 +18,28 @@ struct State {
     queued: bool,
     viewport: Size<Pixels>,
     rem: Pixels,
+    arrival: bool,
 }
 
 #[derive(Clone, Default)]
 pub(crate) struct Height(Rc<RefCell<State>>);
 impl Height {
+    /// A fresh local send has no previous extent. Share disclosure measurement
+    /// and row remeasurement, but reveal once from zero with a small upward rise.
+    pub(crate) fn arrival(w: &Window, cx: &App) -> Self {
+        let height = Self::default();
+        {
+            let mut s = height.0.borrow_mut();
+            s.active = !cx.reduce_motion();
+            s.first = true;
+            s.arrival = true;
+            s.viewport = w.viewport_size();
+            s.rem = w.rem_size();
+            s.transition.start(cx);
+        }
+        height
+    }
+
     /// A parent disclosure owns this extent now; do not resume an unmounted
     /// child's old animation when the parent is opened again.
     pub(crate) fn finish(&self) {
@@ -48,20 +65,25 @@ impl Height {
         cx: &App,
         on_frame: impl Fn(&mut Window, &mut App) + 'static,
     ) -> gpui_kit::AnyElement {
-        let height = {
+        let (height, rise) = {
             let mut s = self.0.borrow_mut();
             if s.viewport != w.viewport_size() || s.rem != w.rem_size() || cx.reduce_motion() {
                 s.active = false;
             }
             s.viewport = w.viewport_size();
             s.rem = w.rem_size();
+            let mut rise = 0.;
             if s.active {
                 let t = s.transition.progress(Duration::from_millis(200), w, cx);
                 s.active = t < 1.;
                 let target = s.natural.map_or(s.shown, |size| f32::from(size.height));
                 s.shown = s.from + (target - s.from) * ease_out(t);
+                // Same quiet6pt rise as page entrance; no new motion clock.
+                if s.arrival {
+                    rise = 6. * (1. - ease_out(t));
+                }
             }
-            s.active.then_some(s.shown)
+            (s.active.then_some(s.shown), rise)
         };
         let state = self.0.clone();
         let on_frame = Rc::new(on_frame);
@@ -72,7 +94,15 @@ impl Height {
             .min_h_0()
             .overflow_hidden()
             .when_some(height, |slot, height| slot.h(px(height)))
-            .child(div().w_full().min_w_0().flex_none().child(child))
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .flex_none()
+                    .relative()
+                    .top(px(rise))
+                    .child(child),
+            )
             .on_children_prepainted(move |bounds, w, _| {
                 let Some(bounds) = bounds.first() else { return };
                 let mut s = state.borrow_mut();

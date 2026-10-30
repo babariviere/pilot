@@ -80,6 +80,8 @@ pub(crate) enum EditorEvent {
     /// You sent a message to this existing chat (its canonical id).
     Sent {
         chat: String,
+        /// Exact ordinary-send presentation key; question answers have none.
+        sending: Option<u64>,
     },
 }
 
@@ -904,6 +906,9 @@ impl ChatEditor {
                 if let Some(chat) = key.strip_prefix("chat:") {
                     cx.emit(EditorEvent::Sent {
                         chat: chat.to_owned(),
+                        sending: Some(
+                            sending::SENDING_KEY | (draft_revision & (sending::SENDING_KEY - 1)),
+                        ),
                     });
                 }
             }

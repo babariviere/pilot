@@ -297,6 +297,21 @@ reversal, selection/copy, reduced motion and idle frame scheduling; `disclosure`
 long-history scroll anchor, and the transcript unit scope checks resize and retained
 Markdown selection. Offscreen draw/renderer-readback timings are not visible smoothness.
 
+Sent messages reuse that measured slot for one200ms ease-out arrival, with the
+page entrance's6pt rise. Only an admitted ordinary local submit arms it, using
+its exact draft-revision presentation key. History mounts, snapshots, reconnects,
+question answers and streamed text never start it. Busy sends stay in the queue
+tray, whose measured motion is unchanged. A canonical queue/history echo does not
+inherit or restart motion through text matching (that match is presentation only).
+Refusal/removal immediately unmounts the row; there is no exit/reversal animation.
+Resize and reduced motion show natural geometry immediately. The row-only next-frame
+remeasurement retains bottom follow or the older reading anchor without changing
+parser, selection, input/IME or Send takeoff ownership. `queued_message` checks
+synthetic Return, intermediate/final native geometry, unchanged full-child width,
+selection/copy/preedit, reset/stream exclusions, resize, removal and idle callbacks
+at680/1100 light/dark. Native draw and renderer+RGBA readback costs are reported
+separately, not as visible smoothness or production GPU timings.
+
 Content exceptions: stored visual/chart palettes, source code/Markdown typography,
 SVG geometry and genuine data-driven sizes retain their separate authorities.
 Do not neutralize categorical charts or style user-authored content with chrome

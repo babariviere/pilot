@@ -1198,7 +1198,10 @@ impl LocalViewer {
                     view.rebuild_nav(window, cx)
                 }
                 EditorEvent::Flushed => menu_routing::exit(cx),
-                EditorEvent::Sent { chat } => {
+                EditorEvent::Sent { chat, sending } => {
+                    if let Some(id) = sending {
+                        view.sent_arrival(chat, *id, window, cx);
+                    }
                     let now = crate::sidebar_memory::now();
                     view.chats.update(cx, |list, cx| {
                         list.delegate_mut().memory.note_sent(chat, now);

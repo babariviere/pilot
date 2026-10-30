@@ -13,6 +13,9 @@ use serde_json::{Value, json};
 
 const FIRST: &str = "Ship it 👩‍💻 e\u{301} 日本語";
 
+#[path = "submit_arrival_probe.rs"]
+mod arrival;
+
 fn settle(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
     for _ in 0..4 {
         cx.run_until_parked();
@@ -45,6 +48,10 @@ struct Probe {
 }
 impl Probe {
     fn publish(&mut self, cx: &mut HeadlessAppContext, event: Value) {
+        self.publish_now(cx, event);
+        settle(cx, self.h);
+    }
+    fn publish_now(&mut self, cx: &mut HeadlessAppContext, event: Value) {
         self.model.apply(&event);
         let rows = self.model.rows();
         let queue = self.model.user_queue.clone();
@@ -68,9 +75,12 @@ impl Probe {
             })
         })
         .unwrap();
-        settle(cx, self.h);
     }
     fn write(&mut self, cx: &mut HeadlessAppContext, handled: Option<u64>) {
+        self.write_now(cx, handled);
+        settle(cx, self.h);
+    }
+    fn write_now(&mut self, cx: &mut HeadlessAppContext, handled: Option<u64>) {
         let mut state = WriteState {
             book: Some(Arc::new(self.store.book.clone())),
             ..Default::default()
@@ -84,10 +94,15 @@ impl Probe {
             editor.update(cx, |e, cx| e.accept(state, w, cx));
         })
         .unwrap();
-        settle(cx, self.h);
+        cx.run_until_parked();
     }
     /// Real typing and Return in the production composer.
     fn send(&mut self, cx: &mut HeadlessAppContext, text: &str) -> (Draft, u64) {
+        let sent = self.send_now(cx, text);
+        settle(cx, self.h);
+        sent
+    }
+    fn send_now(&mut self, cx: &mut HeadlessAppContext, text: &str) -> (Draft, u64) {
         let input = cx.update(|cx| self.v.read(cx).editor.read(cx).shell_probe().0);
         cx.update_window(self.h, |_, w, cx| {
             input.update(cx, |i, cx| {
@@ -98,7 +113,7 @@ impl Probe {
             w.press("enter", cx);
         })
         .unwrap();
-        settle(cx, self.h);
+        cx.run_until_parked();
         // Autosave retirement of the previous empty draft is not a send.
         let mut command = self.writes.try_recv();
         while matches!(command, Ok(WriteCommand::RetireEmpty { .. })) {
@@ -197,6 +212,7 @@ impl Probe {
 }
 
 pub(crate) fn run(cx: &mut HeadlessAppContext) {
+    let reduced_motion = cx.update(|cx| cx.reduce_motion());
     for width in [680., 1100.] {
         for dark in [false, true] {
             cx.update(|cx| {
@@ -212,9 +228,13 @@ pub(crate) fn run(cx: &mut HeadlessAppContext) {
             scenario(cx, width, if dark { "dark" } else { "light" });
         }
     }
+    cx.update(|cx| cx.set_reduce_motion(reduced_motion));
 }
 
 fn scenario(cx: &mut HeadlessAppContext, width: f32, mode: &str) {
+    // Static delivery/identity assertions sample final placement. Timed arrival
+    // phases below use the real executor clock separately.
+    cx.update(|cx| cx.set_reduce_motion(true));
     let (writer, writes) = Interaction::recording();
     let (client, _reads) = LocalClient::synthetic_commands();
     let (h, v) = cx
@@ -505,6 +525,14 @@ fn scenario(cx: &mut HeadlessAppContext, width: f32, mode: &str) {
     assert_eq!(p.shown(cx, again), [None]);
     let (draft, request) = p.send(cx, again);
     assert_eq!(p.shown(cx, again), [None, Some("Sending…")]);
+    cx.update_window(h, |_, w, cx| {
+        let id = p.v.read(cx).transcript.read(cx).rows().last().unwrap().id();
+        assert!(
+            w.try_find(("message-arrival", id)).is_some(),
+            "an actual local send owns an arrival slot"
+        );
+    })
+    .unwrap();
     p.placed(cx, "Sending…", false);
     p.focused(cx);
     let intent = p
@@ -519,6 +547,8 @@ fn scenario(cx: &mut HeadlessAppContext, width: f32, mode: &str) {
     p.placed(cx, "Sent", false);
     p.publish(cx, json!({"type":"message_end","entry":user(40, again)}));
     assert_eq!(p.shown(cx, again), [None, None]);
+
+    arrival::run(cx, &mut p, width, mode);
 
     // 5. Navigation: another chat never shows this chat's pending input.
     let pending = "Still sending elsewhere";

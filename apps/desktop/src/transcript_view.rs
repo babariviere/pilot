@@ -82,6 +82,7 @@ pub struct TranscriptView {
     find: transcript_find_view::Find,
     folds: crate::message_fold::Folds,
     fold_motion: HashMap<u64, disclosure_motion::Height>,
+    arrivals: HashMap<u64, disclosure_motion::Height>,
     fold_focus: std::collections::BTreeMap<crate::model::ReaderKey, gpui_kit::FocusHandle>,
     fold_retired: Vec<gpui_kit::FocusHandle>,
     questions: question_entry_view::Disclosures,
@@ -220,6 +221,7 @@ impl TranscriptView {
             find,
             folds: Default::default(),
             fold_motion: Default::default(),
+            arrivals: Default::default(),
             fold_focus: Default::default(),
             fold_retired: Vec::new(),
             questions: Default::default(),
@@ -366,8 +368,10 @@ impl TranscriptView {
         let new_ids: Vec<_> = rows.iter().map(Message::id).collect();
         if reset {
             self.fold_motion.clear();
+            self.arrivals.clear();
         } else {
             self.fold_motion.retain(|id, _| new_ids.contains(id));
+            self.arrivals.retain(|id, _| new_ids.contains(id));
         }
         let mut retained: HashMap<_, _> = old
             .iter()
@@ -616,6 +620,7 @@ impl TranscriptView {
     pub(crate) fn history_scope(&mut self, generation: u64) {
         if self.history_scope != generation {
             self.history_slack = px(0.);
+            self.arrivals.clear();
         }
         self.history_scope = generation;
     }
@@ -868,6 +873,7 @@ impl TranscriptView {
         footer: Option<(gpui_kit::FocusHandle, bool)>,
     ) -> impl IntoElement + use<> {
         let row = self.render_row(ix, cx, owner.clone(), footer);
+        let arrival_owner = owner.clone();
         let row = if let Some(motion) = self.fold_motion.get(&self.transcript.messages()[ix].id()) {
             let id = self.transcript.messages()[ix].id();
             let scope = self.history_scope;
@@ -881,12 +887,32 @@ impl TranscriptView {
         } else {
             row.into_any_element()
         };
+        let id = self.transcript.messages()[ix].id();
+        let scope = self.history_scope;
+        let row = if let Some(motion) = self.arrivals.get(&id) {
+            motion.wrap(("message-arrival", id), row, window, cx, move |_, cx| {
+                let _ = arrival_owner.update(cx, |v, cx| {
+                    if v.history_scope == scope {
+                        v.remeasure_disclosure(id, cx);
+                    }
+                });
+            })
+        } else {
+            row
+        };
         div()
             .w_full()
             .min_w_0()
             .max_w(px(crate::ui::CONVERSATION_MAX_WIDTH))
             .px_3()
             .child(row)
+    }
+
+    pub(crate) fn arrive(&mut self, id: u64, w: &Window, cx: &mut Context<Self>) {
+        self.arrivals
+            .entry(id)
+            .or_insert_with(|| disclosure_motion::Height::arrival(w, cx));
+        self.remeasure_disclosure(id, cx);
     }
 
     fn remeasure_disclosure(&self, id: u64, cx: &mut Context<Self>) {

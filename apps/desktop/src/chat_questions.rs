@@ -474,6 +474,7 @@ impl ChatEditor {
             if let Some(chat) = key.strip_prefix("chat:") {
                 cx.emit(EditorEvent::Sent {
                     chat: chat.to_owned(),
+                    sending: None,
                 });
             }
             self.pending.insert(key, request);
