@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.102.0](https://github.com/babariviere/pilot/compare/v1.101.0...v1.102.0) (2026-10-30)
+
+
+### Features
+
+* **artifacts:** activate native visual resource links ([4a9af0b](https://github.com/babariviere/pilot/commit/4a9af0bd1ca47554907a925f3f3de9eb53bf2add))
+* **desktop:** add native keyboard shortcuts reference ([72dd894](https://github.com/babariviere/pilot/commit/72dd894b87d87be657088fd331da238339ce8a44))
+* **desktop:** filter loaded Local memory text ([368969b](https://github.com/babariviere/pilot/commit/368969b270dbf2e39f846433eda0effc5707c44e))
+* **desktop:** show scheduled messages read-only ([e474e72](https://github.com/babariviere/pilot/commit/e474e729668deef91cd1ab33683cd3321d296bc4))
+
+
+### Bug Fixes
+
+* **daemon:** drain shutdown after terminal schedule close failure ([714048b](https://github.com/babariviere/pilot/commit/714048b96be919fc053ac9cb295add4f0ce14ed6))
+* **desktop:** preserve Markdown copy and live selections ([0ad4412](https://github.com/babariviere/pilot/commit/0ad44125a285ca99c480e2203338136ac12b367f))
+* **desktop:** save drafts during project catalog reads ([fa96627](https://github.com/babariviere/pilot/commit/fa9662723f3aaf2d57aefabab4c5c7cdec6f8726))
+
 ## [1.101.0](https://github.com/babariviere/pilot/compare/v1.100.0...v1.101.0) (2026-10-30)
 
 
