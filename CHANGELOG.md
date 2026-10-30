@@ -1,5 +1,43 @@
 # Changelog
 
+## [1.98.0](https://github.com/babariviere/pilot/compare/v1.97.0...v1.98.0) (2026-10-30)
+
+
+### Features
+
+* **chats:** add opt-in automatic handoff ([98d9449](https://github.com/babariviere/pilot/commit/98d9449a06aed162880780703790e090606c0516))
+* **chats:** load recent history and page older messages ([7f48c8f](https://github.com/babariviere/pilot/commit/7f48c8f352fe97cbad2cfde773d75a279cb3937a))
+* **daemon:** retain versioned review profiles and results ([18e7c2e](https://github.com/babariviere/pilot/commit/18e7c2e01e046a0982022f289fad533d1ad594ff))
+* **delivery:** record retained contribution allocations ([2126cae](https://github.com/babariviere/pilot/commit/2126cae3bf190245e617f3bdbb313a6cdcd7570f))
+* **desktop:** add read-only retained review ([909d345](https://github.com/babariviere/pilot/commit/909d3459b2b969029558dd20f525504b344c842b))
+* **desktop:** animate find and command palette height ([6365795](https://github.com/babariviere/pilot/commit/6365795ef3ba611df112cfec1ee65c6d0c77ee99))
+* **desktop:** animate progress, brief, and task transitions ([68dccf5](https://github.com/babariviere/pilot/commit/68dccf501342b826f183d4cbd64cb72325663c22))
+* **desktop:** copy images and preview composer attachments ([9ea592b](https://github.com/babariviere/pilot/commit/9ea592bc1acac1df898f84ac615e41df5dc43057))
+* **desktop:** ease sent messages into the conversation ([222d49c](https://github.com/babariviere/pilot/commit/222d49c9998ed5e132e1a80e62e45c42e1761219))
+* **desktop:** explain chat attention with exact question focus ([6514f94](https://github.com/babariviere/pilot/commit/6514f94491d9b3b86454979ba22b36fa63484737))
+* **desktop:** refresh subscription limits through daemon ([74969bd](https://github.com/babariviere/pilot/commit/74969bdf8aa7097e214832e02c0100c13bcdaa9c))
+
+
+### Bug Fixes
+
+* **ci:** register native desktop tests ([fa1aa4f](https://github.com/babariviere/pilot/commit/fa1aa4f0787b46bbed446ae7fb8c4fee78a2b216))
+* **daemon:** checkpoint paused subagents before handoff ([800c56f](https://github.com/babariviere/pilot/commit/800c56fa02ed5c7119ff31cf10d833e0c5d60a7d))
+* **desktop:** hide internal compaction boundary ([cbb9813](https://github.com/babariviere/pilot/commit/cbb98137a4beafff9bb146c5dab68f6b8e4b30df))
+* **desktop:** keep usage-paused chats unfinished ([5592737](https://github.com/babariviere/pilot/commit/55927371d4579ad9d2ee52855c43435da976d5a2))
+* **desktop:** remove sidebar chat search ([f2bd147](https://github.com/babariviere/pilot/commit/f2bd14795cf0f56ef0c9b640e8d07fbad34ff90a))
+* **desktop:** remove subagent rows from sidebar ([4dcdcef](https://github.com/babariviere/pilot/commit/4dcdcefe13760ea81528c9e8eeb9077eed74296b))
+* **desktop:** rename command palette ([548d66e](https://github.com/babariviere/pilot/commit/548d66eadbb9686cdee77379d4224687c120589d))
+* **desktop:** reuse loaded task detail across tabs ([5fbbe3d](https://github.com/babariviere/pilot/commit/5fbbe3de696451d8fa4cc608d227433b4019808e))
+* **desktop:** reveal attachment discard on hover ([6b32caa](https://github.com/babariviere/pilot/commit/6b32caa4c94ba3f55f3e3bc51823099436edd3a8))
+* **desktop:** show paused chats with hollow circles ([b1d5291](https://github.com/babariviere/pilot/commit/b1d52919e103ca7c874231db28cd519593a7a2be))
+* **kernel:** preserve coordinator skill resource reads ([5064611](https://github.com/babariviere/pilot/commit/50646114d3a128513e9bf8c7f7775308df63319f))
+
+
+### Performance Improvements
+
+* **desktop:** cache scoped model catalogs ([9372244](https://github.com/babariviere/pilot/commit/9372244f6c33cf5f9690089c5e63ae816a9c734d))
+* **updater:** skip disposable sync and defer temporary cleanup ([29dd5c3](https://github.com/babariviere/pilot/commit/29dd5c39dd9b3c5f3ad33d2b451d3601fa5c0cf0))
+
 ## [1.97.0](https://github.com/babariviere/pilot/compare/v1.96.0...v1.97.0) (2026-10-30)
 
 
