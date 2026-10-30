@@ -94,7 +94,7 @@ impl ChatEditor {
         (self.sending.get(&key) == Some(&draft.revision) && draft.pending.is_none()).then(|| {
             Sending {
                 key: SENDING_KEY | (draft.revision & (SENDING_KEY - 1)),
-                text: draft.text.clone(),
+                text: crate::image_attachments::message(&draft.text, &draft.attachments),
                 status: "Sending…",
             }
         })

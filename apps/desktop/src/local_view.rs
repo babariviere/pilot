@@ -345,6 +345,14 @@ impl LocalViewer {
         self.editor.read(cx).shell_probe().0
     }
     #[cfg(feature = "native-probes")]
+    pub(crate) fn inline_probe_mount_composer(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        let (writer, _commands) = Interaction::recording();
+        self.editor.update(cx, |editor, cx| {
+            editor.shell_probe_setup(writer, w, cx);
+            editor.select("chat:owner".into(), true, false, w, cx);
+        });
+    }
+    #[cfg(feature = "native-probes")]
     pub(crate) fn inline_visual_fixture(
         options: LocalOptions,
         rows: Vec<Message>,

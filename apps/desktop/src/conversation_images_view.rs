@@ -25,6 +25,7 @@ pub(super) struct Entry {
     stop: Arc<AtomicBool>,
     seen: u64,
     _task: Task<()>,
+    copy: Option<Task<()>>,
 }
 impl Drop for Entry {
     fn drop(&mut self) {
@@ -193,6 +194,7 @@ impl TranscriptView {
                 stop: entry_stop,
                 seen: self.images.tick,
                 _task: task,
+                copy: None,
             },
         );
         cx.notify();
@@ -202,6 +204,7 @@ impl TranscriptView {
         row: &Message,
         cx: &App,
         owner: gpui_kit::WeakEntity<Self>,
+        footer: Option<(gpui_kit::FocusHandle, bool)>,
     ) -> AnyElement {
         let source = row.image_data().unwrap();
         let id = row.id();
@@ -241,12 +244,17 @@ impl TranscriptView {
         let pointer_source = source.clone();
         let pointer_key = row.reader_key();
         let painted = self.images.painted.clone();
+        let (focus, focused) = footer.unzip();
+        let focused = focused.unwrap_or(false);
         let identity = Button::new(("conversation-image-source", id))
             .ghost()
             .xsmall()
             .icon(crate::app_icon::AppIcon::Copy.asset())
             .accessibility_label("Copy source identity")
             .tooltip("Copy source identity")
+            .opacity(0.)
+            .group_hover("conversation-image", |s| s.opacity(1.))
+            .focus_visible(|s| s.opacity(1.))
             .on_click(move |_, _, cx| {
                 let _ = copy_owner.update(cx, |v, cx| {
                     if v.history_scope == scope
@@ -264,13 +272,32 @@ impl TranscriptView {
             source.data.is_some() && source.owner.is_some() && row.reader_key().is_some();
         let expand_owner = owner.clone();
         // Image actions appear on hover; the image itself stays the content.
-        let mut actions = div()
-            .h_flex()
-            .gap_1()
-            .opacity(0.)
-            .group_hover("conversation-image", |s| s.opacity(1.))
-            .child(identity);
+        let mut actions = div().h_flex().gap_1().child(identity);
         if supported {
+            let copy_owner = owner.clone();
+            let copy_source = source.clone();
+            let copy_key = row.reader_key();
+            actions = actions.child(
+                Button::new(("conversation-image-copy", id))
+                    .ghost()
+                    .xsmall()
+                    .label("Copy image")
+                    .accessibility_label("Copy image")
+                    .tooltip("Copy image")
+                    .when_some(focus, |b, focus| b.track_focus(&focus))
+                    .when(!focused, |b| b.opacity(0.))
+                    .group_hover("conversation-image", |s| s.opacity(1.))
+                    .focus_visible(|s| s.opacity(1.))
+                    .disabled(
+                        entry.and_then(|e| e.raster.as_ref()).is_none()
+                            || entry.is_some_and(|e| e.copy.is_some()),
+                    )
+                    .on_click(move |_, w, cx| {
+                        let _ = copy_owner.update(cx, |v, cx| {
+                            v.copy_image(id, scope, &copy_source, &copy_key, w, cx)
+                        });
+                    }),
+            );
             actions = actions.child(
                 Button::new(("conversation-image-expand", id))
                     .ghost()
@@ -278,6 +305,9 @@ impl TranscriptView {
                     .icon(crate::app_icon::AppIcon::Enlarge.asset())
                     .accessibility_label("Expand")
                     .tooltip("Expand")
+                    .opacity(0.)
+                    .group_hover("conversation-image", |s| s.opacity(1.))
+                    .focus_visible(|s| s.opacity(1.))
                     .disabled(entry.and_then(|e| e.raster.as_ref()).is_none())
                     .on_click(move |_, w, cx| {
                         let _ = expand_owner.update(cx, |v, cx| {
@@ -387,6 +417,56 @@ impl TranscriptView {
         }
         content.into_any_element()
     }
+    fn copy_image(
+        &mut self,
+        id: u64,
+        scope: u64,
+        source: &Arc<crate::conversation_images::Source>,
+        key: &Option<crate::model::ReaderKey>,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.history_scope != scope || self.history_guard.as_ref().is_some_and(|g| !g(w, cx)) {
+            return;
+        }
+        let Some(entry) =
+            self.images.entries.get_mut(&id).filter(|e| {
+                &e.source == source && Some(&e.key) == key.as_ref() && e.copy.is_none()
+            })
+        else {
+            return;
+        };
+        let Some(raster) = entry.raster.clone() else {
+            return;
+        };
+        let source = source.clone();
+        let key = key.clone();
+        entry.copy = Some(cx.spawn(async move |view, cx| {
+            let item = cx
+                .background_executor()
+                .spawn(async move {
+                    let _permit = crate::artifact_image::Permit::queued().await;
+                    crate::image_clipboard::item(&raster)
+                })
+                .await;
+            let _ = view.update(cx, |v, cx| {
+                if v.history_scope == scope
+                    && v.transcript.messages().iter().any(|r| {
+                        r.id() == id && r.reader_key() == key && r.image_data() == Some(&source)
+                    })
+                {
+                    if let Some(e) = v.images.entries.get_mut(&id) {
+                        e.copy = None;
+                    }
+                    if let Ok(item) = item {
+                        cx.write_to_clipboard(item);
+                    }
+                    cx.notify();
+                }
+            });
+        }));
+        cx.notify();
+    }
     fn expand_image(
         &mut self,
         id: u64,
@@ -464,6 +544,31 @@ struct ImageReader {
     source_copy: Option<Task<()>>,
 }
 impl ImageReader {
+    fn copy_image(&mut self, cx: &mut Context<Self>) {
+        if !self.valid(cx) || self.source_copy.is_some() {
+            return;
+        }
+        let raster = self.raster.clone().unwrap();
+        self.source_copy = Some(cx.spawn(async move |reader, cx| {
+            let item = cx
+                .background_executor()
+                .spawn(async move {
+                    let _permit = crate::artifact_image::Permit::queued().await;
+                    crate::image_clipboard::item(&raster)
+                })
+                .await;
+            let _ = reader.update(cx, |v, cx| {
+                v.source_copy = None;
+                if v.valid(cx)
+                    && let Ok(item) = item
+                {
+                    cx.write_to_clipboard(item);
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
     fn valid(&self, cx: &App) -> bool {
         self.raster.is_some()
             && self.parent.upgrade().is_some_and(|p| {
@@ -539,14 +644,29 @@ impl Render for ImageReader {
                     cx.notify();
                 }
             }))
-            .child(controls)
             .child(
-                Button::new("conversation-reader-copy")
-                    .ghost()
-                    .small()
-                    .label("Copy source")
-                    .disabled(self.source_copy.is_some())
-                    .on_click(cx.listener(|v, _, _, cx| v.copy_source(cx))),
+                div()
+                    .h_flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(controls)
+                    .child(
+                        Button::new("conversation-reader-copy-image")
+                            .ghost()
+                            .small()
+                            .label("Copy image")
+                            .disabled(self.source_copy.is_some())
+                            .on_click(cx.listener(|v, _, _, cx| v.copy_image(cx))),
+                    )
+                    .child(
+                        Button::new("conversation-reader-copy")
+                            .ghost()
+                            .small()
+                            .label("Copy source")
+                            .disabled(self.source_copy.is_some())
+                            .on_click(cx.listener(|v, _, _, cx| v.copy_source(cx))),
+                    ),
             )
             .child(div().flex_1().min_h_0().child(pixels))
             .into_any_element()

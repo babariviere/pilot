@@ -199,6 +199,7 @@ impl ArtifactPane {
             .id("inline-visual")
             .test_support()
             .track_focus(&focus)
+            .group("inline-image")
             .relative()
             .v_flex()
             .w_full()
@@ -214,18 +215,39 @@ impl ArtifactPane {
                     }
                 }),
             )
-            .child(header(
-                format!("{} · r{}", title, reference.revision),
-                Button::new("inline-expand")
-                    .ghost()
-                    .small()
-                    .label("Expand")
-                    .on_click(cx.listener(move |v, _, _, cx| {
-                        if v.generation == generation {
-                            cx.emit(Expand(reference.clone()));
-                        }
-                    })),
-            ));
+            .child(
+                header(
+                    format!("{} · r{}", title, reference.revision),
+                    Button::new("inline-expand")
+                        .ghost()
+                        .small()
+                        .label("Expand")
+                        .on_click(cx.listener(move |v, _, _, cx| {
+                            if v.generation == generation {
+                                cx.emit(Expand(reference.clone()));
+                            }
+                        })),
+                )
+                .when(self.snapshot.raster.is_some(), |header| {
+                    header.child(
+                        Button::new("inline-copy-image")
+                            .ghost()
+                            .small()
+                            .label("Copy image")
+                            .accessibility_label("Copy image")
+                            .tooltip("Copy image")
+                            .when(
+                                !(window.last_input_was_keyboard()
+                                    && focus.contains_focused(window, cx)),
+                                |b| b.opacity(0.),
+                            )
+                            .group_hover("inline-image", |s| s.opacity(1.))
+                            .focus_visible(|s| s.opacity(1.))
+                            .disabled(self.source_copy.is_some())
+                            .on_click(cx.listener(|v, _, w, cx| v.copy_image(w, cx))),
+                    )
+                }),
+            );
         if let Some(error) = &self.snapshot.error {
             view = view.child(
                 crate::ui::text(crate::ui::Text::Caption, error.message.clone())

@@ -479,4 +479,5 @@ pub fn run_composer_probe(cx: &mut HeadlessAppContext) {
         }
     }
     assert_eq!(cases, 4);
+    super::attachments_probe::run(cx);
 }

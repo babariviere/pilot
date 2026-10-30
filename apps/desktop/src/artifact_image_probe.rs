@@ -254,6 +254,52 @@ pub fn run_artifact_image_probe(cx: &mut HeadlessAppContext) {
                 w.click("reader-actual", cx);
             })
             .unwrap();
+            cx.update_window(h, |_, w, cx| w.click("artifact-copy-image", cx))
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(6);
+            while !cx.update(|cx| pane.read(cx).source_copy.is_none()) {
+                frame(cx, h);
+                assert!(Instant::now() < deadline, "bounded image clipboard copy");
+                std::thread::yield_now();
+            }
+            cx.update(|cx| {
+                let item = cx.read_from_clipboard().unwrap();
+                assert!(item.text().is_none());
+                let [gpui_kit::ClipboardEntry::Image(copied)] = item.entries() else {
+                    panic!("PNG clipboard payload");
+                };
+                let rgba = image::load_from_memory(copied.bytes())
+                    .unwrap()
+                    .into_rgba8();
+                assert_eq!(rgba.get_pixel(20, 20).0, [24, 110, 220, 255]);
+            });
+            cx.update_window(h, |_, w, cx| {
+                pane.update(cx, |p, cx| p.inline_mode(true, cx));
+                w.render_frame(cx);
+                cx.write_to_clipboard(ClipboardItem::new_string("inline sentinel".into()));
+                w.hover("inline-visual", cx);
+                w.click("inline-copy-image", cx);
+            })
+            .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(6);
+            while !cx.update(|cx| pane.read(cx).source_copy.is_none()) {
+                frame(cx, h);
+                assert!(Instant::now() < deadline, "bounded inline image copy");
+                std::thread::yield_now();
+            }
+            cx.update(|cx| {
+                assert!(
+                    cx.read_from_clipboard().is_some_and(|c| matches!(
+                        c.entries(),
+                        [gpui_kit::ClipboardEntry::Image(_)]
+                    ))
+                )
+            });
+            cx.update_window(h, |_, w, cx| {
+                pane.update(cx, |p, cx| p.inline_mode(false, cx));
+                w.render_frame(cx);
+            })
+            .unwrap();
             frame(cx, h);
             cx.update_window(h, |_, w, cx| {
                 assert_eq!(pane.read(cx).zoom.scale, Some(1.));

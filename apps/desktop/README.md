@@ -43,6 +43,12 @@ See [bundled Local runtime](docs/bundled-runtime.md) and
 
 ### Chat actions
 
+Ordinary Local Build composers accept pasted clipboard images and dropped PNG/JPEG/GIF/TIFF
+files, with selected attachment previews above the editor. Displayed conversation
+images and raster artifacts offer **Copy image**, retaining a real PNG clipboard
+payload separately from Copy source. See [image attachments](docs/image-attachments.md)
+for the existing Swift-compatible send contract and qualification boundaries.
+
 Mission detail offers **Mark done** when every remaining task is done, with at
 least one done task. Dropped tasks do not block it and are named in confirmation.
 This is an explicit status-only action, independent of task filters/folds. It

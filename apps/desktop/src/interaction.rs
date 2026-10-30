@@ -159,6 +159,7 @@ pub(crate) enum WriteCommand {
 
 #[derive(Clone)]
 pub(crate) struct Interaction {
+    pub(crate) attachment_root: Option<PathBuf>,
     commands: async_channel::Sender<WriteCommand>,
     edits: Arc<Mutex<BTreeMap<String, Draft>>>,
     wake: async_channel::Sender<()>,
@@ -183,6 +184,7 @@ impl Interaction {
             Self {
                 commands,
                 edits: Arc::new(Mutex::new(BTreeMap::new())),
+                attachment_root: None,
                 wake,
                 close,
             },
@@ -202,6 +204,7 @@ impl Interaction {
             Self {
                 commands,
                 edits: Arc::new(Mutex::new(BTreeMap::new())),
+                attachment_root: None,
                 wake,
                 close,
             },
@@ -220,6 +223,7 @@ impl Interaction {
         let replace = output.clone();
         let edits = Arc::new(Mutex::new(BTreeMap::new()));
         let pending = edits.clone();
+        let attachment_root = path.as_ref().ok().cloned();
         std::thread::Builder::new()
             .name("local-draft-courier".into())
             .spawn(move || {
@@ -247,6 +251,7 @@ impl Interaction {
             Self {
                 commands,
                 edits,
+                attachment_root,
                 wake,
                 close,
             },
@@ -949,7 +954,17 @@ async fn submit(
                 "A model switch is unconfirmed. Inspect and acknowledge it before sending; the draft is retained.",
             );
         }
-        writable(client, options, target).await?;
+        let summary = writable(client, options, target).await?;
+        if !stop && !draft.attachments.is_empty() && summary["missionCoordinator"] == true {
+            return Err(
+                "Image attachments are not supported in coordinator chats yet. This draft was not sent.",
+            );
+        }
+        if !stop && !draft.attachments.is_empty() && summary["mode"] != "build" {
+            return Err(
+                "Image attachments require a Build chat. Ask cannot read this attachment store; the draft was not sent.",
+            );
+        }
     }
     if key.starts_with("new:")
         && !store
@@ -973,6 +988,14 @@ async fn submit(
     let child_target = crate::session_subagents::Target::from_key(key);
     if let Some(target) = &child_target {
         let summary = writable(client, options, &target.parent).await?;
+        if !draft.attachments.is_empty() && summary["missionCoordinator"] == true {
+            return Err(
+                "Image attachments require an ordinary Build parent chat. This draft was not sent.",
+            );
+        }
+        if !draft.attachments.is_empty() && summary["mode"] != "build" {
+            return Err("Image attachments require a Build parent chat. This draft was not sent.");
+        }
         let chat = crate::local_model::chat(&summary).ok_or("Subagent parent is unavailable")?;
         if target.child(&chat).is_none_or(|child| child.retired) {
             return Err("Subagent identity changed or retired. Nothing was sent.");

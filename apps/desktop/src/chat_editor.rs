@@ -23,6 +23,11 @@ use std::collections::{BTreeMap, BTreeSet};
 #[path = "path_completion_view.rs"]
 pub(crate) mod paths;
 
+#[path = "composer_attachments.rs"]
+mod attachments;
+#[cfg(feature = "native-probes")]
+#[path = "composer_attachments_probe.rs"]
+mod attachments_probe;
 #[cfg(feature = "native-probes")]
 #[path = "composer_probe.rs"]
 pub(crate) mod composer_probe;
@@ -80,6 +85,7 @@ pub(crate) enum EditorEvent {
 
 pub(crate) struct ChatEditor {
     height: crate::composer_height::State,
+    attachments: attachments::Previews,
     paths: paths::Paths,
     context_entry: Option<gpui_kit::AnyView>,
     todos_entry: Option<gpui_kit::AnyView>,
@@ -177,6 +183,7 @@ impl ChatEditor {
         });
         Self {
             height: Default::default(),
+            attachments: Default::default(),
             paths: Default::default(),
             context_entry: None,
             todos_entry: None,
@@ -241,9 +248,15 @@ impl ChatEditor {
                 .is_some_and(|book| book.drafts.contains_key(key))
                 || key.starts_with("new:")
                 || !draft.text.is_empty()
+                || !draft.attachments.is_empty()
                 || !draft.recovered.is_empty()
                 || draft.answer.is_some()
                 || self.pending.contains_key(key)
+                || self
+                    .attachments
+                    .importing
+                    .as_ref()
+                    .is_some_and(|(capture, _)| capture == key)
                 || self.unsaved_local.contains(key)
         });
     }
@@ -348,6 +361,12 @@ impl ChatEditor {
                         .as_ref()
                         .is_some_and(|(discarding, ..)| discarding == *key)
                     && draft.text.is_empty()
+                    && draft.attachments.is_empty()
+                    && !self
+                        .attachments
+                        .importing
+                        .as_ref()
+                        .is_some_and(|(capture, _)| capture == *key)
                     && draft.pending.is_none()
                     && draft.created.is_none()
                     && draft.recovered.is_empty()
@@ -535,6 +554,7 @@ impl ChatEditor {
         self.sync_project_picker(window, cx);
         self.sync_models(window, cx);
         self.load_question_input(window, cx);
+        self.sync_attachment_previews(cx);
     }
 
     fn changed(&mut self, cx: &mut Context<Self>) {
@@ -564,10 +584,14 @@ impl ChatEditor {
         {
             return;
         }
+        let moved = self.in_conversation(&key, draft);
         let Some(draft) = self.cache.get_mut(&key) else {
             return;
         };
         draft.revision += 1;
+        if moved {
+            draft.attachments.clear();
+        }
         draft.text = self.text.read(cx).value().to_string();
         draft.cwd = self.cwd.read(cx).value().to_string();
         self.error = if draft.text.len() > TEXT_CAP {
@@ -587,6 +611,9 @@ impl ChatEditor {
             self.unsaved_local.insert(key);
         } else {
             self.unsaved_local.remove(&key);
+        }
+        if moved {
+            self.sync_attachment_previews(cx);
         }
         cx.emit(EditorEvent::DraftsChanged);
         cx.notify();
@@ -608,7 +635,7 @@ impl ChatEditor {
         let Some(draft) = self.cache.get(&key).cloned() else {
             return;
         };
-        let mut copied = draft.text.clone();
+        let mut copied = crate::image_attachments::message(&draft.text, &draft.attachments);
         if copied.trim().is_empty() {
             copied = draft.recovered.join("\n\n");
         }
@@ -669,6 +696,7 @@ impl ChatEditor {
                     || book.drafts.contains_key(key)
                     || draft.created.is_none()
                     || !draft.text.is_empty()
+                    || !draft.attachments.is_empty()
             });
         }
         self.pending.retain(|key, request| {
@@ -702,7 +730,9 @@ impl ChatEditor {
                     && saved.answer.is_none()
                     && (saved.last.is_some() || saved.revision > 0)
                     && self.cache.get(key).is_some_and(|local| {
-                        local.revision == saved.revision && local.text.is_empty()
+                        local.revision == saved.revision
+                            && local.text.is_empty()
+                            && local.attachments.is_empty()
                     })
                     && self.retiring.get(key) != Some(&saved.revision)
                     && let Some(client) = &self.client
@@ -723,8 +753,14 @@ impl ChatEditor {
                         .is_some_and(|(discarding, ..)| discarding == key)
                     || self.selected.as_ref() == Some(key)
                     || !draft.text.is_empty()
+                    || !draft.attachments.is_empty()
                     || !draft.recovered.is_empty()
                     || self.pending.contains_key(key)
+                    || self
+                        .attachments
+                        .importing
+                        .as_ref()
+                        .is_some_and(|(capture, _)| capture == key)
                     || self.unsaved_local.contains(key)
             });
         }
@@ -827,7 +863,8 @@ impl ChatEditor {
             return;
         };
         if !draft.editable()
-            || (!stop && draft.text.trim().is_empty())
+            || (!stop && draft.text.trim().is_empty() && draft.attachments.is_empty())
+            || (!stop && self.attachments.importing.is_some())
             || draft.text.len() > TEXT_CAP
         {
             return;
@@ -884,6 +921,10 @@ impl ChatEditor {
     }
 
     pub(crate) fn request_close(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.attachments.importing.is_some() {
+            self.attachments.close_after_import = true;
+            return false;
+        }
         if self.update_checkpoint.is_some() {
             return false;
         }
@@ -936,6 +977,7 @@ impl ChatEditor {
     ) -> bool {
         if !self.ready()
             || self.discarding.is_some()
+            || self.attachments.importing.is_some()
             || self.marked(window, cx)
             || !self.unsaved_local.is_empty()
             || !self.pending.is_empty()
@@ -1289,6 +1331,29 @@ impl Render for ChatEditor {
             .min_w_0()
             .rounded(px(crate::appearance::Radius::CARD))
             .bg(crate::appearance::card(cx))
+            .capture_action(cx.listener(|v, _: &gpui_kit::base::input::Paste, w, cx| {
+                if v.attachment_paste(w, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .on_drop(cx.listener(|v, paths: &gpui_kit::ExternalPaths, w, cx| {
+                if paths
+                    .paths()
+                    .iter()
+                    .all(|p| crate::image_attachments::supported_path(p))
+                {
+                    v.attach_images(
+                        paths
+                            .paths()
+                            .iter()
+                            .cloned()
+                            .map(crate::image_attachments::Incoming::File)
+                            .collect(),
+                        w,
+                        cx,
+                    );
+                }
+            }))
             .capture_action(
                 cx.listener(|v, _: &gpui_kit::base::input::IndentInline, w, cx| {
                     if v.marked(w, cx) {
@@ -1441,7 +1506,8 @@ impl Render for ChatEditor {
                                 blocked
                                     || settled
                                     || !draft.editable()
-                                    || draft.text.trim().is_empty()
+                                    || (draft.text.trim().is_empty() && draft.attachments.is_empty())
+                                    || self.attachments.importing.is_some()
                                     || (is_new && self.project_problem(draft).is_some())
                                     || self.models_block_send()
                                     || (is_new && self.new_model_problem(draft).is_some()),
@@ -1622,6 +1688,7 @@ impl Render for ChatEditor {
             )
             .relative()
             .children(self.path_suggestions(cx))
+            .children(self.attachment_strip(cx))
             .child(footer)
             .into_any_element()
     }

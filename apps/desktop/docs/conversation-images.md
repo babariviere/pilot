@@ -5,6 +5,9 @@ message images. PNG/JPEG show a static raster; GIF shows its first frame.
 Unsupported or decoder-rejected content retains a truthful placeholder. Click the
 image or Expand for the native reader. Fit, 100%, zoom and Reset are contextual
 reader controls; two-axis wheel/trackpad scrolling pans magnified content.
+**Copy image** writes the displayed upright first frame as a native PNG clipboard
+entry, available on hover/keyboard focus and in the expanded reader. Composer
+clipboard import and previews are documented in [image attachments](image-attachments.md).
 Ordinary transcript scrolling never changes zoom. Copy source identity retains
 bounded provenance; expanded Copy source retains the exact embedded data URL.
 

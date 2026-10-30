@@ -967,7 +967,7 @@ impl TranscriptView {
                 .id(("message", row.id()))
                 .w_full()
                 .min_w_0()
-                .child(self.render_image(row, cx, owner));
+                .child(self.render_image(row, cx, owner, footer));
             if let Some(guard) = self.history_guard.clone() {
                 image = image.capture_any_mouse_down(move |_, w, cx| {
                     if !guard(w, cx) {

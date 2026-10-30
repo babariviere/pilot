@@ -18,6 +18,11 @@ impl ChatEditor {
     pub(crate) fn draft_discard_ready(&self, key: &str) -> bool {
         self.ready()
             && self.discarding.is_none()
+            && !self
+                .attachments
+                .importing
+                .as_ref()
+                .is_some_and(|(k, _)| k == key)
             && !self.pending.contains_key(key)
             && self.unsent_draft(key)
     }
@@ -58,7 +63,7 @@ impl ChatEditor {
         }
         let draft = &self.cache[&key];
         let revision = draft.revision;
-        if draft.text.is_empty() && draft.recovered.is_empty() {
+        if draft.text.is_empty() && draft.attachments.is_empty() && draft.recovered.is_empty() {
             self.confirm_draft_discard(&key, revision, window, cx);
             return;
         }
@@ -240,10 +245,14 @@ impl ChatEditor {
             && self.unsent_draft(key)
             && !self.pending.contains_key(key)
             && !self.unsaved_local.contains(key)
-            && self
-                .cache
-                .get(key)
-                .is_some_and(|d| d.text.is_empty() && d.recovered.is_empty())
+            && self.cache.get(key).is_some_and(|d| {
+                d.text.is_empty() && d.attachments.is_empty() && d.recovered.is_empty()
+            })
+            && !self
+                .attachments
+                .importing
+                .as_ref()
+                .is_some_and(|(k, _)| k == key)
     }
 
     /// One deletion at a time; the rest wait for its exact reply. A slot that gained

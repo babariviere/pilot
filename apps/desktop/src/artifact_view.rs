@@ -424,6 +424,35 @@ impl ArtifactPane {
         }));
         cx.notify();
     }
+    fn copy_image(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.source_copy.is_some() {
+            return;
+        }
+        let Some(raster) = self.snapshot.raster.clone() else {
+            return;
+        };
+        let generation = self.generation;
+        self.source_copy = Some(cx.spawn_in(window, async move |view, cx| {
+            let item = cx
+                .background_executor()
+                .spawn(async move {
+                    let _permit = crate::artifact_image::Permit::queued().await;
+                    crate::image_clipboard::item(&raster)
+                })
+                .await;
+            let _ = view.update_in(cx, |v, _, cx| {
+                if v.generation != generation {
+                    return;
+                }
+                v.source_copy = None;
+                if let Ok(item) = item {
+                    cx.write_to_clipboard(item);
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
     pub(crate) fn open(
         &mut self,
         reference: Reference,
@@ -1731,6 +1760,16 @@ impl Render for ArtifactPane {
                             }
                         })),
                 );
+        }
+        if self.snapshot.raster.is_some() {
+            header = header.child(
+                Button::new("artifact-copy-image")
+                    .ghost()
+                    .small()
+                    .label("Copy image")
+                    .disabled(self.source_copy.is_some())
+                    .on_click(cx.listener(|v, _, w, cx| v.copy_image(w, cx))),
+            );
         }
         if !self.source && (self.snapshot.raster.is_some() || scene.is_some()) {
             let fit = self.snapshot.raster.as_ref().map_or(1., |r| {

@@ -1083,8 +1083,68 @@ impl Drop for Temp {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
+#[tokio::test]
+async fn image_attachment_send_requires_fresh_build_mode_before_any_operation() {
+    for (behavior, allowed) in [
+        (Behavior::ImageBuild, true),
+        (Behavior::Accept, false),
+        (Behavior::ImageCoordinator, false),
+    ] {
+        let daemon = Daemon::start(behavior).await;
+        let temp = Temp::new();
+        let mut store = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let captured = Draft {
+            revision: 1,
+            attachments: vec![crate::image_attachments::Attachment {
+                path: temp.0.join("attachments").join(format!("{id}.png")),
+                id,
+                hash: "a".repeat(64),
+            }],
+            ..Default::default()
+        };
+        store
+            .save_edits(BTreeMap::from([("chat:a".into(), captured.clone())]))
+            .unwrap();
+        let result = super::submit(
+            &reqwest::Client::new(),
+            &daemon.options,
+            &mut store,
+            Submission {
+                key: "chat:a",
+                draft: &captured,
+                follow_up: false,
+                stop: false,
+            },
+            &mut None,
+            |_| {},
+        )
+        .await;
+        let seen = daemon.seen.lock().unwrap();
+        if allowed {
+            assert!(result.is_ok());
+            assert_eq!(seen.envelopes.len(), 1);
+            let payload: Value =
+                serde_json::from_str(seen.envelopes[0]["payload"].as_str().unwrap()).unwrap();
+            assert_eq!(
+                payload["message"],
+                crate::image_attachments::message("", &captured.attachments)
+            );
+        } else {
+            assert!(result.unwrap_err().contains("not sent"));
+            assert!(seen.envelopes.is_empty());
+            assert!(store.book.pending.is_empty());
+            assert_eq!(
+                store.book.drafts["chat:a"].attachments,
+                captured.attachments
+            );
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Behavior {
+    ImageBuild,
+    ImageCoordinator,
     AnswerIdle,
     AnswerLost,
     AnswerDelegated,
@@ -1187,7 +1247,7 @@ impl Daemon {
                                 }
                                 else if method=="GET"&&path.starts_with("/api/sessions/") {
                                     let id=path.rsplit('/').next().unwrap();
-                                    json!({"id":id,"mode":"ask","control":behavior==Behavior::Readonly,"state":if matches!(behavior,Behavior::AnswerIdle|Behavior::AnswerLost|Behavior::AnswerDelegated){"idle"}else{"working"},"role":if behavior==Behavior::AnswerDelegated{Some("review")}else{None},"projectId":seen.projects.get(id)})
+                                    json!({"id":id,"mode":if matches!(behavior,Behavior::ImageBuild|Behavior::ImageCoordinator){"build"}else{"ask"},"missionCoordinator":behavior==Behavior::ImageCoordinator,"control":behavior==Behavior::Readonly,"state":if matches!(behavior,Behavior::AnswerIdle|Behavior::AnswerLost|Behavior::AnswerDelegated){"idle"}else{"working"},"role":if behavior==Behavior::AnswerDelegated{Some("review")}else{None},"projectId":seen.projects.get(id)})
                                 } else if method=="POST"&&path.ends_with("/stop") {
                                     seen.stops+=1;if behavior==Behavior::LostStop{return;}json!({"ok":true,"draft":"synthetic queued input"})
                                 } else if method=="POST"&&matches!(path.as_str(),"/api/operations"|"/api/operations/receipt") {
@@ -1957,6 +2017,7 @@ async fn sustained_edits_autosave_before_idle_and_close_flushes_the_latest() {
     let edits = Arc::new(Mutex::new(BTreeMap::new()));
     let client = Interaction {
         commands,
+        attachment_root: None,
         edits: edits.clone(),
         wake,
         close,

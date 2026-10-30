@@ -66,6 +66,8 @@ pub(crate) struct Delivery {
 pub(crate) struct Draft {
     pub(crate) revision: u64,
     pub(crate) text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) attachments: Vec<crate::image_attachments::Attachment>,
     pub(crate) cwd: String,
     /// Canonical project chosen for a new draft, never inferred from cwd.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -90,6 +92,7 @@ impl Default for Draft {
         Self {
             revision: 0,
             text: String::new(),
+            attachments: Vec::new(),
             cwd: String::new(),
             project_id: None,
             model_choice: None,
@@ -117,6 +120,7 @@ fn question_settled_guard(old: &Draft, next: &Draft) -> Option<u64> {
     if guard.is_some_and(|revision| old.revision <= revision)
         && old.answer != next.answer
         && old.text == next.text
+        && old.attachments == next.attachments
         && old.cwd == next.cwd
         && old.project_id == next.project_id
         && old.model_choice == next.model_choice
@@ -263,7 +267,10 @@ pub(crate) fn valid_key(key: &str) -> bool {
             .is_some_and(token)
 }
 pub(crate) fn hash(value: &str) -> String {
-    Sha256::digest(value.as_bytes())
+    hash_bytes(value.as_bytes())
+}
+pub(crate) fn hash_bytes(value: &[u8]) -> String {
+    Sha256::digest(value)
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>()
@@ -282,6 +289,7 @@ fn validate_draft(key: &str, draft: &Draft) -> Result<(), Failure> {
     if !valid_key(key)
         || draft.revision > 9_007_199_254_740_990
         || draft.text.len() > TEXT_CAP
+        || draft.attachments.iter().any(|a| !a.validate())
         || draft.cwd.len() > 4096
         || draft.project_id.as_deref().is_some_and(|id| !token(id))
         || !matches!(draft.mode.as_str(), "ask" | "build")
@@ -763,7 +771,8 @@ impl Store {
             let child=crate::session_subagents::Target::from_key(key);
             let target=if let Some(child)=&child {child.parent.clone()} else if let Some(id)=key.strip_prefix("chat:") {id.into()} else if !stop {Uuid::new_v4().to_string()} else {return Err("Stop requires an existing Local chat");};
             let operation=if stop {None} else {
-                let message=answer.as_ref().map_or(captured.text.as_str(),|(_,message)|message.as_str());
+                let ordinary=crate::image_attachments::message(&captured.text,&captured.attachments);
+                let message=answer.as_ref().map_or(ordinary.as_str(),|(_,message)|message.as_str());
                 if message.trim().is_empty() {return Err("Message is empty");}
                 let create=key.starts_with("new:");
                 if create&&(captured.project_id.is_none()||!Path::new(&captured.cwd).is_absolute()) {return Err("Choose a configured Local project before creating this chat");}
@@ -940,6 +949,7 @@ impl Store {
             if accepted && kind != "stop" && intent.answer.is_none() {
                 if draft.revision == intent.revision {
                     draft.text.clear();
+                    draft.attachments.clear();
                 }
                 if kind == "chat-create" {
                     draft.created = Some(intent.target.clone());
@@ -1033,6 +1043,7 @@ impl Store {
                     draft.revision == revision
                         && draft.answer.is_none()
                         && draft.text.is_empty()
+                        && draft.attachments.is_empty()
                         && draft.pending.is_none()
                         && draft.created.is_none()
                         && draft.recovered.is_empty()

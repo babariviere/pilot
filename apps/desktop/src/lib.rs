@@ -1,4 +1,6 @@
 //! Standalone fixture view, shared by the runnable binary and focused tests.
+mod image_clipboard;
+mod image_attachments;
 #[cfg(target_os = "macos")]
 pub mod app_menu;
 pub mod bundled_runtime;

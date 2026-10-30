@@ -433,6 +433,13 @@ fn composer_reader_guards(
         )
         .unwrap()
     });
+    // The generic inline fixture intentionally has no selected composer. Mount
+    // its real editor before testing focus/IME; focusing an unmounted entity
+    // only survives until the next frame's root-focus fallback.
+    cx.update_window(h, |_, w, cx| {
+        viewer.update(cx, |v, cx| v.inline_probe_mount_composer(w, cx))
+    })
+    .unwrap();
     let (t, input) = cx.update(|cx| {
         let v = viewer.read(cx);
         (v.inline_probe_transcript(), v.inline_probe_input(cx))
@@ -445,6 +452,7 @@ fn composer_reader_guards(
             .is_some_and(|e| e.raster.is_some())
     });
     cx.update_window(h, |_, w, cx| {
+        w.activate_window();
         input.update(cx, |i, cx| {
             i.focus(w, cx);
             i.replace_text_in_range(None, "draft 👩🏽‍💻", w, cx);
@@ -492,6 +500,11 @@ fn composer_reader_guards(
             i.focus(w, cx);
             i.set_selected_range(0..5, cx);
         });
+        assert!(
+            input.focus_handle(cx).is_focused(w),
+            "composer starts with focus before inspection"
+        );
+        w.hover(("conversation-image", 100u64), cx);
         w.click(("conversation-image-expand", 100u64), cx);
     })
     .unwrap();
@@ -518,9 +531,24 @@ fn composer_reader_guards(
         w.press("escape", cx);
     })
     .unwrap();
-    wait(cx, h, |cx| input.read(cx).value().contains("draft"));
-    for _ in 0..24 {
+    // Kit restores the previous focus after its real executor-clock close delay.
+    // A frame count (or already-present draft text) is not that acknowledgement.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
         frame(cx, h);
+        if cx
+            .update_window(h, |_, w, cx| input.focus_handle(cx).is_focused(w))
+            .unwrap()
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "bounded composer focus restoration: current {:?}, composer {:?}",
+            cx.update_window(h, |_, w, cx| w.focused(cx)).unwrap(),
+            cx.update(|cx| input.focus_handle(cx))
+        );
+        std::thread::yield_now();
     }
     cx.update_window(h, |_, w, cx| {
         assert!(
@@ -694,6 +722,7 @@ pub fn run_conversation_images_probe(cx: &mut HeadlessAppContext) {
                     assert_eq!(b, w.find(("conversation-image-viewport", id)).bounds());
                     assert!(b.size.width > px(300.) && b.right() <= px(width));
                 }
+                w.hover(("conversation-image", 100u64), cx);
                 w.click(("conversation-image-source", 100u64), cx);
                 assert!(
                     cx.read_from_clipboard()
@@ -704,6 +733,43 @@ pub fn run_conversation_images_probe(cx: &mut HeadlessAppContext) {
                 );
             })
             .unwrap();
+            cx.update_window(h, |_, w, cx| {
+                w.hover(("conversation-image", 100u64), cx);
+                w.click(("conversation-image-copy", 100u64), cx);
+            })
+            .unwrap();
+            wait(cx, h, |cx| {
+                cx.read_from_clipboard().is_some_and(|item| {
+                    matches!(item.entries(), [gpui_kit::ClipboardEntry::Image(_)])
+                })
+            });
+            cx.update(|cx| {
+                let item = cx.read_from_clipboard().unwrap();
+                assert!(
+                    item.text().is_none(),
+                    "Copy image must never copy a path or data URL"
+                );
+                let [gpui_kit::ClipboardEntry::Image(image)] = item.entries() else {
+                    panic!("image payload");
+                };
+                let pixels = image::load_from_memory(image.bytes()).unwrap().into_rgba8();
+                assert_eq!(pixels.dimensions(), (1600, 800));
+                assert_eq!(pixels.get_pixel(100, 100).0, [24, 110, 220, 255]);
+            });
+            cx.update_window(h, |_, w, cx| {
+                w.activate_window();
+                cx.write_to_clipboard(ClipboardItem::new_string("keyboard sentinel".into()));
+                w.blur(cx);
+                w.focus_next(cx);
+                w.focus_next(cx);
+                w.press("enter", cx);
+            })
+            .unwrap();
+            wait(cx, h, |cx| {
+                cx.read_from_clipboard().is_some_and(|item| {
+                    matches!(item.entries(), [gpui_kit::ClipboardEntry::Image(_)])
+                })
+            });
             if let Some(dir) = &captures {
                 cx.capture_screenshot(h)
                     .unwrap()
@@ -713,6 +779,7 @@ pub fn run_conversation_images_probe(cx: &mut HeadlessAppContext) {
             // Composition admission guard blocks expanded sibling intent.
             cx.update(|cx| view.update(cx, |v, _| v.history_guard = Some(Rc::new(|_, _| false))));
             cx.update_window(h, |_, w, cx| {
+                w.hover(("conversation-image", 100u64), cx);
                 w.click(("conversation-image-expand", 100u64), cx)
             })
             .unwrap();
@@ -721,6 +788,7 @@ pub fn run_conversation_images_probe(cx: &mut HeadlessAppContext) {
                 .unwrap();
             cx.update(|cx| view.update(cx, |v, _| v.history_guard = None));
             cx.update_window(h, |_, w, cx| {
+                w.hover(("conversation-image", 100u64), cx);
                 w.click(("conversation-image-expand", 100u64), cx)
             })
             .unwrap();
@@ -814,6 +882,16 @@ pub fn run_conversation_images_probe(cx: &mut HeadlessAppContext) {
                 );
                 w.click("reader-actual", cx);
                 w.click("reader-reset", cx);
+                cx.write_to_clipboard(ClipboardItem::new_string("reader copy sentinel".into()));
+                w.click("conversation-reader-copy-image", cx);
+            })
+            .unwrap();
+            wait(cx, h, |cx| {
+                cx.read_from_clipboard().is_some_and(|item| {
+                    matches!(item.entries(), [gpui_kit::ClipboardEntry::Image(_)])
+                })
+            });
+            cx.update_window(h, |_, w, cx| {
                 w.click("conversation-reader-copy", cx);
             })
             .unwrap();
@@ -843,6 +921,7 @@ pub fn run_conversation_images_probe(cx: &mut HeadlessAppContext) {
             changed[0] = Message::image(100, "Changed".into(), source)
                 .anchored(crate::model::ReaderKey::model(1, 0, Some(0)));
             cx.update_window(h, |_, w, cx| {
+                w.hover(("conversation-image", 100u64), cx);
                 w.click(("conversation-image-expand", 100u64), cx)
             })
             .unwrap();

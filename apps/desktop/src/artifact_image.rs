@@ -2,7 +2,6 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use gpui_kit::RenderImage;
 use image::{ImageDecoder, ImageFormat, ImageReader, metadata::Orientation};
-use sha2::{Digest, Sha256};
 use std::{
     io::Cursor,
     sync::{Arc, LazyLock},
@@ -71,7 +70,7 @@ pub(crate) fn dimensions(width: u32, height: u32) -> Result<(), &'static str> {
     }
     Ok(())
 }
-fn signature(bytes: &[u8]) -> Option<&'static str> {
+pub(crate) fn signature(bytes: &[u8]) -> Option<&'static str> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some("image/png")
     } else if bytes.starts_with(&[255, 216, 255]) {
@@ -176,7 +175,26 @@ pub(crate) fn decode(source: &str, stop: impl Fn() -> bool) -> Result<Raster, &'
         return Err("Image bytes do not match their declared format.");
     }
     cancelled(&stop)?;
-    let mut decoder = reader(&bytes, format)
+    decode_bytes(
+        &bytes,
+        mime,
+        format,
+        crate::delivery_store::hash(source),
+        stop,
+    )
+}
+/// Shares compressed, header and pixel admission with native clipboard imports.
+pub(crate) fn decode_bytes(
+    bytes: &[u8],
+    mime: &'static str,
+    format: ImageFormat,
+    source_hash: String,
+    stop: impl Fn() -> bool,
+) -> Result<Raster, &'static str> {
+    if bytes.len() > ENCODED_CAP {
+        return Err("Encoded image exceeds 16 MiB.");
+    }
+    let mut decoder = reader(bytes, format)
         .into_decoder()
         .map_err(|_| "Image header is invalid or exceeds the decoder budget.")?;
     let (width, height) = decoder.dimensions();
@@ -209,10 +227,6 @@ pub(crate) fn decode(source: &str, stop: impl Fn() -> bool) -> Result<Raster, &'
             p.swap(0, 2);
         }
     }
-    let source_hash = Sha256::digest(source.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
     cancelled(&stop)?;
     Ok(Raster {
         image: Arc::new(RenderImage::new(vec![image::Frame::new(rgba)])),
