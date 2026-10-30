@@ -3420,5 +3420,9 @@ pub(crate) mod message_footer_probe;
 pub(crate) mod markdown_mermaid_probe;
 
 #[cfg(feature = "native-probes")]
+#[path = "markdown_fidelity_probe.rs"]
+pub(crate) mod markdown_fidelity_probe;
+
+#[cfg(feature = "native-probes")]
 #[path = "new_chat_view_probe.rs"]
 pub(crate) mod new_chat_view_probe;

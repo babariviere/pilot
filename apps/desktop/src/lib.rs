@@ -458,6 +458,8 @@ pub use local_view::tool_diff_preview_probe::run_tool_diff_preview_probe;
 
 mod message_fold;
 #[cfg(feature = "native-probes")]
+pub use local_view::markdown_fidelity_probe::run_markdown_fidelity_probe;
+#[cfg(feature = "native-probes")]
 pub use local_view::markdown_mermaid_probe::run_markdown_mermaid_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::message_fold_probe::run_message_fold_probe;

@@ -38,6 +38,12 @@ existing Cargo archive. Run `bash scripts/bootstrap.sh` on a fresh checkout,
 then use the regular `scripts/cargo.sh` wrapper. `[patch.crates-io]` applies only
 inside this standalone fixture. No global Cargo/Rust settings are changed.
 
+Ordinary Markdown code-only keyboard Copy uses its retained literal code
+selection rather than generic prose `trim()`, preserving indentation, trailing
+spaces and body newlines. Prose/mixed, Plain/tool and explicit source selection
+formatting are unchanged. See [Markdown fidelity](../docs/markdown-fidelity.md)
+for the hidden native matrix, exact-source distinction and remaining limits.
+
 ## Selection retention
 
 Five further exact edits keep plain `SelectableText` paint checks local to the

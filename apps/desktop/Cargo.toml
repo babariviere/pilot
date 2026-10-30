@@ -539,3 +539,8 @@ required-features = ["native-probes"]
 name = "mcp_status"
 harness = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "markdown_fidelity"
+harness = false
+required-features = ["native-probes"]

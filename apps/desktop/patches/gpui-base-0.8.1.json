@@ -320,6 +320,21 @@
       "path": "src/text/inline.rs",
       "old": "        if let Some(next_pos) = text_layout.position_for_index(next_offset)\n            && next_pos.y == pos.y",
       "new": "        if let Some(next_pos) = position_for_index(next_offset)\n            && next_pos.y == pos.y"
+    },
+    {
+      "path": "src/text/state.rs",
+      "old": "    /// Force a full re-measure of the block list after the document has been\n",
+      "new": "    /// A code-only selection has meaningful edge whitespace, unlike prose's\n    /// paragraph separators. The native Copy query must project it first.\n    pub(super) fn selected_code_text(&self) -> Option<String> {\n        if self.format != TextViewFormat::Markdown || self.effective_format() != SelectionFormat::Plain || !self.has_current_copy_document() {\n            return None;\n        }\n        let blocks = &self.parsed_content.document.blocks;\n        if self.select_all {\n            return match blocks.as_slice() {\n                [node::BlockNode::CodeBlock(code)] => Some(code.code().to_string()),\n                _ => None,\n            };\n        }\n        let mut selected = blocks.iter().filter(|block| {\n            !block.selected_text(SelectionFormat::Plain).is_empty()\n        });\n        match (selected.next(), selected.next()) {\n            (Some(node::BlockNode::CodeBlock(code)), None) => Some(code.selected_text()),\n            _ => None,\n        }\n    }\n\n    /// Force a full re-measure of the block list after the document has been\n"
+    },
+    {
+      "path": "src/text/text_view.rs",
+      "old": "        let mut el = div()\n            .id((\"text-view-scroll\", state.entity_id()))",
+      "new": "        let state_for_copy = state.clone();\n        let mut el = div()\n            .id((\"text-view-scroll\", state.entity_id()))"
+    },
+    {
+      "path": "src/text/text_view.rs",
+      "old": "                let text = TextSelection::selected_text(window, cx).trim().to_string();",
+      "new": "                let projected = TextSelection::selected_text(window, cx);\n                let text = state_for_copy.read(cx).selected_code_text()\n                    .unwrap_or_else(|| projected.trim().to_string());"
     }
   ]
 }

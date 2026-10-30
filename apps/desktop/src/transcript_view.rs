@@ -439,7 +439,17 @@ impl TranscriptView {
                 if state.is_none() {
                     self.create_text_state(ix, cx)
                 } else {
-                    if old.reader_key() != row.reader_key()
+                    // LiveTranscript promotes its reserved live row ID into
+                    // the committed entry. That alias is the same message,
+                    // not a reused canonical reader. Keep unchanged/prefix
+                    // text selection; real canonical replacements still reset.
+                    let live_commit = old.id() >= 1 << 63
+                        && old.reader_key().is_none()
+                        && row.reader_key().is_some()
+                        && old.is_assistant()
+                        && row.is_assistant()
+                        && row.source().starts_with(old.source());
+                    if (old.reader_key() != row.reader_key() && !live_commit)
                         || old.is_plain() != row.is_plain()
                         || old_folded.get(&row.id()).copied().unwrap_or(false)
                             != self.folds.collapsed(row)
@@ -1453,6 +1463,10 @@ pub(crate) fn click_copy(w: &mut Window, id: u64, cx: &mut App) {
 #[cfg(test)]
 #[path = "readonly_tests.rs"]
 mod readonly_tests;
+
+#[cfg(test)]
+#[path = "markdown_fidelity_tests.rs"]
+mod markdown_fidelity_tests;
 
 #[cfg(test)]
 #[path = "work_tests.rs"]

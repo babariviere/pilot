@@ -141,3 +141,7 @@ bash scripts/cargo.sh test --locked --features native-probes --test inline_visua
 # Bounded passive project-memory reads, owned faux Local only.
 bash scripts/cargo.sh clippy --locked --features native-probes --test project_memory -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test project_memory
+
+# Ordinary Markdown/code/list/table source and rendered selection, hidden native only.
+bash scripts/cargo.sh clippy --locked --features native-probes --test markdown_fidelity -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test markdown_fidelity
