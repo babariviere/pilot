@@ -236,9 +236,14 @@ swap; the retained/installed inode identities are checked afterwards too. Journa
 transitions use a separate private nonblocking lock. Relaunch intent is durable before
 launch, so fast startup acknowledgement cannot be overwritten by a later helper write.
 On macOS the old app is retained after swap, including after GUI startup ACK:
-the old daemon may still be using that bundle's files. At most one active GUI
+the old daemon may still be using that bundle's files. At most one unfinished GUI
 transaction is admitted. Before another download, staging retries terminal cleanup
-under the target lock; incomplete or still-used transactions continue to block it.
+under the target lock. If the global no-use census is busy or denied by macOS,
+authenticated acknowledged/aborted transactions remain untouched at their original
+paths. Up to four transactions including the new stage are admitted; a full
+retention budget still blocks staging. The normal 1 GiB archive and 2 GiB expanded
+payload limits continue to apply per update. This is bounded retention, not proof
+that retained bundles are unused or permission to delete or relocate them.
 After verifying daemon handoff to the current installed target (or verifying an
 already-current daemon), integration calls `installer::cleanup_completed(target,
 trust)` off-main. GUI ACK alone must never call this API. The permanent target
@@ -255,9 +260,11 @@ preserves the transaction; a missing rollback needs no probe. Each probe is capp
 at two seconds and the remaining cleanup deadline.
 New staging retries the same terminal cleanup under its already-held target lock,
 without polling. Cleanup is best effort: unrelated unsafe legacy history is preserved,
-while surviving active/inflight transactions still block admission of another stage.
+while surviving unfinished transactions still block admission of another stage.
 Acknowledged builds newer than the current app are retained. Failed proof retains
-active evidence and blocks new staging, never authorizes replay or a second exchange.
+active evidence and blocks new staging, never authorizes replay. Terminal retention
+admission requires the same signed completion and acknowledged rollback-inode proof, idle journal
+writers, and no pending write, but does not require proving absence of resource users.
 Unsafe or unreadable legacy history is preserved without blocking unrelated staging.
 
 The same gate purges proven legacy terminal entries in the private sibling

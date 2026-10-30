@@ -200,8 +200,17 @@ when staging needs space.
 Failed swap leaves the old app; failed relaunch/startup keeps both bundles and reports
 uncertainty. Transactions and backups are not blindly retried or deleted; the one
 exception is a download never committed (phase `Ready`), which startup removes once
-no session or helper holds the target lock. Two active transactions per install
-parent remain the admission limit. When staging needs room, older acknowledged
+no session or helper holds the target lock. On macOS, staging retries verified
+terminal cleanup first. When protected processes prevent the global no-use proof,
+completed transactions stay intact at their original paths. Up to four transactions
+including the new stage are allowed, but only one may be unfinished. Every retained
+entry needs authenticated acknowledged/aborted completion, exact acknowledged rollback identity
+(if present), and an idle journal with no pending write. Reaching the retention limit
+or failing those proofs blocks staging. Deletion still requires the full no-use
+proof. Normal per-update archive/expanded-payload limits remain in force.
+
+On Linux, two active transactions per install parent remain the admission limit.
+When staging needs room, older acknowledged
 transactions (and verified aborted transactions) are moved intact into private `.pilot-next-updater-history/` under
 the permanent target and journal locks. The signed archive and exact rollback
 inode must still match; current receipts, pending writes and uncertain installs

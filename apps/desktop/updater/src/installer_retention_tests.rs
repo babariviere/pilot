@@ -340,7 +340,7 @@ fn archived_lookup_refuses_uncertain_or_redirected_history() {
 
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
 #[test]
-fn repeated_gui_updates_keep_one_rollback_until_verified_daemon_handoff() {
+fn repeated_gui_updates_preserve_busy_rollback_until_verified_daemon_handoff() {
     let temp = Temp::new();
     let target = target(&temp);
     for id in 1..=8 {
@@ -349,17 +349,14 @@ fn repeated_gui_updates_keep_one_rollback_until_verified_daemon_handoff() {
         let root = transaction(&target, id, Phase::StartupAcknowledged);
         drop(lock);
         let held = File::open(rollback_bundle(&root, &trust()).join("rollback-resource")).unwrap();
-        assert!(
-            matches!(
-                new_stage(&target, &trust(), &FixturePlatform),
-                Err(Error::StagingCapacity)
-            ),
-            "GUI ACK must retain an in-use exchanged bundle"
-        );
+        let (next, next_lock) =
+            new_stage_checked(&target, &trust(), &FixturePlatform, &|_, _| false).unwrap();
         assert!(
             root.join("install-payload/Pilot Next.app/rollback-resource")
                 .exists()
         );
+        discard_incomplete(&next, &target).unwrap();
+        drop(next_lock);
         drop(held);
         assert_eq!(
             cleanup::cleanup_with(&target, &trust(), &FixturePlatform).unwrap(),
@@ -573,15 +570,160 @@ fn staging_retries_terminal_cleanup_after_a_busy_startup_without_polling() {
         Err(Error::Busy)
     );
     drop(lock);
-    assert!(matches!(
-        new_stage_checked(&target, &trust(), &FixturePlatform, &|_, _| false),
-        Err(Error::StagingCapacity)
-    ));
+    let (deferred, lock) =
+        new_stage_checked(&target, &trust(), &FixturePlatform, &|_, _| false).unwrap();
     assert!(root.exists());
+    discard_incomplete(&deferred, &target).unwrap();
+    drop(lock);
     let (stage, _lock) =
         new_stage_checked(&target, &trust(), &FixturePlatform, &|_, _| true).unwrap();
     assert!(!root.exists());
     assert!(stage.exists());
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn staging_preserves_terminal_paths_and_bytes_when_no_use_is_uncertain() {
+    let temp = Temp::new();
+    let target = target(&temp);
+    let roots = [
+        transaction(&target, 1, Phase::StartupAcknowledged),
+        transaction(&target, 2, Phase::Aborted),
+    ];
+    let files = [
+        "journal.json",
+        "manifest.json",
+        "archive.zip",
+        "ui-state.json",
+        "install-payload/Pilot Next.app/rollback-resource",
+    ];
+    let snapshots: Vec<_> = roots
+        .iter()
+        .map(|root| {
+            let rollback = fs::metadata(rollback_bundle(root, &trust())).unwrap();
+            let bytes: Vec<_> = files
+                .iter()
+                .map(|file| fs::read(root.join(file)).unwrap())
+                .collect();
+            (rollback.dev(), rollback.ino(), bytes)
+        })
+        .collect();
+    let (stage, _lock) =
+        new_stage_checked(&target, &trust(), &FixturePlatform, &|_, _| false).unwrap();
+    assert!(stage.exists());
+    assert!(!target.parent().unwrap().join(HISTORY).exists());
+    for (root, (device, inode, bytes)) in roots.iter().zip(snapshots) {
+        assert_eq!(transaction_path(root).unwrap(), *root);
+        let rollback = fs::metadata(rollback_bundle(root, &trust())).unwrap();
+        assert_eq!((rollback.dev(), rollback.ino()), (device, inode));
+        for (file, before) in files.iter().zip(bytes) {
+            assert_eq!(
+                fs::read(root.join(file)).unwrap(),
+                before,
+                "retained {file}"
+            );
+        }
+    }
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn staging_capacity_counts_retained_terminal_transactions_including_new_stage() {
+    for count in [3, 4] {
+        let temp = Temp::new();
+        let target = target(&temp);
+        let roots: Vec<_> = (1..=count)
+            .map(|id| transaction(&target, id, Phase::StartupAcknowledged))
+            .collect();
+        let result = new_stage_checked(&target, &trust(), &FixturePlatform, &|_, _| false);
+        if count == 3 {
+            let (stage, _lock) = result.expect("three retained transactions permit a fourth");
+            assert!(stage.exists());
+        } else {
+            assert!(matches!(result, Err(Error::StagingCapacity)));
+        }
+        assert!(roots.iter().all(|root| root.exists()));
+        assert!(!target.parent().unwrap().join(HISTORY).exists());
+    }
+}
+
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+#[test]
+fn staging_capacity_refuses_unfinished_or_unproven_transactions() {
+    for phase in [
+        Phase::Ready,
+        Phase::Committed,
+        Phase::Swapped,
+        Phase::RelaunchRequested,
+    ] {
+        let temp = Temp::new();
+        let target = target(&temp);
+        let root = transaction(&target, 1, phase);
+        let before = fs::read(root.join("journal.json")).unwrap();
+        assert!(
+            matches!(
+                new_stage_checked(&target, &trust(), &FixturePlatform, &|_, _| false),
+                Err(Error::StagingCapacity)
+            ),
+            "unfinished {phase:?} must block staging"
+        );
+        assert_eq!(fs::read(root.join("journal.json")).unwrap(), before);
+    }
+    for fault in [
+        "pending",
+        "manifest",
+        "journal-lock",
+        "inode",
+        "future",
+        "unknown",
+        "symlink",
+    ] {
+        let temp = Temp::new();
+        let target = target(&temp);
+        let root = transaction(&target, 1, Phase::StartupAcknowledged);
+        let mut guard = None;
+        match fault {
+            "pending" => fs::write(root.join("journal.pending"), b"uncertain ACK").unwrap(),
+            "manifest" => fs::write(root.join("manifest.json"), b"invalid signature").unwrap(),
+            "journal-lock" => guard = Some(journal_guard(&root).unwrap()),
+            "inode" => {
+                let rollback = rollback_bundle(&root, &trust());
+                fs::rename(&rollback, root.join("other-old")).unwrap();
+                fs::create_dir(&rollback).unwrap();
+            }
+            "future" => {
+                let bytes = archive();
+                let mut manifest = metadata(&bytes);
+                manifest.build = "999.1".into();
+                fs::write(root.join("manifest.json"), envelope(&manifest)).unwrap();
+            }
+            "unknown" => {
+                fs::create_dir(target.parent().unwrap().join(".pilot-next-update-unknown"))
+                    .unwrap();
+            }
+            "symlink" => {
+                let moved = temp.path().join("redirected-transaction");
+                fs::rename(&root, &moved).unwrap();
+                std::os::unix::fs::symlink(&moved, &root).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let before = fs::read(root.join("journal.json")).unwrap();
+        assert!(
+            matches!(
+                new_stage_checked(&target, &trust(), &FixturePlatform, &|_, _| false),
+                Err(Error::StagingCapacity)
+            ),
+            "{fault} must block staging"
+        );
+        assert_eq!(
+            fs::read(root.join("journal.json")).unwrap(),
+            before,
+            "{fault}"
+        );
+        assert!(root.exists(), "{fault} must retain its original path");
+        drop(guard);
+    }
 }
 
 #[cfg(all(target_os = "macos", feature = "native-macos"))]

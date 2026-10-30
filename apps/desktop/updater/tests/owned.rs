@@ -2301,10 +2301,14 @@ fn repeated_native_exchanges_preserve_exact_archived_rollback_and_current_receip
             let held =
                 File::open(installer::rollback_bundle(&root, &current).join("Contents/build"))
                     .unwrap();
-            assert!(matches!(
-                installer::new_stage(&target, &current, &platform),
-                Err(Error::StagingCapacity)
-            ));
+            let (next, next_lock) = installer::new_stage(&target, &current, &platform)
+                .expect("terminal rollback users must not prevent bounded staging");
+            assert!(
+                installer::rollback_bundle(&root, &current).exists(),
+                "in-use rollback must stay at its original path"
+            );
+            installer::discard_incomplete(&next, &target).unwrap();
+            drop(next_lock);
             drop(held);
             // Simulate the separate, verified daemon handoff completion gate.
             assert_eq!(

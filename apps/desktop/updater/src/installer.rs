@@ -264,7 +264,7 @@ fn new_stage_checked(
     #[cfg(all(target_os = "macos", feature = "native-macos"))]
     {
         let _ = cleanup::cleanup_locked(target, trust, unused);
-        cleanup::require_empty(target)?;
+        cleanup::require_capacity(target, trust)?;
         new_stage_locked(target, lock)
     }
     #[cfg(not(all(target_os = "macos", feature = "native-macos")))]

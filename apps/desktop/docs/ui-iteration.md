@@ -18,9 +18,12 @@ still requires explicit COMMIT and actual OS-observed parent exit before its
 native whole-bundle swap/relaunch. The previous bundle remains in the transaction's
 `install-payload` directory. Recovery details expose retained paths; no automatic
 rollback, cleanup, or privilege elevation is claimed.
-The existing two-retained-transaction limit still applies. After two completed
-updates, inspect the retained backups and arrange explicit cleanup before another
-iteration; this feature never silently deletes an older rollback bundle.
+On macOS, up to four transactions including the next stage may coexist, provided
+all older entries have authenticated acknowledged/aborted completion and exact
+acknowledged rollback identity. Unfinished or uncertain receipts still block staging. Cleanup
+retains bundles when macOS cannot prove they are unused; it never moves them out
+from under possible resource users. At the retention limit, explicit verified
+cleanup is required before another iteration. Linux keeps its two-active limit.
 
 UI-only reload leaves agents and the daemon running. It never pauses tools or
 acquires a daemon update reservation. A Next-owned connection still proves its

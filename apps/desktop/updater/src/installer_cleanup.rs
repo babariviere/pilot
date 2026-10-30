@@ -1,8 +1,14 @@
 //! Terminal GUI transaction disposal after verified daemon handoff, never on GUI ACK alone.
 use super::*;
+use std::os::unix::ffi::OsStrExt;
 use std::time::{Duration, Instant};
 
-pub(super) fn require_empty(target: &Path) -> Result<(), Error> {
+// Includes the next stage. Keep retention bounded when macOS cannot inspect
+// unrelated protected processes; never move or delete their possible resources.
+const MAX_RETAINED_TRANSACTIONS: usize = 4;
+
+pub(super) fn require_capacity(target: &Path, trust: &Trust) -> Result<(), Error> {
+    let mut retained = 0;
     for (count, entry) in fs::read_dir(target.parent().ok_or(Error::Filesystem)?)
         .map_err(|_| Error::Filesystem)?
         .enumerate()
@@ -13,10 +19,23 @@ pub(super) fn require_empty(target: &Path) -> Result<(), Error> {
         let entry = entry.map_err(|_| Error::Filesystem)?;
         if entry
             .file_name()
-            .to_str()
-            .is_some_and(|name| name.starts_with(".pilot-next-update-"))
+            .as_bytes()
+            .starts_with(b".pilot-next-update-")
         {
-            return Err(Error::StagingCapacity);
+            retained += 1;
+            if retained >= MAX_RETAINED_TRANSACTIONS {
+                return Err(Error::StagingCapacity);
+            }
+            let root = entry.path();
+            if root.canonicalize().ok().as_deref() != Some(root.as_path())
+                || validate_root(&root, target).is_err()
+            {
+                return Err(Error::StagingCapacity);
+            }
+            let _guard = journal_guard(&root).map_err(|_| Error::StagingCapacity)?;
+            if !terminal_proof(&root, trust) {
+                return Err(Error::StagingCapacity);
+            }
         }
     }
     Ok(())
