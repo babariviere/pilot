@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.99.0](https://github.com/babariviere/pilot/compare/v1.98.0...v1.99.0) (2026-10-30)
+
+
+### Features
+
+* **desktop:** animate sidebar folds and attention hints ([fb03bc5](https://github.com/babariviere/pilot/commit/fb03bc5fc79848efed98fc3e39255061f25b0fd3))
+* **desktop:** enable planning chat image attachments ([e1074b0](https://github.com/babariviere/pilot/commit/e1074b0ab09efb48c8b9c7071eba1994cc115bfe))
+* **desktop:** restore read-only diagnostic chats ([98bf584](https://github.com/babariviere/pilot/commit/98bf584991e72df3b443d8888700497fad754ef6))
+
+
+### Bug Fixes
+
+* **desktop:** deliver subscription reports outside Home ([f9ddae9](https://github.com/babariviere/pilot/commit/f9ddae93b43652db9275448a7d007954df991599))
+* **desktop:** recover scoped model catalogs automatically ([e1758d0](https://github.com/babariviere/pilot/commit/e1758d0797f7cadf4bf36bd301174b36b33f4a66))
+* **desktop:** restore unloaded reading positions automatically ([18af0cd](https://github.com/babariviere/pilot/commit/18af0cd62096e1cc3cae48f91977f74385bad12c))
+* **kernel:** recover oversized automatic handoffs safely ([1bc5b6e](https://github.com/babariviere/pilot/commit/1bc5b6e6733de1f08f43891b88fe1ad36984b4ba))
+* **updater:** simplify GUI and daemon upgrades ([b0774aa](https://github.com/babariviere/pilot/commit/b0774aadee7f99dc8bef1359b4a221b36a7e07db))
+
 ## [1.98.0](https://github.com/babariviere/pilot/compare/v1.97.0...v1.98.0) (2026-10-30)
 
 
