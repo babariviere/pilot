@@ -891,10 +891,16 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
         if let Ok(store) = &store {
             status.book = Some(Arc::new(store.book.clone()));
         }
-        publish(updates, replace, status.clone());
         if status.flushed {
-            break;
+            // The app may exit as soon as this publication wakes its listener.
+            // Release Store and terminate the input lanes before acknowledging Close.
+            let (updates, replace) = (updates.clone(), replace.clone());
+            drop(store);
+            drop(channels);
+            publish(&updates, &replace, status);
+            return;
         }
+        publish(updates, replace, status.clone());
     }
     // `channels` otherwise drops before the earlier store argument. Release
     // the private owner before closing its update lane, so a consumer that

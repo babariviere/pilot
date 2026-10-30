@@ -2001,6 +2001,95 @@ async fn queued_close_bypasses_the_autosave_deadline() {
 }
 
 #[tokio::test]
+async fn close_ack_releases_store_before_waking_application_exit() {
+    use std::{
+        future::Future,
+        task::{Context, Poll, Wake, Waker},
+    };
+    struct Exit {
+        root: PathBuf,
+        host: crate::delivery_store::Host,
+        reopened: Mutex<Option<bool>>,
+        commands: async_channel::Sender<WriteCommand>,
+        terminal: Mutex<Option<bool>>,
+    }
+    impl Wake for Exit {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+        fn wake_by_ref(self: &Arc<Self>) {
+            // Channel publication can immediately wake the app on another thread.
+            // Check at that boundary, not after the worker future has returned.
+            *self.reopened.lock().unwrap() =
+                Some(Store::open(self.root.clone(), self.host.clone()).is_ok());
+            *self.terminal.lock().unwrap() = Some(self.commands.is_closed());
+        }
+    }
+    let options = LocalOptions::synthetic(1);
+    let temp = Temp::new();
+    let store = Store::open(temp.0.clone(), options.host()).unwrap();
+    let (commands, receiver) = async_channel::bounded(8);
+    let (_wake, wake) = async_channel::bounded(1);
+    let (close, closed) = async_channel::bounded(1);
+    let (updates, output) = async_channel::bounded(1);
+    let mut worker = std::pin::pin!(run(
+        options.clone(),
+        Ok(store),
+        WorkerChannels {
+            commands: receiver,
+            wake,
+            close: closed,
+            edits: Arc::new(Mutex::new(BTreeMap::from([(
+                "chat:a".into(),
+                draft(1, "Pending 日本語 👩‍💻 e\u{301}")
+            )]))),
+            updates,
+            replace: output.clone(),
+        }
+    ));
+    assert!(
+        worker
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop()))
+            .is_pending()
+    );
+    assert!(!output.try_recv().unwrap().flushed);
+    let exit = Arc::new(Exit {
+        root: temp.0.clone(),
+        host: options.host(),
+        reopened: Mutex::new(None),
+        commands,
+        terminal: Mutex::new(None),
+    });
+    let waker = Waker::from(exit.clone());
+    let mut receive = std::pin::pin!(output.recv());
+    assert!(
+        receive
+            .as_mut()
+            .poll(&mut Context::from_waker(&waker))
+            .is_pending()
+    );
+    close.try_send(()).unwrap();
+    assert!(matches!(
+        worker
+            .as_mut()
+            .poll(&mut Context::from_waker(Waker::noop())),
+        Poll::Ready(())
+    ));
+    assert!(output.try_recv().unwrap().flushed);
+    assert_eq!(
+        *exit.reopened.lock().unwrap(),
+        Some(true),
+        "application exit woke before Store unlock"
+    );
+    assert_eq!(
+        *exit.terminal.lock().unwrap(),
+        Some(true),
+        "application exit woke before courier input closed"
+    );
+}
+
+#[tokio::test]
 async fn disconnected_clients_exit_in_one_poll_even_when_the_final_save_fails() {
     use std::{
         future::Future,

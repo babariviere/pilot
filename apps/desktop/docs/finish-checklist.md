@@ -165,6 +165,10 @@ not an absence proof. Swift links are historical capability references only.
   socket/full-baseline recovery, paged history/Find, exact Check and native owner
   Close/immediate Store reopen. Matching history/title never settles delivery;
   this isolated corpus does not resolve #105 or qualify live lifecycle/OS IME.
+  The [application Close/Quit corpus](application-quit.md) separately drives real
+  hidden AppKit close/menu-Quit through the shared root coordination and checks
+  Store release at GPUI shutdown and immediate independent post-process reopen.
+  External OS termination and updater-restart teardown remain separate gaps.
 - **Lazy history:** #471/#476 have recorded hidden native and synthetic transport
   results in [lazy history](lazy-history.md). Initial 60-entry tail, contiguous
   24-entry older pages and explicit full-history Find are implemented. Distant

@@ -507,7 +507,9 @@ pub use scheduled_messages_probe::run_scheduled_messages_probe;
 mod archive_view;
 #[cfg(feature = "native-probes")]
 mod lost_ack_fixture;
-#[cfg(feature = "native-probes")]
-pub use local_view::lost_ack_probe::run_lost_ack_probe;
+#[cfg(all(feature = "native-probes", target_os = "macos"))]
+pub use local_view::application_quit_probe::run_application_quit_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::archive_probe::run_archive_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::lost_ack_probe::run_lost_ack_probe;

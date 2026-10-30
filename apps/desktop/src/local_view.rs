@@ -1,9 +1,9 @@
 //! Readonly Local browser. The transport is never given UI events capable of writing.
+#[cfg(all(feature = "native-probes", target_os = "macos"))]
+#[path = "application_quit_probe.rs"]
+pub(crate) mod application_quit_probe;
 #[path = "archive_navigation.rs"]
 mod archive_navigation;
-#[cfg(feature = "native-probes")]
-#[path = "lost_ack_probe.rs"]
-pub(crate) mod lost_ack_probe;
 #[cfg(feature = "native-probes")]
 #[path = "archive_probe.rs"]
 pub(crate) mod archive_probe;
@@ -82,6 +82,9 @@ mod jump_navigation;
 #[cfg(feature = "native-probes")]
 #[path = "jump_probe.rs"]
 pub(crate) mod jump_probe;
+#[cfg(feature = "native-probes")]
+#[path = "lost_ack_probe.rs"]
+pub(crate) mod lost_ack_probe;
 #[path = "menu_routing.rs"]
 pub(crate) mod menu_routing;
 #[cfg(feature = "native-probes")]
@@ -575,6 +578,12 @@ impl LocalViewer {
             }
         }));
         view.listen_writes(write_updates, window, cx);
+        Self::register_close(window, cx);
+        view
+    }
+
+    /// Shared by Local startup and the isolated native application fixture.
+    fn register_close(window: &mut Window, cx: &mut Context<Self>) {
         menu_routing::register_quit_owner(window, cx);
         let weak = cx.weak_entity();
         window.on_window_should_close(cx, move |_, cx| {
@@ -596,7 +605,6 @@ impl LocalViewer {
             })
             .unwrap_or(true)
         });
-        view
     }
 
     fn listen_writes(

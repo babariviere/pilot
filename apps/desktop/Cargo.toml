@@ -19,6 +19,11 @@ required-features = ["native-probes"]
 native-probes = ["gpui-kit/test-support", "pilot-desktop-updater/fixture"]
 
 [[test]]
+name = "application_quit"
+harness = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "archive"
 harness = false
 required-features = ["native-probes"]

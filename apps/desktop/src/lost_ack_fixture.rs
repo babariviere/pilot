@@ -38,6 +38,7 @@ pub(crate) struct Seen {
     pub(crate) requests: Vec<(String, String)>,
     pub(crate) envelope: Option<Value>,
     pub(crate) executes: usize,
+    pub(crate) accept_execute: bool,
     pub(crate) lookups: usize,
     pub(crate) receipt: Receipt,
     pub(crate) wrong_daemon: bool,
@@ -49,6 +50,7 @@ struct Channels {
     seen: Arc<Mutex<Seen>>,
     entered: async_channel::Sender<()>,
     release: async_channel::Receiver<()>,
+    responded: async_channel::Sender<()>,
     control: async_channel::Receiver<Option<Value>>,
     chat: async_channel::Receiver<Option<Value>>,
     pages: async_channel::Receiver<()>,
@@ -58,6 +60,7 @@ pub(crate) struct Server {
     pub(crate) seen: Arc<Mutex<Seen>>,
     pub(crate) entered: async_channel::Receiver<()>,
     pub(crate) release: async_channel::Sender<()>,
+    pub(crate) responded: async_channel::Receiver<()>,
     pub(crate) control: async_channel::Sender<Option<Value>>,
     pub(crate) chat: async_channel::Sender<Option<Value>>,
     pub(crate) pages: async_channel::Sender<()>,
@@ -69,6 +72,7 @@ impl Server {
         let seen = Arc::new(Mutex::new(Seen::default()));
         let (entered, reached) = async_channel::bounded(1);
         let (release, released) = async_channel::bounded(1);
+        let (responded, responses) = async_channel::bounded(1);
         let (control, controls) = async_channel::bounded(8);
         let (chat, chats) = async_channel::bounded(8);
         let (pages, page_steps) = async_channel::bounded(8);
@@ -76,6 +80,7 @@ impl Server {
             seen: seen.clone(),
             entered,
             release: released,
+            responded,
             control: controls,
             chat: chats,
             pages: page_steps,
@@ -107,6 +112,7 @@ impl Server {
             seen,
             entered: reached,
             release,
+            responded: responses,
             control,
             chat,
             pages,
@@ -246,10 +252,15 @@ async fn serve(stream: TcpStream, c: Channels) {
                     serde_json::from_str::<Value>(op["payload"].as_str().unwrap()).unwrap()["message"],
                     ORIGINAL
                 );
-                s.envelope = Some(op);
+                s.envelope = Some(op.clone());
             }
             c.entered.send(()).await.unwrap();
             let _ = c.release.recv().await;
+            let accepted = c.seen.lock().unwrap().accept_execute;
+            if accepted {
+                response(&mut stream, "200 OK", json!({"operationId":op["operationId"],"payloadHash":op["payloadHash"],"destination":op["destination"],"targetId":op["targetId"],"state":"accepted","result":{"sessionId":"a"}})).await;
+            }
+            let _ = c.responded.try_send(());
             return; // The daemon admitted it but the exact ACK is lost.
         }
         ("POST", "/api/operations/receipt") => {

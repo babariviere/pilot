@@ -547,6 +547,10 @@ impl ChatEditor {
         (self.text.clone(), self.cwd.clone(), self.draft().cloned())
     }
     #[cfg(feature = "native-probes")]
+    pub(crate) fn teardown_probe_state(&self) -> &WriteState {
+        &self.state
+    }
+    #[cfg(feature = "native-probes")]
     pub(crate) fn retained_deliveries_probe(&self) -> Vec<u8> {
         serde_json::to_vec(&self.state.book.as_ref().unwrap().pending).unwrap()
     }
