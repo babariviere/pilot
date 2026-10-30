@@ -1,11 +1,78 @@
 # Production reviewer bridge and independence contract
 
-**D37 design proposal only.** Source baseline: `d82df2b3cac4be1c9aa4e23e65d68377f273569f`.
+**D37 design proposal, with the inactive D38 foundation below.** Design source baseline:
+`d82df2b3cac4be1c9aa4e23e65d68377f273569f`.
 This document does not select binding review policy, authorize provider/account execution, install
 an observer, submit a review or activate acceptance. A is inert; B (#35), C (#36) and D (#19)
 remain incomplete. Preserve Balanced minimums, force **OFF**, mandatory passing checks, current
 custody/Ask boundaries and existing account/provider behavior. No waiver, historical attribution,
 adoption/backfill, retirement, cleanup or restart follows from this proposal.
+
+## Inactive retained-input and report API (D38)
+
+[`retained-review-contract.ts`](../packages/daemon/src/retained-review-contract.ts) supplies only:
+
+```ts
+prepareRetainedReviewInput(descriptor: unknown, blobs: readonly {
+  blobId: string; bytes: Uint8Array;
+}[]): PreparedRetainedReviewInput
+parseRetainedReviewReport(input: PreparedRetainedReviewInput, json: string): ParsedRetainedReviewReport
+RETAINED_REVIEW_LIMITS
+```
+
+There is no production consumer, read/acquisition transport, executor, provider call, persisted target/
+producer variant, accounting change or result write. D38 approves the restricted direct-worker direction
+and this foundation, not execution or gates. B/#35, C/#36 and D/#19 remain incomplete and blocked.
+The remaining sections retain their D37 proposal status except for that approved direction.
+
+The strict v1 descriptor binds host/daemon lineage/project/mission/task/run/coordinator/owner IDs,
+full assignment and definition revision, policy/submission/allocation IDs, the five-field allocation
+context fence (including coordinator event), and an opaque exact context-package SHA256. Profile pins
+include ID/revision/full definition; runtime pins include build/config SHA256, matching concrete
+provider/model, prompt/tool versions and output-schema v1. Configuration/context digests pin supplied
+descriptions, not independently observed runtime settings, authority or a qualified context resolver.
+Only declared research intent is supported; no classification proves exhaustive code-free inventory,
+reclassifies code/mixed/unknown work or establishes author lineage. Custody is not authorship.
+
+Each content mapping names an exact brief revision or artifact ID/revision/kind, reference-observation
+SHA256, nullable custodian, explicit `part`, blob ID, original-byte SHA256 and byte length. Briefs
+require `brief`, nonvisual artifacts `source`, and visuals **both** `source` and `data`, supplied
+explicitly, never a synthesized/null default. Uniqueness is `(reference, part)` and blob ID. Parts
+of one reference must agree on reference digest/kind/custodian. All manifest entries and supplied blobs
+must be mapped; several entries may share one source ID from the unique manifest source-ID list.
+The helper cannot establish that supplied bytes actually came from those references.
+
+The supplied manifest must have the existing vault digest, `SHA256(canonicalJSON({entries, omissions}))`.
+Its full header, host/project/source IDs and ordered mappings also enter the input digest. A supplied
+`sealed:true` and matching hash prove **neither actual vault sealing nor authorization/authorship**.
+Reference-observation digests are distinct from original-content digests. Domain-separated ordered
+`["retained-review", 1, domain, ...values]` hashes bind input/profile/context/runtime; canonical object
+keys are deterministic and array order remains material. Original UTF-8 bytes, including BOM, are
+copied and hashed unchanged, never display-decoded, reformatted or silently clipped.
+
+Preflight bounds precede shared parsers/hashing: 20 parts/blobs/source IDs/manifest omissions, 1 MiB
+per blob, 8 MiB total, 64 KiB descriptor, 50 KiB JSON report, 40 findings, 20 citations per list and
+20 coverage/omission/limitation entries. Dense plain JSON data, bounded nesting and exact schemas are
+required. Public data is deeply frozen; private WeakMap-owned bytes bind the exact prepared object.
+Forged/cloned prepared values refuse. This structural identity is **not a host admission token**.
+Report JSON with duplicate object keys also refuses rather than silently overwriting evidence.
+
+Reports bind run/input/profile/context/runtime, profile-compatible `reportedOutcome` and distinct
+`completed`, `failed`, `partial`, `length`, `timed-out`, `cancelled`, `unavailable` states. Noncompleted
+states require null outcome. Findings, unique criterion indexes, coverage gaps, omissions and
+limitations are retained, **including alongside reported Pass**; no omitted coverage is filled in.
+Each citation names the supplied manifest/blob/original SHA256 and a nonempty half-open original
+UTF-8 byte range at character boundaries. Duplicate citations refuse within each list, but may recur
+across findings/criteria. Spoofed producer/human/authority/independent/verified/eligible fields refuse.
+No raw source or report content is logged in errors.
+
+A parsed/matching Pass remains a model claim, not observed execution, provenance, independence,
+semantic completeness, approval, applicability or a green review. Future execution must retain raw
+terminal bytes before interpretation. Real acquisition, admission/context/config/account observation,
+target/accounting/producer linkage, trusted approval/consent/human origin, execution qualification,
+coverage/diversity policy and acceptance interpretation remain separate, unimplemented prerequisites.
+The adjacent tests cover structural adversaries and unchanged policy/history/status/lifecycle only,
+not product review qualification. No SDK/runtime, SQL, active import or entry point is added here.
 
 ## Observed seams, not inferred capabilities
 
