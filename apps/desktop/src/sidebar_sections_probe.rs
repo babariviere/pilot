@@ -239,6 +239,7 @@ fn collapsed(view: &Entity<LocalViewer>, key: &str, cx: &mut HeadlessAppContext)
 }
 
 pub fn run_sidebar_sections_probe(cx: &mut HeadlessAppContext) {
+    run_fold_motion(cx);
     let captures = std::env::var_os("PILOT_NEXT_STYLE_DIR").map(std::path::PathBuf::from);
     if let Some(dir) = &captures {
         std::fs::create_dir_all(dir).unwrap();
@@ -1576,4 +1577,194 @@ fn run_unread_circle(cx: &mut HeadlessAppContext, width: f32) {
         "{}",
         json!({"width":width,"unread_circle":"hollow-read+filled-unread+attention-precedence+open-clears+collapsed-rollups","reply_dots":0})
     );
+}
+
+// Timed production List geometry, rather than a duplicate fold view.
+fn run_fold_motion(cx: &mut HeadlessAppContext) {
+    use gpui_kit::component::list::ListDelegate as _;
+    let frame = |cx: &mut HeadlessAppContext, h, ms| {
+        cx.advance_clock(Duration::from_millis(ms));
+        cx.update_window(h, |_, w, cx| {
+            w.simulate_next_frame(cx);
+            w.render_frame(cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+    };
+    let total = |cx: &mut HeadlessAppContext, view: &Entity<LocalViewer>| {
+        cx.update(|cx| {
+            let d = view.read(cx).chats.read(cx).delegate();
+            (0..d.sections_count(cx))
+                .flat_map(|section| {
+                    (0..d.items_count(section, cx))
+                        .map(move |row| gpui_kit::component::IndexPath::new(row).section(section))
+                })
+                .map(|ix| f32::from(d.item_height(ix, cx).unwrap()))
+                .sum::<f32>()
+        })
+    };
+    let layout = |cx: &mut HeadlessAppContext, h, view: &Entity<LocalViewer>| {
+        let expected = cx.update(|cx| {
+            let d = view.read(cx).chats.read(cx).delegate();
+            d.tree
+                .rows
+                .iter()
+                .enumerate()
+                .filter_map(|(position, row)| {
+                    let key = d.tree.key(*row, &d.all);
+                    let section = d.tree.bounds.iter().rposition(|start| *start <= position)?;
+                    let ix = gpui_kit::component::IndexPath::new(position - d.tree.bounds[section])
+                        .section(section);
+                    Some((key, d.item_height(ix, cx)?))
+                })
+                .collect::<Vec<_>>()
+        });
+        cx.update_window(h, |_, w, _| {
+            let mut mounted = 0;
+            for (key, expected) in expected {
+                if let Some(item) = w.try_find(key) {
+                    near(
+                        item.bounds().size.height,
+                        expected,
+                        "native List item extent",
+                    );
+                    mounted += 1;
+                }
+            }
+            assert!(mounted > 0, "real List items must be measured");
+        })
+        .unwrap();
+    };
+    for width in [680., 1100.] {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            cx.update(|cx| Theme::change(mode, None, cx));
+            let (h, view) = open(cx, width, rows(), &[]);
+            frame(cx, h, 240);
+            for kind in 0..3 {
+                // Start finished-member case expanded, so every case tests a close.
+                if kind == 2 {
+                    cx.update(|cx| {
+                        view.read(cx).chats.clone().update(cx, |l, cx| {
+                            l.delegate_mut().toggle_finished("gpui");
+                            cx.notify();
+                        })
+                    });
+                    frame(cx, h, 0);
+                    frame(cx, h, 240);
+                }
+                let toggle = |cx: &mut HeadlessAppContext, closed: bool| {
+                    cx.update_window(h, |_, w, cx| {
+                        view.update(cx, |v, cx| {
+                            if kind == 0 {
+                                v.toggle_sidebar_group("project:pilot", w, cx);
+                            } else {
+                                v.chats.update(cx, |l, cx| {
+                                    if kind == 1 {
+                                        l.delegate_mut().set_collapsed("gpui", closed);
+                                    } else {
+                                        l.delegate_mut().toggle_finished("gpui");
+                                    }
+                                    cx.notify();
+                                });
+                            }
+                            cx.notify();
+                        });
+                    })
+                    .unwrap();
+                };
+                let expanded = total(cx, &view);
+                toggle(cx, true);
+                frame(cx, h, 0);
+                let start = total(cx, &view);
+                assert!(
+                    (start - expanded).abs() < 0.5,
+                    "close starts at displayed extent: {kind} {start} {expanded}"
+                );
+                frame(cx, h, 64);
+                let closing = total(cx, &view);
+                assert!(closing < start, "intermediate close: {kind}");
+                if kind == 1 {
+                    cx.update(|cx| {
+                        assert!(
+                            view.read(cx)
+                                .chats
+                                .read(cx)
+                                .delegate()
+                                .index("m-q")
+                                .is_none(),
+                            "closed members leave navigation immediately"
+                        )
+                    });
+                    cx.update_window(h, |_, w, _| assert!(w.try_find("chat-row-m-q").is_none()))
+                        .unwrap();
+                }
+                toggle(cx, false);
+                frame(cx, h, 0);
+                assert!(
+                    (total(cx, &view) - closing).abs() < 0.5,
+                    "reversal never jumps"
+                );
+                frame(cx, h, 64);
+                let opening = total(cx, &view);
+                layout(cx, h, &view);
+                assert!(
+                    opening > closing && opening < expanded,
+                    "intermediate reveal"
+                );
+                if let Some(dir) = std::env::var_os("PILOT_NEXT_STYLE_DIR") {
+                    let dir = std::path::PathBuf::from(dir);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    cx.capture_screenshot(h)
+                        .unwrap()
+                        .save(dir.join(format!("{width}-{}-fold-{kind}-partial.png", mode.name())))
+                        .unwrap();
+                }
+                frame(cx, h, 240);
+                assert!((total(cx, &view) - expanded).abs() < 0.5);
+                layout(cx, h, &view);
+                // Resize snaps in the current frame, not after the old clock.
+                toggle(cx, true);
+                frame(cx, h, 0);
+                frame(cx, h, 32);
+                cx.update_window(h, |_, w, cx| {
+                    w.resize(size(px(width - 40.), px(720.)));
+                    w.bounds_changed(cx);
+                })
+                .unwrap();
+                frame(cx, h, 0);
+                let resized = total(cx, &view);
+                frame(cx, h, 64);
+                assert_eq!(total(cx, &view), resized);
+                cx.update(|cx| cx.set_reduce_motion(true));
+                toggle(cx, false);
+                frame(cx, h, 0);
+                assert!(
+                    (total(cx, &view) - expanded).abs() < 0.5,
+                    "reduced motion is immediate"
+                );
+                cx.update(|cx| cx.set_reduce_motion(false));
+                cx.update_window(h, |_, w, cx| {
+                    w.resize(size(px(width), px(760.)));
+                    w.bounds_changed(cx);
+                })
+                .unwrap();
+                frame(cx, h, 0);
+                println!(
+                    "{}",
+                    json!({"fold_motion":kind,"width":width,"mode":mode.name(),
+                    "expanded":expanded,"closing":closing,"opening":opening,
+                    "reversal":true,"native_bounds":true,"resize":true,"reduced_motion":true})
+                );
+            }
+            // A presentation rebuild never arms a history/hydration/reorder animation.
+            cx.update_window(h, |_, w, cx| view.update(cx, |v, cx| v.rebuild_nav(w, cx)))
+                .unwrap();
+            frame(cx, h, 0);
+            let natural = total(cx, &view);
+            frame(cx, h, 64);
+            assert_eq!(total(cx, &view), natural);
+            cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+            cx.run_until_parked();
+        }
+    }
 }

@@ -22,7 +22,8 @@ use crate::{
 use gpui_kit::component::menu::{ContextMenuExt, DropdownMenu};
 use gpui_kit::{
     App, Context, Div, FocusHandle, InteractiveElement, IntoElement, ParentElement, Pixels,
-    SharedString, Styled, Task, TestSupportExt, WeakEntity, Window,
+    SharedString, StatefulInteractiveElement as _, Styled, Task, TestSupportExt, WeakEntity,
+    Window,
     component::{
         ActiveTheme, IconName, IndexPath, StyledExt,
         list::{ListDelegate, ListItem, ListState},
@@ -35,6 +36,9 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
+
+#[path = "sidebar_fold.rs"]
+mod fold;
 
 type Observed = gpui_kit::base::ObservedElement<gpui_kit::Stateful<Div>>;
 
@@ -85,6 +89,8 @@ pub(crate) struct ChatList {
     pub(crate) memory: Memory,
     /// Each row's mark fade, by row key.
     pub(crate) marks: HashMap<String, Fade>,
+    folds: fold::Motion,
+    fold_width: f32,
     /// The list's keyboard focus (its search field), for revealing row actions.
     pub(crate) focus: Option<FocusHandle>,
     /// Rows that build their action menu button: the hovered row, the selected
@@ -111,12 +117,15 @@ impl ChatList {
             show_finished: HashSet::new(),
             memory,
             marks: HashMap::new(),
+            folds: Default::default(),
+            fold_width: 0.,
             focus: None,
             hovered: None,
             menu_row: None,
         }
     }
     pub(crate) fn filter(&mut self) {
+        self.folds.cancel();
         let archived = self.archived;
         let project = self.project.clone();
         // A folder keeps its projects' chats; pinned chats always show.
@@ -148,6 +157,40 @@ impl ChatList {
             .map(|row| self.tree.key(*row, &self.all))
             .collect();
         self.marks.retain(|key, _| keys.contains(key));
+    }
+    fn natural_height(&self, ix: IndexPath) -> Option<f32> {
+        Some(match self.row(ix)? {
+            Row::Chat(chat) if self.chat_caption(self.all.get(chat)?, ix.section) => {
+                TWO_LINE_HEIGHT
+            }
+            Row::Chat(_) => ONE_LINE_HEIGHT,
+            Row::Parent(t) if self.parent_caption(t, ix.section) => TWO_LINE_HEIGHT,
+            Row::Parent(_) => PARENT_HEIGHT,
+            Row::Member { .. } => MEMBER_HEIGHT,
+            Row::Fold(_) => FOLD_HEIGHT,
+            Row::Group(_) => GROUP_HEIGHT,
+        })
+    }
+    fn fold_layout(&self) -> Vec<(String, f32)> {
+        self.tree
+            .rows
+            .iter()
+            .enumerate()
+            .filter_map(|(i, row)| {
+                Some((
+                    self.tree.key(*row, &self.all),
+                    self.natural_height(self.path(i)?)?,
+                ))
+            })
+            .collect()
+    }
+    fn arm_fold(&mut self, key: String, before: Vec<(String, f32)>, mut motion: fold::Motion) {
+        motion.arm(key, &before, &self.fold_layout());
+        self.folds = motion;
+    }
+    pub(super) fn animate_folds(&mut self, width: f32, w: &mut Window, cx: &App) -> bool {
+        self.fold_width = width;
+        self.folds.sample(width, w, cx)
     }
     fn position(&self, ix: IndexPath) -> Option<usize> {
         let start = *self.tree.bounds.get(ix.section)?;
@@ -192,23 +235,32 @@ impl ChatList {
         }
     }
     pub(crate) fn set_collapsed(&mut self, mission: &str, collapsed: bool) {
+        let before = self.fold_layout();
+        let motion = std::mem::take(&mut self.folds);
         if collapsed {
             self.collapsed.insert(mission.to_owned());
         } else {
             self.collapsed.remove(mission);
         }
         self.filter();
+        self.arm_fold(format!("mission:{mission}"), before, motion);
     }
     pub(crate) fn toggle_finished(&mut self, mission: &str) {
+        let before = self.fold_layout();
+        let motion = std::mem::take(&mut self.folds);
         if !self.show_finished.remove(mission) {
             self.show_finished.insert(mission.to_owned());
         }
         self.filter();
+        self.arm_fold(format!("finished:{mission}"), before, motion);
     }
     /// Collapse or expand a project section (saved with the sidebar memory).
     pub(crate) fn set_group_collapsed(&mut self, key: &str, collapsed: bool) {
+        let before = self.fold_layout();
+        let motion = std::mem::take(&mut self.folds);
         self.memory.set_group_collapsed(key, collapsed);
         self.filter();
+        self.arm_fold(format!("group:{key}"), before, motion);
     }
     /// Opening a member expands its thread, and a chat its project section.
     pub(crate) fn reveal(&mut self, id: &str) -> bool {
@@ -1006,12 +1058,36 @@ impl ChatList {
                                     w.prevent_default();
                                     cx.stop_propagation();
                                 })
-                                .on_click(move |_, _, cx| {
+                                .on_click(move |_, w, cx| {
                                     cx.stop_propagation();
                                     let _ = list.update(cx, |list, cx| {
+                                        let selected = list
+                                            .delegate()
+                                            .selected
+                                            .and_then(|ix| list.delegate().key_at(ix));
+                                        let parent = list
+                                            .delegate()
+                                            .tree
+                                            .threads
+                                            .iter()
+                                            .position(|t| t.mission == mission)
+                                            .map(|t| {
+                                                list.delegate()
+                                                    .tree
+                                                    .key(Row::Parent(t), &list.delegate().all)
+                                            });
                                         let collapsed =
                                             !list.delegate().collapsed.contains(&mission);
                                         list.delegate_mut().set_collapsed(&mission, collapsed);
+                                        let ix = selected
+                                            .as_deref()
+                                            .and_then(|key| list.delegate().index(key))
+                                            .or_else(|| {
+                                                parent
+                                                    .as_deref()
+                                                    .and_then(|key| list.delegate().index(key))
+                                            });
+                                        list.set_selected_index(ix, w, cx);
                                         cx.notify();
                                     });
                                 }),
@@ -1354,18 +1430,14 @@ impl ListDelegate for ChatList {
         self.tree.bounds[section + 1] - self.tree.bounds[section]
     }
     fn item_height(&self, ix: IndexPath, _: &App) -> Option<Pixels> {
-        Some(px(match self.row(ix)? {
-            Row::Chat(chat) if self.chat_caption(self.all.get(chat)?, ix.section) => {
-                TWO_LINE_HEIGHT
-            }
-            Row::Chat(_) => ONE_LINE_HEIGHT,
-            Row::Parent(t) if self.parent_caption(t, ix.section) => TWO_LINE_HEIGHT,
-            Row::Parent(_) => PARENT_HEIGHT,
-            Row::Member { .. } => MEMBER_HEIGHT,
-            Row::Fold(_) => FOLD_HEIGHT,
-            Row::Group(_) => GROUP_HEIGHT,
-        }))
+        let natural = self.natural_height(ix)?;
+        if !self.folds.active() {
+            return Some(px(natural));
+        }
+        let key = self.key_at(ix)?;
+        Some(px(self.folds.height(&key, natural)))
     }
+
     fn section_header_height(&self, section: usize, _: &App) -> Option<Pixels> {
         Some(px(if self.header_shown(section) {
             HEADER_HEIGHT
@@ -1417,19 +1489,44 @@ impl ListDelegate for ChatList {
         window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Option<ListItem> {
-        Some(match self.row(ix)? {
-            Row::Chat(chat) => {
-                let chat = self.all.get(chat)?.clone();
-                self.render_chat(ix, chat, window, cx)
+        self.folds.sample(self.fold_width, window, cx);
+        let natural = self.natural_height(ix)?;
+        let height = self.item_height(ix, cx)?;
+        Some(
+            match self.row(ix)? {
+                Row::Chat(chat) => {
+                    let chat = self.all.get(chat)?.clone();
+                    self.render_chat(ix, chat, window, cx)
+                }
+                Row::Parent(thread) => self.render_parent(ix, thread, window, cx),
+                Row::Member { chat, thread } => {
+                    let chat = self.all.get(chat)?.clone();
+                    self.render_member(ix, chat, thread, window, cx)
+                }
+                Row::Fold(thread) => self.render_fold(ix, thread, cx),
+                Row::Group(group) => self.render_group(ix, group, window, cx),
             }
-            Row::Parent(thread) => self.render_parent(ix, thread, window, cx),
-            Row::Member { chat, thread } => {
-                let chat = self.all.get(chat)?.clone();
-                self.render_member(ix, chat, thread, window, cx)
-            }
-            Row::Fold(thread) => self.render_fold(ix, thread, cx),
-            Row::Group(group) => self.render_group(ix, group, window, cx),
-        })
+            .h(height)
+            .overflow_hidden()
+            .items_start()
+            .when(f32::from(height) > natural, |item| {
+                // Only empty exit space remains, never an obsolete child's targets.
+                item.child(
+                    div()
+                        .id("sidebar-fold-exit-space")
+                        .absolute()
+                        .top(px(natural))
+                        .bottom_0()
+                        .left_0()
+                        .right_0()
+                        .on_mouse_down(gpui_kit::MouseButton::Left, |_, w, cx| {
+                            w.prevent_default();
+                            cx.stop_propagation();
+                        })
+                        .on_click(|_, _, cx| cx.stop_propagation()),
+                )
+            }),
+        )
     }
     fn set_selected_index(
         &mut self,
@@ -1437,6 +1534,13 @@ impl ListDelegate for ChatList {
         _: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) {
+        if ix.is_some_and(|ix| {
+            self.key_at(ix)
+                .zip(self.natural_height(ix))
+                .is_some_and(|(key, height)| self.folds.height(&key, height) < height)
+        }) {
+            self.folds.cancel();
+        }
         self.selected = ix;
         cx.notify();
     }

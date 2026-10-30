@@ -21,6 +21,7 @@ pub(super) struct Questions {
     focus: FocusHandle,
     choices_focus: FocusHandle,
     retiring: Option<(String, u64)>,
+    hint_height: crate::composer_height::State,
 }
 impl Questions {
     pub(super) fn new(window: &mut Window, cx: &mut Context<ChatEditor>) -> Self {
@@ -43,6 +44,7 @@ impl Questions {
             focus: cx.focus_handle().tab_stop(false),
             choices_focus: cx.focus_handle(),
             retiring: None,
+            hint_height: Default::default(),
         }
     }
     pub(super) fn reset(&mut self) {
@@ -599,7 +601,28 @@ impl ChatEditor {
         }
         Some(row.into_any_element())
     }
-    pub(super) fn question_panel(&self, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
+    pub(super) fn question_hint_slot(
+        &self,
+        hint: Option<gpui_kit::AnyElement>,
+        gap: f32,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        crate::composer_height::slot(
+            "question-hint-slot",
+            &self.questions.hint_height,
+            self.selected.clone(),
+            hint,
+            gap,
+            w,
+            cx,
+        )
+    }
+    pub(super) fn question_panel(
+        &self,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui_kit::AnyElement> {
         let q = self.questions.current.clone()?;
         let editable = self.question_editable();
         let mut content = div()
@@ -709,7 +732,7 @@ impl ChatEditor {
             .min_w_0()
             .gap_2()
             .p_2();
-        if self.question_needs_you() {
+        let hint = if self.question_needs_you() {
             let identity = q.identity.clone();
             let hint = div()
                 .id("question-attention-hint")
@@ -739,9 +762,13 @@ impl ChatEditor {
                 });
             #[cfg(any(test, feature = "native-probes"))]
             let hint = hint.test_support();
-            panel = panel.child(hint);
-        }
-        panel = panel.child(content);
+            Some(hint.into_any_element())
+        } else {
+            None
+        };
+        panel = panel
+            .child(self.question_hint_slot(hint, 8., w, cx))
+            .child(content);
         // One content-sized action row, never a second Stop-only footer.
         let mut actions = div()
             .id("question-actions")

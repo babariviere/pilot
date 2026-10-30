@@ -238,6 +238,13 @@ impl LocalViewer {
         cx.notify();
     }
     pub(super) fn sidebar(&self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let width = self.sidebar_width(w, cx);
+        self.chats.update(cx, |list, cx| {
+            if list.delegate_mut().animate_folds(width, w, cx) {
+                cx.notify();
+            }
+        });
+
         let width = px(self.sidebar_width(w, cx));
         let archived = self.chats.read(cx).delegate().archived;
         let folder = self.chats.read(cx).delegate().folder.clone();

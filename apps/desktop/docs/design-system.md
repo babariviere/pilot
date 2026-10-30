@@ -282,6 +282,24 @@ parent-width changes snap on the measurement's next redraw, never ease a resize.
 following and reading anchors in hidden native windows, and reports CPU draw cost.
 These offscreen checks do not qualify visible smoothness or OS IME behavior.
 
+Sidebar project, mission and finished-member disclosures use the same 200ms
+executor-clock ease-out. Only explicit folding arms their extent: initial lists,
+search and presentation rebuilds use natural geometry. Logical rows and roll-ups
+change immediately; closing removes child targets and collapses empty space below
+the surviving row. Opening clips full-size rows into that extent, keeping their
+IDs and order. Reversal starts at the displayed extent; resize and reduced motion
+snap. Keyboard navigation into an entering row reveals its natural geometry at
+once rather than leaving selection hidden. The native `style` target exercises
+these phases alongside the existing selection, tree, counts and scrolling checks.
+
+The public attention hint and exact question hint each reuse `composer_height`
+for their own slot, not another animation around the editor. Fresh reason and
+question admission remain immediate, resolved content unmounts immediately, and
+only its remaining space eases away. The retained editor, question identity/action,
+warnings, Stop and uncertain-delivery recovery stay with their existing owners.
+The native `questions` target checks hint phases and simulated input retention
+alongside its existing answer, Unknown, switching and reconnect journeys.
+
 Conversation disclosures use `transcript_view::disclosure_motion::Height` on that same
 executor clock (200ms ease-out). Long-message Show more/less, automatic input, work
 groups, merged reads and individual calls (including inline patch sections) hold a

@@ -31,7 +31,7 @@ impl LocalViewer {
             }
             None => {
                 self.focus_restored_composer(w, cx);
-                self.attention_composer(cx)
+                self.attention_composer(w, cx)
             }
         }
     }

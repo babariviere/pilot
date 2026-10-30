@@ -1668,10 +1668,12 @@ impl Render for ChatEditor {
         if !is_new && !is_subagent {
             footer = footer.children(self.queue_entry.clone());
         }
-        if let Some(question) = self.question_panel(cx) {
+        if let Some(question) = self.question_panel(window, cx) {
             footer = footer.child(question);
         } else {
-            footer = footer.child(div().v_flex().min_w_0().child(input).child(controls));
+            footer = footer
+                .child(self.question_hint_slot(None, 0., window, cx))
+                .child(div().v_flex().min_w_0().child(input).child(controls));
         }
         shell
             .when(!recovery.is_empty(), |shell| {

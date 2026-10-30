@@ -306,6 +306,7 @@ pub struct LocalViewer {
     /// Calm entrance when the destination changes; never on the first frame.
     page_transition: crate::transition::Transition,
     page_key: String,
+    attention_height: crate::composer_height::State,
     /// Open/close easing of the chat side-panel slot, and its last axis.
     side_panel: crate::transition::Reveal<&'static str>,
     side_panel_beside: bool,
@@ -1470,6 +1471,7 @@ impl LocalViewer {
             selected: None,
             page_transition: Default::default(),
             page_key: String::new(),
+            attention_height: Default::default(),
             side_panel: Default::default(),
             side_panel_beside: true,
             title: "Choose a Local chat".into(),

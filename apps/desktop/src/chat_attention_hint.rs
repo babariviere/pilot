@@ -96,7 +96,11 @@ mod attention_hint_tests {
 }
 
 impl LocalViewer {
-    pub(super) fn attention_composer(&self, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+    pub(super) fn attention_composer(
+        &self,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
         let hint = self
             .selected
             .as_deref()
@@ -119,21 +123,29 @@ impl LocalViewer {
                     self.editor.read(cx).question_hint_covered(),
                 )
             });
-        let Some(label) = hint else {
-            return self.editor.clone().into_any_element();
-        };
+        let hint = hint.map(|label| {
+            crate::ui::text(crate::ui::Text::Caption, label.to_owned())
+                .id("chat-attention-hint")
+                .test_support()
+                .aria_label(label.to_owned())
+                .mx_3()
+                .px(px(10.))
+                .text_color(crate::appearance::attention_text(cx))
+                .into_any_element()
+        });
+        let hint = crate::composer_height::slot(
+            "attention-hint-slot",
+            &self.attention_height,
+            self.selected.clone(),
+            hint,
+            0.,
+            w,
+            cx,
+        );
         div()
             .v_flex()
             .min_w_0()
-            .child(
-                crate::ui::text(crate::ui::Text::Caption, label.to_owned())
-                    .id("chat-attention-hint")
-                    .test_support()
-                    .aria_label(label.to_owned())
-                    .mx_3()
-                    .px(px(10.))
-                    .text_color(crate::appearance::attention_text(cx)),
-            )
+            .child(hint)
             .child(self.editor.clone())
             .into_any_element()
     }

@@ -133,6 +133,7 @@ impl Probe {
 }
 
 pub(crate) fn run(cx: &mut HeadlessAppContext) {
+    hint_motion(cx);
     // Public summary reasons never invent a grant or a question target. The
     // wrapper remains outside the editor, preserving its retained draft/input.
     for width in [680., 1100.] {
@@ -330,4 +331,149 @@ pub(crate) fn run(cx: &mut HeadlessAppContext) {
     println!(
         "awaited question passed: Working reply by click and Return, legacy/released/queued fences"
     );
+}
+
+fn hint_motion(cx: &mut HeadlessAppContext) {
+    use gpui_kit::{EntityInputHandler, Focusable};
+    let frame = |cx: &mut HeadlessAppContext, h, ms| {
+        cx.advance_clock(Duration::from_millis(ms));
+        cx.update_window(h, |_, w, cx| {
+            w.simulate_next_frame(cx);
+            w.render_frame(cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+    };
+    let height = |cx: &mut HeadlessAppContext, h| {
+        cx.update_window(h, |_, w, _| {
+            w.try_find("attention-hint-slot")
+                .map_or(0., |n| f32::from(n.bounds().size.height))
+        })
+        .unwrap()
+    };
+    for width in [680., 1100.] {
+        for mode in [
+            gpui_kit::component::ThemeMode::Light,
+            gpui_kit::component::ThemeMode::Dark,
+        ] {
+            cx.update(|cx| gpui_kit::component::Theme::change(mode, None, cx));
+            let p = Probe::open(cx, width);
+            frame(cx, p.h, 0);
+            frame(cx, p.h, 240);
+            let input = cx.update(|cx| p.v.read(cx).editor.read(cx).shell_probe().0);
+            cx.update_window(p.h, |_, w, cx| {
+                input.update(cx, |i, cx| {
+                    i.set_value("Keep selection 日本語", w, cx);
+                    i.focus(w, cx);
+                    i.replace_and_mark_text_in_range(None, "にほん", Some(1..2), w, cx);
+                });
+            })
+            .unwrap();
+            frame(cx, p.h, 0);
+            let saved = cx
+                .update_window(p.h, |_, w, cx| {
+                    let marked = input.update(cx, |i, cx| i.marked_text_range(w, cx));
+                    (
+                        input.read(cx).value(),
+                        input.read(cx).selected_range(),
+                        marked,
+                        w.focused(cx),
+                    )
+                })
+                .unwrap();
+            let reason = |cx: &mut HeadlessAppContext, on: bool| {
+                cx.update(|cx|p.v.update(cx,|v,cx|{
+                v.state.loaded=true; v.state.summary_fresh=true; v.state.generation=v.generation;
+                v.state.chats=Arc::new(vec![crate::local_model::chat(&json!({"id":"synthetic","state":"idle","outcome":if on {"question"} else {"done"}})).unwrap()]);
+                cx.notify();
+            }))
+            };
+            reason(cx, true);
+            frame(cx, p.h, 0);
+            frame(cx, p.h, 0);
+            assert!(height(cx, p.h) < 1., "reveal begins at zero");
+            frame(cx, p.h, 64);
+            let opening = height(cx, p.h);
+            assert!(opening > 0.);
+            reason(cx, false);
+            frame(cx, p.h, 0);
+            let reversed = height(cx, p.h);
+            assert!((reversed - opening).abs() < 0.5);
+            cx.update_window(p.h, |_, w, _| {
+                assert!(
+                    w.try_find("chat-attention-hint").is_none(),
+                    "resolved content unmounts immediately"
+                )
+            })
+            .unwrap();
+            frame(cx, p.h, 32);
+            let closing = height(cx, p.h);
+            assert!(closing < opening);
+            reason(cx, true);
+            frame(cx, p.h, 0);
+            frame(cx, p.h, 0);
+            assert!(
+                (height(cx, p.h) - closing).abs() < 0.5,
+                "reopen from displayed space"
+            );
+            frame(cx, p.h, 64);
+            if let Some(dir) = std::env::var_os("PILOT_NEXT_HINT_MOTION_DIR") {
+                let dir = std::path::PathBuf::from(dir);
+                std::fs::create_dir_all(&dir).unwrap();
+                cx.capture_screenshot(p.h)
+                    .unwrap()
+                    .save(dir.join(format!("{width}-{}-hint-partial.png", mode.name())))
+                    .unwrap();
+            }
+            frame(cx, p.h, 240);
+            let natural = height(cx, p.h);
+            assert!(natural > opening);
+            cx.update_window(p.h, |_, w, cx| {
+                let marked = input.update(cx, |i, cx| i.marked_text_range(w, cx));
+                assert_eq!(
+                    (
+                        input.read(cx).value(),
+                        input.read(cx).selected_range(),
+                        marked,
+                        w.focused(cx)
+                    ),
+                    saved,
+                    "hint preserves draft, selection, simulated preedit and focus"
+                );
+                assert!(input.focus_handle(cx).is_focused(w));
+            })
+            .unwrap();
+            // Resize cancels active easing, including the narrow wrapping path.
+            reason(cx, false);
+            frame(cx, p.h, 0);
+            frame(cx, p.h, 32);
+            reason(cx, true);
+            frame(cx, p.h, 0);
+            frame(cx, p.h, 0);
+            cx.update_window(p.h, |_, w, cx| {
+                w.resize(size(px(width - 40.), px(720.)));
+                w.bounds_changed(cx);
+            })
+            .unwrap();
+            frame(cx, p.h, 0);
+            frame(cx, p.h, 0);
+            assert!(height(cx, p.h) > 0.);
+            let resized = height(cx, p.h);
+            frame(cx, p.h, 64);
+            assert_eq!(height(cx, p.h), resized);
+            cx.update(|cx| cx.set_reduce_motion(true));
+            reason(cx, false);
+            frame(cx, p.h, 0);
+            assert_eq!(height(cx, p.h), 0.);
+            reason(cx, true);
+            frame(cx, p.h, 0);
+            frame(cx, p.h, 0);
+            assert!(height(cx, p.h) > 0.);
+            cx.update(|cx| cx.set_reduce_motion(false));
+            // Reconnect, Unknown, switch, exact answer and Stop semantics run in
+            // the existing production question journeys alongside these frames.
+            assert!(p.answer().is_none());
+            p.close(cx);
+        }
+    }
 }
