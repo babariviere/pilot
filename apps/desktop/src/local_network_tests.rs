@@ -138,6 +138,8 @@ struct Mock {
     step: async_channel::Sender<()>,
     page_step: async_channel::Sender<()>,
     list_frames: async_channel::Sender<Value>,
+    control_frames: async_channel::Sender<Frame>,
+    chat_frames: async_channel::Sender<Frame>,
 }
 impl Drop for Mock {
     fn drop(&mut self) {
@@ -166,6 +168,8 @@ impl Mock {
         let (step, steps) = async_channel::bounded::<()>(2);
         let (page_step, page_steps) = async_channel::bounded::<()>(2);
         let (list_frames, list_values) = async_channel::bounded::<Value>(2);
+        let (control_frames, control_values) = async_channel::bounded::<Frame>(2);
+        let (chat_frames, chat_values) = async_channel::bounded::<Frame>(2);
         let task = tokio::spawn(async move {
             let mut handlers = tokio::task::JoinSet::new();
             loop {
@@ -177,6 +181,8 @@ impl Mock {
                         let steps=steps.clone();
                         let page_steps=page_steps.clone();
                         let list_values=list_values.clone();
+                        let control_values=control_values.clone();
+                        let chat_values=chat_values.clone();
                         handlers.spawn(async move {
                             let mut reader=BufReader::new(stream);
                             let mut headers=String::new();
@@ -246,6 +252,10 @@ impl Mock {
                                             value=list_values.recv()=>{
                                                 let Ok(value)=value else {return;};
                                                 if socket.send(Frame::Text(value.to_string().into())).await.is_err(){return;}
+                                            }
+                                            frame=control_values.recv()=>{
+                                                let Ok(frame)=frame else {return;};
+                                                if socket.send(frame).await.is_err(){return;}
                                             }
                                         }
                                     }
@@ -391,6 +401,19 @@ impl Mock {
                                     }
                                 }
                             }
+                            if path!="/api/ws" && matches!(scenario, Scenario::SessionList | Scenario::SessionListLineage) {
+                                loop {
+                                    tokio::select! {
+                                        frame=socket.next()=>{
+                                            if !matches!(frame,Some(Ok(Frame::Ping(_) | Frame::Pong(_)))) {return;}
+                                        }
+                                        frame=chat_values.recv()=>{
+                                            let Ok(frame)=frame else {return;};
+                                            if socket.send(frame).await.is_err(){return;}
+                                        }
+                                    }
+                                }
+                            }
                             while let Some(Ok(frame))=socket.next().await {
                                 assert!(!matches!(frame,Frame::Text(_) | Frame::Binary(_)),"viewer must not send application WS messages");
                             }
@@ -408,6 +431,8 @@ impl Mock {
             step,
             page_step,
             list_frames,
+            control_frames,
+            chat_frames,
         }
     }
 }
@@ -536,7 +561,7 @@ async fn connected_daemon_follows_the_live_control_socket_hello() {
 
     let mock = Mock::start(Scenario::DaemonVersion).await;
     let (client, rx) = LocalClient::start(mock.options.clone());
-    // Daemon identity arrives before the separate status publication.
+    // The admitted socket identity is independent of list freshness.
     let connected = until(&rx, |view| {
         view.status == "Connected · Local" && client.daemon() != ConnectedDaemon::NotConnected
     })

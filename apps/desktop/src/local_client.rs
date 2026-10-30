@@ -547,19 +547,119 @@ impl Inbox {
     }
 }
 
+/// Produced at the socket boundary, never inferred from display wording.
+enum SocketEvent {
+    Connected(Option<Arc<str>>),
+    Unavailable(Failure),
+}
+
+#[derive(Default)]
+enum ControlState {
+    #[default]
+    Connecting,
+    Reconnecting,
+    Connected(Option<Arc<str>>),
+    Unavailable(Failure),
+    /// Identity/protocol admission failed. Only explicit Reconnect can lift it.
+    Fenced(Failure),
+}
+
+#[derive(Default)]
+enum BaselineState {
+    #[default]
+    Missing,
+    Retained,
+    Fresh,
+    Rejected {
+        loaded: bool,
+        failure: Failure,
+    },
+}
+impl BaselineState {
+    fn loaded(&self) -> bool {
+        !matches!(self, Self::Missing | Self::Rejected { loaded: false, .. })
+    }
+    fn stale(&mut self) {
+        if matches!(self, Self::Fresh) {
+            *self = Self::Retained;
+        }
+    }
+    fn failure(&self) -> Option<Failure> {
+        match self {
+            Self::Rejected { failure, .. } => Some(failure),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Default)]
+enum ChatState {
+    #[default]
+    Closed,
+    Loading,
+    Connected,
+    Unavailable(Failure),
+}
+
+/// Sole authority for connection, baseline and failure state. Presentation is
+/// an output only; retained data and independent chat/control lifetimes stay
+/// with the existing reader. All failures here are bounded, display-safe text.
+#[derive(Default)]
+struct ReaderState {
+    control: ControlState,
+    baseline: BaselineState,
+    chat: ChatState,
+}
+impl ReaderState {
+    fn fenced(&self) -> bool {
+        matches!(self.control, ControlState::Fenced(_))
+    }
+    fn daemon(&self) -> ConnectedDaemon {
+        match &self.control {
+            ControlState::Connected(version) => ConnectedDaemon::Connected(version.clone()),
+            _ => ConnectedDaemon::NotConnected,
+        }
+    }
+    fn project(&self, view: &mut Presentation) {
+        view.list_loaded = self.baseline.loaded();
+        let summary_fresh = matches!(self.control, ControlState::Connected(_))
+            && matches!(self.baseline, BaselineState::Fresh);
+        view.summary_fresh = summary_fresh;
+        view.status = match self.control {
+            ControlState::Connecting => "Connecting to Local…",
+            ControlState::Reconnecting => {
+                self.baseline.failure().unwrap_or("Reconnecting to Local…")
+            }
+            ControlState::Connected(_) => self.baseline.failure().unwrap_or(if summary_fresh {
+                "Connected · Local"
+            } else {
+                "Loading Local chats…"
+            }),
+            ControlState::Unavailable(failure) | ControlState::Fenced(failure) => failure,
+        }
+        .into();
+        view.chat_issue = matches!(self.chat, ChatState::Unavailable(_));
+        view.chat_status = match self.chat {
+            ChatState::Closed => "",
+            ChatState::Loading => "Loading chat…",
+            ChatState::Connected => "Connected · Local",
+            ChatState::Unavailable(failure) => failure,
+        }
+        .into();
+    }
+}
+
 enum Incoming {
     Fatal(Failure),
-    /// The control socket connected; the version comes from its admitting hello.
-    Daemon(Option<Arc<str>>),
     Wire {
         generation: u64,
         chat: bool,
         value: Value,
     },
-    Status {
+    Socket {
         generation: u64,
         chat: bool,
-        text: &'static str,
+        event: SocketEvent,
     },
     Page {
         generation: u64,
@@ -775,21 +875,24 @@ fn socket_task(
         let mut resume: Option<Resume> = None;
         let mut failures = 0;
         loop {
-            let status = |text| Incoming::Status {
+            let status = |event| Incoming::Socket {
                 generation,
                 chat: is_chat,
-                text,
+                event,
             };
+            let unavailable = |failure| status(SocketEvent::Unavailable(failure));
             if !is_chat {
                 crate::diagnostics::disconnect();
             }
             let admitted = hello(&client, &options).await;
             if let Err(error) = admitted {
+                // Legacy hello classification remains wording-based here. Preserve its
+                // fatal/retry policy; it is not a presentation/freshness decision.
                 if error.contains("identity") || error.contains("incompatible") {
                     let _ = inbox.send(Incoming::Fatal(error)).await;
                     return;
                 }
-                let _ = inbox.send(status(error)).await;
+                let _ = inbox.send(unavailable(error)).await;
                 if error.contains("HTTP status")
                     || error.contains("limit")
                     || error.contains("JSON")
@@ -825,10 +928,9 @@ fn socket_task(
                 if let Ok(Ok(mut socket)) =
                     tokio::time::timeout(Duration::from_secs(5), connected).await
                 {
-                    if !is_chat {
-                        let _ = inbox.send(Incoming::Daemon(daemon_version(&hello))).await;
-                    }
-                    let _ = inbox.send(status("Connected · Local")).await;
+                    let _ = inbox
+                        .send(status(SocketEvent::Connected(daemon_version(&hello))))
+                        .await;
                     let mut welcomed = !is_chat;
                     let mut heartbeat = tokio::time::interval(Duration::from_secs(30));
                     heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -847,7 +949,7 @@ fn socket_task(
                             Some(Ok(Frame::Text(text))) => {
                                 let Ok(value) = serde_json::from_str::<Value>(&text) else {
                                     let _ = inbox
-                                        .send(status(
+                                        .send(unavailable(
                                             "Invalid Local stream JSON; subscription stopped.",
                                         ))
                                         .await;
@@ -876,7 +978,7 @@ fn socket_task(
                                         if value["resumed"] == true
                                             && resume.as_ref().is_none_or(|r| r.stream != stream)
                                         {
-                                            let _ = inbox.send(status("Invalid Local resume identity; subscription stopped.")).await;
+                                            let _ = inbox.send(unavailable("Invalid Local resume identity; subscription stopped.")).await;
                                             return;
                                         }
                                         let seq = if value["resumed"] == true {
@@ -923,7 +1025,7 @@ fn socket_task(
                                 if close.is_some_and(|c| (4400..4500).contains(&u16::from(c.code)))
                                 {
                                     let _ = inbox
-                                        .send(status(
+                                        .send(unavailable(
                                             "Local subscription refused; use Reconnect to retry.",
                                         ))
                                         .await;
@@ -932,7 +1034,7 @@ fn socket_task(
                                 break;
                             }
                             Some(Err(tokio_tungstenite::tungstenite::Error::Capacity(_))) => {
-                                let _ = inbox.send(status("Local WebSocket capacity error; subscription stopped. Use Reconnect to retry.")).await;
+                                let _ = inbox.send(unavailable("Local WebSocket capacity error; subscription stopped. Use Reconnect to retry.")).await;
                                 return;
                             }
                             Some(Ok(Frame::Ping(_) | Frame::Pong(_))) => {}
@@ -947,12 +1049,12 @@ fn socket_task(
             failures += 1;
             if failures >= 8 {
                 let _ = inbox
-                    .send(status("Local disconnected; use Reconnect to retry."))
+                    .send(unavailable("Local disconnected; use Reconnect to retry."))
                     .await;
                 return;
             }
             let _ = inbox
-                .send(status(
+                .send(unavailable(
                     "Local disconnected. Reconnecting with identity validation…",
                 ))
                 .await;
@@ -1029,20 +1131,16 @@ async fn run(
         .expect("Local HTTP client");
     let (sender, incoming) = async_channel::bounded(2);
     let mut inbox = Inbox { epoch: 0, sender };
-    let mut fenced = false;
+    let mut reader = ReaderState::default();
     let mut control = socket_task(options.clone(), client.clone(), None, 0, inbox.clone());
     let mut chat_socket: Option<JoinHandle<()>> = None;
     let mut page_task: Option<JoinHandle<()>> = None;
     let mut snapshot_revision = 0_u64;
     let mut awaiting_snapshot = false;
     let mut selected: Option<String> = None;
-    // A transport hello/delta cannot clear a rejected full-list error.
-    let mut list_error: Option<&'static str> = None;
     let mut model = LiveTranscript::default();
-    let mut view = Presentation {
-        status: "Connecting to Local…".into(),
-        ..Default::default()
-    };
+    let mut view = Presentation::default();
+    reader.project(&mut view);
     publish(&updates, &replace, view.clone());
     // A consumed queue row waits this long for its history entry from the other stream.
     let mut settle: Option<tokio::time::Instant> = None;
@@ -1057,10 +1155,10 @@ async fn run(
                 Ok(Command::Clear {generation})=>{
                     if let Some(task)=chat_socket.take(){task.abort();}
                     if let Some(task)=page_task.take(){task.abort();}
-                    view.todos=Default::default();selected=None;model=LiveTranscript::default();model.presentation_dirty=true;view.generation=generation;view.page_busy=false;view.page_error=false;view.chat_status.clear();view.chat_issue=false;view.batches=0;view.queued=0;view.user_queue=Arc::default();view.artifacts=Arc::new(Vec::new());view.artifact_metadata=Default::default();
+                    view.todos=Default::default();selected=None;model=LiveTranscript::default();model.presentation_dirty=true;view.generation=generation;view.page_busy=false;view.page_error=false;reader.chat=ChatState::Closed;view.batches=0;view.queued=0;view.user_queue=Arc::default();view.artifacts=Arc::new(Vec::new());view.artifact_metadata=Default::default();
                 }
                 Ok(Command::Open { id, generation }) => {
-                    if fenced || !local_model::valid_id(&id) { continue; }
+                    if reader.fenced() || !local_model::valid_id(&id) { continue; }
                     if let Some(task) = chat_socket.take() { task.abort(); }
                     if let Some(task) = page_task.take() { task.abort(); }
                     awaiting_snapshot = true;
@@ -1071,11 +1169,11 @@ async fn run(
                     model = LiveTranscript::default();
                     model.image_owner = Some((options.host(), id.clone()));
                     model.presentation_dirty = true;
-                    view.generation = generation; view.page_busy = false; view.page_error=false; view.chat_status = "Loading chat…".into(); view.chat_issue=false; view.batches=0;view.queued=0;view.user_queue=Arc::default();
+                    view.generation = generation; view.page_busy = false; view.page_error=false; reader.chat=ChatState::Loading; view.batches=0;view.queued=0;view.user_queue=Arc::default();
                     chat_socket = Some(socket_task(options.clone(),client.clone(),Some(id),generation,inbox.clone()));
                 }
                 Ok(Command::Earlier { before, generation }) => {
-                    if fenced || generation != view.generation || view.page_busy || model.cursor != Some(before) || model.prefix_pending || !model.has_capacity() { continue; }
+                    if reader.fenced() || generation != view.generation || view.page_busy || model.cursor != Some(before) || model.prefix_pending || !model.has_capacity() { continue; }
                     let Some(id) = selected.clone() else { continue; };
                     let (options, client, inbox) = (options.clone(),client.clone(),inbox.clone());
                     view.page_busy = true; view.page_error=false;
@@ -1088,12 +1186,11 @@ async fn run(
                 }
                 Ok(Command::Reconnect) => {
                     snapshot_revision += 1;
-                    view.summary_fresh=false;
-                    view.status=list_error.unwrap_or("Reconnecting to Local…").into();
+                    reader.baseline.stale();
+                    reader.control=ControlState::Reconnecting;
                     model.thinking=false; model.stale(); awaiting_snapshot=true;
-                    set_daemon(ConnectedDaemon::NotConnected);
                     view.todos.stale();
-                    inbox.epoch+=1; fenced=false;
+                    inbox.epoch+=1;
                     if let Some(task)=page_task.take() {task.abort();} view.page_busy=false;
                     control.abort();
                     let _ = (&mut control).await;
@@ -1110,34 +1207,42 @@ async fn run(
             event = incoming.recv() => match event {
                 Err(_) => break,
                 Ok((epoch,_)) if epoch != inbox.epoch => continue,
+                Ok((_,_)) if reader.fenced() => continue,
                 Ok((_,Incoming::Fatal(text))) => {
                     model.stop_thinking(); model.stale();
-                    set_daemon(ConnectedDaemon::NotConnected);
                     view.todos.stale();
-                    fenced=true; control.abort();
+                    reader.control=ControlState::Fenced(text); control.abort();
                     if let Some(task)=chat_socket.take() {task.abort();}
                     if let Some(task)=page_task.take() {task.abort();}
-                    view.summary_fresh=false;
-                    view.page_busy=false; view.status=text.into(); view.chat_status=text.into();view.chat_issue=true;view.artifact_metadata.mark_stale();
+                    reader.baseline.stale();
+                    reader.chat=ChatState::Unavailable(text);
+                    view.page_busy=false; view.artifact_metadata.mark_stale();
                 },
-                Ok((_, Incoming::Status {generation, chat, text})) => {
-                    if !chat || generation == view.generation { model.thinking=false; }
-                    if chat { if generation != view.generation { continue; }
-                        view.chat_issue = text!="Connected · Local";
-                        if view.chat_issue{snapshot_revision+=1; if let Some(task)=page_task.take(){task.abort();} view.page_busy=false; view.page_revision+=1; view.artifact_metadata.mark_stale();view.todos.stale();model.stale();} view.chat_status = text.into(); }
-                    else {
-                        if text != "Connected · Local" { view.summary_fresh=false; set_daemon(ConnectedDaemon::NotConnected); }
-                        view.status = if text == "Connected · Local" && !view.summary_fresh {
-                            list_error.unwrap_or("Loading Local chats…").into()
-                        } else { text.into() };
+                Ok((_, Incoming::Socket {generation, chat, event})) => {
+                    if chat && generation != view.generation { continue; }
+                    model.thinking=false;
+                    if chat {
+                        reader.chat = match event {
+                            SocketEvent::Connected(_) => ChatState::Connected,
+                            SocketEvent::Unavailable(failure) => {
+                                snapshot_revision+=1;
+                                if let Some(task)=page_task.take(){task.abort();}
+                                view.page_busy=false; view.page_revision+=1;
+                                view.artifact_metadata.mark_stale();view.todos.stale();model.stale();
+                                ChatState::Unavailable(failure)
+                            }
+                        };
+                    } else {
+                        reader.baseline.stale();
+                        reader.control = match event {
+                            SocketEvent::Connected(version) => {
+                                view.control_connection_generation += 1;
+                                ControlState::Connected(version)
+                            }
+                            SocketEvent::Unavailable(failure) => ControlState::Unavailable(failure),
+                        };
                     }
                 }
-                Ok((_, Incoming::Daemon(version))) => {
-                    view.control_connection_generation += 1;
-                    view.summary_fresh=false;
-                    view.status=list_error.unwrap_or("Loading Local chats…").into();
-                    set_daemon(ConnectedDaemon::Connected(version));
-                },
                 Ok((_, Incoming::Page { generation,before,revision,result })) => {
                     if generation != view.generation || revision != snapshot_revision { continue; }
                     view.page_busy = false;
@@ -1148,26 +1253,25 @@ async fn run(
                     }
                 }
                 Ok((_, Incoming::Wire {generation,chat: is_chat,value})) => {
-                    if fenced { continue; }
                     if is_chat {
                         if generation != view.generation || value["sessionId"].as_str()!=selected.as_deref() { continue; }
                         if value["type"] == "chat.stream" {awaiting_snapshot = value["resumed"] != true; snapshot_revision += 1; if let Some(task) = page_task.take() { task.abort(); } view.page_busy=false; view.page_error=false; view.page_revision+=1; view.todos.stream();model.compaction_stream(value["resumed"] == true);}
                         else if value["type"] == "artifacts" && value["sessionId"].as_str()==selected.as_deref(){if let Some(items)=view.artifact_metadata.accept(&value["artifacts"],selected.as_deref().unwrap_or("")){view.artifacts=items;}}
                         else if value["type"] == "events" && let Some(events) = value["events"].as_array() {
                             view.batches+=1;
-                            let reader = holding.load(std::sync::atomic::Ordering::Relaxed);
-                            model.holding = reader >> 1 == generation && reader & 1 == 1;
+                            let position = holding.load(std::sync::atomic::Ordering::Relaxed);
+                            model.holding = position >> 1 == generation && position & 1 == 1;
                             for event in events {
                                 if event["type"] == "snapshot" { awaiting_snapshot=false; snapshot_revision += 1; if let Some(task) = page_task.take() { task.abort(); } view.page_busy=false; view.page_revision+=1; }
                                 view.todos.apply(event);
-                                if event["type"] == "history_error" { model.stale(); view.chat_issue=true; view.chat_status="Chat history could not be loaded. Reconnect to retry.".into(); }
+                                if event["type"] == "history_error" { model.stale(); reader.chat=ChatState::Unavailable("Chat history could not be loaded. Reconnect to retry."); }
                                 if event["type"] != "todos_update" { model.apply(event); }
                             }
                             // Repeated reasoning deltas only update bounded
                             // counters. Do not publish/clone a transcript or
                             // wake the UI when the activity label is unchanged.
                             if events.iter().all(local_model::reasoning_deltas_only) && view.thinking == model.thinking { continue; }
-                        } else if value["type"] == "error" { view.todos.stale(); model.stop_thinking(); model.stale(); view.chat_issue=true; view.chat_status = "Local chat unavailable; details omitted for privacy.".into(); }
+                        } else if value["type"] == "error" { view.todos.stale(); model.stop_thinking(); model.stale(); reader.chat=ChatState::Unavailable("Local chat unavailable; details omitted for privacy."); }
                     } else if value["type"] == "projects" {
                         match local_model::projects(&value["projects"]) {
                             Ok(projects)=>{view.projects=Arc::new(projects);view.projects_loaded=true;view.projects_error=None;},
@@ -1178,15 +1282,10 @@ async fn run(
                             Ok(candidate)=>{
                                 view.chats=Arc::new(candidate.chats);
                                 view.mission_metadata=candidate.metadata;
-                                view.list_loaded=true;
-                                view.summary_fresh=true;
-                                list_error=None;
-                                view.status="Connected · Local".into();
+                                reader.baseline=BaselineState::Fresh;
                             },
                             Err(error)=>{
-                                view.summary_fresh=false;
-                                list_error=Some(error);
-                                view.status=error.into();
+                                reader.baseline=BaselineState::Rejected { loaded:reader.baseline.loaded(), failure:error };
                             },
                         }
                     } else if value["type"] == "session" && let Some(chat) = local_model::chat(&value["session"]) {
@@ -1206,7 +1305,7 @@ async fn run(
         if !model.prefix_pending && model.presentation_dirty {
             view.rows = model.rows();
         }
-        view.cursor = if fenced || model.prefix_pending || !model.has_capacity() {
+        view.cursor = if reader.fenced() || model.prefix_pending || !model.has_capacity() {
             None
         } else {
             model.cursor
@@ -1217,7 +1316,7 @@ async fn run(
         view.loaded = model.loaded && !model.prefix_pending && !awaiting_snapshot;
         view.reader_revision = snapshot_revision;
         view.queued = model.queued;
-        view.user_queue = if fenced {
+        view.user_queue = if reader.fenced() {
             Arc::new(crate::queued_message::Snapshot {
                 unavailable: true,
                 ..Default::default()
@@ -1225,19 +1324,21 @@ async fn run(
         } else {
             model.user_queue.clone()
         };
-        view.thinking = model.thinking && !fenced;
-        view.compacting = model.compacting() && !fenced;
+        view.thinking = model.thinking && !reader.fenced();
+        view.compacting = model.compacting() && !reader.fenced();
         view.failure_run_serial = model.failure_run_serial;
-        view.question = if fenced {
+        view.question = if reader.fenced() {
             crate::question::Projection::Unavailable
         } else {
             model.question()
         };
-        view.question_awaited = !fenced && model.question_awaited();
+        view.question_awaited = !reader.fenced() && model.question_awaited();
         #[cfg(test)]
         {
             view.test_publications += 1;
         }
+        reader.project(&mut view);
+        set_daemon(reader.daemon());
         publish(&updates, &replace, view.for_display(selected.as_deref()));
     }
     control.abort();
@@ -1324,6 +1425,50 @@ mod read_transport_tests;
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn reader_projection_cannot_control_internal_freshness_or_identity() {
+        let mut reader = ReaderState {
+            control: ControlState::Connected(Some("1.2.3".into())),
+            baseline: BaselineState::Fresh,
+            chat: ChatState::Connected,
+        };
+        let mut view = Presentation {
+            status: "Not the connected wording".into(),
+            chat_status: "Not the connected wording".into(),
+            chat_issue: true,
+            ..Default::default()
+        };
+        reader.project(&mut view);
+        assert!(view.summary_fresh && view.list_loaded && !view.chat_issue);
+        assert_eq!(
+            reader.daemon(),
+            ConnectedDaemon::Connected(Some("1.2.3".into()))
+        );
+        reader.baseline = BaselineState::Rejected {
+            loaded: true,
+            failure: "Bounded list failure",
+        };
+        reader.control = ControlState::Reconnecting;
+        reader.baseline.stale();
+        reader.project(&mut view);
+        assert!(view.list_loaded && !view.summary_fresh && !view.chat_issue);
+        assert_eq!(view.status, "Bounded list failure");
+        reader.control = ControlState::Connected(None);
+        reader.project(&mut view);
+        assert!(!view.summary_fresh);
+        assert_eq!(
+            view.status, "Bounded list failure",
+            "hello cannot clear rejection"
+        );
+        reader.control = ControlState::Fenced("Bounded identity failure");
+        view.status = "Connected · Local".into();
+        view.summary_fresh = true;
+        reader.project(&mut view);
+        assert!(reader.fenced() && !view.summary_fresh);
+        assert_eq!(reader.daemon(), ConnectedDaemon::NotConnected);
+        assert_eq!(view.status, "Bounded identity failure");
+    }
+
     #[test]
     fn pending_question_attention_overrides_work_only_with_fresh_canonical_evidence() {
         use crate::{

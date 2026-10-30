@@ -263,6 +263,16 @@ async fn changed_lineage_retains_list_but_refuses_freshness_and_new_socket() {
     assert!(refused.list_loaded && !refused.summary_fresh);
     assert_eq!(refused.control_connection_generation, 1);
     assert_eq!(client.daemon(), ConnectedDaemon::NotConnected);
+    // FIFO Clear is an observable marker after an attempted fenced Open.
+    assert!(client.command(Command::Open {
+        id: "a".into(),
+        generation: 90
+    }));
+    assert!(client.command(Command::Clear { generation: 91 }));
+    let cleared = until(&rx, |v| v.generation == 91).await;
+    assert_eq!(cleared.status, refused.status);
+    assert!(!cleared.summary_fresh && cleared.list_loaded);
+    assert_eq!(client.daemon(), ConnectedDaemon::NotConnected);
     assert_eq!(
         mock.requests
             .lock()
@@ -272,4 +282,126 @@ async fn changed_lineage_retains_list_but_refuses_freshness_and_new_socket() {
             .count(),
         1
     );
+    assert!(
+        mock.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|r| !r.contains("/api/sessions/"))
+    );
+}
+
+#[tokio::test]
+async fn control_socket_health_does_not_depend_on_connected_display_wording() {
+    let mock = Mock::start(Scenario::SessionList).await;
+    let (client, rx) = LocalClient::start(mock.options.clone());
+    // Projects are an ordered marker after socket admission, not list evidence.
+    let hello = until(&rx, |v| v.projects_loaded).await;
+    assert_eq!(hello.control_connection_generation, 1);
+    assert_eq!(client.daemon(), ConnectedDaemon::Connected(None));
+    assert!(!hello.summary_fresh && !hello.list_loaded);
+}
+
+#[tokio::test]
+async fn chat_socket_health_does_not_depend_on_connected_display_wording() {
+    let mock = Mock::start(Scenario::SessionList).await;
+    let (client, rx) = LocalClient::start(mock.options.clone());
+    let mut serial = 0;
+    let listed = frame(&mock, &rx, &mut serial, good()).await;
+    assert!(listed.summary_fresh);
+    assert!(client.command(Command::Open {
+        id: "a".into(),
+        generation: 7
+    }));
+    let chat = until(&rx, |v| v.loaded && v.generation == 7).await;
+    assert!(!chat.chat_issue, "successful chat socket is not a failure");
+    assert!(chat.question_fresh(Some("a"), 7));
+    assert_eq!(client.daemon(), ConnectedDaemon::Connected(None));
+}
+
+#[tokio::test]
+async fn control_disconnect_retains_baseline_and_leaves_chat_stream_independent() {
+    let mock = Mock::start(Scenario::SessionList).await;
+    let (client, rx) = LocalClient::start(mock.options.clone());
+    let mut serial = 0;
+    frame(&mock, &rx, &mut serial, good()).await;
+    assert!(client.command(Command::Open {
+        id: "a".into(),
+        generation: 7
+    }));
+    let chat = until(&rx, |v| v.loaded && v.generation == 7).await;
+    mock.control_frames.send(Frame::Close(None)).await.unwrap();
+    let offline = until(&rx, |v| v.status.starts_with("Local disconnected")).await;
+    retained(&chat, &offline);
+    assert!(!offline.summary_fresh && !offline.chat_issue);
+    assert_eq!(client.daemon(), ConnectedDaemon::NotConnected);
+    mock.chat_frames.send(Frame::Text(json!({"type":"events","sessionId":"a","seq":2,"events":[{"type":"entry_appended","entry":entry(6,"chat remains live")}]}).to_string().into())).await.unwrap();
+    let live_chat = until(&rx, |v| v.batches == 2).await;
+    assert_eq!(live_chat.rows.len(), chat.rows.len() + 1);
+    assert_eq!(live_chat.rows[0].id(), chat.rows[0].id());
+    assert!(!live_chat.summary_fresh && !live_chat.chat_issue);
+    assert!(client.command(Command::Reconnect));
+    let hello = until(&rx, |v| v.control_connection_generation == 2).await;
+    assert!(hello.list_loaded && !hello.summary_fresh);
+    assert!(Arc::ptr_eq(&chat.chats, &hello.chats));
+    assert_eq!(client.daemon(), ConnectedDaemon::Connected(None));
+    let empty = frame(&mock, &rx, &mut serial, snapshot(json!([]))).await;
+    assert!(empty.list_loaded && empty.summary_fresh && empty.chats.is_empty());
+}
+
+#[tokio::test]
+async fn malformed_chat_stream_does_not_invalidate_control_baseline() {
+    let mock = Mock::start(Scenario::SessionList).await;
+    let (client, rx) = LocalClient::start(mock.options.clone());
+    let mut serial = 0;
+    frame(&mock, &rx, &mut serial, good()).await;
+    assert!(client.command(Command::Open {
+        id: "a".into(),
+        generation: 7
+    }));
+    let chat = until(&rx, |v| v.loaded && v.generation == 7).await;
+    mock.chat_frames
+        .send(Frame::Text("not JSON: private synthetic content".into()))
+        .await
+        .unwrap();
+    let failed = until(&rx, |v| v.chat_issue).await;
+    assert!(failed.summary_fresh && failed.list_loaded);
+    assert!(failed.rows == chat.rows);
+    assert_eq!(client.daemon(), ConnectedDaemon::Connected(None));
+    assert_eq!(
+        failed.chat_status,
+        "Invalid Local stream JSON; subscription stopped."
+    );
+    assert!(!failed.question_fresh(Some("a"), 7));
+    let delta = frame(&mock, &rx, &mut serial, json!({"type":"session","session":{"id":"a","title":"Still receiving control","state":"idle"}})).await;
+    assert!(delta.summary_fresh && delta.chat_issue);
+    assert!(client.command(Command::Open {
+        id: "a".into(),
+        generation: 8
+    }));
+    let recovered = until(&rx, |v| v.loaded && v.generation == 8).await;
+    assert!(!recovered.chat_issue && recovered.summary_fresh);
+    assert_eq!(recovered.control_connection_generation, 1);
+    assert!(recovered.question_fresh(Some("a"), 8));
+}
+
+#[tokio::test]
+async fn malformed_control_stream_retains_data_until_explicit_recovery() {
+    let mock = Mock::start(Scenario::SessionList).await;
+    let (client, rx) = LocalClient::start(mock.options.clone());
+    let mut serial = 0;
+    let listed = frame(&mock, &rx, &mut serial, good()).await;
+    mock.control_frames
+        .send(Frame::Text("private invalid JSON".into()))
+        .await
+        .unwrap();
+    let failed = until(&rx, |v| v.status.starts_with("Invalid Local stream JSON")).await;
+    retained(&listed, &failed);
+    assert!(!failed.summary_fresh && failed.list_loaded);
+    assert_eq!(client.daemon(), ConnectedDaemon::NotConnected);
+    assert!(client.command(Command::Reconnect));
+    let hello = until(&rx, |v| v.control_connection_generation == 2).await;
+    assert!(!hello.summary_fresh && hello.list_loaded);
+    let recovered = frame(&mock, &rx, &mut serial, good()).await;
+    assert!(recovered.summary_fresh);
 }
