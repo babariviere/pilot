@@ -79,7 +79,7 @@ fn cmd_k_toggles_jump_when_nothing_is_focused(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn cmd_k_opens_from_home_and_restores_sidebar_search_focus(cx: &mut TestAppContext) {
+fn cmd_k_opens_from_home_and_restores_sidebar_list_focus(cx: &mut TestAppContext) {
     let (h, v, _commands) = setup(cx);
     // Home hides the focused composer, as at launch or after page navigation.
     cx.update_window(h, |_, w, cx| {
@@ -92,18 +92,27 @@ fn cmd_k_opens_from_home_and_restores_sidebar_search_focus(cx: &mut TestAppConte
     assert!(open(cx, &v), "Cmd-K opens Jump from Home");
     press(cx, h, "escape");
     assert!(!open(cx, &v));
-    press(cx, h, "secondary-f");
-    let search = v.read_with(cx, |v, cx| v.chats.read(cx).query_input());
+    cx.update_window(h, |_, w, cx| {
+        v.update(cx, |v, cx| v.chats.update(cx, |l, cx| l.focus(w, cx)))
+    })
+    .unwrap();
+    let list = v.read_with(cx, |v, _| v.chats.clone());
+    let query = v.read_with(cx, |v, cx| v.chats.read(cx).query_input());
+    assert!(
+        !cx.update_window(h, |_, w, cx| query.focus_handle(cx).is_focused(w))
+            .unwrap(),
+        "sidebar has no search focus"
+    );
     let focused = |cx: &mut TestAppContext| {
-        cx.update_window(h, |_, w, cx| search.focus_handle(cx).is_focused(w))
+        cx.update_window(h, |_, w, cx| list.focus_handle(cx).is_focused(w))
             .unwrap()
     };
     assert!(focused(cx));
     press(cx, h, "secondary-k");
-    assert!(open(cx, &v), "Cmd-K opens Jump from sidebar search");
+    assert!(open(cx, &v), "Cmd-K opens Jump from sidebar list");
     press(cx, h, "escape");
     assert!(!open(cx, &v));
-    assert!(focused(cx), "focus returns to search");
+    assert!(focused(cx), "focus returns to list");
 }
 
 #[gpui_kit::test]

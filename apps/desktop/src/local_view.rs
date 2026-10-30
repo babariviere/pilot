@@ -425,10 +425,9 @@ impl LocalViewer {
                 cx,
             ),
             crate::ui::shortcut("secondary-k", ToggleJump, None, cx),
-            // Sidebar tree keys, ahead of the search field's caret moves. The
-            // sidebar passes them on whenever it has nothing to collapse or expand.
-            KeyBinding::new("left", SidebarCollapse, Some("List > Input")),
-            KeyBinding::new("right", SidebarExpand, Some("List > Input")),
+            // Sidebar tree keys are handled only by the sidebar list pane.
+            KeyBinding::new("left", SidebarCollapse, Some("SidebarList > List")),
+            KeyBinding::new("right", SidebarExpand, Some("SidebarList > List")),
             crate::ui::shortcut("secondary-n", NewChat, None, cx),
             crate::ui::shortcut("secondary-f", FocusChats, None, cx),
             crate::ui::shortcut("secondary-1", GoHome, None, cx),
@@ -991,7 +990,7 @@ impl LocalViewer {
                 window,
                 cx,
             )
-            .searchable(true)
+            .searchable(false)
         });
         chats.update(cx, |list, cx| {
             list.delegate_mut().focus = Some(gpui_kit::Focusable::focus_handle(list, cx))
@@ -2229,7 +2228,7 @@ impl LocalViewer {
         }
     }
     /// Left/Right in the sidebar: collapse or expand a thread, or move between
-    /// a member and its parent. False passes the key on to the search field.
+    /// a member and its parent. False passes the key on.
     pub(super) fn sidebar_arrow(
         &mut self,
         right: bool,
@@ -2443,13 +2442,11 @@ impl Render for LocalViewer {
                     if view.editor.update(cx,|e,cx|e.marked(window,cx)) {return;}
                     child.update(cx,|v,cx|v.open_find(window,cx));cx.stop_propagation();return;
                 }
-                // Preserve the existing sidebar Find shortcut outside the active
-                // conversation and its ordinary composer.
                 if view.page==Page::Chat && view.selected.is_some() && view.state.loaded && !view.artifacts_open
                     && (view.editor.update(cx,|e,cx|e.conversation_find_ready(window,cx)) || view.transcript.read(cx).find_focused(window,cx)) {
                     view.transcript.update(cx,|t,cx|t.open_find(window,cx));
-                } else { view.chats.update(cx,|list,cx|list.focus(window,cx)); }
-                cx.stop_propagation();
+                    cx.stop_propagation();
+                } else { cx.propagate(); }
             }))
             .child(self.sidebar(window,cx))
             .child(div().id("main-pane").h_flex().items_stretch().flex_1().min_w_0().min_h_0().h_full()

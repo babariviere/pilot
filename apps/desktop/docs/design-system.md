@@ -359,7 +359,7 @@ It is synthetic native interaction evidence, not OS IME/AX/performance qualifica
 `SidebarHeader`. Add project is a named folder-plus action inside the disclosed
 project selector, not a permanent full-width label. Open the selector, Tab to
 Add project and press Return; Escape closes the existing guarded sheet and
-returns focus to mounted sidebar search. Opening, cancelling or browsing choices
+returns focus to the sidebar list. Opening, cancelling or browsing choices
 never creates a project or chooses a new-chat folder.
 
 The sidebar's trailing hairline is a drag handle (`resize_handle` with
@@ -375,7 +375,7 @@ glyph slot, half-rem gap and two-rem control height (28pt at the app's 14pt rem)
 Chat rows have no phantom glyph column: their title and status align with the
 leading resource column. Compose, filters and chat menus share a trailing action
 column and 28pt targets. Long names truncate without shrinking body text; actual
-owners retain full accessible names. Search, filters, archive, navigation history,
+owners retain full accessible names. Command Palette search, filters, archive, navigation history,
 Usage, Settings and connection/recovery state keep their existing owners.
 
 The sidebar list (`sidebar_list.rs`, rows built by `sidebar_tree.rs`) has
@@ -401,7 +401,7 @@ are ordered by the user's latest send to anything in them, rows inside keep
 the same order, and agent activity never moves either. A thread sits with its
 coordinator's project; a member from another project names it in a quiet
 caption before its state word. Rows inside a section don't repeat the project;
-Pinned, Archived and search results stay flat with their project caption, and a
+Pinned and Archived stay flat with their project caption, and a
 chosen project shows no labels. A collapsed section is only its label, with its
 chat count and most urgent mark in the trailing column. Enter, a click,
 Left/Right or the label's … and right-click menus collapse and expand it; Left
@@ -443,8 +443,8 @@ pieces only touch at the fork, so the translucent hairline stays even. Rows have
 heights per kind through the patched Kit list's `ListDelegate::item_height`
 (48pt two-line, 32pt for a chat or parent without a caption, 28pt member,
 24pt fold, 30pt project label). Left/Right
-(`SidebarCollapse`/`SidebarExpand`, bound ahead of the search field's caret
-moves and passed on when they do nothing) collapse, expand or move between a
+(`SidebarCollapse`/`SidebarExpand`, scoped to the sidebar list and passed on
+when they do nothing) collapse, expand or move between a
 member and its parent; Enter opens a row's chat, opens a coordinator-less
 mission or shows/hides finished members. A new reply fills the trailing circle
 (no dot beside the title); Needs you, Failed or Ready on the row, or Needs you
@@ -466,7 +466,7 @@ it opens the mission rather than the chat. Coordinator-less parent rows already
 open the mission and get none; so do chats whose mission is unknown.
 The open row keeps its faint neutral fill. Missions is the sidebar's only mission
 entry (Command-3 opens the same browser); missions are never sidebar rows, only
-their chats are. Flat rows (search, Pinned, Archived) keep the mission caption:
+their chats are. Flat rows (Pinned and Archived) keep the mission caption:
 a linked chat's metadata line ends with its mission: Map (`AppIcon::Mission`)
 for a member, Compass (`AppIcon::Coordinator`) for the summary's coordinator
 role, as in Swift, then the mission name. As in Swift, names come from the

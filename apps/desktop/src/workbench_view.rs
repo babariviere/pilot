@@ -2,7 +2,7 @@
 use super::*;
 use crate::app_icon::AppIcon;
 use crate::appearance::{Space, TextRole};
-use gpui_kit::{EntityInputHandler, base::InteractiveElementExt as _};
+use gpui_kit::base::InteractiveElementExt as _;
 
 /// The narrowest sidebar (also its narrow-window default) and the widest.
 const SIDEBAR_MIN: f32 = 184.;
@@ -14,7 +14,10 @@ const MAIN_MIN: f32 = 480.;
 /// clamped on every frame so a smaller window narrows it without forgetting it.
 pub(crate) fn sidebar_extent(viewport: f32, chosen: Option<f32>) -> f32 {
     let preferred = chosen.unwrap_or(if viewport < 800. { SIDEBAR_MIN } else { 232. });
-    preferred.min(SIDEBAR_MAX).min(viewport - MAIN_MIN).max(SIDEBAR_MIN)
+    preferred
+        .min(SIDEBAR_MAX)
+        .min(viewport - MAIN_MIN)
+        .max(SIDEBAR_MIN)
 }
 
 /// The drag payload of the sidebar's edge. It renders nothing under the pointer.
@@ -34,17 +37,24 @@ impl LocalViewer {
     }
     /// Keep the width you dragged to (clamped as shown), or None for the
     /// default; saved once the drag has settled rather than on every move.
-    pub(super) fn resize_sidebar(&mut self, width: Option<f32>, w: &mut Window, cx: &mut Context<Self>) {
-        let width = width.map(|width| sidebar_extent(f32::from(w.viewport_size().width), Some(width)));
-        if !self
-            .chats
-            .update(cx, |list, _| list.delegate_mut().memory.set_sidebar_width(width))
-        {
+    pub(super) fn resize_sidebar(
+        &mut self,
+        width: Option<f32>,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let width =
+            width.map(|width| sidebar_extent(f32::from(w.viewport_size().width), Some(width)));
+        if !self.chats.update(cx, |list, _| {
+            list.delegate_mut().memory.set_sidebar_width(width)
+        }) {
             return;
         }
         cx.notify();
         self.sidebar_width_save = Some(cx.spawn(async move |view, cx| {
-            cx.background_executor().timer(Duration::from_millis(300)).await;
+            cx.background_executor()
+                .timer(Duration::from_millis(300))
+                .await;
             let _ = view.update(cx, |view, cx| view.save_sidebar_memory(cx));
         }));
     }
@@ -205,9 +215,7 @@ impl LocalViewer {
         if self.jump.is_some() || self.mission_open || self.add_project_open {
             return false;
         }
-        let q = self.chats.read(cx).query_input();
-        if q.update(cx, |q, cx| q.marked_text_range(w, cx).is_some())
-            || self.missions.update(cx, |m, cx| m.brief_marked(w, cx))
+        if self.missions.update(cx, |m, cx| m.brief_marked(w, cx))
             || self.editor.update(cx, |e, cx| e.marked(w, cx))
             || self.queue_marked(w, cx)
             || (matches!(self.page, Page::Inbox(_))
@@ -318,11 +326,11 @@ impl LocalViewer {
                     .child(self.chat_filter(cx)))
                 .when(archived,|this|this.child(div().id("archives-active").test_support().px_2().text_size(px(TextRole::CAPTION)).text_color(cx.theme().muted_foreground).child("Archived included"))))
             // The sidebar scrolls without a visible scrollbar in any Kit mode.
-            .child(div().id("chat-list-pane").test_support().px(px(Space::SIDEBAR)).flex_1().min_h_0().min_w_0()
-                // Left/Right collapse and expand mission threads; otherwise the search field keeps them.
+            .child(div().id("chat-list-pane").test_support().key_context("SidebarList").px(px(Space::SIDEBAR)).flex_1().min_h_0().min_w_0()
+                // Left/Right collapse and expand mission threads.
                 .on_action(cx.listener(|v,_:&super::SidebarCollapse,w,cx|{if !v.sidebar_arrow(false,w,cx){cx.propagate();}}))
                 .on_action(cx.listener(|v,_:&super::SidebarExpand,w,cx|{if !v.sidebar_arrow(true,w,cx){cx.propagate();}}))
-                .child(List::new(&self.chats).search_placeholder("Find a chat…").scrollbar_visible(false)))
+                .child(List::new(&self.chats).scrollbar_visible(false)))
             .child(self.chat_actions.clone())
             .children(self.daemon_update_notice(cx).map(|message| div().px(px(Space::SIDEBAR)).py_1().child(
                 crate::ui::action("daemon-startup-status", message, crate::ui::Action::Quiet)

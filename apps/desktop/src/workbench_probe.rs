@@ -602,6 +602,16 @@ fn sidebar_alignment(w: &mut Window, width: f32) {
     let count = w.find("sidebar-chat-count").bounds();
     assert!((count.left() - leading).abs() < px(0.5));
     let row = w.find("chat-row-synthetic").bounds();
+    let pane = w.find("chat-list-pane").bounds();
+    let first = ["synthetic", "other", "failed"]
+        .into_iter()
+        .filter_map(|id| w.try_find(format!("chat-row-{id}")).map(|row| row.bounds().top()))
+        .min_by(|a, b| a.partial_cmp(b).unwrap())
+        .unwrap();
+    assert!(
+        first - pane.top() < px(64.),
+        "no reserved search field above chats"
+    );
     let title = w
         .within("chat-row-synthetic")
         .find("sidebar-chat-title")
@@ -688,14 +698,7 @@ fn chooser_checks(
         settle(cx, h);
         cx.update_window(h, |_, w, cx| {
             assert!(!v.read(cx).projects_open);
-            assert!(
-                v.read(cx)
-                    .chats
-                    .read(cx)
-                    .query_input()
-                    .focus_handle(cx)
-                    .is_focused(w)
-            );
+            assert!(v.read(cx).chats.focus_handle(cx).is_focused(w));
         })
         .unwrap();
     }
@@ -745,40 +748,6 @@ fn chooser_checks(
             // the app-owned saved draft later in this interaction sequence.
             t.replace_text_in_range(None, "にほん", w, cx);
         });
-        // Conversation Cmd-F now belongs to loaded-conversation find.
-        // Focus the actual sidebar search owner for its separate IME contract.
-        v.read(cx).chats.clone().update(cx, |l, cx| l.focus(w, cx));
-    })
-    .unwrap();
-    settle(cx, h);
-    let query = cx.update(|cx| v.read(cx).chats.read(cx).query_input());
-    let (mark, focus) = cx
-        .update_window(h, |_, w, cx| {
-            assert!(query.focus_handle(cx).is_focused(w));
-            let mark = query.update(cx, |q, cx| {
-                q.replace_and_mark_text_in_range(None, "にほん", Some(3..3), w, cx);
-                q.marked_text_range(w, cx)
-            });
-            assert!(mark.is_some());
-            let focus = w.focused(cx);
-            w.click("project-scope", cx);
-            assert!(
-                !v.read(cx).projects_open,
-                "chooser respects sidebar preedit"
-            );
-            (mark, focus)
-        })
-        .unwrap();
-    settle(cx, h);
-    cx.update_window(h, |_, w, cx| {
-        assert_eq!(w.focused(cx), focus);
-        query.update(cx, |q, cx| {
-            assert_eq!(q.marked_text_range(w, cx), mark);
-            assert_eq!(q.value().as_ref(), "にほん");
-            q.unmark_text(w, cx);
-        });
-        w.press("secondary-a", cx);
-        w.press("backspace", cx);
         w.click("project-scope", cx);
     })
     .unwrap();

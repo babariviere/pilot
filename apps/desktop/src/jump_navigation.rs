@@ -4,7 +4,7 @@ use crate::{
     jump::{Destination, Snapshot},
     jump_view::{JumpEvent, JumpPalette},
 };
-use gpui_kit::{EntityInputHandler, StatefulInteractiveElement};
+use gpui_kit::StatefulInteractiveElement;
 
 impl LocalViewer {
     pub(super) fn jump_source(&self) -> Snapshot {
@@ -61,9 +61,7 @@ impl LocalViewer {
             }
             return;
         }
-        let search = self.chats.read(cx).query_input();
-        if search.update(cx, |q, cx| q.marked_text_range(w, cx).is_some())
-            || self.missions.update(cx, |m, cx| m.brief_marked(w, cx))
+        if self.missions.update(cx, |m, cx| m.brief_marked(w, cx))
             || self.editor.update(cx, |e, cx| e.marked(w, cx))
             || self.queue_marked(w, cx)
             || (matches!(self.page, Page::Inbox(_))
