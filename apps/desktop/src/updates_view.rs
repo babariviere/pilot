@@ -743,6 +743,12 @@ impl Updates {
         }));
         u
     }
+    /// Inject only the controller result, not an installation or helper acknowledgment.
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_exit_authorized(&mut self) {
+        assert!(self.controller.is_none());
+        self.probe_state = Some(State::ExitAuthorized);
+    }
     /// Controller-free state; `new` attaches the worker.
     fn blank(location: Option<Location>, external: bool) -> Self {
         Self {

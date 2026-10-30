@@ -142,13 +142,21 @@ fn run(args: Vec<String>) -> Result<()> {
                 serde_json::from_slice(&fs::read(root.join("location.json"))?)?;
             let owner: serde_json::Value =
                 serde_json::from_slice(&fs::read(original.home.join(".daemon-owner.json"))?)?;
-            if owner["runtimeRoot"].as_str()
-                != capsule
-                    .join(pilot_desktop_updater::layout::RUNTIME)
-                    .to_str()
+            let ui_only = root.join("no-management").exists();
+            // macOS UI-only startup reconnects by exact app target/hello identity;
+            // it deliberately does not return or admit a retained daemon runtime.
+            let root_matches = if cfg!(target_os = "macos") && ui_only {
+                capsule == target
+            } else {
+                owner["runtimeRoot"].as_str()
+                    == capsule
+                        .join(pilot_desktop_updater::layout::RUNTIME)
+                        .to_str()
+            };
+            if !root_matches
                 || location.home != original.home
                 || location.port != original.port
-                || reconnect_only != root.join("no-management").exists()
+                || reconnect_only != ui_only
                 || !capsule.is_dir()
             {
                 return Err("startup receipt changed reconnect authority".into());
@@ -515,7 +523,7 @@ fn run(args: Vec<String>) -> Result<()> {
         }
         let actions = fs::read_to_string(root.join("update-actions")).unwrap_or_default();
         if actions.lines().any(|action| action != "inspect")
-            || (mode == "ui-only" && actions.lines().count() < 3)
+            || (cfg!(target_os = "linux") && mode == "ui-only" && actions.lines().count() < 3)
         {
             return Err("app update acquired management authority or skipped proof".into());
         }

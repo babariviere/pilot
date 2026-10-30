@@ -138,7 +138,11 @@ authentication for the ordinary loopback API.
    External app-only updates record only their exact Local profile/port/hello pin.
 4. Revalidate fresh exact checkpoint receipts and the applicable reservation,
    retained proof or external identity pin before app-helper COMMIT.
-   Only acknowledged `ExitAuthorized` requests a clean GUI quit. Uncertain COMMIT
+   Only acknowledged `ExitAuthorized`, with the same fresh checkpoint, requests
+   priority draft-writer Close while retaining input fences. The real Flushed
+   event, after Store and courier-input release, permits GUI quit. A checkpoint
+   alone is not a close acknowledgment; see [application exit](application-quit.md).
+   Uncertain COMMIT
    stays recovery-required and fenced; it is not an undo or permission to edit.
 5. The helper observes actual OS parent exit and re-authenticates the archive.
    On macOS it rehashes the exact helper-prepared closed payload; Linux retains

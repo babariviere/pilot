@@ -168,7 +168,12 @@ not an absence proof. Swift links are historical capability references only.
   The [application Close/Quit corpus](application-quit.md) separately drives real
   hidden AppKit close/menu-Quit through the shared root coordination and checks
   Store release at GPUI shutdown and immediate independent post-process reopen.
-  External OS termination and updater-restart teardown remain separate gaps.
+  The updater ExitAuthorized path now uses the same real Store/input-release
+  acknowledgment while retaining its exact checkpoint fence. Three added hidden
+  updater-exit cases qualify this root-release boundary, not bundle installation.
+  Direct external `NSApplication terminate:` demonstrably bypasses the drain and
+  dirty-preferences veto. Its platform should-terminate contract needs scope review;
+  actual OS shutdown remains unqualified.
 - **Lazy history:** #471/#476 have recorded hidden native and synthetic transport
   results in [lazy history](lazy-history.md). Initial 60-entry tail, contiguous
   24-entry older pages and explicit full-history Find are implemented. Distant

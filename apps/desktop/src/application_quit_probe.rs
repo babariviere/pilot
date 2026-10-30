@@ -64,6 +64,10 @@ pub fn run_application_quit_probe() {
         panic!("native termination unexpectedly returned");
     }
     for mode in [
+        "update-exit",
+        "unknown-update-exit",
+        "answer-update-exit",
+        "external-terminate",
         "close",
         "quit",
         "held-close",
@@ -86,8 +90,10 @@ pub fn run_application_quit_probe() {
         } else {
             faux::NEWER
         };
-        assert_eq!(next.book.drafts["chat:a"].text, expected);
-        if mode != "fault" {
+        if mode != "external-terminate" {
+            assert_eq!(next.book.drafts["chat:a"].text, expected);
+        }
+        if mode != "fault" && mode != "external-terminate" {
             assert_eq!(next.book.drafts["chat:b"].text, "Separate 🦀 draft");
         }
         assert!(next.book.drafts["chat:a"].answer == captured().answer);
@@ -100,6 +106,9 @@ pub fn run_application_quit_probe() {
             usize::from(
                 mode.starts_with("held")
                     || mode == "unknown-quit"
+                    || mode == "unknown-update-exit"
+                    || mode == "answer-update-exit"
+                    || mode == "external-terminate"
                     || mode == "answer-quit"
                     || mode == "fault"
             )
@@ -143,9 +152,9 @@ fn child(mode: String, root: PathBuf) {
             captured(),
         )]))
         .unwrap();
-    let original = if mode == "unknown-quit" {
+    let original = if mode == "unknown-quit" || mode == "unknown-update-exit" {
         Some(store.prepare("chat:a", &captured(), false, false).unwrap())
-    } else if mode == "answer-quit" {
+    } else if mode == "answer-quit" || mode == "answer-update-exit" {
         let draft = captured();
         Some(
             store
@@ -161,6 +170,7 @@ fn child(mode: String, root: PathBuf) {
         None
     };
     drop(store);
+    let root = root.canonicalize().unwrap();
     let original = Arc::new(Mutex::new(original));
     gpui_kit::application()
         .with_assets(crate::ChromeAssets)
@@ -189,6 +199,15 @@ fn child(mode: String, root: PathBuf) {
                         );
                         v.state.list_loaded = true;
                         v.state.loaded = true;
+                        if mode.ends_with("update-exit") {
+                            let updater = cx.new(|_| crate::updates_view::Updates::probe_ready_local());
+                            v.settings = cx.new(|_| crate::settings_view::SettingsPreferences::new(Some(Ok(root.join("preferences")))));
+                            v.settings.update(cx, |s, cx| {
+                                s.updater = Some(updater);
+                                s.load(cx);
+                            });
+                            v.connect_updates(w, cx);
+                        }
                         v.listen_writes(writes, w, cx);
                         LocalViewer::register_close(w, cx);
                         v
@@ -198,10 +217,15 @@ fn child(mode: String, root: PathBuf) {
             .unwrap();
             let editor = view.read(cx).editor.clone();
             let (wake, changed) = async_channel::bounded(1);
+            let settings_wake = wake.clone();
             cx.observe(&editor, move |_, _| {
                 let _ = wake.try_send(());
             })
             .detach();
+            let settings = view.read(cx).settings.clone();
+            cx.observe(&settings, move |_, _| {
+                let _ = settings_wake.try_send(());
+            }).detach();
             let approved = Rc::new(Cell::new(false));
             let checked = approved.clone();
             let (exit_root, exit_server, exit_original, exit_mode) =
@@ -214,7 +238,12 @@ fn child(mode: String, root: PathBuf) {
                     "application exited before its Close/veto checks"
                 );
                 let state = exit_editor.read(cx).teardown_probe_state();
-                if exit_mode == "fault" {
+                if exit_mode == "external-terminate" {
+                    assert!(!state.flushed, "external terminate unexpectedly drained");
+                    assert!(exit_writer.command(crate::interaction::WriteCommand::Checkpoint(999)), "external bypass no longer has an open input lane");
+                    assert!(Store::open(exit_root.clone(), exit_server.options.host()).is_err(), "external terminate unexpectedly released Store before shutdown");
+                    println!("application_quit: external terminate bypass observed: no Flushed, Store locked, input open");
+                } else if exit_mode == "fault" {
                     assert!(
                         !state.flushed,
                         "failed private persistence must veto graceful Quit"
@@ -254,11 +283,11 @@ fn child(mode: String, root: PathBuf) {
                 let seen = exit_server.seen.lock().unwrap();
                 assert_eq!(
                     seen.executes,
-                    usize::from(exit_mode.starts_with("held") || exit_mode == "fault")
+                    usize::from(exit_mode.starts_with("held") || exit_mode == "fault" || exit_mode == "external-terminate")
                 );
                 assert_eq!(
                     seen.lookups,
-                    usize::from(exit_mode.starts_with("held") || exit_mode == "fault")
+                    usize::from(exit_mode.starts_with("held") || exit_mode == "fault" || exit_mode == "external-terminate")
                 );
                 assert!(seen.panic.is_none(), "fixture handler: {:?}", seen.panic);
                 assert!(seen.requests.iter().all(|(method, path)| method == "GET"
@@ -280,6 +309,13 @@ fn child(mode: String, root: PathBuf) {
             cx.spawn(async move |cx| {
                 let _commands = commands;
                 wait_for(cx, &editor, &changed, |s| s.book.is_some()).await;
+                while !cx.update(|cx| {
+                    let state = &view.read(cx).settings.read(cx).state;
+                    assert!(state.error().is_none(), "private preferences: {:?}", state.error());
+                    state.loaded()
+                }) {
+                    changed.recv().await.unwrap();
+                }
                 let open = |id: &str, cx: &mut AsyncApp| {
                     h.update(cx, |_, w, cx| {
                         view.update(cx, |v, cx| {
@@ -336,7 +372,7 @@ fn child(mode: String, root: PathBuf) {
                     })
                     .unwrap();
                 }
-                if mode.starts_with("held") || mode == "fault" {
+                if mode.starts_with("held") || mode == "fault" || mode == "external-terminate" {
                     h.update(cx, |_, w, cx| {
                         w.render_frame(cx);
                         w.click("local-send", cx);
@@ -406,7 +442,7 @@ fn child(mode: String, root: PathBuf) {
                 })
                 .unwrap();
                 open("a", cx);
-                if mode == "answer-quit" {
+                if mode == "answer-quit" || mode == "answer-update-exit" {
                     h.update(cx, |_, w, cx| editor.update(cx, |e, cx| {
                         e.question_context(Some("a"), crate::question::Projection::Pending(Arc::new(question())), true, w, cx);
                     })).unwrap();
@@ -419,6 +455,30 @@ fn child(mode: String, root: PathBuf) {
                         .update(cx, |t, cx| t.set_value(faux::NEWER, w, cx))
                 })
                 .unwrap();
+                if mode.ends_with("update-exit") {
+                    h.update(cx, |_, w, cx| view.update(cx, |v, cx| v.probe_begin_update_exit(w, cx))).unwrap();
+                    wait_for(cx, &editor, &changed, |s| s.checkpoint == Some(1)).await;
+                    while !cx.update(|cx| view.read(cx).settings.read(cx).state.persisted()) {
+                        changed.recv().await.unwrap();
+                    }
+                    h.update(cx, |_, w, cx| view.update(cx, |v, cx| {
+                        assert_eq!(v.editor.update(cx, |e, cx| e.update_receipt(w, cx)), Some(v.restart_generation));
+                        assert!(v.settings.read(cx).state.persisted());
+                        v.settings.read(cx).updater.clone().unwrap().update(cx, |u, _| u.probe_exit_authorized());
+                    })).unwrap();
+                    approved.set(true);
+                    h.update(cx, |_, w, cx| view.update(cx, |v, cx| v.advance_update_restart(w, cx))).unwrap();
+                    return;
+                }
+                if mode == "external-terminate" {
+                    // Dirty preferences veto app Quit, but not this external AppKit entry.
+                    h.update(cx, |_, _, cx| view.read(cx).settings.clone().update(cx, |s, _| {
+                        s.state.set_automatic_update_checks(!s.state.current().automatic_update_checks);
+                    })).unwrap();
+                    approved.set(true);
+                    native_terminate();
+                    return;
+                }
                 // No settling wait/checkpoint: Close must drain the pending debounce.
                 approved.set(true);
                 if mode.ends_with("close") {
@@ -486,6 +546,23 @@ fn native_quit() {
             object(submenu, c"delegate"),
             sel_registerName(c"handleGPUIMenuItem:".as_ptr()),
             quit,
+        );
+    }
+}
+
+fn native_terminate() {
+    // SAFETY: main-thread entry on this fixture's own NSApplication, outside App borrow.
+    unsafe {
+        let app = object(
+            objc_getClass(c"NSApplication".as_ptr()),
+            c"sharedApplication",
+        );
+        let call: unsafe extern "C" fn(Id, Sel, Id) =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        call(
+            app,
+            sel_registerName(c"terminate:".as_ptr()),
+            std::ptr::null_mut(),
         );
     }
 }

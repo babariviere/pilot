@@ -5,6 +5,11 @@ use gpui_kit::EntityInputHandler;
 use pilot_desktop_updater::{Flush, Runtime, Safety, State};
 
 impl LocalViewer {
+    #[cfg(all(feature = "native-probes", target_os = "macos"))]
+    pub(super) fn probe_begin_update_exit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.begin_update_restart(window, cx);
+        assert!(self.restart_pending);
+    }
     fn updater(&self, cx: &App) -> Option<Entity<crate::updates_view::Updates>> {
         self.settings.read(cx).updater.clone()
     }
@@ -317,7 +322,11 @@ impl LocalViewer {
         match state {
             Some(State::ExitAuthorized) => {
                 self.restart_timeout = None;
-                cx.quit();
+                if self.safety(window, cx).is_some() {
+                    self.editor.update(cx, |e, cx| {
+                        e.close_gui_update(self.restart_generation, window, cx)
+                    });
+                }
             }
             Some(State::ReadyToRestart(_)) => {
                 if !updater.read(cx).fenced {

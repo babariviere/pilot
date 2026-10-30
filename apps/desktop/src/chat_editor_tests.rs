@@ -1,6 +1,87 @@
 use super::*;
 
 #[gpui_kit::test]
+fn update_checkpoint_close_requires_exact_receipt_and_keeps_fence_until_flushed(
+    cx: &mut TestAppContext,
+) {
+    let (handle, view, _) = setup(cx);
+    let (client, commands, closed) = Interaction::recording_with_close();
+    view.update(cx, |e, _| e.client = Some(client));
+    let flushed = std::rc::Rc::new(std::cell::Cell::new(0));
+    let observed = flushed.clone();
+    cx.update(|cx| {
+        cx.subscribe(&view, move |_, event, _| {
+            if matches!(event, EditorEvent::Flushed) {
+                observed.set(observed.get() + 1);
+            }
+        })
+        .detach()
+    });
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            assert!(!e.close_gui_update(7, w, cx), "no checkpoint");
+            assert!(e.begin_gui_update_checkpoint(7, w, cx));
+            assert!(!e.close_gui_update(7, w, cx), "no writer acknowledgment");
+            let mut book = (**e.state.book.as_ref().unwrap()).clone();
+            book.drafts = e.cache.clone();
+            e.state.book = Some(std::sync::Arc::new(book));
+            e.state.checkpoint = Some(6);
+            assert!(!e.close_gui_update(7, w, cx), "stale acknowledgment");
+            e.state.checkpoint = Some(7);
+            assert!(!e.close_gui_update(8, w, cx), "wrong requested generation");
+            e.state.error = Some("private persistence failed");
+            assert!(!e.close_gui_update(7, w, cx), "failed persistence");
+            e.state.error = None;
+            assert!(
+                !e.request_close(cx),
+                "ordinary Close cannot lift update fence"
+            );
+            assert!(!e.closing);
+        })
+    })
+    .unwrap();
+    while let Ok(command) = commands.try_recv() {
+        assert!(
+            matches!(command, WriteCommand::Checkpoint(7)),
+            "no premature Close"
+        );
+    }
+    assert!(closed.try_recv().is_err(), "no premature priority Close");
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            assert!(e.close_gui_update(7, w, cx));
+            assert!(e.close_gui_update(7, w, cx), "idempotent while draining");
+            assert!(e.update_checkpoint.is_some(), "never unfreeze input");
+            assert!(!e.ready());
+            let mut state = e.state.clone();
+            state.error = Some("final save failed");
+            e.accept(state, w, cx);
+        })
+    })
+    .unwrap();
+    closed.try_recv().unwrap();
+    assert!(closed.try_recv().is_err(), "only one priority Close");
+    assert!(commands.try_recv().is_err(), "never replay a mutation");
+    cx.run_until_parked();
+    assert_eq!(flushed.get(), 0, "failed drain never authorizes exit");
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            let mut state = e.state.clone();
+            state.error = None;
+            state.flushed = true;
+            e.accept(state, w, cx);
+        })
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        flushed.get(),
+        1,
+        "Flushed reaches root despite checkpoint fence"
+    );
+}
+
+#[gpui_kit::test]
 fn coordinator_picker_uses_pasted_storage_and_rejects_stale_selection(cx: &mut TestAppContext) {
     let (handle, view, commands) = setup(cx);
     let root = std::env::temp_dir().join(format!("picker-images-{}", uuid::Uuid::new_v4()));

@@ -758,7 +758,11 @@ impl ChatEditor {
         self.accept_draft_discard(window, cx);
         self.note_delivered(shown);
         if self.update_checkpoint.is_some() {
-            cx.emit(EditorEvent::UpdateCheckpoint);
+            cx.emit(if self.state.flushed {
+                EditorEvent::Flushed
+            } else {
+                EditorEvent::UpdateCheckpoint
+            });
             cx.notify();
             return;
         }
@@ -1105,6 +1109,27 @@ impl ChatEditor {
             return None;
         }
         Some(generation)
+    }
+    /// After authorized GUI replacement, close the existing writer without lifting
+    /// the checkpoint's input fence. Only its later Flushed event permits exit.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(crate) fn close_gui_update(
+        &mut self,
+        generation: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.update_receipt(window, cx) != Some(generation) {
+            return false;
+        }
+        if !self.closing {
+            self.closing = self
+                .client
+                .as_ref()
+                .is_some_and(|client| client.command(WriteCommand::Close));
+            cx.notify();
+        }
+        self.closing
     }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) fn end_update_checkpoint(&mut self, cx: &mut Context<Self>) {
