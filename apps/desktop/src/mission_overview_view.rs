@@ -158,24 +158,24 @@ impl Browser {
         });
         cx.notify();
     }
-    /// A task bar over work-status counts: to do and delegated leave the track
-    /// showing, as in the Tasks list.
-    fn status_bar(counts: &[(&'static str, usize)], cx: &App) -> gpui_kit::Div {
-        let mut track = cx.theme().muted_foreground;
-        track.a *= 0.25;
-        let bar: Vec<_> = counts
-            .iter()
-            .filter_map(|(status, n)| {
-                let (_, fill, color) = ui::task_status(status, cx);
-                ((fill > 0. && *status != "delegated") || *status == "blocked")
-                    .then_some((*n, color))
-            })
-            .collect();
-        ui::progress_bar(&bar, counts.iter().map(|c| c.1).sum(), track)
-    }
     /// Progress by phase when the mission has phases, as in Swift's Overview;
     /// otherwise one bar with its legend.
-    pub(super) fn progress_view(&self, d: &Detail, cx: &Context<Self>) -> Option<AnyElement> {
+    pub(super) fn progress_view(
+        &self,
+        d: &Detail,
+        w: &mut Window,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        let keys = if d.phases.is_empty() {
+            vec!["mission-progress".to_owned()]
+        } else {
+            d.phases
+                .iter()
+                .enumerate()
+                .map(|(ix, g)| format!("mission-phase-{ix}-{}", g.name))
+                .collect()
+        };
+        self.motion.borrow_mut().retain_bars(&keys);
         if !d.phases.is_empty() {
             return Some(
                 div()
@@ -188,7 +188,7 @@ impl Browser {
                         d.phases
                             .iter()
                             .enumerate()
-                            .map(|(ix, g)| self.phase_row(ix, g, cx)),
+                            .map(|(ix, g)| self.phase_row(ix, g, w, cx)),
                     )
                     .into_any_element(),
             );
@@ -213,7 +213,11 @@ impl Browser {
                 .gap_2()
                 .w_full()
                 .max_w(px(360.))
-                .child(Self::status_bar(&s.counts, cx))
+                .child(
+                    self.motion
+                        .borrow_mut()
+                        .bar("mission-progress".into(), &s.counts, w, cx),
+                )
                 .child(
                     div()
                         .h_flex()
@@ -235,7 +239,7 @@ impl Browser {
     }
     /// "Build ▬▬▬ 12/18": the current phase in the text colour, the rest
     /// muted. Rows open Tasks; the counts exclude dropped tasks.
-    fn phase_row(&self, ix: usize, g: &Group, cx: &Context<Self>) -> AnyElement {
+    fn phase_row(&self, ix: usize, g: &Group, w: &mut Window, cx: &Context<Self>) -> AnyElement {
         let generation = self.generation;
         let color = if g.current {
             cx.theme().foreground
@@ -274,13 +278,14 @@ impl Browser {
                         .text_color(color)
                         .when(g.current, |t| t.font_semibold()),
                 )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(48.))
-                        .max_w(px(240.))
-                        .child(Self::status_bar(&g.counts, cx)),
-                )
+                .child(div().flex_1().min_w(px(48.)).max_w(px(240.)).child(
+                    self.motion.borrow_mut().bar(
+                        format!("mission-phase-{ix}-{}", g.name),
+                        &g.counts,
+                        w,
+                        cx,
+                    ),
+                ))
                 .child(
                     ui::text(
                         Text::Caption,
@@ -330,10 +335,17 @@ impl Browser {
     }
     /// One line: status pie, number and title. The owner chat stays a sibling
     /// action, never nested inside the row's own button.
-    fn task_row(&self, section: &str, t: &Row, cx: &Context<Self>) -> AnyElement {
+    fn task_row(&self, section: &'static str, t: &Row, cx: &Context<Self>) -> AnyElement {
         let generation = self.generation;
         let (label, fill, color) = ui::task_status(&t.work_status, cx);
         let id = t.id.clone();
+        let (focus, owner_focus) = {
+            let mut motion = self.motion.borrow_mut();
+            (
+                motion.focus(&t.id, false, cx),
+                motion.focus(&t.id, true, cx),
+            )
+        };
         let mut row = div()
             .h_flex()
             .w_full()
@@ -354,6 +366,7 @@ impl Browser {
                     t.number, t.title, label
                 )))
                 .disabled(!self.can_reveal(generation, cx))
+                .track_focus(&focus)
                 .child(
                     div()
                         .h_flex()
@@ -389,10 +402,20 @@ impl Browser {
                 SharedString::from(format!("mission-owner-{section}-{}", t.id)),
                 owner,
                 title,
+                &owner_focus,
                 cx,
             ));
         }
-        row.into_any_element()
+        self.motion
+            .borrow_mut()
+            .row(
+                &t.id,
+                section,
+                self.detail_scroll.clone(),
+                row.into_any_element(),
+                cx,
+            )
+            .into_any_element()
     }
     fn chat_title(&self, id: &str) -> Option<String> {
         self.chats
@@ -415,6 +438,7 @@ impl Browser {
         element: SharedString,
         id: &str,
         title: String,
+        focus: &FocusHandle,
         cx: &Context<Self>,
     ) -> AnyElement {
         let generation = self.generation;
@@ -424,6 +448,7 @@ impl Browser {
         let enabled = self.can_link(&key, id, generation);
         let chat = id.to_owned();
         ui::action(element, "", Action::Quiet)
+            .track_focus(focus)
             .flex_none()
             .max_w(gpui_kit::relative(0.4))
             .disabled(!enabled)

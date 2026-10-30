@@ -751,6 +751,9 @@ fn root(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     );
 }
 pub fn run_mission_brief_probe(cx: &mut HeadlessAppContext) {
+    // This journey checks editing/ACK/IME, not timed presentation. The missions
+    // motion case separately exercises animated entry/exit and reversals.
+    cx.update(|cx| cx.set_reduce_motion(true));
     let dir = std::env::var_os("PILOT_NEXT_BRIEF_DIR").map(PathBuf::from);
     if let Some(d) = &dir {
         std::fs::create_dir_all(d).unwrap();

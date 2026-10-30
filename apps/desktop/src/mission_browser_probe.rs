@@ -91,6 +91,15 @@ fn into_view(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &'static str) 
 }
 pub fn run_mission_browser_probe(cx: &mut HeadlessAppContext) {
     let case = std::env::var("PILOT_NEXT_MISSIONS_CASE").ok();
+    if case.as_deref().is_none_or(|c| c == "motion") {
+        crate::mission_browser_view::motion::probe::run(cx);
+        if case.as_deref() == Some("motion") {
+            return;
+        }
+    }
+    // Keep the existing navigation/identity journey independent of animation
+    // timing. The real clock phases are checked above, not slept through here.
+    cx.update(|cx| cx.set_reduce_motion(true));
     assert!(
         case.as_deref()
             .is_none_or(|c| c == "chat-menu" || c == "sidebar-open-mission"),

@@ -12,6 +12,8 @@ mod mission_lifecycle_browser;
 mod mission_metadata_browser;
 #[path = "mission_overview_view.rs"]
 mod mission_overview_view;
+#[path = "mission_motion.rs"]
+pub(crate) mod motion;
 #[cfg(test)]
 #[path = "mission_browser_view_tests.rs"]
 mod tests;
@@ -82,6 +84,7 @@ pub(crate) struct Input {
     pub(crate) loaded: bool,
 }
 pub(crate) struct Browser {
+    motion: std::cell::RefCell<motion::Motion>,
     decisions: mission_decisions_view::Disclosure,
     comments: mission_comments_view::Comments,
     pub(crate) generation: u64,
@@ -191,6 +194,7 @@ impl Browser {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         let tasks_browser = cx.new(crate::mission_tasks_view::Pane::new);
         Self {
+            motion: Default::default(),
             decisions: Default::default(),
             comments: Default::default(),
             tasks_browser,
@@ -1030,7 +1034,50 @@ impl Browser {
     }
 }
 impl Render for Browser {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let key = match &self.route {
+            Some(Route::Detail(key)) => Some(key),
+            _ => None,
+        };
+        self.motion.borrow_mut().enter(key);
+        let open = self.brief.as_ref().is_some_and(|b| b.read(cx).visible);
+        let overview =
+            self.tab == Tab::Overview && !open && !self.activity_open && !self.comments.open;
+        let ids: Vec<_> = self
+            .detail
+            .as_ref()
+            .filter(|d| overview && Some(&d.key) == key)
+            .into_iter()
+            .flat_map(|d| {
+                d.summary
+                    .blocked
+                    .iter()
+                    .take(mission_overview_view::SECTION_ROWS)
+                    .chain(
+                        d.summary
+                            .working
+                            .iter()
+                            .take(mission_overview_view::SECTION_ROWS),
+                    )
+            })
+            .map(|t| t.id.as_str())
+            .collect();
+        self.motion
+            .borrow_mut()
+            .retain_rows(&ids, &self.focus, w, cx);
+        if !overview {
+            self.motion.borrow_mut().hide_overview();
+        }
+        let child = self.render_page(w, cx);
+        motion::Brief {
+            reveal: self.motion.borrow().brief.clone(),
+            open,
+            child,
+        }
+    }
+}
+impl Browser {
+    fn render_page(&mut self, w: &mut Window, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
         if let Some(form) = self.lifecycle.iter().find(|f| f.read(cx).visible) {
             return div()
                 .id("missions-page")
@@ -1344,7 +1391,7 @@ impl Render for Browser {
                             .test_support()
                             .text_color(cx.theme().muted_foreground),
                     )
-                    .children(self.progress_view(d, cx)),
+                    .children(self.progress_view(d, w, cx)),
             );
             content = content
                 .child(self.decisions_view(cx))
