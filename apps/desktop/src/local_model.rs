@@ -447,6 +447,9 @@ pub(crate) struct LiveTranscript {
     // Presentation-only activity. Never retain reasoning
     // bodies in the UI projection; canonical daemon history is untouched.
     pub(crate) thinking: bool,
+    /// Live task IDs only, independent of runs for idle manual compaction.
+    compactions: std::collections::BTreeSet<u64>,
+    compactions_stale: bool,
     thinking_suppressed: bool,
     pub(crate) presentation_dirty: bool,
     #[cfg(test)]
@@ -498,6 +501,18 @@ struct SavedHistory {
 }
 
 impl LiveTranscript {
+    pub(crate) fn compacting(&self) -> bool {
+        !self.compactions_stale && !self.compactions.is_empty()
+    }
+
+    /// The socket owner already verified a resumed stream's identity and cursor.
+    pub(crate) fn compaction_stream(&mut self, resumed: bool) {
+        if !resumed {
+            self.compactions.clear();
+        }
+        self.compactions_stale = false;
+    }
+
     pub(crate) fn question(&self) -> crate::question::Projection {
         use crate::question::Projection;
         if !self.loaded || self.prefix_pending || self.runnable_queued != 0 {
@@ -570,6 +585,10 @@ impl LiveTranscript {
     /// The connection is stale or gone: no work may keep reading as Working
     /// until a snapshot reports the run again.
     pub(crate) fn stale(&mut self) {
+        if self.compacting() {
+            self.compactions_stale = true;
+            self.presentation_dirty = true;
+        }
         if self.run_live {
             self.run_live = false;
             self.presentation_dirty = true;
@@ -1024,7 +1043,12 @@ impl LiveTranscript {
             self.queue_baseline |= event["type"] == "snapshot";
         }
         match event["type"].as_str().unwrap_or("") {
-            "run_error" | "error" => self.stop_thinking(),
+            "run_error" | "error" => {
+                if event["type"] == "error" {
+                    self.compactions_stale = true;
+                }
+                self.stop_thinking();
+            }
             "snapshot"
             | "run_start"
             | "message_end"
@@ -1036,6 +1060,13 @@ impl LiveTranscript {
         }
         match event["type"].as_str().unwrap_or("") {
             "snapshot" => {
+                self.compactions_stale = false;
+                self.compactions = event["compactions"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|task| task["taskId"].as_u64())
+                    .collect();
                 let active = event["entries"].as_array().cloned().unwrap_or_default();
                 let head = active.iter().filter_map(|e| e["head"].as_u64()).min();
                 let kept = self.saved_history.take().unwrap_or_else(|| SavedHistory {
@@ -1084,6 +1115,16 @@ impl LiveTranscript {
                 }
                 if !self.prefix_pending {
                     self.finish_snapshot();
+                }
+            }
+            "compaction_start" => {
+                if let Some(id) = event["taskId"].as_u64() {
+                    self.compactions.insert(id);
+                }
+            }
+            "compaction_end" => {
+                if let Some(id) = event["taskId"].as_u64() {
+                    self.compactions.remove(&id);
                 }
             }
             "snapshot_prefix" => {
@@ -2047,6 +2088,88 @@ mod tests {
         assert!(!model.thinking);
         assert!(model.presentation_dirty);
         assert_eq!(model.rows()[0].source(), "answer");
+    }
+
+    #[test]
+    fn compaction_live_tasks_are_not_history_or_run_state() {
+        let mut model = LiveTranscript::default();
+        let history = json!({"id":8,"head":8,"kind":"pi.compaction","data":{"summary":"old"}});
+        model.apply(&json!({"type":"snapshot","entries":[history.clone()]}));
+        assert!(!model.compacting());
+        model.apply(&json!({"type":"compaction_start","taskId":10}));
+        model.apply(&json!({"type":"compaction_start","taskId":10}));
+        model.apply(&json!({"type":"compaction_start","taskId":11}));
+        assert!(model.compacting(), "manual compaction needs no run");
+        assert!(!model.run_live);
+        assert_eq!(model.rows().len(), 1, "no transcript spinner row");
+        model.apply(&json!({"type":"compaction_end","taskId":10,"error":"synthetic"}));
+        assert!(model.compacting());
+        model.apply(&json!({"type":"compaction_end","taskId":99}));
+        assert!(model.compacting());
+        model.apply(&json!({"type":"compaction_end","taskId":11}));
+        assert!(!model.compacting());
+        for terminal in [
+            json!({"type":"error"}),
+            json!({"type":"snapshot","entries":[history]}),
+        ] {
+            model.apply(&json!({"type":"snapshot","entries":[],"compactions":[{"taskId":12}]}));
+            assert!(
+                model.compacting(),
+                "reconnect restores only live snapshot tasks"
+            );
+            model.apply(&terminal);
+            assert!(!model.compacting(), "{terminal}");
+        }
+        model.apply(&json!({"type":"compaction_start","taskId":13}));
+        model.stale();
+        assert!(!model.compacting(), "disconnect clears live activity");
+        model.compaction_stream(true);
+        assert!(
+            model.compacting(),
+            "validated same-stream resume retains open live tasks"
+        );
+        model.apply(&json!({"type":"run_end"}));
+        model.apply(&json!({"type":"run_error"}));
+        assert!(
+            model.compacting(),
+            "conversation-owned compaction can outlive an unrelated run"
+        );
+        model.compaction_stream(false);
+        assert!(
+            !model.compacting(),
+            "a replacement stream waits for its snapshot"
+        );
+        model.apply(&json!({"type":"snapshot","entries":[],"compactions":[{"taskId":14}]}));
+        assert!(model.compacting());
+    }
+
+    #[test]
+    fn compaction_marker_keeps_live_work_active_without_inventing_compaction() {
+        let mut model = LiveTranscript::default();
+        model.apply(&json!({"type":"snapshot","run":{},"entries":[
+            {"id":1,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"c1","name":"read","arguments":{"path":"a"}}]}]},
+            {"id":2,"kind":"pi.compaction","data":{"summary":"summary"}}
+        ]}));
+        assert!(
+            !model.compacting(),
+            "history never manufactures live compaction"
+        );
+        assert!(
+            model
+                .rows()
+                .iter()
+                .any(|row| row.work_data().is_some_and(|work| work.active))
+        );
+        model.apply(&json!({"type":"compaction_start","taskId":15}));
+        model.apply(&json!({"type":"compaction_end","taskId":15}));
+        assert!(model.run_live, "compaction does not end the run");
+        model.apply(&json!({"type":"run_end"}));
+        assert!(
+            model
+                .rows()
+                .iter()
+                .all(|row| row.work_data().is_none_or(|work| !work.active))
+        );
     }
 
     #[test]

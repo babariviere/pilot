@@ -715,6 +715,12 @@ reasoning bodies. History and reconnect snapshots do not activate it. Tools,
 ordinary text, terminal events, errors and Stop clear it. Canonical daemon history
 is unchanged. See [focused evidence](evidence/disclosure-thinking.md).
 
+Live compaction uses that same transient status, **Compacting context…**, including
+manual compaction while idle. Only live task events and snapshot `compactions`
+activate it, never historical summary rows. Completion, disconnect and reset
+clear it; reconnect restores reported live tasks. Question attention and Stop
+admission remain unchanged, with no transcript spinner row.
+
 ## Synthetic fixture mode
 
 - 24 deterministic Markdown/code/table history rows start at the tail.

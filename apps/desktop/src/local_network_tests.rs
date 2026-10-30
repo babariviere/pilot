@@ -24,6 +24,8 @@ enum Scenario {
     Resume,
     Refused,
     Thinking,
+    Compacting,
+    CompactionResume,
     ContextUsage,
     ProviderUsage,
     Todos,
@@ -267,7 +269,7 @@ impl Mock {
                                     let _=socket.close(Some(CloseFrame{code:CloseCode::Library(4404),reason:"synthetic refusal".into()})).await; return;
                                 }
                                 let attempt=attempts.fetch_add(1,Ordering::SeqCst);
-                                let resumed=matches!(scenario,Scenario::Resume)&&attempt>0;
+                                let resumed=matches!(scenario,Scenario::Resume | Scenario::CompactionResume)&&attempt>0;
                                 socket.send(Frame::Text(json!({"type":"chat.stream","sessionId":id,"streamId":"synthetic-stream","resumed":resumed}).to_string().into())).await.unwrap();
                                 if resumed {
                                     assert!(path.ends_with("?stream=synthetic-stream&after=2"));
@@ -294,6 +296,11 @@ impl Mock {
                                         if steps.recv().await.is_err() {return;}
                                         socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":3,"events":[{"type":"entry_appended","entry":entry(7,"after large message")}]}).to_string().into())).await.unwrap();
                                     }
+                                    if matches!(scenario,Scenario::CompactionResume) {
+                                        socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":2,"events":[{"type":"compaction_start","taskId":20}]}).to_string().into())).await.unwrap();
+                                        if steps.recv().await.is_err() {return;}
+                                        let _=socket.close(Some(CloseFrame{code:CloseCode::Again,reason:"synthetic restart".into()})).await; return;
+                                    }
                                     if matches!(scenario,Scenario::Resume) {
                                         socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":2,"events":[{"type":"entry_appended","entry":entry(7,"before disconnect")}]}).to_string().into())).await.unwrap();
                                         let _=socket.close(Some(CloseFrame{code:CloseCode::Again,reason:"synthetic restart".into()})).await; return;
@@ -307,6 +314,15 @@ impl Mock {
                                         socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":3,"events":[{"type":"todos_update","items":null}]}).to_string().into())).await.unwrap();
                                         if steps.recv().await.is_err() {return;}
                                         socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":4,"events":[{"type":"todos_update","items":[]}]}).to_string().into())).await.unwrap();
+                                    }
+                                    if matches!(scenario,Scenario::Compacting) {
+                                        socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":2,"events":[{"type":"compaction_start","taskId":10}]}).to_string().into())).await.unwrap();
+                                        if steps.recv().await.is_err() {return;}
+                                        socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":3,"events":[{"type":"compaction_end","taskId":10,"error":"synthetic failure"}]}).to_string().into())).await.unwrap();
+                                        if steps.recv().await.is_err() {return;}
+                                        socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":4,"events":[{"type":"snapshot","entries":[head.clone()],"compactions":[{"taskId":11}]}]}).to_string().into())).await.unwrap();
+                                        if steps.recv().await.is_err() {return;}
+                                        socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":5,"events":[{"type":"snapshot","entries":[head],"compactions":[]}]}).to_string().into())).await.unwrap();
                                     }
                                     if matches!(scenario,Scenario::Thinking) {
                                         socket.send(Frame::Text(json!({"type":"events","sessionId":id,"seq":2,"events":[{"type":"message_start","message":{"content":[{"type":"thinking","thinking":"synthetic"}]}}]}).to_string().into())).await.unwrap();
@@ -813,4 +829,50 @@ async fn list_admission_initial_snapshot_keeps_every_project_summary() {
             mission: "Mission-New".into()
         }
     );
+}
+
+#[tokio::test]
+async fn live_compaction_publishes_without_transcript_spinners() {
+    let mock = Mock::start(Scenario::Compacting).await;
+    let (client, rx) = LocalClient::start(mock.options.clone());
+    until(&rx, |v| v.list_loaded).await;
+    client.command(Command::Open {
+        id: "a".into(),
+        generation: 1,
+    });
+    let active = until(&rx, |v| v.compacting).await;
+    assert_eq!(active.rows.len(), 1);
+    mock.step.send(()).await.unwrap();
+    let ended = until(&rx, |v| v.batches == 3).await;
+    assert!(!ended.compacting);
+    assert!(ended.rows == active.rows);
+    mock.step.send(()).await.unwrap();
+    assert!(until(&rx, |v| v.batches == 4).await.compacting);
+    mock.step.send(()).await.unwrap();
+    assert!(!until(&rx, |v| v.batches == 5).await.compacting);
+    drop(client);
+    assert!(
+        mock.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|r| r.starts_with("GET "))
+    );
+}
+
+#[tokio::test]
+async fn compaction_resumes_only_with_the_validated_live_stream() {
+    let mock = Mock::start(Scenario::CompactionResume).await;
+    let (client, rx) = LocalClient::start(mock.options.clone());
+    until(&rx, |v| v.list_loaded).await;
+    client.command(Command::Open {
+        id: "a".into(),
+        generation: 1,
+    });
+    until(&rx, |v| v.compacting).await;
+    mock.step.send(()).await.unwrap();
+    until(&rx, |v| !v.compacting && v.chat_issue).await;
+    let resumed = until(&rx, |v| v.batches == 3).await;
+    assert!(resumed.compacting, "resume did not replay compaction_start");
+    drop(client);
 }

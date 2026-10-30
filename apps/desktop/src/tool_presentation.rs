@@ -771,7 +771,7 @@ impl Tools {
         self.project_run(raw, live)
     }
     /// Groups work rows. Only the latest group of a live run is Working, and
-    /// only while nothing but a streaming reply or an artifact follows it: a
+    /// only while streaming replies or non-turn events follow it: a
     /// committed reply or a new user turn ends it, whatever tool events say.
     pub(crate) fn project_run(&mut self, raw: Vec<Message>, run_live: bool) -> Vec<Message> {
         let mut rows = Vec::new();
@@ -793,6 +793,9 @@ impl Tools {
                 row.label().starts_with("Assistant · streaming")
                     || row.artifact_data().is_some()
                     || row.github_event().is_some()
+                    || row
+                        .compaction_event()
+                        .is_some_and(|event| event.kind == crate::compaction_event::Kind::Compacted)
             })
         {
             let mut work = rows[index].work_data().unwrap().as_ref().clone();

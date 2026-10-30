@@ -97,6 +97,7 @@ pub(crate) struct ChatEditor {
     writable: bool,
     busy: bool,
     thinking: bool,
+    compacting: bool,
     thinking_held: bool,
     background_work: bool,
     jobs_only: bool,
@@ -192,6 +193,7 @@ impl ChatEditor {
             writable: false,
             busy: false,
             thinking: false,
+            compacting: false,
             thinking_held: false,
             background_work: false,
             jobs_only: false,
@@ -293,6 +295,7 @@ impl ChatEditor {
         self.background_work = false;
         self.jobs_only = false;
         self.thinking = false;
+        self.compacting = false;
         self.text.update(cx, |v, cx| v.set_value("", window, cx));
         self.cwd.update(cx, |v, cx| v.set_value("", window, cx));
         cx.notify();
@@ -398,6 +401,7 @@ impl ChatEditor {
         self.writable = writable;
         self.busy = busy;
         self.thinking = false;
+        self.compacting = false;
         self.thinking_held = false;
         self.background_work = false;
         self.jobs_only = false;
@@ -429,6 +433,8 @@ impl ChatEditor {
     pub(crate) fn activity_label(&self) -> Option<&'static str> {
         if self.question_needs_you() {
             Some("Needs you")
+        } else if self.compacting {
+            Some("Compacting context…")
         } else if self.thinking {
             Some("Thinking...")
         } else if self.jobs_only {
@@ -437,6 +443,13 @@ impl ChatEditor {
             Some("Working...")
         } else {
             None
+        }
+    }
+
+    pub(crate) fn set_compacting(&mut self, active: bool, cx: &mut Context<Self>) {
+        if self.compacting != active {
+            self.compacting = active;
+            cx.notify();
         }
     }
 

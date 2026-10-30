@@ -1601,6 +1601,7 @@ impl LocalViewer {
         self.state.queued = 0;
         self.sending_view.queued.clear();
         self.state.thinking = false;
+        self.state.compacting = false;
         self.rebuild_nav(window, cx);
         let fold_scope = self
             .usage_options
@@ -1640,6 +1641,7 @@ impl LocalViewer {
             self.state.status = state.status;
             self.state.chat_status = state.chat_status;
             self.state.thinking = state.thinking;
+            self.state.compacting = state.compacting;
             self.state.todos = state.todos;
             self.state.chat_issue = state.chat_issue;
         } else if state.generation == self.generation {
@@ -1706,6 +1708,10 @@ impl LocalViewer {
             });
         }
         self.editor.update(cx, |editor, cx| {
+            editor.set_compacting(
+                self.subagent.is_none() && self.state.compacting && self.selected.is_some(),
+                cx,
+            );
             editor.activity(
                 self.subagent.is_none() && self.state.thinking && self.selected.is_some(),
                 cx,
@@ -1741,8 +1747,10 @@ impl LocalViewer {
     fn clear_chat(&mut self, cx: &mut Context<Self>) {
         self.pending_reader = None;
         self.pending_transcript = None;
-        self.editor
-            .update(cx, |editor, cx| editor.activity(false, cx));
+        self.editor.update(cx, |editor, cx| {
+            editor.activity(false, cx);
+            editor.set_compacting(false, cx);
+        });
         self.artifacts_open = false;
         self.state.artifacts = Arc::new(Vec::new());
         self.state.artifact_metadata = Default::default();
@@ -1765,6 +1773,7 @@ impl LocalViewer {
         self.state.queued = 0;
         self.sending_view.queued.clear();
         self.state.thinking = false;
+        self.state.compacting = false;
         self.transcript
             .update(cx, |v, cx| v.set_history_controls(Default::default(), cx));
         if let Some(client) = &self.client {
@@ -1837,9 +1846,12 @@ impl LocalViewer {
                     .update(cx, |view, _| view.history_scope(generation));
                 self.refreshing = true;
                 self.state.thinking = false;
+                self.state.compacting = false;
                 self.state.chat_issue = false;
-                self.editor
-                    .update(cx, |editor, cx| editor.activity(false, cx));
+                self.editor.update(cx, |editor, cx| {
+                    editor.activity(false, cx);
+                    editor.set_compacting(false, cx);
+                });
                 self.state.page_busy = true;
                 self.state.chat_status = "Loading newest bounded window…".into();
                 self.sync_history_controls(cx);
@@ -3133,6 +3145,48 @@ mod refresh_tests {
         });
     }
     #[gpui_kit::test]
+    fn compaction_status_accepts_only_selected_generation(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (handle, view) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    show: false,
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| LocalViewer::synthetic(window, cx)),
+            )
+            .unwrap()
+        });
+        cx.update_window(handle, |_, window, cx| {
+            view.update(cx, |view, cx| {
+                let mut state = view.state.clone();
+                state.compacting = true;
+                view.accept(state, window, cx);
+                assert_eq!(
+                    view.editor.read(cx).activity_label(),
+                    Some("Compacting context…")
+                );
+                let mut stale = view.state.clone();
+                stale.generation += 1;
+                stale.compacting = false;
+                view.accept(stale, window, cx);
+                assert_eq!(
+                    view.editor.read(cx).activity_label(),
+                    Some("Compacting context…")
+                );
+                view.clear_chat(cx);
+                assert_ne!(
+                    view.editor.read(cx).activity_label(),
+                    Some("Compacting context…")
+                );
+                assert!(!view.state.compacting);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
     fn deferred_stop_activity_is_fenced_to_its_originating_chat(cx: &mut TestAppContext) {
         cx.update(gpui_kit::init);
         let (client, commands) = LocalClient::synthetic_commands();
@@ -3202,12 +3256,13 @@ mod refresh_tests {
             .unwrap()
         });
         cx.update_window(handle,|_,window,cx|view.update(cx,|view,cx|{
-            view.state.thinking=true;
-            view.latest(cx);assert!(view.refreshing);assert!(!view.state.thinking);let first=view.generation;
+            view.state.thinking=true;view.state.compacting=true;
+            view.latest(cx);assert!(view.refreshing);assert!(!view.state.thinking);assert!(!view.state.compacting);let first=view.generation;
             assert!(matches!(commands.try_recv().unwrap(),Command::Open{generation,..}if generation==first));
-            view.state.thinking=true;
+            view.state.thinking=true;view.state.compacting=true;
             view.accept(Presentation{generation:first,chat_status:"Unavailable; retry explicitly".into(),..Default::default()},window,cx);
             assert!(!view.state.thinking,"loading/reconnect must clear the cached activity");
+            assert!(!view.state.compacting,"loading/reconnect must clear compaction");
             assert!(view.state.loaded);assert_eq!(view.state.queued,7);assert!(view.state.chat_status.contains("Unavailable"));
             view.latest(cx);let second=view.generation;assert!(second>first);
             assert!(matches!(commands.try_recv().unwrap(),Command::Open{generation,..}if generation==second));

@@ -356,6 +356,7 @@ pub(crate) struct Presentation {
     pub(crate) queued: usize,
     pub(crate) user_queue: Arc<crate::queued_message::Snapshot>,
     pub(crate) thinking: bool,
+    pub(crate) compacting: bool,
     #[cfg(test)]
     pub(crate) test_publications: u64,
 }
@@ -1042,7 +1043,7 @@ async fn run(
                 Ok((_, Incoming::Wire {generation,chat: is_chat,value})) => {
                     if is_chat {
                         if generation != view.generation || value["sessionId"].as_str()!=selected.as_deref() { continue; }
-                        if value["type"] == "chat.stream" {view.todos.stream();}
+                        if value["type"] == "chat.stream" {view.todos.stream();model.compaction_stream(value["resumed"] == true);}
                         else if value["type"] == "artifacts" && value["sessionId"].as_str()==selected.as_deref(){if let Some(items)=view.artifact_metadata.accept(&value["artifacts"],selected.as_deref().unwrap_or("")){view.artifacts=items;}}
                         else if value["type"] == "events" && let Some(events) = value["events"].as_array() {
                             view.batches+=1;
@@ -1056,7 +1057,7 @@ async fn run(
                             // counters. Do not publish/clone a transcript or
                             // wake the UI when the activity label is unchanged.
                             if events.iter().all(local_model::reasoning_deltas_only) && view.thinking == model.thinking { continue; }
-                        } else if value["type"] == "error" { view.todos.stale(); model.stop_thinking(); view.chat_issue=true; view.chat_status = "Local chat unavailable; details omitted for privacy.".into(); }
+                        } else if value["type"] == "error" { view.todos.stale(); model.stop_thinking(); model.stale(); view.chat_issue=true; view.chat_status = "Local chat unavailable; details omitted for privacy.".into(); }
                     } else if value["type"] == "projects" {
                         match local_model::projects(&value["projects"]) {
                             Ok(projects)=>{view.projects=Arc::new(projects);view.projects_loaded=true;view.projects_error=None;},
@@ -1104,6 +1105,7 @@ async fn run(
             model.user_queue.clone()
         };
         view.thinking = model.thinking && !fenced;
+        view.compacting = model.compacting() && !fenced;
         view.failure_run_serial = model.failure_run_serial;
         view.question = if fenced {
             crate::question::Projection::Unavailable

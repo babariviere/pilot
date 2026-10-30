@@ -272,9 +272,96 @@ pub fn run_compaction_event_probe(cx: &mut HeadlessAppContext) {
         assert!(!detail_shown(cx, h), "a different marker starts collapsed");
         cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
         cx.run_until_parked();
+        live_status(cx, dark, width, captures.as_deref());
     }
     assert_ne!(
         backgrounds[0], backgrounds[1],
         "light and dark both rendered"
     );
+}
+
+fn live_status(
+    cx: &mut HeadlessAppContext,
+    dark: bool,
+    width: f32,
+    captures: Option<&std::path::Path>,
+) {
+    let (h, editor) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(width), px(260.)),
+                    ))),
+                    show: false,
+                    focus: false,
+                    ..Default::default()
+                },
+                cx,
+                |w, cx| {
+                    cx.new(|cx| {
+                        let mut editor = crate::chat_editor::ChatEditor::new(None, w, cx);
+                        editor.select("chat:synthetic".into(), false, false, w, cx);
+                        editor
+                    })
+                },
+            )
+        })
+        .unwrap();
+    let mut model = crate::local_model::LiveTranscript::default();
+    for event in [
+        json!({"type":"snapshot","entries":[],"compactions":[{"taskId":1}]}),
+        json!({"type":"compaction_end","taskId":1}),
+        json!({"type":"compaction_start","taskId":2}),
+    ] {
+        model.apply(&event);
+        cx.update(|cx| {
+            editor.update(cx, |editor, cx| {
+                editor.set_compacting(model.compacting(), cx)
+            })
+        });
+        settle(cx, h);
+        cx.update_window(h, |_, w, cx| {
+            assert_eq!(
+                w.find_all("activity-indicator").len(),
+                usize::from(model.compacting())
+            );
+            assert_eq!(
+                editor.read(cx).activity_label(),
+                model.compacting().then_some("Compacting context…")
+            );
+            if model.compacting() {
+                assert!(w.find("activity-indicator").visible());
+                assert!(w.find("activity-indicator").bounds().right() <= px(width));
+            }
+            assert!(
+                w.find_all("local-stop").is_empty(),
+                "manual idle compaction never changes Stop admission"
+            );
+        })
+        .unwrap();
+    }
+    if let Some(path) = captures {
+        cx.capture_screenshot(h)
+            .unwrap()
+            .save(path.join(format!("live-status-{dark}-{width}.png")))
+            .unwrap();
+    }
+    model.stale();
+    cx.update(|cx| {
+        editor.update(cx, |editor, cx| {
+            editor.set_compacting(model.compacting(), cx)
+        })
+    });
+    settle(cx, h);
+    cx.update_window(h, |_, w, _| {
+        assert!(
+            w.find_all("activity-indicator").is_empty(),
+            "disconnect clears live status"
+        );
+        w.remove_window();
+    })
+    .unwrap();
+    cx.run_until_parked();
 }

@@ -1048,6 +1048,65 @@ fn compact_composer_keeps_controls_inside_and_text_live(cx: &mut TestAppContext)
 }
 
 #[gpui_kit::test]
+fn compaction_reuses_transient_status_preserves_stop_and_question(cx: &mut TestAppContext) {
+    let (handle, view, commands) = setup(cx);
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |editor, cx| {
+            editor.permission(true, false, cx);
+            editor.activity(true, cx);
+            editor.set_compacting(true, cx);
+        });
+        window.render_frame(cx);
+        assert_eq!(view.read(cx).activity_label(), Some("Compacting context…"));
+        assert_eq!(window.find_all("activity-indicator").len(), 1);
+        assert!(
+            window.find_all("local-stop").is_empty(),
+            "idle manual compaction does not invent run admission"
+        );
+        view.update(cx, |editor, cx| editor.permission(true, true, cx));
+        window.render_frame(cx);
+        window.click("local-stop", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(matches!(
+        commands.try_recv().unwrap(),
+        WriteCommand::Submit { stop: true, .. }
+    ));
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |editor, cx| {
+            editor.question_context(
+                Some("a"),
+                crate::question::Projection::Pending(question_composer_fixture(4)),
+                true,
+                window,
+                cx,
+            );
+            assert_eq!(editor.activity_label(), Some("Needs you"));
+            editor.question_context(
+                Some("a"),
+                crate::question::Projection::None,
+                true,
+                window,
+                cx,
+            );
+            editor.set_compacting(false, cx);
+            editor.permission(true, false, cx);
+            editor.activity(false, cx);
+            assert_eq!(editor.activity_label(), None);
+            editor.set_compacting(true, cx);
+            editor.select("chat:b".into(), true, false, window, cx);
+            assert_eq!(
+                editor.activity_label(),
+                None,
+                "navigation clears compaction"
+            );
+        });
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn thinking_reuses_one_indicator_and_stop_fences_late_presentations(cx: &mut TestAppContext) {
     let (handle, view, commands) = setup(cx);
     cx.update_window(handle, |_, window, cx| {
