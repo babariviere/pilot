@@ -58,7 +58,7 @@ test("durable sends continue only the executing HTTP attempt into admission", as
 	const settings = {
 		serviceName: "pilot.daemon" as const,
 		serviceVersion: "1.45.1",
-		environment: "test",
+		environment: "test" as const,
 		hostKind: "local" as const,
 	};
 	configureNodeTelemetry({ ...settings, enabled: true, exporter });

@@ -79,7 +79,7 @@ test("MCP API reports status, rechecks, signs in and pushes changes over the con
 		});
 	// Reading status and opening the control socket must not schedule any connection or login.
 	assert.deepEqual(await (await request("/api/mcp")).json(), { servers: [], checking: false });
-	assert.deepEqual(checks, []);
+	assert.equal(checks.length, 0);
 	assert.deepEqual(logins, []);
 	const checked = nextMcp((status) => !status.checking && status.servers.length === 2);
 	const started = await request("/api/mcp/check", "POST", {});
