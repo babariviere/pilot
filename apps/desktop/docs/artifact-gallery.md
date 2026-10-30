@@ -18,6 +18,10 @@ It replaces the text-button wall without adding a dashboard or per-tile toolbars
 Title/type/revision and meaningful failures remain visible; full source,
 provenance, detailed codec errors and previous revisions stay in detail.
 
+Exact reads are not a revision catalogue. The explicit-picker audit found no
+bounded history-list contract; see [artifact revisions](artifact-revisions.md)
+for the blocker, existing Previous behavior and isolated transport coverage.
+
 - Native Buttons support pointer activation and Tab/Space. With the gallery
   itself focused, arrows, Home/End and Page Up/Down move the canonical target;
   Enter/Space opens it. Navigation never sends a chat message.

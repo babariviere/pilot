@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import type { Server } from "node:http";
 import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -328,6 +328,60 @@ test("HTTP reads persisted artifact revisions and aggregates only the project's 
 	assert.ok(list.every((item) => item.projectId === project.id));
 	assert.ok(list.every((item) => !("source" in item) && !("html" in item)));
 	assert.ok(sessions.list().every((session) => session.state === "parked"));
+});
+
+test("latest artifact metadata is not a readable revision catalogue", async (t) => {
+	const { home, base, sessions, launch, runner } = await api(t, false);
+	const directory = join(home, "sessions", sessionId);
+	const store = new ArtifactStore(directory, { sessionId });
+	const first = await store.create({ title: "First", kind: "html", source: "<p>Stored legacy source</p>" });
+	const image = await store.update(first.id, {
+		title: "Pixel",
+		kind: "image",
+		source:
+			"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR4AQEFAPr/AP8AAP8FAAH/+lyI0QAAAABJRU5ErkJggg==",
+	});
+	const latest = await store.update(first.id, { title: "Latest", kind: "html", source: "<p>Latest source</p>" });
+	const listPath = `${base}/api/sessions/${sessionId}/artifacts`;
+	const path = `${listPath}/${first.id}`;
+	const before = await (await fetch(listPath)).json();
+	assert.deepEqual(before, [await store.summary(first.id)]);
+	assert.equal(before[0].revision, 3);
+	assert.equal(before[0].kind, "html");
+	assert.ok(!("source" in before[0]) && !("revisions" in before[0]));
+
+	// Simulate an unavailable historical file in this disposable fixture only.
+	// A latest pointer cannot certify that all preceding revision bodies still exist.
+	await rename(join(directory, "artifacts", first.id, "1.json"), join(home, "unavailable-revision.json"));
+	assert.deepEqual(await (await fetch(listPath)).json(), before);
+	const read = t.mock.method(sessions, "artifact");
+	assert.equal((await fetch(`${path}?revision=1`)).status, 404);
+	const historical = await fetch(`${path}?revision=2`);
+	assert.equal(historical.status, 200);
+	assert.deepEqual(await historical.json(), image, "historical kind/source belong to the exact revision");
+	assert.deepEqual(
+		read.mock.calls.map((call) => call.arguments),
+		[
+			[sessionId, first.id, 1],
+			[sessionId, first.id, 2],
+		],
+		"an unavailable exact read never falls back to latest",
+	);
+	assert.deepEqual(await (await fetch(path)).json(), latest);
+	assert.equal(sessions.get(sessionId)?.state, "parked");
+	assert.equal(launch.mock.callCount(), 0);
+	assert.equal(runner.mock.callCount(), 0);
+});
+
+test("artifact revision catalogue route is unavailable and does not read bodies", async (t) => {
+	const { base, sessions, launch } = await api(t);
+	const read = t.mock.method(sessions, "artifact", async () => {
+		throw new Error("A missing catalogue route must not probe revision bodies");
+	});
+	const response = await fetch(`${base}/api/sessions/${sessionId}/artifacts/${artifactId}/revisions`);
+	assert.equal(response.status, 404);
+	assert.equal(read.mock.callCount(), 0);
+	assert.equal(launch.mock.callCount(), 0);
 });
 
 test("archived owners retain project-visible artifacts and pinned revisions across restart without waking or restoring", async (t) => {
