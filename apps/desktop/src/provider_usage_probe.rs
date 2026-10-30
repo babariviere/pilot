@@ -63,6 +63,7 @@ fn sync(
     settle(cx, h);
 }
 pub fn run_provider_usage_probe(cx: &mut HeadlessAppContext) {
+    crate::provider_refresh_probe::run(cx);
     // Long Unicode, provider-specific labels and an extra-spend amount must wrap inside the row.
     let long = "Opus 週間リミット: très longue étiquette spécifique au fournisseur 🚀";
     for width in [420., 1100.] {

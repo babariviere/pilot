@@ -4,6 +4,7 @@
 	"private": true,
 	"type": "module",
 	"exports": {
+		"./subscription-refresh": "./src/subscription-refresh.ts",
 		"./mission-authoring": "./src/mission-authoring.ts",
 		"./review-boundary": "./src/review-boundary.ts",
 		"./review-history": "./src/review-history.ts",

@@ -47,6 +47,7 @@ import { createSlackAdder, createSlackPoller } from "./slack-source.ts";
 import { createSlackWaitingWatcher } from "./slack-waiting.ts";
 import { PiSourceMcpClient } from "./source-mcp.ts";
 import { SourceRegistry } from "./sources.ts";
+import { SubscriptionRefresh } from "./subscription-refresh.ts";
 import { SystemEventsDetection } from "./system-events-detection.ts";
 import { TelemetrySettingsService } from "./telemetry-settings.ts";
 import { TerminalManager } from "./terminals.ts";
@@ -331,6 +332,7 @@ const server = createDaemonServer(
 	undefined,
 	environment,
 	runtimeOwner,
+	new SubscriptionRefresh((provider) => models.refreshSubscription(provider)),
 );
 if (runtimeOwner) {
 	runtimeOwner.ready(hello);

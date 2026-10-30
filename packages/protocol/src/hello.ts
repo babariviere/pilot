@@ -37,6 +37,8 @@ export interface DaemonCapabilities {
 	environmentSetup?: 1;
 	/** Bounded local accounting query API. Absent on older hosts, unrelated to subscription windows. */
 	usageQueries?: 1;
+	/** Explicit app-requested provider limits refresh. No agent or GUI credential access. */
+	subscriptionRefresh?: 1;
 	/** Existing-chat conversion rejects changed membership atomically. Missing on older runtimes. */
 	guardedMissionConversion?: true;
 	/** Status-only mission lifecycle with durable chat/wake suppression. */

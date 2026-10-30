@@ -19,6 +19,7 @@ pub(crate) struct Usage {
     days: u64,
     details: bool,
     focus: FocusHandle,
+    pub(crate) limits: Option<gpui_kit::Entity<crate::provider_refresh_view::Limits>>,
 }
 impl Usage {
     pub(crate) fn new(options: Option<LocalOptions>, cx: &mut Context<Self>) -> Self {
@@ -30,6 +31,7 @@ impl Usage {
             days: 7,
             details: false,
             focus: cx.focus_handle(),
+            limits: None,
         }
     }
     pub(crate) fn focus(&self, w: &mut Window, cx: &mut App) {
@@ -124,7 +126,7 @@ impl Render for Usage {
             );
         }
         controls = controls.child(
-            ui::action("usage-refresh", "Refresh", Action::Quiet)
+            ui::action("usage-refresh", "Refresh history", Action::Quiet)
                 .disabled(self.state.busy)
                 .on_click(cx.listener(|v, _, w, cx| v.load(v.days, w, cx))),
         );
@@ -136,6 +138,9 @@ impl Render for Usage {
                 ),
             )
             .child(controls);
+        if let Some(limits) = &self.limits {
+            page = page.child(limits.clone());
+        }
         if let Some(range) = self.state.range {
             page = page.child(
                 ui::text(Text::Caption, range.label())

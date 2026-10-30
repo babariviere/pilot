@@ -477,6 +477,8 @@ impl LocalViewer {
         let (client, updates) = LocalClient::start(options.clone());
         let mut view = Self::build(Some(client), Some(writer), window, cx);
         view.usage_options = Some(options.clone());
+        let limits = cx.new(|_| crate::provider_refresh_view::Limits::new(options.clone()));
+        view.overview.update(cx, |v, _| v.limits = Some(limits));
         if let Ok(root) = Store::default_path() {
             view.load_sidebar_memory(root.join(crate::sidebar_memory::FILE), window, cx);
         }

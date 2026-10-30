@@ -446,6 +446,13 @@ Work resumes automatically when the blocked windows reset or a fresh usage readi
 Known pauses survive restarts and unavailable readings. Usage comes from pi's shared cache, without
 additional provider polling; unknown usage cannot predict a limit, and in-flight requests may still use tokens.
 
+In Pilot Next, **Refresh limits** on Home or Usage explicitly asks Local to refresh Claude and Codex
+subscription reports, without starting an agent or reading credentials in the GUI. It uses canonical Pi
+OAuth only and shares Pi's one-minute usage cache, request lock and provider backoff. A cache hit keeps
+its original report time; unavailable or failed refreshes retain the last report. Account identity is
+not reported by the current cache. **Refresh history** is separate and only rereads retained token totals.
+There is no new automatic provider polling. The legacy Swift app still displays forwarded cached reports.
+
 If the provider reports a subscription usage limit before the cache catches up, the pending model request
 pauses instead of failing the chat. Completed tool results stay saved and are never replayed. The pause
 uses a known reset time when available; otherwise it waits for a fresh lower reading or **Force work**.

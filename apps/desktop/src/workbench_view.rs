@@ -59,6 +59,7 @@ impl LocalViewer {
             return;
         }
         let options = self.usage_options.clone();
+        let limits = self.overview.read(cx).limits.clone();
         let result = gpui_kit::open_window(
             gpui_kit::WindowOptions {
                 window_bounds: Some(gpui_kit::WindowBounds::Windowed(
@@ -74,6 +75,7 @@ impl LocalViewer {
                 w.set_window_title("Usage · Local");
                 let pane = cx.new(|cx| crate::usage_overview_view::Usage::new(options, cx));
                 pane.update(cx, |p, cx| {
+                    p.limits = limits;
                     p.focus(w, cx);
                     p.load(7, w, cx);
                 });

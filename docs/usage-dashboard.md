@@ -8,6 +8,30 @@ change. No storage backend, routing, inference or provider polling changes are p
 
 ## Reading the page
 
+### Pilot Next subscription refresh
+
+Home and Usage share a native **Subscription limits** section and one explicit **Refresh limits**
+operation. This is separate from **Refresh history**, which queries only retained local aggregates.
+Swift's existing Home and Usage panels consume forwarded cached reports; Swift does not own a provider
+collector or refresh cadence. Pi's session extension owns the existing 60-second collection cadence.
+
+Next requests `POST /api/subscription-usage/refresh?provider=anthropic|openai` only after the pinned
+Local hello advertises `subscriptionRefresh: 1`. Both this operation and the passive
+`GET /api/subscription-usage` require exact daemon/lineage IDs. Requests for each provider coalesce
+in the daemon. The tool-free runtime uses canonical Pi OAuth through the existing credential broker,
+never GUI credential access, API-key commands or fallback Claude Code/CLI stores. No agent is started.
+The pinned Pi usage collector retains its one-minute cache, cross-process request lock and backoff.
+No timer, automatic retry or provider polling is added to the app or daemon.
+
+Feedback distinguishes updated, recent cached report, deferred, unavailable credentials and failure.
+Reports keep the cache's actual `fetchedAt`, windows and resets, including after errors. Account identity
+is explicitly not reported; neither chat identity nor provider name is presented as account identity.
+Expanded details disclose source and time; stale/future/unknown timestamps remain visible. Updated shared
+cache files still reach existing subscription admission and force behavior through pilotd's reader.
+Older daemons refuse refresh explicitly instead of silently rereading an old snapshot.
+
+The sections below describe the legacy Swift historical dashboard unless marked otherwise.
+
 - Local execution only, always labelled observed / partial. Historical non-Local work is not included.
   The installed pinned Local identity must be unique and connected. No other execution mode or fallback.
 - Today, 7 days, 30 days, All retained and Custom use UTC days and half-open windows. All is bounded to

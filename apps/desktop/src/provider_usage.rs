@@ -9,6 +9,7 @@ pub(crate) struct Snapshot {
     pub(crate) windows: Vec<Window>,
     // Provider errors may contain account details. Never retain their raw text.
     pub(crate) update_error: bool,
+    pub(crate) app_requested: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,6 +77,7 @@ impl Snapshot {
                 .map(|ms| ms as u64),
             windows,
             update_error: v["error"].as_str().is_some_and(|e| !e.is_empty()),
+            app_requested: false,
         })
     }
 
@@ -88,6 +90,15 @@ impl Snapshot {
         }
     }
     pub(crate) fn help(&self) -> String {
+        if self.app_requested {
+            return format!(
+                "{} subscription report from Pi's shared cache via Local. Reported: {}. Account identity is not reported. App refresh uses Pi OAuth with the existing one-minute cache and provider backoff. Separate from historical tokens and cost estimates.",
+                self.provider,
+                self.fetched_at
+                    .map(crate::message_time::detail)
+                    .unwrap_or_else(|| "Unknown".into())
+            );
+        }
         format!(
             "{} subscription snapshot from loaded Local chat summaries. Reported: {}. Updates arrive while a session uses this subscription. Not a live measurement, billing total or complete account coverage. Separate from Local token and cost Usage.",
             self.provider,

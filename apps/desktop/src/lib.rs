@@ -36,6 +36,11 @@ mod path_completion_reader;
 pub use local_view::path_completion_probe::run_path_completion_probe;
 mod automatic_input;
 mod message_time;
+mod provider_refresh;
+#[cfg(feature = "native-probes")]
+mod provider_refresh_probe;
+mod provider_refresh_reader;
+mod provider_refresh_view;
 mod provider_usage;
 #[cfg(feature = "native-probes")]
 mod provider_usage_probe;

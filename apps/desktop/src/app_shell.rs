@@ -353,6 +353,7 @@ pub(crate) struct Overview {
     working: Vec<usize>,
     visible: Vec<usize>,
     subscriptions: Vec<crate::provider_usage::Snapshot>,
+    pub(crate) limits: Option<gpui_kit::Entity<crate::provider_refresh_view::Limits>>,
     /// Providers whose Home subscription details are expanded, by stable provider key.
     subscription_details: Vec<&'static str>,
     sky: std::rc::Rc<std::cell::RefCell<crate::home_sky::Sky>>,
@@ -400,6 +401,7 @@ impl Overview {
             visible: Vec::new(),
             sky: Default::default(),
             subscriptions: Vec::new(),
+            limits: None,
             subscription_details: Vec::new(),
             #[cfg(feature = "native-probes")]
             renders: 0,
@@ -440,6 +442,9 @@ impl Overview {
             }
         }
         self.subscriptions = subscriptions;
+        if let Some(limits) = &self.limits {
+            limits.update(cx, |v, cx| v.sync(self.subscriptions.clone(), cx));
+        }
         self.chats = chats;
         self.project = project;
         self.projects_loaded = projects_loaded;
@@ -733,7 +738,9 @@ impl Render for Overview {
             );
         }
         // Swift parity: compact subscription bars sit under Home's summary, never on a project.
-        if self.project.is_none() {
+        if let Some(limits) = self.limits.clone().filter(|_| self.project.is_none()) {
+            header = header.child(limits);
+        } else if self.project.is_none() {
             let toggle = |provider: &'static str| -> crate::provider_usage_view::Toggle {
                 Box::new(
                     cx.listener(move |v: &mut Self, _: &gpui_kit::ClickEvent, _, cx| {

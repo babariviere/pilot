@@ -91,6 +91,12 @@ export class ModelCatalog {
 		this.agentDir = agentDir;
 	}
 
+	/** Tool-free limits fetch, using the same canonical OAuth resolver as daemon completions. */
+	async refreshSubscription(provider: "anthropic" | "openai") {
+		const { refreshSubscription } = await import("@pilot/kernel/subscription-refresh");
+		return refreshSubscription(provider, this.agentDir, await this.getRuntime());
+	}
+
 	/** A separate, tool-free completion. Scoped thinking suffixes never apply to titles. */
 	async generateTitle(
 		cwd: string,

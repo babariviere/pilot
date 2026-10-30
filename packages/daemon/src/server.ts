@@ -345,6 +345,7 @@ export function createDaemonServer(
 	catalog?: MissionCatalogSources,
 	environment?: import("./environment.ts").EnvironmentService,
 	bootstrap?: import("./runtime-owner.ts").RuntimeOwner,
+	subscriptions?: import("./subscription-refresh.ts").SubscriptionRefresh,
 ): Server & { runtimeResources: RuntimeResources } {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	sessions.diagnosticFeatureUsage = telemetry ? (host) => telemetry.featureUsage.snapshot(host) : undefined;
@@ -598,6 +599,23 @@ export function createDaemonServer(
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (parts[1] === "subscription-usage") {
+			res.setHeader("cache-control", "no-store");
+			if (!subscriptions || !hello?.lineageId) throw new ServiceUnavailable("Subscription refresh unsupported");
+			if (
+				url.searchParams.get("daemonId") !== hello.daemonId ||
+				url.searchParams.get("lineageId") !== hello.lineageId
+			)
+				throw new HttpError(409, "Host identity changed");
+			if (parts.length === 2 && req.method === "GET") return json(res, 200, subscriptions.snapshot());
+			if (parts.length === 3 && parts[2] === "refresh" && req.method === "POST") {
+				const provider = url.searchParams.get("provider");
+				if (provider !== "anthropic" && provider !== "openai")
+					throw new HttpError(400, "Invalid subscription provider");
+				return json(res, 200, await subscriptions.refresh(provider));
+			}
+			throw new HttpError(404, "Not found");
+		}
 		if (parts[1] === "usage-history") {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET" || parts.length !== 3 || !["query", "page"].includes(parts[2]!))
@@ -778,6 +796,7 @@ export function createDaemonServer(
 					passiveFailedModel: hello?.lineageId ? true : undefined,
 					guardedQueue: true,
 					sessionPathCandidates: hello.lineageId ? 1 : undefined,
+					subscriptionRefresh: subscriptions && hello.lineageId ? 1 : undefined,
 				},
 			});
 		}
