@@ -50,6 +50,13 @@ import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import type { SharedMissionGroup } from "./mission-catalog.ts";
 import {
+	type AllocationContextFence,
+	type AllocationWrite,
+	allocationWrite,
+	assertAllocationSubmission,
+	type ContributionAllocation,
+} from "./mission-contribution-allocation.ts";
+import {
 	assertDeliveryAssignment,
 	type DeliveryObservation,
 	type DeliveryRecord,
@@ -340,6 +347,16 @@ CREATE TABLE IF NOT EXISTS mission_review_records (
 	UNIQUE(mission_id, operation_id)
 );
 CREATE INDEX IF NOT EXISTS mission_review_stream ON mission_review_records(mission_id, record_type, profile_id, task_id, sequence);
+CREATE TABLE IF NOT EXISTS task_contribution_allocations (
+	sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+	task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+	operation_id TEXT NOT NULL,
+	record_id TEXT NOT NULL UNIQUE,
+	record TEXT NOT NULL,
+	UNIQUE(mission_id, operation_id)
+);
+CREATE INDEX IF NOT EXISTS contribution_allocation_task ON task_contribution_allocations(mission_id, task_id, sequence);
 CREATE TABLE IF NOT EXISTS retired_members (
 	session_id TEXT PRIMARY KEY,
 	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
@@ -3434,6 +3451,185 @@ export class MissionStore {
 			return record;
 		}, true);
 		await this.durable();
+		return saved;
+	}
+
+	/** Dormant later scope allocation. No active gate consumes these records. */
+	allocationContextFence(id: string): AllocationContextFence {
+		return {
+			...this.reviewContextFence(id),
+			coordinatorEventId: Number(
+				this.one("SELECT COALESCE(MAX(id),0) n FROM events WHERE mission_id=? AND kind='coordinator'", id)!.n,
+			),
+		};
+	}
+	contributionAllocation(id: string, recordId: string): ContributionAllocation | undefined {
+		this.require(id);
+		const row = this.one(
+			"SELECT record FROM task_contribution_allocations WHERE mission_id=? AND record_id=?",
+			id,
+			recordId,
+		);
+		return row ? (JSON.parse(str(row.record!)) as ContributionAllocation) : undefined;
+	}
+	latestContributionAllocation(id: string, taskId: string): ContributionAllocation | undefined {
+		this.task(id, taskId);
+		const row = this.one(
+			"SELECT record FROM task_contribution_allocations WHERE mission_id=? AND task_id=? ORDER BY sequence DESC LIMIT 1",
+			id,
+			taskId,
+		);
+		return row ? (JSON.parse(str(row.record!)) as ContributionAllocation) : undefined;
+	}
+	contributionAllocationHistory(id: string, taskId: string, before?: string, limit = 100): ContributionAllocation[] {
+		this.task(id, taskId);
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Error("Invalid allocation history limit");
+		const cursor =
+			before === undefined
+				? undefined
+				: this.one(
+						"SELECT sequence FROM task_contribution_allocations WHERE mission_id=? AND task_id=? AND record_id=?",
+						id,
+						taskId,
+						before,
+					);
+		if (before !== undefined && !cursor) throw new Error("Unknown allocation history cursor");
+		return this.all(
+			"SELECT record FROM task_contribution_allocations WHERE mission_id=? AND task_id=? AND sequence<? ORDER BY sequence DESC LIMIT ?",
+			id,
+			taskId,
+			cursor?.sequence ?? Number.MAX_SAFE_INTEGER,
+			limit,
+		)
+			.reverse()
+			.map((row) => JSON.parse(str(row.record!)) as ContributionAllocation);
+	}
+	private assertAllocationActor(id: string, sessionId: string, authorize: () => void): void {
+		authorize();
+		this.assertDeliveryMember(id, sessionId);
+		if (this.require(id).coordinatorSessionId !== sessionId)
+			throw new Conflict("Only the current coordinator may allocate contributions");
+	}
+	private allocationRetry(
+		id: string,
+		taskId: string,
+		sessionId: string,
+		request: AllocationWrite,
+	): ContributionAllocation | undefined {
+		const row = this.one(
+			"SELECT record FROM task_contribution_allocations WHERE mission_id=? AND operation_id=?",
+			id,
+			request.operationId,
+		);
+		if (!row) return;
+		const prior = JSON.parse(str(row.record!)) as ContributionAllocation;
+		if (
+			prior.taskId !== taskId ||
+			prior.recorderSessionId !== sessionId ||
+			deliveryDigest(prior.request) !== deliveryDigest(request)
+		)
+			throw new Conflict("Allocation operation idempotency conflict");
+		return prior;
+	}
+	/** Exact request lookup is authorized recovery, not mutable-source freshness or permission to replay. */
+	async lookupContributionAllocation(
+		id: string,
+		ref: string,
+		sessionId: string,
+		value: unknown,
+		authorize: () => void,
+	) {
+		this.assertAllocationActor(id, sessionId, authorize);
+		const taskId = this.resolveTask(id, ref).id;
+		const request = allocationWrite(value);
+		const record = this.allocationRetry(id, taskId, sessionId, request);
+		await this.durable();
+		this.assertAllocationActor(id, sessionId, authorize);
+		return record;
+	}
+	async recordContributionAllocation(
+		id: string,
+		ref: string,
+		sessionId: string,
+		value: unknown,
+		host: {
+			authorize(): void;
+			resolve: DeliveryResolver;
+			validateSources(observations: DeliveryObservation[]): void;
+		},
+	): Promise<ContributionAllocation> {
+		this.assertAllocationActor(id, sessionId, host.authorize);
+		const taskId = this.resolveTask(id, ref).id;
+		const request = allocationWrite(value);
+		const retry = this.allocationRetry(id, taskId, sessionId, request);
+		if (retry) {
+			await this.durable();
+			this.assertAllocationActor(id, sessionId, host.authorize);
+			return retry;
+		}
+		const admit = () => {
+			this.assertAllocationActor(id, sessionId, host.authorize);
+			const latest = this.latestContributionAllocation(id, taskId);
+			if ((latest?.id ?? null) !== request.expectedAllocationId) throw new Conflict("Allocation revision conflict");
+			if (request.action === "withdraw") {
+				if (latest?.request.action !== "allocate") throw new Conflict("Only an allocation can be withdrawn");
+				return;
+			}
+			const task = this.task(id, taskId);
+			if (!task.sessionId || task.status === "done" || task.status === "dropped")
+				throw new Conflict("Allocation task is unowned or closed");
+			if (
+				task.sessionId !== request.ownerSessionId ||
+				this.sharedDefinitionRevision(taskId) !== request.definitionRevision
+			)
+				throw new Conflict("Allocation owner or definition is stale");
+			assertDeliveryAssignment(task, request.assignment);
+			if (deliveryDigest(this.allocationContextFence(id)) !== deliveryDigest(request.expectedContextFence))
+				throw new Conflict("Allocation context is stale");
+			assertAllocationSubmission(request, latestSubmission(this.currentDeliveryEvidence(id, taskId)));
+		};
+		admit();
+		const observations: DeliveryObservation[] = [];
+		if (request.action === "allocate") {
+			for (const source of request.sources) {
+				const observed = await host.resolve(structuredClone(source.reference));
+				if (deliveryDigest(observed) !== deliveryDigest(source))
+					throw new Conflict("Allocation retained source identity mismatch or unavailable");
+				observations.push(structuredClone(observed));
+			}
+		}
+		const saved = this.transaction(() => {
+			this.assertAllocationActor(id, sessionId, host.authorize);
+			const concurrent = this.allocationRetry(id, taskId, sessionId, request);
+			if (concurrent) return concurrent;
+			admit(); // Recheck all task, source-pin, membership and context fences after asynchronous reads.
+			if (request.action === "allocate") host.validateSources(observations);
+			this.assertDeliveryEvidencePins(id, taskId, observations);
+			const record: ContributionAllocation = {
+				version: 1,
+				id: randomUUID(),
+				missionId: id,
+				taskId,
+				recorderSessionId: sessionId,
+				createdAt: Date.now(),
+				request,
+				historicalTaskAttribution: "unknown",
+				scopeCoverage: "selected-only",
+			};
+			const encoded = JSON.stringify(record);
+			if (Buffer.byteLength(encoded) > 256 * 1024) throw new Error("Allocation record exceeds 256 KiB");
+			this.run(
+				"INSERT INTO task_contribution_allocations(mission_id,task_id,operation_id,record_id,record) VALUES(?,?,?,?,?)",
+				id,
+				taskId,
+				request.operationId,
+				record.id,
+				encoded,
+			);
+			return record;
+		}, true);
+		await this.durable();
+		this.assertAllocationActor(id, sessionId, host.authorize);
 		return saved;
 	}
 

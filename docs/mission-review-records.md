@@ -109,5 +109,8 @@ critical-review records/configuration remain unchanged and are never promoted.
 All acceptance/authority/eligibility/independence outputs remain unavailable.
 Even a current Pass is not passing checks, independent review, coordinator
 acceptance, task-at-operation proof or integration. Future authority/review policy
-and the unresolved contribution-acceptance contract are separate prerequisites.
+and active contribution acceptance are separate prerequisites. The dormant
+[allocation foundation](contribution-allocation.md) records later selected scope,
+not original task purpose or active acceptance; these review records keep their
+existing context and retry semantics.
 No existing delivery gate consumes these records.

@@ -91,3 +91,9 @@ intent-specific independent reviewer policy, authoritative task-at-operation
 attribution for code, source freshness observation and integration verification.
 Transport exposure needs its own trusted session admission and project access
 checks. These records alone do not satisfy those prerequisites.
+
+[Dormant contribution allocation](contribution-allocation.md) separately records
+later coordinator-selected assessment scope under exact submission/assignment and
+context fences. This is the D31 alternative to requiring original task-at-operation
+purpose proof for that later scope, not retroactive attribution or gate activation.
+Historical task purpose stays Unknown; all other delivery gates remain required.

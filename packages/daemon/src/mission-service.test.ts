@@ -737,6 +737,7 @@ test("frozen comparison identities are host-resolved, scoped to worker custody a
 		trees: { before: "d".repeat(40), after: "d".repeat(40) },
 		diff: { sha256: createHash("sha256").update("").digest("hex"), bytes: 0 },
 	};
+	const originalOwnership = structuredClone(manifest.provenance.ledger.ownership);
 	const pin = () => {
 		snapshot = {
 			snapshotId: createHash("sha256").update(JSON.stringify(manifest)).digest("hex"),
@@ -823,10 +824,39 @@ test("frozen comparison identities are host-resolved, scoped to worker custody a
 		);
 	}
 	const reviewed = await f.service.recordReviewResult(worker.id, task.id, review);
+	const allocationRequest = {
+		version: 1,
+		action: "allocate",
+		operationId: "allocate-code",
+		expectedAllocationId: null,
+		reason: "Selected saved layer, not original task purpose",
+		submissionId: saved.id,
+		assignment: task.assignment,
+		ownerSessionId: worker.id,
+		definitionRevision: request.definitionRevision,
+		expectedContextFence: f.store.allocationContextFence(mission.id),
+		sources: saved.observations,
+	};
+	const allocation = await f.service.recordContributionAllocation(lead.id, task.id, allocationRequest);
+	assert.equal((await f.service.evaluateContributionAllocation(lead.id, allocation.id)).applicability, "current");
+	assert.equal(allocation.historicalTaskAttribution, "unknown");
+	assert.equal(snapshot!.manifest.provenance.taskAttribution, "unknown");
+	assert.equal((await f.service.evaluateContributionAllocation(lead.id, allocation.id)).eligibility, "unavailable");
 	assert.equal((await f.service.evaluateReviewResult(lead.id, reviewed.id)).applicability, "current");
 	assert.equal((await f.service.evaluateReviewResult(lead.id, reviewed.id)).liveSourceFreshness, "unavailable");
 	// Same reference with altered retained bytes is not silently accepted as a fresh version.
 	snapshot!.manifest.omissions.push("corrupt manifest");
+	assert.equal((await f.service.evaluateContributionAllocation(lead.id, allocation.id)).applicability, "unavailable");
+	assert.deepEqual(await f.service.lookupContributionAllocation(lead.id, task.id, allocationRequest), allocation);
+	assert.deepEqual(await f.service.recordContributionAllocation(lead.id, task.id, allocationRequest), allocation);
+	await assert.rejects(
+		f.service.recordContributionAllocation(lead.id, task.id, {
+			...allocationRequest,
+			operationId: "corrupt",
+			expectedAllocationId: allocation.id,
+		}),
+		/identity mismatch/,
+	);
 	assert.equal((await f.service.evaluateDeliveryEvidence(lead.id, task.id)).freshness.evidence, "unavailable");
 	assert.deepEqual(await f.service.submitDeliveryEvidence(worker.id, task.id, request), saved);
 	assert.equal((await f.service.evaluateReviewResult(lead.id, reviewed.id)).applicability, "unavailable");
@@ -873,6 +903,16 @@ test("frozen comparison identities are host-resolved, scoped to worker custody a
 			evidence: [{ kind: "snapshot", snapshotId: snapshot!.snapshotId }],
 		});
 		assert.equal(record.observations[0]?.availability, status);
+		await assert.rejects(
+			f.service.recordContributionAllocation(lead.id, task.id, {
+				...allocationRequest,
+				operationId: `allocate-${status}`,
+				expectedAllocationId: allocation.id,
+				submissionId: record.id,
+				sources: record.observations,
+			}),
+			/partial or unavailable/,
+		);
 		assert.equal((await f.service.evaluateDeliveryEvidence(lead.id, task.id)).freshness.evidence, "unavailable");
 	}
 	if (manifest.provenance.ledger.ownership.status === "owned")
@@ -889,7 +929,248 @@ test("frozen comparison identities are host-resolved, scoped to worker custody a
 		}),
 		/not authorized/,
 	);
+	// Seed exact host observations so allocation itself, not submission admission, exercises custody rejection.
+	for (const mutation of ["other-mission", "other-worker", "unknown", "missing"] as const) {
+		manifest.provenance.ledger.ownership = structuredClone(originalOwnership);
+		if (manifest.provenance.ledger.ownership.status === "owned") {
+			if (mutation === "other-mission") manifest.provenance.ledger.ownership.binding.missionId = "other";
+			if (mutation === "other-worker") manifest.provenance.ledger.ownership.binding.sessionId = lead.id;
+		}
+		if (mutation === "unknown") manifest.provenance.ledger.ownership = { status: "unknown", reason: "unproven" };
+		manifest.status = "complete";
+		pin();
+		const ref = {
+			kind: "snapshot" as const,
+			snapshotId: mutation === "missing" ? "0".repeat(64) : snapshot!.snapshotId,
+		};
+		const current = f.store.currentDeliveryEvidence(mission.id, task.id).find((r) => r.type === "submission")!;
+		const submission = await f.store.submitDeliveryEvidence(
+			mission.id,
+			task.id,
+			worker.id,
+			{
+				...request,
+				operationId: `seed-${mutation}`,
+				expectedSubmissionId: current.id,
+				evidence: [ref],
+			},
+			async () => ({
+				reference: ref,
+				sourceOwnerSessionId: worker.id,
+				sha256: ref.snapshotId,
+				availability: "retained",
+			}),
+		);
+		await assert.rejects(
+			f.service.recordContributionAllocation(lead.id, task.id, {
+				...allocationRequest,
+				operationId: `allocate-${mutation}`,
+				expectedAllocationId: allocation.id,
+				submissionId: submission.id,
+				sources: submission.observations,
+			}),
+			/not authorized|unavailable|Snapshot unavailable/i,
+		);
+	}
 });
+
+test("dormant allocation uses exact pinned non-code revisions and current project admission even on recovery", async (t) => {
+	const f = await fixture(t),
+		lead = await f.spawn(),
+		worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Allocation",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	const task = f.store.addTask(mission.id, {
+		title: "Report",
+		sessionId: worker.id,
+		assignment: { version: 1, expectedRevision: 0, intent: "Report", scope: "Bounded", criteria: ["Sources"] },
+	});
+	const artifact = await f.sessions["artifactStore"](worker.id).create({
+		kind: "html",
+		title: "Report",
+		source: "<p>Exact report v1</p>",
+	});
+	await f.service.linkArtifact(mission.id, {
+		sessionId: worker.id,
+		artifactId: artifact.id,
+		revision: 1,
+		taskId: task.id,
+	});
+	const submission = await f.service.submitDeliveryEvidence(worker.id, task.id, {
+		version: 1,
+		operationId: "report",
+		expectedSubmissionId: null,
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		assignment: task.assignment,
+		kind: "research",
+		claim: "Report",
+		limitations: "No proof of code-free work",
+		evidence: [{ kind: "artifact", artifactId: artifact.id, revision: 1 }],
+		coverage: [[0]],
+	});
+	const request = {
+		version: 1,
+		action: "allocate",
+		operationId: "allocate",
+		expectedAllocationId: null,
+		reason: "Select report scope only",
+		submissionId: submission.id,
+		assignment: task.assignment,
+		ownerSessionId: worker.id,
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		expectedContextFence: f.store.allocationContextFence(mission.id),
+		sources: submission.observations,
+	};
+	await assert.rejects(f.service.recordContributionAllocation(worker.id, task.id, request), /coordinator/);
+	await assert.rejects(
+		f.service.recordContributionAllocation(lead.id, task.id, { ...request, actorSessionId: worker.id }),
+		/fields/,
+	);
+	const saved = await f.service.recordContributionAllocation(lead.id, task.id, request);
+	await f.sessions["artifactStore"](worker.id).update(
+		artifact.id,
+		{ kind: "html", title: "Report", source: "<p>Unselected v2</p>" },
+		1,
+	);
+	const result = await f.service.evaluateContributionAllocation(lead.id, saved.id);
+	assert.equal(result.applicability, "current");
+	assert.equal(result.scopeCoverage, "selected-only");
+	assert.equal(result.contributionCompleteness, "unavailable");
+	assert.equal(result.liveSourceFreshness, "unavailable");
+	assert.equal(result.eligibility, "unavailable");
+	const get = f.sessions.get.bind(f.sessions);
+	const moved = t.mock.method(f.sessions, "get", (id: string) => {
+		const s = get(id);
+		return s && id === lead.id ? { ...s, projectId: f.other.id } : s;
+	});
+	await assert.rejects(f.service.recordContributionAllocation(lead.id, task.id, request), /project/i);
+	await assert.rejects(f.service.lookupContributionAllocation(lead.id, task.id, request), /project/i);
+	await assert.rejects(f.service.evaluateContributionAllocation(lead.id, saved.id), /project/i);
+	moved.mock.restore();
+	const movedWorker = t.mock.method(f.sessions, "get", (id: string) => {
+		const s = get(id);
+		return s && id === worker.id ? { ...s, projectId: f.other.id } : s;
+	});
+	assert.equal((await f.service.evaluateContributionAllocation(lead.id, saved.id)).applicability, "unavailable");
+	await assert.rejects(
+		f.service.recordContributionAllocation(lead.id, task.id, {
+			...request,
+			operationId: "moved-worker",
+			expectedAllocationId: saved.id,
+		}),
+		/project/i,
+	);
+	movedWorker.mock.restore();
+	f.store.unlinkArtifact(mission.id, artifact.id, {}, task.id);
+	assert.equal((await f.service.evaluateContributionAllocation(lead.id, saved.id)).applicability, "unavailable");
+	assert.deepEqual(await f.service.lookupContributionAllocation(lead.id, task.id, request), saved);
+	assert.deepEqual(await f.service.recordContributionAllocation(lead.id, task.id, request), saved);
+	f.store.leave(lead.id);
+	await assert.rejects(f.service.lookupContributionAllocation(lead.id, task.id, request), /membership/i);
+	assert.equal(f.store.completion(mission.id, task.id), undefined);
+});
+
+for (const race of ["pin-aba", "actor-project", "custodian-project", "coordinator-aba", "continuation"] as const) {
+	test(`allocation rechecks ${race} after asynchronous retained reads`, async (t) => {
+		const f = await fixture(t),
+			lead = await f.spawn(),
+			worker = await f.spawn();
+		const successor = race === "continuation" ? await f.spawn() : undefined;
+		const { mission } = await f.service.create({
+			projectId: f.project.id,
+			title: "Allocation race",
+			planningVersion: 1,
+			fromSessionId: lead.id,
+			draft: false,
+		});
+		f.service.join(worker.id, { missionId: mission.id });
+		const task = f.store.addTask(mission.id, {
+			title: "Report",
+			sessionId: worker.id,
+			assignment: { version: 1, expectedRevision: 0, intent: "Report", scope: "Bounded", criteria: ["Sources"] },
+		});
+		const refs: Array<{ kind: "artifact"; artifactId: string; revision: number }> = [];
+		for (const title of ["Report", "Source"]) {
+			const artifact = await f.sessions["artifactStore"](worker.id).create({
+				kind: "html",
+				title,
+				source: `<p>${title}</p>`,
+			});
+			await f.service.linkArtifact(mission.id, {
+				sessionId: worker.id,
+				artifactId: artifact.id,
+				revision: 1,
+				taskId: task.id,
+			});
+			refs.push({ kind: "artifact", artifactId: artifact.id, revision: 1 });
+		}
+		const submission = await f.service.submitDeliveryEvidence(worker.id, task.id, {
+			version: 1,
+			operationId: "report",
+			expectedSubmissionId: null,
+			definitionRevision: f.store.sharedDefinitionRevision(task.id),
+			assignment: task.assignment,
+			kind: "research",
+			claim: "Report",
+			limitations: "Unverified",
+			evidence: refs,
+			coverage: [[0, 1]],
+		});
+		const request = {
+			version: 1,
+			action: "allocate",
+			operationId: "allocate",
+			expectedAllocationId: null,
+			reason: "Select retained scope",
+			submissionId: submission.id,
+			assignment: task.assignment,
+			ownerSessionId: worker.id,
+			definitionRevision: f.store.sharedDefinitionRevision(task.id),
+			expectedContextFence: f.store.allocationContextFence(mission.id),
+			sources: submission.observations,
+		};
+		const get = f.sessions.get.bind(f.sessions);
+		let moved: string | undefined;
+		t.mock.method(f.sessions, "get", (id: string) => {
+			const s = get(id);
+			return s && id === moved ? { ...s, projectId: f.other.id } : s;
+		});
+		const original = f.sessions.artifact.bind(f.sessions);
+		t.mock.method(f.sessions, "artifact", async (...args: Parameters<typeof original>) => {
+			const value = await original(...args);
+			if (value.id === refs[1]!.artifactId) {
+				if (race === "pin-aba") {
+					f.store.unlinkArtifact(mission.id, refs[0]!.artifactId, {}, task.id);
+					await f.service.linkArtifact(mission.id, {
+						sessionId: worker.id,
+						artifactId: refs[0]!.artifactId,
+						revision: 1,
+						taskId: task.id,
+					});
+				}
+				if (race === "actor-project") moved = lead.id;
+				if (race === "custodian-project") moved = worker.id;
+				if (race === "coordinator-aba") {
+					f.store.update(mission.id, { coordinatorSessionId: worker.id });
+					f.store.update(mission.id, { coordinatorSessionId: lead.id });
+				}
+				if (race === "continuation") f.store.continueSession(worker.id, successor!.id);
+			}
+			return value;
+		});
+		await assert.rejects(
+			f.service.recordContributionAllocation(lead.id, task.id, request),
+			/stale|changed|project|membership/i,
+		);
+		assert.deepEqual(f.store.contributionAllocationHistory(mission.id, task.id), []);
+	});
+}
 
 test("coordinator admits explorer research before a brief, preserving reports, proposals and Ask profile", async (t) => {
 	const f = await fixture(t);

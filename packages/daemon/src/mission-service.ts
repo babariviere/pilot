@@ -21,6 +21,7 @@ import type {
 } from "@pilot/protocol";
 import { CoordinatorCompaction } from "./coordinator-compaction.ts";
 import { Conflict, NotFound } from "./errors.ts";
+import { evaluateContributionAllocation } from "./mission-contribution-allocation.ts";
 import {
 	type DeliveryObservation,
 	type DeliveryReference,
@@ -558,6 +559,97 @@ export class MissionService {
 			throw new Conflict("Retained snapshot is not authorized for this worker and mission");
 		this.deliveryAccess(sessionId, taskId);
 		return snapshot;
+	}
+
+	/** Dormant coordinator allocation only. Identity is supplied by the host, never request actor fields. */
+	private allocationAccess(sessionId: string, expectedMissionId?: string): string {
+		const missionId = this.reviewMissionAccess(sessionId);
+		if (
+			(expectedMissionId !== undefined && expectedMissionId !== missionId) ||
+			this.store.require(missionId).coordinatorSessionId !== sessionId
+		)
+			throw new Conflict("Only the current coordinator may access contribution allocations");
+		return missionId;
+	}
+	async recordContributionAllocation(sessionId: string, taskRef: string, value: unknown) {
+		const missionId = this.allocationAccess(sessionId);
+		const taskId = this.store.resolveTask(missionId, taskRef).id;
+		return this.store.recordContributionAllocation(missionId, taskId, sessionId, value, {
+			authorize: () => {
+				this.allocationAccess(sessionId, missionId);
+			},
+			resolve: (reference) => this.resolveAllocationSource(sessionId, missionId, taskId, reference),
+			validateSources: (observations) => this.assertAllocationSourceActors(missionId, taskId, observations),
+		});
+	}
+	async lookupContributionAllocation(sessionId: string, taskRef: string, value: unknown) {
+		const missionId = this.allocationAccess(sessionId);
+		return this.store.lookupContributionAllocation(missionId, taskRef, sessionId, value, () => {
+			this.allocationAccess(sessionId, missionId);
+		});
+	}
+	private async resolveAllocationSource(
+		sessionId: string,
+		missionId: string,
+		taskId: string,
+		reference: DeliveryReference,
+	) {
+		const admit = () => {
+			this.allocationAccess(sessionId, missionId);
+			const owner = this.store.task(missionId, taskId).sessionId;
+			if (!owner || this.store.missionOf(owner) !== missionId)
+				throw new Conflict("Allocation worker membership is unavailable");
+			this.assertSameProject(owner, missionId);
+		};
+		admit();
+		const observation = await this.resolveDeliveryEvidence(sessionId, missionId, taskId, reference);
+		admit();
+		return observation;
+	}
+	private assertAllocationSourceActors(missionId: string, taskId: string, observations: DeliveryObservation[]) {
+		const owner = this.store.task(missionId, taskId).sessionId;
+		if (!owner) throw new Conflict("Allocation worker is unavailable");
+		for (const actor of new Set([
+			owner,
+			...observations.flatMap((o) => (o.sourceOwnerSessionId ? [o.sourceOwnerSessionId] : [])),
+		])) {
+			if (this.store.missionOf(actor) !== missionId)
+				throw new Conflict("Allocation source custody membership changed");
+			this.assertSameProject(actor, missionId);
+		}
+	}
+	async evaluateContributionAllocation(sessionId: string, recordId: string) {
+		const missionId = this.allocationAccess(sessionId);
+		const record = this.store.contributionAllocation(missionId, recordId);
+		if (!record) throw new NotFound("Unknown contribution allocation");
+		// Capture context before reads as well, so churn cannot stamp newer context on older observations.
+		const contextFence = this.store.allocationContextFence(missionId);
+		let observations: DeliveryObservation[] | undefined;
+		if (record.request.action === "allocate") {
+			try {
+				observations = [];
+				for (const source of record.request.sources)
+					observations.push(
+						await this.resolveAllocationSource(sessionId, missionId, record.taskId, source.reference),
+					);
+				this.store.assertDeliveryEvidencePins(missionId, record.taskId, observations);
+				this.assertAllocationSourceActors(missionId, record.taskId, observations);
+			} catch {
+				observations = undefined;
+			}
+		}
+		this.allocationAccess(sessionId, missionId);
+		const after = this.store.allocationContextFence(missionId);
+		if (deliveryDigest(contextFence) !== deliveryDigest(after)) observations = undefined;
+		return evaluateContributionAllocation(record, {
+			task: this.store.task(missionId, record.taskId),
+			definitionRevision: this.store.sharedDefinitionRevision(record.taskId),
+			coordinatorSessionId: this.store.require(missionId).coordinatorSessionId,
+			contextFence: after,
+			latestAllocationId: this.store.latestContributionAllocation(missionId, record.taskId)?.id ?? null,
+			submission: latestSubmission(this.store.currentDeliveryEvidence(missionId, record.taskId)),
+			observations,
+		});
 	}
 
 	/** Dormant internal APIs only. No mission tool, transport, scheduler or execution bridge. */
