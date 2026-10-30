@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.97.0](https://github.com/babariviere/pilot/compare/v1.96.0...v1.97.0) (2026-10-30)
+
+
+### Features
+
+* **desktop:** ease composer and tray height changes ([1ae0ba2](https://github.com/babariviere/pilot/commit/1ae0ba2a0b24fbe4a7a85794ef252e505597eb52))
+* **desktop:** ease conversation disclosure heights ([23e5484](https://github.com/babariviere/pilot/commit/23e5484a1b1481784bfaa2992ed16923694b4c72))
+
+
+### Bug Fixes
+
+* **deps:** update dependency @babel/parser to v8 ([8d97353](https://github.com/babariviere/pilot/commit/8d97353635345aba76862712569fb6eff159dbf2))
+* **desktop:** show live context compaction status ([28d41f8](https://github.com/babariviere/pilot/commit/28d41f84ca717b037ed5045b1d694bc27187eabe))
+* **kernel:** allow merge-base source inspection ([96f9610](https://github.com/babariviere/pilot/commit/96f96102ab9372a5013ce583d93ca2c27ca2b19f))
+* **kernel:** scope native source reads to owned workspaces ([1792cf2](https://github.com/babariviere/pilot/commit/1792cf251225df4b016976ac5ee9717cd5ea603b))
+
 ## [1.96.0](https://github.com/babariviere/pilot/compare/v1.95.0...v1.96.0) (2026-10-29)
 
 
