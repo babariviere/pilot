@@ -3,7 +3,7 @@
   "version": "0.8.1",
   "archiveSha256": "d862bc8f2e27710039013d075ac4995892e9687ff207fa530f880cbcd513936f",
   "upstream": "https://crates.io/crates/gpui-base/0.8.1",
-  "purpose": "Message-local selection retention, grapheme editing and opt-out of document image I/O for the isolated viewer, with dead-state-gated retained-layout sweeps; no cache threshold or accessibility change. Keep plain-text paint projection checks participant-local to avoid quadratic window copy scans. Let SelectableText style byte ranges (weight, color, italic, strike, font family) without changing its plain selection/copy text. Add literal plain TextView state with source positions so native range highlights and selection share the existing paragraph renderer, without HTML or Markdown rewriting.",
+  "purpose": "Message-local selection retention, grapheme editing and opt-out of document image I/O for the isolated viewer, with dead-state-gated retained-layout sweeps; no cache threshold or accessibility change. Keep plain-text paint projection checks participant-local to avoid quadratic window copy scans. Let SelectableText style byte ranges (weight, color, italic, strike, font family) without changing its plain selection/copy text. Add literal plain TextView state with source positions so native range highlights and selection share the existing paragraph renderer, without HTML or Markdown rewriting. Bound multiline selection paint and Copy projection with a monotonic native line cursor, keeping glyph/wrap geometry and exact source intact.",
   "edits": [
     {
       "path": "src/text_selection.rs",
@@ -300,6 +300,26 @@
       "path": "src/text/inline.rs",
       "old": "            for row_end in row_ends {\n                let mut width = layout.x_for_index(row_end) - layout.x_for_index(row_start);",
       "new": "            for row_end in row_ends {\n                // These rows produce no hit box after clipping. In a long\n                // wrapped source line, each x_for_index scans its glyphs from\n                // the start; do not pay that cost for invisible rows.\n                if y + line_height <= mask_bounds.top() || y >= mask_bounds.bottom() {\n                    row_ix += 1;\n                    y += line_height;\n                    row_start = row_end;\n                    continue;\n                }\n                let mut width = layout.x_for_index(row_end) - layout.x_for_index(row_start);"
+    },
+    {
+      "path": "src/text/inline.rs",
+      "old": "    fn position_for_index(&self, index: usize) -> Option<Point<Pixels>> {\n        let mut origin = self.bounds.origin;\n        let mut start = 0;\n        for line in &self.lines {\n            let end = start + line.len();\n            if index < start {\n                break;\n            }\n            if index <= end {\n                return Some(origin + line.position_for_index(index - start, self.line_height)?);\n            }\n            origin.y += line.size(self.line_height).height;\n            start = end + 1;\n        }\n        None\n    }\n\n",
+      "new": ""
+    },
+    {
+      "path": "src/text/inline.rs",
+      "old": "trait SelectionGeometry {\n    fn len(&self) -> usize;\n    fn line_height(&self) -> Pixels;\n    fn rows_extent(&self) -> (Pixels, Pixels);\n    fn position_for_index(&self, index: usize) -> Option<Point<Pixels>>;\n}\n\nimpl SelectionGeometry for TextLayout {\n    fn len(&self) -> usize {\n        TextLayout::len(self)\n    }\n    fn line_height(&self) -> Pixels {\n        TextLayout::line_height(self)\n    }\n    fn rows_extent(&self) -> (Pixels, Pixels) {\n        text_rows_extent(self, self.line_height())\n    }\n    fn position_for_index(&self, index: usize) -> Option<Point<Pixels>> {\n        TextLayout::position_for_index(self, index)\n    }\n}\n\nimpl SelectionGeometry for PaintedSelectionLayout {\n    fn len(&self) -> usize {\n        self.len\n    }\n    fn line_height(&self) -> Pixels {\n        self.line_height\n    }\n    fn rows_extent(&self) -> (Pixels, Pixels) {\n        self.rows_extent()\n    }\n    fn position_for_index(&self, index: usize) -> Option<Point<Pixels>> {\n        self.position_for_index(index)\n    }\n}\n\n",
+      "new": "trait SelectionGeometry {\n    fn len(&self) -> usize;\n    fn line_height(&self) -> Pixels;\n    fn rows_extent(&self) -> (Pixels, Pixels);\n    fn line_layouts(&self) -> impl Iterator<Item = Arc<gpui::WrappedLineLayout>>;\n    fn origin(&self) -> Point<Pixels>;\n}\n\nimpl SelectionGeometry for TextLayout {\n    fn len(&self) -> usize {\n        TextLayout::len(self)\n    }\n    fn line_height(&self) -> Pixels {\n        TextLayout::line_height(self)\n    }\n    fn rows_extent(&self) -> (Pixels, Pixels) {\n        text_rows_extent(self, self.line_height())\n    }\n    fn line_layouts(&self) -> impl Iterator<Item = Arc<gpui::WrappedLineLayout>> {\n        TextLayout::line_layouts(self).into_iter()\n    }\n    fn origin(&self) -> Point<Pixels> {\n        self.bounds().origin\n    }\n}\n\nimpl SelectionGeometry for PaintedSelectionLayout {\n    fn len(&self) -> usize {\n        self.len\n    }\n    fn line_height(&self) -> Pixels {\n        self.line_height\n    }\n    fn rows_extent(&self) -> (Pixels, Pixels) {\n        self.rows_extent()\n    }\n    fn line_layouts(&self) -> impl Iterator<Item = Arc<gpui::WrappedLineLayout>> {\n        self.lines.iter().cloned()\n    }\n    fn origin(&self) -> Point<Pixels> {\n        self.bounds.origin\n    }\n}\n\n"
+    },
+    {
+      "path": "src/text/inline.rs",
+      "old": "    let mut selection: Option<Selection> = None;\n    for (offset, c) in text.char_indices() {\n        let Some(pos) = text_layout.position_for_index(offset) else {",
+      "new": "    // Queries below are nondecreasing UTF-8 offsets (current, next, next).\n    // Keep the native line cursor instead of restarting at line zero twice\n    // per character. Per-line glyph/wrap geometry and midpoint rules stay native.\n    let mut lines = text_layout.line_layouts();\n    let mut line = lines.next();\n    let mut origin = text_layout.origin();\n    let mut line_start = 0;\n    let mut position_for_index = |index| {\n        while let Some(current) = &line {\n            let end = line_start + current.len();\n            if index < line_start {\n                return None;\n            }\n            if index <= end {\n                return Some(origin + current.position_for_index(index - line_start, line_height)?);\n            }\n            origin.y += current.size(line_height).height;\n            line_start = end + 1;\n            line = lines.next();\n        }\n        None\n    };\n    let mut selection: Option<Selection> = None;\n    for (offset, c) in text.char_indices() {\n        let Some(pos) = position_for_index(offset) else {"
+    },
+    {
+      "path": "src/text/inline.rs",
+      "old": "        if let Some(next_pos) = text_layout.position_for_index(next_offset)\n            && next_pos.y == pos.y",
+      "new": "        if let Some(next_pos) = position_for_index(next_offset)\n            && next_pos.y == pos.y"
     }
   ]
 }

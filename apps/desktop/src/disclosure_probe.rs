@@ -10,11 +10,17 @@ use std::time::Duration;
 
 #[path = "tool_arguments_probe.rs"]
 mod arguments;
+#[path = "tool_selection_probe.rs"]
+mod selection;
 
 pub fn run_disclosure_probe(cx: &mut HeadlessAppContext) {
     // This matrix checks settled presentation, source, focus and scroll. The
     // message_fold target owns timed disclosure phases on the executor clock.
     cx.update(|cx| cx.set_reduce_motion(true));
+    if std::env::var_os("PILOT_NEXT_TOOL_SELECTION_DIR").is_some() {
+        selection::run(cx);
+        return;
+    }
     if std::env::var_os("PILOT_NEXT_TOOL_ARGUMENTS_DIR").is_some() {
         arguments::run(cx);
         return;
