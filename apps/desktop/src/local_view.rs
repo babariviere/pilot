@@ -112,6 +112,9 @@ pub(crate) mod project_add_probe;
 #[cfg(feature = "native-probes")]
 #[path = "project_settings_probe.rs"]
 pub(crate) mod project_settings_probe;
+#[cfg(feature = "native-probes")]
+#[path = "provider_usage_delivery_probe.rs"]
+pub(crate) mod provider_usage_delivery_probe;
 #[path = "queued_message_view.rs"]
 pub(crate) mod queued_message_view;
 #[cfg(feature = "native-probes")]
@@ -2028,6 +2031,13 @@ impl LocalViewer {
         self.sync_visible_draft(window, cx);
         self.sync_missions(window, cx);
         self.sync_mission_context(cx);
+        // Limits are shared with Usage, even while Home is not mounted.
+        if !Arc::ptr_eq(&self.nav_chats, &self.state.chats)
+            && let Some(limits) = self.overview.read(cx).limits.clone()
+        {
+            let reports = crate::provider_usage::newest(&self.state.chats);
+            limits.update(cx, |v, cx| v.sync(reports, cx));
+        }
         // Only a loaded catalog can show a project as removed.
         if self.state.projects_loaded
             && let Some(projects) = self.settings.read(cx).projects.clone()

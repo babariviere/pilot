@@ -11,6 +11,31 @@ trend. Coverage details reveal capture/retention floors, accounting-loss counter
 and dated trend values. All controls use native keyboard traversal. There are no
 account totals, billing claims, remote reads or recovery/write controls.
 
+## Subscription limits
+
+Home and Usage share one retained subscription-limits owner. The existing
+Local control socket (`GET /api/ws`) supplies `SessionSummary.usage.subscription`
+on its initial session list and subsequent session updates. The viewer feeds
+these reports to the shared owner even while a conversation, Inbox or Missions
+is selected. Reconnecting uses the ordinary hello and session-list path, not a
+provider refresh. No additional socket, provider call or timer is introduced.
+
+The daemon reads Pi's shared provider cache; the client keeps the newest reported
+`fetchedAt` per provider, never the transport receipt time. Claude and Codex windows
+remain separate. The contract does not identify an account, so a report cannot
+prove account matching or complete account coverage. Missing windows/counts and
+unknown reset times remain unknown, not zero. A reset-passed window says
+“was … · awaiting report” until another authoritative report arrives. A stale
+cache replay cannot make it current. This display does not release usage-paused
+work or change the daemon's 99% admission/reset/force-work policy.
+
+Errors retain the last usable windows and their original report time beside the
+error. Their ordering uses the failed report's timestamp separately, so a late
+older error cannot taint a newer report and a late older success cannot clear a
+newer error. Refresh limits remains explicit and daemon-mediated, preserving Pi's
+credential ownership, existing cache and backoff. Historical tokens and estimated
+costs below are a separate source.
+
 ## Audited authority and bounds
 
 Source audit: `apps/macos/Sources/Pilot/UsageDashboard{Model,Page}.swift`,

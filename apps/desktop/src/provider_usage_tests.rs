@@ -22,6 +22,25 @@ fn newest_per_provider_uses_report_time_not_delivery_or_chat_activity() {
 }
 
 #[test]
+fn provider_identity_changes_do_not_relabel_or_fill_unknown_windows() {
+    let before = chat("same-chat", "anthropic", json!(1_000), 90);
+    let after = chat("same-chat", "openai", json!(2_000), 30);
+    assert_eq!(newest(&[before])[0].provider, "Claude");
+    let reports = newest(&[after]);
+    assert_eq!(reports.len(), 1);
+    assert_eq!(reports[0].provider, "Codex");
+    assert_eq!(reports[0].windows[0].value, "30% used");
+    assert!(Snapshot::read(&json!({"fetchedAt":3000,"windows":[]})).is_none());
+    let partial = Snapshot::read(&json!({"provider":"anthropic","fetchedAt":3000,
+        "account":"private account text", "windows":[{"label":"5h","usedPercent":15},
+        {"label":"Week"}]}))
+    .unwrap();
+    assert_eq!(partial.windows.len(), 1);
+    assert_eq!(partial.windows[0].value, "15% used");
+    assert!(!format!("{partial:?}").contains("private account"));
+}
+
+#[test]
 fn unknown_stale_future_error_and_empty_are_not_fresh_or_zero() {
     let mut value = json!({"provider":"openai","fetchedAt":1_000,"windows":[],"error":"secret bearer credential"});
     let s = Snapshot::read(&value).unwrap();

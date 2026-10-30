@@ -1,12 +1,15 @@
 //! App-requested limits state, separate from historical usage and agent admission.
 use crate::provider_usage::Snapshot;
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 #[derive(Default)]
 pub(crate) struct State {
     pub(crate) busy: bool,
     pub(crate) snapshots: Vec<Snapshot>,
     pub(crate) status: Option<String>,
+    // Failed reports retain older windows, whose fetched_at must stay unchanged.
+    latest_at: BTreeMap<&'static str, Option<u64>>,
 }
 impl State {
     pub(crate) fn begin(&mut self) -> bool {
@@ -19,6 +22,14 @@ impl State {
     }
     pub(crate) fn merge(&mut self, reports: Vec<Snapshot>) {
         for report in reports {
+            if self
+                .latest_at
+                .get(report.provider)
+                .is_some_and(|at| report.fetched_at < *at)
+            {
+                continue;
+            }
+            self.latest_at.insert(report.provider, report.fetched_at);
             if let Some(old) = self
                 .snapshots
                 .iter_mut()
@@ -97,6 +108,39 @@ impl State {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn late_reports_cannot_replace_or_clear_a_newer_error() {
+        let good = |at| {
+            Snapshot::read(&json!({"provider":"anthropic","fetchedAt":at,"windows":[{"label":"5h","usedPercent":42}]})).unwrap()
+        };
+        let failed = |at| {
+            Snapshot::read(
+                &json!({"provider":"anthropic","fetchedAt":at,"error":"private","windows":[]}),
+            )
+            .unwrap()
+        };
+        let mut s = State::default();
+        s.merge(vec![good(2000)]);
+        s.merge(vec![failed(1000)]);
+        assert!(
+            !s.snapshots[0].update_error,
+            "late stale errors cannot taint a newer reading"
+        );
+        s.merge(vec![failed(3000)]);
+        assert!(s.snapshots[0].update_error);
+        assert_eq!(
+            s.snapshots[0].fetched_at,
+            Some(2000),
+            "retained windows keep their report time"
+        );
+        s.merge(vec![good(2500)]);
+        assert!(
+            s.snapshots[0].update_error,
+            "late success cannot clear a newer failed report"
+        );
+        s.merge(vec![good(4000)]);
+        assert!(!s.snapshots[0].update_error);
+    }
     #[test]
     fn explicit_refresh_retains_report_time_errors_and_rejects_other_provider() {
         let mut s = State::default();

@@ -442,9 +442,6 @@ impl Overview {
             }
         }
         self.subscriptions = subscriptions;
-        if let Some(limits) = &self.limits {
-            limits.update(cx, |v, cx| v.sync(self.subscriptions.clone(), cx));
-        }
         self.chats = chats;
         self.project = project;
         self.projects_loaded = projects_loaded;

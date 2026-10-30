@@ -29,6 +29,7 @@ enum Scenario {
     CompactionResume,
     ContextUsage,
     ProviderUsage,
+    ProviderUsageReconnect,
     Todos,
     ListAdmission,
     ListSnapshot,
@@ -225,6 +226,10 @@ impl Mock {
                             let mut socket=tokio_tungstenite::WebSocketStream::from_raw_socket(stream,Role::Server,None).await;
                             if path=="/api/ws" {
                                 socket.send(Frame::Text(json!({"type":"projects","projects":[{"id":"p-a","name":"Synthetic project A","path":"/synthetic/a","environment":{"ignore":"synthetic-only"}},{"id":"p-b","name":"Synthetic project B","path":"/synthetic/b"}]}).to_string().into())).await.unwrap();
+                                if matches!(scenario, Scenario::ProviderUsageReconnect) {
+                                    provider_usage_reader_tests::serve(&mut socket, &steps, attempts.fetch_add(1, Ordering::SeqCst)).await;
+                                    return;
+                                }
                                 if matches!(scenario, Scenario::AttentionFreshness) && steps.recv().await.is_err() { return; }
                                 if matches!(scenario, Scenario::ListAdmission | Scenario::ListSnapshot) {
                                     let attempt = attempts.fetch_add(1, Ordering::SeqCst);
