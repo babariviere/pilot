@@ -365,7 +365,7 @@ Usage, Settings and connection/recovery state keep their existing owners.
 The sidebar list (`sidebar_list.rs`, rows built by `sidebar_tree.rs`) has
 four sections: Drafts, Pinned, Chats and, with the Archived filter, Archived.
 An unforced `SessionSummary.subscriptionPause` projects to `Signal::Paused`
-and `Mark::Paused`: a still Lucide Pause in the existing 12pt slot with
+and `Mark::Paused`: a hollow Lucide Circle in the existing 12pt slot with
 theme `muted_foreground`, and the word Paused. Its tooltip and accessible
 name disclose Usage limit reached. Sidebar mission/project roll-ups count it
 separately, unfinished members never fold away, and Inbox has a quiet Paused

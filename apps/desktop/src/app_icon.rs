@@ -9,7 +9,7 @@ use gpui_kit::{
 // The full catalog enum is larger than Kit's default asset bundle. Only embed
 // the additional glyphs used here; preserve default icons for Kit controls.
 icon_assets!(pub(crate) AppIconAssets, [
-    House, Folders, MessagesSquare, SquarePen, CodeXml, Wrench, Layers, ListFilter, Ellipsis, ListTodo, Circle, FolderPlus, Activity, Link, GitCompare, Maximize2, CornerDownRight, Clock, Trash, Map, Compass, MessageCircleQuestionMark, GitPullRequest, ArrowUpToLine, GitBranch, Minimize2, Eraser, ExternalLink, Pause,
+    House, Folders, MessagesSquare, SquarePen, CodeXml, Wrench, Layers, ListFilter, Ellipsis, ListTodo, Circle, FolderPlus, Activity, Link, GitCompare, Maximize2, CornerDownRight, Clock, Trash, Map, Compass, MessageCircleQuestionMark, GitPullRequest, ArrowUpToLine, GitBranch, Minimize2, Eraser, ExternalLink,
 ]);
 
 macro_rules! app_icons {
@@ -31,7 +31,7 @@ app_icons! {
     Complete => Check,
     Dropped => CircleX,
     Working => Ellipsis,
-    Paused => Pause,
+    Paused => Circle,
     Expand => ChevronDown,
     Collapse => ChevronUp,
     Home => House,
@@ -145,6 +145,17 @@ mod tests {
     use super::*;
     use crate::appearance::ChromeAssets;
     use gpui_kit::AssetSource;
+
+    #[test]
+    fn paused_uses_an_empty_circle() {
+        assert_eq!(AppIcon::Paused.asset(), IconName::Circle);
+        let bytes = ChromeAssets
+            .load(&AppIcon::Paused.asset().path())
+            .unwrap()
+            .unwrap();
+        let svg = std::str::from_utf8(&bytes).unwrap();
+        assert!(svg.contains("<circle") && svg.contains("fill=\"none\""));
+    }
 
     #[test]
     fn every_app_role_loads_real_svg_and_preserves_kit_assets() {

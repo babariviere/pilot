@@ -138,7 +138,7 @@ opening the chat empties the circle, and a collapsed mission or project fills it
 replies. Needs you, Failed and Ready rows show no new-reply state (their coloured mark already asks for a look), nor
 does a collapsed mission with a member that needs you.
 
-In Pilot Next, an unforced current per-chat subscription hold reads **Paused**, with a neutral pause mark.
+In Pilot Next, an unforced current per-chat subscription hold reads **Paused**, with a neutral hollow circle.
 **Usage limit reached** is disclosed in its tooltip/details and accessible name. It is unfinished, never folded
 into finished members or automatically archived. A pending question still reads Needs you. Manual archive,
 Stop, Force work and the daemon's existing reset/fresh-reading resume policy remain unchanged; aggregate
