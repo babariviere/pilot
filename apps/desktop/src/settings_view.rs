@@ -43,6 +43,7 @@ pub(crate) struct SettingsPreferences {
     pub(crate) models: Option<Entity<crate::scoped_models_view::ScopedModels>>,
     /// Host-global chat settings; None in synthetic windows without daemon authority.
     pub(crate) chats: Option<Entity<crate::chat_settings_view::ChatSettings>>,
+    pub(crate) mcp: Option<Entity<crate::mcp_status_view::Connections>>,
     pub(crate) projects: Option<Entity<crate::project_settings_view::ProjectSettings>>,
     pub(super) state: SettingsState,
     source: Option<Result<PathBuf, SettingsError>>,
@@ -71,6 +72,7 @@ impl SettingsPreferences {
             restart_locked: false,
             models: None,
             chats: None,
+            mcp: None,
             projects: None,
             state: SettingsState::default(),
             source,
@@ -293,16 +295,18 @@ pub(super) enum Category {
     Appearance,
     Chats,
     Models,
+    Mcp,
     Updates,
     Diagnostics,
     /// The project page selected in `ProjectSettings`.
     Project,
 }
 impl Category {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Appearance,
         Self::Chats,
         Self::Models,
+        Self::Mcp,
         Self::Updates,
         Self::Diagnostics,
     ];
@@ -311,6 +315,7 @@ impl Category {
             Self::Appearance => "Appearance",
             Self::Chats => "Chats",
             Self::Models => "Scoped models",
+            Self::Mcp => "MCP connections",
             Self::Updates => "Updates",
             Self::Diagnostics => "Diagnostics",
             Self::Project => "Project",
@@ -321,6 +326,7 @@ impl Category {
             Self::Appearance => "settings-appearance",
             Self::Chats => "settings-chats",
             Self::Models => "settings-models",
+            Self::Mcp => "settings-mcp",
             Self::Updates => "settings-updates",
             Self::Diagnostics => "settings-diagnostics",
             Self::Project => "settings-project",
@@ -486,6 +492,11 @@ impl SettingsView {
                 cx.notify();
             });
         }
+        if category == Category::Mcp
+            && let Some(mcp) = preferences.read(cx).mcp.clone()
+        {
+            mcp.update(cx, |m, cx| m.load(cx));
+        }
         if category == Category::Chats
             && let Some(chats) = preferences.read(cx).chats.clone()
         {
@@ -579,6 +590,16 @@ impl SettingsView {
             .update(cx, |list, cx| list.focus(window, cx));
     }
     fn select_category(&mut self, category: Category, window: &mut Window, cx: &mut Context<Self>) {
+        if self.preferences.read(cx).category == Category::Mcp
+            && let Some(mcp) = self.preferences.read(cx).mcp.clone()
+        {
+            mcp.update(cx, |m, cx| m.close(cx));
+        }
+        if category == Category::Mcp
+            && let Some(mcp) = self.preferences.read(cx).mcp.clone()
+        {
+            mcp.update(cx, |m, cx| m.load(cx));
+        }
         self.categories.update(cx, |list, cx| {
             list.delegate_mut().current = category;
             if let Some(ix) = list.delegate().index() {
@@ -647,8 +668,13 @@ impl SettingsView {
         if self.models_marked(window, cx) {
             return false;
         }
-        self.preferences
-            .update(cx, |owner, cx| owner.request_close(cx))
+        let ready = self
+            .preferences
+            .update(cx, |owner, cx| owner.request_close(cx));
+        if ready && let Some(mcp) = self.preferences.read(cx).mcp.clone() {
+            mcp.update(cx, |m, cx| m.close(cx));
+        }
+        ready
     }
     fn models_marked(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
         if self
@@ -1036,6 +1062,7 @@ impl Render for SettingsView {
             Category::Appearance => self.appearance(window, cx).into_any_element(),
             Category::Chats => self.preferences.read(cx).chats.clone().map(|c| div().child(c).into_any_element()).unwrap_or_else(|| Notice::new("Chat settings require the real Local viewer. This synthetic Settings window has no daemon authority.").into_any_element()),
            Category::Models=>self.preferences.read(cx).models.clone().map(|m|div().child(m).into_any_element()).unwrap_or_else(||Notice::new("Scoped models require the real Local viewer. This synthetic Settings window has no daemon authority.").into_any_element()),
+            Category::Mcp => self.preferences.read(cx).mcp.clone().map(|m| div().child(m).into_any_element()).unwrap_or_else(|| Notice::new("MCP status requires the Local viewer. No host was queried.").into_any_element()),
             Category::Updates => self.updates(cx).into_any_element(),
             Category::Diagnostics => div().children(self.preferences.read(cx).diagnostics.clone()).into_any_element(),
             Category::Project => self.preferences.read(cx).projects.clone().map(|p| div().child(p).into_any_element()).unwrap_or_else(|| Notice::new("Project settings require the real Local viewer.").into_any_element()),

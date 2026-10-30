@@ -514,6 +514,8 @@ impl LocalViewer {
             cx.new(|cx| crate::chat_settings_view::ChatSettings::new(Some(options.clone()), cx));
         view.settings
             .update(cx, |owner, _| owner.chats = Some(chats));
+        let mcp = cx.new(|_| crate::mcp_status_view::Connections::new(options.clone()));
+        view.settings.update(cx, |owner, _| owner.mcp = Some(mcp));
         view.connect_model_controls(options.clone(), window, cx);
         view.settings.update(cx, |owner, cx| {
             #[cfg(any(target_os = "macos", target_os = "linux"))]

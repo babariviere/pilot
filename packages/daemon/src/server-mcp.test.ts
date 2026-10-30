@@ -77,6 +77,10 @@ test("MCP API reports status, rechecks, signs in and pushes changes over the con
 			method,
 			...(body !== undefined ? { body: JSON.stringify(body), headers: { "content-type": "application/json" } } : {}),
 		});
+	// Reading status and opening the control socket must not schedule any connection or login.
+	assert.deepEqual(await (await request("/api/mcp")).json(), { servers: [], checking: false });
+	assert.deepEqual(checks, []);
+	assert.deepEqual(logins, []);
 	const checked = nextMcp((status) => !status.checking && status.servers.length === 2);
 	const started = await request("/api/mcp/check", "POST", {});
 	assert.equal(started.status, 200);
@@ -91,6 +95,8 @@ test("MCP API reports status, rechecks, signs in and pushes changes over the con
 	});
 	assert.equal((await checked).servers[0]?.name, "datadog");
 	assert.deepEqual(await (await request("/api/mcp")).json(), mcp.status());
+	assert.equal(checks.length, 1, "GET must not recheck a previously reported roster");
+	assert.deepEqual(logins, [], "GET must not sign in");
 
 	const waiting = nextMcp((status) => status.servers[0]?.signIn?.state === "waiting");
 	const signIn = await request("/api/mcp/servers/datadog/sign-in", "POST", {});

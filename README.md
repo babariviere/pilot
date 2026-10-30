@@ -35,6 +35,11 @@ stored notes and summary ranges in a separate read-only window. Text remains
 selectable; forgetting, editing and other memory writes are not offered.
 See the [Local memory browser contract](apps/desktop/docs/project-memory.md).
 
+Settings → **MCP connections** shows Local’s last reported global Pi MCP status,
+with read-only details and explicit stale/unavailable states. Refresh only reads
+the daemon report; check, sign-in and setup actions are not included. See the
+[MCP observation contract](apps/desktop/docs/mcp-status.md).
+
 - **Run several agents at once.** Follow progress across projects, send follow-ups, queue messages or stop
   a run. Every session has its own worker process.
 - **Finish a mission explicitly in Pilot Next.** Mission detail offers **Mark done** when all remaining

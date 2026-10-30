@@ -51,6 +51,10 @@ The one non-Lucide exception is `app_icon::BrandMark` (GitHub, Linear, Slack, fr
 Swift's `BrandMark`): only beside an exactly recognized service link in message text
 (`markdown_service_links`), in the link colour, never as decoration or status.
 
+The read-only **MCP connections** Settings page uses this same column, Kit
+Refresh/Details controls and literal selectable observations. It never exposes
+connection/auth/setup actions. See [Local MCP observations](mcp-status.md).
+
 Layout is a left-aligned reading column, not a grid of nested cards:
 
 The project **Memory…** browser reuses this column and Kit actions in a separate

@@ -287,11 +287,11 @@ pub use local_view::settings_probe::run_settings_probe;
 pub use local_view::subscription_limit_probe::run_subscription_limit_probe;
 mod nested_scroll;
 mod project_memory;
+#[cfg(feature = "native-probes")]
+mod project_memory_probe;
 mod project_memory_reader;
 #[cfg(any(test, feature = "native-probes"))]
 mod project_memory_tests;
-#[cfg(feature = "native-probes")]
-mod project_memory_probe;
 #[cfg(feature = "native-probes")]
 pub use project_memory_probe::run_project_memory_probe;
 mod project_memory_view;
@@ -466,3 +466,13 @@ pub use local_view::message_footer_probe::run_message_footer_probe;
 
 #[cfg(feature = "native-probes")]
 pub use local_view::new_chat_view_probe::run_new_chat_view_probe;
+
+mod mcp_status;
+#[cfg(feature = "native-probes")]
+mod mcp_status_probe;
+mod mcp_status_reader;
+#[cfg(any(test, feature = "native-probes"))]
+mod mcp_status_tests;
+mod mcp_status_view;
+#[cfg(feature = "native-probes")]
+pub use mcp_status_probe::run_mcp_status_probe;
