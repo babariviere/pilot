@@ -161,6 +161,10 @@ not an absence proof. Swift links are historical capability references only.
   #280's [restart evidence](../evidence/restart-retention.md)
   records synthetic lost-ACK/restart checks, not force-quit/power-loss qualification.
   Compare the textarea to `shown_text`, not blindly to saved draft text.
+  The [integrated lost-ACK corpus](lost-ack-reconnect.md) connects ordinary Send,
+  socket/full-baseline recovery, paged history/Find, exact Check and native owner
+  Close/immediate Store reopen. Matching history/title never settles delivery;
+  this isolated corpus does not resolve #105 or qualify live lifecycle/OS IME.
 - **Lazy history:** #471/#476 have recorded hidden native and synthetic transport
   results in [lazy history](lazy-history.md). Initial 60-entry tail, contiguous
   24-entry older pages and explicit full-history Find are implemented. Distant

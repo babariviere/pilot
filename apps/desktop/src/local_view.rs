@@ -2,6 +2,9 @@
 #[path = "archive_navigation.rs"]
 mod archive_navigation;
 #[cfg(feature = "native-probes")]
+#[path = "lost_ack_probe.rs"]
+pub(crate) mod lost_ack_probe;
+#[cfg(feature = "native-probes")]
 #[path = "archive_probe.rs"]
 pub(crate) mod archive_probe;
 #[path = "archived_composer.rs"]

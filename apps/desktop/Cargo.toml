@@ -5,6 +5,12 @@ edition = "2024"
 publish = false
 
 [[test]]
+name = "lost_ack"
+harness = false
+test = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "workspace_changes"
 harness = false
 required-features = ["native-probes"]

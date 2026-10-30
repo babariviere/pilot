@@ -33,6 +33,7 @@ PURE_NATIVE = {"scheduled_messages", "shortcuts", "mcp_status", "project_memory"
 
 PURE_MODULES.add("archive")
 PURE_NATIVE.add("archive")
+PURE_NATIVE.add("lost_ack")
 
 
 def parser():
