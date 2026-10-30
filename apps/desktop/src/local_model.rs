@@ -792,6 +792,8 @@ impl LiveTranscript {
             {
                 self.question_replies.insert(target, id);
             }
+        } else if kind == "pilot.compaction-boundary" {
+            // Internal context bookkeeping, not a conversation event.
         } else if kind == "pilot.artifact" {
             if let Some(reference) =
                 crate::artifact_model::Reference::pinned(&entry["data"]["artifact"])
@@ -1676,6 +1678,24 @@ mod tests {
         assert_eq!(pending_question_id(&model), Some(21));
         model.apply(&json!({"type":"entry_appended","entry":{"id":23,"kind":"pilot.activity","model":[{"role":"user","content":"Continue"}]}}));
         assert_eq!(pending_question_id(&model), None);
+    }
+    #[test]
+    fn compaction_boundary_is_not_a_conversation_row() {
+        let boundary = json!({"id":4,"kind":"pilot.compaction-boundary","model":[]});
+        let summary = json!({"id":3,"kind":"pi.compaction","data":{"summary":"Retained summary"}});
+        let other = json!({"id":5,"kind":"pilot.other","model":[]});
+        let mut model = LiveTranscript::default();
+        model.apply(&json!({"type":"snapshot","entries":[summary, boundary.clone(), other]}));
+        let rows = model.rows();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].label(), "Context compacted");
+        assert!(rows[0].source().contains("Retained summary"));
+        assert!(rows[1].source().contains("Structured entry"));
+        assert_eq!(model.unsupported, 1);
+        model.apply(&json!({"type":"entry_appended","entry":{"id":6,"kind":"pilot.compaction-boundary","model":[]}}));
+        assert_eq!(model.rows().len(), 2);
+        model.page(3, &json!({"entries":[{"id":2,"kind":"pilot.compaction-boundary","model":[]}],"more":false}));
+        assert_eq!(model.rows().len(), 2);
     }
     #[test]
     fn compaction_and_reset_markers_are_one_event_row_never_user_input() {
