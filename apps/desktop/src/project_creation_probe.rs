@@ -441,6 +441,9 @@ pub fn run_project_creation_probe(cx: &mut HeadlessAppContext) {
                     if lost {
                         e.draft().is_some_and(|d| d.pending.is_some())
                             && server.seen.lock().unwrap().envelopes.len() == 1
+                            // Receiving the request is not completion of the lost-ACK path.
+                            // Resolve mounts only after the courier publishes its result.
+                            && !e.pending.contains_key(e.selected.as_ref().unwrap())
                     } else {
                         e.draft().is_some_and(|d| d.created.is_some())
                     }

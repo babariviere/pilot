@@ -64,7 +64,7 @@ fn source(e: &ChatEditor) -> (Scope, String) {
 }
 
 #[gpui_kit::test]
-fn scope_change_retires_reader_and_preserves_draft(cx: &mut TestAppContext) {
+fn scope_change_revalidates_retained_reader_and_preserves_draft(cx: &mut TestAppContext) {
     let (_, h, e, _) = setup(cx);
     cx.update_window(h, |_, w, cx| {
         e.update(cx, |e, cx| {
@@ -75,7 +75,231 @@ fn scope_change_retires_reader_and_preserves_draft(cx: &mut TestAppContext) {
             let m = e.models.as_ref().unwrap();
             assert!(m.request > request);
             assert!(m.picker.as_ref().unwrap().loading);
+            let pending = m.reader.as_ref().unwrap().pending().unwrap();
+            assert_eq!(pending.catalog_generation, 1);
+            assert_eq!(pending.id, m.request);
             assert_eq!(e.text.read(cx).value(), "retained draft");
+        });
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn reconnect_during_composer_preedit_starts_replacement_read_and_fences_old_result(
+    cx: &mut TestAppContext,
+) {
+    let (_, h, e, commands) = setup(cx);
+    cx.update_window(h, |_, w, cx| {
+        e.update(cx, |e, cx| {
+            e.text.update(cx, |t, cx| {
+                t.replace_and_mark_text_in_range(None, "にほん", Some(3..3), w, cx)
+            });
+            let text = e.text.read(cx).value();
+            let choice = e.model_choice();
+            let (scope, _) = source(e);
+            let request = e.models.as_ref().unwrap().request;
+            e.invalidate_models(w, cx);
+            let m = e.models.as_ref().unwrap();
+            let p = m.picker.as_ref().unwrap();
+            assert!(
+                m.request > request,
+                "reconnect must not lose its read during IME"
+            );
+            assert!(p.loading && p.catalog.is_some());
+            e.accept_models(
+                Update {
+                    id: request,
+                    scope,
+                    result: Err("obsolete read"),
+                },
+                w,
+                cx,
+            );
+            assert!(
+                e.models
+                    .as_ref()
+                    .unwrap()
+                    .picker
+                    .as_ref()
+                    .unwrap()
+                    .error
+                    .is_none()
+            );
+            assert_eq!(e.model_choice(), choice);
+            assert_eq!(e.text.read(cx).value(), text);
+            assert!(e.marked(w, cx));
+            assert!(commands.is_empty());
+        });
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn live_model_metadata_during_loading_keeps_one_read_and_last_success(cx: &mut TestAppContext) {
+    let (_, h, e, commands) = setup(cx);
+    cx.update_window(h, |_, w, cx| {
+        e.update(cx, |e, cx| {
+            e.load_models(false, w, cx);
+            let m = e.models.as_ref().unwrap();
+            let request = m.request;
+            assert_eq!(m.reader.as_ref().unwrap().pending().unwrap().id, request);
+            let mut current = m.current.as_ref().unwrap().2.clone();
+            current.model = Some("p/b".into());
+            current.thinking = Some("low".into());
+            current.updated_at += 1;
+            e.model_context("source", "/synthetic/project", current, w, cx);
+            let m = e.models.as_ref().unwrap();
+            let p = m.picker.as_ref().unwrap();
+            assert_eq!(
+                m.request, request,
+                "metadata must not cancel/reissue an active read"
+            );
+            assert!(p.catalog.is_some() && p.loading);
+            assert!(m.reader.as_ref().unwrap().pending().is_none());
+            assert_eq!(e.model_choice().unwrap().thinking.as_deref(), Some("low"));
+            // A catalog result may complete after fresher per-chat metadata.
+            let old = SessionModel {
+                model: Some("p/a".into()),
+                thinking: Some("high".into()),
+                updated_at: 1,
+                ..Default::default()
+            };
+            e.accept_models(
+                Update {
+                    id: request,
+                    scope: p.scope.clone(),
+                    result: Ok((
+                        serde_json::from_value(crate::chat_models_fixture::catalog()).unwrap(),
+                        Some(old),
+                    )),
+                },
+                w,
+                cx,
+            );
+            assert_eq!(e.model_choice().unwrap().model, "p/b");
+            assert_eq!(e.model_choice().unwrap().thinking.as_deref(), Some("low"));
+            assert!(commands.is_empty());
+        });
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
+fn failed_refresh_retains_matching_catalog_but_not_authority_and_chat_switch_recovers(
+    cx: &mut TestAppContext,
+) {
+    let (_, h, e, commands) = setup(cx);
+    cx.update_window(h, |_, w, cx| {
+        e.update(cx, |e, cx| {
+            e.text
+                .update(cx, |t, cx| t.set_value("A draft 日本語", w, cx));
+            let a_current = e
+                .models
+                .as_ref()
+                .unwrap()
+                .current
+                .as_ref()
+                .unwrap()
+                .2
+                .clone();
+            let catalog = e
+                .models
+                .as_ref()
+                .unwrap()
+                .picker
+                .as_ref()
+                .unwrap()
+                .catalog
+                .clone()
+                .unwrap();
+            let (a_scope, a_epoch) = source(e);
+            e.load_models(true, w, cx);
+            let a_request = e.models.as_ref().unwrap().request;
+            e.accept_models(
+                Update {
+                    id: a_request,
+                    scope: a_scope.clone(),
+                    result: Err("Scoped models unavailable for this Local directory."),
+                },
+                w,
+                cx,
+            );
+            assert_eq!(
+                e.models
+                    .as_ref()
+                    .unwrap()
+                    .picker
+                    .as_ref()
+                    .unwrap()
+                    .catalog
+                    .as_deref(),
+                Some(catalog.as_ref())
+            );
+            assert!(!e.can_choose_model());
+            e.choose_model(&a_scope, &a_epoch, "p/b", None, w, cx);
+            assert!(commands.is_empty());
+
+            e.select("chat:b".into(), true, false, w, cx);
+            let mut b_current = a_current.clone();
+            b_current.model = Some("p/b".into());
+            b_current.thinking = Some("low".into());
+            e.model_context("b", "/synthetic/other", b_current.clone(), w, cx);
+            let (b_scope, b_epoch) = source(e);
+            let b_request = e.models.as_ref().unwrap().request;
+            e.accept_models(
+                Update {
+                    id: b_request,
+                    scope: b_scope.clone(),
+                    result: Ok((catalog.as_ref().clone(), Some(b_current))),
+                },
+                w,
+                cx,
+            );
+            e.text.update(cx, |t, cx| t.set_value("B draft 👩‍💻", w, cx));
+            assert_eq!(e.model_choice().unwrap().thinking.as_deref(), Some("low"));
+
+            e.select("chat:source".into(), true, false, w, cx);
+            e.model_context("source", "/synthetic/project", a_current.clone(), w, cx);
+            let a_request = e.models.as_ref().unwrap().request;
+            assert!(e.models.as_ref().unwrap().picker.as_ref().unwrap().loading);
+            e.accept_models(
+                Update {
+                    id: a_request,
+                    scope: a_scope.clone(),
+                    result: Ok((catalog.as_ref().clone(), Some(a_current))),
+                },
+                w,
+                cx,
+            );
+            assert!(e.can_choose_model());
+            assert_eq!(e.text.read(cx).value().as_ref(), "A draft 日本語");
+            assert_eq!(e.cache["chat:b"].text, "B draft 👩‍💻");
+            assert_eq!(e.model_choice().unwrap().model, "p/a");
+            assert_eq!(e.model_choice().unwrap().thinking.as_deref(), Some("high"));
+            e.accept_models(
+                Update {
+                    id: b_request,
+                    scope: b_scope.clone(),
+                    result: Err("stale B error"),
+                },
+                w,
+                cx,
+            );
+            e.choose_model(&b_scope, &b_epoch, "q/c", None, w, cx);
+            e.choose_model(&a_scope, &a_epoch, "q/c", None, w, cx);
+            assert!(
+                e.models
+                    .as_ref()
+                    .unwrap()
+                    .picker
+                    .as_ref()
+                    .unwrap()
+                    .error
+                    .is_none()
+            );
+            while let Ok(command) = commands.try_recv() {
+                assert!(!matches!(command, WriteCommand::Model { .. }));
+            }
         });
     })
     .unwrap();

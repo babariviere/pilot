@@ -444,13 +444,13 @@ pub(crate) async fn catalog(
     if !cwd(path) {
         return Err("Choose an exact Local project/chat directory before loading models.");
     }
-    gate(client, options).await?;
+    read_gate(client, options).await?;
     let r = client
         .get(format!("{}/api/models", options.loopback()))
         .query(&[("cwd", path)])
         .send()
         .await
-        .map_err(|_| "Couldn't load scoped models. Refresh to try again.")?;
+        .map_err(|_| CATALOG_INTERRUPTED)?;
     if r.status() != reqwest::StatusCode::OK {
         return Err("Scoped models unavailable for this Local directory.");
     }
@@ -468,7 +468,7 @@ pub(crate) async fn session(
     target: &Target,
 ) -> Result<SessionModel, Failure> {
     target.validate()?;
-    gate(client, options).await?;
+    read_gate(client, options).await?;
     let r = client
         .get(format!(
             "{}/api/sessions/{}",
@@ -477,7 +477,7 @@ pub(crate) async fn session(
         ))
         .send()
         .await
-        .map_err(|_| "Local chat model could not be checked.")?;
+        .map_err(|_| SESSION_INTERRUPTED)?;
     if r.status() != reqwest::StatusCode::OK {
         return Err("Local chat model is unavailable.");
     }
@@ -486,6 +486,34 @@ pub(crate) async fn session(
         return Err("Local chat identity or directory changed. Reopen the exact chat.");
     }
     Ok(SessionModel::read(&v))
+}
+
+const CONNECTION_INTERRUPTED: &str =
+    "Couldn't check the Local connection for models. Retry models or reconnect.";
+const CATALOG_INTERRUPTED: &str = "Couldn't load scoped models. Refresh to try again.";
+const SESSION_INTERRUPTED: &str = "Local chat model could not be checked.";
+
+pub(crate) fn interrupted_read(error: &str) -> bool {
+    matches!(
+        error,
+        CONNECTION_INTERRUPTED
+            | CATALOG_INTERRUPTED
+            | SESSION_INTERRUPTED
+            | "Model response interrupted."
+    )
+}
+
+/// A failed hello request is not evidence that the independently connected daemon stopped.
+pub(crate) async fn read_gate(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+) -> Result<(), Failure> {
+    gate(client, options).await.map_err(|error| match error {
+        "Local read failed. Check that Pilot is running." | "Local response interrupted" => {
+            CONNECTION_INTERRUPTED
+        }
+        _ => error, // Identity/protocol refusals remain explicit, and are never retried.
+    })
 }
 pub(crate) async fn execute(
     client: &reqwest::Client,

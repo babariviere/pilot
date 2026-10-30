@@ -69,8 +69,17 @@ uncertainty. No Swift state, sign-in, credential file or global/default model is
   Metadata/read generations fence older responses and model acknowledgments are handled
   once, not replayed by later autosave publications.
 - One lazy catalog-reader thread/runtime, one coalesced request and one result slot.
-  No proxy, redirect or retry. Two-second connect and five-second read deadlines; all I/O,
+  No proxy, redirect or HTTP-library retry. Each open/switch/reconnect request may retry
+  one interrupted transport read, never an identity/protocol/refusal/malformed response.
+  A newer selection cancels either attempt, without polling or replaying writes.
+  Two-second connect and five-second read deadlines; all I/O,
   JSON decode and catalog search-key preparation are off the UI thread.
+- Successful catalogs belong to the retained, pinned-daemon reader and exact project/directory
+  scope. Reconnect/Scoped models changes advance catalog generation without destroying that
+  reader. Each scope is revalidated on next use; refresh failures retain the selected scope's
+  previous successful display, but do not authorize model changes from stale data.
+  Read initiation is safe during IME; native model-query application still waits for composition
+  and search to finish. A model-only read error never changes the header's connection state.
 - At most 2,048 unique qualified models, 16 unique reported levels per model, bounded
   IDs/names/levels, 2 MiB predecode body cap including chunked responses. Search matching
   is bounded to 256 query bytes. No per-row entities, polling or added animation clock.

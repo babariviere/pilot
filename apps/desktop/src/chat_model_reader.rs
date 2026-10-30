@@ -15,6 +15,7 @@ pub(crate) struct Scope {
 }
 pub(crate) struct Request {
     pub(crate) id: u64,
+    pub(crate) catalog_generation: u64,
     pub(crate) scope: Scope,
     pub(crate) target: Option<Target>,
     pub(crate) refresh: bool,
@@ -28,6 +29,34 @@ pub(crate) struct Reader {
     commands: async_channel::Sender<Request>,
     replace: async_channel::Receiver<Request>,
 }
+type Catalogs = std::collections::HashMap<(Option<String>, String), (u64, Catalog)>;
+
+async fn read(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    request: &Request,
+    catalogs: &mut Catalogs,
+) -> Result<(Catalog, Option<SessionModel>), Failure> {
+    let current = match &request.target {
+        Some(target) => Some(crate::chat_models::session(client, options, target).await?),
+        None => None,
+    };
+    let key = (request.scope.project.clone(), request.scope.cwd.clone());
+    let catalog = if let Some((_, catalog)) = catalogs
+        .get(&key)
+        .filter(|(generation, _)| *generation == request.catalog_generation)
+    {
+        // Even a successful matching-scope cache hit must validate the pinned daemon.
+        crate::chat_models::read_gate(client, options).await?;
+        catalog.clone()
+    } else {
+        let catalog = crate::chat_models::catalog(client, options, &request.scope.cwd).await?;
+        catalogs.insert(key, (request.catalog_generation, catalog.clone()));
+        catalog
+    };
+    Ok((catalog, current))
+}
+
 impl Reader {
     #[cfg(feature = "native-probes")]
     pub(crate) fn disconnect_fixture(&self) {
@@ -37,6 +66,10 @@ impl Reader {
     pub(crate) fn recording() -> Self {
         let (commands, replace) = async_channel::bounded(1);
         Self { commands, replace }
+    }
+    #[cfg(test)]
+    pub(crate) fn pending(&self) -> Option<Request> {
+        self.replace.try_recv().ok()
     }
     pub(crate) fn start(
         options: LocalOptions,
@@ -61,7 +94,7 @@ impl Reader {
                 if let (Ok(runtime), Ok(client)) = (runtime, client) {
                     runtime.block_on(async {
                         // This worker belongs to one pinned LocalOptions identity.
-                        let mut catalogs = std::collections::HashMap::<(Option<String>, String), Catalog>::new();
+                        let mut catalogs = Catalogs::new();
                         let mut next = None;
                         loop {
                             let r = match next.take() {
@@ -82,22 +115,14 @@ impl Reader {
                                     continue;
                                 }
                                 result = async {
-                                let current = match &r.target {
-                                    Some(t) => Some(
-                                        crate::chat_models::session(&client, &options, t).await?,
-                                    ),
-                                    None => None,
-                                };
-                                let catalog = if let Some(catalog) = catalogs.get(&key) {
-                                    // A cache hit still validates the pinned daemon identity.
-                                    crate::local_client::gate(&client, &options).await?;
-                                    catalog.clone()
-                                } else {
-                                    let catalog = crate::chat_models::catalog(&client, &options, &r.scope.cwd).await?;
-                                    catalogs.insert(key.clone(), catalog.clone());
-                                    catalog
-                                };
-                                Ok((catalog, current))
+                                    let result = read(&client, &options, &r, &mut catalogs).await;
+                                    // One recovery per open/switch/reconnect request, only for a
+                                    // transport interruption. A newer selection cancels both attempts.
+                                    if result.as_ref().is_err_and(|e| crate::chat_models::interrupted_read(e)) {
+                                        read(&client, &options, &r, &mut catalogs).await
+                                    } else {
+                                        result
+                                    }
                                 } => result,
                             };
                             let u = Update {

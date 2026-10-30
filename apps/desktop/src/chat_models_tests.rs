@@ -319,6 +319,23 @@ async fn catalog_cwd_is_exact_encoded_and_response_allocation_and_fixture_teardo
         );
     }
 }
+
+#[tokio::test]
+async fn catalog_hello_transport_failure_is_model_scoped_not_a_daemon_outage_claim() {
+    let s = Server::start(Mode::HelloLost);
+    let error = catalog(&client(), &s.options, "/synthetic/project")
+        .await
+        .unwrap_err();
+    assert!(error.contains("models"), "{error}");
+    assert!(!error.contains("Check that Pilot is running"), "{error}");
+    s.seen.lock().unwrap().mode = Mode::Accept;
+    assert!(
+        catalog(&client(), &s.options, "/synthetic/project")
+            .await
+            .is_ok()
+    );
+    assert_eq!(s.posts(), 0);
+}
 #[test]
 fn forced_pause_permits_ordinary_change_and_only_an_unforced_pause_continues() {
     let s = Server::start(Mode::Paused);

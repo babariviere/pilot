@@ -36,6 +36,10 @@ pub(crate) enum Mode {
     Oversized,
     Chunked,
     Foreign,
+    HelloLost,
+    HelloLostOnce,
+    CatalogLost,
+    CatalogLostOnce,
 }
 pub(crate) struct Seen {
     pub(crate) mode: Mode,
@@ -182,9 +186,23 @@ impl Server {
                         .push((method.clone(), path.clone(), payload.clone()));
                     if path == "/api/hello" {
                         assert_eq!(method, "GET");
+                        if matches!(s.mode, Mode::HelloLost) {
+                            continue;
+                        }
+                        if matches!(s.mode, Mode::HelloLostOnce) {
+                            s.mode = Mode::Accept;
+                            continue;
+                        }
                         (200,json!({"daemonId":if matches!(s.mode,Mode::Foreign){"foreign"}else{"test-daemon"},"lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true,"passiveFailedModel":!matches!(s.mode, Mode::FailedOld)}}).to_string(),false)
                     } else if path.starts_with("/api/models?") {
                         assert_eq!(method, "GET");
+                        if matches!(s.mode, Mode::CatalogLost) {
+                            continue;
+                        }
+                        if matches!(s.mode, Mode::CatalogLostOnce) {
+                            s.mode = Mode::Accept;
+                            continue;
+                        }
                         let url = reqwest::Url::parse(&format!("http://127.0.0.1{path}")).unwrap();
                         let q: Vec<_> = url.query_pairs().collect();
                         assert_eq!(q.len(), 1);

@@ -19,6 +19,13 @@ fn settle(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
         cx.update_window(h, |_, w, cx| w.render_frame(cx)).unwrap();
     }
 }
+fn projection(view: &LocalViewer, cx: &App) -> Presentation {
+    let mut state = view.state.clone();
+    // accept() takes rows out of Presentation. A synthetic subsequent publication,
+    // like the real reducer, must include the current transcript again.
+    state.rows = view.transcript.read(cx).rows().to_vec();
+    state
+}
 fn until(
     cx: &mut HeadlessAppContext,
     h: AnyWindowHandle,
@@ -68,7 +75,7 @@ pub fn run_chat_model_probe(cx: &mut HeadlessAppContext) {
     }
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
-            let server = Server::start(Mode::Accept);
+            let server = Server::start(Mode::HelloLostOnce);
             let (writer, updates) =
                 Interaction::start(server.options.clone(), Ok(server.home.join("state")));
             let drain = updates.clone();
@@ -116,24 +123,20 @@ pub fn run_chat_model_probe(cx: &mut HeadlessAppContext) {
                                     path: "/synthetic/project".into(),
                                     ..Default::default()
                                 }]);
+                                v.state.rows = (1..70)
+                                    .map(|id| {
+                                        Message::live(
+                                            id,
+                                            "assistant".into(),
+                                            format!(
+                                                "Keep this reader stable {id}. {}",
+                                                "Synthetic 日本語 👩‍💻 paragraph. ".repeat(12)
+                                            ),
+                                        )
+                                    })
+                                    .collect();
                                 v.transcript.update(cx, |t, cx| {
-                                    t.replace_readonly(
-                                        (1..70)
-                                            .map(|id| {
-                                                Message::live(
-                                                    id,
-                                                    "assistant".into(),
-                                                    format!(
-                                                        "Keep this reader stable {id}. {}",
-                                                        "Synthetic 日本語 👩‍💻 paragraph. "
-                                                            .repeat(12)
-                                                    ),
-                                                )
-                                            })
-                                            .collect(),
-                                        true,
-                                        cx,
-                                    )
+                                    t.replace_readonly(v.state.rows.clone(), true, cx)
                                 });
                                 v.connect_model_controls(server.options.clone(), w, cx);
                                 v.editor.update(cx, |e, cx| {
@@ -158,6 +161,92 @@ pub fn run_chat_model_probe(cx: &mut HeadlessAppContext) {
             let transcript = cx.update(|cx| v.read(cx).transcript.clone());
             until(cx, h, &editor, |e| e.ready() && e.model_probe_state().0);
             let text = cx.update(|cx| editor.read(cx).shell_probe().0);
+            // Reconnect during IME must enqueue a read, not strand the old loading state.
+            // The model gate and chat/control presentation are independent read paths.
+            cx.update_window(h, |_, w, cx| {
+                text.update(cx, |t, cx| {
+                    t.replace_and_mark_text_in_range(None, "にほん", Some(3..3), w, cx)
+                });
+                server.seen.lock().unwrap().mode = Mode::HelloLostOnce;
+                v.update(cx, |v, cx| {
+                    let mut state = projection(v, cx);
+                    state.chat_status = "Connected · Local".into();
+                    state.control_connection_generation = 1;
+                    v.accept(state, w, cx);
+                });
+            })
+            .unwrap();
+            until(cx, h, &editor, |e| {
+                e.model_probe_state().0 && e.model_probe_error().is_none()
+            });
+            let draft = cx.update(|cx| text.read(cx).value());
+            // A genuinely persistent catalog-only failure retains successful display and
+            // its scoped retry, without replacing healthy header state with a daemon outage.
+            server.seen.lock().unwrap().mode = Mode::CatalogLost;
+            cx.update_window(h, |_, w, cx| {
+                v.update(cx, |v, cx| {
+                    let mut state = projection(v, cx);
+                    state.control_connection_generation = 3; // Intermediate reconnect can coalesce.
+                    v.accept(state, w, cx);
+                })
+            })
+            .unwrap();
+            until(cx, h, &editor, |e| e.model_probe_error().is_some());
+            cx.update_window(h, |_, w, cx| {
+                let error = editor.read(cx).model_probe_error().unwrap();
+                assert!(error.contains("models") && !error.contains("Check that Pilot is running"));
+                assert_eq!(v.read(cx).state.chat_status, "Connected · Local");
+                assert!(w.try_find("chat-header-meta").is_none());
+                assert!(w.find("chat-model-read-error").visible());
+                let retry = w.find("refresh-chat-models");
+                assert_ne!(retry.disabled(), Some(true));
+                assert!(retry.bounds().bottom() <= w.find("desktop-root").bounds().bottom());
+                assert_eq!(text.read(cx).value(), draft);
+                assert!(text.update(cx, |t, cx| t.marked_text_range(w, cx).is_some()));
+                assert!(
+                    editor.read(cx).model_probe_state().0,
+                    "last successful catalog retained"
+                );
+            })
+            .unwrap();
+            if let Some(d) = &dir {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(d.join(format!(
+                        "{}-{}-model-read-error.png",
+                        width as u32,
+                        mode.name()
+                    )))
+                    .unwrap();
+            }
+            server.seen.lock().unwrap().mode = Mode::Accept;
+            cx.update_window(h, |_, w, cx| {
+                v.update(cx, |v, cx| {
+                    let mut state = projection(v, cx);
+                    state.control_connection_generation = 4;
+                    v.accept(state, w, cx);
+                })
+            })
+            .unwrap();
+            until(cx, h, &editor, |e| {
+                e.model_probe_state().0 && e.model_probe_error().is_none()
+            });
+            let reads = server.seen.lock().unwrap().requests.len();
+            cx.update_window(h, |_, w, cx| {
+                text.update(cx, |t, cx| {
+                    t.unmark_text(w, cx);
+                    t.set_value("", w, cx);
+                });
+                v.update(cx, |v, cx| v.accept(projection(v, cx), w, cx));
+            })
+            .unwrap();
+            settle(cx, h);
+            assert_eq!(
+                server.seen.lock().unwrap().requests.len(),
+                reads,
+                "no duplicate read for same connection generation"
+            );
+            assert_eq!(server.posts(), 0);
             cx.update_window(h, |_, w, cx| {
                 assert_eq!(w.find("desktop-root").bounds().size, w.viewport_size());
                 let tray = w.find("composer-tray").bounds();
@@ -221,6 +310,7 @@ pub fn run_chat_model_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             settle(cx, h);
             let anchor = cx.update(|cx| transcript.read(cx).history_probe_anchor(cx));
+            cx.update(|cx| assert_eq!(transcript.read(cx).rows().len(), 69));
             assert_eq!(server.posts(), 0);
             // Long Unicode labels stay compact: titles truncate inside the field caps and never
             // overlap each other, Send or the measured tray. The full title stays the AX value.
@@ -391,7 +481,12 @@ pub fn run_chat_model_probe(cx: &mut HeadlessAppContext) {
                         (_, Some("subscriptionPause")) => {
                             assert!(w.find("subscription-limit").bounds().size.height > px(0.))
                         }
+                        (_, Some("pending")) => {
+                            // Sending owns its recovery; do not duplicate the admission lock.
+                            assert!(w.try_find("chat-model-restriction").is_none());
+                        }
                         _ => {
+                            assert!(w.try_find("chat-model-restriction").is_some(), "{reason}");
                             assert!(w.find("chat-model-restriction").bounds().size.height > px(0.))
                         }
                     }

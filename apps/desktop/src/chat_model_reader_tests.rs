@@ -8,6 +8,7 @@ use tokio::{
 fn request(id: u64, chat: &str) -> Request {
     Request {
         id,
+        catalog_generation: 0,
         scope: Scope {
             key: format!("chat:{chat}"),
             project: None,
@@ -271,5 +272,91 @@ async fn cache_is_scoped_refreshable_and_identity_checked() {
         count(),
         6,
         "new identity-bound worker cannot inherit catalog"
+    );
+}
+
+#[tokio::test]
+async fn lifecycle_reads_recover_one_transport_interruption_without_manual_refresh() {
+    use crate::chat_models_fixture::{Mode, Server};
+    for (mode, expected_models) in [(Mode::HelloLostOnce, 1), (Mode::CatalogLostOnce, 2)] {
+        let server = Server::start(mode);
+        let (reader, updates) = Reader::start(server.options.clone()).unwrap();
+        let mut r = request(1, "source");
+        r.scope.cwd = "/synthetic/project".into();
+        r.target.as_mut().unwrap().cwd = r.scope.cwd.clone();
+        assert!(reader.request(r));
+        let update = tokio::time::timeout(Duration::from_secs(2), updates.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(update.result.is_ok(), "{mode:?}");
+        let seen = server.seen.lock().unwrap();
+        assert_eq!(
+            seen.requests
+                .iter()
+                .filter(|(_, p, _)| p.starts_with("/api/models?"))
+                .count(),
+            expected_models
+        );
+        assert!(seen.requests.iter().all(|(method, _, _)| method == "GET"));
+        assert!(updates.try_recv().is_err());
+    }
+}
+
+#[tokio::test]
+async fn reconnect_generation_revalidates_each_scope_once_and_persistent_failure_is_bounded() {
+    use crate::chat_models_fixture::{Mode, Server};
+    let server = Server::start(Mode::Accept);
+    let (reader, updates) = Reader::start(server.options.clone()).unwrap();
+    let count = || {
+        server
+            .seen
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .filter(|(_, p, _)| p.starts_with("/api/models?"))
+            .count()
+    };
+    for (id, generation, scope, mode, expected, models) in [
+        (1, 0, "a", Mode::Accept, true, 1),
+        (2, 0, "b", Mode::Accept, true, 2),
+        (3, 0, "a", Mode::Accept, true, 2),
+        // A coalesced reconnect jumps straight to generation 3.
+        (4, 3, "a", Mode::Accept, true, 3),
+        (5, 3, "a", Mode::Accept, true, 3),
+        (6, 3, "b", Mode::Accept, true, 4),
+        (7, 4, "a", Mode::CatalogLost, false, 6),
+        (8, 4, "a", Mode::Accept, true, 7),
+        (9, 4, "a", Mode::Accept, true, 7),
+        (10, 4, "a", Mode::Foreign, false, 7),
+    ] {
+        server.seen.lock().unwrap().mode = mode;
+        let mut r = request(id, scope);
+        r.target = None;
+        r.scope.project = Some(format!("project-{scope}"));
+        r.scope.cwd = format!("/synthetic/{scope}");
+        r.catalog_generation = generation;
+        assert!(reader.request(r));
+        let u = tokio::time::timeout(Duration::from_secs(2), updates.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(u.result.is_ok(), expected, "{id}: {mode:?}");
+        assert_eq!(
+            count(),
+            models,
+            "{id}: one catalog per scope/generation; only transport gets one retry"
+        );
+        assert!(updates.try_recv().is_err());
+    }
+    assert!(
+        server
+            .seen
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .all(|(method, _, _)| method == "GET")
     );
 }

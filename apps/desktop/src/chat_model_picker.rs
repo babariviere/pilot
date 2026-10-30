@@ -97,6 +97,7 @@ pub(super) struct Models {
     reader: Option<Reader>,
     task: Option<Task<()>>,
     request: u64,
+    catalog_generation: u64,
     picker: Option<Picker>,
     current: Option<(String, String, SessionModel)>,
     mutation: u64,
@@ -122,6 +123,10 @@ impl ChatEditor {
             .is_some_and(|(id, _, model)| {
                 self.selected.as_deref() == Some(format!("chat:{id}").as_str()) && model.diagnostics
             })
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn model_probe_error(&self) -> Option<&'static str> {
+        self.models.as_ref()?.picker.as_ref()?.error
     }
     #[cfg(feature = "native-probes")]
     pub(crate) fn model_probe_state(&self) -> (bool, bool, Option<ModelChoice>, bool, bool) {
@@ -165,6 +170,7 @@ impl ChatEditor {
             reader: None,
             task: None,
             request: 0,
+            catalog_generation: 0,
             picker: None,
             current: None,
             mutation: 0,
@@ -323,12 +329,13 @@ impl ChatEditor {
             .as_ref()
             .is_none_or(|p| p.scope != scope || p.for_model != for_model);
         if new {
-            let retained = self
+            let (catalog, deferred, error, loading) = self
                 .models
-                .as_ref()
-                .and_then(|m| m.picker.as_ref())
-                .filter(|p| p.scope == scope && !p.loading && p.error.is_none())
-                .and_then(|p| p.catalog.clone());
+                .as_mut()
+                .and_then(|m| m.picker.as_mut())
+                .filter(|p| p.scope == scope)
+                .map(|p| (p.catalog.clone(), p.deferred.take(), p.error, p.loading))
+                .unwrap_or_default();
             if let Some(old) = self.models.as_ref().and_then(|m| m.picker.as_ref()) {
                 for s in [&old.models, &old.thinking] {
                     s.update(cx, |s, cx| s.prepare_navigation(w, cx));
@@ -376,15 +383,17 @@ impl ChatEditor {
                     }
                 }));
             }
-            let need_read = retained.is_none();
+            // Model metadata can change while this exact scope's read is active.
+            // Rebuild callback epochs, not the read or its last successful display.
+            let need_read = catalog.is_none() && deferred.is_none() && error.is_none() && !loading;
             self.models.as_mut().unwrap().picker = Some(Picker {
                 epoch,
                 for_model,
                 scope,
-                catalog: retained,
-                deferred: None,
-                error: None,
-                loading: false,
+                catalog,
+                deferred,
+                error,
+                loading,
                 models,
                 thinking,
                 synced: None,
@@ -415,9 +424,8 @@ impl ChatEditor {
         self.load_models(true, w, cx);
     }
     fn load_models(&mut self, refresh: bool, w: &mut Window, cx: &mut Context<Self>) {
-        if self.marked(w, cx) {
-            return;
-        }
+        // Reads cannot edit input or submit work. Do not lose a reconnect during
+        // IME; accept_models still defers native model-query application.
         let target = self.model_target();
         let Some(models) = &mut self.models else {
             return;
@@ -462,6 +470,7 @@ impl ChatEditor {
         p.synced = None;
         if !models.reader.as_ref().unwrap().request(Request {
             id: models.request,
+            catalog_generation: models.catalog_generation,
             scope: p.scope.clone(),
             target,
             refresh,
@@ -979,12 +988,10 @@ impl ChatEditor {
     }
     pub(crate) fn invalidate_models(&mut self, w: &mut Window, cx: &mut Context<Self>) {
         if let Some(m) = &mut self.models {
-            m.reader = None;
-            m.task = None;
-            if let Some(p) = &mut m.picker {
-                p.error = Some("Scope changed. Refresh the catalog; current choices are retained.");
-                p.synced = None;
-            }
+            // Retain the pinned worker, its other scopes and its one-slot
+            // cancellation. Older generations are revalidated before reuse.
+            m.catalog_generation += 1;
+            m.request += 1;
         }
         self.refresh_models(w, cx);
     }
@@ -1170,7 +1177,12 @@ impl ChatEditor {
                 let view = view.test_support();
                 view
             }))
-            .children(error.map(|e|Notice::new(e).tone(Tone::Error)))
+            .children(error.map(|e|{
+                let view=div().id("chat-model-read-error").child(Notice::new(e).tone(Tone::Error));
+                #[cfg(any(test, feature="native-probes"))]
+                let view=view.test_support();
+                view
+            }))
             .children(self.model_catalog_empty().then(||Notice::new("No models reported for this directory. Refresh models or check Scoped models in Settings; current choices are retained.").tone(Tone::Warning)))
             .children(self.draft().filter(|_|self.selected.as_ref().is_some_and(|k|k.starts_with("new:"))).and_then(|d|self.new_model_problem(d)).map(|e|Notice::new(e).tone(Tone::Warning)))
             .when(error.is_some(),|v|v.child(ui::action("refresh-chat-models","Refresh models",Action::Quiet).disabled(self.models.as_ref().is_some_and(|m|m.busy)).on_click(cx.listener(|v,_,w,cx|v.refresh_models(w,cx)))))
