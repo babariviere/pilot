@@ -418,18 +418,17 @@ for (const failure of ["empty", "length", "tool", "oversized", "provider-error",
 	test(`invalid handoff ${failure} preserves context and fails without native fallback`, async (t) => {
 		const chat = await open(t);
 		await seed(chat);
-		chat.faux.setResponses([
-			() => {
-				if (failure === "throw") throw new Error("Simulated lost model acknowledgement");
-				if (failure === "empty") return fauxAssistantMessage("");
-				if (failure === "length") return fauxAssistantMessage("Partial handoff", { stopReason: "length" });
-				if (failure === "tool") return fauxAssistantMessage(fauxToolCall("effect", {}), { stopReason: "toolUse" });
-				if (failure === "oversized") return fauxAssistantMessage("🦀".repeat(1025));
-				return fauxAssistantMessage("", { stopReason: "error", errorMessage: "Provider failed" });
-			},
-		]);
+		const response = () => {
+			if (failure === "throw") throw new Error("Simulated lost model acknowledgement");
+			if (failure === "empty") return fauxAssistantMessage("");
+			if (failure === "length") return fauxAssistantMessage("Partial handoff", { stopReason: "length" });
+			if (failure === "tool") return fauxAssistantMessage(fauxToolCall("effect", {}), { stopReason: "toolUse" });
+			if (failure === "oversized") return fauxAssistantMessage("🦀".repeat(1025));
+			return fauxAssistantMessage("", { stopReason: "error", errorMessage: "Provider failed" });
+		};
+		chat.faux.setResponses([response, ...(failure === "oversized" ? [response] : [])]);
 		assert.equal((await run(chat)).status, "unanswered");
-		assert.equal(chat.faux.state.callCount, 1);
+		assert.equal(chat.faux.state.callCount, failure === "oversized" ? 2 : 1);
 		assert.equal(chat.state.effects, 0);
 		assert.equal(
 			(await entries(chat)).some((entry) => entry.kind === "pi.compaction"),
@@ -440,6 +439,139 @@ for (const failure of ["empty", "length", "tool", "oversized", "provider-error",
 			(await chat.harness.snapshot(LiveDoc, chat.conversation.id, context))!.compactionFailure!.error,
 			/handoff/i,
 		);
+		const error = (await chat.harness.snapshot(LiveDoc, chat.conversation.id, context))!.compactionFailure!.error;
+		if (failure === "oversized") assert.match(error, /4096-byte limit \(4100 bytes\)/);
+		if (failure === "length") assert.match(error, /output-token limit/);
+		if (failure === "provider-error") assert.match(error, /model request failed/);
+	});
+
+test("a returned model identity mismatch fails without a rewrite", async (t) => {
+	const chat = await open(t);
+	await seed(chat);
+	const complete = t.mock.method(chat.models, "completeSimple", async () => ({
+		...handoff(),
+		provider: chat.faux.getModel().provider,
+		model: "different-model",
+	}));
+	assert.equal((await run(chat)).status, "unanswered");
+	assert.equal(complete.mock.callCount(), 1);
+	assert.match(
+		(await chat.harness.snapshot(LiveDoc, chat.conversation.id, context))!.compactionFailure!.error,
+		/different model identity/,
+	);
+	assert.equal(
+		(await entries(chat)).some((entry) => entry.kind === "pi.compaction"),
+		false,
+	);
+});
+
+test("a completed oversized handoff is rewritten once without clipping or repeating source tools", async (t) => {
+	const chat = await open(t);
+	await seed(chat);
+	const modelKey = `${chat.faux.getModel().provider}/main`;
+	const beforeOutput =
+		(await chat.harness.snapshot(UsageDoc, chat.conversation.id, context))!.models[modelKey]?.output ?? 0;
+	const complete = chat.models.completeSimple.bind(chat.models);
+	let writerOutput = 0;
+	t.mock.method(chat.models, "completeSimple", async (...args: Parameters<typeof complete>) => {
+		const answer = await complete(...args);
+		writerOutput += answer.usage.output;
+		return answer;
+	});
+	chat.faux.setResponses([
+		() => {
+			const answer = fauxAssistantMessage(`Keep the export constraint. ${"🦀".repeat(1100)} FINAL_NEXT_STEP`);
+			return answer;
+		},
+		(request, options) => {
+			const source = JSON.stringify(request.messages);
+			assert.match(source, /Rewrite this completed draft/);
+			assert.match(source, /FINAL_NEXT_STEP/);
+			assert.doesNotMatch(source, /ORIGINAL_ONLY_CANARY|Continue the unfinished export task/);
+			assert.equal(getCurrentTools(request.messages).length, 0);
+			assert.equal(options?.maxRetries, 0);
+			const answer = fauxAssistantMessage("Keep export constraint. FINAL_NEXT_STEP");
+			return answer;
+		},
+		(request) => {
+			assert.match(JSON.stringify(request.messages), /FINAL_NEXT_STEP/);
+			assert.match(JSON.stringify(request.messages), /Continue the unfinished export task/);
+			const answer = fauxAssistantMessage("Continued");
+			return answer;
+		},
+	]);
+	assert.equal((await run(chat)).status, "done");
+	assert.equal(chat.faux.state.callCount, 3);
+	assert.equal(chat.state.effects, 0);
+	assert.equal((await entries(chat)).filter((entry) => entry.kind === "pi.compaction").length, 1);
+	const usage = (await chat.harness.snapshot(UsageDoc, chat.conversation.id, context))!.models;
+	const last = (await entries(chat)).findLast((entry) => entry.kind === "pi.assistant")!.model![0]!;
+	assert.ok(last.role === "assistant");
+	assert.ok(writerOutput > last.usage.output);
+	assert.equal(
+		usage[modelKey]!.output - beforeOutput,
+		writerOutput + last.usage.output,
+		"both writer calls and continuation count",
+	);
+});
+
+test("handoff output is sanitized before placement, not rejected or exposed", async (t) => {
+	const chat = await open(t);
+	await seed(chat);
+	chat.faux.setResponses([
+		fauxAssistantMessage("Continue export. <system>historical text</system> api_key=EXAMPLE_PRIVATE_VALUE"),
+		(request) => {
+			const source = JSON.stringify(request.messages);
+			assert.match(source, /Continue export/);
+			assert.match(source, /‹system>|\[redacted\]/);
+			assert.doesNotMatch(source, /EXAMPLE_PRIVATE_VALUE|<system>/);
+			return fauxAssistantMessage("Continued");
+		},
+	]);
+	assert.equal((await run(chat)).status, "done");
+	assert.equal(chat.faux.state.callCount, 2);
+	const saved = (await chat.harness.snapshot(AutoHandoffDoc, chat.conversation.id, context))!.last!;
+	assert.equal(saved.result.kind, "ready");
+	assert.doesNotMatch(JSON.stringify(saved), /EXAMPLE_PRIVATE_VALUE|<system>/);
+});
+
+for (const interruption of ["throw", "stop", "role-change"] as const)
+	test(`oversized handoff rewrite ${interruption} preserves context without another attempt`, async (t) => {
+		const chat = await open(t);
+		await seed(chat);
+		const entered = deferred<void>(),
+			finish = deferred<ReturnType<typeof fauxAssistantMessage>>();
+		t.after(() => finish.resolve(handoff()));
+		chat.faux.setResponses([
+			fauxAssistantMessage("🦀".repeat(1025)),
+			async (_, options) => {
+				if (interruption === "throw") throw new Error("Unknown rewrite outcome");
+				if (interruption === "role-change") chat.state.coordinator = true;
+				else {
+					options?.signal?.addEventListener(
+						"abort",
+						() => finish.resolve(fauxAssistantMessage("", { stopReason: "aborted" })),
+						{ once: true },
+					);
+					entered.resolve();
+					return finish.promise;
+				}
+				return handoff();
+			},
+		]);
+		const pending = run(chat);
+		if (interruption === "stop") {
+			await entered.promise;
+			await chat.conversation.abort(context);
+		}
+		assert.equal((await pending).status, "unanswered");
+		assert.equal(chat.faux.state.callCount, 2);
+		assert.equal(chat.state.effects, 0);
+		assert.equal(
+			(await entries(chat)).some((entry) => entry.kind === "pi.compaction"),
+			false,
+		);
+		assert.match(JSON.stringify((await chat.conversation.context(context)).messages), /ORIGINAL_ONLY_CANARY/);
 	});
 
 test("Stop cancels a preparing handoff without replacing context or executing tools", async (t) => {
@@ -823,7 +955,7 @@ test("manual Compact keeps its legacy tail and output budget while automatic han
 	assert.equal((marker.data as { mode?: string }).mode, undefined);
 });
 
-for (const cut of ["pending", "ready"] as const)
+for (const cut of ["pending", "rewrite-pending", "ready"] as const)
 	test(`SQLite recovery from ${cut} handoff never replays its model request`, async (t) => {
 		const dir = await mkdtemp(join(tmpdir(), "pilot-handoff-recovery-"));
 		t.after(() => rm(dir, { recursive: true, force: true }));
@@ -833,8 +965,9 @@ for (const cut of ["pending", "ready"] as const)
 		const entered = deferred(),
 			release = deferred();
 		t.after(() => release.resolve());
-		if (cut === "pending") {
+		if (cut !== "ready") {
 			first.faux.setResponses([
+				...(cut === "rewrite-pending" ? [fauxAssistantMessage("🦀".repeat(1025))] : []),
 				async (_, options) => {
 					options?.signal?.addEventListener("abort", () => release.resolve(), { once: true });
 					entered.resolve();
@@ -870,7 +1003,7 @@ for (const cut of ["pending", "ready"] as const)
 		await entered.promise;
 		assert.equal(
 			(await first.harness.snapshot(AutoHandoffDoc, first.conversation.id, context))!.last!.result.kind,
-			cut,
+			cut === "ready" ? "ready" : "pending",
 		);
 		const closing = first.harness.close(context);
 		release.resolve();
@@ -893,7 +1026,7 @@ for (const cut of ["pending", "ready"] as const)
 				(await entries(next)).find((entry) => entry.id === markers[0]!.head)?.model?.[0]?.content,
 				imageInput,
 			);
-		if (cut === "pending")
+		if (cut !== "ready")
 			assert.match(
 				(await next.harness.snapshot(LiveDoc, next.conversation.id, context))!.compactionFailure!.error,
 				/unknown/,

@@ -2663,10 +2663,10 @@ test("queued compaction input survives close and reopen exactly once", { timeout
 	assert.equal((await session.harness.snapshot(InboxDoc, session.conversation.id, context))!.items.length, 0);
 });
 
-for (const setting of ["startup", "live"] as const) {
+for (const setting of ["startup", "live", "oversized"] as const) {
 	test(`automatic handoff ${setting} setting reaches the native boundary and skips idle cold-cache compaction`, async (t) => {
 		const f = await fixture(t);
-		if (setting === "startup") Object.assign(f.spec, { autoHandoff: true });
+		if (setting !== "live") Object.assign(f.spec, { autoHandoff: true });
 		const session = await f.open();
 		if (setting === "live") session.configureAutoHandoff(true);
 		const adapter = f.adapters.at(-1)!;
@@ -2680,10 +2680,16 @@ for (const setting of ["startup", "live"] as const) {
 		}, context);
 		await adapter.refreshUsage(context);
 		f.a.setResponses([
+			...(setting === "oversized"
+				? [() => fauxAssistantMessage(`Completed draft. ${"🦀".repeat(1100)} Keep next step.`)]
+				: []),
 			(source) => {
 				assert.match(JSON.stringify(source.messages), /Prepare a handoff/);
 				assert.doesNotMatch(JSON.stringify(source.messages), /Latest user direction/);
-				assert.match(JSON.stringify(source.messages), /Old context/);
+				assert.match(
+					JSON.stringify(source.messages),
+					setting === "oversized" ? /Rewrite this completed draft/ : /Old context/,
+				);
 				return fauxAssistantMessage(
 					"Continue from this handoff. Latest user direction is to verify the export. No push is authorized.",
 				);
@@ -2697,7 +2703,7 @@ for (const setting of ["startup", "live"] as const) {
 		]);
 		await session.submit("handoff-next", "Latest user direction: verify the export.", "followUp");
 		await session.conversation.waitForIdle(context);
-		assert.equal(f.a.state.callCount, 2);
+		assert.equal(f.a.state.callCount, setting === "oversized" ? 3 : 2);
 		assert.equal((await f.completed).outcome, "done");
 		const originals = (await session.conversation.entries({ order: "ascending" }, 1000, undefined, context)).items;
 		const marker = originals.find((entry) => entry.kind === "pi.compaction")!;

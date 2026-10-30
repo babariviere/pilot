@@ -26,9 +26,14 @@ must fit the model window with room reserved for the handoff or the operation fa
 Historical image meaning can still be lost: `history_recall` returns text, not pixels.
 Retained transcript/attachment storage is not a promise of model-side visual recall.
 
-The output must be a clean, nonempty, tool-free stop, within 4,096 UTF-8 bytes and free
-of credential/framing changes the existing history safeguards would make. Length-limited,
-failed, oversized or tool-calling output is rejected rather than clipped. These checks
+The output must be a clean, nonempty, tool-free stop, within 4,096 UTF-8 bytes after
+the existing history safeguards redact credentials and neutralize framing. The writer
+targets 3,000 bytes for headroom. A fully received, oversized draft gets one tool-free
+rewrite request using that sanitized draft, provided it fits the model window. This is
+not a replay of an interrupted request. Both calls count toward usage; neither can run
+tools. A still-oversized rewrite fails with the actual byte count. Length-limited,
+failed, empty or tool-calling output fails without another request. Text is never clipped.
+Failure messages identify the rejection without exposing the draft or provider error text. These checks
 do not prove semantic completeness, correct citations or absence of model mistakes.
 The provider output-token ceiling is separate and adaptive, allowing room for the
 current model's reasoning as well as the visible handoff.
@@ -58,6 +63,8 @@ Before dispatch, a durable conversation document records a pending request ident
 to the native compaction task, exact source, model, thinking level and output policy.
 A returned handoff is recorded as ready before the Harness atomically places it and
 settles the blocking compaction. Returned usage is counted even when output is rejected.
+The pending marker remains in place throughout an optional rewrite. A crash during either
+call therefore never replays it, even if the earlier draft was received completely.
 
 - Stop cancels the native compaction and its model request. The old context stays in
   place if no handoff was committed. Stop still owns input withdrawal and tool drainage.
