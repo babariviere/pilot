@@ -175,6 +175,9 @@ mod mission_brief_reader;
 mod mission_brief_view;
 #[cfg(feature = "native-probes")]
 pub use mission_brief_probe::run_mission_brief_probe;
+mod mission_artifacts;
+#[cfg(feature = "native-probes")]
+pub use mission_browser_view::mission_artifacts_view::probe::run_mission_artifacts_probe;
 mod mission_browser;
 mod mission_comments;
 mod mission_decisions;

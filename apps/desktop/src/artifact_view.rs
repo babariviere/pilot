@@ -138,7 +138,11 @@ fn column_aligns(columns: &[Value], rows: &[Value]) -> Vec<&'static str> {
         })
         .collect()
 }
+pub(crate) struct MissionBack;
+impl gpui_kit::EventEmitter<MissionBack> for ArtifactPane {}
 pub(crate) struct ArtifactPane {
+    /// A mission pin cannot step into unlinked revisions or the chat gallery.
+    mission_pin: bool,
     inline: bool,
     /// Raster geometry an inline preview reserves while its revision loads.
     inline_reserve: Option<crate::artifact_model::RasterSize>,
@@ -188,6 +192,12 @@ struct SliderBinding {
     _subscription: Subscription,
 }
 impl ArtifactPane {
+    pub(crate) fn mission_pin() -> Self {
+        Self {
+            mission_pin: true,
+            ..Self::new()
+        }
+    }
     fn reader_scale(&self) -> f32 {
         if self.inline {
             return 1.;
@@ -206,6 +216,7 @@ impl ArtifactPane {
     }
     pub(crate) fn new() -> Self {
         Self {
+            mission_pin: false,
             inline: false,
             inline_reserve: None,
             inline_height: None,
@@ -1634,7 +1645,9 @@ impl Render for ArtifactPane {
             .as_ref()
             .is_some_and(|r| !r.visual_supported && r.reference.kind != "image");
         // One toolbar: back · title · revision, then source, copy and zoom actions.
-        let provenance: SharedString = if revision
+        let provenance: SharedString = if self.mission_pin {
+            "Local · pinned mission artifact · exact stored revision".into()
+        } else if revision
             .as_ref()
             .is_some_and(|r| r.reference.kind == "image")
             || reference.kind == "image"
@@ -1657,13 +1670,25 @@ impl Render for ArtifactPane {
                     .ghost()
                     .small()
                     .icon(AppIcon::Back.asset())
-                    .accessibility_label("All artifacts")
-                    .tooltip("All artifacts")
+                    .accessibility_label(if self.mission_pin {
+                        "Mission artifacts"
+                    } else {
+                        "All artifacts"
+                    })
+                    .tooltip(if self.mission_pin {
+                        "Mission artifacts"
+                    } else {
+                        "All artifacts"
+                    })
                     .on_click(cx.listener(move |v, _, window, cx| {
                         if v.generation != generation {
                             return;
                         }
-                        v.show_gallery(window, cx);
+                        if v.mission_pin {
+                            cx.emit(MissionBack);
+                        } else {
+                            v.show_gallery(window, cx);
+                        }
                     })),
             )
             .child(
@@ -1689,8 +1714,8 @@ impl Render for ArtifactPane {
             let source = revision.source.clone();
             let previous = reference.clone();
             header = header
-                // Only offered when an earlier revision exists.
-                .when(reference.revision > 1, |h| {
+                // Legacy chat navigation is an exact attempt. Mission pins cannot step.
+                .when(!self.mission_pin && reference.revision > 1, |h| {
                     h.child(
                         Button::new("artifact-previous")
                             .ghost()
@@ -1867,6 +1892,18 @@ impl Render for ArtifactPane {
                 .min_w_0()
                 .gap_3();
             if self.source {
+                if self.mission_pin {
+                    content = content.child(self.text(
+                        "artifact-pin-provenance".into(),
+                        format!(
+                            "Owner: {}\nArtifact: {}\nPinned revision: {}\nKind: {}",
+                            revision.reference.session,
+                            revision.reference.id,
+                            revision.reference.revision,
+                            revision.reference.kind
+                        ),
+                    ));
+                }
                 content =
                     content
                         .overflow_y_scroll()
@@ -1886,6 +1923,9 @@ impl Render for ArtifactPane {
                         ));
                     }
                 } else {
+                    if self.mission_pin && revision.source.chars().nth(8192).is_some() {
+                        content = content.child(Self::note("Source preview shows the first 8192 characters. Copy source includes the complete stored source."));
+                    }
                     content = content.child(self.text(
                         "artifact-source-text".into(),
                         revision.source.chars().take(8192).collect(),

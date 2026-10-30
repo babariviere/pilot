@@ -10,8 +10,10 @@ import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { ArtifactNotFound, ArtifactStore, getLibrary } from "@pilot/artifacts";
-import type { ArtifactRevision, ArtifactSummary, ServerMessage } from "@pilot/protocol";
+import type { ArtifactRevision, ArtifactSummary, MissionDetail, ServerMessage } from "@pilot/protocol";
 import { WebSocket } from "ws";
+import { MissionService } from "./mission-service.ts";
+import { MissionStore } from "./missions.ts";
 import type { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
@@ -241,7 +243,7 @@ test("shutdown drains serialized artifact notifications without changing lifecyc
 	}
 });
 
-async function api(t: TestContext, mockReads = true) {
+async function api(t: TestContext, mockReads = true, withMissions = false) {
 	const fixture = await registry(t);
 	const { home, sessions, projects, addCleanup } = fixture;
 	if (mockReads) {
@@ -265,12 +267,19 @@ async function api(t: TestContext, mockReads = true) {
 		return () => {};
 	});
 	const terminals = new TerminalManager();
+	const missions = withMissions ? new MissionStore(":memory:") : undefined;
+	if (missions)
+		addCleanup(async () => {
+			await missions.durable();
+			missions.close();
+		});
 	const server = createDaemonServer(
 		{ home, host: "127.0.0.1", port: 0 },
 		sessions,
 		projects,
 		{} as ModelCatalog,
 		terminals,
+		missions ? { store: missions, service: new MissionService(missions, sessions, projects) } : undefined,
 	);
 	const sockets = new Set<Socket>();
 	server.on("connection", (socket) => {
@@ -285,8 +294,69 @@ async function api(t: TestContext, mockReads = true) {
 	});
 	const address = server.address();
 	assert.ok(address && typeof address !== "string");
-	return { ...fixture, server, terminals, broadcast, base: `http://127.0.0.1:${address.port}` };
+	return { ...fixture, server, terminals, broadcast, missions, base: `http://127.0.0.1:${address.port}` };
 }
+
+test("mission detail keeps independent exact pins readable without latest inference or owner work", async (t) => {
+	const { home, base, sessions, project, missions, launch, runner } = await api(t, false, true);
+	assert.ok(missions);
+	const mission = missions.create({ projectId: project.id, title: "Pinned sources", tasks: [{ title: "Older pin" }] });
+	missions.join(sessionId, mission.id);
+	const directory = join(home, "sessions", sessionId);
+	const store = new ArtifactStore(directory, { sessionId });
+	const old = await store.create({ title: "Task body", kind: "html", source: "<p>Exact older task source</p>" });
+	missions.linkArtifact(mission.id, {
+		artifactId: old.id,
+		sessionId,
+		revision: old.revision,
+		kind: old.kind,
+		title: old.title,
+		taskId: "1",
+	});
+	const pinned = await store.update(old.id, {
+		title: "Mission image",
+		kind: "image",
+		source:
+			"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR4AQEFAPr/AP8AAP8FAAH/+lyI0QAAAABJRU5ErkJggg==",
+	});
+	missions.linkArtifact(mission.id, {
+		artifactId: pinned.id,
+		sessionId,
+		revision: pinned.revision,
+		kind: pinned.kind,
+		title: pinned.title,
+	});
+	await store.update(old.id, { title: "Not linked latest", kind: "html", source: "<p>Never substitute latest</p>" });
+	await missions.durable();
+	const read = t.mock.method(sessions, "artifact");
+	const before = missions.detail(mission.id);
+	const response = await fetch(`${base}/api/missions/${mission.id}`);
+	assert.equal(response.status, 200);
+	const detail = (await response.json()) as MissionDetail;
+	assert.deepEqual(detail.artifacts, before.artifacts);
+	assert.equal(read.mock.callCount(), 0, "listing links does not fetch artifact bodies");
+	assert.equal(detail.artifacts.length, 2);
+	for (const link of detail.artifacts) {
+		assert.equal(link.sessionId, sessionId);
+		const exact = await fetch(
+			`${base}/api/sessions/${link.sessionId}/artifacts/${link.artifactId}?revision=${link.revision}`,
+		);
+		assert.equal(exact.status, 200);
+		assert.deepEqual(await exact.json(), link.taskId ? old : pinned);
+	}
+	await rename(join(directory, "artifacts", old.id, "2.json"), join(home, "missing-mission-pin.json"));
+	assert.equal((await fetch(`${base}/api/sessions/${sessionId}/artifacts/${old.id}?revision=2`)).status, 404);
+	assert.deepEqual(
+		((await (await fetch(`${base}/api/missions/${mission.id}`)).json()) as MissionDetail).artifacts,
+		before.artifacts,
+		"a retained link does not promise its body remains available",
+	);
+	assert.deepEqual(read.mock.calls.map((c) => c.arguments[2]).sort(), [1, 2, 2]);
+	assert.deepEqual(missions.detail(mission.id), before, "all reads leave link/task revisions unchanged");
+	assert.equal(sessions.get(sessionId)?.state, "parked");
+	assert.equal(launch.mock.callCount(), 0);
+	assert.equal(runner.mock.callCount(), 0);
+});
 
 test("HTTP reads persisted artifact revisions and aggregates only the project's owning sessions", async (t) => {
 	const { home, base, sessions, project, otherId } = await api(t, false);

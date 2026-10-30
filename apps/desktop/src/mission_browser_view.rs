@@ -2,6 +2,8 @@
 #[cfg(feature = "native-probes")]
 #[path = "mission_activity_probe.rs"]
 pub(crate) mod mission_activity_probe;
+#[path = "mission_artifacts_view.rs"]
+pub(crate) mod mission_artifacts_view;
 #[path = "mission_comments_view.rs"]
 pub(crate) mod mission_comments_view;
 #[path = "mission_decisions_view.rs"]
@@ -85,6 +87,7 @@ pub(crate) struct Input {
     pub(crate) loaded: bool,
 }
 pub(crate) struct Browser {
+    artifacts: mission_artifacts_view::Artifacts,
     motion: std::cell::RefCell<motion::Motion>,
     decisions: mission_decisions_view::Disclosure,
     comments: mission_comments_view::Comments,
@@ -199,6 +202,7 @@ impl Browser {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         let tasks_browser = cx.new(crate::mission_tasks_view::Pane::new);
         Self {
+            artifacts: Default::default(),
             motion: Default::default(),
             decisions: Default::default(),
             comments: Default::default(),
@@ -240,6 +244,7 @@ impl Browser {
         }
     }
     pub(crate) fn options(&mut self, options: LocalOptions) {
+        self.artifacts = Default::default();
         self.tasks_detail = None;
         self.tasks_read_generation = None;
         if self.options.is_some() {
@@ -551,6 +556,9 @@ impl Browser {
             || self.online != online
             || self.loaded != loaded;
         if self.online != online || self.loaded != loaded {
+            if self.artifacts.reading {
+                self.artifact_back(w, cx);
+            }
             self.tasks_detail = None;
             // A read that spanned reconnect may still populate the existing
             // Overview, but cannot seed Tasks as a fresh connection's read.
@@ -582,6 +590,7 @@ impl Browser {
             }
         }
         if self.route != route {
+            self.close_mission_artifacts(w, cx);
             if self.decisions.opened && self.focus.contains_focused(w, cx) {
                 self.focus.focus(w, cx);
             }
@@ -788,6 +797,7 @@ impl Browser {
         cx.notify();
     }
     fn read(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        self.close_mission_artifacts(w, cx);
         self.tasks_detail = None;
         self.tasks_read_generation = None;
         if self.activity_open {
@@ -1125,8 +1135,11 @@ impl Render for Browser {
         };
         self.motion.borrow_mut().enter(key);
         let open = self.brief.as_ref().is_some_and(|b| b.read(cx).visible);
-        let overview =
-            self.tab == Tab::Overview && !open && !self.activity_open && !self.comments.open;
+        let overview = self.tab == Tab::Overview
+            && !open
+            && !self.activity_open
+            && !self.comments.open
+            && !self.artifacts.open;
         let ids: Vec<_> = self
             .detail
             .as_ref()
@@ -1162,6 +1175,9 @@ impl Render for Browser {
 }
 impl Browser {
     fn render_page(&mut self, w: &mut Window, cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+        if self.artifacts.open {
+            return self.mission_artifacts_page(cx);
+        }
         if let Some(form) = self.lifecycle.iter().find(|f| f.read(cx).visible) {
             return div()
                 .id("missions-page")
@@ -1485,7 +1501,8 @@ impl Browser {
             content = content
                 .child(self.decisions_view(cx))
                 .children(self.needs_you_view(d, cx))
-                .children(self.working_view(&d.summary, cx));
+                .children(self.working_view(&d.summary, cx))
+                .child(self.mission_artifacts_line(d, cx));
             content = content.child(ui::heading(
                 "mission-chats-heading",
                 "Chats",

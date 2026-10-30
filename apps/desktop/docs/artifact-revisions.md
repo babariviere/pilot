@@ -15,6 +15,7 @@ slice, not completion of artifact revision parity.
 | `GET /api/projects/:project/artifacts` | Latest summaries across owning sessions | Revision history; this is not the current-chat gallery scope |
 | `GET /api/sessions/:owner/artifacts/:id?revision=N` | One requested revision, or refusal/error | Permission to enumerate, completeness of earlier revisions, or a latest fallback on failure |
 | Transcript `pilot.artifact` pins | Specific published revisions present in loaded history | Every revision, especially with lazy/partial history |
+| `GET /api/missions/:id` artifact links | Stored mission/task references with owner, optional exact revision and that link's kind/title | A catalogue, continuing freshness or body availability; unpinned links are not exact pins |
 
 There is no `/api/sessions/:owner/artifacts/:id/revisions` route. The native
 gallery admits the first 64 validated latest summaries and labels truncation;
@@ -55,6 +56,11 @@ checks and selected-text activation suppression. No source, clipboard, focus,
 IME, draft, interaction or delivery path changes in this slice.
 
 ## Contract needed before a picker
+
+The read-only [mission artifact browser](mission-artifacts.md) uses only existing
+mission-level exact pins. It is not a revision picker. Its reader disables
+Previous revision so it cannot step into an unlinked revision; task pins remain
+independent, and no latest metadata is used to fill missing pin fields.
 
 This is a requirement for a separately approved backend slice, not a new API:
 
