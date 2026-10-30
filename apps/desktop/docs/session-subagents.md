@@ -5,11 +5,9 @@ existing identity-pinned Local connection. Tool labels and mission worker
 chats are never treated as subagents. The supported conversation identity is
 the exact parent chat ID plus the exact child name, including case and Unicode.
 
-Individual names and reported states appear directly under their owning
-sidebar chat, expanded by default. The quiet count folds those rows. They are
-not additional chat IDs, mission members or another mission-tree level, so
-chat ordering, unread roll-ups and mission folds keep their existing meaning.
-The composer also keeps a quiet subagent disclosure.
+Individual names and reported states remain reachable through the quiet composer
+subagent disclosure. Actual subagent sidebar rows are intentionally hidden.
+Children are not additional chat IDs, mission members or another mission-tree level.
 
 Selecting a child opens its conversation in the main pane, reusing the exact
 same `ChatEditor` entity, textarea, input behavior and Send controls. Each child
@@ -36,6 +34,11 @@ its captured draft revision. This endpoint has no courier receipt lookup:
 a lost ACK stays Unknown, survives restart, and is never automatically or
 manually replayed through the courier. Recovery can copy/discard the retained
 message instead. An ACK is not independent proof of backend durability.
+
+Child-message waits use the existing sole `DeliveryOwner` effect loop, allowing
+newer draft text to reach private disk before HTTP resumes. Mutation commands
+remain FIFO. See [child-send autosaves](subagent-autosave.md) for scoped regression
+coverage, metadata freeze and the existing generation/ACK/recovery limitations.
 
 Synthetic unit/transport tests and the hidden native `session_subagents`
 target cover exact identity, parent/child drafts, explicit Send, lost ACK,

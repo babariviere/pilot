@@ -58,6 +58,8 @@ mod session_jobs;
 mod session_subagents;
 #[cfg(any(test, feature = "native-probes"))]
 mod session_subagents_fixture;
+#[cfg(any(test, feature = "native-probes"))]
+mod subagent_wait_fixture;
 #[cfg(feature = "native-probes")]
 pub use local_view::session_subagents_probe::run_session_subagents_probe;
 #[cfg(any(test, feature = "native-probes"))]

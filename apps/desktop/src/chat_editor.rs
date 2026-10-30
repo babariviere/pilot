@@ -61,6 +61,9 @@ pub(crate) mod sending;
 #[path = "stop_wait_probe.rs"]
 mod stop_wait_probe;
 #[cfg(feature = "native-probes")]
+#[path = "subagent_wait_probe.rs"]
+mod subagent_wait_probe;
+#[cfg(feature = "native-probes")]
 #[path = "subscription_wait_probe.rs"]
 mod subscription_wait_probe;
 

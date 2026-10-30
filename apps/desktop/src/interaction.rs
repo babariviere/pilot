@@ -679,7 +679,7 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                 .is_some_and(|d| d.pending.is_some())
                             {
                                 Ok("Delivery is already pending. Check its receipt.")
-                            } else if crate::session_subagents::Target::from_key(&key).is_none() {
+                            } else {
                                 DeliveryOwner {
                                     store,
                                     status: &mut status,
@@ -699,13 +699,6 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                     &mut delivery_report,
                                 )
                                 .await
-                            } else {
-                                tokio::select! {
-                                    result=submit(&client,&options,store,Submission {key:&key,draft:&draft,follow_up,stop},&mut delivery_report,|store| {
-                                        status.book=Some(Arc::new(store.book.clone()));status.notice="Intent saved. Waiting for Local delivery.";publish(updates,replace,status.clone());
-                                    })=>result,
-                                    _=close.recv()=>{closing=true;Ok("Closing. Any interrupted delivery remains unconfirmed.")}
-                                }
                             }
                         }
                         Some(WriteCommand::Check { id, retry }) => {
@@ -1069,6 +1062,7 @@ async fn send_preflight(
     Ok(())
 }
 
+#[cfg(test)]
 async fn submit(
     client: &reqwest::Client,
     options: &LocalOptions,
@@ -1112,58 +1106,67 @@ async fn submit(
     let intent = store.prepare(key, draft, follow_up, stop)?;
     prepared(store);
     if let Some(target) = child_target {
-        // This endpoint has a request ACK, not the courier's receipt API.
-        // Journal first, send once, and never turn a lost ACK into a retry.
-        let op = intent
-            .operation
-            .as_ref()
-            .ok_or("Missing subagent message intent")?;
-        let payload: Value =
-            serde_json::from_str(&op.payload).map_err(|_| "Corrupt subagent message")?;
-        *report = Some(DeliveryReport::new(&intent, None));
-        let diagnostic = report
-            .as_mut()
-            .unwrap()
-            .delivery
-            .diagnostic
-            .as_mut()
-            .unwrap();
-        let mut url =
-            reqwest::Url::parse(&options.loopback()).map_err(|_| "Local is unavailable")?;
-        url.path_segments_mut()
-            .map_err(|_| "Local is unavailable")?
-            .extend([
-                "api",
-                "sessions",
-                &target.parent,
-                "subagents",
-                &target.name,
-                "messages",
-            ]);
-        diagnostic.stage = Stage::Execute;
-        let response = read_json_with(client.post(url)
-            .header("Content-Type", "application/json")
-            .body(serde_json::json!({"message":payload["message"], "mode":payload["mode"], "requestId":intent.id}).to_string()),|status|status==reqwest::StatusCode::ACCEPTED).await;
-        let response = match response {
-            Ok((body, status)) => {
-                diagnostic.status = Some(status);
-                body
-            }
-            Err(error) => {
-                diagnostic.status = error.status;
-                diagnostic.category = error.category;
-                return Err(error.message());
-            }
-        };
-        if diagnostic.status != Some(202) || response["ok"] != true {
-            return Err("Subagent message was not confirmed. It was not retried.");
-        }
-        diagnostic.acknowledgment = Acknowledgment::Accepted;
+        subagent_request(client, options, &target, &intent, report).await?;
         store.finish(&intent.id, "accepted", None)?;
         Ok("")
     } else {
         reconcile(client, options, store, &intent.id, true, None, report).await
     }
+}
+
+/// One-shot request ACK only, never a courier receipt or a replay permission.
+async fn subagent_request(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    target: &crate::session_subagents::Target,
+    intent: &Intent,
+    report: &mut Option<DeliveryReport>,
+) -> Result<(), Failure> {
+    let op = intent
+        .operation
+        .as_ref()
+        .ok_or("Missing subagent message intent")?;
+    let payload: Value =
+        serde_json::from_str(&op.payload).map_err(|_| "Corrupt subagent message")?;
+    *report = Some(DeliveryReport::new(intent, None));
+    let diagnostic = report
+        .as_mut()
+        .unwrap()
+        .delivery
+        .diagnostic
+        .as_mut()
+        .unwrap();
+    let mut url = reqwest::Url::parse(&options.loopback()).map_err(|_| "Local is unavailable")?;
+    url.path_segments_mut()
+        .map_err(|_| "Local is unavailable")?
+        .extend([
+            "api",
+            "sessions",
+            &target.parent,
+            "subagents",
+            &target.name,
+            "messages",
+        ]);
+    diagnostic.stage = Stage::Execute;
+    let response = read_json_with(client.post(url)
+        .header("Content-Type", "application/json")
+        .body(serde_json::json!({"message":payload["message"], "mode":payload["mode"], "requestId":intent.id}).to_string()),|status|status==reqwest::StatusCode::ACCEPTED).await;
+    let response = match response {
+        Ok((body, status)) => {
+            diagnostic.status = Some(status);
+            body
+        }
+        Err(error) => {
+            diagnostic.status = error.status;
+            diagnostic.category = error.category;
+            return Err(error.message());
+        }
+    };
+    if diagnostic.status != Some(202) || response["ok"] != true {
+        return Err("Subagent message was not confirmed. It was not retried.");
+    }
+    diagnostic.acknowledgment = Acknowledgment::Accepted;
+    Ok(())
 }
 
 async fn operation(
@@ -1246,6 +1249,7 @@ async fn verify_local(
         .inspect_err(|_| diagnostic.category = Category::Identity)
 }
 
+#[cfg(test)]
 async fn reconcile(
     client: &reqwest::Client,
     options: &LocalOptions,

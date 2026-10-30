@@ -250,6 +250,13 @@ impl DeliveryOwner<'_> {
                     "Stop outcome is unknown. It was not retried. Inspect the chat before another action.",
                 ),
             }
+        } else if let Some(target) = crate::session_subagents::Target::from_key(request.key) {
+            // Preserve the captured child/generation and one-shot request bytes.
+            // The future owns no Store borrow, so only draft edits can overlap it.
+            self.effect(subagent_request(client, options, &target, &intent, report))
+                .await?;
+            self.store.finish(&intent.id, "accepted", None)?;
+            Ok("")
         } else {
             self.reconcile(client, options, &intent.id, true, None, report)
                 .await

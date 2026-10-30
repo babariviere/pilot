@@ -149,8 +149,8 @@ infer statuses from tools, add mutation callbacks or auto-fold on stream updates
 directly above the task strip: a quiet disclosure summary and per-job rows with
 Copy log path and Stop. See [running jobs](running-jobs.md).
 
-`session_subagents_view` shows actual named children under their sidebar owner,
-expanded by default, plus a quiet composer disclosure. Selecting a child opens
+`session_subagents_view` shows actual named children in a quiet composer
+disclosure; actual subagent sidebar rows are intentionally hidden. Selecting a child opens
 its main-pane conversation with the same composer and a separate private draft,
 not a second editor or a mission worker chat. See [chat subagents](session-subagents.md)
 for identity, snapshot reads and one-shot user sends.

@@ -81,6 +81,8 @@ mod retention;
 mod send_waits;
 #[path = "interaction_stop_tests.rs"]
 mod stop_waits;
+#[path = "interaction_subagent_tests.rs"]
+mod subagent_waits;
 #[path = "interaction_subscription_tests.rs"]
 mod subscription_waits;
 
