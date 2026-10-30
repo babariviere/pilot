@@ -1218,6 +1218,8 @@ Rust GUI signing/trust and native full-payload qualification are explicit public
 future releases no longer publish a standalone headless Linux runtime. Swift distribution is preserved.
 See [Rust GUI releases](apps/desktop/docs/releases.md) for the required configuration and remaining gates.
 
+See the [reliability roadmap](docs/reliability/roadmap.md) for current risks and verification plans.
+
 See [testing](docs/testing.md) for suite selection and offline fixtures, and the
 [CPU/memory](docs/performance-check.md) and [I/O](docs/io-performance-check.md) audits for measurement methods.
 For agent-side artifact preview screenshots, install the optional renderer with `pnpm artifacts:browser`.
