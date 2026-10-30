@@ -77,6 +77,8 @@ pub(super) fn run() {
                     assert_eq!(string(item, c"title"), *title);
                 }
                 let file = object(at(menu, 1), c"submenu");
+                let help = object(at(menu, 5), c"submenu");
+                assert_eq!(string(at(help, 0), c"title"), "Keyboard Shortcuts…");
                 let delegate = object(file, c"delegate");
                 let new_chat = at(file, 0);
                 assert_eq!(string(new_chat, c"title"), "New Chat");

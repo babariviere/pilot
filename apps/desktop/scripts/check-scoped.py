@@ -27,8 +27,8 @@ PURE_MODULES = {"mcp_status_tests", "project_memory", "project_memory_tests", "d
                 "local_client", "local_model", "mission_conversion", "mission_transport",
                 "mission_metadata", "mission_metadata_transport", "mission_update", "mission_update_transport", "mission_task_create", "mission_create", "mission_create_transport", "mission_tasks", "mission_activity", "mission_tasks_reader", "project_registration", "reader_identity_tests", "scoped_models",
                 "scoped_models_worker", "settings_state", "settings_worker"}
-PURE_FILTERS = {"local_view::menu_routing::tests"}
-PURE_NATIVE = {"mcp_status", "project_memory", "daemon_upgrade", "native_menus", "provider_usage", "dogfooding_diagnostics", "path_completion", "new_chat_view", "message_fold", "session_todos", "session_file_view", "queued_message", "conversation_images", "session_failure", "workspace_changes", "conversation_links", "task_model", "usage_overview", "mission_lifecycle", "context_usage", "task_edit", "mission_metadata", "task_status", "chat_rename", "chat_actions", "controls", "project_creation", "mission_tasks", "mission_activity", "mission_update", "mission_task_create", "mission_create"}
+PURE_FILTERS = {"local_view::shortcuts_view::tests", "local_view::menu_routing::tests"}
+PURE_NATIVE = {"shortcuts", "mcp_status", "project_memory", "daemon_upgrade", "native_menus", "provider_usage", "dogfooding_diagnostics", "path_completion", "new_chat_view", "message_fold", "session_todos", "session_file_view", "queued_message", "conversation_images", "session_failure", "workspace_changes", "conversation_links", "task_model", "usage_overview", "mission_lifecycle", "context_usage", "task_edit", "mission_metadata", "task_status", "chat_rename", "chat_actions", "controls", "project_creation", "mission_tasks", "mission_activity", "mission_update", "mission_task_create", "mission_create"}
 
 
 def parser():

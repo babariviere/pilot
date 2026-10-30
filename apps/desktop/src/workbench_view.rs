@@ -29,6 +29,47 @@ impl Render for SidebarResize {
 }
 
 impl LocalViewer {
+    pub(super) fn open_shortcuts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.menu_navigation_ready(window, cx) {
+            return;
+        }
+        if let Some(handle) = self.shortcuts_window
+            && handle.update(cx, |_, w, _| w.activate_window()).is_ok()
+        {
+            return;
+        }
+        let return_focus = window.focused(cx);
+        match gpui_kit::open_window(
+            gpui_kit::WindowOptions {
+                window_bounds: Some(gpui_kit::WindowBounds::Windowed(
+                    gpui_kit::Bounds::centered(None, gpui_kit::size(px(680.), px(720.)), cx),
+                )),
+                window_min_size: Some(gpui_kit::size(px(480.), px(440.))),
+                window_background: crate::appearance::window_background(cx),
+                ..Default::default()
+            },
+            cx,
+            |w, cx| {
+                crate::appearance::follow_appearance(w, cx);
+                w.set_window_title("Keyboard shortcuts");
+                cx.new(|cx| crate::shortcuts_view::Shortcuts::new(w, cx))
+            },
+        ) {
+            Ok((handle, pane)) => {
+                self.shortcuts_window = Some(handle);
+                self.shortcuts_release =
+                    Some(cx.observe_release_in(&pane, window, move |view, _, w, cx| {
+                        view.shortcuts_window = None;
+                        if let Some(focus) = &return_focus {
+                            focus.focus(w, cx);
+                        }
+                        cx.notify();
+                    }));
+            }
+            Err(_) => self.nav_error = Some("Keyboard shortcuts could not be opened. Try again."),
+        }
+        cx.notify();
+    }
     pub(super) fn open_memory(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         if !self.project_choices_ready(window, cx) || !self.state.projects_loaded {
             return;

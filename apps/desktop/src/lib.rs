@@ -117,6 +117,9 @@ pub use local_view::chat_actions_probe::run_chat_actions_probe;
 mod chat_actions_view;
 mod chat_actions_worker;
 mod chat_editor;
+pub(crate) use local_view::shortcuts_view;
+#[cfg(feature = "native-probes")]
+pub use shortcuts_view::probe::run_shortcuts_probe;
 mod composer_height;
 #[cfg(feature = "native-probes")]
 pub use chat_editor::composer_probe::run_composer_probe;

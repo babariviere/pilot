@@ -13,6 +13,11 @@ required-features = ["native-probes"]
 native-probes = ["gpui-kit/test-support", "pilot-desktop-updater/fixture"]
 
 [[test]]
+name = "shortcuts"
+harness = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "native_glass"
 harness = false
 test = false

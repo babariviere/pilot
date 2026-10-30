@@ -111,10 +111,10 @@ fn menus() -> Vec<Menu> {
             MenuItem::action("Minimize", Minimize),
             MenuItem::action("Zoom", Zoom),
         ]),
-        Menu::new("Help").items([MenuItem::action(
-            "Ask about Pilot…",
-            crate::local_view::AskAboutPilot,
-        )]),
+        Menu::new("Help").items([
+            MenuItem::action("Keyboard Shortcuts…", crate::shortcuts_view::OpenShortcuts),
+            MenuItem::action("Ask about Pilot…", crate::local_view::AskAboutPilot),
+        ]),
     ]
 }
 
@@ -182,6 +182,10 @@ mod tests {
             ["Pilot Next", "File", "Edit", "Go", "Window", "Help"]
         );
         let edit = &menus[2];
+        assert!(
+            matches!(&menus[5].items[0], MenuItem::Action { name, action, .. }
+            if name == "Keyboard Shortcuts…" && action.as_any().is::<crate::shortcuts_view::OpenShortcuts>())
+        );
         let actions: Vec<_> = edit
             .items
             .iter()

@@ -12,6 +12,19 @@ Kit and application bindings are registered. There is no drawn menu-bar substitu
   search, dialogs and Settings they keep moving to the start/end of the line, and
   marked IME text keeps them. The menu shows only ⌘[/⌘]. Linux has no ⌘ aliases.
 - **Window:** Minimize (⌘M) and Zoom, plus system-managed window entries.
+- **Help:** Keyboard Shortcuts… opens a passive native reference; Ask about Pilot…
+  retains the existing diagnostic-chat path.
+
+The shortcuts window reads combinations from the installed keymap, using Kit's
+current-platform labels (the same platform resolution as `ui::shortcut`). It
+curates common commands, not an exhaustive command catalogue or customization
+surface. Main-window commands, sidebar-list keys, Settings, forms and focused
+text editing are separate groups. History-arrow aliases explicitly exclude text
+fields; availability notes do not promise that a disabled command will execute.
+The window has literal selectable text and Copy reference. Escape, the Close
+button or platform close-window shortcut closes it and restores the originating
+main-window focus. Opening follows existing navigation/composition guards.
+No production open hotkey, dispatch precedence or editing binding was added.
 
 Application commands reuse the existing guarded handlers. Commands without an
 applicable focused handler are disabled by GPUI's native validation. Navigation
@@ -38,6 +51,7 @@ From `apps/desktop`, after `scripts/bootstrap.sh`:
 ```sh
 python3 scripts/check-scoped.py --unit app_menu --test native_menus --lint
 python3 scripts/check-scoped.py --unit local_view::menu_routing::tests
+python3 scripts/check-scoped.py --unit local_view::shortcuts_view::tests --test shortcuts --lint
 ```
 
 The native target creates no window and activates no app. It inspects the actual
@@ -47,3 +61,10 @@ recording writers, never real profiles or daemon actions. These checks do not
 qualify genuine OS IME input, visible menu appearance or platform-wide lifecycle
 acceptance. Linux still builds without the macOS menu module; no Linux native-menu
 behavior is claimed.
+
+The shortcuts target uses an isolated hidden GPUI owner without a client/writer.
+At 680/1100pt in light/dark it uses a fixture-only F1 binding to exercise the
+same Help action through keyboard dispatch, then checks scrolling, close/reopen, exact focus
+restoration, simulated marked-text refusal and literal selection/Unicode copy.
+This does not qualify physical keyboard navigation of AppKit's Help menu or OS
+IME/clipboard interoperability. No live app is launched or focused.

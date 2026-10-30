@@ -153,6 +153,8 @@ pub(crate) mod settings_probe;
 #[cfg(feature = "native-probes")]
 #[path = "shell_probe.rs"]
 pub(crate) mod shell_probe;
+#[path = "shortcuts_view.rs"]
+pub(crate) mod shortcuts_view;
 #[path = "side_panel.rs"]
 mod side_panel;
 #[cfg(feature = "native-probes")]
@@ -258,6 +260,8 @@ pub struct LocalViewer {
     chat_actions: Entity<crate::chat_actions_view::Actions>,
     settings: Entity<crate::settings_view::SettingsPreferences>,
     settings_window: Option<gpui_kit::AnyWindowHandle>,
+    shortcuts_window: Option<gpui_kit::AnyWindowHandle>,
+    shortcuts_release: Option<Subscription>,
     usage_options: Option<LocalOptions>,
     usage_window: Option<gpui_kit::AnyWindowHandle>,
     memory_windows: std::collections::BTreeMap<String, gpui_kit::AnyWindowHandle>,
@@ -1443,6 +1447,8 @@ impl LocalViewer {
             chat_actions,
             settings,
             settings_window: None,
+            shortcuts_window: None,
+            shortcuts_release: None,
             usage_options: None,
             usage_window: None,
             memory_windows: Default::default(),
@@ -2495,6 +2501,7 @@ impl Render for LocalViewer {
                 view.editor.update(cx,|editor,cx|editor.focus(window,cx));
             }))
             .when(menu_ready, |el| el
+                .on_action(cx.listener(|view,_:&crate::shortcuts_view::OpenShortcuts,window,cx|{view.open_shortcuts(window,cx);cx.stop_propagation();}))
                 .on_action(cx.listener(|view,_:&GoHome,window,cx|view.show_home(window,cx)))
                 .on_action(cx.listener(|view,_:&crate::settings_view::OpenSettings,window,cx|{view.open_settings(window,cx);cx.stop_propagation();}))
                 .on_action(cx.listener(|view,_:&ShowAllChats,window,cx|view.show_chats(window,cx)))
