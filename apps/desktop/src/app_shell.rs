@@ -24,6 +24,7 @@ pub(crate) enum Page {
     Chat,
 }
 pub(crate) enum ShellEvent {
+    Memory(String),
     Project(String),
     Chat(String),
     AllChats,
@@ -700,6 +701,14 @@ impl Render for Overview {
             },
         );
         if let Some(p) = project {
+            let id = p.id.clone();
+            header = header.child(
+                crate::ui::action("project-memory", "Memory…", crate::ui::Action::Quiet)
+                    .self_start()
+                    .on_click(
+                        cx.listener(move |_, _, _, cx| cx.emit(ShellEvent::Memory(id.clone()))),
+                    ),
+            );
             header = header.child(
                 div()
                     .truncate()

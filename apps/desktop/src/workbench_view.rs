@@ -29,6 +29,54 @@ impl Render for SidebarResize {
 }
 
 impl LocalViewer {
+    pub(super) fn open_memory(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.project_choices_ready(window, cx) || !self.state.projects_loaded {
+            return;
+        }
+        let Some(project) = self.state.projects.iter().find(|p| p.id == id).cloned() else {
+            return;
+        };
+        if let Some(handle) = self.memory_windows.get(id)
+            && handle.update(cx, |_, w, _| w.activate_window()).is_ok()
+        {
+            return;
+        }
+        let options = self.usage_options.clone();
+        let result = gpui_kit::open_window(
+            gpui_kit::WindowOptions {
+                window_bounds: Some(gpui_kit::WindowBounds::Windowed(
+                    gpui_kit::Bounds::centered(None, gpui_kit::size(px(780.), px(720.)), cx),
+                )),
+                window_min_size: Some(gpui_kit::size(px(480.), px(440.))),
+                window_background: crate::appearance::window_background(cx),
+                ..Default::default()
+            },
+            cx,
+            |w, cx| {
+                crate::appearance::follow_appearance(w, cx);
+                w.set_window_title("Memory · Local");
+                let pane =
+                    cx.new(|cx| crate::project_memory_view::Memory::new(options, project, cx));
+                pane.update(cx, |v, cx| {
+                    v.focus(w, cx);
+                    v.load(None, w, cx);
+                });
+                let weak = pane.downgrade();
+                w.on_window_should_close(cx, move |_, cx| {
+                    let _ = weak.update(cx, |v, cx| v.close(cx));
+                    true
+                });
+                pane
+            },
+        );
+        match result {
+            Ok((handle, _)) => {
+                self.memory_windows.insert(id.into(), handle);
+            }
+            Err(_) => self.nav_error = Some("Memory could not be opened. Try again."),
+        }
+        cx.notify();
+    }
     pub(super) fn sidebar_width(&self, w: &Window, cx: &App) -> f32 {
         sidebar_extent(
             f32::from(w.viewport_size().width),

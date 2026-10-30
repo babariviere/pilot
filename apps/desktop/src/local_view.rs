@@ -260,6 +260,7 @@ pub struct LocalViewer {
     settings_window: Option<gpui_kit::AnyWindowHandle>,
     usage_options: Option<LocalOptions>,
     usage_window: Option<gpui_kit::AnyWindowHandle>,
+    memory_windows: std::collections::BTreeMap<String, gpui_kit::AnyWindowHandle>,
     usage_events: Option<Subscription>,
     settings_pane: Option<gpui_kit::WeakEntity<crate::settings_view::SettingsView>>,
     settings_return: Option<gpui_kit::FocusHandle>,
@@ -1081,6 +1082,7 @@ impl LocalViewer {
                 window,
                 |view, _, event, window, cx| match event {
                     ShellEvent::Project(id) => view.show_project(id.clone(), window, cx),
+                    ShellEvent::Memory(id) => view.open_memory(id, window, cx),
                     ShellEvent::AllChats => view.show_chats(window, cx),
                     ShellEvent::NewChat => view.new_chat(window, cx),
                     ShellEvent::AddProject => {
@@ -1441,6 +1443,7 @@ impl LocalViewer {
             settings_window: None,
             usage_options: None,
             usage_window: None,
+            memory_windows: Default::default(),
             usage_events: None,
             settings_pane: None,
             settings_return: None,

@@ -286,6 +286,15 @@ pub use local_view::settings_probe::run_settings_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::subscription_limit_probe::run_subscription_limit_probe;
 mod nested_scroll;
+mod project_memory;
+mod project_memory_reader;
+#[cfg(any(test, feature = "native-probes"))]
+mod project_memory_tests;
+#[cfg(feature = "native-probes")]
+mod project_memory_probe;
+#[cfg(feature = "native-probes")]
+pub use project_memory_probe::run_project_memory_probe;
+mod project_memory_view;
 #[cfg(test)]
 mod reader_identity_tests;
 mod tool_presentation;

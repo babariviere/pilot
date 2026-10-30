@@ -30,6 +30,11 @@ palette. It shows observed Local token/cache usage and catalog estimates, not bi
 chat/mission names and sort by cost, tokens, requests or duration. Composer usage is
 unchanged; outstanding accounting memory and release verification is documented separately.
 
+In Pilot Next, open a project's overview and choose **Memory…** to browse its
+stored notes and summary ranges in a separate read-only window. Text remains
+selectable; forgetting, editing and other memory writes are not offered.
+See the [Local memory browser contract](apps/desktop/docs/project-memory.md).
+
 - **Run several agents at once.** Follow progress across projects, send follow-ups, queue messages or stop
   a run. Every session has its own worker process.
 - **Finish a mission explicitly in Pilot Next.** Mission detail offers **Mark done** when all remaining

@@ -53,6 +53,10 @@ Swift's `BrandMark`): only beside an exactly recognized service link in message 
 
 Layout is a left-aligned reading column, not a grid of nested cards:
 
+The project **Memory…** browser reuses this column and Kit actions in a separate
+passive window, with literal selectable notes and summary drill-down. It never
+shares retained rows across project IDs. See [Local memory](project-memory.md).
+
 ```text
 Page title
 context / scope

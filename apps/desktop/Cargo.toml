@@ -529,3 +529,8 @@ required-features = ["native-probes"]
 name = "session_subagents"
 harness = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "project_memory"
+harness = false
+required-features = ["native-probes"]

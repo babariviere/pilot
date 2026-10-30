@@ -137,3 +137,7 @@ bash scripts/cargo.sh test --locked --features native-probes --test new_chat_vie
 # Exact-revision inline native reader and lifecycle.
 bash scripts/cargo.sh clippy --locked --features native-probes --test inline_visual -- -D warnings
 bash scripts/cargo.sh test --locked --features native-probes --test inline_visual
+
+# Bounded passive project-memory reads, owned faux Local only.
+bash scripts/cargo.sh clippy --locked --features native-probes --test project_memory -- -D warnings
+bash scripts/cargo.sh test --locked --features native-probes --test project_memory

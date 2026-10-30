@@ -100,7 +100,8 @@ a test/probe file is only a reproducible check until its recorded result is cite
 Missing-page findings below were checked against the reachable
 [Settings Category](../src/settings_view.rs), [project Fields/Submission::patch](../src/project_settings.rs)
 and [shell Page](../src/app_shell.rs), not inferred from filenames alone. These
-currently expose no notification, MCP, energy, memory, schedule or tracking page.
+currently expose no notification, MCP, energy, schedule or tracking page.
+Memory now has a separate passive project window, described below.
 Usage and Settings also have separate windows, so absence from `Page` alone is
 not an absence proof. Swift links are historical capability references only.
 
@@ -109,7 +110,7 @@ not an absence proof. Swift links are historical capability references only.
 | #143 notifications | **M/B.** Preference, OS permission/delivery/dedup/click route absent. Native OS notification capability must be scoped under D57 before implementation. | Next Category above; Swift [NotificationSettings](../../macos/Sources/Pilot/Settings.swift). Attention UI is not notification delivery. |
 | #145 folders/Finder/GitHub | **P.** Client-only folders delivered; Finder reveal and project-repository resolution/open remain. Opening an already validated web link is not repository discovery. | [Folders methods](../src/sidebar_folders.rs), [external_links::open](../src/external_links.rs); #415. |
 | #146 Usage | **P.** Local dated overview/trends, coverage, shared subscription refresh delivered. Keep group filters/records/reconciliation and informational budgets only. | [Usage](../src/usage_overview_view.rs), [Range/State](../src/usage_overview.rs), [scope](usage-overview.md); #196, #442, #452, #479. |
-| #147 memory | **M.** No memory browser/forget UI. `sidebar_memory` is UI read/fold state, not project memory. Start read-only; forgetting needs explicit confirmation. | Page above; Swift [MemoryPage](../../macos/Sources/Pilot/MemoryPage.swift). |
+| #147 memory | **P.** Read-only project summary/note browsing delivered separately. Search, live refresh and explicit forgetting remain; forgetting needs a confirmed-action contract. `sidebar_memory` is unrelated UI state. | [Memory window](../src/project_memory_view.rs), [existing contract audit](project-memory.md); #486. Swift [MemoryPage](../../macos/Sources/Pilot/MemoryPage.swift) remains the historical fuller reference. |
 | #148 schedules | **M.** No scheduler create/list/edit/cancel UI. Split initial explicit schedule creation from subsequent management. | Page/WriteCommand above; Swift [ScheduleSheet/ScheduledMessages](../../macos/Sources/Pilot/ScheduleUI.swift). |
 | #149 MCP | **M/B.** No roster/check/sign-in controls. First audit existing owner-mediated status/actions; no GUI credential/config fallback. New host/browser authority needs precise approval. | Category above; Swift [ConnectionSettings/McpCheckButton](../../macos/Sources/Pilot/ConnectionSettings.swift). |
 | #150 account inventory | **I** for resolving the inventory question: no standalone provider-login Settings category in the checked Swift inventory. Propose retire the unknown, not invent a login feature. Import's GitHub setup remains #157. | Swift [SettingsTab.general](../../macos/Sources/Pilot/Settings.swift); Next Category above. |
