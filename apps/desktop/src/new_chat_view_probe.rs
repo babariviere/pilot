@@ -595,6 +595,106 @@ pub fn run_new_chat_view_probe(cx: &mut HeadlessAppContext) {
             assert!(writes.try_recv().is_err());
             assert_eq!(models.posts(), 0);
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+            diagnostic_surface(cx, width, dark, captures.as_deref());
         }
     }
+}
+
+/// Real renderer, synthetic writer. Opening diagnostics is not an agent start.
+fn diagnostic_surface(
+    cx: &mut HeadlessAppContext,
+    width: f32,
+    dark: bool,
+    captures: Option<&std::path::Path>,
+) {
+    let (writer, writes) = Interaction::recording();
+    let (h, view) = cx.update(|cx| {
+        gpui_kit::open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                    Default::default(),
+                    size(px(width), px(760.)),
+                ))),
+                show: false,
+                focus: false,
+                ..Default::default()
+            },
+            cx,
+            |w, cx| {
+                cx.new(|cx| {
+                    let v = LocalViewer::preview(PreviewState::Conversation, w, cx);
+                    v.editor
+                        .update(cx, |e, cx| e.shell_probe_setup(writer, w, cx));
+                    v
+                })
+            },
+        )
+        .unwrap()
+    });
+    cx.update_window(h, |_, w, cx| {
+        w.activate_window();
+        view.update(cx, |v, cx| v.ask_about_pilot(w, cx));
+    })
+    .unwrap();
+    settle(cx, h);
+    let editor = cx.update(|cx| view.read(cx).editor.clone());
+    let text = cx.update(|cx| editor.read(cx).shell_probe().0);
+    cx.update_window(h, |_, w, cx| {
+        assert!(w.try_find("diagnostic-chat-setup").is_some());
+        assert!(w.try_find("new-chat-project").is_none());
+        assert_eq!(w.find("local-send").disabled(), Some(true));
+        let setup = w.find("diagnostic-chat-setup").bounds();
+        let tray = w.find("composer-tray").bounds();
+        assert!(setup.bottom() <= tray.top());
+        assert!(f32::from(setup.size.width) > 300.);
+        editor.update(cx, |e, cx| e.focus(w, cx));
+        w.input("Investigate daemon latency 日本語 👩‍💻", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    assert!(
+        !std::iter::from_fn(|| writes.try_recv().ok())
+            .any(|c| matches!(c, WriteCommand::Submit { .. }))
+    );
+    cx.update_window(h, |_, w, cx| {
+        text.update(cx, |t, cx| {
+            t.replace_and_mark_text_in_range(None, "にほん", Some(3..3), w, cx)
+        });
+        w.click("local-send", cx);
+        assert!(text.update(cx, |t, cx| t.marked_text_range(w, cx).is_some()));
+        text.update(cx, |t, cx| t.unmark_text(w, cx));
+    })
+    .unwrap();
+    settle(cx, h);
+    assert!(
+        !std::iter::from_fn(|| writes.try_recv().ok())
+            .any(|c| matches!(c, WriteCommand::Submit { .. }))
+    );
+    if let Some(dir) = captures {
+        cx.capture_screenshot(h)
+            .unwrap()
+            .save(dir.join(format!(
+                "diagnostics-{}-{}.png",
+                width as u32,
+                if dark { "dark" } else { "light" }
+            )))
+            .unwrap();
+    }
+    pointer_click(cx, h, "local-send");
+    let mut sent = 0;
+    while let Ok(command) = writes.try_recv() {
+        if let WriteCommand::Submit { draft, .. } = command {
+            assert!(
+                draft.diagnostics && draft.attachments.is_empty() && draft.project_id.is_none()
+            );
+            assert_eq!(draft.mode, "ask");
+            sent += 1;
+        }
+    }
+    assert_eq!(sent, 1);
+    cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+    println!(
+        "diagnostic_chat {width} {} passed: read-only role, layout, explicit send, IME",
+        if dark { "dark" } else { "light" }
+    );
 }

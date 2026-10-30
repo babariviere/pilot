@@ -1,5 +1,15 @@
 # Agent diagnostics
 
+### Existing daemon performance snapshot
+
+`diagnostic_context` → `performance` returns the already-running watchdog's bounded CPU/memory, event-loop
+delay/stall and operation snapshot through the same sanitization and byte/node bounds as other context evidence.
+It accepts only the action and optional host identity, requires the persisted diagnostics role at worker admission,
+and never forwards to a linked host. Replaced daemon/lineage, missing watchdog or cancellation refuses the read.
+It neither enables collection nor resets counters, profiles, wakes workers, performs provider requests or mutates
+the subject. Cumulative CPU and lifetime percentiles are not current utilization or a specific request's latency;
+in-flight HTTP operations are not IPC queue depth. Native clients already have the separate performance GET contract.
+
 ### Background integration job health
 
 `diagnostic_context` → `refresh_health` includes host-scoped manual discovery lookups and linked-Linear

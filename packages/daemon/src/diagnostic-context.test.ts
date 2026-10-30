@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-	DiagnosticReadBroker,
 	awaitDiagnosticRead,
+	DiagnosticReadBroker,
 	diagnosticContextResponse,
 	parseDiagnosticContext,
 	sanitizeDiagnosticContext,
@@ -23,9 +23,13 @@ test("diagnostic selectors reject forged authority, paths and unbounded queries"
 		{ action: "issues" },
 		{ action: "chats", before: -1 },
 		{ action: "read_file", path: "/secret" },
+		{ action: "performance", query: "profile" },
+		{ action: "performance", sessionId: "00000000-0000-4000-8000-000000000001" },
+		{ action: "performance", reset: true },
 	])
 		assert.throws(() => parseDiagnosticContext(value));
 	assert.deepEqual(parseDiagnosticContext({ action: "chats", host, limit: 20 }), { action: "chats", host, limit: 20 });
+	assert.deepEqual(parseDiagnosticContext({ action: "performance", host }), { action: "performance", host });
 });
 test("metadata and issue text are sanitized and bounded independently from telemetry", () => {
 	const input = {

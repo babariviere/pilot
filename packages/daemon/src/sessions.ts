@@ -2553,6 +2553,9 @@ export class SessionManager {
 			host.daemonId !== this.diagnosticHost.daemonId ||
 			host.lineageId !== this.diagnosticHost.lineageId
 		) {
+			// This selector admits only the existing local snapshot, never a new linked-host capability.
+			if (request.action === "performance")
+				return { ...diagnosticContextResponse(host, null), status: "unavailable", reason: "unsupported" };
 			try {
 				const result = await this.diagnosticReadBroker.read(request, signal);
 				if (signal?.aborted || this.require(callerId).role !== "diagnostics")
@@ -2632,6 +2635,12 @@ export class SessionManager {
 		)
 			throw new Conflict("Diagnostic receiver identity changed");
 		if (signal?.aborted) throw new Conflict("Diagnostic read cancelled");
+		if (request.action === "performance") {
+			const snapshot = daemonPerformance();
+			return snapshot
+				? diagnosticContextResponse(host, snapshot)
+				: { ...diagnosticContextResponse(host, null), status: "unavailable", reason: "unsupported" };
+		}
 		const limit = request.limit ?? 8;
 		if (request.action === "hosts")
 			return diagnosticContextResponse(host, { hosts: [{ host, availability: "available" }] });

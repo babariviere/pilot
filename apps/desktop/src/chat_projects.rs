@@ -192,6 +192,9 @@ impl ChatEditor {
         !self.project_query_marked(window, cx)
     }
     pub(super) fn project_problem(&self, draft: &Draft) -> Option<&'static str> {
+        if draft.diagnostics {
+            return None;
+        }
         if !self.project_catalog.loaded {
             return Some("Loading projects…");
         }

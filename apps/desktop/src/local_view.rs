@@ -232,6 +232,7 @@ gpui_kit::actions!(
         NavigateForward,
         ToggleJump,
         NewChat,
+        AskAboutPilot,
         SidebarCollapse,
         SidebarExpand
     ]
@@ -1955,6 +1956,20 @@ impl LocalViewer {
         self.sync_visible_draft(window, cx);
         self.did_navigate(cx);
     }
+    fn ask_about_pilot(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.editor.read(cx).ready() || !self.prepare_navigation(window, cx) {
+            return;
+        }
+        self.page = Page::Chat;
+        self.change_scope(None, window, cx);
+        self.nav_error = None;
+        self.clear_chat(cx);
+        self.title = "Ask about Pilot".into();
+        self.editor
+            .update(cx, |editor, cx| editor.new_diagnostics(window, cx));
+        self.sync_visible_draft(window, cx);
+        self.did_navigate(cx);
+    }
     fn resume_transcript(&mut self, cx: &mut Context<Self>) {
         if let Some((rows, reset)) = self.pending_transcript.take() {
             self.transcript.update(cx, |view, cx| {
@@ -2462,6 +2477,7 @@ impl Render for LocalViewer {
             .capture_any_mouse_down(cx.listener(|v,_,_,cx|{if v.restart_pending {cx.stop_propagation();}}))
             .when(menu_jump, |el| el.on_action(cx.listener(|v,_:&ToggleJump,w,cx|{v.toggle_jump(w,cx);cx.stop_propagation();})))
             .when(menu_new_chat, |el| el.on_action(cx.listener(|v,_:&NewChat,w,cx|{v.new_chat(w,cx);cx.stop_propagation();})))
+            .when(menu_new_chat, |el| el.on_action(cx.listener(|v,_:&AskAboutPilot,w,cx|{v.ask_about_pilot(w,cx);cx.stop_propagation();})))
             // Capture above the transcript so releasing a dragged thumb in the
             // header/sidebar still completes top-of-history navigation.
             .capture_any_mouse_up(cx.listener(|view,_,_,cx|{

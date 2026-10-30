@@ -1312,6 +1312,16 @@ opening user message, never telemetry, diagnostic evidence or target authority. 
 **Diagnostics** in the sidebar and chat header, with its admitted app or host-qualified chat scope and read-only
 boundary.
 
+Pilot Next on macOS restores **Help → Ask about Pilot…** as a separate Local diagnostic draft.
+Sending creates the existing read-only diagnostics role with exact host identity and the daemon's default model,
+not a Build or coordinator chat. Existing app-scoped and chat-focused diagnostic conversations accept replies
+and Stop again; archived/continued chats remain read-only. The composer identifies the role and refuses image
+attachments and project-path completion. This first slice does not include Swift's focus/model setup or repair
+confirmation UI. Settings → Diagnostics still reviews only Next's private numeric desktop capture, not daemon logs.
+The specialist can inventory existing sanitized sources. Its **performance** context selector reads the existing
+bounded daemon CPU/memory, event-loop and operation snapshot through sanitization, on that daemon only.
+It does not gain Next's private tracing files, arbitrary filesystem/shell/MCP access or provider-refresh authority.
+
 Diagnostics can also read opt-in, local-only daily feature-usage aggregates across chats, independently of remote
 export. Settings → Diagnostics → Local feature usage explains its seven-day retention and clear/disable controls.
 Missing, dropped or disabled observations remain unknown, not zero. See [feature evidence](docs/feature-adoption.md).

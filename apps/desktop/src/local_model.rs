@@ -275,6 +275,20 @@ pub(crate) fn interactive_local(value: &Value) -> bool {
         && (value["mode"].is_null() || matches!(value["mode"].as_str(), Some("ask" | "build")))
 }
 
+/// Sending to a specialist does not convert it to Build or grant ordinary tools.
+pub(crate) fn diagnostic_local(value: &Value) -> bool {
+    value["role"] == "diagnostics"
+        && value["mode"] == "ask"
+        && value["control"] != true
+        && value["archivedAt"].is_null()
+        && value["continuedTo"].is_null()
+        && (value["diagnosticScope"] == "app" || value["diagnosticTarget"].is_object())
+}
+
+pub(crate) fn messageable_local(value: &Value) -> bool {
+    interactive_local(value) || diagnostic_local(value)
+}
+
 pub(crate) fn chat(value: &Value) -> Option<Chat> {
     let id = value["id"].as_str()?;
     if !valid_id(id) {
@@ -298,7 +312,7 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
         archived: value["archivedAt"].is_number(),
         local_draft: false,
         session_path: crate::session_clipboard::path(value),
-        writable: interactive_local(value),
+        writable: messageable_local(value),
         busy: value["working"] == true
             || matches!(value["state"].as_str(), Some("working" | "starting")),
         signal,

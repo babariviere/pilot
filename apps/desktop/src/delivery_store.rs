@@ -65,6 +65,9 @@ pub(crate) struct Delivery {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Draft {
     pub(crate) revision: u64,
+    /// Explicit read-only specialist creation, never an ordinary Build draft.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) diagnostics: bool,
     pub(crate) text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) attachments: Vec<crate::image_attachments::Attachment>,
@@ -91,6 +94,7 @@ impl Default for Draft {
     fn default() -> Self {
         Self {
             revision: 0,
+            diagnostics: false,
             text: String::new(),
             attachments: Vec::new(),
             cwd: String::new(),
@@ -125,6 +129,7 @@ fn question_settled_guard(old: &Draft, next: &Draft) -> Option<u64> {
         && old.project_id == next.project_id
         && old.model_choice == next.model_choice
         && old.mode == next.mode
+        && old.diagnostics == next.diagnostics
     {
         guard.map(|revision| revision.max(next.revision))
     } else {
@@ -277,6 +282,16 @@ pub(crate) fn hash_bytes(value: &[u8]) -> String {
 }
 
 fn validate_draft(key: &str, draft: &Draft) -> Result<(), Failure> {
+    if draft.diagnostics
+        && (!key.starts_with("new:")
+            || draft.mode != "ask"
+            || draft.project_id.is_some()
+            || !draft.cwd.is_empty()
+            || draft.model_choice.is_some()
+            || !draft.attachments.is_empty())
+    {
+        return Err("Diagnostic drafts cannot carry Build, project or attachment authority");
+    }
     if let Some(answer) = &draft.answer {
         answer.validate()?;
         if !key.starts_with("chat:") || answer.identity.revision > draft.revision {
@@ -388,7 +403,11 @@ impl Book {
                     || !token(&last.target)
                     || !matches!(
                         last.kind.as_str(),
-                        "chat-create" | "chat-send" | "subagent-send" | "stop"
+                        "chat-create"
+                            | "diagnostics-create"
+                            | "chat-send"
+                            | "subagent-send"
+                            | "stop"
                     )
                     || !matches!(last.state.as_str(), "accepted" | "rejected" | "unknown")
                     || last.revision > draft.revision)
@@ -436,7 +455,11 @@ impl Book {
             }
             if let Some(op) = &intent.operation {
                 let expected_kind = if intent.key.starts_with("new:") {
-                    "chat-create"
+                    if self.drafts[&intent.key].diagnostics {
+                        "diagnostics-create"
+                    } else {
+                        "chat-create"
+                    }
                 } else if intent.key.starts_with("subagent:") {
                     "subagent-send"
                 } else {
@@ -775,10 +798,11 @@ impl Store {
                 let message=answer.as_ref().map_or(ordinary.as_str(),|(_,message)|message.as_str());
                 if message.trim().is_empty() {return Err("Message is empty");}
                 let create=key.starts_with("new:");
-                if create&&(captured.project_id.is_none()||!Path::new(&captured.cwd).is_absolute()) {return Err("Choose a configured Local project before creating this chat");}
+                if create&&!captured.diagnostics&&(captured.project_id.is_none()||!Path::new(&captured.cwd).is_absolute()) {return Err("Choose a configured Local project before creating this chat");}
                 // Project ID is the supported SpawnRequest contract. No cwd
                 // override: the daemon owns project/workspace resolution.
                 let mut payload=if create {serde_json::json!({"message":message,"projectId":captured.project_id,"mode":"build"})} else {serde_json::json!({"message":message,"mode":if follow_up {"followUp"} else {"steer"}})};
+                if create&&captured.diagnostics {payload=serde_json::json!({"message":message,"mode":"ask","role":"diagnostics","diagnosticScope":"app","diagnosticHost":book.host});}
                 if let Some(child)=&child {payload["name"]=child.name.clone().into();payload["createdAt"]=child.created_at.into();}
                 if create&&let Some(choice)=&captured.model_choice{
                     if captured.project_id.as_deref()!=Some(choice.project_id.as_str())||captured.cwd!=choice.cwd{return Err("Model choice belongs to another project directory. Choose it again explicitly.");}
@@ -788,7 +812,7 @@ impl Store {
                 let payload=payload.to_string();
                 if payload.len()>64*1024 {return Err("Encoded message exceeds the daemon's 64 KiB operation limit");}
                 let sequence=book.next_sequence;book.next_sequence+=1;
-                Some(Operation {schema_version:1,operation_id:id.clone(),producer_id:book.producer_id.clone(),sequence,origin:book.host.clone(),destination:book.host.clone(),kind:if create {"chat-create"} else if child.is_some() {"subagent-send"} else {"chat-send"}.into(),target_id:target.clone(),payload_hash:hash(&payload),payload})
+                Some(Operation {schema_version:1,operation_id:id.clone(),producer_id:book.producer_id.clone(),sequence,origin:book.host.clone(),destination:book.host.clone(),kind:if create {if captured.diagnostics {"diagnostics-create"} else {"chat-create"}} else if child.is_some() {"subagent-send"} else {"chat-send"}.into(),target_id:target.clone(),payload_hash:hash(&payload),payload})
             };
             let intent=Intent {id:id.clone(),key:key.into(),revision:captured.revision,target,operation,state:"unknown".into(),diagnostic:None,answer:answer.as_ref().map(|(a,_)|a.clone())};
             book.drafts.get_mut(key).ok_or("Missing owning draft")?.pending=Some(id.clone());
@@ -951,7 +975,7 @@ impl Store {
                     draft.text.clear();
                     draft.attachments.clear();
                 }
-                if kind == "chat-create" {
+                if matches!(kind.as_str(), "chat-create" | "diagnostics-create") {
                     draft.created = Some(intent.target.clone());
                 }
             }

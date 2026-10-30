@@ -72,6 +72,7 @@ impl ChatEditor {
 
     fn can_attach(&self, w: &mut Window, cx: &mut Context<Self>) -> bool {
         self.ready()
+            && !self.diagnostic_chat()
             && self.writable
             && !self.waiting()
             && !self.marked(w, cx)

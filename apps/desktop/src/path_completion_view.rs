@@ -58,6 +58,9 @@ impl ChatEditor {
         }
     }
     fn path_source(&self, cx: &gpui_kit::App) -> Option<Source> {
+        if self.diagnostic_chat() {
+            return None;
+        }
         self.paths
             .owner
             .as_ref()?

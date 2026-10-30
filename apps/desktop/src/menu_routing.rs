@@ -341,6 +341,46 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn diagnostics_menu_preserves_preedit_and_only_prepares_a_specialist(cx: &mut TestAppContext) {
+        let (writer, commands) = Interaction::recording();
+        let (h, v) = main_owner(cx, writer);
+        let text = cx.update(|cx| v.read(cx).editor.read(cx).shell_probe().0);
+        cx.update_window(h, |_, w, cx| {
+            w.activate_window();
+            text.update(cx, |t, cx| {
+                t.focus(w, cx);
+                t.replace_and_mark_text_in_range(None, "にほん", Some(3..3), w, cx);
+            });
+            w.draw(cx).clear(cx);
+            assert!(!w.is_action_available(&AskAboutPilot, cx));
+            w.dispatch_action(Box::new(AskAboutPilot), cx);
+            assert_eq!(
+                v.read(cx).editor.read(cx).navigation_key(),
+                Some("chat:source")
+            );
+            text.update(cx, |t, cx| t.unmark_text(w, cx));
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(h, |_, w, cx| {
+            w.draw(cx).clear(cx);
+            assert!(w.is_action_available(&AskAboutPilot, cx));
+            w.dispatch_action(Box::new(AskAboutPilot), cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        v.read_with(cx, |v, cx| {
+            let e = v.editor.read(cx);
+            assert!(e.shell_probe().2.unwrap().diagnostics);
+            assert_eq!(e.new_drafts().len(), 1);
+        });
+        assert!(
+            !std::iter::from_fn(|| commands.try_recv().ok())
+                .any(|c| matches!(c, WriteCommand::Submit { .. }))
+        );
+    }
+
+    #[gpui_kit::test]
     fn edit_actions_stay_with_the_focused_input(cx: &mut TestAppContext) {
         let (writer, _commands) = Interaction::recording();
         let (h, v) = main_owner(cx, writer);

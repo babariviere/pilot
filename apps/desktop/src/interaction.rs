@@ -857,7 +857,7 @@ async fn writable(
     Ok(value)
 }
 fn writable_summary(value: &Value, target: &str) -> Result<(), Failure> {
-    if value["id"] != target || !crate::local_model::interactive_local(value) {
+    if value["id"] != target || !crate::local_model::messageable_local(value) {
         return Err("This Local conversation is retained, archived, continued or not writable");
     }
     Ok(())
@@ -979,6 +979,7 @@ async fn submit(
         }
     }
     if key.starts_with("new:")
+        && !draft.diagnostics
         && !store
             .book
             .drafts

@@ -1,5 +1,26 @@
 use super::*;
 use crate::chat_models_fixture::{Mode, Server};
+
+#[test]
+fn diagnostic_role_can_converse_without_build_conversion_or_model_authority() {
+    let mut v = serde_json::json!({"id":"diagnostic", "role":"diagnostics", "mode":"ask", "diagnosticScope":"app", "state":"idle"});
+    assert!(crate::local_model::messageable_local(&v));
+    assert!(!crate::local_model::interactive_local(&v));
+    let model = SessionModel::read(&v);
+    assert!(model.diagnostics && !model.allowed && !model.continuable);
+    for (key, value) in [
+        ("archivedAt", serde_json::json!(1)),
+        ("continuedTo", serde_json::json!("other")),
+        ("mode", serde_json::json!("build")),
+        ("control", serde_json::json!(true)),
+        ("role", serde_json::json!("unknown")),
+    ] {
+        let old = v[key].clone();
+        v[key] = value;
+        assert!(!crate::local_model::messageable_local(&v), "{key}");
+        v[key] = old;
+    }
+}
 fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .no_proxy()

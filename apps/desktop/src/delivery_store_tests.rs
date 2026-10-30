@@ -1,6 +1,72 @@
 use super::*;
 
 #[test]
+fn diagnostic_draft_preserves_role_host_and_unknown_envelope_across_reopen() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    let draft = Draft {
+        revision: 1,
+        diagnostics: true,
+        mode: "ask".into(),
+        text: "Investigate latency 👩‍💻".into(),
+        ..Default::default()
+    };
+    let intent = store
+        .prepare("new:diagnostic", &draft, false, false)
+        .unwrap();
+    let op = intent.operation.as_ref().unwrap();
+    let payload: serde_json::Value = serde_json::from_str(&op.payload).unwrap();
+    assert_eq!(op.kind, "diagnostics-create");
+    assert_eq!(payload["role"], "diagnostics");
+    assert_eq!(payload["mode"], "ask");
+    assert_eq!(payload["diagnosticScope"], "app");
+    assert_eq!(
+        payload["diagnosticHost"],
+        serde_json::to_value(host()).unwrap()
+    );
+    assert!(payload.get("projectId").is_none());
+    assert!(payload.get("cwd").is_none());
+    let original = serde_json::to_vec(op).unwrap();
+    drop(store);
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    assert!(store.book.drafts["new:diagnostic"].diagnostics);
+    assert_eq!(
+        serde_json::to_vec(store.book.pending[&intent.id].operation.as_ref().unwrap()).unwrap(),
+        original
+    );
+    store.finish(&intent.id, "accepted", None).unwrap();
+    assert_eq!(
+        store.book.drafts["new:diagnostic"].created.as_ref(),
+        Some(&intent.target)
+    );
+    assert!(store.book.drafts["new:diagnostic"].text.is_empty());
+    drop(store);
+    assert!(Store::open(temp.0.clone(), host()).unwrap().book.drafts["new:diagnostic"].diagnostics);
+}
+
+#[test]
+fn diagnostic_creation_refuses_ordinary_build_or_project_authority() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    let mut draft = Draft {
+        revision: 1,
+        diagnostics: true,
+        text: "Diagnose".into(),
+        ..Default::default()
+    };
+    assert!(store.prepare("new:a", &draft, false, false).is_err());
+    draft.mode = "ask".into();
+    draft.project_id = Some("p".into());
+    assert!(store.prepare("new:a", &draft, false, false).is_err());
+    draft.project_id = None;
+    draft.cwd = "/tmp".into();
+    assert!(store.prepare("new:a", &draft, false, false).is_err());
+    draft.cwd.clear();
+    assert!(store.prepare("chat:a", &draft, false, false).is_err());
+    assert!(store.book.pending.is_empty());
+}
+
+#[test]
 fn question_discard_guard_keeps_separate_reply_and_original_pending_identity() {
     let temp = Temp::new();
     let mut store = Store::open(temp.0.clone(), host()).unwrap();

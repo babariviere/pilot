@@ -111,6 +111,10 @@ fn menus() -> Vec<Menu> {
             MenuItem::action("Minimize", Minimize),
             MenuItem::action("Zoom", Zoom),
         ]),
+        Menu::new("Help").items([MenuItem::action(
+            "Ask about Pilot…",
+            crate::local_view::AskAboutPilot,
+        )]),
     ]
 }
 

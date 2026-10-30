@@ -1,6 +1,72 @@
 //! Isolated synthetic daemon writes only. Never targets a running Local daemon.
 use super::*;
 
+#[tokio::test]
+async fn diagnostic_creation_and_reply_preserve_role_without_project_reads_or_replay() {
+    for behavior in [Behavior::Diagnostic, Behavior::LostAccepted] {
+        let daemon = Daemon::start(behavior).await;
+        let temp = Temp::new();
+        let (client, updates) = ready(&daemon, &temp).await;
+        let draft = Draft {
+            revision: 1,
+            diagnostics: true,
+            mode: "ask".into(),
+            text: "Investigate latency".into(),
+            ..Default::default()
+        };
+        client.command(WriteCommand::Submit {
+            key: "new:diag".into(),
+            draft: Box::new(draft),
+            follow_up: false,
+            stop: false,
+            request: 1,
+        });
+        let mut state = until(&updates, |s| s.handled.get("new:diag") == Some(&1)).await;
+        if behavior == Behavior::LostAccepted {
+            let id = state.book.as_ref().unwrap().drafts["new:diag"]
+                .pending
+                .clone()
+                .unwrap();
+            assert_eq!(daemon.seen.lock().unwrap().executions, 1);
+            client.command(WriteCommand::Check { id, retry: false });
+            state = until(&updates, |s| {
+                s.book
+                    .as_ref()
+                    .is_some_and(|b| b.drafts["new:diag"].created.is_some())
+            })
+            .await;
+        }
+        let target = state.book.as_ref().unwrap().drafts["new:diag"]
+            .created
+            .clone()
+            .unwrap();
+        {
+            let seen = daemon.seen.lock().unwrap();
+            assert_eq!(seen.envelopes.len(), 1);
+            assert_eq!(seen.envelopes[0]["kind"], "diagnostics-create");
+            let payload: Value =
+                serde_json::from_str(seen.envelopes[0]["payload"].as_str().unwrap()).unwrap();
+            assert_eq!(payload["role"], "diagnostics");
+            assert_eq!(payload["mode"], "ask");
+            assert_eq!(
+                payload["diagnosticHost"],
+                serde_json::to_value(daemon.options.host()).unwrap()
+            );
+            assert!(!seen.requests.iter().any(|(_, p)| p == "/api/projects"));
+        }
+        if behavior == Behavior::Diagnostic {
+            let key = format!("chat:{target}");
+            submit(&client, &key, 1, "Read the log inventory", 2, false);
+            let reply = until(&updates, |s| s.handled.get(&key) == Some(&2)).await;
+            assert!(reply.error.is_none(), "{:?}", reply.error);
+            assert!(reply.book.as_ref().unwrap().pending.is_empty());
+            assert_eq!(daemon.seen.lock().unwrap().executions, 2);
+        }
+        client.command(WriteCommand::Close);
+        until(&updates, |s| s.flushed).await;
+    }
+}
+
 #[path = "interaction_draft_discard_tests.rs"]
 mod draft_discard;
 #[path = "interaction_retention_tests.rs"]
@@ -1229,6 +1295,7 @@ async fn coordinator_images_keep_exact_delivery_and_drafts_on_refusal_or_unknown
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Behavior {
+    Diagnostic,
     ImageBuild,
     ImageCoordinator,
     AnswerIdle,
@@ -1334,7 +1401,7 @@ impl Daemon {
                                 }
                                 else if method=="GET"&&path.starts_with("/api/sessions/") {
                                     let id=path.rsplit('/').next().unwrap();
-                                    json!({"id":id,"mode":if matches!(behavior,Behavior::ImageBuild|Behavior::ImageCoordinator){"build"}else{"ask"},"missionCoordinator":seen.image_coordinator||behavior==Behavior::ImageCoordinator,"control":behavior==Behavior::Readonly,"state":if matches!(behavior,Behavior::AnswerIdle|Behavior::AnswerLost|Behavior::AnswerDelegated){"idle"}else{"working"},"role":if behavior==Behavior::AnswerDelegated{Some("review")}else{None},"projectId":seen.projects.get(id)})
+                                    json!({"id":id,"mode":if matches!(behavior,Behavior::ImageBuild|Behavior::ImageCoordinator){"build"}else{"ask"},"missionCoordinator":seen.image_coordinator||behavior==Behavior::ImageCoordinator,"control":behavior==Behavior::Readonly,"state":if matches!(behavior,Behavior::AnswerIdle|Behavior::AnswerLost|Behavior::AnswerDelegated){"idle"}else{"working"},"role":if behavior==Behavior::AnswerDelegated{Some("review")}else if behavior==Behavior::Diagnostic{Some("diagnostics")}else{None},"diagnosticScope":if behavior==Behavior::Diagnostic{Some("app")}else{None},"projectId":seen.projects.get(id)})
                                 } else if method=="POST"&&path.ends_with("/stop") {
                                     seen.stops+=1;if behavior==Behavior::LostStop{return;}json!({"ok":true,"draft":"synthetic queued input"})
                                 } else if method=="POST"&&matches!(path.as_str(),"/api/operations"|"/api/operations/receipt") {

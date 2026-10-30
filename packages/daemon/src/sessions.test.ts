@@ -26,7 +26,7 @@ import { WebSocket } from "ws";
 import { DATABASE_CONFIG_FILE, DatabaseService } from "./databases.ts";
 import { diagnosticContextResponse } from "./diagnostic-context.ts";
 import { Conflict, NotFound } from "./errors.ts";
-import { DaemonOperations, operations } from "./event-loop-watchdog.ts";
+import { DaemonOperations, EventLoopWatchdog, operations } from "./event-loop-watchdog.ts";
 import type { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
@@ -1703,6 +1703,59 @@ test("diagnostics role reads other parked histories without legacy grants and va
 	);
 	assert.ok(denied?.result, denied?.error);
 	assert.equal(reads.length, 4);
+});
+
+test("diagnostic performance reads existing sanitized local snapshot only with persisted role", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({}, { diagnosticHost });
+	const peer = await sessions.spawn({ projectId: f.project.id, message: "Peer" });
+	const specialist = await sessions.spawn({ message: "Diagnose app", role: "diagnostics", diagnosticScope: "app" });
+	await Promise.all([sessions["starting"].get(peer.id), sessions["starting"].get(specialist.id)]);
+	await assert.rejects(sessions.diagnosticContext(peer.id, { action: "performance" }), /Only diagnostics/);
+	await assert.rejects(
+		sessions.diagnosticContext(specialist.id, { action: "performance", role: "diagnostics" }),
+		/Invalid diagnostic/,
+	);
+	const absent = await sessions.diagnosticContext(specialist.id, { action: "performance" });
+	assert.equal(absent.status, "unavailable");
+	assert.equal(absent.reason, "unsupported");
+	const watchdog = new EventLoopWatchdog();
+	watchdog.start();
+	t.after(() => watchdog.stop());
+	const end = operations.begin("synthetic password=performance-canary");
+	t.after(end);
+	let courierReads = 0;
+	const stop = sessions.diagnosticReadBroker.onRead(() => courierReads++);
+	t.after(stop);
+	const workers = f.workers.length;
+	const before = sessions.get(peer.id);
+	const result = await sessions.diagnosticContext(specialist.id, { action: "performance", host: diagnosticHost });
+	assert.equal(result.status, "available");
+	assert.deepEqual(result.host, diagnosticHost);
+	const data = result.data as {
+		process: { mainThreadCpuMs: number; rssBytes: number };
+		operations: object;
+		eventLoop: object;
+	};
+	assert.ok(data.process.mainThreadCpuMs >= 0 && data.process.rssBytes > 0);
+	assert.ok(data.operations && data.eventLoop);
+	assert.doesNotMatch(JSON.stringify(result), /performance-canary/);
+	assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 65536);
+	const remote = await sessions.diagnosticContext(specialist.id, {
+		action: "performance",
+		host: { ...diagnosticHost, daemonId: "other" },
+	});
+	assert.equal(remote.status, "unavailable");
+	assert.equal(remote.reason, "unsupported");
+	assert.equal(courierReads, 0);
+	assert.equal(f.workers.length, workers);
+	assert.deepEqual(sessions.get(peer.id), before);
+	const cancelled = new AbortController();
+	cancelled.abort();
+	await assert.rejects(
+		sessions.diagnosticContext(specialist.id, { action: "performance" }, cancelled.signal),
+		/cancelled/,
+	);
 });
 
 test("app-wide diagnostic capability reads unselected archived chats and budgets without waking them", async (t) => {

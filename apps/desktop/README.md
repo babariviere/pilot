@@ -163,6 +163,13 @@ is limited to three 64 KiB slots; seven-day expiry runs on next capture, review 
 startup. See [dogfooding diagnostics](docs/dogfooding-diagnostics.md) for the exact
 privacy, retention, export and coverage contract.
 
+On macOS, **Help → Ask about Pilot…** opens a distinct Local diagnostic draft. Nothing starts until Send;
+the created chat uses the existing diagnostics role and daemon default model, not Build or coordinator authority.
+Existing active diagnostic chats accept replies and Stop, with their read-only role visible in the composer.
+The specialist has bounded sanitized diagnostic/history/log tools and the current-daemon-only **performance**
+context selector. No arbitrary files, shell, MCP, provider refresh or automatic repairs. Focus/model setup,
+linked-host courier routing and repair confirmation remain Swift-only. This is separate from the capture export above.
+
 ### Local Scoped models
 
 In **Settings → Scoped models**, choose **All authenticated models**, or search and check

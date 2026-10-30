@@ -143,6 +143,7 @@ fn failure_source(v: &Value) -> Option<FailedSource> {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub(crate) struct SessionModel {
+    pub(crate) diagnostics: bool,
     pub(crate) model: Option<String>,
     pub(crate) thinking: Option<String>,
     pub(crate) updated_at: u64,
@@ -167,6 +168,7 @@ impl SessionModel {
         let pause = crate::subscription_pause::Pause::read(v);
         let failed = v["state"] == "failed" || v["outcome"] == "failed" || !v["failure"].is_null();
         Self {
+            diagnostics: v["role"] == "diagnostics",
             continuable: pause.as_ref().is_some_and(|p| !p.forced)
                 && crate::local_model::interactive_local(v)
                 && v["continuationPending"] != true

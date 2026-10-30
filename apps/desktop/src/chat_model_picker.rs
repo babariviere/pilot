@@ -108,6 +108,21 @@ pub(super) struct Models {
     continuation: Option<subscription::Continuation>,
 }
 impl ChatEditor {
+    pub(super) fn diagnostic_chat(&self) -> bool {
+        if self
+            .selected
+            .as_deref()
+            .is_some_and(|key| key.starts_with("new:"))
+        {
+            return self.draft().is_some_and(|d| d.diagnostics);
+        }
+        self.models
+            .as_ref()
+            .and_then(|m| m.current.as_ref())
+            .is_some_and(|(id, _, model)| {
+                self.selected.as_deref() == Some(format!("chat:{id}").as_str()) && model.diagnostics
+            })
+    }
     #[cfg(feature = "native-probes")]
     pub(crate) fn model_probe_state(&self) -> (bool, bool, Option<ModelChoice>, bool, bool) {
         (
@@ -206,6 +221,9 @@ impl ChatEditor {
         cx.notify();
     }
     fn model_scope(&self) -> Option<Scope> {
+        if self.diagnostic_chat() {
+            return None;
+        }
         let key = self.selected.clone()?;
         if key.starts_with("new:") {
             let d = self.draft()?;

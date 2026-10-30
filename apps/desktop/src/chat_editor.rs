@@ -338,7 +338,12 @@ impl ChatEditor {
                     if draft.created.is_some() {
                         "Created chat, draft kept".into()
                     } else if preview.is_empty() {
-                        "New chat".into()
+                        if draft.diagnostics {
+                            "Ask about Pilot"
+                        } else {
+                            "New chat"
+                        }
+                        .into()
                     } else {
                         preview
                     },
@@ -348,6 +353,20 @@ impl ChatEditor {
     }
 
     pub(crate) fn new_draft(&mut self, cwd: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.new_profile_draft(cwd, false, window, cx);
+    }
+
+    pub(crate) fn new_diagnostics(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.new_profile_draft(String::new(), true, window, cx);
+    }
+
+    fn new_profile_draft(
+        &mut self,
+        cwd: String,
+        diagnostics: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.changed(cx);
         self.prune_cache();
         if !self.ready() {
@@ -358,6 +377,7 @@ impl ChatEditor {
             .iter()
             .find(|(key, draft)| {
                 key.starts_with("new:")
+                    && draft.diagnostics == diagnostics
                     && !self
                         .discarding
                         .as_ref()
@@ -387,6 +407,8 @@ impl ChatEditor {
         let key = format!("new:{}", uuid::Uuid::new_v4());
         let draft = Draft {
             revision: 1,
+            diagnostics,
+            mode: if diagnostics { "ask" } else { "build" }.into(),
             cwd,
             ..Default::default()
         };
@@ -1275,6 +1297,8 @@ impl Render for ChatEditor {
         // The placeholder states what typing does here, including read-only.
         let placeholder = if !self.writable {
             "This chat is read-only."
+        } else if is_new && self.diagnostic_chat() {
+            "What would you like to investigate?"
         } else if is_new {
             "Describe the task…"
         } else if self.busy {
@@ -1470,7 +1494,8 @@ impl Render for ChatEditor {
                     .truncate()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .when(!is_subagent && self.models.is_some(), |v| v.child(self.model_controls(cx)))
+                    .when(!is_subagent && !self.diagnostic_chat() && self.models.is_some(), |v| v.child(self.model_controls(cx)))
+                    .children(self.diagnostic_chat().then_some("Read-only diagnostics · Local"))
                     // Routine autosave is silent; only states that block sending speak.
                     // Read-only is said by the placeholder, not repeated here.
                     // A chat message being sent says so in the conversation instead.
@@ -1545,7 +1570,11 @@ impl Render for ChatEditor {
         if !is_new && !is_subagent {
             recovery.extend(self.subscription_row(cx));
         }
-        if !is_subagent && self.models.is_some() && self.has_model_notice() {
+        if !is_subagent
+            && !self.diagnostic_chat()
+            && self.models.is_some()
+            && self.has_model_notice()
+        {
             recovery.push(self.model_notices(cx).into_any_element());
         }
         if let Some(error) = self.error.or(self.state.error) {

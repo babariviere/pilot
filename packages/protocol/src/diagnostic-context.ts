@@ -21,6 +21,8 @@ export interface DiagnosticContextRequest {
 		| "mission"
 		| "issues"
 		| "features"
+		/** Existing watchdog snapshot on this daemon only; optional host, no other selectors. */
+		| "performance"
 		| "refresh_health";
 	host?: OperationHost;
 	sessionId?: string;

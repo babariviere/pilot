@@ -3,13 +3,13 @@ import { randomUUID } from "node:crypto";
 import type {
 	DiagnosticContextRequest,
 	DiagnosticContextResponse,
-	DiagnosticReadDispatch,
 	DiagnosticContextValue,
+	DiagnosticReadDispatch,
 	OperationHost,
 } from "@pilot/protocol";
-import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { FEATURE_NAMES } from "@pilot/protocol";
 import { isCredentialField, redactDiagnosticText } from "./diagnostic-redaction.ts";
+import { Conflict, ServiceUnavailable } from "./errors.ts";
 
 export function parseDiagnosticContext(value: unknown): DiagnosticContextRequest {
 	const invalid = (): never => {
@@ -48,10 +48,12 @@ export function parseDiagnosticContext(value: unknown): DiagnosticContextRequest
 			"mission",
 			"issues",
 			"features",
+			"performance",
 			"refresh_health",
 		].includes(String(v.action))
 	)
 		return invalid();
+	if (v.action === "performance" && Object.keys(v).some((key) => key !== "action" && key !== "host")) return invalid();
 	if (v.host !== undefined) {
 		const h = v.host as Record<string, unknown>;
 		if (
