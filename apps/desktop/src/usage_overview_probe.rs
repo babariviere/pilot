@@ -6,7 +6,7 @@ use crate::{
 };
 use gpui_kit::{
     AppContext, Bounds, Entity, HeadlessAppContext, WindowBounds, WindowOptions,
-    component::{Theme, ThemeMode},
+    component::{ActiveTheme, Theme, ThemeMode},
     px, size,
     test::TestWindowExt,
 };
@@ -40,7 +40,6 @@ pub fn run_usage_overview_probe(cx: &mut HeadlessAppContext) {
             delayed.delay_ms = 180;
             s.reply(&f::path(&s.options, range, false), delayed);
             let (h, v) = cx.update(|cx| {
-                Theme::change(mode, None, cx);
                 gpui_kit::open_window(
                     WindowOptions {
                         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
@@ -63,6 +62,13 @@ pub fn run_usage_overview_probe(cx: &mut HeadlessAppContext) {
                 )
                 .unwrap()
             });
+            // Opening a window follows system appearance. Set and verify the
+            // fixture mode afterwards so both theme passes exercise real modes.
+            cx.update_window(h, |_, w, cx| {
+                Theme::change(mode, Some(w), cx);
+                assert_eq!(cx.theme().is_dark(), mode == ThemeMode::Dark);
+            })
+            .unwrap();
             settle(cx, h);
             cx.update_window(h, |_, w, _| {
                 assert!(w.try_find("usage-loading").is_some());

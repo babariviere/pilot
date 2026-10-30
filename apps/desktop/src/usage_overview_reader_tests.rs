@@ -38,6 +38,18 @@ fn only_pinned_get_analytics_with_bounded_range_and_no_mutations() {
     assert_eq!(q["limit"], 100);
     assert_eq!(q["bucketMs"], model::DAY);
     assert!(q.get("after").is_none());
+    for buckets in [false, true] {
+        let u = url(&s.options, r, buckets);
+        let query: Value =
+            serde_json::from_str(&u.query_pairs().find(|(k, _)| k == "query").unwrap().1).unwrap();
+        let mut expected = json!({"version": 1, "from": r.from, "to": r.to,
+            "view": if buckets { "buckets" } else { "summary" }});
+        if buckets {
+            expected["bucketMs"] = json!(model::DAY);
+            expected["limit"] = json!(100);
+        }
+        assert_eq!(query, expected, "only global summary and UTC-day queries");
+    }
 }
 #[test]
 fn unsupported_or_foreign_hello_stops_before_usage() {

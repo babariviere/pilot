@@ -84,6 +84,41 @@ marked as a previous observation. A different range clears old-range values.
 Longer ranges do not override retention or imply complete history. Group filters,
 records, reconciliation and informational budgets remain outside this overview.
 
+## Project-filter data gap
+
+The current window cannot honestly offer All / project / Unattributed filtering
+from its retained data. `usage_overview_reader::url` requests only `view: summary`
+and `view: buckets` with `bucketMs: 86400000`, without filters or a dimension.
+`Report.total` is an all-project aggregate; `Report.groups` contains UTC-day keys
+and aggregates. Neither carries project identity, project labels, per-project
+metrics or the number of records missing project attribution. In particular,
+missing attribution in this **projection** does not mean every underlying record
+is unattributed. An Unattributed choice would be just as unsupported as a known
+project choice. There is no record list in this window to filter instead.
+
+The ledger protocol separately supports `UsageObservation.attribution.projectId`,
+`view: breakdown` with `dimension: project` (the disk query returns a JSON string
+key for a known project ID and `null` for unattributed records),
+and `filters.projectId` / `filters.missing: ["project"]`. Those observations and
+breakdowns are not loaded by the overview. A project breakdown alone would not
+provide project-by-day trends. Using these API capabilities would require changed
+reads, not presentation-only filtering of existing rows, so none are introduced
+here. Current chat/project selection, titles, cwd and the project catalogue cannot
+reconstruct historical attribution. No project picker or synthetic unattributed
+total is added. Records/reconciliation/budgets remain separate residual work.
+
+Subscription limits remain global provider reports, independent of historical
+date ranges and any future project filter. Their `fetchedAt` / failed-report
+ordering is not the history query's `queriedAt` or a project freshness signal.
+No refresh, privacy epoch, clear, stale-result or report mutation path changes.
+
+Focused regression coverage rejects known-project and null-attribution breakdown
+keys as summary/day evidence, keeps daily subtotals separate from authoritative
+totals, and pins both existing queries to their unfiltered UTC scope. Existing
+date/unknown/range-replacement and retained-error checks remain applicable.
+No new filter UI exists to qualify for keyboard, empty-project or native visual
+acceptance; the existing hidden overview probe covers the unchanged window.
+
 ## Verification scope
 
 `check-scoped.py --unit usage_overview --test usage_overview --native-probes --lint`

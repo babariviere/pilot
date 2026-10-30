@@ -152,6 +152,39 @@ fn response_bounds_versions_truncation_duplicates_and_generation_are_explicit() 
     assert!(Report::parse(valid, r, false).is_err());
 }
 #[test]
+fn project_breakdowns_cannot_be_used_as_daily_or_summary_evidence() {
+    let r = range();
+    // The daemon's project breakdown uses JSON scalar keys, including null for
+    // unattributed records. Neither is a UTC bucket or an unfiltered summary.
+    for key in [
+        json!("550e8400-e29b-41d4-a716-446655440000").to_string(),
+        json!(null).to_string(),
+    ] {
+        let mut report = f::report(r, false);
+        report["groups"] = json!([{"key": key, "aggregate": f::aggregate()}]);
+        assert!(Report::parse(report.clone(), r, true).is_err());
+        assert!(Report::parse(report, r, false).is_err());
+    }
+}
+
+#[test]
+fn daily_groups_do_not_partition_the_authoritative_summary_by_project() {
+    let r = range();
+    let mut wire = f::report(r, true);
+    // No attribution is present in either total or daily aggregates. A day's
+    // known subtotal cannot identify a project or an unattributed subtotal.
+    wire["total"]["records"] = json!(9);
+    wire["total"]["metrics"]["input"]["value"] = json!(900_000);
+    let report = Report::parse(wire, r, true).unwrap();
+    assert_eq!(report.total.records, 9);
+    assert_eq!(report.total.metric("input").unwrap().value, Some(900_000));
+    let daily: u64 = report.days(r).iter().filter_map(|(_, d)| d.tokens()).sum();
+    assert_eq!(daily, 108_000);
+    assert_eq!(report.coverage, "partial");
+    assert_eq!(report.queried_at, r.to);
+}
+
+#[test]
 fn stale_range_serials_are_fenced_and_failed_refresh_retains_dated_snapshot() {
     let r = range();
     let snapshot = Snapshot {
