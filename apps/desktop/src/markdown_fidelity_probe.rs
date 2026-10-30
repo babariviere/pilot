@@ -13,6 +13,11 @@ use unicode_segmentation::UnicodeSegmentation;
 #[path = "markdown_reconstruction_probe.rs"]
 mod reconstruction;
 
+#[path = "markdown_nested_probe.rs"]
+mod nested;
+#[path = "markdown_nested_corpus.rs"]
+mod nested_corpus;
+
 const CODE: &str = "  <b title=\"&amp;\">literal</b> & < > \\\\ * _ ` if (a < b && c > d) { x &= y; }\n\t日本語 👩🏽‍💻 e\u{301} 🇫🇷\n\n";
 const LIST: &str = "3. **First** café\n   - child 👩🏽‍💻\n     1. deep e\u{301}\n     2. next 🇫🇷\n   - sibling `a_b`\n4. Last\n";
 const LIST_TEXT: &str = "First café\nchild 👩🏽‍💻\ndeep e\u{301}\nnext 🇫🇷\nsibling a_b\nLast\n";
@@ -263,6 +268,7 @@ pub fn run_markdown_fidelity_probe(cx: &mut HeadlessAppContext) {
                 }
             }
             reconstruction::run(cx, h, &v, &mixed, &mixed_text);
+            nested::run(cx, h, &v, width, dark);
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             cx.run_until_parked();
         }

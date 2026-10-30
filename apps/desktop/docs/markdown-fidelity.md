@@ -28,9 +28,21 @@ The initial hidden regression reproduced keyboard Copy removing two leading
 spaces from an ordinary fenced code body. Kit's generic Copy action used
 `trim()`. The scoped patch keeps native projection and serializers intact, but
 uses the selected code's literal text when the selection is wholly one ordinary
-top-level code block. Code-only Select All also retains its body whitespace.
+code block, including a leaf inside list/blockquote containers. Code-only
+Select All also retains its body whitespace when those containers hold only
+that code leaf.
 Prose/mixed selection, Plain/tool text and source-selection formats keep their
 existing behavior. This is not a parser replacement or a table-copy redesign.
+
+Nested blocks exposed two additional defects: the code-only query stopped at
+the container, and code source mapping greedily aligned body spaces with
+container indentation (and applied prose whitespace alignment to literal code).
+The query now walks existing container children, refusing a second code leaf
+or any selected prose. Block-code source mapping matches the canonical parser's
+literal value line by line against source-line suffixes, excluding container
+prefixes. Non-literal parser transformations retain the previous mapping path;
+they are not newly qualified. Inline code/prose mapping and rendered serializers
+are unchanged.
 
 The actual reducer/native stream exercise also exposed parser replacement when
 an assistant's live row acquired its committed reader key. The reducer already
@@ -91,6 +103,49 @@ pasteboard acceptance. OS clipboard interoperability, real IME, accessibility,
 visible motion/FPS, release performance and Linux/Wayland qualification remain
 separate. The existing giant-tool-source measurements and limitations in
 [tool-source-performance.md](tool-source-performance.md) are unchanged.
-The whitespace repair is scoped to ordinary top-level code blocks. Nested-code
-containers, other selection formats and comprehensive Markdown grammar parity
-are not newly qualified. Table selection remains plain text, not TSV.
+Other selection formats and comprehensive Markdown grammar parity are not
+newly qualified. Table selection remains plain text, not TSV.
+
+## Nested literal-code corpus
+
+`src/markdown_nested_corpus.rs` defines four small cases: fenced and indented
+code in an unordered list, and fenced and indented code in a blockquote. Their
+literal body includes two leading spaces, trailing spaces, an interior blank
+line, a tab, Japanese text, combining `é`, a skin-tone ZWJ emoji and a flag.
+Fenced cases retain a final body newline; indented cases follow the canonical
+parser's removal of final line endings. Fixture construction records explicit
+source/body byte segments while adding the known container prefixes. Native
+assertions compare those independent expectations with canonical source mapping
+and actual keyboard clipboard results, never HTML or guessed rendered text.
+The indented-list case starts with a `Before` paragraph inside the same item;
+the indented quote starts with an empty quote line. These spellings produce
+one canonical code leaf. The parser can split an initial-line indented form
+into adjacent code leaves; this change does not merge them or change mixed
+selection trimming.
+
+The hidden native cases use the same 680/1100pt light/dark production root.
+They distinguish code-only Select All (and mixed Select All for `Before`),
+partial and multiline forward/reverse pointer selection, code-only selection
+beside prose in the same container, mixed prose's existing trim policy, and
+exact source-owned Copy. Each case also streams its first code line through
+append and canonical commit, actually recycles/remounts the row, and checks
+parser identity, literal selection, drafts, focus and simulated marked text.
+This is not OS IME qualification. Existing top-level code, whitespace-only,
+explicit-source, mixed prose, table-cell confinement and cross-block negatives
+remain in the same scoped checks.
+
+2026-10-30, the same macOS/Rust/Kit versions and unchanged profiles above:
+all16 nested content cases and all16 nested stream/commit/recycle cases passed,
+alongside the existing16 content/four reconstruction cases. Eight context
+regressions passed in both ordinary and native-feature paths, including new
+mixed/multiple-code negatives and literal source positions with LF/CRLF and
+an indented backtick body. Eight readonly regressions passed. Native-target
+and ordinary production-library Clippy, changed-file rustfmt, and the plain
+locked production build passed, using serial private-target CPU2/4GiB mbx
+admission with over80GiB disk free. Actual narrow/light and wide/dark captures
+were reviewed for readable code and preserved list/quote hierarchy; no new
+chrome, renderer layout, or Copy control was introduced.
+
+These four forms do not establish arbitrary nesting,
+all fence/indentation spellings, or full CommonMark compliance. Parent #134
+remains open for unrelated content/performance gaps.

@@ -2,6 +2,71 @@
 use super::*;
 use gpui_kit::{TestAppContext, component::text::SelectionFormat, test::TestWindowExt};
 
+#[gpui_kit::test]
+fn nested_code_only_select_all_preserves_literal_edges(cx: &mut TestAppContext) {
+    for source in [
+        "- ```text\n    <tag>&amp; 👩🏽‍💻 e\u{301}  \n  \n  ```\n",
+        "> ```text\n>   <tag>&amp; 👩🏽‍💻 e\u{301}  \n> \n> ```\n",
+        "-       <tag>&amp; 👩🏽‍💻 e\u{301}  \n",
+        ">       <tag>&amp; 👩🏽‍💻 e\u{301}  \n",
+    ] {
+        check_copy(
+            cx,
+            source,
+            if source.contains("```") {
+                "  <tag>&amp; 👩🏽‍💻 e\u{301}  \n"
+            } else {
+                "  <tag>&amp; 👩🏽‍💻 e\u{301}  "
+            },
+            SelectionFormat::Plain,
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn nested_prose_and_multiple_code_leaves_keep_mixed_trim(cx: &mut TestAppContext) {
+    check_copy(
+        cx,
+        "> ```\n>   first  \n> ```\n>\n> After **bold** &amp;.\n",
+        "first  \nAfter bold &.",
+        SelectionFormat::Plain,
+    );
+    check_copy(
+        cx,
+        "> ```\n>   first  \n> ```\n>\n> ```\n>   second  \n> ```\n",
+        "first  \n  second",
+        SelectionFormat::Plain,
+    );
+}
+
+#[gpui_kit::test]
+fn code_source_mapping_keeps_literal_spaces_and_original_line_endings(cx: &mut TestAppContext) {
+    for source in [
+        "```\n  <x>  \n```",
+        "```\r\n  <x>  \r\n```",
+        "    ```literal\n      <x>  \n",
+    ] {
+        let (h, view) = readonly_tests::setup(
+            cx,
+            vec![Message::live(20, "assistant".into(), source.into())],
+        );
+        cx.update_window(h, |_, w, cx| {
+            w.render_frame(cx);
+            let text = view.read(cx).text_states[0]
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .rendered_text();
+            let start = source.find("  <x>  ").unwrap();
+            let mapped = text
+                .range_for_source(start..start + "  <x>  ".len())
+                .unwrap();
+            assert_eq!(&text.as_str()[mapped], "  <x>  ", "{source:?}");
+        })
+        .unwrap();
+    }
+}
+
 fn check_copy(cx: &mut TestAppContext, source: &str, expected: &str, format: SelectionFormat) {
     let (h, view) = readonly_tests::setup(
         cx,

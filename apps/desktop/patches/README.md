@@ -40,7 +40,9 @@ inside this standalone fixture. No global Cargo/Rust settings are changed.
 
 Ordinary Markdown code-only keyboard Copy uses its retained literal code
 selection rather than generic prose `trim()`, preserving indentation, trailing
-spaces and body newlines. Prose/mixed, Plain/tool and explicit source selection
+spaces and body newlines, including single code leaves inside lists/quotes.
+Block-code source positions align canonical literal lines with their source
+suffixes rather than container gutter whitespace. Prose/mixed, Plain/tool and explicit source selection
 formatting are unchanged. See [Markdown fidelity](../docs/markdown-fidelity.md)
 for the hidden native matrix, exact-source distinction and remaining limits.
 
