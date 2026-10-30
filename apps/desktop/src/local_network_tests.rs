@@ -628,10 +628,12 @@ async fn captured_pages_keep_live_tail_and_fence_snapshot_navigation_reconnect_a
     mock.step.send(()).await.unwrap();
     let streaming = until(&rx, |v| v.rows.len() == 2).await;
     assert!(streaming.loaded && streaming.page_busy);
+    assert_eq!(streaming.reader_revision, recent.reader_revision);
     assert_eq!(streaming.rows[1].source(), "live while paging");
     mock.step.send(()).await.unwrap();
     let replacement = until(&rx, |v| v.cursor == Some(9) && !v.page_busy).await;
     assert_eq!(replacement.rows.len(), 1);
+    assert!(replacement.reader_revision > streaming.reader_revision);
     assert_eq!(replacement.rows[0].source(), "replacement tail");
     mock.page_step.send(()).await.unwrap(); // Obsolete pre-replacement response.
     client.command(Command::Earlier {
@@ -664,6 +666,7 @@ async fn captured_pages_keep_live_tail_and_fence_snapshot_navigation_reconnect_a
     })
     .await;
     assert_eq!(reconnected.rows.len(), 1);
+    assert!(reconnected.reader_revision > back.reader_revision);
     mock.page_step.send(()).await.unwrap(); // Old connection epoch cannot replace new snapshot.
     client.command(Command::Earlier {
         before: 5,
@@ -684,6 +687,7 @@ async fn captured_pages_keep_live_tail_and_fence_snapshot_navigation_reconnect_a
     let retried = until(&rx, |v| v.cursor == Some(3)).await;
     assert_eq!(retried.rows.len(), 3);
     assert!(!retried.page_error);
+    assert_eq!(retried.reader_revision, reconnected.reader_revision);
     assert!(
         mock.requests
             .lock()

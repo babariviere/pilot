@@ -371,6 +371,8 @@ pub(crate) struct Presentation {
     /// Retained rows and their existing loading/action semantics stay unchanged.
     pub(crate) summary_fresh: bool,
     pub(crate) page_revision: u64,
+    /// Invalidates multi-page reader restoration on stream/snapshot replacement.
+    pub(crate) reader_revision: u64,
     pub(crate) batches: u64,
     pub(crate) queued: usize,
     pub(crate) user_queue: Arc<crate::queued_message::Snapshot>,
@@ -1030,6 +1032,7 @@ async fn run(
                     }));
                 }
                 Ok(Command::Reconnect) => {
+                    snapshot_revision += 1;
                     view.summary_fresh=false;
                     model.thinking=false; model.stale(); awaiting_snapshot=true;
                     set_daemon(ConnectedDaemon::NotConnected);
@@ -1142,6 +1145,7 @@ async fn run(
         view.behind = model.behind;
         view.omitted = model.unsupported;
         view.loaded = model.loaded && !model.prefix_pending && !awaiting_snapshot;
+        view.reader_revision = snapshot_revision;
         view.queued = model.queued;
         view.user_queue = if fenced {
             Arc::new(crate::queued_message::Snapshot {

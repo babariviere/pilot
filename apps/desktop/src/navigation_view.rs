@@ -4,6 +4,10 @@ use crate::navigation::{
 };
 use gpui_kit::EntityInputHandler;
 
+#[cfg(test)]
+#[path = "reader_restore_tests.rs"]
+mod reader_restore_tests;
+
 impl LocalViewer {
     pub(super) fn location(&self, cx: &App) -> Location {
         let target = match &self.page {
@@ -114,6 +118,7 @@ impl LocalViewer {
         }
         self.save_scope(cx);
         if self.page == Page::Chat
+            && self.pending_reader.is_none()
             && !self.refreshing
             && self.state.loaded
             && self.state.generation == self.generation
@@ -122,6 +127,7 @@ impl LocalViewer {
         {
             self.reader_marks.put(id.clone(), mark);
         }
+        self.pending_reader = None;
         true
     }
     #[cfg(feature = "native-probes")]
@@ -364,25 +370,60 @@ impl LocalViewer {
         }
     }
     pub(super) fn restore_reader(&mut self, cx: &mut Context<Self>) {
-        if self.page != Page::Chat || !self.state.loaded || self.state.generation != self.generation
-        {
-            return;
-        }
-        let Some((generation, id, mark)) = self.pending_reader.take() else {
+        let Some(mut pending) = self.pending_reader.take() else {
             return;
         };
-        if generation != self.generation
-            || generation != self.state.generation
-            || self.selected.as_ref() != Some(&id)
+        if pending.generation != self.generation
+            || self.selected.as_ref() != Some(&pending.owner)
+            || self.page != Page::Chat
         {
             return;
         }
-        if !self
-            .transcript
-            .update(cx, |v, cx| v.restore_reading(mark, cx))
+        if pending
+            .revision
+            .is_some_and(|r| r != self.state.reader_revision)
         {
+            // A replacement stream owns its own snapshot. Never continue an
+            // old page chain or move the new reader on a late completion.
+            self.pending_reader = Some(pending);
+            self.nav_error = None;
+            return;
+        }
+        if !self.state.loaded || self.state.generation != self.generation {
+            self.pending_reader = Some(pending);
+            return;
+        }
+        pending.revision = Some(self.state.reader_revision);
+        if self
+            .transcript
+            .update(cx, |v, cx| v.restore_reading(pending.mark.clone(), cx))
+        {
+            self.nav_error = None;
+            return;
+        }
+        self.transcript.update(cx, |v, cx| v.hold_for_history(cx));
+        if let Some(client) = &self.client {
+            client.follow(self.generation, false);
+        }
+        // Entry IDs and the exclusive older cursor prove when the requested
+        // range has been covered. Tool keys have no entry bound: page until
+        // found or exhausted. The existing API admits contiguous pages only.
+        let covered = match &pending.mark.message {
+            Some(crate::model::ReaderKey::Entry { entry, .. }) => {
+                self.state.cursor.is_none_or(|before| before <= *entry)
+            }
+            Some(crate::model::ReaderKey::Tool(_)) => self.state.cursor.is_none(),
+            None => true,
+        };
+        self.pending_reader = Some(pending);
+        if self.state.chat_issue || self.state.page_error || self.state.page_busy {
+            return;
+        }
+        if covered {
             self.nav_error =
-                Some("Previous read position is outside the loaded page. Use More or Latest.");
+                Some("Previous reading position is no longer available in this history.");
+        } else {
+            self.earlier(false, cx);
         }
     }
 }

@@ -596,8 +596,11 @@ The project sidebar restores its last valid chat or Overview, search/archive
 filter and scroll positions (up to64 scopes). An explicit Overview button and
 Home project cards still open Overview. Current-chat history stays retained in
 its one retained transcript; switching back from another chat uses the Local
-reader and a bounded canonical entry/model/block or tool-call position token, never a transcript cache or silent
-history drain. Preedit and refused reads cannot advance history, and draft
+reader and a bounded canonical entry/model/block or tool-call position token, never a transcript cache.
+If that position is outside the recent page, older pages load automatically until
+it is found, without draining history beyond it. Scrolling or navigating cancels
+restoration; failed page reads retain the token and offer Retry earlier.
+Preedit and refused reads cannot advance history, and draft
 destinations reuse existing slots without replaying sends. See
 [navigation boundaries and verification](evidence/navigation.md).
 Inbox provides a bounded read-only view of attention in loaded Local chat summaries,

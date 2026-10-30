@@ -8,6 +8,8 @@ use gpui_kit::{
     test::TestWindowExt,
 };
 use serde_json::json;
+#[path = "reader_restore_probe.rs"]
+mod reader_restore_probe;
 fn rows(first: u64) -> Vec<Message> {
     (first..first + 20)
         .map(|id| {
@@ -52,6 +54,10 @@ fn publish(
     settle(cx, h);
 }
 pub fn run_navigation_probe(cx: &mut HeadlessAppContext) {
+    if std::env::var_os("PILOT_NEXT_READER_RESTORE_ONLY").is_some() {
+        reader_restore_probe::run(cx);
+        return;
+    }
     if std::env::var_os("PILOT_NEXT_SIDEBAR_ADMISSION_ONLY").is_some() {
         sidebar_new_chat_admission(cx);
         return;
@@ -394,9 +400,9 @@ pub fn run_navigation_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, cx| {
                 assert!(
                     v.read(cx).nav_error.is_some(),
-                    "an unloaded older marker needs an honest notice, not auto paging"
+                    "a marker beyond the covered range is genuinely unavailable"
                 );
-                assert!(v.read(cx).pending_reader.is_none());
+                assert!(v.read(cx).pending_reader.is_some());
                 assert!(reads.try_recv().is_err());
                 w.click("latest", cx);
             })
@@ -501,6 +507,7 @@ pub fn run_navigation_probe(cx: &mut HeadlessAppContext) {
     sidebar_new_chat_admission(cx);
     sidebar_scrollbar_hidden(cx, captures.as_deref());
     canonical_reader_navigation(cx);
+    reader_restore_probe::run(cx);
 }
 
 /// An overflowing sidebar paints no scrollbar in any Kit mode, while wheel
@@ -885,7 +892,7 @@ fn canonical_reader_navigation(cx: &mut HeadlessAppContext) {
             publish(cx, h, &v, 14, missing);
             cx.update(|cx| {
                 assert!(v.read(cx).nav_error.is_some());
-                assert!(v.read(cx).pending_reader.is_none());
+                assert!(v.read(cx).pending_reader.is_some());
                 assert_ne!(
                     v.read(cx)
                         .transcript
@@ -898,15 +905,16 @@ fn canonical_reader_navigation(cx: &mut HeadlessAppContext) {
             });
             assert!(reads.try_recv().is_err(), "no restoration paging/draining");
             assert!(writes.try_recv().is_err());
-            // A window that omitted newer entries rereads the newest one as soon
-            // as the reader is at its bottom; a failed read offers a retry.
+            // Missing history never silently follows the tail. An explicit
+            // Latest reads the newest bounded window; failures offer a retry.
             let retained = cx
                 .update_window(h, |_, _, cx| {
                     v.update(cx, |v, cx| {
                         assert!(v.nav_error.is_some());
                         let retained = v.transcript.read(cx).history_probe_row(old_render);
-                        assert!(v.transcript.read(cx).history_probe_anchor(cx).2);
+                        assert!(!v.transcript.read(cx).history_probe_anchor(cx).2);
                         v.state.behind = true;
+                        v.latest(cx);
                         v.sync_history_controls(cx);
                         retained
                     })
@@ -919,8 +927,8 @@ fn canonical_reader_navigation(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, cx| {
                 assert_eq!(cx.theme().is_dark(), mode == ThemeMode::Dark);
                 assert!(
-                    w.try_find("latest").is_none(),
-                    "routine loading has no control"
+                    w.try_find("latest").is_some(),
+                    "explicit Latest retains the held reader while its bounded window loads"
                 );
             })
             .unwrap();

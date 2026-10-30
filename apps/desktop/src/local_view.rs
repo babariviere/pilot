@@ -288,7 +288,7 @@ pub struct LocalViewer {
     restoring_navigation: bool,
     scope_states: crate::navigation::Cache<Option<String>, crate::navigation::ScopeState>,
     reader_marks: crate::navigation::Cache<String, crate::navigation::ReadingMark>,
-    pending_reader: Option<(u64, String, crate::navigation::ReadingMark)>,
+    pending_reader: Option<crate::navigation::ReaderRestoration>,
     page: Page,
     project_scope: Option<String>,
     projects: Entity<ListState<ProjectList>>,
@@ -1356,11 +1356,22 @@ impl LocalViewer {
                 }
             },
         );
+        let reader_intent = cx.subscribe(
+            &transcript,
+            |view, _, event: &crate::transcript_view::ReaderIntent, cx| {
+                if event.0 == view.generation && view.pending_reader.take().is_some() {
+                    view.nav_error = None;
+                    view.sync_history_controls(cx);
+                    cx.notify();
+                }
+            },
+        );
         let full_history_events = cx.subscribe_in(
             &transcript,
             window,
             |view, _, event: &crate::transcript_view::FullHistoryRequested, _, cx| {
                 if event.0 == view.generation && view.page == Page::Chat {
+                    view.pending_reader = None;
                     view.loading_full_history = !view.loading_full_history;
                     if view.loading_full_history {
                         view.earlier(true, cx);
@@ -1496,6 +1507,7 @@ impl LocalViewer {
                 editor_events,
                 artifact_events,
                 history_events,
+                reader_intent,
                 full_history_events,
                 latest_events,
                 following_events,
@@ -1635,7 +1647,12 @@ impl LocalViewer {
             self.reader_marks
                 .get(id)
                 .cloned()
-                .map(|mark| (generation, id.clone(), mark))
+                .map(|mark| crate::navigation::ReaderRestoration {
+                    generation,
+                    owner: id.clone(),
+                    mark,
+                    revision: None,
+                })
         });
         self.artifacts_open = false;
         self.state.artifacts = Arc::new(Vec::new());
@@ -2420,7 +2437,9 @@ impl Render for LocalViewer {
             .and_then(|id| self.state.chats.iter().find(|c| &c.id == id))
             .map(|c| c.cwd.clone())
             .unwrap_or_default();
-        let history_status = if self.earlier_request.is_some() {
+        let history_status = if self.earlier_request.is_some() && self.pending_reader.is_some() {
+            "Restoring reading position…"
+        } else if self.earlier_request.is_some() {
             "Loading earlier messages…"
         } else if self.state.page_error {
             "Earlier messages could not be loaded"

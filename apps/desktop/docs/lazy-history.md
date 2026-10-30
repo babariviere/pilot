@@ -1,12 +1,27 @@
 # Lazy Local history
 
-The conversation opens at the live tail. Older messages wait until the user
+Fresh conversations open at the live tail. Older messages wait until the user
 scrolls near the top or chooses Load earlier messages from More. Find explicitly
 labels partial coverage and offers Load full history, which pages sequentially
 until exhausted or stopped. Merely opening Find does not fetch older pages.
 Search stays literal, case-sensitive committed message source, not tool-output
 or artifact-source search. The existing 1,000-match display limit is disclosed;
 row and source-byte scan ceilings no longer hide an older unique match.
+
+Returning to a retained reading position automatically pages back to its canonical
+entry/model/block or tool-call key, keeping the saved pixel offset. Normal page
+absence is loading, not an error. The header quietly says Restoring reading
+position while a page is pending. Restoration stops as soon as the key is found,
+or its entry range is covered without that projection (genuinely unavailable).
+The current contract supports contiguous 24-entry pages, not an exact-anchor
+lookup. Tool-call keys lack an entry bound and may require paging to exhaustion.
+No backend or stored-history changes are needed. Loaded rows accumulate as usual;
+this is bounded per-page work, not constant total memory or projection time.
+
+Scroll, selection/navigation input and explicit Latest supersede restoration.
+Stream/snapshot replacement cancels its page chain without applying a late anchor;
+the original token remains retained for a fresh visit. Page failures preserve it
+and use the existing Retry earlier action, without an automatic retry loop.
 
 ## Opt-in contract
 

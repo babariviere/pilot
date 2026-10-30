@@ -130,6 +130,13 @@ pub(crate) struct ReadingMark {
     pub(crate) offset: f32,
     pub(crate) following: bool,
 }
+/// A fresh Open binds the retained position to its first admitted snapshot.
+pub(crate) struct ReaderRestoration {
+    pub(crate) generation: u64,
+    pub(crate) owner: String,
+    pub(crate) mark: ReadingMark,
+    pub(crate) revision: Option<u64>,
+}
 pub(crate) fn bounded_query(value: &str) -> String {
     value.chars().take(240).collect()
 }

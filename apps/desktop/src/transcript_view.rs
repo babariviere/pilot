@@ -60,6 +60,9 @@ impl TranscriptView {
 }
 pub(crate) struct HistoryTop(pub(crate) u64);
 impl gpui_kit::EventEmitter<HistoryTop> for TranscriptView {}
+/// Direct reader input supersedes an automatic retained-position restoration.
+pub(crate) struct ReaderIntent(pub(crate) u64);
+impl gpui_kit::EventEmitter<ReaderIntent> for TranscriptView {}
 pub(crate) struct FullHistoryRequested(pub(crate) u64);
 impl gpui_kit::EventEmitter<FullHistoryRequested> for TranscriptView {}
 pub(crate) struct LatestRequested(pub(crate) u64);
@@ -1222,6 +1225,19 @@ impl Render for TranscriptView {
             .flex_1()
             .min_h_0()
             .min_w_0()
+            .capture_any_mouse_down(cx.listener(move |_, _, _, cx| {
+                cx.emit(ReaderIntent(scope));
+            }))
+            .capture_key_down(
+                cx.listener(move |_, event: &gpui_kit::KeyDownEvent, _, cx| {
+                    if matches!(
+                        event.keystroke.key.as_str(),
+                        "up" | "down" | "pageup" | "pagedown" | "home" | "end"
+                    ) {
+                        cx.emit(ReaderIntent(scope));
+                    }
+                }),
+            )
             // A fitting list lets wheel packets bubble instead of invoking the
             // bounce callback. Only upward intent at the top requests history.
             .on_scroll(
@@ -1236,7 +1252,27 @@ impl Render for TranscriptView {
                 }),
             )
             // First, so nested tool output knows where each wheel gesture began.
-            .child(crate::nested_scroll::tracker());
+            .child(crate::nested_scroll::tracker())
+            // Observe wheel intent in capture, before the scroller's bounce
+            // consumes it. Programmatic anchor changes never emit this event.
+            .child({
+                let owner = cx.weak_entity();
+                gpui_kit::canvas(
+                    |bounds, w, _| w.insert_hitbox(bounds, gpui_kit::HitboxBehavior::Normal),
+                    move |_, hitbox, w, _| {
+                        w.on_mouse_event(move |event: &gpui_kit::ScrollEvent, phase, w, cx| {
+                            if phase == gpui_kit::DispatchPhase::Capture
+                                && hitbox.should_handle_scroll(w)
+                                && event.delta.pixel_delta(w.line_height()).y != px(0.)
+                            {
+                                let _ = owner.update(cx, |_, cx| cx.emit(ReaderIntent(scope)));
+                            }
+                        });
+                    },
+                )
+                .absolute()
+                .inset_0()
+            });
         #[cfg(any(test, feature = "native-probes"))]
         let viewport = {
             use gpui_kit::test::TestSupportExt;
