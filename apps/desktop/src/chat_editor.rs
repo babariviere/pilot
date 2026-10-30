@@ -60,6 +60,9 @@ pub(crate) mod sending;
 #[cfg(feature = "native-probes")]
 #[path = "stop_wait_probe.rs"]
 mod stop_wait_probe;
+#[cfg(feature = "native-probes")]
+#[path = "subscription_wait_probe.rs"]
+mod subscription_wait_probe;
 
 pub(crate) enum EditorEvent {
     UpdateCheckpoint,

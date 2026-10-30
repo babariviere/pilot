@@ -3,7 +3,7 @@ use super::send_waits::{disconnected, disk};
 use super::*;
 use crate::model_wait_fixture::{Behavior as ModelBehavior, Server, attempt};
 
-fn seed(server: &Server, temp: &Temp) -> Draft {
+pub(super) fn seed(server: &Server, temp: &Temp) -> Draft {
     let mut captured = draft(2, "Unsent ordinary 日本語 👩‍💻");
     captured.model_choice = Some(crate::chat_models::DraftChoice {
         project_id: "project-a".into(),
@@ -25,7 +25,10 @@ fn seed(server: &Server, temp: &Temp) -> Draft {
         .unwrap();
     captured
 }
-async fn start(server: &Server, temp: &Temp) -> (Interaction, async_channel::Receiver<WriteState>) {
+pub(super) async fn start(
+    server: &Server,
+    temp: &Temp,
+) -> (Interaction, async_channel::Receiver<WriteState>) {
     let (client, updates) = Interaction::start(server.options.clone(), Ok(temp.0.clone()));
     until(&updates, |s| s.book.is_some()).await;
     (client, updates)
@@ -37,18 +40,18 @@ fn submit_model(client: &Interaction, failed: bool, request: u64) {
         action: crate::chat_models::Action::Submit(attempt(failed))
     }));
 }
-async fn reached(server: &Server) {
+pub(super) async fn reached(server: &Server) {
     tokio::time::timeout(Duration::from_secs(5), server.entered.recv())
         .await
         .unwrap()
         .unwrap();
 }
-fn settled(state: &WriteState, request: u64) -> bool {
+pub(super) fn settled(state: &WriteState, request: u64) -> bool {
     state.model.as_ref().is_some_and(|r| {
         r.request == request && !matches!(r.outcome, crate::chat_models::Outcome::Pending)
     })
 }
-async fn close(
+pub(super) async fn close(
     client: Interaction,
     updates: async_channel::Receiver<WriteState>,
     server: &Server,
@@ -64,7 +67,7 @@ async fn close(
             == *closed.book.unwrap()
     );
 }
-fn posts(server: &Server) -> usize {
+pub(super) fn posts(server: &Server) -> usize {
     server
         .seen
         .lock()

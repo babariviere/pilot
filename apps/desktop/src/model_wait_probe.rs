@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-struct Private(PathBuf);
+pub(super) struct Private(pub(super) PathBuf);
 impl Drop for Private {
     fn drop(&mut self) {
         if !std::thread::panicking() {
@@ -22,7 +22,7 @@ impl Drop for Private {
         }
     }
 }
-struct Root(Entity<ChatEditor>);
+pub(super) struct Root(pub(super) Entity<ChatEditor>);
 impl Render for Root {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
@@ -33,7 +33,7 @@ impl Render for Root {
             .child(self.0.clone())
     }
 }
-fn pump(
+pub(super) fn pump(
     cx: &mut HeadlessAppContext,
     h: AnyWindowHandle,
     editor: &Entity<ChatEditor>,
@@ -49,7 +49,7 @@ fn pump(
     cx.advance_clock(Duration::from_millis(16));
     cx.update_window(h, |_, w, cx| w.render_frame(cx)).unwrap();
 }
-fn until(
+pub(super) fn until(
     cx: &mut HeadlessAppContext,
     h: AnyWindowHandle,
     editor: &Entity<ChatEditor>,
@@ -64,7 +64,7 @@ fn until(
     }
     pump(cx, h, editor, updates);
 }
-fn disk(private: &Private) -> crate::delivery_store::Book {
+pub(super) fn disk(private: &Private) -> crate::delivery_store::Book {
     serde_json::from_slice(&std::fs::read(private.0.join("state-v1.json")).unwrap()).unwrap()
 }
 pub(super) fn run(cx: &mut HeadlessAppContext) {

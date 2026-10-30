@@ -24,6 +24,8 @@ and reset. Nothing shows without a pause. This mirrors Swift `SubscriptionLimitN
   and other model actions. The draft, its delivery and the transcript are untouched.
   Forced pauses are not held, so the ordinary idle-only model change applies.
 
-No backend change. Checks: `subscription_pause` and `chat_models` unit/transport tests,
-and the `project_creation` native target's subscription-limit probe at 680/1100 in light
-and dark (pointer and keyboard, preedit guard, private draft restart).
+The existing sole writer now services draft autosaves during these HTTP waits,
+without overtaking FIFO commands. See [subscription autosave](subscription-autosave.md)
+for the ownership boundary and focused synthetic checks. No backend change.
+`subscription_pause`, `chat_models` and the `subscription_limits` native target
+retain policy/transport and confirmation coverage at 680/1100 in light and dark.

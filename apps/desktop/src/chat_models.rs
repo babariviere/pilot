@@ -1,8 +1,10 @@
 //! Scoped Local catalog and explicit idle-only selection, plus the explicit
 //! subscription-limit Force work and continue-model actions. Never spawn/send.
+#[cfg(test)]
+use crate::delivery_store::Store;
 use crate::{
     LocalOptions,
-    delivery_store::{Failure, Store, token},
+    delivery_store::{Failure, token},
     local_client::gate,
 };
 use serde::{Deserialize, Serialize};
@@ -341,7 +343,7 @@ async fn post(
 }
 /// One subscription-force POST after a fresh identity read. Setting the same value
 /// again is harmless, so a lost reply is reported, never resent.
-async fn force(
+pub(crate) async fn force(
     client: &reqwest::Client,
     options: &LocalOptions,
     target: &Target,
@@ -381,6 +383,7 @@ async fn force(
 }
 /// One continue-model POST, retained like a model switch so a lost reply fences
 /// Send until it is inspected. A refusal (4xx) changed nothing and settles it.
+#[cfg(test)]
 async fn continue_model(
     client: &reqwest::Client,
     options: &LocalOptions,
@@ -388,23 +391,50 @@ async fn continue_model(
     attempt: Attempt,
     prepared: impl FnOnce(&Store),
 ) -> Outcome {
-    let target = &attempt.target;
-    let pre = async {
-        attempt.validate(&target.session)?;
-        let current = session(client, options, target).await?;
-        if !current.continuable || current.model != target.model {
-            return Err("This chat is no longer held at a usage limit, or its model changed. Nothing was continued.");
-        }
-        if !catalog(client, options, &target.cwd).await?.admits(&attempt.choice) {
-            return Err("This model is no longer in this chat's scope. Refresh models.");
-        }
-        store.prepare_model_change(attempt.clone())
-    }
-    .await;
+    let pre = continue_preflight(client, options, &attempt)
+        .await
+        .and_then(|()| store.prepare_model_change(attempt.clone()));
     if let Err(e) = pre {
         return Outcome::Refused(e);
     }
     prepared(store);
+    let outcome = continue_request(client, options, &attempt).await;
+    if matches!(
+        outcome,
+        Outcome::Refused(_) | Outcome::Acknowledged(_) | Outcome::Continued(_)
+    ) {
+        let _ = store.finish_model_change(&attempt.target.session, &attempt.id);
+    }
+    outcome
+}
+pub(crate) async fn continue_preflight(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    attempt: &Attempt,
+) -> Result<(), Failure> {
+    let target = &attempt.target;
+    attempt.validate(&target.session)?;
+    let current = session(client, options, target).await?;
+    if !current.continuable || current.model != target.model {
+        return Err(
+            "This chat is no longer held at a usage limit, or its model changed. Nothing was continued.",
+        );
+    }
+    if !catalog(client, options, &target.cwd)
+        .await?
+        .admits(&attempt.choice)
+    {
+        return Err("This model is no longer in this chat's scope. Refresh models.");
+    }
+    Ok(())
+}
+/// Immutable one-shot transport, independent of private draft storage.
+pub(crate) async fn continue_request(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    attempt: &Attempt,
+) -> Outcome {
+    let target = &attempt.target;
     let payload = serde_json::to_value(&attempt.choice).expect("serializable choice");
     let lost = "Couldn't confirm the continuation. Nothing was resent; inspect this chat before acting again.";
     let value = match post(client, options, &target.session, "continue-model", &payload).await {
@@ -413,7 +443,6 @@ async fn continue_model(
             Err(_) => return Outcome::Unknown(lost),
         },
         Ok(r) if r.status().is_client_error() => {
-            let _ = store.finish_model_change(&target.session, &attempt.id);
             return Outcome::Refused(
                 "Local couldn't continue this chat now. It may be busy, running jobs or no longer paused. Nothing changed.",
             );
@@ -425,14 +454,10 @@ async fn continue_model(
         if value["cwd"] != target.cwd || actual.model.as_deref() != Some(&attempt.choice.model) {
             return Outcome::Unknown(lost);
         }
-        let _ = store.finish_model_change(&target.session, &attempt.id);
         return Outcome::Acknowledged(actual);
     }
     match crate::local_model::chat(&value) {
-        Some(next) => {
-            let _ = store.finish_model_change(&target.session, &attempt.id);
-            Outcome::Continued(Box::new(next))
-        }
+        Some(next) => Outcome::Continued(Box::new(next)),
         None => Outcome::Unknown(lost),
     }
 }
@@ -639,6 +664,7 @@ pub(crate) async fn submit_request(
     Outcome::Acknowledged(actual)
 }
 
+#[cfg(test)]
 pub(crate) async fn execute(
     client: &reqwest::Client,
     options: &LocalOptions,

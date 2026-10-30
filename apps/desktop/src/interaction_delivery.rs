@@ -149,19 +149,39 @@ impl DeliveryOwner<'_> {
                     Err(error) => Outcome::Refused(error),
                 })
             }
-            // Subscription Force/Continue ownership is unchanged by this slice.
-            action @ (Action::Force { .. } | Action::Continue(_)) => {
-                let channels = self.channels;
-                tokio::select! {
-                    outcome = chat_models::execute(client, options, self.store, action, |store| {
-                        self.status.book = Some(Arc::new(store.book.clone()));
-                        if let Some(channels) = channels { publish(&channels.updates, &channels.replace, self.status.clone()); }
-                    }) => Ok(outcome),
-                    _ = async { match channels { Some(channels) => { let _ = channels.close.recv().await; }, None => std::future::pending().await } } => {
-                        *self.closing = true;
-                        Err("Closing. Any admitted model switch remains unconfirmed and is never resent.")
-                    }
+            Action::Force { target, force } => {
+                self.effect(async { Ok(chat_models::force(client, options, &target, force).await) })
+                    .await
+            }
+            Action::Continue(attempt) => {
+                match self
+                    .effect(chat_models::continue_preflight(client, options, &attempt))
+                    .await
+                {
+                    Err(error) if *self.closing => return Err(error),
+                    Err(error) => return Ok(Outcome::Refused(error)),
+                    Ok(()) => {}
                 }
+                if let Err(error) = self.store.prepare_model_change(attempt.clone()) {
+                    return Ok(Outcome::Refused(error));
+                }
+                self.prepared(self.status.notice);
+                let outcome = self
+                    .effect(async {
+                        Ok(chat_models::continue_request(client, options, &attempt).await)
+                    })
+                    .await?;
+                // Only the existing definitive outcomes settle continuation. GET/echo
+                // never proves success; a known ACK survives a private disk fault.
+                if matches!(
+                    outcome,
+                    Outcome::Refused(_) | Outcome::Acknowledged(_) | Outcome::Continued(_)
+                ) {
+                    let _ = self
+                        .store
+                        .finish_model_change(&attempt.target.session, &attempt.id);
+                }
+                Ok(outcome)
             }
         }
     }

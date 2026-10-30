@@ -81,6 +81,8 @@ mod retention;
 mod send_waits;
 #[path = "interaction_stop_tests.rs"]
 mod stop_waits;
+#[path = "interaction_subscription_tests.rs"]
+mod subscription_waits;
 
 #[tokio::test]
 async fn update_checkpoint_acknowledges_exact_flushed_generation_without_closing_writer() {

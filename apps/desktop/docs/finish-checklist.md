@@ -140,12 +140,14 @@ not an absence proof. Swift links are historical capability references only.
   and [chat_sending::shown_text](../src/chat_sending.rs) separate saved drafts,
   visible sends and immutable pending operations. The current owner services
   autosaves during ordinary Send, Stop, chat model/thinking selection and inspection,
-  question replies and explicit receipt recovery
+  subscription Force/Continue, question replies and explicit receipt recovery
   waits, but mutation/Stop/checkpoint commands remain FIFO. The [held Stop
   regression](stop-autosave.md) separates durable typing from Stop acknowledgment;
   it is not live Stop-latency qualification. The [model wait regression](model-autosave.md)
   preserves separate healthy/failed-next-model contracts and Unknown/no replay;
-  project default-model PATCH remains outside this coverage.
+  the [subscription wait regression](subscription-autosave.md) preserves existing
+  Force meaning, continuation confirmation/admission and no replay. Project
+  default-model PATCH remains outside this coverage.
   #280's [restart evidence](../evidence/restart-retention.md)
   records synthetic lost-ACK/restart checks, not force-quit/power-loss qualification.
   Compare the textarea to `shown_text`, not blindly to saved draft text.

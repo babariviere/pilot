@@ -71,6 +71,17 @@ pub(crate) struct Server {
 }
 impl Server {
     pub(crate) fn start(failed: bool, behavior: Behavior, hold: &'static str) -> Self {
+        Self::start_inner(failed, None, behavior, hold)
+    }
+    pub(crate) fn subscription(forced: bool, behavior: Behavior, hold: &'static str) -> Self {
+        Self::start_inner(false, Some(forced), behavior, hold)
+    }
+    fn start_inner(
+        failed: bool,
+        pause: Option<bool>,
+        behavior: Behavior,
+        hold: &'static str,
+    ) -> Self {
         let (send, receive) = std::sync::mpsc::sync_channel(1);
         let (shutdown, done) = tokio::sync::oneshot::channel();
         let (entered, reached) = async_channel::bounded(1);
@@ -114,7 +125,26 @@ impl Server {
                             let payload: serde_json::Value = if mutation { serde_json::from_slice(&bytes).unwrap() } else { json!(null) };
                             let mut body = match (method,path) {
                                 ("GET", "/api/hello") => json!({"daemonId":"test-daemon","lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true,"passiveFailedModel":true}}),
-                                ("GET", "/api/sessions/a") => session(failed, None),
+                                ("GET", "/api/sessions/a") => {
+                                    let mut v = session(failed, None);
+                                    if let Some(forced) = pause { v["subscriptionPause"] = json!({"forced":forced,"windows":[]}); }
+                                    v
+                                },
+                                ("POST", "/api/sessions/a/subscription-force") => {
+                                    assert!(pause.is_some());
+                                    assert_eq!(payload.as_object().unwrap().len(), 1);
+                                    let mut v = session(false, None);
+                                    v["subscriptionPause"] = json!({"forced":payload["force"],"windows":[]});
+                                    if behavior == Behavior::Wrong { v["cwd"] = json!("/other"); }
+                                    v
+                                },
+                                ("POST", "/api/sessions/a/continue-model") => {
+                                    assert_eq!(pause, Some(false));
+                                    let mut v = session(false, Some(&payload));
+                                    if payload["model"] == "q/c" { v["id"] = json!("next"); }
+                                    if behavior == Behavior::Wrong { v = json!({"id":"a","cwd":"/other"}); }
+                                    v
+                                },
                                 ("GET", "/api/sessions/b") => { let mut v = session(false, None); v["id"] = json!("b"); v["model"] = json!("q/c"); v["thinking"] = json!("off"); v },
                                 ("GET", p) if p.starts_with("/api/models?") => crate::chat_models_fixture::catalog(),
                                 ("POST", "/api/sessions/a/model" | "/api/sessions/a/failed-model") => {
