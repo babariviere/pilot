@@ -69,8 +69,10 @@ impl Memory {
         cx.notify();
     }
     pub(crate) fn load(&mut self, range: Option<Range>, w: &mut Window, cx: &mut Context<Self>) {
+        if self.state.range != range {
+            self.details = false;
+        }
         let generation = self.state.begin(range);
-        self.details = false;
         if self.reader.is_none() {
             match self
                 .options
@@ -167,6 +169,7 @@ impl Render for Memory {
             .gap(px(Space::CONTROL))
             .child(
                 ui::action("memory-refresh", "Refresh", Action::Quiet)
+                    .accessibility_label("Refresh current memory range")
                     .disabled(self.state.busy)
                     .on_click(cx.listener(|v, _, w, cx| v.load(v.state.range, w, cx))),
             );
@@ -226,13 +229,13 @@ impl Render for Memory {
         }
         if let Some(e) = self.state.error {
             page = page.child(notice("memory-error", e, Tone::Error));
-            if self.state.tree.is_some() {
-                page = page.child(notice(
-                    "memory-retained",
-                    "Showing the last read for this range, not a current snapshot.",
-                    Tone::Quiet,
-                ));
-            }
+        }
+        if self.state.tree.is_some() && (self.state.busy || self.state.error.is_some()) {
+            page = page.child(notice(
+                "memory-retained",
+                "Showing the previous observation for this range, not a current snapshot.",
+                Tone::Quiet,
+            ));
         }
         if let Some(tree) = &self.state.tree {
             if self.state.range.is_none() {

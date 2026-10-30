@@ -115,6 +115,69 @@ fn project_memory_generation_and_range_fence_retained_rows() {
     assert!(state.tree.is_some());
     assert_eq!(state.error, Some("offline"));
 }
+
+#[test]
+fn project_memory_refresh_replaces_exact_range_and_refuses_missing_topology() {
+    let s = Server::start();
+    install(&s);
+    let range = Some(Range { lo: 0, hi: 3 });
+    let p = path("project-A", range).unwrap();
+    let (reader, events) = Reader::start(s.options.clone(), "project-A".into()).unwrap();
+    let mut state = State::default();
+    for generation in 1..=4 {
+        if generation == 2 {
+            let mut changed = children();
+            changed["nodes"][0]["text"] = "Refreshed 日本語".into();
+            changed["nodes"][0]["entry"]["text"] = "Refreshed 日本語".into();
+            s.reply(&p, Reply::json(200, changed));
+        } else if generation == 3 {
+            s.reply(&p, Reply::json(503, json!({})));
+        } else if generation == 4 {
+            s.reply(
+                &p,
+                Reply::json(200, json!({"count":0,"nodes":[],"truncated":false})),
+            );
+        }
+        assert_eq!(state.begin(range), generation);
+        assert!(reader.request(Request {
+            generation,
+            target: range
+        }));
+        let response = events.recv_blocking().unwrap();
+        assert!(state.accept(response.generation, response.range, response.result));
+        assert_eq!(state.range, range);
+        if generation >= 2 {
+            assert_eq!(
+                state.tree.as_ref().unwrap().nodes[0].text.as_deref(),
+                Some("Refreshed 日本語")
+            );
+        }
+        assert_eq!(state.error.is_some(), generation >= 3);
+    }
+    assert_eq!(
+        s.state
+            .lock()
+            .unwrap()
+            .seen
+            .iter()
+            .filter(|(_, seen)| seen == &p)
+            .count(),
+        4
+    );
+    assert!(
+        s.state
+            .lock()
+            .unwrap()
+            .seen
+            .iter()
+            .all(|(_, seen)| seen == &p || seen == "/api/hello")
+    );
+    drop(reader);
+    assert!(
+        events.recv_blocking().is_err(),
+        "closing reader closes its output"
+    );
+}
 #[test]
 fn project_memory_transport_is_tree_get_only_pinned_and_refuses_partial() {
     let s = Server::start();

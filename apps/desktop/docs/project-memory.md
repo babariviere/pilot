@@ -8,7 +8,13 @@ reuse its rows. Memory here is agent-written knowledge, not sidebar read/fold st
 The native page uses the app's reading column, tokens, Kit buttons and selectable
 literal text. **Open notes** drills into a summary, **Back** returns to its parent,
 and **Refresh** explicitly rereads the current range. Tab and Enter reach these
-same controls. Details discloses exact note/device/origin IDs and stored shared
+same controls (Refresh's accessible name is **Refresh current memory range**).
+Refresh retains the selected range, parent path, loaded-text query and Details
+disclosure; it does not reset to root or recreate the search editor. While a
+refresh is pending or fails, retained rows are labeled a previous observation,
+not a current snapshot. If Local no longer admits the selected range, the page
+keeps that exact range and shows an error with explicit **Back** navigation,
+never silently substituting root. Details discloses exact note/device/origin IDs and stored shared
 provenance, without guessing a source-chat link or account identity. Pending
 summaries remain navigable. Replaced notes remain inspectable and labeled.
 
@@ -54,7 +60,10 @@ generation/range fences, retained failure, malformed/partial/refused reads and
 replacement cancellation over an owned faux Local server. `project_memory`
 mounts the production page in hidden GPUI windows at680/1100, light/dark, and
 exercises keyboard drill-down, pointer text selection/copy, Details, Back,
-loading, failure/retained rows and empty states. This is synthetic native
+loading, failure/retained rows and empty states. Refresh regressions also cover
+changed exact-range content, missing topology, Back superseding a pending read,
+close during refresh, retained search focus/editor preedit, and explicit
+post-open light/dark theme assertions. This is synthetic native
 verification, not live memory/provider access, OS IME/AX or product acceptance.
 
 ## Loaded-text filter

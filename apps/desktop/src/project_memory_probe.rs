@@ -7,9 +7,10 @@ use crate::{
     project_memory_view::Memory,
 };
 use gpui_kit::{
-    AppContext, Bounds, Entity, HeadlessAppContext, WindowBounds, WindowOptions,
+    AppContext, Bounds, Entity, EntityInputHandler, Focusable, HeadlessAppContext, WindowBounds,
+    WindowOptions,
     base::TextSelection,
-    component::{Theme, ThemeMode},
+    component::{ActiveTheme, Theme, ThemeMode},
     point, px, size,
     test::TestWindowExt,
 };
@@ -98,6 +99,11 @@ pub fn run_project_memory_probe(cx: &mut HeadlessAppContext) {
                 )
                 .unwrap()
             });
+            cx.update_window(h, |_, w, cx| {
+                Theme::change(mode, Some(w), cx);
+                assert_eq!(cx.theme().is_dark(), mode == ThemeMode::Dark);
+            })
+            .unwrap();
             settle(cx, h);
             cx.update_window(h, |_, w, _| {
                 assert!(w.try_find("memory-loading").is_some());
@@ -214,6 +220,67 @@ pub fn run_project_memory_probe(cx: &mut HeadlessAppContext) {
                     .save(dir.join(format!("memory-{width}-{mode:?}.png")))
                     .unwrap();
             }
+            // Refresh is already installed. Activate its actual Kit keyboard path,
+            // then retain the same search entity/preedit through the async read.
+            let range = Some(crate::project_memory::Range { lo: 0, hi: 3 });
+            let child_path = path("project-A", range).unwrap();
+            let mut refreshed = f::children();
+            refreshed["nodes"][0]["text"] = "Refreshed 日本語".into();
+            refreshed["nodes"][0]["entry"]["text"] = "Refreshed 日本語".into();
+            let mut reply = Reply::json(200, refreshed);
+            reply.delay_ms = 400;
+            server.reply(&child_path, reply);
+            search(cx, h, "日本語");
+            cx.update_window(h, |_, w, cx| {
+                v.update(cx, |v, cx| v.focus(w, cx));
+                w.focus_next(cx);
+                for _ in 0..12 {
+                    if w.find("memory-refresh").focused() == Some(true) {
+                        break;
+                    }
+                    w.press("tab", cx);
+                }
+                assert_eq!(
+                    w.find("memory-refresh").label(),
+                    Some("Refresh current memory range")
+                );
+                assert_eq!(w.find("memory-refresh").focused(), Some(true));
+                w.press("enter", cx);
+                let input = v.read(cx).search.clone();
+                input.focus_handle(cx).focus(w, cx);
+                w.press("secondary-a", cx);
+                input.update(cx, |q, cx| {
+                    q.replace_and_mark_text_in_range(None, "日本語", Some(3..3), w, cx)
+                });
+            })
+            .unwrap();
+            settle(cx, h);
+            let search_id = cx.update(|cx| v.read(cx).search.entity_id());
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("memory-retained").is_some());
+                assert!(w.try_find("memory-loading").is_some());
+            })
+            .unwrap();
+            until(cx, h, &v);
+            cx.update_window(h, |_, w, cx| {
+                let input = v.read(cx).search.clone();
+                assert_eq!(input.entity_id(), search_id);
+                assert!(input.focus_handle(cx).is_focused(w));
+                input.update(cx, |q, cx| assert!(q.marked_text_range(w, cx).is_some()));
+                assert_eq!(input.read(cx).value().as_ref(), "日本語");
+                assert_eq!(v.read(cx).state.range, range);
+                assert_eq!(
+                    v.read(cx).state.tree.as_ref().unwrap().nodes[0]
+                        .text
+                        .as_deref(),
+                    Some("Refreshed 日本語")
+                );
+                assert!(w.try_find("memory-back").is_some());
+                assert!(w.try_find("memory-retained").is_none());
+                input.update(cx, |q, cx| q.unmark_text(w, cx));
+            })
+            .unwrap();
+            clear(cx, h);
             // Same-scope failures retain labeled stale rows. Range changes clear them.
             server.reply(
                 &path(
@@ -240,8 +307,34 @@ pub fn run_project_memory_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             clear(cx, h);
             assert_eq!(server.state.lock().unwrap().seen.len(), reads);
+            // A no-longer-admitted range is an error, never a silent root read.
+            server.reply(
+                &child_path,
+                Reply::json(
+                    200,
+                    serde_json::json!({"count":0,"nodes":[],"truncated":false}),
+                ),
+            );
+            cx.update_window(h, |_, w, cx| w.click("memory-refresh", cx))
+                .unwrap();
+            until(cx, h, &v);
+            assert_eq!(cx.update(|cx| v.read(cx).state.range), range);
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("memory-error").is_some());
+                assert!(w.try_find("memory-retained").is_some());
+                assert!(w.try_find("memory-back").is_some());
+            })
+            .unwrap();
+            // Back supersedes a delayed refresh without borrowing another range's rows.
+            let mut late = Reply::json(200, f::children());
+            late.delay_ms = 400;
+            server.reply(&child_path, late);
+            cx.update_window(h, |_, w, cx| w.click("memory-refresh", cx))
+                .unwrap();
+            settle(cx, h);
             cx.update_window(h, |_, w, cx| w.click("memory-back", cx))
                 .unwrap();
+            assert!(cx.update(|cx| v.read(cx).state.tree.is_none()));
             until(cx, h, &v);
             assert!(cx.update(|cx| v.read(cx).state.range.is_none()));
             server.reply(
@@ -323,7 +416,15 @@ pub fn run_project_memory_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             cx.update_window(h, |_, w, cx| {
+                let mut delayed = Reply::json(200, f::root());
+                delayed.delay_ms = 400;
+                server.reply(&path("project-A", None).unwrap(), delayed);
+                w.click("memory-refresh", cx);
+                assert!(v.read(cx).state.busy);
+                let generation = v.read(cx).state.generation;
                 v.update(cx, |v, cx| v.close(cx));
+                assert_eq!(v.read(cx).state.generation, generation + 1);
+                assert!(!v.read(cx).state.busy);
                 w.remove_window();
             })
             .unwrap();
