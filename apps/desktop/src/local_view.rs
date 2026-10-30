@@ -11,6 +11,8 @@ mod chat_actions_navigation;
 pub(crate) mod chat_actions_probe;
 #[path = "chat_attention_hint.rs"]
 mod chat_attention_hint;
+#[path = "chat_header.rs"]
+mod chat_header;
 #[path = "chat_link_navigation.rs"]
 mod chat_link_navigation;
 #[cfg(feature = "native-probes")]
@@ -120,6 +122,9 @@ pub(crate) mod queued_message_view;
 #[cfg(feature = "native-probes")]
 #[path = "scoped_models_probe.rs"]
 pub(crate) mod scoped_models_probe;
+#[cfg(feature = "native-probes")]
+#[path = "scroll_work.rs"]
+mod scroll_work;
 #[cfg(feature = "native-probes")]
 #[path = "session_failure_probe.rs"]
 pub(crate) mod session_failure_probe;
@@ -303,6 +308,7 @@ pub struct LocalViewer {
     client: Option<LocalClient>,
     chats: Entity<ListState<ChatList>>,
     transcript: Entity<TranscriptView>,
+    chat_header: Entity<chat_header::ChatHeader>,
     selected: Option<String>,
     /// Calm entrance when the destination changes; never on the first frame.
     page_transition: crate::transition::Transition,
@@ -1423,6 +1429,12 @@ impl LocalViewer {
         // GPUI calls this only when no rendered element in this window holds
         // focus (e.g. the focused element was removed); keep shortcuts reachable.
         let focus_lost = cx.on_focus_lost(window, |v, w, cx| v.root_focus.focus(w, cx));
+        let chat_header = {
+            let owner = cx.entity();
+            cx.new(|cx| {
+                chat_header::ChatHeader::new(&owner, &editor, &mission, &mission_context, cx)
+            })
+        };
         Self {
             chat_actions,
             settings,
@@ -1480,6 +1492,7 @@ impl LocalViewer {
             client,
             chats,
             transcript,
+            chat_header,
             selected: None,
             page_transition: Default::default(),
             page_key: String::new(),
@@ -2384,7 +2397,6 @@ impl LocalViewer {
 
 impl Render for LocalViewer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        use gpui_kit::StatefulInteractiveElement as _;
         let menu_ready = self.menu_navigation_ready(window, cx);
         let menu_jump = self.menu_jump_ready(window, cx);
         let menu_new_chat = menu_ready && self.editor.read(cx).ready();
@@ -2431,42 +2443,6 @@ impl Render for LocalViewer {
             cx,
         ));
         let glass = crate::appearance::glass(cx);
-        let cwd = self
-            .selected
-            .as_ref()
-            .and_then(|id| self.state.chats.iter().find(|c| &c.id == id))
-            .map(|c| c.cwd.clone())
-            .unwrap_or_default();
-        let history_status = if self.earlier_request.is_some() && self.pending_reader.is_some() {
-            "Restoring reading position…"
-        } else if self.earlier_request.is_some() {
-            "Loading earlier messages…"
-        } else if self.state.page_error {
-            "Earlier messages could not be loaded"
-        } else {
-            self.state.chat_status.as_str()
-        };
-        // One quiet subtitle line: project, then only non-routine transport status.
-        let project = self
-            .selected
-            .as_ref()
-            .and_then(|id| self.state.chats.iter().find(|c| &c.id == id))
-            .and_then(|c| c.project_id.as_ref())
-            .and_then(|id| self.state.projects.iter().find(|p| &p.id == id))
-            .map(|p| p.name.clone());
-        let header_meta = project
-            .into_iter()
-            .chain(
-                (!history_status.is_empty() && history_status != "Connected · Local")
-                    .then(|| history_status.to_owned()),
-            )
-            .collect::<Vec<_>>()
-            .join(" · ");
-        let paused = self
-            .selected
-            .as_ref()
-            .and_then(|id| self.state.chats.iter().find(|c| &c.id == id))
-            .and_then(Chat::pause_reason);
         div().map(menu_routing::window_commands).id("desktop-root").track_focus(&self.root_focus).test_support().relative().h_flex().items_stretch().size_full().min_w_0()
             // Over glass the sidebar and page are separate tints, never stacked.
             .when(!glass,|this|this.bg(cx.theme().background)).text_color(cx.theme().foreground)
@@ -2536,7 +2512,11 @@ impl Render for LocalViewer {
                     cx.stop_propagation();
                 } else { cx.propagate(); }
             }))
-            .child(self.sidebar(window,cx))
+            .child(self.sidebar(window,cx).map(|d| {
+                #[cfg(feature = "native-probes")]
+                let d = scroll_work::region(d, "sidebar");
+                d
+            }))
             .child(div().id("main-pane").h_flex().items_stretch().flex_1().min_w_0().min_h_0().h_full()
                 .when(glass,|this|this.bg(cx.theme().background))
                 // Paint-only entrance: a short fade and 6pt rise, no layout change.
@@ -2567,30 +2547,7 @@ impl Render for LocalViewer {
                 } else {
                 let conversation = div().id("conversation").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()
                     // One 48pt row: title over a quiet project subtitle, then named icon actions and the … menu.
-                    .child(div().id("chat-header").test_support().h_flex().items_center().gap_2().h(px(48.)).px_3().flex_shrink_0().border_b_1().border_color(cx.theme().border)
-                        .child(div().v_flex().items_start().justify_center().flex_1().min_w_0()
-                            .child(div().id("chat-title").max_w_full().truncate().text_size(px(crate::ui::TextRole::HEADLINE)).line_height(px(crate::ui::TextRole::HEADLINE*1.3)).font_semibold()
-                                .when(!cwd.is_empty(),|d|{let cwd=SharedString::from(cwd.clone());gpui_kit::StatefulInteractiveElement::tooltip(d,move|w,cx|gpui_kit::component::tooltip::Tooltip::new(cwd.clone()).build(w,cx))})
-                                .child(SharedString::from(self.title.clone())).test_support())
-                            .when(!header_meta.is_empty(),|this|this.child(div().id("chat-header-meta").test_support().max_w_full().truncate().text_size(px(crate::ui::TextRole::CAPTION)).line_height(px(crate::ui::TextRole::CAPTION*1.3)).text_color(cx.theme().muted_foreground).child(SharedString::from(header_meta)))))
-                        .when_some(paused, |d, reason| d.child(
-                            div().id("chat-paused-status").h_flex().items_center().gap_1().flex_none()
-                                .text_color(cx.theme().muted_foreground)
-                                .aria_label(SharedString::from(format!("Paused, {reason}")))
-                                .tooltip(move |w,cx| gpui_kit::component::tooltip::Tooltip::new(reason).build(w,cx))
-                                .test_support()
-                                .child(crate::state_mark::slot(Some(crate::state_mark::Mark::Paused.into()),None,1.,cx))
-                                .child(crate::ui::text(crate::ui::Text::Caption,"Paused"))))
-                        .child(div().h_flex().items_center().gap_0p5().flex_none()
-                            .children(self.conversation_links_action(cx))
-                            .children(self.workspace_changes_action(cx))
-                            .when(!self.state.artifacts.is_empty()||self.artifacts_open,|this|this.child({
-                                let b=Button::new("artifact-gallery").ghost().small();
-                                if self.artifacts_open {b.icon(AppIcon::Back.asset()).label("Back to chat")} else {b.icon(AppIcon::Artifacts.asset()).accessibility_label("Artifacts").tooltip("Artifacts")}
-                                .on_click(cx.listener(|view,_,window,cx|{if !view.prepare_navigation(window,cx){return;}view.artifacts_open = !view.artifacts_open;view.sync_mission_context(cx);if view.artifacts_open{view.artifacts.update(cx,|p,cx|p.show_gallery(window,cx));}else{view.artifacts.update(cx,|p,cx|p.hide_gallery(cx));view.editor.update(cx,|editor,cx|editor.focus(window,cx));}cx.notify();}))}))
-                            .when(self.state.page_error && !self.state.page_busy, |this| this.child(crate::ui::action("history-retry", "Retry earlier", crate::ui::Action::Quiet).small().on_click(cx.listener(|v,_,_,cx|v.earlier(true,cx)))))
-                            .children(self.mission_context_action(cx))
-                            .when(self.selected.is_some()&&!self.artifacts_open,|this|this.child(self.history_menu(cx)))))
+                    .child(self.chat_header_element(window, cx))
                     .when_some(self.session_failure_banner(cx), |d, banner| d.child(banner))
                     .child(div().v_flex().flex_1().min_h_0().min_w_0().w_full().when(self.artifacts_open, |d| d.max_w(px(760.)).mx_auto())
                         // Placeholders keep the readable column; only the transcript scroller spans the pane.
@@ -2606,7 +2563,11 @@ impl Render for LocalViewer {
                 }
                 }
                 }
-            )))
+            )).map(|d| {
+                #[cfg(feature = "native-probes")]
+                let d = scroll_work::region(d, "main");
+                d
+            }))
             .when_some(self.jump.clone(),|this,palette|this.child(self.jump_overlay(palette,window,cx)))
             .when(self.mission_open,|this|this.child(self.mission_overlay(window,cx)))
             .when(self.add_project_open,|this|this.child(self.add_project_overlay(window,cx)))

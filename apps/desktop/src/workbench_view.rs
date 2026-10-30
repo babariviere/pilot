@@ -337,7 +337,11 @@ impl LocalViewer {
                 // Left/Right collapse and expand mission threads.
                 .on_action(cx.listener(|v,_:&super::SidebarCollapse,w,cx|{if !v.sidebar_arrow(false,w,cx){cx.propagate();}}))
                 .on_action(cx.listener(|v,_:&super::SidebarExpand,w,cx|{if !v.sidebar_arrow(true,w,cx){cx.propagate();}}))
-                .child(List::new(&self.chats).scrollbar_visible(false)))
+                .child(List::new(&self.chats).scrollbar_visible(false).map(|d| {
+                    #[cfg(feature = "native-probes")]
+                    let d = super::scroll_work::region(d, "list");
+                    d
+                })))
             .child(self.chat_actions.clone())
             .children(self.daemon_update_notice(cx).map(|message| div().px(px(Space::SIDEBAR)).py_1().child(
                 crate::ui::action("daemon-startup-status", message, crate::ui::Action::Quiet)

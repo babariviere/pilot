@@ -159,6 +159,7 @@ pub fn run(cx: &mut App) {
                             (v.render_count, v.transcript.read(cx).probe_render_count())
                         };
                         let renders_before = renders(cx);
+                        let _ = super::scroll_work::take();
                         let counters = instructions_cycles();
                         let (cpu, start) = (thread_cpu_ms(), Instant::now());
                         w.dispatch_event(
@@ -177,9 +178,17 @@ pub fn run(cx: &mut App) {
                         let cpu = thread_cpu_ms() - cpu;
                         let after = instructions_cycles();
                         let renders_after = renders(cx);
+                        let regions = super::scroll_work::take();
+                        if std::env::var_os("PILOT_NEXT_SIDEBAR_SCROLL_ASSERT_ISOLATED").is_some() {
+                            assert!(
+                                !regions.contains_key("header"),
+                                "sidebar-only wheel must reuse the unchanged chat header"
+                            );
+                        }
                         let list = view.read(cx).chats.read(cx);
                         json!({
                             "step": step,
+                            "regions_cpu_ms": regions,
                             "dispatch_ms": dispatched,
                             "draw_ms": draw,
                             "thread_cpu_ms": cpu,
@@ -220,6 +229,25 @@ pub fn run(cx: &mut App) {
             .unwrap();
         }
         println!("hidden native sidebar wheel journey (draw/CPU, not presentation)");
+        let transcript_before =
+            view.read_with(cx, |v, cx| v.transcript.read(cx).probe_render_count());
+        view.update(cx, |v, cx| {
+            v.title = "Updated synthetic title".into();
+            cx.notify();
+        });
+        cx.update_window(h, |_, w, cx| {
+            w.draw(cx).clear(cx);
+            assert!(
+                super::scroll_work::take().contains_key("main"),
+                "owner change must repaint main"
+            );
+            let transcript_after = view.read(cx).transcript.read(cx).probe_render_count();
+            assert_eq!(
+                transcript_after, transcript_before,
+                "header changes must retain the transcript cache"
+            );
+        })
+        .unwrap();
         cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
         cx.update(|cx| cx.quit());
     })

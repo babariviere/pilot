@@ -531,6 +531,11 @@ segment stays the target; the open chat, its draft and Back stay as they were.
 Info and plain Coordinator marks stay text.
 `examples/sidebar_scroll_native.rs` times sidebar wheel draws in a hidden
 native window with production dispatchers, cold (first traversal) against warm.
+The fixed-height chat header reuses its own cached view during sidebar wheels,
+without nesting the transcript or composer under that cache. State and guarded
+callbacks remain with `LocalViewer`; real owner/eligibility/context changes refresh
+the header. See [sidebar wheel work](sidebar-scroll-work.md) for attribution,
+the rejected full-pane experiment, regression checks and hidden-only limits.
 `examples/sidebar_scroll_visible.rs` (release build; from an agent, launch it
 inside a minimal .app with `open`) wheels a shown window from display frame
 callbacks and logs frame intervals, main-thread CPU and process instructions and

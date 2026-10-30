@@ -62,6 +62,7 @@ pub(crate) fn rows() -> Vec<Chat> {
 }
 
 pub fn run_style_probe(cx: &mut HeadlessAppContext) {
+    super::chat_header::probe::run(cx);
     let captures = std::env::var_os("PILOT_NEXT_STYLE_DIR").map(std::path::PathBuf::from);
     if let Some(dir) = &captures {
         std::fs::create_dir_all(dir).unwrap();
