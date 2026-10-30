@@ -511,7 +511,11 @@ async fn connected_daemon_follows_the_live_control_socket_hello() {
 
     let mock = Mock::start(Scenario::DaemonVersion).await;
     let (client, rx) = LocalClient::start(mock.options.clone());
-    let connected = until(&rx, |_| client.daemon() != ConnectedDaemon::NotConnected).await;
+    // Daemon identity arrives before the separate status publication.
+    let connected = until(&rx, |view| {
+        view.status == "Connected · Local" && client.daemon() != ConnectedDaemon::NotConnected
+    })
+    .await;
     assert_eq!(connected.status, "Connected · Local");
     assert_eq!(
         client.daemon(),
@@ -525,7 +529,10 @@ async fn connected_daemon_follows_the_live_control_socket_hello() {
     .await;
     // A vanished daemon is not connected; its last version is not kept.
     drop(mock);
-    let gone = until(&rx, |_| client.daemon() == ConnectedDaemon::NotConnected).await;
+    let gone = until(&rx, |view| {
+        view.status != "Connected · Local" && client.daemon() == ConnectedDaemon::NotConnected
+    })
+    .await;
     assert_ne!(gone.status, "Connected · Local");
 }
 
@@ -896,16 +903,25 @@ async fn attention_waits_for_new_control_snapshot_after_reconnect() {
     let mock = Mock::start(Scenario::AttentionFreshness).await;
     let (client, rx) = LocalClient::start(mock.options.clone());
     let admitted = until(&rx, |v| v.status == "Connected · Local").await;
-    assert!(!admitted.summary_fresh, "Hello is not fresh reason evidence");
+    assert!(
+        !admitted.summary_fresh,
+        "Hello is not fresh reason evidence"
+    );
     mock.step.send(()).await.unwrap();
     let initial = until(&rx, |v| v.summary_fresh).await;
     assert!(initial.list_loaded && !initial.chats.is_empty());
     assert!(client.command(Command::Reconnect));
     let retained = until(&rx, |v| {
-        !v.summary_fresh && v.list_loaded
+        !v.summary_fresh
+            && v.list_loaded
             && matches!(client.daemon(), ConnectedDaemon::Connected(_))
-    }).await;
-    assert_eq!(retained.chats.len(), initial.chats.len(), "Cached rows remain readable during hello/list gap");
+    })
+    .await;
+    assert_eq!(
+        retained.chats.len(),
+        initial.chats.len(),
+        "Cached rows remain readable during hello/list gap"
+    );
     mock.step.send(()).await.unwrap();
     let current = until(&rx, |v| v.summary_fresh).await;
     assert_eq!(current.chats.len(), initial.chats.len());

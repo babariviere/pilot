@@ -396,7 +396,7 @@ mod tests {
     fn menu_dismissal_keeps_focus_moved_to_another_input(cx: &mut TestAppContext) {
         use gpui_kit::{Focusable, test::TestWindowExt};
         let (h, v) = setup(cx);
-        let query = v.read_with(cx, |v, cx| v.chats.read(cx).query_input());
+        let query = v.read_with(cx, |v, cx| v.editor.read(cx).shell_probe().0);
         cx.update_window(h, |_, w, cx| {
             w.render_frame(cx);
             w.click("chat-filters", cx);
@@ -423,7 +423,25 @@ mod tests {
     fn archive_filter_preserves_canonical_selection_and_refuses_stale_scope_or_preedit(
         cx: &mut TestAppContext,
     ) {
+        use gpui_kit::test::TestWindowExt;
         let (h, v) = setup(cx);
+        cx.update_window(h, |_, w, cx| {
+            v.update(cx, |v, cx| {
+                v.editor.update(cx, |editor, cx| {
+                    editor.accept(
+                        crate::interaction::WriteState {
+                            book: Some(Arc::new(crate::delivery_store::Book::shell_probe())),
+                            ..Default::default()
+                        },
+                        w,
+                        cx,
+                    );
+                    editor.select("chat:synthetic".into(), true, false, w, cx);
+                });
+            });
+            w.render_frame(cx);
+        })
+        .unwrap();
         cx.update_window(h,|_,w,cx|v.update(cx,|v,cx|{
             v.state.chats=Arc::new(vec![crate::local_model::chat(&serde_json::json!({"id":"archived","title":"Archived","archivedAt":1,"state":"idle"})).unwrap(),crate::local_model::chat(&serde_json::json!({"id":"active","title":"Active","state":"idle"})).unwrap()]);v.rebuild_nav(w,cx);
             v.chats.update(cx,|l,cx|{let ix=l.delegate().index("active");l.set_selected_index(ix,w,cx)});
@@ -433,7 +451,7 @@ mod tests {
             assert_eq!(v.selected,selected);assert_eq!(v.transcript,transcript);assert_eq!(v.editor,editor);
             assert!(!v.navigation.can_move(false)&&!v.navigation.can_move(true),"a filter must not create a history entry");
             v.set_archived(&Some("stale".into()),false,w,cx);assert!(v.chats.read(cx).delegate().archived);
-            let query=v.chats.read(cx).query_input();query.update(cx,|q,cx|q.replace_and_mark_text_in_range(None,"にほん",Some(3..3),w,cx));
+            let query=v.editor.read(cx).shell_probe().0;query.update(cx,|q,cx|q.replace_and_mark_text_in_range(None,"にほん",Some(3..3),w,cx));
             v.set_archived(&None,false,w,cx);assert!(v.chats.read(cx).delegate().archived);assert!(query.update(cx,|q,cx|q.marked_text_range(w,cx).is_some()));
         })).unwrap();
     }

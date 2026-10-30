@@ -605,7 +605,10 @@ fn sidebar_alignment(w: &mut Window, width: f32) {
     let pane = w.find("chat-list-pane").bounds();
     let first = ["synthetic", "other", "failed"]
         .into_iter()
-        .filter_map(|id| w.try_find(format!("chat-row-{id}")).map(|row| row.bounds().top()))
+        .filter_map(|id| {
+            w.try_find(format!("chat-row-{id}"))
+                .map(|row| row.bounds().top())
+        })
         .min_by(|a, b| a.partial_cmp(b).unwrap())
         .unwrap();
     assert!(

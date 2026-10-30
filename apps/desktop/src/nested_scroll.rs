@@ -8,8 +8,8 @@
 //! the transcript, and an area that reaches its end stops there.
 use gpui_kit::{
     App, DispatchPhase, Div, Global, HitboxBehavior, IntoElement, ParentElement, Pixels,
-    ScrollDelta, ScrollHandle, ScrollEvent, StatefulInteractiveElement, Styled, TouchPhase,
-    Window, canvas, component::scroll::Scrollbar, div, px,
+    ScrollDelta, ScrollEvent, ScrollHandle, StatefulInteractiveElement, Styled, TouchPhase, Window,
+    canvas, component::scroll::Scrollbar, div, px,
 };
 use std::{
     sync::atomic::{AtomicU64, Ordering},
@@ -122,24 +122,22 @@ impl NestedScroll {
                     |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
                     move |_, hitbox, window, _| {
                         let view = window.current_view();
-                        window.on_mouse_event(
-                            move |event: &ScrollEvent, phase, window, cx| {
-                                if phase != DispatchPhase::Capture
-                                    || !hitbox.should_handle_scroll(window)
-                                {
-                                    return;
-                                }
-                                let Some(dy) = vertical(event, window) else {
-                                    return;
-                                };
-                                if scroll(key, &handle, dy, cx) {
-                                    cx.notify(view);
-                                }
-                                if cx.default_global::<Gesture>().owner == Owner::Area(key) {
-                                    cx.stop_propagation();
-                                }
-                            },
-                        );
+                        window.on_mouse_event(move |event: &ScrollEvent, phase, window, cx| {
+                            if phase != DispatchPhase::Capture
+                                || !hitbox.should_handle_scroll(window)
+                            {
+                                return;
+                            }
+                            let Some(dy) = vertical(event, window) else {
+                                return;
+                            };
+                            if scroll(key, &handle, dy, cx) {
+                                cx.notify(view);
+                            }
+                            if cx.default_global::<Gesture>().owner == Owner::Area(key) {
+                                cx.stop_propagation();
+                            }
+                        });
                     },
                 )
                 .absolute()

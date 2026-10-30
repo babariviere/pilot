@@ -421,15 +421,13 @@ fn build(
                                 // leaving the window, hides the readout until it moves again.
                                 let report = on_hover.clone();
                                 let focused = focus.clone();
-                                window.on_mouse_event(
-                                    move |_: &ScrollEvent, phase, window, cx| {
-                                        if phase == DispatchPhase::Capture
-                                            && !focused.is_focused(window)
-                                        {
-                                            report(None, window, cx);
-                                        }
-                                    },
-                                );
+                                window.on_mouse_event(move |_: &ScrollEvent, phase, window, cx| {
+                                    if phase == DispatchPhase::Capture
+                                        && !focused.is_focused(window)
+                                    {
+                                        report(None, window, cx);
+                                    }
+                                });
                                 let report = on_hover.clone();
                                 let focused = focus.clone();
                                 window.on_mouse_event(

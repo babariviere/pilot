@@ -538,7 +538,7 @@ impl ChatEditor {
             && self.state.error.is_none()
             && self.selected.as_ref().is_some_and(|key| {
                 self.cache.get(key).is_some_and(|draft| {
-                    draft.text == self.text.read(cx).value().as_ref()
+                    self.shown_text(key, draft) == self.text.read(cx).value().as_ref()
                         && self
                             .state
                             .book

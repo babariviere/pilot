@@ -165,13 +165,8 @@ pub fn run_project_add_probe(cx: &mut HeadlessAppContext) {
             assert_eq!(server.posts(), 0);
             cx.update_window(handle, |_, w, cx| {
                 assert!(
-                    view.read(cx)
-                        .chats
-                        .read(cx)
-                        .query_input()
-                        .focus_handle(cx)
-                        .is_focused(w),
-                    "close restores a mounted sidebar input"
+                    view.read(cx).chats.focus_handle(cx).is_focused(w),
+                    "close restores the mounted sidebar list"
                 );
                 w.click("project-scope", cx);
             })

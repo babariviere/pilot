@@ -179,7 +179,7 @@ mod tests {
         let menus = menus();
         assert_eq!(
             menus.iter().map(|m| m.name.as_ref()).collect::<Vec<_>>(),
-            ["Pilot Next", "File", "Edit", "Go", "Window"]
+            ["Pilot Next", "File", "Edit", "Go", "Window", "Help"]
         );
         let edit = &menus[2];
         let actions: Vec<_> = edit

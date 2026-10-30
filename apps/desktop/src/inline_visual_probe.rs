@@ -693,8 +693,26 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
                     .as_ref()
                     .is_some_and(|s| s.contains("\"clicks\":2"))
             });
+            // Draggable slider steppers reveal on real pointer hover.
             cx.update_window(h, |_, w, cx| {
-                w.click("0.3-plus", cx);
+                w.within(("message", 2u64)).hover("0.3-slider", cx);
+            })
+            .unwrap();
+            frame(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                let viewport = w.find("viewport").bounds();
+                let button = w.within(("message", 2u64)).find("0.3-plus");
+                let bounds = button.bounds();
+                assert!(button.visible() && button.disabled() != Some(true));
+                assert!(
+                    bounds.size.width > px(0.)
+                        && bounds.size.height > px(0.)
+                        && viewport.contains(&bounds.origin)
+                        && bounds.right() <= viewport.right()
+                        && bounds.bottom() <= viewport.bottom(),
+                    "usable message-2 stepper at {width} dark={dark}: {bounds:?} inside {viewport:?}"
+                );
+                w.within(("message", 2u64)).click("0.3-plus", cx);
             })
             .unwrap();
             wait(cx, h, |cx| {
@@ -705,13 +723,16 @@ pub fn run_inline_visual_probe(cx: &mut HeadlessAppContext) {
                     .is_some_and(|s| s.contains("\"n\":5"))
             });
             cx.update_window(h, |_, w, cx| {
-                let thumb = w.within("0.3-slider").find(("slider-thumb", 0u32)).bounds();
-                let track = w.find("0.3-slider").bounds();
-                w.drag(
-                    thumb.center(),
-                    point(track.left() + track.size.width * 0.85, thumb.center().y),
-                    cx,
-                );
+                let thumb = w
+                    .within(("message", 2u64))
+                    .within("0.3-slider")
+                    .find(("slider-thumb", 0u32))
+                    .bounds();
+                let track = w.within(("message", 2u64)).find("0.3-slider").bounds();
+                let target = point(track.left() + track.size.width * 0.85, thumb.center().y);
+                let viewport = w.find("viewport").bounds();
+                assert!(viewport.contains(&thumb.center()) && viewport.contains(&target));
+                w.drag(thumb.center(), target, cx);
             })
             .unwrap();
             wait(cx, h, |cx| {

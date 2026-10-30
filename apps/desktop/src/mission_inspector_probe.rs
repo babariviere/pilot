@@ -10,6 +10,7 @@ use gpui_kit::{
 };
 use serde_json::json;
 use std::{path::PathBuf, time::Instant};
+const PENDING_TEXT: &str = "Owned immutable pending 日本語 👩‍💻";
 fn settle(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
     for _ in 0..3 {
         cx.run_until_parked();
@@ -104,7 +105,7 @@ pub fn run_mission_inspector_probe(cx: &mut HeadlessAppContext) {
                         key,
                         &crate::delivery_store::Draft {
                             revision: 1,
-                            text: "Owned immutable pending 日本語 👩‍💻".into(),
+                            text: PENDING_TEXT.into(),
                             ..Default::default()
                         },
                         true,
@@ -158,6 +159,14 @@ pub fn run_mission_inspector_probe(cx: &mut HeadlessAppContext) {
             }
             until(cx, h, &view, |v, cx| v.editor.read(cx).saved_probe(cx));
             let text = cx.update(|cx| editor.read(cx).shell_probe().0.read(cx).value().to_string());
+            if pending {
+                assert!(text.is_empty(), "pending send leaves the composer empty");
+                cx.update(|cx| {
+                    let e = editor.read(cx);
+                    assert_eq!(e.shell_probe().2.unwrap().text, PENDING_TEXT);
+                    assert_eq!(e.retained_deliveries_probe(), pending_before);
+                });
+            }
             for _ in 0..2 {
                 cx.update_window(h, |_, w, cx| {
                     w.scroll(
@@ -441,6 +450,22 @@ pub fn run_mission_inspector_probe(cx: &mut HeadlessAppContext) {
                         "pending close must retain a mounted navigation or editor scope"
                     );
                     assert!(editor.read(cx).shell_probe().2.unwrap().pending.is_some());
+                    let sending = editor.read(cx).sending("chat-A").unwrap();
+                    assert_eq!(sending.text, PENDING_TEXT);
+                    let row = v
+                        .sending_view
+                        .pending_rows(v.selected.as_deref())
+                        .iter()
+                        .find(|row| row.id() == sending.key)
+                        .expect("unresolved send remains in the conversation tray");
+                    assert_eq!(row.source(), PENDING_TEXT);
+                    let preview = w.find(("pending-preview", sending.key));
+                    assert!(preview.visible());
+                    assert!(
+                        w.find("conversation")
+                            .bounds()
+                            .contains(&preview.bounds().center())
+                    );
                 })
                 .unwrap();
             }
@@ -533,7 +558,10 @@ pub fn run_mission_inspector_probe(cx: &mut HeadlessAppContext) {
                     .unwrap();
                 });
             let store = Store::open(root.clone(), server.options.host()).unwrap();
-            assert_eq!(store.book.drafts["chat:chat-A"].text, text);
+            assert_eq!(
+                store.book.drafts["chat:chat-A"].text,
+                if pending { PENDING_TEXT } else { &text }
+            );
             assert_eq!(
                 serde_json::to_vec(&store.book.pending).unwrap(),
                 pending_before,

@@ -3251,7 +3251,12 @@ mod refresh_tests {
             let conversation = window.find("conversation").bounds();
             let editor = window.find("conversation-editor").bounds();
             assert_eq!(editor.bottom(), conversation.bottom(), "No footer gap");
-            window.press("secondary-f", cx);
+            window.press("secondary-k", cx);
+        })
+        .unwrap();
+        cx.run_until_parked();
+        cx.update_window(handle, |_, window, cx| {
+            window.render_frame(cx);
             window.input("review", cx);
         })
         .unwrap();
@@ -3262,7 +3267,9 @@ mod refresh_tests {
             assert_eq!(view.selected.as_deref(), Some("synthetic"));
             let nav = view.chats.read(cx).delegate();
             assert_eq!(nav.opened, view.selected);
-            assert_eq!(nav.query, "review");
+            assert!(nav.query.is_empty(), "Jump never filters the sidebar");
+            let jump = view.jump.as_ref().expect("Cmd-K opens Jump").read(cx);
+            assert_eq!(jump.list.read(cx).query_input().read(cx).value(), "review");
             assert!(!nav.tree.rows.is_empty());
             assert!(view.writer.is_none());
         });

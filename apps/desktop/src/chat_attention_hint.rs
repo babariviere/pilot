@@ -21,6 +21,62 @@ fn attention_hint(chat: &Chat, fresh: bool, question_visible: bool) -> Option<&s
     })
 }
 
+impl LocalViewer {
+    pub(super) fn attention_composer(
+        &self,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        let hint = self
+            .selected
+            .as_deref()
+            .and_then(|id| self.state.chats.iter().find(|chat| chat.id == id))
+            .and_then(|chat| {
+                attention_hint(
+                    chat,
+                    self.state.generation == self.generation
+                        && self.state.loaded
+                        && self.state.summary_fresh
+                        && !self.state.chat_issue
+                        && !self.refreshing
+                        && self.subagent.is_none()
+                        && self.client.as_ref().is_some_and(|c| {
+                            matches!(
+                                c.daemon(),
+                                crate::local_client::ConnectedDaemon::Connected(_)
+                            )
+                        }),
+                    self.editor.read(cx).question_hint_covered(),
+                )
+            });
+        let hint = hint.map(|label| {
+            crate::ui::text(crate::ui::Text::Caption, label.to_owned())
+                .id("chat-attention-hint")
+                .test_support()
+                .aria_label(label.to_owned())
+                .mx_3()
+                .px(px(10.))
+                .text_color(crate::appearance::attention_text(cx))
+                .into_any_element()
+        });
+        let hint = crate::composer_height::slot(
+            "attention-hint-slot",
+            &self.attention_height,
+            self.selected.clone(),
+            hint,
+            0.,
+            w,
+            cx,
+        );
+        div()
+            .v_flex()
+            .min_w_0()
+            .child(hint)
+            .child(self.editor.clone())
+            .into_any_element()
+    }
+}
+
 #[cfg(test)]
 mod attention_hint_tests {
     use super::*;
@@ -92,61 +148,5 @@ mod attention_hint_tests {
             attention_hint(&global_only, true, false),
             Some("Your input is needed to continue")
         );
-    }
-}
-
-impl LocalViewer {
-    pub(super) fn attention_composer(
-        &self,
-        w: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> gpui_kit::AnyElement {
-        let hint = self
-            .selected
-            .as_deref()
-            .and_then(|id| self.state.chats.iter().find(|chat| chat.id == id))
-            .and_then(|chat| {
-                attention_hint(
-                    chat,
-                    self.state.generation == self.generation
-                        && self.state.loaded
-                        && self.state.summary_fresh
-                        && !self.state.chat_issue
-                        && !self.refreshing
-                        && self.subagent.is_none()
-                        && self.client.as_ref().is_some_and(|c| {
-                            matches!(
-                                c.daemon(),
-                                crate::local_client::ConnectedDaemon::Connected(_)
-                            )
-                        }),
-                    self.editor.read(cx).question_hint_covered(),
-                )
-            });
-        let hint = hint.map(|label| {
-            crate::ui::text(crate::ui::Text::Caption, label.to_owned())
-                .id("chat-attention-hint")
-                .test_support()
-                .aria_label(label.to_owned())
-                .mx_3()
-                .px(px(10.))
-                .text_color(crate::appearance::attention_text(cx))
-                .into_any_element()
-        });
-        let hint = crate::composer_height::slot(
-            "attention-hint-slot",
-            &self.attention_height,
-            self.selected.clone(),
-            hint,
-            0.,
-            w,
-            cx,
-        );
-        div()
-            .v_flex()
-            .min_w_0()
-            .child(hint)
-            .child(self.editor.clone())
-            .into_any_element()
     }
 }

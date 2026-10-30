@@ -167,7 +167,10 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
                 assert!(main.left() >= sidebar.right() && f32::from(main.size.width) > 350.);
                 assert_eq!(view.read(cx).page, Page::Home);
                 // Three chats under their three project labels.
-                assert_eq!(view.read(cx).chats.read(cx).delegate().tree.rows.len(), 3 + 3);
+                assert_eq!(
+                    view.read(cx).chats.read(cx).delegate().tree.rows.len(),
+                    3 + 3
+                );
                 assert!(window.try_find("home-project-project-a").is_some());
                 assert!(window.try_find("home-project-project-b").is_some());
                 let button = window.find("home-project-project-a").bounds();

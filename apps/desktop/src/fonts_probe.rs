@@ -137,6 +137,10 @@ pub fn run_fonts_probe(cx: &mut HeadlessAppContext) {
         settle(cx, chat);
         cx.update_window(chat, |_, w, cx| {
             w.click("work-toggle-900", cx);
+        })
+        .unwrap();
+        settle(cx, chat);
+        cx.update_window(chat, |_, w, cx| {
             w.click("step-toggle-call:font-tool", cx);
         })
         .unwrap();

@@ -219,10 +219,17 @@ fn search_palette_and_dialogs_keep_their_keys(cx: &mut TestAppContext) {
     let (h, v) = setup(cx);
     seed_history(cx, h, &v);
     let at = location(cx, &v);
-    // Sidebar search.
-    let search = v.read_with(cx, |v, cx| v.chats.read(cx).query_input());
-    cx.update_window(h, |_, w, cx| search.update(cx, |s, cx| s.focus(w, cx)))
-        .unwrap();
+    // Jump's mounted query owns its caret keys, not navigation history.
+    press(cx, h, "secondary-k");
+    let search = v.read_with(cx, |v, cx| {
+        v.jump
+            .as_ref()
+            .unwrap()
+            .read(cx)
+            .list
+            .read(cx)
+            .query_input()
+    });
     insert(cx, h, &search, "atlas");
     press(cx, h, BACK);
     insert(cx, h, &search, "<");
@@ -231,7 +238,6 @@ fn search_palette_and_dialogs_keep_their_keys(cx: &mut TestAppContext) {
     assert_eq!(value(cx, h, &search), "<atlas>");
     assert_eq!(location(cx, &v), at);
     // Jump palette: modal, its query owns the keys.
-    press(cx, h, "secondary-k");
     assert!(v.read_with(cx, |v, _| v.jump.is_some()));
     press(cx, h, BACK);
     press(cx, h, FORWARD);
