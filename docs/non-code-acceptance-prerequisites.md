@@ -121,8 +121,13 @@ retry contracts. Each slice requires coordinator contract validation before code
 
 ### A. Explicit policy and explain-only decision
 
+The separately validated inert A foundation is documented in
+[non-code policy APIs and recovery](non-code-acceptance-policy.md). It implements configuration and
+always-false explanation only. Creation/schema admission is not authenticated opt-in or approved
+authority. B/C/D below remain prerequisites, not activated by that foundation.
+
 Add `MissionService.saveNonCodeAcceptancePolicy(sessionId, taskRef, request)` for the current
-coordinator on a new opted-in v1 mission. Request: `version:1`, `operationId`, `expectedPolicyId`,
+coordinator on a creation-admitted v1 mission. Request: `version:1`, `operationId`, `expectedPolicyId`,
 full assignment, owner, `definitionRevision`, `expectedContextFence`, explicit `kind:non-code`,
 destination refs, named required check IDs/config versions, required profile revisions/reviewer
 provenance rules and exact authority reference. Store resolved approved authority separately from

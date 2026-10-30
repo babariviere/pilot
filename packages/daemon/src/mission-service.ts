@@ -31,6 +31,7 @@ import {
 	latestSubmission,
 } from "./mission-delivery-evidence.ts";
 import { type LinearClosingGuard, linearPrGuidance, unavailableClosingGuard } from "./mission-linear-pr-guidance.ts";
+import type { NonCodeAcceptanceState } from "./mission-non-code-acceptance.ts";
 import { parseNonCodeDelivery } from "./mission-non-code-delivery.ts";
 import { MissionNotices } from "./mission-notices.ts";
 import {
@@ -662,6 +663,66 @@ export class MissionService {
 			submission: latestSubmission(this.store.currentDeliveryEvidence(missionId, record.taskId)),
 			observations,
 		});
+	}
+
+	/** Inert internal configuration. Current actor admission never implies approved workflow authority. */
+	async saveNonCodeAcceptancePolicy(sessionId: string, taskRef: string, value: unknown) {
+		const missionId = this.allocationAccess(sessionId);
+		const taskId = this.store.resolveTask(missionId, taskRef).id;
+		return this.store.saveNonCodeAcceptancePolicy(
+			missionId,
+			taskId,
+			sessionId,
+			value,
+			this.nonCodePolicyHost(sessionId, missionId, taskId),
+		);
+	}
+	async lookupNonCodeAcceptancePolicy(sessionId: string, taskRef: string, value: unknown) {
+		const missionId = this.allocationAccess(sessionId);
+		return this.store.lookupNonCodeAcceptancePolicy(missionId, taskRef, sessionId, value, () => {
+			this.allocationAccess(sessionId, missionId);
+		});
+	}
+	async evaluateNonCodeAcceptance(sessionId: string, taskRef: string) {
+		const missionId = this.allocationAccess(sessionId);
+		const taskId = this.store.resolveTask(missionId, taskRef).id;
+		return this.store.evaluateNonCodeAcceptance(
+			missionId,
+			taskId,
+			sessionId,
+			this.nonCodePolicyHost(sessionId, missionId, taskId),
+		);
+	}
+	private nonCodePolicyHost(sessionId: string, missionId: string, taskId: string) {
+		return {
+			authorize: () => {
+				this.allocationAccess(sessionId, missionId);
+			},
+			resolve: (reference: DeliveryReference) =>
+				this.resolveAllocationSource(sessionId, missionId, taskId, reference),
+			validateSources: (observations: DeliveryObservation[]) =>
+				this.assertAllocationSourceActors(missionId, taskId, observations),
+			actorFence: (state: NonCodeAcceptanceState) =>
+				[
+					...new Set([
+						sessionId,
+						...(state.task.sessionId ? [state.task.sessionId] : []),
+						...(state.policy?.destinations.flatMap((o) =>
+							o.sourceOwnerSessionId ? [o.sourceOwnerSessionId] : [],
+						) ?? []),
+					]),
+				]
+					.sort()
+					.map((id) => {
+						let projectId: string | null = null;
+						try {
+							projectId = this.session(id).projectId ?? null;
+						} catch {
+							/* Missing session metadata is not authority. */
+						}
+						return { sessionId: id, projectId, missionId: this.store.missionOf(id) ?? null };
+					}),
+		};
 	}
 
 	/** Dormant internal APIs only. No mission tool, transport, scheduler or execution bridge. */

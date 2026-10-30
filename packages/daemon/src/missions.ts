@@ -74,6 +74,15 @@ import {
 	linearTarget,
 	reconcileLinearRecord,
 } from "./mission-linear-state.ts";
+import {
+	explainNonCodeAcceptance,
+	type NonCodeAcceptancePolicy,
+	type NonCodeAcceptanceState,
+	type NonCodeAuthorityGap,
+	type NonCodePolicyWrite,
+	nonCodeInputIds,
+	nonCodePolicyWrite,
+} from "./mission-non-code-acceptance.ts";
 import { parseNonCodeDelivery } from "./mission-non-code-delivery.ts";
 import { assignmentWrite, strictPlanningFields, TASK_WRITE_FIELDS } from "./mission-planning.ts";
 import { MissionReplica } from "./mission-replica.ts";
@@ -358,6 +367,16 @@ CREATE TABLE IF NOT EXISTS task_contribution_allocations (
 	UNIQUE(mission_id, operation_id)
 );
 CREATE INDEX IF NOT EXISTS contribution_allocation_task ON task_contribution_allocations(mission_id, task_id, sequence);
+CREATE TABLE IF NOT EXISTS task_non_code_acceptance_policies (
+	sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+	task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+	operation_id TEXT NOT NULL,
+	record_id TEXT NOT NULL UNIQUE,
+	record TEXT NOT NULL,
+	UNIQUE(mission_id, operation_id)
+);
+CREATE INDEX IF NOT EXISTS non_code_policy_task ON task_non_code_acceptance_policies(mission_id, task_id, sequence);
 CREATE TABLE IF NOT EXISTS retired_members (
 	session_id TEXT PRIMARY KEY,
 	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
@@ -3659,6 +3678,278 @@ export class MissionStore {
 		await this.durable();
 		this.assertAllocationActor(id, sessionId, host.authorize);
 		return saved;
+	}
+
+	/** Inert policy metadata. No active gate, transport, status or lifecycle consumer. */
+	latestNonCodeAcceptancePolicy(id: string, taskId: string): NonCodeAcceptancePolicy | undefined {
+		this.task(id, taskId);
+		const row = this.one(
+			"SELECT record FROM task_non_code_acceptance_policies WHERE mission_id=? AND task_id=? ORDER BY sequence DESC LIMIT 1",
+			id,
+			taskId,
+		);
+		return row ? (JSON.parse(str(row.record!)) as NonCodeAcceptancePolicy) : undefined;
+	}
+	nonCodeAcceptancePolicyHistory(id: string, taskId: string, before?: string, limit = 100): NonCodeAcceptancePolicy[] {
+		this.task(id, taskId);
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+			throw new Error("Invalid non-code policy history limit");
+		const cursor =
+			before === undefined
+				? undefined
+				: this.one(
+						"SELECT sequence FROM task_non_code_acceptance_policies WHERE mission_id=? AND task_id=? AND record_id=?",
+						id,
+						taskId,
+						before,
+					);
+		if (before !== undefined && !cursor) throw new Error("Unknown non-code policy history cursor");
+		return this.all(
+			"SELECT record FROM task_non_code_acceptance_policies WHERE mission_id=? AND task_id=? AND sequence<? ORDER BY sequence DESC LIMIT ?",
+			id,
+			taskId,
+			cursor?.sequence ?? Number.MAX_SAFE_INTEGER,
+			limit,
+		)
+			.reverse()
+			.map((r) => JSON.parse(str(r.record!)) as NonCodeAcceptancePolicy);
+	}
+	private assertNonCodePolicyActor(id: string, actor: string, authorize: () => void): void {
+		authorize();
+		this.assertDeliveryMember(id, actor);
+		if (this.require(id).coordinatorSessionId !== actor)
+			throw new Conflict("Only the current coordinator may access non-code policies");
+	}
+	private nonCodePolicyRetry(
+		id: string,
+		taskId: string,
+		actor: string,
+		request: NonCodePolicyWrite,
+	): NonCodeAcceptancePolicy | undefined {
+		const row = this.one(
+			"SELECT record FROM task_non_code_acceptance_policies WHERE mission_id=? AND operation_id=?",
+			id,
+			request.operationId,
+		);
+		if (!row) return;
+		const prior = JSON.parse(str(row.record!)) as NonCodeAcceptancePolicy;
+		if (
+			prior.taskId !== taskId ||
+			prior.recorderSessionId !== actor ||
+			prior.version !== 1 ||
+			deliveryDigest(prior.request) !== deliveryDigest(request)
+		)
+			throw new Conflict("Non-code policy operation idempotency conflict");
+		return prior;
+	}
+	async lookupNonCodeAcceptancePolicy(id: string, ref: string, actor: string, value: unknown, authorize: () => void) {
+		this.assertNonCodePolicyActor(id, actor, authorize);
+		const taskId = this.resolveTask(id, ref).id,
+			request = nonCodePolicyWrite(value);
+		const record = this.nonCodePolicyRetry(id, taskId, actor, request);
+		await this.durable();
+		this.assertNonCodePolicyActor(id, actor, authorize);
+		return record;
+	}
+	private nonCodePolicyAuthority(id: string, claim: NonCodePolicyWrite["authorityClaim"]): NonCodeAuthorityGap {
+		let code: NonCodeAuthorityGap["code"] = "authority-not-configured";
+		if (claim) {
+			try {
+				const decision = this.decision(id, claim.decisionId);
+				code =
+					deliveryDigest(decision) === claim.sha256 &&
+					this.allocationContextFence(id).decisionEventId === claim.decisionEventId
+						? "trusted-approval-source-unavailable"
+						: "authority-reference-changed";
+			} catch {
+				code = "authority-reference-unavailable";
+			}
+		}
+		return {
+			state: "unavailable",
+			claimedReference: claim,
+			code,
+			remedy:
+				"An independently admitted exact-scope approval source is required; decision content and actor labels do not grant authority.",
+		};
+	}
+	async saveNonCodeAcceptancePolicy(
+		id: string,
+		ref: string,
+		actor: string,
+		value: unknown,
+		host: {
+			authorize(): void;
+			resolve: DeliveryResolver;
+			validateSources(observations: DeliveryObservation[]): void;
+		},
+	): Promise<NonCodeAcceptancePolicy> {
+		this.assertNonCodePolicyActor(id, actor, host.authorize);
+		const taskId = this.resolveTask(id, ref).id,
+			request = nonCodePolicyWrite(value);
+		const retry = this.nonCodePolicyRetry(id, taskId, actor, request);
+		if (retry) {
+			await this.durable();
+			this.assertNonCodePolicyActor(id, actor, host.authorize);
+			return retry; // Historical metadata only. Never reopen revoked retained content.
+		}
+		const admit = () => {
+			this.assertNonCodePolicyActor(id, actor, host.authorize);
+			const task = this.task(id, taskId);
+			if (
+				!task.sessionId ||
+				["done", "dropped"].includes(task.status) ||
+				task.sessionId !== request.ownerSessionId ||
+				this.sharedDefinitionRevision(taskId) !== request.definitionRevision
+			)
+				throw new Conflict("Non-code policy owner or definition is stale or closed");
+			this.assertMember(id, task.sessionId);
+			assertDeliveryAssignment(task, request.assignment);
+			if ((this.latestNonCodeAcceptancePolicy(id, taskId)?.id ?? null) !== request.expectedPolicyId)
+				throw new Conflict("Non-code policy revision conflict");
+			if (deliveryDigest(this.allocationContextFence(id)) !== deliveryDigest(request.expectedContextFence))
+				throw new Conflict("Non-code policy context changed");
+			return request.reviews.map((r) => {
+				const profile = this.reviewProfile(id, r.profileId);
+				if (
+					!profile ||
+					profile.revision !== r.profileRevision ||
+					!profile.request.definition.applicableIntents.includes("research")
+				)
+					throw new Conflict("Non-code policy review profile missing, changed or inapplicable");
+				return profile.id;
+			});
+		};
+		const profileIds = admit(),
+			observations: DeliveryObservation[] = [];
+		host.validateSources(observations); // Current owner admission for a NEW write, never historical retry.
+		for (const reference of request.destinations) {
+			let observed: DeliveryObservation;
+			try {
+				observed = await host.resolve(structuredClone(reference));
+			} catch {
+				throw new Conflict("Non-code policy retained destination unavailable");
+			}
+			if (
+				deliveryDigest(observed.reference) !== deliveryDigest(reference) ||
+				!/^[a-f0-9]{64}$/.test(observed.sha256) ||
+				observed.availability !== "retained"
+			)
+				throw new Conflict("Non-code policy retained identity unavailable or mismatched");
+			observations.push(structuredClone(observed));
+		}
+		const saved = this.transaction(() => {
+			this.assertNonCodePolicyActor(id, actor, host.authorize);
+			const concurrent = this.nonCodePolicyRetry(id, taskId, actor, request);
+			if (concurrent) return concurrent;
+			if (deliveryDigest(admit()) !== deliveryDigest(profileIds))
+				throw new Conflict("Non-code policy profile changed during reads");
+			host.validateSources(observations);
+			for (const o of observations) if (o.sourceOwnerSessionId) this.assertMember(id, o.sourceOwnerSessionId);
+			this.assertDeliveryEvidencePins(id, taskId, observations);
+			const record: NonCodeAcceptancePolicy = {
+				version: 1,
+				id: randomUUID(),
+				missionId: id,
+				taskId,
+				recorderSessionId: actor,
+				createdAt: Date.now(),
+				request,
+				destinations: observations,
+				authority: this.nonCodePolicyAuthority(id, request.authorityClaim),
+			};
+			const encoded = JSON.stringify(record);
+			if (Buffer.byteLength(encoded) > 256 * 1024) throw new Error("Non-code policy record exceeds 256 KiB");
+			this.run(
+				"INSERT INTO task_non_code_acceptance_policies(mission_id,task_id,operation_id,record_id,record) VALUES(?,?,?,?,?)",
+				id,
+				taskId,
+				request.operationId,
+				record.id,
+				encoded,
+			);
+			return record;
+		}, true);
+		await this.durable();
+		this.assertNonCodePolicyActor(id, actor, host.authorize);
+		return saved;
+	}
+	private nonCodeAcceptanceState(id: string, taskId: string, actor: string): NonCodeAcceptanceState {
+		const policy = this.latestNonCodeAcceptancePolicy(id, taskId),
+			records = this.currentDeliveryEvidence(id, taskId),
+			mission = this.require(id);
+		return {
+			missionId: id,
+			projectId: mission.projectId,
+			actorSessionId: actor,
+			coordinatorSessionId: mission.coordinatorSessionId ?? null,
+			task: this.task(id, taskId),
+			definitionRevision: this.sharedDefinitionRevision(taskId),
+			contextFence: this.allocationContextFence(id),
+			policy,
+			submission: latestSubmission(records),
+			judgement: latestJudgement(records),
+			allocation: this.latestContributionAllocation(id, taskId),
+			reviews:
+				policy?.request.reviews.map((requirement) => ({
+					requirement,
+					profile: this.reviewProfile(id, requirement.profileId),
+					result: this.latestReviewResult(id, taskId, requirement.profileId),
+				})) ?? [],
+		};
+	}
+	async evaluateNonCodeAcceptance(
+		id: string,
+		ref: string,
+		actor: string,
+		host: {
+			authorize(): void;
+			resolve: DeliveryResolver;
+			validateSources(observations: DeliveryObservation[]): void;
+			/** Host metadata only; catches observed actor/project/membership churn, not source stability. */
+			actorFence(state: NonCodeAcceptanceState): unknown;
+		},
+	) {
+		this.assertNonCodePolicyActor(id, actor, host.authorize);
+		const taskId = this.resolveTask(id, ref).id,
+			state = this.nonCodeAcceptanceState(id, taskId, actor);
+		if (state.task.assignment?.classification?.deliveryKind !== "research")
+			throw new Conflict("Non-code explanation requires explicit research classification");
+		const inputs = nonCodeInputIds(state),
+			actors = structuredClone(host.actorFence(state));
+		const authority = this.nonCodePolicyAuthority(id, state.policy?.request.authorityClaim ?? null);
+		let observations: DeliveryObservation[] | undefined;
+		if (state.policy) {
+			try {
+				observations = [];
+				for (const reference of state.policy.request.destinations)
+					observations.push(structuredClone(await host.resolve(structuredClone(reference))));
+				host.validateSources(observations);
+				this.assertDeliveryEvidencePins(id, taskId, observations);
+			} catch {
+				observations = undefined;
+			} // No source text or exception payload enters diagnostics.
+		}
+		await this.durable();
+		this.assertNonCodePolicyActor(id, actor, host.authorize);
+		const after = this.nonCodeAcceptanceState(id, taskId, actor),
+			currentInputs = nonCodeInputIds(after),
+			currentActors = host.actorFence(after);
+		if (
+			deliveryDigest(inputs) !== deliveryDigest(currentInputs) ||
+			deliveryDigest(actors) !== deliveryDigest(currentActors)
+		) {
+			return {
+				...explainNonCodeAcceptance(state, authority, undefined),
+				policyApplicability: "outdated" as const,
+				changedInputs: {
+					before: inputs,
+					after: currentInputs,
+					actorMetadata: { before: actors, after: currentActors },
+				},
+			};
+		}
+		return { ...explainNonCodeAcceptance(state, authority, observations), changedInputs: null };
 	}
 
 	/** Dormant host-only review history. No legacy receipt promotion or active gate consumer. */

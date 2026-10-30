@@ -13,6 +13,7 @@ import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import type { MissionDetail, ServerMessage, SessionState, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { Conflict } from "./errors.ts";
+import type { NonCodePolicyWrite } from "./mission-non-code-acceptance.ts";
 import type { ReviewProducer, ReviewResultWrite } from "./mission-review-contract.ts";
 import { optionalReviewSeeds } from "./mission-review-seeds.ts";
 import { draftMessage, MissionService } from "./mission-service.ts";
@@ -7096,4 +7097,267 @@ test("passive completion HTTP ACK waits for durability and preserves working mem
 	assert.equal(worker.requests.length, requestsBefore, "no input, abort or other worker request");
 	assert.equal(phases.mock.calls.length, 0);
 	assert.equal(linear.mock.calls.length, 0);
+});
+
+async function nonCodePolicyFixture(t: TestContext) {
+	const f = await fixture(t),
+		lead = await f.spawn(),
+		worker = await f.spawn(),
+		peer = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Inert policy",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.store.join(worker.id, mission.id);
+	f.store.join(peer.id, mission.id);
+	const task = f.store.addTask(mission.id, {
+		title: "Report",
+		sessionId: worker.id,
+		assignment: {
+			version: 1,
+			expectedRevision: 0,
+			expectedDefinitionRevision: 0,
+			intent: "Report",
+			scope: "Bounded",
+			criteria: ["Explain"],
+			classification: {
+				version: 1,
+				effort: "small",
+				difficulty: "routine",
+				risk: "low",
+				uncertainty: "known",
+				scope: "bounded",
+				role: "explorer",
+				deliveryKind: "research",
+			},
+		},
+	});
+	const artifacts = f.sessions["artifactStore"](worker.id);
+	const artifact = await artifacts.create({ kind: "html", title: "Report", source: "<p>PRIVATE RETAINED SOURCE</p>" });
+	await f.service.linkArtifact(mission.id, {
+		sessionId: worker.id,
+		artifactId: artifact.id,
+		revision: 1,
+		taskId: task.id,
+	});
+	const profileWrite = {
+		version: 1,
+		operationId: "profile",
+		profileId: "design",
+		expectedRevision: 0,
+		definition: {
+			version: 1,
+			purpose: "Design",
+			rubric: "PRIVATE RUBRIC",
+			applicableIntents: ["research"],
+			modelSelection: { unavailable: "No runner" },
+			reasoningEffort: null,
+			timeLimitMs: null,
+			outputInterpretation: { kind: "pass-fail", pass: "Pass", fail: "Fail" },
+		},
+	};
+	await f.service.saveReviewProfile(lead.id, profileWrite);
+	const request: NonCodePolicyWrite = {
+		version: 1,
+		operationId: "policy",
+		expectedPolicyId: null,
+		kind: "non-code",
+		assignment: task.assignment!,
+		ownerSessionId: worker.id,
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		expectedContextFence: f.store.allocationContextFence(mission.id),
+		destinations: [{ kind: "artifact", artifactId: artifact.id, revision: 1 }],
+		checks: [{ checkId: "diagram-validation", configVersion: "v1" }],
+		reviews: [
+			{
+				kind: "independent-agent",
+				profileId: "design",
+				profileRevision: 1,
+				scrutiny: "targeted",
+				provenance: "host-proven-producer-and-independence",
+			},
+		],
+		authorityClaim: null,
+	};
+	return { ...f, lead, worker, peer, mission, task, artifact, artifacts, request, profileWrite };
+}
+
+test("non-code policy historical recovery never reopens revoked pins, owner or profiles", async (t) => {
+	const f = await nonCodePolicyFixture(t);
+	const save = (request = f.request, actor = f.lead.id) =>
+		f.service.saveNonCodeAcceptancePolicy(actor, f.task.id, request);
+	await assert.rejects(save(f.request, f.worker.id), /coordinator/);
+	const saved = await save();
+	assert.equal((await f.service.evaluateNonCodeAcceptance(f.lead.id, f.task.id)).policyApplicability, "current");
+	f.store.unlinkArtifact(f.mission.id, f.artifact.id, {}, f.task.id);
+	f.store.leave(f.worker.id);
+	await f.service.saveReviewProfile(f.lead.id, { ...f.profileWrite, operationId: "profile-new", expectedRevision: 1 });
+	const reads = t.mock.method(f.sessions, "artifact", async () => {
+		throw new Error("Revoked content must never reopen");
+	});
+	assert.deepEqual(await save(), saved);
+	assert.deepEqual(await f.service.lookupNonCodeAcceptancePolicy(f.lead.id, f.task.id, f.request), saved);
+	assert.equal(reads.mock.calls.length, 0);
+	await assert.rejects(save({ ...f.request, operationId: "new", expectedPolicyId: saved.id }), /stale|owner|closed/);
+	reads.mock.restore();
+	f.sessions["require"](f.lead.id).projectId = f.other.id;
+	await assert.rejects(save(), /project/);
+	await assert.rejects(f.service.lookupNonCodeAcceptancePolicy(f.lead.id, f.task.id, f.request), /project/);
+});
+
+test("non-code policy service checks current actor and actual owner/custodian projects", async (t) => {
+	const f = await nonCodePolicyFixture(t);
+	const foreign = await f.spawn(f.other.id);
+	f.store.join(foreign.id, f.mission.id);
+	f.store.update(f.mission.id, { coordinatorSessionId: foreign.id });
+	await assert.rejects(f.service.saveNonCodeAcceptancePolicy(foreign.id, f.task.id, f.request), /project/);
+	f.store.update(f.mission.id, { coordinatorSessionId: f.lead.id });
+	const owner = f.sessions["require"](f.worker.id),
+		original = owner.projectId;
+	owner.projectId = f.other.id;
+	await assert.rejects(
+		f.service.saveNonCodeAcceptancePolicy(f.lead.id, f.task.id, {
+			...f.request,
+			expectedContextFence: f.store.allocationContextFence(f.mission.id),
+		}),
+		/project/,
+	);
+	owner.projectId = original;
+	const request = { ...f.request, expectedContextFence: f.store.allocationContextFence(f.mission.id) };
+	const saved = await f.service.saveNonCodeAcceptancePolicy(f.lead.id, f.task.id, request);
+	f.store.update(f.mission.id, { coordinatorSessionId: f.peer.id });
+	await assert.rejects(f.service.lookupNonCodeAcceptancePolicy(f.lead.id, f.task.id, request), /coordinator/);
+	await assert.rejects(f.service.saveNonCodeAcceptancePolicy(f.lead.id, f.task.id, request), /coordinator/);
+	assert.equal(f.store.latestNonCodeAcceptancePolicy(f.mission.id, f.task.id)?.id, saved.id);
+});
+
+test("all reported non-code receipts, Pass, judgement and selected allocation still cannot enable acceptance", async (t) => {
+	const f = await nonCodePolicyFixture(t);
+	const receipt = await f.service.saveNonCodeDelivery(f.worker.id, f.task.id, {
+		kind: "non-code",
+		references: f.request.destinations,
+		checks: "Reported green",
+		limitations: "Not observed",
+	});
+	const policy = await f.service.saveNonCodeAcceptancePolicy(f.lead.id, f.task.id, f.request);
+	const submission = await f.service.submitDeliveryEvidence(f.worker.id, f.task.id, {
+		version: 1,
+		operationId: "submission",
+		expectedSubmissionId: null,
+		definitionRevision: f.request.definitionRevision,
+		assignment: f.request.assignment,
+		kind: "research",
+		claim: "Done",
+		limitations: "No actual execution",
+		evidence: f.request.destinations,
+		coverage: [[0]],
+	});
+	const judgement = await f.service.judgeDeliveryEvidence(f.lead.id, f.task.id, {
+		version: 1,
+		operationId: "judge",
+		expectedJudgementId: null,
+		submissionId: submission.id,
+		decision: "approve",
+		reason: "Reported judgement only",
+	});
+	const allocation = await f.service.recordContributionAllocation(f.lead.id, f.task.id, {
+		version: 1,
+		operationId: "allocation",
+		action: "allocate",
+		expectedAllocationId: null,
+		reason: "Selected later scope",
+		assignment: f.request.assignment,
+		ownerSessionId: f.worker.id,
+		definitionRevision: f.request.definitionRevision,
+		expectedContextFence: f.store.allocationContextFence(f.mission.id),
+		submissionId: submission.id,
+		sources: submission.observations,
+	});
+	const review = await f.service.recordReviewResult(f.lead.id, f.task.id, {
+		version: 1,
+		operationId: "review",
+		profileId: "design",
+		profileRevision: 1,
+		expectedResultId: null,
+		assignment: f.request.assignment,
+		definitionRevision: f.request.definitionRevision,
+		expectedContextFence: f.store.reviewContextFence(f.mission.id),
+		intent: "research",
+		content: f.request.destinations,
+		context: [],
+		preferences: { unavailable: "None" },
+		output: { state: "completed", outcome: "pass", reason: "Reported pass" },
+		findings: [],
+		resolutions: [],
+		limitations: "No executor provenance",
+		confidence: "high",
+	});
+	const e = await f.service.evaluateNonCodeAcceptance(f.lead.id, f.task.id);
+	assert.equal(e.eligible, false);
+	assert.equal(e.force, "off");
+	assert.equal(e.policyApplicability, "current");
+	assert.equal(e.inputs.policyId, policy.id);
+	assert.equal(e.inputs.submissionId, submission.id);
+	assert.equal(e.inputs.judgementId, judgement.id);
+	assert.equal(e.inputs.allocationId, allocation.id);
+	assert.equal(e.inputs.reviews[0]!.resultId, review.id);
+	assert.ok(e.requirements.some((r) => r.code === "review-producer-and-independence-unavailable"));
+	assert.ok(e.requirements.some((r) => r.code === "destination-observer"));
+	assert.ok(!JSON.stringify(e).includes("PRIVATE"));
+	assert.equal(f.store.task(f.mission.id, f.task.id).status, "todo");
+	assert.equal(f.store.completion(f.mission.id, f.task.id), undefined);
+	assert.equal(f.store.retiredMember(f.worker.id), false);
+	assert.deepEqual(f.store.nonCodeDelivery(f.mission.id, f.task.id), receipt);
+	assert.equal(f.store.reviewHistory(f.mission.id, f.task.id).length, 1);
+	assert.equal(f.store.contributionAllocationHistory(f.mission.id, f.task.id).length, 1);
+});
+
+for (const race of ["owner-aba", "pin", "custodian-membership", "custodian-project"] as const) {
+	test(`non-code policy service refuses ${race} while real retained reads are pending`, async (t) => {
+		const f = await nonCodePolicyFixture(t),
+			read = f.sessions.artifact.bind(f.sessions);
+		t.mock.method(f.sessions, "artifact", async (...args: Parameters<SessionManager["artifact"]>) => {
+			const artifact = await read(...args);
+			if (race === "owner-aba") {
+				f.store.releaseTask(f.mission.id, f.task.id);
+				f.store.claimTask(f.mission.id, f.task.id, f.worker.id, { sessionId: f.lead.id });
+			}
+			if (race === "pin") f.store.unlinkArtifact(f.mission.id, f.artifact.id, {}, f.task.id);
+			if (race === "custodian-membership") f.store.leave(f.worker.id);
+			if (race === "custodian-project") f.sessions["require"](f.worker.id).projectId = f.other.id;
+			return artifact;
+		});
+		await assert.rejects(f.service.saveNonCodeAcceptancePolicy(f.lead.id, f.task.id, f.request));
+		assert.deepEqual(f.store.nonCodeAcceptancePolicyHistory(f.mission.id, f.task.id), []);
+	});
+}
+
+test("non-code explain fences owner project change across actual retained I/O, naming before and after", async (t) => {
+	const f = await nonCodePolicyFixture(t);
+	await f.service.saveNonCodeAcceptancePolicy(f.lead.id, f.task.id, f.request);
+	const read = f.sessions.artifact.bind(f.sessions);
+	t.mock.method(f.sessions, "artifact", async (...args: Parameters<SessionManager["artifact"]>) => {
+		const artifact = await read(...args);
+		f.sessions["require"](f.worker.id).projectId = f.other.id;
+		return artifact;
+	});
+	const e = await f.service.evaluateNonCodeAcceptance(f.lead.id, f.task.id);
+	assert.equal(e.policyApplicability, "outdated");
+	assert.equal(e.eligible, false);
+	assert.ok(e.changedInputs);
+	assert.notDeepEqual(e.changedInputs.actorMetadata.before, e.changedInputs.actorMetadata.after);
+});
+
+test("non-code exact recovery checks current actor project again after durability", async (t) => {
+	const f = await nonCodePolicyFixture(t);
+	await f.service.saveNonCodeAcceptancePolicy(f.lead.id, f.task.id, f.request);
+	const durable = f.store.durable.bind(f.store);
+	t.mock.method(f.store, "durable", async () => {
+		await durable();
+		f.sessions["require"](f.lead.id).projectId = f.other.id;
+	});
+	await assert.rejects(f.service.lookupNonCodeAcceptancePolicy(f.lead.id, f.task.id, f.request), /project/);
 });
