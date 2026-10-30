@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { setImmediate } from "node:timers/promises";
 import type { Context } from "@earendil-works/chord";
-import type { Message, Usage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Message, Usage } from "@earendil-works/pi-ai";
 import { estimateMessageTokens, estimateTextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import {
 	type CompactionHooks,
@@ -24,10 +24,30 @@ export const HANDOFF_TARGET_TOKENS = 100_000;
 const WINDOW_FRACTION = 0.7;
 type Input = Parameters<CompactionHooks["beforeCompact"]>[0];
 type Decision = NonNullable<Awaited<ReturnType<CompactionHooks["beforeCompact"]>>>;
+/** Content-free evidence only. Never retain a rejected draft or a provider's error text. */
+type Diagnostic = {
+	phase: "writer" | "rewrite" | "validation";
+	attempt: number;
+	reason?:
+		| "accepted"
+		| "output_tokens"
+		| "provider_error"
+		| "incomplete"
+		| "tool_call"
+		| "model_identity"
+		| "raw_limit"
+		| "empty"
+		| "byte_limit"
+		| "sanitizer";
+	stopReason?: AssistantMessage["stopReason"] | "other";
+	rawBytes?: number;
+	sanitizedBytes?: number;
+};
 type Saved = {
 	task: string;
 	identity: string;
 	result: { kind: "pending" } | { kind: "ready"; text: string } | { kind: "failed"; message: string };
+	diagnostic?: Diagnostic;
 };
 export const AutoHandoffDoc = defineDoc<{ last?: Saved }>({
 	kind: "pilot.auto-handoff",
@@ -54,8 +74,10 @@ export function autoHandoffPolicy(window: number): CompactionPolicy {
 }
 
 function safe(text: string): string {
-	const result = neutralizeUntrusted(redactHistoryText(text));
-	return text.length > MAX_REDACT_CHARS
+	// Keep exact environment-secret matching, then catch credentials revealed by character removal.
+	const normalized = neutralizeUntrusted(redactHistoryText(text));
+	const result = neutralizeUntrusted(redactHistoryText(normalized));
+	return text.length > MAX_REDACT_CHARS || normalized.length > MAX_REDACT_CHARS
 		? `${result}\n[Source text clipped; read the retained original entry.]`
 		: result;
 }
@@ -297,6 +319,7 @@ export class AutoHandoff {
 				"Automatic handoff outcome is unknown after interruption. Original context was preserved; no request was replayed.",
 			);
 		if (continuing && saved.result.kind === "failed") return { error: saved.result.message };
+		let phase = "source preparation";
 		try {
 			context.abortSignal?.throwIfAborted();
 			const conversation = await harness.conversation(api.conversationId, context);
@@ -360,6 +383,7 @@ export class AutoHandoff {
 					task: String(api.taskId),
 					identity,
 					result: { kind: "pending" },
+					diagnostic: { phase: "writer", attempt: 1 },
 				};
 				return true;
 			}, context);
@@ -369,9 +393,11 @@ export class AutoHandoff {
 					: { decline: true };
 			let writerSource = source;
 			let result: Saved["result"] = { kind: "failed", message: "Automatic handoff returned no text." };
+			let diagnostic: Diagnostic = { phase: "writer", attempt: 1 };
 			// Only a fully received, oversized answer can be rewritten. Unknown calls are never replayed.
 			for (let attempt = 0; attempt < 2; attempt++) {
 				context.abortSignal?.throwIfAborted();
+				phase = attempt === 0 ? "writer request" : "rewrite request";
 				const answer = await api.models.completeSimple(
 					model,
 					{
@@ -388,6 +414,7 @@ export class AutoHandoff {
 						...(agent.thinkingLevel === "off" ? {} : { reasoning: agent.thinkingLevel }),
 					},
 				);
+				phase = "validation";
 				await recordUsage(harness, api, answer.usage, `${answer.provider}/${answer.model}`, context);
 				context.abortSignal?.throwIfAborted();
 				const current = await conversation.agent(context);
@@ -404,7 +431,24 @@ export class AutoHandoff {
 					.join("\n")
 					.trim();
 				let problem: string | undefined;
+				diagnostic = {
+					phase: "validation",
+					attempt: attempt + 1,
+					stopReason: ["pending", "stop", "length", "toolUse", "error", "aborted", "deferred"].includes(
+						answer.stopReason,
+					)
+						? answer.stopReason
+						: "other",
+					rawBytes: Buffer.byteLength(raw),
+					reason: "accepted",
+				};
 				if (answer.stopReason !== "stop") {
+					diagnostic.reason =
+						answer.stopReason === "length"
+							? "output_tokens"
+							: answer.stopReason === "error"
+								? "provider_error"
+								: "incomplete";
 					problem =
 						answer.stopReason === "length"
 							? "The handoff writer reached its output-token limit."
@@ -412,17 +456,25 @@ export class AutoHandoff {
 								? "The handoff writer's model request failed."
 								: "The handoff writer did not finish with a text response.";
 				} else if (answer.content.some((part) => part.type === "toolCall")) {
+					diagnostic.reason = "tool_call";
 					problem = "The handoff writer returned a tool call instead of text.";
 				} else if (answer.provider !== model.provider || answer.model !== model.id) {
+					diagnostic.reason = "model_identity";
 					problem = "The handoff writer returned a different model identity.";
 				} else if (raw.length > MAX_REDACT_CHARS) {
+					diagnostic.reason = "raw_limit";
 					problem = "The handoff writer returned too much text to prepare safely.";
 				}
 				// Apply the same privacy/framing safeguards as source preparation, rather than rejecting
 				// useful prose solely because the model included a tag or credential-like field.
 				const text = problem ? "" : safe(raw).trim();
-				if (!problem && !text) problem = "The handoff writer returned no text.";
+				if (!problem) diagnostic.sanitizedBytes = Buffer.byteLength(text);
+				if (!problem && !text) {
+					diagnostic.reason = "empty";
+					problem = "The handoff writer returned no text.";
+				}
 				if (!problem && Buffer.byteLength(text) > HANDOFF_OUTPUT_BYTES) {
+					diagnostic.reason = "byte_limit";
 					problem = `The handoff writer exceeded the ${HANDOFF_OUTPUT_BYTES}-byte limit (${Buffer.byteLength(text)} bytes).`;
 					const rewrite = JSON.stringify({
 						instruction:
@@ -433,11 +485,22 @@ export class AutoHandoff {
 						attempt === 0 &&
 						estimateTextTokens(instructions + rewrite) + maxTokens + 512 <= model.contextWindow
 					) {
+						// Fence and persist the rewrite phase before dispatch, without retaining its draft.
+						await harness.commit(async (tx) => {
+							const doc = await tx.doc(AutoHandoffDoc, api.conversationId);
+							if (doc.last?.task !== String(api.taskId) || doc.last.identity !== identity)
+								throw new Error("Handoff admission changed");
+							if (!this.options.eligible(api.conversationId)) throw new Error("Handoff scope changed");
+							doc.last.diagnostic = { ...diagnostic, phase: "rewrite", attempt: 2 };
+						}, context);
 						writerSource = rewrite;
 						continue;
 					}
 				}
-				if (!problem && !validText(text)) problem = "The handoff text could not be sanitized safely.";
+				if (!problem && !validText(text)) {
+					diagnostic.reason = "sanitizer";
+					problem = "The handoff text could not be sanitized safely.";
+				}
 				result = problem
 					? {
 							kind: "failed",
@@ -446,17 +509,19 @@ export class AutoHandoff {
 					: { kind: "ready", text };
 				break;
 			}
+			phase = "saving result";
 			await harness.commit(async (tx) => {
 				const doc = await tx.doc(AutoHandoffDoc, api.conversationId);
 				if (!this.options.eligible(api.conversationId)) throw new Error("Handoff scope changed before saving");
 				if (doc.last?.task !== String(api.taskId) || doc.last.identity !== identity)
 					throw new Error("Handoff admission changed");
 				doc.last.result = result;
+				doc.last.diagnostic = diagnostic;
 			}, context);
 			return result.kind === "ready" ? this.replacement(result.text, api, keepFrom) : { error: result.message };
 		} catch {
 			return {
-				error: "Automatic handoff was interrupted; its outcome is unconfirmed. Original context was preserved; no native tool was replayed.",
+				error: `Automatic handoff was interrupted during ${phase}; its outcome is unconfirmed. Original context was preserved; no native tool was replayed.`,
 			};
 		}
 	}

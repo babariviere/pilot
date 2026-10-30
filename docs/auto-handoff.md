@@ -35,6 +35,10 @@ tools. A still-oversized rewrite fails with the actual byte count. Length-limite
 failed, empty or tool-calling output fails without another request. Text is never clipped.
 Failure messages identify the rejection without exposing the draft or provider error text. These checks
 do not prove semantic completeness, correct citations or absence of model mistakes.
+Source and output preparation redact exact credentials, remove invisible/framing characters,
+then redact again. This preserves exact environment-secret matching while preventing character
+removal from revealing a credential after the privacy scan. Prepared output is checked again;
+non-idempotent preparation still fails closed, not into clipped text.
 The provider output-token ceiling is separate and adaptive, allowing room for the
 current model's reasoning as well as the visible handoff.
 
@@ -65,6 +69,17 @@ A returned handoff is recorded as ready before the Harness atomically places it 
 settles the blocking compaction. Returned usage is counted even when output is rejected.
 The pending marker remains in place throughout an optional rewrite. A crash during either
 call therefore never replays it, even if the earlier draft was received completely.
+
+The existing `pilot.auto-handoff` document also records content-free diagnostics: writer/rewrite/
+validation phase, attempt, fixed rejection category, stop category and trimmed UTF-8 byte counts
+before/after sanitization when available. Before a rewrite, its phase is committed while the
+request remains pending; counts then describe the previous completed draft, not the unknown rewrite.
+Rejected draft text and provider error details are never recorded. Unexpected failures surface a
+fixed preparation/request/validation/save phase in the existing compaction error. These diagnostics
+do not establish semantic completeness or prove whether an unacknowledged provider request ran.
+Older generic “incomplete or invalid” records lack these discriminants and cannot retrospectively
+identify an overflow, sanitization or provider failure. The sanitizer-order regression is reproduced
+synthetically; it is not an established cause of those historical records.
 
 - Stop cancels the native compaction and its model request. The old context stays in
   place if no handoff was committed. Stop still owns input withdrawal and tool drainage.
@@ -104,6 +119,10 @@ an already running installation. The legacy Swift Settings UI is unchanged.
 `auto-handoff.test.ts` uses faux providers to cover whole-context replacement, retained
 history/recall, both queue modes, Stop, invalid outputs, current-role fencing, toggle
 behavior, no native-effect replay and SQLite reopen from pending/ready/placed stages.
+Additional fixtures cover normalization-uncovered credentials, non-idempotent sanitization,
+malformed/transport failures, exact rejection diagnostics, large Unicode codemode results,
+retained head markers and interleaved two-result/image rounds. Original records and IDs are
+checked unchanged on rejection; neither the native tool-safe validator nor history is relaxed.
 `model.integration.test.ts` exercises the real KernelSession/NativeAdapter at startup
 and after a live setting change, including cold-cache ordering and coordinator exclusion.
 Daemon settings, HTTP CAS and worker-initialization propagation have separate offline tests.

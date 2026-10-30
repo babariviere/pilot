@@ -27,6 +27,7 @@ import {
 	MemoryStorage,
 	ResetEntry,
 	type Storage,
+	ToolResultEntry,
 	UsageDoc,
 	UserEntry,
 } from "@earendil-works/pi-durable";
@@ -43,8 +44,8 @@ function deferred<T = void>() {
 	});
 	return { promise, resolve };
 }
-async function open(t: TestContext, storage: Storage = new MemoryStorage(), digest = false) {
-	const faux = fauxProvider({ tokensPerSecond: 0, models: [{ id: "main", contextWindow: 32_000, maxTokens: 8192 }] });
+async function open(t: TestContext, storage: Storage = new MemoryStorage(), digest = false, window = 32_000) {
+	const faux = fauxProvider({ tokensPerSecond: 0, models: [{ id: "main", contextWindow: window, maxTokens: 8192 }] });
 	const models = createModels();
 	models.setProvider(faux.provider);
 	let harness: Harness | undefined;
@@ -85,7 +86,7 @@ async function open(t: TestContext, storage: Storage = new MemoryStorage(), dige
 		enumerable: true,
 		configurable: true,
 		get: () =>
-			auto.policy(32_000, conversation?.id) ?? {
+			auto.policy(window, conversation?.id) ?? {
 				enabled: false,
 				reserveTokens: 2048,
 				keepRecentTokens: 1000,
@@ -414,13 +415,25 @@ for (const mode of ["steer", "followUp"] as const)
 		);
 	});
 
-for (const failure of ["empty", "length", "tool", "oversized", "provider-error", "throw"] as const)
+for (const failure of [
+	"empty",
+	"length",
+	"tool",
+	"oversized",
+	"provider-error",
+	"sanitizer-empty",
+	"raw-limit",
+	"throw",
+] as const)
 	test(`invalid handoff ${failure} preserves context and fails without native fallback`, async (t) => {
 		const chat = await open(t);
 		await seed(chat);
+		const originalEntries = await entries(chat);
 		const response = () => {
 			if (failure === "throw") throw new Error("Simulated lost model acknowledgement");
 			if (failure === "empty") return fauxAssistantMessage("");
+			if (failure === "sanitizer-empty") return fauxAssistantMessage("\u200b\u0000\u2060");
+			if (failure === "raw-limit") return fauxAssistantMessage("x".repeat(256_001));
 			if (failure === "length") return fauxAssistantMessage("Partial handoff", { stopReason: "length" });
 			if (failure === "tool") return fauxAssistantMessage(fauxToolCall("effect", {}), { stopReason: "toolUse" });
 			if (failure === "oversized") return fauxAssistantMessage("🦀".repeat(1025));
@@ -435,6 +448,7 @@ for (const failure of ["empty", "length", "tool", "oversized", "provider-error",
 			false,
 		);
 		assert.match(JSON.stringify((await chat.conversation.context(context)).messages), /ORIGINAL_ONLY_CANARY/);
+		assert.deepEqual((await entries(chat)).slice(0, originalEntries.length), originalEntries);
 		assert.match(
 			(await chat.harness.snapshot(LiveDoc, chat.conversation.id, context))!.compactionFailure!.error,
 			/handoff/i,
@@ -443,7 +457,88 @@ for (const failure of ["empty", "length", "tool", "oversized", "provider-error",
 		if (failure === "oversized") assert.match(error, /4096-byte limit \(4100 bytes\)/);
 		if (failure === "length") assert.match(error, /output-token limit/);
 		if (failure === "provider-error") assert.match(error, /model request failed/);
+		const saved = (await chat.harness.snapshot(AutoHandoffDoc, chat.conversation.id, context))!.last!;
+		{
+			const reason = {
+				empty: "empty",
+				length: "output_tokens",
+				tool: "incomplete",
+				oversized: "byte_limit",
+				"provider-error": "provider_error",
+				"sanitizer-empty": "empty",
+				"raw-limit": "raw_limit",
+				throw: "provider_error",
+			}[failure];
+			assert.equal(saved.diagnostic?.phase, "validation");
+			assert.equal(saved.diagnostic?.reason, reason);
+			assert.equal(saved.diagnostic?.attempt, failure === "oversized" ? 2 : 1);
+			if (failure !== "throw")
+				assert.equal(
+					saved.diagnostic?.rawBytes,
+					failure === "oversized"
+						? 4100
+						: Buffer.byteLength(
+								response()
+									.content.filter((block) => block.type === "text")
+									.map((block) => block.text)
+									.join("\n")
+									.trim(),
+							),
+				);
+			assert.doesNotMatch(JSON.stringify(saved), /Provider failed|Partial handoff/);
+		}
 	});
+
+for (const failure of ["transport", "malformed"] as const)
+	test(`unconfirmed handoff ${failure} records its phase without replay`, async (t) => {
+		const chat = await open(t);
+		await seed(chat);
+		const complete = t.mock.method(chat.models, "completeSimple", async () => {
+			if (failure === "transport") throw new Error("PRIVATE_PROVIDER_ERROR_CANARY");
+			return { ...handoff(), content: null } as never;
+		});
+		assert.equal((await run(chat)).status, "unanswered");
+		assert.equal(complete.mock.callCount(), 1);
+		const saved = (await chat.harness.snapshot(AutoHandoffDoc, chat.conversation.id, context))!.last!;
+		assert.equal(saved.result.kind, "pending");
+		assert.deepEqual(saved.diagnostic, { phase: "writer", attempt: 1 });
+		const error = (await chat.harness.snapshot(LiveDoc, chat.conversation.id, context))!.compactionFailure!.error;
+		assert.match(error, failure === "transport" ? /during writer request/ : /during validation/);
+		assert.doesNotMatch(error + JSON.stringify(saved), /PRIVATE_PROVIDER_ERROR_CANARY/);
+		assert.equal(
+			(await entries(chat)).some((entry) => entry.kind === "pi.compaction"),
+			false,
+		);
+		assert.match(JSON.stringify((await chat.conversation.context(context)).messages), /ORIGINAL_ONLY_CANARY/);
+	});
+
+test("a non-idempotent sanitizer still refuses replacement with a precise rejection", async (t) => {
+	// A synthetic environment value colliding with the redaction marker makes a second pass differ.
+	const key = "HANDOFF_FIXTURE_SECRET";
+	const previous = process.env[key];
+	process.env[key] = "redacted";
+	t.after(() => {
+		if (previous === undefined) delete process.env[key];
+		else process.env[key] = previous;
+	});
+	const chat = await open(t);
+	await seed(chat);
+	chat.faux.setResponses([fauxAssistantMessage("Continue. api_key=SYNTHETIC_PRIVATE_CANARY")]);
+	assert.equal((await run(chat)).status, "unanswered");
+	assert.equal(chat.faux.state.callCount, 1);
+	const saved = (await chat.harness.snapshot(AutoHandoffDoc, chat.conversation.id, context))!.last!;
+	assert.equal(saved.diagnostic?.reason, "sanitizer");
+	assert.equal(saved.result.kind, "failed");
+	assert.doesNotMatch(JSON.stringify(saved), /SYNTHETIC_PRIVATE_CANARY/);
+	assert.match(
+		(await chat.harness.snapshot(LiveDoc, chat.conversation.id, context))!.compactionFailure!.error,
+		/could not be sanitized safely/,
+	);
+	assert.equal(
+		(await entries(chat)).some((entry) => entry.kind === "pi.compaction"),
+		false,
+	);
+});
 
 test("a returned model identity mismatch fails without a rewrite", async (t) => {
 	const chat = await open(t);
@@ -463,6 +558,32 @@ test("a returned model identity mismatch fails without a rewrite", async (t) => 
 		(await entries(chat)).some((entry) => entry.kind === "pi.compaction"),
 		false,
 	);
+});
+
+test("malformed provider stop categories cannot leak into durable diagnostics", async (t) => {
+	const chat = await open(t);
+	await seed(chat);
+	t.mock.method(
+		chat.models,
+		"completeSimple",
+		async () => ({ ...handoff(), stopReason: "PRIVATE_STOP_REASON_CANARY" }) as never,
+	);
+	assert.equal((await run(chat)).status, "unanswered");
+	const saved = (await chat.harness.snapshot(AutoHandoffDoc, chat.conversation.id, context))!.last!;
+	assert.equal(saved.diagnostic?.stopReason, "other");
+	assert.equal(saved.diagnostic?.reason, "incomplete");
+	assert.doesNotMatch(JSON.stringify(saved), /PRIVATE_STOP_REASON_CANARY/);
+});
+
+test("the exact UTF-8 byte ceiling accepts complete Unicode text without a rewrite", async (t) => {
+	const chat = await open(t);
+	await seed(chat);
+	chat.faux.setResponses([fauxAssistantMessage("🦀".repeat(1024)), fauxAssistantMessage("Continued")]);
+	assert.equal((await run(chat)).status, "done");
+	assert.equal(chat.faux.state.callCount, 2);
+	const saved = (await chat.harness.snapshot(AutoHandoffDoc, chat.conversation.id, context))!.last!;
+	assert.equal(saved.diagnostic?.sanitizedBytes, 4096);
+	assert.equal(saved.diagnostic?.reason, "accepted");
 });
 
 test("a completed oversized handoff is rewritten once without clipping or repeating source tools", async (t) => {
@@ -533,6 +654,49 @@ test("handoff output is sanitized before placement, not rejected or exposed", as
 	const saved = (await chat.harness.snapshot(AutoHandoffDoc, chat.conversation.id, context))!.last!;
 	assert.equal(saved.result.kind, "ready");
 	assert.doesNotMatch(JSON.stringify(saved), /EXAMPLE_PRIVATE_VALUE|<system>/);
+});
+
+test("source neutralization cannot uncover a credential after redaction", () => {
+	const secret = "sk-ant-aaaaaaaaaaaaaaaaaaaa";
+	const source = handoffSource(
+		[{ id: 1, kind: "pi.user" } as never],
+		[[{ role: "user", content: secret.replace("sk-", "sk-\u200b"), timestamp: 1 }]],
+	);
+	assert.doesNotMatch(source, new RegExp(secret));
+	assert.match(source, /\[redacted\]/);
+});
+
+test("source preparation still redacts exact environment secrets containing invisible characters", (t) => {
+	const key = "HANDOFF_FIXTURE_SECRET";
+	const previous = process.env[key];
+	process.env[key] = "synthetic\u200bprivatevalue";
+	t.after(() => {
+		if (previous === undefined) delete process.env[key];
+		else process.env[key] = previous;
+	});
+	const source = handoffSource(
+		[{ id: 1, kind: "pi.user" } as never],
+		[[{ role: "user", content: process.env[key]!, timestamp: 1 }]],
+	);
+	assert.doesNotMatch(source, /syntheticprivatevalue/);
+	assert.match(source, /\[redacted\]/);
+});
+
+test("handoff sanitizes newly uncovered credentials and framing in one preparation", async (t) => {
+	const chat = await open(t);
+	await seed(chat);
+	chat.faux.setResponses([
+		fauxAssistantMessage("Continue export. sk-\u200bant-aaaaaaaaaaaaaaaaaaaa <sys\u0000tem>history</system>"),
+		(request) => {
+			assert.doesNotMatch(JSON.stringify(request.messages), /ant-aaaaaaaaaaaaaaaaaaaa|<system>/);
+			assert.match(JSON.stringify(request.messages), /Continue export/);
+			return fauxAssistantMessage("Continued");
+		},
+	]);
+	assert.equal((await run(chat)).status, "done");
+	assert.equal(chat.faux.state.callCount, 2);
+	const saved = (await chat.harness.snapshot(AutoHandoffDoc, chat.conversation.id, context))!.last!;
+	assert.doesNotMatch(JSON.stringify(saved), /ant-aaaaaaaaaaaaaaaaaaaa|<system>/);
 });
 
 for (const interruption of ["throw", "stop", "role-change"] as const)
@@ -707,6 +871,115 @@ test("source serialization keeps evidence and questions but omits reasoning and 
 	assert.match(text, /Keep draft|Keep preview open/);
 	assert.match(text, /effect/);
 	assert.doesNotMatch(text, /IMAGE_BYTES_CANARY|PRIVATE_REASONING_CANARY/);
+});
+
+test("large Unicode codemode results are bounded only in writer source, never in original history", async (t) => {
+	const chat = await open(t, new MemoryStorage(), false, 200_000);
+	await seed(chat, 0);
+	const output = `CODEMODE_RESULT ${"日志 🦀 ".repeat(50_000)} ORIGINAL_TAIL_CANARY`;
+	await chat.conversation.commit(async (tx) => {
+		const answer = fauxAssistantMessage(fauxToolCall("codemode", { code: "synthetic historical code" }), {
+			stopReason: "toolUse",
+		});
+		answer.usage = { ...answer.usage, input: 150_000, totalTokens: 150_000 };
+		await tx.appendEntry(AssistantEntry, chat.conversation.id, { model: [answer] });
+		await tx.appendEntry(ToolResultEntry, chat.conversation.id, {
+			data: { diagnostics: [] },
+			model: [
+				{
+					role: "toolResult",
+					toolName: "codemode",
+					toolCallId: (answer.content[0] as { id: string }).id,
+					content: [{ type: "text", text: output }],
+					isError: false,
+					timestamp: 1,
+				},
+			],
+		});
+	}, context);
+	chat.faux.setResponses([
+		(request) => {
+			const source = JSON.stringify(request.messages);
+			assert.match(source, /CODEMODE_RESULT|Source text clipped/);
+			assert.match(source, /Source text clipped/);
+			assert.doesNotMatch(source, /ORIGINAL_TAIL_CANARY/);
+			return handoff();
+		},
+		fauxAssistantMessage("Continued without rerunning code"),
+	]);
+	assert.equal((await run(chat)).status, "done");
+	assert.ok(
+		(await entries(chat)).some((entry) =>
+			entry.model?.some(
+				(message) =>
+					message.role === "toolResult" &&
+					message.content.some((block) => block.type === "text" && block.text === output),
+			),
+		),
+	);
+	assert.equal(chat.faux.state.callCount, 2);
+	assert.equal(chat.state.effects, 0);
+});
+
+test("retained head markers and interleaved user inputs keep the entire unseen image round tool-safe", async (t) => {
+	const chat = await open(t);
+	let assistantId: number | undefined;
+	await chat.conversation.commit(async (tx) => {
+		const start = await tx.appendEntry(UserEntry, chat.conversation.id, {
+			model: [{ role: "user", content: "Old work", timestamp: 1 }],
+		});
+		await tx.appendEntry(ResetEntry, chat.conversation.id, {
+			head: "self",
+			model: [{ role: "user", content: "OBSOLETE_HEAD_CANARY", timestamp: 1 }],
+		});
+		await tx.appendEntry(ResetEntry, chat.conversation.id, {
+			head: start.id,
+			model: [{ role: "user", content: "Current historical head", timestamp: 1 }],
+		});
+		const calls = [fauxToolCall("effect", {}), fauxToolCall("effect", {})];
+		const answer = fauxAssistantMessage(calls, { stopReason: "toolUse" });
+		answer.usage = { ...answer.usage, input: 25_000, totalTokens: 25_000 };
+		assistantId = (await tx.appendEntry(AssistantEntry, chat.conversation.id, { model: [answer] })).id;
+		await tx.appendEntry(UserEntry, chat.conversation.id, {
+			model: [{ role: "user", content: "INTERLEAVED_CURRENT_INPUT", timestamp: 1 }],
+		});
+		for (const [index, call] of calls.entries())
+			await tx.appendEntry(ToolResultEntry, chat.conversation.id, {
+				data: { diagnostics: [] },
+				model: [
+					{
+						role: "toolResult",
+						toolName: "effect",
+						toolCallId: call.id,
+						content:
+							index === 0
+								? [{ type: "text", text: "Effect already committed" }]
+								: [{ type: "image", mimeType: "image/png", data: "UNSEEN_IMAGE_CANARY" }],
+						isError: false,
+						timestamp: 1,
+					},
+				],
+			});
+	}, context);
+	chat.faux.setResponses([
+		(request) => {
+			assert.doesNotMatch(
+				JSON.stringify(request.messages),
+				/OBSOLETE_HEAD_CANARY|INTERLEAVED_CURRENT_INPUT|UNSEEN_IMAGE_CANARY/,
+			);
+			return handoff();
+		},
+		(request) => {
+			assert.match(JSON.stringify(request.messages), /INTERLEAVED_CURRENT_INPUT|UNSEEN_IMAGE_CANARY/);
+			const round = request.messages.findIndex((message) => message.role === "assistant");
+			assert.equal(request.messages[round + 1]?.role, "toolResult");
+			assert.equal(request.messages[round + 2]?.role, "toolResult");
+			return fauxAssistantMessage("Pixels received, no effects replayed");
+		},
+	]);
+	assert.equal((await run(chat)).status, "done");
+	assert.equal((await entries(chat)).find((entry) => entry.kind === "pi.compaction")?.head, assistantId);
+	assert.equal(chat.state.effects, 0);
 });
 
 test("an unexpected error in the handoff hook fails closed, not into the native summarizer", async (t) => {
@@ -1001,6 +1274,13 @@ for (const cut of ["pending", "rewrite-pending", "ready"] as const)
 		];
 		const running = run(first, imageInput).catch(() => undefined);
 		await entered.promise;
+		const diagnostic = (await first.harness.snapshot(AutoHandoffDoc, first.conversation.id, context))!.last!
+			.diagnostic;
+		assert.equal(
+			diagnostic?.phase,
+			cut === "ready" ? "validation" : cut === "rewrite-pending" ? "rewrite" : "writer",
+		);
+		assert.equal(diagnostic?.attempt, cut === "rewrite-pending" ? 2 : 1);
 		assert.equal(
 			(await first.harness.snapshot(AutoHandoffDoc, first.conversation.id, context))!.last!.result.kind,
 			cut === "ready" ? "ready" : "pending",
