@@ -144,23 +144,17 @@ pub fn run_session_subagents_probe(cx: &mut HeadlessAppContext) {
             assert!(!anchor.2, "fixture reads parent history");
             publish(cx, h, &view, children(), true);
             cx.update_window(h, |_, w, cx| {
-                for (name, state) in [
-                    (NAME, "Working"),
-                    ("Finished", "Done"),
-                    ("Idle", "Idle"),
-                    ("Failed", "Failed"),
-                ] {
+                for parent in ["source", "coordinator", "member"] {
+                    assert!(w.try_find(format!("sidebar-subagents:{parent}")).is_none());
                     assert!(
-                        w.find(format!("sidebar-subagent:source:{name}")).visible(),
-                        "actual names shown by default"
-                    );
-                    assert!(
-                        w.find(format!("sidebar-subagent:source:{name}"))
-                            .label()
-                            .unwrap()
-                            .contains(state)
+                        w.try_find(format!("sidebar-subagent:{parent}:{NAME}"))
+                            .is_none()
                     );
                 }
+                assert!(
+                    w.find("chat-row-member").visible(),
+                    "mission member remains visible"
+                );
                 assert_eq!(input.read(cx).value().as_ref(), DRAFT);
                 let now = transcript.read(cx).history_probe_anchor(cx);
                 assert_eq!(now.0, anchor.0);
@@ -169,19 +163,11 @@ pub fn run_session_subagents_probe(cx: &mut HeadlessAppContext) {
                 let tree = &view.read(cx).chats.read(cx).delegate().tree;
                 assert_eq!(tree.threads.len(), 1);
                 assert_eq!(tree.threads[0].members.len(), 1);
-                w.click("sidebar-subagents:source", cx);
             })
             .unwrap();
             settle(cx, h);
-            cx.update_window(h, |_, w, cx| {
-                assert!(
-                    w.try_find(format!("sidebar-subagent:source:{NAME}"))
-                        .is_none()
-                );
-                w.click("sidebar-subagents:source", cx);
-                w.click("session-subagents-toggle", cx);
-            })
-            .unwrap();
+            cx.update_window(h, |_, w, cx| w.click("session-subagents-toggle", cx))
+                .unwrap();
             settle(cx, h);
             if let Some(p) = &captures {
                 cx.capture_screenshot(h)
@@ -198,7 +184,7 @@ pub fn run_session_subagents_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             settle(cx, h);
             cx.update_window(h, |_, w, cx| {
-                w.click(format!("sidebar-subagent:source:{NAME}"), cx)
+                w.click(format!("composer-subagent:source:{NAME}"), cx)
             })
             .unwrap();
             settle(cx, h);
@@ -318,7 +304,7 @@ pub fn run_session_subagents_probe(cx: &mut HeadlessAppContext) {
                 let now = transcript.read(cx).history_probe_anchor(cx);
                 assert_eq!(now.0, anchor.0);
                 assert!((now.1 - anchor.1).abs() < 1.);
-                w.click(format!("sidebar-subagent:source:{NAME}"), cx);
+                w.click(format!("composer-subagent:source:{NAME}"), cx);
             })
             .unwrap();
             settle(cx, h);
@@ -329,15 +315,21 @@ pub fn run_session_subagents_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             settle(cx, h);
             // Same name under a mission member is a different conversation/draft.
+            cx.update_window(h, |_, w, cx| w.click("chat-row-member", cx))
+                .unwrap();
+            settle(cx, h);
+            assert!(matches!(commands.try_recv(),Ok(Command::Open{id,..}) if id=="member"));
+            cx.update_window(h, |_, w, cx| w.click("session-subagents-toggle", cx))
+                .unwrap();
+            settle(cx, h);
             cx.update_window(h, |_, w, cx| {
-                w.click(format!("sidebar-subagent:member:{NAME}"), cx)
+                w.click(format!("composer-subagent:member:{NAME}"), cx)
             })
             .unwrap();
             until(cx, h, |w| {
                 w.try_find("subagent-refresh")
                     .is_some_and(|e| e.disabled() != Some(true))
             });
-            assert!(matches!(commands.try_recv(),Ok(Command::Open{id,..}) if id=="member"));
             cx.update_window(h, |_, w, cx| {
                 assert!(input.read(cx).value().is_empty());
                 assert_ne!(editor.read(cx).navigation_key(), Some(key.as_str()));
@@ -351,7 +343,7 @@ pub fn run_session_subagents_probe(cx: &mut HeadlessAppContext) {
             assert!(matches!(commands.try_recv(),Ok(Command::Open{id,..}) if id=="source"));
             cx.update_window(h, |_, w, cx| {
                 assert_eq!(input.read(cx).value().as_ref(), DRAFT);
-                w.click(format!("sidebar-subagent:source:{NAME}"), cx);
+                w.click(format!("composer-subagent:source:{NAME}"), cx);
             })
             .unwrap();
             settle(cx, h);
@@ -359,12 +351,6 @@ pub fn run_session_subagents_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, _| {
                 assert_eq!(w.find("local-send").disabled(), Some(true));
                 assert_eq!(w.find("subagent-refresh").disabled(), Some(true));
-                assert!(
-                    w.find(format!("sidebar-subagent:source:{NAME}"))
-                        .label()
-                        .unwrap()
-                        .contains("State unknown")
-                );
             })
             .unwrap();
             publish(cx, h, &view, children(), true);
@@ -397,33 +383,6 @@ pub fn run_session_subagents_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
-            // Tab/Enter activates the actual child, never its parent row's Confirm.
-            cx.update_window(h, |_, w, cx| {
-                view.update(cx, |v, cx| v.chats.update(cx, |l, cx| l.focus(w, cx)))
-            })
-            .unwrap();
-            settle(cx, h);
-            let mut reached = false;
-            for _ in 0..24 {
-                cx.update_window(h, |_, w, cx| w.press("tab", cx)).unwrap();
-                settle(cx, h);
-                reached = cx
-                    .update_window(h, |_, w, _| {
-                        w.find(format!("sidebar-subagent:source:{NAME}")).focused() == Some(true)
-                    })
-                    .unwrap();
-                if reached {
-                    break;
-                }
-            }
-            assert!(reached, "keyboard reaches child row");
-            cx.update_window(h, |_, w, cx| w.press("enter", cx))
-                .unwrap();
-            settle(cx, h);
-            cx.update_window(h, |_, w, _| {
-                assert!(w.find("subagent-conversation").visible())
-            })
-            .unwrap();
             while let Ok(command) = writes.try_recv() {
                 assert!(
                     !matches!(command, WriteCommand::Submit { .. }),
@@ -437,7 +396,7 @@ pub fn run_session_subagents_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             cx.run_until_parked();
             println!(
-                "session subagents {tag}: visible child rows, exact main conversation/shared composer, separate drafts, explicit Send, state/identity, mission folds and IME/keyboard passed"
+                "session subagents {tag}: absent sidebar children, preserved mission member, exact main conversation/shared composer, separate drafts, explicit Send, state/identity, mission folds and IME/keyboard passed"
             );
         }
     }

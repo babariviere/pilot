@@ -8,7 +8,7 @@
 //! collapsed count sits in one trailing column.
 use super::{
     LocalViewer, mission_link, mission_link_focus, mission_mark, mission_segment,
-    session_subagents_view, sidebar_mission_title,
+    sidebar_mission_title,
 };
 use crate::{
     app_icon::AppIcon,
@@ -81,7 +81,6 @@ pub(crate) struct ChatList {
     /// Collapsed threads and threads showing their finished members, by mission.
     pub(crate) collapsed: HashSet<String>,
     pub(crate) show_finished: HashSet<String>,
-    pub(crate) collapsed_subagents: HashSet<String>,
     /// Last looked and your own activity order, private to this machine.
     pub(crate) memory: Memory,
     /// Each row's mark fade, by row key.
@@ -110,7 +109,6 @@ impl ChatList {
             folder: None,
             collapsed: HashSet::new(),
             show_finished: HashSet::new(),
-            collapsed_subagents: HashSet::new(),
             memory,
             marks: HashMap::new(),
             focus: None,
@@ -739,12 +737,8 @@ impl ChatList {
                         }),
                 )
             });
-        item(&chat.id, spoken, self.opened.as_ref() == Some(&chat.id)).child(self.with_subagents(
-            self.menu(row, Some(&chat)),
-            Some(&chat),
-            false,
-            cx,
-        ))
+        item(&chat.id, spoken, self.opened.as_ref() == Some(&chat.id))
+            .child(self.menu(row, Some(&chat)))
     }
     fn render_parent(
         &mut self,
@@ -1031,12 +1025,7 @@ impl ChatList {
                         ),
                 )
             });
-        item(&key, spoken, open).child(self.with_subagents(
-            self.menu(row, coordinator.as_ref()),
-            coordinator.as_ref(),
-            stem,
-            cx,
-        ))
+        item(&key, spoken, open).child(self.menu(row, coordinator.as_ref()))
     }
     fn render_member(
         &mut self,
@@ -1121,53 +1110,8 @@ impl ChatList {
             }))
             .children(mark.map(|m| state_word(m.word(), m, menu, cx)))
             .child(trailing);
-        item(&chat.id, spoken, self.opened.as_ref() == Some(&chat.id)).child(self.with_subagents(
-            self.menu(row, Some(&chat)),
-            Some(&chat),
-            !last,
-            cx,
-        ))
-    }
-    fn with_subagents(
-        &self,
-        row: gpui_kit::AnyElement,
-        chat: Option<&Chat>,
-        stem: bool,
-        cx: &mut Context<ListState<Self>>,
-    ) -> gpui_kit::AnyElement {
-        let Some(chat) = chat.filter(|c| c.subagents.visible()) else {
-            return row;
-        };
-        div()
-            .v_flex()
-            .w_full()
-            .min_w_0()
-            .child(row)
-            .child(
-                div()
-                    .relative()
-                    .w_full()
-                    .min_w_0()
-                    .when(stem, |d| {
-                        d.child(
-                            div()
-                                .absolute()
-                                .left(px(STEM_X - 0.5))
-                                .top_0()
-                                .bottom_0()
-                                .w(px(1.))
-                                .bg(cx.theme().border),
-                        )
-                    })
-                    .child(session_subagents_view::sidebar(
-                        self.action_owner.clone(),
-                        chat,
-                        self.collapsed_subagents.contains(&chat.id),
-                        cx.entity().downgrade(),
-                        cx,
-                    )),
-            )
-            .into_any_element()
+        item(&chat.id, spoken, self.opened.as_ref() == Some(&chat.id))
+            .child(self.menu(row, Some(&chat)))
     }
     fn render_fold(
         &mut self,
@@ -1397,8 +1341,7 @@ impl ListDelegate for ChatList {
         self.tree.bounds[section + 1] - self.tree.bounds[section]
     }
     fn item_height(&self, ix: IndexPath, _: &App) -> Option<Pixels> {
-        let subagents = self.at(ix).is_some_and(|c| c.subagents.visible());
-        Some(px((match self.row(ix)? {
+        Some(px(match self.row(ix)? {
             Row::Chat(chat) if self.chat_caption(self.all.get(chat)?, ix.section) => {
                 TWO_LINE_HEIGHT
             }
@@ -1408,15 +1351,6 @@ impl ListDelegate for ChatList {
             Row::Member { .. } => MEMBER_HEIGHT,
             Row::Fold(_) => FOLD_HEIGHT,
             Row::Group(_) => GROUP_HEIGHT,
-        }) + if subagents {
-            self.at(ix).map_or(0., |chat| {
-                session_subagents_view::sidebar_height(
-                    &chat.subagents,
-                    self.collapsed_subagents.contains(&chat.id),
-                )
-            })
-        } else {
-            0.
         }))
     }
     fn section_header_height(&self, section: usize, _: &App) -> Option<Pixels> {

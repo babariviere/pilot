@@ -1,27 +1,18 @@
-//! Actual named children in the sidebar and composer; selecting one keeps the
+//! Actual named children in the composer; selecting one keeps the
 //! same composer entity and a separate durable draft in the main conversation.
 use super::*;
 use crate::{
-    session_subagents::{Child, Report, State, Target},
+    session_subagents::{Child, State, Target},
     ui::{self, Action, Text},
 };
 use gpui_kit::{FocusHandle, StatefulInteractiveElement};
 use std::collections::BTreeSet;
 
-pub(super) const SIDEBAR_HEIGHT: f32 = 24.;
 fn current(v: &LocalViewer) -> bool {
     v.state.list_loaded && v.state.status == "Connected · Local"
 }
 fn status(child: &Child, fresh: bool) -> State {
     if fresh { child.state } else { State::Unknown }
-}
-pub(super) fn sidebar_height(report: &Report, collapsed: bool) -> f32 {
-    SIDEBAR_HEIGHT
-        + if collapsed {
-            0.
-        } else {
-            report.children.len() as f32 * SIDEBAR_HEIGHT
-        }
 }
 pub(super) fn open(
     viewer: Entity<LocalViewer>,
@@ -81,223 +72,6 @@ impl LocalViewer {
         .detach();
         cx.notify();
     }
-}
-
-pub(super) fn sidebar(
-    viewer: gpui_kit::WeakEntity<LocalViewer>,
-    chat: &Chat,
-    collapsed: bool,
-    list: gpui_kit::WeakEntity<ListState<super::sidebar_list::ChatList>>,
-    cx: &App,
-) -> impl IntoElement + use<> {
-    let fresh = viewer.upgrade().is_some_and(|v| current(v.read(cx)));
-    let id = chat.id.clone();
-    let guard = viewer.clone();
-    let toggle = std::rc::Rc::new(move |w: &mut Window, cx: &mut App| {
-        if !guard
-            .update(cx, |v, cx| v.project_choices_ready(w, cx))
-            .unwrap_or(false)
-        {
-            return;
-        }
-        let _ = list.update(cx, |l, cx| {
-            if !l.delegate_mut().collapsed_subagents.remove(&id) {
-                l.delegate_mut().collapsed_subagents.insert(id.clone());
-            }
-            cx.notify();
-        });
-    });
-    let confirm = toggle.clone();
-    let report = &chat.subagents;
-    let summary = report.summary(fresh);
-    div()
-        .id(SharedString::from(format!(
-            "sidebar-subagents-slot:{}",
-            chat.id
-        )))
-        .v_flex()
-        .w_full()
-        .min_w_0()
-        .pl(px(25.))
-        .child(
-            div()
-                .id(SharedString::from(format!(
-                    "sidebar-subagents-header:{}",
-                    chat.id
-                )))
-                .h(px(SIDEBAR_HEIGHT))
-                .w_full()
-                .on_action(move |_: &gpui_kit::base::actions::Confirm, w, cx| {
-                    cx.stop_propagation();
-                    confirm(w, cx);
-                })
-                .child(
-                    ui::action(
-                        SharedString::from(format!("sidebar-subagents:{}", chat.id)),
-                        "",
-                        Action::Quiet,
-                    )
-                    .w_full()
-                    .min_w_0()
-                    .h(px(SIDEBAR_HEIGHT))
-                    .accessibility_label(SharedString::from(format!(
-                        "{} {summary} in {}",
-                        if collapsed { "Show" } else { "Hide" },
-                        chat.title
-                    )))
-                    .child(
-                        div()
-                            .h_flex()
-                            .w_full()
-                            .min_w_0()
-                            .gap_1()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(
-                                ui::text(
-                                    Text::Caption,
-                                    SharedString::from(if report.unavailable {
-                                        "Subagents unavailable".into()
-                                    } else {
-                                        format!(
-                                            "{} subagent{}",
-                                            report.children.len(),
-                                            if report.children.len() == 1 { "" } else { "s" }
-                                        )
-                                    }),
-                                )
-                                .min_w_0()
-                                .flex_1()
-                                .truncate(),
-                            )
-                            .child(
-                                if collapsed {
-                                    AppIcon::Forward
-                                } else {
-                                    AppIcon::Expand
-                                }
-                                .inline()
-                                .flex_none(),
-                            ),
-                    )
-                    .on_mouse_down(gpui_kit::MouseButton::Left, |_, w, cx| {
-                        w.prevent_default();
-                        cx.stop_propagation();
-                    })
-                    .on_click(move |_, w, cx| {
-                        cx.stop_propagation();
-                        toggle(w, cx);
-                    }),
-                ),
-        )
-        .when(!collapsed, |d| {
-            d.child(
-                div()
-                    .id(SharedString::from(format!(
-                        "sidebar-subagent-list:{}",
-                        chat.id
-                    )))
-                    .v_flex()
-                    .w_full()
-                    .min_w_0()
-                    .children(report.children.iter().map(|child| {
-                        let (parent, name) = (chat.id.clone(), child.name.clone());
-                        let owner = viewer.clone();
-                        let guard = viewer.clone();
-                        let invoke = std::rc::Rc::new(move |w: &mut Window, cx: &mut App| {
-                            if let Some(v) = owner.upgrade() {
-                                open(v, parent.clone(), Some(name.clone()), w, cx);
-                            }
-                        });
-                        let confirm = invoke.clone();
-                        let state = status(child, fresh);
-                        let active = viewer.upgrade().is_some_and(|v| {
-                            v.read(cx).subagent.as_ref().is_some_and(|s| {
-                                let target = &s.read(cx).target;
-                                target.parent == chat.id && target.name == child.name
-                            })
-                        });
-                        div()
-                            .id(SharedString::from(format!(
-                                "sidebar-subagent-slot:{}:{}",
-                                chat.id, child.name
-                            )))
-                            .w_full()
-                            .h(px(SIDEBAR_HEIGHT))
-                            .on_action(move |_: &gpui_kit::base::actions::Confirm, w, cx| {
-                                cx.stop_propagation();
-                                confirm(w, cx);
-                            })
-                            .child(
-                                ui::action(
-                                    SharedString::from(format!(
-                                        "sidebar-subagent:{}:{}",
-                                        chat.id, child.name
-                                    )),
-                                    "",
-                                    Action::Quiet,
-                                )
-                                .w_full()
-                                .min_w_0()
-                                .h(px(SIDEBAR_HEIGHT))
-                                .selected(active)
-                                .accessibility_label(SharedString::from(format!(
-                                    "Open subagent {}, {}, in {}",
-                                    child.name,
-                                    state.label(),
-                                    chat.title
-                                )))
-                                .child(
-                                    div()
-                                        .h_flex()
-                                        .w_full()
-                                        .min_w_0()
-                                        .gap_1()
-                                        .child(
-                                            AppIcon::Subagent
-                                                .inline()
-                                                .flex_none()
-                                                .text_color(cx.theme().muted_foreground),
-                                        )
-                                        .child(
-                                            ui::text(
-                                                Text::Caption,
-                                                SharedString::from(child.name.clone()),
-                                            )
-                                            .min_w_0()
-                                            .flex_1()
-                                            .truncate(),
-                                        )
-                                        .child(
-                                            ui::text(
-                                                Text::Caption,
-                                                if state == State::Unknown {
-                                                    "Unknown"
-                                                } else {
-                                                    state.label()
-                                                },
-                                            )
-                                            .flex_none()
-                                            .text_color(if state == State::Failed {
-                                                cx.theme().danger
-                                            } else {
-                                                cx.theme().muted_foreground
-                                            }),
-                                        ),
-                                )
-                                .on_mouse_down(gpui_kit::MouseButton::Left, move |_, w, cx| {
-                                    w.prevent_default();
-                                    cx.stop_propagation();
-                                    let _ =
-                                        guard.update(cx, |v, cx| v.project_choices_ready(w, cx));
-                                })
-                                .on_click(move |_, w, cx| {
-                                    cx.stop_propagation();
-                                    invoke(w, cx);
-                                }),
-                            )
-                    })),
-            )
-        })
 }
 
 pub(super) struct Entry {

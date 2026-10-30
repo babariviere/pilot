@@ -45,6 +45,7 @@ pub(crate) fn report(range: Range, buckets: bool) -> Value {
 }
 /// Longer ranges with billions of tokens per day, a 30-day retention floor, and
 /// periodic partial, empty and zero days.
+#[cfg(feature = "native-probes")]
 pub(crate) fn long_report(range: Range, buckets: bool) -> Value {
     let mut v = report(range, false);
     let floor = range.to.saturating_sub(30 * DAY);
