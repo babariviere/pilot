@@ -580,16 +580,44 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                 catalog: None,
                             });
                             publish(updates, replace, status.clone());
-                            tokio::select! {
-                                reply = async {
-                                    let result = crate::project_registration::register(&client, &options, store, &id, &path, |store| {
-                                            status.book=Some(Arc::new(store.book.clone())); publish(updates,replace,status.clone());
-                                        }).await;
-                                    if let Ok(Outcome::Created(created)) = &result { status.project_receipt = Some((id.clone(),created.clone())); }
-                                    let catalog = Some(crate::project_registration::catalog(&client, &options).await);
-                                    Reply { id, result, catalog }
-                                } => { status.project = Some(reply); if store.is_faulted() { status.error=Some("Private state write failed; keep/copy unsaved text before restart."); } Ok("") },
-                                _ = close.recv() => { closing=true; Ok("Closing. Interrupted project registration is not retried.") }
+                            let mut owner = DeliveryOwner {
+                                store,
+                                status: &mut status,
+                                channels: Some(&channels),
+                                autosave: &mut autosave,
+                                closing: &mut closing,
+                            };
+                            let result = owner.project(&client, &options, &id, &path).await;
+                            if let Ok(Outcome::Created(created)) = &result {
+                                owner.status.project_receipt = Some((id.clone(), created.clone()));
+                            }
+                            let catalog = if *owner.closing {
+                                Err("Closing. Project registration was interrupted.")
+                            } else {
+                                owner
+                                    .effect(async {
+                                        Ok(crate::project_registration::catalog(&client, &options)
+                                            .await)
+                                    })
+                                    .await
+                            };
+                            match catalog {
+                                Ok(catalog) => {
+                                    status.project = Some(Reply {
+                                        id,
+                                        result,
+                                        catalog: Some(catalog),
+                                    });
+                                    if store.is_faulted() {
+                                        status.error = Some(
+                                            "Private state write failed; keep/copy unsaved text before restart.",
+                                        );
+                                    }
+                                    Ok("")
+                                }
+                                Err(_) => {
+                                    Ok("Closing. Interrupted project registration is not retried.")
+                                }
                             }
                         }
                         Some(WriteCommand::Mission {

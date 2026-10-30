@@ -1,4 +1,5 @@
 use super::*;
+use crate::delivery_store::Store;
 use crate::project_registration_fixture::{Behavior, Server};
 use std::time::Duration;
 struct Temp(std::path::PathBuf);

@@ -1,7 +1,7 @@
 //! One-shot Local registration. Unknown attempts are retained, never replayed.
 use crate::{
     LocalOptions,
-    delivery_store::{Failure, Store, token},
+    delivery_store::{Failure, token},
     local_model::Project,
 };
 use serde::{Deserialize, Serialize};
@@ -75,17 +75,12 @@ pub(crate) async fn catalog(
     }
     crate::local_model::projects(&body(response, 2 * 1024 * 1024).await?)
 }
-pub(crate) async fn register(
+/// Read-only admission and captured bytes. No private Store borrow crosses HTTP.
+pub(crate) async fn preflight(
     client: &reqwest::Client,
     options: &LocalOptions,
-    store: &mut Store,
-    id: &str,
     path: &str,
-    prepared: impl FnOnce(&Store),
-) -> Result<Outcome, Failure> {
-    if store.book.host != options.host() {
-        return Err("Local registration source differs from private state; no request was sent.");
-    }
+) -> Result<Vec<u8>, Failure> {
     validate_path(path)?;
     // Preflight is read-only. Even a duplicate is current catalog evidence,
     // never a receipt proving that a previous Unknown request succeeded.
@@ -98,8 +93,14 @@ pub(crate) async fn register(
     if payload.len() > 32 * 1024 {
         return Err("Encoded project path is too large.");
     }
-    store.prepare_project(id, path)?;
-    prepared(store);
+    Ok(payload)
+}
+
+pub(crate) async fn submit_request(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    payload: Vec<u8>,
+) -> Outcome {
     let response = client
         .post(format!("{}/api/projects", options.loopback()))
         .header("Content-Type", "application/json")
@@ -107,14 +108,14 @@ pub(crate) async fn register(
         .send()
         .await;
     let Ok(response) = response else {
-        return Ok(Outcome::Unknown(
+        return Outcome::Unknown(
             "Registration is unconfirmed. The response was lost; do not resend this folder.",
-        ));
+        );
     };
     // ProjectStore pushes in memory before persist. Even non-2xx may follow
     // mutation; no status/body string proves that retry is safe.
     if response.status() != reqwest::StatusCode::CREATED {
-        return Ok(Outcome::Unknown(match response.status().as_u16() {
+        return Outcome::Unknown(match response.status().as_u16() {
             401 | 403 => {
                 "Local refused access. Registration is unconfirmed; check projects, not a mutation retry."
             }
@@ -127,29 +128,46 @@ pub(crate) async fn register(
             _ => {
                 "Local reported an error. Registration may have changed before that error; do not resend this folder."
             }
-        }));
+        });
     }
     let value = match body(response, 64 * 1024).await {
         Ok(value) => value,
         Err(_) => {
-            return Ok(Outcome::Unknown(
+            return Outcome::Unknown(
                 "Registration response is incomplete, oversized or malformed. Do not resend this folder.",
-            ));
+            );
         }
     };
     let rows = crate::local_model::projects(&serde_json::json!([value]));
     let Ok(rows) = rows else {
-        return Ok(Outcome::Unknown(
+        return Outcome::Unknown(
             "Registration receipt identity/path is invalid. Do not resend this folder.",
-        ));
+        );
     };
-    let id_created = rows[0].id.clone();
-    // No local settlement failure, including pre-I/O capacity refusal, can
-    // undo the known 201. Keep its ID in the worker's memory receipt while
-    // the original durable Unknown continues fencing replay. The UI compares
-    // that receipt with the private record, never claims it survived restart.
-    let _ = store.finish_project(id, &id_created);
-    Ok(Outcome::Created(id_created))
+    Outcome::Created(rows[0].id.clone())
+}
+
+// Direct transport tests retain the same staged orchestration without a worker.
+#[cfg(test)]
+async fn register(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    store: &mut crate::delivery_store::Store,
+    id: &str,
+    path: &str,
+    prepared: impl FnOnce(&crate::delivery_store::Store),
+) -> Result<Outcome, Failure> {
+    if store.book.host != options.host() {
+        return Err("Local registration source differs from private state; no request was sent.");
+    }
+    let payload = preflight(client, options, path).await?;
+    store.prepare_project(id, path)?;
+    prepared(store);
+    let result = submit_request(client, options, payload).await;
+    if let Outcome::Created(created) = &result {
+        let _ = store.finish_project(id, created);
+    }
+    Ok(result)
 }
 
 #[cfg(test)]

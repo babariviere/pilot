@@ -49,6 +49,9 @@ mod new_chat_view;
 #[cfg(feature = "native-probes")]
 #[path = "project_creation_probe.rs"]
 pub(crate) mod project_creation_probe;
+#[cfg(feature = "native-probes")]
+#[path = "project_wait_probe.rs"]
+mod project_wait_probe;
 #[path = "chat_projects.rs"]
 mod projects;
 #[cfg(feature = "native-probes")]

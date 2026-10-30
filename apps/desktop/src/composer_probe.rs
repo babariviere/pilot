@@ -60,6 +60,7 @@ pub fn run_composer_probe(cx: &mut HeadlessAppContext) {
     super::subscription_wait_probe::run(cx);
     super::subagent_wait_probe::run(cx);
     super::mission_wait_probe::run(cx);
+    super::project_wait_probe::run(cx);
     crate::local_view::composer_motion_probe::run(cx);
     let mut cases = 0;
     for width in [680., 1100.] {

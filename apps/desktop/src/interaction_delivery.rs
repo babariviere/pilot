@@ -74,6 +74,38 @@ impl DeliveryOwner<'_> {
         }
     }
 
+    /// Registration keeps its one-shot journal; only draft edits overlap HTTP.
+    pub(super) async fn project(
+        &mut self,
+        client: &reqwest::Client,
+        options: &LocalOptions,
+        id: &str,
+        path: &str,
+    ) -> Result<crate::project_registration::Outcome, Failure> {
+        use crate::project_registration::{self, Outcome};
+        if self.store.book.host != options.host() {
+            return Err(
+                "Local registration source differs from private state; no request was sent.",
+            );
+        }
+        let payload = self
+            .effect(project_registration::preflight(client, options, path))
+            .await?;
+        self.store.prepare_project(id, path)?;
+        self.prepared(self.status.notice);
+        let result = self
+            .effect(async {
+                Ok(project_registration::submit_request(client, options, payload).await)
+            })
+            .await?;
+        if let Outcome::Created(created) = &result {
+            // A private write refusal cannot undo a known 201. The worker keeps
+            // the existing volatile receipt while durable Unknown fences replay.
+            let _ = self.store.finish_project(id, created);
+        }
+        Ok(result)
+    }
+
     /// Conversion keeps its staged one-shot intent; only draft edits overlap HTTP.
     pub(super) async fn mission(
         &mut self,

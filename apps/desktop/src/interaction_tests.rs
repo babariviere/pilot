@@ -75,6 +75,8 @@ mod draft_discard;
 mod mission_waits;
 #[path = "interaction_model_tests.rs"]
 mod model_waits;
+#[path = "interaction_project_tests.rs"]
+mod project_waits;
 #[path = "interaction_recovery_tests.rs"]
 mod recovery_waits;
 #[path = "interaction_retention_tests.rs"]

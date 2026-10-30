@@ -21,6 +21,7 @@ pub(crate) enum Behavior {
     Status(u16),
 }
 pub(crate) struct Seen {
+    pub(crate) bodies: Vec<Vec<u8>>,
     pub(crate) created_id: String,
     pub(crate) requests: Vec<(String, String, Value)>,
     pub(crate) projects: Vec<Value>,
@@ -32,12 +33,34 @@ pub(crate) struct Server {
     pub(crate) seen: Arc<Mutex<Seen>>,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+    pub(crate) entered: async_channel::Receiver<()>,
+    pub(crate) release: async_channel::Sender<()>,
+    pub(crate) completed: async_channel::Receiver<()>,
 }
 impl Server {
     pub(crate) fn start(behavior: Behavior) -> Self {
+        Self::start_with_hold(behavior, None)
+    }
+    // Hold one exact method/path occurrence, including the post-registration list.
+    pub(crate) fn held(
+        behavior: Behavior,
+        method: &'static str,
+        path: &'static str,
+        nth: usize,
+    ) -> Self {
+        Self::start_with_hold(behavior, Some((method, path, nth)))
+    }
+    fn start_with_hold(
+        behavior: Behavior,
+        hold: Option<(&'static str, &'static str, usize)>,
+    ) -> Self {
+        let (entered, arrived) = async_channel::bounded(1);
+        let (release, released) = async_channel::bounded(1);
+        let (completed, finished) = async_channel::unbounded();
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
         let options = LocalOptions::synthetic(listener.local_addr().unwrap().port());
         let seen = Arc::new(Mutex::new(Seen {
+            bodies: vec![],
             created_id: "registered-project".into(),
             requests: vec![],
             projects: vec![],
@@ -83,10 +106,24 @@ impl Server {
                 } else {
                     serde_json::from_slice(&bytes).unwrap()
                 };
-                let (status, body, chunked) = {
+                let occurrence = {
                     let mut s = record.lock().unwrap();
                     s.requests
                         .push((method.clone(), path.clone(), payload.clone()));
+                    if method == "POST" {
+                        s.bodies.push(bytes);
+                    }
+                    s.requests
+                        .iter()
+                        .filter(|(m, p, _)| m == &method && p == &path)
+                        .count()
+                };
+                if hold.is_some_and(|(m, p, n)| m == method && p == path && n == occurrence) {
+                    let _ = entered.send_blocking(());
+                    let _ = released.recv_blocking();
+                }
+                let (status, body, chunked) = {
+                    let mut s = record.lock().unwrap();
                     match (method.as_str(), path.as_str()) {
                         ("GET", "/api/hello") => (200, s.hello.to_string(), false),
                         ("GET", "/api/projects") => {
@@ -98,7 +135,10 @@ impl Server {
                             let project = json!({"id":s.created_id,"name":"Existing 日本語","path":payload["path"]});
                             s.projects = vec![project.clone()];
                             match s.behavior {
-                                Behavior::Lost => continue,
+                                Behavior::Lost => {
+                                    let _ = completed.send_blocking(());
+                                    continue;
+                                }
                                 Behavior::Malformed => (201, "{bad".into(), false),
                                 Behavior::InvalidReceipt => (
                                     201,
@@ -131,6 +171,7 @@ impl Server {
                         body.len()
                     );
                 }
+                let _ = completed.send_blocking(());
             }
         });
         Self {
@@ -138,6 +179,9 @@ impl Server {
             seen,
             stop,
             thread: Some(thread),
+            entered: arrived,
+            release,
+            completed: finished,
         }
     }
     pub(crate) fn posts(&self) -> usize {
@@ -153,6 +197,7 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
+        let _ = self.release.try_send(());
         let _ = TcpStream::connect(self.options.loopback().strip_prefix("http://").unwrap());
         if let Some(t) = self.thread.take() {
             t.join().unwrap();

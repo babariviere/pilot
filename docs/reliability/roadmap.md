@@ -31,6 +31,19 @@ These later deliveries do not relabel the original closeout or historical invent
 | Catalog ownership (#26, delivered) | `apps/desktop/src/interaction.rs` routes only `WriteCommand::Project { path: None }` through the existing Store-free `DeliveryOwner.effect` seam in `interaction_delivery.rs`. `interaction_catalog_tests.rs` holds faux HTTP while same/other draft edits persist, preserving FIFO, Close, catalog results/errors and disk-fault fencing. Builder reported 68 interaction passes/1 pre-existing ignored, including three catalog tests; production Clippy and changed-file formatting passed. Old-source held-read control failed; restored bytes/rebuild/census checked. Registration and other mutation adapters remain serialized and unqualified; no native/full-suite/CI/deployment evidence. |
 | Typed reader state (#27, delivered) | `apps/desktop/src/local_client.rs` produces typed `SocketEvent` and derives output from `ReaderState`, keeping control/chat lifetimes and full-list adoption separate. `session_list_reader_tests.rs` covers actual faux WS baseline/retention, duplicate/cold/valid-empty/recovery, hello/disconnect, display-only wording and fatal identity fencing; the projection-poisoning control is in `local_client.rs`. Builder reported 48 client and 46 model passes, 0 ignored, production Clippy and changed-file formatting. Old producer-label-only controls failed; restored bytes/rebuild/census checked. Legacy hello fatal/retry substring classification remains unchanged, not fully typed. No native/full-suite/CI/deployment evidence. |
 
+Current desktop ownership follow-up: Stop, model/thinking selection/inspection,
+subscription Force/Continue, child sends and chat conversion now use the existing
+Store-free effect seam. [Project registration](../../apps/desktop/docs/project-registration-autosave.md)
+also moves its preflight, one-shot POST and post-registration catalogue waits onto
+that seam. Catalogue-only Project was already fixed and is unchanged. The new
+seeded held-HTTP regression failed original ownership while awaiting durable text;
+focused writer/native checks cover its bounded boundary, not a new receipt or
+idempotency guarantee. This reconciles the known `Interaction::run` HTTP/Store
+adapters, without relabelling the historical evidence above. Commands remain FIFO,
+not priority Stop. Project default-model PATCH remains blocked on its unsafe
+mutation contract; broader app ownership, lifecycle, OS input, live latency and
+deployment acceptance remain unqualified.
+
 ### Schedule shutdown boundary (#28)
 
 The daemon remains the process-local owner. `packages/daemon/src/daemon.ts` wires `schedule-shutdown.ts` around one terminal store close, not a generic supervisor. The preserved dependency order is:
