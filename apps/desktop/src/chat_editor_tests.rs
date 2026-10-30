@@ -484,6 +484,52 @@ fn question_retry_carries_only_the_exact_fresh_awaited_question(cx: &mut TestApp
     }
 }
 #[gpui_kit::test]
+fn question_hint_focus_is_exact_and_never_submits(cx: &mut TestAppContext) {
+    use crate::question::Projection;
+    use gpui_kit::Focusable;
+    let (handle, view, commands) = setup(cx);
+    let first = question_composer_fixture(4);
+    let second = question_composer_fixture(8);
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            e.question_context(Some("a"), Projection::Pending(first.clone()), true, w, cx);
+            let original = e.cache["chat:a"].text.clone();
+            e.view_question(&first.identity, w, cx);
+            assert!(e.questions.input.read(cx).focus_handle(cx).is_focused(w));
+            assert_eq!(e.cache["chat:a"].text, original);
+            e.text.update(cx, |s, cx| s.focus(w, cx));
+            e.question_context(Some("a"), Projection::Pending(second.clone()), true, w, cx);
+            e.text.update(cx, |s, cx| s.focus(w, cx));
+            e.view_question(&first.identity, w, cx);
+            assert!(
+                e.text.read(cx).focus_handle(cx).is_focused(w),
+                "Old action cannot focus a newer question"
+            );
+            e.question_context(Some("a"), Projection::Pending(second.clone()), false, w, cx);
+            e.view_question(&second.identity, w, cx);
+            assert!(!e.question_needs_you(), "Reconnect hides current reason");
+            e.question_context(Some("b"), Projection::Pending(first.clone()), true, w, cx);
+            e.view_question(&first.identity, w, cx);
+            assert!(!e.question_needs_you(), "Other chat cannot supply a hint");
+            e.question_context(Some("a"), Projection::None, true, w, cx);
+            assert!(!e.question_needs_you(), "Resolved hint disappears");
+        });
+    })
+    .unwrap();
+    cx.run_until_parked();
+    while let Ok(command) = commands.try_recv() {
+        assert!(
+            !matches!(
+                command,
+                WriteCommand::Answer { .. }
+                    | WriteCommand::Check { .. }
+                    | WriteCommand::RetryAnswer { .. }
+            ),
+            "Viewing a question is navigation only"
+        );
+    }
+}
+#[gpui_kit::test]
 fn question_composer_choice_then_explicit_reply_preserves_ordinary(cx: &mut TestAppContext) {
     let (handle, view, commands) = setup_width(cx, 680.);
     let q = question_composer_fixture(4);
@@ -659,6 +705,7 @@ fn question_composer_readonly_stale_source_and_access_never_answer(cx: &mut Test
             e.question_context(Some("a"),crate::question::Projection::Pending(access),true,w,cx);e.answer_question(None,w,cx);
         });
         w.render_frame(cx);assert!(w.try_find("answer-question").is_none());
+        assert!(w.try_find("view-pending-question").is_none(), "Unsupported access has no fabricated target");
     }).unwrap();
     cx.run_until_parked();
     assert!(commands.try_recv().is_err());

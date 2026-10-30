@@ -32,6 +32,7 @@ enum Scenario {
     Todos,
     ListAdmission,
     ListSnapshot,
+    AttentionFreshness,
     MissionTitles,
     LargeFrame,
     LargeFragmentedMessage,
@@ -224,6 +225,7 @@ impl Mock {
                             let mut socket=tokio_tungstenite::WebSocketStream::from_raw_socket(stream,Role::Server,None).await;
                             if path=="/api/ws" {
                                 socket.send(Frame::Text(json!({"type":"projects","projects":[{"id":"p-a","name":"Synthetic project A","path":"/synthetic/a","environment":{"ignore":"synthetic-only"}},{"id":"p-b","name":"Synthetic project B","path":"/synthetic/b"}]}).to_string().into())).await.unwrap();
+                                if matches!(scenario, Scenario::AttentionFreshness) && steps.recv().await.is_err() { return; }
                                 if matches!(scenario, Scenario::ListAdmission | Scenario::ListSnapshot) {
                                     let attempt = attempts.fetch_add(1, Ordering::SeqCst);
                                     let count = if matches!(scenario, Scenario::ListSnapshot) { 10005 } else { 1000 };
@@ -878,6 +880,26 @@ async fn websocket_single_frame_above_eight_mib_preserves_source_and_continues()
 #[tokio::test]
 async fn websocket_fragmented_message_above_eight_mib_preserves_source_and_continues() {
     large_stream_is_intact(Scenario::LargeFragmentedMessage).await;
+}
+
+#[tokio::test]
+async fn attention_waits_for_new_control_snapshot_after_reconnect() {
+    let mock = Mock::start(Scenario::AttentionFreshness).await;
+    let (client, rx) = LocalClient::start(mock.options.clone());
+    let admitted = until(&rx, |v| v.status == "Connected · Local").await;
+    assert!(!admitted.summary_fresh, "Hello is not fresh reason evidence");
+    mock.step.send(()).await.unwrap();
+    let initial = until(&rx, |v| v.summary_fresh).await;
+    assert!(initial.list_loaded && !initial.chats.is_empty());
+    assert!(client.command(Command::Reconnect));
+    let retained = until(&rx, |v| {
+        !v.summary_fresh && v.list_loaded
+            && matches!(client.daemon(), ConnectedDaemon::Connected(_))
+    }).await;
+    assert_eq!(retained.chats.len(), initial.chats.len(), "Cached rows remain readable during hello/list gap");
+    mock.step.send(()).await.unwrap();
+    let current = until(&rx, |v| v.summary_fresh).await;
+    assert_eq!(current.chats.len(), initial.chats.len());
 }
 
 #[tokio::test]

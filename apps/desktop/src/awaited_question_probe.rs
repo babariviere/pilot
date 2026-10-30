@@ -32,16 +32,17 @@ struct Probe {
     chats: Arc<Vec<crate::local_model::Chat>>,
 }
 impl Probe {
-    fn open(cx: &mut HeadlessAppContext) -> Self {
+    fn open(cx: &mut HeadlessAppContext, width: f32) -> Self {
         let (writer, writes) = Interaction::recording();
         let (client, _reads) = LocalClient::synthetic_commands();
+        client.set_synthetic_daemon(crate::local_client::ConnectedDaemon::Connected(None));
         let (h, v) = cx
             .update(|cx| {
                 gpui_kit::open_window(
                     WindowOptions {
                         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                             Default::default(),
-                            size(px(900.), px(760.)),
+                            size(px(width), px(760.)),
                         ))),
                         show: false,
                         focus: false,
@@ -132,8 +133,76 @@ impl Probe {
 }
 
 pub(crate) fn run(cx: &mut HeadlessAppContext) {
+    // Public summary reasons never invent a grant or a question target. The
+    // wrapper remains outside the editor, preserving its retained draft/input.
+    for width in [680., 1100.] {
+        for mode in [
+            gpui_kit::component::ThemeMode::Light,
+            gpui_kit::component::ThemeMode::Dark,
+        ] {
+            cx.update(|cx| gpui_kit::component::Theme::change(mode, None, cx));
+            let p = Probe::open(cx, width);
+            cx.update_window(p.h, |_, w, cx| {
+                p.v.update(cx, |v, cx| {
+                    v.state.loaded = true;
+                    v.state.summary_fresh = true;
+                    v.state.generation = v.generation;
+                    v.state.chats = Arc::new(vec![crate::local_model::chat(&json!({"id":"synthetic","state":"idle","outcome":"question"})).unwrap()]);
+                    cx.notify();
+                });
+                w.render_frame(cx);
+                let hint = w.find("chat-attention-hint").bounds();
+                let editor = w.find("conversation-editor").bounds();
+                assert!(hint.left() >= editor.left() && hint.right() <= editor.right());
+                assert!(w.try_find("view-pending-question").is_none(), "No exact target, no invented action");
+                assert!(w.try_find("question-composer").is_none());
+                p.v.update(cx, |v, cx| {
+                    v.client.as_ref().unwrap().set_synthetic_daemon(crate::local_client::ConnectedDaemon::NotConnected);
+                    cx.notify();
+                });
+                w.render_frame(cx);
+                assert!(w.try_find("chat-attention-hint").is_none(), "Control reconnect hides last-known reason");
+                p.v.update(cx, |v, cx| {
+                    v.client.as_ref().unwrap().set_synthetic_daemon(crate::local_client::ConnectedDaemon::Connected(None));
+                    v.state.summary_fresh = false;
+                    cx.notify();
+                });
+                w.render_frame(cx);
+                assert!(w.try_find("chat-attention-hint").is_none(), "Hello alone cannot revive cached attention");
+                p.v.update(cx, |v, cx| {
+                    v.state.summary_fresh = true;
+                    v.state.generation = v.generation.wrapping_add(1);
+                    cx.notify();
+                });
+                w.render_frame(cx);
+                assert!(w.try_find("chat-attention-hint").is_none(), "Old stream generation hides");
+                p.v.update(cx, |v, cx| { v.state.generation = v.generation; cx.notify(); });
+                w.render_frame(cx);
+                assert!(w.try_find("chat-attention-hint").is_some(), "Fresh same-chat reason returns");
+                p.v.update(cx, |v, cx| { v.state.chat_issue = true; cx.notify(); });
+                w.render_frame(cx);
+                assert!(w.try_find("chat-attention-hint").is_none(), "Disconnected reason hides");
+                p.v.update(cx, |v, cx| {
+                    v.state.chat_issue = false;
+                    v.state.chats = Arc::new(vec![crate::local_model::chat(&json!({"id":"synthetic","state":"idle","subscriptionPause":{"forced":false}})).unwrap()]);
+                    cx.notify();
+                });
+                w.render_frame(cx);
+                assert!(w.try_find("chat-attention-hint").is_none(), "Paused has its own explanation");
+                p.v.update(cx, |v, cx| {
+                    v.state.chats = Arc::new(vec![crate::local_model::chat(&json!({"id":"synthetic","state":"idle","outcome":"question"})).unwrap()]);
+                    v.selected = Some("other".into());
+                    cx.notify();
+                });
+                w.render_frame(cx);
+                assert!(w.try_find("chat-attention-hint").is_none(), "Switch never borrows the old reason");
+            }).unwrap();
+            assert!(p.answer().is_none(), "Reason rendering never sends");
+            p.close(cx);
+        }
+    }
     // 1. Single choice: pointer pick, then click Reply while the chat is Working.
-    let mut p = Probe::open(cx);
+    let mut p = Probe::open(cx, 900.);
     p.publish(
         cx,
         json!({"type":"snapshot","entries":[ask(4, false, true)],"run":{"startedAt":1}}),
@@ -193,7 +262,7 @@ pub(crate) fn run(cx: &mut HeadlessAppContext) {
     p.close(cx);
 
     // 2. Multiple choice: typed words alone, then Return.
-    let mut p = Probe::open(cx);
+    let mut p = Probe::open(cx, 900.);
     p.publish(
         cx,
         json!({"type":"snapshot","entries":[ask(6, true, true)],"run":{"startedAt":1}}),
@@ -215,7 +284,7 @@ pub(crate) fn run(cx: &mut HeadlessAppContext) {
     p.close(cx);
 
     // 3. Negative fences: nothing is offered unless the live run awaits the ask.
-    let mut p = Probe::open(cx);
+    let mut p = Probe::open(cx, 900.);
     // A turn-ending ask never presents during a run.
     p.publish(
         cx,
@@ -242,6 +311,10 @@ pub(crate) fn run(cx: &mut HeadlessAppContext) {
     // A later run never presents the released ask.
     p.publish(cx, json!({"type":"run_start"}));
     assert_eq!(p.reply_disabled(cx), None);
+    cx.update_window(p.h, |_, w, _| {
+        assert!(w.try_find("question-attention-hint").is_none())
+    })
+    .unwrap();
     // A queued reply hides the ask, even while its run awaits it.
     p.publish(
         cx,

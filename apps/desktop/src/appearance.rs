@@ -65,6 +65,14 @@ pub(crate) fn accent_mark(cx: &App) -> gpui_kit::Hsla {
         .into()
 }
 
+/// Amber caption ink, darker on light surfaces than the decorative state dot.
+const fn attention_ink(dark: bool) -> u32 {
+    if dark { 0xf59e0b } else { 0x915600 }
+}
+pub(crate) fn attention_text(cx: &App) -> gpui_kit::Hsla {
+    gpui_kit::rgb(attention_ink(cx.theme().is_dark())).into()
+}
+
 #[derive(Clone, Copy, Default)]
 struct CommittedAppearance(AppearancePreference);
 impl gpui_kit::Global for CommittedAppearance {}
@@ -672,6 +680,11 @@ mod tests {
             for surface in [page, sidebar, tray.as_str(), card.as_str()] {
                 assert!(ratio(ink, surface) >= 7., "{ink} text on {surface}");
                 assert!(ratio(meta, surface) >= 4.5, "{meta} metadata on {surface}");
+                let attention = format!("#{:06x}", attention_ink(dark));
+                assert!(
+                    ratio(&attention, surface) >= 4.5,
+                    "{attention} attention text on {surface}"
+                );
             }
             assert_ne!(tray, card, "editor card stays distinct from its tray");
             let accent = accent(dark);

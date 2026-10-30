@@ -1,6 +1,8 @@
 //! Readonly Local browser. The transport is never given UI events capable of writing.
 #[path = "archived_composer.rs"]
 mod archived_composer;
+#[path = "chat_attention_hint.rs"]
+mod chat_attention_hint;
 #[cfg(feature = "native-probes")]
 #[path = "awaited_question_probe.rs"]
 pub(crate) mod awaited_question_probe;
@@ -1682,6 +1684,7 @@ impl LocalViewer {
             self.state.projects_loaded = state.projects_loaded;
             self.state.projects_error = state.projects_error;
             self.state.chats = state.chats;
+            self.state.summary_fresh = state.summary_fresh;
             self.state.mission_metadata = state.mission_metadata;
             self.state.mission_titles = state.mission_titles;
             self.state.status = state.status;
@@ -1729,6 +1732,7 @@ impl LocalViewer {
         } else {
             // An old chat never replaces the selected chat, even while switching quickly.
             self.state.chats = state.chats;
+            self.state.summary_fresh = state.summary_fresh;
             self.state.mission_metadata = state.mission_metadata;
             self.state.mission_titles = state.mission_titles;
             self.state.status = state.status;

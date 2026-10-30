@@ -192,6 +192,28 @@ impl ChatEditor {
     pub(super) fn question_needs_you(&self) -> bool {
         self.questions.fresh && self.questions.current.is_some() && !self.question_accepted()
     }
+    pub(crate) fn question_hint_covered(&self) -> bool {
+        self.questions.current.is_some() || self.draft().is_some_and(|d| d.answer.is_some())
+    }
+    pub(super) fn view_question(
+        &mut self,
+        identity: &Identity,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.question_needs_you()
+            || self.questions.owner != self.selected
+            || self
+                .questions
+                .current
+                .as_ref()
+                .is_none_or(|q| &q.identity != identity || q.content.kind != Kind::Message)
+            || self.marked(window, cx)
+        {
+            return;
+        }
+        self.questions.input.update(cx, |s, cx| s.focus(window, cx));
+    }
     /// Explicit Send again. An answer carries the fresh current question only
     /// when it still projects the reply's exact identity; otherwise the worker
     /// applies the ended-turn rule.
@@ -686,8 +708,40 @@ impl ChatEditor {
             .flex_none()
             .min_w_0()
             .gap_2()
-            .p_2()
-            .child(content);
+            .p_2();
+        if self.question_needs_you() {
+            let identity = q.identity.clone();
+            let hint = div()
+                .id("question-attention-hint")
+                .h_flex()
+                .items_center()
+                .flex_wrap()
+                .min_w_0()
+                .gap_2()
+                .child(
+                    ui::text(
+                        Text::Caption,
+                        if q.content.kind == Kind::Message {
+                            "Waiting for your answer"
+                        } else {
+                            "Your input is needed to continue"
+                        },
+                    )
+                    .text_color(crate::appearance::attention_text(cx)),
+                )
+                .when(q.content.kind == Kind::Message, |row| {
+                    row.child(
+                        ui::action("view-pending-question", "View question", Action::Quiet)
+                            .on_click(
+                                cx.listener(move |v, _, w, cx| v.view_question(&identity, w, cx)),
+                            ),
+                    )
+                });
+            #[cfg(any(test, feature = "native-probes"))]
+            let hint = hint.test_support();
+            panel = panel.child(hint);
+        }
+        panel = panel.child(content);
         // One content-sized action row, never a second Stop-only footer.
         let mut actions = div()
             .id("question-actions")

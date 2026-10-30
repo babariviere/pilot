@@ -1642,7 +1642,7 @@ impl Render for ChatEditor {
                 .gap(px(crate::ui::Space::SIDEBAR))
                 .child(self.new_chat_setup(draft, blocked, window, cx));
         }
-        if let Some(label) = self.activity_label() {
+        if let Some(label) = self.activity_label().filter(|_| !self.question_needs_you()) {
             let indicator = div()
                 .id("activity-indicator")
                 .px(px(10.))

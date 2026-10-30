@@ -337,6 +337,23 @@ adoption by itself; functional Settings is a separate implementation.
 
 ## Verification
 
+### Chat attention hint
+
+`chat_attention_hint` uses the selected chat's fresh public attention reason,
+never transcript prose or an inferred approval. It is caption-sized amber text
+above the ordinary composer, not a banner. Unspecified attention says “Your
+input is needed to continue”; Paused and failures retain their own surfaces.
+Use `appearance::attention_text` for this caption, not the decorative state-dot
+amber: its deeper light-mode ink keeps AA contrast on page, tray and card.
+Exact pending questions integrate “Waiting for your answer” into the existing
+question panel instead of adding a duplicate Needs you line. The quiet “View
+question” button focuses that exact reply field without sending, retrying or
+approving, and refuses stale identities and marked input. Unsupported access
+decisions keep their existing explanation with no fabricated review action.
+Question/summary hints disappear on resolution or stale source; pending and
+Unknown reply recovery remain independent. The `questions` hidden native probe
+checks light/dark, narrow/wide, focus, preedit, reconnect and resolved layouts.
+
 ### Retained Review
 
 Mission detail's Review tab (`native_review_view`/`native_review_render`) composes the existing

@@ -31,7 +31,7 @@ impl LocalViewer {
             }
             None => {
                 self.focus_restored_composer(w, cx);
-                self.editor.clone().into_any_element()
+                self.attention_composer(cx)
             }
         }
     }

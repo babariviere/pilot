@@ -367,6 +367,9 @@ pub(crate) struct Presentation {
     pub(crate) omitted: usize,
     pub(crate) loaded: bool,
     pub(crate) list_loaded: bool,
+    /// Attention may use summaries only after this control connection's list.
+    /// Retained rows and their existing loading/action semantics stay unchanged.
+    pub(crate) summary_fresh: bool,
     pub(crate) page_revision: u64,
     pub(crate) batches: u64,
     pub(crate) queued: usize,
@@ -509,7 +512,7 @@ impl LocalClient {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
     }
-    #[cfg(all(test, target_os = "macos"))]
+    #[cfg(any(feature = "native-probes", all(test, target_os = "macos")))]
     pub(crate) fn set_synthetic_daemon(&self, daemon: ConnectedDaemon) {
         *self
             .daemon
@@ -1027,6 +1030,7 @@ async fn run(
                     }));
                 }
                 Ok(Command::Reconnect) => {
+                    view.summary_fresh=false;
                     model.thinking=false; model.stale(); awaiting_snapshot=true;
                     set_daemon(ConnectedDaemon::NotConnected);
                     view.todos.stale();
@@ -1053,6 +1057,7 @@ async fn run(
                     fenced=true; control.abort();
                     if let Some(task)=chat_socket.take() {task.abort();}
                     if let Some(task)=page_task.take() {task.abort();}
+                    view.summary_fresh=false;
                     view.page_busy=false; view.status=text.into(); view.chat_status=text.into();view.chat_issue=true;view.artifact_metadata.mark_stale();
                 },
                 Ok((_, Incoming::Status {generation, chat, text})) => {
@@ -1061,12 +1066,13 @@ async fn run(
                         view.chat_issue = text!="Connected · Local";
                         if view.chat_issue{snapshot_revision+=1; if let Some(task)=page_task.take(){task.abort();} view.page_busy=false; view.page_revision+=1; view.artifact_metadata.mark_stale();view.todos.stale();model.stale();} view.chat_status = text.into(); }
                     else {
-                        if text != "Connected · Local" { set_daemon(ConnectedDaemon::NotConnected); }
+                        if text != "Connected · Local" { view.summary_fresh=false; set_daemon(ConnectedDaemon::NotConnected); }
                         view.status = text.into();
                     }
                 }
                 Ok((_, Incoming::Daemon(version))) => {
                     view.control_connection_generation += 1;
+                    view.summary_fresh=false;
                     set_daemon(ConnectedDaemon::Connected(version));
                 },
                 Ok((_, Incoming::Page { generation,before,revision,result })) => {
@@ -1106,6 +1112,7 @@ async fn run(
                     } else if value["type"] == "sessions" {
                         crate::mission_inspector::Metadata::accept(&mut view.mission_metadata, &value);
                         view.list_loaded=true;
+                        view.summary_fresh=true;
                         let mut chats = value["sessions"].as_array().map(|values| values.iter().filter_map(local_model::chat).collect::<Vec<_>>()).unwrap_or_default();
                         crate::chat_order::sort(&mut chats);
                         view.chats = Arc::new(chats);

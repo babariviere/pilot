@@ -246,6 +246,14 @@ pub fn run_question_probe(cx: &mut HeadlessAppContext) {
                 let actions = w.find("question-actions").bounds();
                 let stop = w.find("question-stop").bounds();
                 let reply = w.find("answer-question").bounds();
+                let hint = w.find("question-attention-hint").bounds();
+                assert_eq!(w.find_all("question-attention-hint").len(), 1);
+                assert!(
+                    w.try_find("activity-indicator").is_none(),
+                    "Reason replaces redundant Needs you line"
+                );
+                assert!(hint.bottom() <= content.top());
+                assert!(hint.left() >= question.left() && hint.right() <= question.right());
                 let gap = w.rem_size() * 0.5;
                 assert!((stop.center().y - reply.center().y).abs() < px(1.));
                 assert!(stop.right() < reply.left());
@@ -258,10 +266,11 @@ pub fn run_question_probe(cx: &mut HeadlessAppContext) {
                         - content.size.height
                         - own.size.height
                         - actions.size.height
-                        - gap * 4.)
+                        - hint.size.height
+                        - gap * 5.)
                         .abs()
                         < px(1.),
-                    "Question height contains only content, input, actions and Kit spacing"
+                    "Question height contains only hint, content, input, actions and Kit spacing"
                 );
                 assert!(question.top() >= tray.top() && question.bottom() <= tray.bottom());
                 assert!(content.size.height <= px(280.5));
@@ -375,6 +384,32 @@ pub fn run_question_probe(cx: &mut HeadlessAppContext) {
                     .unwrap();
             }
             assert!(commands.try_recv().is_err());
+            cx.update_window(h, |_, w, cx| {
+                w.click("view-pending-question", cx);
+                w.render_frame(cx);
+                assert_eq!(w.find_by_label("Your question reply").focused(), Some(true));
+                assert_eq!(editor.read(cx).cache["chat:a"].text, initial.text);
+                for _ in 0..q.content.options.len() + 12 {
+                    if w.find("view-pending-question").focused() == Some(true) {
+                        break;
+                    }
+                    control_key(w, "tab", cx);
+                    w.render_frame(cx);
+                }
+                assert_eq!(
+                    w.find("view-pending-question").focused(),
+                    Some(true),
+                    "Hint action is keyboard reachable"
+                );
+                control_key(w, "space", cx);
+                w.render_frame(cx);
+                assert_eq!(w.find_by_label("Your question reply").focused(), Some(true));
+            })
+            .unwrap();
+            assert!(
+                commands.try_recv().is_err(),
+                "View question only focuses the exact reply"
+            );
             // A marked reply blocks both actions without losing native preedit.
             cx.update_window(h, |_, w, cx| {
                 let handler = ElementInputHandler::new(
@@ -382,6 +417,7 @@ pub fn run_question_probe(cx: &mut HeadlessAppContext) {
                     editor.read(cx).questions.input.clone(),
                 );
                 TestInput::new(handler, w).compose_text(None, "にほん", Some(3..3), cx);
+                w.click("view-pending-question", cx);
                 w.click("question-stop", cx);
                 w.click("answer-question", cx);
                 editor.update(cx, |e, cx| {
@@ -591,6 +627,8 @@ pub fn run_question_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, _| {
                 assert!(w.try_find("keep-question-reply").is_none());
                 assert!(w.try_find("composer-recovery").is_none());
+                assert!(w.try_find("question-attention-hint").is_none());
+                assert!(w.try_find("view-pending-question").is_none());
             })
             .unwrap();
             match commands.try_recv().unwrap() {
