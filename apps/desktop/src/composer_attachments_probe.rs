@@ -133,11 +133,23 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
             .unwrap();
             wait(cx, h, &editor);
             let id = images[0].id.clone();
-            cx.update_window(h, |_, w, _| {
+            cx.update_window(h, |_, w, cx| {
                 let preview = w.find("composer-attachments").bounds();
                 assert!(preview.bottom() <= w.find("composer-tray").bounds().top());
                 assert!(preview.size.height >= px(104.));
                 assert!(w.find(format!("attachment:{id}")).visible());
+                w.hover("composer-input", cx);
+                assert!(
+                    !w.find(format!("remove-attachment:{id}")).visible(),
+                    "discard stays hidden outside its thumbnail"
+                );
+                w.hover(format!("attachment:{id}"), cx);
+                assert!(
+                    w.find(format!("remove-attachment:{id}")).visible(),
+                    "hovering the thumbnail reveals discard"
+                );
+                w.hover("composer-input", cx);
+                assert!(!w.find(format!("remove-attachment:{id}")).visible());
             })
             .unwrap();
             // A named child shares the composer, never the parent's image draft.
@@ -169,6 +181,46 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             wait(cx, h, &editor);
+            cx.update_window(h, |_, w, cx| {
+                w.hover(format!("attachment:{id}"), cx);
+                assert!(w.find(format!("remove-attachment:{id}")).visible());
+            })
+            .unwrap();
+            for button_hover in [false, true] {
+                let (bounds, background) = cx
+                    .update_window(h, |_, w, cx| {
+                        w.hover(
+                            if button_hover {
+                                format!("remove-attachment:{id}")
+                            } else {
+                                format!("attachment:{id}")
+                            },
+                            cx,
+                        );
+                        let color: gpui_kit::Rgba = if button_hover {
+                            crate::appearance::tray(cx)
+                        } else {
+                            crate::appearance::card(cx)
+                        }
+                        .into();
+                        (
+                            w.find(format!("remove-attachment:{id}")).bounds(),
+                            [color.r, color.g, color.b, color.a].map(|c| (c * 255.).round() as u8),
+                        )
+                    })
+                    .unwrap();
+                let shot = cx.capture_screenshot(h).unwrap();
+                let scale = shot.width() as f32 / width;
+                assert_eq!(
+                    shot.get_pixel(
+                        ((f32::from(bounds.left()) + 3.) * scale) as u32,
+                        (f32::from(bounds.center().y) * scale) as u32,
+                    )
+                    .0,
+                    background,
+                    "discard background stays opaque over image pixels, button hover={button_hover}"
+                );
+            }
             if let Some(dir) = std::env::var_os("PILOT_NEXT_COMPOSER_DIR") {
                 std::fs::create_dir_all(&dir).unwrap();
                 cx.capture_screenshot(h)
@@ -180,7 +232,20 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
                     .unwrap();
             }
             cx.update_window(h, |_, w, cx| {
-                w.click(format!("remove-attachment:{id}"), cx);
+                w.hover("composer-input", cx);
+                editor.update(cx, |e, cx| e.focus(w, cx));
+                w.render_frame(cx);
+                for _ in 0..16 {
+                    w.press("tab", cx);
+                    w.render_frame(cx);
+                    if w.find(format!("remove-attachment:{id}")).focused() == Some(true) {
+                        break;
+                    }
+                }
+                let remove = w.find(format!("remove-attachment:{id}"));
+                assert_eq!(remove.focused(), Some(true), "Tab reaches discard");
+                assert!(remove.visible(), "keyboard focus reveals discard");
+                w.press("enter", cx);
             })
             .unwrap();
             frame(cx, h);
@@ -191,6 +256,9 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
             );
             cx.update_window(h, |_, w, cx| {
                 use gpui_kit::InputEvent as _;
+                // Keyboard removal changes the strip's height; move the drag
+                // over the re-laid-out editor before submitting it.
+                w.hover("composer-input", cx);
                 let position = w.find("composer-input").bounds().center();
                 w.dispatch_event(
                     gpui_kit::FileDropEvent::Entered {
@@ -211,6 +279,7 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
             assert_eq!(dropped.len(), 1, "native external-file drop");
             assert_ne!(dropped[0].id, id, "drop adopts its own immutable identity");
             cx.update_window(h, |_, w, cx| {
+                w.hover(format!("attachment:{}", dropped[0].id), cx);
                 w.click(format!("remove-attachment:{}", dropped[0].id), cx)
             })
             .unwrap();
@@ -266,7 +335,7 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
             drop(store);
             std::fs::remove_dir_all(root).unwrap();
             println!(
-                "composer_attachments {width} {dark} passed: TIFF paste/preview/remove/send/parent-child draft identity"
+                "composer_attachments {width} {dark} passed: TIFF paste/preview/hover/opaque discard/Tab-Enter remove/pointer remove/send/parent-child draft identity"
             );
         }
     }

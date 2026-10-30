@@ -184,6 +184,7 @@ impl ChatEditor {
             let remove_key = key.clone();
             let tile = div()
                 .id(SharedString::from(format!("attachment:{id}")))
+                .group("composer-attachment")
                 .relative()
                 .w(px(144.))
                 .h(px(104.))
@@ -212,8 +213,17 @@ impl ChatEditor {
                 tile.child(
                     div().absolute().top_0().right_0().child(
                         Button::new(SharedString::from(format!("remove-attachment:{id}")))
-                            .ghost()
+                            .custom(
+                                gpui_kit::component::button::ButtonCustomVariant::new(cx)
+                                    .color(crate::appearance::card(cx))
+                                    .hover(crate::appearance::tray(cx))
+                                    .active(crate::appearance::tray(cx)),
+                            )
+                            .bg(crate::appearance::card(cx))
                             .xsmall()
+                            .opacity(0.)
+                            .group_hover("composer-attachment", |s| s.opacity(1.))
+                            .focus_visible(|s| s.opacity(1.))
                             .icon(AppIcon::Close.asset())
                             .accessibility_label("Remove attached image")
                             .tooltip("Remove attached image")
