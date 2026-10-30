@@ -74,6 +74,98 @@ impl DeliveryOwner<'_> {
         }
     }
 
+    /// Model selection uses the same FIFO writer and edit mailbox as delivery.
+    pub(super) async fn model(
+        &mut self,
+        client: &reqwest::Client,
+        options: &LocalOptions,
+        action: crate::chat_models::Action,
+    ) -> Result<crate::chat_models::Outcome, Failure> {
+        use crate::chat_models::{self, Action, Outcome};
+        match action {
+            Action::Submit(attempt) => {
+                match self
+                    .effect(chat_models::submit_preflight(client, options, &attempt))
+                    .await
+                {
+                    Err(error) if *self.closing => return Err(error),
+                    Err(error) => return Ok(Outcome::Refused(error)),
+                    Ok(()) => {}
+                }
+                // New edits do not replace the captured choice/target or any Pending.
+                if let Err(error) = self.store.prepare_model_change(attempt.clone()) {
+                    return Ok(Outcome::Refused(error));
+                }
+                self.prepared(self.status.notice);
+                let outcome = self
+                    .effect(async {
+                        Ok(chat_models::submit_request(client, options, &attempt).await)
+                    })
+                    .await?;
+                if matches!(outcome, Outcome::Acknowledged(_)) {
+                    // Preserve the exact accepted ACK in memory even on cleanup failure.
+                    let _ = self
+                        .store
+                        .finish_model_change(&attempt.target.session, &attempt.id);
+                }
+                Ok(outcome)
+            }
+            Action::Inspect(target) => {
+                let result = self
+                    .effect(chat_models::session(client, options, &target))
+                    .await;
+                if *self.closing {
+                    return Err("Closing. Model inspection was interrupted.");
+                }
+                Ok(match result {
+                    Ok(current) => Outcome::Observed(current),
+                    Err(error) => Outcome::Refused(error),
+                })
+            }
+            Action::Acknowledge { session, id } => {
+                let Some(attempt) = self
+                    .store
+                    .book
+                    .model_changes
+                    .get(&session)
+                    .filter(|a| a.id == id)
+                else {
+                    return Ok(Outcome::Refused(
+                        "Model switch ownership changed. Nothing was acknowledged.",
+                    ));
+                };
+                let target = attempt.target.clone();
+                let result = self
+                    .effect(chat_models::session(client, options, &target))
+                    .await;
+                if *self.closing {
+                    return Err("Closing. Model inspection was interrupted.");
+                }
+                Ok(match result {
+                    Ok(current) => match self.store.finish_model_change(&session, &id) {
+                        Ok(()) => Outcome::Dismissed(current),
+                        Err(error) => Outcome::Refused(error),
+                    },
+                    Err(error) => Outcome::Refused(error),
+                })
+            }
+            // Subscription Force/Continue ownership is unchanged by this slice.
+            action @ (Action::Force { .. } | Action::Continue(_)) => {
+                let channels = self.channels;
+                tokio::select! {
+                    outcome = chat_models::execute(client, options, self.store, action, |store| {
+                        self.status.book = Some(Arc::new(store.book.clone()));
+                        if let Some(channels) = channels { publish(&channels.updates, &channels.replace, self.status.clone()); }
+                    }) => Ok(outcome),
+                    _ = async { match channels { Some(channels) => { let _ = channels.close.recv().await; }, None => std::future::pending().await } } => {
+                        *self.closing = true;
+                        Err("Closing. Any admitted model switch remains unconfirmed and is never resent.")
+                    }
+                }
+            }
+        }
+    }
+
     pub(super) async fn submit(
         &mut self,
         client: &reqwest::Client,

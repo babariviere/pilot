@@ -508,15 +508,32 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                 outcome: Outcome::Pending,
                             });
                             publish(updates, replace, status.clone());
-                            tokio::select! {
-                                outcome=crate::chat_models::execute(&client,&options,store,action,|store|{
-                                    status.book=Some(Arc::new(store.book.clone()));publish(updates,replace,status.clone());
-                                })=>{
-                                    status.model=Some(Reply{session,request,outcome});
-                                    if store.is_faulted(){status.error=Some("Private model-switch receipt could not be saved. Keep unsaved text before restarting.");}
+                            let result = DeliveryOwner {
+                                store,
+                                status: &mut status,
+                                channels: Some(&channels),
+                                autosave: &mut autosave,
+                                closing: &mut closing,
+                            }
+                            .model(&client, &options, action)
+                            .await;
+                            match result {
+                                Ok(outcome) => {
+                                    status.model = Some(Reply {
+                                        session,
+                                        request,
+                                        outcome,
+                                    });
+                                    if store.is_faulted() {
+                                        status.error = Some(
+                                            "Private model-switch receipt could not be saved. Keep unsaved text before restarting.",
+                                        );
+                                    }
                                     Ok("")
-                                },
-                                _=close.recv()=>{closing=true;Ok("Closing. Any admitted model switch remains unconfirmed and is never resent.")}
+                                }
+                                Err(_) => Ok(
+                                    "Closing. Any admitted model switch remains unconfirmed and is never resent.",
+                                ),
                             }
                         }
                         Some(WriteCommand::Project { id, path: None }) => {

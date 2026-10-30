@@ -54,8 +54,10 @@ opt-in passive endpoint/capability, without changing healthy legacy callers.
   choices keep the previous payload shape. Retained legacy payload strings, hashes, IDs,
   revisions and destinations are never reconstructed from current UI choices on retry.
 
-The existing private interaction worker serializes model actions with delivery and draft
-writes. Unknown model switches fence Send and further model changes for that chat, not
+The existing private interaction worker serializes model actions with delivery. Its
+[selection effect loop](model-autosave.md) services durable draft text saves during
+held model preflight, POST and inspection waits, without overtaking FIFO commands.
+Unknown model switches fence Send and further model changes for that chat, not
 Stop. A known acknowledgment remains in memory if private receipt cleanup fails, while
 the private I/O fence prevents further writes. Optional new fields load older private
 records without migration; older binaries deny unknown fields rather than dropping new

@@ -139,10 +139,14 @@ not an absence proof. Swift links are historical capability references only.
   [DeliveryOwner::submit/submit_answer/reconcile](../src/interaction_delivery.rs)
   and [chat_sending::shown_text](../src/chat_sending.rs) separate saved drafts,
   visible sends and immutable pending operations. The current owner services
-  autosaves during ordinary Send, Stop, question replies and explicit receipt recovery
+  autosaves during ordinary Send, Stop, chat model/thinking selection and inspection,
+  question replies and explicit receipt recovery
   waits, but mutation/Stop/checkpoint commands remain FIFO. The [held Stop
   regression](stop-autosave.md) separates durable typing from Stop acknowledgment;
-  it is not live Stop-latency qualification. #280's [restart evidence](../evidence/restart-retention.md)
+  it is not live Stop-latency qualification. The [model wait regression](model-autosave.md)
+  preserves separate healthy/failed-next-model contracts and Unknown/no replay;
+  project default-model PATCH remains outside this coverage.
+  #280's [restart evidence](../evidence/restart-retention.md)
   records synthetic lost-ACK/restart checks, not force-quit/power-loss qualification.
   Compare the textarea to `shown_text`, not blindly to saved draft text.
 - **Lazy history:** #471/#476 have recorded hidden native and synthetic transport

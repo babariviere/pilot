@@ -129,6 +129,8 @@ mod chat_model_reader;
 mod chat_models;
 #[cfg(any(test, feature = "native-probes"))]
 mod chat_models_fixture;
+#[cfg(any(test, feature = "native-probes"))]
+mod model_wait_fixture;
 #[cfg(feature = "native-probes")]
 pub use chat_editor::project_creation_probe::run_project_creation_probe;
 mod delivery_store;
