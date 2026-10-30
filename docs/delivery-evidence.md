@@ -87,8 +87,9 @@ Unsupported verification stays unavailable, never skipped-to-passing.
 
 No completion/status-done wiring, merge, cleanup, live adoption, UI or change to
 `ask_user`. Future activation needs implemented check and authority policy,
-intent-specific independent reviewer policy, authoritative task-at-operation
-attribution for code, source freshness observation and integration verification.
+intent-specific independent reviewer policy, contribution reconciliation and exact
+later allocation (D31, not invented original task attribution), source freshness
+observation and integration verification.
 Transport exposure needs its own trusted session admission and project access
 checks. These records alone do not satisfy those prerequisites.
 
@@ -97,3 +98,6 @@ later coordinator-selected assessment scope under exact submission/assignment an
 context fences. This is the D31 alternative to requiring original task-at-operation
 purpose proof for that later scope, not retroactive attribution or gate activation.
 Historical task purpose stays Unknown; all other delivery gates remain required.
+
+[Acceptance prerequisites](non-code-acceptance-prerequisites.md) separates these gaps from
+the existing completion/status routes and proposes a bounded non-code path, without activation.

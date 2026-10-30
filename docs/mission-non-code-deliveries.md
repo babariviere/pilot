@@ -21,3 +21,7 @@ effects. It must revalidate references and authorization at acceptance, handle
 concurrent changes, and address shared-host projection and desktop presentation.
 The existing legacy code receipt validates only the shape of its 40-hex commit;
 it does not verify that the commit exists or landed.
+
+See [acceptance prerequisites](non-code-acceptance-prerequisites.md) for the source-grounded
+completion routes, zero-code evidence requirements and bounded implementation proposals.
+That plan activates nothing and does not adopt legacy missions.
