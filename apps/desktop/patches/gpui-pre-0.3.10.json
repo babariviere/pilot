@@ -3,7 +3,7 @@
   "version": "0.3.10",
   "archiveSha256": "df4b5f8d0c278308df2f11e0bfe0212dd77d7848ce1bdc4b9d513334414396f6",
   "upstream": "https://crates.io/crates/gpui-pre/0.3.10",
-  "purpose": "Expose native background blur capability. Unsupported and headless platforms default to opaque.",
+  "purpose": "Expose native background blur capability. Unsupported and headless platforms default to opaque. Add an opt-in asynchronous macOS should-terminate owner, separate from shutdown observers.",
   "edits": [
     {
       "path": "src/platform.rs",
@@ -14,6 +14,16 @@
       "path": "src/window.rs",
       "old": "    pub fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {",
       "new": "    /// Whether the native backend currently supports behind-window blur.\n    pub fn supports_background_blur(&self) -> bool {\n        self.platform_window.supports_background_blur()\n    }\n\n    /// Sets the window background appearance.\n    pub fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance) {"
+    },
+    {
+      "path": "src/platform.rs",
+      "old": "    fn on_quit(&self, callback: Box<dyn FnMut() -> bool>);",
+      "new": "    fn on_quit(&self, callback: Box<dyn FnMut() -> bool>);\n\n    /// Install an asynchronous native termination veto (macOS only).\n    /// Other platforms retain their existing termination behavior.\n    fn on_should_quit(\n        &self,\n        _callback: Box<dyn FnMut() -> futures::future::LocalBoxFuture<'static, bool>>,\n    ) {\n    }"
+    },
+    {
+      "path": "src/app.rs",
+      "old": "    /// Register a callback to be invoked when the application is about to quit.",
+      "new": "    /// Install the macOS deferred should-terminate owner. The future must\n    /// positively confirm exit; cancellation/refusal must resolve false. Native\n    /// requests are coalesced while pending, and callbacks/replies are deferred\n    /// outside App borrows. This replaces the prior owner, not quit observers.\n    /// Other platforms retain their existing termination behavior.\n    pub fn on_should_quit<Fut>(\n        &self,\n        mut callback: impl FnMut(&mut App) -> Fut + 'static,\n    ) where\n        Fut: 'static + Future<Output = bool>,\n    {\n        let app = self.this.clone();\n        self.platform.on_should_quit(Box::new(move || {\n            let Some(app) = app.upgrade() else {\n                return std::future::ready(false).boxed_local();\n            };\n            let Ok(mut app) = app.try_borrow_mut() else {\n                return std::future::ready(false).boxed_local();\n            };\n            app.update(|cx| callback(cx)).boxed_local()\n        }));\n    }\n\n    /// Register a callback to be invoked when the application is about to quit."
     }
   ]
 }

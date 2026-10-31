@@ -280,12 +280,15 @@ pub struct LocalViewer {
     settings_pane: Option<gpui_kit::WeakEntity<crate::settings_view::SettingsView>>,
     settings_return: Option<gpui_kit::FocusHandle>,
     settings_events: Vec<Subscription>,
+    quit_window_closed: Option<Subscription>,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     update_events: Vec<Subscription>,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     restart_generation: u64,
     pub(super) restart_pending: bool,
     pub(super) daemon_upgrade_pending: bool,
+    #[cfg(target_os = "macos")]
+    external_termination: menu_routing::ExternalTermination,
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     restart_timeout: Option<Task<()>>,
     #[cfg(feature = "native-probes")]
@@ -578,15 +581,17 @@ impl LocalViewer {
             }
         }));
         view.listen_writes(write_updates, window, cx);
-        Self::register_close(window, cx);
+        view.register_close(window, cx);
         view
     }
 
     /// Shared by Local startup and the isolated native application fixture.
-    fn register_close(window: &mut Window, cx: &mut Context<Self>) {
-        menu_routing::register_quit_owner(window, cx);
+    fn register_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.quit_window_closed = menu_routing::register_quit_owner(window, cx);
         let weak = cx.weak_entity();
-        window.on_window_should_close(cx, move |_, cx| {
+        window.on_window_should_close(cx, move |window, cx| {
+            #[cfg(not(target_os = "macos"))]
+            let _ = window;
             weak.update(cx, |view, cx| {
                 if view.daemon_upgrade_pending {
                     return false;
@@ -599,6 +604,14 @@ impl LocalViewer {
                 }
                 if view.restart_pending {
                     return false;
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    view.begin_fresh_quit();
+                    if view.editor.read(cx).close_confirmed() {
+                        view.finish_quit(window, cx);
+                        return false;
+                    }
                 }
                 view.editor
                     .update(cx, |editor, cx| editor.request_close(cx))
@@ -652,8 +665,14 @@ impl LocalViewer {
                         if let Some(child) = view.subagent.clone() {
                             child.update(cx, |child, cx| child.accept_write(&state, cx));
                         }
+                        #[cfg(target_os = "macos")]
+                        let close_failed = state.error.is_some();
                         view.editor
                             .update(cx, |editor, cx| editor.accept(state, window, cx));
+                        #[cfg(target_os = "macos")]
+                        if close_failed {
+                            view.refuse_external_termination();
+                        }
                         #[cfg(any(target_os = "macos", target_os = "linux"))]
                         view.acknowledge_update_startup(cx);
                         #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -668,6 +687,8 @@ impl LocalViewer {
                     break;
                 }
             }
+            #[cfg(target_os = "macos")]
+            let _ = view.update_in(cx, |view, _, _| view.refuse_external_termination());
         }));
     }
 
@@ -1276,7 +1297,7 @@ impl LocalViewer {
                     view.sync_sending(cx);
                     view.rebuild_nav(window, cx)
                 }
-                EditorEvent::Flushed => menu_routing::exit(cx),
+                EditorEvent::Flushed => view.finish_quit(window, cx),
                 EditorEvent::Sent { chat, sending } => {
                     if let Some(id) = sending {
                         view.sent_arrival(chat, *id, window, cx);
@@ -1506,11 +1527,14 @@ impl LocalViewer {
             settings_pane: None,
             settings_return: None,
             settings_events: Vec::new(),
+            quit_window_closed: None,
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             update_events: Vec::new(),
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             restart_generation: 0,
             restart_pending: false,
+            #[cfg(target_os = "macos")]
+            external_termination: menu_routing::ExternalTermination::Idle,
             daemon_upgrade_pending: false,
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             restart_timeout: None,

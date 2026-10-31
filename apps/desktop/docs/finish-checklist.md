@@ -171,9 +171,13 @@ not an absence proof. Swift links are historical capability references only.
   The updater ExitAuthorized path now uses the same real Store/input-release
   acknowledgment while retaining its exact checkpoint fence. Three added hidden
   updater-exit cases qualify this root-release boundary, not bundle installation.
-  Direct external `NSApplication terminate:` demonstrably bypasses the drain and
-  dirty-preferences veto. Its platform should-terminate contract needs scope review;
-  actual OS shutdown remains unqualified.
+  Direct external `NSApplication terminate:` now uses a deferred should-terminate
+  hook through the existing root vetoes and courier Close. Its YES requires the
+  current root's real Flushed or an exact already-drained updater authorization,
+  never a deadline or shutdown observer. Native reentry is coalesced at the app
+  entry as well as the delegate. See the corpus for before-YES independent Store
+  reopen/input checks and the distinction between fault-fixture cleanup and a
+  successful save. Actual OS shutdown/log-out remains unqualified.
 - **Lazy history:** #471/#476 have recorded hidden native and synthetic transport
   results in [lazy history](lazy-history.md). Initial 60-entry tail, contiguous
   24-entry older pages and explicit full-history Find are implemented. Distant

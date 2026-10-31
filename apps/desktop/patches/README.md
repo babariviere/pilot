@@ -24,6 +24,26 @@ No X11 path or compositor-policy changes. See
 [`native-glass.md`](../docs/native-glass.md) for isolated request tests and the
 separate visible-compositor qualification boundary.
 
+The opt-in application termination hook adds a separate `App::on_should_quit`
+seam to `gpui-pre`, and macOS AppKit should-terminate/reply wiring to the existing
+platform patch. `applicationWillTerminate:` remains observation, not a veto.
+The application subclass coalesces reentrant `terminate:` calls before AppKit
+can bypass its delegate while another request is pending.
+
+`gpui-pre-apple-0.3.10.json` enables common-run-loop foreground wakes only when
+that hook is installed. An actual hidden native fixture demonstrated why:
+AppKit's deferred termination runs a nested loop, and a `terminate:` already on
+the main dispatch queue prevents that queue from delivering the courier drain.
+Switching only after a request would strand previously queued work. Registration
+therefore enables the path for the remainder of the process, including before
+requests. Core Foundation copies each block and runs its existing trampoline
+once; no runnable registry, extra executor or second delivery owner is added.
+Background dispatch, timer workers, apps without the hook, iOS and Linux retain
+their upstream paths. This changes foreground scheduling for the opted-in app;
+it makes no performance, native-input or broad modal-UI qualification claim.
+See [`application-quit.md`](../docs/application-quit.md) for the actual native
+request/reply corpus, original red test and remaining limits.
+
 `gpui-base-0.8.1.json` records exact preimages/replacements and the original
 crates.io archive SHA-256. `scripts/prepare-patches.py` verifies that archive,
 extracts it into ignored `.patched/gpui-base-0.8.1`, checks every edit count,

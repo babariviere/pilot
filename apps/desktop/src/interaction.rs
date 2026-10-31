@@ -295,6 +295,11 @@ impl Interaction {
         }
         self.commands.try_send(command).is_ok()
     }
+
+    #[cfg(all(feature = "native-probes", target_os = "macos"))]
+    pub(crate) fn teardown_probe_inputs_closed(&self) -> bool {
+        self.commands.is_closed() && self.close.is_closed() && self.wake.is_closed()
+    }
 }
 
 fn retain_report(status: &mut WriteState, store: &mut Store, report: Option<DeliveryReport>) {

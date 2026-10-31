@@ -18,12 +18,91 @@ struct QuitOwner {
 }
 impl Global for QuitOwner {}
 
-pub(super) fn register_quit_owner(window: &Window, cx: &mut Context<LocalViewer>) {
+pub(super) fn register_quit_owner(
+    window: &Window,
+    cx: &mut Context<LocalViewer>,
+) -> Option<Subscription> {
     let view = cx.weak_entity();
+    #[cfg(target_os = "macos")]
+    if let Some(previous) = cx.try_global::<QuitOwner>().cloned()
+        && previous.view != view
+    {
+        let _ = previous
+            .view
+            .update(cx, |view, _| view.refuse_external_termination());
+    }
     cx.set_global(QuitOwner {
         view,
         window: window.window_handle(),
     });
+    #[cfg(target_os = "macos")]
+    {
+        cx.on_should_quit(external_quit);
+        let weak = cx.weak_entity();
+        let id = window.window_handle().window_id();
+        // Window teardown must refuse even when a cache/test still retains the
+        // view entity. Dropping the subscription/root otherwise closes its sender.
+        Some(cx.on_window_closed(move |cx, closed| {
+            if closed == id {
+                let _ = weak.update(cx, |view, _| view.refuse_external_termination());
+            }
+        }))
+    }
+    #[cfg(not(target_os = "macos"))]
+    None
+}
+
+#[cfg(target_os = "macos")]
+pub(super) enum ExternalTermination {
+    Idle,
+    Waiting(async_channel::Sender<bool>),
+    // A late Flushed after refusal is not permission to quit. A fresh explicit
+    // request may try again, but neither a timer nor an old result can do so.
+    Refused,
+}
+
+/// AppKit owns one deferred request. The current root owns its reply until
+/// Flushed or refusal; dropping that root also closes the reply channel (NO).
+#[cfg(target_os = "macos")]
+pub(super) fn external_quit(cx: &mut App) -> impl std::future::Future<Output = bool> + use<> {
+    let (reply, decision) = async_channel::bounded(1);
+    if let Some(owner) = cx.try_global::<QuitOwner>().cloned() {
+        cx.defer(move |cx| {
+            if cx
+                .try_global::<QuitOwner>()
+                .is_none_or(|current| current.view != owner.view)
+            {
+                return;
+            }
+            let _ = owner.window.update(cx, |_, window, cx| {
+                let _ = owner.view.update(cx, |view, cx| {
+                    // The updater keeps its checkpoint fence after Flushed.
+                    // Recheck the existing exact generation/preferences safety,
+                    // never treat merely starting Close or COMMIT as permission.
+                    if view.restart_pending {
+                        let _ = reply.try_send(
+                            !view.daemon_upgrade_pending
+                                && view.editor.read(cx).close_confirmed()
+                                && view.authorized_update_exit(window, cx),
+                        );
+                        return;
+                    }
+                    // Never replace an outstanding reply with a newer request.
+                    if matches!(view.external_termination, ExternalTermination::Waiting(_))
+                        || !view.editor.read(cx).external_close_ready()
+                    {
+                        return;
+                    }
+                    view.external_termination = ExternalTermination::Waiting(reply);
+                    view.request_menu_quit(window, cx);
+                    if !view.editor.read(cx).close_requested() {
+                        view.refuse_external_termination();
+                    }
+                });
+            });
+        });
+    }
+    async move { decision.recv().await.unwrap_or(false) }
 }
 
 /// The main window, for app commands that need a home when no window is key.
@@ -76,7 +155,72 @@ struct Exits(usize);
 impl Global for Exits {}
 
 impl LocalViewer {
+    #[cfg(target_os = "macos")]
+    pub(super) fn begin_fresh_quit(&mut self) {
+        if matches!(self.external_termination, ExternalTermination::Refused) {
+            self.external_termination = ExternalTermination::Idle;
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn refuse_external_termination(&mut self) {
+        if !matches!(self.external_termination, ExternalTermination::Waiting(_)) {
+            return;
+        }
+        if let ExternalTermination::Waiting(reply) =
+            std::mem::replace(&mut self.external_termination, ExternalTermination::Refused)
+        {
+            let _ = reply.try_send(false);
+        }
+    }
+
+    pub(super) fn finish_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(not(target_os = "macos"))]
+        let _ = window;
+        // A released/replaced root cannot authorize termination for its successor.
+        #[cfg(target_os = "macos")]
+        if cx
+            .try_global::<QuitOwner>()
+            .is_some_and(|owner| owner.view.entity_id() != cx.entity_id())
+        {
+            self.refuse_external_termination();
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        if matches!(self.external_termination, ExternalTermination::Refused) {
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        if let ExternalTermination::Waiting(reply) =
+            std::mem::replace(&mut self.external_termination, ExternalTermination::Idle)
+        {
+            let flushed = self.editor.read(cx).close_confirmed() && self.quit_allowed(window, cx);
+            if !flushed {
+                self.external_termination = ExternalTermination::Refused;
+            }
+            let _ = reply.try_send(flushed);
+            return;
+        }
+        exit(cx);
+    }
+
     pub(super) fn request_menu_quit(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        if !self.quit_allowed(w, cx) {
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        self.begin_fresh_quit();
+        #[cfg(target_os = "macos")]
+        if self.editor.read(cx).close_confirmed() {
+            self.finish_quit(w, cx);
+            return;
+        }
+        if self.editor.update(cx, |e, cx| e.request_close(cx)) {
+            self.finish_quit(w, cx);
+        }
+    }
+
+    fn quit_allowed(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
         if self.restart_pending
             || self.daemon_upgrade_pending
             || self.editor.update(cx, |e, cx| e.marked(w, cx))
@@ -84,16 +228,14 @@ impl LocalViewer {
         {
             // Keep the composition; show where it is when Quit came from another window.
             w.activate_window();
-            return;
+            return false;
         }
         if !self.settings_window_allows_quit(cx)
             || !self.settings.update(cx, |s, cx| s.request_close(cx))
         {
-            return;
+            return false;
         }
-        if self.editor.update(cx, |e, cx| e.request_close(cx)) {
-            exit(cx);
-        }
+        true
     }
 
     /// Ask Settings in its own window, so its preedit checks read that window's
@@ -187,8 +329,8 @@ mod tests {
         let (h, v) = cx.update(|cx| {
             gpui_kit::open_window(hidden(), cx, |w, cx| {
                 cx.new(|cx| {
-                    let v = LocalViewer::build(None, Some(writer), w, cx);
-                    register_quit_owner(w, cx);
+                    let mut v = LocalViewer::build(None, Some(writer), w, cx);
+                    v.quit_window_closed = register_quit_owner(w, cx);
                     v.editor.update(cx, |e, cx| {
                         e.accept(probe_state(false), w, cx);
                         e.select("chat:source".into(), true, false, w, cx);
@@ -543,5 +685,214 @@ mod tests {
         .unwrap();
         cx.run_until_parked();
         assert_eq!(exits(cx), 1);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui_kit::test]
+    fn external_quit_waits_for_current_flush_and_keeps_one_reply(cx: &mut TestAppContext) {
+        use futures_util::FutureExt;
+        let (writer, _commands, closes) = Interaction::recording_with_close();
+        let (h, view) = main_owner(cx, writer);
+        let mut decision = Box::pin(cx.update(external_quit));
+        cx.run_until_parked();
+        assert!(decision.as_mut().now_or_never().is_none());
+        assert_eq!(closes.try_recv(), Ok(()));
+        // The platform coalesces native duplicates. This separately tests that
+        // the root cannot replace an existing sender if it is asked twice.
+        let duplicate = cx.update(external_quit);
+        cx.run_until_parked();
+        assert_eq!(duplicate.now_or_never(), Some(false));
+        assert!(closes.try_recv().is_err());
+        assert_eq!(exits(cx), 0);
+        cx.update_window(h, |_, w, cx| {
+            view.read(cx)
+                .editor
+                .clone()
+                .update(cx, |e, cx| e.accept(probe_state(false), w, cx));
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert!(
+            decision.as_mut().now_or_never().is_none(),
+            "an intermediate projection is not Flushed"
+        );
+        cx.update_window(h, |_, w, cx| {
+            view.read(cx)
+                .editor
+                .clone()
+                .update(cx, |e, cx| e.accept(probe_state(true), w, cx));
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert_eq!(decision.now_or_never(), Some(true));
+        assert_eq!(exits(cx), 0, "native reply, not another App::quit");
+        let already_drained = cx.update(external_quit);
+        cx.run_until_parked();
+        assert_eq!(
+            already_drained.now_or_never(),
+            Some(true),
+            "positively already drained"
+        );
+        assert!(closes.try_recv().is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui_kit::test]
+    fn external_quit_rechecks_preferences_and_rejects_late_flush(cx: &mut TestAppContext) {
+        use futures_util::FutureExt;
+        let (writer, _commands, closes) = Interaction::recording_with_close();
+        let (h, view) = main_owner(cx, writer);
+        let decision = cx.update(external_quit);
+        cx.run_until_parked();
+        assert_eq!(closes.try_recv(), Ok(()));
+        cx.update_window(h, |_, w, cx| {
+            view.read(cx).settings.clone().update(cx, |s, _| {
+                s.state
+                    .set_automatic_update_checks(!s.state.current().automatic_update_checks);
+            });
+            view.read(cx)
+                .editor
+                .clone()
+                .update(cx, |e, cx| e.accept(probe_state(true), w, cx));
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert_eq!(decision.now_or_never(), Some(false));
+        cx.update_window(h, |_, w, cx| {
+            view.read(cx)
+                .settings
+                .clone()
+                .update(cx, |s, _| s.state.revert());
+            view.read(cx)
+                .editor
+                .clone()
+                .update(cx, |e, cx| e.accept(probe_state(true), w, cx));
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert_eq!(exits(cx), 0, "late Flushed cannot undo a refusal");
+        let fresh = cx.update(external_quit);
+        cx.run_until_parked();
+        assert_eq!(
+            fresh.now_or_never(),
+            Some(true),
+            "fresh explicit request may use the confirmed drain"
+        );
+        assert!(closes.try_recv().is_err(), "no second Close");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui_kit::test]
+    fn external_quit_replacement_and_teardown_refuse_old_attempt(cx: &mut TestAppContext) {
+        use futures_util::FutureExt;
+        let (writer, _commands, closes) = Interaction::recording_with_close();
+        let (old_window, old) = main_owner(cx, writer);
+        let decision = cx.update(external_quit);
+        cx.run_until_parked();
+        assert_eq!(closes.try_recv(), Ok(()));
+        let (writer, _commands, new_closes) = Interaction::recording_with_close();
+        let (new_window, new) = main_owner(cx, writer);
+        assert_eq!(decision.now_or_never(), Some(false));
+        cx.update_window(old_window, |_, w, cx| {
+            old.read(cx)
+                .editor
+                .clone()
+                .update(cx, |e, cx| e.accept(probe_state(true), w, cx));
+        })
+        .unwrap();
+        cx.run_until_parked();
+        assert_eq!(exits(cx), 0, "old root cannot quit its replacement");
+        let decision = cx.update(external_quit);
+        cx.run_until_parked();
+        assert_eq!(new_closes.try_recv(), Ok(()));
+        cx.update_window(new_window, |_, w, _| w.remove_window())
+            .unwrap();
+        drop(new);
+        cx.run_until_parked();
+        assert_eq!(
+            decision.now_or_never(),
+            Some(false),
+            "dropped root is not authorization"
+        );
+        assert_eq!(exits(cx), 0);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui_kit::test]
+    fn external_quit_preserves_preedit_upgrade_and_checkpoint_vetoes(cx: &mut TestAppContext) {
+        use futures_util::FutureExt;
+        let (writer, _commands, closes) = Interaction::recording_with_close();
+        let (h, view) = main_owner(cx, writer);
+        for upgrade in [true, false] {
+            view.update(cx, |v, _| {
+                v.daemon_upgrade_pending = upgrade;
+                v.restart_pending = !upgrade;
+            });
+            let decision = cx.update(external_quit);
+            cx.run_until_parked();
+            assert_eq!(decision.now_or_never(), Some(false));
+            assert!(closes.try_recv().is_err());
+        }
+        view.update(cx, |v, _| v.restart_pending = false);
+        let text = cx.update(|cx| view.read(cx).editor.read(cx).shell_probe().0);
+        cx.update_window(h, |_, w, cx| {
+            text.update(cx, |t, cx| {
+                t.focus(w, cx);
+                t.replace_and_mark_text_in_range(None, "にほん", Some(3..3), w, cx);
+            });
+        })
+        .unwrap();
+        let decision = cx.update(external_quit);
+        cx.run_until_parked();
+        assert_eq!(decision.now_or_never(), Some(false));
+        assert!(closes.try_recv().is_err());
+        cx.update_window(h, |_, w, cx| {
+            assert!(text.update(cx, |t, cx| t.marked_text_range(w, cx).is_some()));
+            text.update(cx, |t, cx| {
+                t.unmark_text(w, cx);
+                t.set_value("", w, cx);
+            });
+            view.read(cx).editor.clone().update(cx, |e, cx| {
+                assert!(e.begin_gui_update_checkpoint(7, w, cx));
+            });
+        })
+        .unwrap();
+        let decision = cx.update(external_quit);
+        cx.run_until_parked();
+        assert_eq!(decision.now_or_never(), Some(false));
+        assert!(closes.try_recv().is_err());
+        assert_eq!(exits(cx), 0);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui_kit::test]
+    fn external_quit_refuses_pending_and_unconfirmed_preferences(cx: &mut TestAppContext) {
+        use futures_util::FutureExt;
+        let (writer, _commands, closes) = Interaction::recording_with_close();
+        let (_, view) = main_owner(cx, writer);
+        let settings = view.read_with(cx, |v, _| v.settings.clone());
+        let request = settings.update(cx, |s, _| {
+            assert!(s.state.loaded());
+            assert!(
+                s.state
+                    .set_automatic_update_checks(!s.state.current().automatic_update_checks)
+            );
+            s.state.begin_save().unwrap()
+        });
+        let pending = cx.update(external_quit);
+        cx.run_until_parked();
+        assert_eq!(pending.now_or_never(), Some(false));
+        settings.update(cx, |s, _| {
+            assert!(s.state.finish_save(
+                request,
+                Err(crate::settings_state::SettingsError::DurabilityUnknown)
+            ));
+            assert!(s.state.unconfirmed());
+        });
+        let unconfirmed = cx.update(external_quit);
+        cx.run_until_parked();
+        assert_eq!(unconfirmed.now_or_never(), Some(false));
+        assert!(closes.try_recv().is_err());
+        assert_eq!(exits(cx), 0);
     }
 }

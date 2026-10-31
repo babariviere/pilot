@@ -1,0 +1,24 @@
+{
+  "crate": "gpui-pre-apple",
+  "version": "0.3.10",
+  "archiveSha256": "e97cd068d8134b4e073321b946491760aa1e4511e486084a92e73b9174bff78a",
+  "upstream": "https://crates.io/crates/gpui-pre-apple/0.3.10",
+  "purpose": "Opt-in main-run-loop foreground dispatch for the macOS deferred termination hook. AppKit's nested terminate loop cannot service a main-dispatch callback that is already on the stack. Background dispatch and apps without the hook retain upstream behavior.",
+  "edits": [
+    {
+      "path": "src/dispatcher.rs",
+      "old": "pub struct AppleDispatcher;",
+      "new": "pub struct AppleDispatcher;\n\n#[cfg(target_os = \"macos\")]\nstatic TERMINATION_RUN_LOOP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);\n\n#[cfg(target_os = \"macos\")]\nfn dispatch_termination_ready(context: *mut c_void) {\n    use core_foundation::{runloop::{CFRunLoopGetMain, CFRunLoopRef, CFRunLoopWakeUp, kCFRunLoopCommonModes}, string::CFStringRef};\n    unsafe extern \"C\" {\n        fn CFRunLoopPerformBlock(run_loop: CFRunLoopRef, mode: CFStringRef, block: &block2::DynBlock<dyn Fn()>);\n    }\n    let block = block2::RcBlock::new(move || trampoline(context));\n    // SAFETY: Core Foundation copies the block and executes it once on the main\n    // run loop. The runnable's raw ownership is transferred once to trampoline,\n    // exactly as with exec_async_f. No App/entity borrow is captured. Common modes\n    // remain serviceable inside AppKit's deferred should-terminate loop.\n    unsafe {\n        let run_loop = CFRunLoopGetMain();\n        CFRunLoopPerformBlock(run_loop, kCFRunLoopCommonModes, &block);\n        CFRunLoopWakeUp(run_loop);\n    }\n}"
+    },
+    {
+      "path": "src/dispatcher.rs",
+      "old": "impl AppleDispatcher {\n    pub fn new() -> Self {",
+      "new": "impl AppleDispatcher {\n    /// Enable common-run-loop wakes before installing the macOS termination\n    /// owner. Keep this enabled, including before requests, so previously queued\n    /// foreground work cannot be stranded behind a nested terminate call.\n    #[cfg(target_os = \"macos\")]\n    pub fn enable_termination_run_loop() {\n        TERMINATION_RUN_LOOP.store(true, std::sync::atomic::Ordering::Release);\n    }\n\n    pub fn new() -> Self {"
+    },
+    {
+      "path": "src/dispatcher.rs",
+      "old": "    fn dispatch_on_main_thread(&self, runnable: RunnableVariant, _priority: Priority) {\n        let context = runnable.into_raw().as_ptr() as *mut c_void;",
+      "new": "    fn dispatch_on_main_thread(&self, runnable: RunnableVariant, _priority: Priority) {\n        let context = runnable.into_raw().as_ptr() as *mut c_void;\n        #[cfg(target_os = \"macos\")]\n        if TERMINATION_RUN_LOOP.load(std::sync::atomic::Ordering::Acquire) {\n            dispatch_termination_ready(context);\n            return;\n        }"
+    }
+  ]
+}

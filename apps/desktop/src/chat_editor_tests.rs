@@ -51,6 +51,12 @@ fn update_checkpoint_close_requires_exact_receipt_and_keeps_fence_until_flushed(
         view.update(cx, |e, cx| {
             assert!(e.close_gui_update(7, w, cx));
             assert!(e.close_gui_update(7, w, cx), "idempotent while draining");
+            #[cfg(target_os = "macos")]
+            assert_eq!(
+                e.closed_update_receipt(w, cx),
+                None,
+                "Close intent is not Flushed"
+            );
             assert!(e.update_checkpoint.is_some(), "never unfreeze input");
             assert!(!e.ready());
             let mut state = e.state.clone();
@@ -69,7 +75,26 @@ fn update_checkpoint_close_requires_exact_receipt_and_keeps_fence_until_flushed(
             let mut state = e.state.clone();
             state.error = None;
             state.flushed = true;
+            state.checkpoint = None; // The real courier clears this on Close.
             e.accept(state, w, cx);
+            #[cfg(target_os = "macos")]
+            {
+                assert_eq!(
+                    e.update_receipt(w, cx),
+                    None,
+                    "normal receipt remains strict"
+                );
+                assert_eq!(e.closed_update_receipt(w, cx), Some(7));
+                e.state.error = Some("late failed state");
+                assert_eq!(e.closed_update_receipt(w, cx), None);
+                e.state.error = None;
+                e.end_update_checkpoint(cx);
+                assert_eq!(
+                    e.closed_update_receipt(w, cx),
+                    None,
+                    "old Flushed cannot recreate a checkpoint"
+                );
+            }
         })
     })
     .unwrap();

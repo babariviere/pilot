@@ -229,6 +229,8 @@ impl LocalViewer {
             updater.update(cx,|u,cx|u.defer("Finish preedit and resolve pending or unsaved drafts before installing. All text is retained.",cx));
             return;
         }
+        #[cfg(target_os = "macos")]
+        self.begin_fresh_quit();
         self.restart_pending = true;
         self.settings.update(cx, |owner, cx| {
             if !owner.state.persisted() {
@@ -284,6 +286,25 @@ impl LocalViewer {
             runtime: Runtime::Unknown,
             admissions_fenced: true,
         })
+    }
+    /// Native termination may recognize an already-drained updater exit only
+    /// while the controller and its exact current checkpoint still authorize it.
+    #[cfg(target_os = "macos")]
+    pub(super) fn authorized_update_exit(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.restart_pending
+            && !self.daemon_upgrade_pending
+            && self.settings.read(cx).state.durability_token().is_some()
+            && self.updater(cx).is_some_and(|updater| {
+                matches!(updater.read(cx).state(), Some(State::ExitAuthorized))
+            })
+            && self
+                .editor
+                .update(cx, |editor, cx| editor.closed_update_receipt(window, cx))
+                == Some(self.restart_generation)
     }
     pub(super) fn advance_update_restart(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.restore_update_navigation(window, cx);

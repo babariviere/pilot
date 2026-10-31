@@ -1002,6 +1002,21 @@ impl ChatEditor {
         cx.notify();
         false
     }
+    #[cfg(target_os = "macos")]
+    pub(crate) fn external_close_ready(&self) -> bool {
+        self.attachments.importing.is_none()
+            && self.update_checkpoint.is_none()
+            && self.state.book.is_some()
+            && self.state.error.is_none()
+    }
+    #[cfg(target_os = "macos")]
+    pub(crate) fn close_requested(&self) -> bool {
+        self.closing
+    }
+    #[cfg(target_os = "macos")]
+    pub(crate) fn close_confirmed(&self) -> bool {
+        self.state.flushed && self.state.error.is_none()
+    }
     /// Strict checkpoint used by settled-delivery regression fixtures.
     #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
     pub(crate) fn begin_update_checkpoint(
@@ -1072,8 +1087,31 @@ impl ChatEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<u64> {
+        let acknowledged = self
+            .update_checkpoint
+            .is_some_and(|(generation, _)| self.state.checkpoint == Some(generation));
+        self.checkpoint_receipt(acknowledged, window, cx)
+    }
+    /// Close clears the worker's transient checkpoint marker. Its terminal ACK
+    /// is stronger, but only while the same admitted checkpoint/input fence and
+    /// exact draft/question projection still match. Normal receipts stay strict.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn closed_update_receipt(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<u64> {
+        self.checkpoint_receipt(self.closing && self.state.flushed, window, cx)
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    fn checkpoint_receipt(
+        &self,
+        acknowledged: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<u64> {
         let (generation, retain_unknown) = self.update_checkpoint?;
-        if self.state.checkpoint != Some(generation)
+        if !acknowledged
             || self.state.error.is_some()
             || !self.unsaved_local.is_empty()
             || !self.pending.is_empty()

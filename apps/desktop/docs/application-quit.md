@@ -143,80 +143,133 @@ one priority Close, continued fencing, no mutation replay, no Flushed on an erro
 projection and forwarding of the later Flushed event. It uses recorded channels,
 not a real filesystem-failure claim after an already completed checkpoint.
 
-## External native termination: demonstrated bypass, implementation blocked
+## External native termination: deferred request/reply
 
-The added `external-terminate` child sends **`NSApplication terminate:` directly**
-on its own hidden application, outside the App borrow. An execute is held by the
-faux daemon, newer unsent text exists, and preferences are dirty. At GPUI's actual
-shutdown observer it demonstrates all three facts:
+The original `external-terminate` safety regression sent **`NSApplication
+terminate:` directly**, with a held faux Send and newer unsent text. It failed
+at the real shutdown observer with `external termination bypassed the draft
+drain`. The earlier characterization separately proved no Flushed, a locked
+Store and open input lanes despite dirty preferences. Process-exit cleanup was
+not a successful save. This task implements the approved should-terminate
+boundary, not another `willTerminate` observer.
 
-- no Flushed acknowledgment;
-- an independent Store open is refused because the original still owns its lock;
-- the original courier still accepts an input command.
+### Platform and root ownership
 
-The process nevertheless exits, despite preferences that veto the app's Quit
-menu. Post-process Store reopen succeeds, but that is OS resource cleanup, **not
-a graceful drain or veto**. This case deliberately makes no claim that the latest
-text was saved, that the held request was acknowledged, or that a timeout was safe.
+The existing checksum-pinned GPUI patches expose opt-in `App::on_should_quit`.
+On macOS the actual `applicationShouldTerminate:` delegate returns
+`NSTerminateLater`, then invokes the owner outside the native callback/App
+borrow and replies through `replyToApplicationShouldTerminate:`. Apps without
+an owner and non-macOS platform implementations retain their legacy behavior.
+A failed App borrow or absent root is refusal, not permission. There is no
+production deadline that grants exit.
 
-Current GPUI macOS registers `applicationWillTerminate:`, not
-`applicationShouldTerminate:`. Its callback invokes `App::shutdown`; quit
-observers run after termination is committed and have a bounded 200ms wait.
-They cannot refuse termination. Adding a best-effort observer would not repair
-the demonstrated veto gap, and the ordinary window/menu orchestration cannot
-intercept this external entry. **No external-path source fix is made.**
+The current Local root uses its existing composer/queued-input preedit,
+Settings-window/shared-preferences, daemon-upgrade and restart/checkpoint
+vetoes. It enqueues the existing priority courier Close, without another Store,
+executor, checkpoint or replay path. Refusal and write-listener failure/EOF
+reply NO. Window teardown also refuses while retained view handles still exist;
+dropping the root closes its reply channel. Replacing a root cancels its old
+reply, and old-root Flushed cannot terminate the new owner. A refused attempt
+cannot be revived by a late projection. A fresh explicit request may recheck an
+already-confirmed drain.
 
-Proposed narrow contract, requiring scope review before implementation: an
-explicit macOS should-terminate request/reply hook, returning deferred termination
-while the existing application owners check their current vetoes and drain. Reply
-yes only after the exact current attempt's real Flushed acknowledgment, or for
-an already drained authorized exit. Dirty/preedit/failed/unconfirmed state must
-reply no and retain the app/input; a deadline is never success. Keep
-`applicationWillTerminate:` as observation/cleanup only, avoid duplicate requests
-or reentrant App borrows, and preserve ordinary Quit and updater confirmation.
-This would be a platform-boundary addition, not permission to implement it here.
-OS shutdown/log-out behavior needs separate isolated qualification after review;
-direct `terminate:` is not evidence of an actual OS shutdown.
+YES requires this root's actual Flushed with no writer error and current root
+vetoes still clear. Already-drained ordinary exits use the same checks without
+sending another Close. An updater exit must additionally remain
+`ExitAuthorized` with the existing exact current generation, draft/outbox receipt
+and preferences durability safety. A checkpoint or COMMIT alone is insufficient.
+Prepare, confirmation, uncertain COMMIT/Unknown, rollback and legacy platform
+paths are not reimplemented.
 
-## Follow-up verification scope
+Courier Close clears the transient checkpoint acknowledgment. The terminal
+updater receipt therefore reuses the existing exact draft/question validation
+with the same retained checkpoint fence and a real `closing && Flushed` ACK.
+The ordinary checkpoint receipt still requires its original acknowledgment;
+an absent/reset fence, wrong generation, error or mere Close intent is never
+reconstructed from an old Flushed projection.
 
-The selected native target now has eleven child cases: three updater exits,
-one external-bypass characterization, six successful ordinary Close/Quit cases
-and one fault-refusal case. A passing characterization means the **defect was
-observed**, not that external termination is safe. Five focused editor checkpoint
-tests and matching library/native Clippy passed on macOS27.2 arm64/Rust1.98.1.
+Two additional native integration failures were found rather than hidden with
+settling sleeps:
+
+- AppKit runs a nested event loop during deferred `terminate:`. If the original
+  call is itself on the main dispatch queue, that queue cannot deliver GPUI's
+  courier listener or even its foreground deadline. Installing the hook enables
+  common-run-loop foreground wakes in the pinned Apple dispatcher, including
+  before requests so previously queued work remains serviceable. Background
+  dispatch/timers and apps without the hook remain unchanged. Refusal posts an
+  inert application-defined event to release `nextEvent`'s inner wait without
+  user input. That event authorizes nothing.
+- A reentrant `terminate:` can bypass AppKit's delegate while a termination loop
+  is already pending. The existing GPUIApplication subclass therefore coalesces
+  at the application entry as well as at the should-terminate delegate. One
+  outstanding native request owns one reply. There is no selector swizzle,
+  replacement delegate, polling pump, runnable registry or second lifecycle
+  controller. Source patches and their original archive checksums are tracked in
+  `patches/`; generated `.patched` inputs are never edited by hand.
+
+### Focused verification
+
+The hidden application corpus retains the existing actual window Close/menu
+Quit and three already-drained updater cases, and adds external unsent, held
+Send, durable Unknown Send, durable Unknown answer and Close-time private-disk
+failure cases. Every child first refuses dirty preferences through actual
+window Close, menu Quit and external termination. A real reentrant terminate is
+scheduled while the first native request is outstanding, not merely called
+back-to-back after a refusal. Held external Send explicitly enters from the
+native main dispatch queue, preserving the original red fixture's blocked-queue
+boundary even after GPUI foreground dispatch opts into the common run loop.
+
+The production owner is instrumented at its future's return, not replaced by a
+synthetic delegate: before returning YES, each successful case independently
+opens Store, verifies the latest Unicode text and captured answer/model/intent,
+and verifies closed command, priority-Close and wake receivers. The actual
+shutdown observer repeats the checks. The held server's late ACK cannot mutate the replacement-owned file;
+post-process reopen checks exact draft bytes and metadata again. Each held case
+has exactly its one original execute/receipt request, and retained Unknown cases
+have no mutation or receipt lookup. Fault cases prove NO and retained
+app/input/Store ownership. Their explicit test-only termination override is
+cleanup, **not** successful graceful exit or persistence acceptance.
+
+Focused root/context tests additionally cover an intermediate non-Flushed
+projection, duplicate sender protection, changed preferences at completion,
+late Flushed after refusal, current-owner replacement, window teardown with
+retained entities, marked input, upgrade/restart and checkpoint vetoes. They
+also refuse saving and durability-unconfirmed preferences without closing the
+writer. These are synthetic input-handler/state checks, not OS IME or native
+filesystem preference-failure evidence. The native process deadline runs on an
+independent thread so a blocked main event loop fails instead of stranding the test.
+Readiness otherwise uses owner/courier notifications and explicit HTTP barriers,
+never sleeps or polling.
 
 ```sh
 python3 scripts/check-scoped.py \
-  --unit chat_editor::tests::update_checkpoint --test application_quit --lint
+  --unit local_view::menu_routing::tests \
+  --test application_quit --test native_menus --lint
+python3 scripts/check-scoped.py \
+  --unit chat_editor::tests::update_checkpoint --native-probes --lint
+python3 scripts/check-scoped.py \
+  --unit interaction::tests::close_ack_releases_store_before_waking_application_exit \
+  --native-probes --lint
+bash scripts/cargo.sh build --locked -p pilot-desktop --bin pilot-desktop
 ```
 
-Existing synthetic native helper lifecycle qualification remains separate from
-the injected controller-result/root-release proof above. All eight existing
-helper modes passed with private fake apps/daemon/payloads: verified install,
+On macOS27.2 arm64/Rust1.98.1, 15 hidden process cases passed (13 successful
+drains, two explicitly cleaned-up fault refusals), plus the native no-window
+menu/default-hook regression. Eleven root tests, five checkpoint tests and the
+synchronous Store/input-release regression passed. Selected Clippy, changed-file
+rustfmt and the plain locked binary build passed using the private target and
+serial mbx CPU2/4GiB admission with fresh disk checks. No broad suite was run.
+
+All processes use private Stores/preferences, hidden unfocused AppKit windows
+and the faux loopback daemon. This is not OS shutdown/log-out, force-kill/power
+loss, packaged bootstrap, native OS IME/pasteboard, visible-window/performance,
+Linux/Wayland or daemon/service/PilotPower survival qualification. The opted-in
+foreground scheduling change is necessary for nested termination, not evidence
+of broad native modal/input parity. No installed app, live profile/data,
+provider, daemon/service/runtime, release/feed/signing or Swift build is touched.
+
+The previous isolated updater-helper corpus separately covered verified install,
 cancel, expired guard, interrupted fixture parent, failed startup, external and
-UI-only reconnect, and prepared-payload tamper refusal. Retained rollback and
-recovery assertions stayed in place; fixture interruption is not a graceful
-drain, force-termination or power-loss acceptance claim.
-
-The initial helper run passed six modes then timed out at UI-only startup.
-Its stale assertion expected a retained daemon capsule and runtime-owner inspect
-calls on macOS. The current macOS `Guard::startup_connection` deliberately
-returns the verified GUI target with reconnect-only authority and pins hello
-without those management calls. Only that example fixture's expectations were
-corrected; Linux expectations and production trust/guard code are unchanged.
-The full eight-mode rerun passed with its source-unchanged check.
-
-Three selected updater tests passed for exact persistence-owner receipts,
-uncertain COMMIT recovery and lost-COMMIT-ACK retention. The synchronous courier
-Store/input-release regression also passed. Matching application library/native
-and helper-example Clippy, changed-file pinned rustfmt, the lifecycle script's
-Python regression and the plain locked desktop binary build passed. Checks ran
-serially through existing Cargo/mbx CPU2/4GiB admission with Rust1.98.1, a private
-copy-on-write target/toolchain and fresh disk checks. No full suite was run.
-
-External-path implementation is blocked for platform contract review in #517.
-No frontend-close
-result promises daemon, service, parent-process or PilotPower survival. No live
-app/store/service/runtime/feed/key/install/restart, force-kill, power-loss, OS IME,
-OS shutdown or Linux acceptance is claimed.
+UI-only reconnect, and prepared-payload tamper refusal, retaining rollback and
+recovery assertions. That helper does not use GPUI; it is not rerun or promoted
+to external-termination/OS-shutdown evidence by this source-only hook change.

@@ -68,6 +68,10 @@ pub fn run_application_quit_probe() {
         "unknown-update-exit",
         "answer-update-exit",
         "external-terminate",
+        "held-external-terminate",
+        "unknown-external-terminate",
+        "answer-external-terminate",
+        "close-fault-external-terminate",
         "close",
         "quit",
         "held-close",
@@ -85,15 +89,13 @@ pub fn run_application_quit_probe() {
         assert!(status.success(), "hidden native {mode}: {status}");
         // Actual OS process exit, not a synthetic writer-lane ACK or a delay.
         let mut next = Store::open(root.clone(), LocalOptions::synthetic(1).host()).unwrap();
-        let expected = if mode == "fault" {
+        let expected = if mode.contains("fault") {
             faux::ORIGINAL
         } else {
             faux::NEWER
         };
-        if mode != "external-terminate" {
-            assert_eq!(next.book.drafts["chat:a"].text, expected);
-        }
-        if mode != "fault" && mode != "external-terminate" {
+        assert_eq!(next.book.drafts["chat:a"].text, expected);
+        if !mode.contains("fault") {
             assert_eq!(next.book.drafts["chat:b"].text, "Separate 🦀 draft");
         }
         assert!(next.book.drafts["chat:a"].answer == captured().answer);
@@ -105,11 +107,8 @@ pub fn run_application_quit_probe() {
             next.book.pending.len(),
             usize::from(
                 mode.starts_with("held")
-                    || mode == "unknown-quit"
-                    || mode == "unknown-update-exit"
-                    || mode == "answer-update-exit"
-                    || mode == "external-terminate"
-                    || mode == "answer-quit"
+                    || mode.starts_with("unknown")
+                    || mode.starts_with("answer")
                     || mode == "fault"
             )
         );
@@ -144,6 +143,15 @@ async fn wait_for(
 }
 
 fn child(mode: String, root: PathBuf) {
+    // This deadline must still fail the fixture if AppKit is stuck inside a
+    // nested termination loop and cannot service foreground executor timers.
+    let (_deadline_owner, deadline) = std::sync::mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        if deadline.recv_timeout(Duration::from_secs(12)).is_err() {
+            eprintln!("hidden native Quit fixture exceeded its failure deadline");
+            std::process::exit(1);
+        }
+    });
     let server = Arc::new(Server::start());
     let mut store = Store::open(root.clone(), server.options.host()).unwrap();
     store
@@ -152,9 +160,9 @@ fn child(mode: String, root: PathBuf) {
             captured(),
         )]))
         .unwrap();
-    let original = if mode == "unknown-quit" || mode == "unknown-update-exit" {
+    let original = if mode.starts_with("unknown") {
         Some(store.prepare("chat:a", &captured(), false, false).unwrap())
-    } else if mode == "answer-quit" || mode == "answer-update-exit" {
+    } else if mode.starts_with("answer") {
         let draft = captured();
         Some(
             store
@@ -209,7 +217,7 @@ fn child(mode: String, root: PathBuf) {
                             v.connect_updates(w, cx);
                         }
                         v.listen_writes(writes, w, cx);
-                        LocalViewer::register_close(w, cx);
+                        v.register_close(w, cx);
                         v
                     })
                 },
@@ -232,24 +240,67 @@ fn child(mode: String, root: PathBuf) {
                 (root.clone(), server.clone(), original.clone(), mode.clone());
             let exit_editor = editor.clone();
             let exit_writer = writer.clone();
+            let (replied, decisions) = async_channel::unbounded();
+            let (native_root, native_server, native_writer, native_editor, native_original) =
+                (root.clone(), server.clone(), writer.clone(), editor.clone(), original.clone());
+            let native_requests = Rc::new(Cell::new(0));
+            let requests = native_requests.clone();
+            let exit_requests = native_requests.clone();
+            // Instrument the shared production owner, not a synthetic delegate.
+            // Only actual AppKit shouldTerminate invokes this closure. The future
+            // checks lock/input release BEFORE returning YES to the native hook.
+            cx.on_should_quit(move |cx| {
+                requests.set(requests.get() + 1);
+                let ordinal = requests.get();
+                eprintln!("application_quit: native should-terminate {ordinal}");
+                let decision = menu_routing::external_quit(cx);
+                let (entered, duplicate) = async_channel::bounded(1);
+                // Queue an actual reentrant terminate while the first request is
+                // pending. NSTerminateLater can run a nested AppKit loop, so two
+                // back-to-back calls would merely be sequential, not duplicates.
+                cx.spawn(async move |_| {
+                    entered.try_send(()).unwrap();
+                    native_terminate();
+                }).detach();
+                let (root, server, writer, editor, replied, original) =
+                    (native_root.clone(), native_server.clone(), native_writer.clone(), native_editor.clone(), replied.clone(), native_original.clone());
+                let app = cx.to_async();
+                async move {
+                    duplicate.recv().await.unwrap();
+                    let allow = decision.await;
+                    eprintln!("application_quit: native reply {ordinal}: {allow}");
+                    if allow {
+                        app.update(|cx| assert!(editor.read(cx).teardown_probe_state().flushed));
+                        assert!(writer.teardown_probe_inputs_closed(), "commands/Close/wake receiver remains before native YES");
+                        assert!(!writer.command(crate::interaction::WriteCommand::Checkpoint(998)), "input open before native YES");
+                        let independent = Store::open(root, server.options.host()).expect("Store still locked before native YES");
+                        assert_eq!(independent.book.drafts["chat:a"].text, faux::NEWER);
+                        assert_eq!(independent.book.drafts["chat:b"].text, "Separate 🦀 draft");
+                        assert!(independent.book.drafts["chat:a"].answer == captured().answer);
+                        assert_eq!(independent.book.drafts["chat:a"].model_choice, captured().model_choice);
+                        if let Some(intent) = original.lock().unwrap().as_ref() {
+                            unchanged(&independent.book, intent);
+                        }
+                    }
+                    let _ = replied.try_send((ordinal, allow));
+                    allow
+                }
+            });
             cx.on_app_quit(move |cx| {
                 assert!(
                     checked.get(),
                     "application exited before its Close/veto checks"
                 );
+                assert_eq!(exit_requests.get(), 2, "duplicate native requests must not start another decision");
                 let state = exit_editor.read(cx).teardown_probe_state();
-                if exit_mode == "external-terminate" {
-                    assert!(!state.flushed, "external terminate unexpectedly drained");
-                    assert!(exit_writer.command(crate::interaction::WriteCommand::Checkpoint(999)), "external bypass no longer has an open input lane");
-                    assert!(Store::open(exit_root.clone(), exit_server.options.host()).is_err(), "external terminate unexpectedly released Store before shutdown");
-                    println!("application_quit: external terminate bypass observed: no Flushed, Store locked, input open");
-                } else if exit_mode == "fault" {
+                if exit_mode.contains("fault") {
                     assert!(
                         !state.flushed,
                         "failed private persistence must veto graceful Quit"
                     );
                 } else {
                     assert!(state.flushed, "root bypassed courier drain");
+                    assert!(exit_writer.teardown_probe_inputs_closed());
                     assert!(!exit_writer.command(crate::interaction::WriteCommand::Checkpoint(999)), "courier input still accepts commands at app shutdown");
                     // This callback runs at actual GPUI/native application shutdown.
                     // Opening here must not race the worker's still-held lock.
@@ -283,11 +334,11 @@ fn child(mode: String, root: PathBuf) {
                 let seen = exit_server.seen.lock().unwrap();
                 assert_eq!(
                     seen.executes,
-                    usize::from(exit_mode.starts_with("held") || exit_mode == "fault" || exit_mode == "external-terminate")
+                    usize::from(exit_mode.starts_with("held") || exit_mode == "fault")
                 );
                 assert_eq!(
                     seen.lookups,
-                    usize::from(exit_mode.starts_with("held") || exit_mode == "fault" || exit_mode == "external-terminate")
+                    usize::from(exit_mode.starts_with("held") || exit_mode == "fault")
                 );
                 assert!(seen.panic.is_none(), "fixture handler: {:?}", seen.panic);
                 assert!(seen.requests.iter().all(|(method, path)| method == "GET"
@@ -295,15 +346,6 @@ fn child(mode: String, root: PathBuf) {
                     || path == "/api/operations/receipt"));
                 println!("application_quit: {exit_mode} real GPUI shutdown boundary checked");
                 std::future::ready(())
-            })
-            .detach();
-            // A failure deadline only, not a timer used as durability or readiness proof.
-            cx.spawn(async move |cx| {
-                cx.background_executor()
-                    .timer(Duration::from_secs(12))
-                    .await;
-                eprintln!("hidden native Quit fixture exceeded its failure deadline");
-                std::process::exit(1);
             })
             .detach();
             cx.spawn(async move |cx| {
@@ -327,7 +369,7 @@ fn child(mode: String, root: PathBuf) {
                 };
                 open("a", cx);
                 let native = h.update(cx, |_, w, _| native_window(w)).unwrap();
-                // Exercise existing Settings veto through BOTH native entry points.
+                // Exercise existing Settings veto through all three native entries.
                 h.update(cx, |_, _, cx| {
                     view.read(cx).settings.clone().update(cx, |s, _| {
                         assert!(s.state.loaded());
@@ -339,6 +381,11 @@ fn child(mode: String, root: PathBuf) {
                 .unwrap();
                 native_close(native);
                 native_quit();
+                // Duplicate/reentrant native requests are coalesced. Await the
+                // actual native callback's refusal, not a delay or direct call.
+                native_terminate();
+                assert_eq!(decisions.recv().await.unwrap(), (1, false));
+                assert_eq!(native_requests.get(), 1);
                 h.update(cx, |_, _, cx| {
                     assert!(
                         editor.read(cx).ready(),
@@ -372,7 +419,7 @@ fn child(mode: String, root: PathBuf) {
                     })
                     .unwrap();
                 }
-                if mode.starts_with("held") || mode == "fault" || mode == "external-terminate" {
+                if mode.starts_with("held") || mode == "fault" {
                     h.update(cx, |_, w, cx| {
                         w.render_frame(cx);
                         w.click("local-send", cx);
@@ -420,15 +467,23 @@ fn child(mode: String, root: PathBuf) {
                     .unwrap();
                     native_quit();
                     wait_for(cx, &editor, &changed, |s| s.notice == "Private writer is fenced after an I/O failure. Keep/copy unsaved text before restart.").await;
+                    native_terminate();
+                    assert_eq!(decisions.recv().await.unwrap(), (2, false));
                     h.update(cx, |_, _, cx| {
-                        assert!(!editor.read(cx).teardown_probe_state().flushed)
+                        assert!(!editor.read(cx).teardown_probe_state().flushed);
+                        assert!(writer.command(crate::interaction::WriteCommand::Checkpoint(997)), "failed save must retain input lanes");
+                        assert!(Store::open(root.clone(), server.options.host()).is_err());
                     })
                     .unwrap();
                     // Fixture-only cleanup after the app vetoed. Not an app Close ACK.
                     std::fs::remove_dir(&snapshot).unwrap();
                     std::fs::rename(&backup, &snapshot).unwrap();
                     approved.set(true);
-                    cx.update(|cx| cx.quit());
+                    cx.update(|cx| {
+                        // Explicit fixture cleanup, NOT a successful save or veto.
+                        cx.on_should_quit(|_| std::future::ready(true));
+                        cx.quit();
+                    });
                     return;
                 }
                 // Ordinary production navigation, two exact IDs with identical titles.
@@ -442,10 +497,15 @@ fn child(mode: String, root: PathBuf) {
                 })
                 .unwrap();
                 open("a", cx);
-                if mode == "answer-quit" || mode == "answer-update-exit" {
+                if mode.starts_with("answer") {
                     h.update(cx, |_, w, cx| editor.update(cx, |e, cx| {
                         e.question_context(Some("a"), crate::question::Projection::Pending(Arc::new(question())), true, w, cx);
                     })).unwrap();
+                }
+                if mode == "close-fault-external-terminate" {
+                    let snapshot = root.join("state-v1.json");
+                    std::fs::rename(&snapshot, root.join("before-fault.json")).unwrap();
+                    std::fs::create_dir(&snapshot).unwrap();
                 }
                 h.update(cx, |_, w, cx| {
                     editor
@@ -455,6 +515,28 @@ fn child(mode: String, root: PathBuf) {
                         .update(cx, |t, cx| t.set_value(faux::NEWER, w, cx))
                 })
                 .unwrap();
+                if mode == "close-fault-external-terminate" {
+                    native_terminate();
+                    assert_eq!(decisions.recv().await.unwrap(), (2, false));
+                    h.update(cx, |_, _, cx| {
+                        let state = editor.read(cx).teardown_probe_state();
+                        assert!(!state.flushed);
+                        assert!(state.error.is_some());
+                        assert_eq!(editor.read(cx).shell_probe().0.read(cx).value().as_ref(), faux::NEWER);
+                        assert!(writer.command(crate::interaction::WriteCommand::Checkpoint(996)));
+                        assert!(Store::open(root.clone(), server.options.host()).is_err());
+                    }).unwrap();
+                    // Failed Close retained the app, newer input and Store owner.
+                    // This override is fixture cleanup, never save acceptance.
+                    std::fs::remove_dir(root.join("state-v1.json")).unwrap();
+                    std::fs::rename(root.join("before-fault.json"), root.join("state-v1.json")).unwrap();
+                    approved.set(true);
+                    cx.update(|cx| {
+                        cx.on_should_quit(|_| std::future::ready(true));
+                        cx.quit();
+                    });
+                    return;
+                }
                 if mode.ends_with("update-exit") {
                     h.update(cx, |_, w, cx| view.update(cx, |v, cx| v.probe_begin_update_exit(w, cx))).unwrap();
                     wait_for(cx, &editor, &changed, |s| s.checkpoint == Some(1)).await;
@@ -470,13 +552,16 @@ fn child(mode: String, root: PathBuf) {
                     h.update(cx, |_, w, cx| view.update(cx, |v, cx| v.advance_update_restart(w, cx))).unwrap();
                     return;
                 }
-                if mode == "external-terminate" {
-                    // Dirty preferences veto app Quit, but not this external AppKit entry.
-                    h.update(cx, |_, _, cx| view.read(cx).settings.clone().update(cx, |s, _| {
-                        s.state.set_automatic_update_checks(!s.state.current().automatic_update_checks);
-                    })).unwrap();
+                if mode.ends_with("external-terminate") {
+                    // External termination must use the same production draft drain.
                     approved.set(true);
-                    native_terminate();
+                    if mode == "held-external-terminate" {
+                        // Preserve the original red fixture's main-dispatch entry,
+                        // even though GPUI foreground work now uses the run loop.
+                        dispatch_native_terminate();
+                    } else {
+                        native_terminate();
+                    }
                     return;
                 }
                 // No settling wait/checkpoint: Close must drain the pending debounce.
@@ -563,6 +648,27 @@ fn native_terminate() {
             app,
             sel_registerName(c"terminate:".as_ptr()),
             std::ptr::null_mut(),
+        );
+    }
+}
+
+#[link(name = "System")]
+unsafe extern "C" {
+    static _dispatch_main_q: c_void;
+    fn dispatch_async_f(queue: Id, context: Id, work: extern "C" fn(Id));
+}
+
+fn dispatch_native_terminate() {
+    extern "C" fn invoke(_: Id) {
+        native_terminate();
+    }
+    // SAFETY: libdispatch's public main queue, one owned fixture callback, no
+    // context pointer or borrowed App/view. The actual terminate runs on main.
+    unsafe {
+        dispatch_async_f(
+            (&raw const _dispatch_main_q).cast_mut(),
+            std::ptr::null_mut(),
+            invoke,
         );
     }
 }
