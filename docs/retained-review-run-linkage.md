@@ -294,3 +294,72 @@ Missing byte-preserving vault access, real host admission/producer, cross-store 
 reconciliation, lifecycle erasure hooks and independently attested authorship are source-backed
 blockers. They cannot be supplied by this document or fake-provider tests. No adoption/backfill,
 production executor, live review, cleanup or release follows.
+
+## Inactive linkage implementation status (D39)
+
+[`retained-review-linkage-contract.ts`](../packages/daemon/src/retained-review-linkage-contract.ts)
+implements only six detached, deeply frozen **supplied claim** snapshots: target, run binding,
+call observation, usage observation, completion and producer. It has no production importer,
+executor, observer, storage, transport or accounting consumer. `retainedReviewDispatchStatus()`
+always returns frozen `{enabled:false, reason:"retained-dispatch-disabled"}`. No retained effort
+or budget key is selected; existing session/PR accounting, accounts, Bash, jobs and ask_user are
+unchanged. The conceptual storage/execution schema and protocol above remain proposals.
+
+The exported parsers accept unknown public data and strictly snapshot each whole argument aggregate
+before helpers or hashes. `RETAINED_REVIEW_LINKAGE_LIMITS` bounds that aggregate to 64 KiB JSON,
+4096 visited nodes, depth 16, 256 own keys per object, 128 elements per dense ordinary array,
+32 call observations, 32 usage observations and 20 claimed author lineages. IDs are 1–128 ASCII
+letters/digits/underscore/hyphen; SHA256 strings are 64 lowercase hex characters. Reasons are
+1–2000 UTF-16 units and sources/provider/model are 1–256, preserved exactly without trimming or
+normalization. Raw-output length claims are 0–50 KiB. Integers are nonnegative safe integers
+(definition/profile/assignment revisions start at one). Overflow refuses, never clips. Accessors,
+toJSON functions, cycles, symbols, exotic objects, sparse arrays and noncanonical/out-of-range
+array properties are rejected; reflection is not isolation against arbitrary Proxy traps.
+
+`retainedReviewLinkageDigest(kind,value)` shape-validates one of the six snapshots and hashes
+`["retained-review-linkage",1,kind,value]` with existing canonical `deliveryDigest`. It does not
+validate unavailable parents. Contextual parsers additionally compare exact supplied parents:
+target ID **and** digest, input/profile/context/runtime hashes, evidence/manifest identity,
+run/binding, call-bound usage and known claimed billing. Completion resolves its nullable terminal
+call and any nonempty unique captured usage IDs against supplied observations. Multiple distinct
+observations of the same bound call may retain different provider/transport reasons, including
+unknown then observed. This is neither latest-wins nor a claim that either source is authoritative.
+
+`compareRetainedReviewTargetInput(target,binding,input)` compares every overlapping task, owner,
+assignment, definition, allocation, submission, policy, manifest, profile and five-field context pin,
+plus binding run/provider/model/evidence identity. It recomputes D38's exact public profile, context,
+runtime and input digest domains from the supplied descriptor before comparing hash labels. This
+is **public structural consistency only**, not D38 WeakMap/preparation membership, original-byte
+validation, full descriptor/profile semantic validation, actual vault sealing or admission. A copied
+or self-consistently fabricated structure can pass. Account `configSha256` is a separate claimed
+domain: `deliveryDigest(["retained-review-linkage",1,"account-config",nonSecretAccountConfiguration])`.
+The configuration is not acquired or verified here; this hash is never equated with D38's full
+runtime `configSha256`. Unknown account/author lineage remains explicit, not inferred consent or
+independence. The `host-retained-run` producer name denotes a supplied claim, not a host callback.
+
+`compareRetainedReviewClaims(kind,left,right)` does shape-only pairwise comparisons:
+
+- Exact whole canonical snapshots replay. Same target ID with changed pins conflicts; fresh target
+  IDs are distinct, even for the same retained selection (D38 input includes run ID). No budget or
+  authority follows a fresh target. Same run ID with changed binding conflicts.
+- Reused call observation IDs with changed bytes conflict. A call ID rebound to another run/binding
+  conflicts; distinct observations for the same bound call are distinct supplied facts.
+- Usage with reused observation ID or receipt-source/receipt-identity pair and changed bytes conflicts,
+  even across runs/calls. Only different observation and receipt identities with the same exact
+  run/call/binding/rate/billing/input/generated/duration corroborate. Changed binding, rate, billing
+  or usage for the same call conflicts. Other nonaliased call identities are distinct.
+- Same run with a different completion ID conflicts, as does the same completion ID on another run.
+  Producer comparisons also conflict on reused run or completion identity. Other identities are distinct.
+
+These results are not a journal, durable idempotency, quarantine, settlement, charge/refund, callback,
+or physical-quiescence proof. Completion captures usage knowledge immutably; supplying later call-bound
+usage never rewrites that snapshot. Zero-length raw bytes, observed no-output with its exact reason,
+and unknown raw output remain distinct. Host termination never synthesizes or overrides D38's separately
+parsed model state/outcome/findings. No raw bytes are read or interpreted by this module.
+
+Fixture tests cover these comparisons, every pin and mismatch, stale hash labels, strict data bounds,
+detachment, exact reasons and later usage without terminal mutation. Existing D38 tests remain unchanged.
+Equality or parser success establishes no host admission, observed execution, seal, provenance,
+independence, current access, budget/consent, human origin, physical exit, projection or acceptance.
+No production calls, persistence/migration, grant, gate, adoption/backfill, learning, cleanup or
+release/restart follows. Production qualification and the unresolved policies above remain blocked.
