@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.103.0](https://github.com/babariviere/pilot/compare/v1.102.0...v1.103.0) (2026-10-31)
+
+
+### Features
+
+* **delivery:** record non-code policy and explain blocked gates ([7e502b8](https://github.com/babariviere/pilot/commit/7e502b87be5e47079a08ef94c67b0f12d30a5f02))
+* **desktop:** add passive Archive navigation ([729e24c](https://github.com/babariviere/pilot/commit/729e24ccea39ab64404f15a66a626a3d97c5c2b7))
+* **desktop:** browse pinned artifacts from overview ([1473f46](https://github.com/babariviere/pilot/commit/1473f460234559c91a33c470d2009608540ea7a3))
+* **desktop:** browse reported resource links read-only ([4bd1401](https://github.com/babariviere/pilot/commit/4bd1401fd6245984066d1b464977d45ec54f1d08))
+* **exploration:** add bounded static caller impact ([3540a30](https://github.com/babariviere/pilot/commit/3540a30473b08fa0b2327992c4114711f1a7ef09))
+* **review:** add inactive retained-input citation contracts ([e04aed0](https://github.com/babariviere/pilot/commit/e04aed0c4e96965efc6c65aa9e1f3f07046c7e4d))
+* **review:** retain committed worker revisions ([6cfa78c](https://github.com/babariviere/pilot/commit/6cfa78c43a06e2575d2913387f5e7a61bba55396))
+* **usage:** filter local history by ledger project ([69f0338](https://github.com/babariviere/pilot/commit/69f03386520eaf5886353ce9793e38c23916c705))
+* **usage:** read retained request records on demand ([6149d39](https://github.com/babariviere/pilot/commit/6149d396c0211eb16541c425cea869df7c2192ff))
+
+
+### Bug Fixes
+
+* **desktop:** autosave drafts during chat conversion ([ce2aa9d](https://github.com/babariviere/pilot/commit/ce2aa9da890a2b90acb9918f9d8e22a267969dd4))
+* **desktop:** autosave drafts during chat model changes ([7681e29](https://github.com/babariviere/pilot/commit/7681e29d7696bd3f7625ddda8810aa4c881a8634))
+* **desktop:** autosave drafts during project registration ([7ae5505](https://github.com/babariviere/pilot/commit/7ae5505c2b395fc04d6e5cfb1940c7748cab877e))
+* **desktop:** autosave drafts during subagent sends ([b819192](https://github.com/babariviere/pilot/commit/b819192fe1cef4126fc85cef1888371d1712058b))
+* **desktop:** autosave drafts during subscription recovery ([d82df2b](https://github.com/babariviere/pilot/commit/d82df2b3cac4be1c9aa4e23e65d68377f273569f))
+* **desktop:** autosave drafts while Stop HTTP waits ([bdd23ff](https://github.com/babariviere/pilot/commit/bdd23ff307fc46c5cbadfa6ffb7cb7c06fdd4790))
+* **desktop:** drain draft writer before updater exit ([f33f010](https://github.com/babariviere/pilot/commit/f33f0101147a8ec57c847cb413d74029aef1b02e))
+* **desktop:** preserve literal copy in nested Markdown code ([6536389](https://github.com/babariviere/pilot/commit/6536389606542eaf6ecd6ccae7bc6f2377c5a9b6))
+* **desktop:** register missing native CI targets ([a08d49b](https://github.com/babariviere/pilot/commit/a08d49b0d3d63736315fb8c993f0b67d63a2d3ce))
+* **desktop:** release draft owner before application exit ([44e7fbe](https://github.com/babariviere/pilot/commit/44e7fbea8d7b61e822982f059fd69e961f49f95f))
+* **memory:** preserve exact-range refresh context ([2fe196f](https://github.com/babariviere/pilot/commit/2fe196f5e5ae526bb178e03d1d0888a49016b2c7))
+
 ## [1.102.0](https://github.com/babariviere/pilot/compare/v1.101.0...v1.102.0) (2026-10-30)
 
 
