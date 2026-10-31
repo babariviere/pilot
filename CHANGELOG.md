@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.104.0](https://github.com/babariviere/pilot/compare/v1.103.0...v1.104.0) (2026-10-31)
+
+
+### Features
+
+* **review:** add inactive retained linkage contracts ([d1fbe6e](https://github.com/babariviere/pilot/commit/d1fbe6e62be0f4f5e39c0a49c51a9b9fad42cbfe))
+
+
+### Bug Fixes
+
+* **desktop:** veto unsafe external application termination ([50b8ca6](https://github.com/babariviere/pilot/commit/50b8ca6150ce01e09b31d393d8c31295e2f659cc))
+
 ## [1.103.0](https://github.com/babariviere/pilot/compare/v1.102.0...v1.103.0) (2026-10-31)
 
 
