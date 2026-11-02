@@ -216,7 +216,7 @@ export type KernelCommand =
 			event?: import("@pilot/protocol").ChatEventSummary;
 	  }
 	/** Passive, display-only daemon activity. Never schedules a model turn. */
-	| { type: "activity"; requestId: string; text: string }
+	| { type: "activity"; requestId: string; text: string; event?: import("@pilot/protocol").ChatEventSummary }
 	| {
 			type: "editQueuedMessage";
 			requestId: string;

@@ -360,7 +360,7 @@ test("idle-only automatic origins wait while an explicit user steer can answer",
 	const f = await fixture(t);
 	f.faux.setResponses([
 		fauxAssistantMessage(fauxToolCall("ask_user", { question: "Choose?" }), { stopReason: "toolUse" }),
-		...Array.from({ length: 8 }, () => fauxAssistantMessage("Done.")),
+		...Array.from({ length: 9 }, () => fauxAssistantMessage("Done.")),
 	]);
 	await f.session.submit("user:ask", "Ask", "followUp");
 	await waitingQuestion(f);
@@ -370,6 +370,7 @@ test("idle-only automatic origins wait while an explicit user steer can answer",
 		"control:",
 		"mission:send:",
 		"pr-follow-up:",
+		"automation:",
 		"slack-reply:",
 		"native:subagent:",
 	]) {
@@ -380,7 +381,7 @@ test("idle-only automatic origins wait while an explicit user steer can answer",
 	assert.equal(f.faux.state.callCount, 1);
 	await f.session.submit("native:user:answer", "User steer", "steer");
 	await f.session.conversation.waitForIdle(context);
-	assert.equal(f.faux.state.callCount, 9);
+	assert.equal(f.faux.state.callCount, 10);
 });
 
 test("a second question keeps deferred automatic input waiting instead of treating it as a reply", {

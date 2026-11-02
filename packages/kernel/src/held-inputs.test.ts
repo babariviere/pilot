@@ -41,6 +41,29 @@ async function fixture() {
 	return { storage, session, id: conversation.id, read };
 }
 
+test("automation input arriving after Stop stays held and deduplicates until Send now", async () => {
+	const f = await fixture();
+	try {
+		await holdOnStop(f.session, f.id, f.read, context);
+		const input = {
+			requestId: "automation:run.finished:123",
+			content: "<automation>Fix checks</automation>",
+			mode: "followUp" as const,
+		};
+		const first = await admitWithHeld(f.session, f.id, input, context);
+		const repeated = await admitWithHeld(f.session, f.id, input, context);
+		assert.equal(first?.held, true);
+		assert.equal(first?.id, repeated?.id);
+		assert.equal((await f.session.snapshot(LiveDoc, f.id, context))?.run, undefined);
+		const held = (await f.session.snapshot(HeldInputsDoc, f.id, context))!;
+		const display = await queueUpdateForDisplay(null, f.read, undefined, 1, held);
+		assert.equal(display.automatic?.find((item) => item.preview === input.content)?.origin, "automation");
+		assert.equal((await admitWithHeld(f.session, f.id, undefined, context))?.started, true);
+	} finally {
+		await f.session.close(context);
+	}
+});
+
 test("question publication and legacy recovery fence automatic inbox entries atomically", async () => {
 	const f = await fixture();
 	try {

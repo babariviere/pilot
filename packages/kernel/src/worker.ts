@@ -308,7 +308,7 @@ export function runKernelWorker(): void {
 				await send({ type: "accepted", requestId: command.requestId });
 				break;
 			case "activity":
-				await session.recordActivity(command.requestId, command.text);
+				await session.recordActivity(command.requestId, command.text, command.event);
 				await send({ type: "accepted", requestId: command.requestId });
 				break;
 			case "input": {

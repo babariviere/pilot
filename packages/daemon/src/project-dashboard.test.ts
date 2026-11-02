@@ -116,6 +116,15 @@ test("stuck PRs survive reading, count once per chat and exclude every head from
 	assert.equal(f.service.inbox(undefined, 50).readyToMerge.total, 1);
 });
 
+test("automation attention survives reading and a settled PR", () => {
+	const attentionReason = { kind: "automation" as const, detail: "Checks still failing after 3 follow-ups" };
+	const chat = session({ outcome: "done", outcomeAt: 1, attentionReason, pullRequest: pr(1, { state: "merged" }) });
+	const dashboard = build({ sessions: [chat], isUnread: () => false });
+	assert.equal(dashboard.needsYou.total, 1);
+	assert.equal(dashboard.needsYou.items[0]?.kind, "automation");
+	assert.deepEqual(dashboard.needsYou.items[0]?.attentionReason, attentionReason);
+});
+
 test("code changes without a PR survive reading and clear when a PR is created or changes are removed", () => {
 	const chat = session({ id: "no-pr", missionId: "m", outcome: "done", outcomeAt: 1, unpublishedWork: true });
 	const read = { isUnread: () => false, onChange: () => () => {} };

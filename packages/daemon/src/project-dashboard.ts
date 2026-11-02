@@ -66,6 +66,7 @@ const KIND_RANK = {
 	tool_stall: 3,
 	long_job: 4,
 	mcp: 5,
+	automation: 5,
 	pr_stuck: 6,
 	no_pr: 7,
 	unread: 8,
@@ -118,7 +119,7 @@ function needsReview(session: SessionSummary, isUnread: DashboardInput["isUnread
 	if (isWorking(session)) return false;
 	// A scheduled follow-up message is the user's answer: the chat now waits on that schedule.
 	if (session.scheduledMessage) return false;
-	if (session.attentionReason?.kind === "pr_stuck") return true;
+	if (session.attentionReason?.kind === "pr_stuck" || session.attentionReason?.kind === "automation") return true;
 	if (hasMissingPullRequest(session)) return true;
 	// A question waits until it is answered, not until the chat is viewed.
 	if (session.outcome === "question") return true;
@@ -157,6 +158,7 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 		const attention =
 			attentionReason.kind === "long_job" ||
 			attentionReason.kind === "pr_stuck" ||
+			attentionReason.kind === "automation" ||
 			attentionReason.kind === "no_pr" ||
 			attentionReason.kind === "mcp" ||
 			attentionReason.kind === "tool_stall"

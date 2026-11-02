@@ -17,6 +17,8 @@ export interface RunFinished {
 
 export interface RunBoundary {
 	id: string;
+	/** Only a newer completion can finish this admission, including after an idle rejection. */
+	after?: number;
 	baseline?: string;
 	filesError?: string;
 	finished?: RunFinished;

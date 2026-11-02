@@ -111,6 +111,14 @@ import { ModelCatalog } from "./models.ts";
 import { NativeDiagnosticsStore } from "./native-diagnostics.ts";
 import { NativeReviewReader, NoRetainedBinding } from "./native-review.ts";
 import { reasonLine, stuckPullRequestReason } from "./needs-you-reason.ts";
+import {
+	AUTOMATION_FOLLOW_UP_ATTEMPT_LIMIT,
+	type AutomationFollowUps,
+	automationMatches,
+	checkFollowUp,
+	filesMatch,
+	type PostRunState,
+} from "./post-run.ts";
 import { PullRequestAutoRebase } from "./pr-auto-rebase.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
@@ -490,6 +498,10 @@ interface SessionMeta extends OutcomeMeta {
 		runs: import("@pilot/protocol").AutomationRunRecord[];
 		setup?: WorkspaceSetupState;
 		boundary?: RunBoundary;
+		postRun?: PostRunState;
+		followUps?: AutomationFollowUps;
+		stopped?: boolean;
+		attention?: { automationId: string; detail: string; at: number };
 	};
 	createdAt: number;
 	updatedAt: number;
@@ -1412,6 +1424,10 @@ export class SessionManager {
 	private readonly shutdownSignal = new AbortController();
 	private readonly updateGate = new UpdateGate();
 	private readonly actionRunner: ActionRunner;
+	private readonly postRunTasks = new Map<
+		string,
+		{ controller: AbortController; done: Promise<void>; checking: boolean }
+	>();
 	private readonly runFinishing = new Map<string, Promise<void>>();
 	private readonly runFinishedListeners = new Set<(id: string, event: RunFinished) => void>();
 	private readonly automationsEnabled: () => boolean;
@@ -1597,6 +1613,7 @@ export class SessionManager {
 		this.workerOptions = { startupTimeoutMs: options.startupTimeoutMs, commandTimeoutMs: options.commandTimeoutMs };
 		this.automationsEnabled = options.automationsEnabled ?? (() => false);
 		this.workspaceSetup = options.workspaceSetup;
+		this.onRunFinished((id) => this.startPostRun(this.require(id)));
 		this.workspaceSetupHoldMs = Math.min(
 			WORKSPACE_SETUP_HOLD_MS,
 			Math.max(0, options.workspaceSetupHoldMs ?? WORKSPACE_SETUP_HOLD_MS),
@@ -1763,7 +1780,7 @@ export class SessionManager {
 		if (!this.automationsEnabled() || !this.setupEligible(meta)) return;
 		meta.automation ??= { runs: [] };
 		if (meta.automation.boundary && !meta.automation.boundary.finished) return;
-		const boundary: RunBoundary = { id: requestId };
+		const boundary: RunBoundary = { id: requestId, after: meta.lastOutcomeAt ?? meta.outcomeAt };
 		meta.automation.boundary = boundary;
 		try {
 			boundary.baseline = await readRunFiles(() => runSnapshot(meta.cwd, meta.workspace!.jj));
@@ -1798,6 +1815,7 @@ export class SessionManager {
 			summary.working ||
 			!meta.outcome ||
 			meta.outcomeAt === undefined ||
+			meta.outcomeAt <= (boundary.after ?? -1) ||
 			meta.pending?.length ||
 			meta.initializing ||
 			this.runFinishedPaused(meta) ||
@@ -1853,6 +1871,248 @@ export class SessionManager {
 					this.observeRunFinished(meta, this.summary(meta));
 			});
 		this.runFinishing.set(meta.id, done);
+	}
+
+	private cancelPostRun(meta: SessionMeta): void {
+		this.postRunTasks.get(meta.id)?.controller.abort();
+		if (meta.automation?.postRun?.state === "pending") meta.automation.postRun.state = "cancelled";
+	}
+
+	private refundAutomation(meta: SessionMeta, requestId: string): void {
+		const followUps = meta.automation?.followUps;
+		if (followUps?.requestId !== requestId) return;
+		followUps.attempts = Math.max(0, followUps.attempts - 1);
+		delete followUps.requestId;
+		followUps.checks = followUps.refund?.checks;
+		followUps.names = followUps.refund?.names;
+		followUps.progress = followUps.refund?.progress;
+		delete followUps.refund;
+	}
+
+	private startPostRun(meta: SessionMeta): void {
+		const event = meta.automation?.boundary?.finished;
+		if (
+			!event ||
+			event.outcome !== "done" ||
+			this.postRunTasks.has(meta.id) ||
+			!this.automationsEnabled() ||
+			meta.automation?.stopped ||
+			!this.setupEligible(meta) ||
+			this.runFinishedPaused(meta) ||
+			!this.pullRequestFollowUpIdle(meta) ||
+			this.summary(meta).working ||
+			meta.outcome !== "done"
+		)
+			return;
+		const definitions = this.projects.get(meta.projectId!)?.automations;
+		if (
+			!meta.automation?.followUps?.checks?.length &&
+			!definitions?.items.some((hook) => hook.enabled && hook.on.includes("run.finished"))
+		)
+			return;
+		const retained = meta.automation?.postRun;
+		if (retained?.triggerId === event.triggerId && retained.state !== "pending") return;
+		const controller = new AbortController();
+		const task = { controller, checking: true, done: Promise.resolve() };
+		const done = Promise.resolve()
+			.then(async () => {
+				await this.runPostRun(meta, event, controller.signal);
+				const state = meta.automation?.postRun;
+				if (!this.closing && !this.automationsEnabled() && state?.state === "pending") {
+					state.state = "cancelled";
+					state.hooks = [];
+					state.results = {};
+					await this.save(meta, undefined, undefined, true);
+				}
+			})
+			.catch((error: unknown) => console.warn(`pilotd: post-run work failed: ${error}`))
+			.finally(() => {
+				this.postRunTasks.delete(meta.id);
+				// The next emitter may safely admit a follow-up only after check ownership is released.
+				if (!this.closing) {
+					const summary = this.summary(meta);
+					for (const listener of this.changeListeners) listener(summary);
+					if (
+						!this.runFinishedPaused(meta) &&
+						(meta.pending?.length || (meta.prActivities?.length && this.workers.has(meta.id)))
+					)
+						void this.start(meta.id);
+				}
+			});
+		task.done = done;
+		this.postRunTasks.set(meta.id, task);
+	}
+
+	private async runPostRun(meta: SessionMeta, event: RunFinished, signal: AbortSignal): Promise<void> {
+		const automation = meta.automation!;
+		if (automation.postRun?.triggerId !== event.triggerId) {
+			const definitions = this.projects.get(meta.projectId!)?.automations;
+			automation.postRun = {
+				triggerId: event.triggerId,
+				state: "pending",
+				definitionRevision: definitions?.revision ?? 0,
+				hooks:
+					definitions && !definitions.error
+						? structuredClone(
+								definitions.items.filter(
+									(hook) =>
+										automationMatches(hook, event) && hook.action.type === "shell" && filesMatch(hook, event),
+								),
+							)
+						: [],
+				results: {},
+			};
+			await this.save(meta, undefined, undefined, true);
+		}
+		const state = automation.postRun;
+		const current = () =>
+			!signal.aborted &&
+			state.state === "pending" &&
+			automation.postRun === state &&
+			automation.boundary?.finished === event &&
+			this.automationsEnabled() &&
+			!this.runFinishedPaused(meta) &&
+			this.pullRequestFollowUpIdle(meta, true) &&
+			!this.backgroundWorking(meta);
+		const hooks = validateAutomationItems(state.hooks);
+		for (const hook of hooks) {
+			if (!current()) return;
+			if (state.results[hook.id]) continue;
+			const live = this.projects.get(meta.projectId!)?.automations;
+			if (!live || live.error || !live.items.some((item) => JSON.stringify(item) === JSON.stringify(hook))) continue;
+			const runId = `${event.triggerId}/${hook.id}`;
+			let record = automation.runs.find((run) => run.id === runId);
+			if (!record || ["waiting", "running", "interrupted"].includes(record.state)) {
+				if ((record?.attempt ?? 0) >= 2) {
+					record = { ...record!, state: "failed", reason: "interrupted twice", endedAt: Date.now() };
+					automation.runs = automation.runs.map((run) => (run.id === runId ? record! : run));
+				} else {
+					await this.runWorkspaceAction(
+						meta.id,
+						hook,
+						"run.finished",
+						event.triggerId,
+						state.definitionRevision,
+						signal,
+					);
+					if (!current()) return;
+					record = automation.runs.find((run) => run.id === runId)!;
+					if (record.state === "interrupted") return;
+				}
+			}
+			state.results[hook.id] = structuredClone(record);
+			await this.save(meta, undefined, undefined, true);
+		}
+		if (!current()) return;
+		const records = Object.values(state.results);
+		const failures = records.filter((record) => !["ok", "cancelled"].includes(record.state));
+		const liveHooks = this.projects.get(meta.projectId!)?.automations;
+		const failedChecks = failures.filter(
+			(record) =>
+				!record.reason &&
+				record.state !== "skipped" &&
+				hooks.some(
+					(hook) =>
+						hook.id === record.automationId &&
+						hook.action.type === "shell" &&
+						hook.action.onFailure === "followUp" &&
+						!liveHooks?.error &&
+						liveHooks?.items.some((item) => JSON.stringify(item) === JSON.stringify(hook)),
+				),
+		);
+		for (const record of records)
+			if (record.state === "ok" && automation.attention?.automationId === record.automationId)
+				delete automation.attention;
+		if (records.length) {
+			const text =
+				`${failures.length ? "Checks failed" : "Checks passed"}: ${records.map((record) => record.name).join(", ")}`.slice(
+					0,
+					512,
+				);
+			meta.prActivities ??= [];
+			const requestId = `automation-result:${event.triggerId}`;
+			if (!meta.prActivities.some((activity) => activity.requestId === requestId))
+				meta.prActivities.push({
+					type: "activity",
+					requestId,
+					text: [text, ...records.map((record) => `${record.name}: ${record.state}\n${record.excerpt}`)]
+						.join("\n\n")
+						.slice(0, 16 * 1024),
+					event: { kind: failures.length ? "automation_failed" : "automation_finished", text },
+				});
+		}
+		for (const failure of failures)
+			if (!failedChecks.includes(failure))
+				automation.attention = {
+					automationId: failure.automationId,
+					detail: `${failure.name} failed (${failure.reason ?? failure.state})`.slice(0, 512),
+					at: Date.now(),
+				};
+		if (
+			event.filesError &&
+			liveHooks?.items.some(
+				(hook) => hook.enabled && hook.on.includes("run.finished") && hook.action.type === "shell",
+			)
+		)
+			automation.attention = { automationId: "run.finished", detail: event.filesError, at: Date.now() };
+		// All commands have settled. Admission may now use the common idle guard.
+		this.postRunTasks.get(meta.id)!.checking = false;
+		if (!current()) return;
+		automation.followUps ??= { attempts: 0, generation: 0 };
+		const followUps = automation.followUps;
+		if (failedChecks.length) {
+			const names = failedChecks.map((run) => run.name).join(", ");
+			if (followUps.attempts >= AUTOMATION_FOLLOW_UP_ATTEMPT_LIMIT)
+				automation.attention = {
+					automationId: failedChecks[0]!.automationId,
+					detail: `Checks still failing after ${AUTOMATION_FOLLOW_UP_ATTEMPT_LIMIT} follow-ups: ${names}`.slice(
+						0,
+						512,
+					),
+					at: Date.now(),
+				};
+			else {
+				const attempt = followUps.attempts + 1;
+				const requestId = `automation:${event.triggerId}`;
+				automation.followUps = {
+					...followUps,
+					attempts: attempt,
+					requestId,
+					progress: { openTodos: event.openTodos },
+					refund: { checks: followUps.checks, names: followUps.names, progress: followUps.progress },
+					checks: failedChecks.map((record) => record.automationId),
+					names,
+				};
+				meta.pending ??= [];
+				meta.pending.push({
+					type: "input",
+					requestId,
+					content: checkFollowUp(failedChecks, attempt),
+					mode: "followUp",
+					onlyIfIdle: true,
+				});
+			}
+		} else if (followUps.checks?.length) {
+			const configured = this.projects.get(meta.projectId!)?.automations;
+			const unresolved =
+				configured?.items.filter(
+					(hook) => hook.enabled && followUps.checks?.includes(hook.id) && state.results[hook.id]?.state !== "ok",
+				) ?? [];
+			if (unresolved.length)
+				automation.attention = {
+					automationId: unresolved[0]!.id,
+					detail: `Checks failing, agent made no matching changes: ${followUps.names}`.slice(0, 512),
+					at: Date.now(),
+				};
+			else {
+				delete followUps.checks;
+				delete followUps.names;
+			}
+		}
+		state.state = "done";
+		state.hooks = [];
+		state.results = {};
+		await this.save(meta, undefined, undefined, true);
 	}
 
 	private setupEligible(meta: SessionMeta): boolean {
@@ -2364,7 +2624,10 @@ ${run.excerpt}`,
 					meta.kernelRestartPending)
 			)
 				void this.start(meta.id, true);
-		for (const meta of this.metas.values()) void this.startWorkspaceSetup(meta);
+		for (const meta of this.metas.values()) {
+			void this.startWorkspaceSetup(meta);
+			this.startPostRun(meta);
+		}
 		this.pullRequests.start();
 		this.scheduleArchiveSweep();
 		// Resume dissociation interrupted by a restart.
@@ -4347,6 +4610,8 @@ ${run.excerpt}`,
 				)
 					throw new Conflict("Stop the session before archiving it");
 				if (archived) {
+					this.cancelPostRun(meta);
+					if (meta.automation) delete meta.automation.attention;
 					this.workspaceSetups.get(id)?.controller.abort();
 					await this.actionRunner.cancelSession(id);
 					await this.workspaceSetups.get(id)?.done;
@@ -5321,6 +5586,8 @@ ${run.excerpt}`,
 		const blockers: import("./runtime-admission.ts").RuntimeBlocker[] = [...(this.actionRunner?.blockers() ?? [])];
 		for (const id of this.workspaceSetups.keys())
 			blockers.push({ kind: "automation", id: `workspace-setup:${id}`, sessionId: id });
+		for (const [id, task] of this.postRunTasks)
+			if (task.checking) blockers.push({ kind: "automation", id: `post-run:${id}`, sessionId: id });
 		if (
 			!this.updateGate.paused ||
 			this.updateGate.admissions ||
@@ -5527,10 +5794,11 @@ ${run.excerpt}`,
 		for (const meta of this.metas.values()) {
 			void this.startWorkspaceSetup(meta);
 			this.observeRunFinished(meta, this.summary(meta));
+			this.startPostRun(meta);
 			if (!meta.updatePaused) continue;
 			if (this.workers.has(meta.id)) {
 				delete meta.updatePaused;
-				this.observeLifecycle(meta);
+				this.emit(meta);
 				void this.save(meta).catch((error) => console.warn("pilotd: could not clear update pause", error));
 			} else if (!this.closing && !meta.failure && meta.archivedAt === undefined) void this.start(meta.id);
 		}
@@ -6313,6 +6581,15 @@ ${run.excerpt}`,
 			if (!meta.prFollowUpResetRequests?.includes(requestId)) {
 				meta.prFollowUpResetRequests ??= [];
 				meta.prFollowUpResetRequests.push(requestId);
+				if (!inputOrigin(requestId) && meta.automation) {
+					this.cancelPostRun(meta);
+					delete meta.automation.stopped;
+					meta.automation.followUps = {
+						attempts: 0,
+						generation: (meta.automation.followUps?.generation ?? 0) + 1,
+					};
+					delete meta.automation.attention;
+				}
 				meta.prFollowUp = { attempts: 0, nextAttemptAt: 0, generation: (meta.prFollowUp?.generation ?? 0) + 1 };
 			}
 			await this.save(meta, undefined, undefined, durable);
@@ -6437,6 +6714,11 @@ ${run.excerpt}`,
 		this.assertNotContinued(meta, true);
 		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 		if (this.closing) throw new Error("pilotd is shutting down");
+		this.cancelPostRun(meta);
+		if (meta.automation) {
+			meta.automation.stopped = true;
+			await this.save(meta, undefined, undefined, true);
+		}
 		this.workspaceSetups.get(id)?.controller.abort();
 		if (meta.automation?.setup?.state === "pending") {
 			meta.automation.setup.state = "cancelled";
@@ -6617,6 +6899,15 @@ ${run.excerpt}`,
 		let settled = false;
 		try {
 			await this.captureRunBoundary(this.require(id), command.requestId);
+			if (this.closing || this.sleepPause) throw new WorkerUnavailable("Input admission paused");
+			if (
+				command.onlyIfIdle &&
+				command.requestId.startsWith("automation:") &&
+				(!this.automationsEnabled() ||
+					this.require(id).automation?.stopped ||
+					this.require(id).automation?.followUps?.requestId !== command.requestId)
+			)
+				throw new CommandRejected("Automatic input is no longer eligible", "busy");
 			// Stop may replace the outbox while snapshotting. Never admit the withdrawn input.
 			if (
 				!this.require(id).pending?.some((pending) => pending === command) ||
@@ -7824,6 +8115,7 @@ ${run.excerpt}`,
 	/** Close kernels without aborting durable tasks. Block admissions synchronously before the first write. */
 	pauseForSleep(wakeToken?: string): Promise<void> {
 		this.sleepRevision++;
+		for (const task of this.postRunTasks.values()) task.controller.abort();
 		for (const setup of this.workspaceSetups.values()) setup.controller.abort();
 		for (const waiters of this.workspaceSetupWaiters.values()) for (const wake of waiters) wake();
 		const latch = { since: Date.now(), ...(wakeToken ? { wakeToken } : {}) };
@@ -7915,7 +8207,10 @@ ${run.excerpt}`,
 			}
 			this.sleepPause = undefined;
 			this.actionRunner?.resumeAfterSleep();
-			for (const meta of this.metas.values()) void this.startWorkspaceSetup(meta);
+			for (const meta of this.metas.values()) {
+				void this.startWorkspaceSetup(meta);
+				this.startPostRun(meta);
+			}
 			for (const meta of this.metas.values()) {
 				this.observeRunFinished(meta, this.summary(meta));
 				if (revision !== this.sleepRevision || this.closing) return;
@@ -7993,6 +8288,7 @@ ${run.excerpt}`,
 		await this.pullRequestMerger.settled();
 		const drainPullRequests = this.pullRequests.stop();
 		this.shutdownSignal.abort();
+		for (const task of this.postRunTasks.values()) task.controller.abort();
 		for (const setup of this.workspaceSetups.values()) setup.controller.abort();
 		for (const waiters of this.workspaceSetupWaiters.values()) for (const wake of waiters) wake();
 		await Promise.allSettled([...this.titleTasks]);
@@ -8024,6 +8320,7 @@ ${run.excerpt}`,
 		await drainActions;
 		await Promise.allSettled([...this.workspaceSetups.values()].map((setup) => setup.done));
 		await Promise.allSettled(this.runFinishing.values());
+		await Promise.allSettled([...this.postRunTasks.values()].map((task) => task.done));
 		await Promise.all([...this.saving.values()]);
 		await this.aiUsage.close();
 		await this.legacyUsageMigration;
@@ -8185,7 +8482,10 @@ ${run.excerpt}`,
 						const command = meta.pending[0];
 						// Only real input resumes workspace maintenance. Recheck the outbox after I/O,
 						// so Stop and superseded automatic notices cannot deliver stale commands.
-						if (command.type === "input") await this.refreshMainWorkspace(id);
+						if (command.type === "input") {
+							await this.postRunTasks.get(id)?.done;
+							await this.refreshMainWorkspace(id);
+						}
 						await this.save(meta);
 						if (this.closing || this.sleepPause) return;
 						// Stop can replace the queue while this write is in flight.
@@ -8196,13 +8496,16 @@ ${run.excerpt}`,
 							command.onlyIfIdle &&
 							((command.requestId.startsWith("mission-notice:")
 								? !this.missions?.noticeAllowed?.(id, command.requestId) || meta.archivedAt !== undefined
-								: meta.prFollowUp?.requestId !== command.requestId) ||
+								: command.requestId.startsWith("automation:")
+									? !this.automationsEnabled() || meta.automation?.followUps?.requestId !== command.requestId
+									: meta.prFollowUp?.requestId !== command.requestId) ||
 								meta.pending.some((pending) => pending !== command))
 						) {
 							rejected.set(
 								command.requestId,
 								new CommandRejected("Automatic input is no longer eligible", "busy"),
 							);
+							if (command.type === "input") this.refundAutomation(meta, command.requestId);
 							if (meta.prFollowUp?.requestId === command.requestId) {
 								meta.prFollowUp.attempts = Math.max(0, meta.prFollowUp.attempts - 1);
 								delete meta.prFollowUp.requestId;
@@ -8219,6 +8522,10 @@ ${run.excerpt}`,
 							// Taken before admission, so a push early in the follow-up's own turn still counts.
 							const admittedAt = Date.now();
 							await this.deliver(id, worker, command);
+							if (meta.automation?.followUps?.requestId === command.requestId) {
+								meta.automation.followUps.deliveredAt = admittedAt;
+								delete meta.automation.followUps.refund;
+							}
 							if (followUp && meta.prFollowUp?.requestId === command.requestId)
 								meta.prFollowUp.deliveredAt = admittedAt;
 							if (reviewThreads) {
@@ -8241,6 +8548,7 @@ ${run.excerpt}`,
 								error.code === "busy"
 							) {
 								// An idle-guard rejection is not an agent failure or a consumed attempt.
+								if (command.type === "input") this.refundAutomation(meta, command.requestId);
 								if (meta.prFollowUp?.requestId === command.requestId) {
 									meta.prFollowUp.attempts = Math.max(0, meta.prFollowUp.attempts - 1);
 									delete meta.prFollowUp.requestId;
@@ -8313,6 +8621,7 @@ ${run.excerpt}`,
 			.then(() => rejected)
 			.finally(() => {
 				this.starting.delete(id);
+				this.emit(meta);
 				void this.archiveMissionCoordinator(meta);
 			});
 		this.starting.set(id, task);
@@ -9450,6 +9759,7 @@ ${run.excerpt}`,
 			!paused &&
 			!offlinePaused &&
 			(this.workspaceSetups.has(meta.id) ||
+				this.postRunTasks.get(meta.id)?.checking ||
 				this.actionRunner?.isWorking(meta.id) ||
 				toolsRunning ||
 				(!mainQuotaPaused && mainBusy) ||
@@ -9529,6 +9839,16 @@ ${run.excerpt}`,
 			...(worker?.runningJobs?.length ? { runningJobs: worker.runningJobs } : {}),
 			...longJob,
 			...(!working ? this.stuckPullRequestAttention(meta) : {}),
+			...(!working &&
+			meta.archivedAt === undefined &&
+			meta.automation?.attention &&
+			meta.outcome !== "failed" &&
+			meta.outcome !== "question"
+				? {
+						attentionReason: { kind: "automation" as const, detail: meta.automation.attention.detail },
+						attentionAt: meta.automation.attention.at,
+					}
+				: {}),
 			// After stuck PRs, so an MCP server to fix wins. Long jobs keep their own reason.
 			...mcpAttention,
 			...(!longJob && !mcpAttention && toolStall
@@ -9899,10 +10219,11 @@ ${run.excerpt}`,
 	}
 
 	/** Transient admission gates shared by automatic follow-ups and stuck-PR attention. */
-	private pullRequestFollowUpIdle(meta: SessionMeta): boolean {
+	private pullRequestFollowUpIdle(meta: SessionMeta, allowChecks = false): boolean {
 		const worker = this.workers.get(meta.id);
 		return Boolean(
 			!this.closing &&
+				(allowChecks || !this.postRunTasks.get(meta.id)?.checking) &&
 				!meta.continuedTo &&
 				!meta.continuationPending &&
 				!this.isMissionCoordinator(meta.id) &&
@@ -10377,6 +10698,7 @@ ${run.excerpt}`,
 		if (!this.closing) {
 			this.observeLifecycle(meta, summary);
 			this.observeRunFinished(meta, summary);
+			this.startPostRun(meta);
 		}
 		if (!this.closing)
 			this.longJobTimers.update(meta.id, meta.archivedAt === undefined ? (summary.runningJobs ?? []) : [], () => {

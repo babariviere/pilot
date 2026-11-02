@@ -65,6 +65,7 @@ test("request IDs map to automatic origins, and user input has none", () => {
 	assert.equal(inputOrigin("control:send:call"), "control");
 	assert.equal(inputOrigin("control:start:call"), "control");
 	assert.equal(inputOrigin("pr-follow-up:abc"), "pullRequest");
+	assert.equal(inputOrigin("automation:run.finished:123"), "automation");
 });
 
 test("only automatic user entries are annotated, and later entries trigger one rescan", async (t) => {

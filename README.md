@@ -688,9 +688,14 @@ has failed or is still running. Failures appear separately in the Rust chat view
 retained by the daemon. Ask chats, coordinators, direct checkouts and continuation chats do not run setup.
 There is no teardown or archive-time hook.
 
-Commands are bounded by timeouts and output caps. **Stop** cancels setup; disabling automations prevents new
-commands and lets admitted commands finish. Interrupted shell steps get one recovery attempt. Post-run checks,
-continue-on-todos, manual reruns and the management UI remain planned. See [automations](docs/automations.md).
+**Post-run checks** run matching shell commands after a successful run changes files. Failures can send one
+redacted `<automation>` follow-up, only while idle and never ahead of user input. Checks share a three-message
+attempt limit; no progress or an exhausted limit raises Needs you. A user message resets the limit.
+
+Commands are bounded by timeouts and output caps. **Stop** cancels setup/checks and holds queued automatic
+messages; user input cancels stale checks. Disabling automations prevents new commands and lets admitted
+commands finish. Interrupted shell steps get one recovery attempt. Continue-on-todos, manual reruns and the
+management UI remain planned. See [automations](docs/automations.md).
 
 ### Missions
 

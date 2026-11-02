@@ -155,6 +155,7 @@ export type InputOrigin =
 	| "coordinator"
 	| "mission"
 	| "pullRequest"
+	| "automation"
 	| "slack"
 	| "control"
 	| "watch";
@@ -257,7 +258,9 @@ export interface ChatEventSummary {
 		| "mission_decisions_changed"
 		| "mission_task_done"
 		| "mission_member_finished"
-		| "watch_notice";
+		| "watch_notice"
+		| "automation_finished"
+		| "automation_failed";
 	text: string;
 }
 export interface GitHubActionsUpdateEvent {
@@ -1435,6 +1438,7 @@ export type DashboardNeedsYouKind =
 	| "mcp"
 	| "tool_stall"
 	| "pr_stuck"
+	| "automation"
 	| "no_pr"
 	| "unread";
 
@@ -1447,6 +1451,7 @@ export type NeedsYouReasonKind =
 	| "mission"
 	| "limit"
 	| "pr_stuck"
+	| "automation"
 	| "no_pr"
 	| "long_job"
 	| "mcp"

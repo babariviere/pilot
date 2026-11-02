@@ -14,6 +14,7 @@ const PREFIXES: [string, InputOrigin | "user"][] = [
 	["mission:send:", "coordinator"],
 	["mission:", "mission"],
 	["pr-follow-up:", "pullRequest"],
+	["automation:", "automation"],
 	["slack-reply:", "slack"],
 ];
 

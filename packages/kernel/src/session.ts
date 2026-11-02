@@ -1047,9 +1047,17 @@ export class KernelSession {
 		return this.adapter.thinkingLevel;
 	}
 
-	async recordActivity(requestId: string, text: string): Promise<void> {
+	async recordActivity(
+		requestId: string,
+		text: string,
+		event?: import("@pilot/protocol").ChatEventSummary,
+	): Promise<void> {
 		await this.conversation.submit(
-			{ type: "write", requestId, entry: { kind: "pilot.activity", data: { text }, model: [] } },
+			{
+				type: "write",
+				requestId,
+				entry: { kind: "pilot.activity", data: { text, ...(event ? { event: { ...event } } : {}) }, model: [] },
+			},
 			context,
 		);
 	}
