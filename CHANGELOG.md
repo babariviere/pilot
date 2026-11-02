@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.106.0](https://github.com/babariviere/pilot/compare/v1.105.0...v1.106.0) (2026-11-02)
+
+
+### Features
+
+* **desktop:** decide database-access requests with native Allow/Deny\n\nWell-formed databaseAccess requests now show the structured privilege and\nexplicit Deny / Allow read|write access buttons in the existing question panel.\nNothing is focused by default and no key press decides. Activation queues one\nDatabaseAccess command on the FIFO writer, which pins hello identity and posts\nexactly {id, allow} to pilotd's existing database-access endpoint. Only an\nexact 202 ok is accepted; pre-change refusals say nothing changed and every\nother outcome stays Unknown and is never resent. Malformed requests keep an\nexplicit refusal. Ordinary question replies are unchanged. ([a4b6bf5](https://github.com/babariviere/pilot/commit/a4b6bf52fbf5eff7e30b504d923a36c21b4b8ee0))
+
 ## [1.105.0](https://github.com/babariviere/pilot/compare/v1.104.0...v1.105.0) (2026-11-02)
 
 
