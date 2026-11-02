@@ -2,7 +2,8 @@
 
 **Status: workspace setup implemented, disabled by default.** Definitions, validation, native-authorized
 revision-checked writes, the bounded shell runner and workspace create/restore triggers are implemented.
-Post-run hooks, follow-ups and the management UI below remain planned. Enable Automations in desktop Settings → Chats to expose the
+The daemon also retains run-finished events with per-run changed paths, outcome and open todos.
+Post-run actions, follow-ups and the management UI below remain planned. Enable Automations in desktop Settings → Chats to expose the
 `automations: 1` capability and editing endpoint. This host-owned switch defaults off, persists in
 `chat-settings.json`, and applies to new admissions immediately, without restarting the daemon.
 Turning it off leaves admitted commands to finish and skips later setup steps.
@@ -230,6 +231,9 @@ an idle kernel alone. The trigger ID is `run.finished:<outcomeAt>`, stable acros
   the event loop, at most 1,000 paths; beyond that `filesChanged` is true and every path condition matches.
   Environment setup uses the same list to detect drift.
 - **Open todos.** `openTodoCount` for the chat at that moment.
+
+The retained boundary is saved before notification. Pauses defer observation, rather than looking like
+completion. Snapshot failures are explicit unknowns, never an empty diff or permission to run checks.
 
 ### Manual runs
 

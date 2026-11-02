@@ -127,6 +127,7 @@ import {
 } from "./pull-requests.ts";
 import { RecoveryStops } from "./recovery-stops.ts";
 import { ReviewSnapshotStore } from "./review-snapshots.ts";
+import { type RunBoundary, type RunFinished, readRunFiles, runChangedFiles, runSnapshot } from "./run-finished.ts";
 import { continuationAnswer, continuationHandoff, continuationQueuedInputs } from "./session-continuation.ts";
 import { readSessionDiagnostics } from "./session-diagnostics.ts";
 import {
@@ -485,7 +486,11 @@ interface SessionMeta extends OutcomeMeta {
 	workspacePrunedAt?: number;
 	/** Told to the next kernel so the agent does not assume dependencies or build output exist. */
 	workspaceReset?: WorkspaceReset;
-	automation?: { runs: import("@pilot/protocol").AutomationRunRecord[]; setup?: WorkspaceSetupState };
+	automation?: {
+		runs: import("@pilot/protocol").AutomationRunRecord[];
+		setup?: WorkspaceSetupState;
+		boundary?: RunBoundary;
+	};
 	createdAt: number;
 	updatedAt: number;
 	/** User-submission time, separate from worker lifecycle and metadata changes. */
@@ -1407,6 +1412,8 @@ export class SessionManager {
 	private readonly shutdownSignal = new AbortController();
 	private readonly updateGate = new UpdateGate();
 	private readonly actionRunner: ActionRunner;
+	private readonly runFinishing = new Map<string, Promise<void>>();
+	private readonly runFinishedListeners = new Set<(id: string, event: RunFinished) => void>();
 	private readonly automationsEnabled: () => boolean;
 	private readonly workspaceSetup?: SessionManagerOptions["workspaceSetup"];
 	private readonly workspaceSetupHoldMs: number;
@@ -1746,6 +1753,108 @@ export class SessionManager {
 			},
 		});
 	}
+	/** Event is durably retained before notification. Consumers deduplicate with triggerId. */
+	onRunFinished(listener: (id: string, event: RunFinished) => void): () => void {
+		this.runFinishedListeners.add(listener);
+		return () => this.runFinishedListeners.delete(listener);
+	}
+
+	private async captureRunBoundary(meta: SessionMeta, requestId: string): Promise<void> {
+		if (!this.automationsEnabled() || !this.setupEligible(meta)) return;
+		meta.automation ??= { runs: [] };
+		if (meta.automation.boundary && !meta.automation.boundary.finished) return;
+		const boundary: RunBoundary = { id: requestId };
+		meta.automation.boundary = boundary;
+		try {
+			boundary.baseline = await readRunFiles(() => runSnapshot(meta.cwd, meta.workspace!.jj));
+		} catch {
+			boundary.filesError = "Could not capture the run's initial workspace state";
+		}
+		await this.save(meta, undefined, undefined, true);
+	}
+
+	private runFinishedPaused(meta: SessionMeta): boolean {
+		return !!(
+			this.closing ||
+			this.sleepPause ||
+			meta.sleepPaused ||
+			meta.updatePaused ||
+			this.updateGate.paused ||
+			this.updateGate.frozen ||
+			this.subscriptionPaused(meta.id) ||
+			this.internetOnline === false ||
+			meta.kernelRestartPending
+		);
+	}
+
+	private observeRunFinished(meta: SessionMeta, summary: SessionSummary): void {
+		const boundary = meta.automation?.boundary;
+		if (
+			!this.automationsEnabled() ||
+			!boundary ||
+			boundary.finished ||
+			!this.setupEligible(meta) ||
+			meta.archivedAt !== undefined ||
+			summary.working ||
+			!meta.outcome ||
+			meta.outcomeAt === undefined ||
+			meta.pending?.length ||
+			meta.initializing ||
+			this.runFinishedPaused(meta) ||
+			this.runFinishing.has(meta.id)
+		)
+			return;
+		const outcome = meta.outcome;
+		const outcomeAt = meta.outcomeAt;
+		const current = () =>
+			meta.automation?.boundary === boundary &&
+			!this.summary(meta).working &&
+			!meta.pending?.length &&
+			!meta.initializing &&
+			meta.outcomeAt === outcomeAt &&
+			meta.archivedAt === undefined &&
+			this.automationsEnabled() &&
+			!this.runFinishedPaused(meta);
+		const done = Promise.resolve()
+			.then(async () => {
+				let changedFiles: string[] | "many" = [];
+				let filesError = boundary.filesError;
+				if (boundary.baseline) {
+					try {
+						changedFiles = await readRunFiles(() =>
+							runChangedFiles(meta.cwd, meta.workspace!.jj, boundary.baseline!),
+						);
+					} catch {
+						filesError = "Could not compare the run's workspace snapshots";
+					}
+				}
+				const openTodos = await this.openTodoCount(meta.id);
+				if (!current()) return;
+				const event: RunFinished = {
+					triggerId: `run.finished:${outcomeAt}`,
+					outcome,
+					changedFiles,
+					openTodos,
+					...(filesError ? { filesError } : {}),
+				};
+				boundary.finished = event;
+				try {
+					await this.save(meta, undefined, undefined, true);
+				} catch (error) {
+					delete boundary.finished;
+					throw error;
+				}
+				if (current()) for (const listener of this.runFinishedListeners) listener(meta.id, structuredClone(event));
+			})
+			.catch((error: unknown) => console.warn(`pilotd: run-finished observation failed: ${error}`))
+			.finally(() => {
+				this.runFinishing.delete(meta.id);
+				if (meta.automation?.boundary !== boundary || meta.outcomeAt !== outcomeAt)
+					this.observeRunFinished(meta, this.summary(meta));
+			});
+		this.runFinishing.set(meta.id, done);
+	}
+
 	private setupEligible(meta: SessionMeta): boolean {
 		return !!(
 			meta.workspace &&
@@ -5413,6 +5522,7 @@ ${run.excerpt}`,
 		if (this.sleepPause) return;
 		for (const meta of this.metas.values()) {
 			void this.startWorkspaceSetup(meta);
+			this.observeRunFinished(meta, this.summary(meta));
 			if (!meta.updatePaused) continue;
 			if (this.workers.has(meta.id)) {
 				delete meta.updatePaused;
@@ -6502,6 +6612,13 @@ ${run.excerpt}`,
 		const trace = this.inputTraces.get(traceKey);
 		let settled = false;
 		try {
+			await this.captureRunBoundary(this.require(id), command.requestId);
+			// Stop may replace the outbox while snapshotting. Never admit the withdrawn input.
+			if (
+				!this.require(id).pending?.some((pending) => pending === command) ||
+				(command.onlyIfIdle && this.require(id).pending?.some((pending) => pending !== command))
+			)
+				throw new CommandRejected("Input withdrawn before admission", "busy");
 			await worker.request(trace ? { ...command, trace } : command);
 			settled = true;
 		} catch (error) {
@@ -7796,6 +7913,7 @@ ${run.excerpt}`,
 			this.actionRunner?.resumeAfterSleep();
 			for (const meta of this.metas.values()) void this.startWorkspaceSetup(meta);
 			for (const meta of this.metas.values()) {
+				this.observeRunFinished(meta, this.summary(meta));
 				if (revision !== this.sleepRevision || this.closing) return;
 				if (
 					!(
@@ -7901,6 +8019,7 @@ ${run.excerpt}`,
 		await drainRepairProjects;
 		await drainActions;
 		await Promise.allSettled([...this.workspaceSetups.values()].map((setup) => setup.done));
+		await Promise.allSettled(this.runFinishing.values());
 		await Promise.all([...this.saving.values()]);
 		await this.aiUsage.close();
 		await this.legacyUsageMigration;
@@ -10221,7 +10340,10 @@ ${run.excerpt}`,
 		)
 			this.toolStallWatchdog.remove(meta.id);
 		const summary = this.summary(meta, worker ?? this.workers.get(meta.id));
-		if (!this.closing) this.observeLifecycle(meta, summary);
+		if (!this.closing) {
+			this.observeLifecycle(meta, summary);
+			this.observeRunFinished(meta, summary);
+		}
 		if (!this.closing)
 			this.longJobTimers.update(meta.id, meta.archivedAt === undefined ? (summary.runningJobs ?? []) : [], () => {
 				const current = this.metas.get(meta.id);
