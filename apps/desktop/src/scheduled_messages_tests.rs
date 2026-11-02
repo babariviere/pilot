@@ -16,6 +16,33 @@ pub(crate) fn roster_at(now: u64) -> Value {
         {"id":"six","revision":2,"title":"Sending","trigger":"at","at":now - 60_000,"target":{"kind":"message","sessionId":"chat-gone","message":"In flight"},"state":"dispatching","createdAt":1,"updatedAt":2,"claimedAt":now - 30_000}
     ])
 }
+pub(crate) const PROMPT: &str = "Analyse slow queries 日本語\nthen summarise";
+/// Recurring rules: an active weekly rule with a late run, a daily message rule in another
+/// zone whose last run was skipped, and a paused monthly rule whose run failed.
+pub(crate) fn recurring_at(now: u64) -> Value {
+    let zone = crate::recurring_schedules::local_zone();
+    let h = 3_600_000;
+    json!([
+        {"id":"weekly","revision":4,"title":"Weekly DB performance analysis","projectId":"project-a","trigger":"recurring","at":now + 2 * DAY,
+         "recurrence":{"every":"week","time":"09:00","timeZone":zone,"weekday":1},
+         "target":{"kind":"chat","spawn":{"message":PROMPT,"projectId":"project-a","model":"m"}},
+         "state":"pending","createdAt":1,"updatedAt":2,"handledThrough":now - h,
+         "runs":[{"due":now - 5 * h,"at":now - h,"outcome":"started","late":true,"sessionId":"chat-a"}],
+         "notice":{"due":now - 5 * h,"at":now - h,"outcome":"started","late":true,"sessionId":"chat-a"}},
+        {"id":"daily","revision":2,"title":"Daily dependency check","projectId":"project-a","trigger":"recurring","at":now + 20 * h,
+         "recurrence":{"every":"day","time":"08:30","timeZone":if zone == "Asia/Tokyo" {"Europe/Paris"} else {"Asia/Tokyo"},"weekdays":[1,2,3,4,5]},
+         "target":{"kind":"message","sessionId":"chat-a","message":"Check dependencies"},
+         "state":"pending","createdAt":1,"updatedAt":3,"handledThrough":now - 2 * h,
+         "runs":[{"due":now - 2 * h,"at":now - 2 * h,"outcome":"skipped_running","sessionId":"chat-a"}],
+         "notice":{"due":now - 2 * h,"at":now - 2 * h,"outcome":"skipped_running","sessionId":"chat-a"}},
+        {"id":"monthly","revision":7,"title":"Monthly cost report","projectId":"project-b","trigger":"recurring","at":now + 9 * DAY,"paused":true,
+         "recurrence":{"every":"month","time":"07:00","timeZone":zone,"dayOfMonth":1},
+         "target":{"kind":"chat","spawn":{"message":"Summarise costs","projectId":"project-b"}},
+         "state":"pending","createdAt":1,"updatedAt":4,"handledThrough":now - 3 * DAY,
+         "runs":[{"due":now - 3 * DAY,"at":now - 3 * DAY,"outcome":"failed","error":"Project removed"}],
+         "notice":{"due":now - 3 * DAY,"at":now - 3 * DAY,"outcome":"failed","error":"Project removed"}}
+    ])
+}
 /// Midnight UTC, Tuesday 3 November 2026.
 #[cfg(test)]
 pub(crate) const TUESDAY: u64 = 20_760 * DAY;
@@ -32,7 +59,7 @@ mod tests {
     use super::*;
     use crate::{
         scheduled_messages::{RowAction, Section, Snapshot, State, Status, words},
-        scheduled_messages_reader::{Outcome, Reader, Request, act, fetch},
+        scheduled_messages_reader::{Outcome, Reader, Request, Write, act, fetch, write},
     };
     fn parse(v: Value) -> Result<Snapshot, &'static str> {
         Snapshot::parse(&serde_json::to_vec(&v).unwrap())
@@ -74,13 +101,19 @@ mod tests {
         assert_eq!(attention, ["two"]);
         let item = |id: &str| snapshot.items.iter().find(|s| s.id == id).unwrap();
         assert_eq!(item("one").status(read_at), None);
-        assert_eq!(item("one").action(), Some(RowAction::Cancel));
+        assert_eq!(
+            item("one").action(Section::OneTime),
+            Some(RowAction::Cancel)
+        );
         assert_eq!(item("one").message(), MESSAGE);
         assert_eq!(item("two").status(read_at), Some(Status::Failed));
-        assert_eq!(item("two").action(), Some(RowAction::Dismiss));
+        assert_eq!(
+            item("two").action(Section::Attention),
+            Some(RowAction::Dismiss)
+        );
         assert_eq!(item("two").new_chat_project(), Some("project-b"));
         assert_eq!(item("six").status(read_at), Some(Status::Sending));
-        assert_eq!(item("six").action(), None);
+        assert_eq!(item("six").action(Section::OneTime), None);
         assert_eq!(
             item("one").status(item("one").at.unwrap()),
             Some(Status::Overdue)
@@ -129,12 +162,211 @@ mod tests {
         let mut v = roster();
         v[0]["state"] = json!("future");
         let item = parse(v).unwrap().items.remove(0);
-        assert_eq!((item.section(), item.action()), (None, None));
+        assert_eq!((item.shown(), item.action(Section::OneTime)), (false, None));
         let mut v = roster();
         v[0]["trigger"] = json!("recurring");
+        assert!(
+            parse(v.clone()).is_err(),
+            "a recurring rule needs its recurrence"
+        );
         v[0]["recurrence"] =
-            json!({"every":"week","time":"09:00","timeZone":"Europe/Paris","weekdays":[1]});
-        assert_eq!(parse(v).unwrap().items[0].section(), None);
+            json!({"every":"week","time":"09:00","timeZone":"Europe/Paris","weekday":1});
+        let rule = parse(v).unwrap().items.remove(0);
+        assert!(rule.in_section(Section::Recurring) && !rule.in_section(Section::OneTime));
+        let mut v = recurring_at(TUESDAY);
+        v[0]["runs"] = json!(vec![v[0]["notice"].clone(); 101]);
+        assert!(parse(v).is_err());
+    }
+    #[test]
+    fn recurring_rules_and_their_notices() {
+        let snapshot = parse(recurring_at(TUESDAY)).unwrap();
+        let ids = |section| -> Vec<String> {
+            snapshot
+                .section(section)
+                .iter()
+                .map(|s| s.id.clone())
+                .collect()
+        };
+        // Active rules by next run, paused last; one-time stays empty.
+        assert_eq!(ids(Section::Recurring), ["daily", "weekly", "monthly"]);
+        assert!(ids(Section::OneTime).is_empty());
+        // Skipped and failed runs need attention, newest first; a late success doesn't.
+        assert_eq!(ids(Section::Attention), ["daily", "monthly"]);
+        let item = |id: &str| snapshot.items.iter().find(|s| s.id == id).unwrap();
+        assert_eq!(
+            item("daily").action(Section::Attention),
+            Some(RowAction::DismissNotice)
+        );
+        assert_eq!(item("daily").action(Section::Recurring), None);
+        assert!(item("monthly").technical().contains("Paused: yes"));
+        assert!(item("weekly").technical().contains("\"weekday\":1"));
+        // The pushed control-stream index validates the same way.
+        assert_eq!(
+            Snapshot::from_value(&recurring_at(TUESDAY))
+                .unwrap()
+                .items
+                .len(),
+            3
+        );
+        assert!(Snapshot::from_value(&json!({"bad": true})).is_err());
+    }
+    #[test]
+    fn rule_edits_are_revision_checked_fenced_and_natively_authorized() {
+        let rt = runtime();
+        let c = client();
+        let rule = recurring_at(TUESDAY)[0].clone();
+        let mut saved = rule.clone();
+        saved["revision"] = json!(5);
+        saved["paused"] = json!(true);
+        // No native authority: nothing is sent.
+        let s = Server::start();
+        let pause = Write::Row {
+            id: "weekly".into(),
+            revision: 4,
+            action: RowAction::Pause,
+        };
+        assert!(matches!(
+            rt.block_on(write(&c, &s.options, pause.clone())),
+            Outcome::Refused(_)
+        ));
+        assert!(s.writes().is_empty());
+        let s = Server::start().with_capability();
+        s.reply(
+            "PATCH /api/schedules/weekly",
+            Reply::json(200, saved.clone()),
+        );
+        assert_eq!(
+            rt.block_on(write(&c, &s.options, pause.clone())),
+            Outcome::Done
+        );
+        let writes = s.writes();
+        assert_eq!(writes.len(), 1);
+        let (method, path, capability, body) = &writes[0];
+        assert_eq!(
+            (method.as_str(), path.as_str(), *capability),
+            ("PATCH", "/api/schedules/weekly", true)
+        );
+        assert_eq!(
+            body,
+            &json!({"paused":true,"expectedRevision":4,"expectedHome":{"daemonId":"test-daemon","lineageId":"test-lineage"}})
+        );
+        // Refusals Local raises before writing, and anything else unconfirmed.
+        for (reply, refused) in [
+            (
+                Reply::json(
+                    409,
+                    json!({"error":"Schedule changed; reload before editing"}),
+                ),
+                true,
+            ),
+            (
+                Reply::json(503, json!({"error":"Automations are disabled"})),
+                true,
+            ),
+            (
+                Reply::json(403, json!({"error":"native_action_required"})),
+                true,
+            ),
+            (
+                Reply::json(400, json!({"error":"time must be HH:MM"})),
+                true,
+            ),
+            (Reply::json(500, json!({})), false),
+            (Reply::json(200, rule.clone()), false),
+        ] {
+            s.reply("PATCH /api/schedules/weekly", reply);
+            let outcome = rt.block_on(write(&c, &s.options, pause.clone()));
+            assert_eq!(
+                matches!(outcome, Outcome::Refused(_)),
+                refused,
+                "{outcome:?}"
+            );
+            assert_eq!(s.writes().len(), 1, "sent once, never retried");
+        }
+        s.reply(
+            "PATCH /api/schedules/weekly",
+            Reply::json(503, json!({"error":"Automations are disabled"})),
+        );
+        let Outcome::Refused(text) = rt.block_on(write(&c, &s.options, pause)) else {
+            panic!()
+        };
+        assert!(text.contains("Settings → Chats"), "{text}");
+        s.writes();
+        // Dismiss clears only the notice.
+        let mut cleared = rule.clone();
+        cleared["revision"] = json!(5);
+        s.reply("PATCH /api/schedules/weekly", Reply::json(200, cleared));
+        let dismiss = Write::Row {
+            id: "weekly".into(),
+            revision: 4,
+            action: RowAction::DismissNotice,
+        };
+        assert_eq!(rt.block_on(write(&c, &s.options, dismiss)), Outcome::Done);
+        assert_eq!(s.writes()[0].3["dismissNotice"], json!(true));
+    }
+    #[test]
+    fn creation_is_fenced_to_the_checked_home() {
+        let rt = runtime();
+        let c = client();
+        let s = Server::start();
+        let created = |trigger: &str| {
+            let mut v = if trigger == "at" {
+                roster()[0].clone()
+            } else {
+                recurring_at(TUESDAY)[0].clone()
+            };
+            v["revision"] = json!(1);
+            v
+        };
+        let once = json!({"trigger":"at","at":TUESDAY + DAY,"target":{"kind":"message","sessionId":"chat-a","message":MESSAGE}});
+        s.reply("POST /api/schedules", Reply::json(201, created("at")));
+        assert_eq!(
+            rt.block_on(write(&c, &s.options, Write::Create { body: once.clone() })),
+            Outcome::Done
+        );
+        let writes = s.writes();
+        assert!(!writes[0].2, "one-time messages need no native authority");
+        assert_eq!(writes[0].3["expectedHome"]["daemonId"], "test-daemon");
+        assert_eq!(writes[0].3["target"]["message"], MESSAGE);
+        // A recurring rule without native authority is never sent.
+        let rule = json!({"trigger":"recurring","recurrence":{"every":"day","time":"09:00","timeZone":"UTC"},"target":{"kind":"chat","spawn":{"message":"x","projectId":"project-a"}}});
+        assert!(matches!(
+            rt.block_on(write(&c, &s.options, Write::Create { body: rule.clone() })),
+            Outcome::Refused(_)
+        ));
+        assert!(s.writes().is_empty());
+        let s = s.with_capability();
+        s.reply(
+            "POST /api/schedules",
+            Reply::json(201, created("recurring")),
+        );
+        assert_eq!(
+            rt.block_on(write(&c, &s.options, Write::Create { body: rule.clone() })),
+            Outcome::Done
+        );
+        assert!(s.writes()[0].2);
+        // A 400 can follow a committed row: said as unconfirmed, never "nothing was saved".
+        s.reply(
+            "POST /api/schedules",
+            Reply::json(400, json!({"error":"listener failed"})),
+        );
+        assert!(matches!(
+            rt.block_on(write(&c, &s.options, Write::Create { body: rule.clone() })),
+            Outcome::Unconfirmed(_)
+        ));
+        s.reply(
+            "POST /api/schedules",
+            Reply::json(
+                409,
+                json!({"error":"Schedule home changed; reconnect before editing"}),
+            ),
+        );
+        let Outcome::Refused(text) =
+            rt.block_on(write(&c, &s.options, Write::Create { body: rule }))
+        else {
+            panic!()
+        };
+        assert!(text.contains("changed identity"), "{text}");
     }
     #[test]
     fn generation_fences_retained_snapshot_and_timestamp() {

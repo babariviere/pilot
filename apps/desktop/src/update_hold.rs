@@ -58,6 +58,8 @@ pub(crate) enum Blocker {
         key: Key,
         hold: Hold,
     },
+    /// The New/Edit automation sheet.
+    Automation(Hold),
 }
 
 /// Where the Show action takes the user.
@@ -139,6 +141,12 @@ impl Blocker {
             Self::Mission { .. } => {
                 "Save or revert your unsaved mission edits first. Nothing was discarded."
             }
+            Self::Automation(Sending) => {
+                "An automation is still saving. Try again when it finishes."
+            }
+            Self::Automation(_) => {
+                "Create or cancel the automation you're editing first. Nothing was discarded."
+            }
         }
     }
     /// None when the blocker is already on screen beside the message (Settings Save/Revert)
@@ -152,9 +160,11 @@ impl Blocker {
             | Self::ProjectSettings(_)
             | Self::ChatAction => None,
             Self::ScopedModels(_) => Some(Destination::ScopedModels),
-            Self::Composition | Self::Jump | Self::Conversion(_) | Self::AddProject(_) => {
-                Some(Destination::MainWindow)
-            }
+            Self::Composition
+            | Self::Jump
+            | Self::Conversion(_)
+            | Self::AddProject(_)
+            | Self::Automation(_) => Some(Destination::MainWindow),
             Self::QueuedMessage { chat } | Self::ChatRename { chat, .. } => {
                 Some(Destination::Chat(chat.clone()))
             }
@@ -220,6 +230,8 @@ mod tests {
                 key: key.clone(),
                 hold: Hold::Sending,
             },
+            Blocker::Automation(Hold::Unsaved),
+            Blocker::Automation(Hold::Sending),
         ];
         let messages: std::collections::BTreeSet<_> = all.iter().map(Blocker::message).collect();
         assert_eq!(messages.len(), all.len(), "each blocker is distinguishable");

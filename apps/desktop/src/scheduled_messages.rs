@@ -1,6 +1,6 @@
-//! One-time schedule records, as the Automations page presents them.
+//! Schedule records (one-time messages and recurring rules), as the Automations page presents them.
 //! Time passing is not delivery evidence; a dispatched message is not agent completion.
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Exact UTC, for the technical details only.
@@ -44,6 +44,54 @@ pub(crate) struct Item {
     pub(crate) fired_at: Option<u64>,
     pub(crate) session_id: Option<String>,
     pub(crate) error: Option<String>,
+    /// Recurring rules only.
+    pub(crate) recurrence: Option<Recurrence>,
+    #[serde(default)]
+    pub(crate) runs: Vec<Run>,
+    pub(crate) notice: Option<Run>,
+    #[serde(default)]
+    pub(crate) paused: bool,
+    pub(crate) handled_through: Option<u64>,
+}
+/// A recurring rule's calendar, in its own stored time zone.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Recurrence {
+    /// "day", "week" or "month".
+    pub(crate) every: String,
+    /// "HH:MM", 24-hour local wall time.
+    pub(crate) time: String,
+    pub(crate) time_zone: String,
+    /// Daily: 1 = Monday … 7 = Sunday. Omitted means every day.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) weekdays: Option<Vec<u8>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) weekday: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) day_of_month: Option<u8>,
+}
+/// One handled occurrence of a recurring rule.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Run {
+    pub(crate) due: u64,
+    pub(crate) at: u64,
+    /// "started", "sent", "skipped_running", "missed" or "failed".
+    pub(crate) outcome: String,
+    #[serde(default)]
+    pub(crate) late: bool,
+    pub(crate) session_id: Option<String>,
+    pub(crate) count: Option<u64>,
+    pub(crate) error: Option<String>,
+}
+impl Run {
+    /// Skipped, missed and failed runs need a look; late successes are only shown.
+    pub(crate) fn needs_attention(&self) -> bool {
+        matches!(
+            self.outcome.as_str(),
+            "skipped_running" | "missed" | "failed"
+        )
+    }
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -60,6 +108,7 @@ pub(crate) enum Target {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Section {
     Attention,
+    Recurring,
     OneTime,
 }
 /// The row's right-hand status. Pending rows on time show none.
@@ -83,37 +132,69 @@ impl Status {
 /// The one row action Local offers for this state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RowAction {
-    /// Pending: Local marks it cancelled.
+    /// Pending one-time: Local marks it cancelled.
     Cancel,
-    /// Failed: Local deletes the record.
+    /// Failed one-time: Local deletes the record.
     Dismiss,
+    /// Pending recurring rule: Local marks it cancelled, so it never runs again.
+    Delete,
+    /// Recurring notice: cleared with a revision-checked PATCH; runs stay.
+    DismissNotice,
+    Pause,
+    Resume,
 }
 impl RowAction {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Cancel => "Cancel",
-            Self::Dismiss => "Dismiss",
+            Self::Dismiss | Self::DismissNotice => "Dismiss",
+            Self::Delete => "Delete",
+            Self::Pause => "Pause",
+            Self::Resume => "Resume",
         }
     }
     /// The reported state Local must still have before the request is sent.
     pub(crate) fn state(self) -> &'static str {
         match self {
-            Self::Cancel => "pending",
             Self::Dismiss => "failed",
+            _ => "pending",
+        }
+    }
+    /// The revision-checked PATCH body, for actions that edit a recurring rule.
+    pub(crate) fn patch(self) -> Option<Value> {
+        match self {
+            Self::DismissNotice => Some(serde_json::json!({"dismissNotice": true})),
+            Self::Pause => Some(serde_json::json!({"paused": true})),
+            Self::Resume => Some(serde_json::json!({"paused": false})),
+            Self::Cancel | Self::Dismiss | Self::Delete => None,
         }
     }
 }
 impl Item {
-    pub(crate) fn section(&self) -> Option<Section> {
-        // Recurring rules belong to their own section, not One-time.
-        if self.trigger != "at" {
-            return None;
+    pub(crate) fn recurring(&self) -> bool {
+        self.trigger == "recurring"
+    }
+    fn active(&self) -> bool {
+        matches!(self.state.as_str(), "pending" | "dispatching")
+    }
+    /// A recurring rule with a skipped, missed or failed run is listed twice:
+    /// under Needs attention and under Recurring.
+    pub(crate) fn in_section(&self, section: Section) -> bool {
+        match (section, self.trigger.as_str()) {
+            (Section::OneTime, "at") | (Section::Recurring, "recurring") => self.active(),
+            (Section::Attention, "at") => self.state == "failed",
+            (Section::Attention, "recurring") => {
+                self.active() && self.notice.as_ref().is_some_and(Run::needs_attention)
+            }
+            _ => false,
         }
-        match self.state.as_str() {
-            "pending" | "dispatching" => Some(Section::OneTime),
-            "failed" => Some(Section::Attention),
-            _ => None,
-        }
+    }
+    /// Listed anywhere on the page. Sent and cancelled records are history.
+    #[cfg(test)]
+    pub(crate) fn shown(&self) -> bool {
+        [Section::Attention, Section::Recurring, Section::OneTime]
+            .into_iter()
+            .any(|s| self.in_section(s))
     }
     pub(crate) fn status(&self, read_at: u64) -> Option<Status> {
         match self.state.as_str() {
@@ -123,10 +204,12 @@ impl Item {
             _ => None,
         }
     }
-    pub(crate) fn action(&self) -> Option<RowAction> {
-        match self.state.as_str() {
-            "pending" => Some(RowAction::Cancel),
-            "failed" => Some(RowAction::Dismiss),
+    /// The one row action a section offers. Recurring rows use their pause switch instead.
+    pub(crate) fn action(&self, section: Section) -> Option<RowAction> {
+        match (section, self.recurring(), self.state.as_str()) {
+            (Section::OneTime, false, "pending") => Some(RowAction::Cancel),
+            (Section::Attention, false, "failed") => Some(RowAction::Dismiss),
+            (Section::Attention, true, "pending") => Some(RowAction::DismissNotice),
             _ => None,
         }
     }
@@ -184,6 +267,17 @@ impl Item {
                 ));
             }
         }
+        if let Some(r) = &self.recurrence {
+            lines.push(format!(
+                "Recurrence: {}",
+                serde_json::to_string(r).unwrap_or_default()
+            ));
+            lines.push(format!(
+                "Paused: {}",
+                if self.paused { "yes" } else { "no" }
+            ));
+            lines.push(format!("Handled through: {}", time(self.handled_through)));
+        }
         lines.push(format!("Created: {}", time(Some(self.created_at))));
         lines.push(format!("Updated: {}", time(Some(self.updated_at))));
         if self.claimed_at.is_some() {
@@ -209,6 +303,13 @@ impl Item {
             .flatten()
             .any(|at| at > 8_640_000_000_000_000)
             && !(self.trigger == "at" && self.at.is_none())
+            && (self.trigger == "recurring") == self.recurrence.is_some()
+            && self.runs.len() <= 100
+            && self
+                .runs
+                .iter()
+                .chain(&self.notice)
+                .all(|r| r.due.max(r.at) <= 8_640_000_000_000_000)
             && match &self.target {
                 Target::Message { session_id, .. } => {
                     !session_id.is_empty()
@@ -226,6 +327,15 @@ impl Snapshot {
     pub(crate) fn parse(bytes: &[u8]) -> Result<Self, &'static str> {
         let items: Vec<Item> = serde_json::from_slice(bytes)
             .map_err(|_| "Local returned malformed scheduled items.")?;
+        Self::accept(items)
+    }
+    /// The control stream's `schedules` index, validated like a read.
+    pub(crate) fn from_value(value: &Value) -> Result<Self, &'static str> {
+        let items = Vec::<Item>::deserialize(value)
+            .map_err(|_| "Local returned malformed scheduled items.")?;
+        Self::accept(items)
+    }
+    fn accept(items: Vec<Item>) -> Result<Self, &'static str> {
         let mut ids = std::collections::HashSet::new();
         if items.len() > 1000 || items.iter().any(|s| !ids.insert(&s.id) || !s.valid()) {
             return Err(
@@ -234,16 +344,22 @@ impl Snapshot {
         }
         Ok(Self { items })
     }
-    /// One section's rows: one-time by due time, needing attention newest first.
+    /// One section's rows: one-time and active recurring rules by due time (paused
+    /// rules last), needing attention newest first.
     pub(crate) fn section(&self, section: Section) -> Vec<&Item> {
         let mut rows: Vec<&Item> = self
             .items
             .iter()
-            .filter(|s| s.section() == Some(section))
+            .filter(|s| s.in_section(section))
             .collect();
         match section {
             Section::OneTime => rows.sort_by_key(|s| (s.at.unwrap_or(u64::MAX), s.created_at)),
-            Section::Attention => rows.sort_by_key(|s| std::cmp::Reverse(s.updated_at)),
+            Section::Recurring => {
+                rows.sort_by_key(|s| (s.paused, s.at.unwrap_or(u64::MAX), s.created_at))
+            }
+            Section::Attention => rows.sort_by_key(|s| {
+                std::cmp::Reverse(s.notice.as_ref().map_or(s.updated_at, |n| n.at))
+            }),
         }
         rows
     }

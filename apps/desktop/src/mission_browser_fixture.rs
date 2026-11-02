@@ -77,6 +77,8 @@ impl Reply {
 pub(crate) struct State {
     pub(crate) seen: Vec<(String, String)>,
     pub(crate) overrides: BTreeMap<String, Reply>,
+    /// Non-GET requests: method, path, whether native authority was attached, JSON body.
+    pub(crate) writes: Vec<(String, String, bool, Value)>,
 }
 pub(crate) struct Server {
     pub(crate) options: LocalOptions,
@@ -129,6 +131,25 @@ impl Server {
             .iter()
             .all(|(method, _)| method == "GET")
     }
+    /// Gives these options a private native capability file for the synthetic home.
+    pub(crate) fn with_capability(mut self) -> Self {
+        let home = std::env::temp_dir().join(format!("faux-capability-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&home).unwrap();
+        let cap = home.join("github-app-capability");
+        std::fs::write(
+            &cap,
+            json!({"daemonId":"test-daemon","lineageId":"test-lineage","token":"b".repeat(64)})
+                .to_string(),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&cap, std::fs::Permissions::from_mode(0o600)).unwrap();
+        self.options = self.options.clone().with_scope_home(home);
+        self
+    }
+    pub(crate) fn writes(&self) -> Vec<(String, String, bool, Value)> {
+        std::mem::take(&mut self.state.lock().unwrap().writes)
+    }
 }
 impl Drop for Server {
     fn drop(&mut self) {
@@ -150,6 +171,34 @@ async fn serve(mut socket: TcpStream, state: Arc<Mutex<State>>) -> std::io::Resu
     let mut words = request.split_whitespace();
     let method = words.next().unwrap_or("");
     let path = words.next().unwrap_or("");
+    if method != "GET" {
+        let end = bytes
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .map_or(bytes.len(), |p| p + 4);
+        let head = String::from_utf8_lossy(&bytes[..end]).to_ascii_lowercase();
+        let length = head
+            .lines()
+            .find_map(|l| l.strip_prefix("content-length:"))
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .unwrap_or(0)
+            .min(1 << 20);
+        let mut body = bytes[end..].to_vec();
+        while body.len() < length {
+            let n = socket.read(&mut buf).await?;
+            if n == 0 {
+                break;
+            }
+            body.extend_from_slice(&buf[..n]);
+        }
+        let capability = head.contains("x-pilot-github-capability: ");
+        let value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        state
+            .lock()
+            .unwrap()
+            .writes
+            .push((method.into(), path.into(), capability, value));
+    }
     let reply = {
         let mut state = state.lock().unwrap();
         assert!(state.seen.len() < 256, "bounded faux request budget");

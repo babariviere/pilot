@@ -1,5 +1,11 @@
 # One-time scheduled USER message creation: blocked contract
 
+**Superseded.** `POST /api/schedules` now accepts `expectedHome` and refuses a
+mismatched daemon/lineage before any row exists. The Automations page's
+**New automation** sheet creates one-time messages and recurring rules with it
+(see [scheduled-messages.md](scheduled-messages.md)). The audit below is kept as
+history; the composer still has no schedule action.
+
 The existing API preserves message/session/epoch bytes and can acknowledge a
 durably created row, but cannot fence creation to the daemon/lineage checked by
 the client. Next therefore exposes **no creation action** in this slice.

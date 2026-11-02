@@ -526,7 +526,9 @@ mod mcp_status_view;
 #[cfg(feature = "native-probes")]
 pub use mcp_status_probe::run_mcp_status_probe;
 
+mod automation_editor;
 mod automations_view;
+mod recurring_schedules;
 #[cfg(feature = "native-probes")]
 pub use local_view::automations_probe::run_automations_probe;
 mod scheduled_messages;

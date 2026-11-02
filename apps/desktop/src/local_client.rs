@@ -360,6 +360,10 @@ pub(crate) struct Presentation {
     /// Counts pilotd's `tracked.changed` and `sources` signals, so an open Inbox Slack tab
     /// rereads. Carries no item data.
     pub(crate) tracked_revision: u64,
+    /// Local's pushed schedule index (one-time messages and recurring rules), validated whole.
+    /// Inbox projects recurring notices from it; an open Automations page rereads on each change.
+    pub(crate) schedules: Option<Arc<crate::scheduled_messages::Snapshot>>,
+    pub(crate) schedules_revision: u64,
     pub(crate) projects: Arc<Vec<local_model::Project>>,
     pub(crate) projects_loaded: bool,
     pub(crate) projects_error: Option<&'static str>,
@@ -1437,6 +1441,10 @@ async fn run(
                         view.mcp = Some(Arc::new(crate::mcp_status::Snapshot::from_value(&value["mcp"])));
                     } else if value["type"] == "tracked.changed" || value["type"] == "sources" {
                         view.tracked_revision += 1;
+                    } else if value["type"] == "schedules" {
+                        // A malformed index is dropped whole, never shown partially.
+                        view.schedules = crate::scheduled_messages::Snapshot::from_value(&value["schedules"]).ok().map(Arc::new);
+                        view.schedules_revision += 1;
                     }
                 }
             }

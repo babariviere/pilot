@@ -43,10 +43,14 @@ pub(crate) struct InboxInput {
     /// pilotd's tracked-item and source change signals (one also follows each control
     /// connection), which the Slack tab rereads on.
     pub(crate) tracked: u64,
+    /// Local's pushed schedule index, for recurring-rule notices.
+    pub(crate) schedules: Option<Arc<crate::scheduled_messages::Snapshot>>,
 }
 pub(crate) enum InboxEvent {
     Chat(String),
     Filter(Option<String>),
+    /// A recurring rule's notice without a listed chat: show the rule.
+    Schedule(String),
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Tab {
@@ -71,11 +75,68 @@ impl SelectItem for Choice {
         self.unavailable
     }
 }
+/// A recurring rule's late, skipped, missed or failed run. Never counted as a chat.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ScheduleNotice {
+    pub(crate) id: String,
+    pub(crate) title: String,
+    pub(crate) project_id: Option<String>,
+    pub(crate) reason: String,
+    pub(crate) failed: bool,
+    /// Late successes are shown after the rows that need a look.
+    pub(crate) informational: bool,
+    pub(crate) session_id: Option<String>,
+}
+fn notices(
+    snapshot: Option<&crate::scheduled_messages::Snapshot>,
+    filter: Option<&str>,
+    now: u64,
+) -> Vec<ScheduleNotice> {
+    let Some(snapshot) = snapshot else {
+        return Vec::new();
+    };
+    let mut rows: Vec<(bool, std::cmp::Reverse<u64>, ScheduleNotice)> = snapshot
+        .items
+        .iter()
+        .filter(|s| s.recurring() && matches!(s.state.as_str(), "pending" | "dispatching"))
+        .filter(|s| filter.is_none_or(|p| s.project_id.as_deref() == Some(p)))
+        .filter_map(|s| {
+            let run = s.notice.as_ref()?;
+            let informational = !run.needs_attention();
+            if informational && !run.late {
+                return None;
+            }
+            let message = matches!(s.target, crate::scheduled_messages::Target::Message { .. });
+            let notice = ScheduleNotice {
+                id: s.id.clone(),
+                title: s.title.clone(),
+                project_id: s.project_id.clone(),
+                reason: crate::recurring_schedules::reason(
+                    run,
+                    message,
+                    now,
+                    crate::subscription_pause::local_offset,
+                ),
+                failed: run.outcome == "failed",
+                informational,
+                session_id: run.session_id.clone(),
+            };
+            Some((informational, std::cmp::Reverse(run.at), notice))
+        })
+        .collect();
+    rows.sort_by_key(|a| (a.0, a.1));
+    rows.into_iter()
+        .map(|(_, _, n)| n)
+        .take(SUMMARY_CAP)
+        .collect()
+}
 #[derive(Default)]
 struct Rows {
     needs: Vec<usize>,
     ready: Vec<usize>,
     paused: Vec<usize>,
+    /// Shown in Needs you after its chats.
+    notices: Vec<ScheduleNotice>,
 }
 impl Rows {
     fn new(chats: &[Chat], filter: Option<&str>) -> Self {
@@ -109,6 +170,15 @@ impl Rows {
             _ => &self.paused,
         }
     }
+    fn count(&self, section: usize) -> usize {
+        self.section(section).len() + if section == 0 { self.notices.len() } else { 0 }
+    }
+    fn notice(&self, ix: IndexPath) -> Option<&ScheduleNotice> {
+        (ix.section == 0)
+            .then(|| ix.row.checked_sub(self.needs.len()))
+            .flatten()
+            .and_then(|row| self.notices.get(row))
+    }
 }
 pub(crate) struct InboxList {
     owner: WeakEntity<Inbox>,
@@ -127,6 +197,106 @@ impl InboxList {
             .get(ix.row)
             .and_then(|ix| self.all.get(*ix))
     }
+    /// Where a notice row leads: its run's chat when listed, else the rule.
+    fn notice_event(&self, notice: &ScheduleNotice) -> InboxEvent {
+        match notice
+            .session_id
+            .as_ref()
+            .filter(|id| self.all.iter().any(|c| &&c.id == id && !c.archived))
+        {
+            Some(chat) => InboxEvent::Chat(chat.clone()),
+            None => InboxEvent::Schedule(notice.id.clone()),
+        }
+    }
+    fn notice_item(&self, notice: ScheduleNotice, cx: &mut Context<ListState<Self>>) -> ListItem {
+        let project = notice
+            .project_id
+            .as_ref()
+            .map(|id| {
+                self.projects
+                    .iter()
+                    .find(|p| &p.id == id)
+                    .map(|p| p.name.as_str())
+                    .unwrap_or("Project unavailable")
+            })
+            .unwrap_or("No project");
+        let context = format!("{project} · {}", notice.reason);
+        let glyph = if notice.failed {
+            crate::state_mark::Glyph::Mark(crate::state_mark::Mark::Failed)
+        } else if notice.informational {
+            crate::state_mark::Glyph::Circle {
+                faint: true,
+                filled: false,
+            }
+        } else {
+            crate::state_mark::Glyph::Mark(crate::state_mark::Mark::NeedsYou)
+        };
+        let tooltip = SharedString::from(format!("{}\n{context}", notice.title));
+        let owner = self.owner.clone();
+        let event_id = notice.id.clone();
+        ListItem::new(SharedString::from(format!("inbox-notice-{}", notice.id)))
+            .accessibility_label(SharedString::from(format!("{}, {context}", notice.title)))
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                let _ = owner.update(cx, |v, cx| {
+                    let event = v.list.update(cx, |l, cx| {
+                        let d = l.delegate();
+                        let ix = d
+                            .rows
+                            .notices
+                            .iter()
+                            .position(|n| n.id == event_id)
+                            .map(|row| IndexPath::new(row + d.rows.needs.len()));
+                        let event = ix
+                            .and_then(|ix| d.rows.notice(ix))
+                            .map(|n| d.notice_event(n));
+                        l.set_selected_index(ix, window, cx);
+                        l.focus(window, cx);
+                        event
+                    });
+                    if let Some(event) = event {
+                        cx.emit(event);
+                    }
+                });
+            })
+            .child(
+                div()
+                    .id(SharedString::from(format!(
+                        "attention-notice-{}",
+                        notice.id
+                    )))
+                    .test_support()
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(tooltip.clone())
+                            .build(window, cx)
+                    })
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .relative()
+                    .overflow_hidden()
+                    .rounded(px(crate::appearance::Radius::ROW))
+                    .w_full()
+                    .min_w_0()
+                    .px_2()
+                    .py_2()
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            ResourceLabel::new(SharedString::from(notice.title.clone()))
+                                .detail(SharedString::from(context)),
+                        ),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!(
+                                "inbox-mark-notice-{}",
+                                notice.id
+                            )))
+                            .test_support()
+                            .child(crate::state_mark::slot(Some(glyph), None, 1., cx)),
+                    ),
+            )
+    }
     fn index(&self, id: &str) -> Option<IndexPath> {
         (0..3).find_map(|section| {
             self.rows
@@ -143,7 +313,7 @@ impl ListDelegate for InboxList {
         3
     }
     fn items_count(&self, section: usize, _: &App) -> usize {
-        self.rows.section(section).len()
+        self.rows.count(section)
     }
     fn set_selected_index(
         &mut self,
@@ -159,7 +329,7 @@ impl ListDelegate for InboxList {
         _: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Option<impl IntoElement> {
-        let count = self.rows.section(section).len();
+        let count = self.rows.count(section);
         // Kit measures section zero even when it is empty. Empty sections
         // are not mounted, but must still supply the common header height.
         Some(
@@ -216,6 +386,9 @@ impl ListDelegate for InboxList {
         window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Option<ListItem> {
+        if let Some(notice) = self.rows.notice(ix).cloned() {
+            return Some(self.notice_item(notice, cx));
+        }
         let chat = self.at(ix)?.clone();
         let attention = chat.attention.as_ref()?;
         let project = chat
@@ -309,6 +482,7 @@ pub(crate) struct Inbox {
     loaded: bool,
     projects_error: bool,
     tracked: u64,
+    schedules: Option<Arc<crate::scheduled_messages::Snapshot>>,
     pub(crate) tab: Tab,
     pub(crate) slack: Entity<SlackBoard>,
     _subscriptions: Vec<Subscription>,
@@ -393,10 +567,15 @@ impl Inbox {
             .searchable(true)
         });
         let rows = cx.subscribe(&list, |view, _, event, cx| {
-            if let ListEvent::Confirm(ix) = event
-                && let Some(c) = view.list.read(cx).delegate().at(*ix)
-            {
-                cx.emit(InboxEvent::Chat(c.id.clone()));
+            if let ListEvent::Confirm(ix) = event {
+                let d = view.list.read(cx).delegate();
+                let event = match d.rows.notice(*ix) {
+                    Some(notice) => Some(d.notice_event(notice)),
+                    None => d.at(*ix).map(|c| InboxEvent::Chat(c.id.clone())),
+                };
+                if let Some(event) = event {
+                    cx.emit(event);
+                }
             }
         });
         let filter = cx.subscribe(
@@ -420,6 +599,7 @@ impl Inbox {
             loaded: false,
             projects_error: false,
             tracked: 0,
+            schedules: None,
             tab: Tab::Chats,
             slack,
             _subscriptions: vec![rows, filter, opened],
@@ -462,12 +642,18 @@ impl Inbox {
             loaded,
             projects_error,
             tracked,
+            schedules,
         } = input;
         if Arc::ptr_eq(&self.chats, &chats)
             && Arc::ptr_eq(&self.projects, &projects)
             && self.filter == filter
             && self.loaded == loaded
             && self.projects_error == projects_error
+            && match (&self.schedules, &schedules) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
         {
             // A Slack change signal alone leaves the chat rows untouched.
             if self.tracked != tracked {
@@ -490,6 +676,7 @@ impl Inbox {
         self.loaded = loaded;
         self.projects_error = projects_error;
         self.tracked = tracked;
+        self.schedules = schedules;
         if self.tab == Tab::Slack {
             self.show_slack(window, cx);
         }
@@ -526,6 +713,11 @@ impl Inbox {
                 .map(|c| c.id.clone());
             let d = v.delegate_mut();
             d.rows = Rows::new(&chats, self.filter.as_deref());
+            d.rows.notices = notices(
+                self.schedules.as_deref(),
+                self.filter.as_deref(),
+                crate::usage_overview::now(),
+            );
             d.all = chats;
             d.projects = projects;
             d.loaded = loaded;
@@ -651,6 +843,7 @@ mod tests {
                                     loaded: true,
                                     projects_error: false,
                                     tracked: 0,
+                                    schedules: None,
                                 },
                                 w,
                                 cx,

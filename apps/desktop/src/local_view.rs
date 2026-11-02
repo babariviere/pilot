@@ -1137,6 +1137,22 @@ impl LocalViewer {
         let inbox = cx.new(|cx| crate::inbox::Inbox::new(window, cx));
         let archive = cx.new(|cx| crate::archive_view::Archive::new(window, cx));
         let automations = cx.new(crate::automations_view::Automations::new);
+        let automations_events = cx.subscribe_in(
+            &automations,
+            window,
+            |v, _, event: &crate::automations_view::AutomationsEvent, w, cx| {
+                if v.page != Page::Automations {
+                    return;
+                }
+                match event {
+                    crate::automations_view::AutomationsEvent::OpenChat(id) => {
+                        if let Some(chat) = v.state.chats.iter().find(|c| &c.id == id).cloned() {
+                            v.open(chat, w, cx);
+                        }
+                    }
+                }
+            },
+        );
         let archive_events = cx.subscribe_in(
             &archive,
             window,
@@ -1174,6 +1190,12 @@ impl LocalViewer {
                     crate::inbox::InboxEvent::Chat(id) => {
                         if let Some(chat) = view.state.chats.iter().find(|c| &c.id == id).cloned() {
                             view.open(chat, window, cx);
+                        }
+                    }
+                    crate::inbox::InboxEvent::Schedule(id) => {
+                        if view.show_automations(window, cx) {
+                            view.automations
+                                .update(cx, |v, cx| v.reveal(id.clone(), cx));
                         }
                     }
                     crate::inbox::InboxEvent::Filter(filter) => {
@@ -1704,6 +1726,7 @@ impl LocalViewer {
                 shell_events,
                 inbox_events,
                 archive_events,
+                automations_events,
                 focus_lost,
             ],
             updates: None,
@@ -1891,6 +1914,8 @@ impl LocalViewer {
         self.state.inventory_error = state.inventory_error;
         // App-wide, whichever chat this publication belongs to.
         self.state.tracked_revision = state.tracked_revision;
+        self.state.schedules = state.schedules.clone();
+        self.state.schedules_revision = state.schedules_revision;
         if let Some(report) = state.mcp.take()
             && let Some(page) = self.settings.read(cx).mcp.clone()
         {
@@ -2275,7 +2300,12 @@ impl LocalViewer {
         }
         if self.page == Page::Automations {
             self.automations.update(cx, |v, cx| {
-                v.sync(&self.state.chats, &self.state.projects, cx)
+                v.sync(
+                    &self.state.chats,
+                    &self.state.projects,
+                    self.state.schedules_revision,
+                    cx,
+                )
             });
         }
         self.sync_visible_draft(window, cx);
@@ -2318,6 +2348,7 @@ impl LocalViewer {
                         loaded: self.state.list_loaded,
                         projects_error: self.state.projects_error.is_some(),
                         tracked: self.state.tracked_revision,
+                        schedules: self.state.schedules.clone(),
                     },
                     window,
                     cx,

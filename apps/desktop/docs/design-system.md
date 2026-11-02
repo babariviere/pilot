@@ -67,10 +67,13 @@ label/value list: ghost Buttons showing the value (chevron on hover) that open c
 Kit dropdown menus. See [Slack triage](slack-triage.md).
 
 The **Automations** page uses the same column with grouped, hairline-bordered
-lists of inset rows: a glyph tile (follow-up, new chat or failure), target over
-a muted message preview, time over status, at most one action (Cancel revealed
-on hover/focus) and a chevron that discloses the message, with technical fields
-under Details. See [Automations page](scheduled-messages.md).
+lists of inset rows: a glyph tile (follow-up, new chat, recurring rule or a run
+that needs a look), title over a muted line, time over status, at most one action
+(Cancel revealed on hover/focus; a recurring rule's Kit Switch pauses it) and a
+chevron that discloses the message, with technical fields under Details. **New
+automation** opens a Kit dialog sheet of label/control rows: outline ButtonGroups
+for choices, Kit TimeField, DatePicker and Select, and Textareas.
+See [Automations page](scheduled-messages.md).
 
 Layout is a left-aligned reading column, not a grid of nested cards:
 

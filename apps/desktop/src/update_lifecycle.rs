@@ -108,6 +108,15 @@ impl LocalViewer {
         if add.pending {
             return Some(Blocker::AddProject(Hold::Sending));
         }
+        if let Some(hold) = self
+            .automations
+            .read(cx)
+            .editor
+            .as_ref()
+            .and_then(|e| e.read(cx).update_hold(cx))
+        {
+            return Some(Blocker::Automation(hold));
+        }
         // A chosen folder outlives the closed sheet (and a finished registration) but holds
         // no typed input; the writer's book owns sent registrations.
         if self.add_project_open || add.choosing {

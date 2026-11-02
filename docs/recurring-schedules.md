@@ -1,6 +1,6 @@
 # Recurring schedules (design)
 
-**Status: daemon and protocol steps 1–3 implemented; desktop management remains planned.** Recurring time triggers such as "every Monday at 9:00, run a
+**Status: implemented (daemon steps 1–3, desktop step 4; see [the Automations page](../apps/desktop/docs/scheduled-messages.md)).** Recurring time triggers such as "every Monday at 9:00, run a
 database performance analysis". When the computer was off or asleep at the due time, the run happens once
 Pilot is back. Scope is the daemon (`pilotd`) and the Rust desktop app (`apps/desktop`); the Swift app is no
 longer supported and gets no work.
