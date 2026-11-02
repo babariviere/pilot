@@ -7,6 +7,8 @@ get their own design later and may reuse these parts.
 Scope is **setup only** for workspace lifecycle: there are no teardown scripts and no archive-time hooks.
 [Project environment setup](environment-setup.md) builds on the triggers and the runner described here; this
 document adopts its integration assumptions (its section 10) instead of redefining them.
+Time-based runs (every Monday at 9:00, with catch-up after downtime) are scheduled items, not hook
+definitions: see [recurring schedules](recurring-schedules.md).
 
 ## Model
 
