@@ -242,6 +242,7 @@ for (const mission of missionStore.list())
 const missionService = new MissionService(missionStore, sessions, projects);
 const knowledge = new KnowledgeService(missionStore, projects, sessions);
 sessions.setKnowledge(knowledge);
+knowledge.maintenance.start();
 // Keep legacy grants occupied and delegated sessions fenced, without loading any live
 // sharing service, observers, replica recovery or courier endpoints.
 const sharing = new RetiredDevboxes(
@@ -387,6 +388,7 @@ async function stop(): Promise<void> {
 			stopMemoryProjects();
 			await mcpStatus.close();
 			await missionLinear.stop();
+			await knowledge.maintenance.stop();
 			await linearPrChecks.stop();
 			await linearSync.stop();
 			await tracking.stop();

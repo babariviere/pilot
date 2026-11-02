@@ -1,11 +1,12 @@
 /** Project knowledge rows inside missions.sqlite. Projects own entries; missions only hold versioned links. */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { SQLInputValue } from "node:sqlite";
 import type {
 	KnowledgeAuthor,
 	KnowledgeDetail,
 	KnowledgeFreshness,
 	KnowledgeKind,
+	KnowledgeObservation,
 	KnowledgeOrigin,
 	KnowledgeRevision,
 	KnowledgeRevisionSummary,
@@ -19,7 +20,7 @@ import { Conflict, NotFound } from "./errors.ts";
 type Row = Record<string, SQLInputValue>;
 
 /**
- * Four tables. Only revision/link/check rows depend on an entry. Origin and source IDs are provenance locators, not
+ * Catalog tables plus small observation/origin rows. Origin and source IDs are provenance locators, not
  * foreign keys, so deleting or archiving a mission never removes knowledge; deleting a mission removes its links.
  */
 export const KNOWLEDGE_SCHEMA = `
@@ -79,6 +80,17 @@ CREATE TABLE IF NOT EXISTS project_knowledge_checks (
 	failure_at INTEGER,
 	failure_reason TEXT
 );
+CREATE TABLE IF NOT EXISTS project_knowledge_observations (
+	knowledge_id TEXT PRIMARY KEY REFERENCES project_knowledge(id) ON DELETE CASCADE,
+	revision INTEGER NOT NULL,
+	at INTEGER NOT NULL,
+	sources TEXT NOT NULL
+);
+-- Host-recorded origin survives task completion and later batches. It is not an agent payload label.
+CREATE TABLE IF NOT EXISTS project_knowledge_documentation_tasks (
+	mission_id TEXT NOT NULL,
+	task_id TEXT PRIMARY KEY
+);
 `;
 
 /** The few MissionStore primitives the catalog uses: the same in-memory connection, transactions and replica. */
@@ -131,14 +143,19 @@ export class ProjectKnowledgeStore {
 		this.db = db;
 	}
 
-	private freshness(row: Row | undefined, revision: number, current: number): KnowledgeFreshness {
+	private freshness(row: Row | undefined, revision: number, current: number, detailed = false): KnowledgeFreshness {
 		if (!row) return { state: "not_checked" };
 		const isCurrent = revision === current;
 		const pending = isCurrent && Number(row.pending_generation) > Number(row.cleared_generation);
 		// A historical revision never inherits a newer revision's check, and a save is never a check.
 		const checked =
 			row.checked_revision !== null && Number(row.checked_revision) === revision
-				? { at: Number(row.checked_at), checker: String(row.checker), coverage: String(row.coverage ?? "") }
+				? {
+						at: Number(row.checked_at),
+						checker: String(row.checker),
+						coverage: String(row.coverage ?? ""),
+						...(detailed ? { sourceVersions: json<unknown>(row.source_versions, null) } : {}),
+					}
 				: undefined;
 		const triggers = json<unknown[]>(row.pending_triggers, []);
 		return {
@@ -274,10 +291,12 @@ export class ProjectKnowledgeStore {
 		);
 		if (!row) return undefined;
 		const check = this.check(id);
+		const observation = this.observation(id);
 		return {
 			entry: this.summaryFrom(entry, check),
 			revision: this.revisionFrom(row),
-			freshness: this.freshness(check, Number(row.revision), current),
+			freshness: this.freshness(check, Number(row.revision), current, true),
+			...(observation?.revision === Number(row.revision) ? { observation } : {}),
 		};
 	}
 
@@ -428,6 +447,22 @@ export class ProjectKnowledgeStore {
 				JSON.stringify(write.author),
 				now,
 			);
+			// Catalog revisions have host-recorded documentation origin. Mark citations, never launch work.
+			const dependents = this.db.all(
+				`SELECT DISTINCT k.id FROM project_knowledge k
+				JOIN project_knowledge_revisions r ON r.knowledge_id=k.id AND r.revision=k.revision, json_each(r.sources) s
+				WHERE k.project_id=? AND json_extract(s.value, '$.type')='knowledge'
+				AND json_extract(s.value, '$.knowledgeId')=?`,
+				projectId,
+				id,
+			);
+			for (const dependent of dependents)
+				this.markPending(
+					projectId,
+					String(dependent.id),
+					"Documentation source revised; original citation retained",
+					`knowledge:${id}:${revision}`,
+				);
 			return {
 				operationId: write.operationId,
 				replayed: false,
@@ -550,6 +585,8 @@ export class ProjectKnowledgeStore {
 			const active = row && Number(row.pending_generation) > Number(row.cleared_generation);
 			const reasons = active ? json<string[]>(row.pending_reasons, []) : [];
 			const triggers = active ? json<string[]>(row.pending_triggers, []) : [];
+			if (active && trigger !== undefined && triggers.includes(trigger) && reasons.includes(reason))
+				return Number(row.pending_generation);
 			if (!reasons.includes(reason) && reasons.length < MAX_PENDING_REASONS) reasons.push(reason);
 			// Overflow is visible as broader pending coverage, not silently dropped work.
 			if (trigger !== undefined && !triggers.includes(trigger)) {
@@ -570,6 +607,176 @@ export class ProjectKnowledgeStore {
 			);
 			return generation;
 		});
+	}
+
+	/** Bounded keyset scan for maintenance, separate from all passive catalog reads. */
+	maintenanceEntries(after = "", projectId?: string): { id: string; projectId: string }[] {
+		return this.db
+			.all(
+				`SELECT id, project_id FROM project_knowledge WHERE id > ? ${projectId === undefined ? "" : "AND project_id = ?"}
+			ORDER BY id LIMIT 50`,
+				after,
+				...(projectId === undefined ? [] : [projectId]),
+			)
+			.map((row) => ({ id: String(row.id), projectId: String(row.project_id) }));
+	}
+
+	observation(id: string): KnowledgeObservation | undefined {
+		const row = this.db.one("SELECT * FROM project_knowledge_observations WHERE knowledge_id = ?", id);
+		return row ? { revision: Number(row.revision), at: Number(row.at), sources: json(row.sources, []) } : undefined;
+	}
+
+	pendingGeneration(id: string): number {
+		return Number(this.check(id)?.pending_generation ?? 0);
+	}
+
+	/** Persist only changed observations. Comparing source bytes makes duplicate/missed hints cheap. */
+	observe(projectId: string, id: string, observation: KnowledgeObservation, expectedGeneration: number): void {
+		this.db.transaction(() => {
+			if (Number(this.entryRow(projectId, id)?.revision) !== observation.revision)
+				throw new Conflict("Knowledge changed during source observation");
+			if (this.pendingGeneration(id) !== expectedGeneration)
+				throw new Conflict("Pending work changed during source observation");
+			const previous = this.observation(id);
+			const encoded = JSON.stringify(observation.sources);
+			if (previous?.revision === observation.revision && JSON.stringify(previous.sources) === encoded) return;
+			this.db.run(
+				`INSERT INTO project_knowledge_observations VALUES (?, ?, ?, ?)
+				ON CONFLICT(knowledge_id) DO UPDATE SET revision = excluded.revision, at = excluded.at, sources = excluded.sources`,
+				id,
+				observation.revision,
+				observation.at,
+				encoded,
+			);
+			this.markPending(
+				projectId,
+				id,
+				"Registered sources need a check",
+				`observation:${observation.revision}:${createHash("sha256").update(encoded).digest("hex")}`,
+			);
+			const unavailable = observation.sources.filter((source) => source.version === null);
+			if (unavailable.length)
+				this.recordFailure(
+					projectId,
+					id,
+					`Unavailable coverage: ${unavailable
+						.map((s) => s.coverage)
+						.join("; ")
+						.slice(0, 900)}`,
+				);
+		});
+	}
+
+	recordFailure(projectId: string, id: string, reason: string): void {
+		this.db.transaction(() => {
+			if (!this.entryRow(projectId, id)) throw new NotFound("Knowledge entry not found in this project");
+			if (!this.summary(projectId, id)?.freshness.pending)
+				this.markPending(projectId, id, "Check failed; needs another check");
+			this.db.run(
+				`INSERT INTO project_knowledge_checks (knowledge_id, failure_at, failure_reason) VALUES (?, ?, ?)
+			ON CONFLICT(knowledge_id) DO UPDATE SET failure_at = excluded.failure_at, failure_reason = excluded.failure_reason`,
+				id,
+				Date.now(),
+				reason.slice(0, 1000),
+			);
+		});
+	}
+
+	/** Atomic with canonical mutations in this database. No source fanout or worker launch. */
+	invalidateMission(missionId: string, field: "decisionId" | "taskId" | "briefRevision", ref: string | number): void {
+		const rows = this.db.all(
+			`SELECT DISTINCT k.id, k.project_id FROM project_knowledge k
+			JOIN project_knowledge_revisions r ON r.knowledge_id=k.id AND r.revision=k.revision, json_each(r.sources) s
+			WHERE json_extract(s.value, '$.type')='mission' AND json_extract(s.value, '$.missionId')=?
+			AND ${field === "briefRevision" ? "json_extract(s.value, '$.briefRevision') IS NOT NULL" : `json_extract(s.value, '$.${field}')=?`}`,
+			missionId,
+			...(field === "briefRevision" ? [] : [ref]),
+		);
+		for (const row of rows)
+			this.markPending(
+				String(row.project_id),
+				String(row.id),
+				"Canonical mission source changed",
+				`${missionId}:${field}:${ref}:generation:${this.pendingGeneration(String(row.id)) + 1}`,
+			);
+	}
+
+	/** A coordinator explicitly reuses a task. This does not create, assign, start or complete one. */
+	bindDocumentationTask(projectId: string, ids: string[], missionId: string, taskId: string): void {
+		this.db.transaction(() => {
+			for (const id of ids) {
+				if (!this.summary(projectId, id)?.freshness.pending) throw new Conflict("Entry has no pending check");
+				const previous = this.check(id)?.task_id;
+				if (
+					previous &&
+					previous !== taskId &&
+					this.db.one("SELECT 1 FROM tasks WHERE id = ? AND status NOT IN ('done', 'dropped')", previous)
+				)
+					throw new Conflict("Reuse the existing open documentation task");
+				this.db.run("UPDATE project_knowledge_checks SET task_id = ? WHERE knowledge_id = ?", taskId, id);
+			}
+			this.db.run("INSERT OR IGNORE INTO project_knowledge_documentation_tasks VALUES (?, ?)", missionId, taskId);
+		});
+	}
+
+	/** Completion receipts carry no changed-path proof. Keep mapping explicitly unknown, not 'unaffected'. */
+	invalidateDelivery(projectId: string, missionId: string, taskId: string, commit: string): void {
+		const rows = this.db.all(
+			`SELECT DISTINCT k.id FROM project_knowledge k
+			JOIN project_knowledge_revisions r ON r.knowledge_id=k.id AND r.revision=k.revision, json_each(r.sources) s
+			WHERE k.project_id=? AND json_extract(s.value, '$.type')='repository'`,
+			projectId,
+		);
+		const origin = this.isDocumentationTask(missionId, taskId) ? "Documentation-origin delivery" : "Delivery";
+		for (const row of rows)
+			this.markPending(
+				projectId,
+				String(row.id),
+				`${origin}: changed-path mapping unknown`,
+				`${missionId}:task:${taskId}:commit:${commit}`,
+			);
+	}
+
+	isDocumentationTask(missionId: string, taskId: string): boolean {
+		return !!this.db.one(
+			"SELECT 1 FROM project_knowledge_documentation_tasks WHERE mission_id = ? AND task_id = ?",
+			missionId,
+			taskId,
+		);
+	}
+
+	/** Current canonical state, not the historical quotation/pin. Exact body pins remain in the revision. */
+	missionSourceVersion(source: Extract<KnowledgeSource, { type: "mission" }>, projectId: string): unknown {
+		if (this.db.one("SELECT project_id FROM missions WHERE id = ?", source.missionId)?.project_id !== projectId)
+			throw new NotFound("Mission source is unavailable in this project");
+		const records: unknown[] = [];
+		if (source.decisionId)
+			records.push(
+				this.db.one(
+					"SELECT id, text, audience FROM decisions WHERE mission_id = ? AND id = ?",
+					source.missionId,
+					source.decisionId,
+				),
+			);
+		if (source.taskId)
+			records.push(
+				this.db.one(
+					`SELECT t.id, t.title, t.body, t.status, t.updated_at, c.record FROM tasks t
+			LEFT JOIN task_completions c ON c.task_id=t.id WHERE t.mission_id = ? AND t.id = ?`,
+					source.missionId,
+					source.taskId,
+				),
+			);
+		if (source.eventId)
+			records.push(
+				this.db.one("SELECT * FROM events WHERE mission_id = ? AND id = ?", source.missionId, source.eventId),
+			);
+		if (source.briefRevision !== undefined)
+			records.push(this.db.one("SELECT brief_revision FROM missions WHERE id = ?", source.missionId));
+		if (!records.length)
+			records.push(this.db.one("SELECT brief_revision, status FROM missions WHERE id = ?", source.missionId));
+		if (records.some((record) => !record)) throw new NotFound("Registered mission source is unavailable");
+		return records;
 	}
 
 	/**
@@ -594,6 +801,13 @@ export class ProjectKnowledgeStore {
 			const row = this.check(id);
 			if (Number(row?.pending_generation ?? 0) !== check.pendingGeneration)
 				throw new Conflict("Newer pending work arrived since the check began");
+			const observation = this.observation(id);
+			if (
+				observation &&
+				(observation.revision !== check.revision ||
+					JSON.stringify(observation.sources) !== JSON.stringify(check.sourceVersions))
+			)
+				throw new Conflict("Observed sources changed since the check began");
 			this.db.run(
 				`INSERT INTO project_knowledge_checks (knowledge_id, checked_revision, checked_at, checker, coverage,
 				source_versions, pending_generation, cleared_generation) VALUES (?, ?, ?, ?, ?, ?, ?, ?)

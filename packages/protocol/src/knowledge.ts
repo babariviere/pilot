@@ -80,11 +80,27 @@ export type KnowledgeFreshnessState = "not_checked" | "checked" | "needs_check";
 export interface KnowledgeFreshness {
 	state: KnowledgeFreshnessState;
 	/** The last successful check of exactly this revision. */
-	checked?: { at: number; checker: string; coverage: string };
+	checked?: { at: number; checker: string; coverage: string; sourceVersions?: unknown };
 	/** Stored pending work for the current revision; reading never changes it. */
 	pending?: { generation: number; since: number; reasons: string[]; triggers: number; taskId?: string };
 	failure?: { at: number; reason: string };
 }
+
+/** Stored observation, not a content check. Unsupported sources remain explicitly unavailable. */
+export interface KnowledgeObservation {
+	revision: number;
+	at: number;
+	sources: { key: string; version: string | null; coverage: string }[];
+}
+
+/** Captured by an admitted observation. A writer must return this token when recording a check. */
+export interface KnowledgeCheckInput {
+	id: string;
+	revision: number;
+	pendingGeneration: number;
+	observationToken: string;
+}
+export type KnowledgeObservationResult = KnowledgeCheckInput | { id: string; error: string };
 
 export interface KnowledgeSummary {
 	id: string;
@@ -118,6 +134,8 @@ export interface KnowledgeDetail {
 	entry: KnowledgeSummary;
 	revision: KnowledgeRevision;
 	freshness: KnowledgeFreshness;
+	/** Only for this exact revision. Reading does not refresh it. */
+	observation?: KnowledgeObservation;
 }
 /**
  * GET /api/projects/:projectId/knowledge?kind=&missionId=&check=needs_check&q=&limit=&cursor=.

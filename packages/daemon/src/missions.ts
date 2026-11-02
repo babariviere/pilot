@@ -1391,6 +1391,17 @@ export class MissionStore {
 		this.replica.push(changes);
 	}
 
+	/** Meaningful knowledge hints only, not streaming, task chatter or pending/check projections. */
+	private readonly knowledgeListeners = new Set<(projectId: string) => void>();
+	onKnowledgeChange(listener: (projectId: string) => void): () => void {
+		this.knowledgeListeners.add(listener);
+		return () => this.knowledgeListeners.delete(listener);
+	}
+	private knowledgeChanged(id: string): void {
+		const projectId = this.require(id).projectId;
+		for (const listener of this.knowledgeListeners) listener(projectId);
+	}
+
 	/** Called after every committed change of a mission, including membership and deletion. */
 	onChange(listener: (missionId: string, passive?: boolean, preferenceOnly?: boolean) => void): () => void {
 		this.listeners.add(listener);
@@ -2580,6 +2591,7 @@ export class MissionStore {
 			return this.insertBrief(id, content, mission.briefRevision + 1, actor, Date.now());
 		});
 		this.changed(id);
+		this.knowledgeChanged(id);
 		return brief;
 	}
 
@@ -2593,6 +2605,7 @@ export class MissionStore {
 			now,
 		);
 		this.run("UPDATE missions SET brief_revision = ? WHERE id = ?", revision, id);
+		this.knowledge.invalidateMission(id, "briefRevision", revision);
 		this.event(id, "brief", `Brief revision ${revision}`, actor, { at: now });
 		return { missionId: id, revision, markdown, ...optionalAuthor(actor.sessionId), createdAt: now };
 	}
@@ -3261,6 +3274,8 @@ export class MissionStore {
 		}
 		this.batchChanges(() => {
 			this.run("INSERT INTO task_completions VALUES (?, ?)", task.id, encoded);
+			this.knowledge.invalidateMission(id, "taskId", task.id);
+			this.knowledge.invalidateDelivery(this.require(id).projectId, id, task.id, record.commit);
 			this.updateTask(id, task.id, { status: "done" }, { sessionId });
 			if (task.status === "done")
 				this.event(
@@ -3285,6 +3300,7 @@ export class MissionStore {
 				this.run("INSERT OR IGNORE INTO retired_members VALUES (?, ?, ?)", sessionId, id, Date.now());
 			this.changed(id, [sessionId]);
 		});
+		this.knowledgeChanged(id);
 		return record;
 	}
 
@@ -4903,6 +4919,7 @@ export class MissionStore {
 			this.event(id, "decision", `Decision D${decision.number}: ${decision.text}`, actor, { at: now });
 		});
 		this.changed(id, this.members(id));
+		this.knowledgeChanged(id);
 		return decision;
 	}
 
@@ -4929,6 +4946,8 @@ export class MissionStore {
 				before.id,
 			);
 			this.dropProposal(id, before.id);
+			if (before.text !== decisionText || before.audience !== scope)
+				this.knowledge.invalidateMission(id, "decisionId", before.id);
 			this.event(
 				id,
 				"decision",
@@ -4938,6 +4957,7 @@ export class MissionStore {
 			);
 		});
 		this.changed(id, this.members(id));
+		this.knowledgeChanged(id);
 		return this.decision(id, decisionId);
 	}
 
@@ -4956,6 +4976,7 @@ export class MissionStore {
 			}
 			this.dropProposal(id, before.id);
 			this.run("DELETE FROM decisions WHERE id = ?", before.id);
+			this.knowledge.invalidateMission(id, "decisionId", before.id);
 			this.event(
 				id,
 				"decision",
@@ -4965,6 +4986,7 @@ export class MissionStore {
 			);
 		});
 		this.changed(id, this.members(id));
+		this.knowledgeChanged(id);
 	}
 
 	private decision(id: string, decisionId: string): MissionDecision {

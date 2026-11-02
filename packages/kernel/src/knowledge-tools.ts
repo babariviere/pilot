@@ -3,7 +3,18 @@ import type { JsonValue } from "@earendil-works/chord";
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 
-export const KNOWLEDGE_ACTIONS = ["list", "get", "revisions", "create", "append", "link", "unlink"] as const;
+export const KNOWLEDGE_ACTIONS = [
+	"list",
+	"get",
+	"revisions",
+	"create",
+	"append",
+	"link",
+	"unlink",
+	"observe",
+	"check",
+	"batch",
+] as const;
 export type KnowledgeAction = (typeof KNOWLEDGE_ACTIONS)[number];
 export type KnowledgeCall = (
 	action: KnowledgeAction,
@@ -22,10 +33,17 @@ export function createKnowledgeTool(call: KnowledgeCall): ToolDefinition {
 Body is readable Markdown. Investigations need headings Question, Findings (label each, observed/inferred/proposed and supported/negative/inconclusive), Limitations; include method and evidence. Components need Purpose, Interfaces or Architecture, Constraints or Gaps.
 Sources cite existing records: repository {path, commit?, dirty?}, artifact {sessionId, artifactId, revision}, mission {missionId, decisionId|taskId|eventId|briefRevision}, web {url, accessedAt}, knowledge {knowledgeId, revision, relation}. Max 64 sources and 64 KiB.
 Saving never marks an entry checked. After an interrupted or unknown result, retry with the same operationId.
-- link/unlink (mission coordinator only): id and expectedLinkRevision from get's missionLink; link pins revision or follows current.`,
+- link/unlink (mission coordinator only): id and expectedLinkRevision from get's missionLink; link pins revision or follows current.
+- observe: ids (1-50), explicit bounded source observation, not a content check. GET/list/Refresh never observe. Committed repository objects only; live edits and external web changes remain unchecked.
+- check: after actually checking current code and delivered scope, pass id, revision, pendingGeneration, observationToken returned by observe and coverage (evidence/limits). New revisions/events or unavailable sources leave work pending. Append content separately using normal expectedRevision; then observe/check the new revision.
+- batch (coordinator only): ids and an existing open taskId. Reuse one documentation task for related pending entries; this records documentation origin but never creates/starts a worker or spends provider usage. Documentation-only changes never launch jobs; mixed code changes still need checking. Required docs belong in acceptance.`,
 		parameters: Type.Object({
 			action: StringEnum(KNOWLEDGE_ACTIONS),
 			id: Type.Optional(Type.String({ maxLength: 128 })),
+			ids: Type.Optional(Type.Array(Type.String({ maxLength: 128 }), { minItems: 1, maxItems: 50 })),
+			pendingGeneration: Type.Optional(Type.Integer({ minimum: 0 })),
+			observationToken: Type.Optional(Type.String({ maxLength: 64 })),
+			coverage: Type.Optional(Type.String({ maxLength: 1000 })),
 			revision: Type.Optional(Type.Integer({ minimum: 1 })),
 			kind: Type.Optional(StringEnum(["investigation", "component"] as const)),
 			q: Type.Optional(Type.String({ maxLength: 200 })),

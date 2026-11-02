@@ -42,6 +42,9 @@ project chats register entries with readable Markdown bodies and cited sources, 
 as new revisions and never mark an entry checked by saving it. Mission coordinators link entries to
 their mission; archiving or deleting a mission never removes them. In Pilot Next, **Knowledge…** on a
 project's overview opens a read-only window, and Mission Overview lists the mission's linked entries.
+Meaningful deliveries, decisions and research changes coalesce into stored **Needs a check** work.
+Writers explicitly observe registered sources and record scoped checks; coordinators reuse existing
+documentation tasks. Refresh stays passive. This never launches agents or writes repository docs automatically.
 See [project knowledge](apps/desktop/docs/project-knowledge.md) and the
 [catalog design](docs/project-knowledge-catalog.md).
 

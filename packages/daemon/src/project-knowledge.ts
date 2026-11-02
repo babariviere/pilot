@@ -13,6 +13,7 @@ import type {
 	MissionKnowledgeLink,
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
+import { KnowledgeMaintenance, type RepositoryObservation } from "./knowledge-maintenance.ts";
 import type { MissionStore } from "./missions.ts";
 import type { KnowledgeListFilter, PreparedKnowledgeWrite } from "./project-knowledge-store.ts";
 
@@ -62,6 +63,8 @@ export interface KnowledgeSessions {
 	get(id: string): { projectId?: string } | undefined;
 	/** Exact stored artifact revision; never wakes a worker. */
 	artifact(sessionId: string, artifactId: string, revision?: number): Promise<{ revision: number }>;
+	/** Existing committed-artifact notifications are hints; no worker is opened. */
+	onArtifactsChanged?(listener: (sessionId: string) => void): () => void;
 }
 
 export interface KnowledgeProjects {
@@ -320,13 +323,20 @@ export interface KnowledgeListQuery {
 }
 
 export class KnowledgeService {
+	readonly maintenance: KnowledgeMaintenance;
 	private readonly store: MissionStore;
 	private readonly projects: KnowledgeProjects;
 	private readonly sessions: KnowledgeSessions;
-	constructor(store: MissionStore, projects: KnowledgeProjects, sessions: KnowledgeSessions) {
+	constructor(
+		store: MissionStore,
+		projects: KnowledgeProjects,
+		sessions: KnowledgeSessions,
+		repository?: RepositoryObservation,
+	) {
 		this.store = store;
 		this.projects = projects;
 		this.sessions = sessions;
+		this.maintenance = new KnowledgeMaintenance(store, projects, sessions, repository);
 	}
 
 	private admitProject(projectId: string): void {
@@ -509,6 +519,7 @@ export class KnowledgeService {
 		this.admitProject(projectId);
 		const result = replay();
 		await this.store.durable();
+		if (!result.replayed) this.maintenance.hint(projectId);
 		return result;
 	}
 
@@ -579,6 +590,35 @@ export class KnowledgeService {
 			if (caller.readOnly) throw new Conflict("This chat is read-only; report findings for a writer to register");
 		};
 		switch (action) {
+			case "observe": {
+				writer();
+				return this.maintenance.observeKnowledgeSources(projectId, entryIds(args.ids));
+			}
+			case "check": {
+				writer();
+				const input = {
+					id: id(args.id, "id"),
+					revision: integer(args.revision, "revision", 1),
+					pendingGeneration: integer(args.pendingGeneration, "pendingGeneration", 0),
+					observationToken: text(args.observationToken, "observationToken", 64)!,
+				};
+				await this.maintenance.recordCheck(
+					projectId,
+					input,
+					caller.sessionId,
+					text(args.coverage, "coverage", 1000, { multiline: true })!,
+				);
+				return this.durableRead(() => this.detail(projectId, input.id));
+			}
+			case "batch": {
+				writer();
+				const ownMission = coordinator();
+				const task = this.store.resolveTask(ownMission, args.taskId);
+				if (["done", "dropped"].includes(task.status)) throw new Conflict("Reuse an open documentation task");
+				this.store.knowledge.bindDocumentationTask(projectId, entryIds(args.ids), ownMission, task.id);
+				await this.store.durable();
+				return { taskId: task.id, entries: entryIds(args.ids) };
+			}
 			case "list":
 				if (args.linked === true && !sameProjectMission)
 					throw new Error("linked applies only to a chat in a mission of this project");
@@ -654,4 +694,10 @@ export class KnowledgeService {
 				throw new Error("Unknown knowledge action");
 		}
 	}
+}
+
+function entryIds(value: unknown): string[] {
+	if (!Array.isArray(value) || value.length < 1 || value.length > 50 || new Set(value).size !== value.length)
+		throw new Error("Pass 1-50 distinct entry IDs in ids");
+	return value.map((value) => id(value, "ids"));
 }

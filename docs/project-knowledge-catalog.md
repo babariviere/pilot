@@ -271,7 +271,8 @@ checks, not runtime tests; validation/publication of this proposal activates no 
 
 ## Shipped slice
 
-- **Storage:** the four tables above in `missions.sqlite`
+- **Storage:** the four catalog tables above, plus small stored source-observation and host-recorded
+  documentation-task-origin tables in `missions.sqlite`
   ([store](../packages/daemon/src/project-knowledge-store.ts)), written through MissionStore's
   transactions and replica. Writes await `durable()` before acknowledging, and HTTP and tool reads use
   the same barrier before and after reading; a durability failure fails the reply. Only mission deletion
@@ -288,8 +289,63 @@ checks, not runtime tests; validation/publication of this proposal activates no 
 - **Agent tool:** `knowledge` over supervised IPC ([tool](../packages/kernel/src/knowledge-tools.ts)),
   registered for writable project chats. pilotd derives identity and project from the session and
   refuses read-only roles and shared chats. Linking requires the caller to coordinate its own mission.
-- **Check state:** `markPending` and `recordCheck` exist as host-internal store methods with
-  generation CAS for later maintenance wiring; no route, tool or job calls them yet.
+- **Maintenance:** the bounded source-only flow below now calls `markPending` and `recordCheck`.
 - **Native:** see [project knowledge in Pilot Next](../apps/desktop/docs/project-knowledge.md).
-- **Not shipped:** automatic registration, source observation or freshness maintenance, bulk
+- **Not shipped:** automatic registration or body updates, unattended model/provider execution, bulk
   import of existing research, local source opening, knowledge in Ask chats, cross-project links.
+
+### Shipped bounded maintenance
+
+[KnowledgeMaintenance](../packages/daemon/src/knowledge-maintenance.ts) observes registered sources,
+not arbitrary project content. It uses existing supervised writer identity and the same durable store.
+It is not a documentation author or a new worker lifecycle:
+
+- Canonical decision changes/removal, brief revisions, task completion and referenced catalog revisions
+  mark dependent entries in the source transaction. Meaningful mission events, catalog writes and
+  committed-artifact notifications coalesce source-observation hints. Pending/check writes emit no
+  such hints. No polling timer, worker start, provider call, repository write or task creation is installed.
+- Startup recovers missed notifications by scanning stored entries in keyset batches of at most 50.
+  An admitted writer can also call `knowledge observe {ids}` (1–50 distinct IDs). GET, list, history and
+  native Refresh remain strictly passive. Unchanged source versions perform no observation/pending writes.
+  A stale entry returns an inspectable error without stopping the other entries in its batch.
+- Repository observation uses one local `HEAD` tree and bounded literal path chunks through the existing
+  off-thread subprocess service (10-second/1-MiB command bounds). Only registered file/directory Git objects
+  are compared. It does not fetch, inspect live uncommitted edits or follow symlink/submodule targets.
+  An absent object, inaccessible repository or unsupported source remains unavailable, not empty evidence.
+  External web changes are not observed. Artifact checks read the exact citation and latest pointer without
+  waking a worker; they do not invent a historical revision catalogue. Mission refs compare current canonical
+  records, while historical quotations/pins stay in the saved body. Knowledge refs compare current revision
+  while preserving the original citation. These source observations are not atomic across external stores.
+- Existing completion receipts contain a commit claim, not verified changed paths or proof of landing.
+  Such a receipt conservatively marks repository-backed entries **changed-path mapping unknown** for
+  coordinator triage. A local project tree observation cannot certify that claimed delivery's scope.
+  Writers still inspect cited code and exact delivered scope before asserting coverage. Missing mapping
+  is not a claim that every entry is wrong or that no documents are affected.
+- `knowledge batch {ids, taskId}` lets only the current mission coordinator bind pending entries to an
+  **existing open** same-project mission task. Repeating a batch reuses that task; an entry already bound
+  to another open task refuses replacement. It neither creates/assigns a task nor launches a worker.
+  The host records documentation-task origin; completion preserves that label. Catalog revisions also
+  have documentation origin. Neither path recursively creates jobs, and origin never hides mixed code
+  changes or unknown delivery scope. Required documentation remains part of acceptance; optional work
+  can remain asynchronously pending. There is no autonomous coordinator/model scheduler in this slice.
+- Observation returns `{id, revision, pendingGeneration, observationToken}`. After actually checking the
+  applicable sources, an ordinary admitted writer passes these plus evidence/limits in `coverage` to
+  `knowledge check`. The host re-observes and compares revision, pending generation and exact observed
+  versions before atomically recording the check. Changed/unavailable/empty inputs fail and remain pending;
+  prior successful coverage and source versions survive. Metadata writes await `durable()` before replies.
+  Source/check failures are retained in detail responses, not converted into successful or empty checks.
+- Body changes still use normal `append` with `expectedRevision`, complete content and a reason. Saving
+  is never checking; after an append, observe/check the new revision separately. History, original research,
+  user edits and rationale are never rewritten by maintenance. Proposed/approved/implemented distinctions
+  remain the writer's source-grounded content responsibility, not new decision authority.
+
+Stored detail responses include the exact revision's observation and successful check's source versions;
+summary pages omit the potentially large version arrays. The native reader remains read-only and shows
+its existing pending/check state. Known presentation limit: linked pinned **list rows** still label the
+current revision's check state; exact historical detail does not inherit a newer revision's check.
+This slice changes no native UI and does not claim a pinned body passed a current-body check.
+
+Focused tests in [knowledge-maintenance.test.ts](../packages/daemon/src/knowledge-maintenance.test.ts)
+cover coalescence/50-entry bounds, passive reads, canonical/source/revision races, no-change checks,
+failed inputs, origin/non-recursion, task reuse, restart recovery, durable replies and literal committed
+Git observations. They use faux sources and temporary repositories, not provider execution or live migrations.
