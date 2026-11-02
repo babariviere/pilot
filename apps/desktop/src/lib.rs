@@ -97,6 +97,8 @@ pub use local_view::context_usage_probe::run_context_usage_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::conversation_links_probe::run_conversation_links_probe;
 #[cfg(feature = "native-probes")]
+pub use local_view::diagnostic_repair_probe::run_diagnostic_repair_probe;
+#[cfg(feature = "native-probes")]
 pub use local_view::run_session_file_view_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::session_failure_probe::run_session_failure_probe;
@@ -143,6 +145,7 @@ mod model_wait_fixture;
 #[cfg(feature = "native-probes")]
 pub use chat_editor::project_creation_probe::run_project_creation_probe;
 mod delivery_store;
+mod diagnostic_repair;
 mod interaction;
 mod jump;
 mod jump_view;

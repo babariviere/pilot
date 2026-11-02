@@ -240,6 +240,8 @@ pub(crate) struct Chat {
     /// Live worker-owned jobs from the summary, in server order (session_jobs).
     pub(crate) subagents: crate::session_subagents::Report,
     pub(crate) running_jobs: std::sync::Arc<[crate::session_jobs::Job]>,
+    /// Persisted diagnostics role and its structured repair proposal, if any.
+    pub(crate) diagnostic: Option<std::sync::Arc<crate::diagnostic_repair::Specialist>>,
 }
 impl Chat {
     /// Row reason: attention, else live signal, else a non-routine raw state.
@@ -331,6 +333,7 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
         order: crate::chat_order::read(value, working(value)),
         subagents: crate::session_subagents::read(value),
         running_jobs: crate::session_jobs::read(value),
+        diagnostic: crate::diagnostic_repair::specialist(value).map(std::sync::Arc::new),
     })
 }
 

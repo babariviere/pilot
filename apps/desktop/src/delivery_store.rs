@@ -196,6 +196,9 @@ pub(crate) struct Book {
     pub(crate) project_registrations: BTreeMap<String, crate::project_registration::Attempt>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) model_changes: BTreeMap<String, crate::chat_models::Attempt>,
+    /// One retained diagnostic repair start per diagnostics chat. Open ones are never replaced.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) repairs: BTreeMap<String, crate::diagnostic_repair::Attempt>,
     /// Operation ids the user explicitly abandoned. They are never retried or executed again.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) abandoned: Vec<String>,
@@ -341,6 +344,7 @@ impl Book {
             missions: BTreeMap::new(),
             project_registrations: BTreeMap::new(),
             model_changes: BTreeMap::new(),
+            repairs: BTreeMap::new(),
             abandoned: Vec::new(),
         }
     }
@@ -363,6 +367,7 @@ impl Book {
             || self.missions.len() > 32
             || self.project_registrations.len() > 32
             || self.model_changes.len() > 32
+            || self.repairs.len() > 32
             || self.abandoned.len() > ABANDONED_CAP
         {
             return Err(
@@ -377,6 +382,23 @@ impl Book {
         }
         for (id, attempt) in &self.project_registrations {
             attempt.validate(id)?;
+        }
+        for (specialist, attempt) in &self.repairs {
+            attempt.validate(specialist)?;
+            let op = &attempt.operation;
+            if op.schema_version != 1
+                || !token(&op.operation_id)
+                || !token(&op.target_id)
+                || op.producer_id != self.producer_id
+                || op.sequence == 0
+                || op.sequence >= self.next_sequence
+                || op.origin != self.host
+                || op.destination != self.host
+                || op.payload.len() > 64 * 1024
+                || hash(&op.payload) != op.payload_hash
+            {
+                return Err("Stored repair start is corrupt.");
+            }
         }
         for (index, id) in self.abandoned.iter().enumerate() {
             if !token(id) || self.abandoned[..index].contains(id) {
@@ -926,6 +948,84 @@ impl Store {
                 return Err("A settled mission receipt cannot be replaced");
             }
             attempt.outcome = outcome;
+            Ok(())
+        })
+    }
+
+    /// Saves one immutable repair-create before its POST. An open start is never replaced.
+    pub(crate) fn prepare_repair(
+        &mut self,
+        specialist: &str,
+        proposal_id: &str,
+        payload: String,
+    ) -> Result<Operation, Failure> {
+        use crate::diagnostic_repair::{Attempt, State};
+        if payload.len() > 64 * 1024 {
+            return Err("The reviewed repair exceeds the 64 KiB start limit.");
+        }
+        self.change(|book| {
+            if let Some(old) = book.repairs.get(specialist) {
+                if old.open() {
+                    return Err("A repair start is still unconfirmed. Check it; nothing new was sent.");
+                }
+                if old.proposal_id == proposal_id && old.state == State::Accepted {
+                    return Err("This proposal already started a repair chat.");
+                }
+            } else if book.repairs.len() >= 32 {
+                // Only settled starts retire; an unconfirmed one is never discarded.
+                let old = book.repairs.iter().find(|(_, a)| !a.open()).map(|(id, _)| id.clone());
+                match old {
+                    Some(old) => {
+                        book.repairs.remove(&old);
+                    }
+                    None => return Err("Unconfirmed repair start storage is full. Nothing was discarded or sent."),
+                }
+            }
+            let sequence = book.next_sequence;
+            book.next_sequence += 1;
+            let operation = Operation {
+                schema_version: 1,
+                operation_id: Uuid::new_v4().to_string(),
+                producer_id: book.producer_id.clone(),
+                sequence,
+                origin: book.host.clone(),
+                destination: book.host.clone(),
+                kind: "repair-create".into(),
+                target_id: Uuid::new_v4().to_string(),
+                payload_hash: hash(&payload),
+                payload,
+            };
+            book.repairs.insert(
+                specialist.into(),
+                Attempt {
+                    proposal_id: proposal_id.into(),
+                    operation: operation.clone(),
+                    state: State::Unknown,
+                    reason: None,
+                },
+            );
+            Ok(operation)
+        })
+    }
+    /// Records an exact receipt. A settled receipt is never replaced by another state.
+    pub(crate) fn finish_repair(
+        &mut self,
+        specialist: &str,
+        operation_id: &str,
+        state: crate::diagnostic_repair::State,
+        reason: Option<String>,
+    ) -> Result<(), Failure> {
+        self.change(|book| {
+            let attempt = book
+                .repairs
+                .get_mut(specialist)
+                .filter(|a| a.operation.operation_id == operation_id)
+                .ok_or("The repair start changed. Its original record was kept.")?;
+            if !attempt.open() && attempt.state != state {
+                return Err("A settled repair receipt cannot be replaced.");
+            }
+            attempt.state = state;
+            attempt.reason = reason.map(|r| r.chars().take(512).collect());
             Ok(())
         })
     }

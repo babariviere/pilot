@@ -471,6 +471,11 @@ harness = false
 required-features = ["native-probes"]
 
 [[test]]
+name = "diagnostic_repair"
+harness = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "conversation_images"
 path = "tests/conversation_images.rs"
 harness = false

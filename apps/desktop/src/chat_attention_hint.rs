@@ -23,7 +23,7 @@ fn attention_hint(chat: &Chat, fresh: bool, question_visible: bool) -> Option<&s
 
 impl LocalViewer {
     pub(super) fn attention_composer(
-        &self,
+        &mut self,
         w: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
@@ -71,6 +71,7 @@ impl LocalViewer {
         div()
             .v_flex()
             .min_w_0()
+            .children(self.repair_panel(w, cx))
             .child(hint)
             .child(self.editor.clone())
             .into_any_element()

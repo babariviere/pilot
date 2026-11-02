@@ -63,6 +63,11 @@ mod daemon_upgrade_lifecycle;
 #[path = "daemon_upgrade_lifecycle_probe.rs"]
 pub(crate) mod daemon_upgrade_lifecycle_probe;
 #[cfg(feature = "native-probes")]
+#[path = "diagnostic_repair_probe.rs"]
+pub(crate) mod diagnostic_repair_probe;
+#[path = "diagnostic_repair_view.rs"]
+mod diagnostic_repair_view;
+#[cfg(feature = "native-probes")]
 #[path = "disclosure_probe.rs"]
 pub(crate) mod disclosure_probe;
 #[cfg(feature = "native-probes")]
@@ -376,6 +381,7 @@ pub struct LocalViewer {
     earlier_request: Option<(u64, u64, u64)>,
     artifacts: Entity<crate::artifact_view::ArtifactPane>,
     artifacts_open: bool,
+    repair: diagnostic_repair_view::RepairPanel,
     #[cfg(feature = "native-probes")]
     render_count: u64,
 }
@@ -669,6 +675,9 @@ impl LocalViewer {
             while let Ok(state) = write_updates.recv().await {
                 if view
                     .update_in(cx, |view, window, cx| {
+                        if view.repair.accept(&state) {
+                            cx.notify();
+                        }
                         view.add_project
                             .update(cx, |form, cx| form.accept(&state, cx));
                         if let Some(reply) = &state.project
@@ -761,6 +770,7 @@ impl LocalViewer {
                 order: Default::default(),
                 subagents: Default::default(),
                 running_jobs: Default::default(),
+                diagnostic: None,
                 cwd: String::new(),
                 project_id: None,
                 model_configuration: None,
@@ -787,6 +797,7 @@ impl LocalViewer {
                 order: Default::default(),
                 subagents: Default::default(),
                 running_jobs: Default::default(),
+                diagnostic: None,
                 cwd: String::new(),
                 project_id: None,
                 model_configuration: None,
@@ -813,6 +824,7 @@ impl LocalViewer {
                 order: Default::default(),
                 subagents: Default::default(),
                 running_jobs: Default::default(),
+                diagnostic: None,
                 cwd: String::new(),
                 project_id: None,
                 model_configuration: None,
@@ -1016,6 +1028,7 @@ impl LocalViewer {
             order: Default::default(),
             subagents: Default::default(),
             running_jobs: Default::default(),
+            diagnostic: None,
             cwd: String::new(),
             project_id: None,
             model_configuration: None,
@@ -1434,6 +1447,7 @@ impl LocalViewer {
                             order: Default::default(),
                             subagents: Default::default(),
                             running_jobs: Default::default(),
+                            diagnostic: None,
                             cwd: String::new(),
                             project_id: None,
                             model_configuration: None,
@@ -1699,6 +1713,7 @@ impl LocalViewer {
             earlier_request: None,
             artifacts: cx.new(|_| crate::artifact_view::ArtifactPane::new()),
             artifacts_open: false,
+            repair: Default::default(),
             #[cfg(feature = "native-probes")]
             render_count: 0,
         }
@@ -2423,6 +2438,7 @@ impl LocalViewer {
                     order: Default::default(),
                     subagents: Default::default(),
                     running_jobs: Default::default(),
+                    diagnostic: None,
                     cwd: String::new(),
                     project_id: None,
                     attention: None,
@@ -3302,6 +3318,7 @@ mod refresh_tests {
                         order: Default::default(),
                         subagents: Default::default(),
                         running_jobs: Default::default(),
+                        diagnostic: None,
                         cwd: String::new(),
                         project_id: None,
                         attention: None,

@@ -312,6 +312,7 @@ impl LocalViewer {
                     order: Default::default(),
                     subagents: Default::default(),
                     running_jobs: Default::default(),
+                    diagnostic: None,
                     cwd: String::new(),
                     project_id: None,
                     model_configuration: None,

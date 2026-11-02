@@ -153,6 +153,72 @@ impl DeliveryOwner<'_> {
         }
     }
 
+    /// One explicit repair start or Check. The start is saved before its single POST;
+    /// Check reuses the saved bytes. Draft edits keep saving while HTTP waits.
+    pub(super) async fn repair(
+        &mut self,
+        client: &reqwest::Client,
+        options: &LocalOptions,
+        specialist: &str,
+        action: crate::diagnostic_repair::Action,
+    ) -> Result<crate::diagnostic_repair::Outcome, Failure> {
+        use crate::diagnostic_repair::{self as repair, Action, Outcome};
+        if self.store.book.host != options.host() {
+            return Ok(Outcome::Refused(
+                "Local source differs from private state. Nothing was sent.",
+            ));
+        }
+        let operation = match action {
+            Action::Start {
+                proposal_id,
+                payload,
+            } => {
+                match self
+                    .effect(repair::start_preflight(
+                        client,
+                        options,
+                        specialist,
+                        &proposal_id,
+                    ))
+                    .await
+                {
+                    Err(error) if *self.closing => return Err(error),
+                    Err(error) => return Ok(Outcome::Refused(error)),
+                    Ok(()) => {}
+                }
+                let operation = match self.store.prepare_repair(specialist, &proposal_id, payload) {
+                    Ok(operation) => operation,
+                    Err(error) => return Ok(Outcome::Refused(error)),
+                };
+                self.prepared(self.status.notice);
+                let outcome = self
+                    .effect(async { Ok(repair::execute(client, options, &operation).await) })
+                    .await?;
+                (operation, outcome)
+            }
+            Action::Check => {
+                let Some(attempt) = self.store.book.repairs.get(specialist).cloned() else {
+                    return Ok(Outcome::Refused("There is no repair start to check."));
+                };
+                if !attempt.open() {
+                    return Ok(repair::outcome(&attempt));
+                }
+                let outcome = self
+                    .effect(async { Ok(repair::check(client, options, &attempt.operation).await) })
+                    .await?;
+                (attempt.operation, outcome)
+            }
+        };
+        let (operation, outcome) = operation;
+        if let Some((state, reason)) = outcome.state() {
+            // A private write failure cannot undo a known receipt; the worker reports it.
+            let _ = self
+                .store
+                .finish_repair(specialist, &operation.operation_id, state, reason);
+        }
+        Ok(outcome)
+    }
+
     /// Model selection uses the same FIFO writer and edit mailbox as delivery.
     pub(super) async fn model(
         &mut self,

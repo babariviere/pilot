@@ -32,6 +32,7 @@ pub(crate) struct WriteState {
     pub(crate) delivery_reports: BTreeMap<String, DeliveryReport>,
     pub(crate) mission: Option<crate::mission_conversion::Reply>,
     pub(crate) project: Option<crate::project_registration::Reply>,
+    pub(crate) repair: Option<crate::diagnostic_repair::Reply>,
     pub(crate) project_receipt: Option<(String, String)>,
     pub(crate) model: Option<crate::chat_models::Reply>,
     /// The latest explicit database-access decision. Volatile: never resent.
@@ -118,6 +119,12 @@ pub(crate) enum WriteCommand {
         target: crate::mission_conversion::Target,
         request: u64,
         action: crate::mission_conversion::Action,
+    },
+    /// Explicit diagnostic repair start or Check. Never issued without a user click.
+    Repair {
+        specialist: String,
+        request: u64,
+        action: crate::diagnostic_repair::Action,
     },
     Submit {
         key: String,
@@ -668,6 +675,43 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                     Ok("Closing. Interrupted project registration is not retried.")
                                 }
                             }
+                        }
+                        Some(WriteCommand::Repair {
+                            specialist,
+                            request,
+                            action,
+                        }) => {
+                            use crate::diagnostic_repair::Reply;
+                            status.repair = Some(Reply {
+                                specialist: specialist.clone(),
+                                request,
+                                outcome: None,
+                            });
+                            publish(updates, replace, status.clone());
+                            let result = DeliveryOwner {
+                                store,
+                                status: &mut status,
+                                channels: Some(&channels),
+                                autosave: &mut autosave,
+                                closing: &mut closing,
+                            }
+                            .repair(&client, &options, &specialist, action)
+                            .await;
+                            status.repair = Some(Reply {
+                                specialist,
+                                request,
+                                outcome: Some(result.unwrap_or(
+                                    crate::diagnostic_repair::Outcome::Unknown(
+                                        "Closing. Any saved repair start stays unconfirmed and is never resent automatically.",
+                                    ),
+                                )),
+                            });
+                            if store.is_faulted() {
+                                status.error = Some(
+                                    "Private repair receipt could not be saved. Keep unsaved text before restarting.",
+                                );
+                            }
+                            Ok("")
                         }
                         Some(WriteCommand::Mission {
                             target,

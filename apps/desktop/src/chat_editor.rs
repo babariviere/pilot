@@ -892,6 +892,56 @@ impl ChatEditor {
         self.submit_mode(stop, false, window, cx);
     }
 
+    /// Whether this key has a delivery that is not yet confirmed.
+    pub(crate) fn waiting_for(&self, key: &str) -> bool {
+        self.pending.contains_key(key) || self.cache.get(key).is_some_and(|d| d.pending.is_some())
+    }
+    /// Why a fixed request can't be sent through this chat's own composer now.
+    /// It never replaces typed text or a pending delivery.
+    pub(crate) fn fixed_send_problem(&self, key: &str, cx: &gpui_kit::App) -> Option<&'static str> {
+        if self.selected.as_deref() != Some(key) || !self.ready() || !self.writable {
+            return Some("This chat can't send right now.");
+        }
+        if self.error.is_some() || self.closing {
+            return Some("Resolve the composer problem first.");
+        }
+        if self.waiting() {
+            return Some("Wait until the last message is confirmed.");
+        }
+        if self.questions.current.is_some() {
+            return Some("Answer the open question first.");
+        }
+        let Some(draft) = self.draft() else {
+            return Some("This chat can't send right now.");
+        };
+        if !draft.editable()
+            || !draft.text.trim().is_empty()
+            || !draft.attachments.is_empty()
+            || !self.text.read(cx).value().trim().is_empty()
+        {
+            return Some("Send or clear your draft first.");
+        }
+        None
+    }
+    /// Sends exact text as a queued follow-up through the ordinary delivery path,
+    /// with its immutable operation, receipt and Unknown recovery. Only an empty
+    /// composer is used, so no typed text is replaced.
+    pub(crate) fn send_fixed(
+        &mut self,
+        key: &str,
+        text: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.fixed_send_problem(key, cx).is_some() || self.marked(window, cx) {
+            return false;
+        }
+        self.text
+            .update(cx, |state, cx| state.set_value(text, window, cx));
+        self.submit_mode(false, true, window, cx);
+        self.pending.contains_key(key)
+    }
+
     // Swift: Return/button steers (or starts); Option-Return explicitly queues.
     // This choice is captured once in the existing immutable delivery envelope.
     fn submit_mode(
