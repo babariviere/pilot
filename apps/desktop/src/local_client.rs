@@ -357,6 +357,9 @@ pub(crate) struct Presentation {
     pub(crate) mission_titles: Option<Arc<std::collections::HashMap<String, String>>>,
     /// Latest control-stream MCP report, for an open Settings MCP page only.
     pub(crate) mcp: Option<crate::mcp_status_view::Pushed>,
+    /// Counts pilotd's `tracked.changed` and `sources` signals, so an open Inbox Slack tab
+    /// rereads. Carries no item data.
+    pub(crate) tracked_revision: u64,
     pub(crate) projects: Arc<Vec<local_model::Project>>,
     pub(crate) projects_loaded: bool,
     pub(crate) projects_error: Option<&'static str>,
@@ -1432,6 +1435,8 @@ async fn run(
                         view.mission_titles = Some(Arc::new(titles));
                     } else if value["type"] == "mcp" {
                         view.mcp = Some(Arc::new(crate::mcp_status::Snapshot::from_value(&value["mcp"])));
+                    } else if value["type"] == "tracked.changed" || value["type"] == "sources" {
+                        view.tracked_revision += 1;
                     }
                 }
             }

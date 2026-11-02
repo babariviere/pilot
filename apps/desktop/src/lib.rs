@@ -506,6 +506,13 @@ mod scheduled_messages_tests;
 mod scheduled_messages_view;
 #[cfg(feature = "native-probes")]
 pub use scheduled_messages_probe::run_scheduled_messages_probe;
+mod slack_triage;
+#[cfg(any(test, feature = "native-probes"))]
+mod slack_triage_fixture;
+mod slack_triage_transport;
+mod slack_triage_view;
+#[cfg(feature = "native-probes")]
+pub use local_view::slack_triage_probe::run_slack_triage_probe;
 mod archive_view;
 #[cfg(feature = "native-probes")]
 mod lost_ack_fixture;

@@ -1,8 +1,10 @@
-//! Bounded, read-only loaded-summary Inbox. No transport, authority or timers.
+//! Bounded, read-only loaded-summary Inbox, plus the Slack tab (`slack_triage_view`), which
+//! owns its own reads and explicit triage writes.
 use crate::{
     app_icon::AppIcon,
     attention::Kind,
     local_model::{Chat, Project},
+    slack_triage_view::{BoardEvent, SlackBoard},
     ui::{self, Notice, ResourceLabel, Space, Text, Tone},
 };
 use gpui_kit::{
@@ -10,7 +12,8 @@ use gpui_kit::{
     Render, SharedString, StatefulInteractiveElement, Styled, Subscription, TestSupportExt,
     WeakEntity, Window,
     component::{
-        ActiveTheme, FocusableExt, IndexPath, Sizable, StyledExt,
+        ActiveTheme, FocusableExt, IndexPath, Selectable, Sizable, StyledExt,
+        button::{ButtonGroup, ButtonVariants},
         list::{List, ListDelegate, ListEvent, ListItem, ListState},
         select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
     },
@@ -37,10 +40,18 @@ pub(crate) struct InboxInput {
     pub(crate) filter: Option<String>,
     pub(crate) loaded: bool,
     pub(crate) projects_error: bool,
+    /// pilotd's tracked-item and source change signals (one also follows each control
+    /// connection), which the Slack tab rereads on.
+    pub(crate) tracked: u64,
 }
 pub(crate) enum InboxEvent {
     Chat(String),
     Filter(Option<String>),
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Tab {
+    Chats,
+    Slack,
 }
 #[derive(Clone)]
 struct Choice {
@@ -297,6 +308,9 @@ pub(crate) struct Inbox {
     filter: Option<String>,
     loaded: bool,
     projects_error: bool,
+    tracked: u64,
+    pub(crate) tab: Tab,
+    pub(crate) slack: Entity<SlackBoard>,
     _subscriptions: Vec<Subscription>,
     #[cfg(feature = "native-probes")]
     pub(crate) syncs: usize,
@@ -393,6 +407,10 @@ impl Inbox {
                 }
             },
         );
+        let slack = cx.new(|cx| SlackBoard::new(window, cx));
+        let opened = cx.subscribe(&slack, |_, _, event: &BoardEvent, cx| match event {
+            BoardEvent::OpenChat(id) => cx.emit(InboxEvent::Chat(id.clone())),
+        });
         Self {
             list,
             picker,
@@ -401,10 +419,29 @@ impl Inbox {
             filter: None,
             loaded: false,
             projects_error: false,
-            _subscriptions: vec![rows, filter],
+            tracked: 0,
+            tab: Tab::Chats,
+            slack,
+            _subscriptions: vec![rows, filter, opened],
             #[cfg(feature = "native-probes")]
             syncs: 0,
         }
+    }
+    pub(crate) fn options(&mut self, options: crate::LocalOptions, cx: &mut Context<Self>) {
+        self.slack.update(cx, |s, _| s.options(options));
+    }
+    pub(crate) fn choose_tab(&mut self, tab: Tab, window: &mut Window, cx: &mut Context<Self>) {
+        self.tab = tab;
+        if tab == Tab::Slack {
+            self.show_slack(window, cx);
+        }
+        self.focus(window, cx);
+        cx.notify();
+    }
+    fn show_slack(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (filter, tracked, chats) = (self.filter.clone(), self.tracked, self.chats.clone());
+        self.slack
+            .update(cx, |s, cx| s.show(filter, tracked, chats, window, cx));
     }
     pub(crate) fn restore_filter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let value = self.filter.clone().unwrap_or_default();
@@ -412,7 +449,10 @@ impl Inbox {
             .update(cx, |v, cx| v.set_selected_value(&value, window, cx));
     }
     pub(crate) fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
-        self.list.update(cx, |v, cx| v.focus(window, cx));
+        match self.tab {
+            Tab::Chats => self.list.update(cx, |v, cx| v.focus(window, cx)),
+            Tab::Slack => self.slack.update(cx, |s, cx| s.focus(window, cx)),
+        }
     }
     pub(crate) fn sync(&mut self, input: InboxInput, window: &mut Window, cx: &mut Context<Self>) {
         let InboxInput {
@@ -421,6 +461,7 @@ impl Inbox {
             filter,
             loaded,
             projects_error,
+            tracked,
         } = input;
         if Arc::ptr_eq(&self.chats, &chats)
             && Arc::ptr_eq(&self.projects, &projects)
@@ -428,6 +469,13 @@ impl Inbox {
             && self.loaded == loaded
             && self.projects_error == projects_error
         {
+            // A Slack change signal alone leaves the chat rows untouched.
+            if self.tracked != tracked {
+                self.tracked = tracked;
+                if self.tab == Tab::Slack {
+                    self.show_slack(window, cx);
+                }
+            }
             return;
         }
         #[cfg(feature = "native-probes")]
@@ -441,6 +489,10 @@ impl Inbox {
         self.filter = filter;
         self.loaded = loaded;
         self.projects_error = projects_error;
+        self.tracked = tracked;
+        if self.tab == Tab::Slack {
+            self.show_slack(window, cx);
+        }
         if picker_changed {
             let mut choices = vec![Choice {
                 id: String::new(),
@@ -510,11 +562,16 @@ impl Render for Inbox {
                 .child(div().h_flex().w_full().min_w_0().items_center().justify_between().gap_2()
                 // Coverage caveat lives in the title tooltip, not as permanent copy.
                 .child(div().id("inbox-scope-note").test_support().flex_1().min_w_0()
-                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Chats that need you and pull requests ready to merge. Opening a chat doesn't mark it reviewed.").build(w, cx))
+                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Chats that need you, pull requests ready to merge and Slack messages to triage. Opening a chat doesn't mark it reviewed.").build(w, cx))
                     .child(ui::heading("inbox-title", "Inbox", Text::Title)))
                 // Select's refinement sizes the inner input, not its Base wrapper.
                 // Bound both so native hit testing matches the visible control.
                 .child(div().w(px(220.)).min_w(px(220.)).max_w(px(220.)).child(Select::new(&self.picker).id("inbox-project-filter").small().w_full().focus_ring(false).menu_max_h(px(300.)).accessibility_label("Inbox project filter").search_placeholder("Find a project…")))))
+            .child(ButtonGroup::new("inbox-tabs").small().ghost().flex_none().self_start()
+                .child(ui::action("inbox-tab-chats", "Chats", ui::Action::Quiet).selected(self.tab == Tab::Chats)
+                    .on_click(cx.listener(|v, _, w, cx| v.choose_tab(Tab::Chats, w, cx))))
+                .child(ui::action("inbox-tab-slack", "Slack", ui::Action::Quiet).selected(self.tab == Tab::Slack)
+                    .on_click(cx.listener(|v, _, w, cx| v.choose_tab(Tab::Slack, w, cx)))))
             // A failed project refresh is reported once, beside the sidebar's
             // project chooser. Only a filter whose project vanished is page-specific.
             .when(missing, |this| this.child(
@@ -523,7 +580,10 @@ impl Render for Inbox {
                     .child(div().v_flex().min_w_0().gap(px(Space::META))
                         .child(Notice::new("This project is no longer available").tone(Tone::Error))
                         .child(ui::text(Text::Caption, "Choose another project to see its chats.").text_color(cx.theme().muted_foreground)))))
-            .child(div().id("inbox-list").test_support().flex_1().min_h_0().min_w_0().child(List::new(&self.list))))
+            .child(match self.tab {
+                Tab::Chats => div().id("inbox-list").test_support().flex_1().min_h_0().min_w_0().child(List::new(&self.list)),
+                Tab::Slack => div().id("inbox-slack").test_support().flex_1().min_h_0().min_w_0().child(self.slack.clone()),
+            }))
     }
 }
 
@@ -588,6 +648,7 @@ mod tests {
                                     filter: None,
                                     loaded: true,
                                     projects_error: false,
+                                    tracked: 0,
                                 },
                                 w,
                                 cx,

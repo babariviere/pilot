@@ -586,3 +586,8 @@ required-features = ["native-probes"]
 name = "scheduled_messages"
 harness = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "slack_triage"
+harness = false
+required-features = ["native-probes"]

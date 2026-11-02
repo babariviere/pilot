@@ -178,6 +178,9 @@ pub(crate) mod sidebar_scroll_native;
 #[path = "sidebar_sections_probe.rs"]
 pub(crate) mod sidebar_sections_probe;
 #[cfg(feature = "native-probes")]
+#[path = "slack_triage_probe.rs"]
+pub(crate) mod slack_triage_probe;
+#[cfg(feature = "native-probes")]
 #[path = "style_probe.rs"]
 pub(crate) mod style_probe;
 #[path = "submit_visibility.rs"]
@@ -464,6 +467,22 @@ impl LocalViewer {
             // Sidebar tree keys are handled only by the sidebar list pane.
             KeyBinding::new("left", SidebarCollapse, Some("SidebarList > List")),
             KeyBinding::new("right", SidebarExpand, Some("SidebarList > List")),
+            // Slack board columns: left and right move between status columns.
+            KeyBinding::new(
+                "left",
+                crate::slack_triage_view::Left,
+                Some("SlackBoard > List"),
+            ),
+            KeyBinding::new(
+                "right",
+                crate::slack_triage_view::Right,
+                Some("SlackBoard > List"),
+            ),
+            KeyBinding::new(
+                "escape",
+                crate::slack_triage_view::CloseDetail,
+                Some("SlackDetail"),
+            ),
             crate::ui::shortcut("secondary-n", NewChat, None, cx),
             crate::ui::shortcut("secondary-f", FocusChats, None, cx),
             crate::ui::shortcut("secondary-1", GoHome, None, cx),
@@ -564,6 +583,8 @@ impl LocalViewer {
             .update(cx, |pane, _| pane.options(options.clone()));
         view.mission_context
             .update(cx, |pane, _| pane.options(options.clone()));
+        view.inbox
+            .update(cx, |inbox, cx| inbox.options(options.clone(), cx));
         view.artifacts.update(cx, |pane, _| pane.options(options));
         view.updates = Some(cx.spawn_in(window, async move |view, cx| {
             while let Ok(update) = updates.recv().await {
@@ -1816,6 +1837,8 @@ impl LocalViewer {
     fn accept(&mut self, mut state: Presentation, window: &mut Window, cx: &mut Context<Self>) {
         self.state.inventory_refreshing = state.inventory_refreshing;
         self.state.inventory_error = state.inventory_error;
+        // App-wide, whichever chat this publication belongs to.
+        self.state.tracked_revision = state.tracked_revision;
         if let Some(report) = state.mcp.take()
             && let Some(page) = self.settings.read(cx).mcp.clone()
         {
@@ -2237,6 +2260,7 @@ impl LocalViewer {
                         filter: filter.clone(),
                         loaded: self.state.list_loaded,
                         projects_error: self.state.projects_error.is_some(),
+                        tracked: self.state.tracked_revision,
                     },
                     window,
                     cx,
