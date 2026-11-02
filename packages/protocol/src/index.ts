@@ -11,6 +11,7 @@ export type {
 	SnapshotEvent,
 	ToolSlot,
 } from "@earendil-works/pi-durable";
+export type * from "./automations.ts";
 export type * from "./chat-settings.ts";
 export type * from "./critical-review.ts";
 export type * from "./databases.ts";
@@ -680,6 +681,8 @@ export interface Project {
 	trackingGeneration?: string;
 	/** Environment profile. Edited through PUT /api/projects/:id/environment, never through project updates. */
 	environment?: import("./environment.ts").ProjectEnvironment;
+	/** Personal hooks. Writes require the native automations endpoint. */
+	automations?: import("./automations.ts").ProjectAutomations;
 	/** This host's own environment layer, never synced. Edited through PUT /api/projects/:id/environment/override. */
 	environmentOverride?: import("./environment.ts").ProjectEnvironmentOverride;
 	createdAt: number;

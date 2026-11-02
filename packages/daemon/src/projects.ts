@@ -3,7 +3,10 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import type {
+	Automation,
+	AutomationTrigger,
 	Project,
+	ProjectAutomations,
 	ProjectEnvironment,
 	ProjectEnvironmentOverride,
 	ProjectGitHubRepository,
@@ -12,6 +15,7 @@ import type {
 	RemoteBranchList,
 	SlackProjectLabel,
 } from "@pilot/protocol";
+import { automationRevision, validateAutomationsUpdate, validateProjectAutomations } from "./automation-definitions.ts";
 import {
 	applyEnvironmentApprovals,
 	effectiveEnvironment,
@@ -39,6 +43,7 @@ export class ProjectStore {
 	/** Profiles and overrides that failed validation on load, by project. Kept so a later save does not silently drop
 	 * a hand edit. */
 	private readonly invalid = {
+		automations: new Map<string, unknown>(),
 		environment: new Map<string, unknown>(),
 		environmentOverride: new Map<string, unknown>(),
 	};
@@ -63,6 +68,23 @@ export class ProjectStore {
 			const parsed = JSON.parse(await readFile(this.file, "utf8")) as Project[];
 			this.projects = Array.isArray(parsed) ? parsed : [];
 			let migrated = false;
+			this.invalid.automations.clear();
+			this.projects = this.projects.map((project) => {
+				if (project.automations === undefined) return project;
+				try {
+					return { ...project, automations: validateProjectAutomations(project.automations) };
+				} catch (error) {
+					this.invalid.automations.set(project.id, project.automations);
+					return {
+						...project,
+						automations: {
+							revision: automationRevision(project.automations),
+							items: [],
+							error: (error as Error).message,
+						},
+					};
+				}
+			});
 			const validators = {
 				environment: validateProjectEnvironment,
 				environmentOverride: validateProjectEnvironmentOverride,
@@ -194,6 +216,7 @@ export class ProjectStore {
 	}
 
 	async create(request: ProjectRequest): Promise<Project> {
+		if (Object.hasOwn(request, "automations")) throw new Error("Use the native automations endpoint to edit hooks");
 		validatePullRequestSetting(request);
 		const tracking = request.tracking === undefined ? undefined : validateTrackingConfig(request.tracking);
 		if (typeof request.path !== "string" || !request.path.trim()) throw new Error("path is required");
@@ -215,6 +238,7 @@ export class ProjectStore {
 	}
 
 	async update(id: string, request: Partial<ProjectRequest>): Promise<Project> {
+		if (Object.hasOwn(request, "automations")) throw new Error("Use the native automations endpoint to edit hooks");
 		validatePullRequestSetting(request);
 		const tracking = request.tracking === undefined ? undefined : validateTrackingConfig(request.tracking);
 		const project = this.require(id);
@@ -241,6 +265,32 @@ export class ProjectStore {
 		this.projects = this.projects.map((existing) => (existing.id === id ? next : existing));
 		await this.persist();
 		return next;
+	}
+
+	/** Detached trigger-time snapshot. Invalid saved definitions are never executable. */
+	enabledAutomations(id: string, trigger: AutomationTrigger): { revision: number; items: Automation[] } {
+		const config = this.require(id).automations;
+		return {
+			revision: config?.revision ?? 0,
+			items: config?.error
+				? []
+				: structuredClone(config?.items.filter((item) => item.enabled && item.on.includes(trigger)) ?? []),
+		};
+	}
+
+	async updateAutomations(id: string, value: unknown): Promise<ProjectAutomations> {
+		const request = validateAutomationsUpdate(value);
+		const project = this.require(id);
+		const current = project.automations ?? { revision: 0, items: [] };
+		if (request.expectedRevision !== current.revision)
+			throw new AutomationsRevisionConflict(structuredClone(current));
+		const next = { revision: current.revision + 1, items: request.items };
+		this.invalid.automations.delete(id);
+		this.projects = this.projects.map((existing) =>
+			existing.id === id ? { ...existing, automations: next } : existing,
+		);
+		await this.persist();
+		return structuredClone(next);
 	}
 
 	/**
@@ -313,6 +363,7 @@ export class ProjectStore {
 	/** Sessions keep their projectId; clients show them as unassigned. */
 	async remove(id: string): Promise<void> {
 		this.require(id);
+		this.invalid.automations.delete(id);
 		this.invalid.environment.delete(id);
 		this.invalid.environmentOverride.delete(id);
 		this.projects = this.projects.filter((project) => project.id !== id);
@@ -322,6 +373,8 @@ export class ProjectStore {
 	private persist(): Promise<void> {
 		const stored = this.projects.map((project) => {
 			let result: Record<string, unknown> = project as unknown as Record<string, unknown>;
+			if (this.invalid.automations.has(project.id))
+				result = { ...result, automations: this.invalid.automations.get(project.id) };
 			for (const field of ["environment", "environmentOverride"] as const)
 				if (this.invalid[field].has(project.id) && !project[field])
 					result = { ...result, [field]: this.invalid[field].get(project.id) };
@@ -338,6 +391,14 @@ export class ProjectStore {
 		const projects = this.list();
 		for (const listener of this.listeners) listener(projects);
 		return this.saving;
+	}
+}
+
+export class AutomationsRevisionConflict extends Conflict {
+	readonly current: ProjectAutomations;
+	constructor(current: ProjectAutomations) {
+		super("The automations changed. Review the latest version and try again.");
+		this.current = current;
 	}
 }
 

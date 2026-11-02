@@ -35,6 +35,8 @@ export interface DaemonCapabilities {
 	workspaceTerminalProtocol?: 2;
 	/** Project environment setup (docs/environment-setup.md). Absent on older runtimes and while the feature is off. */
 	environmentSetup?: 1;
+	/** Personal lifecycle hooks. Absent while disabled. */
+	automations?: 1;
 	/** Bounded local accounting query API. Absent on older hosts, unrelated to subscription windows. */
 	usageQueries?: 1;
 	/** Explicit app-requested provider limits refresh. No agent or GUI credential access. */

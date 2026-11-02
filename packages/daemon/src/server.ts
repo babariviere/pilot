@@ -78,6 +78,7 @@ import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import type { GitHubImportService } from "./github-import.ts";
 import type { GitHubSetupService } from "./github-setup.ts";
+import { automationsEnabled } from "./hello.ts";
 import { MachineInformationReader } from "./machine.ts";
 import { McpSetupError, McpSetupStore } from "./mcp-setup.ts";
 import { type McpStatusService, SignInUnavailable } from "./mcp-status.ts";
@@ -94,7 +95,7 @@ import { PathCompletionReader } from "./path-completion.ts";
 import type { PowerService } from "./power.ts";
 import { type DashboardProviders, ProjectDashboardService } from "./project-dashboard.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
-import { EnvironmentRevisionConflict, expandHome, type ProjectStore } from "./projects.ts";
+import { AutomationsRevisionConflict, EnvironmentRevisionConflict, expandHome, type ProjectStore } from "./projects.ts";
 import { PTY_INPUT_CHUNK } from "./pty-input.ts";
 import { RepositoryBrowser } from "./repository-browser.ts";
 import { isRetiredDevboxOperation } from "./retired-devboxes.ts";
@@ -1440,6 +1441,22 @@ export function createDaemonServer(
 			return json(res, 200, await projects.github(parts[2]!));
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "origin" && req.method === "GET")
 			return json(res, 200, await projects.origin(parts[2]!));
+		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "automations" && req.method === "PUT") {
+			if (!automationsEnabled()) return json(res, 404, { error: "automations_unavailable" });
+			if (!githubSetup) return json(res, 503, { error: "automations_unavailable" });
+			try {
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			} catch {
+				return json(res, 403, { error: "native_action_required" });
+			}
+			try {
+				return json(res, 200, await projects.updateAutomations(parts[2]!, await readJson(req, 512 * 1024)));
+			} catch (error) {
+				if (error instanceof AutomationsRevisionConflict)
+					return json(res, 409, { error: "automations_conflict", current: error.current });
+				throw error;
+			}
+		}
 		if (parts[1] === "projects" && parts[3] === "environment") {
 			// Off unless this host advertises DaemonCapabilities.environmentSetup.
 			if (!environment) return json(res, 404, { error: "environment_unavailable" });

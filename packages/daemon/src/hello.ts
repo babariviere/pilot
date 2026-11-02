@@ -52,6 +52,10 @@ export function environmentSetupEnabled(env: NodeJS.ProcessEnv = process.env): b
 	return env.PILOT_ENVIRONMENT_SETUP === "1";
 }
 
+export function automationsEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+	return env.PILOT_AUTOMATIONS === "1";
+}
+
 export async function daemonHello(
 	home: string,
 	capabilities: DaemonCapabilities,
@@ -69,6 +73,7 @@ export async function daemonHello(
 			...capabilities,
 			workspaceTerminalProtocol: 2,
 			usageQueries: 1,
+			...(automationsEnabled(env) ? { automations: 1 as const } : {}),
 			...(environmentSetupEnabled(env) ? { environmentSetup: 1 as const } : {}),
 		},
 	};
