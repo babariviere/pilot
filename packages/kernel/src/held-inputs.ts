@@ -336,7 +336,15 @@ export async function pauseInputs(
 export async function admitWithHeld(
 	session: Pick<Session, "commit">,
 	conversationId: ConversationId,
-	input: { requestId: string; content: Input["content"]; mode: DeliveryMode; entry?: Input["entry"] } | undefined,
+	input:
+		| {
+				requestId: string;
+				content: Input["content"];
+				mode: DeliveryMode;
+				entry?: Input["entry"];
+				answerQuestionId?: number;
+		  }
+		| undefined,
 	context: Context,
 	onlyIfIdle = false,
 	release = false,
@@ -345,6 +353,43 @@ export async function admitWithHeld(
 	return session.commit(async (tx) => {
 		const held = await tx.doc(HeldInputsDoc, conversationId);
 		if (revision !== undefined && revision <= (held.controlRevision ?? 0)) return { started: false };
+		const coordinatorAnswer = input?.answerQuestionId !== undefined;
+		// Dedupe before checking the boundary: an accepted answer may already have resumed the chat.
+		if (coordinatorAnswer) {
+			const existing = await tx.submissionByRequest(conversationId, input.requestId);
+			if (existing) return { id: existing.id, held: held.items.some((item) => item.id === existing.id) };
+			if (
+				!Number.isSafeInteger(input.answerQuestionId) ||
+				input.answerQuestionId! <= 0 ||
+				inputOrigin(input.requestId) !== "coordinator"
+			)
+				throw new Error("Invalid coordinator question reply");
+			const question = await tx.entry(input.answerQuestionId as EntryId);
+			const data = question?.data;
+			if (
+				!held.questionPending ||
+				held.stopped ||
+				question?.conversationId !== conversationId ||
+				question.kind !== QUESTION_ENTRY ||
+				typeof data !== "object" ||
+				data === null ||
+				Array.isArray(data) ||
+				typeof data.question !== "string" ||
+				data.databaseAccess !== undefined
+			)
+				throw new Error("That ordinary question is no longer pending");
+			// A previous question's entry must never answer a later question in the same chat.
+			let cursor: Cursor | undefined;
+			do {
+				const page = await tx.scanEntries({ conversationId }, 64, cursor);
+				const latest = page.items.find((entry) => entry.kind === QUESTION_ENTRY);
+				if (latest) {
+					if (latest.id !== question.id) throw new Error("That question is no longer pending");
+					break;
+				}
+				cursor = page.next;
+			} while (cursor !== undefined);
+		}
 		if (
 			!held.stopped &&
 			!held.paused &&
@@ -360,7 +405,7 @@ export async function admitWithHeld(
 		const inbox = await tx.doc(InboxDoc, conversationId);
 		if (held.questionPending && !input) return { held: true };
 		if (
-			(held.questionPending && input && inputOrigin(input.requestId)) ||
+			(held.questionPending && input && inputOrigin(input.requestId) && !coordinatorAnswer) ||
 			(!release && !held.questionPending && (held.paused || (input && inputOrigin(input.requestId))))
 		) {
 			if (!input) return { held: true };

@@ -12,6 +12,7 @@ export class MissionNotices {
 	private readonly dispatcher: NoticeDispatcher;
 	private stopped = true;
 	private readonly seen = new Map<string, string>();
+	private readonly questions = new Map<string, string>();
 	private readonly unsubscribe: (() => void)[];
 	private readonly store: MissionStore;
 	private readonly sessions: SessionManager;
@@ -79,6 +80,7 @@ export class MissionNotices {
 		if (this.stopped) return;
 		if (!session.missionId) {
 			this.seen.delete(session.id);
+			this.questions.delete(session.id);
 			return;
 		}
 		if (recovering) {
@@ -96,9 +98,17 @@ export class MissionNotices {
 			session.archivedAt,
 			session.missionId,
 			session.runningJobs,
+			session.attentionReason?.kind === "asks" ? [session.attentionAt, session.attentionReason.detail] : undefined,
 		]);
 		if (this.seen.get(session.id) === key) return;
 		this.seen.set(session.id, key);
+		if (session.attentionReason?.kind === "asks") {
+			const questionKey = JSON.stringify([session.missionId, session.attentionAt, session.attentionReason.detail]);
+			if (this.questions.get(session.id) !== questionKey) {
+				this.questions.set(session.id, questionKey);
+				this.store.recordMemberQuestion(session);
+			}
+		} else this.questions.delete(session.id);
 		// An unanswered question is a result for the mission even while the chat's jobs keep running.
 		const question = session.outcome === "question" && !session.working;
 		if (

@@ -209,6 +209,8 @@ export type KernelCommand =
 			reportDelivery?: boolean;
 			/** Explicit redirect releases the Stop hold without impersonating a user submission. */
 			resumeHeld?: boolean;
+			/** Coordinator reply to this exact pending ordinary question entry. */
+			answerQuestionId?: number;
 			/** Ephemeral W3C parent context from pilotd. Never contains baggage or conversation data. */
 			trace?: TraceCarrier;
 			event?: import("@pilot/protocol").ChatEventSummary;

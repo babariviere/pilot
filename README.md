@@ -135,6 +135,9 @@ the daemon report; check, sign-in and setup actions are not included. See the
   script deadline cancels the wait. A worker replacement keeps the question, but never replays the interrupted
   script; your answer then starts a fresh turn. Safe update drains wait for an answer or cancellation, rather
   than interrupting a script's other effects. Database-access approvals keep their separate turn-ending flow.
+  Mission coordinators are notified of member questions and can answer ordinary questions within the approved
+  mission scope. They read the exact pending question with `mission status` and reply with `mission answer`.
+  Replies are attributed to the coordinator, not you. Stale questions are rejected; database approvals remain yours.
 - **Explore before implementing.** Ask chats can read code and produce artifacts without repository write
   access. Move the discussion into a separate Build chat when you're ready to make changes.
 - **Review work in context.** Build chats include a diff inspector, a [libghostty](https://github.com/Lakr233/libghostty-spm)

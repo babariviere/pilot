@@ -133,6 +133,38 @@ function jobDelivery(store: MissionStore, id: string) {
 	};
 }
 
+test("live member questions wake the coordinator once without completing the run", async () => {
+	const { store, id } = setup();
+	const f = jobDelivery(store, id);
+	try {
+		f.change({
+			state: "working",
+			working: true,
+			attentionReason: { kind: "asks", detail: "Which database?" },
+			attentionAt: 100,
+		});
+		let events = store.activity(id, { limit: 100 }).filter((event) => event.text.includes("chat asked a question"));
+		assert.equal(events.length, 1);
+		assert.match(events[0]!.text, /Which database/);
+		assert.equal(store.tasks(id)[0]!.status, "in_progress");
+		f.change({ runningJobs: [backgroundJob] });
+		events = store.activity(id, { limit: 100 }).filter((event) => event.text.includes("chat asked a question"));
+		assert.equal(events.length, 1, "job updates cannot repeat the same question");
+		const notice = store.prepareNotice(id, "lead", Date.now() + 30_000);
+		assert.match(notice!.content, /pending question/);
+		assert.match(notice!.content, /targetSessionId/);
+		f.change({ attentionReason: undefined, attentionAt: undefined });
+		f.change({ attentionReason: { kind: "asks", detail: "Which checks?" }, attentionAt: 200 });
+		assert.equal(
+			store.activity(id, { limit: 100 }).filter((event) => event.text.includes("chat asked a question")).length,
+			2,
+		);
+	} finally {
+		await f.delivery.stop();
+		store.close();
+	}
+});
+
 test("mission notices omit events about the coordinator chat but retain other chats", async (t) => {
 	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
 	const { store, id } = setup();

@@ -334,6 +334,7 @@ export function runKernelWorker(): void {
 						command.event,
 						admissionSpan?.carrier() ?? command.trace,
 						command.resumeHeld,
+						command.answerQuestionId,
 					);
 					await send({ type: "accepted", requestId: command.requestId, ...delivery });
 					admissionSpan?.end();

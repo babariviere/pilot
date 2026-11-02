@@ -1316,13 +1316,24 @@ export class KernelSession {
 		event?: import("@pilot/protocol").ChatEventSummary,
 		trace?: TraceCarrier,
 		resumeHeld = false,
+		answerQuestionId?: number,
 	): Promise<{ delivery: "delivered" | "queued" | "not_started"; reason?: string } | undefined> {
 		// Reserve admission before serialization yields, so model changes and idle-only sends cannot race preparation.
 		if (this.#closing || this.#changingModel || this.#moving || (onlyIfIdle && this.#admissions))
 			return Promise.reject(new ConversationBusy(this.conversation.id));
 		this.#admissions++;
 		return this.serializeInput(() =>
-			this.submitInput(requestId, content, mode, onlyIfIdle, reportDelivery, event, trace, resumeHeld),
+			this.submitInput(
+				requestId,
+				content,
+				mode,
+				onlyIfIdle,
+				reportDelivery,
+				event,
+				trace,
+				resumeHeld,
+				answerQuestionId,
+			),
 		);
 	}
 
@@ -1335,6 +1346,7 @@ export class KernelSession {
 		event?: import("@pilot/protocol").ChatEventSummary,
 		trace?: TraceCarrier,
 		resumeHeld = false,
+		answerQuestionId?: number,
 	): Promise<{ delivery: "delivered" | "queued" | "not_started"; reason?: string } | undefined> {
 		const traced = trace ? this.adapter.beginInteraction(requestId, trace) : false;
 		try {
@@ -1348,6 +1360,7 @@ export class KernelSession {
 					requestId,
 					content: prepared,
 					mode,
+					...(answerQuestionId !== undefined ? { answerQuestionId } : {}),
 					...(event ? { entry: { kind: "pi.user", data: { event: { ...event } } } } : {}),
 				},
 				context,
@@ -1753,7 +1766,7 @@ export class KernelSession {
 					await this.#origins.events(
 						recent
 							? await Promise.all(
-									events.map((event) => event.type === "snapshot" ? displaySnapshot(event) : event),
+									events.map((event) => (event.type === "snapshot" ? displaySnapshot(event) : event)),
 								)
 							: events,
 					),

@@ -1299,6 +1299,7 @@ export class MissionService {
 				"phase",
 				"start",
 				"send",
+				"answer",
 				"status",
 				"bindPr",
 				"unbindPr",
@@ -1433,21 +1434,28 @@ export class MissionService {
 					subscriptionUsage: this.sessions.subscriptionUsageSnapshot(),
 				};
 			}
+			case "answer":
 			case "send": {
 				if (typeof args.targetSessionId !== "string" || !args.targetSessionId.trim())
-					throw new Error("send requires targetSessionId");
+					throw new Error(`${action} requires targetSessionId`);
 				if (this.store.missionOf(args.targetSessionId) !== missionId)
 					throw new Conflict("That chat is not in this mission");
-				if (typeof args.message !== "string" || !args.message.trim()) throw new Error("send requires message");
+				if (typeof args.message !== "string" || !args.message.trim()) throw new Error(`${action} requires message`);
+				if (action === "answer" && (!Number.isSafeInteger(args.questionId) || (args.questionId as number) <= 0))
+					throw new Error("answer requires questionId from status");
+				if (action === "answer" && args.targetSessionId === sessionId)
+					throw new Conflict("A coordinator cannot answer its own question");
 				if (args.mode !== undefined && args.mode !== "steer" && args.mode !== "followUp")
 					throw new Error("mode must be steer or followUp");
-				const mode = args.mode ?? "followUp";
+				const mode = action === "answer" ? "followUp" : (args.mode ?? "followUp");
 				// Coordinator messages reach the chat without appearing as the user's queued messages.
 				const result = await this.sessions.sendReported(
 					args.targetSessionId,
 					args.message,
 					`mission:send:from:${sessionId}:${missionId}:${randomUUID()}`,
 					mode,
+					false,
+					action === "answer" ? (args.questionId as number) : undefined,
 				);
 				return { sessionId: args.targetSessionId, sent: result.delivery !== "rejected", ...result };
 			}
@@ -1500,6 +1508,9 @@ export class MissionService {
 						...(!member.runningJobs?.length && member.outcome !== undefined ? { outcome: member.outcome } : {}),
 						...(member.outcomeAt !== undefined ? { outcomeAt: member.outcomeAt } : {}),
 						...(member.outcomeReason !== undefined ? { outcomeReason: member.outcomeReason } : {}),
+						...(member.attentionReason?.kind === "asks"
+							? { questionPending: true, question: member.attentionReason.detail }
+							: {}),
 						...(member.archivedAt !== undefined ? { archivedAt: member.archivedAt } : {}),
 						...(member.error !== undefined ? { error: member.error } : {}),
 						tasks: claimed.map((task) => ({ number: task.number, title: task.title, status: task.status })),
@@ -1508,9 +1519,23 @@ export class MissionService {
 				if (typeof target === "string") {
 					const member = members[0];
 					if (!member) throw new NotFound("Member chat not found");
+					const question = await this.sessions.pendingQuestion(target);
+					const lastAssistantReply = await this.sessions.lastAssistantReply(target, 1500);
+					if (
+						this.store.missionOf(sessionId) !== missionId ||
+						this.store.require(missionId).coordinatorSessionId !== sessionId ||
+						this.store.missionOf(target) !== missionId
+					)
+						throw new Conflict("Mission membership changed");
 					return {
 						subscriptionUsage: this.sessions.subscriptionUsageSnapshot(),
-						member: { ...member, lastAssistantReply: await this.sessions.lastAssistantReply(target, 1500) },
+						member: {
+							...member,
+							lastAssistantReply,
+							pendingQuestion: question
+								? { ...(question.data as object), questionId: Number(question.id) }
+								: null,
+						},
 					};
 				}
 				return { subscriptionUsage: this.sessions.subscriptionUsageSnapshot(), members };

@@ -1744,6 +1744,32 @@ export class MissionStore {
 		);
 	}
 
+	/** A live blocking question is not a completed run. Wake the lead without changing work state. */
+	recordMemberQuestion(session: SessionSummary): void {
+		const id = this.missionOf(session.id);
+		if (!id || this.require(id).coordinatorSessionId === session.id || session.archivedAt !== undefined) return;
+		this.transaction(() =>
+			this.event(
+				id,
+				"update",
+				`${session.title}: chat asked a question: ${session.attentionReason?.detail ?? "Read status for the pending question"}`,
+				{ sessionId: session.id },
+				{
+					wake: true,
+					urgent: true,
+					noticeSummaries: [
+						{
+							key: `chat:${session.id}:question`,
+							text: `Chat ${session.id} has a pending question. Read status with targetSessionId, then use answer if within approved mission scope.`,
+							state: "question",
+						},
+					],
+				},
+			),
+		);
+		this.changed(id);
+	}
+
 	/** Durable high-water mark prevents ready snapshots/restarts from announcing a completion twice. */
 	recordMemberCompletion(session: SessionSummary, recovering = false): void {
 		if (session.working || session.runningJobs?.length || !session.outcome || session.outcomeAt === undefined) return;

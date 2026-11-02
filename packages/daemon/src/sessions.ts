@@ -5690,6 +5690,7 @@ export class SessionManager {
 		requestId: string,
 		mode: DeliveryMode = "followUp",
 		resumeHeld = false,
+		answerQuestionId?: number,
 	): Promise<
 		({ delivery: "delivered" | "queued" } | { delivery: "rejected"; reason: string; error?: string }) & {
 			mode: DeliveryMode;
@@ -5701,7 +5702,18 @@ export class SessionManager {
 			const worker = this.workers.get(id);
 			if (worker?.state === "failed")
 				return { delivery: "rejected", mode, reason: "failed", error: worker.error ?? "Chat failed" };
-			await this.sendAdmitted(id, message, mode, requestId, true, false, undefined, resumeHeld);
+			await this.sendAdmitted(
+				id,
+				message,
+				mode,
+				requestId,
+				true,
+				false,
+				undefined,
+				resumeHeld,
+				false,
+				answerQuestionId,
+			);
 			if (this.sleepPause) return { delivery: "queued", mode };
 			const report = this.deliveryReports.get(requestId);
 			if (report)
@@ -5814,6 +5826,7 @@ export class SessionManager {
 		trace?: TraceCarrier,
 		resumeHeld = false,
 		explicitModelRecovery = false,
+		answerQuestionId?: number,
 	): Promise<void> {
 		const meta = this.require(id);
 		this.assertHistoryWritable(meta);
@@ -5824,6 +5837,9 @@ export class SessionManager {
 		if (transition) await transition.promise;
 		if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before sending a message");
 		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
+		if (answerQuestionId !== undefined) {
+			this.assertQuestionAnswerActor(id, requestId);
+		}
 		this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
 		// Diagnostics must never decide whether an input is admitted or acknowledged.
 		const observe = <T>(action: () => T): T | undefined => {
@@ -5886,6 +5902,7 @@ export class SessionManager {
 					mode,
 					...(report ? { reportDelivery: true } : {}),
 					...(resumeHeld ? { resumeHeld: true } : {}),
+					...(answerQuestionId !== undefined ? { answerQuestionId } : {}),
 				});
 			}
 			meta.updatedAt = Date.now();
@@ -7300,6 +7317,27 @@ export class SessionManager {
 			.finally(() => release(false));
 	}
 
+	private assertQuestionAnswerActor(id: string, requestId: string): void {
+		const [, sender, missionId] = /^mission:send:from:([\w-]{1,128}):([\w-]{1,128}):/.exec(requestId) ?? [];
+		const source = sender ? this.missions?.membership(sender) : undefined;
+		const target = this.missions?.membership(id);
+		if (
+			!source?.coordinator ||
+			!source.active ||
+			source.missionId !== missionId ||
+			missionId !== target?.missionId ||
+			sender === id
+		)
+			throw new CommandRejected("Only the current mission coordinator can answer a member question");
+	}
+
+	/** Passive current question read; never subscribes or starts a worker. */
+	async pendingQuestion(id: string) {
+		const view = await this.recentColdSnapshot(this.require(id));
+		const snapshot = view.events.find((event) => event.type === "snapshot");
+		return snapshot?.type === "snapshot" ? (snapshot.history?.question ?? null) : null;
+	}
+
 	private recentColdSnapshot(meta: SessionMeta): Promise<PersistedSessionView> {
 		// Do not reuse the legacy full-history cache, or fill one by opening a paged viewer.
 		const read = this.factories.snapshot
@@ -7747,6 +7785,8 @@ export class SessionManager {
 							continue;
 						}
 						try {
+							if (command.type === "input" && command.answerQuestionId !== undefined)
+								this.assertQuestionAnswerActor(id, command.requestId);
 							const followUp = meta.prFollowUp?.requestId === command.requestId;
 							const reviewThreads = followUp ? meta.prFollowUp?.reviewThreads : undefined;
 							// Taken before admission, so a push early in the follow-up's own turn still counts.

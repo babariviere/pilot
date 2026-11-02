@@ -81,6 +81,40 @@ test("question publication and legacy recovery fence automatic inbox entries ato
 	}
 });
 
+test("coordinator answers require the current ordinary question and preserve queue pause", async () => {
+	const f = await fixture();
+	try {
+		await f.session.commit(async (tx) => {
+			(await tx.doc(InboxDoc, f.id)).items = [];
+		}, context);
+		const publish = async (requestId: string, data = { question: "Which?" } as Record<string, unknown>) => {
+			await publishQuestionWithHeld(f.session, f.id, f.read, requestId, data as never, context);
+			return Number(
+				(await f.storage.scanEntries({ conversationId: f.id }, 100, undefined, context)).items.find(
+					(entry) => entry.kind === "pilot.question",
+				)!.id,
+			);
+		};
+		const first = await publish("question:first");
+		const reply = (answerQuestionId: number, requestId = "mission:send:from:lead:mission:answer") =>
+			admitWithHeld(f.session, f.id, { requestId, answerQuestionId, content: "SQLite", mode: "followUp" }, context);
+		await assert.rejects(reply(first, "native:jobs.result:answer"), /Invalid coordinator/);
+		await pauseInputs(f.session, f.id, context);
+		assert.equal((await reply(first))?.held, true);
+		assert.equal((await f.session.snapshot(HeldInputsDoc, f.id, context))?.questionPending, false);
+		assert.equal((await f.session.snapshot(HeldInputsDoc, f.id, context))?.paused, true);
+		const second = await publish("question:second");
+		await assert.rejects(reply(first, "mission:send:from:lead:mission:stale"), /no longer pending/);
+		await reply(second, "mission:send:from:lead:mission:second");
+		const database = await publish("question:database", { question: "Allow?", databaseAccess: { id: "request" } });
+		await assert.rejects(reply(database, "mission:send:from:lead:mission:database"), /ordinary question/);
+		await holdOnStop(f.session, f.id, f.read, context);
+		await assert.rejects(reply(database, "mission:send:from:lead:mission:stopped"), /no longer pending/);
+	} finally {
+		await f.session.close(context);
+	}
+});
+
 test("an answer accepted during queue pause resolves the question without bypassing pause", async () => {
 	const f = await fixture();
 	try {

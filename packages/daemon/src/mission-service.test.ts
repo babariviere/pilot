@@ -2625,6 +2625,8 @@ async function fixture(
 		else delete meta.coordinatorView;
 	});
 	const store = new MissionStore(":memory:");
+	// Fake workers have no durable transcript to read.
+	t.mock.method(sessions, "pendingQuestion", async () => null);
 	t.mock.method(sessions, "selectTaskModel", async (_cwd: string, model?: string, thinking?: string) => ({
 		model: model ?? "test/model",
 		thinking: thinking ?? "medium",
@@ -5927,6 +5929,85 @@ test("coordinator start reuses Start chat with task IDs or numbers and validates
 	f.store.update(mission.id, { status: "active" });
 	const second = (await f.service.call(coordinator.id, "start", { id: taskId })) as SessionSummary;
 	assert.equal(f.store.resolveTask(mission.id, "2").sessionId, second.id);
+});
+
+test("coordinator answers expose pending questions and use member-scoped attributed delivery", async (t) => {
+	const f = await fixture(t);
+	const coordinator = await f.spawn();
+	const member = await f.spawn();
+	const outsider = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Questions",
+		fromSessionId: coordinator.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	const pending = {
+		id: 42,
+		kind: "pilot.question",
+		data: { question: "Which database?", options: [{ label: "SQLite" }] },
+	};
+	t.mock.method(f.sessions, "pendingQuestion", async () => pending as never);
+	t.mock.method(f.sessions, "lastAssistantReply", async () => "Asking.");
+	const status = (await f.service.call(coordinator.id, "status", { targetSessionId: member.id })) as {
+		member: { pendingQuestion: unknown };
+	};
+	assert.deepEqual(status.member.pendingQuestion, { questionId: 42, ...pending.data });
+	for (const questionId of [undefined, 0, -1, "42", 1.5])
+		await assert.rejects(
+			f.service.call(coordinator.id, "answer", { targetSessionId: member.id, questionId, message: "SQLite" }),
+			/requires questionId/,
+		);
+	await assert.rejects(
+		f.service.call(member.id, "answer", { targetSessionId: member.id, questionId: 42, message: "SQLite" }),
+		/Only the mission coordinator/,
+	);
+	await assert.rejects(
+		f.service.call(coordinator.id, "answer", { targetSessionId: outsider.id, questionId: 42, message: "SQLite" }),
+		/not in this mission/,
+	);
+	await assert.rejects(
+		f.service.call(coordinator.id, "answer", { targetSessionId: coordinator.id, questionId: 42, message: "SQLite" }),
+		/own question/,
+	);
+	const result = await f.service.call(coordinator.id, "answer", {
+		targetSessionId: member.id,
+		questionId: 42,
+		message: "SQLite",
+	});
+	assert.deepEqual(result, { sessionId: member.id, sent: true, delivery: "delivered", mode: "followUp" });
+	const command = f.workers
+		.get(member.id)!
+		.requests.find((command) => command.type === "input" && command.content === "SQLite");
+	assert.ok(command?.type === "input");
+	assert.equal(command.answerQuestionId, 42);
+	assert.ok(command.requestId.startsWith(`mission:send:from:${coordinator.id}:${mission.id}:`));
+	// Recheck authority after persistence, not only at the service entry point.
+	const save = f.sessions["save"].bind(f.sessions);
+	let revoked = false;
+	t.mock.method(
+		f.sessions,
+		"save" as never,
+		(async (...args: Parameters<typeof save>) => {
+			await save(...args);
+			if (!revoked && args[0].id === member.id) {
+				revoked = true;
+				f.service.leave(member.id);
+			}
+		}) as never,
+	);
+	const rejected = (await f.service.call(coordinator.id, "answer", {
+		targetSessionId: member.id,
+		questionId: 42,
+		message: "Must not deliver",
+	})) as { delivery: string };
+	assert.equal(rejected.delivery, "rejected");
+	assert.ok(
+		!f.workers
+			.get(member.id)!
+			.requests.some((command) => command.type === "input" && command.content === "Must not deliver"),
+	);
 });
 
 test("coordinator send admits follow-ups only to member chats and propagates delivery errors", async (t) => {

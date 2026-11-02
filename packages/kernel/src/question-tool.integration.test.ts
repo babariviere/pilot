@@ -222,6 +222,63 @@ test("a direct ask_user suspends until an explicit reply reaches its tool result
 	assert.equal((await settled(completions, 1))?.outcome, "done");
 });
 
+test("coordinator answers resume the exact blocked tool and retain coordinator provenance", {
+	timeout: 20_000,
+}, async (t) => {
+	const { session, faux, effects } = await open(t, "coordinator-question");
+	faux.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall("codemode", {
+				code: 'const answer = await tools.ask_user({question:"Which checks?"}); await tools.question_effect({value:answer});',
+			}),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("Answered."),
+		fauxAssistantMessage("Notice handled."),
+	]);
+	await session.submit("ask", "Ask", "followUp");
+	await questionPublished(session);
+	const entries = (await session.conversation.context(BACKGROUND_CONTEXT)).entries;
+	const questionId = Number(entries.find((entry) => entry.kind === QUESTION_ENTRY)!.id);
+	await session.submit("mission:send:from:lead:mission:notice", "Not an answer", "steer");
+	assert.deepEqual(effects, []);
+	await assert.rejects(
+		session.submit(
+			"mission:send:from:lead:mission:stale",
+			"Wrong",
+			"followUp",
+			false,
+			true,
+			undefined,
+			undefined,
+			false,
+			questionId + 1,
+		),
+		/no longer pending/,
+	);
+	const requestId = "mission:send:from:lead:mission:answer";
+	await session.submit(requestId, "Tests", "followUp", false, true, undefined, undefined, false, questionId);
+	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+	assert.deepEqual(effects, ["Tests"]);
+	await session.submit(requestId, "Tests", "followUp", false, true, undefined, undefined, false, questionId);
+	assert.deepEqual(effects, ["Tests"], "accepted reply retries never replay effects");
+	const events: AgentEvent[] = [];
+	await session.watch("answer-provenance", (batch) => {
+		events.push(...batch);
+	});
+	const snapshot = events.find((event) => event.type === "snapshot");
+	assert.ok(
+		snapshot?.type === "snapshot" &&
+			snapshot.entries.some(
+				(entry) =>
+					entry.kind === "pi.user" &&
+					(entry as unknown as { origin?: string; sourceSessionId?: string }).origin === "coordinator" &&
+					(entry as unknown as { sourceSessionId?: string }).sourceSessionId === "lead",
+			),
+	);
+	await session.unwatch("answer-provenance");
+});
+
 test("codemode code after await ask_user runs only after reply and receives the answer", {
 	timeout: 20_000,
 }, async (t) => {
@@ -434,10 +491,11 @@ test("script deadline cancels the await, leaves the question open, and cannot re
 	timeout: 20_000,
 }, async (t) => {
 	const f = await open(t, "deadline-question");
+	// Allow cold codemode setup/publication; this checks cancellation semantics, not startup speed.
 	f.faux.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall("codemode", {
-				code: '// @options: {"timeout_ms": 500}\nawait tools.question_effect({value:"before"}); await tools.ask_user({question:"Continue?"}); await tools.question_effect({value:"after"});',
+				code: '// @options: {"timeout_ms": 2000}\nawait tools.question_effect({value:"before"}); await tools.ask_user({question:"Continue?"}); await tools.question_effect({value:"after"});',
 			}),
 			{ stopReason: "toolUse" },
 		),

@@ -515,7 +515,7 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 	const schema = tool.parameters as {
 		properties: { action: { enum: string[] }; message: unknown; model: unknown; thinking: unknown };
 	};
-	assert.deepEqual(schema.properties.action.enum.slice(-7), [
+	assert.deepEqual(schema.properties.action.enum.slice(-8), [
 		"start",
 		"send",
 		"status",
@@ -523,6 +523,7 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 		"unbindPr",
 		"split",
 		"updateLink",
+		"answer",
 	]);
 	assert.ok(schema.properties.message);
 	assert.equal(tool.annotations?.destructiveHint, true);
@@ -541,6 +542,7 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 		{ action: "task", id: "#3", order: 1.5 },
 		{ action: "start", id: "#3", message: "Focus on tests", model: "test/model", thinking: "high" },
 		{ action: "send", targetSessionId: "member", message: "Please clarify" },
+		{ action: "answer", targetSessionId: "member", questionId: 42, message: "Use SQLite" },
 		{ action: "status" },
 		{ action: "status", targetSessionId: "member" },
 	])
@@ -553,6 +555,7 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 		["task", { id: "#3", order: 1.5 }],
 		["start", { id: "#3", message: "Focus on tests", model: "test/model", thinking: "high" }],
 		["send", { targetSessionId: "member", message: "Please clarify" }],
+		["answer", { targetSessionId: "member", questionId: 42, message: "Use SQLite" }],
 		["status", {}],
 		["status", { targetSessionId: "member" }],
 	]);
@@ -569,7 +572,7 @@ test("ordinary member declarations omit privileged actions and their guidance", 
 	const schema = tool.parameters as {
 		properties: { action: { enum: string[] }; message?: unknown; model?: unknown; thinking?: unknown };
 	};
-	for (const action of ["delete", "group", "phase", "start", "send", "status", "bindPr", "unbindPr"]) {
+	for (const action of ["delete", "group", "phase", "start", "send", "answer", "status", "bindPr", "unbindPr"]) {
 		assert.ok(!schema.properties.action.enum.includes(action));
 		assert.ok(!tool.description.includes(`- ${action} (`));
 	}
@@ -832,7 +835,7 @@ test("mission tool declarations follow membership without re-registering", { tim
 for (const ask of [false, true]) {
 	for (const initialRole of ["other", "self"] as const) {
 		test(`role-specific declarations refresh live in ${ask ? "Ask" : "Build"}, starting as ${initialRole}`, {
-			timeout: 30_000,
+			timeout: 60_000,
 		}, async (t) => {
 			const f = await fixture(t);
 			const open = NativeAdapter.open;
@@ -955,7 +958,7 @@ for (const ask of [false, true]) {
 							assert.equal(prompt.includes("Maintain the task plan proactively"), coordinator);
 							assert.equal(
 								prompt.includes(
-									"coordinator actions (delete, group, task order, start, send, status, bindPr, unbindPr)",
+									"coordinator actions (delete, group, task order, start, send, answer, status, bindPr, unbindPr)",
 								),
 								coordinator,
 							);

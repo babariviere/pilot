@@ -213,7 +213,9 @@ test("coordinator actions are named only for the coordinator and detailed in the
 	for (const coordinator of ["self", "other", "user"] as const) {
 		const prompt = missionPrompt({ ...mission, coordinator });
 		assert.equal(
-			prompt.includes("coordinator actions (delete, group, task order, start, send, status, bindPr, unbindPr)"),
+			prompt.includes(
+				"coordinator actions (delete, group, task order, start, send, answer, status, bindPr, unbindPr)",
+			),
 			coordinator === "self",
 		);
 		assert.match(prompt, /dropped when no longer needed/);
