@@ -77,19 +77,45 @@ impl Server {
         }
         match self.state {
             Status::Connected => "Reported connected",
-            Status::NeedsSignIn if self.can_sign_in => "Needs sign-in",
-            Status::NeedsSignIn => "Needs sign-in · use pi mcp login in a terminal",
+            Status::NeedsSignIn => "Needs sign-in",
             Status::Failed => "Connection failed",
             Status::Disabled => "Disabled",
             Status::Unknown => "Unknown",
         }
     }
-    pub(crate) fn tone(&self) -> Tone {
-        match (self.checked_at, &self.state) {
-            (Some(_), Status::NeedsSignIn) => Tone::Warning,
-            (Some(_), Status::Failed) => Tone::Error,
-            _ => Tone::Quiet,
+    /// Needs sign-in, failed, or a sign-in is waiting: listed first, under Needs you.
+    pub(crate) fn needs_you(&self) -> bool {
+        self.sign_in.as_ref().is_some_and(SignIn::waiting)
+            || (self.checked_at.is_some()
+                && matches!(self.state, Status::NeedsSignIn | Status::Failed))
+    }
+    /// The short right-aligned status word of a row.
+    pub(crate) fn status(&self) -> (String, Tone) {
+        if self.sign_in.as_ref().is_some_and(SignIn::waiting) {
+            return ("Waiting for your browser…".into(), Tone::Normal);
         }
+        if self.checked_at.is_none() {
+            return ("Not checked yet".into(), Tone::Quiet);
+        }
+        match self.state {
+            Status::Connected => (
+                match self.tools {
+                    Some(1) => "1 tool".into(),
+                    Some(n) => format!("{n} tools"),
+                    None => "Connected".into(),
+                },
+                Tone::Quiet,
+            ),
+            Status::NeedsSignIn => ("Needs sign-in".into(), Tone::Warning),
+            Status::Failed => ("Connection failed".into(), Tone::Error),
+            Status::Disabled => ("Off".into(), Tone::Quiet),
+            Status::Unknown => ("Unknown".into(), Tone::Quiet),
+        }
+    }
+    /// Needs sign-in that Local cannot run in the browser.
+    pub(crate) fn hint(&self) -> Option<&'static str> {
+        (self.checked_at.is_some() && self.state == Status::NeedsSignIn && !self.can_sign_in)
+            .then_some("Sign in with pi mcp login in a terminal.")
     }
     pub(crate) fn action(&self) -> Option<RowAction> {
         if let Some(sign_in) = self.sign_in.as_ref().filter(|s| s.waiting()) {
@@ -113,7 +139,8 @@ impl Server {
         let s = self.sign_in.as_ref()?;
         let at = timestamp(s.finished_at.unwrap_or(s.started_at));
         Some(match s.state {
-            SignInStatus::Waiting => ("Waiting for sign-in in your browser…".into(), Tone::Normal),
+            // The row's status already says it is waiting.
+            SignInStatus::Waiting => return None,
             SignInStatus::Done => (format!("Signed in {at}"), Tone::Success),
             // A later working connection supersedes an old failure; Details keeps it.
             SignInStatus::Failed if self.state == Status::Connected => return None,
@@ -148,7 +175,8 @@ impl Server {
             "Not available"
         };
         let mut text = format!(
-            "Transport: {transport}\nLast check: {checked}\nTools: {tools}\nAccount: not reported\nBrowser sign-in: {browser}"
+            "State: {}\nTransport: {transport}\nLast check: {checked}\nTools: {tools}\nAccount: not reported\nBrowser sign-in: {browser}",
+            self.label()
         );
         if let Some(s) = &self.sign_in {
             let again = if s.again == Some(true) {

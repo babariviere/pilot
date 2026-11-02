@@ -2,16 +2,19 @@
 //! no account, credential or configuration owner.
 use crate::{
     LocalOptions,
-    mcp_status::{RowAction, Server, Snapshot, State, timestamp},
+    mcp_status::{RowAction, Server, Snapshot, State, Status, timestamp},
     mcp_status_reader::{Act, Outcome, Reader, Request, perform},
-    ui::{self, Action, Notice, Text, Tone},
+    state_mark::{self, Glyph, Mark},
+    ui::{self, Action, IconRole, Notice, Space, Text, Tone},
 };
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Task,
     TestSupportExt, Window,
     base::SelectableText,
     component::{ActiveTheme, Disableable, StyledExt},
-    div, px,
+    div,
+    prelude::FluentBuilder,
+    px,
 };
 use std::sync::Arc;
 
@@ -238,22 +241,48 @@ impl Connections {
     fn note_for(&self, server: Option<&str>) -> Option<&Note> {
         self.note.as_ref().filter(|n| n.server.as_deref() == server)
     }
-    fn row(&self, server: &Server, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn row(&self, server: &Server, cx: &mut Context<Self>) -> impl IntoElement {
         let name = server.name.clone();
         let expanded = self.details.as_ref() == Some(&name);
         let busy = self.pending.is_some();
         let mine = self.pending.as_ref().and_then(Act::server) == Some(name.as_str());
         let id = |part: &str| SharedString::from(format!("mcp-{part}-{name}"));
-        let mut text = div()
-            .v_flex()
-            .flex_1()
+        let muted = cx.theme().muted_foreground;
+        let (status, tone) = server.status();
+        let glyph = if server.sign_in.as_ref().is_some_and(|s| s.waiting()) {
+            Some(Glyph::Circle {
+                faint: false,
+                filled: false,
+            })
+        } else if server.checked_at.is_none() {
+            None
+        } else {
+            match server.state {
+                Status::NeedsSignIn => Some(Glyph::Mark(Mark::NeedsYou)),
+                Status::Failed => Some(Glyph::Mark(Mark::Failed)),
+                _ => None,
+            }
+        };
+        let mut line = div()
+            .h_flex()
+            .items_center()
+            .w_full()
             .min_w_0()
-            .gap_1()
+            .gap_2()
+            .min_h(px(36.))
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(state_mark::SLOT))
+                    .flex()
+                    .justify_center()
+                    .children(glyph.map(|g| state_mark::glyph(g, cx))),
+            )
             .child(
                 div()
                     .id(id("text"))
                     .test_support()
-                    .w_full()
+                    .flex_1()
                     .min_w_0()
                     .child(SelectableText::new(
                         id("name"),
@@ -261,82 +290,12 @@ impl Connections {
                     )),
             )
             .child(
-                ui::text(Text::Caption, server.label())
+                ui::text(Text::Caption, SharedString::from(status))
                     .id(id("state"))
                     .test_support()
-                    .text_color(server.tone().color(cx)),
-            );
-        if let Some((line, tone)) = server.sign_in_line() {
-            text = text.child(
-                ui::text(Text::Caption, SharedString::from(line))
-                    .id(id("sign-in"))
-                    .test_support()
+                    .flex_none()
                     .text_color(tone.color(cx)),
             );
-        }
-        if let Some(problem) = &server.problem {
-            text = text.child(div().text_size(px(Text::Caption.size())).child(
-                SelectableText::new(id("problem"), SharedString::from(problem.clone())),
-            ));
-        }
-        if let Some(note) = self.note_for(Some(&name)) {
-            text = text.child(
-                div()
-                    .id(id("note"))
-                    .test_support()
-                    .child(Notice::new(note.text).tone(note.tone)),
-            );
-        }
-        let details_name = name.clone();
-        text = text.child(
-            ui::action(
-                id("details"),
-                if expanded { "Hide details" } else { "Details" },
-                Action::Quiet,
-            )
-            .self_start()
-            .accessibility_label(SharedString::from(format!("Details for {name}")))
-            .on_click(cx.listener(move |v, _, _, cx| {
-                v.details = if expanded {
-                    None
-                } else {
-                    Some(details_name.clone())
-                };
-                cx.notify();
-            })),
-        );
-        if expanded {
-            text = text.child(div().id("mcp-detail-text").test_support().child(
-                SelectableText::new("mcp-detail-content", SharedString::from(server.details())),
-            ));
-            if server.can_sign_in_again() {
-                let act = Act::SignIn {
-                    server: name.clone(),
-                    again: true,
-                };
-                text = text.child(
-                    ui::action(id("sign-in-again"), "Sign in again", Action::Quiet)
-                        .self_start()
-                        .tooltip("Opens your browser to sign in with another account or scope")
-                        .accessibility_label(SharedString::from(format!("Sign in again to {name}")))
-                        .disabled(busy)
-                        .loading(
-                            mine && matches!(self.pending, Some(Act::SignIn { again: true, .. })),
-                        )
-                        .on_click(cx.listener(move |v, _, _, cx| v.run(act.clone(), cx))),
-                );
-            }
-        }
-        let mut row = div()
-            .id(id("row"))
-            .test_support()
-            .h_flex()
-            .items_start()
-            .w_full()
-            .min_w_0()
-            .gap_3()
-            .py_3()
-            .child(text);
         if let Some(action) = server.action() {
             let (label, role, act, help) = match action {
                 RowAction::SignIn => (
@@ -349,7 +308,7 @@ impl Connections {
                     "Opens your browser to sign in",
                 ),
                 RowAction::Cancel(started_at) => (
-                    "Cancel sign-in",
+                    "Cancel",
                     Action::Quiet,
                     Act::Cancel {
                         server: name.clone(),
@@ -366,7 +325,7 @@ impl Connections {
                     "Asks Local to connect to this server again",
                 ),
             };
-            row = row.child(
+            line = line.child(
                 ui::action(id("action"), label, role)
                     .flex_none()
                     .tooltip(help)
@@ -376,50 +335,208 @@ impl Connections {
                     .on_click(cx.listener(move |v, _, _, cx| v.run(act.clone(), cx))),
             );
         }
+        let details_name = name.clone();
+        line = line.child(
+            ui::icon_action(
+                id("details"),
+                SharedString::from(if expanded {
+                    format!("Hide details for {name}")
+                } else {
+                    format!("Details for {name}")
+                }),
+                if expanded {
+                    IconRole::Collapse
+                } else {
+                    IconRole::Expand
+                },
+                Action::Quiet,
+            )
+            .flex_none()
+            .on_click(cx.listener(move |v, _, _, cx| {
+                v.details = if expanded {
+                    None
+                } else {
+                    Some(details_name.clone())
+                };
+                cx.notify();
+            })),
+        );
+        // Everything below the line aligns with the name.
+        let mut more = div()
+            .v_flex()
+            .min_w_0()
+            .gap_1()
+            .pl(px(state_mark::SLOT + Space::CONTROL))
+            .text_size(px(Text::Caption.size()));
+        let mut extra = false;
+        if let Some((text, tone)) = server.sign_in_line() {
+            extra = true;
+            more = more.child(
+                ui::text(Text::Caption, SharedString::from(text))
+                    .id(id("sign-in"))
+                    .test_support()
+                    .text_color(tone.color(cx)),
+            );
+        }
+        if let Some(hint) = server.hint() {
+            extra = true;
+            more = more.child(ui::text(Text::Caption, hint).text_color(muted));
+        }
+        if let Some(problem) = &server.problem {
+            extra = true;
+            more = more.child(div().text_color(muted).child(SelectableText::new(
+                id("problem"),
+                SharedString::from(problem.clone()),
+            )));
+        }
+        if let Some(note) = self.note_for(Some(&name)) {
+            extra = true;
+            more = more.child(
+                ui::text(Text::Caption, note.text)
+                    .id(id("note"))
+                    .test_support()
+                    .text_color(note.tone.color(cx)),
+            );
+        }
+        if expanded {
+            extra = true;
+            more = more.child(
+                div()
+                    .id("mcp-detail-text")
+                    .test_support()
+                    .pt_1()
+                    .text_color(muted)
+                    .child(SelectableText::new(
+                        "mcp-detail-content",
+                        SharedString::from(server.details()),
+                    )),
+            );
+            if server.can_sign_in_again() {
+                let act = Act::SignIn {
+                    server: name.clone(),
+                    again: true,
+                };
+                more = more.child(
+                    ui::action(id("sign-in-again"), "Sign in again…", Action::Quiet)
+                        .self_start()
+                        .tooltip("Opens your browser to sign in with another account or scope")
+                        .accessibility_label(SharedString::from(format!("Sign in again to {name}")))
+                        .disabled(busy)
+                        .loading(
+                            mine && matches!(self.pending, Some(Act::SignIn { again: true, .. })),
+                        )
+                        .on_click(cx.listener(move |v, _, _, cx| v.run(act.clone(), cx))),
+                );
+            }
+        }
         div()
+            .id(id("row"))
+            .test_support()
             .v_flex()
             .w_full()
-            .child(ui::rule(window, cx))
-            .child(row)
+            .min_w_0()
+            .pb(px(if extra { 8. } else { 0. }))
+            .child(line)
+            .when(extra, |d| d.child(more))
+    }
+    fn group(
+        &self,
+        id: &'static str,
+        label: String,
+        servers: &[&Server],
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let mut group = div()
+            .id(id)
+            .test_support()
+            .v_flex()
+            .w_full()
+            .min_w_0()
+            .child(
+                ui::text(Text::Caption, SharedString::from(label))
+                    .font_semibold()
+                    .text_color(cx.theme().muted_foreground)
+                    .pb_1(),
+            );
+        for (i, server) in servers.iter().enumerate() {
+            if i > 0 {
+                group = group.child(ui::rule(window, cx));
+            }
+            group = group.child(self.row(server, cx));
+        }
+        group
     }
 }
 impl Render for Connections {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let muted = cx.theme().muted_foreground;
         let checking = self.state.snapshot.as_ref().is_some_and(|s| s.checking);
         let check_pending = matches!(self.pending, Some(Act::Check { server: None }));
-        let mut controls = div()
+        let last_check = self
+            .state
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.servers.iter().filter_map(|s| s.checked_at).max());
+        let meta = if checking {
+            "Local · checking…".to_owned()
+        } else if let Some(at) = last_check {
+            format!("Local · last checked {}", timestamp(at))
+        } else {
+            "Local · global Pi servers".to_owned()
+        };
+        let refresh_help = match self.state.read_at {
+            Some(at) => format!(
+                "Refresh · re-reads Local’s report (last read {}). Nothing is checked.",
+                timestamp(at)
+            ),
+            None => "Refresh · re-reads Local’s report. Nothing is checked.".to_owned(),
+        };
+        let header = div()
             .h_flex()
-            .flex_wrap()
-            .items_center()
-            .gap_2()
+            .items_start()
+            .justify_between()
+            .w_full()
+            .min_w_0()
+            .gap_3()
             .child(
-                ui::action("mcp-check", "Check now", Action::Quiet)
-                    .tooltip("Asks Local to connect to every server again. Local process servers may start.")
-                    .disabled(self.pending.is_some() || checking || self.state.snapshot.is_none())
-                    .loading(check_pending)
-                    .on_click(cx.listener(|v, _, _, cx| v.run(Act::Check { server: None }, cx))),
+                ui::header("mcp-title", "MCP connections", Text::Title).min_w_0().child(
+                    ui::text(Text::Caption, SharedString::from(meta))
+                        .id(if checking { "mcp-checking" } else { "mcp-meta" })
+                        .test_support()
+                        .text_color(muted),
+                ),
             )
             .child(
-                ui::action("mcp-refresh", "Refresh", Action::Quiet)
-                    .tooltip("Re-reads Local’s last report. Nothing is checked.")
-                    .disabled(self.state.busy)
-                    .on_click(cx.listener(|v, _, _, cx| v.load(cx))),
+                div()
+                    .h_flex()
+                    .flex_none()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        ui::icon_action("mcp-refresh", "Refresh", IconRole::Retry, Action::Quiet)
+                            .tooltip(SharedString::from(refresh_help))
+                            .loading(self.state.busy)
+                            .disabled(self.state.busy)
+                            .on_click(cx.listener(|v, _, _, cx| v.load(cx))),
+                    )
+                    .child(
+                        ui::action("mcp-check", "Check now", Action::Secondary)
+                            .tooltip("Asks Local to connect to every server again. Rows show the last reported check, not live chat connections.")
+                            .disabled(self.pending.is_some() || checking || self.state.snapshot.is_none())
+                            .loading(check_pending)
+                            .on_click(cx.listener(|v, _, _, cx| v.run(Act::Check { server: None }, cx))),
+                    ),
             );
-        if let Some(at) = self.state.read_at {
-            controls = controls.child(
-                ui::text(
-                    Text::Caption,
-                    SharedString::from(format!("Last read {}", timestamp(at))),
-                )
-                .text_color(cx.theme().muted_foreground),
-            );
-        }
-        let mut page = div().id("mcp-page").test_support().v_flex().w_full().min_w_0().gap_4()
-            .child(ui::header("mcp-title", "MCP connections", Text::Title)
-                .child(ui::text(Text::Body, "Local · global Pi servers")))
-            .child(ui::text(Text::Caption, "Last reported checks, not live chat connections. Refresh only reads the daemon’s report; Check now asks it to connect again.").text_color(cx.theme().muted_foreground))
-            .child(controls);
-        if self.state.busy {
+        let mut page = div()
+            .id("mcp-page")
+            .test_support()
+            .v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_5()
+            .child(header);
+        if self.state.busy && self.state.snapshot.is_none() {
             page = page.child(notice("mcp-loading", "Reading status…", Tone::Quiet));
         }
         if let Some(error) = self.state.error {
@@ -438,53 +555,64 @@ impl Render for Connections {
             }
             return page;
         };
-        if self.state.error.is_some() || self.state.busy {
+        if self.state.error.is_some() {
             page = page.child(notice(
                 "mcp-stale",
                 "Stale · showing the previous Local report, not current connection state.",
                 Tone::Quiet,
             ));
         }
-        if snapshot.checking {
-            page = page.child(notice(
-                "mcp-checking",
-                "The daemon reported a check in progress. Rows keep the previous results.",
-                Tone::Quiet,
-            ));
-        }
-        if let Some(n) = snapshot.config_problems.filter(|n| *n > 0) {
-            let problem = if n == 1 {
-                "1 MCP configuration entry needs attention.".into()
-            } else {
-                format!("{n} MCP configuration entries need attention.")
-            };
-            page = page.child(notice(
-                "mcp-config-problem",
-                SharedString::from(problem),
-                Tone::Warning,
-            ));
-        }
         if snapshot.servers.is_empty() {
-            return page.child(notice(
+            page = page.child(notice(
                 "mcp-empty",
                 "No MCP servers reported. This does not prove that no servers are configured.",
                 Tone::Quiet,
             ));
         }
-        let rows: Vec<_> = snapshot
-            .servers
-            .iter()
-            .map(|server| self.row(server, window, cx).into_any_element())
-            .collect();
-        page.child(
-            div()
-                .id("mcp-list")
-                .test_support()
-                .v_flex()
-                .w_full()
-                .min_w_0()
-                .children(rows),
-        )
+        let (needs, rest): (Vec<&Server>, Vec<&Server>) =
+            snapshot.servers.iter().partition(|s| s.needs_you());
+        if !needs.is_empty() {
+            page = page.child(self.group("mcp-needs", "Needs you".into(), &needs, window, cx));
+        }
+        if !rest.is_empty() {
+            let label = if !needs.is_empty() {
+                "Other"
+            } else if rest
+                .iter()
+                .all(|s| s.state == Status::Connected && s.checked_at.is_some())
+            {
+                "Connected"
+            } else {
+                "Servers"
+            };
+            let label = format!("{label} · {}", rest.len());
+            page = page.child(self.group("mcp-list", label, &rest, window, cx));
+        }
+        if let Some(n) = snapshot.config_problems.filter(|n| *n > 0) {
+            let text = if n == 1 {
+                "1 entry in mcp.json isn’t valid · run pi mcp list".to_owned()
+            } else {
+                format!("{n} entries in mcp.json aren’t valid · run pi mcp list")
+            };
+            page = page.child(
+                div()
+                    .id("mcp-config-problem")
+                    .test_support()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(state_mark::SLOT))
+                            .flex()
+                            .justify_center()
+                            .child(state_mark::glyph(Glyph::Mark(Mark::NeedsYou), cx)),
+                    )
+                    .child(ui::text(Text::Caption, SharedString::from(text)).text_color(muted)),
+            );
+        }
+        page
     }
 }
 fn notice(id: &'static str, text: impl Into<SharedString>, tone: Tone) -> impl IntoElement {

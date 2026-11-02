@@ -398,10 +398,30 @@ mod tests {
         v["servers"][1]["canSignIn"] = json!(false);
         let manual = &parse(v).unwrap().servers[1];
         assert_eq!(manual.action(), None);
-        assert!(manual.label().contains("pi mcp login"));
+        assert!(manual.hint().is_some_and(|h| h.contains("pi mcp login")));
+        assert!(manual.needs_you());
+        let s = parse(roster()).unwrap();
+        let needs: Vec<_> = s
+            .servers
+            .iter()
+            .filter(|s| s.needs_you())
+            .map(|s| s.name.as_str())
+            .collect();
+        assert_eq!(needs, ["Linear", "Local tools"]);
+        assert_eq!(s.servers[0].status().0, "12 tools");
+        assert_eq!(s.servers[4].status().0, "Off");
+        assert!(
+            s.servers[0]
+                .details()
+                .starts_with("State: Reported connected")
+        );
         let s = parse(with_sign_in("Linear", waiting(7))).unwrap();
         assert_eq!(s.servers[1].action(), Some(RowAction::Cancel(7)));
-        assert!(s.servers[1].sign_in_line().unwrap().0.contains("Waiting"));
+        assert!(s.servers[1].status().0.starts_with("Waiting"));
+        assert!(
+            s.servers[1].sign_in_line().is_none(),
+            "status already says waiting"
+        );
         assert!(s.servers[1].details().contains("expires"));
         // Done is reported by the sign-in itself, never inferred from a connected row.
         let done = json!({"state":"done","startedAt":7,"expiresAt":9,"finishedAt":8});

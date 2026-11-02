@@ -3,24 +3,32 @@
 **Settings → MCP connections** shows the existing Local daemon's global Pi
 roster and lets the user act on it through the daemon's own routes. Rows show the
 last reported check, not a continuously connected MCP client or a promise that a
-chat can use the server. Each row is the exact server name, its reported state,
-the latest reported browser sign-in and at most one action beside it:
+chat can use the server.
+
+The header is the title, one quiet line (`Local · last checked …`, or
+`checking…` while the daemon reports a check), a Refresh icon (only re-reads the
+report; its tooltip has the last read time) and **Check now** (asks the daemon to
+connect to every server). Servers that need the user (needs sign-in, failed, or a
+sign-in waiting) come first under **Needs you**; the rest follow under
+**Connected**, **Other** or **Servers** with a count. Each server is one line:
+the shared state mark (amber dot, red triangle, neutral circle while waiting),
+the exact selectable name, a short status (`12 tools`, `Needs sign-in`,
+`Waiting for your browser…`, `Off`) and at most one action:
 
 | Reported | Row action |
 | --- | --- |
-| Sign-in waiting | **Cancel sign-in**, bound to the observed `startedAt` |
+| Sign-in waiting | **Cancel**, bound to the observed `startedAt` |
 | Needs sign-in, browser sign-in available | **Sign in** |
-| Needs sign-in, no browser sign-in | none; the state says to use `pi mcp login` |
+| Needs sign-in, no browser sign-in | none; a second line says to use `pi mcp login` |
 | Connection failed | **Check again** (this server) |
 
-**Details** keeps the exact transport, check timestamp, tool count, browser
-sign-in availability and latest sign-in (including an old failure). Account
-identity is not in this contract, so it is explicitly not reported. **Sign in
-again** (replace a working sign-in) is an explicit choice inside Details of a
-connected row that supports browser sign-in. The header has **Check now** (ask
-the daemon to connect to every server) and **Refresh** (only re-read its report).
-Literal Unicode text remains selectable and copyable; every action is a Kit
-button reachable with Tab and Enter.
+A second line appears only when there is something to say: the latest sign-in
+outcome, the daemon's sanitized problem, or an unconfirmed/refused action note.
+The chevron (Tab, Enter) opens the details: reported state, transport, check
+timestamp, tool count, browser sign-in availability, latest sign-in (including an
+old failure) and `Account: not reported`. **Sign in again…** (replace a working
+sign-in) lives there for connected rows that support browser sign-in. Invalid
+`mcp.json` entries are one caption at the bottom (`run pi mcp list`).
 
 ## Contract audit
 

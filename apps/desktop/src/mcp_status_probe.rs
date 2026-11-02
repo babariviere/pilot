@@ -148,7 +148,9 @@ pub fn run_mcp_status_probe(cx: &mut HeadlessAppContext) {
                     "mcp-refresh",
                     "mcp-check",
                     "mcp-page",
+                    "mcp-needs",
                     "mcp-list",
+                    "mcp-config-problem",
                     action,
                 ] {
                     let b = w.find(id).bounds();
@@ -158,10 +160,14 @@ pub fn run_mcp_status_probe(cx: &mut HeadlessAppContext) {
                     );
                 }
                 let name = w.find("mcp-text-Linear").bounds();
+                let state = w.find("mcp-state-Linear").bounds();
+                let button = w.find(action).bounds();
                 assert!(
-                    name.right() <= w.find(action).bounds().left(),
-                    "action beside the row text"
+                    name.right() <= state.left() && state.right() <= button.left(),
+                    "name, status and action share one line"
                 );
+                // Needs you comes first.
+                assert!(w.find("mcp-needs").bounds().bottom() <= w.find("mcp-list").bounds().top());
             })
             .unwrap();
             capture(cx, h, format!("mcp-{width}-{mode:?}-roster"));
@@ -185,7 +191,10 @@ pub fn run_mcp_status_probe(cx: &mut HeadlessAppContext) {
                 )]
             );
             assert!(linear(cx, &v).sign_in.unwrap().waiting());
-            assert!(exists(cx, h, "mcp-sign-in-Linear"));
+            assert!(
+                !exists(cx, h, "mcp-sign-in-Linear"),
+                "the status word says waiting once"
+            );
             capture(cx, h, format!("mcp-{width}-{mode:?}-waiting"));
 
             // Leaving Settings neither cancels nor restarts the daemon's sign-in.
