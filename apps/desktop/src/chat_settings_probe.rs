@@ -352,6 +352,25 @@ pub fn run_chat_settings_probe(cx: &mut HeadlessAppContext) {
                 assert_eq!((s.count("GET"), s.count("PATCH")), (5, 3));
             }
 
+            // The host automation toggle uses the same CAS, without changing handoff.
+            tab_to(cx, settings, "chat-automations");
+            cx.update_window(settings, |_, w, cx| w.press("space", cx))
+                .unwrap();
+            until(cx, settings, &chats, idle);
+            assert!(server.state.lock().unwrap().automations);
+            assert!(server.state.lock().unwrap().auto_handoff);
+            cx.update_window(settings, |_, w, _| {
+                assert_eq!(w.find("chat-automations").checked(), Some(true));
+            })
+            .unwrap();
+            capture(cx, settings, &dir, name("automations-on"));
+            cx.update_window(settings, |_, w, cx| w.click("chat-automations", cx))
+                .unwrap();
+            until(cx, settings, &chats, idle);
+            assert!(!server.state.lock().unwrap().automations);
+            assert!(server.state.lock().unwrap().auto_handoff);
+            capture(cx, settings, &dir, name("automations-off"));
+
             // An older daemon without the route is Unavailable, never shown as off.
             let older = Server::start(Mode::Unsupported);
             let replaced =

@@ -102,7 +102,6 @@ import { DiagnosticRepairProjectStore, diagnosticRepairTitle, repairHost } from 
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import { githubRepository, linkedPullRequest, type PullRequestProblems } from "./github.ts";
-import { automationsEnabled } from "./hello.ts";
 import { LifecycleDiagnostics } from "./lifecycle-diagnostics.ts";
 import { LongJobTimers, longJobAttention } from "./long-jobs.ts";
 import { forkMainViewWorker, MainViewStore } from "./main-view.ts";
@@ -314,8 +313,10 @@ export interface SessionWorker {
 }
 
 export interface SessionManagerOptions {
-	/** Host runner, injectable for offline process tests. Absent unless hooks are enabled. */
+	/** Host runner, injectable for offline process tests. Admissions use the live host switch. */
 	actionRunner?: ActionRunner;
+	/** Reads the host-owned durable switch at each admission. */
+	automationsEnabled?: () => boolean;
 	/** One host-owned accounting store, shared with separate background completions. */
 	usageHistory?: UsageHistoryStore;
 	/** Agent database access. Defaults to the agent directory's config, except with injected test workers. */
@@ -1394,7 +1395,8 @@ export class SessionManager {
 	private readonly titleGenerating = new Set<string>();
 	private readonly shutdownSignal = new AbortController();
 	private readonly updateGate = new UpdateGate();
-	private readonly actionRunner?: ActionRunner;
+	private readonly actionRunner: ActionRunner;
+	private readonly automationsEnabled: () => boolean;
 	private runtimeInspecting?: Promise<import("./runtime-admission.ts").RuntimeBlocker[]>;
 	private updatePauseTimer?: ReturnType<typeof setTimeout>;
 	private readonly updatePausing = new Map<SessionWorker, { id: string; ready: boolean; error?: string }>();
@@ -1571,7 +1573,8 @@ export class SessionManager {
 		this.prFollowUpCiWaitMs = options.prFollowUpCiWaitMs ?? 60 * 60_000;
 		this.kernelRestartBackoffMs = options.kernelRestartBackoffMs ?? 15_000;
 		this.workerOptions = { startupTimeoutMs: options.startupTimeoutMs, commandTimeoutMs: options.commandTimeoutMs };
-		this.actionRunner = options.actionRunner ?? (automationsEnabled() ? new ActionRunner() : undefined);
+		this.automationsEnabled = options.automationsEnabled ?? (() => false);
+		this.actionRunner = options.actionRunner ?? new ActionRunner();
 		this.actionRunner?.onChange((id) => {
 			const meta = id ? this.metas.get(id) : undefined;
 			if (meta) this.emit(meta);
@@ -1652,7 +1655,7 @@ export class SessionManager {
 		signal?: AbortSignal,
 	): Promise<ActionResult> {
 		const meta = this.require(id);
-		if (!this.actionRunner) throw new ServiceUnavailable("Automations are disabled");
+		if (!this.automationsEnabled()) throw new ServiceUnavailable("Automations are disabled");
 		if (
 			this.closing ||
 			meta.archivedAt !== undefined ||

@@ -11,16 +11,21 @@ function patch(value: unknown): ChatSettingsPatch {
 	if (!value || typeof value !== "object" || Array.isArray(value))
 		throw new InvalidChatSettings("Invalid chat settings");
 	const input = value as Record<string, unknown>;
+	const keys = Object.keys(input);
 	if (
-		Object.keys(input).length !== 2 ||
-		!Object.hasOwn(input, "autoHandoff") ||
 		!Object.hasOwn(input, "expectedRevision") ||
-		typeof input.autoHandoff !== "boolean" ||
 		typeof input.expectedRevision !== "string" ||
-		!input.expectedRevision.length
+		!input.expectedRevision.length ||
+		keys.some((key) => !["autoHandoff", "automations", "expectedRevision"].includes(key)) ||
+		!keys.some((key) => key !== "expectedRevision") ||
+		keys.some((key) => key !== "expectedRevision" && typeof input[key] !== "boolean")
 	)
-		throw new InvalidChatSettings("Expected exactly autoHandoff and expectedRevision");
-	return { autoHandoff: input.autoHandoff, expectedRevision: input.expectedRevision };
+		throw new InvalidChatSettings("Expected boolean autoHandoff or automations and expectedRevision");
+	return {
+		...(Object.hasOwn(input, "autoHandoff") ? { autoHandoff: input.autoHandoff as boolean } : {}),
+		...(Object.hasOwn(input, "automations") ? { automations: input.automations as boolean } : {}),
+		expectedRevision: input.expectedRevision,
+	};
 }
 
 async function syncDirectory(directory: string): Promise<void> {
@@ -72,15 +77,16 @@ export class ChatSettingsService {
 				value = JSON.parse(await readFile(service.file, "utf8"));
 			} catch (error) {
 				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-				value = { schemaVersion: 1, autoHandoff: false, revision: randomUUID() };
+				value = { schemaVersion: 1, autoHandoff: false, automations: false, revision: randomUUID() };
 				await persist(service.file, value);
 			}
 			if (
 				value?.schemaVersion !== 1 ||
 				typeof value.autoHandoff !== "boolean" ||
+				(value.automations !== undefined && typeof value.automations !== "boolean") ||
 				typeof value.revision !== "string" ||
 				!value.revision.length ||
-				Object.keys(value).some((key) => !["schemaVersion", "autoHandoff", "revision"].includes(key))
+				Object.keys(value).some((key) => !["schemaVersion", "autoHandoff", "automations", "revision"].includes(key))
 			)
 				throw new Error("Unsupported chat settings");
 			await chmod(service.file, 0o600);
@@ -92,7 +98,7 @@ export class ChatSettingsService {
 				await handle.close();
 			}
 			await syncDirectory(dirname(service.file));
-			service.value = value;
+			service.value = { ...value, automations: value.automations ?? false };
 			service.available = true;
 		} catch {
 			// Never overwrite corrupt, inaccessible or newer settings with defaults.
@@ -106,13 +112,19 @@ export class ChatSettingsService {
 		return { ...this.value };
 	}
 
+	/** Fail closed when the durable value cannot be confirmed. */
+	automationsEnabled(): boolean {
+		return this.available && this.value?.automations === true;
+	}
+
 	update(input: unknown): Promise<ChatSettings> {
 		const next = patch(input);
 		const operation = this.saving.then(async () => {
 			const current = this.settings();
 			if (next.expectedRevision !== current.revision)
 				throw new Conflict("Chat settings revision conflict; GET /api/chat-settings before retrying");
-			const value: ChatSettings = { schemaVersion: 1, autoHandoff: next.autoHandoff, revision: randomUUID() };
+			const { expectedRevision: _, ...changes } = next;
+			const value: ChatSettings = { ...current, ...changes, revision: randomUUID() };
 			try {
 				await this.persist(this.file, value);
 			} catch {

@@ -19,7 +19,7 @@ const hook: Automation = {
 test("workspace commands persist bounded redacted records and logs without a model turn", async (t) => {
 	const pool = new SubprocessPool();
 	t.after(() => pool.close());
-	const f = await fixture(t, { actionRunner: new ActionRunner(pool) });
+	const f = await fixture(t, { automationsEnabled: () => true, actionRunner: new ActionRunner(pool) });
 	const chat = await f.spawn();
 	const inputs = f.workers.flatMap((worker) => worker.requests).filter((request) => request.type === "input").length;
 	const result = await f.sessions.runWorkspaceAction(chat.id, hook, "workspace.created", "workspace.created", 3);
@@ -42,7 +42,7 @@ test("workspace commands persist bounded redacted records and logs without a mod
 		inputs,
 	);
 	await f.sessions.shutdown();
-	const reopened = await f.manager({ actionRunner: new ActionRunner(pool) });
+	const reopened = await f.manager({ automationsEnabled: () => true, actionRunner: new ActionRunner(pool) });
 	assert.equal(reopened.get(chat.id)?.automationRuns?.[0]?.state, "ok");
 });
 
@@ -75,7 +75,7 @@ test("Stop and archive cancel workspace commands and keep them working until the
 		finish.resolve();
 		await pool.close();
 	});
-	const f = await fixture(t, { actionRunner: new ActionRunner(pool) });
+	const f = await fixture(t, { automationsEnabled: () => true, actionRunner: new ActionRunner(pool) });
 	const chat = await f.spawn();
 	const action = f.sessions.runWorkspaceAction(chat.id, hook, "workspace.created", "workspace.created", 1);
 	await running.promise;
@@ -90,4 +90,17 @@ test("Stop and archive cancel workspace commands and keep them working until the
 	await f.sessions.archive(chat.id);
 	assert.equal(spawned.mock.callCount(), 1);
 	await assert.rejects(f.sessions.runWorkspaceAction(chat.id, hook, "workspace.created", "new", 1), /Build workspace/);
+});
+
+test("host switch is checked live for every workspace command admission", async (t) => {
+	const pool = new SubprocessPool();
+	t.after(() => pool.close());
+	let enabled = false;
+	const f = await fixture(t, { automationsEnabled: () => enabled, actionRunner: new ActionRunner(pool) });
+	const chat = await f.spawn();
+	await assert.rejects(f.sessions.runWorkspaceAction(chat.id, hook, "workspace.created", "off", 1), /disabled/);
+	enabled = true;
+	assert.equal((await f.sessions.runWorkspaceAction(chat.id, hook, "workspace.created", "on", 1)).outcome, "ok");
+	enabled = false;
+	await assert.rejects(f.sessions.runWorkspaceAction(chat.id, hook, "workspace.created", "off-again", 1), /disabled/);
 });

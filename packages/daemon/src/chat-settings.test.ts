@@ -16,6 +16,7 @@ test("chat settings default off, persist privately, survive restart and serializ
 	const { home, file, service } = await fixture(t);
 	const initial = service.settings();
 	assert.equal(initial.autoHandoff, false);
+	assert.equal(initial.automations, false);
 	assert.equal(initial.schemaVersion, 1);
 	assert.equal((await stat(file)).mode & 0o777, 0o600);
 	assert.deepEqual((await ChatSettingsService.open(home)).settings(), initial);
@@ -93,4 +94,19 @@ test("unavailable initial persistence does not claim defaults were durably saved
 	assert.throws(() => service.settings(), ServiceUnavailable);
 	await assert.rejects(service.update({ autoHandoff: true, expectedRevision: "unknown" }), ServiceUnavailable);
 	assert.equal((await ChatSettingsService.open(home)).settings().autoHandoff, false);
+});
+
+test("legacy settings default automations off and partial writes preserve both switches", async (t) => {
+	const { home, file } = await fixture(t);
+	await writeFile(file, JSON.stringify({ schemaVersion: 1, autoHandoff: true, revision: "legacy" }));
+	const service = await ChatSettingsService.open(home);
+	assert.equal(service.automationsEnabled(), false);
+	const enabled = await service.update({ automations: true, expectedRevision: "legacy" });
+	assert.equal(enabled.autoHandoff, true);
+	assert.equal(service.automationsEnabled(), true);
+	const handoff = await service.update({ autoHandoff: false, expectedRevision: enabled.revision });
+	assert.equal(handoff.automations, true);
+	assert.equal((await ChatSettingsService.open(home)).automationsEnabled(), true);
+	await assert.rejects(service.update({ automations: false, expectedRevision: enabled.revision }), Conflict);
+	assert.equal(service.automationsEnabled(), true);
 });

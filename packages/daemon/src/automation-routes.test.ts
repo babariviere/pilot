@@ -5,7 +5,9 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { ChatSettingsService } from "./chat-settings.ts";
 import { GitHubSetupService } from "./github-setup.ts";
+import { daemonHello } from "./hello.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
@@ -14,8 +16,7 @@ import { TerminalManager } from "./terminals.ts";
 
 test("hook writes require enabled feature and native authority, reject stale and invalid edits", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-hook-api-"));
-	const previous = process.env.PILOT_AUTOMATIONS;
-	delete process.env.PILOT_AUTOMATIONS;
+	const settings = await ChatSettingsService.open(home);
 	const projects = new ProjectStore(home);
 	await projects.load();
 	const project = await projects.create({ path: home });
@@ -28,6 +29,13 @@ test("hook writes require enabled feature and native authority, reject stale and
 	);
 	await native.status();
 	const token = JSON.parse(await readFile(join(home, "github-app-capability"), "utf8")).token as string;
+	const hello = await daemonHello(home, {
+		powerManagement: false,
+		systemSleepEvents: false,
+		swiftUIArtifacts: false,
+		coordinatorIsolation: false,
+		independentExecution: true,
+	});
 	const server = createDaemonServer(
 		{ home, host: "127.0.0.1", port: 0 },
 		sessions,
@@ -41,16 +49,20 @@ test("hook writes require enabled feature and native authority, reject stale and
 		undefined,
 		undefined,
 		undefined,
+		hello,
 		undefined,
-		undefined,
-		undefined,
+		false,
 		undefined,
 		undefined,
 		native,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		settings,
 	);
 	t.after(async () => {
-		if (previous === undefined) delete process.env.PILOT_AUTOMATIONS;
-		else process.env.PILOT_AUTOMATIONS = previous;
 		await sessions.shutdown();
 		await terminals.shutdown();
 		await native.close();
@@ -67,7 +79,19 @@ test("hook writes require enabled feature and native authority, reject stale and
 			body: JSON.stringify(body),
 		});
 	assert.equal((await put({ expectedRevision: 0, items: [] })).status, 404);
-	process.env.PILOT_AUTOMATIONS = "1";
+	const root = base.replace("/api/projects", "");
+	const capability = async () => (await (await fetch(`${root}/api/hello`)).json()).capabilities.automations;
+	assert.equal(await capability(), undefined);
+	const toggle = (on: boolean, tokenValue = token) =>
+		fetch(`${root}/api/chat-settings`, {
+			method: "PATCH",
+			headers: { "content-type": "application/json", "x-pilot-github-capability": tokenValue },
+			body: JSON.stringify({ automations: on, expectedRevision: settings.settings().revision }),
+		});
+	assert.equal((await toggle(true, "wrong")).status, 403);
+	assert.equal(settings.automationsEnabled(), false);
+	assert.equal((await toggle(true)).status, 200);
+	assert.equal(await capability(), 1);
 	assert.equal((await put({ expectedRevision: 0, items: [] }, "wrong")).status, 403);
 	const hook = {
 		id: "setup",
@@ -99,5 +123,8 @@ test("hook writes require enabled feature and native authority, reject stale and
 		);
 	}
 	assert.equal((await (await fetch(base)).json())[0].automations.revision, 1);
+	assert.equal((await toggle(false)).status, 200);
+	assert.equal(await capability(), undefined);
+	assert.equal((await put({ expectedRevision: 1, items: [] })).status, 404);
 	assert.equal(sessions.list().length, 0, "settings never start chats");
 });

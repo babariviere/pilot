@@ -5,6 +5,7 @@ use serde_json::json;
 fn snapshot(on: bool, revision: &str) -> Snapshot {
     Snapshot {
         auto_handoff: on,
+        automations: Some(false),
         revision: revision.into(),
     }
 }
@@ -12,7 +13,7 @@ fn snapshot(on: bool, revision: &str) -> Snapshot {
 #[test]
 fn parse_accepts_only_the_exact_schema_one_document() {
     assert_eq!(
-        parse(br#"{"schemaVersion":1,"autoHandoff":true,"revision":"r1"}"#),
+        parse(br#"{"schemaVersion":1,"autoHandoff":true,"automations":false,"revision":"r1"}"#),
         Some(snapshot(true, "r1"))
     );
     for bad in [
@@ -223,4 +224,32 @@ async fn failures_map_to_truthful_outcomes() {
         Reply::Save(Saved::NotSent),
         "an unreachable daemon never received the write"
     );
+}
+
+#[test]
+fn automations_share_the_revision_and_never_replay_unknown() {
+    let mut model = Model::default();
+    assert!(model.begin_save_automations(true).is_none());
+    let (request, _) = model.begin_read().unwrap();
+    model.finish(request, Reply::Read(Ok(snapshot(false, "r1"))));
+    assert_eq!(model.automations(), Some(false));
+    let (request, job) = model.begin_save_automations(true).unwrap();
+    assert_eq!(
+        job,
+        Job::SaveAutomations {
+            enabled: true,
+            expected_revision: "r1".into()
+        }
+    );
+    assert!(model.begin_save(true).is_none());
+    assert_eq!(model.automations(), Some(false));
+    model.finish(request, Reply::Save(Saved::Unknown));
+    assert_eq!(model.automations(), None);
+    assert!(model.begin_save_automations(true).is_none());
+}
+
+#[test]
+fn old_daemons_do_not_claim_an_automation_value() {
+    let old = parse(br#"{"schemaVersion":1,"autoHandoff":false,"revision":"r1"}"#).unwrap();
+    assert_eq!(old.automations, None);
 }

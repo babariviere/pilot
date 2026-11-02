@@ -151,6 +151,7 @@ const sessions = new SessionManager(
 	{},
 	{},
 	{
+		automationsEnabled: () => chatSettings.automationsEnabled(),
 		idleParkMs: config.idleParkMs,
 		workspaceRetentionMs: config.workspaceRetentionMs,
 		models,

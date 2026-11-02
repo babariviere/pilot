@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import type { Automation, ProjectRequest } from "@pilot/protocol";
 import { AUTOMATION_FOLLOW_UP_ATTEMPT_LIMIT, validateAutomationItems } from "./automation-definitions.ts";
-import { automationsEnabled, daemonHello } from "./hello.ts";
+import { daemonHello } from "./hello.ts";
 import { AutomationsRevisionConflict, ProjectStore } from "./projects.ts";
 
 const setup: Automation = {
@@ -151,10 +151,9 @@ test("invalid saved definitions stay on disk with an error and cannot run", asyn
 	assert.equal(store.require("p").automations?.revision, 8);
 });
 
-test("hook capability is off by default and explicitly enabled", async (t) => {
+test("hook capability is absent from the static handshake", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-hook-hello-"));
 	t.after(() => rm(home, { recursive: true, force: true }));
-	assert.equal(automationsEnabled({}), false);
 	const capabilities = {
 		powerManagement: false,
 		systemSleepEvents: false,
@@ -163,5 +162,4 @@ test("hook capability is off by default and explicitly enabled", async (t) => {
 		independentExecution: true,
 	};
 	assert.equal((await daemonHello(home, capabilities, {})).capabilities.automations, undefined);
-	assert.equal((await daemonHello(home, capabilities, { PILOT_AUTOMATIONS: "1" })).capabilities.automations, 1);
 });

@@ -28,6 +28,7 @@ pub(crate) enum Mode {
 }
 pub(crate) struct State {
     pub(crate) auto_handoff: bool,
+    pub(crate) automations: bool,
     pub(crate) revision: u32,
     pub(crate) mode: Mode,
     /// While set, a PATCH waits before answering so the in-flight state can be observed.
@@ -36,7 +37,7 @@ pub(crate) struct State {
 }
 impl State {
     fn document(&self) -> Value {
-        json!({"schemaVersion":1,"autoHandoff":self.auto_handoff,"revision":format!("r{}",self.revision)})
+        json!({"schemaVersion":1,"autoHandoff":self.auto_handoff,"automations":self.automations,"revision":format!("r{}",self.revision)})
     }
     pub(crate) fn count(&self, method: &str) -> usize {
         self.requests
@@ -55,15 +56,29 @@ impl State {
 pub(crate) struct Server {
     pub(crate) options: LocalOptions,
     pub(crate) state: Arc<Mutex<State>>,
+    home: std::path::PathBuf,
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 impl Server {
     pub(crate) fn start(mode: Mode) -> Self {
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let options = LocalOptions::synthetic(listener.local_addr().unwrap().port());
+        let home = std::env::temp_dir().join(format!("chat-settings-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&home).unwrap();
+        let cap = home.join("github-app-capability");
+        std::fs::write(
+            &cap,
+            json!({"daemonId":"test-daemon","lineageId":"test-lineage","token":"a".repeat(64)})
+                .to_string(),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&cap, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let options = LocalOptions::synthetic(listener.local_addr().unwrap().port())
+            .with_scope_home(home.clone());
         let state = Arc::new(Mutex::new(State {
             auto_handoff: false,
+            automations: false,
             revision: 1,
             mode,
             hold: false,
@@ -129,7 +144,8 @@ impl Server {
                         ("PATCH", "/api/chat-settings", mode) => {
                             let fields = payload.as_object().map(|o| o.len());
                             assert_eq!(fields, Some(2), "exactly autoHandoff and expectedRevision");
-                            let requested = payload["autoHandoff"].as_bool().unwrap();
+                            let automation = payload.get("automations").is_some();
+                            let requested = payload[if automation { "automations" } else { "autoHandoff" }].as_bool().unwrap();
                             let expected = payload["expectedRevision"].as_str().unwrap().to_owned();
                             match mode {
                                 Mode::Rejected => (400, json!({"error":"Invalid chat settings"}).to_string()),
@@ -140,7 +156,7 @@ impl Server {
                                 _ if expected != format!("r{}", s.revision) => (409, json!({"error":"conflict"}).to_string()),
                                 Mode::Mismatch => (200, s.document().to_string()),
                                 _ => {
-                                    s.auto_handoff = requested;
+                                    if automation { s.automations = requested; } else { s.auto_handoff = requested; }
                                     s.revision += 1;
                                     (200, s.document().to_string())
                                 }
@@ -158,6 +174,7 @@ impl Server {
         });
         Self {
             options,
+            home,
             state,
             stop,
             thread: Some(thread),
@@ -166,6 +183,7 @@ impl Server {
 }
 impl Drop for Server {
     fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.home);
         self.stop.store(true, Ordering::SeqCst);
         let addr = self
             .options

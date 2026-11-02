@@ -78,7 +78,6 @@ import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import type { GitHubImportService } from "./github-import.ts";
 import type { GitHubSetupService } from "./github-setup.ts";
-import { automationsEnabled } from "./hello.ts";
 import { MachineInformationReader } from "./machine.ts";
 import { McpSetupError, McpSetupStore } from "./mcp-setup.ts";
 import { type McpStatusService, SignInUnavailable } from "./mcp-status.ts";
@@ -806,6 +805,7 @@ export function createDaemonServer(
 				...hello,
 				capabilities: {
 					...hello.capabilities,
+					automations: chatSettings?.automationsEnabled() ? 1 : undefined,
 					guardedMissionConversion: missions ? true : undefined,
 					passiveMissionLifecycle: missions ? true : undefined,
 					passiveMissionCompletion: missions ? true : undefined,
@@ -1316,6 +1316,14 @@ export function createDaemonServer(
 			if (req.method === "GET") return json(res, 200, chatSettings.settings());
 			if (req.method === "PATCH") {
 				const input = await readJson(req);
+				if (input && typeof input === "object" && Object.hasOwn(input, "automations")) {
+					if (!githubSetup) throw new ServiceUnavailable("Native settings authority unavailable");
+					try {
+						await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+					} catch {
+						return json(res, 403, { error: "native_action_required" });
+					}
+				}
 				try {
 					return json(res, 200, await chatSettings.update(input));
 				} catch (error) {
@@ -1442,7 +1450,7 @@ export function createDaemonServer(
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "origin" && req.method === "GET")
 			return json(res, 200, await projects.origin(parts[2]!));
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "automations" && req.method === "PUT") {
-			if (!automationsEnabled()) return json(res, 404, { error: "automations_unavailable" });
+			if (!chatSettings?.automationsEnabled()) return json(res, 404, { error: "automations_unavailable" });
 			if (!githubSetup) return json(res, 503, { error: "automations_unavailable" });
 			try {
 				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);

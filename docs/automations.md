@@ -1,8 +1,12 @@
 # Automations (design)
 
 **Status: foundations in progress, disabled by default.** Definitions, validation and native-authorized
-revision-checked writes and the bounded shell runner are implemented. Set `PILOT_AUTOMATIONS=1` on the daemon to expose the
-`automations: 1` capability and editing endpoint. Setup scheduling and user-facing controls follow separately.
+revision-checked writes and the bounded shell runner are implemented. Enable Automations in desktop Settings → Chats to expose the
+`automations: 1` capability and editing endpoint. This host-owned switch defaults off, persists in
+`chat-settings.json`, and applies to new admissions immediately, without restarting the daemon.
+Turning it off leaves admitted commands to finish. Setup scheduling follows separately.
+The switch uses `GET/PATCH /api/chat-settings` with `{ automations, expectedRevision }`;
+PATCH requires native host-action authority and preserves the automatic handoff setting.
 The unsupported Swift app is not part of this implementation; no PilotCore mirror is required.
 This is the lifecycle hook layer: small, personal automations
 around a chat's workspace and runs. Agent flows (sequences of agents, such as a bug-fix flow with a reviewer)

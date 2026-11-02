@@ -62,6 +62,14 @@ impl ChatSettings {
             self.dispatch(request, job, cx);
         }
     }
+    fn set_automations(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.source.is_none() {
+            return;
+        }
+        if let Some((request, job)) = self.model.begin_save_automations(enabled) {
+            self.dispatch(request, job, cx);
+        }
+    }
     fn dispatch(&mut self, request: u64, job: Job, cx: &mut Context<Self>) {
         let Some(options) = self.source.clone() else {
             return;
@@ -173,6 +181,27 @@ impl Render for ChatSettings {
             _ => None,
         };
         let check = phase == Phase::Idle && self.model.value().is_none();
+        let automations = match self.model.automations() {
+            Some(on) => Checkbox::new("chat-automations")
+                .label("Enable automations (experimental)")
+                .checked(on)
+                .disabled(phase != Phase::Idle)
+                .on_change(cx.listener(|owner, checked: &bool, window, cx| {
+                    owner.focus.focus(window, cx);
+                    owner.set_automations(*checked, cx);
+                }))
+                .into_any_element(),
+            None => ui::text(
+                Text::Caption,
+                if phase == Phase::Loading {
+                    "Checking automations…"
+                } else {
+                    "Automations unavailable. Check again or update Pilot."
+                },
+            )
+            .text_color(muted)
+            .into_any_element(),
+        };
         page.child(
             div()
                 .v_flex()
@@ -182,6 +211,12 @@ impl Render for ChatSettings {
                 .child(ui::text(Text::Caption, DESCRIPTION).text_color(muted))
                 .child(ui::text(Text::Caption, TIMING).text_color(muted)),
         )
+        .child(
+            div().v_flex().gap_2().min_w_0()
+                .child(ui::heading("chat-automations-title", "Automations", Text::Headline))
+                .child(automations)
+                .child(ui::text(Text::Caption, "Runs configured project commands on this host. Turning off prevents new commands; admitted commands may finish.").text_color(muted))
+        )
         .children(status.map(|status| {
             ui::text(Text::Caption, status)
                 .id("chat-settings-status")
@@ -189,7 +224,13 @@ impl Render for ChatSettings {
                 .text_color(muted)
         }))
         .children(self.model.note().map(|n| {
-            let (title, tone) = note(n);
+            let (title, tone) = if self.model.saving_automations() {
+                match n {
+                    Note::Saved(_) => ("Saved. Applies to new automation commands immediately.", Tone::Quiet),
+                    Note::Unknown(_) => ("Couldn't confirm the automation setting. It may have saved. Check again before changing it.", Tone::Warning),
+                    _ => note(n),
+                }
+            } else { note(n) };
             div()
                 .id("chat-settings-note")
                 .test_support()
