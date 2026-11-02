@@ -477,6 +477,11 @@ impl ChatEditor {
         let Some(question) = &self.questions.current else {
             return true;
         };
+        // Database approvals have no editable reply to checkpoint. They remain
+        // pending in pilotd across GUI replacement, including unavailable requests.
+        if question.content.kind != Kind::Message {
+            return true;
+        }
         let Some(answer) = self
             .selected
             .as_ref()

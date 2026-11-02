@@ -1,6 +1,66 @@
 use super::*;
 
 #[gpui_kit::test]
+fn update_checkpoint_does_not_require_a_reply_to_database_approval(cx: &mut TestAppContext) {
+    for access in [
+        serde_json::json!({"id":"grant-1","env":"prod","mode":"write"}),
+        serde_json::json!({"requestId":"legacy-unavailable"}),
+    ] {
+        let (handle, view, _) = setup(cx);
+        let (client, commands, closed) = Interaction::recording_with_close();
+        view.update(cx, |e, _| e.client = Some(client));
+        let question = std::sync::Arc::new(
+            crate::question::Question::parse(
+                12,
+                &serde_json::json!({
+                    "question":"Allow write access to the prod database?",
+                    "databaseAccess":access,
+                }),
+            )
+            .unwrap(),
+        );
+        cx.update_window(handle, |_, w, cx| {
+            view.update(cx, |e, cx| {
+                e.question_context(
+                    Some("a"),
+                    crate::question::Projection::Pending(question.clone()),
+                    true,
+                    w,
+                    cx,
+                );
+                assert!(
+                    e.cache["chat:a"].answer.is_none(),
+                    "approvals have no reply draft"
+                );
+                assert!(e.begin_gui_update_checkpoint(42, w, cx));
+                assert!(
+                    !e.close_gui_update(42, w, cx),
+                    "still requires the local writer ACK"
+                );
+                let mut book = (**e.state.book.as_ref().unwrap()).clone();
+                book.drafts = e.cache.clone();
+                e.state.book = Some(std::sync::Arc::new(book));
+                e.state.checkpoint = Some(42);
+                assert_eq!(e.update_receipt(w, cx), Some(42));
+                assert!(e.close_gui_update(42, w, cx));
+                assert_eq!(
+                    e.questions.current.as_ref().unwrap().identity,
+                    question.identity
+                );
+            })
+        })
+        .unwrap();
+        while let Ok(command) = commands.try_recv() {
+            assert!(
+                matches!(command, WriteCommand::Checkpoint(42)),
+                "no access request or reply is sent"
+            );
+        }
+        assert!(closed.try_recv().is_ok(), "Close reaches the writer");
+    }
+}
+
+#[gpui_kit::test]
 fn update_checkpoint_close_requires_exact_receipt_and_keeps_fence_until_flushed(
     cx: &mut TestAppContext,
 ) {
