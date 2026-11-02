@@ -28,6 +28,8 @@ pub struct BundledRuntimeView {
     cancel: Arc<AtomicBool>,
     _updates: Task<()>,
     _closed: gpui_kit::Subscription,
+    #[cfg(target_os = "macos")]
+    daemon_started: Option<gpui_kit::Subscription>,
 }
 impl Drop for BundledRuntimeView {
     fn drop(&mut self) {
@@ -88,7 +90,17 @@ impl BundledRuntimeView {
                             }
                             view.local = Some(local);
                         }
-                        Err(error) => { view.error.get_or_insert(error); },
+                        Err(error) => {
+                            view.error.get_or_insert(error);
+                            #[cfg(target_os = "macos")]
+                            if bundled_runtime::update_receipt().is_none()
+                                && let Ok(location) = bundled_runtime::runtime_location() {
+                                crate::daemon_menu::configure(location, window.window_handle(), cx);
+                                view.daemon_started = crate::daemon_menu::on_started(cx, |view, w, cx| {
+                                    view.connect_with(bundled_runtime::connect_managed, false, w, cx);
+                                }, window);
+                            }
+                        },
                     }
                     cx.notify();
                 });
@@ -108,6 +120,8 @@ impl BundledRuntimeView {
             cancel,
             _updates: updates,
             _closed: closed,
+            #[cfg(target_os = "macos")]
+            daemon_started: None,
         }
     }
     fn existing_available(&self) -> bool {
@@ -174,9 +188,20 @@ impl BundledRuntimeView {
         if !self.existing_available() || self.connecting {
             return;
         }
+        self.connect_with(self.connector, true, window, cx);
+    }
+    fn connect_with(
+        &mut self,
+        connect: fn() -> Result<LocalOptions, &'static str>,
+        external: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.connecting || self.local.is_some() {
+            return;
+        }
         self.connecting = true;
         self.connection_error = None;
-        let connect = self.connector;
         let (send, result) = async_channel::bounded(1);
         if std::thread::Builder::new()
             .name("existing-daemon-check".into())
@@ -197,8 +222,11 @@ impl BundledRuntimeView {
                     view.connecting = false;
                     match reply {
                         Ok(options) => {
-                            window
-                                .set_window_title("Pilot Next · Local · Externally managed daemon");
+                            window.set_window_title(if external {
+                                "Pilot Next · Local · Externally managed daemon"
+                            } else {
+                                "Pilot Next · Local"
+                            });
                             let make_local = view.make_local;
                             let local = cx.new(|cx| make_local(options, window, cx));
                             if let Some(url) = view.pending_chat_url.take() {

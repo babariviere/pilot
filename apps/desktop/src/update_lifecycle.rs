@@ -179,6 +179,16 @@ impl LocalViewer {
         let Some(updater) = self.updater(cx) else {
             return;
         };
+        #[cfg(target_os = "macos")]
+        if crate::daemon_menu::active(cx) {
+            updater.update(cx, |u, cx| {
+                u.defer(
+                    "Wait for the daemon control request to finish before restarting the app.",
+                    cx,
+                )
+            });
+            return;
+        }
         if self.restart_pending {
             return;
         }
@@ -232,6 +242,8 @@ impl LocalViewer {
         #[cfg(target_os = "macos")]
         self.begin_fresh_quit();
         self.restart_pending = true;
+        #[cfg(target_os = "macos")]
+        cx.defer(crate::app_menu::refresh);
         self.settings.update(cx, |owner, cx| {
             if !owner.state.persisted() {
                 owner.persist_update_checkpoint(cx);
@@ -475,6 +487,8 @@ impl LocalViewer {
     }
     fn end_update_restart(&mut self, message: &'static str, cx: &mut Context<Self>) {
         self.restart_pending = false;
+        #[cfg(target_os = "macos")]
+        cx.defer(crate::app_menu::refresh);
         self.restart_timeout = None;
         self.editor.update(cx, |e, cx| e.end_update_checkpoint(cx));
         self.settings.update(cx, |o, cx| {

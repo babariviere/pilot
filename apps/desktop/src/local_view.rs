@@ -546,6 +546,10 @@ impl LocalViewer {
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             {
                 owner.update_location = options.update_location();
+                #[cfg(target_os = "macos")]
+                if let Some(location) = options.update_location() {
+                    crate::daemon_menu::configure(location, window.window_handle(), cx);
+                }
                 owner.update_connection = options.external_update_connection();
                 owner.daemon_options = Some(options.clone());
             }
@@ -593,6 +597,10 @@ impl LocalViewer {
             #[cfg(not(target_os = "macos"))]
             let _ = window;
             weak.update(cx, |view, cx| {
+                #[cfg(target_os = "macos")]
+                if crate::daemon_menu::active(cx) {
+                    return false;
+                }
                 if view.daemon_upgrade_pending {
                     return false;
                 }

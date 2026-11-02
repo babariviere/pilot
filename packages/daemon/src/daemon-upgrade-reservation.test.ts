@@ -103,34 +103,68 @@ async function fixture(t: TestContext) {
 	return { home, owner, sessions, worker, terminals, commands, chat, request, shellStarts: () => shellStarts };
 }
 
-for (const busy of ["job", "child", "unknown", "terminal"] as const) {
-	test(`daemon upgrade refuses ${busy} despite pause.ready and GUI reservation acceptance`, async (t) => {
+for (const purpose of ["daemon-upgrade", "daemon-stop", "daemon-restart"] as const) {
+	for (const busy of ["job", "child", "unknown", "terminal"] as const) {
+		test(`${purpose} refuses ${busy} despite pause.ready and GUI reservation acceptance`, async (t) => {
+			const f = await fixture(t);
+			if (busy === "job")
+				f.worker.jobs = async () => [
+					{ id: "live", name: "job", state: "running", startedAt: 1, outputPath: "/synthetic/log" },
+				];
+			if (busy === "child") f.worker.hasChildren = async () => true;
+			if (busy === "unknown")
+				f.worker.jobs = async () => {
+					throw new Error("IPC disconnected");
+				};
+			if (busy === "terminal") t.mock.method(f.terminals, "blockers", () => [{ kind: "terminal", id: "live-pty" }]);
+			assert.equal(f.sessions.pauseForUpdate().ready, true, "tool drain is not process exit proof");
+			const gui = await f.request("prepare", { operationId: randomUUID() });
+			assert.equal(gui.status, 200, "legacy GUI-only behavior stays unchanged");
+			assert.equal((await f.request("verify", { ...gui.receipt, purpose: "daemon-upgrade" })).status, 409);
+			assert.equal((await f.request("cancel", gui.receipt)).status, 200);
+			const input = { operationId: randomUUID(), purpose };
+			assert.equal(
+				(await f.request("prepare", input)).status,
+				409,
+				"daemon upgrade must defer without stopping work",
+			);
+			assert.equal((await f.request("prepare", input)).status, 409, "no replay of failed attempt");
+			assert.equal(
+				f.commands.some((c) => c.type === "abort" || c.type === "shutdown"),
+				false,
+			);
+			assert.equal(f.shellStarts(), 0);
+		});
+	}
+}
+
+for (const purpose of ["daemon-stop", "daemon-restart"] as const) {
+	test(`${purpose} admits idle work through the existing signed channel`, async (t) => {
 		const f = await fixture(t);
-		if (busy === "job")
-			f.worker.jobs = async () => [
-				{ id: "live", name: "job", state: "running", startedAt: 1, outputPath: "/synthetic/log" },
-			];
-		if (busy === "child") f.worker.hasChildren = async () => true;
-		if (busy === "unknown")
-			f.worker.jobs = async () => {
-				throw new Error("IPC disconnected");
-			};
-		if (busy === "terminal") t.mock.method(f.terminals, "blockers", () => [{ kind: "terminal", id: "live-pty" }]);
-		assert.equal(f.sessions.pauseForUpdate().ready, true, "tool drain is not process exit proof");
-		const gui = await f.request("prepare", { operationId: randomUUID() });
-		assert.equal(gui.status, 200, "legacy GUI-only behavior stays unchanged");
-		assert.equal((await f.request("verify", { ...gui.receipt, purpose: "daemon-upgrade" })).status, 409);
-		assert.equal((await f.request("cancel", gui.receipt)).status, 200);
-		const input = { operationId: randomUUID(), purpose: "daemon-upgrade" };
-		assert.equal((await f.request("prepare", input)).status, 409, "daemon upgrade must defer without stopping work");
-		assert.equal((await f.request("prepare", input)).status, 409, "no replay of failed attempt");
-		assert.equal(
-			f.commands.some((c) => c.type === "abort" || c.type === "shutdown"),
-			false,
-		);
-		assert.equal(f.shellStarts(), 0);
+		const held = await f.request("prepare", { operationId: randomUUID(), purpose });
+		assert.equal(held.status, 200);
+		assert.equal(held.receipt.purpose, purpose);
+		assert.equal((await f.request("verify", held.receipt)).status, 200);
+		assert.equal((await f.request("cancel", held.receipt)).status, 200);
 	});
 }
+
+test("Stop and Restart refuse a working run even with acknowledged tool pause", async (t) => {
+	const f = await fixture(t);
+	f.worker.state = "working";
+	assert.equal(f.sessions.pauseForUpdate().ready, true);
+	for (const purpose of ["daemon-stop", "daemon-restart"]) {
+		assert.equal((await f.request("prepare", { operationId: randomUUID(), purpose })).status, 409);
+	}
+	// Preserve the prior upgrade contract, which can checkpoint unfinished work.
+	const upgrade = await f.request("prepare", { operationId: randomUUID(), purpose: "daemon-upgrade" });
+	assert.equal(upgrade.status, 200);
+	assert.equal((await f.request("cancel", upgrade.receipt)).status, 200);
+	assert.equal(
+		f.commands.some((c) => c.type === "abort" || c.type === "shutdown"),
+		false,
+	);
+});
 
 test("daemon reservation checkpoints owned subagents before the unchanged process census", async (t) => {
 	const f = await fixture(t);

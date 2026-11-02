@@ -197,6 +197,9 @@ the daemon report; check, sign-in and setup actions are not included. See the
 New releases contain the Rust GPUI desktop, with `Pilot-Next-macos-arm64.zip` for macOS 15+
 and `Pilot-Next-linux-x64.zip` for Wayland Linux. See [Pilot Next](apps/desktop/README.md).
 Pilot Next uses the native macOS menu bar for application, editing and navigation commands.
+Packaged managed Local connections also expose **Pilot Next → Daemon → Start / Stop / Restart**.
+These explicit controls preserve the existing runtime and login settings. Active or uninspectable work
+blocks stopping; uncertain outcomes remain inspect-only. See [daemon controls](apps/desktop/docs/daemon-upgrades.md).
 With a paged-history daemon, chats open on recent messages and load older history on scroll.
 Find can explicitly load the full history. See [lazy Local history](apps/desktop/docs/lazy-history.md).
 Pilot Next supports explicit [source-pinned UI iteration updates](apps/desktop/docs/ui-iteration.md),

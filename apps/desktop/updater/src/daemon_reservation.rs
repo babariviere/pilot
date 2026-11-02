@@ -10,6 +10,16 @@ pub(super) struct Reservation {
 }
 impl Reservation {
     pub(super) fn prepare(location: &Location, owner: &Value) -> Result<Self, Failure> {
+        Self::prepare_for(location, owner, "daemon-upgrade")
+    }
+    pub(super) fn prepare_for(
+        location: &Location,
+        owner: &Value,
+        purpose: &str,
+    ) -> Result<Self, Failure> {
+        if !["daemon-upgrade", "daemon-stop", "daemon-restart"].contains(&purpose) {
+            return Err(Failure::Unsupported);
+        }
         if owner["runtimeRoot"]
             .as_str()
             .is_none_or(|r| !std::path::Path::new(r).is_absolute())
@@ -20,7 +30,7 @@ impl Reservation {
         // Server hold is 180s measured before inspection (which may take 10s).
         // Keep five seconds of margin; verify never renews this local deadline.
         let deadline = Instant::now() + Duration::from_secs(175);
-        let request = json!({"operationId":coordination::random_operation().map_err(|_|Failure::Unverified)?,"purpose":"daemon-upgrade"});
+        let request = json!({"operationId":coordination::random_operation().map_err(|_|Failure::Unverified)?,"purpose":purpose});
         let receipt =
             coordination::signed_update(location, owner, &request, "prepare").map_err(failure)?;
         validate_receipt(&receipt, &request)?;
@@ -63,7 +73,7 @@ fn validate_receipt(receipt: &Value, request: &Value) -> Result<(), Failure> {
     if receipt.as_object().is_none_or(|v| v.len() != 4)
         || receipt["schema"] != 1
         || receipt["operationId"] != request["operationId"]
-        || receipt["purpose"] != "daemon-upgrade"
+        || receipt["purpose"] != request["purpose"]
         || receipt["token"].as_str().is_none_or(|s| {
             s.len() != 64
                 || !s

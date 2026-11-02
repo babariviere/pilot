@@ -162,7 +162,7 @@ fn hex(value: Option<&str>) -> bool {
     })
 }
 #[cfg(target_os = "macos")]
-fn code_build(capsule: &Path) -> Result<String, Error> {
+pub(crate) fn code_build(capsule: &Path) -> Result<String, Error> {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
     unsafe extern "C" {
         fn pnu_bundle_build(
@@ -190,7 +190,7 @@ fn code_build(capsule: &Path) -> Result<String, Error> {
     Ok(build)
 }
 #[cfg(target_os = "linux")]
-fn code_build(capsule: &Path) -> Result<String, Error> {
+pub(crate) fn code_build(capsule: &Path) -> Result<String, Error> {
     let value: Value = serde_json::from_slice(
         &fs::read(capsule.join(crate::linux::INVENTORY)).map_err(|_| Error::Identity)?,
     )

@@ -2,6 +2,8 @@
 #[cfg(target_os = "macos")]
 pub mod app_menu;
 pub mod bundled_runtime;
+#[cfg(target_os = "macos")]
+mod daemon_menu;
 pub mod diagnostics;
 mod diagnostics_view;
 mod image_attachments;

@@ -510,6 +510,8 @@ export function createDaemonServer(
 		undefined,
 		// Explicit daemon handoffs must also prove that jobs, descendants and PTYs are absent.
 		runtimeResources,
+		// Stop/Restart cannot interrupt an unfinished run merely because it paused.
+		() => sessions.prepareUpdate().ready,
 	);
 	bootstrap?.updates(async (action, value) => {
 		if (!value || typeof value !== "object") throw new Error("update_receipt_invalid");

@@ -138,6 +138,36 @@ test("daemon purpose cannot silently fall back to GUI resources", async () => {
 	}
 });
 
+for (const purpose of ["daemon-stop", "daemon-restart"] as const) {
+	test(`${purpose} uses full resources and cannot change receipt intent`, async () => {
+		const gui = new RuntimeResources([]);
+		const work = new RuntimeAdmission();
+		const full = new RuntimeResources([work]);
+		let idle = true;
+		const gate = new UpdateReservation(gui, undefined, undefined, full, () => idle);
+		try {
+			idle = false;
+			await assert.rejects(gate.prepare("32345678-1234-1234-1234-123456789abc", purpose), /not_idle/);
+			idle = true;
+			const end = work.begin({ kind: "child", id: "owned" });
+			await assert.rejects(gate.prepare(operation, purpose), /not_idle/);
+			end();
+			const receipt = await gate.prepare("22345678-1234-1234-1234-123456789abc", purpose);
+			assert.equal(receipt.purpose, purpose);
+			assert.throws(() => work.begin({ kind: "job", id: "race" }), /frozen/);
+			for (const other of [undefined, "daemon-upgrade", "daemon-stop", "daemon-restart"] as const) {
+				if (other !== purpose) assert.throws(() => gate.cancel({ ...receipt, purpose: other }), /expired/);
+			}
+			assert.deepEqual(gate.verify(receipt), receipt);
+			gate.cancel(receipt);
+			work.begin({ kind: "job", id: "resumed" })();
+			await assert.rejects(gate.prepare("22345678-1234-1234-1234-123456789abc", purpose), /busy/);
+		} finally {
+			gate.close();
+		}
+	});
+}
+
 test("lost daemon ACK holds until expiry, never renews, and cannot survive a new owner", async () => {
 	const admission = new RuntimeAdmission();
 	const resources = new RuntimeResources([admission]);
@@ -157,6 +187,40 @@ test("lost daemon ACK holds until expiry, never renews, and cannot survive a new
 	} finally {
 		gate.close();
 		successor.close();
+	}
+});
+
+test("a run becoming non-idle during inspection cannot receive a control receipt", async () => {
+	let idle = true;
+	let inspected!: () => void;
+	let resume!: () => void;
+	const entered = new Promise<void>((resolve) => {
+		inspected = resolve;
+	});
+	const admission = new RuntimeAdmission();
+	const resources = new RuntimeResources([
+		admission,
+		{
+			freezeAdmissions: () => () => {},
+			async blockers() {
+				inspected();
+				await new Promise<void>((resolve) => {
+					resume = resolve;
+				});
+				return [];
+			},
+		},
+	]);
+	const gate = new UpdateReservation(resources, undefined, undefined, resources, () => idle);
+	try {
+		const pending = gate.prepare(operation, "daemon-stop");
+		await entered;
+		idle = false;
+		resume();
+		await assert.rejects(pending, /not_idle/);
+		admission.begin({ kind: "work", id: "released" })();
+	} finally {
+		gate.close();
 	}
 });
 

@@ -122,6 +122,16 @@ pub(crate) fn connected_daemon(cx: &App) -> crate::local_client::ConnectedDaemon
         .unwrap_or_default()
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn daemon_control_available(cx: &App) -> bool {
+    cx.try_global::<QuitOwner>()
+        .and_then(|owner| owner.view.upgrade())
+        .is_none_or(|view| {
+            let view = view.read(cx);
+            !view.restart_pending && !view.daemon_upgrade_pending
+        })
+}
+
 /// App-level Quit from the menu or an auxiliary window (Settings, Usage).
 /// Deferred because the dispatching window is borrowed during dispatch, and the
 /// main owner may need to ask the Settings window before anything quits.
@@ -221,6 +231,10 @@ impl LocalViewer {
     }
 
     fn quit_allowed(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
+        #[cfg(target_os = "macos")]
+        if crate::daemon_menu::active(cx) {
+            return false;
+        }
         if self.restart_pending
             || self.daemon_upgrade_pending
             || self.editor.update(cx, |e, cx| e.marked(w, cx))

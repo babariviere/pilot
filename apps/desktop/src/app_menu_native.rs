@@ -90,7 +90,7 @@ pub(super) fn run() {
                 assert!(available(delegate, about), "About is app-wide");
                 assert_eq!(string(at(app_menu, 2), c"keyEquivalent"), ",");
                 assert!(!available(delegate, at(app_menu, 2)), "Settings unavailable without a Local owner");
-                assert_eq!(string(at(app_menu, 10), c"keyEquivalent"), "q");
+                assert_eq!(string(at(app_menu, 11), c"keyEquivalent"), "q");
                 // Command-Left/Right are extra history keys outside text fields; the
                 // menu keeps showing ⌘[/⌘] so AppKit never claims the line-edit keys.
                 let go = object(at(menu, 3), c"submenu");
@@ -130,7 +130,7 @@ pub(super) fn run() {
                 assert!(detail.starts_with(&format!("Pilot Next: {} (", crate::diagnostics::Build::current().version())), "{detail}");
                 assert!(detail.ends_with("\nDaemon: Not connected"), "{detail}");
                 println!("native_menus: AppKit hierarchy, standard shortcuts, single dispatch and About passed (no windows)");
-                cx.quit();
+                crate::daemon_menu::native::run(cx);
             });
         }).detach();
     });

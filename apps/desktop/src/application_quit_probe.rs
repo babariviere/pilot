@@ -624,7 +624,15 @@ fn native_quit() {
             std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
         let item = at(menu, sel_registerName(c"itemAtIndex:".as_ptr()), 0);
         let submenu = object(item, c"submenu");
-        let quit = at(submenu, sel_registerName(c"itemAtIndex:".as_ptr()), 10);
+        let count: unsafe extern "C" fn(Id, Sel) -> isize =
+            std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+        let quit = (0..count(submenu, sel_registerName(c"numberOfItems".as_ptr())))
+            .map(|ix| at(submenu, sel_registerName(c"itemAtIndex:".as_ptr()), ix))
+            .find(|item| {
+                let title = object(object(*item, c"title"), c"UTF8String");
+                !title.is_null() && std::ffi::CStr::from_ptr(title.cast()) == c"Quit Pilot Next"
+            })
+            .expect("native Quit item");
         let call: unsafe extern "C" fn(Id, Sel, Id) =
             std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
         call(

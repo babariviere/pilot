@@ -16,7 +16,7 @@ const owner=await ownRuntime(process.env.PILOT_HOME,Number(process.env.PILOT_POR
 writeFileSync(process.env.PILOT_HOME+'/daemon-id','fixture-daemon',{mode:0o600});
 writeFileSync(process.env.PILOT_HOME+'/storage-lineage','fixture-lineage',{mode:0o600});
 const resources={freezeAdmissions:()=>()=>{},blockers:async()=>existsSync(process.env.PILOT_HOME+'/blocker')?[{kind:readFileSync(process.env.PILOT_HOME+'/blocker','utf8'),id:'fixture'}]:[]};
-const reservation=new UpdateReservation(resources,undefined,180000,resources);
+const reservation=new UpdateReservation(resources,undefined,180000,resources,()=>!existsSync(process.env.PILOT_HOME+'/active-agent'));
 owner.updates(async(action,value)=>{
  if(action==='prepare'){
    const exact=await reservation.prepare(value.operationId,value.purpose);
@@ -33,13 +33,15 @@ owner.updates(async(action,value)=>{
 owner.install((req,res)=>{
   if(req.url==='/fixture-runtime-build') {
     res.writeHead(200,{'Content-Type':'application/json'}).end(readFileSync(stamp));
+  } else if(req.url==='/api/update/prepare' && req.method==='POST') {
+    res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify({ready:!existsSync(process.env.PILOT_HOME+'/active-agent')}));
   } else if(req.url==='/api/update/pause' && req.method==='POST') {
     const pending=existsSync(process.env.PILOT_HOME+'/tool-pending');
     if(pending){const count=process.env.PILOT_HOME+'/pause-count';writeFileSync(count,String(existsSync(count)?Number(readFileSync(count,'utf8'))+1:1),{mode:0o600});}
     res.writeHead(200,{'Content-Type':'application/json'}).end(JSON.stringify({ready:!pending,processId:process.pid}));
   } else res.writeHead(404).end();
 });
-owner.ready({daemonId:'fixture-daemon',lineageId:'fixture-lineage',daemonVersion:'0.0.1',protocolVersion:1,minimumClientProtocolVersion:1,platform:process.platform,arch:process.arch,capabilities:{independentExecution:true}});
+if(!existsSync(process.env.PILOT_HOME+'/lost-ready')) owner.ready({daemonId:'fixture-daemon',lineageId:'fixture-lineage',daemonVersion:'0.0.1',protocolVersion:1,minimumClientProtocolVersion:1,platform:process.platform,arch:process.arch,capabilities:{independentExecution:true}});
 process.on('SIGTERM',async()=>{await owner.close();process.exit(0)});
 "#;
 
@@ -638,14 +640,140 @@ fn native_launchd_registration_offline_seed_and_singleton() {
     assert_eq!(definition["PilotNextManaged"], true);
     assert_eq!(definition["ProgramArguments"].as_array().unwrap().len(), 2);
     assert!(file.with_extension("plist.next-owner").exists());
+    // Preserve the existing stopped-registration regression as well as the
+    // stricter unchanged-definition controls below. Fixtures never enable login.
     command("/bin/launchctl", &["bootout".as_ref(), service.as_ref()]).unwrap();
     let end = Instant::now() + Duration::from_secs(10);
     while coordination::owner_live(&profile) {
         assert!(Instant::now() < end);
         std::thread::sleep(Duration::from_millis(100));
     }
-    // A normal explicit start reuses the selected immutable version after GUI removal.
-    register_at(&home, &label, location, &current, &trust, &cancel, false).unwrap();
+    register_at(
+        &home,
+        &label,
+        location.clone(),
+        &current,
+        &trust,
+        &cancel,
+        false,
+    )
+    .unwrap();
+    let owner = super::super::native::running(&location, &current).unwrap();
+    use control::{Command as Control, State};
+    let inspect = || control::inspect_at(location.clone(), &home, &label, &trust);
+    let running = inspect().unwrap();
+    assert_eq!(running.state(), State::Running);
+    assert_eq!(
+        control::execute(&running, Control::Start, &trust, &cancel),
+        Err(Failure::Unsupported)
+    );
+    assert_eq!(
+        control::execute(&running, Control::Stop, &trust, &AtomicBool::new(true)),
+        Err(Failure::Cancelled)
+    );
+    fs::write(profile.join("active-agent"), "").unwrap();
+    assert_eq!(
+        control::execute(&running, Control::Stop, &trust, &cancel),
+        Err(Failure::Busy)
+    );
+    assert_eq!(
+        coordination::record(&location).unwrap()["boot"],
+        owner["boot"]
+    );
+    fs::remove_file(profile.join("active-agent")).unwrap();
+    for blocker in [
+        "job", "terminal", "child", "transfer", "mutation", "unknown",
+    ] {
+        fs::write(profile.join("blocker"), blocker).unwrap();
+        assert_eq!(
+            control::execute(&running, Control::Restart, &trust, &cancel),
+            Err(Failure::Busy),
+            "{blocker}"
+        );
+        assert_eq!(
+            coordination::record(&location).unwrap()["boot"],
+            owner["boot"]
+        );
+        fs::remove_file(profile.join("blocker")).unwrap();
+    }
+    // A lost prepare ACK never authorizes a stop. Cancel only its exact orphan.
+    fs::write(profile.join("lost-prepare"), "").unwrap();
+    assert_eq!(
+        control::execute(&running, Control::Stop, &trust, &cancel),
+        Err(Failure::Unverified)
+    );
+    assert_eq!(
+        coordination::record(&location).unwrap()["boot"],
+        owner["boot"]
+    );
+    let orphan: Value =
+        serde_json::from_slice(&fs::read(profile.join("fixture-receipt")).unwrap()).unwrap();
+    assert_eq!(orphan["purpose"], "daemon-stop");
+    coordination::signed_update(&location, &owner, &orphan, "cancel").unwrap();
+    fs::remove_file(profile.join("lost-prepare")).unwrap();
+    assert_eq!(
+        control::execute(&running, Control::Stop, &trust, &cancel),
+        Ok(State::Stopped)
+    );
+    assert_eq!(plist(&file).unwrap(), definition);
+    assert!(!coordination::owner_live(&profile));
+    let stopped = inspect().unwrap();
+    assert_eq!(stopped.state(), State::Stopped);
+    assert!(!stopped.permits(Control::Restart));
+    // A new GUI/controller lifetime only inspects; it does not bootstrap KeepAlive.
+    assert_eq!(inspect().unwrap().state(), State::Stopped);
+    let before = fs::read(&file).unwrap();
+    assert_eq!(
+        control::execute(&stopped, Control::Start, &trust, &cancel),
+        Ok(State::Running)
+    );
+    let first = coordination::record(&location).unwrap();
+    assert_ne!(first["boot"], owner["boot"]);
+    assert_eq!(first["runtimeRoot"], owner["runtimeRoot"]);
+    assert_eq!(fs::read(&file).unwrap(), before);
+    let running = inspect().unwrap();
+    // A newer GUI must restart the selected runtime, not publish its own version.
+    let mut newer = trust.clone();
+    newer.current_build = "999.1".into();
+    assert_eq!(
+        control::execute(&running, Control::Restart, &newer, &cancel),
+        Ok(State::Running)
+    );
+    let second = coordination::record(&location).unwrap();
+    assert_ne!(second["boot"], first["boot"]);
+    assert_eq!(second["runtimeRoot"], first["runtimeRoot"]);
+    assert_eq!(second["build"], first["build"]);
+    assert_eq!(fs::read(&file).unwrap(), before);
+    assert_eq!(
+        control::execute(&running, Control::Restart, &trust, &cancel),
+        Err(Failure::Unverified),
+        "old boot cannot stop its successor"
+    );
+    let journal: Value = serde_json::from_slice(&fs::read(profile.join(JOURNAL)).unwrap()).unwrap();
+    assert_eq!(journal["phase"], "complete");
+    assert_eq!(journal["purpose"], "daemon-restart");
+    assert_eq!(journal["receipt"]["purpose"], "daemon-restart");
+    assert!(journal.get("secret").is_none());
+    // Lose the replacement's ready ACK after bootstrap. A running service/GET
+    // cannot clear this interrupted intent or authorize another action.
+    let running = inspect().unwrap();
+    fs::write(profile.join("lost-ready"), "").unwrap();
+    assert_eq!(
+        control::execute(&running, Control::Restart, &trust, &cancel),
+        Err(Failure::Unknown)
+    );
+    assert_ne!(
+        coordination::record(&location).unwrap()["boot"],
+        second["boot"]
+    );
+    assert_eq!(fs::read(&file).unwrap(), before);
+    let journal: Value = serde_json::from_slice(&fs::read(profile.join(JOURNAL)).unwrap()).unwrap();
+    assert_eq!(journal["phase"], "starting");
+    assert!(matches!(inspect(), Err(Failure::Unknown)));
+    assert_eq!(
+        control::execute(&running, Control::Restart, &trust, &cancel),
+        Err(Failure::Unknown)
+    );
 }
 
 #[test]

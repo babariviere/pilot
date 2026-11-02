@@ -21,6 +21,8 @@ use std::{
 
 const LABEL: &str = "com.babariviere.pilot.daemon";
 const JOURNAL: &str = ".daemon-upgrade.json";
+#[path = "daemon_control_macos.rs"]
+pub mod control;
 #[path = "daemon_migrate_stopped.rs"]
 mod stopped;
 pub use stopped::migrate_stopped;

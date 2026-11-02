@@ -20,7 +20,14 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &HideOthers, cx| cx.hide_other_apps());
     cx.on_action(|_: &ShowAll, cx| cx.unhide_other_apps());
     cx.on_action(|_: &About, cx| cx.defer(show_about));
-    cx.set_menus(menus());
+    #[cfg(target_os = "macos")]
+    crate::daemon_menu::init(cx);
+    refresh(cx);
+}
+
+pub(crate) fn refresh(cx: &mut App) {
+    let menus = menus_with(Some(cx));
+    cx.set_menus(menus);
 }
 
 /// Set while the About alert is open, so a repeat request does not queue another sheet.
@@ -68,7 +75,13 @@ fn show_about(cx: &mut App) {
     }
 }
 
+#[cfg(test)]
 fn menus() -> Vec<Menu> {
+    menus_with(None)
+}
+fn menus_with(cx: Option<&App>) -> Vec<Menu> {
+    #[cfg(not(target_os = "macos"))]
+    let _ = cx;
     use crate::local_view::{
         GoHome, NavigateBack, NavigateForward, NewChat, ShowAllChats, ShowMissions, ToggleJump,
     };
@@ -77,6 +90,8 @@ fn menus() -> Vec<Menu> {
             MenuItem::action("About Pilot Next", About),
             MenuItem::separator(),
             MenuItem::action("Settings…", crate::settings_view::OpenSettings),
+            #[cfg(target_os = "macos")]
+            crate::daemon_menu::menu(cx),
             MenuItem::separator(),
             MenuItem::os_submenu("Services", SystemMenuType::Services),
             MenuItem::separator(),

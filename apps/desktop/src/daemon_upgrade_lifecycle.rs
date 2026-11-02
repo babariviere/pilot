@@ -4,6 +4,11 @@ use super::*;
 
 impl LocalViewer {
     pub(super) fn advance_startup_daemon_upgrade(&mut self, cx: &mut Context<Self>) {
+        // An explicit unchanged-runtime control must never turn into an upgrade.
+        #[cfg(target_os = "macos")]
+        if crate::daemon_menu::manual(cx) || crate::daemon_menu::active(cx) {
+            return;
+        }
         if self.restart_pending
             || self.daemon_upgrade_pending
             || !self.editor.read(cx).ready()
@@ -32,6 +37,16 @@ impl LocalViewer {
         let Some(upgrade) = self.daemon_upgrade(cx) else {
             return;
         };
+        #[cfg(target_os = "macos")]
+        if crate::daemon_menu::active(cx) {
+            upgrade.update(cx, |u, cx| {
+                u.set_notice(
+                    "Wait for the daemon control request to finish before upgrading.",
+                    cx,
+                )
+            });
+            return;
+        }
         if !upgrade.read(cx).checkpoint_requested() {
             return;
         }
@@ -48,6 +63,8 @@ impl LocalViewer {
         // and visuals stay with their existing owners. Never flush, resolve or resend
         // an Unknown just to obtain permission to replace the daemon.
         self.daemon_upgrade_pending = true;
+        #[cfg(target_os = "macos")]
+        cx.defer(crate::app_menu::refresh);
         upgrade.update(cx, |u, cx| u.begin(cx));
         cx.notify();
     }
@@ -64,6 +81,8 @@ impl LocalViewer {
     pub(super) fn finish_daemon_checkpoint(&mut self, cx: &mut Context<Self>) {
         // Unknown fences another native handoff in DaemonUpgrade, not unrelated UI.
         self.daemon_upgrade_pending = false;
+        #[cfg(target_os = "macos")]
+        cx.defer(crate::app_menu::refresh);
         cx.notify();
     }
 

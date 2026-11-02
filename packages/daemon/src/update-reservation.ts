@@ -8,7 +8,7 @@ export interface ReservationReceipt {
 	operationId: string;
 	token: string;
 	/** Omitted for legacy GUI-only updates, which leave pilotd running. */
-	purpose?: "daemon-upgrade";
+	purpose?: "daemon-upgrade" | "daemon-stop" | "daemon-restart";
 }
 
 export class UpdateReservation {
@@ -19,6 +19,7 @@ export class UpdateReservation {
 	private readonly used = new Set<string>();
 	private readonly resources: Pick<RuntimeResources, "freezeAdmissions" | "blockers">;
 	private readonly daemonResources?: Pick<RuntimeResources, "freezeAdmissions" | "blockers">;
+	private readonly controlsIdle?: () => boolean;
 	private readonly now: () => number;
 	private readonly duration: number;
 	constructor(
@@ -26,9 +27,11 @@ export class UpdateReservation {
 		now = () => performance.now(),
 		duration = 180_000,
 		daemonResources?: Pick<RuntimeResources, "freezeAdmissions" | "blockers">,
+		controlsIdle?: () => boolean,
 	) {
 		this.resources = resources;
 		this.daemonResources = daemonResources;
+		this.controlsIdle = controlsIdle;
 		this.now = now;
 		this.duration = duration;
 	}
@@ -49,9 +52,15 @@ export class UpdateReservation {
 		);
 		this.timer.unref();
 	}
-	async prepare(operationId: string, purpose?: "daemon-upgrade"): Promise<ReservationReceipt> {
+	async prepare(operationId: string, purpose?: ReservationReceipt["purpose"]): Promise<ReservationReceipt> {
 		this.expire();
-		if (purpose !== undefined && (purpose !== "daemon-upgrade" || !this.daemonResources))
+		const control = purpose === "daemon-stop" || purpose === "daemon-restart";
+		if (
+			purpose !== undefined &&
+			(!["daemon-upgrade", "daemon-stop", "daemon-restart"].includes(purpose) ||
+				!this.daemonResources ||
+				(control && !this.controlsIdle))
+		)
 			throw new Error("update_reservation_purpose_invalid");
 		if (
 			this.closed ||
@@ -68,8 +77,11 @@ export class UpdateReservation {
 		const until = this.now() + this.duration;
 		let inspectionTimer: ReturnType<typeof setTimeout> | undefined;
 		try {
-			const resources = purpose === "daemon-upgrade" ? this.daemonResources! : this.resources;
+			const resources = purpose !== undefined ? this.daemonResources! : this.resources;
 			release = resources.freezeAdmissions();
+			// An upgrade may checkpoint an unfinished run. Explicit Stop/Restart
+			// must instead decline it, even after its tools have acknowledged pause.
+			if (control && !this.controlsIdle!()) throw new Error("update_reservation_not_idle");
 			const blockers = await Promise.race([
 				resources.blockers(),
 				new Promise<never>((_, reject) => {
@@ -79,7 +91,8 @@ export class UpdateReservation {
 					);
 				}),
 			]);
-			if (blockers.length || this.closed || this.now() >= until) throw new Error("update_reservation_not_idle");
+			if (blockers.length || this.closed || this.now() >= until || (control && !this.controlsIdle!()))
+				throw new Error("update_reservation_not_idle");
 			const receipt: ReservationReceipt = {
 				schema: 1,
 				operationId,

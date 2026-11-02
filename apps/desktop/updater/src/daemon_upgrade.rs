@@ -121,6 +121,8 @@ fn execute(host: &mut impl Handoff, cancel: &AtomicBool) -> Result<(), Failure> 
 #[path = "daemon_upgrade_macos.rs"]
 mod macos;
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
+pub use macos::control;
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
 pub use macos::{migrate_stopped, needed, upgrade, upgrade_startup};
 #[cfg(all(target_os = "linux", feature = "native-linux"))]
 #[path = "daemon_upgrade_linux.rs"]

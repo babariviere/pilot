@@ -499,6 +499,11 @@ pub(crate) const SERVICE_REQUIRED: &str =
 pub(crate) const SERVICE_UNKNOWN: &str =
     "Service outcome unknown. Inspect the retained handoff and service state; do not retry.";
 
+#[cfg(target_os = "macos")]
+pub(crate) fn connect_managed() -> Result<crate::LocalOptions, Failure> {
+    crate::LocalOptions::discover_at(runtime_location()?)?.verify_running()
+}
+
 /// User-confirmed startup action. Registration includes login enablement and one start.
 pub(crate) fn register_service_explicit(
     cancel: Arc<AtomicBool>,
@@ -543,7 +548,7 @@ static PROFILE: std::sync::OnceLock<pilot_desktop_updater::coordination::Locatio
     std::sync::OnceLock::new();
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-fn runtime_location() -> Result<pilot_desktop_updater::coordination::Location, Failure> {
+pub(crate) fn runtime_location() -> Result<pilot_desktop_updater::coordination::Location, Failure> {
     if let Some(location) = PROFILE.get() {
         return Ok(location.clone());
     }
