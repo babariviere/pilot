@@ -1,8 +1,8 @@
 # Automations (design)
 
 **Status: foundations in progress, disabled by default.** Definitions, validation and native-authorized
-revision-checked writes are implemented. Set `PILOT_AUTOMATIONS=1` on the daemon to expose the
-`automations: 1` capability and editing endpoint. Execution and user-facing controls follow separately.
+revision-checked writes and the bounded shell runner are implemented. Set `PILOT_AUTOMATIONS=1` on the daemon to expose the
+`automations: 1` capability and editing endpoint. Setup scheduling and user-facing controls follow separately.
 The unsupported Swift app is not part of this implementation; no PilotCore mirror is required.
 This is the lifecycle hook layer: small, personal automations
 around a chat's workspace and runs. Agent flows (sequences of agents, such as a bug-fix flow with a reviewer)

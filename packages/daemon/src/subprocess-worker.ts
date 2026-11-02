@@ -45,6 +45,7 @@ function start(request: ProcessRequest): void {
 	let childError: NodeJS.ErrnoException | undefined;
 	let finished = false;
 	let forceKill: ReturnType<typeof setTimeout> | undefined;
+	let closed: ProcessReply | undefined;
 	const kill = (signal: NodeJS.Signals) => {
 		try {
 			// Git and gh can spawn helpers. A detached child owns its process group, so stop all of it.
@@ -57,7 +58,13 @@ function start(request: ProcessRequest): void {
 	const stop = (signal: NodeJS.Signals = request.killSignal ?? "SIGTERM") => {
 		if (forceKill) return;
 		kill(signal);
-		forceKill = setTimeout(() => kill("SIGKILL"), signal === "SIGKILL" ? 0 : (request.forceKillMs ?? 1_000));
+		forceKill = setTimeout(
+			() => {
+				kill("SIGKILL");
+				if (closed) finish(closed);
+			},
+			signal === "SIGKILL" ? 0 : (request.forceKillMs ?? 1_000),
+		);
 	};
 	const timer =
 		request.timeoutMs !== undefined && request.timeoutMs > 0
@@ -74,6 +81,10 @@ function start(request: ProcessRequest): void {
 		},
 	});
 	child.stdout!.on("data", (chunk: Buffer) => {
+		if (request.overflow === "tail") {
+			retainTail(chunk);
+			return;
+		}
 		if (truncated || overflowed) return;
 		const remaining = request.maxBytes - stdoutBytes;
 		if (chunk.length <= remaining) {
@@ -93,10 +104,45 @@ function start(request: ProcessRequest): void {
 	});
 	const maxStderr = request.maxStderrBytes ?? 64 * 1024;
 	child.stderr!.on("data", (chunk: Buffer) => {
+		if (request.overflow === "tail" && request.combinedOutput) {
+			retainTail(chunk);
+			return;
+		}
 		if (stderr.length < maxStderr) stderr += chunk.toString("utf8").slice(0, maxStderr - stderr.length);
 	});
+	function retainTail(chunk: Buffer): void {
+		truncated ||= stdoutBytes + chunk.length > request.maxBytes;
+		if (chunk.length >= request.maxBytes) {
+			stdout.length = 0;
+			stdout.push(Buffer.from(chunk.subarray(chunk.length - request.maxBytes)));
+			stdoutBytes = request.maxBytes;
+			return;
+		}
+		stdout.push(chunk);
+		stdoutBytes += chunk.length;
+		while (stdoutBytes > request.maxBytes) {
+			const excess = stdoutBytes - request.maxBytes;
+			const first = stdout[0]!;
+			if (first.length <= excess) {
+				stdout.shift();
+				stdoutBytes -= first.length;
+			} else {
+				stdout[0] = Buffer.from(first.subarray(excess));
+				stdoutBytes -= excess;
+			}
+		}
+	}
 	const finish = (message: ProcessReply) => {
 		if (finished) return;
+		// A leader may close its pipes while a TERM-ignoring descendant remains in its group.
+		// Do not release the caller's concurrency/cwd lease before escalation has signalled it.
+		if (request.detached && forceKill && !closed && child.pid) {
+			try {
+				process.kill(-child.pid, 0);
+				closed = message;
+				return;
+			} catch {}
+		}
 		finished = true;
 		clearTimeout(timer);
 		clearTimeout(forceKill);

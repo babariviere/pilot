@@ -25,7 +25,9 @@ export interface ProcessRequest {
 	/** Retained stdout bound. */
 	maxBytes: number;
 	/** `truncate` keeps the prefix and stops the child; `fail` stops it and reports `overflowed`. */
-	overflow: "truncate" | "fail";
+	overflow: "truncate" | "fail" | "tail";
+	/** Combine stderr into stdout in observed arrival order (tail mode only). */
+	combinedOutput?: boolean;
 	/** Retained stderr bound. Further output is discarded. Defaults to 64 KiB. */
 	maxStderrBytes?: number;
 }

@@ -84,6 +84,7 @@ import release from "../../../package.json" with { type: "json" };
 import { AIUsageLedger } from "./ai-usage.ts";
 import { compareAIUsageBudget } from "./ai-usage-budget.ts";
 import { prepareAskSnapshot } from "./ask-snapshots.ts";
+import { type ActionResult, ActionRunner } from "./automation-runner.ts";
 import { chatTitleContext, TITLE_OPENING_LIMIT } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
 import { coordinatorTrust } from "./coordinator-trust.ts";
@@ -101,6 +102,7 @@ import { DiagnosticRepairProjectStore, diagnosticRepairTitle, repairHost } from 
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import { githubRepository, linkedPullRequest, type PullRequestProblems } from "./github.ts";
+import { automationsEnabled } from "./hello.ts";
 import { LifecycleDiagnostics } from "./lifecycle-diagnostics.ts";
 import { LongJobTimers, longJobAttention } from "./long-jobs.ts";
 import { forkMainViewWorker, MainViewStore } from "./main-view.ts";
@@ -312,6 +314,8 @@ export interface SessionWorker {
 }
 
 export interface SessionManagerOptions {
+	/** Host runner, injectable for offline process tests. Absent unless hooks are enabled. */
+	actionRunner?: ActionRunner;
 	/** One host-owned accounting store, shared with separate background completions. */
 	usageHistory?: UsageHistoryStore;
 	/** Agent database access. Defaults to the agent directory's config, except with injected test workers. */
@@ -469,6 +473,7 @@ interface SessionMeta extends OutcomeMeta {
 	workspacePrunedAt?: number;
 	/** Told to the next kernel so the agent does not assume dependencies or build output exist. */
 	workspaceReset?: WorkspaceReset;
+	automation?: { runs: import("@pilot/protocol").AutomationRunRecord[] };
 	createdAt: number;
 	updatedAt: number;
 	/** User-submission time, separate from worker lifecycle and metadata changes. */
@@ -1389,6 +1394,7 @@ export class SessionManager {
 	private readonly titleGenerating = new Set<string>();
 	private readonly shutdownSignal = new AbortController();
 	private readonly updateGate = new UpdateGate();
+	private readonly actionRunner?: ActionRunner;
 	private runtimeInspecting?: Promise<import("./runtime-admission.ts").RuntimeBlocker[]>;
 	private updatePauseTimer?: ReturnType<typeof setTimeout>;
 	private readonly updatePausing = new Map<SessionWorker, { id: string; ready: boolean; error?: string }>();
@@ -1565,6 +1571,11 @@ export class SessionManager {
 		this.prFollowUpCiWaitMs = options.prFollowUpCiWaitMs ?? 60 * 60_000;
 		this.kernelRestartBackoffMs = options.kernelRestartBackoffMs ?? 15_000;
 		this.workerOptions = { startupTimeoutMs: options.startupTimeoutMs, commandTimeoutMs: options.commandTimeoutMs };
+		this.actionRunner = options.actionRunner ?? (automationsEnabled() ? new ActionRunner() : undefined);
+		this.actionRunner?.onChange((id) => {
+			const meta = id ? this.metas.get(id) : undefined;
+			if (meta) this.emit(meta);
+		});
 		this.credentials = options.credentials;
 		this.workspaceRetentionMs = options.workspaceRetentionMs ?? DAY_MS;
 		this.sharedWorkspaces = new SharedWorkspaceStore(home);
@@ -1629,6 +1640,88 @@ export class SessionManager {
 
 	setProjectMemory(memory: ProjectMemoryService): void {
 		this.memory = memory;
+	}
+
+	/** Execution seam shared by setup participants and, later, post-run checks. */
+	async runWorkspaceAction(
+		id: string,
+		hook: import("@pilot/protocol").Automation,
+		trigger: import("@pilot/protocol").AutomationTrigger | "manual",
+		triggerId: string,
+		definitionRevision: number,
+		signal?: AbortSignal,
+	): Promise<ActionResult> {
+		const meta = this.require(id);
+		if (!this.actionRunner) throw new ServiceUnavailable("Automations are disabled");
+		if (
+			this.closing ||
+			meta.archivedAt !== undefined ||
+			meta.mode === "ask" ||
+			this.isMissionCoordinator(id) ||
+			!meta.workspace ||
+			!meta.projectId
+		)
+			throw new Conflict("A Build workspace is required");
+		if (hook.action.type !== "shell") throw new Error("Expected a shell action");
+		const action = hook.action;
+		const runId = `${triggerId}/${hook.id}`;
+		meta.automation ??= { runs: [] };
+		const previous = meta.automation.runs.find((run) => run.id === runId);
+		const record: import("@pilot/protocol").AutomationRunRecord = {
+			id: runId,
+			automationId: hook.id,
+			name: hook.name,
+			definitionRevision,
+			trigger,
+			state: "waiting",
+			attempt: (previous?.attempt ?? 0) + 1,
+			excerpt: "",
+		};
+		return this.actionRunner.runAction({
+			actionId: `${id}/${runId}`,
+			projectId: meta.projectId,
+			sessionId: id,
+			cwd: meta.cwd,
+			relativeCwd: action.cwd,
+			run: action.run,
+			env: action.env,
+			automationId: hook.id,
+			trigger,
+			timeoutMs: action.timeoutMs,
+			signal,
+			record: async (state, result) => {
+				record.state = state;
+				if (state === "running") record.startedAt = Date.now();
+				if (result) {
+					record.endedAt = Date.now();
+					if (result.exitCode !== undefined) record.exitCode = result.exitCode;
+					else delete record.exitCode;
+					if (result.reason !== undefined) record.reason = result.reason;
+					else delete record.reason;
+					record.excerpt = Buffer.from(result.outputTail.split("\n").slice(-40).join("\n"))
+						.subarray(-4096)
+						.toString("utf8");
+					const directory = join(this.dir(id), "automation-logs");
+					await mkdir(directory, { recursive: true, mode: 0o700 });
+					const file = `${createHash("sha256").update(runId).digest("hex")}.log`;
+					await writeFile(join(directory, file), result.outputTail, { mode: 0o600 });
+					const kept = new Set([
+						...meta
+							.automation!.runs.filter((run) => run.id !== runId)
+							.slice(-9)
+							.map((run) => `${createHash("sha256").update(run.id).digest("hex")}.log`),
+						file,
+					]);
+					for (const old of await readdir(directory))
+						if (/^[a-f0-9]{64}\.log$/.test(old) && !kept.has(old)) await rm(join(directory, old));
+				}
+				meta.automation!.runs = [...meta.automation!.runs.filter((run) => run.id !== runId), { ...record }].slice(
+					-20,
+				);
+				await this.save(meta);
+				this.emit(meta);
+			},
+		});
 	}
 	private sharing?: import("./retired-devboxes.ts").LegacySessionOwnership;
 	setSharedContext(sharing: import("./retired-devboxes.ts").LegacySessionOwnership): void {
@@ -1815,7 +1908,12 @@ export class SessionManager {
 				const childWork = !meta.failure && !meta.recoveryStopped && this.backgroundWorking(meta);
 				if (childWork) applyActivity(meta, Boolean(meta.working), undefined, true);
 				this.metas.set(meta.id, meta);
-				if (legacyRefresh || childWork || migratedPermission)
+				const interruptedActions = meta.automation?.runs.some(
+					(run) => run.state === "running" || run.state === "waiting",
+				);
+				for (const run of meta.automation?.runs ?? [])
+					if (run.state === "running" || run.state === "waiting") run.state = "interrupted";
+				if (legacyRefresh || childWork || migratedPermission || interruptedActions)
 					await this.save(meta, undefined, undefined, migratedPermission);
 			} catch (error) {
 				console.warn(`pilotd: skipping unreadable session ${id}: ${error}`);
@@ -1911,6 +2009,7 @@ export class SessionManager {
 	/** Child admissions are durable even when the parent has already ended its own run. */
 	private backgroundWorking(meta: SessionMeta, worker = this.workers.get(meta.id)): boolean {
 		return !!(
+			this.actionRunner?.isWorking(meta.id) ||
 			(meta.archivedAt === undefined &&
 				!meta.failure &&
 				!meta.recoveryStopped &&
@@ -3860,6 +3959,7 @@ export class SessionManager {
 						this.sending.has(id))
 				)
 					throw new Conflict("Stop the session before archiving it");
+				if (archived) await this.actionRunner?.cancelSession(id);
 				// A new archival starts a new cleanup cycle; an older reset notice no longer describes the workspace.
 				if (archived) delete meta.workspaceReset;
 				else delete meta.workspacePrunedAt;
@@ -4798,7 +4898,12 @@ export class SessionManager {
 
 	/** Maintenance-owned freeze has no implicit timeout. The caller owns release/recovery. */
 	freezeAdmissions(): () => void {
-		return this.updateGate.freezeAdmissions();
+		const gate = this.updateGate.freezeAdmissions();
+		const actions = this.actionRunner?.freezeAdmissions();
+		return () => {
+			gate();
+			actions?.();
+		};
 	}
 
 	/** Handoff preflight checkpoints owned drained subagents before independent safety inspection.
@@ -4813,7 +4918,7 @@ export class SessionManager {
 		return this.runtimeInspecting;
 	}
 	private async inspectRuntimeBlockers(): Promise<import("./runtime-admission.ts").RuntimeBlocker[]> {
-		const blockers: import("./runtime-admission.ts").RuntimeBlocker[] = [];
+		const blockers: import("./runtime-admission.ts").RuntimeBlocker[] = [...(this.actionRunner?.blockers() ?? [])];
 		if (
 			!this.updateGate.paused ||
 			this.updateGate.admissions ||
@@ -4943,6 +5048,7 @@ export class SessionManager {
 	}
 
 	private pauseWorkersForUpdate(): UpdatePreparation {
+		this.actionRunner?.setUpdatePaused(true);
 		const drained = this.updateGate.pause();
 		clearTimeout(this.updatePauseTimer);
 		this.updatePauseTimer = setTimeout(() => this.resumeAfterUpdate(), 30_000);
@@ -5013,6 +5119,7 @@ export class SessionManager {
 				if (this.updatePausing.has(worker)) worker.send({ type: "update.resume" });
 		this.updatePausing.clear();
 		this.updateGate.release();
+		this.actionRunner?.setUpdatePaused(false);
 		this.pumpMainRefreshes();
 		if (this.sleepPause) return;
 		for (const meta of this.metas.values()) {
@@ -5909,6 +6016,7 @@ export class SessionManager {
 		this.assertNotContinued(meta, true);
 		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 		if (this.closing) throw new Error("pilotd is shutting down");
+		if (this.actionRunner?.isWorking(id)) await this.actionRunner.cancelSession(id);
 		if (this.canRetryStartup(meta)) return this.stopFailedRecovery(meta);
 		if (meta.failure || meta.recoveryStopped) return this.stoppedWithoutWorker(meta);
 		if (
@@ -7274,6 +7382,7 @@ export class SessionManager {
 		void prepared.catch(() => {});
 		const resuming = this.sleepResuming;
 		const pause = async () => {
+			await this.actionRunner?.pauseForSleep();
 			await resuming;
 			await this.savePowerPause();
 			// Detach synchronously before persistence so shutdown packets cannot complete/fail paused work.
@@ -7345,6 +7454,7 @@ export class SessionManager {
 				return;
 			}
 			this.sleepPause = undefined;
+			this.actionRunner?.resumeAfterSleep();
 			for (const meta of this.metas.values()) {
 				if (revision !== this.sleepRevision || this.closing) return;
 				if (
@@ -7404,6 +7514,7 @@ export class SessionManager {
 		this.diagnosticContextReads.clear();
 		this.diagnosticReadBroker.close();
 		this.closing = true;
+		const drainActions = this.actionRunner?.close();
 		const drainRepairProjects = this.repairProject.close();
 		this.workerStarts.close();
 		this.recoveryStops.close();
@@ -7446,6 +7557,7 @@ export class SessionManager {
 		await this.archiveSweep;
 		await Promise.allSettled([...this.archiveTransitions.values()].map((transition) => transition.promise));
 		await drainRepairProjects;
+		await drainActions;
 		await Promise.all([...this.saving.values()]);
 		await this.aiUsage.close();
 		await this.legacyUsageMigration;
@@ -8740,6 +8852,10 @@ export class SessionManager {
 	}
 
 	private summary(meta: SessionMeta, worker = this.workers.get(meta.id)): SessionSummary {
+		const actionState = this.actionRunner?.state(meta.id);
+		const actionRecord = actionState
+			? meta.automation?.runs.find((run) => `${meta.id}/${run.id}` === actionState.actionId)
+			: undefined;
 		const failedModelSource = this.failedModelSource(meta);
 		const retainedHistory = this.isRetainedHistory(meta);
 		const membership = this.missionSummary(meta.id);
@@ -8832,7 +8948,8 @@ export class SessionManager {
 			!meta.recoveryStopped &&
 			!paused &&
 			!offlinePaused &&
-			(toolsRunning ||
+			(this.actionRunner?.isWorking(meta.id) ||
+				toolsRunning ||
 				(!mainQuotaPaused && mainBusy) ||
 				(!questionWaits && (runnableChildren || !!worker?.runningJobs?.length)));
 		const heldAtQuota =
@@ -8893,6 +9010,17 @@ export class SessionManager {
 			...(offlinePaused ? { offlinePaused: true } : {}),
 			state,
 			working,
+			...(meta.automation?.runs.length ? { automationRuns: structuredClone(meta.automation.runs) } : {}),
+			...(actionState
+				? {
+						automation: {
+							state: actionState.state,
+							name: actionRecord?.name ?? "Setup",
+							trigger: actionRecord?.trigger ?? "manual",
+							startedAt: actionRecord?.startedAt ?? meta.createdAt,
+						},
+					}
+				: {}),
 			...(worker?.runningJobs?.length ? { runningJobs: worker.runningJobs } : {}),
 			...longJob,
 			...(!working ? this.stuckPullRequestAttention(meta) : {}),

@@ -46,3 +46,18 @@ export interface ProjectAutomationsUpdateRequest {
 	expectedRevision: number;
 	items: Automation[];
 }
+
+export interface AutomationRunRecord {
+	id: string;
+	automationId: string;
+	name: string;
+	definitionRevision: number;
+	trigger: AutomationTrigger | "manual";
+	state: "waiting" | "running" | "ok" | "failed" | "timed_out" | "cancelled" | "interrupted" | "skipped";
+	attempt: number;
+	exitCode?: number;
+	reason?: string;
+	startedAt?: number;
+	endedAt?: number;
+	excerpt: string;
+}

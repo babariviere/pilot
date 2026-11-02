@@ -300,6 +300,9 @@ export interface FailedModelResponse extends FailedModelRequest {
 }
 
 export interface SessionSummary {
+	/** Bounded retained command results, available without opening a kernel. */
+	automationRuns?: import("./automations.ts").AutomationRunRecord[];
+	automation?: { state: "running" | "waiting"; name: string; trigger: string; startedAt: number };
 	/** Captured failure/configuration precondition. Absent means passive configuration is unavailable. */
 	failedModelSource?: FailedModelSource;
 	/** Saved for a future explicit recovery, not the current worker or a retry receipt. */
