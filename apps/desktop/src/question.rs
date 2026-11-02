@@ -26,6 +26,47 @@ pub(crate) struct Choice {
 pub(crate) enum Kind {
     Message,
     AccessUnavailable,
+    /// A well-formed database-access request. Only the explicit native
+    /// Allow/Deny decision for its exact request ID answers it, never a message.
+    Access,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum AccessMode {
+    Read,
+    Write,
+}
+/// pilotd's structured request, shown and submitted as reported. The prose
+/// question, context and choices never widen, narrow or answer it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct Access {
+    pub(crate) id: String,
+    pub(crate) env: String,
+    pub(crate) mode: AccessMode,
+}
+impl Access {
+    fn parse(value: &Value) -> Option<Self> {
+        let id = value["id"].as_str()?;
+        let env = value["env"].as_str()?;
+        let mode = match value["mode"].as_str()? {
+            "read" => AccessMode::Read,
+            "write" => AccessMode::Write,
+            _ => return None,
+        };
+        let id_ok = (1..=128).contains(&id.len())
+            && id
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_');
+        // pilotd bounds environment names to 64 characters.
+        let env_ok = !env.trim().is_empty()
+            && env.encode_utf16().count() <= 64
+            && !env.chars().any(char::is_control);
+        (id_ok && env_ok).then(|| Self {
+            id: id.into(),
+            env: env.into(),
+            mode,
+        })
+    }
 }
 #[derive(Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct Content {
@@ -38,6 +79,9 @@ pub(crate) struct Content {
     /// Omitted when false, so legacy turn-ending identities are unchanged.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub(crate) blocking: bool,
+    /// Present only for `Kind::Access`, so other identities are unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) access: Option<Access>,
 }
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Question {
@@ -102,10 +146,11 @@ impl Question {
         }
         // Any access marker, including malformed metadata, must never become
         // a generic message-based grant/deny surface.
-        let kind = if data["databaseAccess"].is_null() {
-            Kind::Message
-        } else {
-            Kind::AccessUnavailable
+        let access = Access::parse(&data["databaseAccess"]);
+        let kind = match (&data["databaseAccess"], &access) {
+            (Value::Null, _) => Kind::Message,
+            (_, Some(_)) => Kind::Access,
+            (_, None) => Kind::AccessUnavailable,
         };
         let multi = kind == Kind::Message && data["multiSelect"] == true && options.len() > 1;
         // Only an exact boolean is a delivery contract; access requests never await a message.
@@ -121,6 +166,7 @@ impl Question {
             multi,
             kind,
             blocking,
+            access,
         };
         let bytes =
             serde_json::to_vec(&content).map_err(|_| "Question metadata cannot be encoded")?;

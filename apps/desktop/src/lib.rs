@@ -246,6 +246,7 @@ pub use mission_tasks_probe::run_mission_tasks_probe;
 #[cfg(feature = "native-probes")]
 pub use task_status_probe::run_task_status_probe;
 mod compaction_event;
+mod database_access;
 mod github_event;
 mod mission_transport;
 mod mission_view;
@@ -257,6 +258,8 @@ mod project_registration;
 mod project_registration_fixture;
 mod question;
 mod question_entry;
+#[cfg(feature = "native-probes")]
+pub use chat_editor::database_access_probe::run_database_access_probe;
 #[cfg(feature = "native-probes")]
 pub use chat_editor::question_probe::run_question_probe;
 #[cfg(feature = "native-probes")]

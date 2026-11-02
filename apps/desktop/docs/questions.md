@@ -28,10 +28,35 @@ prefix, queue, run and summary state before confirming. The worker rechecks
 Local identity, target eligibility and turn state before admission/retry.
 These checks do not claim atomic server-side question settlement.
 
-Database-access questions use a different grant/request authority. They are
-explicitly unavailable here, with no generic allow/deny/message fallback.
-Use the current macOS app for those decisions. No backend, permissions or host
-capabilities are expanded.
+Database-access questions use a different grant/request authority. A
+well-formed request (`databaseAccess` with a 1-128 character `[A-Za-z0-9_-]`
+ID, a non-blank environment of at most 64 characters without control
+characters, and mode `read` or `write`) shows only explicit **Deny** and
+**Allow read/write access** buttons, in that order. The title and scope line
+come from the structured mode and environment ("Allow write access to the prod
+database?", "Reads and writes, for the rest of this chat."), never from the
+agent's prose, choices or suggested answer, which stay visible as context
+only. Nothing is focused by default and no Return/Space on the panel decides;
+keyboard users Tab to Deny first. There is no reply input or radio group, and
+an ordinary message never grants access.
+
+Activation captures the exact chat, question identity (entry plus fingerprint,
+which now covers the structured request) and request, then queues one
+`WriteCommand::DatabaseAccess` on the existing FIFO writer. The worker checks
+the private Book host, pins hello identity and posts exactly `{id, allow}` to
+pilotd's existing `POST /api/sessions/:id/database-access`, whose exact
+pending-ID check remains the authority. Grant lifetime and scope are pilotd's.
+Only an exact `202 {"ok":true}` is accepted. Refusals pilotd returns before
+any change (400, its exact `Unknown session` 404, and the "no longer pending"
+or archived 409s) say nothing changed; every other status, body or interruption
+is Unknown, including a 409 after the decision was saved. Unknown is never
+resent; the buttons stay available for another explicit choice, which pilotd
+refuses if the first already applied. Pending and Accepted fence duplicates
+until the request leaves. The decision is volatile: there is no durable intent
+to replay after restart. Draft edits autosave while the POST is held.
+Changed, stale, read-only, other-chat and resolved requests cannot be decided.
+Malformed or unsupported access metadata keeps an explicit refusal with no
+decision controls. No backend, permissions or host capabilities are expanded.
 
 `pi.compaction` user-role summaries do not answer a question. Later actual
 user input, including automatic input, does. Background jobs alone do not hide
@@ -122,6 +147,16 @@ The matrix checks exact content/input/action bounds, Stop/Reply alignment and
 unique Stop ownership, native pointer and Tab/Space Stop, Reply, Unicode/preedit,
 long-question scrolling and reduced motion. Add `--test composer_controls` to
 cover the unchanged ordinary composer geometry and actions.
+
+`scripts/check-scoped.py --unit access --test database_access --native-probes --lint`
+covers structured parsing, the faux daemon transport classification, held
+writer autosave/FIFO/Close and hidden native 680/1100 light/dark decisions:
+no default activation, Deny-first keyboard order, exact allow/deny payloads,
+Pending/Accepted duplicate fences, Unknown without resubmission, stale replies,
+changed/stale/read-only/other-chat/malformed/resolved requests, preedit
+deferral and the preserved ordinary Unicode draft. Set
+`PILOT_NEXT_DATABASE_ACCESS_DIR` for synthetic captures. No real daemon,
+database, account or grant is used.
 
 The redundant composer model notice was traced to
 `chat_model_picker::model_restriction`: "Wait for the pending chat action before

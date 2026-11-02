@@ -158,8 +158,64 @@ fn question_malformed_latest_never_resurrects_old_or_authorizes_access() {
     let mut access = question(7);
     access["data"]["databaseAccess"] = json!({"id":"request-1","env":"prod","mode":"read"});
     let q = Question::parse(7, &access["data"]).unwrap();
-    assert!(q.content.kind == Kind::AccessUnavailable);
+    assert!(q.content.kind == Kind::Access);
     assert!(q.reply(&BTreeSet::from([0]), "").is_err());
     access["data"]["databaseAccess"] = json!({"mode":"invalid"});
     assert!(Question::parse(7, &access["data"]).unwrap().content.kind == Kind::AccessUnavailable);
+}
+#[test]
+fn database_access_is_structured_exact_and_never_a_message_answer() {
+    use crate::question::{AccessMode, AnswerDraft};
+    let data = |access: serde_json::Value| {
+        json!({"question":"Allow read access to the prod database?","context":"SELECT only",
+            "options":[{"label":"Allow read access to prod","suggested":true},{"label":"Deny"}],
+            "multiSelect":true,"blocking":true,"databaseAccess":access})
+    };
+    let write = Question::parse(
+        9,
+        &data(json!({"id":"5b0f-req_1","env":"prod 日本語","mode":"write","extra":1})),
+    )
+    .unwrap();
+    assert!(write.content.kind == Kind::Access);
+    let access = write.content.access.as_ref().unwrap();
+    assert_eq!(
+        (access.id.as_str(), access.env.as_str(), access.mode),
+        ("5b0f-req_1", "prod 日本語", AccessMode::Write),
+        "Structured write stays write whatever the prose says"
+    );
+    assert!(!write.content.multi && !write.content.blocking);
+    assert!(write.reply(&BTreeSet::from([0]), "Allow").is_err());
+    assert!(AnswerDraft::capture(&write, 1, BTreeSet::from([0]), String::new()).is_err());
+    // Identity covers the exact request: another ID or mode is another question.
+    let read = Question::parse(
+        9,
+        &data(json!({"id":"5b0f-req_1","env":"prod 日本語","mode":"read"})),
+    )
+    .unwrap();
+    let other = Question::parse(
+        9,
+        &data(json!({"id":"5b0f-req_2","env":"prod 日本語","mode":"write"})),
+    )
+    .unwrap();
+    assert_ne!(read.identity, write.identity);
+    assert_ne!(other.identity, write.identity);
+    for malformed in [
+        json!(true),
+        json!("request"),
+        json!({"env":"prod","mode":"read"}),
+        json!({"id":"","env":"prod","mode":"read"}),
+        json!({"id":"has space","env":"prod","mode":"read"}),
+        json!({"id":"r".repeat(129),"env":"prod","mode":"read"}),
+        json!({"id":"r","env":" ","mode":"read"}),
+        json!({"id":"r","env":"pr\nod","mode":"read"}),
+        json!({"id":"r","env":"e".repeat(65),"mode":"read"}),
+        json!({"id":"r","env":"prod","mode":"admin"}),
+        json!({"id":"r","env":"prod"}),
+        json!({"id":1,"env":"prod","mode":"read"}),
+    ] {
+        let q = Question::parse(9, &data(malformed.clone())).unwrap();
+        assert!(q.content.kind == Kind::AccessUnavailable, "{malformed}");
+        assert!(q.content.access.is_none());
+        assert!(q.reply(&BTreeSet::from([0]), "").is_err());
+    }
 }

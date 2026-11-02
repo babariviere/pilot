@@ -34,6 +34,8 @@ pub(crate) struct WriteState {
     pub(crate) project: Option<crate::project_registration::Reply>,
     pub(crate) project_receipt: Option<(String, String)>,
     pub(crate) model: Option<crate::chat_models::Reply>,
+    /// The latest explicit database-access decision. Volatile: never resent.
+    pub(crate) access: Option<crate::database_access::Reply>,
     pub(crate) mission_receipts:
         Arc<std::collections::BTreeMap<String, crate::mission_conversion::Receipt>>,
 }
@@ -102,6 +104,11 @@ pub(crate) enum WriteCommand {
         session: String,
         request: u64,
         action: crate::chat_models::Action,
+    },
+    /// One explicit Allow/Deny for an exact pending database-access request.
+    DatabaseAccess {
+        decision: crate::database_access::Decision,
+        request: u64,
     },
     Project {
         id: String,
@@ -464,6 +471,9 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
         };
         status.notice_key = match &command {
             Some(WriteCommand::Model { session, .. }) => Some(format!("chat:{session}")),
+            Some(WriteCommand::DatabaseAccess { decision, .. }) => {
+                Some(format!("chat:{}", decision.session))
+            }
             Some(WriteCommand::Mission { target, .. }) => {
                 Some(format!("mission:{}", target.source))
             }
@@ -540,6 +550,40 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                     "Closing. Any admitted model switch remains unconfirmed and is never resent.",
                                 ),
                             }
+                        }
+                        Some(WriteCommand::DatabaseAccess { decision, request }) => {
+                            use crate::database_access::{Outcome, Reply, UNKNOWN};
+                            status.access = Some(Reply {
+                                decision: decision.clone(),
+                                request,
+                                outcome: Outcome::Pending,
+                            });
+                            publish(updates, replace, status.clone());
+                            let outcome = if store.book.host != options.host() {
+                                Outcome::Refused(
+                                    "Local source differs from private state. Nothing was sent.",
+                                )
+                            } else {
+                                DeliveryOwner {
+                                    store,
+                                    status: &mut status,
+                                    channels: Some(&channels),
+                                    autosave: &mut autosave,
+                                    closing: &mut closing,
+                                }
+                                .effect(async {
+                                    Ok(crate::database_access::submit(&client, &options, &decision)
+                                        .await)
+                                })
+                                .await
+                                .unwrap_or(Outcome::Unknown(UNKNOWN))
+                            };
+                            status.access = Some(Reply {
+                                decision,
+                                request,
+                                outcome,
+                            });
+                            Ok("")
                         }
                         Some(WriteCommand::Project { id, path: None }) => {
                             use crate::project_registration::{Outcome, Reply};

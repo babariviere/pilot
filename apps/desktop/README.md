@@ -245,9 +245,11 @@ See [delivery-diagnostics.md](docs/delivery-diagnostics.md) for bounds and lifec
 Ordinary agent questions now have explicit single/multiple-choice answers,
 suggested options and a separate own-words reply field. Selection never sends,
 and the existing message draft stays separate. Unknown replies retain their
-original operation for explicit Check/Retry. Database-access decisions remain
-unavailable here. See [structured questions](docs/questions.md) for the existing
-steering contract, identity guards and recovery.
+original operation for explicit Check/Retry. Database-access requests show
+their structured privilege with explicit Deny/Allow buttons that answer only
+that exact pending request through pilotd's existing decision endpoint. See
+[structured questions](docs/questions.md) for the steering and decision
+contracts, identity guards and recovery.
 Answered questions retain the compact question disclosure and one exact inline
 reply block; internal reply/context edits do not appear as extra messages.
 

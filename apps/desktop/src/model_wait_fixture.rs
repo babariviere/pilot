@@ -146,6 +146,11 @@ impl Server {
                                     v
                                 },
                                 ("GET", "/api/sessions/b") => { let mut v = session(false, None); v["id"] = json!("b"); v["model"] = json!("q/c"); v["thinking"] = json!("off"); v },
+                                ("POST", "/api/sessions/a/database-access") => {
+                                    assert_eq!(payload.as_object().unwrap().len(), 2);
+                                    assert!(payload["id"].is_string() && payload["allow"].is_boolean());
+                                    if behavior == Behavior::Reject { json!({"error":"This database access request is no longer pending"}) } else { json!({"ok":true}) }
+                                },
                                 ("GET", p) if p.starts_with("/api/models?") => crate::chat_models_fixture::catalog(),
                                 ("POST", "/api/sessions/a/model" | "/api/sessions/a/failed-model") => {
                                     assert_eq!(path.ends_with("/failed-model"), failed);
@@ -169,7 +174,7 @@ impl Server {
                                 _ => panic!("Unexpected model fixture route {method} {path}"),
                             }.to_string();
                             if mutation && behavior == Behavior::Malformed { body = "{broken".into(); }
-                            let status = if mutation && behavior == Behavior::Reject {"409 Conflict"} else {"200 OK"};
+                            let status = if mutation && behavior == Behavior::Reject {"409 Conflict"} else if path.ends_with("/database-access") {"202 Accepted"} else {"200 OK"};
                             let _ = reader.into_inner().write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await;
                             if held { let _ = complete.send(()).await; }
                         });

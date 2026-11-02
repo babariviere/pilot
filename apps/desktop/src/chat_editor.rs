@@ -32,6 +32,9 @@ mod attachments_probe;
 #[path = "composer_probe.rs"]
 pub(crate) mod composer_probe;
 #[cfg(feature = "native-probes")]
+#[path = "database_access_probe.rs"]
+pub(crate) mod database_access_probe;
+#[cfg(feature = "native-probes")]
 #[path = "delivery_probe.rs"]
 pub(crate) mod delivery_probe;
 #[path = "chat_draft_discard.rs"]
@@ -767,6 +770,7 @@ impl ChatEditor {
             return;
         }
         self.accept_model_action(window, cx);
+        self.accept_access_decision(cx);
         if self.state.error.is_some() {
             self.retiring.clear();
             if !self.state.flushed {
@@ -1188,12 +1192,15 @@ impl ChatEditor {
     }
     pub(crate) fn focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.ready() && self.selected.is_some() {
-            if self.questions.current.is_some() {
-                self.questions
+            match self.questions.current.as_ref().map(|q| q.content.kind) {
+                Some(crate::question::Kind::Message) => self
+                    .questions
                     .input
-                    .update(cx, |state, cx| state.focus(window, cx));
-            } else {
-                self.text.update(cx, |state, cx| state.focus(window, cx));
+                    .update(cx, |state, cx| state.focus(window, cx)),
+                // An access request has no reply input. Focus its panel, never
+                // Allow or Deny, so no key press decides by default.
+                Some(_) => self.focus_question_panel(window, cx),
+                None => self.text.update(cx, |state, cx| state.focus(window, cx)),
             }
         }
     }

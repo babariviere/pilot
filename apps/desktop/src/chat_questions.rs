@@ -2,7 +2,8 @@
 //! The ordinary editor and immutable courier continue to own their own draft.
 use super::*;
 use crate::{
-    question::{AnswerDraft, Identity, Kind, Projection, Question},
+    database_access::{Decision, Outcome as AccessOutcome},
+    question::{Access, AccessMode, AnswerDraft, Identity, Kind, Projection, Question},
     ui::{self, Action, Text},
 };
 use gpui_kit::component::{checkbox::Checkbox, radio::Radio};
@@ -22,6 +23,31 @@ pub(super) struct Questions {
     choices_focus: FocusHandle,
     retiring: Option<(String, u64)>,
     hint_height: crate::composer_height::State,
+    /// The latest explicit database-access decision. Kept across selection so
+    /// returning to the chat still shows Pending/Accepted/Unknown for it.
+    access: Option<AccessDecision>,
+}
+/// Volatile UI view of one submitted decision, matched to the worker's exact reply.
+struct AccessDecision {
+    owner: String,
+    identity: Identity,
+    allow: bool,
+    request: u64,
+    outcome: AccessOutcome,
+}
+fn access_title(access: &Access) -> String {
+    let mode = match access.mode {
+        AccessMode::Read => "read",
+        AccessMode::Write => "write",
+    };
+    format!("Allow {mode} access to the {} database?", access.env)
+}
+/// What a grant permits, from the structured mode, never from prose.
+fn access_scope(access: &Access) -> &'static str {
+    match access.mode {
+        AccessMode::Read => "Read-only, for the rest of this chat.",
+        AccessMode::Write => "Reads and writes, for the rest of this chat.",
+    }
 }
 impl Questions {
     pub(super) fn new(window: &mut Window, cx: &mut Context<ChatEditor>) -> Self {
@@ -45,6 +71,7 @@ impl Questions {
             choices_focus: cx.focus_handle(),
             retiring: None,
             hint_height: Default::default(),
+            access: None,
         }
     }
     pub(super) fn reset(&mut self) {
@@ -136,10 +163,11 @@ impl ChatEditor {
         self.questions.next = None;
         self.load_question_input(window, cx);
         if changed && focused {
-            if self.questions.current.is_some() {
-                self.questions.input.update(cx, |s, cx| s.focus(window, cx));
-            } else {
-                self.text.update(cx, |s, cx| s.focus(window, cx));
+            match self.questions.current.as_ref().map(|q| q.content.kind) {
+                Some(Kind::Message) => self.questions.input.update(cx, |s, cx| s.focus(window, cx)),
+                // Never focus Allow or Deny: no key press may decide by default.
+                Some(_) => window.focus(&self.questions.focus, cx),
+                None => self.text.update(cx, |s, cx| s.focus(window, cx)),
             }
         }
         self.retire_settled_question(cx);
@@ -164,6 +192,9 @@ impl ChatEditor {
         self.questions
             .input
             .update(cx, |s, cx| s.marked_text_range(window, cx).is_some())
+    }
+    pub(super) fn focus_question_panel(&self, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.questions.focus, cx);
     }
     fn question_previous(&self) -> bool {
         self.draft().is_some_and(|d| {
@@ -192,7 +223,102 @@ impl ChatEditor {
         })
     }
     pub(super) fn question_needs_you(&self) -> bool {
-        self.questions.fresh && self.questions.current.is_some() && !self.question_accepted()
+        self.questions.fresh
+            && self.questions.current.is_some()
+            && !self.question_accepted()
+            && !matches!(self.access_outcome(), Some(AccessOutcome::Accepted))
+    }
+    /// The decision submitted for exactly the projected request in this chat.
+    fn access_outcome(&self) -> Option<&AccessOutcome> {
+        let decision = self.questions.access.as_ref()?;
+        let current = self.questions.current.as_ref()?;
+        (self.questions.owner.as_ref() == Some(&decision.owner)
+            && current.identity == decision.identity)
+            .then_some(&decision.outcome)
+    }
+    fn access_decidable(&self) -> bool {
+        self.ready()
+            && self.writable
+            && self.questions.fresh
+            && self.questions.owner == self.selected
+            && !self.waiting()
+            && self.error.is_none()
+            && self
+                .questions
+                .current
+                .as_ref()
+                .is_some_and(|q| q.content.kind == Kind::Access && q.content.access.is_some())
+            && !matches!(
+                self.access_outcome(),
+                Some(AccessOutcome::Pending | AccessOutcome::Accepted)
+            )
+    }
+    /// Only an explicit Allow/Deny activation for this exact pending request.
+    /// A lost reply stays Unknown; nothing here resubmits automatically.
+    pub(super) fn decide_access(
+        &mut self,
+        identity: &Identity,
+        allow: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.marked(window, cx) {
+            return;
+        }
+        self.resume_question_context(window, cx);
+        if !self.access_decidable() {
+            return;
+        }
+        let (Some(owner), Some(question)) =
+            (self.questions.owner.clone(), self.questions.current.clone())
+        else {
+            return;
+        };
+        let (Some(session), Some(access)) =
+            (owner.strip_prefix("chat:"), question.content.access.clone())
+        else {
+            return;
+        };
+        if question.identity != *identity {
+            return;
+        }
+        self.next_request += 1;
+        let request = self.next_request;
+        let decision = Decision {
+            session: session.to_owned(),
+            question: question.identity.clone(),
+            access,
+            allow,
+        };
+        if self.client.as_ref().is_some_and(|client| {
+            client.command(WriteCommand::DatabaseAccess { decision, request })
+        }) {
+            self.questions.access = Some(AccessDecision {
+                owner,
+                identity: question.identity.clone(),
+                allow,
+                request,
+                outcome: AccessOutcome::Pending,
+            });
+        } else {
+            self.error = Some("Local action queue is busy. Nothing was submitted.");
+        }
+        cx.notify();
+    }
+    /// Adopt only the worker's reply to this exact submitted request.
+    pub(super) fn accept_access_decision(&mut self, cx: &mut Context<Self>) {
+        let (Some(reply), Some(decision)) = (&self.state.access, &mut self.questions.access) else {
+            return;
+        };
+        if reply.request == decision.request
+            && reply.decision.question == decision.identity
+            && reply.decision.allow == decision.allow
+            && format!("chat:{}", reply.decision.session) == decision.owner
+            && reply.outcome != decision.outcome
+        {
+            decision.outcome = reply.outcome.clone();
+            cx.notify();
+        }
     }
     pub(crate) fn question_hint_covered(&self) -> bool {
         self.questions.current.is_some() || self.draft().is_some_and(|d| d.answer.is_some())
@@ -625,6 +751,14 @@ impl ChatEditor {
     ) -> Option<gpui_kit::AnyElement> {
         let q = self.questions.current.clone()?;
         let editable = self.question_editable();
+        let access = q
+            .content
+            .access
+            .as_ref()
+            .filter(|_| q.content.kind == Kind::Access);
+        // A database request's title states the structured privilege; prose
+        // (including the agent's reason) never changes what is granted.
+        let headline = access.map_or_else(|| q.content.question.clone(), access_title);
         let mut content = div()
             .id("question-content")
             .v_flex()
@@ -632,15 +766,21 @@ impl ChatEditor {
             .min_w_0()
             .max_h(px(280.))
             .overflow_y_scroll()
-            .child(ui::text(Text::Headline, q.content.question.clone()));
+            .child(ui::text(Text::Headline, headline));
+        if let Some(access) = access {
+            content = content.child(ui::text(Text::Body, access_scope(access)));
+        }
         if let Some(context) = &q.content.context {
             content = content.child(
                 ui::text(Text::Caption, context.clone()).text_color(cx.theme().muted_foreground),
             );
         }
         if q.content.kind == Kind::AccessUnavailable {
-            content=content.child(ui::text(Text::Body,"Access decisions are not supported here. Use the current macOS app; a message cannot grant access."));
-        } else {
+            content = content.child(ui::text(
+                Text::Body,
+                "This access request is malformed or unsupported, so it can't be decided here. A message never grants access.",
+            ));
+        } else if q.content.kind == Kind::Message {
             let mut radios = Vec::new();
             for (ix, choice) in q.content.options.iter().enumerate() {
                 let id = SharedString::from(format!(
@@ -746,6 +886,8 @@ impl ChatEditor {
                         Text::Caption,
                         if q.content.kind == Kind::Message {
                             "Waiting for your answer"
+                        } else if q.content.kind == Kind::Access {
+                            "Approval needed"
                         } else {
                             "Your input is needed to continue"
                         },
@@ -824,7 +966,62 @@ impl ChatEditor {
                     ),
             );
         }
-        if self.busy || q.content.kind == Kind::Message {
+        if let Some(access) = access {
+            let decidable = self.access_decidable();
+            let (status, failed) = match self.access_outcome() {
+                Some(AccessOutcome::Pending) => (Some("Sending decision…"), false),
+                Some(AccessOutcome::Accepted) => {
+                    (Some("Decision sent. Waiting for the agent."), false)
+                }
+                Some(AccessOutcome::Refused(e) | AccessOutcome::Unknown(e)) => (Some(*e), true),
+                None => (None, false),
+            };
+            if let Some(status) = status {
+                let status = div()
+                    .id("database-access-status")
+                    .min_w_0()
+                    .aria_label(status)
+                    .child(ui::text(Text::Caption, status).text_color(if failed {
+                        cx.theme().danger
+                    } else {
+                        cx.theme().muted_foreground
+                    }));
+                #[cfg(any(test, feature = "native-probes"))]
+                let status = status.test_support();
+                panel = panel.child(status);
+            }
+            let mode = match access.mode {
+                AccessMode::Read => "read",
+                AccessMode::Write => "write",
+            };
+            let (deny, allow) = (q.identity.clone(), q.identity.clone());
+            actions = actions
+                .child(
+                    ui::action("deny-database-access", "Deny", Action::Secondary)
+                        .accessibility_label(format!(
+                            "Deny {mode} access to the {} database",
+                            access.env
+                        ))
+                        .disabled(!decidable)
+                        .on_click(
+                            cx.listener(move |v, _, w, cx| v.decide_access(&deny, false, w, cx)),
+                        ),
+                )
+                .child(
+                    ui::action(
+                        "allow-database-access",
+                        format!("Allow {mode} access"),
+                        Action::Primary,
+                    )
+                    .accessibility_label(format!(
+                        "Allow {mode} access to the {} database",
+                        access.env
+                    ))
+                    .disabled(!decidable)
+                    .on_click(cx.listener(move |v, _, w, cx| v.decide_access(&allow, true, w, cx))),
+                );
+        }
+        if self.busy || q.content.kind != Kind::AccessUnavailable {
             #[cfg(any(test, feature = "native-probes"))]
             let actions = actions.test_support();
             panel = panel.child(actions);
