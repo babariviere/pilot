@@ -279,6 +279,23 @@ test("the coordinator prompt allows chat starts only on request", () => {
 		assert.doesNotMatch(missionPrompt({ ...mission, coordinator }), /Start chats/);
 });
 
+test("proactive planning guidance is coordinator-only, in legacy and versioned missions", () => {
+	for (const planningVersion of [undefined, 1]) {
+		for (const coordinator of ["self", "other", "user"] as const) {
+			const prompt = missionPrompt({ ...mission, planningVersion, coordinator });
+			assert.equal(prompt.includes("Maintain the task plan proactively"), coordinator === "self");
+			if (coordinator !== "self") continue;
+			for (const journey of ["interview", "research", "delivery", "review", "notices or resume"])
+				assert.ok(prompt.includes(journey), journey);
+			assert.match(prompt, /without waiting for the user to request tasks or confirm routine planning/);
+			assert.match(prompt, /Check existing coverage first; update matching tasks instead of duplicating them/);
+			assert.match(prompt, /Keep questions and proposals distinct from approved scope/);
+			assert.match(prompt, /Planning grants no worker starts, provider spend or restricted activation/);
+			assert.match(prompt, /Start chats only when the user asks; Autopilot is not enabled/);
+		}
+	}
+});
+
 test("stack guidance uses existing PR URLs, preserves sibling work and explains detected fallback", () => {
 	for (const available of [true, false, undefined]) {
 		const prompt = missionPrompt(mission, available);

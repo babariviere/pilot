@@ -1383,6 +1383,105 @@ test("planning v1 binds worker IPC identity and keeps coordinator/user no-PR com
 	assert.equal(((await response.json()) as { status: string }).status, "done");
 });
 
+test("scripted coordinator planning journey reuses task APIs without worker admission", async (t) => {
+	// Script the intended choices, not a planner/model: these assertions prove API effects only.
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Import recovery",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	const spawn = t.mock.method(f.sessions, "spawn", async () => {
+		throw new Error("Planning must not start workers");
+	});
+	await f.service.call(lead.id, "brief", {
+		markdown: "Recover interrupted local imports. Preserve item count and order. No cloud sync.",
+		expectedRevision: 0,
+	});
+	const assignment = {
+		version: 1,
+		expectedRevision: 0,
+		intent: "Recover interrupted imports",
+		scope: "Local import journal only. No cloud sync.",
+		criteria: ["Interrupted imports resume without lost or duplicate items"],
+	};
+	// Interview: agreed requirement gets coverage without another confirmation action.
+	const recovery = (await f.service.call(lead.id, "task", {
+		title: "Recover interrupted imports",
+		body: "Source: agreed interview requirement in brief revision 1.",
+		assignment,
+	})) as MissionDetail["tasks"][number];
+	assert.equal(recovery.status, "todo");
+	assert.equal(recovery.sessionId, undefined);
+	// Research: a concrete prerequisite, source reference and explicit blocker, not broader scope.
+	await f.service.call(member.id, "log", {
+		text: "Research: the local journal cannot distinguish unfinished imports.",
+	});
+	const prerequisite = (await f.service.call(lead.id, "task", {
+		title: "Detect unfinished local imports",
+		assignment: {
+			...assignment,
+			intent: "Identify unfinished imports before recovery",
+			criteria: ["Complete and unfinished local journal fixtures are distinguished"],
+		},
+	})) as MissionDetail["tasks"][number];
+	await f.service.call(lead.id, "link", {
+		taskId: prerequisite.id,
+		url: "https://example.com/local-import-journal",
+		title: "Journal research source",
+	});
+	await f.service.call(lead.id, "task", {
+		id: recovery.id,
+		status: "blocked",
+		body: `Blocked by #${prerequisite.number}: unfinished imports must be detectable first.`,
+		dependsOn: [prerequisite.id],
+	});
+	// Delivery/review: update already-covered acceptance on the same task, not a new task per notice.
+	const current = (await f.service.call(lead.id, "get", { id: recovery.id })) as typeof recovery;
+	await f.service.call(lead.id, "task", {
+		id: current.id,
+		assignment: {
+			...assignment,
+			expectedRevision: current.assignment!.revision,
+			criteria: [...assignment.criteria, "Recovery fixtures preserve original item order"],
+		},
+	});
+	// Duplicate delivery/review notices and resume: reread current coverage, with no unchanged write.
+	const before = f.store.detail(mission.id);
+	for (const _journey of ["delivery", "review", "duplicate review", "resume"]) {
+		const { tasks } = (await f.service.call(lead.id, "tasks", { filter: "all" })) as {
+			tasks: Array<{ number: number; assignment?: { revision: number } }>;
+		};
+		assert.equal(tasks.length, 2);
+		assert.equal(tasks.find((task) => task.number === recovery.number)?.assignment?.revision, 2);
+	}
+	assert.deepEqual(f.store.detail(mission.id), before, "coverage reads do not manufacture tasks or progress");
+	// An out-of-scope question stays a question. Only the coordinator can change the plan.
+	await f.service.call(member.id, "comment", {
+		text: "Should cloud sync be supported? Proposal only, outside the brief.",
+	});
+	await assert.rejects(
+		f.service.call(member.id, "task", { title: "Add cloud sync", assignment }),
+		/Coordinator-owned/,
+	);
+	assert.deepEqual(f.store.detail(mission.id).tasks, before.tasks);
+	assert.equal(f.store.detail(mission.id).comments.at(-1)?.authorSessionId, member.id);
+	assert.deepEqual(f.store.task(mission.id, recovery.id).dependsOn, [prerequisite.id]);
+	assert.equal(f.store.task(mission.id, recovery.id).status, "blocked");
+	assert.match(f.store.task(mission.id, recovery.id).body!, /Blocked by/);
+	assert.equal(
+		f.store.detail(mission.id).resources.find((link) => link.taskId === prerequisite.id)?.title,
+		"Journal research source",
+	);
+	assert.ok(f.store.detail(mission.id).tasks.every((task) => task.sessionId === undefined));
+	assert.equal(spawn.mock.callCount(), 0);
+});
+
 test("planning v1 reuses relevant decision audiences/pins and changes context when pins change", async (t) => {
 	const f = await fixture(t);
 	const lead = await f.spawn();

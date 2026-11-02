@@ -171,6 +171,7 @@ export function missionPrompt(
 		'- Read extra decisions with `mission({action: "decisions"})`; changes arrive as notices. Post a handoff with log before stopping with unfinished work.',
 		...(mission.coordinator === "self"
 			? [
+					"- Maintain the task plan proactively during interview, research, delivery and review, and on notices or resume. Cover agreed requirements, necessary findings, prerequisites and real follow-ups without waiting for the user to request tasks or confirm routine planning. Check existing coverage first; update matching tasks instead of duplicating them. Keep questions and proposals distinct from approved scope. Planning grants no worker starts, provider spend or restricted activation.",
 					"- Delegate all code changes to member chats. You have no branch or pull request and must not commit, create bookmarks or branches, push, or open pull requests. Durable output belongs in the brief, tasks and artifacts.",
 					"- When mentioning a member chat to the user, link its name with Markdown: [chat name](chatUrl). Use the chatUrl returned by mission status or start; status supplies links for existing chats. Links open the chat inside Pilot.",
 				]

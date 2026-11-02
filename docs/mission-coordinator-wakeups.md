@@ -1,7 +1,8 @@
 # Proposed cost-aware coordinator wakes and stall recovery
 
-**Docs-only proposal, not adopted scheduling or implemented guarantees.** The coordinator owns
-planning and adoption. This document changes no runtime, schema, transport, tools, provider calls,
+**Scheduling proposal, not adopted scheduling or implemented guarantees.** The coordinator owns
+planning and adoption. The proactive-planning guidance below is implemented; the wake lifecycle
+and timing recommendations remain proposals. This document changes no runtime, schema, transport, tools, provider calls,
 worker starts, `ask_user`, roles, UI, live mission, migration, cleanup, release or restart behavior.
 Timing and caps below are recommendations for later validation, not service-level promises.
 
@@ -29,6 +30,35 @@ act**, linked to existing facts, plus **what it is waiting for after a turn**. T
 orchestrator, research-budget system, model polling loop or autonomous replacement-coordinator service.
 
 ## Current implementation and limits
+
+### Proactive task planning
+
+The coordinator [prompt](../packages/kernel/src/policy.ts) and coordinator-only
+[mission tool guidance](../packages/kernel/src/mission-tools.ts) now ask for task maintenance
+during interview, research, delivery, review, notices and resume, without a separate user request
+or confirmation for routine in-scope planning. Read current coverage first, including done/dropped
+tasks when relevant. Update an existing match or create a bounded uncovered deliverable, with intent,
+acceptance, source references, dependencies and explicit blockers. Duplicate/covered notices need
+no task or unchanged rewrite. Questions and proposal-only/out-of-scope findings remain questions
+or proposals, not execution grants. Trivial bookkeeping and speculative frameworks need no tasks.
+
+This uses the existing policy section rendered for each model request and live mission-role/tool
+refresh in `KernelSession.setMission`, not a planner service or task-generation postprocessor.
+Existing event-driven notices and kernel recovery supply the occasions to reconcile; this change
+does not add wakes, scheduling, model calls, worker admission or authority. Future wake work should
+reuse the same coordinator guidance, not create a second planning loop.
+
+Regression tests in `policy.test.ts` and `mission-tools.test.ts` check trigger/coverage/authority
+guidance and its coordinator-only refresh across membership changes and adapter reload. The
+scripted journey in `mission-service.test.ts` exercises existing planning APIs for interview
+coverage, a research prerequisite/blocker, delivery/review criterion updates, repeated coverage
+reads and a proposal-only question. It verifies ownership denial, links/dependencies and no worker
+start from those planning calls. Choices are scripted, not model judgments: these tests cannot
+guarantee that a real coordinator recognizes every gap, deduplicates semantically or follows the
+guidance after recovery. Existing notice/reopen tests cover transport/storage recovery, not
+end-to-end plan quality or the proposed reason-consumption lifecycle below.
+
+### Existing wake foundations
 
 These are source-inspection anchors, not evidence that the proposed lifecycle already exists.
 

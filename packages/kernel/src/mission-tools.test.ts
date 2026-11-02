@@ -92,6 +92,36 @@ test("coordinator planning schema exposes only strict versioned assignment write
 	assert.match(tool.description, /in_review is for PR review, not generic submission/);
 });
 
+test("coordinator planning recipes cover actionable gaps without unconditional tasks or authority", () => {
+	const { description } = createMissionTool(async () => null, true);
+	assert.match(description, /read current get\/brief\/decisions and relevant tasks before changing the plan/);
+	assert.match(description, /include done\/dropped work when checking overlap or recovery/);
+	assert.match(
+		description,
+		/uncovered agreed requirement, necessary in-scope finding, missing prerequisite or real review follow-up/,
+	);
+	assert.match(description, /without extra user confirmation/);
+	assert.match(description, /Define intent, scope and acceptance in body/);
+	assert.match(description, /use assignment with its current expectedRevision/);
+	assert.match(description, /link source evidence with link\/attach or event\/comment references/);
+	assert.match(description, /set dependsOn for prerequisites/);
+	assert.match(description, /Keep affected tasks blocked with the reason and missing decision\/dependency explicit/);
+	assert.match(description, /Already-covered work or duplicate notices need no new task or unchanged rewrite/);
+	assert.match(description, /never blindly replay task creation/);
+	assert.match(description, /Do not create tasks for trivial bookkeeping or speculative frameworks/);
+	assert.match(description, /Preserve actual questions\/uncertainty; ask when needed/);
+	assert.match(
+		description,
+		/Out-of-scope suggestions and proposal-only findings stay proposals in comment\/log pending a decision/,
+	);
+	assert.match(
+		description,
+		/Task creation\/updates grant no worker starts, provider spend, approval or restricted activation/,
+	);
+	assert.match(description, /Start only when asked/);
+	assert.doesNotMatch(createMissionTool(async () => null).description, /Coordinator planning:/);
+});
+
 test("mission authoring boundaries match runtime schema and reject before IPC", async () => {
 	for (const coordinator of [false, true]) {
 		let calls = 0;
@@ -852,6 +882,7 @@ for (const ask of [false, true]) {
 					todoAvailable,
 				);
 				const native = adapter.session.getAllTools().find((tool) => tool.name === MISSION_TOOL)!;
+				assert.equal(native.description.includes("Coordinator planning:"), coordinator);
 				const declared = (await session.conversation.agent(BACKGROUND_CONTEXT)).tools.find(
 					(tool) => tool.name === MISSION_TOOL,
 				);
@@ -921,6 +952,7 @@ for (const ask of [false, true]) {
 							if (tool) assert.deepEqual(tool.parameters, native.parameters);
 							const prompt = getCurrentSystemPrompt(context.messages);
 							assert.equal(prompt.includes("You coordinate this mission"), coordinator);
+							assert.equal(prompt.includes("Maintain the task plan proactively"), coordinator);
 							assert.equal(
 								prompt.includes(
 									"coordinator actions (delete, group, task order, start, send, status, bindPr, unbindPr)",
