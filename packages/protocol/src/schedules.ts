@@ -1,7 +1,7 @@
 import type { SpawnRequest } from "./index.ts";
 
-/** on_back is sleep after save/edit, then a full wake followed by reachability ("When I'm back"). All triggers are one-shot. */
-export type ScheduleTrigger = "at" | "on_wake" | "on_online" | "on_back";
+/** Only a one-shot time. Overdue times fire once online. */
+export type ScheduleTrigger = "at";
 export type ScheduleTarget =
 	| {
 			kind: "chat";
@@ -12,12 +12,12 @@ export type ScheduleTarget =
 	| { kind: "message"; sessionId: string; message: string };
 export type ScheduleState = "pending" | "dispatching" | "fired" | "failed" | "cancelled";
 
-/** POST /api/schedules. Omitted trigger defaults to on_back. */
+/** POST /api/schedules. trigger "at" and at are required. */
 export interface ScheduleRequest {
 	title?: string;
-	trigger?: ScheduleTrigger;
-	/** Epoch milliseconds. Required only for at; overdue times fire when online. */
-	at?: number;
+	trigger: "at";
+	/** Epoch milliseconds. Overdue times fire when online. */
+	at: number;
 	target: ScheduleTarget;
 }
 /** PATCH /api/schedules/:id. Only pending items are editable. Target replacement is complete. */
@@ -41,10 +41,6 @@ export interface ScheduledItem {
 	state: ScheduleState;
 	createdAt: number;
 	updatedAt: number;
-	/** Persisted so a full wake while offline survives a restart. Requires sleepObserved. */
-	wakeObserved?: boolean;
-	/** A sleep after the last save/edit. Dark wakes do not consume this latch. */
-	sleepObserved?: boolean;
 	claimedAt?: number;
 	firedAt?: number;
 	/** Created chat, or target of a follow-up. */

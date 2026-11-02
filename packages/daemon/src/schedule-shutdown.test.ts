@@ -189,7 +189,8 @@ test("dispatch final write drains before store closure and independent cleanup",
 	await service.load();
 	service.start();
 	const item = await service.create({
-		trigger: "on_online",
+		trigger: "at",
+		at: 0,
 		target: { kind: "message", sessionId: "fixture", message: "offline fixture" },
 	});
 	const dispatch = service.signal({ type: "online", online: true });
@@ -220,7 +221,7 @@ test("dispatch final write drains before store closure and independent cleanup",
 		assert.deepEqual(events, [], "held dispatch blocks store and dependent teardown");
 		assert.equal(finished, false);
 		assert.notEqual(worker.threadId, -1);
-		await assert.rejects(service.create({ target: item.target }), /Scheduler stopped/);
+		await assert.rejects(service.create({ trigger: "at", at: 0, target: item.target }), /Scheduler stopped/);
 		await assert.rejects(service.signal({ type: "online", online: false }), /Scheduler not running/);
 	} finally {
 		releaseSend.resolve();

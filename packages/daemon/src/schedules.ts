@@ -39,10 +39,6 @@ const clock: ScheduleClock = {
 		return () => clearTimeout(timer);
 	},
 };
-// Each durable observation increments the CAS revision exactly once. Discount only those
-// writes when comparing queued events; a user edit clears both latches and remains a barrier.
-const saveRevision = (row: Pick<ScheduledItem, "revision" | "sleepObserved" | "wakeObserved">) =>
-	row.revision - Number(!!row.sleepObserved) - Number(!!row.wakeObserved);
 export interface ScheduleDispatch {
 	spawn(request: SpawnRequest): Promise<{ id: string }>;
 	send(id: string, message: string, mode: "followUp", requestId: string): Promise<void>;
@@ -121,69 +117,23 @@ export class ScheduleService {
 			console.warn(`pilotd: schedule dispatch: ${error}`);
 		});
 	}
-	/** Injectable fast path for daemon detectors (not an HTTP endpoint). */
+	/** Injectable fast path for daemon detectors (not an HTTP endpoint). Only online state matters. */
 	signal(event: ScheduleTriggerEvent): Promise<void> {
 		if (!this.started || this.stopped) return Promise.reject(new ServiceUnavailable("Scheduler not running"));
 		if (this.queued >= 64) return Promise.reject(new ServiceUnavailable("Scheduler busy; retry shortly"));
-		// Capture candidates now: a schedule created after the event must wait for the next one.
-		const candidates = this.store.pendingItems();
-		const becameOnline = event.type === "online" && event.online && !this.online && !event.initial;
 		if (event.type === "online") this.online = event.online;
-		return this.enqueue(async () => {
-			for (const candidate of candidates) {
-				try {
-					const item = this.store.require(candidate.id);
-					// Latch writes advance the CAS revision, but must not invalidate already queued
-					// sleep→wake events. Every edit clears both latches and advances this save revision.
-					if (item.state !== "pending" || saveRevision(item) !== saveRevision(candidate)) continue;
-					if (
-						event.type === "sleep" &&
-						Math.floor(event.at) > item.updatedAt &&
-						(item.trigger === "on_wake" || item.trigger === "on_back") &&
-						!item.sleepObserved
-					)
-						await this.store.replace(item, { ...item, sleepObserved: true });
-					else if (
-						event.type === "wake" &&
-						event.full &&
-						item.sleepObserved &&
-						item.trigger === "on_back" &&
-						!item.wakeObserved
-					)
-						await this.store.replace(item, { ...item, wakeObserved: true });
-					else if (
-						(event.type === "wake" && event.full && item.sleepObserved && item.trigger === "on_wake") ||
-						(becameOnline && item.trigger === "on_online")
-					)
-						await this.fire(item);
-				} catch (error) {
-					if (!(error instanceof Conflict || error instanceof NotFound)) throw error;
-				}
-			}
-			await this.sweep();
-		});
+		return this.enqueue(() => this.sweep());
 	}
 	private async sweep(): Promise<void> {
 		this.cancelTimer?.();
 		this.cancelTimer = undefined;
 		const pending = this.store.pendingItems();
-		if (
-			this.online &&
-			this.deps.triggers?.refreshOnline &&
-			pending.some(
-				(item) =>
-					(item.trigger === "at" && item.at! <= this.time.now()) ||
-					(item.trigger === "on_back" && item.sleepObserved && item.wakeObserved),
-			)
-		)
+		if (this.online && this.deps.triggers?.refreshOnline && pending.some((item) => item.at! <= this.time.now()))
 			this.online = await this.deps.triggers.refreshOnline();
 		for (const item of pending) {
 			if (this.stopped) break;
 			if (!this.online) continue;
-			if (
-				(item.trigger === "at" && item.at! <= this.time.now()) ||
-				(item.trigger === "on_back" && item.sleepObserved && item.wakeObserved)
-			) {
+			if (item.at! <= this.time.now()) {
 				try {
 					const current = this.store.require(item.id);
 					if (current.state === "pending" && current.revision === item.revision) await this.fire(current);
@@ -198,7 +148,7 @@ export class ScheduleService {
 		const pending = this.store.pendingItems();
 		this.deps.triggers?.setActive?.(!this.stopped && pending.length > 0);
 		if (this.stopped || !this.online) return;
-		const next = Math.min(...pending.filter((item) => item.trigger === "at").map((item) => item.at!));
+		const next = Math.min(...pending.map((item) => item.at!));
 		if (Number.isFinite(next))
 			this.cancelTimer = this.time.setTimeout(
 				() => {
@@ -278,11 +228,11 @@ export class ScheduleService {
 		if (patch.expectedRevision !== undefined && patch.expectedRevision !== old.revision)
 			throw new Conflict("Schedule changed; reload before editing");
 		const trigger = patch.trigger ?? old.trigger;
-		if (trigger === "removed") throw new Error("Invalid schedule trigger");
+		if (trigger !== "at") throw new Error("Invalid schedule trigger");
 		const data = await this.validate({
 			title: patch.title ?? old.title,
 			trigger,
-			at: trigger === "at" ? (patch.at ?? old.at) : patch.at,
+			at: patch.at ?? old.at!,
 			target: patch.target ?? old.target,
 		});
 		return this.store.replace(old, {
@@ -291,8 +241,6 @@ export class ScheduleService {
 			at: data.at,
 			projectId: data.projectId,
 			sessionId: data.sessionId,
-			wakeObserved: undefined,
-			sleepObserved: undefined,
 			updatedAt: this.time.now(),
 		});
 	}
@@ -347,17 +295,10 @@ export class ScheduleService {
 		if (!request || typeof request !== "object" || Array.isArray(request))
 			throw new Error("Schedule request is required");
 		if ("networkNames" in request) throw new Error("Wi-Fi triggers were removed");
-		const trigger = request.trigger === undefined ? "on_back" : request.trigger;
-		if (!["on_back", "on_wake", "on_online", "at"].includes(trigger)) throw new Error("Invalid schedule trigger");
-		if (trigger === "at") {
-			if (
-				typeof request.at !== "number" ||
-				!Number.isSafeInteger(request.at) ||
-				request.at < 0 ||
-				request.at > 8.64e15
-			)
-				throw new Error("at must be epoch milliseconds");
-		} else if (request.at !== undefined) throw new Error("at is only valid for an at trigger");
+		const trigger = request.trigger;
+		if (trigger !== "at") throw new Error("Invalid schedule trigger");
+		if (typeof request.at !== "number" || !Number.isSafeInteger(request.at) || request.at < 0 || request.at > 8.64e15)
+			throw new Error("at must be epoch milliseconds");
 		if (
 			request.title !== undefined &&
 			(typeof request.title !== "string" || !request.title.trim() || request.title.length > 200)

@@ -9,15 +9,15 @@ import {
 	OFFLINE_BACKOFF_MS,
 	parseWakeToken,
 	probeReachability,
-	sampleSystemWake,
 	ScheduleDetection,
+	sampleSystemWake,
 	WAKE_SAMPLE_MS,
 	type WakeSample,
 } from "./schedule-detection.ts";
 import { ScheduleStore } from "./schedule-store.ts";
-import { ScheduleService, type ScheduleClock, type ScheduleTriggerEvent } from "./schedules.ts";
+import { type ScheduleClock, ScheduleService, type ScheduleTriggerEvent } from "./schedules.ts";
 import { SubprocessPool } from "./subprocess.ts";
-import { parseSystemPowerState, type SystemPowerState, type SystemPowerSource } from "./system-power.ts";
+import { parseSystemPowerState, type SystemPowerSource, type SystemPowerState } from "./system-power.ts";
 
 class FakeClock implements ScheduleClock {
 	time = 0;
@@ -305,62 +305,6 @@ test("macOS sampler reads the real kernel timestamp off-thread without the app",
 	assert.ok(sample.monotonicMs > 0);
 });
 
-test("merged store/dispatch waits through wake while offline and fires once after recovery", async (t) => {
-	const home = await mkdtemp(join(tmpdir(), "pilot-wake-"));
-	const f = fixture();
-	const store = new ScheduleStore(join(home, "schedules.sqlite"));
-	let calls = 0;
-	const service = new ScheduleService(store, {
-		clock: f.clock,
-		triggers: f.detector,
-		projects: {
-			require: () => {
-				throw new Error("unused");
-			},
-		},
-		sessions: {
-			get: () => undefined,
-			spawn: async () => {
-				calls++;
-				return { id: "created" };
-			},
-			send: async () => {},
-		},
-	});
-	await service.load();
-	service.start();
-	t.after(async () => {
-		await service.stop();
-		await store.close();
-		await rm(home, { recursive: true, force: true });
-	});
-	const drain = async () => {
-		await flush();
-		await service.signal({ type: "online", online: f.detector.online, initial: true });
-	};
-	const item = await service.create({ target: { kind: "chat", spawn: { cwd: home, message: "Start after wake" } } });
-	await drain();
-	assert.equal(f.detector.online, true);
-	f.reach(false);
-	f.wake();
-	f.clock.advance(WAKE_SAMPLE_MS);
-	await drain();
-	assert.equal(service.require(item.id).wakeObserved, true);
-	assert.equal(calls, 0);
-	f.clock.advance(5_000);
-	await drain();
-	assert.equal(calls, 0);
-	f.reach(true);
-	f.clock.advance(10_000);
-	await drain();
-	assert.equal(service.require(item.id).state, "fired");
-	assert.equal(calls, 1);
-	assert.equal(f.clock.timers.size, 0);
-	f.clock.advance(1_000_000);
-	await drain();
-	assert.equal(calls, 1);
-});
-
 test("due at dispatch refreshes cached reachability, then catches up online without a wake", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-at-online-"));
 	const f = fixture();
@@ -451,11 +395,15 @@ test("claiming the last item stops detection even while session admission is sti
 		await store.close();
 		await rm(home, { recursive: true, force: true });
 	});
-	const item = await service.create({ target: { kind: "chat", spawn: { cwd: home, message: "Wake" } } });
+	const item = await service.create({
+		trigger: "at",
+		at: 0,
+		target: { kind: "chat", spawn: { cwd: home, message: "Wake" } },
+	});
 	await flush();
-	await service.signal({ type: "online", online: f.detector.online, initial: true });
-	f.wake();
+	f.reach(true);
 	f.clock.advance(WAKE_SAMPLE_MS);
+	void service.signal({ type: "online", online: true });
 	await admitted;
 	assert.equal(service.require(item.id).state, "dispatching");
 	assert.equal(f.clock.timers.size, 0);

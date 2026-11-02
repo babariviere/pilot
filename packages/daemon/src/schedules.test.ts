@@ -155,6 +155,12 @@ async function fixture(t: TestContext, initialOnline = false) {
 		},
 	};
 }
+/** Make every default-time item due and report online. */
+const fire = async (f: { clock: FakeClock; triggers: FakeTriggers; service: ScheduleService }) => {
+	f.clock.advance(10_000);
+	f.triggers.online = true;
+	await f.service.signal({ type: "online", online: true });
+};
 const chat = (extra: Partial<ScheduleRequest> = {}): ScheduleRequest => ({
 	target: {
 		kind: "chat",
@@ -168,6 +174,8 @@ const chat = (extra: Partial<ScheduleRequest> = {}): ScheduleRequest => ({
 			title: "Work",
 		},
 	},
+	trigger: "at",
+	at: 2000,
 	...extra,
 });
 
@@ -180,7 +188,7 @@ test("removed network triggers are rejected on create and edit", async (t) => {
 	}
 	await assert.rejects(f.service.create({ ...chat(), networkNames: ["Example"] } as ScheduleRequest), /removed/);
 	await assert.rejects(f.service.update(item.id, { networkNames: ["Example"] } as never), /removed/);
-	assert.equal(f.service.require(item.id).trigger, "on_back");
+	assert.equal(f.service.require(item.id).trigger, "at");
 });
 
 test("legacy network records cancel durably on load, never dispatch, and can be dismissed", async (t) => {
@@ -201,8 +209,6 @@ test("legacy network records cancel durably on load, never dispatch, and can be 
 				state,
 				createdAt: 0,
 				updatedAt: 0,
-				sleepObserved: true,
-				wakeObserved: true,
 				target:
 					trigger === "on_join_network"
 						? chat().target
@@ -219,13 +225,10 @@ test("legacy network records cancel durably on load, never dispatch, and can be 
 		assert.equal(row.revision, 2);
 		assert.equal(row.updatedAt, f.clock.now());
 		assert.equal("networkNames" in row, false);
-		assert.equal(row.sleepObserved, undefined);
-		assert.equal(row.wakeObserved, undefined);
 	}
 	assert.deepEqual(f.store.dashboard("p"), []);
 	assert.equal(f.triggers.active, false);
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	await f.service.signal({ type: "wake", full: true });
+	await fire(f);
 	await f.service.signal({ type: "online", online: false });
 	await f.service.signal({ type: "online", online: true });
 	await f.restart();
@@ -234,7 +237,7 @@ test("legacy network records cancel durably on load, never dispatch, and can be 
 	assert.ok(snapshot.every((row) => row.state === "cancelled" && row.revision === 2 && row.trigger === "removed"));
 	const ws = JSON.parse(await f.service.snapshot(undefined, true));
 	assert.deepEqual(ws.schedules, snapshot);
-	await assert.rejects(f.service.update(ids[0], { trigger: "on_online" }), /Only pending/);
+	await assert.rejects(f.service.update(ids[0], { trigger: "at", at: 5 }), /Only pending/);
 	await f.service.remove(ids[0]);
 	await f.restart();
 	assert.throws(() => f.service.require(ids[0]), NotFound);
@@ -245,12 +248,13 @@ test("scheduled tickets survive edits and restart, then bind on dispatch exactly
 	for (const kind of ["linear", "slack"] as const) {
 		const ticket = (await f.trackedItems.list({ projectId: "p", kind })).items[0]!;
 		const target = { ...chat().target, trackedItemId: ticket.id };
-		const item = await f.service.create(chat({ target }));
+		const item = await f.service.create(chat({ target, at: f.clock.now() + 5000 }));
 		assert.equal((await f.trackedItems.require(ticket.id)).sessionId, undefined);
-		await f.service.update(item.id, { title: "Edited", trigger: "on_online" });
+		await f.service.update(item.id, { title: "Edited" });
 		await f.restart();
 		assert.deepEqual(f.service.require(item.id).target, target);
 		assert.equal((await f.trackedItems.require(ticket.id)).sessionId, undefined);
+		f.clock.advance(10_000);
 		await f.service.signal({ type: "online", online: false });
 		await f.service.signal({ type: "online", online: true });
 		const fired = f.service.require(item.id);
@@ -273,13 +277,14 @@ test("ticket binding is validated on create, replacement and dispatch", async (t
 	const other = (await f.trackedItems.list({ projectId: "other" })).items[0]!;
 	const target = { kind: "chat" as const, spawn: { projectId: "p", message: "Work" }, trackedItemId: ticket.id };
 	for (const trackedItemId of [null, 1, "", " ", "x".repeat(201), "missing", other.id])
-		await assert.rejects(f.service.create({ target: { ...target, trackedItemId } } as ScheduleRequest));
+		await assert.rejects(f.service.create({ ...chat(), target: { ...target, trackedItemId } } as ScheduleRequest));
 	await assert.rejects(
-		f.service.create({ target: { ...target, spawn: { cwd: "/tmp", message: "Work" } } }),
+		f.service.create({ ...chat(), target: { ...target, spawn: { cwd: "/tmp", message: "Work" } } }),
 		/project/,
 	);
 	await assert.rejects(
 		f.service.create({
+			...chat(),
 			target: {
 				kind: "message",
 				sessionId: "existing",
@@ -289,14 +294,13 @@ test("ticket binding is validated on create, replacement and dispatch", async (t
 		} as ScheduleRequest),
 		/only valid for a chat/,
 	);
-	const item = await f.service.create({ trigger: "on_wake", target });
+	const item = await f.service.create({ trigger: "at", at: 2000, target });
 	await assert.rejects(f.service.update(item.id, { target: { ...target, trackedItemId: other.id } }), /project/);
 	assert.deepEqual(f.service.require(item.id).target, target);
 	f.trackedItems.require = async () => {
 		throw new NotFound("Ticket was removed");
 	};
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	await f.service.signal({ type: "wake", full: true });
+	await fire(f);
 	assert.equal(f.calls.length, 0);
 	assert.equal(f.service.require(item.id).state, "failed");
 	assert.match(f.service.require(item.id).error!, /Ticket was removed/);
@@ -307,14 +311,13 @@ test("complete target replacement can change or remove the scheduled ticket", as
 	const linear = (await f.trackedItems.list({ projectId: "p", kind: "linear" })).items[0]!;
 	const slack = (await f.trackedItems.list({ projectId: "p", kind: "slack" })).items[0]!;
 	const target = { kind: "chat" as const, spawn: { projectId: "p", message: "Work" }, trackedItemId: linear.id };
-	const item = await f.service.create({ trigger: "on_wake", target });
+	const item = await f.service.create({ trigger: "at", at: 2000, target });
 	const replaced = await f.service.update(item.id, { target: { ...target, trackedItemId: slack.id } });
 	assert.deepEqual(replaced.target, { ...target, trackedItemId: slack.id });
 	const unbound = await f.service.update(item.id, { target: { kind: "chat", spawn: target.spawn } });
 	assert.deepEqual(unbound.target, { kind: "chat", spawn: target.spawn });
 	await f.restart();
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	await f.service.signal({ type: "wake", full: true });
+	await fire(f);
 	assert.equal(f.service.require(item.id).state, "fired");
 	assert.equal((await f.trackedItems.require(linear.id)).sessionId, undefined);
 	assert.equal((await f.trackedItems.require(slack.id)).sessionId, undefined);
@@ -324,7 +327,8 @@ test("cancelled or failed admission never binds; binding failure retains the cre
 	const f = await fixture(t);
 	const ticket = (await f.trackedItems.list({ projectId: "p" })).items[0]!;
 	const request: ScheduleRequest = {
-		trigger: "on_wake",
+		trigger: "at",
+		at: 2000,
 		target: {
 			kind: "chat",
 			spawn: { projectId: "p", message: "Work" },
@@ -333,13 +337,11 @@ test("cancelled or failed admission never binds; binding failure retains the cre
 	};
 	const cancelled = await f.service.create(request);
 	await f.service.remove(cancelled.id);
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	await f.service.signal({ type: "wake", full: true });
+	await fire(f);
 	assert.equal(f.calls.length, 0);
 	const rejected = await f.service.create(request);
 	f.fail(new Error("Admission failed"));
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	await f.service.signal({ type: "wake", full: true });
+	await fire(f);
 	assert.equal(f.service.require(rejected.id).state, "failed");
 	assert.equal((await f.trackedItems.require(ticket.id)).sessionId, undefined);
 	await f.restart();
@@ -348,25 +350,22 @@ test("cancelled or failed admission never binds; binding failure retains the cre
 		throw new Error("Binding failed");
 	};
 	const item = await f.service.create(request);
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	await f.service.signal({ type: "wake", full: true });
+	await fire(f);
 	assert.equal(f.service.require(item.id).state, "failed");
 	assert.equal(f.service.require(item.id).sessionId, "created");
 	assert.match(f.service.require(item.id).error!, /Binding failed/);
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	await f.service.signal({ type: "wake", full: true });
+	await fire(f);
 	await f.restart();
 	assert.equal(f.calls.length, 2);
 });
 
-test("wake then online survives restart and fires once with the full spawn request", async (t) => {
+test("an overdue at time survives restart and fires once online with the full spawn request", async (t) => {
 	const f = await fixture(t);
 	const item = await f.service.create(chat());
-	assert.equal(item.trigger, "on_back");
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	await f.service.signal({ type: "wake", full: true });
+	assert.equal(item.trigger, "at");
+	f.clock.advance(10_000);
+	await f.settle();
 	assert.equal(f.calls.length, 0);
-	assert.equal(f.service.require(item.id).wakeObserved, true);
 	await f.restart();
 	assert.equal(f.calls.length, 0);
 	f.triggers.online = true;
@@ -374,33 +373,53 @@ test("wake then online survives restart and fires once with the full spawn reque
 	assert.deepEqual(f.calls, [{ kind: "chat", spawn: item.target.kind === "chat" ? item.target.spawn : undefined }]);
 	assert.equal(f.service.require(item.id).state, "fired");
 	assert.equal(f.service.require(item.id).sessionId, "created");
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	await f.service.signal({ type: "wake", full: true });
+	await f.service.signal({ type: "online", online: false });
 	await f.service.signal({ type: "online", online: true });
 	await f.restart();
 	assert.equal(f.calls.length, 1);
 });
 
-test("on_online requires a new offline→online edge; wake-only is independent", async (t) => {
+test("retired triggers cancel pending rows on load and leave terminal rows readable", async (t) => {
 	const f = await fixture(t, true);
-	const online = await f.service.create(chat({ trigger: "on_online" }));
-	await f.settle();
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	await f.service.signal({ type: "wake", full: true });
-	assert.equal(f.calls.length, 0);
-	const wake = await f.service.create(chat({ trigger: "on_wake" }));
-	f.triggers.online = false;
+	await f.service.stop();
+	const rows: ScheduledItem[] = [];
+	for (const trigger of ["on_wake", "on_online", "on_back"])
+		for (const state of ["pending", "fired", "failed"] as const) {
+			const row = {
+				id: `${trigger}-${state}`,
+				revision: 1,
+				title: "Old",
+				projectId: "p",
+				trigger,
+				state,
+				createdAt: 0,
+				updatedAt: 0,
+				sleepObserved: true,
+				wakeObserved: true,
+				target: chat().target,
+			} as unknown as ScheduledItem;
+			rows.push(row);
+			await f.store.create(row);
+		}
+	await f.restart();
+	for (const row of rows) {
+		const loaded = f.service.require(row.id);
+		assert.equal("sleepObserved" in loaded, false);
+		if (row.state === "pending") {
+			assert.equal(loaded.trigger, "removed");
+			assert.equal(loaded.state, "cancelled");
+		} else {
+			assert.equal(loaded.trigger, row.trigger);
+			assert.equal(loaded.state, row.state);
+		}
+	}
 	await f.service.signal({ type: "online", online: false });
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	await f.service.signal({ type: "wake", full: true });
-	assert.equal(f.service.require(wake.id).state, "fired");
-	assert.equal(f.service.require(online.id).state, "pending");
-	f.triggers.online = true;
-	f.triggers.emit({ type: "online", online: true });
-	await f.settle();
-	assert.equal(f.service.require(online.id).state, "fired");
-	assert.equal(f.calls.length, 2);
-	assert.equal(f.triggers.active, false);
+	await f.service.signal({ type: "online", online: true });
+	assert.equal(f.calls.length, 0);
+	assert.deepEqual(
+		f.store.dashboard("p").map((item) => item.state),
+		["failed", "failed", "failed"],
+	);
 });
 
 test("nearest at deadline uses a fake clock, defers offline, and cancels timers when idle", async (t) => {
@@ -420,8 +439,6 @@ test("nearest at deadline uses a fake clock, defers offline, and cancels timers 
 	await f.service.signal({ type: "online", online: false });
 	assert.equal(f.clock.timers.size, 0);
 	f.clock.advance(5000);
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	await f.service.signal({ type: "wake", full: true });
 	assert.equal(f.service.require(second.id).state, "pending");
 	await f.restart();
 	f.triggers.online = true;
@@ -435,19 +452,18 @@ test("nearest at deadline uses a fake clock, defers offline, and cancels timers 
 test("follow-ups use the durable admission key and deleted targets become Needs you", async (t) => {
 	const f = await fixture(t);
 	const request: ScheduleRequest = {
-		trigger: "on_wake",
+		trigger: "at",
+		at: 2000,
 		target: { kind: "message", sessionId: "existing", message: "Continue" },
 	};
 	const item = await f.service.create(request);
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	await f.service.signal({ type: "wake", full: true });
+	await fire(f);
 	assert.deepEqual(f.calls, [
 		{ kind: "message", id: "existing", message: "Continue", mode: "followUp", requestId: `schedule:${item.id}` },
 	]);
 	const deleted = await f.service.create(request);
 	f.chats.delete("existing");
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	await f.service.signal({ type: "wake", full: true });
+	await fire(f);
 	assert.equal(f.service.require(deleted.id).state, "failed");
 	assert.match(f.service.require(deleted.id).error!, /deleted/);
 	assert.equal(f.calls.length, 1);
@@ -459,16 +475,20 @@ test("pending follow-up messages mark their chat until sent or cancelled", async
 	const f = await fixture(t);
 	assert.deepEqual([...f.service.scheduledMessageSessions()], []);
 	const later = await f.service.create({
-		trigger: "on_wake",
+		trigger: "at",
+		at: 2000,
 		target: { kind: "message", sessionId: "existing", message: "Continue" },
 	});
-	await f.service.create(chat({ trigger: "on_wake" }));
+	await f.service.create(chat());
 	assert.deepEqual([...f.service.scheduledMessageSessions()], ["existing"]);
 	await f.service.remove(later.id);
 	assert.deepEqual([...f.service.scheduledMessageSessions()], []);
-	await f.service.create({ trigger: "on_wake", target: { kind: "message", sessionId: "existing", message: "Go" } });
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	await f.service.signal({ type: "wake", full: true });
+	await f.service.create({
+		trigger: "at",
+		at: 2000,
+		target: { kind: "message", sessionId: "existing", message: "Go" },
+	});
+	await fire(f);
 	assert.equal(f.calls.filter((call) => call.kind === "message").length, 1);
 	assert.deepEqual([...f.service.scheduledMessageSessions()], []);
 });
@@ -476,17 +496,15 @@ test("pending follow-up messages mark their chat until sent or cancelled", async
 test("dispatch errors never replay and interrupted claims recover as uncertain failures", async (t) => {
 	const f = await fixture(t);
 	f.fail(new Error("No model access"));
-	const failed = await f.service.create(chat({ trigger: "on_wake" }));
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	await f.service.signal({ type: "wake", full: true });
+	const failed = await f.service.create(chat());
+	await fire(f);
 	assert.equal(f.service.require(failed.id).error, "No model access");
-	const interrupted = await f.service.create(chat());
+	const interrupted = await f.service.create(chat({ at: f.clock.now() + 1e6 }));
 	await f.store.replace(interrupted, { ...interrupted, state: "dispatching", claimedAt: f.clock.now() });
 	await f.restart();
 	assert.equal(f.service.require(interrupted.id).state, "failed");
 	assert.match(f.service.require(interrupted.id).error!, /uncertain/);
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	await f.service.signal({ type: "wake", full: true });
+	await fire(f);
 	assert.equal(f.calls.length, 1);
 });
 
@@ -515,35 +533,9 @@ test("CRUD revision guards and atomic claim vs edit/cancel races have one winner
 	const pending = await f.service.create(chat());
 	await f.service.remove(pending.id);
 	assert.equal(f.service.require(pending.id).state, "cancelled");
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	await f.service.signal({ type: "wake", full: true });
+	await fire(f);
 	await f.service.remove(pending.id);
 	assert.throws(() => f.service.require(pending.id), NotFound);
-});
-
-test("editing resets sleep/wake progress; events exclude later schedules", async (t) => {
-	const f = await fixture(t);
-	const item = await f.service.create(chat());
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	await f.service.signal({ type: "wake", full: true });
-	await f.service.update(item.id, { title: "Changed" });
-	assert.equal(f.service.require(item.id).wakeObserved, undefined);
-	assert.equal(f.service.require(item.id).sleepObserved, undefined);
-	await f.service.update(item.id, { trigger: "on_wake" });
-	await f.service.update(item.id, { trigger: "on_back" });
-	assert.equal(f.service.require(item.id).wakeObserved, undefined);
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	const before = f.service.signal({ type: "wake", full: true });
-	const later = await f.service.create(chat());
-	await before;
-	f.triggers.online = true;
-	await f.service.signal({ type: "online", online: true });
-	assert.equal(f.service.require(item.id).state, "fired");
-	assert.equal(f.service.require(later.id).state, "pending");
-	await f.service.stop();
-	assert.equal(f.triggers.listeners.size, 0);
-	assert.equal(f.clock.timers.size, 0);
-	assert.equal(f.triggers.active, false);
 });
 
 test("validates untrusted bodies and enforces a bounded store", async (t) => {
@@ -553,7 +545,8 @@ test("validates untrusted bodies and enforces a bounded store", async (t) => {
 		{},
 		{ trigger: "at" },
 		chat({ trigger: "at", at: NaN }),
-		chat({ at: 1 }),
+		chat({ trigger: "on_wake" } as never),
+		chat({ at: undefined }),
 		chat({ title: "" }),
 		{ target: { kind: "message", sessionId: "existing", message: " " } },
 		{ target: { kind: "chat", spawn: { projectId: "p", message: "x".repeat(16_384) } } },
@@ -580,108 +573,37 @@ test("aggregate prompt budget bounds snapshots, including target edits", async (
 	for (let i = 0; i < count; i++) await f.store.create({ ...seed, id: `payload-${i}`, target });
 	const remaining = budget - small - count * big;
 	if (remaining >= big - small) await f.store.create({ ...seed, id: "payload-small" });
-	await assert.rejects(f.service.create({ target }), /payload limit/);
+	await assert.rejects(f.service.create({ ...chat(), target }), /payload limit/);
 	await assert.rejects(f.service.update(seed.id, { target }), /payload limit/);
 	assert.deepEqual(f.service.require(seed.id).target, seed.target);
 	const ws = JSON.parse(await f.service.snapshot(undefined, true));
 	assert.equal(ws.type, "schedules");
 	assert.equal(ws.schedules.length, f.service.list().length);
 });
-test("refreshing a suspended detector synchronizes reachability without inventing an online edge", async (t) => {
-	const f = await fixture(t);
-	const online = await f.service.create(chat({ trigger: "on_online" }));
-	await f.service.signal({ type: "online", online: true, initial: true });
-	assert.equal(f.service.require(online.id).state, "pending");
-	await f.service.signal({ type: "online", online: false });
-	await f.service.signal({ type: "online", online: true });
-	assert.equal(f.service.require(online.id).state, "fired");
-});
-
 test("failed claim persistence produces no session effect; failed finalization never redispatches", async (t) => {
 	const f = await fixture(t);
-	const first = await f.service.create(chat({ trigger: "on_wake" }));
+	const first = await f.service.create(chat());
 	const replace = f.store.replace.bind(f.store);
 	f.store.replace = async (old, next) => {
 		if (next.state === "dispatching") throw new Error("disk full before claim");
 		return replace(old, next);
 	};
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	await assert.rejects(f.service.signal({ type: "wake", full: true }), /disk full before claim/);
+	f.triggers.online = true;
+	f.clock.time = 10_000;
+	await assert.rejects(f.service.signal({ type: "online", online: true }), /disk full before claim/);
 	assert.equal(f.calls.length, 0);
 	assert.equal(f.service.require(first.id).state, "pending");
 	f.store.replace = async (old, next) => {
 		if (next.state === "fired") throw new Error("disk full after admission");
 		return replace(old, next);
 	};
-	await assert.rejects(f.service.signal({ type: "wake", full: true }), /disk full after admission/);
+	f.clock.time = 10_000;
+	await assert.rejects(f.service.signal({ type: "online", online: true }), /disk full after admission/);
 	assert.equal(f.calls.length, 1);
 	assert.equal(f.service.require(first.id).state, "dispatching");
-	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
-	await f.service.signal({ type: "wake", full: true });
+	await f.service.signal({ type: "online", online: true });
 	assert.equal(f.calls.length, 1);
 	await f.restart();
 	assert.equal(f.service.require(first.id).state, "failed");
 	assert.match(f.service.require(first.id).error!, /uncertain/);
-});
-
-for (const trigger of ["on_wake", "on_back"] as const) {
-	test(`${trigger}: save awake requires a new sleep, dark wakes never count, restart asleep retains the latch`, async (t) => {
-		const f = await fixture(t);
-		const item = await f.service.create(chat({ trigger }));
-		await f.service.signal({ type: "wake", full: true });
-		await f.service.signal({ type: "sleep", at: item.updatedAt - 1 });
-		await f.service.signal({ type: "wake", full: true });
-		assert.equal(f.service.require(item.id).sleepObserved, undefined);
-		assert.equal(f.calls.length, 0);
-		f.clock.advance(100);
-		await f.service.signal({ type: "sleep", at: f.clock.now() });
-		assert.equal(f.service.require(item.id).sleepObserved, true);
-		await f.service.signal({ type: "wake", full: false });
-		assert.equal(f.service.require(item.id).wakeObserved, undefined);
-		assert.equal(f.calls.length, 0);
-		await f.restart(); // Relaunch while asleep, before the full wake.
-		assert.equal(f.service.require(item.id).sleepObserved, true);
-		await f.service.signal({ type: "wake", full: false });
-		assert.equal(f.calls.length, 0);
-		await f.service.signal({ type: "wake", full: true });
-		if (trigger === "on_back") {
-			assert.equal(f.service.require(item.id).wakeObserved, true);
-			assert.equal(f.calls.length, 0);
-			f.triggers.online = true;
-			await f.settle();
-		}
-		assert.equal(f.service.require(item.id).state, "fired");
-		assert.equal(f.calls.length, 1);
-	});
-	test(`${trigger}: every edit clears progress, and queued sleep/full-wake events survive internal CAS writes`, async (t) => {
-		const f = await fixture(t);
-		const item = await f.service.create(chat({ trigger }));
-		f.clock.advance(100);
-		await f.service.signal({ type: "sleep", at: f.clock.now() });
-		f.clock.advance(100);
-		await f.service.update(item.id, { title: "Edited while awake" });
-		await f.service.signal({ type: "sleep", at: f.clock.now() - 100 }); // A helper reconnect's old sample.
-		await f.service.signal({ type: "wake", full: true });
-		assert.equal(f.calls.length, 0);
-		assert.equal(f.service.require(item.id).sleepObserved, undefined);
-		f.clock.advance(100);
-		f.triggers.emit({ type: "sleep", at: f.clock.now() });
-		f.triggers.emit({ type: "wake", full: false });
-		f.triggers.emit({ type: "wake", full: true });
-		await f.settle();
-		if (trigger === "on_back") {
-			assert.equal(f.service.require(item.id).wakeObserved, true);
-			f.triggers.online = true;
-			await f.settle();
-		}
-		assert.equal(f.calls.length, 1);
-	});
-}
-test("a legacy kernel-wake latch is not evidence of sleep or a full wake", async (t) => {
-	const f = await fixture(t, true);
-	const item = await f.service.create(chat());
-	await f.store.replace(item, { ...item, wakeObserved: true });
-	await f.restart();
-	assert.equal(f.service.require(item.id).wakeObserved, undefined);
-	assert.equal(f.calls.length, 0);
 });

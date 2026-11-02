@@ -71,10 +71,7 @@ impl Item {
                     )
                 },
             ),
-            "on_wake" => "After sleep, on full wake".into(),
-            "on_online" => "When back online".into(),
-            "on_back" => "After sleep, full wake and online".into(),
-            "removed" => "Removed trigger".into(),
+            "removed" | "on_wake" | "on_online" | "on_back" => "Trigger removed".into(),
             _ => format!("Unknown trigger: {}", self.trigger),
         }
     }

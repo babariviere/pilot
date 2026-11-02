@@ -60,16 +60,14 @@ export class ScheduleStore {
 	snapshot(projectId?: string, ws = false): Promise<string> {
 		return this.rpc("snapshot", { expected: { projectId, ws } });
 	}
-	pendingItems(): Array<Pick<ScheduledItem, "id" | "revision" | "trigger" | "at" | "wakeObserved" | "sleepObserved">> {
+	pendingItems(): Array<Pick<ScheduledItem, "id" | "revision" | "trigger" | "at">> {
 		return [...this.items.values()]
 			.filter((item) => item.state === "pending")
-			.map(({ id, revision, trigger, at, wakeObserved, sleepObserved }) => ({
+			.map(({ id, revision, trigger, at }) => ({
 				id,
 				revision,
 				trigger,
 				at,
-				wakeObserved,
-				sleepObserved,
 			}));
 	}
 	/** Lightweight projection: dashboard builds never copy stored prompt payloads. */

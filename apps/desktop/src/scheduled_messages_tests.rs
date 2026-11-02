@@ -5,7 +5,7 @@ pub(crate) const NAME: &str = "Research 日本語 👩‍💻 e\u{301} · schedu
 pub(crate) fn roster() -> Value {
     json!([
         {"id":"one","revision":1,"title":NAME,"projectId":"project-a","trigger":"at","at":1793381000000u64,"target":{"kind":"message","sessionId":"chat-a","message":"Exact  日本語\n  keep spacing 👩‍💻"},"sessionId":"chat-a","state":"pending","createdAt":1,"updatedAt":1},
-        {"id":"two","revision":2,"title":"Failed new chat","projectId":"project-b","trigger":"on_back","target":{"kind":"chat","spawn":{"message":"Investigate","projectId":"project-b","mode":"build"}},"state":"failed","error":"Dispatch interrupted by restart; delivery is uncertain.","createdAt":1,"updatedAt":2},
+        {"id":"two","revision":2,"title":"Failed new chat","projectId":"project-b","trigger":"at","at":1793381000000u64,"target":{"kind":"chat","spawn":{"message":"Investigate","projectId":"project-b","mode":"build"}},"state":"failed","error":"Dispatch interrupted by restart; delivery is uncertain.","createdAt":1,"updatedAt":2},
         {"id":"three","revision":3,"title":"Cancelled","trigger":"removed","target":{"kind":"message","sessionId":"chat-b","message":"Never sent"},"state":"cancelled","createdAt":1,"updatedAt":2}
     ])
 }
@@ -59,7 +59,7 @@ mod tests {
                 assert_eq!(item.status(), "Unknown");
             }
         }
-        for trigger in ["at", "on_wake", "on_online", "on_back", "removed", "future"] {
+        for trigger in ["at", "on_back", "removed", "future"] {
             let mut v = roster();
             v[0]["trigger"] = json!(trigger);
             assert!(!parse(v).unwrap().items[0].when(100).is_empty());

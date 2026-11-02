@@ -28,26 +28,27 @@ parentPort!.on("message", ({ id, method, item, expected, now }) => {
 				for (const row of list()) {
 					// Decode old triggers only at the storage boundary. Never turn them into live work.
 					const removed = ["on_join_network", "on_leave_network"].includes(String(row.trigger));
+					const retired = ["on_wake", "on_online", "on_back"].includes(String(row.trigger));
+					const gone = removed || (retired && row.state === "pending");
 					const interrupted = !removed && row.state === "dispatching";
-					const legacyWake = row.state === "pending" && row.wakeObserved && !row.sleepObserved;
-					if (legacyWake) delete row.wakeObserved;
-					if (removed) {
+					if (gone) {
 						row.trigger = "removed";
 						row.state = "cancelled";
-						row.error = "Wi-Fi triggers were removed";
+						row.error = removed ? "Wi-Fi triggers were removed" : "This trigger was removed";
 						row.updatedAt = now;
 						delete (row as ScheduledItem & { networkNames?: unknown }).networkNames;
-						delete row.sleepObserved;
-						delete row.wakeObserved;
 					}
+					const latched = "sleepObserved" in row || "wakeObserved" in row;
+					delete (row as { sleepObserved?: unknown }).sleepObserved;
+					delete (row as { wakeObserved?: unknown }).wakeObserved;
 					if (interrupted) {
 						row.state = "failed";
 						row.error =
 							"Dispatch interrupted by restart; delivery is uncertain. Check the chats before rescheduling.";
 						row.updatedAt = now;
 					}
-					if (removed || legacyWake || interrupted) {
-						row.revision++;
+					if (gone || interrupted || latched) {
+						if (gone || interrupted) row.revision++;
 						db.prepare("UPDATE schedules SET revision=?,state=?,item=? WHERE id=?").run(
 							row.revision,
 							row.state,

@@ -66,7 +66,7 @@ async function fixture(t: TestContext) {
 	};
 	const providerListeners = new Set<() => void>();
 	const memory = new ProjectMemoryService(join(home, "data"));
-	let pending = [] as Array<{ id: string; title: string; kind: "chat"; trigger: "on_back"; state: "pending" }>;
+	let pending = [] as Array<{ id: string; title: string; kind: "chat"; trigger: "at"; state: "pending" }>;
 	const server = createDaemonServer(
 		{ home: join(home, "data"), host: "127.0.0.1", port: 0 },
 		sessions,
@@ -269,7 +269,7 @@ test("WebSocket pushes counts on connect and dashboards on change, without dupli
 	f.store.create({ projectId: f.project.id, title: "M", goal: "" });
 	await until(() => dashboards().length === 3);
 	assert.equal(dashboards()[2]!.dashboard.missions.total, 1);
-	f.schedule({ id: "x", title: "Plan", kind: "chat", trigger: "on_back", state: "pending" });
+	f.schedule({ id: "x", title: "Plan", kind: "chat", trigger: "at", state: "pending" });
 	await until(() => dashboards().length === 4);
 	assert.equal(dashboards()[3]!.dashboard.scheduled.total, 1);
 

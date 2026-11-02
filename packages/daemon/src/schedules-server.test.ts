@@ -107,7 +107,7 @@ test("schedule CRUD API, reconnect snapshot, WS updates, and dashboard provider"
 	assert.equal((await api("/schedules/wifi", "POST", {})).status, 404);
 	await waitFor(() => first.messages.some((m) => m.type === "schedules" && m.schedules.length === 0));
 	first.ws.send(JSON.stringify({ type: "dashboard.subscribe", projectId: project.id }));
-	const request = { trigger: "on_wake", target: { kind: "message", sessionId: "existing", message: "Continue" } };
+	const request = { trigger: "at", at: 1, target: { kind: "message", sessionId: "existing", message: "Continue" } };
 	assert.equal((await api("/schedules", "POST", null)).status, 400);
 	assert.equal((await api("/schedules", "POST", { ...request, trigger: "bogus" })).status, 400);
 	assert.equal((await api("/schedules/unknown")).status, 404);
@@ -134,8 +134,7 @@ test("schedule CRUD API, reconnect snapshot, WS updates, and dashboard provider"
 		second.messages.some((m) => m.type === "schedules" && m.schedules.some((s) => s.title === "New title")),
 	);
 	targetExists = false;
-	await schedules.signal({ type: "sleep", at: Date.now() + 1 });
-	await schedules.signal({ type: "wake", full: true });
+	await schedules.signal({ type: "online", online: true });
 	await waitFor(() =>
 		first.messages.some(
 			(m) => m.type === "schedules" && m.schedules.some((s) => s.id === item.id && s.state === "failed"),
@@ -150,10 +149,11 @@ test("schedule CRUD API, reconnect snapshot, WS updates, and dashboard provider"
 	assert.equal((await api(`/schedules/${item.id}`, "DELETE")).status, 200);
 	assert.equal((await api(`/schedules/${item.id}`)).status, 404);
 	targetExists = true;
-	const cancelled = (await (await api("/schedules", "POST", request)).json()) as ScheduledItem;
+	const cancelled = (await (
+		await api("/schedules", "POST", { ...request, at: Date.now() + 1e9 })
+	).json()) as ScheduledItem;
 	assert.equal((await api(`/schedules/${cancelled.id}`, "DELETE")).status, 200);
-	await schedules.signal({ type: "sleep", at: Date.now() + 1 });
-	await schedules.signal({ type: "wake", full: true });
+	await schedules.signal({ type: "online", online: true });
 	assert.equal(((await (await api(`/schedules/${cancelled.id}`)).json()) as ScheduledItem).state, "cancelled");
 
 	const chatTarget = {
@@ -161,9 +161,17 @@ test("schedule CRUD API, reconnect snapshot, WS updates, and dashboard provider"
 		spawn: { projectId: project.id, message: "Fix crash" },
 		trackedItemId: ticket.id,
 	};
-	assert.equal((await api("/schedules", "POST", { target: { ...chatTarget, trackedItemId: null } })).status, 400);
-	assert.equal((await api("/schedules", "POST", { target: { ...chatTarget, trackedItemId: "missing" } })).status, 404);
-	const chatResponse = await api("/schedules", "POST", { trigger: "on_wake", target: chatTarget });
+	assert.equal(
+		(await api("/schedules", "POST", { trigger: "at", at: 1, target: { ...chatTarget, trackedItemId: null } }))
+			.status,
+		400,
+	);
+	assert.equal(
+		(await api("/schedules", "POST", { trigger: "at", at: 1, target: { ...chatTarget, trackedItemId: "missing" } }))
+			.status,
+		404,
+	);
+	const chatResponse = await api("/schedules", "POST", { trigger: "at", at: Date.now() + 1e9, target: chatTarget });
 	assert.equal(chatResponse.status, 201);
 	const scheduledChat = (await chatResponse.json()) as ScheduledItem;
 	assert.deepEqual(scheduledChat.target, chatTarget);
@@ -180,8 +188,8 @@ test("schedule CRUD API, reconnect snapshot, WS updates, and dashboard provider"
 				),
 		),
 	);
-	await schedules.signal({ type: "sleep", at: Date.now() + 1 });
-	await schedules.signal({ type: "wake", full: true });
+	assert.equal((await api("/schedules/" + scheduledChat.id, "PATCH", { at: 1 })).status, 200);
+	await schedules.signal({ type: "online", online: true });
 	assert.equal((await trackedItems.require(ticket.id)).sessionId, "spawned");
 	const dispatched = (await (await api(`/schedules/${scheduledChat.id}`)).json()) as ScheduledItem;
 	assert.equal(dispatched.state, "fired");

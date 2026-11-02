@@ -274,12 +274,12 @@ test("needs you lists failures, mission questions, failed schedules and unread r
 				id: "x1",
 				title: "Nightly",
 				kind: "chat",
-				trigger: "on_back",
+				trigger: "at",
 				state: "failed",
 				error: "Project is gone",
 				at: 50,
 			},
-			{ id: "x2", title: "Later", kind: "chat", trigger: "on_online", state: "pending" },
+			{ id: "x2", title: "Later", kind: "chat", trigger: "at", state: "pending" },
 		],
 	});
 	assert.deepEqual(
@@ -738,7 +738,7 @@ test("providers feed scheduled and tracked sections and report changes", () => {
 	const f = service([], {
 		providers: {
 			scheduled: (projectId) =>
-				projectId === "p1" ? [{ id: "a", title: "Plan", kind: "chat", trigger: "on_back", state: "pending" }] : [],
+				projectId === "p1" ? [{ id: "a", title: "Plan", kind: "chat", trigger: "at", state: "pending" }] : [],
 			tracked: () => [{ source: "linear", label: "Linear", status: "syncing", total: 0, items: [] }],
 			onChange: (listener) => {
 				changeListeners.add(listener);
@@ -771,7 +771,7 @@ test("every attention row has a reason, including missing diagnostics and schedu
 				session({ outcome: "done", outcomeAt: 1 }),
 			],
 			missions: [mission({ needsYouCount: 1, needsYouReason: "Blocked: Release" })],
-			scheduled: [{ id: "schedule", title: "Later", kind: "chat", trigger: "on_back", state: "failed" }],
+			scheduled: [{ id: "schedule", title: "Later", kind: "chat", trigger: "at", state: "failed" }],
 		},
 		50,
 	);
