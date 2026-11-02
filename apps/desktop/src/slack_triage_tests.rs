@@ -75,6 +75,33 @@ fn parses_effective_triage_overrides_and_canonical_identity() {
 
 #[test]
 fn status_titles_carry_reasons_without_inventing_them() {
+    // Exactly what pilotd lists: fractional times, null and absent optional fields, extras.
+    let production = json!({
+        "id":"6f0c2a4e-1b7d-4c55-9a39-1f2e3d4c5b6a","projectId":"0e1d2c3b-4a59-6877-8695-a4b3c2d1e0f9",
+        "kind":"slack","externalId":"C0123456789/1791892800.000123","title":"Checkout fails",
+        "url":"https://slack.com/archives/C0123456789/p1791892800000123","status":"open",
+        "metadata":{"channel":"C0123456789","channelName":"support","thread_ts":"1791892800.000123",
+            "replies":2,"confidence":0.92,"severity":"high","summary":"x","type":"bug","label":null},
+        "dismissed":false,
+        "slack":{"type":"bug","label":null,"severity":"high","status":"open","overrides":{}},
+        "createdAt":1791892800000.123,"updatedAt":1791892800000.123
+    });
+    let i = Item::read(&production).unwrap();
+    assert_eq!(i.updated_at, 1_791_892_800_000);
+    assert_eq!(i.replies, Some(2));
+    assert!(i.session_id.is_none() && i.triage.label.is_none() && !i.started);
+    let mut legacy = production.clone();
+    legacy.as_object_mut().unwrap().remove("slack");
+    assert_eq!(Item::read(&legacy).unwrap().triage.severity, Severity::High);
+    for (field, value, reason) in [
+        ("updatedAt", json!(-1), "time"),
+        ("updatedAt", json!("1791892800000"), "time"),
+        ("title", Value::Null, "title"),
+    ] {
+        let mut bad = production.clone();
+        bad[field] = value;
+        assert!(Item::read(&bad).unwrap_err().contains(reason), "{field}");
+    }
     let mut t = Item::parse(&item("m", "p1", "t", "dismissed", "low", 1))
         .unwrap()
         .triage;

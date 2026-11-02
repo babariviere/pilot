@@ -254,13 +254,23 @@ pub(crate) struct Item {
 }
 impl Item {
     pub(crate) fn parse(value: &Value) -> Option<Self> {
+        Self::read(value).ok()
+    }
+    /// Like `parse`, naming what was unreadable. Times may be fractional: pilotd derives a
+    /// message's `updatedAt` from its Slack timestamp (`seconds.micros * 1000`).
+    pub(crate) fn read(value: &Value) -> Result<Self, &'static str> {
         if value["kind"] != "slack" {
-            return None;
+            return Err("A Slack message from Pilot couldn't be read (not a Slack item).");
         }
-        let id = value["id"].as_str().filter(|id| valid_id(id))?.to_owned();
+        let id = value["id"]
+            .as_str()
+            .filter(|id| valid_id(id))
+            .ok_or("A Slack message from Pilot couldn't be read (identity).")?
+            .to_owned();
         let project_id = value["projectId"]
             .as_str()
-            .filter(|id| valid_id(id))?
+            .filter(|id| valid_id(id))
+            .ok_or("A Slack message from Pilot couldn't be read (project).")?
             .to_owned();
         let metadata = &value["metadata"];
         let slack = &value["slack"];
@@ -272,7 +282,8 @@ impl Item {
                 kind: Kind::parse(&slack["type"]).unwrap_or(Kind::Unknown),
                 label: text(&slack["label"]),
                 severity: Severity::parse(&slack["severity"]).unwrap_or(Severity::Low),
-                status: Status::parse(&slack["status"])?,
+                status: Status::parse(&slack["status"])
+                    .ok_or("A Slack message from Pilot couldn't be read (status).")?,
                 overridden: Overridden {
                     kind: !overrides["type"].is_null(),
                     label: overrides.get("label").is_some(),
@@ -306,14 +317,21 @@ impl Item {
             .and_then(Value::as_str)
             .filter(|id| valid_id(id))
             .map(str::to_owned);
-        Some(Self {
+        Ok(Self {
             id,
             project_id,
-            title: value["title"].as_str()?.to_owned(),
-            url: value["url"].as_str()?.to_owned(),
+            title: value["title"]
+                .as_str()
+                .ok_or("A Slack message from Pilot couldn't be read (title).")?
+                .to_owned(),
+            url: value["url"]
+                .as_str()
+                .ok_or("A Slack message from Pilot couldn't be read (link).")?
+                .to_owned(),
             channel_name: text(&metadata["channelName"]),
-            replies: metadata["replies"].as_u64(),
-            updated_at: value["updatedAt"].as_u64()?,
+            replies: millis(&metadata["replies"]),
+            updated_at: millis(&value["updatedAt"])
+                .ok_or("A Slack message from Pilot couldn't be read (time).")?,
             triage,
             session_id,
             started: metadata["slackStart"]["outcome"] == "reacted",
@@ -339,6 +357,16 @@ impl Item {
         }
         parts.join(" · ")
     }
+}
+
+/// A non-negative JSON number, fractional or not, as a whole count (milliseconds, replies).
+fn millis(value: &Value) -> Option<u64> {
+    value.as_u64().or_else(|| {
+        value
+            .as_f64()
+            .filter(|n| n.is_finite() && *n >= 0. && *n < u64::MAX as f64)
+            .map(|n| n as u64)
+    })
 }
 
 pub(crate) fn ago(at: u64, now: u64) -> String {

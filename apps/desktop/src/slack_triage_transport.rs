@@ -99,6 +99,7 @@ fn reason(value: &Option<Value>) -> Option<String> {
 
 const OFFLINE: &str = "Couldn't reach Pilot.";
 const UNREADABLE: &str = "Pilot's Slack messages couldn't be read.";
+const PROJECTS: &str = "Pilot's project list couldn't be read.";
 
 async fn get(
     client: &reqwest::Client,
@@ -142,9 +143,9 @@ async fn pages(
         total = value["total"].as_u64().ok_or(UNREADABLE)?;
         let page = value["items"].as_array().ok_or(UNREADABLE)?;
         for raw in page {
-            let item = Item::parse(raw).ok_or(UNREADABLE)?;
+            let item = Item::read(raw)?;
             if item.project_id != project {
-                return Err(UNREADABLE);
+                return Err("Pilot listed a Slack message under the wrong project.");
             }
             items.push(item);
         }
@@ -168,11 +169,11 @@ pub(crate) async fn read(
     let projects = get(client, options, "/api/projects").await?;
     let projects: Vec<Project> = projects
         .as_array()
-        .ok_or(UNREADABLE)?
+        .ok_or(PROJECTS)?
         .iter()
         .map(Project::parse)
         .collect::<Option<_>>()
-        .ok_or(UNREADABLE)?;
+        .ok_or(PROJECTS)?;
     let scoped: Vec<Project> = match scope {
         Some(id) => vec![
             projects
@@ -195,7 +196,7 @@ pub(crate) async fn read(
         let sources = get(client, options, &format!("/api/sources?projectId={id}")).await?;
         let source = sources
             .as_array()
-            .ok_or(UNREADABLE)?
+            .ok_or("Pilot's Slack sync status couldn't be read.")?
             .iter()
             .filter(|s| s["projectId"] == id.as_str())
             .find_map(Source::parse);
@@ -246,6 +247,11 @@ pub(crate) async fn thread(
         .map_err(|_| OFFLINE.to_owned())?;
     match body(response).await {
         (200, Some(value)) => Thread::parse(&value, id).ok_or_else(|| FAILED.into()),
+        // pilotd before the thread route: the list works, the thread needs a newer Pilot.
+        (404, _) => Err(
+            "This version of Pilot can't show Slack threads yet. Update Pilot to read them here."
+                .into(),
+        ),
         // pilotd's plain reasons: sign-in, Slack unreachable, sync first, busy.
         (409 | 503, value) => Err(reason(&value)
             .filter(|r| !r.starts_with("Superseded"))

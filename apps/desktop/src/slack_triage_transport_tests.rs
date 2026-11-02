@@ -98,7 +98,54 @@ async fn foreign_identity_and_malformed_replies_are_refused_whole() {
     );
     assert_eq!(
         read(&client(), &s.options, Some("p1"), false).await,
-        Err("Pilot's Slack messages couldn't be read.")
+        Err("A Slack message from Pilot couldn't be read (project)."),
+        "the reason names what was unreadable"
+    );
+    let s = server();
+    s.reply(
+        "GET",
+        "/api/tracked-items",
+        Reply::status(
+            Some(200),
+            json!({"items":[item("m9", "p3", "Elsewhere", "open", "low", 1)],"total":1}),
+        ),
+    );
+    assert_eq!(
+        read(&client(), &s.options, Some("p1"), false).await,
+        Err("Pilot listed a Slack message under the wrong project.")
+    );
+}
+
+/// Installed pilotd 1.103 (and current) stores `updatedAt = Number(threadTs) * 1000`, so
+/// every Slack item's time is fractional. One such item once failed the whole board.
+#[tokio::test]
+async fn production_fractional_times_and_optional_fields_load() {
+    let s = server();
+    for raw in s.state.lock().unwrap().items.iter_mut() {
+        let ms = raw["updatedAt"].as_u64().unwrap() as f64 + 0.001;
+        raw["updatedAt"] = json!(ms);
+        raw["createdAt"] = json!(ms);
+        raw["metadata"]["confidence"] = json!(0.92);
+        raw["metadata"]["summary"] = json!("Synthetic summary 日本語");
+        raw["slack"]["overrides"] = json!({});
+        raw["linearParent"] = Value::Null;
+    }
+    let board = read(&client(), &s.options, None, false).await.unwrap();
+    let m1 = board.item("m1").unwrap();
+    assert_eq!(m1.updated_at, 1, "fractional milliseconds floor, not fail");
+    assert_eq!(board.project("p1").unwrap().items.len(), 3);
+    // The thread route is newer than pilotd 1.103: a 404 says to update, not "couldn't load".
+    s.reply(
+        "GET",
+        "/api/tracked-items/m1/thread",
+        Reply::status(Some(404), json!({"error":"Unknown tracking operation"})),
+    );
+    assert_eq!(
+        crate::slack_triage_transport::thread(&client(), &s.options, "m1").await,
+        Err(
+            "This version of Pilot can't show Slack threads yet. Update Pilot to read them here."
+                .into()
+        )
     );
 }
 
