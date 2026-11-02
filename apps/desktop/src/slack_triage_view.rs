@@ -1735,6 +1735,6 @@ impl Render for SlackBoard {
 mod tests {
     #[test]
     fn board_columns_fit_beside_the_inspector_only_in_wide_windows() {
-        assert!(super::INSPECTOR_WIDTH + 2. * super::COLUMN_MIN < super::WIDE);
+        const { assert!(super::INSPECTOR_WIDTH + 2. * super::COLUMN_MIN < super::WIDE) };
     }
 }

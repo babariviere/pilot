@@ -97,7 +97,8 @@ pub(crate) fn decision(allow: bool) -> Decision {
 async fn decision_posts_exact_request_once_and_refuses_only_before_any_change() {
     let refused = |o: &Outcome| matches!(o, Outcome::Refused(_));
     let unknown = |o: &Outcome| *o == Outcome::Unknown(UNKNOWN);
-    let cases: [(Option<(u16, &'static str)>, &dyn Fn(&Outcome) -> bool); 13] = [
+    type Case<'a> = (Option<(u16, &'static str)>, &'a dyn Fn(&Outcome) -> bool);
+    let cases: [Case<'_>; 13] = [
         (Some((202, r#"{"ok":true}"#)), &|o: &Outcome| {
             *o == Outcome::Accepted
         }),

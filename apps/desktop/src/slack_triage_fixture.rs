@@ -142,6 +142,7 @@ impl Server {
             .replies
             .insert((method.into(), path.into()), reply);
     }
+    #[cfg(feature = "native-probes")]
     pub(crate) fn clear(&self, method: &str, path: &str) {
         self.state
             .lock()

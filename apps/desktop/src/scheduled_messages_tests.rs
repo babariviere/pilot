@@ -245,7 +245,10 @@ mod tests {
         ));
         assert!(seen(&s).iter().all(|(m, _)| m == "GET"));
         s.reply("GET /api/schedules/one", Reply::json(200, one));
-        s.reply("DELETE /api/schedules/one?expectedRevision=1", Reply::json(409, json!({})));
+        s.reply(
+            "DELETE /api/schedules/one?expectedRevision=1",
+            Reply::json(409, json!({})),
+        );
         assert!(matches!(
             run("one", 1, RowAction::Cancel),
             Outcome::Refused(_)

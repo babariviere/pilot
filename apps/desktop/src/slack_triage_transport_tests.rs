@@ -281,14 +281,7 @@ async fn threads_and_polls_keep_pilotd_reasons() {
         poll(&client(), &s.options, "p1").await,
         PollOutcome::Refused("Slack hourly budget reached. Resumes next hour.".into())
     );
-    let posts: Vec<_> = s
-        .state
-        .lock()
-        .unwrap()
-        .writes()
-        .into_iter()
-        .map(|(m, p, b)| (m, p, b))
-        .collect();
+    let posts = s.state.lock().unwrap().writes();
     assert_eq!(posts.len(), 2);
     assert!(
         posts

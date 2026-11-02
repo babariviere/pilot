@@ -37,7 +37,9 @@ async fn access_decision_autosaves_while_held_posts_once_and_never_resends() {
         assert!(client.command(WriteCommand::Checkpoint(28)));
         assert_eq!(client.commands.len(), 1, "commands stay FIFO behind HTTP");
         server.release.send(()).await.unwrap();
-        let done = until(&updates, |s| settled(s, 17)).await;
+        // The single-slot update channel may coalesce settlement and checkpoint.
+        let done = until(&updates, |s| s.checkpoint == Some(28)).await;
+        assert!(settled(&done, 17));
         let reply = done.access.unwrap();
         assert_eq!(reply.decision, decision(allow));
         assert_eq!(
@@ -48,7 +50,6 @@ async fn access_decision_autosaves_while_held_posts_once_and_never_resends() {
                 _ => Outcome::Unknown(UNKNOWN),
             }
         );
-        until(&updates, |s| s.checkpoint == Some(28)).await;
         assert_eq!(
             posts(&server),
             1,
