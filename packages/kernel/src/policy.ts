@@ -52,6 +52,7 @@ export interface PilotContext {
 	requirePullRequest?: boolean;
 	/** Pilot removed files from this workspace while the chat was archived. */
 	workspaceReset?: WorkspaceReset;
+	workspaceSetup?: { state: "pending" | "ok" | "failed" | "cancelled" };
 }
 
 /**
@@ -364,6 +365,13 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 				"- If a new branch is needed, create it with `git switch -c <name>`. Commit on the chosen branch and push it with `git push -u origin <name>`.",
 			);
 		}
+	}
+	if (!context.ask && !coordinator && workspace && context.workspaceSetup && context.workspaceSetup.state !== "ok") {
+		lines.push(
+			context.workspaceSetup.state === "pending"
+				? "- Workspace setup is still running after its first-turn wait. Dependencies may not be ready yet."
+				: "- Workspace setup did not finish successfully. Dependencies may be incomplete; inspect the setup report before relying on builds or tests.",
+		);
 	}
 	if (!context.ask && !coordinator && workspace && context.workspaceReset) {
 		const reset = context.workspaceReset;

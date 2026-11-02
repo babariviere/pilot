@@ -1,10 +1,11 @@
 # Automations (design)
 
-**Status: foundations in progress, disabled by default.** Definitions, validation and native-authorized
-revision-checked writes and the bounded shell runner are implemented. Enable Automations in desktop Settings → Chats to expose the
+**Status: workspace setup implemented, disabled by default.** Definitions, validation, native-authorized
+revision-checked writes, the bounded shell runner and workspace create/restore triggers are implemented.
+Post-run hooks, follow-ups and the management UI below remain planned. Enable Automations in desktop Settings → Chats to expose the
 `automations: 1` capability and editing endpoint. This host-owned switch defaults off, persists in
 `chat-settings.json`, and applies to new admissions immediately, without restarting the daemon.
-Turning it off leaves admitted commands to finish. Setup scheduling follows separately.
+Turning it off leaves admitted commands to finish and skips later setup steps.
 The switch uses `GET/PATCH /api/chat-settings` with `{ automations, expectedRevision }`;
 PATCH requires native host-action authority and preserves the automatic handoff setting.
 The unsupported Swift app is not part of this implementation; no PilotCore mirror is required.
@@ -163,6 +164,28 @@ ships: saved intent in the app, per-host writes with revision checks, Synced, Pe
 Until then, definitions are edited per host.
 
 ## 2. Triggers
+
+### Implemented workspace setup
+
+The create/restore boundary persists one pending setup record with the workspace/archive metadata.
+It snapshots at most 32 selected commands and their definition revision. A separate completion cursor
+prevents old successful steps from repeating after the 20-result display tail rolls over. Interrupted
+shell steps get one recovery attempt; Stop cancels the boundary and never replays it on the next input.
+A command disabled or removed before admission is skipped.
+
+The first input waits up to ten minutes across the generic setup participant and shell steps together.
+After that, setup continues in the daemon while the agent receives a fixed not-ready note. Failure stops
+later steps but does not fail the agent's turn. Redacted command results use the existing retained records
+and logs; a passive activity outbox holds at most eight setup reports (16 KiB each) until a kernel is next opened.
+Restoring a snapshot runs setup without starting a model. Intact restores do nothing. The Rust chat view
+shows the latest setup failure separately from the agent's own outcome.
+
+Environment setup can supply `SessionManagerOptions.workspaceSetup(context)` before the project commands.
+The context carries the workspace, stable trigger ID and cancellation signal, not an install recipe.
+A participant must honor cancellation and resume its own durable actions by trigger ID after interruption.
+No environment installation or database behavior is introduced here.
+
+The remaining subsections describe the wider hook design, including later manual rerun and timeline controls.
 
 ### Which chats
 

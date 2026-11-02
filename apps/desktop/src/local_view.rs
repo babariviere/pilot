@@ -734,6 +734,7 @@ impl LocalViewer {
                 mission: Default::default(),
                 mission_coordinator: false,
                 failure: None,
+                setup_failure: None,
                 pull_requests: Vec::new(),
                 context_usage: Default::default(),
                 subscription_usage: None,
@@ -759,6 +760,7 @@ impl LocalViewer {
                 mission: Default::default(),
                 mission_coordinator: false,
                 failure: None,
+                setup_failure: None,
                 pull_requests: Vec::new(),
                 context_usage: Default::default(),
                 subscription_usage: None,
@@ -784,6 +786,7 @@ impl LocalViewer {
                 mission: Default::default(),
                 mission_coordinator: false,
                 failure: None,
+                setup_failure: None,
                 pull_requests: Vec::new(),
                 context_usage: Default::default(),
                 subscription_usage: None,
@@ -986,6 +989,7 @@ impl LocalViewer {
             mission: Default::default(),
             mission_coordinator: false,
             failure: None,
+            setup_failure: None,
             pull_requests: Vec::new(),
             context_usage: Default::default(),
             subscription_usage: None,
@@ -1391,6 +1395,7 @@ impl LocalViewer {
                             mission: Default::default(),
                             mission_coordinator: false,
                             failure: None,
+                            setup_failure: None,
                             pull_requests: Vec::new(),
                             context_usage: Default::default(),
                             subscription_usage: None,
@@ -2371,6 +2376,7 @@ impl LocalViewer {
                     mission: Default::default(),
                     mission_coordinator: false,
                     failure: None,
+                    setup_failure: None,
                     pull_requests: Vec::new(),
                     context_usage: Default::default(),
                     subscription_usage: None,
@@ -2720,6 +2726,7 @@ impl Render for LocalViewer {
                     // One 48pt row: title over a quiet project subtitle, then named icon actions and the … menu.
                     .child(self.chat_header_element(window, cx))
                     .when_some(self.session_failure_banner(cx), |d, banner| d.child(banner))
+                    .when_some(self.workspace_setup_banner(), |d, banner| d.child(banner))
                     .child(div().v_flex().flex_1().min_h_0().min_w_0().w_full().when(self.artifacts_open, |d| d.max_w(px(760.)).mx_auto())
                         // Placeholders keep the readable column; only the transcript scroller spans the pane.
                         .when(self.selected.is_some()&&!self.state.loaded,|this|this.child(div().w_full().max_w(px(crate::ui::CONVERSATION_MAX_WIDTH)).mx_auto().p_3().text_sm().text_color(cx.theme().muted_foreground).child("Loading history…")))
@@ -3243,6 +3250,7 @@ mod refresh_tests {
                         mission: Default::default(),
                         mission_coordinator: false,
                         failure: None,
+                        setup_failure: None,
                         pull_requests: Vec::new(),
                         context_usage: Default::default(),
                         subscription_usage: None,

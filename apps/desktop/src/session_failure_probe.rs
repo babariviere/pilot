@@ -27,6 +27,7 @@ fn report(
         .unwrap();
     chat.writable = true;
     chat.failure = crate::session_failure::read(&value);
+    chat.setup_failure = crate::workspace_setup::failure(&value);
     chat.busy = value["working"] == true;
     chat.state = value["state"].as_str().unwrap_or("idle").into();
     chat.signal = if chat.busy {
@@ -101,6 +102,43 @@ pub fn run_session_failure_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
+            cx.update_window(h, |_, w, cx| {
+                view.update(cx, |v, cx| report(v, json!({
+                    "state":"working", "working":true,
+                    "workspaceSetup":{"state":"failed","detail":"Setup failed: Install dependencies (exit 1)"}
+                }), w, cx));
+            }).unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, _| {
+                assert!(w.find("workspace-setup-failure").visible());
+                assert!(
+                    w.try_find("session-failure").is_none(),
+                    "setup never claims the agent failed"
+                );
+            })
+            .unwrap();
+            if let Some(p) = &captures {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(p.join(format!("setup-{}-{dark}.png", width as u32)))
+                    .unwrap();
+            }
+            cx.update_window(h, |_, w, cx| {
+                view.update(cx, |v, cx| {
+                    report(
+                        v,
+                        json!({"state":"working","working":true,"workspaceSetup":{"state":"ok"}}),
+                        w,
+                        cx,
+                    )
+                });
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("workspace-setup-failure").is_none())
+            })
+            .unwrap();
             let healthy = cx
                 .update_window(h, |_, w, _| w.find("conversation-editor").bounds())
                 .unwrap();

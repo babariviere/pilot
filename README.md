@@ -667,19 +667,19 @@ restored) are a design proposal, not yet implemented: see
 
 ### Automations
 
-Personal automations around a chat's workspace and runs are a design proposal, not yet implemented. Each is a
-trigger, conditions and an action, stored in Pilot's project settings (never in the repository) and run by the
-daemon of the host that runs the chat:
+Personal setup commands are stored in Pilot's project settings (never in the repository) and run by the
+host daemon. Enable **Automations** in desktop **Settings → Chats**; the host switch defaults off and applies
+without a restart. Definitions currently use the native-authorized project settings API.
 
-- **Setup** runs your commands when a workspace is created and again after an archived workspace is restored.
-  The first turn waits for it, up to 10 minutes. There is no teardown.
-- **Checks** run lint or tests after a run that changed files, and send failures back to the agent.
-- **Continue** asks the agent to keep going when the chat finishes with open todos.
+**Setup** runs commands in order when a Build workspace is created and after a reclaimed or pruned archived
+workspace is restored. The first turn waits up to 10 minutes; then it starts with a not-ready note if setup
+has failed or is still running. Failures appear separately in the Rust chat view, with redacted command results
+retained by the daemon. Ask chats, coordinators, direct checkouts and continuation chats do not run setup.
+There is no teardown or archive-time hook.
 
-Commands are bounded by timeouts and output caps, stop with **Stop** and archive, and wait during sleep and
-update pauses. Messages to the agent follow the PR follow-up rules: idle only, at most three per chat until you
-send a message, and only after the agent made progress. Results show as one-line events in the chat; failures
-and exhausted attempts appear in **Needs you**. See [automations](docs/automations.md).
+Commands are bounded by timeouts and output caps. **Stop** cancels setup; disabling automations prevents new
+commands and lets admitted commands finish. Interrupted shell steps get one recovery attempt. Post-run checks,
+continue-on-todos, manual reruns and the management UI remain planned. See [automations](docs/automations.md).
 
 ### Missions
 

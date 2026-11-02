@@ -84,7 +84,8 @@ import release from "../../../package.json" with { type: "json" };
 import { AIUsageLedger } from "./ai-usage.ts";
 import { compareAIUsageBudget } from "./ai-usage-budget.ts";
 import { prepareAskSnapshot } from "./ask-snapshots.ts";
-import { type ActionResult, ActionRunner } from "./automation-runner.ts";
+import { validateAutomationItems } from "./automation-definitions.ts";
+import { type ActionResult, ActionRunner, actionOutput } from "./automation-runner.ts";
 import { chatTitleContext, TITLE_OPENING_LIMIT } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
 import { coordinatorTrust } from "./coordinator-trust.ts";
@@ -160,6 +161,12 @@ import { WorkerActivity } from "./worker-activity.ts";
 import { WorkerReviewDelivery } from "./worker-review-delivery.ts";
 import { WorkerStarts } from "./worker-starts.ts";
 import { workspaceCommandEnvironment } from "./workspace-environment.ts";
+import {
+	WORKSPACE_SETUP_HOLD_MS,
+	type WorkspaceSetupContext,
+	type WorkspaceSetupState,
+	type WorkspaceSetupTrigger,
+} from "./workspace-setup.ts";
 import {
 	createWorkspace,
 	dissociateWorkspace,
@@ -317,6 +324,10 @@ export interface SessionManagerOptions {
 	actionRunner?: ActionRunner;
 	/** Reads the host-owned durable switch at each admission. */
 	automationsEnabled?: () => boolean;
+	/** Runs before project setup commands, under the same first-turn hold and cancellation. */
+	workspaceSetup?: (context: WorkspaceSetupContext) => Promise<void>;
+	/** Shorter holds for deterministic offline tests; never extends the ten-minute bound. */
+	workspaceSetupHoldMs?: number;
 	/** One host-owned accounting store, shared with separate background completions. */
 	usageHistory?: UsageHistoryStore;
 	/** Agent database access. Defaults to the agent directory's config, except with injected test workers. */
@@ -474,7 +485,7 @@ interface SessionMeta extends OutcomeMeta {
 	workspacePrunedAt?: number;
 	/** Told to the next kernel so the agent does not assume dependencies or build output exist. */
 	workspaceReset?: WorkspaceReset;
-	automation?: { runs: import("@pilot/protocol").AutomationRunRecord[] };
+	automation?: { runs: import("@pilot/protocol").AutomationRunRecord[]; setup?: WorkspaceSetupState };
 	createdAt: number;
 	updatedAt: number;
 	/** User-submission time, separate from worker lifecycle and metadata changes. */
@@ -1397,6 +1408,10 @@ export class SessionManager {
 	private readonly updateGate = new UpdateGate();
 	private readonly actionRunner: ActionRunner;
 	private readonly automationsEnabled: () => boolean;
+	private readonly workspaceSetup?: SessionManagerOptions["workspaceSetup"];
+	private readonly workspaceSetupHoldMs: number;
+	private readonly workspaceSetups = new Map<string, { controller: AbortController; done: Promise<void> }>();
+	private readonly workspaceSetupWaiters = new Map<string, Set<() => void>>();
 	private runtimeInspecting?: Promise<import("./runtime-admission.ts").RuntimeBlocker[]>;
 	private updatePauseTimer?: ReturnType<typeof setTimeout>;
 	private readonly updatePausing = new Map<SessionWorker, { id: string; ready: boolean; error?: string }>();
@@ -1574,6 +1589,11 @@ export class SessionManager {
 		this.kernelRestartBackoffMs = options.kernelRestartBackoffMs ?? 15_000;
 		this.workerOptions = { startupTimeoutMs: options.startupTimeoutMs, commandTimeoutMs: options.commandTimeoutMs };
 		this.automationsEnabled = options.automationsEnabled ?? (() => false);
+		this.workspaceSetup = options.workspaceSetup;
+		this.workspaceSetupHoldMs = Math.min(
+			WORKSPACE_SETUP_HOLD_MS,
+			Math.max(0, options.workspaceSetupHoldMs ?? WORKSPACE_SETUP_HOLD_MS),
+		);
 		this.actionRunner = options.actionRunner ?? new ActionRunner();
 		this.actionRunner?.onChange((id) => {
 			const meta = id ? this.metas.get(id) : undefined;
@@ -1721,11 +1741,256 @@ export class SessionManager {
 				meta.automation!.runs = [...meta.automation!.runs.filter((run) => run.id !== runId), { ...record }].slice(
 					-20,
 				);
-				await this.save(meta);
+				await this.save(meta, undefined, undefined, true);
 				this.emit(meta);
 			},
 		});
 	}
+	private setupEligible(meta: SessionMeta): boolean {
+		return !!(
+			meta.workspace &&
+			meta.projectId &&
+			meta.mode !== "ask" &&
+			!meta.control &&
+			!meta.role &&
+			!meta.coordinatorView &&
+			!this.isMissionCoordinator(meta.id) &&
+			!meta.continuationOf &&
+			!meta.continuedTo &&
+			!meta.workspaceOriginId
+		);
+	}
+
+	private setupHooks(meta: SessionMeta, trigger: WorkspaceSetupTrigger): import("@pilot/protocol").Automation[] {
+		const definitions = meta.projectId ? this.projects.get(meta.projectId)?.automations : undefined;
+		return definitions && !definitions.error
+			? definitions.items.filter((hook) => hook.enabled && hook.on.includes(trigger) && hook.action.type === "shell")
+			: [];
+	}
+
+	/** Called before the metadata write that publishes the workspace or clears archival. */
+	private queueWorkspaceSetup(meta: SessionMeta, trigger: WorkspaceSetupTrigger, triggerId: string): void {
+		if (!this.automationsEnabled() || !this.setupEligible(meta)) return;
+		if (!this.workspaceSetup && !this.setupHooks(meta, trigger).length) return;
+		meta.automation ??= { runs: [] };
+		if (meta.automation.setup?.triggerId === triggerId) return;
+		meta.automation.setup = {
+			trigger,
+			triggerId,
+			holdUntil: Date.now() + this.workspaceSetupHoldMs,
+			state: "pending",
+			hooks: structuredClone(this.setupHooks(meta, trigger)),
+			definitionRevision: this.projects.get(meta.projectId!)?.automations?.revision ?? 0,
+			finished: {},
+		};
+	}
+
+	private startWorkspaceSetup(meta: SessionMeta): Promise<void> {
+		const active = this.workspaceSetups.get(meta.id);
+		if (active) return active.done;
+		const setup = meta.automation?.setup;
+		if (
+			!setup ||
+			setup.state !== "pending" ||
+			meta.archivedAt !== undefined ||
+			!this.setupEligible(meta) ||
+			this.closing ||
+			this.sleepPause ||
+			this.updateGate.paused ||
+			this.updateGate.frozen
+		)
+			return Promise.resolve();
+		const controller = new AbortController();
+		const done = Promise.resolve()
+			.then(() => this.runWorkspaceSetup(meta, setup, controller.signal))
+			.catch(async (error: unknown) => {
+				if (this.closing || this.sleepPause) return;
+				setup.state = controller.signal.aborted ? "cancelled" : "failed";
+				setup.hooks = [];
+				setup.detail = controller.signal.aborted
+					? "Workspace setup cancelled"
+					: `Workspace setup failed: ${actionOutput(String(error)).slice(0, 400)}`;
+				await this.save(meta, undefined, undefined, true);
+				this.emit(meta);
+			})
+			.finally(() => {
+				if (this.workspaceSetups.get(meta.id)?.done === done) this.workspaceSetups.delete(meta.id);
+				for (const wake of this.workspaceSetupWaiters.get(meta.id) ?? []) wake();
+				this.emit(meta);
+			});
+		this.workspaceSetups.set(meta.id, { controller, done });
+		// A failed metadata write remains a startup error for the hold, and a logged failure on passive restore.
+		void done.catch((error: unknown) => console.warn(`pilotd: workspace setup: ${error}`));
+		return done;
+	}
+
+	private async runWorkspaceSetup(meta: SessionMeta, setup: WorkspaceSetupState, signal: AbortSignal): Promise<void> {
+		const hooks = validateAutomationItems(setup.hooks);
+		const revision = setup.definitionRevision;
+		let failed = Object.values(setup.finished).some((ok) => !ok);
+		if (!this.automationsEnabled()) {
+			setup.state = "cancelled";
+			setup.detail = "Workspace setup skipped while automations are off";
+			setup.hooks = [];
+			await this.save(meta, undefined, undefined, true);
+			this.emit(meta);
+			return;
+		}
+		if (this.workspaceSetup && !setup.participantDone && !signal.aborted) {
+			await this.workspaceSetup({
+				sessionId: meta.id,
+				projectId: meta.projectId!,
+				cwd: meta.cwd,
+				trigger: setup.trigger,
+				triggerId: setup.triggerId,
+				signal,
+			});
+			if (this.closing || this.sleepPause) return;
+			setup.participantDone = true;
+			await this.save(meta, undefined, undefined, true);
+		}
+		for (const hook of hooks) {
+			if (this.closing || this.sleepPause) return;
+			if (signal.aborted || setup.state === "cancelled") break;
+			const runId = `${setup.triggerId}/${hook.id}`;
+			if (Object.hasOwn(setup.finished, hook.id)) continue;
+			const previous = meta.automation!.runs.find((run) => run.id === runId);
+			if (previous && !["waiting", "running", "interrupted"].includes(previous.state)) {
+				failed ||= previous.state !== "ok";
+				setup.finished[hook.id] = previous.state === "ok";
+				await this.save(meta, undefined, undefined, true);
+				continue;
+			}
+			const currentHook = this.setupHooks(meta, setup.trigger).some((current) => current.id === hook.id);
+			if (failed || !this.automationsEnabled() || !currentHook || (previous?.attempt ?? 0) >= 2) {
+				const reason = failed
+					? "an earlier setup step failed"
+					: !this.automationsEnabled()
+						? "automations are disabled"
+						: !currentHook
+							? "setup command was disabled or removed"
+							: "setup was interrupted twice";
+				meta.automation!.runs = [
+					...meta.automation!.runs.filter((run) => run.id !== runId),
+					{
+						id: runId,
+						automationId: hook.id,
+						name: hook.name,
+						definitionRevision: revision,
+						trigger: setup.trigger,
+						state: "skipped" as const,
+						attempt: previous?.attempt ?? 0,
+						reason,
+						excerpt: "",
+						endedAt: Date.now(),
+					},
+				].slice(-20);
+				failed = true;
+				setup.finished[hook.id] = false;
+				await this.save(meta, undefined, undefined, true);
+				continue;
+			}
+			const result = await this.runWorkspaceAction(meta.id, hook, setup.trigger, setup.triggerId, revision, signal);
+			if (this.closing || this.sleepPause) return;
+			failed ||= result.outcome !== "ok";
+			if (result.outcome !== "ok" && !setup.detail)
+				setup.detail =
+					`Setup failed: ${hook.name} (${result.reason ?? (result.exitCode !== undefined ? `exit ${result.exitCode}` : result.outcome)})`.slice(
+						0,
+						512,
+					);
+			setup.finished[hook.id] = result.outcome === "ok";
+			await this.save(meta, undefined, undefined, true);
+		}
+		if (this.closing || this.sleepPause) return;
+		if (signal.aborted || setup.state === "cancelled") {
+			setup.state = "cancelled";
+			setup.detail = "Workspace setup cancelled";
+		} else {
+			const records = meta.automation!.runs.filter((run) => run.id.startsWith(`${setup.triggerId}/`));
+			const firstFailure = records.find((run) => run.state !== "ok");
+			setup.state = failed ? "failed" : "ok";
+			setup.detail =
+				failed && setup.detail
+					? setup.detail
+					: firstFailure
+						? `Setup failed: ${firstFailure.name} (${firstFailure.reason ?? (firstFailure.exitCode !== undefined ? `exit ${firstFailure.exitCode}` : firstFailure.state)})`.slice(
+								0,
+								512,
+							)
+						: setup.trigger === "workspace.restored"
+							? "Workspace set up again after restore"
+							: "Workspace set up";
+			if (hooks.length || this.workspaceSetup) {
+				const activity = {
+					type: "activity" as const,
+					requestId: `workspace-setup:${setup.triggerId}`,
+					text: [
+						setup.detail,
+						...records.map(
+							(run) => `${run.name}: ${run.state}
+${run.excerpt}`,
+						),
+					]
+						.join("\n\n")
+						.slice(0, 16 * 1024),
+				};
+				meta.prActivities ??= [];
+				if (!meta.prActivities.some((entry) => entry.requestId === activity.requestId))
+					meta.prActivities.push(activity);
+				const kept = new Set(
+					meta.prActivities
+						.filter((entry) => entry.requestId.startsWith("workspace-setup:"))
+						.slice(-8)
+						.map((entry) => entry.requestId),
+				);
+				meta.prActivities = meta.prActivities.filter(
+					(entry) => !entry.requestId.startsWith("workspace-setup:") || kept.has(entry.requestId),
+				);
+			}
+		}
+		// Retain only the small completion cursor and results after the boundary is terminal.
+		setup.hooks = [];
+		await this.save(meta, undefined, undefined, true);
+		this.emit(meta);
+		// Never open a kernel merely to record a restore. An already-open one can drain passive activity.
+		const starting = this.starting.get(meta.id);
+		if (starting)
+			void starting.then(
+				() => {
+					if (!this.closing && !this.sleepPause && meta.prActivities?.length && this.workers.has(meta.id))
+						void this.start(meta.id);
+				},
+				() => undefined,
+			);
+		else if (this.workers.has(meta.id)) void this.start(meta.id);
+	}
+
+	private async holdForWorkspaceSetup(meta: SessionMeta): Promise<boolean> {
+		const setup = meta.automation?.setup;
+		if (!setup || setup.state !== "pending") return true;
+		const waiters = this.workspaceSetupWaiters.get(meta.id) ?? new Set<() => void>();
+		this.workspaceSetupWaiters.set(meta.id, waiters);
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let release!: () => void;
+		const settled = new Promise<void>((resolve) => {
+			release = () => resolve();
+			waiters.add(release);
+			timer = setTimeout(resolve, Math.max(0, setup.holdUntil - Date.now()));
+		});
+		const done = this.startWorkspaceSetup(meta);
+		const active = this.workspaceSetups.get(meta.id);
+		try {
+			// A runtime lease can defer setup admission. Its release starts the boundary and wakes this hold.
+			await Promise.race(active ? [done, settled] : [settled]);
+		} finally {
+			clearTimeout(timer);
+			waiters.delete(release);
+			if (!waiters.size) this.workspaceSetupWaiters.delete(meta.id);
+		}
+		return !active?.controller.signal.aborted && meta.automation?.setup?.state !== "cancelled";
+	}
+
 	private sharing?: import("./retired-devboxes.ts").LegacySessionOwnership;
 	setSharedContext(sharing: import("./retired-devboxes.ts").LegacySessionOwnership): void {
 		this.sharing = sharing;
@@ -1986,6 +2251,7 @@ export class SessionManager {
 					meta.kernelRestartPending)
 			)
 				void this.start(meta.id, true);
+		for (const meta of this.metas.values()) void this.startWorkspaceSetup(meta);
 		this.pullRequests.start();
 		this.scheduleArchiveSweep();
 		// Resume dissociation interrupted by a restart.
@@ -2012,6 +2278,7 @@ export class SessionManager {
 	/** Child admissions are durable even when the parent has already ended its own run. */
 	private backgroundWorking(meta: SessionMeta, worker = this.workers.get(meta.id)): boolean {
 		return !!(
+			this.workspaceSetups.has(meta.id) ||
 			this.actionRunner?.isWorking(meta.id) ||
 			(meta.archivedAt === undefined &&
 				!meta.failure &&
@@ -3373,6 +3640,7 @@ export class SessionManager {
 						delete meta.workspaceOriginId;
 					}
 					delete meta.coordinatorView;
+					this.queueWorkspaceSetup(meta, "workspace.created", "workspace.created");
 				}
 				delete meta.workspaceMainDue;
 				delete meta.workspaceRefreshDue;
@@ -3814,7 +4082,10 @@ export class SessionManager {
 	async restore(id: string): Promise<SessionSummary> {
 		const end = this.updateGate.begin();
 		try {
-			return await this.setArchived(id, false);
+			await this.setArchived(id, false);
+			const meta = this.require(id);
+			void this.startWorkspaceSetup(meta);
+			return this.summary(meta);
 		} finally {
 			end();
 		}
@@ -3962,16 +4233,29 @@ export class SessionManager {
 						this.sending.has(id))
 				)
 					throw new Conflict("Stop the session before archiving it");
-				if (archived) await this.actionRunner?.cancelSession(id);
+				if (archived) {
+					this.workspaceSetups.get(id)?.controller.abort();
+					await this.actionRunner.cancelSession(id);
+					await this.workspaceSetups.get(id)?.done;
+				}
 				// A new archival starts a new cleanup cycle; an older reset notice no longer describes the workspace.
 				if (archived) delete meta.workspaceReset;
-				else delete meta.workspacePrunedAt;
+				else {
+					delete meta.workspacePrunedAt;
+					if (meta.workspaceReset)
+						this.queueWorkspaceSetup(meta, "workspace.restored", `workspace.restored:${meta.workspaceReset.at}`);
+				}
 				// Stage only this write. Concurrent lifecycle saves and summaries keep the committed state.
-				await this.save(meta, {
-					timestamp: archived ? Date.now() : undefined,
-					...(!archived ? { restoredAt: Date.now() } : {}),
-					autoArchivedPullRequest,
-				});
+				await this.save(
+					meta,
+					{
+						timestamp: archived ? Date.now() : undefined,
+						...(!archived ? { restoredAt: Date.now() } : {}),
+						autoArchivedPullRequest,
+					},
+					undefined,
+					!archived && meta.automation?.setup?.state === "pending",
+				);
 				if (archived && coordinatorMissionId === undefined && this.missions?.archiveCoordinator?.(id))
 					await this.missions?.whenDurable?.();
 				this.workspaceCleanupBackoff.delete(id);
@@ -4922,6 +5206,8 @@ export class SessionManager {
 	}
 	private async inspectRuntimeBlockers(): Promise<import("./runtime-admission.ts").RuntimeBlocker[]> {
 		const blockers: import("./runtime-admission.ts").RuntimeBlocker[] = [...(this.actionRunner?.blockers() ?? [])];
+		for (const id of this.workspaceSetups.keys())
+			blockers.push({ kind: "automation", id: `workspace-setup:${id}`, sessionId: id });
 		if (
 			!this.updateGate.paused ||
 			this.updateGate.admissions ||
@@ -5126,6 +5412,7 @@ export class SessionManager {
 		this.pumpMainRefreshes();
 		if (this.sleepPause) return;
 		for (const meta of this.metas.values()) {
+			void this.startWorkspaceSetup(meta);
 			if (!meta.updatePaused) continue;
 			if (this.workers.has(meta.id)) {
 				delete meta.updatePaused;
@@ -6036,7 +6323,15 @@ export class SessionManager {
 		this.assertNotContinued(meta, true);
 		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 		if (this.closing) throw new Error("pilotd is shutting down");
+		this.workspaceSetups.get(id)?.controller.abort();
+		if (meta.automation?.setup?.state === "pending") {
+			meta.automation.setup.state = "cancelled";
+			meta.automation.setup.detail = "Workspace setup cancelled";
+			for (const wake of this.workspaceSetupWaiters.get(id) ?? []) wake();
+			await this.save(meta, undefined, undefined, true);
+		}
 		if (this.actionRunner?.isWorking(id)) await this.actionRunner.cancelSession(id);
+		await this.workspaceSetups.get(id)?.done;
 		if (this.canRetryStartup(meta)) return this.stopFailedRecovery(meta);
 		if (meta.failure || meta.recoveryStopped) return this.stoppedWithoutWorker(meta);
 		if (
@@ -7408,6 +7703,8 @@ export class SessionManager {
 	/** Close kernels without aborting durable tasks. Block admissions synchronously before the first write. */
 	pauseForSleep(wakeToken?: string): Promise<void> {
 		this.sleepRevision++;
+		for (const setup of this.workspaceSetups.values()) setup.controller.abort();
+		for (const waiters of this.workspaceSetupWaiters.values()) for (const wake of waiters) wake();
 		const latch = { since: Date.now(), ...(wakeToken ? { wakeToken } : {}) };
 		if (this.sleepResuming) this.sleepPause = latch;
 		else this.sleepPause ??= latch;
@@ -7488,6 +7785,7 @@ export class SessionManager {
 			await this.sleepTransition;
 			// A paused admission may still be finishing workspace preparation or a rejected kernel request.
 			await Promise.allSettled([...this.starting.values()]);
+			await Promise.allSettled([...this.workspaceSetups.values()].map((setup) => setup.done));
 			if (!this.sleepPause || this.closing || revision !== this.sleepRevision) return;
 			await this.savePowerPause(null);
 			if (revision !== this.sleepRevision) {
@@ -7496,6 +7794,7 @@ export class SessionManager {
 			}
 			this.sleepPause = undefined;
 			this.actionRunner?.resumeAfterSleep();
+			for (const meta of this.metas.values()) void this.startWorkspaceSetup(meta);
 			for (const meta of this.metas.values()) {
 				if (revision !== this.sleepRevision || this.closing) return;
 				if (
@@ -7572,6 +7871,8 @@ export class SessionManager {
 		await this.pullRequestMerger.settled();
 		const drainPullRequests = this.pullRequests.stop();
 		this.shutdownSignal.abort();
+		for (const setup of this.workspaceSetups.values()) setup.controller.abort();
+		for (const waiters of this.workspaceSetupWaiters.values()) for (const wake of waiters) wake();
 		await Promise.allSettled([...this.titleTasks]);
 		await Promise.allSettled([...this.preparations]);
 		await this.dissociation;
@@ -7599,6 +7900,7 @@ export class SessionManager {
 		await Promise.allSettled([...this.archiveTransitions.values()].map((transition) => transition.promise));
 		await drainRepairProjects;
 		await drainActions;
+		await Promise.allSettled([...this.workspaceSetups.values()].map((setup) => setup.done));
 		await Promise.all([...this.saving.values()]);
 		await this.aiUsage.close();
 		await this.legacyUsageMigration;
@@ -7723,11 +8025,13 @@ export class SessionManager {
 							...(created.upstream ? { upstream: created.upstream } : {}),
 						};
 						delete meta.preparing;
-						await this.save(meta);
+						this.queueWorkspaceSetup(meta, "workspace.created", "workspace.created");
+						await this.save(meta, undefined, undefined, true);
 						void this.pullRequests.refresh(meta);
 						this.dissociate(meta);
 					}
 				}
+				if (!(await this.holdForWorkspaceSetup(meta))) return;
 				await this.unparked(id);
 				if (this.passiveNoticeOnly(meta)) return;
 				if (this.isMissionCoordinator(id) || meta.coordinatorView) await this.prepareCoordinatorRole(id);
@@ -8060,6 +8364,7 @@ export class SessionManager {
 							? { requirePullRequest: this.projects.get(meta.projectId)?.requirePullRequest !== false }
 							: {}),
 						...(meta.workspaceReset ? { workspaceReset: meta.workspaceReset } : {}),
+						...(meta.automation?.setup ? { workspaceSetup: { state: meta.automation.setup.state } } : {}),
 					},
 					...(mission ? { mission } : {}),
 					...(!meta.ask && !meta.control && this.databases?.configured(this.projectPath(meta))
@@ -8991,7 +9296,8 @@ export class SessionManager {
 			!meta.recoveryStopped &&
 			!paused &&
 			!offlinePaused &&
-			(this.actionRunner?.isWorking(meta.id) ||
+			(this.workspaceSetups.has(meta.id) ||
+				this.actionRunner?.isWorking(meta.id) ||
 				toolsRunning ||
 				(!mainQuotaPaused && mainBusy) ||
 				(!questionWaits && (runnableChildren || !!worker?.runningJobs?.length)));
@@ -9053,6 +9359,9 @@ export class SessionManager {
 			...(offlinePaused ? { offlinePaused: true } : {}),
 			state,
 			working,
+			...(meta.automation?.setup
+				? { workspaceSetup: { state: meta.automation.setup.state, detail: meta.automation.setup.detail } }
+				: {}),
 			...(meta.automation?.runs.length ? { automationRuns: structuredClone(meta.automation.runs) } : {}),
 			...(actionState
 				? {

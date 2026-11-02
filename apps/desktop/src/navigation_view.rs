@@ -289,6 +289,7 @@ impl LocalViewer {
                     mission: Default::default(),
                     mission_coordinator: false,
                     failure: None,
+                    setup_failure: None,
                     pull_requests: Vec::new(),
                     context_usage: Default::default(),
                     subscription_usage: None,

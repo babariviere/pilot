@@ -91,6 +91,7 @@ mod session_file_view;
 mod session_file_view_reader;
 mod workspace_changes;
 mod workspace_changes_reader;
+mod workspace_setup;
 #[cfg(feature = "native-probes")]
 pub use local_view::context_usage_probe::run_context_usage_probe;
 #[cfg(feature = "native-probes")]
@@ -429,9 +430,7 @@ mod visual_scene;
 mod visual_session;
 mod visual_slider;
 mod visual_wire;
-pub use appearance::{
-    ChromeAssets, follow_appearance, init_appearance, window_background,
-};
+pub use appearance::{ChromeAssets, follow_appearance, init_appearance, window_background};
 
 mod queued_message;
 #[cfg(any(test, feature = "native-probes"))]

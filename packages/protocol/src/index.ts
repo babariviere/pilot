@@ -300,6 +300,8 @@ export interface FailedModelResponse extends FailedModelRequest {
 }
 
 export interface SessionSummary {
+	/** Latest workspace setup boundary, independent of the agent's run outcome. */
+	workspaceSetup?: { state: "pending" | "ok" | "failed" | "cancelled"; detail?: string };
 	/** Bounded retained command results, available without opening a kernel. */
 	automationRuns?: import("./automations.ts").AutomationRunRecord[];
 	automation?: { state: "running" | "waiting"; name: string; trigger: string; startedAt: number };

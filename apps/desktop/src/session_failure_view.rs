@@ -8,6 +8,37 @@ use gpui_kit::{AnyElement, ClipboardItem, StatefulInteractiveElement, base::Sele
 use std::hash::{Hash, Hasher};
 
 impl LocalViewer {
+    pub(super) fn workspace_setup_banner(&self) -> Option<AnyElement> {
+        if self.page != Page::Chat
+            || self.artifacts_open
+            || self.state.generation != self.generation
+        {
+            return None;
+        }
+        let detail = self
+            .selected
+            .as_ref()
+            .and_then(|id| {
+                self.state
+                    .chats
+                    .iter()
+                    .find(|chat| &chat.id == id && !chat.local_draft)
+            })
+            .and_then(|chat| chat.setup_failure.as_ref())?;
+        Some(
+            div()
+                .id("workspace-setup-failure")
+                .test_support()
+                .flex_none()
+                .min_w_0()
+                .w_full()
+                .px_3()
+                .py_2()
+                .child(ui::Notice::new(SharedString::from(detail.clone())).tone(ui::Tone::Error))
+                .into_any_element(),
+        )
+    }
+
     pub(super) fn selected_failure(&self) -> Option<&Failure> {
         if self.page != Page::Chat
             || self.artifacts_open

@@ -1054,3 +1054,17 @@ test("diagnostics history guidance uses role-wide visibility and treats evidence
 	assert.match(prompt, /cannot read source, arbitrary files or credentials/);
 	assert.match(prompt, /only native verified linked-host routing/);
 });
+
+test("workspace setup notes distinguish running and failed without command output", () => {
+	const workspace = { source: "/src/app", base: "main", jj: true };
+	assert.match(pilotPrompt({ workspace, workspaceSetup: { state: "pending" } }), /Workspace setup is still running/);
+	assert.match(
+		pilotPrompt({ workspace, workspaceSetup: { state: "failed" } }),
+		/Workspace setup did not finish successfully/,
+	);
+	assert.doesNotMatch(pilotPrompt({ workspace, workspaceSetup: { state: "ok" } }), /Workspace setup (is|did)/);
+	assert.doesNotMatch(
+		pilotPrompt({ ask: { source: "/src/app" }, workspace, workspaceSetup: { state: "failed" } }),
+		/Workspace setup did not/,
+	);
+});
