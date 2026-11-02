@@ -1808,6 +1808,11 @@ impl LocalViewer {
     fn accept(&mut self, mut state: Presentation, window: &mut Window, cx: &mut Context<Self>) {
         self.state.inventory_refreshing = state.inventory_refreshing;
         self.state.inventory_error = state.inventory_error;
+        if let Some(report) = state.mcp.take()
+            && let Some(page) = self.settings.read(cx).mcp.clone()
+        {
+            page.update(cx, |page, cx| page.pushed(report, cx));
+        }
         if state.control_connection_generation > self.model_connection_generation {
             self.model_connection_generation = state.control_connection_generation;
             self.editor

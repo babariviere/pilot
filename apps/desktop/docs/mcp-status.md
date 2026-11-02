@@ -1,79 +1,94 @@
-# Local MCP observations
+# Local MCP connections
 
-**Settings → MCP connections** reads the existing Local daemon's global Pi roster.
-Rows show the last reported check, not a continuously connected MCP client or a
-promise that a chat can use the server. **Refresh** only rereads the report.
-**Details** exposes the exact server name, transport, check timestamp and tool
-count when reported. Account identity is not in this contract, so it is explicitly
-not reported. Literal Unicode text remains selectable and copyable. Tab and Enter
-reach the existing Kit controls; no custom navigation or new design system.
+**Settings → MCP connections** shows the existing Local daemon's global Pi
+roster and lets the user act on it through the daemon's own routes. Rows show the
+last reported check, not a continuously connected MCP client or a promise that a
+chat can use the server. Each row is the exact server name, its reported state,
+the latest reported browser sign-in and at most one action beside it:
+
+| Reported | Row action |
+| --- | --- |
+| Sign-in waiting | **Cancel sign-in**, bound to the observed `startedAt` |
+| Needs sign-in, browser sign-in available | **Sign in** |
+| Needs sign-in, no browser sign-in | none; the state says to use `pi mcp login` |
+| Connection failed | **Check again** (this server) |
+
+**Details** keeps the exact transport, check timestamp, tool count, browser
+sign-in availability and latest sign-in (including an old failure). Account
+identity is not in this contract, so it is explicitly not reported. **Sign in
+again** (replace a working sign-in) is an explicit choice inside Details of a
+connected row that supports browser sign-in. The header has **Check now** (ask
+the daemon to connect to every server) and **Refresh** (only re-read its report).
+Literal Unicode text remains selectable and copyable; every action is a Kit
+button reachable with Tab and Enter.
 
 ## Contract audit
 
-- `packages/daemon/src/server.ts` handles `GET /api/mcp` with `mcp.status()`.
-  `McpStatusService.status()` in `mcp-status.ts` copies and sorts its in-memory
-  observations and reads existing sign-in progress. Neither method starts a probe,
-  connection, login, provider request, config read or credential read/write.
-  The initial control WebSocket `mcp` event uses this same passive method.
-- Independently, the daemon calls `start()` at startup, watches `mcp.json` and
-  `mcp-auth.json`, and exposes explicit check/sign-in actions. Those paths can
-  start worker connections, refresh credentials and launch stdio servers.
-  `mcp-status-worker.ts` closes probe connections before reporting. Hence
-  **Reported connected**, not a claim that the probe connection is still open.
-  This page never calls those action routes or starts/subscribes to the worker.
-- `packages/protocol/src/mcp.ts` supplies the safe metadata contract. Problems
-  are fixed sanitized sentences, not server output. The worker reports at most
-  64 global entries, with up to four probe connections independently running.
-  It can truncate a larger external configuration without a truncation flag;
-  the page says "reported", never promises a complete configuration inventory.
-- Historical Swift `HostMcpConnections.swift`, `HostMcpRoster.swift`,
-  `HostMcpActions.swift` and `PilotCore/Mcp.swift` combine per-host observations
-  with check/sign-in actions. Only Local passive observations are adopted here.
-  No remote host, browser, CLI fallback, setup/config editor, cancellation,
-  reconnect/check/test/sign-in action or GUI credential access is added.
+- `GET /api/mcp` returns `McpStatusService.status()`, a copy of in-memory
+  observations plus sign-in progress. It starts no probe, login, provider
+  request, config or credential read/write. The control WebSocket sends the same
+  object as `{type:"mcp"}` on connect and on every change.
+- `POST /api/mcp/check {server?}` starts (or merges into) one worker check and
+  returns the status at once with `checking`. Checks can launch stdio servers and
+  refresh credentials inside the daemon's worker. Results arrive as `mcp` updates.
+- `POST /api/mcp/servers/:name/sign-in {again}` runs pi's browser OAuth flow in
+  the daemon (`SourceSignIns`): it opens the browser and stores credentials there.
+  A waiting sign-in is returned rather than duplicated. 409 means the server has
+  no browser sign-in, 404 that it is not reported. `again` replaces a working
+  sign-in. A finished sign-in triggers the daemon's own recheck of that server.
+- `DELETE` on the same route with `{expectedStartedAt}` cancels only that exact
+  waiting sign-in (409 when it changed) and returns its state or `null`.
+- Historical Swift `HostMcpActions`/`ConnectionSettings` use the same three
+  Local routes. Remote-host routing, the devbox CLI sheet and setup/config
+  editing are not adopted. No backend change was needed.
 
-## Scope, freshness and failure
+## Scope, fences and truthfulness
 
 One retained page owns captured Local options, including daemon/lineage and port.
-Every status read checks the existing hello identity before and after the GET.
-This is loopback identity pinning, not authentication or account verification.
-No arbitrary path, URL or namespace is interpolated into a request. The endpoint
-is fixed; redirects/retries/proxies and authentication fallback are disabled.
+Every read and action checks the existing hello identity before and after the
+request: a different daemon before sending means nothing is sent; after sending,
+the action is unconfirmed. This is loopback identity pinning, not authentication.
+The server name is one percent-encoded path segment, so the daemon decodes the
+exact name. Redirects/retries/proxies and authentication fallback are disabled.
 
-Opening this category or pressing Refresh reads once. There is no polling.
-Last-read time is distinct from each server's last-check time. A check-in-progress
-flag describes the daemon report only. Missing completed-check timing cannot
-produce a connected label; unfamiliar states remain Unknown. An empty roster
-means no servers were reported, not that no servers are configured. The service
-can preserve old observations after a failed probe and exposes no overall probe
-error or completed-scan revision, so the UI cannot infer latest-probe success.
+Opening the category or pressing Refresh reads once. While the category is open,
+the existing control-stream `mcp` updates (already delivered to the app, parsed
+off the UI thread) replace the shown report; there is no polling. A report that
+arrived before opening is never adopted later. A newer report invalidates a read
+in flight. Last-read time is distinct from each server's last-check time.
 
-Opening/replacing a read advances the page generation; obsolete I/O is cancelled.
-Leaving the category or closing Settings drops its reader and invalidates replies.
-Errors keep only this same immutable daemon scope's prior successful report,
-explicitly stale, with the original read time. First-read unavailable, refusal,
-offline, malformed, loading and empty are distinct. No config/history-derived
-connection state or guessed account identity fills a gap.
+Actions run only from a click or keypress, one at a time, never on open or
+navigation. Results are applied as reported: a sign-in ACK updates only that
+exact row and never overwrites a newer reported sign-in. **Signed in** comes only
+from the daemon's `done` sign-in, never from a connected roster. Failure shows the
+daemon's sanitized reason; a later working connection moves it into Details.
+Refusals say what is known. A lost or malformed answer is shown as unconfirmed,
+followed by one passive re-read; the request is never repeated. A refused cancel
+re-reads too. Leaving the category or closing Settings drops reads and ignores
+late action replies; it does not cancel a daemon sign-in, and reopening only reads.
 
-The native parser validates the whole roster, unique exact names and existing
-64-entry probe limit, rejects malformed numeric fields and retains no partial
-adoption. The streamed response uses the existing desktop small-snapshot 2 MiB
-wire safety budget, including chunked responses. It refuses overflow rather than
-silently trimming text or hiding additional rows. This does not add a daemon cap.
+Errors keep this same daemon scope's prior successful report, explicitly stale,
+with the original read time. First-read unavailable, refusal, offline, malformed,
+loading and empty are distinct. An empty roster means no servers were reported,
+not that none are configured. The service can keep old observations after a
+failed probe and has no completed-scan revision, so the UI cannot infer
+latest-probe success. The native parser validates the whole roster (unique exact
+names, the existing 64-entry probe limit, safe integer fields including sign-in
+times) and keeps no partial adoption, within the 2 MiB small-snapshot budget.
 
 ## Verification scope
 
-`mcp_status_tests` exercises parsing, Unknown/no-check behavior, exact Unicode,
-generation/timestamp retention, owned faux HTTP GET-only paths, refusals,
-redirects, malformed/oversized responses, identity changes and cancellation.
-`server-mcp.test.ts` asserts that status GET and initial WebSocket observation do
-not call the injected probe/login, both before and after a reported roster.
+`mcp_status_tests` exercises parsing, row actions and sign-in wording, ACK
+merging, push/read ordering, exact routes/bodies/decoded names, refusals,
+lost ACKs without replay, identity changes before/after a request, offline,
+redirects, budgets and cancellation, against owned faux daemons only.
+`server-mcp.test.ts` covers the daemon routes with an injected probe/login.
 `mcp_status` mounts real Settings and Kit controls in hidden 680/1100 light/dark
-windows, using only a faux Local daemon. It covers navigation, loading, keyboard
-disclosure, literal selection/copy, retained stale failures and category teardown.
-These are synthetic native checks, not live MCP/account checks, OS IME/AX
-qualification, performance acceptance or proof of a production connection.
+windows against a faux Local: keyboard Sign in, waiting, leaving without cancel,
+exact and refused cancellation, reported completion/failure, Sign in again,
+lost ACK, changed daemon, Check now, stale/empty states, literal selection/copy
+and teardown. These are synthetic checks, not live MCP/browser/account checks,
+OS IME/AX qualification or proof of a production connection.
 
-Check/test/reconnect, browser sign-in/auth, setup/config changes and any richer
-freshness/account contract remain separate reviewed scope. No backend addition
-is required for this passive report reader.
+Setup/config editing, remote hosts and chat-level MCP attention actions remain
+separate scope.

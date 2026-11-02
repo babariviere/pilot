@@ -355,6 +355,8 @@ pub(crate) struct Presentation {
     /// Mission titles from the session socket. `None` until the daemon sends
     /// its mission list (older daemons may not).
     pub(crate) mission_titles: Option<Arc<std::collections::HashMap<String, String>>>,
+    /// Latest control-stream MCP report, for an open Settings MCP page only.
+    pub(crate) mcp: Option<crate::mcp_status_view::Pushed>,
     pub(crate) projects: Arc<Vec<local_model::Project>>,
     pub(crate) projects_loaded: bool,
     pub(crate) projects_error: Option<&'static str>,
@@ -1428,6 +1430,8 @@ async fn run(
                         crate::chat_order::upsert(Arc::make_mut(&mut view.chats), chat);
                     } else if value["type"] == "missions" && let Some(titles) = local_model::mission_titles(&value["missions"]) {
                         view.mission_titles = Some(Arc::new(titles));
+                    } else if value["type"] == "mcp" {
+                        view.mcp = Some(Arc::new(crate::mcp_status::Snapshot::from_value(&value["mcp"])));
                     }
                 }
             }

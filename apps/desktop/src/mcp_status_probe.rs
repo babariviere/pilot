@@ -1,8 +1,8 @@
-//! Real hidden Settings navigation and MCP surface against an owned faux daemon only.
+//! Real hidden Settings navigation, MCP actions and sign-in journeys against an owned faux daemon only.
 use crate::{
-    mcp_status_tests as f,
+    mcp_status::{SignInStatus, Snapshot},
+    mcp_status_tests::{self as f, Answer, Daemon},
     mcp_status_view::Connections,
-    mission_browser_fixture::{Reply, Server},
     settings_view::{SettingsPreferences, SettingsView},
 };
 use gpui_kit::{
@@ -12,7 +12,11 @@ use gpui_kit::{
     point, px, size,
     test::TestWindowExt,
 };
-use std::time::{Duration, Instant};
+use serde_json::{Value, json};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 fn settle(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
     for _ in 0..3 {
         cx.run_until_parked();
@@ -23,10 +27,11 @@ fn settle(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
         .unwrap();
     }
 }
+/// Bounded wait for the page's read and action to finish.
 fn until(cx: &mut HeadlessAppContext, h: AnyWindowHandle, v: &Entity<Connections>) {
     let end = Instant::now() + Duration::from_secs(8);
-    while cx.update(|cx| v.read(cx).state.busy) {
-        assert!(Instant::now() < end, "bounded faux status read");
+    while cx.update(|cx| v.read(cx).state.busy || v.read(cx).pending.is_some()) {
+        assert!(Instant::now() < end, "bounded faux MCP request");
         settle(cx, h);
         std::thread::yield_now();
     }
@@ -42,17 +47,64 @@ fn capture(cx: &mut HeadlessAppContext, h: AnyWindowHandle, name: String) {
             .unwrap();
     }
 }
+fn click(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &str) {
+    cx.update_window(h, |_, w, cx| w.click(id.to_owned(), cx))
+        .unwrap();
+    settle(cx, h);
+}
+fn exists(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &str) -> bool {
+    cx.update_window(h, |_, w, _| w.try_find(id.to_owned()).is_some())
+        .unwrap()
+}
+/// Real Kit focus traversal, then Enter. No direct state mutation.
+fn keyboard(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &str) {
+    for _ in 0..40 {
+        if cx
+            .update_window(h, |_, w, _| w.find(id.to_owned()).focused() == Some(true))
+            .unwrap()
+        {
+            break;
+        }
+        cx.update_window(h, |_, w, cx| w.press("tab", cx)).unwrap();
+        settle(cx, h);
+    }
+    cx.update_window(h, |_, w, cx| {
+        assert_eq!(
+            w.find(id.to_owned()).focused(),
+            Some(true),
+            "{id} keyboard focus"
+        );
+        w.press("enter", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+}
+fn push(cx: &mut HeadlessAppContext, h: AnyWindowHandle, v: &Entity<Connections>, value: Value) {
+    let report = Arc::new(Snapshot::from_value(&value));
+    cx.update(|cx| v.update(cx, |c, cx| c.pushed(report, cx)));
+    settle(cx, h);
+}
+fn linear(cx: &mut HeadlessAppContext, v: &Entity<Connections>) -> crate::mcp_status::Server {
+    cx.update(|cx| v.read(cx).state.snapshot.as_ref().unwrap().servers[1].clone())
+}
+fn with_linear(state: &str, sign_in: Value) -> Value {
+    let mut v = f::roster();
+    v["servers"][1]["state"] = json!(state);
+    v["servers"][1]["signIn"] = sign_in;
+    v
+}
 pub fn run_mcp_status_probe(cx: &mut HeadlessAppContext) {
+    let linear_path = f::sign_in_path("Linear");
+    let action = "mcp-action-Linear";
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
-            let s = Server::start();
-            f::install(&s);
-            let mut r = Reply::json(200, f::roster());
+            let d = Daemon::start();
+            let mut r = Answer::json(200, f::roster());
             r.delay_ms = 180;
-            s.reply("/api/mcp", r);
+            d.reply("GET", "/api/mcp", r);
             let (h, (v, settings)) = cx.update(|cx| {
                 Theme::change(mode, None, cx);
-                let mcp = cx.new(|_| Connections::new(s.options.clone()));
+                let mcp = cx.new(|_| Connections::new(d.options.clone()));
                 let owner = cx.new(|_| {
                     let mut p = SettingsPreferences::new(None);
                     p.mcp = Some(mcp.clone());
@@ -76,55 +128,193 @@ pub fn run_mcp_status_probe(cx: &mut HeadlessAppContext) {
                 (h, (mcp, settings))
             });
             settle(cx, h);
+            // A report pushed before the page opens is never adopted later.
+            push(cx, h, &v, with_linear("connected", json!(null)));
             assert!(
-                s.state.lock().unwrap().seen.is_empty(),
-                "no MCP read before category intent"
+                d.seen.lock().unwrap().is_empty(),
+                "no MCP request before category intent"
             );
-            cx.update_window(h, |_, w, cx| {
-                w.activate_window();
-                w.click("settings-mcp", cx);
-            })
-            .unwrap();
-            settle(cx, h);
-            cx.update_window(h, |_, w, _| {
-                assert!(w.try_find("mcp-loading").is_some());
-                assert!(w.try_find("mcp-empty").is_none());
-            })
-            .unwrap();
+            cx.update_window(h, |_, w, _| w.activate_window()).unwrap();
+            click(cx, h, "settings-mcp");
+            assert!(exists(cx, h, "mcp-loading"));
+            assert!(!exists(cx, h, "mcp-empty"));
             until(cx, h, &v);
             assert!(cx.update(|cx| v.read(cx).state.error.is_none()));
-            let details = format!("mcp-details-{}", f::NAME);
-            cx.update_window(h, |_, w, cx| {
-                for id in ["mcp-title", "mcp-refresh", "mcp-page"] {
+            assert!(d.actions().is_empty(), "opening never checks or signs in");
+            assert_eq!(linear(cx, &v).state, crate::mcp_status::Status::NeedsSignIn);
+            cx.update_window(h, |_, w, _| {
+                for id in [
+                    "mcp-title",
+                    "mcp-refresh",
+                    "mcp-check",
+                    "mcp-page",
+                    "mcp-list",
+                    action,
+                ] {
                     let b = w.find(id).bounds();
                     assert!(
                         b.size.width > px(0.) && b.left() >= px(0.) && b.right() <= px(width),
                         "{id} at {width}"
                     );
                 }
-                w.click("mcp-refresh", cx);
+                let name = w.find("mcp-text-Linear").bounds();
+                assert!(
+                    name.right() <= w.find(action).bounds().left(),
+                    "action beside the row text"
+                );
             })
             .unwrap();
+            capture(cx, h, format!("mcp-{width}-{mode:?}-roster"));
+
+            // Required-auth row: keyboard Sign in starts exactly one daemon-owned browser sign-in.
+            let mut ack = Answer::json(200, f::waiting(1_793_381_100_000));
+            ack.delay_ms = 120;
+            d.reply("POST", &linear_path, ack);
+            keyboard(cx, h, action);
+            assert!(
+                cx.update(|cx| v.read(cx).pending.is_some()),
+                "action in flight"
+            );
             until(cx, h, &v);
-            // Real Kit button focus and keyboard disclosure, not direct state mutation.
-            for _ in 0..16 {
-                if cx
-                    .update_window(h, |_, w, _| w.find(details.clone()).focused() == Some(true))
-                    .unwrap()
-                {
-                    break;
-                }
-                cx.update_window(h, |_, w, cx| w.press("tab", cx)).unwrap();
-                settle(cx, h);
-            }
+            assert_eq!(
+                d.actions(),
+                vec![(
+                    "POST".into(),
+                    linear_path.clone(),
+                    r#"{"again":false}"#.into()
+                )]
+            );
+            assert!(linear(cx, &v).sign_in.unwrap().waiting());
+            assert!(exists(cx, h, "mcp-sign-in-Linear"));
+            capture(cx, h, format!("mcp-{width}-{mode:?}-waiting"));
+
+            // Leaving Settings neither cancels nor restarts the daemon's sign-in.
+            d.reply(
+                "GET",
+                "/api/mcp",
+                Answer::json(
+                    200,
+                    with_linear("needs_sign_in", f::waiting(1_793_381_100_000)),
+                ),
+            );
+            click(cx, h, "settings-appearance");
+            click(cx, h, "settings-mcp");
+            until(cx, h, &v);
+            assert_eq!(d.actions().len(), 1);
+            assert!(linear(cx, &v).sign_in.unwrap().waiting());
+
+            // A newer start is reported first: cancel binds the exact observed start, and a
+            // changed sign-in is refused, shown and re-read without a second attempt.
+            push(
+                cx,
+                h,
+                &v,
+                with_linear("needs_sign_in", f::waiting(1_793_381_200_000)),
+            );
+            d.reply(
+                "DELETE",
+                &linear_path,
+                Answer::json(409, json!({"error":"Sign-in changed"})),
+            );
+            click(cx, h, action);
+            until(cx, h, &v);
+            assert_eq!(
+                d.actions()[1],
+                (
+                    "DELETE".into(),
+                    linear_path.clone(),
+                    r#"{"expectedStartedAt":1793381200000}"#.into()
+                )
+            );
+            assert!(exists(cx, h, "mcp-note-Linear"));
+            // That re-read reports the earlier start again; cancel now binds that one.
+            assert_eq!(
+                linear(cx, &v).sign_in.unwrap().started_at,
+                1_793_381_100_000
+            );
+            d.reply("DELETE", &linear_path, Answer::json(200, json!({"state":"cancelled","startedAt":1_793_381_100_000u64,"expiresAt":1_793_381_400_000u64,"finishedAt":1_793_381_150_000u64})));
+            click(cx, h, action);
+            until(cx, h, &v);
+            assert_eq!(d.actions()[2].2, r#"{"expectedStartedAt":1793381100000}"#);
+            assert_eq!(
+                linear(cx, &v).sign_in.unwrap().state,
+                SignInStatus::Cancelled
+            );
+            assert!(!exists(cx, h, "mcp-note-Linear"));
+            capture(cx, h, format!("mcp-{width}-{mode:?}-cancelled"));
+
+            // Completion and failure come from the reported sign-in, never from the roster alone.
+            push(cx, h, &v, with_linear("connected", json!(null)));
+            assert!(!exists(cx, h, "mcp-sign-in-Linear") && !exists(cx, h, action));
+            push(
+                cx,
+                h,
+                &v,
+                with_linear(
+                    "connected",
+                    json!({"state":"done","startedAt":1_793_381_300_000u64,"expiresAt":1_793_381_600_000u64,"finishedAt":1_793_381_310_000u64}),
+                ),
+            );
+            assert!(exists(cx, h, "mcp-sign-in-Linear"));
+            capture(cx, h, format!("mcp-{width}-{mode:?}-signed-in"));
+            push(
+                cx,
+                h,
+                &v,
+                with_linear(
+                    "needs_sign_in",
+                    json!({"state":"failed","startedAt":1_793_381_300_000u64,"expiresAt":1_793_381_600_000u64,"finishedAt":1_793_381_310_000u64,"error":"Sign-in timed out. Try again."}),
+                ),
+            );
+            assert!(exists(cx, h, "mcp-sign-in-Linear") && exists(cx, h, action));
+            capture(cx, h, format!("mcp-{width}-{mode:?}-failed"));
+
+            // Lost ACK: unconfirmed, re-read passively, never replayed.
+            d.reply("POST", &linear_path, Answer::lost());
+            let reads = d.reads();
+            click(cx, h, action);
+            until(cx, h, &v);
+            assert_eq!(d.actions().len(), 4);
+            assert!(d.reads() > reads, "passive re-read after a lost ACK");
+            assert!(exists(cx, h, "mcp-note-Linear"));
+            capture(cx, h, format!("mcp-{width}-{mode:?}-unconfirmed"));
+
+            // A different daemon: refused before anything is sent.
+            d.identity("different-daemon");
+            click(cx, h, action);
+            until(cx, h, &v);
+            assert_eq!(d.actions().len(), 4);
+            assert!(exists(cx, h, "mcp-note-Linear"));
+            d.identity("test-daemon");
+
+            // Sign in again is an explicit secondary choice inside Details.
+            let details = format!("mcp-details-{}", f::NAME);
+            let again = format!("mcp-sign-in-again-{}", f::NAME);
+            assert!(!exists(cx, h, &again));
+            d.reply(
+                "POST",
+                &f::sign_in_path(f::NAME),
+                Answer::json(200, f::waiting(1_793_381_500_000)),
+            );
+            keyboard(cx, h, &details);
+            assert!(exists(cx, h, "mcp-detail-text"));
+            click(cx, h, &again);
+            until(cx, h, &v);
+            assert_eq!(
+                d.actions()[4],
+                (
+                    "POST".into(),
+                    f::sign_in_path(f::NAME),
+                    r#"{"again":true}"#.into()
+                )
+            );
+            assert!(
+                exists(cx, h, &format!("mcp-action-{}", f::NAME)),
+                "Cancel replaces Sign in again"
+            );
+
+            // Literal Unicode selection/copy survives the new layout.
             cx.update_window(h, |_, w, cx| {
-                assert_eq!(w.find(details.clone()).focused(), Some(true));
-                w.press("enter", cx);
-            })
-            .unwrap();
-            settle(cx, h);
-            cx.update_window(h, |_, w, cx| {
-                assert!(w.try_find("mcp-detail-text").is_some());
                 let b = w.find(format!("mcp-text-{}", f::NAME)).bounds();
                 assert!(b.right() <= px(width));
                 let a = point(b.left() + px(1.), b.top() + px(7.));
@@ -140,60 +330,69 @@ pub fn run_mcp_status_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             capture(cx, h, format!("mcp-{width}-{mode:?}-details"));
-            cx.update_window(h, |_, w, cx| w.click(details.clone(), cx))
-                .unwrap();
-            settle(cx, h);
-            capture(cx, h, format!("mcp-{width}-{mode:?}-roster"));
+            click(cx, h, &details);
+
+            // Check now asks the daemon to connect again; Refresh only re-reads.
+            let mut checking = f::roster();
+            checking["checking"] = json!(true);
+            d.reply("POST", "/api/mcp/check", Answer::json(200, checking));
+            click(cx, h, "mcp-check");
+            until(cx, h, &v);
+            assert_eq!(
+                d.actions()[5],
+                ("POST".into(), "/api/mcp/check".into(), "{}".into())
+            );
+            assert!(exists(cx, h, "mcp-checking"));
+            click(cx, h, "mcp-check");
+            assert_eq!(
+                d.actions().len(),
+                6,
+                "disabled while the daemon reports a check"
+            );
+
+            // Stale retained report on a failed re-read.
             let read_at = cx.update(|cx| v.read(cx).state.read_at);
-            s.reply("/api/mcp", Reply::json(503, serde_json::json!({})));
-            cx.update_window(h, |_, w, cx| w.click("mcp-refresh", cx))
-                .unwrap();
+            d.reply("GET", "/api/mcp", Answer::json(503, json!({})));
+            click(cx, h, "mcp-refresh");
             until(cx, h, &v);
             assert_eq!(cx.update(|cx| v.read(cx).state.read_at), read_at);
-            cx.update_window(h, |_, w, _| {
-                assert!(w.try_find("mcp-error").is_some());
-                assert!(w.try_find("mcp-stale").is_some());
-                assert!(w.try_find(format!("mcp-text-{}", f::NAME)).is_some());
-            })
-            .unwrap();
+            assert!(exists(cx, h, "mcp-error") && exists(cx, h, "mcp-stale"));
+            assert!(exists(cx, h, &format!("mcp-text-{}", f::NAME)));
             capture(cx, h, format!("mcp-{width}-{mode:?}-stale"));
-            s.reply(
+            d.reply(
+                "GET",
                 "/api/mcp",
-                Reply::json(200, serde_json::json!({"checking":true,"servers":[]})),
+                Answer::json(200, json!({"checking":false,"servers":[]})),
             );
-            cx.update_window(h, |_, w, cx| w.click("mcp-refresh", cx))
-                .unwrap();
+            click(cx, h, "mcp-refresh");
             until(cx, h, &v);
-            cx.update_window(h, |_, w, _| assert!(w.try_find("mcp-checking").is_some()))
-                .unwrap();
-            // Navigation cancels active obsolete reads without altering the reported roster.
-            let mut r = Reply::json(200, f::roster());
-            r.delay_ms = 180;
-            s.reply("/api/mcp", r);
-            cx.update_window(h, |_, w, cx| {
-                w.click("mcp-refresh", cx);
-                w.click("settings-appearance", cx);
-            })
-            .unwrap();
-            assert!(!cx.update(|cx| v.read(cx).state.busy));
-            assert!(cx.update(|cx| {
-                v.read(cx)
-                    .state
-                    .snapshot
-                    .as_ref()
-                    .unwrap()
-                    .servers
-                    .is_empty()
-            }));
-            assert!(s.all_gets());
+            assert!(exists(cx, h, "mcp-empty"));
+            capture(cx, h, format!("mcp-{width}-{mode:?}-empty"));
+
+            // Navigation drops in-flight work: reads are cancelled, a sign-in started on the
+            // daemon is neither cancelled nor repeated, and its late reply is ignored.
+            d.reply("GET", "/api/mcp", Answer::json(200, f::roster()));
+            click(cx, h, "mcp-refresh");
+            until(cx, h, &v);
+            let mut slow = Answer::json(200, f::waiting(1_793_381_700_000));
+            slow.delay_ms = 300;
+            d.reply("POST", &linear_path, slow);
+            click(cx, h, action);
+            let mut slow = Answer::json(200, f::roster());
+            slow.delay_ms = 180;
+            d.reply("GET", "/api/mcp", slow);
+            click(cx, h, "mcp-refresh");
+            click(cx, h, "settings-appearance");
+            assert!(cx.update(|cx| !v.read(cx).state.busy && v.read(cx).pending.is_none()));
+            std::thread::sleep(Duration::from_millis(400));
+            settle(cx, h);
             assert!(
-                s.state
-                    .lock()
-                    .unwrap()
-                    .seen
-                    .iter()
-                    .all(|(_, p)| p == "/api/hello" || p == "/api/mcp")
+                linear(cx, &v).sign_in.is_none(),
+                "late ACK after leaving is ignored"
             );
+            assert_eq!(d.actions().len(), 7);
+            let deletes = d.actions().iter().filter(|(m, _, _)| m == "DELETE").count();
+            assert_eq!(deletes, 2, "only the two explicit cancellations");
             // Explicit close through the real Settings owner also drops the reader.
             cx.update_window(h, |_, w, cx| {
                 assert!(settings.update(cx, |s, cx| s.request_close(w, cx)));
