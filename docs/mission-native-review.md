@@ -21,15 +21,34 @@ Kit Diff owns selection/copy/navigation, with Option-Up/Down for previous/next c
 The summary distinguishes proven worker creation, enrollment task scope and historical task purpose
 (Unknown). Optional agent dimensions and reported evidence load only on explicit disclosure, after
 raw diff. Their exact profiles and task intent are displayed separately, never as an overall score.
-The default view is intentionally only worker, selected comparison and diff controls. Provenance,
-full IDs, analysis limits, evidence and source inspection are disclosed in **Details**, not persistent
+The default view is intentionally only worker, selected comparison and the full diff. Provenance,
+full IDs, analysis limits and evidence are in the **Revision details** dialog, not persistent
 status prose. Actual partial/unavailable/error warnings remain visible. Comparison choices use
-human-readable layer/stack and capture labels; exact base/head identities remain in Details.
+human-readable layer/stack and capture labels; exact base/head identities remain in that dialog.
 Recorded outcomes remain **Unavailable** for current applicability unless structurally **Outdated**:
 this reader does not re-resolve arbitrary context, attest producing agents, or prove independence,
 checks, acceptance or live-source freshness. A selected allocation is assessment scope only, not final
 acceptance or original task purpose. No human rating, annotation, approval or submit control exists.
 Changed paths explicitly remains Unavailable until retained-input analysis exists.
+
+### Layout (Files changed)
+
+Review reads like a pull request's Files changed page. One toolbar holds Worker, Saved revision,
+a Revision details (info) button and Refresh; narrow panes give the worker its own row. Below it
+sit only real warnings (errors, capture, partial, newer revision). Then "N files changed +A −D",
+an optional Jump to file (two or more files; it scrolls, then returns to its placeholder),
+Unified/Split, and every file of the exact retained comparison in one continuous Kit Diff. Each
+file header has View file, which opens that file's retained source (after side, or before for a
+deletion) with Back and a Before/After switch; an absent side is disabled, and Back cancels a pending
+side read. Revision details is a dialog bound to the revision
+shown when it opened: missing content, capture limits, provenance, evidence, analysis limits,
+keyboard keys and the exact IDs. When there is no diff, the diff area says why: loading, no
+workers, choose a worker, no saved revisions yet, or choose a saved revision. Nothing is selected
+automatically, and a newer capture never replaces the revision being read.
+
+Before: a full-width file dropdown sat above the diff, so it read as one file at a time; Details
+pushed IDs and caveats above the diff; Refresh could slide under a scrollbar; an optional evidence
+failure disabled choosing another revision; and the diff area was blank before a selection.
 
 The diff is the existing virtualized Kit 0.8.1 `Diff`, not the live Changes renderer. Unified/Split,
 file navigation and Before/After source all refer to the same retained comparison. Source previews
@@ -85,6 +104,10 @@ required-record rejection, revocation during reads and exact source after worksp
 byte caps and cancelled obsolete reads. The hidden `native_review` target mounts the production
 LocalViewer and real Kit controls at680/1100 light/dark, testing mission entry, exact layer/stack,
 new-revision pinning, source/back, keyboard, resize and empty/refused states against owned faux HTTP.
+It pins and asserts the theme after the window opens, checks the loading and choose/empty prompts,
+opens Revision details with Tab and Space and closes it with Escape without leaving Review, shows
+a three-file comparison continuously (jump, View file on a deletion) and keeps a long worker title
+inside its control at both widths.
 These probes are not OS IME, performance, screen-reader or accessibility acceptance, and install
 nothing. The hidden journey also consumes real jj/SQLite lifecycle-captured comparisons over owned
 fixture HTTP, preserving selection across newer captures and exercising saved source, failed capture

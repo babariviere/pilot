@@ -52,6 +52,48 @@ fn choose(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &'static str, dow
 fn idle(cx: &mut HeadlessAppContext, h: AnyWindowHandle, p: &Entity<Pane>) {
     until(cx, h, |cx| !p.read(cx).probe(cx).0);
 }
+fn shot(cx: &mut HeadlessAppContext, h: AnyWindowHandle, dir: &Option<PathBuf>, name: String) {
+    if let Some(d) = dir {
+        cx.capture_screenshot(h)
+            .unwrap()
+            .save(d.join(name))
+            .unwrap();
+    }
+}
+/// Opens retained source from a file header's View file action.
+fn view_file(cx: &mut HeadlessAppContext, h: AnyWindowHandle, pane: &Entity<Pane>, ix: usize) {
+    let path = cx.update(|cx| pane.read(cx).probe_files(cx)[ix].clone());
+    cx.update_window(h, |_, w, cx| w.click(format!("review-view:{path}"), cx))
+        .unwrap();
+    settle(cx, h);
+}
+/// Every visible control stays inside the pane, and choices never overlap.
+fn contained(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
+    cx.update_window(h, |_, w, _| {
+        let pane = w.find("native-review").bounds();
+        for id in [
+            "review-worker",
+            "review-comparison",
+            "review-actions",
+            "review-files-bar",
+        ] {
+            let b = w.find(id).bounds();
+            assert!(
+                b.left() >= pane.left() - px(1.) && b.right() <= pane.right() + px(1.),
+                "{id} overflows"
+            );
+        }
+        let (a, b) = (
+            w.find("review-worker").bounds(),
+            w.find("review-comparison").bounds(),
+        );
+        assert!(
+            b.left() >= a.right() || b.top() >= a.bottom(),
+            "choices overlap"
+        );
+    })
+    .unwrap();
+}
 pub fn run_native_review_probe(cx: &mut HeadlessAppContext) {
     cx.update(|cx| cx.set_reduce_motion(true));
     // Real managed jj -> durable lifecycle outbox -> capture -> admitted list/patch/source.
@@ -108,6 +150,23 @@ pub fn run_native_review_probe(cx: &mut HeadlessAppContext) {
                 )
                 .unwrap()
             });
+            // The window's appearance sync runs on open; pin the theme afterwards.
+            cx.update(|cx| {
+                gpui_kit::component::Theme::change(
+                    if dark {
+                        gpui_kit::component::ThemeMode::Dark
+                    } else {
+                        gpui_kit::component::ThemeMode::Light
+                    },
+                    None,
+                    cx,
+                )
+            });
+            settle(cx, h);
+            cx.update(|cx| {
+                use gpui_kit::component::ActiveTheme;
+                assert_eq!(cx.theme().is_dark(), dark)
+            });
             let browser = cx
                 .update_window(h, |_, w, cx| {
                     view.update(cx, |v, cx| v.brief_fixture_setup(s.options.clone(), w, cx))
@@ -126,15 +185,39 @@ pub fn run_native_review_probe(cx: &mut HeadlessAppContext) {
             click(cx, h, "mission-tab-review");
             let pane = cx.update(|cx| browser.read(cx).review.clone().unwrap());
             idle(cx, h, &pane);
+            cx.update(|cx| {
+                assert_eq!(
+                    pane.read(cx).probe_state(),
+                    Some("Choose a worker to see its saved revisions.")
+                )
+            });
             choose(cx, h, "review-worker", 1);
             idle(cx, h, &pane);
+            cx.update(|cx| {
+                assert_eq!(
+                    pane.read(cx).probe_state(),
+                    Some("Choose a saved revision to see its diff.")
+                )
+            });
+            // Loading shows where the diff goes; the selectors stay mounted and usable.
+            let first = r::comparison(1, "layer");
+            let mut slow = Reply::json(200, r::snapshot(&first));
+            slow.delay_ms = 600;
+            s.reply(&format!("{}/chat-B/{:064x}", r::ROOT, 1), slow);
             choose(cx, h, "review-comparison", 1);
+            cx.update(|cx| assert_eq!(pane.read(cx).probe_state(), Some("Loading diff…")));
+            cx.update_window(h, |_, w, _| {
+                assert!(w.find("review-state").bounds().size.height > px(0.));
+                assert!(w.try_find("review-comparison").is_some());
+            })
+            .unwrap();
             idle(cx, h, &pane);
             cx.update(|cx| {
                 let p = pane.read(cx).probe(cx);
                 assert_eq!(p.1, Some(format!("{:064x}", 1)));
                 assert_eq!(p.3, 1);
                 assert_eq!(p.4, None);
+                assert_eq!(pane.read(cx).probe_state(), None);
             });
             cx.update_window(h, |_, w, cx| {
                 let b = w.find("review-diff").bounds();
@@ -146,12 +229,14 @@ pub fn run_native_review_probe(cx: &mut HeadlessAppContext) {
                 );
                 assert!(
                     w.try_find("review-records").is_none(),
-                    "evidence stays inside Details"
+                    "evidence stays in Revision details"
                 );
                 assert!(
-                    w.try_find("review-after").is_none(),
-                    "source inspection stays inside Details"
+                    w.try_find("review-identities").is_none(),
+                    "no technical identity in the default view"
                 );
+                assert!(w.find("review-files-summary").bounds().size.height > px(0.));
+                assert!(w.try_find("review-jump").is_none(), "no jump for one file");
                 assert!(b.right() <= w.find("native-review").bounds().right() + px(1.));
                 w.click("review-diff", cx);
                 w.press("down", cx);
@@ -159,6 +244,57 @@ pub fn run_native_review_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
+            // Revision details is reachable and operable from the keyboard alone.
+            for _ in 0..40 {
+                let focused = cx
+                    .update_window(h, |_, w, cx| {
+                        let on = w.find("review-details").focused() == Some(true);
+                        if !on {
+                            w.press("tab", cx);
+                        }
+                        on
+                    })
+                    .unwrap();
+                settle(cx, h);
+                if focused {
+                    break;
+                }
+            }
+            cx.update_window(h, |_, w, cx| {
+                assert_eq!(w.find("review-details").focused(), Some(true));
+                w.press("space", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, _| {
+                assert!(w.find("review-details-panel").bounds().size.height > px(0.));
+                assert!(w.find("review-identities").bounds().size.height > px(0.));
+            })
+            .unwrap();
+            let theme = if dark { "dark" } else { "light" };
+            shot(
+                cx,
+                h,
+                &dir,
+                format!("review-{}-{theme}-details.png", width as u32),
+            );
+            cx.update_window(h, |_, w, cx| {
+                w.press("escape", cx);
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("review-details-panel").is_none())
+            })
+            .unwrap();
+            // Escape closed only the dialog: Review and its exact diff remain.
+            cx.update(|cx| {
+                assert_eq!(
+                    browser.read(cx).tab,
+                    crate::mission_browser_view::Tab::Review
+                );
+                assert_eq!(pane.read(cx).probe(cx).3, 1);
+            });
             click(cx, h, "review-split");
             click(cx, h, "review-unified");
             choose(cx, h, "review-comparison", 1);
@@ -187,6 +323,11 @@ pub fn run_native_review_probe(cx: &mut HeadlessAppContext) {
             choose(cx, h, "review-comparison", 1);
             idle(cx, h, &pane);
             cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).1, Some(format!("{:064x}", 3))));
+            // The partial warning is visible without opening Details.
+            cx.update_window(h, |_, w, _| {
+                assert!(w.find("review-status").bounds().size.height > px(0.))
+            })
+            .unwrap();
             // Select the previous retained comparison again, not live HEAD.
             click(cx, h, "review-comparison");
             cx.update_window(h, |_, w, cx| {
@@ -195,8 +336,7 @@ pub fn run_native_review_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             idle(cx, h, &pane);
-            click(cx, h, "review-details");
-            click(cx, h, "review-after");
+            view_file(cx, h, &pane, 0);
             idle(cx, h, &pane);
             cx.update(|cx| {
                 assert!(
@@ -213,13 +353,109 @@ pub fn run_native_review_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             settle(cx, h);
             cx.update(|cx| assert!(pane.read(cx).probe(cx).2.is_none()));
-            click(cx, h, "review-details");
+            // A long worker title truncates inside its own control at both widths.
+            s.reply(r::ROOT, Reply::json(200, json!({"missionId":"mission-A","projectId":"project-A","workers":[{"id":"chat-B","title":format!("Parser worker 日本語 👩‍💻 {}", "with a very long descriptive title ".repeat(8))}],"more":false})));
+            // The same exact revision 2 now holds three files, shown as one continuous list.
+            let (manifest, patch) = r::multi(&r::comparison(2, "stack"));
+            s.reply(
+                &format!("{}/chat-B/{:064x}", r::ROOT, 2),
+                Reply::json(200, manifest),
+            );
+            s.reply(
+                &format!("{}/chat-B/{:064x}/patch", r::ROOT, 2),
+                Reply::json(
+                    200,
+                    json!({"snapshotId":format!("{:064x}",2),"patch":patch}),
+                ),
+            );
+            click(cx, h, "review-refresh");
+            idle(cx, h, &pane);
+            cx.update(|cx| {
+                let p = pane.read(cx).probe(cx);
+                assert_eq!(p.1, Some(format!("{:064x}", 2)));
+                assert_eq!(p.3, 3);
+            });
+            cx.update_window(h, |_, w, _| {
+                assert!(w.find("review-jump").bounds().size.height > px(0.));
+            })
+            .unwrap();
+            // Jumping scrolls the full list; it never narrows it to one file.
+            choose(cx, h, "review-jump", 3);
+            cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).3, 3));
+            // A deleted file opens its retained before side.
+            s.reply(
+                &format!(
+                    "{}/chat-B/{:064x}/source?side=before&path=old.txt&sha256={}",
+                    r::ROOT,
+                    2,
+                    crate::native_review::hash(b"gone\n")
+                ),
+                Reply::json(
+                    200,
+                    json!({"snapshotId":format!("{:064x}",2),"text":"gone\n"}),
+                ),
+            );
+            view_file(cx, h, &pane, 2);
+            idle(cx, h, &pane);
+            cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).2.as_deref(), Some("gone\n")));
+            // A deleted file has no after side: the switch is disabled, not a warning.
+            click(cx, h, "review-after");
+            cx.update(|cx| {
+                let p = pane.read(cx).probe(cx);
+                assert_eq!(p.2.as_deref(), Some("gone\n"));
+                assert_eq!(p.4, None);
+                assert!(!p.0);
+            });
+            click(cx, h, "review-back");
+            cx.update(|cx| assert!(pane.read(cx).probe(cx).2.is_none()));
+            // Back during a slow Before read cancels it: the late reply never reopens source.
+            view_file(cx, h, &pane, 0);
+            idle(cx, h, &pane);
+            let mut slow = Reply::json(
+                200,
+                json!({"snapshotId":format!("{:064x}",2),"text":"before\n"}),
+            );
+            slow.delay_ms = 600;
+            s.reply(
+                &format!(
+                    "{}/chat-B/{:064x}/source?side=before&path=a.rs&sha256={}",
+                    r::ROOT,
+                    2,
+                    crate::native_review::hash(b"before\n")
+                ),
+                slow,
+            );
+            click(cx, h, "review-before");
+            cx.update(|cx| assert!(pane.read(cx).probe(cx).0, "before read pending"));
+            click(cx, h, "review-back");
+            let end = Instant::now() + Duration::from_millis(1200);
+            while Instant::now() < end {
+                settle(cx, h);
+                std::thread::yield_now();
+            }
+            cx.update(|cx| {
+                let p = pane.read(cx).probe(cx);
+                assert!(
+                    p.2.is_none(),
+                    "late source reply reopened source after Back"
+                );
+                assert_eq!(p.1, Some(format!("{:064x}", 2)));
+                assert_eq!(p.3, 3);
+                assert_eq!(p.4, None);
+                assert!(!p.0);
+            });
+            cx.update_window(h, |_, w, cx| {
+                assert!(pane.read(cx).owns_focus(w, cx), "focus stays in Review");
+            })
+            .unwrap();
+            contained(cx, h);
             cx.update_window(h, |_, w, cx| {
                 w.resize(size(px(if width == 680. { 1100. } else { 680. }), px(700.)));
                 w.bounds_changed(cx);
             })
             .unwrap();
             settle(cx, h);
+            contained(cx, h);
             cx.update_window(h, |_, w, _| {
                 assert!(w.find("review-diff").bounds().size.height > px(100.))
             })
@@ -229,7 +465,8 @@ pub fn run_native_review_probe(cx: &mut HeadlessAppContext) {
                     .unwrap()
                     .save(d.join(format!(
                         "review-{}-{}.png",
-                        width as u32,
+                        // Named for the width shown after the resize above.
+                        if width == 680. { 1100 } else { 680 },
                         if dark { "dark" } else { "light" }
                     )))
                     .unwrap();
@@ -247,6 +484,10 @@ pub fn run_native_review_probe(cx: &mut HeadlessAppContext) {
                 assert_eq!(p.3, 0);
                 assert!(p.4.is_some());
             });
+            cx.update_window(h, |_, w, _| {
+                assert!(w.find("review-error").bounds().size.height > px(0.))
+            })
+            .unwrap();
             r::install(&s);
             click(cx, h, "review-refresh");
             idle(cx, h, &pane);
@@ -284,15 +525,7 @@ pub fn run_native_review_probe(cx: &mut HeadlessAppContext) {
             click(cx, h, "review-refresh");
             idle(cx, h, &pane);
             cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).1.as_deref(), Some(real_id)));
-            // Details may already be open from the preceding journey.
-            cx.update_window(h, |_, w, cx| {
-                if w.try_find("review-after").is_none() {
-                    w.click("review-details", cx);
-                }
-            })
-            .unwrap();
-            settle(cx, h);
-            click(cx, h, "review-after");
+            view_file(cx, h, &pane, 0);
             idle(cx, h, &pane);
             cx.update(|cx| {
                 assert!(
@@ -323,6 +556,9 @@ pub fn run_native_review_probe(cx: &mut HeadlessAppContext) {
                 assert!(w.try_find("review-comparison").is_none())
             })
             .unwrap();
+            cx.update(|cx| {
+                assert_eq!(pane.read(cx).probe_state(), Some("No saved revisions yet."))
+            });
             cx.update(|cx| assert_eq!(pane.read(cx).probe_capture_notice(),Some("Saving some committed revisions couldn't be confirmed. They remain queued for exact recovery at the next worker checkpoint; existing saved revisions are unchanged.")));
             cx.update_window(h, |_, w, _| {
                 assert!(w.find("review-capture-notice").bounds().size.height > px(0.))
@@ -342,18 +578,15 @@ pub fn run_native_review_probe(cx: &mut HeadlessAppContext) {
             s.reply(&format!("{}/chat-B?after=0",r::ROOT),Reply::json(200,json!({"comparisons":[],"next":null,"capture":{"pending":0,"failed":0,"unsupported":["divergent","multiple-parents","root-base","missing","unknown-custody","unknown-discovery"]}})));
             click(cx, h, "review-refresh");
             idle(cx, h, &pane);
-            cx.update_window(h, |_, w, cx| {
-                if w.try_find("review-capture-limitations").is_none() {
-                    w.click("review-details", cx);
-                }
-            })
-            .unwrap();
-            settle(cx, h);
+            click(cx, h, "review-details");
             cx.update_window(h, |_, w, _| {
                 assert!(w.try_find("review-comparison").is_none());
                 assert!(w.find("review-capture-limitations").bounds().size.height > px(0.));
             })
             .unwrap();
+            cx.update_window(h, |_, w, cx| w.press("escape", cx))
+                .unwrap();
+            settle(cx, h);
             s.reply(
                 &format!("{}/chat-B?after=0", r::ROOT),
                 Reply::json(
@@ -383,6 +616,18 @@ pub fn run_native_review_probe(cx: &mut HeadlessAppContext) {
             click(cx, h, "review-refresh");
             idle(cx, h, &pane);
             cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).3, 0));
+            cx.update(|cx| {
+                assert_eq!(
+                    pane.read(cx).probe_state(),
+                    Some("No current workers in this mission.")
+                )
+            });
+            shot(
+                cx,
+                h,
+                &dir,
+                format!("review-{}-{theme}-empty.png", width as u32),
+            );
             cx.update_window(h, |_, w, cx| {
                 pane.update(cx, |p, cx| p.focus(w, cx));
                 w.press("escape", cx);

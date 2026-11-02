@@ -64,9 +64,9 @@ pub(crate) struct Pane {
     file_picker: Entity<Picker>,
     file: Option<String>,
     source: Option<(String, SharedString)>,
+    source_side: &'static str,
     records: Vec<String>,
     records_open: bool,
-    details: bool,
     busy: bool,
     error: Option<&'static str>,
     patch_error: Option<&'static str>,
@@ -83,6 +83,19 @@ impl Pane {
     #[cfg(feature = "native-probes")]
     pub(crate) fn probe_capture_notice(&self) -> Option<&'static str> {
         self.capture_notice
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_state(&self) -> Option<&'static str> {
+        self.state_message().map(|(title, _)| title)
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_files(&self, cx: &App) -> Vec<String> {
+        self.diff
+            .read(cx)
+            .files()
+            .iter()
+            .map(|f| f.path().to_string())
+            .collect()
     }
     #[cfg(feature = "native-probes")]
     pub(crate) fn probe(
@@ -168,6 +181,11 @@ impl Pane {
                             {
                                 v.file = Some(id.clone());
                                 v.diff.update(cx, |d, cx| d.scroll_to_file(id, cx));
+                                // Jump is navigation, not a selection: return to its placeholder.
+                                let picker = p.clone();
+                                cx.defer_in(w, move |_, w, cx| {
+                                    picker.update(cx, |p, cx| p.set_selected_index(None, w, cx))
+                                });
                                 cx.notify();
                             }
                         }
@@ -197,9 +215,9 @@ impl Pane {
             file_picker,
             file: None,
             source: None,
+            source_side: "after",
             records: vec![],
             records_open: false,
-            details: false,
             busy: false,
             error: None,
             patch_error: None,
@@ -320,6 +338,64 @@ impl Pane {
     }
     pub(crate) fn focus(&self, w: &mut Window, cx: &mut App) {
         self.focus.focus(w, cx);
+    }
+    /// A diff or retained source is on screen (possibly while refreshing).
+    fn has_content(&self) -> bool {
+        self.source.is_some() || self.snapshot.is_some()
+    }
+    fn loading_label(&self) -> &'static str {
+        match self.route {
+            Some(Route::Workers(..)) => "Loading workers…",
+            Some(Route::Comparisons(..)) => "Loading saved revisions…",
+            Some(Route::Snapshot(..)) => "Loading diff…",
+            Some(Route::Records(..)) => "Loading evidence…",
+            Some(Route::Source(..)) => "Loading source…",
+            None => "Loading…",
+        }
+    }
+    /// What fills the diff area when there is no diff: loading is not empty,
+    /// and no saved revision is not "no code changes". Never auto-selects.
+    fn state_message(&self) -> Option<(&'static str, Option<&'static str>)> {
+        if self.has_content() {
+            return None;
+        }
+        if self.busy {
+            return Some((self.loading_label(), None));
+        }
+        if self.error.is_some() || self.selected.is_some() {
+            // The visible warning explains it; nothing else is guessed.
+            return None;
+        }
+        if self.workers.is_empty() {
+            return Some((
+                "No current workers in this mission.",
+                Some(
+                    "Saved revisions come from worker checkpoints, separately from live code changes.",
+                ),
+            ));
+        }
+        if self.worker.is_none() {
+            return Some(("Choose a worker to see its saved revisions.", None));
+        }
+        if self.comparisons.is_empty() {
+            return Some((
+                "No saved revisions yet.",
+                Some(
+                    "Eligible workers save committed layers at worker checkpoints, not when Review opens. This doesn't mean there are no code changes.",
+                ),
+            ));
+        }
+        Some(("Choose a saved revision to see its diff.", None))
+    }
+    /// A later capture of the same change and scope is listed; the pin stays.
+    fn newer_listed(&self) -> bool {
+        self.selected.as_ref().is_some_and(|p| {
+            self.comparisons.iter().any(|c| {
+                c.request.change_id == p.request.change_id
+                    && c.request.scope == p.request.scope
+                    && c.sequence > p.sequence
+            })
+        })
     }
     pub(crate) fn owns_focus(&self, w: &Window, cx: &App) -> bool {
         self.focus.contains_focused(w, cx)
@@ -507,7 +583,8 @@ impl Pane {
                 } else {
                     ""
                 };
-                self.source = Some((format!("{side}: {path}"), format!("{shown}{suffix}").into()));
+                self.source_side = if side == "before" { "before" } else { "after" };
+                self.source = Some((path, format!("{shown}{suffix}").into()));
             }
         }
         cx.notify();
@@ -583,13 +660,18 @@ impl Pane {
                         label: f.path().clone(),
                     })
                     .collect();
-                Self::items(&self.file_picker, items, self.file.clone(), w, cx);
+                // Jumping is navigation only; the full file list stays in the diff.
+                Self::items(&self.file_picker, items, None, w, cx);
             }
             _ => {}
         }
     }
     fn back(&mut self, w: &mut Window, cx: &mut Context<Self>) {
         if self.source.is_some() {
+            // A pending Before/After read must not reopen source after Back.
+            if matches!(self.route, Some(Route::Source(..))) {
+                self.cancel();
+            }
             self.source = None;
             self.diff.read(cx).focus_handle(cx).focus(w, cx);
         } else {
@@ -598,21 +680,31 @@ impl Pane {
         }
         cx.notify();
     }
-    fn read_source(&mut self, side: &str, w: &mut Window, cx: &mut Context<Self>) {
-        let (Some(k), Some(worker), Some(s), Some(file)) = (
-            self.key.clone(),
-            self.worker.clone(),
-            self.snapshot.clone(),
-            self.file.clone(),
-        ) else {
-            return;
+    /// Opens retained source for one file of the shown diff: after, or before for deletions.
+    fn view_file(&mut self, path: String, w: &mut Window, cx: &mut Context<Self>) {
+        let side = match self
+            .diff
+            .read(cx)
+            .files()
+            .iter()
+            .find(|f| f.path().as_ref() == path)
+        {
+            Some(f) if f.modified_path().is_none() => "before",
+            Some(_) => "after",
+            None => return,
         };
+        self.file = Some(path);
+        self.read_source(side, w, cx);
+    }
+    /// The retained text entry for one side of the current file, if that side exists as text.
+    fn source_entry(&self, side: &str, cx: &App) -> Option<model::Source> {
+        let (s, file) = (self.snapshot.as_ref()?, self.file.as_ref()?);
         let path = self
             .diff
             .read(cx)
             .files()
             .iter()
-            .find(|f| f.path().as_ref() == file)
+            .find(|f| f.path().as_ref() == file.as_str())
             .and_then(|f| {
                 if side == "before" {
                     f.original_path()
@@ -620,16 +712,27 @@ impl Pane {
                     f.modified_path()
                 }
             })
-            .map(|p| p.to_string());
+            .map(|p| p.to_string())?;
         let entries = if side == "before" {
             &s.before
         } else {
             &s.after
         };
-        let Some(e) = path
-            .and_then(|path| entries.iter().find(|e| e.path == path))
-            .filter(|e| e.state == "text")
+        entries
+            .iter()
+            .find(|e| e.path == path && e.state == "text")
+            .cloned()
+    }
+    pub(super) fn side_available(&self, side: &str, cx: &App) -> bool {
+        self.source_entry(side, cx).is_some()
+    }
+    fn read_source(&mut self, side: &str, w: &mut Window, cx: &mut Context<Self>) {
+        let (Some(k), Some(worker), Some(s)) =
+            (self.key.clone(), self.worker.clone(), self.snapshot.clone())
         else {
+            return;
+        };
+        let Some(e) = self.source_entry(side, cx) else {
             self.error =
                 Some("This side is absent, binary or unsupported. Retained text is unavailable.");
             cx.notify();
