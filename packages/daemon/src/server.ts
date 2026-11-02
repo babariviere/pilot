@@ -935,7 +935,11 @@ export function createDaemonServer(
 				return json(res, 200, await schedules.update(id, body));
 			}
 			if (id && req.method === "DELETE") {
-				await schedules.remove(id);
+				// Optional precondition; clients without it keep the unconditional behaviour.
+				const raw = url.searchParams.getAll("expectedRevision");
+				if (raw.length > 1 || (raw.length === 1 && !/^[1-9][0-9]{0,15}$/.test(raw[0]!)))
+					throw new HttpError(400, "expectedRevision must be a positive integer");
+				await schedules.remove(id, raw.length ? Number(raw[0]) : undefined);
 				return json(res, 200, { ok: true });
 			}
 			throw new HttpError(404, "Unknown schedule operation");

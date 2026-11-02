@@ -113,6 +113,40 @@ test("recurring schedule writes require native authority, live setting and exact
 	assert.equal((await write(patch, "wrong", "/" + row.id)).status, 403);
 	assert.equal((await write(patch, token, "/" + row.id)).status, 200);
 	assert.equal((await write(patch, token, "/" + row.id)).status, 409);
+	// One-time Cancel/Dismiss: the optional revision precondition refuses a row that changed since it was read.
+	const once1 = (await (
+		await write({ trigger: "at", at: Date.now() + 3_600_000, target: request.target })
+	).json()) as {
+		id: string;
+		revision: number;
+	};
+	const del = (query: string) => fetch(`${url}/${once1.id}${query}`, { method: "DELETE" });
+	for (const bad of [
+		"?expectedRevision=0",
+		"?expectedRevision=x",
+		"?expectedRevision=",
+		"?expectedRevision=1&expectedRevision=1",
+	])
+		assert.equal((await del(bad)).status, 400, bad);
+	assert.equal((await del(`?expectedRevision=${once1.revision + 1}`)).status, 409);
+	assert.equal(schedules.require(once1.id).state, "pending");
+	assert.equal((await del(`?expectedRevision=${once1.revision}`)).status, 200);
+	assert.equal(schedules.require(once1.id).state, "cancelled");
+	assert.equal((await del(`?expectedRevision=${once1.revision}`)).status, 409, "stale after the cancel");
+	assert.equal(schedules.require(once1.id).state, "cancelled");
+	assert.equal((await del(`?expectedRevision=${once1.revision + 1}`)).status, 200);
+	assert.equal((await del("")).status, 404);
+	const legacy = (await (
+		await write({ trigger: "at", at: Date.now() + 3_600_000, target: request.target })
+	).json()) as {
+		id: string;
+	};
+	assert.equal(
+		(await fetch(`${url}/${legacy.id}`, { method: "DELETE" })).status,
+		200,
+		"old clients send no precondition",
+	);
+	assert.equal((await fetch(`${url}/${legacy.id}`, { method: "DELETE" })).status, 200);
 	// The scheduler is deliberately unstarted. Roster, dashboard, Inbox and WS reads are passive.
 	const current = schedules.require(row.id);
 	const run = {

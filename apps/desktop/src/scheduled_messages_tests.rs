@@ -199,12 +199,12 @@ mod tests {
         let two = roster()[1].clone();
         s.reply("GET /api/schedules/one", Reply::json(200, one.clone()));
         s.reply(
-            "DELETE /api/schedules/one",
+            "DELETE /api/schedules/one?expectedRevision=1",
             Reply::json(200, json!({"ok": true})),
         );
         s.reply("GET /api/schedules/two", Reply::json(200, two));
         s.reply(
-            "DELETE /api/schedules/two",
+            "DELETE /api/schedules/two?expectedRevision=2",
             Reply::json(200, json!({"ok": true})),
         );
         let rt = runtime();
@@ -218,7 +218,7 @@ mod tests {
             [
                 path("GET", "/api/hello"),
                 path("GET", "/api/schedules/one"),
-                path("DELETE", "/api/schedules/one"),
+                path("DELETE", "/api/schedules/one?expectedRevision=1"),
                 path("GET", "/api/hello"),
             ]
         );
@@ -245,7 +245,7 @@ mod tests {
         ));
         assert!(seen(&s).iter().all(|(m, _)| m == "GET"));
         s.reply("GET /api/schedules/one", Reply::json(200, one));
-        s.reply("DELETE /api/schedules/one", Reply::json(409, json!({})));
+        s.reply("DELETE /api/schedules/one?expectedRevision=1", Reply::json(409, json!({})));
         assert!(matches!(
             run("one", 1, RowAction::Cancel),
             Outcome::Refused(_)
@@ -256,7 +256,7 @@ mod tests {
             Reply::json(400, json!({})),
             Reply::json(200, json!({})),
         ] {
-            s.reply("DELETE /api/schedules/one", reply);
+            s.reply("DELETE /api/schedules/one?expectedRevision=1", reply);
             seen(&s);
             assert!(matches!(
                 run("one", 1, RowAction::Cancel),

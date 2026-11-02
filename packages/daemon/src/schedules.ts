@@ -453,10 +453,17 @@ export class ScheduleService {
 			updatedAt: this.time.now(),
 		});
 	}
-	/** Pending rows are cancelled, terminal rows dismissed. In-flight claims cannot be cancelled. */
-	async remove(id: string): Promise<void> {
+	/**
+	 * Pending rows are cancelled, terminal rows dismissed. In-flight claims cannot be cancelled.
+	 * With expectedRevision, a row that changed since it was read (for example one that sent) is refused.
+	 */
+	async remove(id: string, expectedRevision?: number): Promise<void> {
 		this.assertOpen();
+		if (expectedRevision !== undefined && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1))
+			throw new Error("expectedRevision must be a positive integer");
 		const old = this.store.require(id);
+		if (expectedRevision !== undefined && expectedRevision !== old.revision)
+			throw new Conflict("Schedule changed; reload before cancelling");
 		if (old.state === "dispatching") throw new Conflict("Schedule is already dispatching");
 		if (old.state === "pending")
 			await this.store.replace(old, { ...old, state: "cancelled", updatedAt: this.time.now() });

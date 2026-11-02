@@ -531,6 +531,15 @@ test("CRUD revision guards and atomic claim vs edit/cancel races have one winner
 	assert.equal(results.filter((r) => r.status === "fulfilled").length, 1);
 	await assert.rejects(f.service.remove(item.id), Conflict);
 	await assert.rejects(f.service.update(item.id, { title: "Too late" }), Conflict);
+	const guarded = await f.service.create(chat());
+	await assert.rejects(f.service.remove(guarded.id, guarded.revision + 1), Conflict);
+	await assert.rejects(f.service.remove(guarded.id, 0), /positive integer/);
+	assert.equal(f.service.require(guarded.id).state, "pending");
+	await f.service.remove(guarded.id, guarded.revision);
+	assert.equal(f.service.require(guarded.id).state, "cancelled");
+	await assert.rejects(f.service.remove(guarded.id, guarded.revision), Conflict);
+	await f.service.remove(guarded.id, guarded.revision + 1);
+	assert.throws(() => f.service.require(guarded.id), NotFound);
 	const pending = await f.service.create(chat());
 	await f.service.remove(pending.id);
 	assert.equal(f.service.require(pending.id).state, "cancelled");

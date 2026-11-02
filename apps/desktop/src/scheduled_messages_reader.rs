@@ -153,7 +153,8 @@ async fn body(response: &mut reqwest::Response, cap: usize) -> Option<Vec<u8>> {
     Some(bytes)
 }
 /// Cancels a pending record or dismisses a failed one through the existing DELETE.
-/// The record must still be at the shown revision and state on the same daemon first.
+/// The record must still be at the shown revision and state on the same daemon first,
+/// and the DELETE carries that revision so a record that changed since is refused.
 pub(crate) async fn act(
     client: &reqwest::Client,
     options: &LocalOptions,
@@ -187,7 +188,10 @@ pub(crate) async fn act(
     if current.id != id || current.revision != revision || current.state != action.state() {
         return Outcome::Refused(CHANGED);
     }
-    let mut response = match client.delete(record_url(options, id)).send().await {
+    // The daemon refuses with 409 if the record changed after the read above.
+    let mut delete_url = record_url(options, id);
+    delete_url.push_str(&format!("?expectedRevision={revision}"));
+    let mut response = match client.delete(delete_url).send().await {
         Ok(response) => response,
         Err(error) if error.is_connect() => {
             return Outcome::Refused("Local is offline. Nothing was changed.");
@@ -197,7 +201,7 @@ pub(crate) async fn act(
     match response.status().as_u16() {
         200 => {}
         // Conflict and NotFound are raised before the store is touched.
-        409 => return Outcome::Refused("It’s already sending. Nothing was cancelled."),
+        409 => return Outcome::Refused("This scheduled message changed. Nothing was changed."),
         404 => return Outcome::Refused("Local no longer has this scheduled message."),
         _ => return Outcome::Unconfirmed(UNCONFIRMED),
     }

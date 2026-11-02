@@ -214,7 +214,7 @@ pub fn run_automations_probe(cx: &mut HeadlessAppContext) {
                 Reply::json(200, f::roster_at(now)[0].clone()),
             );
             s.reply(
-                "DELETE /api/schedules/one",
+                "DELETE /api/schedules/one?expectedRevision=1",
                 Reply::json(200, json!({"ok": true})),
             );
             s.reply("GET /api/schedules", Reply::json(200, after.clone()));

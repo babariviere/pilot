@@ -59,21 +59,23 @@ WebSocket subscription. A GET is an observation, never a dispatch receipt.
 
 ## Cancel and Dismiss
 
-The only writes. **Cancel** (pending rows) and **Dismiss** (failed rows) use the
-existing `DELETE /api/schedules/:id`, which marks a pending record cancelled
+The only writes. **Cancel** (pending rows) and **Dismiss** (failed rows) use
+`DELETE /api/schedules/:id?expectedRevision=N`, which marks a pending record cancelled
 and removes any other non-dispatching record. Each press:
 
 1. checks hello identity, then `GET /api/schedules/:id` must still report the
    shown revision and state; otherwise nothing is sent ("This scheduled message
    changed");
-2. sends one DELETE; 409 (already sending) and 404 are refusals that changed
-   nothing; any other answer, a body other than `{"ok":true}` or a changed
-   hello afterwards is **unconfirmed**, said on the row and never retried;
+2. sends one DELETE with the shown revision as `expectedRevision`; 409 (the
+   record changed or is sending) and 404 are refusals that changed nothing; any
+   other answer, a body other than `{"ok":true}` or a changed hello afterwards is
+   **unconfirmed**, said on the row and never retried;
 3. re-reads the list passively.
 
-The check narrows but cannot close the window between the GET and the DELETE:
-the daemon's DELETE has no revision precondition. A record sent in between is
-removed from history rather than cancelled.
+The daemon compares `expectedRevision` with the stored record atomically, so a
+record that sent or changed between the GET and the DELETE is refused with 409
+and kept. The parameter is optional on the daemon; clients that omit it keep the
+old unconditional behaviour.
 
 ## Verification
 
