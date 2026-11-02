@@ -3,19 +3,22 @@
 //! shared executor clock. A surviving row, with its own targets, eases from
 //! where it showed into its slot; a new row fades in there; a removed row is
 //! gone at once and its neighbours close the gap. Rows that keep their relative
-//! order slide; the fewest others pass over them on an opaque backdrop.
+//! order slide; the fewest others pass over them. What a passing row covers is
+//! clipped away rather than painted over, so every row keeps the sidebar
+//! surface it rests on, translucent glass included (a row covered in its
+//! middle keeps its larger part).
 //! Search, scope, folds and first loads never arm it. Resize and reduced motion
 //! snap. While a row moves it blocks the List's slot click beneath it (whose
 //! final row may differ), so a click there never opens another chat.
 use crate::transition::{Transition, ease_out};
 use gpui_kit::{
-    AnyElement, App, Bounds, ContentMask, Element, ElementId, GlobalElementId, Hsla,
-    InspectorElementId, InteractiveElement as _, IntoElement, LayoutId, ParentElement as _, Pixels,
-    Size, Styled as _, Window,
+    AnyElement, App, Bounds, ContentMask, Element, ElementId, GlobalElementId, InspectorElementId,
+    InteractiveElement as _, IntoElement, LayoutId, ParentElement as _, Pixels, Size, Styled as _,
+    Window,
     component::{Selectable, list::ListItem},
     div, point,
     prelude::FluentBuilder as _,
-    px,
+    px, size,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -24,6 +27,9 @@ use std::{
 
 const DURATION: Duration = Duration::from_millis(200);
 
+/// Section headers' top and height in the list's content, by section.
+pub(super) type Headers = HashMap<usize, (f32, f32)>;
+
 #[derive(Default)]
 pub(super) struct Motion {
     /// Each moving row's offset from its slot at the start, and whether it
@@ -31,6 +37,10 @@ pub(super) struct Motion {
     moves: HashMap<String, (f32, bool)>,
     /// Each entering row's opacity at the start.
     entering: HashMap<String, f32>,
+    /// Each row's slot (top and height in the list's content) after the
+    /// change, and each section header's, for what passing rows cover.
+    slots: HashMap<String, (f32, f32)>,
+    headers: Headers,
     /// Eased progress of the current motion.
     t: f32,
     pending: bool,
@@ -63,10 +73,67 @@ impl Motion {
             .get(key)
             .map_or(1., |from| from + (1. - from) * self.t)
     }
-    /// Rows by key and top, in list order, before and after a data change.
-    /// Each row starts from where it shows now, so a reversal never jumps.
-    pub(super) fn arm(&mut self, before: &[(String, f32)], after: &[(String, f32)]) {
-        if self.viewport.is_none() || before.is_empty() || before == after {
+    /// How much of a row's top and bottom the rows passing over it cover now:
+    /// every raised row covers the others, and a later raised row an earlier.
+    pub(super) fn covered(&self, key: &str) -> (f32, f32) {
+        let Some(&(top, height)) = self.slots.get(key) else {
+            return (0., 0.);
+        };
+        let raised = self.raised(key);
+        self.cover((top + self.offset(key), height), |other, slot| {
+            other != key && (!raised || slot > top)
+        })
+    }
+    /// The same for a section header, which never moves.
+    pub(super) fn header_covered(&self, section: usize) -> (f32, f32) {
+        self.headers
+            .get(&section)
+            .map_or((0., 0.), |band| self.cover(*band, |_, _| true))
+    }
+    /// What remains of `band` is its largest part outside the passing rows;
+    /// returns how much is hidden above and below that part.
+    fn cover(&self, (top, height): (f32, f32), over: impl Fn(&str, f32) -> bool) -> (f32, f32) {
+        let bottom = top + height;
+        let mut covers: Vec<(f32, f32)> = self
+            .moves
+            .iter()
+            .filter(|(key, (_, raised))| *raised && self.slots.contains_key(key.as_str()))
+            .filter_map(|(key, _)| {
+                let (slot, h) = self.slots[key.as_str()];
+                let from = slot + self.offset(key);
+                (over(key, slot) && from < bottom && from + h > top)
+                    .then_some((from.max(top), (from + h).min(bottom)))
+            })
+            .collect();
+        if covers.is_empty() {
+            return (0., 0.);
+        }
+        covers.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut best = (top, top);
+        let mut start = top;
+        for (from, to) in covers.into_iter().chain([(bottom, bottom)]) {
+            if from - start > best.1 - best.0 {
+                best = (start, from);
+            }
+            start = start.max(to);
+        }
+        (best.0 - top, bottom - best.1)
+    }
+    /// Rows by key and top, in list order, before a data change; rows by key,
+    /// top and height, and section headers, after it. Each row starts from
+    /// where it shows now, so a reversal never jumps.
+    pub(super) fn arm(
+        &mut self,
+        before: &[(String, f32)],
+        after: &[(String, f32, f32)],
+        headers: Headers,
+    ) {
+        let unchanged = before.len() == after.len()
+            && before
+                .iter()
+                .zip(after)
+                .all(|((a, y), (b, z, _))| a == b && y == z);
+        if self.viewport.is_none() || before.is_empty() || unchanged {
             return;
         }
         let shown: HashMap<&str, (usize, f32, f32)> = before
@@ -76,12 +143,12 @@ impl Motion {
             .collect();
         let order: Vec<usize> = after
             .iter()
-            .filter_map(|(key, _)| shown.get(key.as_str()).map(|s| s.0))
+            .filter_map(|(key, ..)| shown.get(key.as_str()).map(|s| s.0))
             .collect();
         let steady = steady(&order);
         let mut moves = HashMap::new();
         let mut entering = HashMap::new();
-        for (key, y) in after {
+        for (key, y, _) in after {
             let Some(&(i, from, opacity)) = shown.get(key.as_str()) else {
                 entering.insert(key.clone(), 0.);
                 continue;
@@ -98,6 +165,11 @@ impl Motion {
             pending: !moves.is_empty() || !entering.is_empty(),
             moves,
             entering,
+            slots: after
+                .iter()
+                .map(|(key, y, h)| (key.clone(), (*y, *h)))
+                .collect(),
+            headers,
             viewport,
             ..Self::default()
         };
@@ -158,7 +230,8 @@ pub(crate) struct Row {
     item: ListItem,
     offset: f32,
     opacity: f32,
-    backdrop: Option<Hsla>,
+    raised: bool,
+    covered: (f32, f32),
     viewport: Option<Bounds<Pixels>>,
 }
 impl Row {
@@ -167,7 +240,8 @@ impl Row {
             item,
             offset: 0.,
             opacity: 1.,
-            backdrop: None,
+            raised: false,
+            covered: (0., 0.),
             viewport: None,
         }
     }
@@ -176,12 +250,12 @@ impl Row {
         mut self,
         motion: &Motion,
         key: &str,
-        backdrop: Hsla,
         viewport: Option<Bounds<Pixels>>,
     ) -> Self {
         self.offset = motion.offset(key);
         self.opacity = motion.opacity(key);
-        self.backdrop = motion.raised(key).then_some(backdrop);
+        self.raised = motion.raised(key);
+        self.covered = motion.covered(key);
         self.viewport = viewport.filter(|b| !b.is_empty());
         self
     }
@@ -214,25 +288,39 @@ impl IntoElement for Row {
                 .w_full()
                 .when(self.opacity < 1., |d| d.opacity(self.opacity))
                 .when(offset != 0., |d| d.block_mouse_except_scroll())
-                .when_some(self.backdrop.filter(|_| offset != 0.), |d, bg| d.bg(bg))
                 .child(self.item)
                 .into_any_element()
         };
         Shift {
             child: Some(child),
             offset,
-            raised: self.backdrop.is_some(),
+            raised: self.raised,
+            covered: self.covered,
             viewport: self.viewport,
         }
     }
 }
 
+/// A section header, clipped where a row passes over it.
+pub(super) fn header(header: impl IntoElement, covered: (f32, f32)) -> Shift {
+    Shift {
+        child: Some(header.into_any_element()),
+        offset: 0.,
+        raised: false,
+        covered,
+        viewport: None,
+    }
+}
+
 /// Lays out at the slot; a moving row prepaints, hitboxes included, at its
-/// shown position over the list, clipped to the list's viewport.
+/// shown position over the list, clipped to the list's viewport. Any element
+/// is clipped to what the rows passing over it leave uncovered.
 pub(crate) struct Shift {
     child: Option<AnyElement>,
     offset: f32,
     raised: bool,
+    /// Hidden from the top and bottom by rows passing over.
+    covered: (f32, f32),
     viewport: Option<Bounds<Pixels>>,
 }
 impl IntoElement for Shift {
@@ -243,7 +331,8 @@ impl IntoElement for Shift {
 }
 impl Element for Shift {
     type RequestLayoutState = ();
-    type PrepaintState = ();
+    /// The uncovered part of an element painted in place.
+    type PrepaintState = Option<ContentMask<Pixels>>;
     fn id(&self) -> Option<ElementId> {
         None
     }
@@ -264,20 +353,40 @@ impl Element for Shift {
         &mut self,
         _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
-        _: Bounds<Pixels>,
+        bounds: Bounds<Pixels>,
         _: &mut (),
         w: &mut Window,
         cx: &mut App,
-    ) {
-        match self.viewport.filter(|_| self.offset != 0.) {
-            Some(bounds) => w.defer_draw(
-                self.child.take().expect("moving row child"),
-                w.element_offset() + point(px(0.), px(self.offset)),
-                usize::from(self.raised),
-                Some(ContentMask { bounds }),
+    ) -> Option<ContentMask<Pixels>> {
+        let (above, below) = self.covered;
+        let shown = |top: Pixels| Bounds {
+            origin: point(bounds.origin.x, top + px(above)),
+            size: size(
+                bounds.size.width,
+                (bounds.size.height - px(above + below)).max(px(0.)),
             ),
+        };
+        match self.viewport.filter(|_| self.offset != 0.) {
+            Some(viewport) => {
+                let mut mask = viewport;
+                if above + below > 0. {
+                    mask = mask.intersect(&shown(bounds.origin.y + px(self.offset)));
+                }
+                w.defer_draw(
+                    self.child.take().expect("moving row child"),
+                    w.element_offset() + point(px(0.), px(self.offset)),
+                    usize::from(self.raised),
+                    Some(ContentMask { bounds: mask }),
+                );
+                None
+            }
             None => {
-                self.child.as_mut().expect("row child").prepaint(w, cx);
+                let mask = (above + below > 0.).then(|| ContentMask {
+                    bounds: shown(bounds.origin.y),
+                });
+                let child = self.child.as_mut().expect("row child");
+                w.with_content_mask(mask, |w| child.prepaint(w, cx));
+                mask
             }
         }
     }
@@ -287,12 +396,12 @@ impl Element for Shift {
         _: Option<&InspectorElementId>,
         _: Bounds<Pixels>,
         _: &mut (),
-        _: &mut (),
+        mask: &mut Option<ContentMask<Pixels>>,
         w: &mut Window,
         cx: &mut App,
     ) {
         if let Some(child) = &mut self.child {
-            child.paint(w, cx);
+            w.with_content_mask(*mask, |w| child.paint(w, cx));
         }
     }
 }
@@ -303,6 +412,13 @@ mod tests {
 
     fn rows(keys: &[(&str, f32)]) -> Vec<(String, f32)> {
         keys.iter().map(|(k, y)| ((*k).to_owned(), *y)).collect()
+    }
+    impl Motion {
+        /// Rows 48pt tall, without section headers.
+        fn arm_rows(&mut self, before: &[(String, f32)], after: &[(String, f32)]) {
+            let after: Vec<_> = after.iter().map(|(k, y)| (k.clone(), *y, 48.)).collect();
+            self.arm(before, &after, HashMap::new());
+        }
     }
     fn armed() -> Motion {
         Motion {
@@ -325,7 +441,7 @@ mod tests {
         let mut m = armed();
         let before = rows(&[("a", 0.), ("b", 48.), ("c", 96.), ("d", 144.)]);
         let after = rows(&[("d", 0.), ("a", 48.), ("b", 96.), ("c", 144.)]);
-        m.arm(&before, &after);
+        m.arm_rows(&before, &after);
         assert!(m.active() && m.pending);
         assert_eq!(m.offset("d"), 144.);
         assert!(m.raised("d"));
@@ -341,7 +457,7 @@ mod tests {
         let mut m = armed();
         let before = rows(&[("a", 0.), ("gone", 48.), ("c", 96.)]);
         let after = rows(&[("new", 0.), ("a", 48.), ("c", 96.)]);
-        m.arm(&before, &after);
+        m.arm_rows(&before, &after);
         assert_eq!(m.opacity("new"), 0.);
         assert_eq!(m.offset("new"), 0.);
         assert_eq!(m.offset("a"), -48.);
@@ -350,7 +466,7 @@ mod tests {
         // Halfway, the same layout again (a refresh without a move) continues.
         m.pending = false;
         m.t = 0.5;
-        m.arm(&after, &after);
+        m.arm_rows(&after, &after);
         assert!(!m.pending);
         assert_eq!(m.offset("a"), -24.);
     }
@@ -360,31 +476,87 @@ mod tests {
         let mut m = armed();
         let first = rows(&[("a", 0.), ("b", 48.)]);
         let swapped = rows(&[("b", 0.), ("a", 48.)]);
-        m.arm(&first, &swapped);
+        m.arm_rows(&first, &swapped);
         m.pending = false;
         m.t = 0.25;
         let a_shown = 48. + m.offset("a");
         let b_shown = m.offset("b");
-        m.arm(&swapped, &first);
+        m.arm_rows(&swapped, &first);
         assert_eq!(m.offset("a"), a_shown);
         assert_eq!(48. + m.offset("b"), b_shown);
         // A row still fading in keeps its shown opacity.
         let mut m = armed();
         let entered = rows(&[("new", 0.), ("a", 48.), ("b", 96.)]);
-        m.arm(&first, &entered);
+        m.arm_rows(&first, &entered);
         m.pending = false;
         m.t = 0.5;
-        m.arm(&entered, &rows(&[("new", 0.), ("b", 48.), ("a", 96.)]));
+        m.arm_rows(&entered, &rows(&[("new", 0.), ("b", 48.), ("a", 96.)]));
         assert_eq!(m.opacity("new"), 0.5);
     }
 
     #[test]
     fn first_lists_and_unsampled_lists_never_arm() {
         let mut m = Motion::default();
-        m.arm(&rows(&[("a", 0.)]), &rows(&[("b", 0.), ("a", 48.)]));
+        m.arm_rows(&rows(&[("a", 0.)]), &rows(&[("b", 0.), ("a", 48.)]));
         assert!(!m.active());
         let mut m = armed();
-        m.arm(&[], &rows(&[("a", 0.)]));
+        m.arm_rows(&[], &rows(&[("a", 0.)]));
         assert!(!m.active());
+    }
+
+    #[test]
+    fn passing_rows_cover_what_they_pass_over() {
+        let mut m = armed();
+        let before = rows(&[("a", 0.), ("b", 48.), ("c", 96.), ("d", 144.)]);
+        let after = rows(&[("d", 0.), ("a", 48.), ("b", 96.), ("c", 144.)]);
+        m.arm_rows(&before, &after);
+        m.t = 0.375;
+        // "d" shows at 90..138: it covers the foot of "b" (66..114) and the
+        // head of "c" (114..162); "a" (18..66) stays whole, as does "d".
+        assert_eq!(m.covered("d"), (0., 0.));
+        assert_eq!(m.covered("a"), (0., 0.));
+        assert_eq!(m.covered("b"), (0., 24.));
+        assert_eq!(m.covered("c"), (24., 0.));
+        m.t = 1.;
+        assert_eq!(m.covered("b"), (0., 0.));
+
+        // A short row passing the middle of a tall one leaves its larger
+        // part; a header under it is covered.
+        let mut m = armed();
+        m.arm(
+            &rows(&[("tall", 0.), ("w", 100.), ("x", 120.)]),
+            &[
+                ("x".to_owned(), 0., 20.),
+                ("tall".to_owned(), 20., 100.),
+                ("w".to_owned(), 120., 20.),
+            ],
+            HashMap::from([(1, (65., 5.))]),
+        );
+        assert!(m.raised("x") && !m.raised("tall"));
+        m.t = 0.5;
+        // "x" shows at 60..80 and "tall" at 10..110.
+        assert_eq!(m.covered("tall"), (0., 50.));
+        assert_eq!(m.covered("w"), (0., 0.));
+        assert_eq!(m.header_covered(1), (0., 5.));
+        assert_eq!(m.header_covered(0), (0., 0.));
+
+        // Raised rows that meet: the later in the list covers the earlier.
+        let mut m = armed();
+        let ten = |keys: &[&str]| -> Vec<(String, f32, f32)> {
+            keys.iter()
+                .enumerate()
+                .map(|(i, k)| ((*k).to_owned(), i as f32 * 10., 10.))
+                .collect()
+        };
+        let before: Vec<_> = ten(&["a", "b", "c", "d", "e"])
+            .into_iter()
+            .map(|(k, y, _)| (k, y))
+            .collect();
+        m.arm(&before, &ten(&["e", "d", "a", "b", "c"]), HashMap::new());
+        assert!(m.raised("d") && m.raised("e"));
+        m.t = 0.5;
+        // Both show at 20..30.
+        assert_eq!(m.covered("e"), (0., 10.));
+        assert_eq!(m.covered("d"), (0., 0.));
     }
 }

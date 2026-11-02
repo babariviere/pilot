@@ -172,7 +172,8 @@ impl ChatList {
     pub(crate) fn filter_moving(&mut self, before: &[(String, f32)]) {
         let mut motion = std::mem::take(&mut self.reorder);
         self.filter();
-        motion.arm(before, &self.row_layout());
+        let (rows, headers) = self.slots();
+        motion.arm(before, &rows, headers);
         self.reorder = motion;
     }
     /// Shows every row in its slot now.
@@ -190,26 +191,40 @@ impl ChatList {
     }
     /// Each row's key and top in the list's content, section headers included.
     pub(crate) fn row_layout(&self) -> Vec<(String, f32)> {
+        let rows = self.slots().0;
+        rows.into_iter().map(|(key, top, _)| (key, top)).collect()
+    }
+    /// Each row's key, top and natural height in the list's content, and
+    /// each section header's top and height.
+    fn slots(&self) -> (Vec<(String, f32, f32)>, reorder::Headers) {
         let mut y = 0.;
         let mut out = Vec::with_capacity(self.tree.rows.len());
+        let mut headers = HashMap::new();
         for section in 0..SECTIONS.len() {
             let (start, end) = (self.tree.bounds[section], self.tree.bounds[section + 1]);
             if start == end {
                 continue;
             }
-            y += if self.header_shown(section) {
+            let header = if self.header_shown(section) {
                 HEADER_HEIGHT
             } else {
                 HEADER_GAP
             };
+            headers.insert(section, (y, header));
+            y += header;
             for position in start..end {
-                out.push((self.tree.key(self.tree.rows[position], &self.all), y));
-                y += self
+                let height = self
                     .natural_height(IndexPath::new(position - start).section(section))
                     .unwrap_or(0.);
+                out.push((
+                    self.tree.key(self.tree.rows[position], &self.all),
+                    y,
+                    height,
+                ));
+                y += height;
             }
         }
-        out
+        (out, headers)
     }
     fn natural_height(&self, ix: IndexPath) -> Option<f32> {
         Some(match self.row(ix)? {
@@ -1510,7 +1525,7 @@ impl ListDelegate for ChatList {
     ) -> Option<impl IntoElement> {
         let kind = SECTIONS[section];
         let shown = self.header_shown(section);
-        Some(
+        Some(reorder::header(
             div()
                 .id(SharedString::from(format!(
                     "sidebar-section-{}",
@@ -1536,7 +1551,9 @@ impl ListDelegate for ChatList {
                             .child(kind.title()),
                     )
                 }),
-        )
+            // A row passing over hides the caption beneath it.
+            self.reorder.header_covered(section),
+        ))
     }
     fn render_item(
         &mut self,
@@ -1586,10 +1603,8 @@ impl ListDelegate for ChatList {
             return Some(row);
         }
         let key = self.key_at(ix)?;
-        let mut backdrop = cx.theme().sidebar;
-        backdrop.a = 1.;
         let viewport = self.scroll.as_ref().map(|s| s.bounds());
-        Some(row.moving(&self.reorder, &key, backdrop, viewport))
+        Some(row.moving(&self.reorder, &key, viewport))
     }
     fn set_selected_index(
         &mut self,

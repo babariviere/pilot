@@ -84,7 +84,7 @@ pub fn run_glass_probe(cx: &mut HeadlessAppContext) {
     }
     let glass = cx.update(|cx| {
         if std::env::var_os("PILOT_NEXT_GLASS_SIMULATE").is_some() {
-            crate::appearance::simulate_glass_for_probe(cx);
+            crate::appearance::simulate_glass_for_probe(true, cx);
         }
         crate::appearance::glass(cx)
     });

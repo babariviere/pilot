@@ -158,7 +158,6 @@ fn open(
     chats: Vec<Chat>,
     collapsed: &[&str],
 ) -> (AnyWindowHandle, Entity<LocalViewer>) {
-    let collapsed: Vec<String> = collapsed.iter().map(|k| (*k).to_owned()).collect();
     let (h, view) = cx.update(|cx| {
         gpui_kit::open_window(
             WindowOptions {
@@ -171,38 +170,45 @@ fn open(
                 ..Default::default()
             },
             cx,
-            |window, cx| {
-                cx.new(|cx| {
-                    let mut view = LocalViewer::preview(PreviewState::Conversation, window, cx);
-                    view.state.chats = Arc::new(chats);
-                    view.state.projects = Arc::new(projects());
-                    view.state.projects_loaded = true;
-                    view.state.mission_titles = Some(Arc::new(
-                        [(
-                            "gpui".to_owned(),
-                            "GPUI Rewrite — 迁移 🚀 long name".to_owned(),
-                        )]
-                        .into_iter()
-                        .collect(),
-                    ));
-                    view.chats.update(cx, |list, _| {
-                        let memory = &mut list.delegate_mut().memory;
-                        *memory = crate::sidebar_memory::Memory::ephemeral(0.);
-                        for key in &collapsed {
-                            memory.set_group_collapsed(key, true);
-                        }
-                    });
-                    view.selected = None;
-                    view.page = crate::app_shell::Page::Home;
-                    view.rebuild_nav(window, cx);
-                    view
-                })
-            },
+            |window, cx| viewer(window, cx, chats, collapsed),
         )
         .unwrap()
     });
     settle(cx, h);
     (h, view)
+}
+/// The production viewer over synthetic chats, on Home.
+fn viewer(
+    window: &mut gpui_kit::Window,
+    cx: &mut gpui_kit::App,
+    chats: Vec<Chat>,
+    collapsed: &[&str],
+) -> Entity<LocalViewer> {
+    cx.new(|cx| {
+        let mut view = LocalViewer::preview(PreviewState::Conversation, window, cx);
+        view.state.chats = Arc::new(chats);
+        view.state.projects = Arc::new(projects());
+        view.state.projects_loaded = true;
+        view.state.mission_titles = Some(Arc::new(
+            [(
+                "gpui".to_owned(),
+                "GPUI Rewrite — 迁移 🚀 long name".to_owned(),
+            )]
+            .into_iter()
+            .collect(),
+        ));
+        view.chats.update(cx, |list, _| {
+            let memory = &mut list.delegate_mut().memory;
+            *memory = crate::sidebar_memory::Memory::ephemeral(0.);
+            for key in collapsed {
+                memory.set_group_collapsed(key, true);
+            }
+        });
+        view.selected = None;
+        view.page = crate::app_shell::Page::Home;
+        view.rebuild_nav(window, cx);
+        view
+    })
 }
 fn near(a: Pixels, b: Pixels, what: &str) {
     assert!((a - b).abs() < px(0.5), "{what}: {a:?} vs {b:?}");

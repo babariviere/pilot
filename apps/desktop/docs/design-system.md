@@ -321,14 +321,19 @@ pinned or archived. The list's layout, keys, selection and keyboard order are
 final at once; each surviving row paints from where it showed into its slot, a
 new row fades in place, and a removed row leaves at once (no ghost or targets)
 while its neighbours close the gap. Rows that keep their relative order slide;
-the fewest others pass over them on an opaque sidebar backdrop. A moving row's
-own controls move with it, and it blocks the List's slot click beneath it, so a
-click there never opens another chat; the wheel still scrolls. Reversals start
+the fewest others pass over them. What a passing row covers (rows and section
+captions) is clipped away instead of painted over, so every row keeps the surface
+it rests on, translucent glass included; an opaque fill there flashed pale over
+the glass sidebar. A moving row's own controls move with it, and it blocks the
+List's slot click beneath it, so a click there never opens another chat; the
+wheel still scrolls. Reversals start
 from shown positions. First loads, scope/search rebuilds, restored order and
 explicit folds use natural geometry; resize and reduced motion snap. The order
 itself is unchanged: user activity only, never agent activity. The `style`
 target's `sidebar_reorder_probe` checks painted positions against the final
-layout and reports offscreen CPU draw cost, not visible smoothness.
+layout, compares rendered frames of moving rows with their resting surface over
+opaque and simulated glass sidebars (no OS blur), and reports offscreen CPU draw
+cost, not visible smoothness.
 
 The public attention hint and exact question hint each reuse `composer_height`
 for their own slot, not another animation around the editor. Fresh reason and

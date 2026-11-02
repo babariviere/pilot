@@ -141,8 +141,11 @@ fn set_glass(supported: bool, cx: &mut App) -> gpui_kit::WindowBackgroundAppeara
 }
 
 #[cfg(feature = "native-probes")]
-pub(crate) fn simulate_glass_for_probe(cx: &mut App) {
-    set_glass(true, cx);
+pub(crate) fn simulate_glass_for_probe(on: bool, cx: &mut App) {
+    if on {
+        enable_glass(cx);
+    }
+    set_glass(on, cx);
 }
 
 fn blur_window(window: &mut Window, cx: &mut App) {

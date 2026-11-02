@@ -3,12 +3,15 @@
 //! final layout, reversal from shown positions, entry/exit, mission and
 //! collapsed-project moves, folds and presentation rebuilds that snap, reduced
 //! motion, resize, selection/keyboard, wheel scrolling and blocked slot clicks.
-//! Hidden windows, synthetic chats only. CPU draw timings are offscreen
+//! Rendered frames check that moving rows paint the surface they rest on, over
+//! opaque and simulated glass sidebars. Hidden windows, synthetic chats only:
+//! the OS blur is not rendered, and CPU draw timings are offscreen
 //! observations, not visible smoothness or performance acceptance.
 use super::{LocalViewer, chat, open, rows};
 use crate::{chat_editor::EditorEvent, local_model::Chat};
 use gpui_kit::{
-    AnyWindowHandle, Entity, HeadlessAppContext, ScrollDelta,
+    AnyWindowHandle, AppContext as _, Bounds, Entity, HeadlessAppContext, Pixels, ScrollDelta,
+    WindowBounds, WindowOptions,
     component::{Theme, ThemeMode},
     point, px, size,
     test::TestWindowExt,
@@ -164,7 +167,8 @@ fn order(cx: &mut HeadlessAppContext, view: &Entity<LocalViewer>) -> Vec<String>
 fn scroll_y(cx: &mut HeadlessAppContext, view: &Entity<LocalViewer>) -> f32 {
     cx.update(|cx| f32::from(view.read(cx).chats.read(cx).scroll_handle().offset().y))
 }
-/// A painted moving row whose middle is inside the list's viewport.
+/// A painted moving row whose middle is inside the list's viewport, not
+/// wholly covered by a row passing over it.
 fn moving_row(
     cx: &mut HeadlessAppContext,
     h: AnyWindowHandle,
@@ -172,10 +176,17 @@ fn moving_row(
 ) -> Option<String> {
     let viewport = cx.update(|cx| view.read(cx).chats.read(cx).scroll_handle().bounds());
     let (top, bottom) = (f32::from(viewport.top()), f32::from(viewport.bottom()));
-    snapshot(cx, h, view)
+    let moving: Vec<_> = snapshot(cx, h, view)
         .into_iter()
-        .find(|r| r.offset.abs() > 8. && r.shown.is_some_and(|y| y > top && y + 20. < bottom))
+        .filter(|r| r.offset.abs() > 8. && r.shown.is_some_and(|y| y > top && y + 20. < bottom))
         .map(|r| r.key)
+        .collect();
+    cx.update_window(h, |_, w, _| {
+        moving
+            .into_iter()
+            .find(|key| w.try_find(key.clone()).is_some_and(|e| e.visible()))
+    })
+    .unwrap()
 }
 /// A move from one send: frame 0 shows the old positions, 64ms is between,
 /// 240ms is the final layout.
@@ -215,7 +226,213 @@ fn check_move(
     (from, now, to_y)
 }
 
+/// The desktop behind a glass window: one flat mid-tone, so a moving row that
+/// paints a different surface than the translucent sidebar it rests on shows.
+struct Desktop(Entity<LocalViewer>);
+impl gpui_kit::Render for Desktop {
+    fn render(
+        &mut self,
+        _: &mut gpui_kit::Window,
+        _: &mut gpui_kit::Context<Self>,
+    ) -> impl gpui_kit::IntoElement {
+        use gpui_kit::{ParentElement as _, Styled as _};
+        gpui_kit::div()
+            .relative()
+            .size_full()
+            .bg(gpui_kit::rgb(0x7a3e9d))
+            .child(
+                gpui_kit::div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .child(self.0.clone()),
+            )
+    }
+}
+struct Painted {
+    key: String,
+    bounds: Bounds<Pixels>,
+    moving: bool,
+    raised: bool,
+}
+struct Capture {
+    image: image::RgbaImage,
+    rows: Vec<Painted>,
+    viewport: Bounds<Pixels>,
+}
+/// A rendered frame and where each row painted in it, in list order.
+fn capture(cx: &mut HeadlessAppContext, h: AnyWindowHandle, view: &Entity<LocalViewer>) -> Capture {
+    let (rows, viewport) = cx.update(|cx| {
+        let list = view.read(cx).chats.read(cx);
+        let d = list.delegate();
+        let rows: Vec<_> = d
+            .row_layout()
+            .into_iter()
+            .map(|(key, _)| {
+                let (offset, _, raised) = d.row_motion(&key);
+                (key, offset != 0., raised)
+            })
+            .collect();
+        (rows, list.scroll_handle().bounds())
+    });
+    let rows = cx
+        .update_window(h, |_, w, _| {
+            rows.into_iter()
+                .filter_map(|(key, moving, raised)| {
+                    Some(Painted {
+                        bounds: w.try_find(key.clone())?.bounds(),
+                        key,
+                        moving,
+                        raised,
+                    })
+                })
+                .collect()
+        })
+        .unwrap();
+    Capture {
+        image: cx.capture_screenshot(h).unwrap(),
+        rows,
+        viewport,
+    }
+}
+fn pixel(c: &Capture, width: f32, x: Pixels, y: f32) -> [u8; 3] {
+    let scale = c.image.width() as f32 / width;
+    let p = c
+        .image
+        .get_pixel((f32::from(x) * scale) as u32, (y * scale) as u32)
+        .0;
+    [p[0], p[1], p[2]]
+}
+/// Each moving row's leading edge (no text) paints what the row shows at rest,
+/// except where a row passing over covers it. Returns the points compared.
+fn same_surface(during: &Capture, rest: &Capture, width: f32, what: &str) -> usize {
+    let inside =
+        |v: Bounds<Pixels>, y: f32| y > f32::from(v.top()) + 2. && y < f32::from(v.bottom()) - 2.;
+    let mut compared = 0;
+    for (i, row) in during.rows.iter().enumerate().filter(|(_, r)| r.moving) {
+        let Some(home) = rest.rows.iter().find(|r| r.key == row.key) else {
+            continue;
+        };
+        // Raised rows pass over the others; later raised rows over earlier.
+        let covers: Vec<_> = during
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(j, r)| r.raised && *j != i && (!row.raised || *j > i))
+            .map(|(_, r)| (f32::from(r.bounds.top()), f32::from(r.bounds.bottom())))
+            .collect();
+        let top = f32::from(row.bounds.top());
+        let mut y = top + 4.;
+        while y < f32::from(row.bounds.bottom()) - 4. {
+            let at_rest = f32::from(home.bounds.top()) + (y - top);
+            if inside(during.viewport, y)
+                && inside(rest.viewport, at_rest)
+                && !covers.iter().any(|(a, b)| y > a - 2. && y < b + 2.)
+            {
+                let shown = pixel(during, width, row.bounds.left() + px(3.), y);
+                let resting = pixel(rest, width, home.bounds.left() + px(3.), at_rest);
+                assert!(
+                    shown.iter().zip(resting).all(|(a, b)| a.abs_diff(b) <= 2),
+                    "{what}: {} (raised {}) paints {shown:?} at {y}, but rests on {resting:?}",
+                    row.key,
+                    row.raised
+                );
+                compared += 1;
+            }
+            y += 3.;
+        }
+    }
+    compared
+}
+
+/// Opaque and simulated glass sidebars, light and dark: initial, intermediate
+/// and final frames of upward moves, with the selected row passed over and
+/// the selected row raised.
+fn surfaces(cx: &mut HeadlessAppContext) {
+    let width = 1100.;
+    for mode in [ThemeMode::Light, ThemeMode::Dark] {
+        for glass in [false, true] {
+            cx.update(|cx| {
+                crate::appearance::simulate_glass_for_probe(glass, cx);
+                Theme::change(mode, None, cx);
+            });
+            let mut viewer = None;
+            let (h, _) = cx
+                .update(|cx| {
+                    gpui_kit::open_window(
+                        WindowOptions {
+                            window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                                Default::default(),
+                                size(px(width), px(1300.)),
+                            ))),
+                            show: false,
+                            focus: false,
+                            ..Default::default()
+                        },
+                        cx,
+                        |w, cx| {
+                            let v = super::viewer(w, cx, rows(), &[]);
+                            viewer = Some(v.clone());
+                            cx.new(|_| Desktop(v))
+                        },
+                    )
+                })
+                .unwrap();
+            let view = viewer.unwrap();
+            assert_eq!(cx.update(|cx| crate::appearance::glass(cx)), glass);
+            frame(cx, h, 240);
+            let name = format!("{}-{}", mode.name(), if glass { "glass" } else { "opaque" });
+            for (selected, to, case) in [
+                ("fix", "etl", "selected row passed over"),
+                ("nix", "nix", "selected row raised"),
+            ] {
+                let what = format!("{name}, {case}");
+                super::select(&view, selected, h, cx);
+                let before = capture(cx, h, &view);
+                send(cx, &view, to);
+                let mut frames = Vec::new();
+                for ms in [0, 48, 48] {
+                    frame(cx, h, ms);
+                    frames.push(capture(cx, h, &view));
+                }
+                frame(cx, h, 240);
+                let rest = capture(cx, h, &view);
+                assert!(
+                    frames[0].rows.iter().any(|r| r.raised) && rest.rows.iter().all(|r| !r.moving),
+                    "{what}: a row passes over, then all rest"
+                );
+                if let Some(dir) = std::env::var_os("PILOT_NEXT_STYLE_DIR") {
+                    let dir = std::path::PathBuf::from(dir);
+                    std::fs::create_dir_all(&dir).unwrap();
+                    let file = format!("reorder-{name}-{}.png", case.replace(' ', "-"));
+                    frames[1].image.save(dir.join(file)).unwrap();
+                }
+                for (ix, during) in frames.iter().enumerate() {
+                    let n = same_surface(during, &rest, width, &format!("{what}, frame {ix}"));
+                    assert!(n > 20, "{what}, frame {ix}: moving rows compared ({n})");
+                }
+                // The selected row rests on the same surface before and after.
+                let mut moved = before;
+                for row in &mut moved.rows {
+                    row.moving = row.key == selected;
+                }
+                assert!(same_surface(&moved, &rest, width, &format!("{what}, rest")) > 5);
+                println!(
+                    "{}",
+                    json!({"sidebar_reorder_surface":case,"mode":mode.name(),"glass":glass,
+                    "frames":[0, 48, 96],"matches_rest":true,"os_blur":false})
+                );
+            }
+            cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+            cx.run_until_parked();
+        }
+    }
+    cx.update(|cx| crate::appearance::simulate_glass_for_probe(false, cx));
+}
+
 pub(super) fn run(cx: &mut HeadlessAppContext) {
+    surfaces(cx);
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
             cx.update(|cx| Theme::change(mode, None, cx));
