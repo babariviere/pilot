@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.108.0](https://github.com/babariviere/pilot/compare/v1.107.0...v1.108.0) (2026-11-02)
+
+
+### Features
+
+* **daemon:** continue runs with open chat todos ([e038165](https://github.com/babariviere/pilot/commit/e0381657b4c866eb36a598f6e0b8c8cce2ec5a9f))
+* **daemon:** run configured post-run checks ([b80c523](https://github.com/babariviere/pilot/commit/b80c523d7d648f99269d858569576bc23b62c6b0))
+* **desktop:** move scheduled messages to their own sidebar page ([cd5ff78](https://github.com/babariviere/pilot/commit/cd5ff78edf536e8165471371b30bbaadf8bd148a))
+* **knowledge:** coalesce scoped documentation checks ([4f7c401](https://github.com/babariviere/pilot/commit/4f7c401926c9e80aeb258324323a4d10ab945c10))
+
+
+### Bug Fixes
+
+* **daemon:** refuse one-time Cancel when the message changed ([8eb09fb](https://github.com/babariviere/pilot/commit/8eb09fbdf4de7af6965d4cf04363abd602074ce3))
+* **usage:** expand capacity and compact accounting storage ([f7704f2](https://github.com/babariviere/pilot/commit/f7704f2248891fa92a8939668d847e407b1b929b))
+
 ## [1.107.0](https://github.com/babariviere/pilot/compare/v1.106.0...v1.107.0) (2026-11-02)
 
 
