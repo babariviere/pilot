@@ -261,6 +261,10 @@ source; coordinator synthesis does not turn a hypothesis into a decision. Findin
 from mission constraints and learned preferences. Relevant task context is bounded and scoped under
 [grouping/context](mission-grouping-context.md); pinning alone proves neither applicability nor authority.
 
+The [project knowledge catalog proposal](project-knowledge-catalog.md) defines project-owned research
+and component entries, linked mission subsets, source history and pending freshness checks (D46).
+Its proposed storage/API/navigation contracts do not activate a catalog or documentation jobs.
+
 Current [exploration findings/limits](code-exploration.md): literal search and TS/JS declaration/call
 tools supply source hashes/locations and explicit partial coverage; live scans are not atomic snapshots.
 Landed `code_impact` investigates 1 to 8 exact callable roots within one host-selected source and shared
