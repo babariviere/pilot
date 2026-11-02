@@ -20,7 +20,8 @@ Bash, jobs, ask_user, credential helpers and account behavior are outside this p
   store. [`CriticalReviewVault.capture`](../packages/daemon/src/critical-review-vault.ts#L115)
   stages and syncs blobs, renames, syncs the directory, then stores the manifest; recovery removes
   incomplete stages. Its manifest digest covers entries/omissions, not all target or run pins.
-  Vault reads expose decoded pages, not a byte-preserving acquisition API.
+  Vault `read` exposes decoded pages; the host-only `readExact` helper described below returns
+  selected original sealed bytes. Neither acquires original live artifact revisions.
 * [`ReviewProducer`](../packages/daemon/src/mission-review-contract.ts#L91) permits unavailable or
   observed-agent with a session ID. [`MissionService.recordReviewResult`](../packages/daemon/src/mission-service.ts#L735)
   uses an optional observer, unavailable when absent, and rechecks mission/project membership.
@@ -290,7 +291,7 @@ Coordinator/user validation is needed for budget-key option and effort/floor, wh
 needs cumulative target limits, version/compatibility and retention boundaries, authoritative ABA
 generations, context/runtime/account observation, lossless mission projection, and separate trusted
 approval/consent. Coverage, model/provider diversity and eventual authority remain policy choices.
-Missing byte-preserving vault access, real host admission/producer, cross-store atomicity or safe
+Missing real host admission/producer, cross-store atomicity or safe
 reconciliation, lifecycle erasure hooks and independently attested authorship are source-backed
 blockers. They cannot be supplied by this document or fake-provider tests. No adoption/backfill,
 production executor, live review, cleanup or release follows.
@@ -363,3 +364,31 @@ Equality or parser success establishes no host admission, observed execution, se
 independence, current access, budget/consent, human origin, physical exit, projection or acceptance.
 No production calls, persistence/migration, grant, gate, adoption/backfill, learning, cleanup or
 release/restart follows. Production qualification and the unresolved policies above remain blocked.
+
+## Exact-byte vault read implementation status (D40)
+
+`CriticalReviewVault.readExact(request, signal?)` is a host-only helper with no installed caller.
+Its typed internal request pins one manifest ID/digest and 1–20 selected blob IDs/digests/lengths.
+It snapshots the request before waiting, resolves the sealed manifest through the existing store,
+checks pins, duplicate blob IDs and membership, then verifies every original file length and SHA256.
+Selected blobs are capped at 1 MiB each and 8 MiB total before blob allocation. Request order is
+preserved. Results contain detached stored manifest metadata and `{blobId, sha256, length, bytes}`
+copies, including original BOM, CRLF, multibyte UTF-8 and zero-length bytes without text conversion.
+The manifest digest still covers entries/omissions only, not its header or present authority.
+
+The existing vault queue serializes the read interval against same-vault erasure. Handles close
+before the final manifest/availability and cancellation checks. Cancellation suppresses the result
+and releases the queue after in-flight I/O/close completes. Reads do not refresh retention. Erased,
+tombstoned or expired manifests cannot be reopened through this helper. Returned copies are not a
+continuing lease: later erasure cannot recall them, and later use needs its own authorization checks.
+The final store recheck detects observed revocation or metadata changes, not an atomic barrier
+against another owner changing state immediately afterward. Existing path checks, no-follow opens,
+file stats and digest checks are not isolation from a hostile filesystem or mutable ancestors.
+
+This small helper trusts typed host input and the existing local store. It adds no generic hostile
+object parser or pre-hydration metadata guard: `store.get` still loads/JSON-parses the record under
+the store's existing behavior (normal writes cap record JSON at 4 MiB). Direct database tampering
+is outside that size guarantee. Caller-supplied pins or `sealed` claims cannot replace the lookup;
+successful reads are neither admission nor delivery/acceptance evidence. Capture, retention,
+deletion, text reads, accounting and transport are unchanged. Retained dispatch stays disabled,
+force stays OFF, and production review/observation/acceptance remain blocked.

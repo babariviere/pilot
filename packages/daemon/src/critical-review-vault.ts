@@ -15,6 +15,9 @@ export const REVIEW_VAULT_LIMITS = Object.freeze({
 	exportBytes: 20 * 1024 * 1024,
 	guidanceBytes: 24 * 1024,
 	readBytes: 50 * 1024,
+	exactReadBlobs: 20,
+	exactReadBlobBytes: 1024 * 1024,
+	exactReadTotalBytes: 8 * 1024 * 1024,
 });
 const opaqueId = /^[A-Za-z0-9_-]{1,128}$/;
 const digestPattern = /^[a-f0-9]{64}$/;
@@ -44,6 +47,16 @@ export interface ReviewCapture {
 	selections: ReviewSelection[];
 	/** Known secrets from the trusted capture scope. Values never enter records/logs. */
 	knownSecrets: string[];
+}
+/** Internal host pins, not caller-supplied evidence or authorization. */
+export interface ExactReadRequest {
+	manifestId: string;
+	manifestSha256: string;
+	blobs: readonly { blobId: string; sha256: string; length: number }[];
+}
+export interface ExactReadResult {
+	manifest: CriticalReviewEvidence;
+	blobs: { blobId: string; sha256: string; length: number; bytes: Uint8Array }[];
 }
 function labelAllowed(label: string): boolean {
 	return (
@@ -335,6 +348,91 @@ export class CriticalReviewVault {
 			} finally {
 				await handle.close();
 			}
+		});
+	}
+	/** Original sealed bytes only. The serial lease ends on return, not on later use of the copies. */
+	async readExact(request: ExactReadRequest, signal?: AbortSignal): Promise<ExactReadResult> {
+		signal?.throwIfAborted();
+		if (
+			!opaqueId.test(request.manifestId) ||
+			!digestPattern.test(request.manifestSha256) ||
+			!Array.isArray(request.blobs) ||
+			request.blobs.length < 1 ||
+			request.blobs.length > REVIEW_VAULT_LIMITS.exactReadBlobs
+		)
+			throw new Error("Invalid exact evidence request");
+		// Snapshot typed host input before queueing or any other await.
+		const { manifestId, manifestSha256 } = request;
+		const pins = request.blobs.map(({ blobId, sha256, length }) => ({ blobId, sha256, length }));
+		let total = 0;
+		const selected = new Set<string>();
+		for (const pin of pins) {
+			if (
+				!opaqueId.test(pin.blobId) ||
+				!digestPattern.test(pin.sha256) ||
+				selected.has(pin.blobId) ||
+				!Number.isSafeInteger(pin.length) ||
+				pin.length < 0 ||
+				pin.length > REVIEW_VAULT_LIMITS.exactReadBlobBytes
+			)
+				throw new Error("Invalid exact evidence selection");
+			selected.add(pin.blobId);
+			total += pin.length;
+		}
+		if (total > REVIEW_VAULT_LIMITS.exactReadTotalBytes) throw new Error("Exact evidence quota exceeded");
+		return this.serial(async () => {
+			signal?.throwIfAborted();
+			const manifest = await this.manifest(manifestId);
+			signal?.throwIfAborted();
+			if (
+				manifest.id !== manifestId ||
+				manifest.sha256 !== manifestSha256 ||
+				new Set(manifest.entries.map((entry) => entry.blobId)).size !== manifest.entries.length
+			)
+				throw new Error("Evidence manifest pin mismatch");
+			// Check every membership/length/hash pin before allocating or opening any blob.
+			for (const pin of pins) {
+				const entry = manifest.entries.find((entry) => entry.blobId === pin.blobId);
+				if (!entry || entry.sha256 !== pin.sha256 || entry.bytes !== pin.length)
+					throw new Error("Blob outside exact sealed selection");
+			}
+			const manifestJSON = canonicalJSON(manifest);
+			const blobs: ExactReadResult["blobs"] = [];
+			for (const pin of pins) {
+				signal?.throwIfAborted();
+				const path = await scopedPath(this.root, `${manifestId}/${pin.blobId}`);
+				signal?.throwIfAborted();
+				const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+				try {
+					signal?.throwIfAborted();
+					const info = await handle.stat();
+					if (!info.isFile() || info.size !== pin.length || info.nlink !== 1)
+						throw new Error("Evidence unavailable");
+					const bytes = Buffer.alloc(pin.length + 1);
+					let size = 0;
+					while (size < bytes.length) {
+						signal?.throwIfAborted();
+						const read = await handle.read(bytes, size, Math.min(64 * 1024, bytes.length - size), size);
+						signal?.throwIfAborted();
+						if (!read.bytesRead) break;
+						size += read.bytesRead;
+					}
+					if (size !== pin.length || (await evidenceDigest(bytes.subarray(0, size))) !== pin.sha256)
+						throw new Error("Evidence digest mismatch");
+					signal?.throwIfAborted();
+					const after = await handle.stat();
+					if (after.size !== info.size || after.mtimeMs !== info.mtimeMs || after.ctimeMs !== info.ctimeMs)
+						throw new Error("Evidence changed during read");
+					blobs.push({ ...pin, bytes: Uint8Array.from(bytes.subarray(0, size)) });
+				} finally {
+					await handle.close();
+				}
+			}
+			// Recheck availability and the complete metadata after closing every handle.
+			if (canonicalJSON(await this.manifest(manifestId)) !== manifestJSON)
+				throw new Error("Evidence manifest changed during read");
+			signal?.throwIfAborted();
+			return { manifest: structuredClone(manifest), blobs };
 		});
 	}
 	/** Trusted owner action adapter only. Reads never refresh retention implicitly. */
