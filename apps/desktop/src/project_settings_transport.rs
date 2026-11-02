@@ -59,17 +59,18 @@ pub(crate) async fn submit(
         return Outcome::NotSent("Couldn't reach Pilot. Nothing was changed.");
     }
     let url = format!("{}/api/projects/{}", options.loopback(), s.project_id);
-    let current = match client.get(&url).send().await {
+    let (current, tracking) = match client.get(&url).send().await {
         Ok(r) if r.status() == reqwest::StatusCode::NOT_FOUND => {
             return Outcome::NotSent("This project was removed. Nothing was changed.");
         }
         Ok(r) if r.status() == reqwest::StatusCode::OK => match project(r).await {
-            Some(p) if p.id == s.project_id => p,
+            Some((p, tracking)) if p.id == s.project_id => (p, tracking),
             _ => return Outcome::NotSent("Couldn't read this project. Nothing was changed."),
         },
         _ => return Outcome::NotSent("Couldn't read this project. Nothing was changed."),
     };
-    if !s.current(&Fields::of(&current)) {
+    // A check, not a lock: a write landing between this read and the PATCH is still overwritten.
+    if !s.current(&Fields::of(&current), &tracking) {
         return Outcome::NotSent(
             "This project changed elsewhere. Revert to see the new values. Nothing was changed.",
         );
@@ -93,14 +94,15 @@ pub(crate) async fn submit(
         );
     }
     match project(response).await {
-        Some(saved) => Outcome::Saved(saved),
+        Some((saved, tracking)) => Outcome::Saved(saved, tracking),
         None => Outcome::Unknown(
             "Pilot's reply was unreadable. The save may have applied; it won't be resent.",
         ),
     }
 }
 
-async fn project(mut response: reqwest::Response) -> Option<Project> {
+/// One project and its tracking value (Null when it has none). Bounded.
+pub(crate) async fn project(mut response: reqwest::Response) -> Option<(Project, Value)> {
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.ok()? {
         if bytes.len() + chunk.len() > RESPONSE_BYTES {
@@ -108,10 +110,15 @@ async fn project(mut response: reqwest::Response) -> Option<Project> {
         }
         bytes.extend_from_slice(&chunk);
     }
-    let value: Value = serde_json::from_slice(&bytes).ok()?;
-    crate::local_model::projects(&Value::Array(vec![value]))
+    let mut value: Value = serde_json::from_slice(&bytes).ok()?;
+    let tracking = value
+        .get_mut("tracking")
+        .map(Value::take)
+        .unwrap_or_default();
+    let project = crate::local_model::projects(&Value::Array(vec![value]))
         .ok()?
-        .pop()
+        .pop()?;
+    Some((project, tracking))
 }
 
 #[cfg(test)]

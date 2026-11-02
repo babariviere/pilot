@@ -14,4 +14,5 @@ fn main() {
         pilot_desktop::TranscriptView::bind_keys(cx);
     });
     pilot_desktop::run_project_settings_probe(&mut cx);
+    pilot_desktop::run_project_slack_probe(&mut cx);
 }

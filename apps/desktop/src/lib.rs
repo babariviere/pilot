@@ -108,10 +108,14 @@ mod project_settings;
 mod project_settings_fixture;
 mod project_settings_transport;
 mod project_settings_view;
+mod project_slack;
+mod project_slack_reader;
 #[cfg(feature = "native-probes")]
 pub use local_view::chat_rename_probe::run_chat_rename_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::project_settings_probe::run_project_settings_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::project_settings_probe::run_project_slack_probe;
 #[cfg(any(test, feature = "native-probes"))]
 mod chat_actions_fixture;
 #[cfg(any(test, feature = "native-probes"))]

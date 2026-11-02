@@ -1,4 +1,4 @@
-# Project settings: General and Workspace
+# Project settings: General, Workspace and Slack
 
 The Settings window lists Local projects under **Projects**, after the app-wide pages. A project
 page edits the subset of Swift's `ProjectSettings` that the existing daemon project contract
@@ -12,7 +12,47 @@ page edits the subset of Swift's `ProjectSettings` that the existing daemon proj
 | Isolated workspace per chat | Checkbox | `workspace`: `"clone"` (default, also sent to turn it back on) or `"direct"`. |
 | Require a pull request | Checkbox | `requirePullRequest`; only an explicit `false` permits direct default-branch pushes. Turning it off shows a warning before Save. |
 
-Default model, environment, integrations, databases and Remove stay in the Swift app for now.
+Default model, environment, Linear, databases and Remove stay in the Swift app for now. Slack is
+described below.
+
+## Slack
+
+The project page's Slack section mirrors the Slack half of Swift's `TrackingSettings.swift`:
+
+| Setting | Next | Contract |
+| --- | --- | --- |
+| Channels | List with remove, plus a search field | `tracking.slackChannels` holds canonical channel IDs (older configs may hold names; kept as stored). Names go to `slackChannelNames`, display only. |
+| Only messages that mention me | Checkbox per channel | `slackMentionOnlyChannels`, configured channels only. |
+| My Slack groups | Text field, shown once a channel is mention-only or groups are set | `slackGroupHandles`, sent trimmed, without `@`, lowercased and deduplicated as pilotd stores them. `@here`, `@channel` and `@everyone` are refused. |
+| Labels | Name, description, effect menu and remove | `slackLabels` (at most 50, unique names of at most 80 and descriptions of at most 240 UTF-16 units). Hide and Close spell out what they do under the label. |
+| Account and channel health | Only when something needs attention | `GET /api/sources?projectId=`, pilotd's local projection (no poll or MCP call). |
+
+The search field asks pilotd's read-only lookup (`GET /api/tracking/slack/channels?query=`)
+350 ms after typing settles; the newest query wins and followed channels aren't offered. A
+pasted channel ID can be added without a lookup. Nothing signs in, polls, posts or starts work.
+Sign-in, the triage guide (Rebuild) and recent corrections stay in the Swift app for now.
+
+**Reads.** The catalog carries only navigation metadata, so each page reads its project's
+tracking with `GET /api/projects/:id` when opened, after every projects broadcast and on Revert.
+Only the newest read settles, and a save invalidates reads started before it. A tracking value
+with keys this editor doesn't know is shown read-only rather than rewritten.
+
+**Saves.** pilotd replaces `tracking` whole (`validateTrackingConfig`), so a Slack change sends
+the complete object: the Linear team, name and mappings exactly as read, plus the edited Slack
+values. A General-only save never sends `tracking`. The pre-PATCH read refuses the save when
+the project's tracking differs at all from the value the edits started from.
+
+**Missing backend precondition.** That read is a check, not a lock. `ProjectRequest` has no
+expected tracking value or `trackingGeneration`, and `ProjectStore.update` applies the submitted
+tracking unconditionally, so a Linear or Slack change landing between the read and the PATCH
+(for example from the Swift app) is overwritten. Closing that needs an opt-in atomic precondition
+on `PATCH /api/projects/:id`, such as an expected `trackingGeneration`; it is not added here. The
+same limitation applies to the General fields above.
+
+A Linear-only change that arrives while Slack edits are unsaved becomes the new base silently,
+since this page never edits Linear. A Slack change elsewhere shows "Slack settings changed
+elsewhere" and Save is refused until Revert loads it. A reply without the written values, an
+error or a lost reply is Unknown and never resent; a later read showing the values settles it.
 
 ## Default-model contract audit
 
@@ -90,8 +130,12 @@ opens Settings on one project ID for a project menu.
 ## Checks
 
 `python3 scripts/check-scoped.py --unit project_settings --lint` covers the form, transport and
-owner. `python3 scripts/check-scoped.py --test project_settings --lint` runs the real Settings
+owner; `--unit project_slack` covers the Slack model.
+`python3 scripts/check-scoped.py --test project_settings --lint` runs the real Settings
 window at 680/1100 in light and dark against a synthetic project daemon: pointer and keyboard
 navigation, IME composition blocking ⌘S, Unicode names, an acknowledged save, a lost reply,
-a change elsewhere and a removed project. Set `PILOT_NEXT_PROJECT_SETTINGS_DIR` to keep captures.
+a change elsewhere and a removed project, then the Slack section: load with channel health, a
+debounced lookup, mention and group filters, a Close label, IME in a label, an acknowledged
+save that keeps Linear, a lost reply, a Slack change elsewhere, a failed read with retry and
+drafts kept across projects. Set `PILOT_NEXT_PROJECT_SETTINGS_DIR` to keep captures.
 These are synthetic offscreen checks, not live data or OS IME qualification.

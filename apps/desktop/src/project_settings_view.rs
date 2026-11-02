@@ -3,7 +3,7 @@
 use crate::{
     LocalOptions,
     local_model::Project,
-    project_settings::{Editor, Outcome, Status, name_problem},
+    project_settings::{Editor, Outcome, Status},
     ui::{self, Action, FieldLayout, FieldRow, Notice, Text, Tone},
 };
 use gpui_kit::prelude::FluentBuilder;
@@ -19,6 +19,9 @@ use gpui_kit::{
 };
 use std::{collections::HashMap, sync::Arc};
 
+#[path = "project_slack_view.rs"]
+mod slack;
+
 struct Page {
     editor: Editor,
     name: Option<Entity<InputState>>,
@@ -26,6 +29,7 @@ struct Page {
     name_loaded: u64,
     _name_events: Option<Subscription>,
     reply: Option<Task<()>>,
+    slack: slack::Ui,
 }
 
 pub(crate) struct ProjectSettings {
@@ -51,6 +55,12 @@ impl ProjectSettings {
         for page in self.pages.values_mut() {
             page.editor.catalog(&self.catalog);
         }
+        // A projects broadcast follows every project write, including tracking-only ones the
+        // catalog doesn't carry, so each page rereads its Slack settings.
+        let ids: Vec<String> = self.pages.keys().cloned().collect();
+        for id in ids {
+            self.read_slack(&id, cx);
+        }
         cx.notify();
     }
     pub(crate) fn select(&mut self, project_id: String, cx: &mut Context<Self>) {
@@ -66,8 +76,10 @@ impl ProjectSettings {
                         name_loaded: 0,
                         _name_events: None,
                         reply: None,
+                        slack: Default::default(),
                     },
                 );
+                self.read_slack(&project_id, cx);
             }
             self.selected = Some(project_id);
             cx.notify();
@@ -103,7 +115,7 @@ impl ProjectSettings {
             p.name
                 .as_ref()
                 .is_some_and(|n| n.update(cx, |i, cx| i.marked_text_range(window, cx).is_some()))
-        })
+        }) || self.slack_marked(window, cx)
     }
 
     pub(crate) fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -143,9 +155,14 @@ impl ProjectSettings {
         cx.notify();
     }
     pub(crate) fn revert(&mut self, cx: &mut Context<Self>) {
-        if let Some(page) = self.selected_page()
+        let Some(id) = self.selected.clone() else {
+            return;
+        };
+        if let Some(page) = self.pages.get_mut(&id)
             && page.editor.revert()
         {
+            // Revert also retries a Slack read that failed or found something else.
+            self.read_slack(&id, cx);
             cx.notify();
         }
     }
@@ -217,8 +234,7 @@ impl ProjectSettings {
         } else {
             ""
         };
-        let can_save =
-            dirty && !saving && !editor.removed() && name_problem(&editor.draft().name).is_none();
+        let can_save = editor.can_save();
         let (revert, save) = (this.clone(), this.clone());
         Some(
             div()
@@ -316,6 +332,7 @@ impl Render for ProjectSettings {
                 .into_any_element();
         };
         let name = self.name_input(window, cx);
+        let slack_fields = self.slack_fields(window, cx);
         let Some(page) = self.pages.get(&id) else {
             return div()
                 .v_flex()
@@ -341,7 +358,10 @@ impl Render for ProjectSettings {
             FieldLayout::Stacked
         };
         let this = cx.entity();
-        let invalid = editor.dirty().then(|| name_problem(&draft.name)).flatten();
+        let invalid = editor
+            .dirty()
+            .then(|| crate::project_settings::name_problem(&draft.name))
+            .flatten();
         let widens = editor
             .latest()
             .is_some_and(|p| p.policy.require_pull_request)
@@ -456,6 +476,7 @@ impl Render for ProjectSettings {
                         )
                     }),
             )
+            .child(self.slack_section(&id, slack_fields, layout, cx))
             .into_any_element()
     }
 }

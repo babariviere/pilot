@@ -18,7 +18,7 @@ async fn save_patches_only_changed_fields_and_preserves_other_settings() {
     e.set_require_pull_request(false);
     let s = e.begin_save().unwrap();
     let outcome = submit(&client().unwrap(), &server.options, &s).await;
-    let Outcome::Saved(saved) = &outcome else {
+    let Outcome::Saved(saved, _) = &outcome else {
         panic!("{outcome:?}")
     };
     assert_eq!(saved.id, "a");
@@ -131,5 +131,91 @@ fn background_start_reports_the_same_submission() {
     let rx = start(server.options.clone(), s.clone()).unwrap();
     let (back, outcome) = rx.recv_blocking().unwrap();
     assert_eq!(back, s);
-    assert!(matches!(outcome, Outcome::Saved(_)));
+    assert!(matches!(outcome, Outcome::Saved(..)));
+}
+
+#[tokio::test]
+async fn slack_save_replaces_tracking_once_and_keeps_everything_else() {
+    let mut atlas = project("a", "Atlas");
+    atlas["tracking"] =
+        json!({"slackChannels":["C1"],"linearTeam":"T1","linearTeamName":"Platform"});
+    let server = Server::start(&[atlas]);
+    let client = client().unwrap();
+    let read = crate::project_slack_reader::read(&client, &server.options, "a").await;
+    let mut e = editor(&server, "a");
+    let t = e.begin_read().unwrap();
+    e.finish_read(t, read.tracking);
+    e.add_channel("C0123ABCD", Some("日本-support"));
+    let s = e.begin_save().unwrap();
+    let outcome = submit(&client, &server.options, &s).await;
+    assert!(e.finish(&s, outcome));
+    assert_eq!(*e.status(), Status::Idle);
+    assert!(!e.dirty());
+    let state = server.state.lock().unwrap();
+    assert_eq!(state.patches().len(), 1);
+    assert_eq!(
+        state.projects["a"]["tracking"],
+        json!({"slackChannels":["C1","C0123ABCD"],"slackChannelNames":{"C0123ABCD":"日本-support"},
+            "linearTeam":"T1","linearTeamName":"Platform"})
+    );
+    assert_eq!(
+        state.projects["a"]["environment"],
+        json!({"secret":"never shown"})
+    );
+    assert_eq!(state.projects["a"]["name"], "Atlas");
+}
+
+#[tokio::test]
+async fn slack_save_is_refused_when_tracking_changed_after_the_read() {
+    let server = Server::start(&[project("a", "Atlas")]);
+    let mut e = editor(&server, "a");
+    let t = e.begin_read().unwrap();
+    e.finish_read(t, Ok(json!({"slackChannels":["C1"]})));
+    e.remove_channel("C1");
+    let s = e.begin_save().unwrap();
+    let mut theirs = project("a", "Atlas");
+    theirs["tracking"] = json!({"slackChannels":["C1"],"linearTeam":"T2"});
+    server.set(theirs);
+    assert!(matches!(
+        submit(&client().unwrap(), &server.options, &s).await,
+        Outcome::NotSent(_)
+    ));
+    assert!(server.state.lock().unwrap().patches().is_empty());
+}
+
+#[tokio::test]
+async fn slack_reads_are_get_only_and_project_scoped() {
+    let server = Server::start(&[project("a", "Atlas")]);
+    {
+        let mut state = server.state.lock().unwrap();
+        state.sources = json!([
+            {"projectId":"b","kind":"slack","status":"error"},
+            {"projectId":"a","kind":"slack","status":"ok","channels":[{"id":"C1","status":"pending"}]}
+        ]);
+        state.channels = json!({"status":"ok","items":[{"id":"C2","name":"日本","private":false}]});
+    }
+    let client = client().unwrap();
+    let read = crate::project_slack_reader::read(&client, &server.options, "a").await;
+    assert_eq!(read.tracking, Ok(json!({"slackChannels":["C1"]})));
+    let source = read.source.unwrap();
+    assert_eq!(
+        (
+            source.status.as_str(),
+            source.channel("C1").unwrap().status.as_str()
+        ),
+        ("ok", "pending")
+    );
+    let lookup =
+        crate::project_slack_reader::channels(&client, &server.options, " 日本 & co ").await;
+    assert!(
+        matches!(lookup, crate::project_slack::Lookup::Found { ref items, .. } if items[0].id == "C2")
+    );
+    let missing = crate::project_slack_reader::read(&client, &server.options, "gone").await;
+    assert_eq!(missing.tracking, Err("This project was removed."));
+    let state = server.state.lock().unwrap();
+    assert!(state.seen.iter().all(|(m, _, _)| m == "GET"));
+    assert_eq!(
+        state.lookups(),
+        ["/api/tracking/slack/channels?query=%E6%97%A5%E6%9C%AC+%26+co"]
+    );
 }

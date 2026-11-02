@@ -120,10 +120,10 @@ fn save_ack_settles_only_its_own_submission_and_keeps_newer_edits() {
     let mut stale = s.clone();
     stale.token += 1;
     let saved = with(&atlas, |p| p.name = "Boreal".into());
-    assert!(!editor.finish(&stale, Outcome::Saved(saved.clone())));
-    assert!(editor.finish(&s, Outcome::Saved(saved.clone())));
+    assert!(!editor.finish(&stale, Outcome::Saved(saved.clone(), Value::Null)));
+    assert!(editor.finish(&s, Outcome::Saved(saved.clone(), Value::Null)));
     assert!(
-        !editor.finish(&s, Outcome::Saved(saved)),
+        !editor.finish(&s, Outcome::Saved(saved, Value::Null)),
         "duplicate replies are ignored"
     );
     assert_eq!(*editor.status(), Status::Idle);
@@ -161,10 +161,10 @@ fn unconfirmed_reply_values_are_unknown() {
     let mut editor = Editor::new(&atlas);
     editor.set_require_pull_request(false);
     let s = editor.begin_save().unwrap();
-    editor.finish(&s, Outcome::Saved(project("other", "Atlas")));
+    editor.finish(&s, Outcome::Saved(project("other", "Atlas"), Value::Null));
     assert!(matches!(editor.status(), Status::Unknown(_)));
     let s = editor.begin_save().unwrap();
-    editor.finish(&s, Outcome::Saved(atlas.clone()));
+    editor.finish(&s, Outcome::Saved(atlas.clone(), Value::Null));
     assert!(
         matches!(editor.status(), Status::Unknown(_)),
         "reply without the change"
@@ -179,7 +179,10 @@ fn concurrent_change_during_save_is_kept_visible() {
     let s = editor.begin_save().unwrap();
     let theirs = with(&atlas, |p| p.name = "Theirs".into());
     editor.catalog(std::slice::from_ref(&theirs));
-    editor.finish(&s, Outcome::Saved(with(&atlas, |p| p.name = "Mine".into())));
+    editor.finish(
+        &s,
+        Outcome::Saved(with(&atlas, |p| p.name = "Mine".into()), Value::Null),
+    );
     assert!(editor.updated_elsewhere());
     assert_eq!(editor.draft().name, "Mine");
     assert!(
@@ -192,7 +195,7 @@ fn concurrent_change_during_save_is_kept_visible() {
     let s = editor.begin_save().unwrap();
     let mine = with(&atlas, |p| p.name = "Mine".into());
     editor.catalog(std::slice::from_ref(&mine));
-    editor.finish(&s, Outcome::Saved(mine));
+    editor.finish(&s, Outcome::Saved(mine, Value::Null));
     assert!(!editor.updated_elsewhere() && !editor.dirty());
 }
 
@@ -203,7 +206,159 @@ fn preflight_compares_only_changed_fields() {
     editor.set_name("Boreal");
     let s = editor.begin_save().unwrap();
     let unrelated = Fields::of(&with(&atlas, |p| p.policy.isolated = false));
-    assert!(s.current(&unrelated));
+    assert!(s.current(&unrelated, &Value::Null));
     let renamed = Fields::of(&with(&atlas, |p| p.name = "Elsewhere".into()));
-    assert!(!s.current(&renamed));
+    assert!(!s.current(&renamed, &Value::Null));
+}
+
+fn loaded(project: &Project, tracking: Value) -> Editor {
+    let mut editor = Editor::new(project);
+    let token = editor.begin_read().unwrap();
+    assert!(editor.finish_read(token, Ok(tracking)));
+    assert_eq!(*editor.slack_load(), SlackLoad::Ready);
+    editor
+}
+
+#[test]
+fn slack_edits_send_whole_tracking_with_linear_kept() {
+    let atlas = project("a", "Atlas");
+    let base = json!({"slackChannels":["C1"],"linearTeam":"T1","linearTeamName":"Platform"});
+    let mut editor = loaded(&atlas, base.clone());
+    assert!(!editor.add_channel("C1", Some("dup")), "already followed");
+    assert!(editor.add_channel("C0123ABCD", Some("support-日本")));
+    assert!(editor.set_mention_only("C0123ABCD", true));
+    assert!(editor.set_groups("@oncall"));
+    let key = editor.add_label().unwrap();
+    assert!(editor.set_label_name(key, "Billing 💳"));
+    assert!(editor.set_label_effect(key, project_slack::Effect::Close));
+    assert!(editor.dirty());
+    let s = editor.begin_save().unwrap();
+    assert_eq!(
+        s.patch(),
+        json!({"tracking":{
+            "linearTeam":"T1","linearTeamName":"Platform",
+            "slackChannels":["C1","C0123ABCD"],
+            "slackChannelNames":{"C0123ABCD":"support-日本"},
+            "slackMentionOnlyChannels":["C0123ABCD"],
+            "slackGroupHandles":["oncall"],
+            "slackLabels":[{"name":"Billing 💳","description":"","effect":"close"}]
+        }})
+    );
+    assert!(s.current(&Fields::of(&atlas), &base));
+    let mut theirs = base.clone();
+    theirs["linearTeam"] = json!("T2");
+    assert!(
+        !s.current(&Fields::of(&atlas), &theirs),
+        "tracking is replaced whole, so any change refuses"
+    );
+    assert!(!editor.add_channel("C2", None), "read-only while saving");
+    let saved = s.patch()["tracking"].clone();
+    assert!(editor.finish(&s, Outcome::Saved(atlas.clone(), saved.clone())));
+    assert_eq!(*editor.status(), Status::Idle);
+    assert!(!editor.dirty());
+    assert!(editor.slack_saved("C0123ABCD"));
+
+    // A General-only save never touches tracking.
+    let mut editor = loaded(&atlas, base);
+    editor.set_isolated(false);
+    assert_eq!(
+        editor.begin_save().unwrap().patch(),
+        json!({"workspace":"direct"})
+    );
+}
+
+#[test]
+fn slack_reads_follow_only_the_newest_and_keep_unsaved_edits() {
+    let atlas = project("a", "Atlas");
+    let mut editor = Editor::new(&atlas);
+    assert!(!editor.slack_editable(), "nothing to edit before the read");
+    let old = editor.begin_read().unwrap();
+    let new = editor.begin_read().unwrap();
+    assert!(!editor.finish_read(old, Ok(json!({"slackChannels":["STALE"]}))));
+    assert!(editor.finish_read(new, Err("Couldn't reach Pilot.")));
+    assert_eq!(
+        *editor.slack_load(),
+        SlackLoad::Failed("Couldn't reach Pilot.")
+    );
+    let t = editor.begin_read().unwrap();
+    editor.finish_read(t, Ok(json!({"slackChannels":["C1"],"linearTeam":"T1"})));
+    assert_eq!(editor.slack().channels[0].id, "C1");
+
+    // Unsaved edits survive a Linear-only change and are saved on top of it.
+    editor.add_channel("C2", None);
+    let t = editor.begin_read().unwrap();
+    editor.finish_read(t, Ok(json!({"slackChannels":["C1"],"linearTeam":"T9"})));
+    assert!(editor.dirty() && !editor.slack_elsewhere());
+    let s = editor.begin_save().unwrap();
+    assert_eq!(s.patch()["tracking"]["linearTeam"], "T9");
+    editor.finish(&s, Outcome::NotSent("refused"));
+
+    // A Slack change elsewhere is shown, never merged into the draft.
+    let t = editor.begin_read().unwrap();
+    editor.finish_read(t, Ok(json!({"slackChannels":["C7"],"linearTeam":"T9"})));
+    assert!(editor.slack_elsewhere());
+    assert_eq!(editor.slack().channels.len(), 2);
+    assert!(editor.revert());
+    assert_eq!(editor.slack().channels[0].id, "C7");
+    assert!(!editor.dirty() && !editor.slack_elsewhere());
+
+    // A later failure keeps the loaded values.
+    let t = editor.begin_read().unwrap();
+    assert!(!editor.finish_read(t, Err("gone")));
+    assert_eq!(*editor.slack_load(), SlackLoad::Ready);
+}
+
+#[test]
+fn slack_unknown_settles_only_when_the_daemon_shows_the_values() {
+    let atlas = project("a", "Atlas");
+    let mut editor = loaded(&atlas, json!({"slackChannels":[]}));
+    editor.add_channel("C1", Some("bugs"));
+    let s = editor.begin_save().unwrap();
+    let stale = editor.begin_read();
+    assert!(stale.is_none(), "no reads while saving");
+    editor.finish(&s, Outcome::Unknown("lost"));
+    assert_eq!(*editor.status(), Status::Unknown("lost"));
+    assert!(editor.dirty(), "edits survive");
+    let s = editor.begin_save().expect("explicit Save stays available");
+    editor.finish(&s, Outcome::Unknown("lost"));
+    let t = editor.begin_read().unwrap();
+    editor.finish_read(t, Ok(json!({"slackChannels":[]})));
+    assert_eq!(*editor.status(), Status::Unknown("lost"), "not yet shown");
+    let t = editor.begin_read().unwrap();
+    editor.finish_read(
+        t,
+        Ok(json!({"slackChannels":["C1"],"slackChannelNames":{"C1":"bugs"}})),
+    );
+    assert_eq!(*editor.status(), Status::Idle);
+    assert!(!editor.dirty());
+
+    // A reply whose tracking lacks the change is Unknown, not Saved.
+    let mut editor = loaded(&atlas, json!({"slackChannels":[]}));
+    editor.add_channel("C1", None);
+    let s = editor.begin_save().unwrap();
+    editor.finish(
+        &s,
+        Outcome::Saved(atlas.clone(), json!({"slackChannels":[]})),
+    );
+    assert!(matches!(editor.status(), Status::Unknown(_)));
+}
+
+#[test]
+fn unsupported_tracking_is_read_only_and_blank_labels_are_not_edits() {
+    let atlas = project("a", "Atlas");
+    let mut editor = Editor::new(&atlas);
+    let t = editor.begin_read().unwrap();
+    editor.finish_read(t, Ok(json!({"slackChannels":["C1"],"future":true})));
+    assert_eq!(*editor.slack_load(), SlackLoad::Unsupported);
+    assert!(!editor.add_channel("C2", None) && !editor.dirty());
+
+    let mut editor = loaded(&atlas, Value::Null);
+    let key = editor.add_label().unwrap();
+    assert!(!editor.dirty(), "an empty row is not a change");
+    editor.set_label_description(key, "orphan");
+    assert!(editor.dirty() && !editor.can_save());
+    editor.set_label_name(key, "Named");
+    assert!(editor.can_save());
+    editor.set_groups("@everyone");
+    assert!(!editor.can_save() && editor.begin_save().is_none());
 }

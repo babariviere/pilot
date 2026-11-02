@@ -32,6 +32,10 @@ pub(crate) struct State {
     pub(crate) seen: Vec<(String, String, Value)>,
     pub(crate) projects: BTreeMap<String, Value>,
     pub(crate) replies: BTreeMap<(String, String), Reply>,
+    /// GET /api/sources, as pilotd's local source list.
+    pub(crate) sources: Value,
+    /// GET /api/tracking/slack/channels, the same lookup for every query.
+    pub(crate) channels: Value,
 }
 impl State {
     pub(crate) fn patches(&self) -> Vec<Value> {
@@ -39,6 +43,13 @@ impl State {
             .iter()
             .filter(|(m, _, _)| m == "PATCH")
             .map(|(_, _, b)| b.clone())
+            .collect()
+    }
+    pub(crate) fn lookups(&self) -> Vec<String> {
+        self.seen
+            .iter()
+            .filter(|(_, p, _)| p.starts_with("/api/tracking/slack/channels"))
+            .map(|(_, p, _)| p.clone())
             .collect()
     }
 }
@@ -140,6 +151,10 @@ fn apply(state: &mut State, id: &str, body: &Value) -> Option<Value> {
     if let Some(require) = body["requirePullRequest"].as_bool() {
         object.insert("requirePullRequest".into(), json!(require));
     }
+    // pilotd replaces tracking whole.
+    if let Some(tracking) = body.get("tracking") {
+        object.insert("tracking".into(), tracking.clone());
+    }
     Some(project.clone())
 }
 fn respond(state: &mut State, method: &str, path: &str, body: Value) -> (Option<u16>, Value, u64) {
@@ -158,6 +173,24 @@ fn respond(state: &mut State, method: &str, path: &str, body: Value) -> (Option<
         ("GET", "/api/hello", _) => (
             Some(200),
             json!({"daemonId":"test-daemon","lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true}}),
+            0,
+        ),
+        ("GET", p, _) if p.starts_with("/api/sources?") => (
+            Some(200),
+            if state.sources.is_null() {
+                json!([])
+            } else {
+                state.sources.clone()
+            },
+            0,
+        ),
+        ("GET", p, _) if p.starts_with("/api/tracking/slack/channels?") => (
+            Some(200),
+            if state.channels.is_null() {
+                json!({"status":"ok","items":[]})
+            } else {
+                state.channels.clone()
+            },
             0,
         ),
         ("GET", _, Some(id)) => match state.projects.get(&id) {
