@@ -66,9 +66,10 @@ ghost Buttons with an underline, and an inspector whose triage values are a quie
 label/value list: ghost Buttons showing the value (chevron on hover) that open checked
 Kit dropdown menus. See [Slack triage](slack-triage.md).
 
-The read-only **Scheduled messages** Settings page uses the same column, a native
-Kit List and literal selectable Details. Refresh only reads the bounded Local
-roster. It exposes no management/send actions. See [Scheduled messages](scheduled-messages.md).
+The **Automations** page uses the same column and the calm settings list
+pattern: one-line rows with a state mark slot, a right status, at most one
+action and a chevron that discloses the message, with technical fields under
+Details. See [Automations page](scheduled-messages.md).
 
 Layout is a left-aligned reading column, not a grid of nested cards:
 

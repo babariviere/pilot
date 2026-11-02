@@ -514,15 +514,13 @@ mod mcp_status_view;
 #[cfg(feature = "native-probes")]
 pub use mcp_status_probe::run_mcp_status_probe;
 
-mod scheduled_messages;
+mod automations_view;
 #[cfg(feature = "native-probes")]
-mod scheduled_messages_probe;
+pub use local_view::automations_probe::run_automations_probe;
+mod scheduled_messages;
 mod scheduled_messages_reader;
 #[cfg(any(test, feature = "native-probes"))]
 mod scheduled_messages_tests;
-mod scheduled_messages_view;
-#[cfg(feature = "native-probes")]
-pub use scheduled_messages_probe::run_scheduled_messages_probe;
 mod slack_triage;
 #[cfg(any(test, feature = "native-probes"))]
 mod slack_triage_fixture;

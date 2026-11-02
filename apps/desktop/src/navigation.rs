@@ -6,6 +6,7 @@ pub(crate) const SCOPE_CAP: usize = 64;
 pub(crate) enum Target {
     Home,
     Archive,
+    Automations,
     Missions,
     Mission(crate::mission_browser::Key),
     Inbox(Option<String>),

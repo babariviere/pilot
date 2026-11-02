@@ -594,7 +594,7 @@ harness = false
 required-features = ["native-probes"]
 
 [[test]]
-name = "scheduled_messages"
+name = "automations"
 harness = false
 required-features = ["native-probes"]
 

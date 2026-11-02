@@ -408,6 +408,7 @@ impl LocalViewer {
         let target = match &location.target {
             Target::Home => json!({"target": "home"}),
             Target::Archive => json!({"target": "archive"}),
+            Target::Automations => json!({"target": "automations"}),
             Target::Missions | Target::Mission(_) => json!({"target": "missions"}),
             Target::Inbox(filter) => json!({"target": "inbox", "id": filter}),
             Target::Project(id) => json!({"target": "project", "id": id}),
@@ -517,6 +518,7 @@ fn update_location(value: &serde_json::Value) -> Option<crate::navigation::Locat
     let target = match token["target"].as_str()? {
         "home" => Target::Home,
         "archive" => Target::Archive,
+        "automations" => Target::Automations,
         "missions" => Target::Missions,
         "inbox" => Target::Inbox(id(&token["id"])?),
         "project" => Target::Project(id(&token["id"])??),
@@ -970,6 +972,10 @@ mod tests {
             (
                 json!({"location":{"target":"archive"},"scope":null}),
                 at(Target::Archive, None),
+            ),
+            (
+                json!({"location":{"target":"automations"},"scope":null}),
+                at(Target::Automations, None),
             ),
             (
                 json!({"location":{"target":"inbox","id":null}}),

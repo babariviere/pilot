@@ -1,16 +1,30 @@
-//! Existing one-shot schedule records. Time passing is not delivery evidence.
+//! One-time schedule records, as the Automations page presents them.
+//! Time passing is not delivery evidence; a dispatched message is not agent completion.
 use serde::Deserialize;
 use serde_json::Value;
 
+/// Exact UTC, for the technical details only.
 fn timestamp(at: u64) -> String {
     format!(
-        "{} {:02}:{:02}:{:02}.{:03} UTC",
+        "{} {:02}:{:02}:{:02} UTC",
         crate::usage_overview::date(at),
         at / 3_600_000 % 24,
         at / 60_000 % 60,
-        at / 1000 % 60,
-        at % 1000
+        at / 1000 % 60
     )
+}
+
+/// Local time in words: "Today at 18:00", "Tomorrow at 08:00", "Tue at 06:34", "20 Oct at 06:34".
+pub(crate) fn words(at: u64, now: u64, offset: impl Fn(i64) -> i64) -> String {
+    let clock =
+        crate::subscription_pause::clock_with((at / 1000) as i64, (now / 1000) as i64, offset);
+    if let Some(rest) = clock.strip_prefix("tomorrow ") {
+        format!("Tomorrow {rest}")
+    } else if let Some(rest) = clock.strip_prefix("on ") {
+        rest.to_owned()
+    } else {
+        format!("Today {clock}")
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -30,8 +44,6 @@ pub(crate) struct Item {
     pub(crate) fired_at: Option<u64>,
     pub(crate) session_id: Option<String>,
     pub(crate) error: Option<String>,
-    pub(crate) sleep_observed: Option<bool>,
-    pub(crate) wake_observed: Option<bool>,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -44,81 +56,166 @@ pub(crate) enum Target {
         tracked_item_id: Option<String>,
     },
 }
+/// Where a record appears. Sent and cancelled records are history and stay off the page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Section {
+    Attention,
+    OneTime,
+}
+/// The row's right-hand status. Pending rows on time show none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Status {
+    /// Pending past its time at the last read: Local hasn't sent it yet.
+    Overdue,
+    /// Claimed; delivery isn't confirmed.
+    Sending,
+    Failed,
+}
+impl Status {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Overdue => "Overdue",
+            Self::Sending => "Sending",
+            Self::Failed => "Couldn’t send",
+        }
+    }
+}
+/// The one row action Local offers for this state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RowAction {
+    /// Pending: Local marks it cancelled.
+    Cancel,
+    /// Failed: Local deletes the record.
+    Dismiss,
+}
+impl RowAction {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Cancel => "Cancel",
+            Self::Dismiss => "Dismiss",
+        }
+    }
+    /// The reported state Local must still have before the request is sent.
+    pub(crate) fn state(self) -> &'static str {
+        match self {
+            Self::Cancel => "pending",
+            Self::Dismiss => "failed",
+        }
+    }
+}
 impl Item {
-    pub(crate) fn status(&self) -> &str {
+    pub(crate) fn section(&self) -> Option<Section> {
+        // Recurring rules belong to their own section, not One-time.
+        if self.trigger != "at" {
+            return None;
+        }
         match self.state.as_str() {
-            "pending" => "Pending",
-            "dispatching" => "Dispatching · delivery not confirmed",
-            "fired" => "Dispatched · not agent completion",
-            "failed" => "Failed · delivery may be uncertain",
-            "cancelled" => "Cancelled",
-            _ => "Unknown",
+            "pending" | "dispatching" => Some(Section::OneTime),
+            "failed" => Some(Section::Attention),
+            _ => None,
         }
     }
-    pub(crate) fn when(&self, read_at: u64) -> String {
-        match self.trigger.as_str() {
-            "at" => self.at.map_or_else(
-                || "Time not reported".into(),
-                |at| {
-                    format!(
-                        "{}{}",
-                        timestamp(at),
-                        if self.state == "pending" && at < read_at {
-                            " · overdue at last read, not dispatched"
-                        } else {
-                            ""
-                        }
-                    )
-                },
-            ),
-            "removed" | "on_wake" | "on_online" | "on_back" => "Trigger removed".into(),
-            _ => format!("Unknown trigger: {}", self.trigger),
+    pub(crate) fn status(&self, read_at: u64) -> Option<Status> {
+        match self.state.as_str() {
+            "pending" if self.at.is_some_and(|at| at <= read_at) => Some(Status::Overdue),
+            "dispatching" => Some(Status::Sending),
+            "failed" => Some(Status::Failed),
+            _ => None,
         }
     }
-    pub(crate) fn target_label(&self) -> String {
+    pub(crate) fn action(&self) -> Option<RowAction> {
+        match self.state.as_str() {
+            "pending" => Some(RowAction::Cancel),
+            "failed" => Some(RowAction::Dismiss),
+            _ => None,
+        }
+    }
+    pub(crate) fn when(&self, now: u64) -> String {
+        match (self.trigger.as_str(), self.at) {
+            ("at", Some(at)) => words(at, now, crate::subscription_pause::local_offset),
+            _ => "No time".into(),
+        }
+    }
+    /// The text Local will send, or the new chat's first message.
+    pub(crate) fn message(&self) -> &str {
         match &self.target {
-            Target::Message { session_id, .. } => format!("Message to chat {session_id}"),
-            Target::Chat { .. } => "New chat (not an existing chat)".into(),
+            Target::Message { message, .. } => message,
+            Target::Chat { spawn, .. } => spawn["message"].as_str().unwrap_or_default(),
         }
     }
-    pub(crate) fn details(&self, read_at: u64) -> String {
-        let target = match &self.target {
-            Target::Message {
-                session_id,
-                message,
-            } => format!("Target chat: {session_id}\nMessage:\n{message}"),
+    /// Project of a new-chat request, falling back to the record's own project.
+    pub(crate) fn new_chat_project(&self) -> Option<&str> {
+        match &self.target {
+            Target::Chat { spawn, .. } => {
+                spawn["projectId"].as_str().or(self.project_id.as_deref())
+            }
+            Target::Message { .. } => None,
+        }
+    }
+    /// IDs, revision and exact UTC times, collapsed under Details.
+    pub(crate) fn technical(&self) -> String {
+        let or = |v: Option<&str>| v.unwrap_or("Not reported").to_owned();
+        let time = |v: Option<u64>| v.map_or_else(|| "Not reported".into(), timestamp);
+        let mut lines = vec![
+            format!("Title: {}", self.title),
+            format!("Schedule ID: {}", self.id),
+            format!("Revision: {}", self.revision),
+            format!("State: {}", self.state),
+            format!("Trigger: {}", self.trigger),
+            format!("Scheduled: {}", time(self.at)),
+            format!("Project ID: {}", or(self.project_id.as_deref())),
+        ];
+        match &self.target {
+            Target::Message { session_id, .. } => {
+                lines.push(format!("Target chat ID: {session_id}"))
+            }
             Target::Chat {
                 spawn,
                 tracked_item_id,
-            } => format!(
-                "New-chat request:\n{}\nTracked item: {}",
-                serde_json::to_string_pretty(spawn).unwrap_or_default(),
-                tracked_item_id.as_deref().unwrap_or("Not reported")
-            ),
-        };
-        format!(
-            "{}\n{}\n{}\nProject ID: {}\nSchedule ID: {}\nRevision: {}\nReported state: {}\nTrigger: {}\nCreated: {}\nUpdated: {}\nClaimed: {}\nDispatched: {}\nResult/target chat ID: {}\nSleep observed: {}\nFull wake observed: {}\n{}",
-            self.title,
-            self.status(),
-            self.when(read_at),
-            self.project_id.as_deref().unwrap_or("Not reported"),
-            self.id,
-            self.revision,
-            self.state,
-            self.trigger,
-            timestamp(self.created_at),
-            timestamp(self.updated_at),
-            self.claimed_at
-                .map_or_else(|| "Not reported".into(), timestamp),
-            self.fired_at
-                .map_or_else(|| "Not reported".into(), timestamp),
-            self.session_id.as_deref().unwrap_or("Not reported"),
-            self.sleep_observed
-                .map_or("Not reported", |v| if v { "Yes" } else { "No" }),
-            self.wake_observed
-                .map_or("Not reported", |v| if v { "Yes" } else { "No" }),
-            target
-        )
+            } => {
+                lines.push(format!(
+                    "New-chat request: {}",
+                    serde_json::to_string(spawn).unwrap_or_default()
+                ));
+                lines.push(format!("Tracked item: {}", or(tracked_item_id.as_deref())));
+                lines.push(format!(
+                    "Created chat ID: {}",
+                    or(self.session_id.as_deref())
+                ));
+            }
+        }
+        lines.push(format!("Created: {}", time(Some(self.created_at))));
+        lines.push(format!("Updated: {}", time(Some(self.updated_at))));
+        if self.claimed_at.is_some() {
+            lines.push(format!("Claimed: {}", time(self.claimed_at)));
+        }
+        if self.fired_at.is_some() {
+            lines.push(format!("Dispatched: {}", time(self.fired_at)));
+        }
+        lines.join("\n")
+    }
+    pub(crate) fn valid(&self) -> bool {
+        !self.id.is_empty()
+            && self.revision != 0
+            && self.revision <= 9_007_199_254_740_991
+            && ![
+                Some(self.created_at),
+                Some(self.updated_at),
+                self.at,
+                self.claimed_at,
+                self.fired_at,
+            ]
+            .into_iter()
+            .flatten()
+            .any(|at| at > 8_640_000_000_000_000)
+            && !(self.trigger == "at" && self.at.is_none())
+            && match &self.target {
+                Target::Message { session_id, .. } => {
+                    !session_id.is_empty()
+                        && self.session_id.as_ref().is_none_or(|id| id == session_id)
+                }
+                Target::Chat { spawn, .. } => spawn.is_object() && spawn["message"].is_string(),
+            }
     }
 }
 #[derive(Clone, Debug)]
@@ -130,39 +227,25 @@ impl Snapshot {
         let items: Vec<Item> = serde_json::from_slice(bytes)
             .map_err(|_| "Local returned malformed scheduled items.")?;
         let mut ids = std::collections::HashSet::new();
-        if items.len() > 1000
-            || items.iter().any(|s| {
-                s.id.is_empty()
-                    || !ids.insert(&s.id)
-                    || s.revision == 0
-                    || s.revision > 9_007_199_254_740_991
-                    || [
-                        Some(s.created_at),
-                        Some(s.updated_at),
-                        s.at,
-                        s.claimed_at,
-                        s.fired_at,
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .any(|at| at > 8_640_000_000_000_000)
-                    || (s.trigger == "at" && s.at.is_none())
-                    || match &s.target {
-                        Target::Message { session_id, .. } => {
-                            session_id.is_empty()
-                                || s.session_id.as_ref().is_some_and(|id| id != session_id)
-                        }
-                        Target::Chat { spawn, .. } => {
-                            !spawn.is_object() || !spawn["message"].is_string()
-                        }
-                    }
-            })
-        {
+        if items.len() > 1000 || items.iter().any(|s| !ids.insert(&s.id) || !s.valid()) {
             return Err(
                 "Local returned invalid or duplicate scheduled items. No partial list shown.",
             );
         }
         Ok(Self { items })
+    }
+    /// One section's rows: one-time by due time, needing attention newest first.
+    pub(crate) fn section(&self, section: Section) -> Vec<&Item> {
+        let mut rows: Vec<&Item> = self
+            .items
+            .iter()
+            .filter(|s| s.section() == Some(section))
+            .collect();
+        match section {
+            Section::OneTime => rows.sort_by_key(|s| (s.at.unwrap_or(u64::MAX), s.created_at)),
+            Section::Attention => rows.sort_by_key(|s| std::cmp::Reverse(s.updated_at)),
+        }
+        rows
     }
 }
 #[derive(Default)]

@@ -454,21 +454,9 @@ pub fn run_settings_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             settle(cx, handle);
             cx.update(|cx| {
-                assert_eq!(
-                    owner.read(cx).category,
-                    crate::settings_view::Category::Schedules
-                )
-            });
-            cx.update_window(handle, |_, window, cx| {
-                window.press("up", cx);
-                window.press("enter", cx);
-            })
-            .unwrap();
-            settle(cx, handle);
-            cx.update(|cx| {
                 assert_eq!(owner.read(cx).category, crate::settings_view::Category::Mcp)
             });
-            // Schedules and MCP sit between Updates and Models. Traverse the
+            // MCP sits between Updates and Models. Traverse the
             // same mounted List keyboard path, not a direct category mutation.
             cx.update_window(handle, |_, window, cx| {
                 window.press("up", cx);

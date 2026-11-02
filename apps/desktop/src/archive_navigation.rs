@@ -14,6 +14,22 @@ impl LocalViewer {
         self.did_navigate(cx);
         true
     }
+    /// Each visit reads the schedules again; leaving closes the reader (see `did_navigate`).
+    pub(super) fn show_automations(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.prepare_navigation(w, cx) {
+            return false;
+        }
+        self.leave_artifacts(cx);
+        self.page = Page::Automations;
+        self.nav_error = None;
+        self.rebuild_nav(w, cx);
+        self.automations.update(cx, |v, cx| {
+            v.load(cx);
+            v.focus(w, cx);
+        });
+        self.did_navigate(cx);
+        true
+    }
     pub(super) fn refresh_archive(&mut self, w: &mut Window, cx: &mut Context<Self>) {
         if self.state.inventory_refreshing || !self.archive.update(cx, |v, cx| v.ready(w, cx)) {
             return;

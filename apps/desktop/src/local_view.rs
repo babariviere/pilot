@@ -10,6 +10,9 @@ pub(crate) mod archive_probe;
 #[path = "archived_composer.rs"]
 mod archived_composer;
 #[cfg(feature = "native-probes")]
+#[path = "automations_probe.rs"]
+pub(crate) mod automations_probe;
+#[cfg(feature = "native-probes")]
 #[path = "awaited_question_probe.rs"]
 pub(crate) mod awaited_question_probe;
 #[path = "chat_actions_navigation.rs"]
@@ -249,6 +252,7 @@ gpui_kit::actions!(
         GoHome,
         ShowAllChats,
         ShowMissions,
+        ShowAutomations,
         NavigateBack,
         NavigateForward,
         ToggleJump,
@@ -329,6 +333,7 @@ pub struct LocalViewer {
     overview: Entity<Overview>,
     inbox: Entity<crate::inbox::Inbox>,
     archive: Entity<crate::archive_view::Archive>,
+    automations: Entity<crate::automations_view::Automations>,
     missions: Entity<crate::mission_browser_view::Browser>,
     mission_context: Entity<crate::mission_inspector_view::Pane>,
     nav_projects: Arc<Vec<crate::local_model::Project>>,
@@ -495,6 +500,7 @@ impl LocalViewer {
             crate::ui::shortcut("secondary-1", GoHome, None, cx),
             crate::ui::shortcut("secondary-2", ShowAllChats, None, cx),
             crate::ui::shortcut("secondary-3", ShowMissions, None, cx),
+            crate::ui::shortcut("secondary-4", ShowAutomations, None, cx),
             KeyBinding::new(
                 "escape",
                 crate::mission_inspector_view::Close,
@@ -560,11 +566,8 @@ impl LocalViewer {
             cx.new(|cx| crate::chat_settings_view::ChatSettings::new(Some(options.clone()), cx));
         view.settings
             .update(cx, |owner, _| owner.chats = Some(chats));
-        let schedules = cx.new(|cx| {
-            crate::scheduled_messages_view::ScheduledMessages::new(options.clone(), window, cx)
-        });
-        view.settings
-            .update(cx, |owner, _| owner.schedules = Some(schedules));
+        view.automations
+            .update(cx, |a, _| a.connect(options.clone()));
         let mcp = cx.new(|_| crate::mcp_status_view::Connections::new(options.clone()));
         view.settings.update(cx, |owner, _| owner.mcp = Some(mcp));
         view.connect_model_controls(options.clone(), window, cx);
@@ -1113,6 +1116,7 @@ impl LocalViewer {
         let overview = cx.new(|_| Overview::new());
         let inbox = cx.new(|cx| crate::inbox::Inbox::new(window, cx));
         let archive = cx.new(|cx| crate::archive_view::Archive::new(window, cx));
+        let automations = cx.new(crate::automations_view::Automations::new);
         let archive_events = cx.subscribe_in(
             &archive,
             window,
@@ -1615,6 +1619,7 @@ impl LocalViewer {
             overview,
             inbox,
             archive,
+            automations,
             missions,
             mission_context,
             queue_forms: Vec::new(),
@@ -2245,6 +2250,11 @@ impl LocalViewer {
             self.archive
                 .update(cx, |v, cx| v.sync(&self.state, window, cx));
         }
+        if self.page == Page::Automations {
+            self.automations.update(cx, |v, cx| {
+                v.sync(&self.state.chats, &self.state.projects, cx)
+            });
+        }
         self.sync_visible_draft(window, cx);
         self.sync_missions(window, cx);
         self.sync_mission_context(cx);
@@ -2620,6 +2630,7 @@ impl Render for LocalViewer {
         let page_key = match &self.page {
             Page::Home => "home".to_owned(),
             Page::Archive => "archive".to_owned(),
+            Page::Automations => "automations".to_owned(),
             Page::Missions | Page::Mission(_) => "missions".to_owned(),
             Page::Inbox(_) => "inbox".to_owned(),
             Page::Project(id) => format!("project:{id}"),
@@ -2686,7 +2697,8 @@ impl Render for LocalViewer {
                 .on_action(cx.listener(|view,_:&GoHome,window,cx|view.show_home(window,cx)))
                 .on_action(cx.listener(|view,_:&crate::settings_view::OpenSettings,window,cx|{view.open_settings(window,cx);cx.stop_propagation();}))
                 .on_action(cx.listener(|view,_:&ShowAllChats,window,cx|view.show_chats(window,cx)))
-                .on_action(cx.listener(|view,_:&ShowMissions,window,cx|{view.show_missions(window,cx);} )))
+                .on_action(cx.listener(|view,_:&ShowMissions,window,cx|{view.show_missions(window,cx);} ))
+                .on_action(cx.listener(|view,_:&ShowAutomations,window,cx|{view.show_automations(window,cx);} )))
             .on_action(cx.listener(|v,_:&workspace_changes_view::Toggle,w,cx|{v.toggle_workspace_changes(w,cx);cx.stop_propagation();}))
             .on_action(cx.listener(|v,_:&conversation_links_view::Toggle,w,cx|{v.toggle_conversation_links(w,cx);cx.stop_propagation();}))
             .on_action(cx.listener(|v,_:&crate::mission_inspector_view::Toggle,w,cx|{v.mission_context_toggle(w,cx);cx.stop_propagation();}))
@@ -2720,6 +2732,9 @@ impl Render for LocalViewer {
                         .child(self.archive.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())).into_any_element()
                 } else if matches!(self.page,Page::Missions|Page::Mission(_)) {
                     div().id("missions").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full().child(self.missions.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())).into_any_element()
+                } else if self.page==Page::Automations {
+                    div().id("automations").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()
+                        .child(self.automations.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())).into_any_element()
                 } else if matches!(self.page,Page::Inbox(_)) {
                     div().id("inbox").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()
                         .child(self.inbox.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())).into_any_element()

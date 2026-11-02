@@ -1,76 +1,93 @@
-# Scheduled messages, read-only
+# Automations page
 
-Settings → Scheduled messages reads the existing Local daemon's complete schedule
-roster. Scope is explicitly **all projects and chats**, not the selected chat.
-One owner is created from immutable pinned `LocalOptions`; changing chat/project
-does not relabel these rows as belonging to that chat/project. Target chat IDs,
-project IDs and new-chat request fields come from the record, never title matching.
+The **Automations** sidebar entry (below Missions, ⌘4, Go → Automations) opens
+one page for what Pilot does on its own, across all projects and chats. It
+replaces the old read-only Settings → Scheduled messages roster (D41).
 
-The native Kit List virtualizes the roster. Confirm a row with pointer or keyboard
-to open literal selectable Details, including its trigger, UTC times, revision,
-target/message, latches, reported state and reported error. New-chat requests are
-inert JSON, not executable controls. Refresh is the only read action after opening.
-No create/edit/cancel/dispatch/pause/enable, activity promotion, service, credential,
-provider or account action is exposed. Management remains separate work.
-One-time creation was separately audited: the existing POST lacks a mutation-time
-daemon/lineage precondition. See the [creation blocker and isolated evidence](schedule-creation.md).
+```text
+Automations                                              [↻]
+All projects · 2 upcoming · 1 need attention
 
-## Existing passive contract
+Needs attention
+  ▲ Yesterday 14:00 → New chat in Docs        Couldn’t send  Dismiss  ⌄
+One-time · 2
+    Tomorrow at 08:00 → Design review                        Cancel   ⌄
+    Fri at 09:00 → New chat in Pilot                         Cancel   ⌄
+```
 
-`GET /api/schedules[?projectId=…]` routes directly to
-`ScheduleService.snapshot` → `ScheduleStore.snapshot` → worker `snapshot`.
-That worker only SELECTs, optionally filters exact project ID and JSON-encodes.
-`GET /api/schedules/:id` calls `require`, a clone of the cached stored record.
-Neither path validates targets, refreshes reachability, queues a sweep, arms a
-timer, changes latches/state/revision, or invokes session/provider work.
+Sections hide when empty: **Needs attention**, **Recurring** (recurring rules,
+later), **One-time** and **Hooks** (later). The header's single primary action
+slot is reserved for **New automation**, which arrives with the editor sheet
+for recurring rules. Until then the page has no creation action (see
+[schedule-creation.md](schedule-creation.md)).
 
-Do not confuse reads with startup: `load` repairs interrupted/retired records;
-`start`, timer callbacks, store changes and detector signals can dispatch. The
-app does not call those operations. The server's independent scheduler can still
-dispatch while a read is in flight. A GET response is only an observation, not a
-dispatch receipt or proof of agent completion.
+## Rows
 
-The store already limits retained records to 1000 and target payloads to 4 MiB
-(16 KiB per target). Native reads accept up to 8 MiB wire bytes for the full index
-and metadata. Oversized/malformed/duplicate responses are rejected as a whole,
-never partially displayed as empty. Only the existing fixed list GET is used,
-with hello daemon/lineage checks before and after, no redirects/retries, a bounded
-cancel-on-replacement reader and generation fencing. No schedule WS subscription
-or polling is added. Opening/Refresh uses the existing loopback contract, not
-authentication. No filesystem fallback exists.
+Calm list pattern (title + one meta line, one-line rows, at most one action,
+chevron details), the same as Settings → MCP connections.
 
-## Meaning and presentation
+- **One-time** lists pending and sending one-time messages by due time:
+  local time in words, an arrow, then the target chat's current title or
+  "New chat in <project>". A message to a chat the shell doesn't list says
+  "a chat not listed here"; titles never select a target.
+- **Needs attention** lists failed one-time messages, newest first, with a red
+  mark and "Couldn’t send". Recurring notices (missed, skipped, late) join it later.
+- Sent and cancelled records are history and stay off the page. Recurring rules
+  (`trigger: "recurring"`) are left for the Recurring section.
+- Right-hand status only when it matters: **Overdue** (pending past its time at
+  the last read: Local hasn't sent it yet, which is not delivery), **Sending**
+  (claimed, delivery not confirmed) or **Couldn’t send**.
+- Times are local, in words: "Today at 18:00", "Tomorrow at 08:00", "Fri at
+  09:00", "13 Nov at 09:00".
 
-Historical Swift `ScheduleUI.swift` offers creation/edit/cancel and mostly filters
-to pending/failed rows. Next deliberately retains every reported state here,
-including cancelled and unknown, with exact target details. `at` is epoch
-milliseconds. All displayed times are explicitly UTC, not guessed local timezone.
-Pending deadlines earlier than the read time say overdue **at last read**, not
-sent. `fired` means the dispatch call returned, not that the agent succeeded.
-`dispatching` has no confirmed delivery; `failed` retains its error, including
-interrupted-delivery uncertainty. Unknown state/trigger labels remain unknown.
-Wake/online/back triggers are one-shot event conditions, not calendar dates.
+Clicking a row or its chevron opens the full local time, the exact message
+(selectable) and any error. Technical fields (title, schedule and target IDs,
+revision, state, trigger, exact UTC times, a new-chat request's JSON) stay
+collapsed under **Details**. More than 200 rows in a section show the first
+200 with a count.
 
-Loading is not empty. Read errors/unavailable/identity refusal retain the previous
-report with a stale notice and unchanged last-read time. Successful empty reports
-clear prior rows/details. Leaving or closing cancels the reader and invalidates
-its generation; reopening reads again. No cross-daemon owner/cache is shared.
+## Reads
+
+Opening the page and the refresh button issue `GET /api/schedules` through a
+bounded, cancel-on-replacement reader with hello daemon/lineage checks before
+and after, no redirects or retries, an 8 MiB wire cap and generation fencing.
+Malformed, oversized or duplicate reports are rejected whole, never shown
+partially. A failed refresh keeps the last report with a quiet "Showing the
+last report from Local." note. Leaving the page closes the reader and ignores
+late results; coming back reads again. There is no polling and no schedule
+WebSocket subscription. A GET is an observation, never a dispatch receipt.
+
+## Cancel and Dismiss
+
+The only writes. **Cancel** (pending rows) and **Dismiss** (failed rows) use the
+existing `DELETE /api/schedules/:id`, which marks a pending record cancelled
+and removes any other non-dispatching record. Each press:
+
+1. checks hello identity, then `GET /api/schedules/:id` must still report the
+   shown revision and state; otherwise nothing is sent ("This scheduled message
+   changed");
+2. sends one DELETE; 409 (already sending) and 404 are refusals that changed
+   nothing; any other answer, a body other than `{"ok":true}` or a changed
+   hello afterwards is **unconfirmed**, said on the row and never retried;
+3. re-reads the list passively.
+
+The check narrows but cannot close the window between the GET and the DELETE:
+the daemon's DELETE has no revision precondition. A record sent in between is
+removed from history rather than cancelled.
 
 ## Verification
 
-`schedules-passive.test.ts` runs an isolated real HTTP server, SQLite worker and
-started scheduler with an injected clock. After its deadline passes without the
-timer callback, repeated list/project-filter/detail/missing GETs leave the row,
-revision, latches and timer untouched. Session validation/send/spawn, project and
-ticket validation, ticket mutation and reachability probes are forbidden spies.
-No provider or real data is used. This proves reads do not initiate dispatch,
-not that the real scheduler cannot independently dispatch concurrently.
+`scheduled_messages_tests` covers local time words (including the offset
+deciding the day), sections, statuses, actions, technical details, whole-report
+validation, generation fencing, identity checks around reads and actions,
+read budgets, replacement cancellation, and Cancel/Dismiss: revision/state
+precondition, exactly one DELETE, refusals and unconfirmed outcomes, against
+owned faux HTTP only.
 
-`scheduled_messages_tests` covers exact target/text/time/status interpretation,
-malformed/duplicate/oversized bodies, scope IDs, stale generations, empty reports,
-hello changes before/after reads and replacement cancellation. The hidden
-`scheduled_messages` probe exercises actual Settings navigation and Kit List at
-680/1100, light/dark (theme asserted after production window-open appearance),
-loading, time/failed Details, keyboard confirmation, Unicode selection/copy,
-stale/error/empty and navigation cancellation against faux HTTP only. Screenshots
-are native synthetic fixtures, not production acceptance or OS IME qualification.
+The hidden `automations` native probe drives the real LocalViewer at 680/1100
+in light and dark (theme asserted after window-open appearance): sidebar
+navigation and ⌘4, loading, sections and hidden history, bounds, row and
+keyboard chevron disclosure, Details, Unicode selection/copy, Cancel with one
+DELETE and a re-read, a refused Cancel, stale error, empty state, and leaving
+the page cancelling an in-flight read. Screenshots
+(`PILOT_NEXT_AUTOMATIONS_DIR`) are synthetic fixtures, not production acceptance.

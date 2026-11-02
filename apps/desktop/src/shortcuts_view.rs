@@ -20,9 +20,9 @@ struct Section {
 /// The descriptions are intentionally curated: a binding is not proof of availability.
 fn sections(cx: &App) -> Vec<Section> {
     use super::{
-        FocusChats, GoHome, NavigateBack, NavigateForward, NewChat, ShowAllChats, ShowMissions,
-        SidebarCollapse, SidebarExpand, ToggleJump, conversation_links_view, queued_message_view,
-        workspace_changes_view,
+        FocusChats, GoHome, NavigateBack, NavigateForward, NewChat, ShowAllChats, ShowAutomations,
+        ShowMissions, SidebarCollapse, SidebarExpand, ToggleJump, conversation_links_view,
+        queued_message_view, workspace_changes_view,
     };
     let mut sections = Vec::new();
     let mut section = |title, note, commands: Vec<(&'static str, Box<dyn gpui_kit::Action>)>| {
@@ -68,6 +68,7 @@ fn sections(cx: &App) -> Vec<Section> {
             ("Home", Box::new(GoHome)),
             ("Chats", Box::new(ShowAllChats)),
             ("Missions", Box::new(ShowMissions)),
+            ("Automations", Box::new(ShowAutomations)),
             ("Back", Box::new(NavigateBack)),
             ("Forward", Box::new(NavigateForward)),
             (

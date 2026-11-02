@@ -83,7 +83,8 @@ fn menus_with(cx: Option<&App>) -> Vec<Menu> {
     #[cfg(not(target_os = "macos"))]
     let _ = cx;
     use crate::local_view::{
-        GoHome, NavigateBack, NavigateForward, NewChat, ShowAllChats, ShowMissions, ToggleJump,
+        GoHome, NavigateBack, NavigateForward, NewChat, ShowAllChats, ShowAutomations,
+        ShowMissions, ToggleJump,
     };
     vec![
         Menu::new("Pilot Next").items([
@@ -119,6 +120,7 @@ fn menus_with(cx: Option<&App>) -> Vec<Menu> {
             MenuItem::action("Home", GoHome),
             MenuItem::action("Chats", ShowAllChats),
             MenuItem::action("Missions", ShowMissions),
+            MenuItem::action("Automations", ShowAutomations),
             MenuItem::separator(),
             MenuItem::action("Command Palette", ToggleJump),
         ]),

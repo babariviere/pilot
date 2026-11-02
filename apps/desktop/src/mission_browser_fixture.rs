@@ -154,7 +154,12 @@ async fn serve(mut socket: TcpStream, state: Arc<Mutex<State>>) -> std::io::Resu
         let mut state = state.lock().unwrap();
         assert!(state.seen.len() < 256, "bounded faux request budget");
         state.seen.push((method.into(), path.into()));
-        state.overrides.get(path).cloned()
+        // "METHOD /path" overrides first, then the path for any method.
+        state
+            .overrides
+            .get(&format!("{method} {path}"))
+            .or_else(|| state.overrides.get(path))
+            .cloned()
     };
     let reply=reply.unwrap_or_else(||{
         if method!="GET"{return Reply::json(405,json!({"error":"No mutation fixture"}));}

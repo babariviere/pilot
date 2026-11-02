@@ -13,6 +13,7 @@ impl LocalViewer {
         let target = match &self.page {
             Page::Home => Target::Home,
             Page::Archive => Target::Archive,
+            Page::Automations => Target::Automations,
             Page::Missions => Target::Missions,
             Page::Mission(key) => Target::Mission(key.clone()),
             Page::Inbox(filter) => Target::Inbox(filter.clone()),
@@ -191,6 +192,9 @@ impl LocalViewer {
         self.scope_states.put(self.project_scope.clone(), state);
     }
     pub(super) fn did_navigate(&mut self, cx: &mut Context<Self>) {
+        if self.page != Page::Automations {
+            self.automations.update(cx, |v, cx| v.close(cx));
+        }
         if !self.restoring_navigation {
             self.navigation.record(self.location(cx));
             self.save_scope(cx);
@@ -235,6 +239,7 @@ impl LocalViewer {
         match &location.target {
             Target::Home => location.scope.is_none(),
             Target::Archive => true,
+            Target::Automations => true,
             Target::Missions => true,
             Target::Mission(key) => key.valid() && self.missions.read(cx).contains(key),
             Target::Inbox(filter) => filter
@@ -266,6 +271,7 @@ impl LocalViewer {
         self.restoring_navigation = true;
         let success = match &location.target {
             Target::Archive => self.show_archive(window, cx),
+            Target::Automations => self.show_automations(window, cx),
             Target::Missions => self.show_missions(window, cx),
             Target::Mission(key) => self.show_mission_overview(key.clone(), window, cx),
             Target::Home => {

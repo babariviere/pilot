@@ -304,7 +304,7 @@ pub(crate) fn local_offset(t: i64) -> i64 {
 pub(crate) fn clock(at: i64, now: i64) -> String {
     clock_with(at, now, local_offset)
 }
-fn clock_with(at: i64, now: i64, offset: impl Fn(i64) -> i64) -> String {
+pub(crate) fn clock_with(at: i64, now: i64, offset: impl Fn(i64) -> i64) -> String {
     let local = at + offset(at);
     let day = local.div_euclid(86_400);
     let days = day - (now + offset(now)).div_euclid(86_400);

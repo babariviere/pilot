@@ -10,7 +10,7 @@ use gpui_kit::{
 // the additional glyphs used here; preserve default icons for Kit controls.
 icon_assets!(pub(crate) AppIconAssets, [
     Archive,
-    House, Folders, MessagesSquare, SquarePen, CodeXml, Wrench, Layers, ListFilter, Ellipsis, ListTodo, Circle, FolderPlus, Activity, Link, GitCompare, Maximize2, CornerDownRight, Clock, Trash, Map, Compass, MessageCircleQuestionMark, GitPullRequest, ArrowUpToLine, GitBranch, Minimize2, Eraser, ExternalLink, Paperclip,
+    House, Folders, MessagesSquare, SquarePen, CodeXml, Wrench, Layers, ListFilter, Ellipsis, ListTodo, Circle, FolderPlus, Activity, Link, GitCompare, Maximize2, CornerDownRight, Clock, Trash, Map, Compass, MessageCircleQuestionMark, GitPullRequest, ArrowUpToLine, GitBranch, Minimize2, Eraser, ExternalLink, Paperclip, Workflow,
 ]);
 
 macro_rules! app_icons {
@@ -45,6 +45,7 @@ app_icons! {
     Project => Folder,
     Overview => LayoutDashboard,
     Mission => Map,
+    Automations => Workflow,
     Coordinator => Compass,
     Question => MessageCircleQuestionMark,
     Subagent => Bot,

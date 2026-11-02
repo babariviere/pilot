@@ -2,8 +2,8 @@
 
 The existing API preserves message/session/epoch bytes and can acknowledge a
 durably created row, but cannot fence creation to the daemon/lineage checked by
-the client. Next therefore exposes **no creation action** in this slice. Settings
-→ Scheduled messages remains the [passive roster](scheduled-messages.md).
+the client. Next therefore exposes **no creation action** in this slice.
+The [Automations page](scheduled-messages.md) lists and cancels one-time messages.
 No composer, attachment, draft, focus or default-action behavior changes.
 
 ## Exact blocker
@@ -84,7 +84,7 @@ wall times.
 
 Next's ordinary `ChatEditor`/`DeliveryOwner` capture immutable drafts and retain
 uncertain sends; that durable-operation route has no schedule-create kind.
-Settings' `ScheduledMessages` owner only reads the roster and exact details.
+The Automations page only reads the roster and offers Cancel/Dismiss.
 Do not turn entering a date, typing a message, changing chat/project, Return in
 an ordinary editor or closing a form into scheduling.
 

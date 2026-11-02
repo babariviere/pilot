@@ -1,5 +1,8 @@
-//! Fixed passive schedule GET. Never creates, dispatches, validates or changes a schedule.
-use crate::{LocalOptions, scheduled_messages::Snapshot};
+//! Fixed passive schedule GET, plus the explicit Cancel/Dismiss DELETE. Never creates or dispatches.
+use crate::{
+    LocalOptions,
+    scheduled_messages::{Item, RowAction, Snapshot},
+};
 use std::time::Duration;
 // Existing store: 4 MiB target payloads, 1000 rows, plus metadata/JSON escaping.
 // No text truncation or partial roster adoption on overflow.
@@ -116,4 +119,128 @@ impl Drop for Reader {
     fn drop(&mut self) {
         self.commands.close();
     }
+}
+
+/// Result of one Cancel or Dismiss. Never retried or replayed.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Outcome {
+    Done,
+    /// Local answered before changing anything.
+    Refused(&'static str),
+    /// Sent, but no valid answer from the same daemon.
+    Unconfirmed(&'static str),
+}
+const UNCONFIRMED: &str = "Pilot couldn’t confirm this change. The list shows what Local reports now; nothing was retried.";
+const RECORD_CAP: usize = 64 * 1024;
+fn record_url(options: &LocalOptions, id: &str) -> String {
+    let mut url = reqwest::Url::parse(&options.loopback()).expect("loopback URL");
+    url.path_segments_mut()
+        .expect("HTTP URL")
+        .extend(["api", "schedules", id]);
+    url.into()
+}
+async fn body(response: &mut reqwest::Response, cap: usize) -> Option<Vec<u8>> {
+    if response.content_length().is_some_and(|n| n > cap as u64) {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if chunk.len() > cap.saturating_sub(bytes.len()) {
+            return None;
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Some(bytes)
+}
+/// Cancels a pending record or dismisses a failed one through the existing DELETE.
+/// The record must still be at the shown revision and state on the same daemon first.
+pub(crate) async fn act(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    id: &str,
+    revision: u64,
+    action: RowAction,
+) -> Outcome {
+    const CHANGED: &str = "This scheduled message changed. Nothing was changed.";
+    if !crate::local_model::valid_id(id) {
+        return Outcome::Refused(
+            "Pilot can’t address this scheduled message. Nothing was changed.",
+        );
+    }
+    if crate::local_client::hello(client, options).await.is_err() {
+        return Outcome::Refused("Local is unavailable or changed identity. Nothing was changed.");
+    }
+    let current = match client.get(record_url(options, id)).send().await {
+        Ok(mut r) if r.status().as_u16() == 200 => body(&mut r, RECORD_CAP)
+            .await
+            .and_then(|b| serde_json::from_slice::<Item>(&b).ok()),
+        Ok(r) if r.status().as_u16() == 404 => {
+            return Outcome::Refused("Local no longer has this scheduled message.");
+        }
+        _ => None,
+    };
+    let Some(current) = current else {
+        return Outcome::Refused(
+            "Local couldn’t read this scheduled message. Nothing was changed.",
+        );
+    };
+    if current.id != id || current.revision != revision || current.state != action.state() {
+        return Outcome::Refused(CHANGED);
+    }
+    let mut response = match client.delete(record_url(options, id)).send().await {
+        Ok(response) => response,
+        Err(error) if error.is_connect() => {
+            return Outcome::Refused("Local is offline. Nothing was changed.");
+        }
+        Err(_) => return Outcome::Unconfirmed(UNCONFIRMED),
+    };
+    match response.status().as_u16() {
+        200 => {}
+        // Conflict and NotFound are raised before the store is touched.
+        409 => return Outcome::Refused("It’s already sending. Nothing was cancelled."),
+        404 => return Outcome::Refused("Local no longer has this scheduled message."),
+        _ => return Outcome::Unconfirmed(UNCONFIRMED),
+    }
+    let ok = body(&mut response, 1024)
+        .await
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .is_some_and(|v| v == serde_json::json!({"ok": true}));
+    if !ok || crate::local_client::hello(client, options).await.is_err() {
+        return Outcome::Unconfirmed(UNCONFIRMED);
+    }
+    Outcome::Done
+}
+/// Runs one action on its own thread. Dropping the receiver ignores, never cancels, the request.
+pub(crate) fn perform(
+    options: LocalOptions,
+    id: String,
+    revision: u64,
+    action: RowAction,
+) -> async_channel::Receiver<Outcome> {
+    let (sender, receiver) = async_channel::bounded(1);
+    let _ = std::thread::Builder::new()
+        .name("local-schedule-action".into())
+        .spawn(move || {
+            let outcome = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .ok()
+                .zip(
+                    reqwest::Client::builder()
+                        .no_proxy()
+                        .retry(reqwest::retry::never())
+                        .redirect(reqwest::redirect::Policy::none())
+                        .connect_timeout(Duration::from_secs(2))
+                        .timeout(Duration::from_secs(10))
+                        .build()
+                        .ok(),
+                )
+                .map(|(runtime, client)| {
+                    runtime.block_on(act(&client, &options, &id, revision, action))
+                });
+            if let Some(outcome) = outcome {
+                let _ = sender.send_blocking(outcome);
+            }
+        });
+    receiver
 }

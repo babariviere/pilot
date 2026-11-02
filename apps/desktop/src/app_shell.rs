@@ -18,6 +18,7 @@ use std::{collections::BTreeMap, sync::Arc};
 pub(crate) enum Page {
     Home,
     Archive,
+    Automations,
     Missions,
     Mission(crate::mission_browser::Key),
     Inbox(Option<String>),

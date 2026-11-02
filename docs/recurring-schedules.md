@@ -19,7 +19,7 @@ is either `at` (one time) or `recurring` (this document).
 - Runs wait for a working network only, never for AC power.
 - **No overlap**: if the previous run's chat is still working, the occurrence is recorded as skipped.
 - A rule runs on **one host**: the daemon that stores it, which is the project's home host.
-- The **Inbox** shows late, skipped, missed and failed runs; **Settings** lists rules with their next due time.
+- The **Inbox** shows late, skipped, missed and failed runs; the **Automations** page lists rules with their next due time.
 
 ## 1. Where rules live
 
@@ -101,7 +101,7 @@ export interface ScheduledItem {
 - Limits: at most 50 active recurring rules per host, inside the store's existing 1,000-row and payload limits.
 
 **Time computation** runs in the daemon with `Intl` and the rule's `timeZone`, so a laptop that travels still
-runs at 9:00 in the stored zone (Settings shows the zone when it differs from the computer's). A local time that
+runs at 9:00 in the stored zone (the Automations page shows the zone when it differs from the computer's). A local time that
 does not exist on a DST spring-forward day runs at the first valid minute after it; an ambiguous fall-back
 time runs at its first instance. `at` is recomputed on load, after each claim and after edits.
 
@@ -185,14 +185,15 @@ up under the rules above when it returns.
 
 ## 7. Presentation (apps/desktop)
 
-**Automations page** (sidebar below Missions, replacing Settings → Scheduled messages), following
+**Automations page** (sidebar below Missions, replacing Settings → Scheduled messages; one-time rows and Cancel
+are described in [apps/desktop/docs/scheduled-messages.md](../apps/desktop/docs/scheduled-messages.md)), following
 the calm settings list pattern:
 
 ```text
-Schedules                                          [+ New schedule]
+Automations                                      [+ New automation]
 3 recurring · 1 one-time
 
-Needs you
+Needs attention
   ● Weekly DB performance analysis   Skipped: still running            ›
 Recurring
   ○ Weekly DB performance analysis   Mondays 09:00 · next Mon 9 Nov    ›
@@ -243,7 +244,7 @@ time zone, temporary directories, faux sessions). Full suites run in CI. Desktop
    runs and notices; detection active only while due work waits; wake sweep; Linux timer cap. Needs the
    one-shot trigger removal to land first.
 3. **Inbox and dashboard**: notice projection into Needs you, badge rules, `dismissNotice`.
-4. **Desktop app**: Settings → Schedules list, editor and details; Inbox rows.
+4. **Desktop app**: Automations page Recurring and Needs attention sections, editor and details; Inbox rows.
 
 ## 9. Open questions
 

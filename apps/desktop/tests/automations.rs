@@ -1,4 +1,4 @@
-//! Hidden production Settings surface; only owned synthetic HTTP.
+//! Hidden production Automations page; only owned synthetic HTTP.
 use gpui_kit::HeadlessAppContext;
 use std::sync::Arc;
 fn main() {
@@ -10,6 +10,8 @@ fn main() {
     cx.update(|cx| {
         gpui_kit::init(cx);
         pilot_desktop::init_appearance(cx);
+        pilot_desktop::LocalViewer::bind_keys(cx);
+        pilot_desktop::TranscriptView::bind_keys(cx);
     });
-    pilot_desktop::run_scheduled_messages_probe(&mut cx);
+    pilot_desktop::run_automations_probe(&mut cx);
 }
