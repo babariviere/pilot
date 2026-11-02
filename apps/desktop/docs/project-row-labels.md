@@ -56,6 +56,28 @@ new mounted unit covers both widths/themes and loading states, with exact
 keyboard/pointer project events. A pure context test covers full Unicode text,
 unloaded zero/stale counts and confirmed loaded counts.
 
+## Long tooltip wrapping
+
+Kit's text tooltip is one unwrapped line, so a long project name pushed its
+count suffix past the window's right edge (popover right edge 875pt in a 680pt
+window). The row now sets its own tooltip on the same Button: the unchanged
+complete label, wrapped at 360pt or the window width minus 64pt of tooltip
+chrome, whichever is smaller. The accessible label, row ID, callback, geometry
+and tokens are unchanged. Kit's styled Tooltip still draws the box; it appears at
+the pointer, like the other app-owned element tooltips, and flips to stay inside.
+
+`PILOT_NEXT_HOME_TOOLTIP_DIR` selects a hidden capture fixture: two long Unicode
+project rows at 680/1100 light/dark, each hovered past the show delay. It asserts
+the tooltip carries the full row label, its bordered box and text stay inside
+the window, the text wraps, row bounds are unchanged by hover, and a click still
+opens the exact project. Keyboard activation stays covered by the mounted unit.
+
+```sh
+env -u PILOT_NEXT_PROJECT_ROWS_DIR -u PILOT_NEXT_HOME_CONTEXT_DIR -u PILOT_NEXT_SHELL_DIR \
+  PILOT_NEXT_HOME_TOOLTIP_DIR="$PWD/evidence/local/home-tooltip" \
+  bash scripts/cargo.sh test --locked --features native-probes --test shell
+```
+
 ## Verification ledger
 
 macOS author verification, 2026-10-23. Frozen executable/test source

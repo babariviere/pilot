@@ -26,6 +26,10 @@ pub fn run_shell_probe(cx: &mut HeadlessAppContext) {
         run_home_context_probe(cx);
         return;
     }
+    if std::env::var_os("PILOT_NEXT_HOME_TOOLTIP_DIR").is_some() {
+        run_home_tooltip_probe(cx);
+        return;
+    }
     let captures = std::env::var_os("PILOT_NEXT_SHELL_DIR").map(std::path::PathBuf::from);
     if let Some(dir) = &captures {
         std::fs::create_dir_all(dir).unwrap();
@@ -759,6 +763,105 @@ fn run_home_context_probe(cx: &mut HeadlessAppContext) {
                         .unwrap();
                 }
             }
+            cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+            cx.run_until_parked();
+        }
+    }
+}
+
+// Hovers long Home project rows and checks their tooltip stays inside the window.
+fn run_home_tooltip_probe(cx: &mut HeadlessAppContext) {
+    let captures =
+        std::path::PathBuf::from(std::env::var_os("PILOT_NEXT_HOME_TOOLTIP_DIR").unwrap());
+    std::fs::create_dir_all(&captures).unwrap();
+    let long = " 日本語 👩‍💻 e\u{301} with a deliberately long synthetic project name that cannot fit one tooltip line";
+    for width in [680., 1100.] {
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            cx.update(|cx| Theme::change(mode, None, cx));
+            let projects = Arc::new(
+                crate::local_model::projects(&json!([
+                    {"id":"a","name":format!("Synthetic Atlas{long}"),"path":"/synthetic/shared"},
+                    {"id":"ab","name":format!("Synthetic Boreal{long}"),"path":"/synthetic/shared"}
+                ]))
+                .unwrap(),
+            );
+            let chats = Arc::new([
+                json!({"id":"work-ab","title":"Synthetic work","projectId":"ab","cwd":"/synthetic/shared","state":"working"}),
+                json!({"id":"ask-ab","title":"Synthetic question","projectId":"ab","cwd":"/synthetic/shared","state":"idle","outcome":"question","attentionReason":{"kind":"asks","detail":"Choose a synthetic region"}}),
+                json!({"id":"idle-a","title":"Synthetic idle","projectId":"a","cwd":"/synthetic/shared","state":"idle"}),
+            ].iter().map(|v| crate::local_model::chat(v).unwrap()).collect::<Vec<_>>());
+            let (h, v) = cx.update(|cx| {
+                gpui_kit::open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                            Default::default(),
+                            size(px(width), px(1000.)),
+                        ))),
+                        show: false,
+                        focus: false,
+                        ..Default::default()
+                    },
+                    cx,
+                    |w, cx| {
+                        cx.new(|cx| {
+                            let mut v = LocalViewer::synthetic(w, cx);
+                            v.state.projects = projects.clone();
+                            v.state.chats = chats.clone();
+                            v.state.projects_loaded = true;
+                            v.state.list_loaded = true;
+                            v.rebuild_nav(w, cx);
+                            v
+                        })
+                    },
+                )
+                .unwrap()
+            });
+            cx.update_window(h, |_, w, cx| v.update(cx, |v, cx| v.show_home(w, cx)))
+                .unwrap();
+            settle(cx, h);
+            let rows = |w: &mut gpui_kit::Window| {
+                ["a", "ab"].map(|id| w.find(format!("home-project-{id}")).bounds())
+            };
+            let before = cx.update_window(h, |_, w, _| rows(w)).unwrap();
+            for id in ["ab", "a"] {
+                let row_id = format!("home-project-{id}");
+                cx.update_window(h, |_, w, cx| w.hover(row_id.clone(), cx))
+                    .unwrap();
+                cx.advance_clock(Duration::from_secs(1));
+                settle(cx, h);
+                let file = captures.join(format!("{}-{}-{id}.png", width as u32, mode.name()));
+                cx.capture_screenshot(h).unwrap().save(&file).unwrap();
+                cx.update_window(h, |_, w, cx| {
+                    let label = w.find(row_id.clone()).label().unwrap().to_owned();
+                    let name = &projects.iter().find(|p| p.id == id).unwrap().name;
+                    assert!(label.starts_with(name.as_str()) && label.contains(" loaded chat"));
+                    // The rounded popover box; light pages share its fill.
+                    let popover: gpui_kit::Background = cx.theme().tokens.popover.into();
+                    let right = w
+                        .painted_quads()
+                        .iter()
+                        .filter(|q| q.background == popover && q.corner_radii.top_left.0 > 0.)
+                        .map(|q| q.bounds.right().0 / w.scale_factor())
+                        .fold(0., f32::max);
+                    println!("{}", json!({"fixture":"home-tooltip-v1","width":width,"mode":mode.name(),"project":id,"popover_right":right}));
+                    let tip = w.find("home-project-tooltip");
+                    let text = tip.bounds();
+                    println!("{}", json!({"text_left":f32::from(text.left()),"text_right":f32::from(text.right()),"text_height":f32::from(text.size.height)}));
+                    assert_eq!(tip.label(), Some(label.as_str()), "tooltip keeps the complete row label");
+                    assert!(right > 0. && right <= width, "tooltip box inside the window");
+                    assert!(text.left() >= px(0.) && text.right() <= px(width) && text.bottom() <= px(1000.));
+                    assert!(
+                        f32::from(text.size.height) > crate::appearance::TextRole::BODY * 2.,
+                        "a long label wraps onto several lines instead of clipping its suffix"
+                    );
+                    assert_eq!(rows(w), before, "hover leaves the row layout unchanged");
+                })
+                .unwrap();
+            }
+            cx.update_window(h, |_, w, cx| w.click("home-project-ab", cx))
+                .unwrap();
+            settle(cx, h);
+            cx.update(|cx| assert_eq!(v.read(cx).page, Page::Project("ab".into())));
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             cx.run_until_parked();
         }

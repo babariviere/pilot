@@ -90,6 +90,31 @@ fn project_row_context(
     (detail.into(), label)
 }
 
+/// Readable line length for a Home project tooltip.
+const PROJECT_TOOLTIP_WIDTH: f32 = 360.;
+/// Kit's tooltip margin, padding and border around its content, plus an edge gap.
+const PROJECT_TOOLTIP_CHROME: f32 = 64.;
+
+/// The project row's complete label, wrapped so its counts stay inside the window.
+/// Kit's text tooltip is a single line, which pushed long names' counts off-screen.
+fn project_tooltip(label: SharedString) -> impl Fn(&mut Window, &mut App) -> gpui_kit::AnyView {
+    move |w, cx| {
+        let width = (w.viewport_size().width - px(PROJECT_TOOLTIP_CHROME))
+            .min(px(PROJECT_TOOLTIP_WIDTH))
+            .max(px(0.));
+        let label = label.clone();
+        gpui_kit::component::tooltip::Tooltip::element(move |_, _| {
+            div()
+                .id("home-project-tooltip")
+                .test_support()
+                .aria_label(label.clone())
+                .max_w(width)
+                .child(label.clone())
+        })
+        .build(w, cx)
+    }
+}
+
 /// The sidebar's project picker: All projects, then your folders (with how
 /// many projects each holds), then every project.
 pub(crate) struct ProjectList {
@@ -573,29 +598,26 @@ impl Overview {
             let id = p.id.clone();
             let counts = self.counts.get(&id).copied().unwrap_or_default();
             let (detail, label) = project_row_context(p, counts, self.chats_loaded);
-            section = section.child(
-                Button::new(SharedString::from(format!("home-project-{id}")))
-                    .ghost()
-                    .small()
-                    .w_full()
-                    .min_w_0()
-                    .justify_start()
-                    .overflow_hidden()
-                    .h(px(Space::ROW))
-                    .rounded(px(crate::appearance::Radius::ROW))
-                    .border_b(crate::appearance::hairline(w))
-                    .border_color(cx.theme().border)
-                    .accessibility_label(label.clone())
-                    .tooltip(label)
-                    .child(
-                        crate::ui::ResourceLabel::new(SharedString::from(p.name.clone()))
-                            .detail(detail)
-                            .icon(crate::ui::IconRole::Project),
-                    )
-                    .on_click(
-                        cx.listener(move |_, _, _, cx| cx.emit(ShellEvent::Project(id.clone()))),
-                    ),
-            );
+            let mut row = Button::new(SharedString::from(format!("home-project-{id}")))
+                .ghost()
+                .small()
+                .w_full()
+                .min_w_0()
+                .justify_start()
+                .overflow_hidden()
+                .h(px(Space::ROW))
+                .rounded(px(crate::appearance::Radius::ROW))
+                .border_b(crate::appearance::hairline(w))
+                .border_color(cx.theme().border)
+                .accessibility_label(label.clone())
+                .child(
+                    crate::ui::ResourceLabel::new(SharedString::from(p.name.clone()))
+                        .detail(detail)
+                        .icon(crate::ui::IconRole::Project),
+                )
+                .on_click(cx.listener(move |_, _, _, cx| cx.emit(ShellEvent::Project(id.clone()))));
+            row.interactivity().tooltip(project_tooltip(label));
+            section = section.child(row);
         }
         if self.projects.len() > 8 {
             section = section.child(
