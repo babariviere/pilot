@@ -94,12 +94,8 @@ deliberately. In particular use `Surface::Card.color(cx)` on an existing editor
 root, not another padded wrapper. Preserve76pt tray/34pt editor and the opaque
 white-on-gray/light, card-on-tray/dark distinction.
 
-Popup content is opaque even with glass enabled. Use `ui::dialog` on Kit dialogs:
-Kit's default uses the page token, which is translucent with glass. The shared
-wrapper uses the opaque popover background/foreground without replacing native
-focus, dismissal, geometry or shadows. Kit popovers, menus, selects and tooltips
-already use that popover token. Translucent modal scrims are separate from their
-opaque content; page/sidebar/list glass stays unchanged.
+Popup and dialog content use the opaque popover token. Translucent modal scrims
+remain separate from their content.
 
 Message content and composer share `ui::CONVERSATION_MAX_WIDTH` (960pt outer
 cap), centered and shrinking with the available pane width. The transcript's
@@ -275,15 +271,8 @@ never loop. `state_mark::Fade` cross-fades a changed mark once (180 ms) on the
 sight never fades and reduced motion swaps at once. The `style` native target
 checks still marks, the settled fade and reduced motion.
 
-Glass: `appearance::enable_glass` requests glass before windows open;
-`follow_appearance` admits it from the actual native capability, not desktop names.
-macOS keeps its native behind-window material (unless Reduce Transparency is on).
-Protocol-capable KWin/Hyprland receive explicit blur regions. The page, sidebar
-and list retain their frosted, milky wash. Cards, the composer tray/editor,
-popovers, buttons and code stay opaque. Never stack the page tint under the sidebar.
-Elsewhere, and in offscreen probes, every surface stays solid.
-See [native glass](native-glass.md) for request lifecycle, fallback and the separate
-visible compositor qualification boundary.
+Window, page, sidebar and list surfaces use the opaque app-owned palette in both
+appearances. Ordinary selection washes, overlays and image alpha remain unchanged.
 
 `transition::Transition` is the one-shot entrance helper: it runs on the executor
 clock (settled by probe clock advances), requests frames only while running and is
@@ -328,8 +317,7 @@ new row fades in place, and a removed row leaves at once (no ghost or targets)
 while its neighbours close the gap. Rows that keep their relative order slide;
 the fewest others pass over them. What a passing row covers (rows and section
 captions) is clipped away instead of painted over, so every row keeps the surface
-it rests on, translucent glass included; an opaque fill there flashed pale over
-the glass sidebar. A moving row's own controls move with it, and it blocks the
+it rests on, without painting over the sidebar. A moving row's own controls move with it, and it blocks the
 List's slot click beneath it, so a click there never opens another chat; the
 wheel still scrolls. Reversals start
 from shown positions. First loads, scope/search rebuilds, restored order and
@@ -337,7 +325,7 @@ explicit folds use natural geometry; resize and reduced motion snap. The order
 itself is unchanged: user activity only, never agent activity. The `style`
 target's `sidebar_reorder_probe` checks painted positions against the final
 layout, compares rendered frames of moving rows with their resting surface over
-opaque and simulated glass sidebars (no OS blur), and reports offscreen CPU draw
+opaque sidebars over a painted desktop, and reports offscreen CPU draw
 cost, not visible smoothness.
 
 The public attention hint and exact question hint each reuse `composer_height`
@@ -462,7 +450,7 @@ The sidebar's trailing hairline is a drag handle (`resize_handle` with
 Its width defaults to 232pt (184pt below 800pt windows), drags between 184 and
 400pt and always leaves the conversation 480pt; window resizes clamp it without
 forgetting your width. Double-click restores the default. The width is saved in
-`sidebar-v1.json` once a drag settles. Rows, scroll, focus and glass are untouched.
+`sidebar-v1.json` once a drag settles. Rows, scroll, focus and surfaces are untouched.
 The `workbench` native target checks drag limits, window clamping and restart.
 
 Navigation, scope choices and footer use the same 12pt outer inset, one-rem

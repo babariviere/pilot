@@ -2611,10 +2611,8 @@ impl Render for LocalViewer {
             window,
             cx,
         ));
-        let glass = crate::appearance::glass(cx);
         div().map(menu_routing::window_commands).id("desktop-root").track_focus(&self.root_focus).test_support().relative().h_flex().items_stretch().size_full().min_w_0()
-            // Over glass the sidebar and page are separate tints, never stacked.
-            .when(!glass,|this|this.bg(cx.theme().background)).text_color(cx.theme().foreground)
+            .bg(cx.theme().background).text_color(cx.theme().foreground)
             .capture_key_down(cx.listener(|v,e:&gpui_kit::KeyDownEvent,w,cx|{
                 if v.restart_pending {cx.stop_propagation();return;}
                 // An inline queue composition keeps its keys; nothing else is fenced.
@@ -2688,7 +2686,6 @@ impl Render for LocalViewer {
                 d
             }))
             .child(div().id("main-pane").h_flex().items_stretch().flex_1().min_w_0().min_h_0().h_full()
-                .when(glass,|this|this.bg(cx.theme().background))
                 // Paint-only entrance: a short fade and 6pt rise, no layout change.
                 .child(div().relative().top(px(6.*(1.-entrance))).opacity(0.4+0.6*entrance)
                     .h_flex().items_stretch().flex_1().min_w_0().min_h_0().h_full().child(

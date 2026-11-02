@@ -1,6 +1,4 @@
-//! Production root over a synthetic backdrop: glass tints, opaque reading
-//! surfaces and the calm page entrance. Offscreen; the OS blur itself is not
-//! rendered here, so captures show the tints over an already-soft backdrop.
+//! Opaque production surfaces and calm page entrance over a painted backdrop.
 use super::*;
 use gpui_kit::{
     Bounds, HeadlessAppContext, WindowBounds, WindowOptions,
@@ -82,12 +80,6 @@ pub fn run_glass_probe(cx: &mut HeadlessAppContext) {
     if let Some(d) = &captures {
         std::fs::create_dir_all(d).unwrap();
     }
-    let glass = cx.update(|cx| {
-        if std::env::var_os("PILOT_NEXT_GLASS_SIMULATE").is_some() {
-            crate::appearance::simulate_glass_for_probe(true, cx);
-        }
-        crate::appearance::glass(cx)
-    });
     for width in [680., 1100.] {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
             cx.update(|cx| Theme::change(mode, None, cx));
@@ -156,7 +148,7 @@ pub fn run_glass_probe(cx: &mut HeadlessAppContext) {
             if let Some(dir) = &captures {
                 shot.save(dir.join(name("chat"))).unwrap();
             }
-            let (sidebar, editor, card, opaque_sidebar) = cx
+            let (sidebar, editor, card, opaque_sidebar, opaque_page) = cx
                 .update_window(h, |_, w, cx| {
                     let rgba = |c: gpui_kit::Hsla| {
                         let c: gpui_kit::Rgba = c.into();
@@ -168,6 +160,7 @@ pub fn run_glass_probe(cx: &mut HeadlessAppContext) {
                         w.find("composer-input").bounds(),
                         rgba(crate::appearance::card(cx)),
                         rgba(gpui_kit::Rgba::try_from(p.sidebar).unwrap().into()),
+                        rgba(gpui_kit::Rgba::try_from(p.page).unwrap().into()),
                     )
                 })
                 .unwrap();
@@ -186,11 +179,14 @@ pub fn run_glass_probe(cx: &mut HeadlessAppContext) {
                 f32::from(sidebar.left()) + 8.,
                 f32::from(sidebar.bottom()) - 120.,
             );
-            if glass {
-                assert_ne!(empty, opaque_sidebar, "sidebar lets the backdrop through");
-            } else {
-                assert_eq!(empty, opaque_sidebar, "no glass: solid sidebar");
-            }
+            assert_eq!(empty, opaque_sidebar, "sidebar hides the painted backdrop");
+            let page = pixel(f32::from(sidebar.right()) + 2., 758.);
+            assert!(
+                page.iter()
+                    .zip(opaque_page)
+                    .all(|(a, b)| a.abs_diff(b) <= 2),
+                "page hides the painted backdrop: {page:?} vs {opaque_page:?}"
+            );
             // Calm entrance: a paint-only rise that settles exactly.
             let before = cx
                 .update_window(h, |_, w, cx| {
@@ -237,7 +233,7 @@ pub fn run_glass_probe(cx: &mut HeadlessAppContext) {
             }
             println!(
                 "{}",
-                json!({"width":width,"mode":mode.name(),"glass":glass,"sidebar_pixel":empty,"opaque_editor":true,"entrance_rise":f32::from(before - after)})
+                json!({"width":width,"mode":mode.name(),"sidebar_pixel":empty,"opaque_editor":true,"entrance_rise":f32::from(before - after)})
             );
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             cx.run_until_parked();

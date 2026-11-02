@@ -423,7 +423,7 @@ mod visual_session;
 mod visual_slider;
 mod visual_wire;
 pub use appearance::{
-    ChromeAssets, enable_glass, follow_appearance, init_appearance, window_background,
+    ChromeAssets, follow_appearance, init_appearance, window_background,
 };
 
 mod queued_message;

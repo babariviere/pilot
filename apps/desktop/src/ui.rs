@@ -103,7 +103,7 @@ impl Surface {
 pub fn surface(role: Surface, cx: &App) -> Div {
     div().bg(role.color(cx))
 }
-/// Opaque popup chrome; Kit's default dialog background is the glass page token.
+/// Opaque popup chrome; use the popover token for dialog content.
 /// The dialog retains its native geometry, shadow, focus and dismissal behavior.
 pub(crate) fn dialog(
     dialog: gpui_kit::component::dialog::Dialog,

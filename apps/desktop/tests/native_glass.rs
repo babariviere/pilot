@@ -1,10 +1,10 @@
-//! Hidden native request/lifecycle checks, NOT proof of visible backdrop blur.
+//! Hidden native opaque-window and appearance lifecycle checks.
 #[cfg(target_os = "macos")]
 mod mac {
     use gpui_kit::component::{ActiveTheme, Theme, ThemeMode};
     use gpui_kit::{
-        AppContext, Bounds, Context, IntoElement, ParentElement, Render, Styled, Window,
-        WindowBackgroundAppearance, WindowBounds, WindowOptions, div, point, px, size,
+        AppContext, Context, IntoElement, Render, Window, WindowBackgroundAppearance,
+        WindowOptions, div, px, size,
     };
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use std::ffi::{c_char, c_void};
@@ -151,11 +151,10 @@ mod mac {
             gpui_kit::init(cx);
             pilot_desktop::init_appearance(cx);
             cx.spawn(async move |cx| {
-                // First prove the real opaque, non-opted-in request path.
-                for requested in [false, true, true] {
+                // Check recreated opaque windows and appearance changes.
+                for _ in 0..2 {
                     let notifications = std::rc::Rc::new(std::cell::Cell::new(0));
                     let handle = cx.update(|cx| {
-                        if requested { pilot_desktop::enable_glass(cx); }
                         let (handle, _) = gpui_kit::open_window(
                             WindowOptions { show: false, focus: false, ..Default::default() },
                             cx,
@@ -165,10 +164,7 @@ mod mac {
                                 window.observe_window_appearance(move |_, _| {
                                     notifications.set(notifications.get() + 1);
                                 }).detach();
-                                let background = if requested && window.supports_background_blur() {
-                                    WindowBackgroundAppearance::Blurred
-                                } else { WindowBackgroundAppearance::Opaque };
-                                inspect(window, background, false);
+                                inspect(window, WindowBackgroundAppearance::Opaque, false);
                                 cx.new(|_| Fixture)
                             },
                         ).unwrap();
@@ -193,166 +189,23 @@ mod mac {
                         // not a polling loop or a visible/activated test window.
                         cx.background_executor().timer(std::time::Duration::from_millis(30)).await;
                         handle.update(cx, |_, window, cx| {
-                            let blurred = requested && window.supports_background_blur();
-                            inspect(window, if blurred { WindowBackgroundAppearance::Blurred } else { WindowBackgroundAppearance::Opaque }, false);
-                            assert_eq!(cx.theme().background.a < 1., blurred);
+                            inspect(window, WindowBackgroundAppearance::Opaque, false);
+                            assert_eq!(cx.theme().background.a, 1.);
                             assert_eq!(cx.theme().is_dark(), mode == ThemeMode::Dark);
                         }).unwrap();
                     }
                     handle.update(cx, |_, window, _| window.remove_window()).unwrap();
                 }
-                println!("hidden AppKit material, inactive state, opaque fallback, theme/accessibility notifications, resize mask, input view and window recreation passed; visible blur unqualified");
+                println!("hidden AppKit opaque window, theme/accessibility notifications, resize mask, input view and recreation passed");
                 cx.update(|cx| cx.quit());
             }).detach();
-        });
-    }
-
-    struct Pattern;
-    impl Render for Pattern {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            div()
-                .relative()
-                .size_full()
-                .bg(gpui_kit::white())
-                .children((0..190).map(|index| {
-                    let color = [0xe44060, 0x305de0, 0x29b070, 0xffd035][(index / 24) % 4];
-                    div()
-                        .absolute()
-                        .left(px(index as f32 * 6.))
-                        .top_0()
-                        .w(px(6.))
-                        .h_full()
-                        .bg(gpui_kit::rgb(if index % 2 == 0 { color } else { 0xffffff }))
-                }))
-        }
-    }
-    struct Comparison {
-        label: &'static str,
-        opaque: bool,
-    }
-    impl Render for Comparison {
-        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            use gpui_kit::component::StyledExt as _;
-            let mut page = cx.theme().background;
-            if self.opaque {
-                page.a = 1.;
-            }
-            div()
-                .v_flex()
-                .size_full()
-                .bg(if self.opaque {
-                    page
-                } else {
-                    cx.theme().transparent
-                })
-                .text_color(cx.theme().foreground)
-                .child(div().p_3().bg(cx.theme().popover).child(self.label))
-                .child(div().flex_1().child("No app tint"))
-                .child(div().flex_1().bg(page).child("Approved page tint"))
-        }
-    }
-
-    /// Explicitly opt-in visible compositor comparison, never run by CI.
-    pub fn visible() {
-        gpui_kit::application().run(|cx| {
-            gpui_kit::init(cx);
-            pilot_desktop::init_appearance(cx);
-            pilot_desktop::enable_glass(cx);
-            pilot_desktop::TranscriptView::bind_keys(cx);
-            let bounds = Bounds::centered(None, size(px(1140.), px(700.)), cx);
-            gpui_kit::open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    focus: false,
-                    ..Default::default()
-                },
-                cx,
-                |window, cx| {
-                    window.set_window_title("Known background: sharp 6pt stripes");
-                    cx.new(|_| Pattern)
-                },
-            )
-            .unwrap();
-            let mut handles = Vec::new();
-            for (index, (label, background)) in [
-                ("Native material", WindowBackgroundAppearance::Blurred),
-                (
-                    "Plain transparency control",
-                    WindowBackgroundAppearance::Transparent,
-                ),
-                ("Opaque control", WindowBackgroundAppearance::Opaque),
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let (handle, _) = gpui_kit::open_window(
-                    WindowOptions {
-                        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
-                            bounds.origin + point(px(20. + index as f32 * 375.), px(85.)),
-                            size(px(350.), px(550.)),
-                        ))),
-                        focus: false,
-                        ..Default::default()
-                    },
-                    cx,
-                    |window, cx| {
-                        if background == WindowBackgroundAppearance::Blurred {
-                            pilot_desktop::follow_appearance(window, cx);
-                        } else {
-                            window.set_background_appearance(background);
-                        }
-                        window.set_window_title(label);
-                        println!("{label}: page_alpha={}", cx.theme().background.a);
-                        cx.new(|_| Comparison {
-                            label,
-                            opaque: background == WindowBackgroundAppearance::Opaque,
-                        })
-                    },
-                )
-                .unwrap();
-                handles.push((handle, background));
-            }
-            cx.spawn(async move |cx| {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(250))
-                    .await;
-                for (handle, background) in handles {
-                    handle
-                        .update(cx, |_, window, _| {
-                            inspect(
-                                window,
-                                if background == WindowBackgroundAppearance::Blurred
-                                    && !window.supports_background_blur()
-                                {
-                                    WindowBackgroundAppearance::Opaque
-                                } else {
-                                    background
-                                },
-                                true,
-                            );
-                        })
-                        .unwrap();
-                }
-            })
-            .detach();
-            cx.on_window_closed(|cx, _| {
-                if cx.windows().is_empty() {
-                    cx.quit();
-                }
-            })
-            .detach();
-            cx.activate(true);
         });
     }
 }
 
 fn main() {
     #[cfg(target_os = "macos")]
-    if std::env::args().any(|arg| arg == "--visible") {
-        mac::visible();
-    } else {
-        mac::run();
-    }
+    mac::run();
     #[cfg(not(target_os = "macos"))]
-    panic!("this target inspects AppKit; Wayland request fixtures are in gpui-pre-linux");
+    panic!("this target inspects AppKit");
 }

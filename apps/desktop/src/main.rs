@@ -120,7 +120,6 @@ fn main() {
         .run(move |cx| {
             gpui_kit::init(cx);
             pilot_desktop::init_appearance(cx);
-            pilot_desktop::enable_glass(cx);
             TranscriptView::bind_keys(cx);
             LocalViewer::bind_keys(cx);
             #[cfg(target_os = "macos")]
