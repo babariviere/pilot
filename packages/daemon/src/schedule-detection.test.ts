@@ -344,7 +344,8 @@ test("due at dispatch refreshes cached reachability, then catches up online with
 		target: { kind: "chat", spawn: { cwd: home, message: "At deadline" } },
 	});
 	await drain();
-	assert.equal(f.detector.online, true);
+	assert.equal(f.detector.online, false);
+	assert.equal(f.probes, 0, "future deadlines do not activate reachability");
 	f.reach(false);
 	f.clock.advance(1000);
 	await drain();

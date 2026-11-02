@@ -95,6 +95,7 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 	online = false;
 	private active = false;
 	private scheduleActive = false;
+	private calendarActive = false;
 	private agentsActive = false;
 	private wakeActive = false;
 	private generation = 0;
@@ -150,6 +151,11 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 	private emit(event: ScheduleTriggerEvent): void {
 		for (const listener of this.listeners) listener(event);
 	}
+	setCalendarActive(active: boolean): void {
+		if (this.calendarActive === active) return;
+		this.calendarActive = active;
+		this.updateWakeActivity();
+	}
 	setActive(active: boolean): void {
 		this.scheduleActive = active;
 		this.updateActive();
@@ -194,7 +200,7 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 	}
 	/** Agent recovery needs reachability, not idle wake/display subprocess sampling. */
 	private updateWakeActivity(): void {
-		const active = this.active && this.scheduleActive;
+		const active = this.calendarActive || (this.active && this.scheduleActive);
 		if (active === this.wakeActive) return;
 		this.wakeActive = active;
 		this.sampleGeneration++;
@@ -209,7 +215,7 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 		if (active) {
 			this.disposePower = this.power?.subscribePower((state) => this.acceptPower(state));
 			this.power?.setPowerActive(true);
-			void this.checkWake();
+			if (!this.calendarActive) void this.checkWake();
 		} else {
 			this.power?.setPowerActive(false);
 			void this.wakeProcesses.close();
@@ -226,7 +232,7 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 			this.wakeAbort?.abort();
 			void this.wakeProcesses.close();
 			this.observePower(state.sleepAt, state.fullWake);
-		} else if (wasAvailable) {
+		} else if (wasAvailable && !this.calendarActive) {
 			this.previous = undefined;
 			void this.checkWake();
 		}
@@ -241,7 +247,7 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 		this.fullSleep = sleepAt;
 		this.invalidateOnline();
 		this.emit({ type: "wake", full: true });
-		void this.refreshOnline();
+		if (this.active) void this.refreshOnline();
 	}
 	private invalidateOnline(): void {
 		this.probeGeneration++;
@@ -255,7 +261,7 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 		this.failures = 0;
 	}
 	private async checkWake(): Promise<void> {
-		if (!this.wakeActive || this.helperAvailable) return;
+		if (!this.wakeActive || this.helperAvailable || this.calendarActive) return;
 		const generation = this.generation;
 		const sampleGeneration = ++this.sampleGeneration;
 		const abort = new AbortController();
@@ -303,7 +309,6 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 	}
 	/** Fresh validation before a due network-gated dispatch; coalesces with any in-flight probe. */
 	refreshOnline(): Promise<boolean> {
-		if (!this.active) return Promise.resolve(false);
 		if (this.probing) return this.probing;
 		this.cancelProbeTimer?.();
 		this.cancelProbeTimer = undefined;
@@ -318,8 +323,7 @@ export class ScheduleDetection implements ScheduleTriggerSource {
 			} catch {
 				// A failed probe means unreachable, not a detector failure or an unhandled rejection.
 			}
-			if (!this.active || generation !== this.generation || probeGeneration !== this.probeGeneration)
-				return this.online;
+			if (generation !== this.generation || probeGeneration !== this.probeGeneration) return this.online;
 			const initial = this.knownOnline === undefined || this.knownOnline === reachable;
 			const changed = this.online !== reachable || this.knownOnline === undefined;
 			this.knownOnline = reachable;

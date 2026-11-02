@@ -437,7 +437,8 @@ test("nearest at deadline uses a fake clock, defers offline, and cancels timers 
 	assert.equal(f.clock.timers.size, 1);
 	f.triggers.online = false;
 	await f.service.signal({ type: "online", online: false });
-	assert.equal(f.clock.timers.size, 0);
+	assert.equal(f.clock.timers.size, 1, "offline future deadlines still arm one timer");
+	assert.equal(f.triggers.active, false, "no probes until work is due");
 	f.clock.advance(5000);
 	assert.equal(f.service.require(second.id).state, "pending");
 	await f.restart();

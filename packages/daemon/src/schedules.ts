@@ -5,6 +5,7 @@ import type {
 	ScheduleHome,
 	SchedulePatch,
 	ScheduleRequest,
+	ScheduleRun,
 	ScheduleTarget,
 	SpawnRequest,
 } from "@pilot/protocol";
@@ -28,6 +29,8 @@ export interface ScheduleTriggerSource {
 	subscribe(listener: (event: ScheduleTriggerEvent) => void): () => void;
 	/** Detection can suspend its probes when no pending schedules remain. */
 	setActive?(active: boolean): void;
+	/** Helper wake events only, without subprocess wake sampling. */
+	setCalendarActive?(active: boolean): void;
 }
 export interface ScheduleClock {
 	now(): number;
@@ -44,7 +47,7 @@ const clock: ScheduleClock = {
 export interface ScheduleDispatch {
 	spawn(request: SpawnRequest): Promise<{ id: string }>;
 	send(id: string, message: string, mode: "followUp", requestId: string): Promise<void>;
-	get(id: string): { projectId?: string } | undefined;
+	get(id: string): { projectId?: string; working?: boolean } | undefined;
 }
 export interface ScheduleServiceDeps {
 	sessions: ScheduleDispatch;
@@ -55,11 +58,15 @@ export interface ScheduleServiceDeps {
 	triggers?: ScheduleTriggerSource;
 	automationsEnabled?: () => boolean;
 	home?: ScheduleHome;
+	paused?: () => boolean;
+	subscribeAdmission?: (listener: () => void) => () => void;
+	platform?: string;
 }
 /** One serial dispatcher. No detection/polling here; one nearest-deadline timer while online. */
 export class ScheduleService {
 	private readonly time: ScheduleClock;
 	private online = false;
+	private sleeping = false;
 	private started = false;
 	private stopped = false;
 	private tail: Promise<void> = Promise.resolve();
@@ -96,6 +103,7 @@ export class ScheduleService {
 					void this.signal(event).catch((error) => console.warn(`pilotd: schedule trigger: ${error}`));
 				}),
 			);
+		if (this.deps.subscribeAdmission) this.disposers.push(this.deps.subscribeAdmission(() => this.requestSweep()));
 		this.requestSweep();
 	}
 	private enqueue(work: () => Promise<void>): Promise<void> {
@@ -119,48 +127,201 @@ export class ScheduleService {
 		}).catch((error) => {
 			this.sweepQueued = false;
 			console.warn(`pilotd: schedule dispatch: ${error}`);
+			this.arm();
 		});
 	}
-	/** Injectable fast path for daemon detectors (not an HTTP endpoint). Only online state matters. */
+	/** Injectable daemon detector events, never an HTTP dispatch endpoint. */
 	signal(event: ScheduleTriggerEvent): Promise<void> {
 		if (!this.started || this.stopped) return Promise.reject(new ServiceUnavailable("Scheduler not running"));
 		if (this.queued >= 64) return Promise.reject(new ServiceUnavailable("Scheduler busy; retry shortly"));
 		if (event.type === "online") this.online = event.online;
-		return this.enqueue(() => this.sweep());
+		if (event.type === "sleep") this.sleeping = true;
+		if (event.type === "wake" && event.full) this.sleeping = false;
+		return this.enqueue(async () => {
+			try {
+				await this.sweep();
+			} finally {
+				this.arm();
+			}
+		});
+	}
+	private activeItems() {
+		return this.store.pendingItems().filter((item) => item.trigger === "at" || this.deps.automationsEnabled?.());
+	}
+	private unavailable(): boolean {
+		return this.stopped || (this.deps.paused ? this.deps.paused() : this.sleeping);
 	}
 	private async sweep(): Promise<void> {
 		this.cancelTimer?.();
 		this.cancelTimer = undefined;
-		const pending = this.store.pendingItems();
-		if (this.online && this.deps.triggers?.refreshOnline && pending.some((item) => item.at! <= this.time.now()))
-			this.online = await this.deps.triggers.refreshOnline();
+		const pending = this.activeItems();
+		this.deps.triggers?.setCalendarActive?.(pending.length > 0);
+		if (this.unavailable()) {
+			this.arm();
+			return;
+		}
+		// Evaluate expiry even offline. Refresh once per sweep, only if an occurrence could run.
+		let needsNetwork = false;
 		for (const item of pending) {
-			if (this.stopped) break;
-			if (!this.online) continue;
-			if (item.trigger === "at" && item.at! <= this.time.now()) {
-				try {
-					const current = this.store.require(item.id);
-					if (current.state === "pending" && current.revision === item.revision) await this.fire(current);
-				} catch (error) {
-					if (!(error instanceof NotFound)) throw error;
+			if (item.at! > this.time.now()) continue;
+			const row = this.store.require(item.id);
+			if (row.revision !== item.revision || row.state !== "pending") continue;
+			if (row.trigger === "recurring") {
+				const c = new RecurrenceCalendar(row.recurrence!);
+				const due = c.latest(this.time.now());
+				if (due <= row.handledThrough!) continue;
+				if (this.time.now() >= c.periodEnd(due)) {
+					await this.finishOccurrence(row, {
+						due,
+						at: this.time.now(),
+						outcome: "missed",
+						count: c.count(row.handledThrough!, due),
+					});
+					continue;
 				}
+			}
+			needsNetwork = true;
+		}
+		if (needsNetwork && this.deps.triggers?.refreshOnline) this.online = await this.deps.triggers.refreshOnline();
+		for (const item of pending) {
+			if (this.unavailable() || !this.online) break;
+			if (item.at! > this.time.now()) continue;
+			try {
+				const current = this.store.require(item.id);
+				if (current.state !== "pending" || current.paused || current.revision !== item.revision) continue;
+				if (current.trigger === "recurring") {
+					if (this.deps.automationsEnabled?.()) await this.fireRecurring(current);
+				} else await this.fire(current);
+			} catch (error) {
+				if (!(error instanceof NotFound)) throw error;
 			}
 		}
 		this.arm();
 	}
 	private arm(): void {
-		const pending = this.store.pendingItems();
-		this.deps.triggers?.setActive?.(!this.stopped && pending.length > 0);
-		if (this.stopped || !this.online) return;
-		const next = Math.min(...pending.filter((item) => item.trigger === "at").map((item) => item.at!));
+		this.cancelTimer?.();
+		this.cancelTimer = undefined;
+		const pending = this.activeItems(),
+			now = this.time.now();
+		this.deps.triggers?.setCalendarActive?.(!this.stopped && pending.length > 0);
+		const waiting = !this.unavailable() && pending.some((item) => item.at! <= now);
+		this.deps.triggers?.setActive?.(waiting && !this.online);
+		if (this.unavailable()) return;
+		// Offline due rules also need a period-expiry timer, not an immediate retry loop.
+		const deadlines = pending.map((item) => {
+			if (item.at! > now) return item.at!;
+			if (item.trigger === "recurring")
+				return new RecurrenceCalendar(this.store.require(item.id).recurrence!).periodEnd(now);
+			return Infinity;
+		});
+		const next = Math.min(...deadlines);
 		if (Number.isFinite(next))
 			this.cancelTimer = this.time.setTimeout(
 				() => {
 					this.cancelTimer = undefined;
 					this.requestSweep();
 				},
-				Math.min(2_147_483_647, Math.max(0, next - this.time.now())),
+				Math.min(
+					this.deps.platform === "linux" || (!this.deps.platform && process.platform === "linux")
+						? 900_000
+						: 2_147_483_647,
+					Math.max(0, next - now),
+				),
 			);
+	}
+	private async finishOccurrence(item: ScheduledItem, run: ScheduleRun, paused = false): Promise<void> {
+		const noteworthy = run.late || !["started", "sent"].includes(run.outcome);
+		await this.store.replace(item, {
+			...item,
+			state: "pending",
+			handledThrough: run.due,
+			at: new RecurrenceCalendar(item.recurrence!).next(run.due),
+			claimedAt: undefined,
+			updatedAt: this.time.now(),
+			runs: [...(item.runs ?? []), run].slice(-10),
+			notice: noteworthy ? run : undefined,
+			sessionId: run.sessionId ?? item.sessionId,
+			paused: paused ? true : item.paused,
+			error: paused ? run.error : undefined,
+		});
+	}
+	private async fireRecurring(item: ScheduledItem): Promise<void> {
+		if (this.unavailable() || !this.deps.automationsEnabled?.()) return;
+		const calendar = new RecurrenceCalendar(item.recurrence!);
+		const due = calendar.latest(this.time.now());
+		if (due <= item.handledThrough!) return;
+		const count = calendar.count(item.handledThrough!, due);
+		if (this.time.now() >= calendar.periodEnd(due)) {
+			await this.finishOccurrence(item, { due, at: this.time.now(), outcome: "missed", count });
+			return;
+		}
+		let claimed: ScheduledItem;
+		try {
+			claimed = await this.store.replace(item, {
+				...item,
+				state: "dispatching",
+				handledThrough: due,
+				claimedAt: this.time.now(),
+				updatedAt: this.time.now(),
+			});
+		} catch (error) {
+			if (error instanceof Conflict || error instanceof NotFound) return;
+			throw error;
+		}
+		const run: ScheduleRun = { due, at: this.time.now(), outcome: "failed", ...(count > 1 ? { count } : {}) };
+		let permanentlyMissing = false;
+		try {
+			// Gates can change while SQLite commits. Consume the claim, never admit across a pause/disable.
+			if (this.unavailable() || !this.deps.automationsEnabled?.())
+				throw new Error("Dispatch interrupted before admission");
+			try {
+				this.deps.projects.require(claimed.projectId!);
+			} catch {
+				permanentlyMissing = true;
+				throw new NotFound("Project was removed");
+			}
+			const priorId =
+				claimed.target.kind === "message"
+					? claimed.target.sessionId
+					: (claimed.runs?.findLast((run) => !!run.sessionId)?.sessionId ?? claimed.sessionId);
+			const previous = priorId ? this.deps.sessions.get(priorId) : undefined;
+			if (claimed.target.kind === "message" && !previous) {
+				permanentlyMissing = true;
+				throw new NotFound("Target chat was deleted");
+			}
+			if (previous?.working) {
+				run.outcome = "skipped_running";
+				run.sessionId = priorId;
+			} else {
+				run.at = this.time.now();
+				const late = run.at - due > 300_000;
+				const prefix = late ? lateScheduleLine(claimed.title, due, run.at, calendar) + "\n" : "";
+				if (claimed.target.kind === "chat") {
+					const date = new Date(calendar.day(due)).toISOString().slice(0, 10);
+					run.sessionId = (
+						await this.deps.sessions.spawn({
+							...claimed.target.spawn,
+							title: `${claimed.title} · ${date}`,
+							message: prefix + claimed.target.spawn.message,
+						})
+					).id;
+					run.outcome = "started";
+				} else {
+					run.sessionId = claimed.target.sessionId;
+					await this.deps.sessions.send(
+						run.sessionId,
+						prefix + claimed.target.message,
+						"followUp",
+						`schedule:${claimed.id}:${due}`,
+					);
+					run.outcome = "sent";
+				}
+				if (late) run.late = true;
+			}
+		} catch (error) {
+			run.error = (error instanceof Error ? error.message : String(error)).slice(0, 1000);
+		}
+		await this.finishOccurrence(claimed, run, permanentlyMissing);
 	}
 	private async fire(item: ScheduledItem): Promise<void> {
 		if (this.stopped) return;
@@ -315,6 +476,7 @@ export class ScheduleService {
 		this.cancelTimer?.();
 		for (const dispose of this.disposers.splice(0)) dispose();
 		this.deps.triggers?.setActive?.(false);
+		this.deps.triggers?.setCalendarActive?.(false);
 		await this.tail;
 	}
 	private assertOpen(): void {
@@ -464,4 +626,27 @@ export class ScheduleService {
 			sessionId,
 		};
 	}
+}
+
+// Attribute text only; escape user-supplied titles so the envelope remains one line.
+function lateScheduleLine(title: string, due: number, at: number, calendar: RecurrenceCalendar): string {
+	const escapeAttribute = (s: string) =>
+		s.replace(
+			/[&<>"\r\n]/g,
+			(c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "\r": " ", "\n": " " })[c]!,
+		);
+	const stamp = (instant: number) => {
+		const wall = calendar.local(instant),
+			offset = Math.round((wall - Math.floor(instant / 60_000) * 60_000) / 60_000);
+		const sign = offset < 0 ? "-" : "+",
+			abs = Math.abs(offset);
+		return (
+			new Date(wall).toISOString().slice(0, 16) +
+			sign +
+			String(Math.floor(abs / 60)).padStart(2, "0") +
+			":" +
+			String(abs % 60).padStart(2, "0")
+		);
+	};
+	return `<schedule rule="${escapeAttribute(title)}" due="${stamp(due)}" started="${stamp(at)}">Started late: Pilot was off, asleep or offline when this was due.</schedule>`;
 }

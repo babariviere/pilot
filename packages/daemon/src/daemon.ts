@@ -306,6 +306,15 @@ const schedules = new ScheduleService(scheduleStore, {
 	triggers: scheduleDetection,
 	automationsEnabled: () => chatSettings.automationsEnabled(),
 	home: { daemonId: hello.daemonId, lineageId: hello.lineageId! },
+	paused: () => !!sessions.powerPause,
+	subscribeAdmission: (listener) => {
+		const stopSettings = chatSettings.onChange(listener);
+		const stopPower = power?.onChange(listener);
+		return () => {
+			stopSettings();
+			stopPower?.();
+		};
+	},
 });
 await schedules.load();
 sessions.setScheduledMessages(schedules);
