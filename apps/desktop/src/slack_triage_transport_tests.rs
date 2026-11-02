@@ -190,18 +190,35 @@ async fn unconfirmed_patches_are_unknown_and_sent_once() {
 }
 
 #[tokio::test]
-async fn excerpts_and_polls_keep_pilotd_reasons() {
+async fn threads_and_polls_keep_pilotd_reasons() {
     let s = server();
-    s.state.lock().unwrap().excerpts.insert(
+    s.state.lock().unwrap().threads.insert(
         "m1".into(),
-        json!({"itemId":"m1","author":"Ana","text":"Bonjour 日本 👩‍💻\nline two","truncated":true}),
+        json!({"itemId":"m1","more":true,"messages":[
+            {"ts":"1700000000.000100","author":"Ana","text":"Bonjour 日本 👩‍💻\nline two","truncated":true},
+            {"ts":"1700000100.000200","text":"","truncated":false}]}),
     );
-    let e = excerpt(&client(), &s.options, "m1").await.unwrap();
-    assert_eq!(e.author.as_deref(), Some("Ana"));
-    assert_eq!(e.text, "Bonjour 日本 👩‍💻\nline two");
-    assert!(e.truncated);
+    let thread = thread(&client(), &s.options, "m1").await.unwrap();
+    assert!(thread.more);
+    let [parent, reply] = &thread.messages[..] else {
+        panic!("{thread:?}")
+    };
+    assert_eq!(parent.author.as_deref(), Some("Ana"));
+    assert_eq!(parent.text, "Bonjour 日本 👩‍💻\nline two");
+    assert!(parent.truncated);
+    assert_eq!(parent.at(), Some(1_700_000_000_000));
+    assert!(reply.author.is_none() && reply.text.is_empty());
+    s.state.lock().unwrap().threads.insert(
+        "m3".into(),
+        json!({"itemId":"other","more":false,"messages":[{"ts":"1.000001","text":"x","truncated":false}]}),
+    );
     assert_eq!(
-        excerpt(&client(), &s.options, "m2").await,
+        crate::slack_triage_transport::thread(&client(), &s.options, "m3").await,
+        Err("Couldn't load this message.".into()),
+        "another message's thread is never shown"
+    );
+    assert_eq!(
+        crate::slack_triage_transport::thread(&client(), &s.options, "m2").await,
         Err("Couldn't read this message from Slack.".into())
     );
     assert_eq!(poll(&client(), &s.options, "p1").await, PollOutcome::Done);

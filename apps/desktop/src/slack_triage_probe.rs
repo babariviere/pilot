@@ -2,8 +2,9 @@
 //! accounts, settings, services or app actions; links go to a capturing opener.
 use super::*;
 use crate::{
-    slack_triage::{ExcerptState, Save, Status},
+    slack_triage::{Save, Status, ThreadState},
     slack_triage_fixture::{Reply, Server, item, project, source},
+    slack_triage_view::{Layout, SlackBoard},
 };
 use gpui_kit::{
     AnyWindowHandle, Bounds, HeadlessAppContext, WindowBounds, WindowOptions,
@@ -73,6 +74,20 @@ fn choose(cx: &mut HeadlessAppContext, h: AnyWindowHandle, trigger: &str, label:
     .unwrap();
     settle(cx, h);
 }
+fn click(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &str) {
+    let id = SharedString::from(id.to_owned());
+    cx.update_window(h, |_, w, cx| w.click(id, cx)).unwrap();
+    settle(cx, h);
+}
+fn press(cx: &mut HeadlessAppContext, h: AnyWindowHandle, key: &str) {
+    cx.update_window(h, |_, w, cx| w.press(key, cx)).unwrap();
+    settle(cx, h);
+}
+fn present(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &str) -> bool {
+    let id = SharedString::from(id.to_owned());
+    cx.update_window(h, |_, w, _| w.try_find(id).is_some())
+        .unwrap()
+}
 fn fixture(now: u64) -> Server {
     let hour = 3_600_000;
     let mut linked = item(
@@ -84,6 +99,7 @@ fn fixture(now: u64) -> Server {
         now - 2 * hour,
     );
     linked["sessionIds"] = json!(["chat-linked"]);
+    linked["slack"]["label"] = json!("Product");
     let mut waiting = item(
         "m4",
         "p1",
@@ -130,25 +146,32 @@ fn fixture(now: u64) -> Server {
             noise,
         ],
     );
-    s.state.lock().unwrap().excerpts.insert(
+    let parent = (now - 2 * hour) / 1000;
+    s.state.lock().unwrap().threads.insert(
         "m1".into(),
-        json!({"itemId":"m1","author":"Ana","text":"Safari 17 shows a blank page after Pay.\nRepro: open checkout, press Pay 日本語.","truncated":false}),
+        json!({"itemId":"m1","more":false,"messages":[
+            {"ts":format!("{parent}.000100"),"author":"Ana","truncated":false,
+             "text":"Safari 17 shows a blank page after Pay.\nRepro: open checkout, press Pay 日本語."},
+            {"ts":format!("{}.000200", parent + 600),"author":"Ben","truncated":false,
+             "text":"Same on iOS. Started after Tuesday's release."},
+            {"ts":format!("{}.000300", parent + 1200),"author":"Ana","truncated":false,
+             "text":"Thanks, I'll attach a HAR."}]}),
     );
     s
 }
 fn writes(s: &Server) -> Vec<(String, String, Value)> {
     s.state.lock().unwrap().writes()
 }
-fn board(v: &Entity<LocalViewer>, cx: &App) -> Entity<crate::slack_triage_view::SlackBoard> {
+fn slack(v: &Entity<LocalViewer>, cx: &App) -> Entity<SlackBoard> {
     v.read(cx).inbox.read(cx).slack.clone()
 }
-fn excerpt_reads(s: &Server) -> usize {
+fn thread_reads(s: &Server) -> usize {
     s.state
         .lock()
         .unwrap()
         .seen
         .iter()
-        .filter(|(_, p, _)| p.ends_with("/excerpt"))
+        .filter(|(_, p, _)| p.ends_with("/thread"))
         .count()
 }
 
@@ -178,7 +201,7 @@ pub fn run_slack_triage_probe(cx: &mut HeadlessAppContext) {
                     WindowOptions {
                         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                             Default::default(),
-                            size(px(width), px(720.)),
+                            size(px(width), px(760.)),
                         ))),
                         show: false,
                         focus: false,
@@ -221,9 +244,7 @@ pub fn run_slack_triage_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             cx.update(|cx| assert_eq!(cx.theme().is_dark(), mode == ThemeMode::Dark));
             settle(cx, h);
-            cx.update_window(h, |_, w, cx| w.click("nav-inbox", cx))
-                .unwrap();
-            settle(cx, h);
+            click(cx, h, "nav-inbox");
             assert!(
                 s.state.lock().unwrap().seen.is_empty(),
                 "the Chats tab reads nothing from Slack triage"
@@ -234,114 +255,144 @@ pub fn run_slack_triage_probe(cx: &mut HeadlessAppContext) {
                 assert!(
                     w.try_find("slack-loading").is_some(),
                     "loading is not empty"
-                );
+                )
             })
             .unwrap();
             until(cx, h, "first read", |cx| {
-                let b = board(&v, cx);
+                let b = slack(&v, cx);
                 let b = b.read(cx);
                 b.board.is_some() && !b.busy
             });
-            cx.update_window(h, |_, w, cx| {
-                let b = board(&v, cx);
+            cx.update(|cx| {
+                let b = slack(&v, cx);
+                let b = b.read(cx);
                 assert_eq!(
-                    b.read(cx).probe_rows(),
+                    b.probe_rows(),
                     ["m1", "m3", "m2", "m4", "m5"],
                     "severity then age; the hiding label stays behind Show hidden"
                 );
-                for section in ["open", "in_progress", "waiting", "done"] {
-                    let id = SharedString::from(format!("slack-section-{section}"));
-                    assert!(w.try_find(id).is_some(), "{section}");
+                assert_eq!(b.probe_column(Status::Open), ["m1", "m2"]);
+                assert_eq!(b.layout, Layout::Board, "the board is the default");
+            });
+            if wide {
+                for id in [
+                    "slack-board",
+                    "slack-column-open",
+                    "slack-column-in_progress",
+                    "slack-column-waiting",
+                    "slack-column-done",
+                    "slack-card-m1",
+                    "slack-card-m5",
+                    "slack-layout-board",
+                ] {
+                    assert!(present(cx, h, id), "{id}");
                 }
-                assert!(w.try_find("slack-section-dismissed").is_none());
-                // Two projects in scope: no single-project Sync, project-named budget notice.
-                assert!(w.try_find("slack-sync").is_none());
-                assert!(w.try_find("slack-source-1").is_some());
+                assert!(!present(cx, h, "slack-column-dismissed"));
+            } else {
+                // The board needs room: narrow windows list one status per tab.
+                for id in [
+                    "slack-status-tabs",
+                    "slack-tab-open",
+                    "slack-tab-done",
+                    "slack-row-m1",
+                ] {
+                    assert!(present(cx, h, id), "{id}");
+                }
+                assert!(!present(cx, h, "slack-board") && !present(cx, h, "slack-layout-board"));
+                click(cx, h, "slack-tab-in_progress");
+                assert!(present(cx, h, "slack-row-m3") && !present(cx, h, "slack-row-m1"));
+                capture(cx, h, captures.as_deref(), width, mode, "tab-in-progress");
+                click(cx, h, "slack-tab-open");
+            }
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("slack-source-1").is_some(), "Boreal's budget");
+                assert!(w.try_find("slack-sync").is_none(), "two projects: no Sync");
                 let page = w.find("inbox-page").bounds();
                 let toolbar = w.find("slack-toolbar").bounds();
                 assert!(toolbar.left() >= page.left() && toolbar.right() <= page.right());
-                let count = w.find("slack-count").bounds();
-                assert!(count.right() <= toolbar.right() && count.size.width > px(0.));
             })
             .unwrap();
-            assert_eq!(excerpt_reads(&s), 0, "opening reads no Slack message");
-            capture(cx, h, captures.as_deref(), width, mode, "list");
+            assert_eq!(thread_reads(&s), 0, "opening reads no Slack thread");
+            capture(cx, h, captures.as_deref(), width, mode, "overview");
 
-            // Status filter, then back to every status.
-            choose(cx, h, "slack-status-filter", "Done");
-            cx.update(|cx| assert_eq!(board(&v, cx).read(cx).probe_rows(), ["m5"]));
-            capture(cx, h, captures.as_deref(), width, mode, "filter-done");
-            choose(cx, h, "slack-status-filter", "Show hidden (1)");
-            cx.update(|cx| assert_eq!(board(&v, cx).read(cx).probe_rows(), ["m5"]));
-            choose(cx, h, "slack-status-filter", "All statuses");
+            // Hidden labels stay behind the filter menu.
+            choose(cx, h, "slack-filter", "Show hidden (1)");
             cx.update(|cx| {
                 assert_eq!(
-                    board(&v, cx).read(cx).probe_rows(),
-                    ["m1", "m3", "m2", "m6", "m4", "m5"]
+                    slack(&v, cx).read(cx).probe_column(Status::Open),
+                    ["m1", "m2", "m6"]
                 )
             });
-            choose(cx, h, "slack-status-filter", "Show hidden (1)");
+            choose(cx, h, "slack-filter", "Show hidden (1)");
 
-            // Keyboard selection; the excerpt is read only once its detail shows.
+            // Keyboard: arrows select without reading; Return opens the inspector and its thread.
             cx.update_window(h, |_, w, cx| {
-                v.update(cx, |v, cx| v.inbox.update(cx, |i, cx| i.focus(w, cx)));
-                w.press("down", cx);
+                v.update(cx, |v, cx| v.inbox.update(cx, |i, cx| i.focus(w, cx)))
             })
             .unwrap();
-            settle(cx, h);
-            cx.update(|cx| {
-                assert_eq!(board(&v, cx).read(cx).selected.as_deref(), Some("m1"));
+            press(cx, h, "down");
+            cx.update(|cx| assert_eq!(slack(&v, cx).read(cx).selected.as_deref(), Some("m1")));
+            if wide {
+                press(cx, h, "right");
+                cx.update(|cx| assert_eq!(slack(&v, cx).read(cx).selected.as_deref(), Some("m3")));
+                press(cx, h, "left");
+                cx.update(|cx| assert_eq!(slack(&v, cx).read(cx).selected.as_deref(), Some("m1")));
+            }
+            assert_eq!(thread_reads(&s), 0, "selection alone reads nothing");
+            press(cx, h, "enter");
+            until(cx, h, "thread", |cx| {
+                matches!(
+                    slack(&v, cx).read(cx).probe_thread("m1"),
+                    Some(ThreadState::Loaded(_))
+                )
             });
-            if !wide {
-                assert_eq!(excerpt_reads(&s), 0, "no detail, no Slack read");
-                cx.update_window(h, |_, w, cx| w.press("enter", cx))
-                    .unwrap();
-                settle(cx, h);
-                cx.update_window(h, |_, w, _| {
+            assert_eq!(thread_reads(&s), 1);
+            cx.update_window(h, |_, w, cx| {
+                for id in [
+                    "slack-detail",
+                    "slack-properties",
+                    "slack-message-0",
+                    "slack-message-2",
+                ] {
+                    assert!(w.try_find(id).is_some(), "{id}");
+                }
+                if wide {
+                    let inspector = w.find("slack-inspector").bounds();
+                    let board = w.find("slack-board").bounds();
+                    assert!(
+                        board.right() <= inspector.left(),
+                        "board beside the inspector"
+                    );
+                } else {
                     assert!(w.try_find("slack-back").is_some());
                     assert!(
                         w.try_find("slack-list").is_none(),
-                        "detail replaces the list"
+                        "inspector replaces the list"
                     );
-                })
-                .unwrap();
-            }
-            until(cx, h, "excerpt", |cx| {
-                matches!(
-                    board(&v, cx).read(cx).probe_excerpt("m1"),
-                    Some(ExcerptState::Loaded(_))
-                )
-            });
-            assert_eq!(excerpt_reads(&s), 1);
-            cx.update_window(h, |_, w, cx| {
-                assert!(w.try_find("slack-excerpt-text").is_some());
-                let title = w.find("slack-detail-title").bounds();
-                let detail = w.find("slack-detail").bounds();
-                assert!(title.left() >= detail.left() && title.right() <= detail.right());
-                if wide {
-                    let list = w.find("slack-list").bounds();
-                    assert!(list.right() <= detail.left(), "side by side");
                 }
                 w.click("slack-open", cx);
                 w.click("slack-copy", cx);
             })
             .unwrap();
             settle(cx, h);
-            let url = "https://acme.slack.com/archives/C1/p".to_owned();
             {
                 let opened = opened.lock().unwrap();
                 assert_eq!(opened.len(), 1);
-                assert!(opened[0].starts_with(&url) && opened[0].ends_with("000100?team=T1"));
+                assert!(opened[0].starts_with("https://acme.slack.com/archives/C1/p"));
+                assert!(opened[0].ends_with("000100?team=T1"), "team kept");
             }
             cx.update(|cx| {
                 let copied = cx.read_from_clipboard().and_then(|c| c.text()).unwrap();
-                assert_eq!(copied, opened.lock().unwrap()[0], "exact link, team kept");
+                assert_eq!(copied, opened.lock().unwrap()[0], "exact link");
             });
-            capture(cx, h, captures.as_deref(), width, mode, "detail");
+            capture(cx, h, captures.as_deref(), width, mode, "inspector");
 
-            // An explicit status change sends one narrow override and shows pilotd's copy.
+            // Choosing a value from a property's menu sends one narrow override and shows
+            // pilotd's copy.
             choose(cx, h, "slack-field-status", "Done");
-            until(cx, h, "saved", |cx| board(&v, cx).read(cx).saves.is_empty());
+            until(cx, h, "status saved", |cx| {
+                slack(&v, cx).read(cx).saves.is_empty()
+            });
             assert_eq!(
                 writes(&s),
                 [(
@@ -351,83 +402,96 @@ pub fn run_slack_triage_probe(cx: &mut HeadlessAppContext) {
                 )]
             );
             cx.update(|cx| {
-                let b = board(&v, cx);
+                let b = slack(&v, cx);
                 let b = b.read(cx);
-                let m1 = b.board.as_ref().unwrap().item("m1").unwrap();
-                assert_eq!(m1.triage.status, Status::Done);
+                assert_eq!(
+                    b.board.as_ref().unwrap().item("m1").unwrap().triage.status,
+                    Status::Done
+                );
+                assert!(b.open, "the inspector keeps the message it moved");
             });
+            if wide {
+                // Dragging a card to another column changes its status.
+                cx.update_window(h, |_, w, cx| {
+                    w.drag_to("slack-card-m2", "slack-column-in_progress", cx)
+                })
+                .unwrap();
+                until(cx, h, "drop saved", |cx| {
+                    slack(&v, cx).read(cx).saves.is_empty()
+                });
+                assert_eq!(
+                    writes(&s)[1],
+                    (
+                        "PATCH".to_owned(),
+                        "/api/tracked-items/m2".to_owned(),
+                        json!({"slack":{"status":"in_progress"}})
+                    )
+                );
+                cx.update(|cx| {
+                    assert_eq!(
+                        slack(&v, cx).read(cx).probe_column(Status::InProgress),
+                        ["m3", "m2"]
+                    )
+                });
+                capture(cx, h, captures.as_deref(), width, mode, "board-after-drop");
+            } else {
+                choose(cx, h, "slack-field-severity", "High");
+                until(cx, h, "severity saved", |cx| {
+                    slack(&v, cx).read(cx).saves.is_empty()
+                });
+                assert_eq!(writes(&s)[1].2, json!({"slack":{"severity":"high"}}));
+            }
 
             // The exact linked chat opens; coming back keeps the Slack tab.
-            cx.update_window(h, |_, w, cx| w.click("slack-open-chat", cx))
-                .unwrap();
-            settle(cx, h);
+            click(cx, h, "slack-open-chat");
             cx.update(|cx| {
                 let view = v.read(cx);
                 assert_eq!(view.page, Page::Chat);
                 assert_eq!(view.selected.as_deref(), Some("chat-linked"));
             });
-            cx.update_window(h, |_, w, cx| w.click("nav-inbox", cx))
-                .unwrap();
-            settle(cx, h);
+            click(cx, h, "nav-inbox");
             cx.update(|cx| assert_eq!(v.read(cx).inbox.read(cx).tab, crate::inbox::Tab::Slack));
             if !wide {
-                cx.update_window(h, |_, w, cx| w.click("slack-back", cx))
-                    .unwrap();
-                settle(cx, h);
+                click(cx, h, "slack-back");
             }
 
             // An unconfirmed write is Unknown, shown beside the message and never resent.
             s.reply(
                 "PATCH",
-                "/api/tracked-items/m2",
+                "/api/tracked-items/m4",
                 Reply::status(Some(500), json!({"error":"Synthetic store failure"})),
             );
-            cx.update_window(h, |_, w, cx| w.click("slack-row-m2", cx))
-                .unwrap();
-            settle(cx, h);
-            cx.update_window(h, |_, w, cx| w.click("slack-dismiss", cx))
-                .unwrap();
+            if wide {
+                // The board takes the width back when the inspector closes.
+                click(cx, h, "slack-close");
+                click(cx, h, "slack-card-m4");
+            } else {
+                click(cx, h, "slack-tab-waiting");
+                click(cx, h, "slack-row-m4");
+            }
+            choose(cx, h, "slack-field-label", "Product");
             until(cx, h, "unknown", |cx| {
-                matches!(
-                    board(&v, cx).read(cx).saves.get("m2"),
-                    Some(Save::Unknown(_))
-                ) && !board(&v, cx).read(cx).busy
+                let b = slack(&v, cx);
+                let b = b.read(cx);
+                matches!(b.saves.get("m4"), Some(Save::Unknown(_))) && !b.busy
             });
-            settle(cx, h);
-            cx.update_window(h, |_, w, _| assert!(w.try_find("slack-save").is_some()))
-                .unwrap();
-            assert_eq!(writes(&s).len(), 2, "Unknown is never resent");
+            assert!(present(cx, h, "slack-save"));
+            assert_eq!(writes(&s).len(), 3, "Unknown is never resent");
+            assert_eq!(writes(&s)[2].2, json!({"slack":{"label":"Product"}}));
             capture(cx, h, captures.as_deref(), width, mode, "unknown");
-            s.clear("PATCH", "/api/tracked-items/m2");
+            s.clear("PATCH", "/api/tracked-items/m4");
 
             if wide {
-                // Board columns: left and right cross statuses with the selection.
-                cx.update_window(h, |_, w, cx| w.click("slack-layout-board", cx))
-                    .unwrap();
-                settle(cx, h);
-                cx.update_window(h, |_, w, cx| {
-                    for column in ["open", "in_progress", "waiting", "done"] {
-                        let id = SharedString::from(format!("slack-column-{column}"));
-                        assert!(w.try_find(id).is_some(), "{column}");
-                    }
-                    w.press("right", cx);
-                })
-                .unwrap();
-                settle(cx, h);
-                cx.update(|cx| assert_eq!(board(&v, cx).read(cx).selected.as_deref(), Some("m3")));
-                capture(cx, h, captures.as_deref(), width, mode, "board");
-                cx.update_window(h, |_, w, cx| w.click("slack-layout-list", cx))
-                    .unwrap();
-                settle(cx, h);
+                // The list layout puts one status per tab beside the same inspector.
+                click(cx, h, "slack-layout-list");
+                assert!(present(cx, h, "slack-status-tabs") && present(cx, h, "slack-inspector"));
+                capture(cx, h, captures.as_deref(), width, mode, "list");
+                click(cx, h, "slack-close");
+                assert!(!present(cx, h, "slack-inspector"));
+                click(cx, h, "slack-layout-board");
             } else {
-                cx.update_window(h, |_, w, cx| w.press("escape", cx))
-                    .unwrap();
-                settle(cx, h);
-                cx.update_window(h, |_, w, _| {
-                    assert!(w.try_find("slack-detail").is_none());
-                    assert!(w.try_find("slack-list").is_some());
-                })
-                .unwrap();
+                press(cx, h, "escape");
+                assert!(!present(cx, h, "slack-detail") && present(cx, h, "slack-list"));
             }
 
             // The Inbox project filter scopes the board; one project offers an ordinary sync.
@@ -436,15 +500,13 @@ pub fn run_slack_triage_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             until(cx, h, "scoped read", |cx| {
-                let b = board(&v, cx);
+                let b = slack(&v, cx);
                 let b = b.read(cx);
                 !b.busy && b.probe_rows() == ["m5"]
             });
-            cx.update_window(h, |_, w, cx| {
-                assert!(w.try_find("slack-source-0").is_some(), "budget notice");
-                w.click("slack-sync", cx);
-            })
-            .unwrap();
+            assert!(present(cx, h, "slack-source-0"), "budget notice");
+            cx.update_window(h, |_, w, cx| w.click("slack-sync", cx))
+                .unwrap();
             until(cx, h, "sync", |_| {
                 writes(&s).iter().any(|(m, _, _)| m == "POST")
             });
@@ -473,28 +535,23 @@ pub fn run_slack_triage_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             until(cx, h, "identity refusal", |cx| {
-                let b = board(&v, cx);
+                let b = slack(&v, cx);
                 let b = b.read(cx);
                 b.error.is_some() && !b.busy
             });
-            cx.update_window(h, |_, w, _| assert!(w.try_find("slack-stale").is_some()))
-                .unwrap();
-            cx.update(|cx| assert_eq!(board(&v, cx).read(cx).probe_rows(), ["m5"]));
+            assert!(present(cx, h, "slack-stale"));
+            cx.update(|cx| assert_eq!(slack(&v, cx).read(cx).probe_rows(), ["m5"]));
             capture(cx, h, captures.as_deref(), width, mode, "stale");
-            assert_eq!(
-                writes(&s).len(),
-                3,
-                "only the explicit change, the Unknown attempt and the sync"
-            );
+            assert_eq!(writes(&s).len(), 4, "three explicit changes and one sync");
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             cx.run_until_parked();
             println!(
                 "{}",
-                json!({"width":width,"mode":mode.name(),"rows_sections_filters":true,
-                    "keyboard_detail_excerpt":true,"exact_link_copy":true,"narrow_override_saved":true,
-                    "exact_chat":true,"unknown_not_resent":true,"board_or_escape":true,
-                    "project_scope_unforced_sync":true,"identity_refused_stale":true,
-                    "writes":3,"native_offscreen":true})
+                json!({"width":width,"mode":mode.name(),"board_default":wide,"status_tabs":!wide,
+                    "hidden_filter":true,"keyboard":true,"thread_on_open_only":true,
+                    "exact_link_copy":true,"segment_change":true,"drag_to_column":wide,
+                    "exact_chat":true,"unknown_not_resent":true,"project_scope_unforced_sync":true,
+                    "identity_refused_stale":true,"writes":4,"native_offscreen":true})
             );
         }
     }

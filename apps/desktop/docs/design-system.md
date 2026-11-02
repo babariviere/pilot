@@ -60,10 +60,11 @@ and project/mission filter menus. It keeps the shared full registered inventory
 and passive history admission separate from writable chat actions. See
 [Archive coverage](archive.md).
 
-The **Inbox Slack** tab reuses the Inbox column, a Chats/Slack `ButtonGroup`,
-Kit Lists (status sections, or one per board column when wide), `ResourceLabel`
-rows with a trailing severity dot (critical/high only) and Kit dropdown menus for
-filters and triage fields. See [Slack triage](slack-triage.md).
+The **Inbox Slack** tab uses the pane's width: a kanban of tray-surface columns with
+card-surface cards (drag between columns), or a Kit List under status tabs made of
+ghost Buttons with an underline, and an inspector whose triage values are a quiet
+label/value list: ghost Buttons showing the value (chevron on hover) that open checked
+Kit dropdown menus. See [Slack triage](slack-triage.md).
 
 The read-only **Scheduled messages** Settings page uses the same column, a native
 Kit List and literal selectable Details. Refresh only reads the bounded Local

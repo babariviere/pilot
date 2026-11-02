@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { SlackExcerpt, TrackedItem, TrackingJson } from "@pilot/protocol";
+import type { SlackExcerpt, SlackThread, TrackedItem, TrackingJson } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import type { ModelCatalog } from "./models.ts";
 import { parseSlackClassification, type SlackClassification, type SlackClassifierContext } from "./slack-classifier.ts";
@@ -7,6 +7,7 @@ import {
 	parseSlackPage,
 	parseSlackThread,
 	parseSlackThreadParent,
+	parseSlackThreadReplies,
 	SLACK_SEARCH_CHARS,
 	SlackFormatChanged,
 	slackExcerptText,
@@ -30,6 +31,10 @@ const THREAD_LIMIT = 30;
 /** The inspector's quote: a few lines, enough to recognize the message. Open in Slack shows the rest. */
 export const SLACK_EXCERPT_CHARS = 600;
 export const SLACK_EXCERPT_LINES = 10;
+/** The inspector's full thread: replies read at once, and bounds per message. */
+export const SLACK_THREAD_REPLIES = 100;
+export const SLACK_THREAD_CHARS = 4000;
+export const SLACK_THREAD_LINES = 200;
 /** A newly added channel starts this far back. Classification results are cached per thread. */
 const INITIAL_LOOKBACK_MS = 7 * 86_400_000;
 /** Your Slack user ID and username rarely change. One profile read a day is enough. */
@@ -487,6 +492,37 @@ function firstLine(text: string): string {
 /** Read one thread's first message for the triage inspector, only from a channel the project still tracks.
  * Plain, bounded text that is returned to the app and never stored. */
 export async function slackExcerpt(context: SourcePollContext, item: TrackedItem): Promise<SlackExcerpt> {
+	const { channel, ts } = readableThread(context, item);
+	const parent = parseSlackThreadParent(
+		// Only the parent is shown. Fetch as few replies as the tool allows.
+		await context.call("thread", { channel_id: channel, message_ts: ts, limit: 1, response_format: "detailed" }),
+		ts,
+	);
+	const { text, truncated } = slackExcerptText(parent.text, SLACK_EXCERPT_CHARS, SLACK_EXCERPT_LINES);
+	return { itemId: item.id, ...(parent.author ? { author: parent.author } : {}), text, truncated };
+}
+/** The whole thread of a Slack item, parent first, for the triage inspector. Read on demand, never stored. */
+export async function slackThread(context: SourcePollContext, item: TrackedItem): Promise<SlackThread> {
+	const { channel, ts } = readableThread(context, item);
+	const read = parseSlackThreadReplies(
+		await context.call("thread", {
+			channel_id: channel,
+			message_ts: ts,
+			limit: SLACK_THREAD_REPLIES,
+			response_format: "detailed",
+		}),
+		ts,
+		SLACK_THREAD_REPLIES,
+	);
+	const messages = [read.parent, ...read.replies].map((message) => ({
+		ts: message.ts,
+		...(message.author ? { author: message.author } : {}),
+		...slackExcerptText(message.text, SLACK_THREAD_CHARS, SLACK_THREAD_LINES),
+	}));
+	return { itemId: item.id, messages, more: read.more };
+}
+/** A Slack item's channel and thread, when its channel is still tracked (or it was added by hand). */
+function readableThread(context: SourcePollContext, item: TrackedItem): { channel: string; ts: string } {
 	const { channel, channelName, thread_ts: ts } = item.metadata;
 	if (typeof channel !== "string" || !/^[CDG][A-Z0-9]{1,199}$/.test(channel) || !slackTimestamp(ts))
 		throw new Conflict("This message can't be read from Slack");
@@ -497,13 +533,7 @@ export async function slackExcerpt(context: SourcePollContext, item: TrackedItem
 				configured === channel || (typeof channelName === "string" && configured.replace(/^#/, "") === channelName),
 		);
 	if (!tracked) throw new Conflict("This message's channel was removed from this project");
-	const parent = parseSlackThreadParent(
-		// Only the parent is shown. Fetch as few replies as the tool allows.
-		await context.call("thread", { channel_id: channel, message_ts: ts, limit: 1, response_format: "detailed" }),
-		ts,
-	);
-	const { text, truncated } = slackExcerptText(parent.text, SLACK_EXCERPT_CHARS, SLACK_EXCERPT_LINES);
-	return { itemId: item.id, ...(parent.author ? { author: parent.author } : {}), text, truncated };
+	return { channel, ts: ts as string };
 }
 /** Short, stable key. Configured entries can be up to 200 characters; the checkpoint stays small. */
 function channelKey(channel: string): string {

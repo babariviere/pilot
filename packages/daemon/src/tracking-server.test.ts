@@ -423,6 +423,8 @@ test("Linear cycle/fallback and transient prefill are exposed through the tracki
 	assert.equal((await fetch(`${root}/tracked-items/missing/prefill`)).status, 404);
 	assert.equal((await fetch(`${root}/tracked-items/${item.id}/excerpt`)).status, 409, "excerpts are Slack only");
 	assert.equal((await fetch(`${root}/tracked-items/missing/excerpt`)).status, 404);
+	assert.equal((await fetch(`${root}/tracked-items/${item.id}/thread`)).status, 409, "threads are Slack only");
+	assert.equal((await fetch(`${root}/tracked-items/missing/thread`)).status, 404);
 	assert.ok(!JSON.stringify(await items.require(item.id)).includes("description"));
 	for (const body of [{ start: true }, { start: true, sessionId: "foreign" }, { start: true, missionId: "missing" }]) {
 		const invalid = await fetch(`${root}/tracked-items/${item.id}`, {

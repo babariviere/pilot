@@ -1072,6 +1072,8 @@ export function createDaemonServer(
 					return json(res, 200, await tracking.prefill(decodeURIComponent(parts[2]!)));
 				if (parts.length === 4 && parts[3] === "excerpt" && req.method === "GET")
 					return json(res, 200, await tracking.slackExcerpt(decodeURIComponent(parts[2]!)));
+				if (parts.length === 4 && parts[3] === "thread" && req.method === "GET")
+					return json(res, 200, await tracking.slackThread(decodeURIComponent(parts[2]!)));
 				if (parts.length === 3 && req.method === "GET") {
 					const item = await tracking.items.require(decodeURIComponent(parts[2]!));
 					projects.require(item.projectId);

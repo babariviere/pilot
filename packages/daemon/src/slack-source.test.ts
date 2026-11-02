@@ -13,6 +13,7 @@ import {
 	createSlackPoller,
 	SLACK_BATCH_SIZE,
 	SLACK_EXCERPT_LINES,
+	SLACK_THREAD_REPLIES,
 	slackChannelProgress,
 } from "./slack-source.ts";
 import { SourceRateLimited, SourceSignInRequired, SourceToolError } from "./source-mcp.ts";
@@ -753,6 +754,67 @@ test("inspector excerpt is read on demand from a tracked channel, latest selecti
 	await assert.rejects(registry.slackExcerpt(linear.id), /Only Slack/);
 	await projects.update(project.id, { tracking: { slackChannels: ["C2"] } });
 	await assert.rejects(registry.slackExcerpt(a.id), /removed from this project/);
+});
+
+test("inspector thread reads the parent and replies on demand, shares the excerpt slot, and stores nothing", async (t) => {
+	const f = await fixture(t);
+	const projects = new ProjectStore(f.home);
+	await projects.load();
+	const project = await projects.create({ path: f.home, tracking: { slackChannels: ["C000000001"] } });
+	await f.store.load([project.id]);
+	const calls: Array<Record<string, unknown>> = [];
+	let gate: (() => void) | undefined;
+	const registry = new SourceRegistry(projects, f.store, {
+		call: async (_kind, tool, args, signal) => {
+			if (tool === "reactions") return { present: false };
+			if (tool === "history") return standalone("C000000001", 2, "Private body text");
+			calls.push(args);
+			const ts = String(args.message_ts);
+			if (args.limit === 1 && !gate)
+				await new Promise<void>((resolve, reject) => {
+					gate = resolve;
+					signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+				});
+			return {
+				...thread(ts, `Export fails for <https://example.test/a|account 42>.\nSecond line 日本語.`),
+				pagination_info: "There are more messages in this thread. To view the next page, use cursor: `c1`",
+			};
+		},
+	});
+	t.after(() => registry.stop());
+	registry.register(
+		"slack",
+		createSlackPoller(f.store, { classifySlack: async () => bug }, () => now),
+	);
+	assert.equal((await registry.poll(`${project.id}:slack`)).status, "ok");
+	const [a, b] = (await registry.listItems({ projectId: project.id })).items.sort((x, y) =>
+		String(x.metadata.thread_ts).localeCompare(String(y.metadata.thread_ts)),
+	);
+	assert.ok(a && b);
+	const before = JSON.stringify(await f.store.list({ projectId: project.id }));
+	// A thread request supersedes an excerpt still in flight: one slot, latest wins.
+	const pending = registry.slackExcerpt(a.id);
+	for (let i = 0; i < 200 && !gate; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+	const read = await Promise.all([assert.rejects(pending, /Superseded/), registry.slackThread(b.id)]);
+	const threadRead = read[1];
+	assert.equal(threadRead.itemId, b.id);
+	assert.equal(threadRead.more, true);
+	assert.deepEqual(
+		threadRead.messages.map((m) => [m.ts, m.author, m.text, m.truncated]),
+		[
+			[b.metadata.thread_ts, "Reporter", "Export fails for account 42.\nSecond line 日本語.", false],
+			["1791892900.000001", "Helper", "A reply that is never shown.", false],
+		],
+	);
+	assert.deepEqual(calls.at(-1), {
+		channel_id: "C000000001",
+		message_ts: b.metadata.thread_ts,
+		limit: SLACK_THREAD_REPLIES,
+		response_format: "detailed",
+	});
+	assert.equal(JSON.stringify(await f.store.list({ projectId: project.id })), before, "never stored");
+	await projects.update(project.id, { tracking: { slackChannels: ["C2"] } });
+	await assert.rejects(registry.slackThread(a.id), /removed from this project/);
 });
 
 test("a pasted Slack link adds its thread to triage from any channel, classified once and kept when untracked", async (t) => {

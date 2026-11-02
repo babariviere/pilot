@@ -1,20 +1,21 @@
-//! The Inbox's Slack tab: messages of the projects in scope as a status list or board, with
-//! a progressive detail for one message. Reads only on opening, scope or filter changes,
-//! pilotd's change signals and explicit Try again; every write is an explicit user action.
+//! The Inbox's Slack tab: a kanban board of the projects' Slack messages by status, or a list
+//! with one tab per status, plus an inspector with the full thread and direct triage controls.
+//! Reads happen on opening, scope or filter changes, pilotd's change signals and explicit
+//! retries; every write is an explicit user action on one message.
 use crate::{
     LocalOptions,
     app_icon::AppIcon,
     local_model::Chat,
     slack_triage::{
-        self as model, Board, Change, ExcerptState, Excerpts, Filter, Item, Kind, Save, Severity,
-        Status,
+        self as model, Board, Change, Filter, Item, Kind, Save, Severity, Status, ThreadState,
+        Threads,
     },
     slack_triage_transport::{self as transport, Outcome, PollOutcome},
-    ui::{self, Action, Notice, ResourceLabel, Space, Text, Tone},
+    ui::{self, Action, Notice, ResourceLabel, Space, Surface, Text, Tone},
 };
 use gpui_kit::{
     AnyElement, App, AppContext, ClipboardItem, Context, Div, Entity, EventEmitter, FocusHandle,
-    InteractiveElement, IntoElement, ParentElement, Render, ScrollStrategy, SharedString,
+    InteractiveElement, IntoElement, ParentElement, Render, ScrollHandle, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, WeakEntity, Window,
     base::SelectableText,
     component::{
@@ -29,13 +30,15 @@ use gpui_kit::{
 };
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-gpui_kit::actions!(slack_triage, [Left, Right, CloseDetail]);
+gpui_kit::actions!(slack_triage, [Up, Down, Left, Right, Open, CloseDetail]);
 
-/// Board columns and a side-by-side detail need the wide window; narrower windows list
-/// messages and open the detail in place.
+/// Below this window width the board's columns do not fit: the list shows, and the inspector
+/// replaces it instead of sitting beside it.
 const WIDE: f32 = 960.;
-const DETAIL_WIDTH: f32 = 320.;
-/// Moving through the list with the arrow keys reads only the message the selection settles on.
+/// Sized so a 1100 pt window shows all four status columns, or two beside the inspector.
+const INSPECTOR_WIDTH: f32 = 372.;
+const COLUMN_MIN: f32 = 172.;
+/// Moving through messages with the arrow keys reads only the thread the selection settles on.
 const SETTLE: Duration = Duration::from_millis(250);
 /// pilotd's change signals arrive in bursts while a sync commits.
 const COALESCE: Duration = Duration::from_millis(300);
@@ -65,47 +68,49 @@ enum Poll {
     Message(String),
 }
 
+/// A card being dragged to another column, which changes the message's status on drop.
+#[derive(Clone)]
+pub(crate) struct DraggedCard {
+    id: String,
+    title: SharedString,
+}
+impl Render for DraggedCard {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .w(px(COLUMN_MIN))
+            .p(px(Space::CONTROL))
+            .rounded(px(crate::appearance::Radius::CONTROL))
+            .bg(Surface::Card.color(cx))
+            .border_1()
+            .border_color(cx.theme().border)
+            .shadow_md()
+            .child(ui::text(Text::Body, self.title.clone()).truncate())
+    }
+}
+
+/// The list layout: the selected status tab's messages.
 pub(crate) struct Rows {
     owner: WeakEntity<SlackBoard>,
     items: Arc<Vec<Item>>,
-    sections: Vec<(Status, Vec<usize>)>,
-    /// One board column: a single status without section headers.
-    column: bool,
+    rows: Vec<usize>,
     names: Arc<HashMap<String, String>>,
     now: u64,
 }
 impl Rows {
-    fn new(owner: WeakEntity<SlackBoard>, column: bool) -> Self {
-        Self {
-            owner,
-            items: Arc::default(),
-            sections: Vec::new(),
-            column,
-            names: Arc::default(),
-            now: 0,
-        }
-    }
     fn at(&self, ix: IndexPath) -> Option<&Item> {
-        self.sections
-            .get(ix.section)
-            .and_then(|(_, rows)| rows.get(ix.row))
-            .and_then(|i| self.items.get(*i))
+        self.rows.get(ix.row).and_then(|i| self.items.get(*i))
     }
     fn index(&self, id: &str) -> Option<IndexPath> {
-        self.sections.iter().enumerate().find_map(|(s, (_, rows))| {
-            rows.iter()
-                .position(|i| self.items[*i].id == id)
-                .map(|row| IndexPath::new(row).section(s))
-        })
+        self.rows
+            .iter()
+            .position(|i| self.items[*i].id == id)
+            .map(IndexPath::new)
     }
 }
 impl ListDelegate for Rows {
     type Item = ListItem;
-    fn sections_count(&self, _: &App) -> usize {
-        self.sections.len().max(1)
-    }
-    fn items_count(&self, section: usize, _: &App) -> usize {
-        self.sections.get(section).map_or(0, |(_, rows)| rows.len())
+    fn items_count(&self, _: usize, _: &App) -> usize {
+        self.rows.len()
     }
     fn set_selected_index(
         &mut self,
@@ -116,39 +121,15 @@ impl ListDelegate for Rows {
         cx.notify();
     }
     fn section_header_height(&self, _: usize, _: &App) -> Option<gpui_kit::Pixels> {
-        self.column.then_some(px(0.))
+        Some(px(0.))
     }
     fn render_section_header(
         &mut self,
-        section: usize,
+        _: usize,
         _: &mut Window,
-        cx: &mut Context<ListState<Self>>,
+        _: &mut Context<ListState<Self>>,
     ) -> Option<impl IntoElement> {
-        if self.column {
-            return Some(div().h(px(0.)).into_any_element());
-        }
-        let (status, rows) = self
-            .sections
-            .get(section)
-            .map_or((Status::Open, 0), |(s, rows)| (*s, rows.len()));
-        Some(
-            section_label(
-                SharedString::from(format!("slack-section-{}", status.wire())),
-                status.title(),
-                rows,
-                cx,
-            )
-            .into_any_element(),
-        )
-    }
-    fn render_empty(
-        &mut self,
-        _: &mut Window,
-        cx: &mut Context<ListState<Self>>,
-    ) -> impl IntoElement {
-        div()
-            .p(px(Space::CONTROL))
-            .child(ui::text(Text::Caption, "Nothing here").text_color(cx.theme().muted_foreground))
+        Some(div().h(px(0.)))
     }
     fn render_item(
         &mut self,
@@ -193,29 +174,7 @@ impl ListDelegate for Rows {
     }
 }
 
-fn section_label(
-    id: SharedString,
-    title: &'static str,
-    count: usize,
-    cx: &App,
-) -> impl IntoElement {
-    div()
-        .id(id)
-        .test_support()
-        .h_flex()
-        .items_center()
-        .gap(px(Space::CONTROL))
-        .px(px(Space::CONTROL))
-        .py(px(Space::CONTROL))
-        .child(
-            ui::text(Text::Label, title)
-                .font_medium()
-                .text_color(cx.theme().foreground),
-        )
-        .child(ui::text(Text::Caption, count.to_string()).text_color(cx.theme().muted_foreground))
-}
-
-/// Only critical and high take a signal colour; the row's words always name the severity.
+/// Only critical and high take a signal colour; words always name the severity.
 fn severity_mark(severity: Severity, cx: &App) -> Div {
     let color = match severity {
         Severity::Critical => Some(cx.theme().danger),
@@ -229,6 +188,31 @@ fn severity_mark(severity: Severity, cx: &App) -> Div {
         .when_some(color, |d, c| d.bg(c))
 }
 
+/// A project label as a quiet hairline tag.
+fn label_tag(name: &str, cx: &App) -> Div {
+    div()
+        .flex_none()
+        .px(px(6.))
+        .rounded(px(crate::appearance::Radius::SMALL))
+        .border_1()
+        .border_color(cx.theme().border)
+        .child(ui::text(Text::Caption, SharedString::from(name.to_owned())))
+}
+
+fn caption(text: impl Into<SharedString>, cx: &App) -> Div {
+    ui::text(Text::Caption, text).text_color(cx.theme().muted_foreground)
+}
+
+fn empty_column_copy(status: Status) -> &'static str {
+    match status {
+        Status::Open => "No open messages",
+        Status::InProgress => "Nothing in progress",
+        Status::Waiting => "Nothing waiting",
+        Status::Done => "Nothing done yet",
+        Status::Dismissed => "Nothing dismissed",
+    }
+}
+
 pub(crate) struct SlackBoard {
     options: Option<LocalOptions>,
     chats: Arc<Vec<Chat>>,
@@ -239,55 +223,62 @@ pub(crate) struct SlackBoard {
     pub(crate) error: Option<&'static str>,
     pub(crate) board: Option<Arc<Board>>,
     filter: Filter,
-    layout: Layout,
+    pub(crate) layout: Layout,
+    /// The list layout's status tab.
+    pub(crate) tab: Status,
     pub(crate) selected: Option<String>,
-    pub(crate) detail: bool,
+    /// The inspector shows the selected message.
+    pub(crate) open: bool,
     wide: bool,
     visible: Arc<Vec<Item>>,
     columns: Vec<(Status, Vec<usize>)>,
+    names: Arc<HashMap<String, String>>,
     list: Entity<ListState<Rows>>,
-    /// One list per status, in `Status::ALL` order.
-    lanes: Vec<Entity<ListState<Rows>>>,
-    excerpts: Excerpts,
-    excerpt_task: Option<Task<()>>,
+    board_focus: FocusHandle,
+    detail_focus: FocusHandle,
+    /// One per status column, in `Status::ALL` order, to keep the selected card in view.
+    scrolls: Vec<ScrollHandle>,
+    threads: Threads,
+    thread_task: Option<Task<()>>,
     reload: Option<Task<()>>,
     pub(crate) saves: HashMap<String, Save>,
     polls: HashMap<String, Poll>,
-    detail_focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 impl EventEmitter<BoardEvent> for SlackBoard {}
 impl SlackBoard {
     pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let owner = cx.weak_entity();
-        let make = |column: bool, window: &mut Window, cx: &mut Context<Self>| {
-            let owner = owner.clone();
-            cx.new(|cx| ListState::new(Rows::new(owner, column), window, cx).searchable(false))
-        };
-        let list = make(false, window, cx);
-        let lanes: Vec<_> = Status::ALL.iter().map(|_| make(true, window, cx)).collect();
-        let subscriptions = std::iter::once(&list)
-            .chain(&lanes)
-            .map(|l| {
-                cx.subscribe_in(l, window, |v, list, event: &ListEvent, window, cx| {
-                    let id =
-                        |ix: &IndexPath| list.read(cx).delegate().at(*ix).map(|i| i.id.clone());
-                    match event {
-                        ListEvent::Select(ix) => {
-                            if let Some(id) = id(ix) {
-                                v.select(Some(id), window, cx);
-                            }
-                        }
-                        ListEvent::Confirm(ix) => {
-                            if let Some(id) = id(ix) {
-                                v.activate(&id, true, window, cx);
-                            }
-                        }
-                        ListEvent::Cancel => {}
+        let list = cx.new(|cx| {
+            ListState::new(
+                Rows {
+                    owner,
+                    items: Arc::default(),
+                    rows: Vec::new(),
+                    names: Arc::default(),
+                    now: 0,
+                },
+                window,
+                cx,
+            )
+            .searchable(false)
+        });
+        let rows = cx.subscribe_in(&list, window, |v, list, event: &ListEvent, window, cx| {
+            let id = |ix: &IndexPath| list.read(cx).delegate().at(*ix).map(|i| i.id.clone());
+            match event {
+                ListEvent::Select(ix) => {
+                    if let Some(id) = id(ix) {
+                        v.select(Some(id), window, cx);
                     }
-                })
-            })
-            .collect();
+                }
+                ListEvent::Confirm(ix) => {
+                    if let Some(id) = id(ix) {
+                        v.activate(&id, true, window, cx);
+                    }
+                }
+                ListEvent::Cancel => {}
+            }
+        });
         Self {
             options: None,
             chats: Arc::default(),
@@ -298,21 +289,24 @@ impl SlackBoard {
             error: None,
             board: None,
             filter: Filter::default(),
-            layout: Layout::List,
+            layout: Layout::Board,
+            tab: Status::Open,
             selected: None,
-            detail: false,
+            open: false,
             wide: false,
             visible: Arc::default(),
             columns: Vec::new(),
+            names: Arc::default(),
             list,
-            lanes,
-            excerpts: Excerpts::default(),
-            excerpt_task: None,
+            board_focus: cx.focus_handle(),
+            detail_focus: cx.focus_handle(),
+            scrolls: Status::ALL.iter().map(|_| ScrollHandle::new()).collect(),
+            threads: Threads::default(),
+            thread_task: None,
             reload: None,
             saves: HashMap::new(),
             polls: HashMap::new(),
-            detail_focus: cx.focus_handle(),
-            _subscriptions: subscriptions,
+            _subscriptions: vec![rows],
         }
     }
     pub(crate) fn options(&mut self, options: LocalOptions) {
@@ -343,7 +337,7 @@ impl SlackBoard {
             self.board = None;
             self.error = None;
             self.selected = None;
-            self.detail = false;
+            self.open = false;
             self.polls.clear();
             self.rebuild(window, cx);
         }
@@ -432,72 +426,77 @@ impl SlackBoard {
         }
         cx.notify();
     }
-    fn split(&self) -> bool {
-        self.wide && self.layout == Layout::List
-    }
     fn layout(&self) -> Layout {
         if self.wide { self.layout } else { Layout::List }
     }
+    /// The inspector sits beside the list or board; narrow windows show it instead of them.
+    fn beside(&self) -> bool {
+        self.wide
+    }
+    fn column(&self, status: Status) -> &[usize] {
+        self.columns
+            .iter()
+            .find(|(s, _)| *s == status)
+            .map_or(&[], |(_, rows)| rows.as_slice())
+    }
+    /// IDs in keyboard order: one column per status on the board, the current tab in the list.
+    fn key_columns(&self) -> Vec<Vec<String>> {
+        let ids = model::ids(&self.visible, &self.columns);
+        if self.layout() == Layout::Board {
+            return ids;
+        }
+        self.columns
+            .iter()
+            .zip(ids)
+            .filter(|((s, _), _)| *s == self.tab)
+            .map(|(_, ids)| ids)
+            .collect()
+    }
     /// Recomputes rows from the board and filters. The selection follows its message; one that
-    /// left the list gives way to its neighbour unless its detail is open.
+    /// left the view gives way to its neighbour unless the inspector holds it.
     fn rebuild(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let before = self.key_columns();
         let visible = self
             .board
             .as_ref()
             .map(|b| b.visible(&self.filter))
             .unwrap_or_default();
-        let columns = model::columns(&visible, &self.filter.statuses(&visible));
-        let before = model::ids(&self.visible, &self.columns);
-        let after = model::ids(&visible, &columns);
+        let statuses = self.filter.statuses(&visible);
+        if !statuses.contains(&self.tab) {
+            self.tab = Status::Open;
+        }
+        self.columns = model::columns(&visible, &statuses);
+        self.visible = Arc::new(visible);
+        self.names = Arc::new(self.board.as_ref().map(|b| b.names()).unwrap_or_default());
+        let after = self.key_columns();
         let listed = |id: &str| after.iter().any(|c| c.iter().any(|x| x == id));
         if let Some(selected) = self.selected.clone()
             && !listed(&selected)
         {
-            let kept = self.detail
+            let kept = self.open
                 && self
                     .board
                     .as_ref()
                     .is_some_and(|b| b.item(&selected).is_some());
             if !kept {
                 self.selected = model::successor(&before, &selected).filter(|s| listed(s));
-                self.detail = false;
+                self.open = self.open && self.selected.is_some();
             }
         }
-        let names = Arc::new(self.board.as_ref().map(|b| b.names()).unwrap_or_default());
-        let now = crate::usage_overview::now();
-        let items = Arc::new(visible);
-        self.visible = items.clone();
-        self.columns = columns;
-        let sections: Vec<_> = self
-            .columns
-            .iter()
-            .filter(|(_, rows)| !rows.is_empty())
-            .cloned()
-            .collect();
+        let (items, names) = (self.visible.clone(), self.names.clone());
+        let rows = self.column(self.tab).to_vec();
         let selected = self.selected.clone();
-        let fill = |l: &mut ListState<Rows>,
-                    sections,
-                    window: &mut Window,
-                    cx: &mut Context<ListState<Rows>>| {
+        let now = crate::usage_overview::now();
+        self.list.update(cx, |l, cx| {
             let d = l.delegate_mut();
-            d.items = items.clone();
-            d.sections = sections;
-            d.names = names.clone();
+            d.items = items;
+            d.rows = rows;
+            d.names = names;
             d.now = now;
             let ix = selected.as_deref().and_then(|id| d.index(id));
             l.set_selected_index(ix, window, cx);
             cx.notify();
-        };
-        self.list.update(cx, |l, cx| fill(l, sections, window, cx));
-        for (lane, status) in self.lanes.clone().iter().zip(Status::ALL) {
-            let rows = self
-                .columns
-                .iter()
-                .find(|(s, _)| *s == status)
-                .map(|(_, rows)| rows.clone())
-                .unwrap_or_default();
-            lane.update(cx, |l, cx| fill(l, vec![(status, rows)], window, cx));
-        }
+        });
         cx.notify();
     }
     fn select(&mut self, id: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
@@ -506,132 +505,135 @@ impl SlackBoard {
         }
         self.selected = id;
         let id = self.selected.clone();
-        for list in std::iter::once(&self.list).chain(&self.lanes) {
-            list.update(cx, |l, cx| {
-                let ix = id.as_deref().and_then(|id| l.delegate().index(id));
-                l.set_selected_index(ix, window, cx);
-            });
-        }
-        self.read_excerpt(SETTLE, window, cx);
+        self.list.update(cx, |l, cx| {
+            let ix = id.as_deref().and_then(|id| l.delegate().index(id));
+            l.set_selected_index(ix, window, cx);
+        });
+        self.reveal_card();
+        self.read_thread(SETTLE, window, cx);
         cx.notify();
     }
-    /// Click or Return: select the message and show its detail. Return in the side-by-side
-    /// layout moves focus into the detail for its controls.
+    /// Keeps the selected card in view in its column.
+    fn reveal_card(&self) {
+        let Some(id) = self.selected.as_deref() else {
+            return;
+        };
+        for (status, rows) in &self.columns {
+            if let Some(row) = rows.iter().position(|i| self.visible[*i].id == id) {
+                let ix = Status::ALL.iter().position(|s| s == status).unwrap_or(0);
+                self.scrolls[ix].scroll_to_item(row);
+            }
+        }
+    }
+    /// Click or Return: select the message and open the inspector. In a narrow window the
+    /// inspector takes the list's place and keyboard focus.
     fn activate(&mut self, id: &str, keyboard: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.select(Some(id.to_owned()), window, cx);
-        if !self.split() {
-            self.detail = true;
-            self.detail_focus.focus(window, cx);
-        } else if keyboard {
+        self.open = true;
+        if !self.beside() || keyboard && self.layout() == Layout::List {
             self.detail_focus.focus(window, cx);
         }
-        self.read_excerpt(Duration::ZERO, window, cx);
+        self.read_thread(Duration::ZERO, window, cx);
         cx.notify();
     }
     fn close_detail(&mut self, _: &CloseDetail, window: &mut Window, cx: &mut Context<Self>) {
-        self.detail = false;
+        self.open = false;
+        self.thread_task = None;
         self.focus(window, cx);
         cx.notify();
     }
-    /// The list holding the selection, else the first with messages.
-    fn current_list(&self) -> Entity<ListState<Rows>> {
-        if self.layout() == Layout::List {
-            return self.list.clone();
-        }
-        let column = self
-            .columns
-            .iter()
-            .position(|(_, rows)| {
-                rows.iter()
-                    .any(|i| Some(&self.visible[*i].id) == self.selected.as_ref())
-            })
-            .or_else(|| self.columns.iter().position(|(_, rows)| !rows.is_empty()))
-            .unwrap_or(0);
-        let status = self.columns.get(column).map_or(Status::Open, |(s, _)| *s);
-        self.lane(status)
-    }
-    fn lane(&self, status: Status) -> Entity<ListState<Rows>> {
-        let ix = Status::ALL.iter().position(|s| *s == status).unwrap_or(0);
-        self.lanes[ix].clone()
-    }
     pub(crate) fn focus(&self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.detail && !self.split() {
+        if self.open && !self.beside() {
             self.detail_focus.focus(window, cx);
+        } else if self.layout() == Layout::Board {
+            self.board_focus.focus(window, cx);
         } else {
-            self.current_list().update(cx, |l, cx| l.focus(window, cx));
+            self.list.update(cx, |l, cx| l.focus(window, cx));
         }
     }
-    fn sideways(&mut self, dx: isize, window: &mut Window, cx: &mut Context<Self>) {
-        let ids = model::ids(&self.visible, &self.columns);
-        let Some(selected) = self.selected.clone() else {
-            return;
+    /// Board keys: up and down within a column, left and right to the nearest card of the
+    /// next non-empty column. With nothing selected, any move selects the first card.
+    fn step(&mut self, dx: isize, dy: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let columns = self.key_columns();
+        let next = match self.selected.as_deref() {
+            None => columns.iter().find_map(|c| c.first().cloned()),
+            Some(selected) if dx != 0 => {
+                model::sideways(&columns, selected, dx).map(|(c, r)| columns[c][r].clone())
+            }
+            Some(selected) => columns.iter().find_map(|c| {
+                let row = c.iter().position(|id| id == selected)?;
+                let next = (row as isize + dy).clamp(0, c.len() as isize - 1) as usize;
+                Some(c[next].clone())
+            }),
         };
-        if let Some((column, row)) = model::sideways(&ids, &selected, dx) {
-            let id = ids[column][row].clone();
-            self.select(Some(id), window, cx);
-            let lane = self.lane(self.columns[column].0);
-            lane.update(cx, |l, cx| {
-                l.scroll_to_item(IndexPath::new(row), ScrollStrategy::Center, window, cx);
-                l.focus(window, cx);
-            });
+        if next.is_some() {
+            self.select(next, window, cx);
         }
+    }
+    fn up(&mut self, _: &Up, window: &mut Window, cx: &mut Context<Self>) {
+        self.step(0, -1, window, cx);
+    }
+    fn down(&mut self, _: &Down, window: &mut Window, cx: &mut Context<Self>) {
+        self.step(0, 1, window, cx);
     }
     fn left(&mut self, _: &Left, window: &mut Window, cx: &mut Context<Self>) {
-        self.sideways(-1, window, cx);
+        self.step(-1, 0, window, cx);
     }
     fn right(&mut self, _: &Right, window: &mut Window, cx: &mut Context<Self>) {
-        self.sideways(1, window, cx);
+        self.step(1, 0, window, cx);
     }
-    fn detail_visible(&self) -> bool {
-        self.split() || self.detail
+    fn open_selected(&mut self, _: &Open, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(id) = self.selected.clone() {
+            self.activate(&id, true, window, cx);
+        }
     }
-    /// Reads the selected message once its selection settles, only while its detail shows.
-    fn read_excerpt(&mut self, settle: Duration, window: &mut Window, cx: &mut Context<Self>) {
-        self.excerpt_task = None;
+    /// Reads the selected thread once the selection settles, only while the inspector shows it.
+    fn read_thread(&mut self, settle: Duration, window: &mut Window, cx: &mut Context<Self>) {
+        self.thread_task = None;
         let Some(id) = self.selected.clone() else {
             return;
         };
-        if !self.detail_visible() || !self.excerpts.needs_read(&id) {
+        if !self.open || !self.threads.needs_read(&id) {
             return;
         }
         let Some(options) = self.options.clone() else {
             return;
         };
-        self.excerpt_task = Some(cx.spawn_in(window, async move |this, cx| {
+        self.thread_task = Some(cx.spawn_in(window, async move |this, cx| {
             if !settle.is_zero() {
                 cx.background_executor().timer(settle).await;
             }
             let read = id.clone();
             let Ok(started) = this.update(cx, |v, cx| {
-                v.excerpts.set(&id, ExcerptState::Loading);
+                v.threads.set(&id, ThreadState::Loading);
                 cx.notify();
                 transport::spawn(
-                    "local-slack-triage-excerpt",
+                    "local-slack-triage-thread",
                     Duration::from_secs(35),
-                    move |client| async move { transport::excerpt(&client, &options, &read).await },
+                    move |client| async move { transport::thread(&client, &options, &read).await },
                 )
             }) else {
                 return;
             };
             let state = match started {
                 Ok(rx) => match rx.recv().await {
-                    Ok(Ok(excerpt)) => ExcerptState::Loaded(excerpt),
-                    Ok(Err(reason)) => ExcerptState::Unavailable(reason),
-                    Err(_) => ExcerptState::Unavailable("Couldn't load this message.".into()),
+                    Ok(Ok(thread)) => ThreadState::Loaded(thread),
+                    Ok(Err(reason)) => ThreadState::Unavailable(reason),
+                    Err(_) => ThreadState::Unavailable("Couldn't load this thread.".into()),
                 },
-                Err(reason) => ExcerptState::Unavailable(reason.into()),
+                Err(reason) => ThreadState::Unavailable(reason.into()),
             };
             let _ = this.update(cx, |v, cx| {
-                v.excerpts.set(&id, state);
+                v.threads.set(&id, state);
                 cx.notify();
             });
         }));
     }
-    fn retry_excerpt(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn retry_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(id) = self.selected.clone() {
-            self.excerpts
-                .set(&id, ExcerptState::Unavailable(String::new()));
-            self.read_excerpt(Duration::ZERO, window, cx);
+            self.threads
+                .set(&id, ThreadState::Unavailable(String::new()));
+            self.read_thread(Duration::ZERO, window, cx);
         }
     }
     /// One explicit triage change. A no-op choice sends nothing; one change per message at a
@@ -760,9 +762,17 @@ impl SlackBoard {
     }
     fn set_layout(&mut self, layout: Layout, window: &mut Window, cx: &mut Context<Self>) {
         self.layout = layout;
-        self.detail = false;
+        self.rebuild(window, cx);
         self.focus(window, cx);
-        cx.notify();
+    }
+    fn set_tab(&mut self, tab: Status, window: &mut Window, cx: &mut Context<Self>) {
+        self.tab = tab;
+        self.rebuild(window, cx);
+        self.list.update(cx, |l, cx| {
+            l.scroll_handle()
+                .restore_offset(gpui_kit::point(px(0.), px(0.)));
+            l.focus(window, cx);
+        });
     }
 
     #[cfg(feature = "native-probes")]
@@ -770,12 +780,20 @@ impl SlackBoard {
         self.visible.iter().map(|i| i.id.clone()).collect()
     }
     #[cfg(feature = "native-probes")]
-    pub(crate) fn probe_excerpt(&self, id: &str) -> Option<ExcerptState> {
-        self.excerpts.get(id).cloned()
+    pub(crate) fn probe_column(&self, status: Status) -> Vec<String> {
+        self.column(status)
+            .iter()
+            .map(|i| self.visible[*i].id.clone())
+            .collect()
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_thread(&self, id: &str) -> Option<ThreadState> {
+        self.threads.get(id).cloned()
     }
 }
 
 impl SlackBoard {
+    /// Status tabs (list) or the message count (board), then layout, filters and Sync.
     fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let filter = self.filter;
         let hidden = self
@@ -783,80 +801,59 @@ impl SlackBoard {
             .as_ref()
             .map_or(0, |b| b.hidden_count(filter.show_dismissed));
         let owner = cx.weak_entity();
-        let status = Button::new("slack-status-filter")
-            .ghost()
-            .small()
-            .label(filter.title())
-            .dropdown_caret(true)
-            .accessibility_label(SharedString::from(format!(
-                "Status filter: {}",
-                filter.title()
-            )))
-            .dropdown_menu(move |mut menu, _, _| {
-                let choose = |next: Filter| {
-                    let owner = owner.clone();
-                    move |_: &gpui_kit::ClickEvent, w: &mut Window, cx: &mut App| {
-                        let _ = owner.update(cx, |v, cx| v.set_filter(next, w, cx));
-                    }
-                };
-                menu = menu.item(
-                    PopupMenuItem::new("All statuses")
-                        .checked(filter.status.is_none())
-                        .on_click(choose(Filter {
-                            status: None,
-                            ..filter
-                        })),
-                );
-                for status in [
-                    Status::Open,
-                    Status::InProgress,
-                    Status::Waiting,
-                    Status::Done,
-                ] {
-                    menu = menu.item(
-                        PopupMenuItem::new(status.title())
-                            .checked(filter.status == Some(status))
-                            .on_click(choose(Filter {
-                                status: Some(status),
-                                ..filter
-                            })),
-                    );
+        let filters = ui::icon_action(
+            "slack-filter",
+            if filter.show_hidden || filter.show_dismissed {
+                "Filters (on)"
+            } else {
+                "Filters"
+            },
+            AppIcon::Filter,
+            Action::Quiet,
+        )
+        .selected(filter.show_hidden || filter.show_dismissed)
+        .dropdown_menu(move |mut menu, _, _| {
+            let choose = |next: Filter| {
+                let owner = owner.clone();
+                move |_: &gpui_kit::ClickEvent, w: &mut Window, cx: &mut App| {
+                    let _ = owner.update(cx, |v, cx| v.set_filter(next, w, cx));
                 }
-                menu = menu.separator();
-                if hidden > 0 || filter.show_hidden {
-                    menu = menu.item(
-                        PopupMenuItem::new(SharedString::from(format!("Show hidden ({hidden})")))
-                            .checked(filter.show_hidden)
-                            .on_click(choose(Filter {
-                                show_hidden: !filter.show_hidden,
-                                ..filter
-                            })),
-                    );
-                }
-                menu.item(
-                    PopupMenuItem::new("Show dismissed")
-                        .checked(filter.show_dismissed)
-                        .on_click(choose(Filter {
-                            show_dismissed: !filter.show_dismissed,
-                            ..filter
-                        })),
-                )
-            });
+            };
+            menu = menu.item(
+                PopupMenuItem::new(SharedString::from(format!("Show hidden ({hidden})")))
+                    .checked(filter.show_hidden)
+                    .disabled(hidden == 0 && !filter.show_hidden)
+                    .on_click(choose(Filter {
+                        show_hidden: !filter.show_hidden,
+                        ..filter
+                    })),
+            );
+            menu.item(
+                PopupMenuItem::new("Show dismissed")
+                    .checked(filter.show_dismissed)
+                    .on_click(choose(Filter {
+                        show_dismissed: !filter.show_dismissed,
+                        ..filter
+                    })),
+            )
+        });
         let layout = self.layout;
         let switcher = self.wide.then(|| {
             ButtonGroup::new("slack-layout")
                 .small()
-                .ghost()
+                .outline()
                 .flex_none()
                 .child(
-                    ui::action("slack-layout-list", "List", Action::Quiet)
-                        .selected(layout == Layout::List)
-                        .on_click(cx.listener(|v, _, w, cx| v.set_layout(Layout::List, w, cx))),
-                )
-                .child(
-                    ui::action("slack-layout-board", "Board", Action::Quiet)
+                    Button::new("slack-layout-board")
+                        .label("Board")
                         .selected(layout == Layout::Board)
                         .on_click(cx.listener(|v, _, w, cx| v.set_layout(Layout::Board, w, cx))),
+                )
+                .child(
+                    Button::new("slack-layout-list")
+                        .label("List")
+                        .selected(layout == Layout::List)
+                        .on_click(cx.listener(|v, _, w, cx| v.set_layout(Layout::List, w, cx))),
                 )
         });
         // Sync names one project; with several in scope, choose a project first.
@@ -882,21 +879,24 @@ impl SlackBoard {
             .loading(running)
             .on_click(cx.listener(move |v, _, w, cx| v.sync(id.clone(), w, cx)))
         });
-        let count = self.board.as_ref().map(|_| {
+        let lead = if self.layout() == Layout::List && self.board.is_some() {
+            self.status_tabs(cx).into_any_element()
+        } else {
             let n = self.visible.len();
-            ui::text(
-                Text::Caption,
-                SharedString::from(if n == 1 {
+            caption(
+                if self.board.is_none() {
+                    String::new()
+                } else if n == 1 {
                     "1 message".to_owned()
                 } else {
                     format!("{n} messages")
-                }),
+                },
+                cx,
             )
             .id("slack-count")
             .test_support()
-            .flex_none()
-            .text_color(cx.theme().muted_foreground)
-        });
+            .into_any_element()
+        };
         div()
             .id("slack-toolbar")
             .test_support()
@@ -905,25 +905,67 @@ impl SlackBoard {
             .min_w_0()
             .items_center()
             .gap_2()
-            .child(status)
+            .child(div().flex_1().min_w_0().child(lead))
             .children(switcher)
-            .child(div().flex_1())
-            .children(count)
+            .child(filters)
             .children(sync)
+    }
+    /// One tab per status: real buttons, so Tab and Return reach them, with an underline on
+    /// the current one.
+    fn status_tabs(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("slack-status-tabs")
+            .test_support()
+            .h_flex()
+            .items_end()
+            .gap_1()
+            .children(self.columns.iter().map(|(status, rows)| {
+                let status = *status;
+                let current = status == self.tab;
+                div()
+                    .v_flex()
+                    .child(
+                        Button::new(SharedString::from(format!("slack-tab-{}", status.wire())))
+                            .ghost()
+                            .small()
+                            .label(SharedString::from(format!(
+                                "{} {}",
+                                status.title(),
+                                rows.len()
+                            )))
+                            .accessibility_label(SharedString::from(format!(
+                                "{}, {} messages{}",
+                                status.title(),
+                                rows.len(),
+                                if current { ", selected" } else { "" }
+                            )))
+                            .on_click(cx.listener(move |v, _, w, cx| v.set_tab(status, w, cx))),
+                    )
+                    .child(
+                        div()
+                            .h(px(2.))
+                            .mx(px(Space::CONTROL))
+                            .rounded_full()
+                            .when(current, |d| d.bg(cx.theme().foreground)),
+                    )
+            }))
     }
     fn notices(&self, cx: &App) -> Vec<AnyElement> {
         let mut out = Vec::new();
-        let notice =
-            |id: &'static str, n: Notice| div().id(id).test_support().child(n).into_any_element();
         if let Some(error) = self.error
             && self.board.is_some()
         {
-            out.push(notice(
-                "slack-stale",
-                Notice::new("Couldn't refresh Slack messages. Showing the last report.")
-                    .detail(error)
-                    .tone(Tone::Error),
-            ));
+            out.push(
+                div()
+                    .id("slack-stale")
+                    .test_support()
+                    .child(
+                        Notice::new("Couldn't refresh Slack messages. Showing the last report.")
+                            .detail(error)
+                            .tone(Tone::Error),
+                    )
+                    .into_any_element(),
+            );
         }
         let Some(board) = &self.board else {
             return out;
@@ -966,18 +1008,17 @@ impl SlackBoard {
             }
             if p.truncated() {
                 out.push(
-                    ui::text(
-                        Text::Caption,
-                        SharedString::from(named(
+                    caption(
+                        named(
                             p,
                             format!(
                                 "Showing the latest {} of {} messages.",
                                 model::PROJECT_ITEMS,
                                 p.active_total
                             ),
-                        )),
+                        ),
+                        cx,
                     )
-                    .text_color(cx.theme().muted_foreground)
                     .into_any_element(),
                 );
             }
@@ -1029,123 +1070,229 @@ impl SlackBoard {
             )
             .into_any_element();
         }
-        if self.detail
-            && !self.split()
-            && let Some(item) = self.selected.as_deref().and_then(|id| board.item(id))
+        let item = self
+            .selected
+            .as_deref()
+            .filter(|_| self.open)
+            .and_then(|id| board.item(id));
+        if let Some(item) = item
+            && !self.beside()
         {
-            return self.detail(item, true, cx).into_any_element();
+            return self.inspector(item, true, cx).into_any_element();
         }
-        if self.visible.is_empty() {
-            let narrowed = self.filter.status.is_some();
+        let main = match self.layout() {
+            Layout::Board => self.board_view(cx).into_any_element(),
+            Layout::List => self.list_view(),
+        };
+        let Some(item) = item else {
+            return main;
+        };
+        div()
+            .h_flex()
+            .size_full()
+            .min_h_0()
+            .items_start()
+            .child(div().flex_1().min_w_0().h_full().min_h_0().child(main))
+            .child(
+                div()
+                    .id("slack-inspector")
+                    .test_support()
+                    .flex_none()
+                    .w(px(INSPECTOR_WIDTH))
+                    .h_full()
+                    .min_h_0()
+                    .ml(px(Space::SIDEBAR))
+                    .pl(px(Space::SIDEBAR + Space::META))
+                    .border_l_1()
+                    .border_color(cx.theme().border)
+                    .child(self.inspector(item, false, cx)),
+            )
+            .into_any_element()
+    }
+    fn list_view(&self) -> AnyElement {
+        if self.column(self.tab).is_empty() {
             return div()
-                .v_flex()
-                .gap(px(Space::CONTROL))
-                .child(notice(
-                    "slack-empty",
-                    if narrowed {
-                        Notice::new("No messages match").detail("Try another status.")
-                    } else {
-                        Notice::new("Nothing to triage")
-                            .detail("New messages from your Slack channels appear here after the next sync.")
-                    }
-                    .tone(Tone::Quiet),
-                ))
-                .when(narrowed, |d| {
-                    let filter = Filter { status: None, ..self.filter };
-                    d.child(
-                        ui::action("slack-clear-filter", "Show all statuses", Action::Quiet)
-                            .self_start()
-                            .on_click(cx.listener(move |v, _, w, cx| v.set_filter(filter, w, cx))),
-                    )
-                })
+                .id("slack-empty")
+                .test_support()
+                .pt(px(Space::CONTROL))
+                .child(
+                    Notice::new(empty_column_copy(self.tab))
+                        .detail("Messages from your Slack channels appear here after each sync.")
+                        .tone(Tone::Quiet),
+                )
                 .into_any_element();
         }
-        match self.layout() {
-            Layout::List => {
-                let list = div()
-                    .id("slack-list")
-                    .test_support()
-                    .flex_1()
-                    .min_w_0()
-                    .min_h_0()
-                    .h_full()
-                    .child(List::new(&self.list));
-                if !self.split() {
-                    return list.into_any_element();
-                }
-                let detail = match self.selected.as_deref().and_then(|id| board.item(id)) {
-                    Some(item) => self.detail(item, false, cx).into_any_element(),
-                    None => div()
-                        .id("slack-detail-empty")
-                        .test_support()
-                        .p(px(Space::CONTROL))
-                        .child(
-                            ui::text(Text::Caption, "Select a message to see it here.")
-                                .text_color(cx.theme().muted_foreground),
-                        )
-                        .into_any_element(),
-                };
+        div()
+            .id("slack-list")
+            .test_support()
+            .size_full()
+            .min_w_0()
+            .min_h_0()
+            .child(List::new(&self.list))
+            .into_any_element()
+    }
+    /// Columns of cards, Swift's board. Dragging a card to another column changes its status.
+    fn board_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let many = self.names.len() > 1;
+        let now = crate::usage_overview::now();
+        div()
+            .id("slack-board")
+            .test_support()
+            .track_focus(&self.board_focus)
+            .key_context("SlackBoard")
+            .on_action(cx.listener(Self::up))
+            .on_action(cx.listener(Self::down))
+            .on_action(cx.listener(Self::left))
+            .on_action(cx.listener(Self::right))
+            .on_action(cx.listener(Self::open_selected))
+            .on_action(cx.listener(Self::close_detail))
+            .h_flex()
+            .size_full()
+            .min_h_0()
+            .items_start()
+            .gap(px(Space::SIDEBAR))
+            .overflow_x_scroll()
+            .children(self.columns.iter().map(|(status, rows)| {
+                let status = *status;
+                let scroll =
+                    &self.scrolls[Status::ALL.iter().position(|s| *s == status).unwrap_or(0)];
                 div()
-                    .h_flex()
-                    .size_full()
+                    .id(SharedString::from(format!(
+                        "slack-column-{}",
+                        status.wire()
+                    )))
+                    .test_support()
+                    .v_flex()
+                    .flex_1()
+                    .min_w(px(COLUMN_MIN))
+                    .h_full()
                     .min_h_0()
-                    .items_start()
-                    .gap(px(Space::SECTION))
-                    .child(list)
+                    .rounded(px(crate::appearance::Radius::CARD))
+                    .bg(Surface::Tray.color(cx))
+                    .drag_over::<DraggedCard>(|style, _, _, cx| style.bg(cx.theme().list_active))
+                    .on_drop(cx.listener(move |v, card: &DraggedCard, w, cx| {
+                        v.change(&card.id, Change::Status(status), w, cx)
+                    }))
                     .child(
                         div()
-                            .flex_none()
-                            .w(px(DETAIL_WIDTH))
-                            .h_full()
-                            .min_h_0()
-                            .pl(px(Space::SECTION))
-                            .border_l_1()
-                            .border_color(cx.theme().border)
-                            .child(detail),
+                            .h_flex()
+                            .items_center()
+                            .gap(px(Space::CONTROL))
+                            .px(px(Space::SIDEBAR))
+                            .pt(px(Space::SIDEBAR))
+                            .pb(px(Space::CONTROL))
+                            .child(
+                                ui::text(Text::Label, status.title())
+                                    .font_medium()
+                                    .text_color(cx.theme().foreground),
+                            )
+                            .child(caption(rows.len().to_string(), cx)),
                     )
-                    .into_any_element()
-            }
-            Layout::Board => div()
-                .id("slack-board-columns")
-                .test_support()
-                .key_context("SlackBoard")
-                .on_action(cx.listener(Self::left))
-                .on_action(cx.listener(Self::right))
-                .h_flex()
-                .size_full()
-                .min_h_0()
-                .items_start()
-                .gap(px(Space::CONTROL))
-                .children(self.columns.iter().map(|(status, rows)| {
-                    div()
-                        .id(SharedString::from(format!(
-                            "slack-column-{}",
-                            status.wire()
-                        )))
-                        .test_support()
-                        .v_flex()
-                        .flex_1()
-                        .min_w_0()
-                        .h_full()
-                        .min_h_0()
-                        .child(section_label(
-                            SharedString::from(format!("slack-column-title-{}", status.wire())),
-                            status.title(),
-                            rows.len(),
-                            cx,
-                        ))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_h_0()
-                                .child(List::new(&self.lane(*status))),
-                        )
-                }))
-                .into_any_element(),
-        }
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("slack-cards-{}", status.wire())))
+                            .track_scroll(scroll)
+                            .overflow_y_scroll()
+                            .flex_1()
+                            .min_h_0()
+                            .v_flex()
+                            .gap(px(Space::CONTROL))
+                            .px(px(Space::CONTROL))
+                            .pb(px(Space::CONTROL))
+                            .when(rows.is_empty(), |d| {
+                                d.child(
+                                    div()
+                                        .px(px(Space::META))
+                                        .child(caption(empty_column_copy(status), cx)),
+                                )
+                            })
+                            .children(rows.iter().map(|i| {
+                                let item = &self.visible[*i];
+                                self.card(item, many, now, cx)
+                            })),
+                    )
+            }))
     }
-    /// One message: what it says, its triage values and the actions on it.
-    fn detail(&self, item: &Item, back: bool, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+    fn card(
+        &self,
+        item: &Item,
+        many: bool,
+        now: u64,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let selected = self.selected.as_deref() == Some(item.id.as_str());
+        let t = &item.triage;
+        let mut meta = Vec::new();
+        if many && let Some(name) = self.names.get(&item.project_id) {
+            meta.push(name.clone());
+        }
+        meta.push(item.channel());
+        meta.push(model::ago(item.updated_at, now));
+        match item.replies {
+            Some(1) => meta.push("1 reply".into()),
+            Some(n) if n > 1 => meta.push(format!("{n} replies")),
+            _ => {}
+        }
+        let reason = (t.status_title() != t.status.title()).then(|| t.status_title());
+        let id = item.id.clone();
+        let hover = cx.theme().muted_foreground.opacity(0.4);
+        let drag = DraggedCard {
+            id: item.id.clone(),
+            title: SharedString::from(item.title.clone()),
+        };
+        div()
+            .id(SharedString::from(format!("slack-card-{}", item.id)))
+            .test_support()
+            .v_flex()
+            .gap(px(Space::META))
+            .w_full()
+            .p(px(Space::SIDEBAR))
+            .rounded(px(crate::appearance::Radius::CONTROL))
+            .bg(if selected {
+                ui::selected_fill(cx)
+            } else {
+                Surface::Card.color(cx)
+            })
+            .border_1()
+            .border_color(if selected {
+                cx.theme().muted_foreground.opacity(0.6)
+            } else {
+                cx.theme().border
+            })
+            .cursor_pointer()
+            .hover(move |s| s.border_color(hover))
+            .on_click(cx.listener(move |v, _, w, cx| {
+                v.board_focus.focus(w, cx);
+                v.activate(&id, false, w, cx);
+            }))
+            .on_drag(drag, |card, _, _, cx| cx.new(|_| card.clone()))
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap(px(Space::CONTROL))
+                    .child(severity_mark(t.severity, cx))
+                    .child(caption(
+                        format!("{} · {}", t.kind.title(), t.severity.title()),
+                        cx,
+                    ))
+                    .when_some(t.label.as_deref(), |d, l| d.child(label_tag(l, cx))),
+            )
+            .child(
+                ui::text(Text::Body, SharedString::from(item.title.clone()))
+                    .line_clamp(2)
+                    .text_color(cx.theme().foreground),
+            )
+            .child(caption(meta.join(" · "), cx).truncate())
+            .when_some(reason, |d, r| d.child(caption(r, cx).truncate()))
+    }
+    /// One message: what it is, direct triage controls and the full thread.
+    fn inspector(
+        &self,
+        item: &Item,
+        back: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
         let id = item.id.clone();
         let t = &item.triage;
         let save = self.saves.get(&id);
@@ -1156,137 +1303,237 @@ impl SlackBoard {
             .and_then(|b| b.project(&item.project_id))
             .map(|p| p.project.labels.clone())
             .unwrap_or_default();
-        let names = self.board.as_ref().map(|b| b.names()).unwrap_or_default();
-        let meta = item.meta(
-            names.get(&item.project_id).map(String::as_str),
-            crate::usage_overview::now(),
-        );
-        let owner = cx.weak_entity();
-        let field = |key: &'static str,
-                     title: &'static str,
-                     value: String,
-                     choices: Vec<(String, Change, bool)>| {
-            let owner = owner.clone();
-            let id = id.clone();
-            div()
-                .h_flex()
-                .items_center()
-                .gap(px(Space::CONTROL))
-                .child(
-                    ui::text(Text::Caption, title)
-                        .w(px(64.))
-                        .flex_none()
-                        .text_color(cx.theme().muted_foreground),
-                )
-                .child(
-                    Button::new(SharedString::from(format!("slack-field-{key}")))
-                        .ghost()
-                        .small()
-                        .label(SharedString::from(value.clone()))
-                        .dropdown_caret(true)
-                        .disabled(pending)
-                        .accessibility_label(SharedString::from(format!("{title}: {value}")))
-                        .dropdown_menu(move |mut menu, _, _| {
-                            for (label, change, checked) in &choices {
-                                let (owner, id, change) =
-                                    (owner.clone(), id.clone(), change.clone());
-                                menu = menu.item(
-                                    PopupMenuItem::new(SharedString::from(label.clone()))
-                                        .checked(*checked)
-                                        .on_click(move |_, w, cx| {
-                                            let _ = owner.update(cx, |v, cx| {
-                                                v.change(&id, change.clone(), w, cx)
-                                            });
-                                        }),
-                                );
-                            }
-                            menu
-                        }),
-                )
-        };
-        let statuses = [
-            Status::Open,
-            Status::InProgress,
-            Status::Waiting,
-            Status::Done,
-            Status::Dismissed,
-        ]
-        .into_iter()
-        .map(|s| (s.title().to_owned(), Change::Status(s), t.status == s))
-        .collect();
-        let kinds = Kind::ALL
-            .into_iter()
-            .map(|k| (k.title().to_owned(), Change::Kind(k), t.kind == k))
-            .collect();
-        let severities = Severity::ALL
-            .into_iter()
-            .map(|s| (s.title().to_owned(), Change::Severity(s), t.severity == s))
-            .collect();
-        let mut label_choices = vec![("None".to_owned(), Change::Label(None), t.label.is_none())];
-        label_choices.extend(labels.iter().map(|l| {
-            (
-                l.name.clone(),
-                Change::Label(Some(l.name.clone())),
-                t.label.as_deref() == Some(l.name.as_str()),
-            )
-        }));
-        let excerpt = match self.excerpts.get(&id) {
-            Some(ExcerptState::Loaded(e)) => div()
-                .v_flex()
-                .gap(px(Space::META))
-                .when_some(e.author.clone(), |d, a| {
-                    d.child(
-                        ui::text(Text::Caption, SharedString::from(a))
-                            .font_medium()
-                            .text_color(cx.theme().muted_foreground),
-                    )
-                })
-                .child(if e.text.is_empty() {
-                    ui::text(Text::Caption, "No text, only attachments.")
-                        .text_color(cx.theme().muted_foreground)
-                        .into_any_element()
-                } else {
-                    div()
-                        .id("slack-excerpt-text")
-                        .test_support()
-                        .w_full()
-                        .min_w_0()
-                        .child(SelectableText::new(
-                            SharedString::from(format!("slack-excerpt-{id}")),
-                            SharedString::from(e.text.clone()),
-                        ))
-                        .into_any_element()
-                })
-                .when(e.truncated, |d| {
-                    d.child(
-                        ui::text(Text::Caption, "The message continues in Slack.")
-                            .text_color(cx.theme().muted_foreground),
-                    )
-                }),
-            Some(ExcerptState::Unavailable(reason)) if !reason.is_empty() => div()
-                .v_flex()
-                .gap(px(Space::META))
-                .child(
-                    ui::text(Text::Caption, SharedString::from(reason.clone()))
-                        .text_color(cx.theme().muted_foreground),
-                )
-                .child(
-                    ui::action("slack-excerpt-retry", "Try again", Action::Quiet)
-                        .self_start()
-                        .on_click(cx.listener(|v, _, w, cx| v.retry_excerpt(w, cx))),
-                ),
-            _ => div().child(
-                ui::text(Text::Caption, "Reading the message…")
-                    .text_color(cx.theme().muted_foreground),
-            ),
-        };
+        let now = crate::usage_overview::now();
+        let mut context = vec![item.channel()];
+        if let Some(name) = self.names.get(&item.project_id) {
+            context.insert(0, name.clone());
+        }
+        context.push(model::ago(item.updated_at, now));
         let chat = item
             .session_id
             .clone()
             .filter(|sid| self.chats.iter().any(|c| &c.id == sid));
         let url = crate::external_links::web(&item.url);
+        let link = item.url.clone();
+        // Quiet label/value rows: plain text that opens a checked menu on click.
+        let owner = cx.weak_entity();
+        let property = |key: &'static str,
+                        title: &'static str,
+                        value: String,
+                        mark: Option<Severity>,
+                        choices: Vec<(String, Change, bool)>| {
+            let (owner, id) = (owner.clone(), id.clone());
+            let group = SharedString::from(format!("slack-property-{key}"));
+            let trigger = Button::new(SharedString::from(format!("slack-field-{key}")))
+                .ghost()
+                .small()
+                .w_full()
+                .disabled(pending)
+                .accessibility_label(SharedString::from(format!("{title}: {value}")))
+                .child(
+                    div()
+                        .h_flex()
+                        .w_full()
+                        .min_w_0()
+                        .items_center()
+                        .gap(px(Space::CONTROL))
+                        .when_some(mark, |d, s| d.child(severity_mark(s, cx)))
+                        .child(
+                            ui::text(Text::Body, SharedString::from(value.clone()))
+                                .flex_1()
+                                .min_w_0()
+                                .truncate(),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .opacity(0.)
+                                .group_hover(group.clone(), |s| s.opacity(1.))
+                                .text_color(cx.theme().muted_foreground)
+                                .child(AppIcon::Expand.inline()),
+                        ),
+                )
+                .dropdown_menu(move |mut menu, _, _| {
+                    for (label, change, checked) in &choices {
+                        let (owner, id, change) = (owner.clone(), id.clone(), change.clone());
+                        menu = menu.item(
+                            PopupMenuItem::new(SharedString::from(label.clone()))
+                                .checked(*checked)
+                                .on_click(move |_, w, cx| {
+                                    let _ = owner
+                                        .update(cx, |v, cx| v.change(&id, change.clone(), w, cx));
+                                }),
+                        );
+                    }
+                    menu
+                });
+            div()
+                .group(group)
+                .h_flex()
+                .items_center()
+                .gap(px(Space::CONTROL))
+                .child(caption(title, cx).w(px(72.)).flex_none())
+                .child(div().flex_1().min_w_0().child(trigger))
+        };
+        let status = property(
+            "status",
+            "Status",
+            t.status.title().to_owned(),
+            None,
+            [
+                Status::Open,
+                Status::InProgress,
+                Status::Waiting,
+                Status::Done,
+            ]
+            .into_iter()
+            .map(|s| (s.title().to_owned(), Change::Status(s), t.status == s))
+            .collect(),
+        );
+        let severity = property(
+            "severity",
+            "Severity",
+            t.severity.title().to_owned(),
+            // Only signal severities carry a dot, so quiet values stay aligned.
+            matches!(t.severity, Severity::Critical | Severity::High).then_some(t.severity),
+            Severity::ALL
+                .into_iter()
+                .map(|s| (s.title().to_owned(), Change::Severity(s), t.severity == s))
+                .collect(),
+        );
+        let kind = property(
+            "type",
+            "Type",
+            t.kind.title().to_owned(),
+            None,
+            Kind::ALL
+                .into_iter()
+                .map(|k| (k.title().to_owned(), Change::Kind(k), t.kind == k))
+                .collect(),
+        );
+        // A label's effect is named in the menu, since choosing it can hide or close the message.
+        let mut label_choices = vec![(
+            "No label".to_owned(),
+            Change::Label(None),
+            t.label.is_none(),
+        )];
+        label_choices.extend(labels.iter().map(|l| {
+            let name = match l.effect {
+                model::Effect::Hide => format!("{} (hidden from Inbox)", l.name),
+                model::Effect::Close => format!("{} (closes it)", l.name),
+                model::Effect::None => l.name.clone(),
+            };
+            (
+                name,
+                Change::Label(Some(l.name.clone())),
+                t.label.as_deref() == Some(l.name.as_str()),
+            )
+        }));
+        if let Some(current) = &t.label
+            && !labels.iter().any(|l| &l.name == current)
+        {
+            label_choices.push((current.clone(), Change::Label(Some(current.clone())), true));
+        }
+        let label = property(
+            "label",
+            "Label",
+            t.label.clone().unwrap_or_else(|| "None".into()),
+            None,
+            label_choices,
+        );
+        let mut notes: Vec<String> = Vec::new();
+        if t.status_title() != t.status.title() {
+            notes.push(t.status_title());
+        }
+        if item.started && t.status != Status::Done {
+            notes.push("Marking it Done adds a done reaction in Slack.".into());
+        }
+        if let Some(note) = t.overridden_note() {
+            notes.push(note);
+        }
         let dismissed = t.status == Status::Dismissed;
-        let reason = (t.status_title() != t.status.title()).then(|| t.status_title());
+        let next = if dismissed {
+            Status::Open
+        } else {
+            Status::Dismissed
+        };
+        let dismiss_id = id.clone();
+        let header = div()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .when(back, |d| {
+                d.child(
+                    ui::icon_action(
+                        "slack-back",
+                        "Back to messages",
+                        AppIcon::Back,
+                        Action::Quiet,
+                    )
+                    .on_click(cx.listener(|v, _, w, cx| v.close_detail(&CloseDetail, w, cx))),
+                )
+            })
+            .child(
+                div()
+                    .h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .items_center()
+                    .gap(px(Space::CONTROL))
+                    .child(severity_mark(t.severity, cx))
+                    .child(caption(context.join(" · "), cx).truncate()),
+            )
+            .when_some(url, |d, url| {
+                d.child(
+                    ui::icon_action(
+                        "slack-open",
+                        "Open in Slack",
+                        AppIcon::OpenLink,
+                        Action::Quiet,
+                    )
+                    .on_click(move |_, _, cx| crate::external_links::open(&url, cx)),
+                )
+            })
+            .child(
+                ui::icon_action("slack-copy", "Copy link", AppIcon::Copy, Action::Quiet).on_click(
+                    move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(link.clone())),
+                ),
+            )
+            .when_some(chat, |d, sid| {
+                d.child(
+                    ui::icon_action(
+                        "slack-open-chat",
+                        "Open chat",
+                        AppIcon::Chats,
+                        Action::Quiet,
+                    )
+                    .on_click(
+                        cx.listener(move |_, _, _, cx| cx.emit(BoardEvent::OpenChat(sid.clone()))),
+                    ),
+                )
+            })
+            .child({
+                let (owner, id) = (cx.weak_entity(), dismiss_id.clone());
+                ui::icon_action("slack-more", "More actions", AppIcon::More, Action::Quiet)
+                    .dropdown_menu(move |menu, _, _| {
+                        let (owner, id) = (owner.clone(), id.clone());
+                        menu.item(
+                            PopupMenuItem::new(if dismissed { "Restore" } else { "Dismiss" })
+                                .disabled(pending)
+                                .on_click(move |_, w, cx| {
+                                    let _ = owner.update(cx, |v, cx| {
+                                        v.change(&id, Change::Status(next), w, cx)
+                                    });
+                                }),
+                        )
+                    })
+            })
+            .when(!back, |d| {
+                d.child(
+                    ui::icon_action("slack-close", "Close", AppIcon::Close, Action::Quiet)
+                        .on_click(cx.listener(|v, _, w, cx| v.close_detail(&CloseDetail, w, cx))),
+                )
+            });
         div()
             .id("slack-detail")
             .test_support()
@@ -1297,24 +1544,18 @@ impl SlackBoard {
             .size_full()
             .min_h_0()
             .min_w_0()
-            .gap(px(Space::SECTION))
-            .overflow_y_scroll()
-            .when(back, |d| {
-                d.child(
-                    ui::icon_action(
-                        "slack-back",
-                        "Back to messages",
-                        AppIcon::Back,
-                        Action::Quiet,
-                    )
-                    .self_start()
-                    .on_click(cx.listener(|v, _, w, cx| v.close_detail(&CloseDetail, w, cx))),
-                )
-            })
+            .gap(px(Space::CONTROL))
+            .child(header)
             .child(
                 div()
+                    .id("slack-detail-body")
+                    .test_support()
                     .v_flex()
-                    .gap(px(Space::META))
+                    .flex_1()
+                    .min_h_0()
+                    .gap(px(Space::SIDEBAR + Space::META))
+                    .overflow_y_scroll()
+                    .pb(px(Space::SECTION))
                     .child(
                         div()
                             .id("slack-detail-title")
@@ -1327,126 +1568,144 @@ impl SlackBoard {
                             )),
                     )
                     .child(
-                        ui::text(Text::Caption, SharedString::from(meta))
-                            .id("slack-detail-meta")
+                        div()
+                            .id("slack-properties")
                             .test_support()
-                            .text_color(cx.theme().muted_foreground),
-                    ),
+                            .v_flex()
+                            .gap(px(Space::META))
+                            .child(status)
+                            .child(severity)
+                            .child(kind)
+                            .child(label)
+                            .when(!notes.is_empty(), |d| {
+                                d.child(
+                                    div()
+                                        .v_flex()
+                                        .gap(px(Space::META))
+                                        .children(notes.into_iter().map(|n| caption(n, cx))),
+                                )
+                            })
+                            .when_some(save.cloned(), |d, save| {
+                                let (text, tone) = match save {
+                                    Save::Pending(_) => ("Saving…".to_owned(), Tone::Quiet),
+                                    Save::NotSent(r) | Save::Unknown(r) => (r, Tone::Error),
+                                };
+                                d.child(
+                                    div()
+                                        .id("slack-save")
+                                        .test_support()
+                                        .child(Notice::new(SharedString::from(text)).tone(tone)),
+                                )
+                            }),
+                    )
+                    .child(self.thread_view(item, cx)),
             )
-            .child(
+    }
+    /// The thread, parent first: who wrote each message, when, and its selectable text.
+    fn thread_view(&self, item: &Item, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let now = crate::usage_overview::now();
+        let body = match self.threads.get(&item.id) {
+            Some(ThreadState::Loaded(thread)) => (
                 div()
-                    .id("slack-excerpt")
-                    .test_support()
-                    .pl(px(Space::CONTROL))
-                    .border_l_2()
-                    .border_color(cx.theme().border)
-                    .child(excerpt),
-            )
-            .child(
+                    .v_flex()
+                    .gap(px(Space::SIDEBAR + Space::META))
+                    .children(thread.messages.iter().enumerate().map(|(ix, m)| {
+                        let when = m.at().map(|at| model::ago(at, now)).unwrap_or_default();
+                        div()
+                            .id(SharedString::from(format!("slack-message-{ix}")))
+                            .test_support()
+                            .v_flex()
+                            .gap(px(Space::META))
+                            .child(
+                                div()
+                                    .h_flex()
+                                    .gap(px(Space::CONTROL))
+                                    .items_center()
+                                    .child(
+                                        ui::text(
+                                            Text::Label,
+                                            SharedString::from(
+                                                m.author
+                                                    .clone()
+                                                    .unwrap_or_else(|| "Someone".into()),
+                                            ),
+                                        )
+                                        .font_medium(),
+                                    )
+                                    .child(caption(when, cx)),
+                            )
+                            .child(if m.text.is_empty() {
+                                caption("No text, only attachments.", cx).into_any_element()
+                            } else {
+                                div()
+                                    .w_full()
+                                    .min_w_0()
+                                    .text_size(px(Text::Body.size()))
+                                    .child(SelectableText::new(
+                                        SharedString::from(format!(
+                                            "slack-text-{}-{}",
+                                            item.id, m.ts
+                                        )),
+                                        SharedString::from(m.text.clone()),
+                                    ))
+                                    .into_any_element()
+                            })
+                            .when(m.truncated, |d| {
+                                d.child(caption("The message continues in Slack.", cx))
+                            })
+                    }))
+                    .when(thread.more, |d| {
+                        d.child(caption("More replies are in Slack.", cx))
+                    })
+                    .into_any_element(),
+                Some(thread.messages.len()),
+            ),
+            Some(ThreadState::Unavailable(reason)) if !reason.is_empty() => (
                 div()
                     .v_flex()
                     .gap(px(Space::META))
-                    .child(field(
-                        "status",
-                        "Status",
-                        t.status.title().to_owned(),
-                        statuses,
-                    ))
-                    .child(field("type", "Type", t.kind.title().to_owned(), kinds))
-                    .child(field(
-                        "severity",
-                        "Severity",
-                        t.severity.title().to_owned(),
-                        severities,
-                    ))
-                    .child(field(
-                        "label",
-                        "Label",
-                        t.label.clone().unwrap_or_else(|| "None".into()),
-                        label_choices,
-                    ))
-                    .when_some(reason, |d, r| {
-                        d.child(
-                            ui::text(Text::Caption, SharedString::from(r))
-                                .text_color(cx.theme().muted_foreground),
-                        )
-                    })
-                    .when(item.started && t.status != Status::Done, |d| {
-                        d.child(
-                            ui::text(
-                                Text::Caption,
-                                "Marking it Done adds a done reaction in Slack.",
-                            )
-                            .text_color(cx.theme().muted_foreground),
-                        )
-                    })
-                    .when_some(t.overridden_note(), |d, note| {
-                        d.child(
-                            ui::text(Text::Caption, SharedString::from(note))
-                                .text_color(cx.theme().muted_foreground),
-                        )
-                    }),
-            )
-            .when_some(save.cloned(), |d, save| {
-                let (text, tone) = match save {
-                    Save::Pending(_) => ("Saving…".to_owned(), Tone::Quiet),
-                    Save::NotSent(r) => (r, Tone::Error),
-                    Save::Unknown(r) => (r, Tone::Error),
-                };
-                d.child(
-                    div()
-                        .id("slack-save")
-                        .test_support()
-                        .child(Notice::new(SharedString::from(text)).tone(tone)),
-                )
-            })
+                    .child(caption(reason.clone(), cx))
+                    .child(
+                        ui::action("slack-thread-retry", "Try again", Action::Quiet)
+                            .self_start()
+                            .on_click(cx.listener(|v, _, w, cx| v.retry_thread(w, cx))),
+                    )
+                    .into_any_element(),
+                None,
+            ),
+            _ => (caption("Reading the thread…", cx).into_any_element(), None),
+        };
+        let (body, count) = body;
+        div()
+            .id("slack-thread")
+            .test_support()
+            .v_flex()
+            .gap(px(Space::CONTROL))
+            .pt(px(Space::SIDEBAR))
+            .border_t_1()
+            .border_color(cx.theme().border)
             .child(
                 div()
                     .h_flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .when_some(url, |d, url| {
-                        d.child(
-                            ui::action("slack-open", "Open in Slack", Action::Secondary)
-                                .icon(AppIcon::OpenLink.inline())
-                                .on_click(move |_, _, cx| crate::external_links::open(&url, cx)),
-                        )
-                    })
-                    .child({
-                        let link = item.url.clone();
-                        ui::action("slack-copy", "Copy link", Action::Quiet).on_click(
-                            move |_, _, cx| {
-                                cx.write_to_clipboard(ClipboardItem::new_string(link.clone()))
+                    .items_center()
+                    .gap(px(Space::CONTROL))
+                    .child(
+                        ui::text(Text::Label, "Thread")
+                            .font_medium()
+                            .text_color(cx.theme().foreground),
+                    )
+                    .children(count.map(|n| {
+                        caption(
+                            if n == 1 {
+                                "1 message".to_owned()
+                            } else {
+                                format!("{n} messages")
                             },
+                            cx,
                         )
-                    })
-                    .when_some(chat, |d, sid| {
-                        d.child(
-                            ui::action("slack-open-chat", "Open chat", Action::Quiet).on_click(
-                                cx.listener(move |_, _, _, cx| {
-                                    cx.emit(BoardEvent::OpenChat(sid.clone()))
-                                }),
-                            ),
-                        )
-                    })
-                    .child({
-                        let id = id.clone();
-                        let next = if dismissed {
-                            Status::Open
-                        } else {
-                            Status::Dismissed
-                        };
-                        ui::action(
-                            "slack-dismiss",
-                            if dismissed { "Restore" } else { "Dismiss" },
-                            Action::Quiet,
-                        )
-                        .disabled(pending)
-                        .on_click(cx.listener(move |v, _, w, cx| {
-                            v.change(&id, Change::Status(next), w, cx)
-                        }))
-                    }),
+                    })),
             )
+            .child(body)
     }
 }
 
@@ -1455,10 +1714,7 @@ impl Render for SlackBoard {
         let wide = f32::from(window.viewport_size().width) >= WIDE;
         if wide != self.wide {
             self.wide = wide;
-            // The detail opened in place belongs to the narrow layout.
-            if wide && self.layout == Layout::List {
-                self.detail = false;
-            }
+            self.rebuild(window, cx);
         }
         let notices = self.notices(cx);
         div()
@@ -1468,7 +1724,7 @@ impl Render for SlackBoard {
             .size_full()
             .min_h_0()
             .min_w_0()
-            .gap(px(Space::CONTROL))
+            .gap(px(Space::SIDEBAR))
             .child(self.toolbar(cx))
             .children(notices)
             .child(div().flex_1().min_h_0().min_w_0().child(self.body(cx)))
@@ -1478,7 +1734,7 @@ impl Render for SlackBoard {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn layout_constants_keep_the_detail_inside_the_wide_page() {
-        assert!(super::DETAIL_WIDTH * 2. < super::WIDE);
+    fn board_columns_fit_beside_the_inspector_only_in_wide_windows() {
+        assert!(super::INSPECTOR_WIDTH + 2. * super::COLUMN_MIN < super::WIDE);
     }
 }

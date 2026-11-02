@@ -219,12 +219,12 @@ export interface SlackReply {
 }
 
 /** Replies of a thread read with `oldest`, which still returns the parent first. The server writes "No thread
- * messsages" (sic) when no reply is newer. more: another page follows. */
+ * messsages" (sic) when no reply is newer. more: another page follows. parent: the thread's first message. */
 export function parseSlackThreadReplies(
 	value: TrackingJson,
 	parentTs: string,
 	limit: number,
-): { replies: SlackReply[]; more: boolean } {
+): { parent: SlackReply; replies: SlackReply[]; more: boolean } {
 	const fail = (reason: string): never => {
 		throw new SlackFormatChanged(reason);
 	};
@@ -258,15 +258,17 @@ export function parseSlackThreadReplies(
 	};
 	const empty = /^=== THREAD PARENT MESSAGE ===[ \t]*\n([\s\S]*?)\n+No thread mess?sages\.?$/.exec(text);
 	if (empty) {
-		if (parseMessage(empty[1]!).ts !== parentTs) fail("thread parent timestamp");
-		return { replies: [], more: false };
+		const parent = parseMessage(empty[1]!);
+		if (parent.ts !== parentTs) fail("thread parent timestamp");
+		return { parent, replies: [], more: false };
 	}
 	const header =
 		/^=== THREAD PARENT MESSAGE ===[ \t]*\n([\s\S]*?)\n=== THREAD REPLIES \((\d+) total\) ===[ \t]*\n?([\s\S]*)$/.exec(
 			text,
 		);
 	if (!header) return fail("thread header");
-	if (parseMessage(header[1]!).ts !== parentTs) fail("thread parent timestamp");
+	const parent = parseMessage(header[1]!);
+	if (parent.ts !== parentTs) fail("thread parent timestamp");
 	const count = Number(header[2]);
 	if (!Number.isSafeInteger(count) || count > limit) return fail("reply count");
 	const parts = header[3]!.split(/^--- Reply (\d+) of (\d+) ---[ \t]*$/m);
@@ -276,7 +278,7 @@ export function parseSlackThreadReplies(
 		if (Number(parts[i * 3 + 1]) !== i + 1 || Number(parts[i * 3 + 2]) !== count) return fail("reply numbering");
 		replies.push(parseMessage(parts[i * 3 + 3]!));
 	}
-	return { replies, more: parsePagination(value.pagination_info, true) !== undefined };
+	return { parent, replies, more: parsePagination(value.pagination_info, true) !== undefined };
 }
 
 // Control and format characters that hide or reorder text (bidi overrides, zero-width spaces). Joiners stay for emoji.

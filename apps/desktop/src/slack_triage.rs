@@ -487,7 +487,6 @@ impl Board {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Filter {
-    pub(crate) status: Option<Status>,
     pub(crate) show_hidden: bool,
     pub(crate) show_dismissed: bool,
 }
@@ -501,20 +500,11 @@ impl Filter {
         {
             return false;
         }
-        if !self.show_hidden && t.label.as_deref().is_some_and(|l| project.hides(l)) {
-            return false;
-        }
-        self.status.is_none_or(|s| s == t.status)
+        !(!self.show_hidden && t.label.as_deref().is_some_and(|l| project.hides(l)))
     }
-    pub(crate) fn title(&self) -> &'static str {
-        self.status.map_or("All statuses", Status::title)
-    }
-    /// Status groups in board order. Dismissed shows with Show dismissed, or while the list
-    /// holds label-closed messages.
+    /// Status tabs and board columns, in order. Dismissed shows with Show dismissed, or while
+    /// the list holds label-closed messages.
     pub(crate) fn statuses(&self, visible: &[Item]) -> Vec<Status> {
-        if let Some(status) = self.status {
-            return vec![status];
-        }
         let dismissed =
             self.show_dismissed || visible.iter().any(|i| i.triage.status == Status::Dismissed);
         Status::ALL
@@ -613,48 +603,75 @@ impl Change {
     }
 }
 
-/// The inspector's quote of the message, read on demand and never stored.
+/// One message of a thread, parent first.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Excerpt {
+pub(crate) struct ThreadMessage {
+    pub(crate) ts: String,
     pub(crate) author: Option<String>,
     pub(crate) text: String,
     pub(crate) truncated: bool,
 }
-impl Excerpt {
+impl ThreadMessage {
+    /// Epoch milliseconds from the Slack timestamp.
+    pub(crate) fn at(&self) -> Option<u64> {
+        let (seconds, _) = self.ts.split_once('.')?;
+        seconds.parse::<u64>().ok()?.checked_mul(1000)
+    }
+}
+
+/// The thread of a message, read on demand from Slack through pilotd and never stored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Thread {
+    pub(crate) messages: Vec<ThreadMessage>,
+    /// Slack holds more replies than pilotd read.
+    pub(crate) more: bool,
+}
+impl Thread {
     pub(crate) fn parse(value: &Value, id: &str) -> Option<Self> {
         if value["itemId"] != id {
             return None;
         }
-        Some(Self {
-            author: value["author"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned),
-            text: value["text"].as_str()?.to_owned(),
-            truncated: value["truncated"] == true,
+        let messages = value["messages"]
+            .as_array()?
+            .iter()
+            .map(|m| {
+                Some(ThreadMessage {
+                    ts: m["ts"].as_str()?.to_owned(),
+                    author: m["author"]
+                        .as_str()
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned),
+                    text: m["text"].as_str()?.to_owned(),
+                    truncated: m["truncated"] == true,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        (!messages.is_empty()).then_some(Self {
+            messages,
+            more: value["more"] == true,
         })
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum ExcerptState {
+pub(crate) enum ThreadState {
     Loading,
-    Loaded(Excerpt),
+    Loaded(Thread),
     Unavailable(String),
 }
 
-/// A bounded in-memory cache of the latest excerpts, as Swift's `SlackExcerptStore`.
+/// A bounded in-memory cache of the latest threads, as Swift's `SlackExcerptStore`.
 #[derive(Default)]
-pub(crate) struct Excerpts {
-    states: HashMap<String, ExcerptState>,
+pub(crate) struct Threads {
+    states: HashMap<String, ThreadState>,
     recent: Vec<String>,
 }
-impl Excerpts {
+impl Threads {
     pub(crate) const LIMIT: usize = 40;
-    pub(crate) fn get(&self, id: &str) -> Option<&ExcerptState> {
+    pub(crate) fn get(&self, id: &str) -> Option<&ThreadState> {
         self.states.get(id)
     }
-    pub(crate) fn set(&mut self, id: &str, state: ExcerptState) {
+    pub(crate) fn set(&mut self, id: &str, state: ThreadState) {
         self.recent.retain(|r| r != id);
         self.recent.push(id.to_owned());
         self.states.insert(id.to_owned(), state);
@@ -667,7 +684,7 @@ impl Excerpts {
     pub(crate) fn needs_read(&self, id: &str) -> bool {
         !matches!(
             self.states.get(id),
-            Some(ExcerptState::Loaded(_) | ExcerptState::Loading)
+            Some(ThreadState::Loaded(_) | ThreadState::Loading)
         )
     }
 }

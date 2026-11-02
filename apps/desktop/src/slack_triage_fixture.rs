@@ -1,4 +1,4 @@
-//! Owned synthetic pilotd for Slack triage checks: projects, sources, tracked items, excerpts,
+//! Owned synthetic pilotd for Slack triage checks: projects, sources, tracked items, threads,
 //! override PATCHes and polls. Loopback only, no real accounts, Slack or settings.
 use crate::LocalOptions;
 use serde_json::{Value, json};
@@ -35,7 +35,7 @@ pub(crate) struct State {
     pub(crate) projects: Vec<Value>,
     pub(crate) sources: Vec<Value>,
     pub(crate) items: Vec<Value>,
-    pub(crate) excerpts: BTreeMap<String, Value>,
+    pub(crate) threads: BTreeMap<String, Value>,
     /// Keyed by method and exact path (without the query).
     pub(crate) replies: BTreeMap<(String, String), Reply>,
     pub(crate) daemon: String,
@@ -236,11 +236,11 @@ fn respond(state: &mut State, method: &str, path: &str, body: Value) -> (Option<
                 .collect();
             ok(json!({"items":page,"total":all.len()}))
         }
-        ("GET", r) if r.ends_with("/excerpt") => {
+        ("GET", r) if r.ends_with("/thread") => {
             let id = r
                 .trim_start_matches("/api/tracked-items/")
-                .trim_end_matches("/excerpt");
-            match state.excerpts.get(id) {
+                .trim_end_matches("/thread");
+            match state.threads.get(id) {
                 Some(v) => ok(v.clone()),
                 None => (
                     Some(503),

@@ -122,12 +122,12 @@ fn filters_hidden_and_dismissed_like_swift_and_sorts_by_severity_then_age() {
         ["crit", "gone", "done", "low-new", "closed", "low-old"]
     );
     assert_eq!(b.hidden_count(true), 2);
-    let open = Filter {
-        status: Some(Status::Open),
-        ..all
-    };
-    assert_eq!(ids(&open), ["crit", "low-new", "low-old"]);
-    assert_eq!(open.statuses(&b.visible(&open)), [Status::Open]);
+    // Status tabs and columns: indices into the visible, sorted messages.
+    let visible = b.visible(&all);
+    assert_eq!(
+        columns(&visible, &all.statuses(&visible))[0],
+        (Status::Open, vec![0, 2, 3])
+    );
     assert_eq!(
         all.statuses(&b.visible(&all)),
         [
@@ -189,20 +189,22 @@ fn board_replace_keeps_project_identity_and_excerpts_stay_bounded() {
     assert_eq!(b.item("m1").unwrap().triage.status, Status::Done);
     saved.project_id = "p2".into();
     assert!(!b.replace(saved), "never moves a message across projects");
-    let mut e = Excerpts::default();
-    for n in 0..=Excerpts::LIMIT {
-        e.set(&n.to_string(), ExcerptState::Loading);
+    let mut e = Threads::default();
+    for n in 0..=Threads::LIMIT {
+        e.set(&n.to_string(), ThreadState::Loading);
     }
     assert!(e.get("0").is_none());
-    assert!(e.get(&Excerpts::LIMIT.to_string()).is_some());
-    e.set("x", ExcerptState::Unavailable("no".into()));
+    assert!(e.get(&Threads::LIMIT.to_string()).is_some());
+    e.set("x", ThreadState::Unavailable("no".into()));
     // "x" evicted the oldest kept entry ("1"); a kept read in flight is not reread.
     assert!(e.needs_read("x") && e.needs_read("1"));
-    assert!(!e.needs_read(&Excerpts::LIMIT.to_string()));
+    assert!(!e.needs_read(&Threads::LIMIT.to_string()));
+    let message = json!({"ts":"1.000001","text":"t","truncated":false});
     assert!(
-        Excerpt::parse(&json!({"itemId":"other","text":"t"}), "m1").is_none(),
-        "an excerpt for another message is never shown"
+        Thread::parse(&json!({"itemId":"other","messages":[message]}), "m1").is_none(),
+        "a thread for another message is never shown"
     );
+    assert!(Thread::parse(&json!({"itemId":"m1","messages":[]}), "m1").is_none());
 }
 
 #[test]

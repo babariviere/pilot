@@ -556,7 +556,9 @@ impl Render for Inbox {
             .as_ref()
             .is_some_and(|id| !self.projects.iter().any(|p| &p.id == id));
         div().id("inbox-pane").test_support().size_full().min_w_0().min_h_0()
+        // The Slack board needs the pane's width; chats keep the reading column.
         .child(ui::page().id("inbox-page").test_support().h_full().min_h_0()
+            .when(self.tab == Tab::Slack, |p| p.max_w(px(1600.)))
             .gap(px(Space::SIDEBAR))
             .child(div().v_flex().gap(px(Space::META))
                 .child(div().h_flex().w_full().min_w_0().items_center().justify_between().gap_2()

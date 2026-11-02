@@ -14,6 +14,7 @@ import type {
 	SlackChannelOption,
 	SlackChannelStatus,
 	SlackExcerpt,
+	SlackThread,
 	SourceSignIn,
 	TrackedItem,
 	TrackedItemList,
@@ -35,7 +36,7 @@ import { SlackModelUnavailable } from "./slack-classifier.ts";
 import { parseSlackMessageLink, SlackFormatChanged } from "./slack-format.ts";
 import type { SlackReactionOwner } from "./slack-reaction-owner.ts";
 import { addSlackDone, refreshSlackReactions, removeSlackEyes } from "./slack-reactions.ts";
-import { type SlackAdder, slackChannelProgress, slackExcerpt } from "./slack-source.ts";
+import { type SlackAdder, slackChannelProgress, slackExcerpt, slackThread } from "./slack-source.ts";
 import { slackStart, slackStartAllowed } from "./slack-start.ts";
 import type { SlackWaitingWatcher } from "./slack-waiting.ts";
 import {
@@ -240,8 +241,13 @@ export class SourceRegistry {
 	private doneScheduled = false;
 	/** Settings lookups, at most one per kind, sharing slots with polls and prefills. */
 	private readonly lookups = new Map<TrackedKind, { controller: AbortController; promise: Promise<unknown> }>();
-	/** The triage inspector's excerpt: latest selection wins, at most one, sharing the two MCP slots. */
-	private excerptRun?: { itemId: string; controller: AbortController; promise: Promise<SlackExcerpt> };
+	/** The triage inspector's excerpt or thread: latest selection wins, at most one, sharing the two MCP slots. */
+	private excerptRun?: {
+		itemId: string;
+		what: "excerpt" | "thread";
+		controller: AbortController;
+		promise: Promise<unknown>;
+	};
 	private excerptGeneration = 0;
 	/** Slack messages being added from pasted links, coalesced per message and sharing the two MCP slots. */
 	private readonly adds = new Map<string, { controller: AbortController; promise: Promise<TrackedItem> }>();
@@ -982,10 +988,22 @@ export class SourceRegistry {
 	/** The first message of a Slack item's thread, for the triage inspector. Read on demand, never stored. A newer
 	 * request replaces the one in flight, so moving through the list never queues Slack reads. Failures are plain,
 	 * logged without content, and leave the source's health alone: the inspector shows them quietly. */
-	async slackExcerpt(itemId: string): Promise<SlackExcerpt> {
+	slackExcerpt(itemId: string): Promise<SlackExcerpt> {
+		return this.slackRead(itemId, "excerpt", slackExcerpt);
+	}
+	/** The whole thread of a Slack item, parent first, read like the excerpt and sharing its single slot. */
+	slackThread(itemId: string): Promise<SlackThread> {
+		return this.slackRead(itemId, "thread", slackThread);
+	}
+	private async slackRead<T>(
+		itemId: string,
+		what: "excerpt" | "thread",
+		read: (context: SourcePollContext, item: TrackedItem) => Promise<T>,
+	): Promise<T> {
 		if (this.stopped) throw new ServiceUnavailable("Tracking is stopped");
 		const previous = this.excerptRun;
-		if (previous?.itemId === itemId && !previous.controller.signal.aborted) return previous.promise;
+		if (previous?.itemId === itemId && previous.what === what && !previous.controller.signal.aborted)
+			return previous.promise as Promise<T>;
 		const generation = ++this.excerptGeneration;
 		if (previous) {
 			previous.controller.abort(new Conflict("Superseded by a newer selection"));
@@ -995,7 +1013,7 @@ export class SourceRegistry {
 		if (generation !== this.excerptGeneration || this.excerptRun)
 			throw new Conflict("Superseded by a newer selection");
 		if (this.stopped) throw new ServiceUnavailable("Tracking is stopped");
-		if (item.kind !== "slack") throw new Conflict("Only Slack messages have an excerpt");
+		if (item.kind !== "slack") throw new Conflict(`Only Slack messages have an ${what}`);
 		const id = `${item.projectId}:slack`,
 			key = this.currentKey(id);
 		const checkpoint = this.items.checkpoint(id);
@@ -1008,9 +1026,9 @@ export class SourceRegistry {
 		if (this.busy() >= 2) throw new ServiceUnavailable("Tracking is busy, retry shortly");
 		const project = structuredClone(this.projects.require(item.projectId));
 		const controller = new AbortController();
-		const timer = setTimeout(() => controller.abort(new Error("Excerpt timed out")), 30_000);
-		const run = { itemId, controller, promise: Promise.resolve({} as SlackExcerpt) };
-		const work = slackExcerpt(
+		const timer = setTimeout(() => controller.abort(new Error(`Slack ${what} timed out`)), 30_000);
+		const run = { itemId, what, controller, promise: Promise.resolve() as Promise<unknown> };
+		const work = read(
 			{
 				project,
 				config: project.tracking!,
@@ -1019,14 +1037,14 @@ export class SourceRegistry {
 			},
 			item,
 		);
-		run.promise = abortable(work, controller.signal)
-			.then((excerpt) => {
+		const promise = abortable(work, controller.signal)
+			.then((value) => {
 				if (this.currentKey(id) !== key) throw new Conflict("Tracking configuration changed");
-				return excerpt;
+				return value;
 			})
 			.catch((error: unknown) => {
 				if (error instanceof Conflict) throw error;
-				console.warn(`pilotd: Slack excerpt failed for project ${item.projectId}: ${logCause(error)}`);
+				console.warn(`pilotd: Slack ${what} failed for project ${item.projectId}: ${logCause(error)}`);
 				throw new ServiceUnavailable(
 					error instanceof SourceSignInRequired
 						? "Sign in to Slack to read this message"
@@ -1038,8 +1056,9 @@ export class SourceRegistry {
 				if (this.excerptRun === run) this.excerptRun = undefined;
 				this.schedule();
 			});
+		run.promise = promise;
 		this.excerptRun = run;
-		return run.promise;
+		return promise;
 	}
 	/** Adds one Slack message from a pasted link to a project's triage, from any channel the user's Slack account can
 	 * read. The project must track Slack. Repeated requests for the same message share one read; a message already

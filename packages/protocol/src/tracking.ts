@@ -251,6 +251,24 @@ export interface SlackExcerpt {
 	/** The message was longer and was cut, ending with an ellipsis. */
 	truncated: boolean;
 }
+/** GET /api/tracked-items/:id/thread. A Slack message's thread, parent first, read on demand for the triage
+ * inspector like the excerpt (latest request wins) and never stored or broadcast. Each message is plain text,
+ * bounded and stripped of control characters; at most 100 replies. */
+export interface SlackThread {
+	itemId: string;
+	messages: SlackThreadMessage[];
+	/** More replies exist than were read. */
+	more: boolean;
+}
+export interface SlackThreadMessage {
+	/** Slack message timestamp, "seconds.micros". */
+	ts: string;
+	author?: string;
+	/** Empty when the message has no text (for example, only files). */
+	text: string;
+	/** The message was longer and was cut, ending with an ellipsis. */
+	truncated: boolean;
+}
 /** POST /api/tracking/slack/messages. Adds one Slack message, from a pasted link, to a project's triage. pilotd
  * reads its thread, classifies it like a polled message and returns the stored item. The item's metadata has
  * `manual: true`, so it stays listed even when its channel is not one the project tracks. */

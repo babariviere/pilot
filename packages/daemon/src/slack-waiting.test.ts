@@ -76,7 +76,9 @@ async function fixture(t: TestContext) {
 }
 
 test("thread reads after a wait parse new replies and the empty answer", () => {
-	assert.deepEqual(parseSlackThreadReplies(thread(), parent, 30), { replies: [], more: false });
+	const empty = parseSlackThreadReplies(thread(), parent, 30);
+	assert.deepEqual({ replies: empty.replies, more: empty.more }, { replies: [], more: false });
+	assert.equal(empty.parent.ts, parent);
 	const parsed = parseSlackThreadReplies(
 		thread(reply(1, 1, "Csm Person <csm@example.test> (UCSM)", "1780000100.000001", "It is org 42.")),
 		parent,

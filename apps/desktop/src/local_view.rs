@@ -467,16 +467,16 @@ impl LocalViewer {
             // Sidebar tree keys are handled only by the sidebar list pane.
             KeyBinding::new("left", SidebarCollapse, Some("SidebarList > List")),
             KeyBinding::new("right", SidebarExpand, Some("SidebarList > List")),
-            // Slack board columns: left and right move between status columns.
+            // Slack board: arrows move between cards and status columns, Return opens one.
+            KeyBinding::new("up", crate::slack_triage_view::Up, Some("SlackBoard")),
+            KeyBinding::new("down", crate::slack_triage_view::Down, Some("SlackBoard")),
+            KeyBinding::new("left", crate::slack_triage_view::Left, Some("SlackBoard")),
+            KeyBinding::new("right", crate::slack_triage_view::Right, Some("SlackBoard")),
+            KeyBinding::new("enter", crate::slack_triage_view::Open, Some("SlackBoard")),
             KeyBinding::new(
-                "left",
-                crate::slack_triage_view::Left,
-                Some("SlackBoard > List"),
-            ),
-            KeyBinding::new(
-                "right",
-                crate::slack_triage_view::Right,
-                Some("SlackBoard > List"),
+                "escape",
+                crate::slack_triage_view::CloseDetail,
+                Some("SlackBoard"),
             ),
             KeyBinding::new(
                 "escape",

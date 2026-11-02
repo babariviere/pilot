@@ -1,5 +1,5 @@
 //! Loopback reads and explicit writes for the Inbox Slack board, through existing pilotd routes:
-//! GET /api/projects, /api/sources, /api/tracked-items and /api/tracked-items/:id/excerpt;
+//! GET /api/projects, /api/sources, /api/tracked-items and /api/tracked-items/:id/thread;
 //! PATCH /api/tracked-items/:id with Slack overrides only; POST /api/sources/:id/poll without
 //! force. Each runs on its own short-lived thread. Writes check the pinned daemon identity first
 //! and are never retried: a lost or unconfirmed reply stays Unknown.
@@ -7,7 +7,7 @@ use crate::{
     LocalOptions,
     local_model::valid_id,
     slack_triage::{
-        Board, Change, Excerpt, Item, PAGE, PROJECT_ITEMS, Project, ProjectBoard, Source,
+        Board, Change, Item, PAGE, PROJECT_ITEMS, Project, ProjectBoard, Source, Thread,
     },
 };
 use serde_json::Value;
@@ -223,12 +223,12 @@ pub(crate) async fn read(
     Ok(board)
 }
 
-/// The first message of the thread, read by pilotd from Slack on demand. Never stored.
-pub(crate) async fn excerpt(
+/// The message's thread, parent first, read by pilotd from Slack on demand. Never stored.
+pub(crate) async fn thread(
     client: &reqwest::Client,
     options: &LocalOptions,
     id: &str,
-) -> Result<Excerpt, String> {
+) -> Result<Thread, String> {
     const FAILED: &str = "Couldn't load this message.";
     if !valid_id(id) {
         return Err(FAILED.into());
@@ -238,14 +238,14 @@ pub(crate) async fn excerpt(
         .map_err(str::to_owned)?;
     let response = client
         .get(format!(
-            "{}/api/tracked-items/{id}/excerpt",
+            "{}/api/tracked-items/{id}/thread",
             options.loopback()
         ))
         .send()
         .await
         .map_err(|_| OFFLINE.to_owned())?;
     match body(response).await {
-        (200, Some(value)) => Excerpt::parse(&value, id).ok_or_else(|| FAILED.into()),
+        (200, Some(value)) => Thread::parse(&value, id).ok_or_else(|| FAILED.into()),
         // pilotd's plain reasons: sign-in, Slack unreachable, sync first, busy.
         (409 | 503, value) => Err(reason(&value)
             .filter(|r| !r.starts_with("Superseded"))
