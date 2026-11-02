@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.107.0](https://github.com/babariviere/pilot/compare/v1.106.0...v1.107.0) (2026-11-02)
+
+
+### Features
+
+* **daemon:** retain bounded run-finished events ([44b1428](https://github.com/babariviere/pilot/commit/44b14281ce60647790e798cbe3d5adf5a318c2bf))
+* **desktop:** add project Slack settings ([74c3ee2](https://github.com/babariviere/pilot/commit/74c3ee26882a0ce20a3c1f6cd7353d5a77281994))
+* **desktop:** Slack triage kanban, status tabs and full thread ([38341b7](https://github.com/babariviere/pilot/commit/38341b76c57d27c0246b618fb6a5ca8520a02729))
+* **knowledge:** add project-owned research and component catalog ([d31a2dd](https://github.com/babariviere/pilot/commit/d31a2dd7876412a3314e32513c512a96afc0d9ac))
+* **missions:** let coordinators answer member questions ([ef71ab1](https://github.com/babariviere/pilot/commit/ef71ab1f8ac08bb010c58247f803011a043d8363))
+* **schedules:** dispatch recurring rules with bounded catch-up ([0828fb5](https://github.com/babariviere/pilot/commit/0828fb5123b3e3a41ec15eb092c9e0c6aacec99d))
+* **schedules:** project recurring notices into Inbox and badges ([49ed99e](https://github.com/babariviere/pilot/commit/49ed99eaf7637a2f05b1195a2d5eec35f9fc47ec))
+* **schedules:** store validated recurring calendar rules ([a6075f9](https://github.com/babariviere/pilot/commit/a6075f9bfe6d38a788196af2a9bc20f6b4efd935))
+* **settings:** persist the host hook toggle ([a70a771](https://github.com/babariviere/pilot/commit/a70a771777dd665c9d421558151a23b8e0a19d61))
+* **workspaces:** run setup on creation and snapshot restore ([1a6f9f2](https://github.com/babariviere/pilot/commit/1a6f9f24569c884b57dcb2450b79da977c5b063e))
+
+
+### Bug Fixes
+
+* **desktop:** allow updates with pending database approvals ([5cb3e6b](https://github.com/babariviere/pilot/commit/5cb3e6b1de7042872966ab60d613e22b12dc7509))
+* **desktop:** load Slack triage items with fractional times ([8cfdcbb](https://github.com/babariviere/pilot/commit/8cfdcbbbdd038d8c60b56882b95efc657c829769))
+* **kernel:** drain nested tool calls before pausing ([655e44c](https://github.com/babariviere/pilot/commit/655e44c11fcd25e248bef0656d43f8188b87dcfc))
+* **kernel:** reject escaped newlines in commit and PR messages ([23345dc](https://github.com/babariviere/pilot/commit/23345dc6aef98fdd028d03da8370e265b91b7a8b))
+
 ## [1.106.0](https://github.com/babariviere/pilot/compare/v1.105.0...v1.106.0) (2026-11-02)
 
 
