@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.105.0](https://github.com/babariviere/pilot/compare/v1.104.0...v1.105.0) (2026-11-02)
+
+
+### Features
+
+* **daemon:** persist validated personal lifecycle hooks ([b41f951](https://github.com/babariviere/pilot/commit/b41f9516b950f531118b4468cde338dbd471da48))
+* **daemon:** run bounded workspace shell actions ([29f0fc5](https://github.com/babariviere/pilot/commit/29f0fc5ce74fccc3eabcedeb120f8c5b6744e446))
+* **desktop:** add managed daemon menu controls ([0c3b323](https://github.com/babariviere/pilot/commit/0c3b3238212603f5daa5a629af94822fd0a0adc3))
+* **desktop:** add Slack triage board to the Inbox ([ef38572](https://github.com/babariviere/pilot/commit/ef38572ed316346786ee20103503c90fab3c4dbe))
+
+
+### Bug Fixes
+
+* **coordination:** maintain task plans proactively ([d290e97](https://github.com/babariviere/pilot/commit/d290e9722bd4200353e3b4a25777cc6326811a55))
+* **desktop:** clear stale project label selection on chat open ([4d49c32](https://github.com/babariviere/pilot/commit/4d49c32cdafac779f8abf52c711abde5d508fd84))
+* **desktop:** keep the resting surface under moving sidebar rows ([f216cf7](https://github.com/babariviere/pilot/commit/f216cf73a260ac60372432ca43cc2c6418ce045b))
+* **desktop:** use opaque window surfaces ([7d548a2](https://github.com/babariviere/pilot/commit/7d548a24a505a8a1fb6277ad0f809e47d926d065))
+
 ## [1.104.0](https://github.com/babariviere/pilot/compare/v1.103.0...v1.104.0) (2026-11-02)
 
 
