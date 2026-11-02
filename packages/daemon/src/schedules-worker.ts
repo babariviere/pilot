@@ -5,6 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 import { parentPort, workerData } from "node:worker_threads";
 import type { ScheduledItem } from "@pilot/protocol";
 
+import { RecurrenceCalendar, validateRecurrence } from "./schedule-recurrence.ts";
+
 mkdirSync(dirname(workerData.file), { recursive: true, mode: 0o700 });
 const db = new DatabaseSync(workerData.file);
 if (workerData.file !== ":memory:") chmodSync(workerData.file, 0o600);
@@ -47,7 +49,34 @@ parentPort!.on("message", ({ id, method, item, expected, now }) => {
 							"Dispatch interrupted by restart; delivery is uncertain. Check the chats before rescheduling.";
 						row.updatedAt = now;
 					}
-					if (gone || interrupted || latched) {
+					const recurring =
+						row.trigger === "recurring" &&
+						(row.state === "pending" || row.state === "dispatching" || interrupted);
+					if (recurring) {
+						try {
+							const calendar = new RecurrenceCalendar(validateRecurrence(row.recurrence));
+							if (!Number.isFinite(row.handledThrough)) throw new Error("Missing handledThrough");
+							if (interrupted) {
+								const run = {
+									due: row.handledThrough!,
+									at: now,
+									outcome: "failed" as const,
+									error: "Interrupted; delivery is uncertain, check the chats",
+								};
+								row.runs = [...(row.runs ?? []), run].slice(-10);
+								row.notice = run;
+								row.state = "pending";
+								delete row.error;
+								delete row.claimedAt;
+							}
+							row.at = calendar.next(row.handledThrough!);
+						} catch {
+							row.state = "pending";
+							row.paused = true;
+							row.error = "Invalid stored recurrence";
+						}
+					}
+					if (gone || interrupted || latched || recurring) {
 						if (gone || interrupted) row.revision++;
 						db.prepare("UPDATE schedules SET revision=?,state=?,item=? WHERE id=?").run(
 							row.revision,
@@ -64,6 +93,14 @@ parentPort!.on("message", ({ id, method, item, expected, now }) => {
 			}
 			value = list();
 		} else if (method === "create") {
+			if (
+				item.trigger === "recurring" &&
+				!item.paused &&
+				list().filter(
+					(r) => r.trigger === "recurring" && !r.paused && (r.state === "pending" || r.state === "dispatching"),
+				).length >= 50
+			)
+				throw new Error("Recurring schedule limit reached (50)");
 			if ((db.prepare("SELECT COUNT(*) AS n FROM schedules").get()!.n as number) >= 1000)
 				throw new Error("Schedule limit reached (1000). Delete old items first.");
 			const bytes = db
@@ -79,6 +116,20 @@ parentPort!.on("message", ({ id, method, item, expected, now }) => {
 			);
 			value = item;
 		} else if (method === "replace" || method === "remove") {
+			if (
+				method === "replace" &&
+				item.trigger === "recurring" &&
+				!item.paused &&
+				item.state === "pending" &&
+				list().filter(
+					(r) =>
+						r.id !== item.id &&
+						r.trigger === "recurring" &&
+						!r.paused &&
+						(r.state === "pending" || r.state === "dispatching"),
+				).length >= 50
+			)
+				throw new Error("Recurring schedule limit reached (50)");
 			if (method === "replace" && JSON.stringify(item.target) !== JSON.stringify(expected.target)) {
 				const bytes = db
 					.prepare(

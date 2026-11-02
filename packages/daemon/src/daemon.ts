@@ -304,6 +304,8 @@ const schedules = new ScheduleService(scheduleStore, {
 	missions: missionStore,
 	trackedItems,
 	triggers: scheduleDetection,
+	automationsEnabled: () => chatSettings.automationsEnabled(),
+	home: { daemonId: hello.daemonId, lineageId: hello.lineageId! },
 });
 await schedules.load();
 sessions.setScheduledMessages(schedules);

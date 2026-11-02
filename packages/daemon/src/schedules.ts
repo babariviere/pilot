@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
 	DashboardScheduledItem,
 	ScheduledItem,
+	ScheduleHome,
 	SchedulePatch,
 	ScheduleRequest,
 	ScheduleTarget,
@@ -10,6 +11,7 @@ import type {
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import type { MissionStore } from "./missions.ts";
 import type { ProjectStore } from "./projects.ts";
+import { RecurrenceCalendar, validateRecurrence } from "./schedule-recurrence.ts";
 import type { ScheduleStore } from "./schedule-store.ts";
 import type { TrackedItemStore } from "./tracked-items.ts";
 
@@ -51,6 +53,8 @@ export interface ScheduleServiceDeps {
 	trackedItems?: Pick<TrackedItemStore, "require" | "patch">;
 	clock?: ScheduleClock;
 	triggers?: ScheduleTriggerSource;
+	automationsEnabled?: () => boolean;
+	home?: ScheduleHome;
 }
 /** One serial dispatcher. No detection/polling here; one nearest-deadline timer while online. */
 export class ScheduleService {
@@ -133,7 +137,7 @@ export class ScheduleService {
 		for (const item of pending) {
 			if (this.stopped) break;
 			if (!this.online) continue;
-			if (item.at! <= this.time.now()) {
+			if (item.trigger === "at" && item.at! <= this.time.now()) {
 				try {
 					const current = this.store.require(item.id);
 					if (current.state === "pending" && current.revision === item.revision) await this.fire(current);
@@ -148,7 +152,7 @@ export class ScheduleService {
 		const pending = this.store.pendingItems();
 		this.deps.triggers?.setActive?.(!this.stopped && pending.length > 0);
 		if (this.stopped || !this.online) return;
-		const next = Math.min(...pending.map((item) => item.at!));
+		const next = Math.min(...pending.filter((item) => item.trigger === "at").map((item) => item.at!));
 		if (Number.isFinite(next))
 			this.cancelTimer = this.time.setTimeout(
 				() => {
@@ -203,11 +207,13 @@ export class ScheduleService {
 		this.assertOpen();
 		const data = await this.validate(request);
 		const now = this.time.now();
+		this.checkHome(request.expectedHome, data.trigger === "recurring");
 		return this.store.create({
 			...data,
 			id: randomUUID(),
 			revision: 1,
 			state: "pending",
+			...(data.trigger === "recurring" ? { handledThrough: now, runs: [] } : {}),
 			createdAt: now,
 			updatedAt: now,
 		});
@@ -215,8 +221,18 @@ export class ScheduleService {
 	async update(id: string, patch: SchedulePatch): Promise<ScheduledItem> {
 		this.assertOpen();
 		if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("Schedule patch is required");
+		this.rejectOwned(patch);
 		if ("networkNames" in patch) throw new Error("Wi-Fi triggers were removed");
-		for (const key of ["title", "trigger", "at", "target", "expectedRevision"] as const)
+		for (const key of [
+			"title",
+			"trigger",
+			"at",
+			"target",
+			"expectedRevision",
+			"recurrence",
+			"paused",
+			"expectedHome",
+		] as const)
 			if (patch[key] === null) throw new Error(`${key} cannot be null`);
 		if (
 			patch.expectedRevision !== undefined &&
@@ -228,11 +244,20 @@ export class ScheduleService {
 		if (patch.expectedRevision !== undefined && patch.expectedRevision !== old.revision)
 			throw new Conflict("Schedule changed; reload before editing");
 		const trigger = patch.trigger ?? old.trigger;
-		if (trigger !== "at") throw new Error("Invalid schedule trigger");
+		if (trigger !== "at" && trigger !== "recurring") throw new Error("Invalid schedule trigger");
+		if (trigger === "recurring" && patch.expectedRevision === undefined)
+			throw new Error("expectedRevision is required");
+		this.checkHome(patch.expectedHome, old.trigger === "recurring" || trigger === "recurring");
+		if (old.trigger !== trigger) throw new Error("Schedule trigger cannot be changed");
+		if (patch.paused !== undefined && (trigger !== "recurring" || typeof patch.paused !== "boolean"))
+			throw new Error("paused requires a recurring rule and boolean");
+		if (trigger === "recurring" && patch.at !== undefined) throw new Error("at is daemon-owned");
 		const data = await this.validate({
+			recurrence: patch.recurrence ?? old.recurrence,
+			expectedHome: patch.expectedHome,
 			title: patch.title ?? old.title,
 			trigger,
-			at: patch.at ?? old.at!,
+			at: trigger === "at" ? (patch.at ?? old.at!) : undefined,
 			target: patch.target ?? old.target,
 		});
 		return this.store.replace(old, {
@@ -241,6 +266,20 @@ export class ScheduleService {
 			at: data.at,
 			projectId: data.projectId,
 			sessionId: data.sessionId,
+			...(trigger === "recurring"
+				? {
+						paused: (patch.paused ?? old.paused) ? true : undefined,
+						handledThrough:
+							patch.recurrence !== undefined || (old.paused && patch.paused === false)
+								? this.time.now()
+								: old.handledThrough,
+						at: new RecurrenceCalendar(data.recurrence!).next(
+							patch.recurrence !== undefined || (old.paused && patch.paused === false)
+								? this.time.now()
+								: old.handledThrough!,
+						),
+					}
+				: {}),
 			updatedAt: this.time.now(),
 		});
 	}
@@ -281,6 +320,34 @@ export class ScheduleService {
 	private assertOpen(): void {
 		if (this.stopped) throw new ServiceUnavailable("Scheduler stopped");
 	}
+	private rejectOwned(value: object): void {
+		for (const key of [
+			"handledThrough",
+			"runs",
+			"notice",
+			"claimedAt",
+			"firedAt",
+			"state",
+			"sessionId",
+			"projectId",
+			"error",
+			"createdAt",
+			"updatedAt",
+			"revision",
+		])
+			if (key in value) throw new Error(`${key} is daemon-owned`);
+	}
+	private checkHome(expected: ScheduleHome | undefined, recurring: boolean): void {
+		if (recurring && !this.deps.automationsEnabled?.()) throw new ServiceUnavailable("Automations are disabled");
+		if (recurring && !expected) throw new Error("expectedHome is required");
+		if (
+			expected &&
+			(!this.deps.home ||
+				expected.daemonId !== this.deps.home.daemonId ||
+				expected.lineageId !== this.deps.home.lineageId)
+		)
+			throw new Conflict("Schedule home changed; reconnect before editing");
+	}
 	private async validateTrackedItem(id: string | undefined, projectId: string | undefined): Promise<void> {
 		if (id === undefined) return;
 		if (typeof id !== "string" || !id.trim() || id.length > 200)
@@ -291,13 +358,20 @@ export class ScheduleService {
 	}
 	private async validate(
 		request: ScheduleRequest,
-	): Promise<Pick<ScheduledItem, "title" | "trigger" | "at" | "target" | "projectId" | "sessionId">> {
+	): Promise<Pick<ScheduledItem, "title" | "trigger" | "at" | "target" | "projectId" | "sessionId" | "recurrence">> {
 		if (!request || typeof request !== "object" || Array.isArray(request))
 			throw new Error("Schedule request is required");
+		this.rejectOwned(request);
 		if ("networkNames" in request) throw new Error("Wi-Fi triggers were removed");
 		const trigger = request.trigger;
-		if (trigger !== "at") throw new Error("Invalid schedule trigger");
-		if (typeof request.at !== "number" || !Number.isSafeInteger(request.at) || request.at < 0 || request.at > 8.64e15)
+		if (trigger !== "at" && trigger !== "recurring") throw new Error("Invalid schedule trigger");
+		const recurrence = trigger === "recurring" ? validateRecurrence(request.recurrence) : undefined;
+		if (trigger === "at" && request.recurrence !== undefined) throw new Error("recurrence requires a recurring rule");
+		if (trigger === "recurring" && request.at !== undefined) throw new Error("at is daemon-owned");
+		if (
+			trigger === "at" &&
+			(typeof request.at !== "number" || !Number.isSafeInteger(request.at) || request.at < 0 || request.at > 8.64e15)
+		)
 			throw new Error("at must be epoch milliseconds");
 		if (
 			request.title !== undefined &&
@@ -340,6 +414,11 @@ export class ScheduleService {
 				if (copy.cwd !== undefined) throw new Error("missionId does not allow cwd");
 				projectId = mission.projectId;
 			}
+			if (
+				trigger === "recurring" &&
+				(!projectId || copy.cwd !== undefined || copy.missionId !== undefined || raw.trackedItemId !== undefined)
+			)
+				throw new Error("Recurring chats require projectId without cwd, missionId or trackedItemId");
 			const project = projectId ? this.deps.projects.require(projectId) : undefined;
 			if (!projectId && !copy.cwd) throw new Error("projectId, missionId or cwd is required");
 			if (copy.workspace && (copy.mode === "ask" || !project || copy.cwd))
@@ -366,6 +445,10 @@ export class ScheduleService {
 			target = { kind: "message", sessionId, message: raw.message };
 			message = raw.message;
 		} else throw new Error("target kind must be chat or message");
+		if (trigger === "recurring") {
+			if (!projectId) throw new Error("Recurring targets require a project");
+			this.deps.projects.require(projectId);
+		}
 		if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
 		if (Buffer.byteLength(JSON.stringify(target)) > 16_384) throw new Error("Schedule target exceeds 16 KiB");
 		return {
@@ -374,7 +457,8 @@ export class ScheduleService {
 				(target.kind === "chat" ? target.spawn.title?.trim().slice(0, 200) : undefined) ??
 				message.trim().split("\n")[0].slice(0, 200),
 			trigger,
-			at: request.at,
+			at: recurrence ? new RecurrenceCalendar(recurrence).next(this.time.now()) : request.at,
+			recurrence,
 			target,
 			projectId,
 			sessionId,

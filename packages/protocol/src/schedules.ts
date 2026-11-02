@@ -1,7 +1,28 @@
 import type { SpawnRequest } from "./index.ts";
 
-/** Only a one-shot time. Overdue times fire once online. */
-export type ScheduleTrigger = "at";
+/** Calendar deadlines, stored and executed on one host. */
+export type ScheduleTrigger = "at" | "recurring";
+export interface ScheduleRecurrence {
+	every: "day" | "week" | "month";
+	time: string;
+	timeZone: string;
+	weekdays?: number[];
+	weekday?: number;
+	dayOfMonth?: number;
+}
+export interface ScheduleRun {
+	due: number;
+	at: number;
+	outcome: "started" | "sent" | "skipped_running" | "missed" | "failed";
+	late?: true;
+	sessionId?: string;
+	count?: number;
+	error?: string;
+}
+export interface ScheduleHome {
+	daemonId: string;
+	lineageId: string;
+}
 export type ScheduleTarget =
 	| {
 			kind: "chat";
@@ -12,12 +33,14 @@ export type ScheduleTarget =
 	| { kind: "message"; sessionId: string; message: string };
 export type ScheduleState = "pending" | "dispatching" | "fired" | "failed" | "cancelled";
 
-/** POST /api/schedules. trigger "at" and at are required. */
+/** POST /api/schedules. Recurring rules require recurrence and expectedHome, not at. */
 export interface ScheduleRequest {
 	title?: string;
-	trigger: "at";
+	trigger: ScheduleTrigger;
 	/** Epoch milliseconds. Overdue times fire when online. */
-	at: number;
+	at?: number;
+	recurrence?: ScheduleRecurrence;
+	expectedHome?: ScheduleHome;
 	target: ScheduleTarget;
 }
 /** PATCH /api/schedules/:id. Only pending items are editable. Target replacement is complete. */
@@ -26,6 +49,10 @@ export interface SchedulePatch {
 	trigger?: ScheduleTrigger;
 	at?: number;
 	target?: ScheduleTarget;
+	recurrence?: ScheduleRecurrence;
+	paused?: boolean;
+	dismissNotice?: true;
+	expectedHome?: ScheduleHome;
 	/** Optional optimistic concurrency guard against a stale editor. */
 	expectedRevision?: number;
 }
@@ -37,6 +64,11 @@ export interface ScheduledItem {
 	/** Removed triggers are a non-executable tombstone on cancelled records. */
 	trigger: ScheduleTrigger | "removed";
 	at?: number;
+	recurrence?: ScheduleRecurrence;
+	handledThrough?: number;
+	runs?: ScheduleRun[];
+	notice?: ScheduleRun;
+	paused?: true;
 	target: ScheduleTarget;
 	state: ScheduleState;
 	createdAt: number;

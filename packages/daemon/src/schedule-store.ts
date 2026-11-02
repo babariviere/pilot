@@ -62,7 +62,7 @@ export class ScheduleStore {
 	}
 	pendingItems(): Array<Pick<ScheduledItem, "id" | "revision" | "trigger" | "at">> {
 		return [...this.items.values()]
-			.filter((item) => item.state === "pending")
+			.filter((item) => item.state === "pending" && !item.paused)
 			.map(({ id, revision, trigger, at }) => ({
 				id,
 				revision,

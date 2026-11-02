@@ -907,11 +907,27 @@ export function createDaemonServer(
 			const id = parts[2];
 			if (!id && req.method === "GET")
 				return jsonText(res, 200, await schedules.snapshot(url.searchParams.get("projectId") ?? undefined));
-			if (!id && req.method === "POST")
-				return json(res, 201, await schedules.create(await readJson<ScheduleRequest>(req)));
+			const authorizeRecurring = async () => {
+				if (!chatSettings?.automationsEnabled()) throw new ServiceUnavailable("Automations are disabled");
+				if (!githubSetup) throw new HttpError(403, "native_action_required");
+				try {
+					await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				} catch {
+					throw new HttpError(403, "native_action_required");
+				}
+			};
+			if (!id && req.method === "POST") {
+				const body = await readJson<ScheduleRequest>(req);
+				if (body.trigger === "recurring") await authorizeRecurring();
+				return json(res, 201, await schedules.create(body));
+			}
 			if (id && req.method === "GET") return json(res, 200, schedules.require(id));
-			if (id && req.method === "PATCH")
-				return json(res, 200, await schedules.update(id, await readJson<SchedulePatch>(req)));
+			if (id && req.method === "PATCH") {
+				const body = await readJson<SchedulePatch>(req);
+				if (schedules.require(id).trigger === "recurring" || body.trigger === "recurring")
+					await authorizeRecurring();
+				return json(res, 200, await schedules.update(id, body));
+			}
 			if (id && req.method === "DELETE") {
 				await schedules.remove(id);
 				return json(res, 200, { ok: true });
