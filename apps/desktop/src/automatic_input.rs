@@ -14,6 +14,8 @@ pub(crate) enum Origin {
     Coordinator,
     Mission,
     PullRequest,
+    /// Project hooks: `<automation>` follow-ups and hook result notes.
+    Automation,
     Slack,
     Control,
     Watch,
@@ -29,6 +31,7 @@ impl Origin {
             "coordinator" => Self::Coordinator,
             "mission" => Self::Mission,
             "pullRequest" => Self::PullRequest,
+            "automation" => Self::Automation,
             "slack" => Self::Slack,
             "control" => Self::Control,
             "watch" => Self::Watch,
@@ -44,6 +47,7 @@ impl Origin {
             Self::Coordinator => "Coordinator",
             Self::Mission => "Mission",
             Self::PullRequest => "PR follow-up",
+            Self::Automation => "Automation message",
             Self::Slack => "Slack reply",
             Self::Control => "Control chat",
             Self::Watch => "Watch",
@@ -58,6 +62,7 @@ impl Origin {
             Self::Coordinator | Self::Control => AppIcon::Coordinator,
             Self::Mission => AppIcon::Mission,
             Self::PullRequest => AppIcon::PullRequest,
+            Self::Automation => AppIcon::Automations,
             Self::Slack | Self::Watch => AppIcon::Chats,
             Self::Activity => AppIcon::Info,
         }
@@ -72,6 +77,8 @@ pub(crate) struct Automatic {
     pub(crate) summary: Option<String>,
     /// Sending chat projected from durable submission IDs, when known.
     pub(crate) sender: Option<String>,
+    /// A hook result the daemon reported as failed (`automation_failed`).
+    pub(crate) failed: bool,
 }
 
 impl Automatic {
@@ -79,12 +86,14 @@ impl Automatic {
     /// automatic `pi.user` entries alone, and for kernel-written
     /// `pilot.activity` notes (mission decision notices, PR activity).
     pub(crate) fn read(entry: &Value) -> Option<Self> {
+        let event = entry["data"]["event"]["kind"].as_str().unwrap_or("");
         let origin = match entry["origin"].as_str() {
             Some(origin) => Origin::parse(origin),
             None if entry["kind"] == "pilot.activity" => {
-                let event = entry["data"]["event"]["kind"].as_str().unwrap_or("");
                 if event.starts_with("mission_") {
                     Origin::Mission
+                } else if event.starts_with("automation_") {
+                    Origin::Automation
                 } else {
                     Origin::Activity
                 }
@@ -98,10 +107,16 @@ impl Automatic {
                 .filter(|s| !s.is_empty() && s.len() <= 512)
                 .map(str::to_owned)
         };
+        let summary = text(&entry["data"]["event"]["text"]).or_else(|| {
+            (origin == Origin::Automation && entry["kind"] == "pi.user")
+                .then(|| follow_up_summary(first_text(entry)?))
+                .flatten()
+        });
         Some(Self {
             origin,
-            summary: text(&entry["data"]["event"]["text"]),
+            summary,
             sender: text(&entry["sourceSessionId"]).filter(|s| s.len() <= 128),
+            failed: origin == Origin::Automation && event == "automation_failed",
         })
     }
     /// The row's sentence: the kernel's summary, else the source's name.
@@ -128,6 +143,71 @@ fn preview(source: &str) -> Option<String> {
     } else {
         line
     })
+}
+
+/// The first text part of the entry's first model message.
+fn first_text(entry: &Value) -> Option<&str> {
+    let content = &entry["model"][0]["content"];
+    content.as_str().or_else(|| {
+        content
+            .as_array()?
+            .iter()
+            .find(|part| part["type"] == "text")?["text"]
+            .as_str()
+    })
+}
+
+/// One line for an `<automation>` follow-up, read from its opening tag only
+/// (docs/automations.md §5): `<automation name="…" kind="check|continue" attempt="n/m">`.
+/// Anything else reads as the origin's title.
+fn follow_up_summary(source: &str) -> Option<String> {
+    let line = source.lines().next()?.trim();
+    let attributes = line.strip_prefix("<automation ")?.strip_suffix('>')?;
+    let mut name = None;
+    let mut kind = None;
+    let mut attempt = None;
+    let mut rest = attributes;
+    while !rest.is_empty() {
+        let (key, after) = rest.split_once("=\"")?;
+        let (value, after) = after.split_once('"')?;
+        match key.trim() {
+            "name" => name = Some(value),
+            "kind" => kind = Some(value),
+            "attempt" => attempt = Some(value),
+            _ => return None,
+        }
+        rest = after.trim_start();
+    }
+    let attempt = attempt.filter(|a| {
+        a.split_once('/').is_some_and(|(n, m)| {
+            !n.is_empty()
+                && !m.is_empty()
+                && n.len() <= 3
+                && m.len() <= 3
+                && n.bytes().chain(m.bytes()).all(|b| b.is_ascii_digit())
+        })
+    })?;
+    let name = unescape(name?);
+    let name: String = if name.chars().count() > 160 {
+        name.chars().take(159).chain(['…']).collect()
+    } else {
+        name
+    };
+    match kind? {
+        "check" if !name.trim().is_empty() => {
+            Some(format!("Checks failed: {name} · sent to agent ({attempt})"))
+        }
+        "continue" => Some(format!("Open todos · asked agent to continue ({attempt})")),
+        _ => None,
+    }
+}
+
+/// The three entities the daemon escapes in attribute values.
+fn unescape(value: &str) -> String {
+    value
+        .replace("&lt;", "<")
+        .replace("&quot;", "\"")
+        .replace("&amp;", "&")
 }
 
 #[cfg(test)]
@@ -159,6 +239,7 @@ mod tests {
             ("coordinator", Origin::Coordinator),
             ("mission", Origin::Mission),
             ("pullRequest", Origin::PullRequest),
+            ("automation", Origin::Automation),
             ("slack", Origin::Slack),
             ("control", Origin::Control),
             ("watch", Origin::Watch),
@@ -216,5 +297,71 @@ mod tests {
         );
         // Other kernel kinds without origin are not automatic input.
         assert_eq!(Automatic::read(&json!({"kind": "pilot.question"})), None);
+    }
+
+    #[test]
+    fn automation_follow_ups_read_only_their_opening_line() {
+        let follow_up = |content: Value| {
+            Automatic::read(&json!({
+                "kind": "pi.user",
+                "origin": "automation",
+                "model": [{"role": "user", "content": content}]
+            }))
+            .unwrap()
+        };
+        let check = follow_up(json!(
+            "<automation name=\"Lint &amp; test, A&lt;B &quot;x&quot;\" kind=\"check\" attempt=\"1/3\">\nChecks failed after your last run.\n</automation>"
+        ));
+        assert_eq!(check.origin, Origin::Automation);
+        assert_eq!(
+            check.sentence(),
+            "Checks failed: Lint & test, A<B \"x\" · sent to agent (1/3)"
+        );
+        assert_eq!(check.preview("anything"), None);
+        assert!(!check.failed);
+        let todos = follow_up(json!([{"type": "text", "text":
+            "<automation name=\"Continue on open todos\" kind=\"continue\" attempt=\"2/3\">\nYou finished with 3 open todos."}]));
+        assert_eq!(
+            todos.sentence(),
+            "Open todos · asked agent to continue (2/3)"
+        );
+        for body in [
+            "Checks failed: Tests",
+            "<automation kind=\"check\" attempt=\"1/3\">",
+            "<automation name=\"T\" kind=\"other\" attempt=\"1/3\">",
+            "<automation name=\"T\" kind=\"check\" attempt=\"one\">",
+            "<automation name=\"T\" kind=\"check\" attempt=\"1/3\" extra=\"x\">",
+            "<automation name=\"T kind=\"check\" attempt=\"1/3\">",
+        ] {
+            let read = follow_up(json!(body));
+            assert_eq!(read.summary, None, "{body}");
+            assert_eq!(read.sentence(), "Automation message");
+        }
+        // The same opening line from the user is still the user's.
+        assert_eq!(
+            Automatic::read(
+                &json!({"kind":"pi.user","model":[{"role":"user","content":"<automation name=\"T\" kind=\"check\" attempt=\"1/3\">"}]})
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn hook_results_are_automation_events() {
+        let read = |kind: &str| {
+            Automatic::read(&json!({
+                "kind": "pilot.activity",
+                "data": {"text": "Checks failed: Tests\n\nTests: failed", "event": {"kind": kind, "text": "Checks failed: Tests"}},
+                "model": []
+            }))
+            .unwrap()
+        };
+        let failed = read("automation_failed");
+        assert_eq!(failed.origin, Origin::Automation);
+        assert!(failed.failed);
+        assert_eq!(failed.sentence(), "Checks failed: Tests");
+        let passed = read("automation_finished");
+        assert_eq!(passed.origin, Origin::Automation);
+        assert!(!passed.failed);
     }
 }

@@ -81,6 +81,13 @@ mod chat_links;
 mod chat_links_fixture;
 #[cfg(feature = "native-probes")]
 pub use local_view::chat_links_probe::run_chat_links_probe;
+mod automation_hooks;
+#[cfg(any(test, feature = "native-probes"))]
+mod automation_hooks_fixture;
+#[cfg(test)]
+mod automation_hooks_tests;
+mod automation_hooks_transport;
+mod automation_hooks_view;
 mod conversation_links;
 #[cfg(target_os = "macos")]
 mod desktop_app_link;
@@ -92,6 +99,8 @@ mod session_file_view_reader;
 mod workspace_changes;
 mod workspace_changes_reader;
 mod workspace_setup;
+#[cfg(feature = "native-probes")]
+pub use local_view::automation_hooks_probe::run_automation_hooks_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::context_usage_probe::run_context_usage_probe;
 #[cfg(feature = "native-probes")]

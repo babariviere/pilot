@@ -2350,6 +2350,10 @@ ${run.excerpt}`,
 					]
 						.join("\n\n")
 						.slice(0, 16 * 1024),
+					event: {
+						kind: failed ? ("automation_failed" as const) : ("automation_finished" as const),
+						text: setup.detail ?? "Workspace set up",
+					},
 				};
 				meta.prActivities ??= [];
 				if (!meta.prActivities.some((entry) => entry.requestId === activity.requestId))

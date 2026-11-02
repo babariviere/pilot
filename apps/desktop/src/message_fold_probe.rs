@@ -78,8 +78,21 @@ fn automatic_rows(id: u64) -> Vec<Message> {
             "Agent-facing mission notice",
             serde_json::json!({"origin":"mission","data":{"event":{"text":"Task #3 marked done"}}}),
         ),
+        automatic(
+            23,
+            23,
+            HOOK_FOLLOW_UP,
+            serde_json::json!({"origin":"automation","model":[{"role":"user","content":HOOK_FOLLOW_UP}]}),
+        ),
+        automatic(
+            24,
+            24,
+            "Checks failed: Tests\n\nTests: failed\nexit 1",
+            serde_json::json!({"kind":"pilot.activity","data":{"event":{"kind":"automation_failed","text":"Checks failed: Tests"}}}),
+        ),
     ]
 }
+const HOOK_FOLLOW_UP: &str = "<automation name=\"Tests\" kind=\"check\" attempt=\"1/3\">\nChecks failed after your last run.\n</automation>";
 /// Automatic input: one folded line by default, exact source on copy and expand.
 fn automatic_section(
     cx: &mut HeadlessAppContext,
@@ -126,6 +139,16 @@ fn automatic_section(
         );
         let mission = w.find(toggle(22)).label().unwrap_or_default().to_string();
         assert!(mission.contains("Task #3 marked done"), "{mission}");
+        // Hook follow-ups and results: one quiet line each, from structured provenance.
+        let follow_up = w.find(toggle(23)).label().unwrap_or_default().to_string();
+        assert!(
+            follow_up.contains("Checks failed: Tests · sent to agent (1/3)"),
+            "{follow_up}"
+        );
+        let result = w.find(toggle(24));
+        assert!(result.visible() && result.bounds().size.height < px(40.));
+        let result = result.label().unwrap_or_default().to_string();
+        assert!(result.contains("Checks failed: Tests"), "{result}");
         let job = w.find(toggle(21)).label().unwrap_or_default().to_string();
         assert!(
             job.starts_with("Show automatic input: Background job"),

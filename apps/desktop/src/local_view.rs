@@ -10,6 +10,9 @@ pub(crate) mod archive_probe;
 #[path = "archived_composer.rs"]
 mod archived_composer;
 #[cfg(feature = "native-probes")]
+#[path = "automation_hooks_probe.rs"]
+pub(crate) mod automation_hooks_probe;
+#[cfg(feature = "native-probes")]
 #[path = "automations_probe.rs"]
 pub(crate) mod automations_probe;
 #[cfg(feature = "native-probes")]
@@ -754,6 +757,7 @@ impl LocalViewer {
                 mission_coordinator: false,
                 failure: None,
                 setup_failure: None,
+                automation_runs: Default::default(),
                 pull_requests: Vec::new(),
                 context_usage: Default::default(),
                 subscription_usage: None,
@@ -781,6 +785,7 @@ impl LocalViewer {
                 mission_coordinator: false,
                 failure: None,
                 setup_failure: None,
+                automation_runs: Default::default(),
                 pull_requests: Vec::new(),
                 context_usage: Default::default(),
                 subscription_usage: None,
@@ -808,6 +813,7 @@ impl LocalViewer {
                 mission_coordinator: false,
                 failure: None,
                 setup_failure: None,
+                automation_runs: Default::default(),
                 pull_requests: Vec::new(),
                 context_usage: Default::default(),
                 subscription_usage: None,
@@ -1012,6 +1018,7 @@ impl LocalViewer {
             mission_coordinator: false,
             failure: None,
             setup_failure: None,
+            automation_runs: Default::default(),
             pull_requests: Vec::new(),
             context_usage: Default::default(),
             subscription_usage: None,
@@ -1431,6 +1438,7 @@ impl LocalViewer {
                             mission_coordinator: false,
                             failure: None,
                             setup_failure: None,
+                            automation_runs: Default::default(),
                             pull_requests: Vec::new(),
                             context_usage: Default::default(),
                             subscription_usage: None,
@@ -2421,6 +2429,7 @@ impl LocalViewer {
                     mission_coordinator: false,
                     failure: None,
                     setup_failure: None,
+                    automation_runs: Default::default(),
                     pull_requests: Vec::new(),
                     context_usage: Default::default(),
                     subscription_usage: None,
@@ -3301,6 +3310,7 @@ mod refresh_tests {
                         mission_coordinator: false,
                         failure: None,
                         setup_failure: None,
+                        automation_runs: Default::default(),
                         pull_requests: Vec::new(),
                         context_usage: Default::default(),
                         subscription_usage: None,

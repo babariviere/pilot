@@ -6,7 +6,9 @@ The daemon also retains run-finished events with per-run changed paths, outcome 
 Matching shell checks now run through the same bounded runner. Check failures use a durable, idle-only
 `<automation>` follow-up, a shared three-message attempt limit and visible no-progress/limit attention.
 Continue-on-todos actions share that limit and require closed-todo or changed-file progress before repeating.
-Failed checks win over continuation. The management UI below remains planned. Enable Automations in desktop Settings → Chats to expose the
+Failed checks win over continuation. The Rust desktop shows hook results in the chat timeline, the `automation` Needs you
+reason, and a Hooks section on the Automations page ([automation-hooks.md](../apps/desktop/docs/automation-hooks.md));
+the working line and **Run setup again** remain planned. Enable Automations in desktop Settings → Chats to expose the
 `automations: 1` capability and editing endpoint. This host-owned switch defaults off, persists in
 `chat-settings.json`, and applies to new admissions immediately, without restarting the daemon.
 Turning it off leaves admitted commands to finish and skips later setup steps.

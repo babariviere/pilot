@@ -49,9 +49,12 @@ pub(crate) struct Automations {
     chats: Arc<Vec<Chat>>,
     titles: HashMap<String, String>,
     projects: Arc<Vec<Project>>,
+    /// Self-contained Hooks section with its own reads and writes.
+    pub(crate) hooks: gpui_kit::Entity<crate::automation_hooks_view::Hooks>,
 }
 impl Automations {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
+        let hooks = gpui_kit::AppContext::new(cx, crate::automation_hooks_view::Hooks::new);
         Self {
             state: State::default(),
             options: None,
@@ -68,6 +71,7 @@ impl Automations {
             chats: Arc::new(Vec::new()),
             titles: HashMap::new(),
             projects: Arc::new(Vec::new()),
+            hooks,
         }
     }
     pub(crate) fn connect(&mut self, options: LocalOptions) {
@@ -83,6 +87,7 @@ impl Automations {
         projects: &Arc<Vec<Project>>,
         cx: &mut Context<Self>,
     ) {
+        self.hooks.update(cx, |h, cx| h.sync(chats, projects, cx));
         if !Arc::ptr_eq(&self.chats, chats) {
             self.chats = chats.clone();
             self.titles = chats
@@ -97,6 +102,7 @@ impl Automations {
         }
     }
     pub(crate) fn close(&mut self, cx: &mut Context<Self>) {
+        self.hooks.update(cx, |h, cx| h.close(cx));
         if !self.open {
             return;
         }
@@ -113,6 +119,13 @@ impl Automations {
     }
     pub(crate) fn load(&mut self, cx: &mut Context<Self>) {
         self.open = true;
+        let options = self.options.clone();
+        self.hooks.update(cx, |h, cx| {
+            if let Some(options) = options {
+                h.connect(options);
+            }
+            h.load(cx);
+        });
         let generation = self.state.begin();
         let Some(options) = self.options.clone() else {
             self.state.accept(
@@ -712,6 +725,7 @@ impl Render for Automations {
                 page = page.child(empty(muted, cx));
             }
         }
+        page = page.child(self.hooks.clone());
         div()
             .id("automations-scroll")
             .track_focus(&self.focus)

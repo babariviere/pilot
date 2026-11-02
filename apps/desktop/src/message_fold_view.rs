@@ -190,10 +190,16 @@ impl TranscriptView {
             crate::work_view::Caption {
                 verb: sentence.clone(),
                 subject: preview.clone(),
+                error: automatic.failed,
                 ..Default::default()
             },
             !collapsed,
-            Some(automatic.origin.icon()),
+            // A failed hook result reads like a failed tool call.
+            Some(if automatic.failed {
+                crate::app_icon::AppIcon::Error
+            } else {
+                automatic.origin.icon()
+            }),
             cx,
         )
         .accessibility_label(SharedString::from(format!(

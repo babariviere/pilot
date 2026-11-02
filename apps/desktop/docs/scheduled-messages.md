@@ -19,7 +19,7 @@ One-time 2
 ```
 
 Sections hide when empty: **Needs attention**, **Recurring** (recurring rules,
-later), **One-time** and **Hooks** (later). The header's single primary action
+later), **One-time** and **Hooks** ([automation-hooks.md](automation-hooks.md)). The header's single primary action
 slot is reserved for **New automation**, which arrives with the editor sheet
 for recurring rules. Until then the page has no creation action (see
 [schedule-creation.md](schedule-creation.md)).

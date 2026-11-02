@@ -73,6 +73,8 @@ test("setup failure is retained and reported without failing or withholding the 
 	assert.equal(f.specs[0]?.pilot?.workspaceSetup?.state, "failed");
 	const activity = f.workers.flatMap((w) => w.requests).find((r) => r.type === "activity");
 	assert.ok(activity && activity.type === "activity" && activity.text.includes("Setup failed"));
+	assert.equal(activity.event?.kind, "automation_failed");
+	assert.match(activity.event?.text ?? "", /^Setup failed/);
 	assert.equal(f.workers.flatMap((w) => w.requests).filter((r) => r.type === "input").length, 1);
 });
 

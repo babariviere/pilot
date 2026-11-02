@@ -218,6 +218,8 @@ pub(crate) struct Chat {
     pub(crate) pull_requests: Vec<crate::jump::PullRequest>,
     pub(crate) failure: Option<crate::session_failure::Failure>,
     pub(crate) setup_failure: Option<String>,
+    /// Retained hook command results, newest first, without output (`automation_hooks`).
+    pub(crate) automation_runs: std::sync::Arc<[crate::automation_hooks::Run]>,
     pub(crate) context_usage: crate::context_usage::Usage,
     pub(crate) subscription_usage: Option<crate::provider_usage::Snapshot>,
     pub(crate) model_configuration: Option<crate::chat_models::SessionModel>,
@@ -310,6 +312,7 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
         pull_requests: crate::jump::pull_requests(value),
         failure: crate::session_failure::read(value),
         setup_failure: crate::workspace_setup::failure(value),
+        automation_runs: crate::automation_hooks::runs(value),
         context_usage: crate::context_usage::Usage::read(&value["usage"]),
         subscription_usage: crate::provider_usage::Snapshot::read(&value["usage"]["subscription"]),
         model_configuration: Some(crate::chat_models::SessionModel::read(value)),
@@ -382,6 +385,7 @@ fn decoration(value: &Value) -> (Option<crate::state_mark::Signal>, bool) {
     let ready = value["offlinePaused"] != true
         && !coordinator
         && reason != "pr_stuck"
+        && reason != "automation"
         && value["pullRequest"]["state"] == "open"
         && value["pullRequest"]["readiness"]["state"] == "ready";
     let terminal = value["unpublishedWork"] != true
@@ -419,7 +423,10 @@ fn decoration(value: &Value) -> (Option<crate::state_mark::Signal>, bool) {
         ready.then_some(Signal::Ready)
     } else if !paused && !terminal && (value["outcome"] == "failed" || state == "failed") {
         Some(Signal::Failed)
-    } else if (!paused && value["outcome"] == "question") || reason == "pr_stuck" || missing_pr {
+    } else if (!paused && value["outcome"] == "question")
+        || matches!(reason, "pr_stuck" | "automation")
+        || missing_pr
+    {
         Some(Signal::NeedsYou)
     } else {
         ready.then_some(Signal::Ready)

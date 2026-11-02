@@ -604,6 +604,11 @@ harness = false
 required-features = ["native-probes"]
 
 [[test]]
+name = "automation_hooks"
+harness = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "slack_triage"
 harness = false
 required-features = ["native-probes"]

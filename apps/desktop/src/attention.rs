@@ -103,6 +103,11 @@ pub(crate) fn project(value: &Value, signal: Option<Signal>) -> Option<Attention
             detail.unwrap_or_else(|| "A pull request needs your help".into()),
         ),
         "no_pr" => (Kind::Other, "No PR created".into()),
+        // pilotd's one-line stop reason, e.g. "Checks still failing after 3 follow-ups: Tests".
+        "automation" => (
+            Kind::Other,
+            detail.unwrap_or_else(|| "An automation needs you".into()),
+        ),
         "mission" => (
             Kind::Other,
             with_detail("Mission", "A question or blocked task is waiting on you"),
@@ -188,6 +193,7 @@ mod tests {
             "tool_stall",
             "mcp",
             "pr_stuck",
+            "automation",
             "no_pr",
             "mission",
             "limit",
@@ -266,6 +272,32 @@ mod tests {
                 .unwrap()
                 .kind,
             Kind::ScheduledFailure
+        );
+    }
+    #[test]
+    fn automation_stop_reason_is_needs_you() {
+        let v = json!({"id":"chat","state":"idle","outcome":"done",
+            "attentionReason":{"kind":"automation","detail":"2 open todos, agent made no progress"},
+            "pullRequest":{"state":"open","readiness":{"state":"ready"}}});
+        let chat = crate::local_model::chat(&v).unwrap();
+        assert_eq!(chat.signal, Some(Signal::NeedsYou));
+        let a = chat.attention.unwrap();
+        assert_eq!(
+            (a.kind, a.label.as_str()),
+            (Kind::Other, "2 open todos, agent made no progress")
+        );
+        assert_eq!(
+            attention(json!({"attentionReason":{"kind":"automation"}}))
+                .unwrap()
+                .label,
+            "An automation needs you"
+        );
+        // Running checks keep the chat Working; pilotd projects the reason only when idle.
+        let mut working = v;
+        working["working"] = json!(true);
+        assert_eq!(
+            crate::local_model::chat(&working).unwrap().signal,
+            Some(Signal::Working)
         );
     }
 }
