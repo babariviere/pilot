@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.104.0](https://github.com/babariviere/pilot/compare/v1.103.0...v1.104.0) (2026-11-02)
+
+
+### Features
+
+* **desktop:** animate sidebar row moves after data changes ([e756edf](https://github.com/babariviere/pilot/commit/e756edf33d6f7c6ade88e5c964dc0457548df475))
+* **desktop:** calmer MCP connections layout ([76570c0](https://github.com/babariviere/pilot/commit/76570c01b282fcb71bf9b0a0d1bbbe3ea14d2971))
+* **desktop:** MCP connections sign-in, cancel and checks ([c3eebaa](https://github.com/babariviere/pilot/commit/c3eebaa498a8e8948abd7e34b4a20bd0756c6642))
+* **review:** add inactive retained linkage contracts ([d1fbe6e](https://github.com/babariviere/pilot/commit/d1fbe6e62be0f4f5e39c0a49c51a9b9fad42cbfe))
+* **review:** read bounded exact bytes from sealed evidence ([d1d32f3](https://github.com/babariviere/pilot/commit/d1d32f348dd573af8cdcbaca08cdde38e0ce7d0f))
+
+
+### Bug Fixes
+
+* **desktop:** veto unsafe external application termination ([50b8ca6](https://github.com/babariviere/pilot/commit/50b8ca6150ce01e09b31d393d8c31295e2f659cc))
+* **desktop:** wrap long Home project tooltips inside the window ([ed67653](https://github.com/babariviere/pilot/commit/ed67653f4096908037181e39a48151914f80691a))
+
 ## [1.103.0](https://github.com/babariviere/pilot/compare/v1.102.0...v1.103.0) (2026-10-31)
 
 
