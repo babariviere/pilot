@@ -129,18 +129,19 @@ async fn stop_preserves_fifo_generation_and_other_target_while_autosaving() {
     let final_state = until(&updates, |s| s.checkpoint == Some(29)).await;
     assert_eq!(final_state.handled["chat:a"], 17);
     assert_eq!(final_state.handled["chat:b"], 18);
-    let seen = daemon.seen.lock().unwrap();
-    assert_eq!(seen.stops, 1);
-    assert_eq!(seen.envelopes[0]["targetId"], "b");
-    assert_eq!(
-        seen.requests
-            .iter()
-            .filter(|(_, p)| p.ends_with("/stop") || p == "/api/operations")
-            .map(|(_, p)| p.as_str())
-            .collect::<Vec<_>>(),
-        ["/api/sessions/a/stop", "/api/operations"]
-    );
-    drop(seen);
+    {
+        let seen = daemon.seen.lock().unwrap();
+        assert_eq!(seen.stops, 1);
+        assert_eq!(seen.envelopes[0]["targetId"], "b");
+        assert_eq!(
+            seen.requests
+                .iter()
+                .filter(|(_, p)| p.ends_with("/stop") || p == "/api/operations")
+                .map(|(_, p)| p.as_str())
+                .collect::<Vec<_>>(),
+            ["/api/sessions/a/stop", "/api/operations"]
+        );
+    }
     assert!(client.command(WriteCommand::Close));
     until(&updates, |s| s.flushed).await;
     disconnected(client, updates).await;

@@ -19,6 +19,7 @@ pub(crate) fn snapshot(c: &Value) -> Value {
 }
 
 /// Three files in one retained comparison: modified, added under a long path, deleted.
+#[cfg(feature = "native-probes")]
 pub(crate) fn multi(c: &Value) -> (Value, String) {
     let long =
         "src/review/very/long/directory/name/that/keeps/going/retained_comparison_view_日本語.rs";
