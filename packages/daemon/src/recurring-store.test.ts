@@ -139,3 +139,65 @@ test("active recurring limit is enforced atomically, including resume", async (t
 		/limit/,
 	);
 });
+
+test("notice dismissal preserves cursor, runs and next deadline, including missing projects", async (t) => {
+	const f = await fixture(t);
+	const created = await f.service.create(f.request);
+	const run = { due: created.at!, at: created.at! + 600000, outcome: "failed" as const, error: "Project removed" };
+	const old = await f.store.replace(created, { ...created, runs: [run], notice: run, paused: true });
+	for (const dismissNotice of [false, null, "true"]) {
+		await assert.rejects(
+			f.service.update(old.id, {
+				dismissNotice,
+				expectedHome: f.identity,
+				expectedRevision: old.revision,
+			} as unknown as SchedulePatch),
+		);
+	}
+	f.deps.projects.require = () => {
+		throw new Error("Project removed");
+	};
+	const dismissed = await f.service.update(old.id, {
+		dismissNotice: true,
+		expectedHome: f.identity,
+		expectedRevision: old.revision,
+	});
+	assert.equal(dismissed.notice, undefined);
+	assert.deepEqual(dismissed.runs, [run]);
+	assert.equal(dismissed.handledThrough, old.handledThrough);
+	assert.equal(dismissed.at, old.at);
+	assert.equal(dismissed.paused, true);
+	await assert.rejects(
+		f.service.update(old.id, { dismissNotice: true, expectedHome: f.identity, expectedRevision: old.revision }),
+		/changed/,
+	);
+	await f.restart();
+	assert.equal(f.service.require(old.id).notice, undefined);
+	assert.deepEqual(f.service.require(old.id).runs, [run]);
+});
+
+test("dashboard projections detach notices and never expose prompts; recurring replies do not hide chat attention", async (t) => {
+	const f = await fixture(t);
+	const row = await f.service.create({
+		...f.request,
+		title: "Check project",
+		target: { kind: "message", sessionId: "target", message: "Private prompt" },
+	});
+	assert.equal(f.service.scheduledMessageSessions().size, 0);
+	const run = {
+		due: row.at!,
+		at: row.at! + 600000,
+		outcome: "sent" as const,
+		late: true as const,
+		sessionId: "target",
+	};
+	const noted = await f.store.replace(row, { ...row, notice: run, runs: [run] });
+	const projection = f.service.dashboard("p")[0];
+	assert.equal(JSON.stringify(projection).includes("Private prompt"), false);
+	projection.notice!.sessionId = "mutated";
+	projection.recurrence!.time = "01:00";
+	assert.equal(f.service.require(row.id).notice?.sessionId, "target");
+	assert.equal(f.service.require(row.id).recurrence?.time, "09:00");
+	await f.store.replace(noted, { ...noted, state: "dispatching" });
+	assert.equal(f.service.dashboard("p")[0].notice?.outcome, "sent", "old notice stays visible during the next claim");
+});

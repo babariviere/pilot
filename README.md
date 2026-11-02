@@ -188,7 +188,10 @@ the daemon report; check, sign-in and setup actions are not included. See the
 - **Bring work into Pilot.** Track Linear issues and Slack messages from configured sources, triage Slack
   messages by type, label and severity, see what waits on you across projects in one Inbox, then start a chat or
   mission from an item. A chat started from a Slack message shows that message's status in its toolbar (and ⌘K),
-  where you mark it In progress, Waiting or Done. Schedule work for later or for wake, online and time triggers.
+  where you mark it In progress, Waiting or Done. Schedule work for a one-time deadline. The experimental
+  daemon API also supports daily, weekly and monthly rules behind the Automations setting, with bounded
+  catch-up and Inbox notices. Recurring-rule desktop management is planned; see
+  [recurring schedules](docs/recurring-schedules.md).
 - **Light or dark.** Pilot follows the macOS appearance; **Settings → Appearance** can pin light or dark.
   Home pairs dithered daytime clouds with a separate evening seascape in dark mode. Artifacts stay light documents
   in both.

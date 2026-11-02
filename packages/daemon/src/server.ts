@@ -458,7 +458,12 @@ export function createDaemonServer(
 			...(tracking ? { tracked: (id: string) => tracking.dashboard(id) } : {}),
 			...(tracking ? { inbox: (id: string) => tracking.inboxCount(id) } : {}),
 			...(memory ? { memory: (id: string) => memory.summary(id) } : {}),
-			...(schedules ? { scheduled: (id: string) => schedules.dashboard(id) } : {}),
+			...(schedules
+				? {
+						scheduled: (id: string) => schedules.dashboard(id),
+						scheduledProjects: () => schedules.noticeProjects(),
+					}
+				: {}),
 			onChange(listener) {
 				const stops = [
 					dashboardProviders?.onChange?.(listener),

@@ -1,6 +1,6 @@
 # Recurring schedules (design)
 
-**Status: design proposal, not implemented.** Recurring time triggers such as "every Monday at 9:00, run a
+**Status: daemon and protocol steps 1–3 implemented; desktop management remains planned.** Recurring time triggers such as "every Monday at 9:00, run a
 database performance analysis". When the computer was off or asleep at the due time, the run happens once
 Pilot is back. Scope is the daemon (`pilotd`) and the Rust desktop app (`apps/desktop`); the Swift app is no
 longer supported and gets no work.
@@ -185,7 +185,7 @@ up under the rules above when it returns.
 
 ## 7. Presentation (apps/desktop)
 
-**Settings → Schedules** (the current read-only Scheduled messages roster, which gains management), following
+**Automations page** (sidebar below Missions, replacing Settings → Scheduled messages), following
 the calm settings list pattern:
 
 ```text
@@ -218,9 +218,23 @@ One-time
 
 A notice is replaced by the next noteworthy run, and cleared by Dismiss or by the next on-time successful run.
 
+The daemon projects recurring notices as `scheduled_notice` rows with `scheduleRun` and
+`scheduleTimeZone`. Late successes carry `countsInBadge: false`: section `total` includes them,
+but dashboard `summary.needsYou`, sidebar counts and reason counts do not. Informational rows sort
+after actionable rows and never suppress their chat's own attention or ready PR. Dashboard scheduled
+rows carry recurrence, pause and notice metadata without prompts. A recurring message does not
+mark its fixed chat as waiting on a one-time scheduled reply. The global Inbox and counts retain
+notices for removed projects until dismissed; project-specific reads still reject unknown projects.
+
+Dismiss uses `PATCH /api/schedules/:id` with `dismissNotice: true`, `expectedRevision` and
+`expectedHome`, under native authority and the live Automations setting. It changes only the notice
+and row revision/time, not runs or the handled cursor. A notice-only patch works even if the target
+or project has been removed. Reads stay passive; dismissal never replays a handled occurrence.
+
 ## 8. Implementation split
 
-Each step is one PR with focused tests (injected clock and time zone, temporary directories, faux sessions).
+Each step is one commit, delivered directly to the default branch with focused tests (injected clock and
+time zone, temporary directories, faux sessions). Full suites run in CI. Desktop work is separate.
 
 1. **Model and store**: protocol types, recurrence validation, occurrence and period computation with DST cases,
    `handledThrough` on create, edit and resume, capability and `expectedHome` checks, load repair of interrupted

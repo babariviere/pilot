@@ -393,6 +393,7 @@ export class ScheduleService {
 			"recurrence",
 			"paused",
 			"expectedHome",
+			"dismissNotice",
 		] as const)
 			if (patch[key] === null) throw new Error(`${key} cannot be null`);
 		if (
@@ -413,6 +414,13 @@ export class ScheduleService {
 		if (patch.paused !== undefined && (trigger !== "recurring" || typeof patch.paused !== "boolean"))
 			throw new Error("paused requires a recurring rule and boolean");
 		if (trigger === "recurring" && patch.at !== undefined) throw new Error("at is daemon-owned");
+		if (patch.dismissNotice !== undefined && (patch.dismissNotice !== true || trigger !== "recurring"))
+			throw new Error("dismissNotice must be true on a recurring rule");
+		if (
+			patch.dismissNotice === true &&
+			!["title", "trigger", "at", "target", "recurrence", "paused"].some((key) => key in patch)
+		)
+			return this.store.replace(old, { ...old, notice: undefined, updatedAt: this.time.now() });
 		const data = await this.validate({
 			recurrence: patch.recurrence ?? old.recurrence,
 			expectedHome: patch.expectedHome,
@@ -425,6 +433,7 @@ export class ScheduleService {
 			...old,
 			...data,
 			at: data.at,
+			...(patch.dismissNotice ? { notice: undefined } : {}),
 			projectId: data.projectId,
 			sessionId: data.sessionId,
 			...(trigger === "recurring"
@@ -467,6 +476,9 @@ export class ScheduleService {
 	}
 	dashboard(projectId: string): DashboardScheduledItem[] {
 		return this.store.dashboard(projectId);
+	}
+	noticeProjects(): string[] {
+		return this.store.noticeProjects();
 	}
 	scheduledMessageSessions(): Set<string> {
 		return this.store.scheduledMessageSessions();

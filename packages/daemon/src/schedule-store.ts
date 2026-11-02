@@ -73,7 +73,11 @@ export class ScheduleStore {
 	/** Lightweight projection: dashboard builds never copy stored prompt payloads. */
 	dashboard(projectId: string): DashboardScheduledItem[] {
 		return [...this.items.values()]
-			.filter((item) => item.projectId === projectId && (item.state === "pending" || item.state === "failed"))
+			.filter(
+				(item) =>
+					item.projectId === projectId &&
+					(item.state === "pending" || item.state === "failed" || (item.state === "dispatching" && !!item.notice)),
+			)
 			.sort((a, b) => (a.at ?? a.createdAt) - (b.at ?? b.createdAt))
 			.map((item) => ({
 				id: item.id,
@@ -81,16 +85,35 @@ export class ScheduleStore {
 				kind: item.target.kind,
 				trigger: item.trigger,
 				at: item.state === "failed" ? item.updatedAt : item.at,
-				state: item.state as "pending" | "failed",
+				state: item.state as "pending" | "failed" | "dispatching",
+				...(item.recurrence ? { recurrence: structuredClone(item.recurrence) } : {}),
+				...(item.paused ? { paused: true as const } : {}),
+				...(item.notice ? { notice: structuredClone(item.notice) } : {}),
 				error: item.error,
 				sessionId: item.sessionId,
 			}));
 	}
-	/** Chats with a follow-up message that has not been sent yet (pending or dispatching). */
+	/** Keep notices reachable in the global Inbox after their project is removed. */
+	noticeProjects(): string[] {
+		return [
+			...new Set(
+				[...this.items.values()]
+					.filter(
+						(item) => item.trigger === "recurring" && item.state !== "cancelled" && item.notice && item.projectId,
+					)
+					.map((item) => item.projectId!),
+			),
+		];
+	}
+	/** Only one-time replies represent a chat waiting on a scheduled answer. */
 	scheduledMessageSessions(): Set<string> {
 		const ids = new Set<string>();
 		for (const item of this.items.values())
-			if ((item.state === "pending" || item.state === "dispatching") && item.target.kind === "message")
+			if (
+				item.trigger === "at" &&
+				(item.state === "pending" || item.state === "dispatching") &&
+				item.target.kind === "message"
+			)
 				ids.add(item.target.sessionId);
 		return ids;
 	}

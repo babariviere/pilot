@@ -26,11 +26,14 @@ import { hasMissingPullRequest, reasonLine, sessionNeedsYouReason } from "./need
 import type { ProjectStore } from "./projects.ts";
 import { readinessReasonLabel } from "./pull-request-readiness.ts";
 import type { ReviewStore } from "./reviews.ts";
+import { scheduleNotice } from "./schedule-notice.ts";
 
 /** Optional data providers. Until registered, their sections are empty or absent. */
 export interface DashboardProviders {
 	/** Pending and failed scheduled items of a project. Failed ones are listed under Needs you. */
 	scheduled?: (projectId: string) => DashboardScheduledItem[];
+	/** Includes removed projects whose paused rules still have dismissible notices. */
+	scheduledProjects?: () => string[];
 	/** One group per configured tracking source of a project. */
 	tracked?: (projectId: string) => DashboardTrackedSource[];
 	/** Cached count, recent notes and background compaction health. No disk I/O while building a dashboard. */
@@ -59,6 +62,7 @@ const KIND_RANK = {
 	failed: 0,
 	question: 1,
 	scheduled_failed: 2,
+	scheduled_notice: 2,
 	tool_stall: 3,
 	long_job: 4,
 	mcp: 5,
@@ -66,6 +70,14 @@ const KIND_RANK = {
 	no_pr: 7,
 	unread: 8,
 } as const;
+function compareAttention(a: DashboardNeedsYouItem, b: DashboardNeedsYouItem): number {
+	return (
+		Number(a.countsInBadge === false) - Number(b.countsInBadge === false) ||
+		KIND_RANK[a.kind] - KIND_RANK[b.kind] ||
+		b.at - a.at ||
+		a.id.localeCompare(b.id)
+	);
+}
 const isTerminal = (pr: SessionPullRequest) => pr.state === "merged" || pr.state === "closed";
 const isWorking = (session: SessionSummary) =>
 	session.working ?? (session.state === "working" || session.state === "starting" || !!session.runningJobs?.length);
@@ -183,8 +195,10 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 			at: mission.updatedAt,
 		});
 	}
-	for (const item of scheduled)
-		if (item.state === "failed")
+	for (const item of scheduled) {
+		const notice = scheduleNotice(item);
+		if (notice) needsYou.push(notice);
+		else if (item.state === "failed")
 			needsYou.push({
 				kind: "scheduled_failed",
 				id: `scheduled:${item.id}`,
@@ -198,7 +212,8 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 				},
 				at: item.at ?? 0,
 			});
-	needsYou.sort((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind] || b.at - a.at || a.id.localeCompare(b.id));
+	}
+	needsYou.sort(compareAttention);
 
 	const working: DashboardWorkingItem[] = sessions
 		.filter((session) => isWorking(session) && !reviewing.has(session.id))
@@ -288,7 +303,7 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 		summary: {
 			chats: sessions.length,
 			working: working.length,
-			needsYou: needsYou.length,
+			needsYou: needsYou.filter((item) => item.countsInBadge !== false).length,
 			openPullRequests: pullRequests.length,
 			readyPullRequests: pullRequests.filter(isReady).length,
 			activeMissions: missions.length,
@@ -345,17 +360,19 @@ export class ProjectDashboardService {
 	/** Working, needs-you and Inbox tracked counts of every project that has any. One pass over the chats. */
 	counts(): ProjectDashboardCounts {
 		const all = this.everyProject();
+		const known = new Set(this.deps.projects.list().map((project) => project.id));
 		const projects: ProjectDashboardCounts["projects"] = {};
-		for (const project of this.deps.projects.list()) {
-			const { summary, needsYou } = all.build(project.id, Number.MAX_SAFE_INTEGER);
+		for (const id of this.inboxProjects()) {
+			const { summary, needsYou } = all.build(id, Number.MAX_SAFE_INTEGER);
 			const needsYouReasons: NonNullable<ProjectDashboardCounts["projects"][string]["needsYouReasons"]> = {};
 			for (const item of needsYou.items) {
+				if (item.countsInBadge === false) continue;
 				const kind = item.attentionReason.kind;
 				needsYouReasons[kind] = (needsYouReasons[kind] ?? 0) + 1;
 			}
-			const tracked = this.deps.providers?.inbox?.(project.id) ?? 0;
+			const tracked = known.has(id) ? (this.deps.providers?.inbox?.(id) ?? 0) : 0;
 			if (summary.working || summary.needsYou || tracked)
-				projects[project.id] = {
+				projects[id] = {
 					working: summary.working,
 					needsYou: summary.needsYou,
 					...(summary.needsYou ? { needsYouReasons } : {}),
@@ -377,7 +394,7 @@ export class ProjectDashboardService {
 	 */
 	inbox(projectId: string | undefined, limit: number): Pick<Inbox, "needsYou" | "readyToMerge"> {
 		if (projectId) this.deps.projects.require(projectId);
-		const ids = projectId ? [projectId] : this.deps.projects.list().map((project) => project.id);
+		const ids = projectId ? [projectId] : this.inboxProjects();
 		const all = this.everyProject();
 		const items: InboxNeedsYouItem[] = [];
 		const ready: InboxReadyToMergeItem[] = [];
@@ -387,17 +404,27 @@ export class ProjectDashboardService {
 			for (const item of dashboard.needsYou.items) {
 				items.push({ ...item, projectId: id });
 				// A failed schedule names the chat it targets; that chat is not waiting on the user.
-				if (item.sessionId && item.kind !== "scheduled_failed") busy.add(item.sessionId);
+				if (item.sessionId && item.kind !== "scheduled_failed" && item.kind !== "scheduled_notice")
+					busy.add(item.sessionId);
 			}
 			for (const pr of dashboard.pullRequests.items)
 				if (pr.state === "open" && pr.readiness?.state === "ready" && !busy.has(pr.sessionId))
 					ready.push({ ...pr, projectId: id });
 		}
-		items.sort((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind] || b.at - a.at || a.id.localeCompare(b.id));
+		items.sort(compareAttention);
 		ready.sort((a, b) => b.checkedAt - a.checkedAt || a.url.localeCompare(b.url));
 		return { needsYou: section(items, limit), readyToMerge: section(ready, limit) };
 	}
 
+	/** The global Inbox also owns notices whose project no longer exists. */
+	private inboxProjects(): string[] {
+		return [
+			...new Set([
+				...this.deps.projects.list().map((project) => project.id),
+				...(this.deps.providers?.scheduledProjects?.() ?? []),
+			]),
+		];
+	}
 	/** Fires after any change that can alter a dashboard. Callers coalesce and compare results. */
 	onChange(listener: () => void): () => void {
 		const { sessions, projects, missions, reviews, providers } = this.deps;
@@ -415,6 +442,7 @@ export class ProjectDashboardService {
 
 	/** Chats and missions grouped by project in one pass, for building several dashboards. */
 	private everyProject(): { build(projectId: string, limit?: number): ProjectDashboard } {
+		const known = new Set(this.deps.projects.list().map((project) => project.id));
 		const byProject = new Map<string, SessionSummary[]>();
 		for (const session of this.deps.sessions.list({ archived: "false" })) {
 			if (!session.projectId) continue;
@@ -437,6 +465,7 @@ export class ProjectDashboardService {
 					missionsByProject.get(projectId) ?? [],
 					progress,
 					limit,
+					known.has(projectId),
 				),
 		};
 	}
@@ -447,6 +476,7 @@ export class ProjectDashboardService {
 		missions: Mission[],
 		progress: Map<string, MissionTaskProgress>,
 		limit = DASHBOARD_SECTION_LIMIT,
+		includeProjectProviders = true,
 	): ProjectDashboard {
 		const { reviews, providers } = this.deps;
 		return buildProjectDashboard(
@@ -457,8 +487,8 @@ export class ProjectDashboardService {
 				progress,
 				isUnread: (id, at) => reviews.isUnread(id, at),
 				scheduled: providers?.scheduled?.(projectId),
-				tracked: providers?.tracked?.(projectId),
-				memory: providers?.memory?.(projectId),
+				tracked: includeProjectProviders ? providers?.tracked?.(projectId) : undefined,
+				memory: includeProjectProviders ? providers?.memory?.(projectId) : undefined,
 			},
 			limit,
 		);

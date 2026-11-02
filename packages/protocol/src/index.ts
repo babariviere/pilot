@@ -1421,7 +1421,8 @@ export interface DashboardSection<T> {
  * - `failed`: a chat's latest run failed and has not been reviewed.
  * - `question`: a chat's agent asked a question that is not answered yet (with `sessionId`), or an active mission
  *   has blocked tasks or open agent comments with no coordinator chat to take them (with `missionId` and `count`).
- * - `scheduled_failed`: a scheduled item could not start.
+ * - `scheduled_failed`: a one-time scheduled item could not start.
+ * - `scheduled_notice`: a recurring run was late, skipped, missed or failed. Late successes do not count in badges.
  * - `long_job`: a live job has run for at least one hour. User-only, even inside a mission.
  * - `unread`: a chat finished or stopped and its result has not been reviewed.
  */
@@ -1429,6 +1430,7 @@ export type DashboardNeedsYouKind =
 	| "failed"
 	| "question"
 	| "scheduled_failed"
+	| "scheduled_notice"
 	| "long_job"
 	| "mcp"
 	| "tool_stall"
@@ -1441,6 +1443,7 @@ export type NeedsYouReasonKind =
 	| "asks"
 	| "not_reviewed"
 	| "couldnt_start"
+	| "schedule"
 	| "mission"
 	| "limit"
 	| "pr_stuck"
@@ -1477,8 +1480,13 @@ export interface DashboardNeedsYouItem {
 	sessionId?: string;
 	/** `question` always, chats when they belong to a mission. */
 	missionId?: string;
-	/** `scheduled_failed`: the scheduled item. */
+	/** Scheduled failure or recurring notice: the scheduled item. */
 	scheduledId?: string;
+	/** Exact occurrence/handling times, without the saved prompt. */
+	scheduleRun?: import("./schedules.ts").ScheduleRun;
+	scheduleTimeZone?: string;
+	/** Late successes remain visible but do not count in badges. Omitted means true. */
+	countsInBadge?: false;
 	/** `failed` and `unread`. */
 	outcome?: SessionOutcome;
 	/** Failure or stop reason, one short line. */
@@ -1569,13 +1577,16 @@ export interface DashboardScheduledItem {
 	/** What it will do. */
 	kind: "chat" | "message";
 	trigger: import("./schedules.ts").ScheduleTrigger | "removed";
-	/** Epoch ms, for `at` triggers. */
+	/** Epoch ms: one-time instant or next recurring occurrence. */
 	at?: number;
-	/** `pending` rows list under Scheduled, `failed` ones under Needs you. */
-	state: "pending" | "failed";
+	/** Pending rows list under Scheduled. Failures and recurring notices also appear under Needs you. */
+	state: "pending" | "failed" | "dispatching";
+	recurrence?: import("./schedules.ts").ScheduleRecurrence;
+	paused?: true;
+	notice?: import("./schedules.ts").ScheduleRun;
 	/** Why it could not start. */
 	error?: string;
-	/** Target chat of a message. */
+	/** Target chat of a message, or most recent recurring run. */
 	sessionId?: string;
 }
 
@@ -1625,7 +1636,7 @@ export interface ProjectDashboardSummary {
 	/** Active (not archived) chats of the project. 0 means a new project. */
 	chats: number;
 	working: number;
-	/** Equals `needsYou.total`. */
+	/** Actionable rows only. Unlike `needsYou.total`, excludes informational late successes. */
 	needsYou: number;
 	openPullRequests: number;
 	readyPullRequests: number;
@@ -1655,7 +1666,7 @@ export interface ProjectDashboard {
 export interface ProjectDashboardCount {
 	working: number;
 	needsYou: number;
-	/** Uncapped row totals by reason. Omitted when no rows need the user. */
+	/** Uncapped actionable row totals by reason. Excludes informational late successes. */
 	needsYouReasons?: Partial<Record<NeedsYouReasonKind, number>>;
 	/** Open tracked items the Inbox lists (Linear and Slack, without hidden labels). Omitted when 0. */
 	tracked?: number;
