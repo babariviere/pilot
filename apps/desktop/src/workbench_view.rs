@@ -342,7 +342,7 @@ impl LocalViewer {
     pub(super) fn sidebar(&self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let width = self.sidebar_width(w, cx);
         self.chats.update(cx, |list, cx| {
-            if list.delegate_mut().animate_folds(width, w, cx) {
+            if list.delegate_mut().animate_rows(width, w, cx) {
                 cx.notify();
             }
         });

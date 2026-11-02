@@ -39,6 +39,8 @@ use std::{
 
 #[path = "sidebar_fold.rs"]
 mod fold;
+#[path = "sidebar_reorder.rs"]
+mod reorder;
 
 type Observed = gpui_kit::base::ObservedElement<gpui_kit::Stateful<Div>>;
 
@@ -91,6 +93,10 @@ pub(crate) struct ChatList {
     pub(crate) marks: HashMap<String, Fade>,
     folds: fold::Motion,
     fold_width: f32,
+    /// Row moves after a data change; see `sidebar_reorder`.
+    reorder: reorder::Motion,
+    /// The list's scroll viewport, which clips moving rows.
+    pub(crate) scroll: Option<gpui_kit::ScrollHandle>,
     /// The list's keyboard focus (its search field), for revealing row actions.
     pub(crate) focus: Option<FocusHandle>,
     /// Rows that build their action menu button: the hovered row, the selected
@@ -119,6 +125,8 @@ impl ChatList {
             marks: HashMap::new(),
             folds: Default::default(),
             fold_width: 0.,
+            reorder: Default::default(),
+            scroll: None,
             focus: None,
             hovered: None,
             menu_row: None,
@@ -126,6 +134,7 @@ impl ChatList {
     }
     pub(crate) fn filter(&mut self) {
         self.folds.cancel();
+        self.reorder.cancel();
         let archived = self.archived;
         let project = self.project.clone();
         // A folder keeps its projects' chats; pinned chats always show.
@@ -158,6 +167,50 @@ impl ChatList {
             .collect();
         self.marks.retain(|key, _| keys.contains(key));
     }
+    /// Rebuilds after a data change (`before` is `row_layout` from before it):
+    /// moved rows ease from where they show, new rows fade in.
+    pub(crate) fn filter_moving(&mut self, before: &[(String, f32)]) {
+        let mut motion = std::mem::take(&mut self.reorder);
+        self.filter();
+        motion.arm(before, &self.row_layout());
+        self.reorder = motion;
+    }
+    /// Shows every row in its slot now.
+    pub(crate) fn settle_rows(&mut self) {
+        self.reorder.cancel();
+    }
+    /// A row's current move: offset from its slot, opacity, raised.
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn row_motion(&self, key: &str) -> (f32, f32, bool) {
+        (
+            self.reorder.offset(key),
+            self.reorder.opacity(key),
+            self.reorder.raised(key),
+        )
+    }
+    /// Each row's key and top in the list's content, section headers included.
+    pub(crate) fn row_layout(&self) -> Vec<(String, f32)> {
+        let mut y = 0.;
+        let mut out = Vec::with_capacity(self.tree.rows.len());
+        for section in 0..SECTIONS.len() {
+            let (start, end) = (self.tree.bounds[section], self.tree.bounds[section + 1]);
+            if start == end {
+                continue;
+            }
+            y += if self.header_shown(section) {
+                HEADER_HEIGHT
+            } else {
+                HEADER_GAP
+            };
+            for position in start..end {
+                out.push((self.tree.key(self.tree.rows[position], &self.all), y));
+                y += self
+                    .natural_height(IndexPath::new(position - start).section(section))
+                    .unwrap_or(0.);
+            }
+        }
+        out
+    }
     fn natural_height(&self, ix: IndexPath) -> Option<f32> {
         Some(match self.row(ix)? {
             Row::Chat(chat) if self.chat_caption(self.all.get(chat)?, ix.section) => {
@@ -188,9 +241,11 @@ impl ChatList {
         motion.arm(key, &before, &self.fold_layout());
         self.folds = motion;
     }
-    pub(super) fn animate_folds(&mut self, width: f32, w: &mut Window, cx: &App) -> bool {
+    /// Folds and row moves, once per frame: true while either runs.
+    pub(super) fn animate_rows(&mut self, width: f32, w: &mut Window, cx: &App) -> bool {
         self.fold_width = width;
-        self.folds.sample(width, w, cx)
+        let folds = self.folds.sample(width, w, cx);
+        self.reorder.sample(width, w, cx) || folds
     }
     fn position(&self, ix: IndexPath) -> Option<usize> {
         let start = *self.tree.bounds.get(ix.section)?;
@@ -1422,7 +1477,7 @@ fn branch(last: bool, cx: &App) -> Observed {
 }
 
 impl ListDelegate for ChatList {
-    type Item = ListItem;
+    type Item = reorder::Row;
     fn sections_count(&self, _: &App) -> usize {
         SECTIONS.len()
     }
@@ -1488,45 +1543,53 @@ impl ListDelegate for ChatList {
         ix: IndexPath,
         window: &mut Window,
         cx: &mut Context<ListState<Self>>,
-    ) -> Option<ListItem> {
+    ) -> Option<reorder::Row> {
         self.folds.sample(self.fold_width, window, cx);
+        self.reorder.sample(self.fold_width, window, cx);
         let natural = self.natural_height(ix)?;
         let height = self.item_height(ix, cx)?;
-        Some(
-            match self.row(ix)? {
-                Row::Chat(chat) => {
-                    let chat = self.all.get(chat)?.clone();
-                    self.render_chat(ix, chat, window, cx)
-                }
-                Row::Parent(thread) => self.render_parent(ix, thread, window, cx),
-                Row::Member { chat, thread } => {
-                    let chat = self.all.get(chat)?.clone();
-                    self.render_member(ix, chat, thread, window, cx)
-                }
-                Row::Fold(thread) => self.render_fold(ix, thread, cx),
-                Row::Group(group) => self.render_group(ix, group, window, cx),
+        let item = match self.row(ix)? {
+            Row::Chat(chat) => {
+                let chat = self.all.get(chat)?.clone();
+                self.render_chat(ix, chat, window, cx)
             }
-            .h(height)
-            .overflow_hidden()
-            .items_start()
-            .when(f32::from(height) > natural, |item| {
-                // Only empty exit space remains, never an obsolete child's targets.
-                item.child(
-                    div()
-                        .id("sidebar-fold-exit-space")
-                        .absolute()
-                        .top(px(natural))
-                        .bottom_0()
-                        .left_0()
-                        .right_0()
-                        .on_mouse_down(gpui_kit::MouseButton::Left, |_, w, cx| {
-                            w.prevent_default();
-                            cx.stop_propagation();
-                        })
-                        .on_click(|_, _, cx| cx.stop_propagation()),
-                )
-            }),
-        )
+            Row::Parent(thread) => self.render_parent(ix, thread, window, cx),
+            Row::Member { chat, thread } => {
+                let chat = self.all.get(chat)?.clone();
+                self.render_member(ix, chat, thread, window, cx)
+            }
+            Row::Fold(thread) => self.render_fold(ix, thread, cx),
+            Row::Group(group) => self.render_group(ix, group, window, cx),
+        }
+        .h(height)
+        .overflow_hidden()
+        .items_start()
+        .when(f32::from(height) > natural, |item| {
+            // Only empty exit space remains, never an obsolete child's targets.
+            item.child(
+                div()
+                    .id("sidebar-fold-exit-space")
+                    .absolute()
+                    .top(px(natural))
+                    .bottom_0()
+                    .left_0()
+                    .right_0()
+                    .on_mouse_down(gpui_kit::MouseButton::Left, |_, w, cx| {
+                        w.prevent_default();
+                        cx.stop_propagation();
+                    })
+                    .on_click(|_, _, cx| cx.stop_propagation()),
+            )
+        });
+        let row = reorder::Row::new(item);
+        if !self.reorder.active() {
+            return Some(row);
+        }
+        let key = self.key_at(ix)?;
+        let mut backdrop = cx.theme().sidebar;
+        backdrop.a = 1.;
+        let viewport = self.scroll.as_ref().map(|s| s.bounds());
+        Some(row.moving(&self.reorder, &key, backdrop, viewport))
     }
     fn set_selected_index(
         &mut self,

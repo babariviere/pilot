@@ -19,6 +19,9 @@ use std::{sync::Arc, time::Duration};
 
 const LONG: &str = "stoik-data 日本語 👩‍💻 with a very long project name";
 
+#[path = "sidebar_reorder_probe.rs"]
+mod reorder;
+
 fn settle(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
     for _ in 0..12 {
         cx.advance_clock(Duration::from_millis(16));
@@ -240,6 +243,7 @@ fn collapsed(view: &Entity<LocalViewer>, key: &str, cx: &mut HeadlessAppContext)
 
 pub fn run_sidebar_sections_probe(cx: &mut HeadlessAppContext) {
     run_fold_motion(cx);
+    reorder::run(cx);
     let captures = std::env::var_os("PILOT_NEXT_STYLE_DIR").map(std::path::PathBuf::from);
     if let Some(dir) = &captures {
         std::fs::create_dir_all(dir).unwrap();

@@ -1059,7 +1059,8 @@ impl LocalViewer {
             .searchable(false)
         });
         chats.update(cx, |list, cx| {
-            list.delegate_mut().focus = Some(gpui_kit::Focusable::focus_handle(list, cx))
+            list.delegate_mut().focus = Some(gpui_kit::Focusable::focus_handle(list, cx));
+            list.delegate_mut().scroll = Some((**list.scroll_handle()).clone());
         });
         let subscription = cx.subscribe_in(&chats, window, |view, list, event, window, cx| {
             if let ListEvent::Confirm(ix) = event {
@@ -1304,8 +1305,17 @@ impl LocalViewer {
                     }
                     let now = crate::sidebar_memory::now();
                     view.chats.update(cx, |list, cx| {
-                        list.delegate_mut().memory.note_sent(chat, now);
-                        list.delegate_mut().filter();
+                        // Selection keeps its row, wherever the row moves to.
+                        let selected = list
+                            .delegate()
+                            .selected
+                            .and_then(|ix| list.delegate().key_at(ix));
+                        let delegate = list.delegate_mut();
+                        let before = delegate.row_layout();
+                        delegate.memory.note_sent(chat, now);
+                        delegate.filter_moving(&before);
+                        let selected = selected.and_then(|key| delegate.index(&key));
+                        list.set_selected_index(selected, window, cx);
                         cx.notify();
                     });
                     view.save_sidebar_memory(cx);
@@ -2355,6 +2365,10 @@ impl LocalViewer {
                 .selected
                 .and_then(|ix| list.delegate().key_at(ix));
             let delegate = list.delegate_mut();
+            // A data change moves rows; a first load or another scope doesn't.
+            let before =
+                (metadata_changed && delegate.loaded && delegate.project == self.project_scope)
+                    .then(|| delegate.row_layout());
             if metadata_changed {
                 delegate.memory.observe(&all);
             }
@@ -2369,7 +2383,10 @@ impl LocalViewer {
             delegate.loaded = self.state.list_loaded;
             delegate.project = self.project_scope.clone();
             delegate.projects = self.state.projects.clone();
-            delegate.filter();
+            match before {
+                Some(before) => delegate.filter_moving(&before),
+                None => delegate.filter(),
+            }
             let selected = selected.and_then(|id| delegate.index(&id));
             list.set_selected_index(selected, window, cx);
             cx.notify();
@@ -2471,6 +2488,9 @@ impl LocalViewer {
                 // Seed and redraw with the restored memory.
                 view.nav_chats = Arc::new(Vec::new());
                 view.rebuild_nav(window, cx);
+                // Restored order is a first look, not a move.
+                view.chats
+                    .update(cx, |list, _| list.delegate_mut().settle_rows());
             });
         })
         .detach();

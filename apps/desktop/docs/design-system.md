@@ -315,6 +315,21 @@ snap. Keyboard navigation into an entering row reveals its natural geometry at
 once rather than leaving selection hidden. The native `style` target exercises
 these phases alongside the existing selection, tree, counts and scrolling checks.
 
+Sidebar rows also move on that clock when the data changes their order or
+membership (`sidebar_reorder.rs`): your sends, and chats that appear, leave, are
+pinned or archived. The list's layout, keys, selection and keyboard order are
+final at once; each surviving row paints from where it showed into its slot, a
+new row fades in place, and a removed row leaves at once (no ghost or targets)
+while its neighbours close the gap. Rows that keep their relative order slide;
+the fewest others pass over them on an opaque sidebar backdrop. A moving row's
+own controls move with it, and it blocks the List's slot click beneath it, so a
+click there never opens another chat; the wheel still scrolls. Reversals start
+from shown positions. First loads, scope/search rebuilds, restored order and
+explicit folds use natural geometry; resize and reduced motion snap. The order
+itself is unchanged: user activity only, never agent activity. The `style`
+target's `sidebar_reorder_probe` checks painted positions against the final
+layout and reports offscreen CPU draw cost, not visible smoothness.
+
 The public attention hint and exact question hint each reuse `composer_height`
 for their own slot, not another animation around the editor. Fresh reason and
 question admission remain immediate, resolved content unmounts immediately, and
