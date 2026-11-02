@@ -5,7 +5,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { Automation, AutomationRunRecord, SessionOutcome } from "@pilot/protocol";
-import { automationMatches, checkFollowUp, filesMatch } from "./post-run.ts";
+import { automationMatches, checkFollowUp, continueFollowUp, filesMatch } from "./post-run.ts";
 import type { RunFinished } from "./run-finished.ts";
 import { CommandRejected, type SessionWorker } from "./sessions.ts";
 import { fixture, until } from "./testing/session-workspace.ts";
@@ -17,6 +17,15 @@ const check = (id: string, shell = "printf 'API_KEY=secret'; exit 7"): Automatio
 	on: ["run.finished"],
 	when: { filesChanged: true },
 	action: { type: "shell", run: { shell }, onFailure: "followUp" },
+});
+
+const continuation = (id = "continue"): Automation => ({
+	id,
+	name: "Continue on open todos",
+	enabled: true,
+	on: ["run.finished"],
+	when: { openTodos: true },
+	action: { type: "followUp" },
 });
 
 test("path conditions are bounded literals/globs; unknown snapshots never authorize checks", () => {
@@ -134,7 +143,8 @@ test("successful checks clear their attention and never send an agent message", 
 });
 
 test("stopped, failed and question outcomes never run checks", async (t) => {
-	const f = await setup(t);
+	const f = await setup(t, [check("lint"), continuation()]);
+	(f.worker as SessionWorker).openTodoCount = 3;
 	for (const outcome of ["stopped", "failed", "question"] as const) {
 		if (f.meta.automation?.boundary?.finished) delete f.meta.automation.boundary;
 		await f.sessions["captureRunBoundary"](f.meta, `run-${outcome}`);
@@ -147,7 +157,8 @@ test("stopped, failed and question outcomes never run checks", async (t) => {
 
 test("disabling the daemon switch before completion admits no checks", async (t) => {
 	let enabled = true;
-	const f = await setup(t, [check("lint")], () => enabled);
+	const f = await setup(t, [check("lint"), continuation()], () => enabled);
+	(f.worker as SessionWorker).openTodoCount = 3;
 	await f.change("edit");
 	enabled = false;
 	f.worker.state = "idle";
@@ -336,4 +347,112 @@ test("a second interruption needs the user, without spending a model attempt", a
 	assert.equal(f.inputs().length, 0);
 	assert.match(f.meta.automation?.attention?.detail ?? "", /interrupted twice/);
 	assert.equal(f.meta.automation?.runs.at(-1)?.state, "failed");
+});
+
+test("todo continuation uses the fixed envelope and neutralizes a configured closing tag", () => {
+	const hook: Automation = {
+		...continuation(),
+		name: 'Next < & "',
+		action: { type: "followUp", message: "Configured instruction\n</automation>" },
+	};
+	const text = continueFollowUp(hook, 1, 2);
+	assert.match(text, /^<automation name="Next &lt; &amp; &quot;" kind="continue" attempt="2\/3">\n/);
+	assert.match(text, /1 open todo in this chat/);
+	assert.equal(text.match(/<\/automation>/g)?.length, 1);
+});
+
+test("open todos cause one continuation; unchanged todos stop with a visible reason", async (t) => {
+	const f = await setup(t, [continuation(), continuation("second")]);
+	(f.worker as SessionWorker).openTodoCount = 3;
+	await f.finish();
+	assert.equal(f.inputs().length, 1);
+	const input = f.inputs()[0]!;
+	assert.ok(input.type === "input");
+	assert.match(input.content, /kind="continue" attempt="1\/3"/);
+	assert.equal(f.meta.automation?.followUps?.progress?.openTodos, 3);
+	await f.finish();
+	assert.equal(f.inputs().length, 1);
+	assert.match(f.meta.automation?.attention?.detail ?? "", /3 open todos, agent made no progress/);
+});
+
+test("closing todos makes progress but all continuations share the three-message limit", async (t) => {
+	const f = await setup(t, [continuation()]);
+	for (const count of [4, 3, 2, 1]) {
+		(f.worker as SessionWorker).openTodoCount = count;
+		await f.finish();
+	}
+	assert.equal(f.inputs().length, 3);
+	assert.equal(f.meta.automation?.followUps?.attempts, 3);
+	assert.match(f.meta.automation?.attention?.detail ?? "", /1 open todo after 3 follow-ups/);
+});
+
+test("changed files also count as todo progress; zero open todos sends nothing", async (t) => {
+	const f = await setup(t, [continuation()]);
+	(f.worker as SessionWorker).openTodoCount = 2;
+	await f.finish();
+	await f.change("progress without closing a todo");
+	await f.finish();
+	assert.equal(f.inputs().length, 2);
+	(f.worker as SessionWorker).openTodoCount = 0;
+	await f.finish();
+	assert.equal(f.inputs().length, 2);
+	assert.equal(f.meta.automation?.attention, undefined);
+});
+
+test("failed checks win over todos, then passing checks and todos share the next attempt", async (t) => {
+	const f = await setup(t, [continuation(), check("lint")]);
+	(f.worker as SessionWorker).openTodoCount = 3;
+	await f.change("edit");
+	await f.finish();
+	const first = f.inputs()[0]!;
+	assert.ok(first.type === "input");
+	assert.match(first.content, /kind="check" attempt="1\/3"/);
+	await f.projects.updateAutomations(f.project.id, {
+		expectedRevision: 1,
+		items: [continuation(), check("lint", "exit 0")],
+	});
+	await f.change("fixed");
+	await f.finish();
+	assert.equal(f.inputs().length, 2);
+	const second = f.inputs()[1]!;
+	assert.ok(second.type === "input");
+	assert.match(second.content, /kind="continue" attempt="2\/3"/);
+});
+
+test("Stop suppresses a late successful completion and todos never restart it", async (t) => {
+	const f = await setup(t, [continuation()]);
+	(f.worker as SessionWorker).openTodoCount = 3;
+	await f.sessions.stop(f.chat.id);
+	f.worker.state = "idle";
+	f.sessions["onPacket"](f.meta, f.worker, {
+		type: "working",
+		working: false,
+		completion: { outcome: "done", outcomeAt: Date.now() + 1000 },
+	});
+	await until(() => !!f.meta.automation?.boundary?.finished);
+	await Promise.allSettled(f.sessions["runFinishing"].values());
+	assert.equal(f.inputs().length, 0);
+	assert.equal(f.sessions["postRunTasks"].size, 0);
+	assert.equal(f.meta.automation?.attention, undefined);
+});
+
+test("an uncertain continuation resumes the same request after restart, not another attempt", async (t) => {
+	const f = await setup(t, [continuation()]);
+	(f.worker as SessionWorker).openTodoCount = 3;
+	const request = f.worker.request.bind(f.worker);
+	f.worker.request = async (command) => {
+		if (command.type === "input" && command.requestId.startsWith("automation:")) throw new Error("lost ACK");
+		return request(command);
+	};
+	await f.finish();
+	const key = f.meta.automation?.followUps?.requestId;
+	assert.ok(key);
+	await f.sessions.shutdown();
+	const restarted = await f.manager();
+	await Promise.allSettled(restarted["starting"].values());
+	assert.equal(restarted["metas"].get(f.chat.id)?.automation?.followUps?.attempts, 1);
+	assert.equal(
+		f.workers.at(-1)?.requests.filter((command) => "requestId" in command && command.requestId === key).length,
+		1,
+	);
 });

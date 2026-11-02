@@ -692,10 +692,14 @@ There is no teardown or archive-time hook.
 redacted `<automation>` follow-up, only while idle and never ahead of user input. Checks share a three-message
 attempt limit; no progress or an exhausted limit raises Needs you. A user message resets the limit.
 
+**Continue on open todos** can ask the agent to take the next todo from this chat's durable list, shared with
+its subagents. It shares the checks' attempt limit and only repeats after a todo closes or files change.
+Failed checks take priority; stopped, failed and question outcomes never continue automatically.
+
 Commands are bounded by timeouts and output caps. **Stop** cancels setup/checks and holds queued automatic
 messages; user input cancels stale checks. Disabling automations prevents new commands and lets admitted
-commands finish. Interrupted shell steps get one recovery attempt. Continue-on-todos, manual reruns and the
-management UI remain planned. See [automations](docs/automations.md).
+commands finish. Interrupted shell steps get one recovery attempt. Manual reruns and the management UI
+remain planned. See [automations](docs/automations.md).
 
 ### Missions
 

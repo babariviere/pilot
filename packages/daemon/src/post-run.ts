@@ -67,6 +67,16 @@ export function xmlAttribute(text: string): string {
 	return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
 }
 
+export function continueFollowUp(hook: Automation, openTodos: number, attempt: number): string {
+	if (hook.action.type !== "followUp") throw new Error("Expected a follow-up action");
+	return [
+		`<automation name="${xmlAttribute(hook.name)}" kind="continue" attempt="${attempt}/${AUTOMATION_FOLLOW_UP_ATTEMPT_LIMIT}">`,
+		`You finished with ${openTodos} open ${openTodos === 1 ? "todo" : "todos"} in this chat. Continue with the next one, and close todos that are done or no longer needed. If you are blocked or need the user, say so and finish.`,
+		...(hook.action.message ? [hook.action.message.replace(/<\/automation/gi, "<\\/automation")] : []),
+		"</automation>",
+	].join("\n");
+}
+
 /** A single bounded envelope. Neither output nor configured names can close it. */
 export function checkFollowUp(failures: AutomationRunRecord[], attempt: number): string {
 	let remaining = 8192;

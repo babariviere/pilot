@@ -116,6 +116,7 @@ import {
 	type AutomationFollowUps,
 	automationMatches,
 	checkFollowUp,
+	continueFollowUp,
 	filesMatch,
 	type PostRunState,
 } from "./post-run.ts";
@@ -2071,27 +2072,11 @@ export class SessionManager {
 					),
 					at: Date.now(),
 				};
-			else {
-				const attempt = followUps.attempts + 1;
-				const requestId = `automation:${event.triggerId}`;
-				automation.followUps = {
-					...followUps,
-					attempts: attempt,
-					requestId,
-					progress: { openTodos: event.openTodos },
-					refund: { checks: followUps.checks, names: followUps.names, progress: followUps.progress },
+			else
+				this.queueAutomationFollowUp(meta, event, checkFollowUp(failedChecks, followUps.attempts + 1), {
 					checks: failedChecks.map((record) => record.automationId),
 					names,
-				};
-				meta.pending ??= [];
-				meta.pending.push({
-					type: "input",
-					requestId,
-					content: checkFollowUp(failedChecks, attempt),
-					mode: "followUp",
-					onlyIfIdle: true,
 				});
-			}
 		} else if (followUps.checks?.length) {
 			const configured = this.projects.get(meta.projectId!)?.automations;
 			const unresolved =
@@ -2109,10 +2094,72 @@ export class SessionManager {
 				delete followUps.names;
 			}
 		}
+		// Checks win. Only a clean boundary can ask for the next todo, and only once per event.
+		const definitions = this.projects.get(meta.projectId!)?.automations;
+		if (
+			event.openTodos === 0 &&
+			definitions?.items.some(
+				(hook) => hook.action.type === "followUp" && hook.id === automation.attention?.automationId,
+			)
+		)
+			delete automation.attention;
+		if (!failedChecks.length && !followUps.checks?.length) {
+			const continuation = !definitions?.error
+				? definitions?.items.find(
+						(hook) => hook.action.type === "followUp" && automationMatches(hook, event) && event.openTodos > 0,
+					)
+				: undefined;
+			if (continuation && (!automation.attention || automation.attention.automationId === continuation.id)) {
+				const openTodos = `${event.openTodos} open ${event.openTodos === 1 ? "todo" : "todos"}`;
+				const progressed =
+					!followUps.progress ||
+					event.openTodos < followUps.progress.openTodos ||
+					(!event.filesError && (event.changedFiles === "many" || event.changedFiles.length > 0));
+				if (followUps.attempts >= AUTOMATION_FOLLOW_UP_ATTEMPT_LIMIT || !progressed)
+					automation.attention = {
+						automationId: continuation.id,
+						detail:
+							followUps.attempts >= AUTOMATION_FOLLOW_UP_ATTEMPT_LIMIT
+								? `${openTodos} after ${AUTOMATION_FOLLOW_UP_ATTEMPT_LIMIT} follow-ups`
+								: `${openTodos}, agent made no progress`,
+						at: Date.now(),
+					};
+				else {
+					delete automation.attention;
+					this.queueAutomationFollowUp(
+						meta,
+						event,
+						continueFollowUp(continuation, event.openTodos, followUps.attempts + 1),
+					);
+				}
+			}
+		}
 		state.state = "done";
 		state.hooks = [];
 		state.results = {};
 		await this.save(meta, undefined, undefined, true);
+	}
+
+	/** Outbox and attempt reservation are saved together with the terminal trigger cursor. */
+	private queueAutomationFollowUp(
+		meta: SessionMeta,
+		event: RunFinished,
+		content: string,
+		details: { checks?: string[]; names?: string } = {},
+	): void {
+		const previous = meta.automation!.followUps!;
+		const requestId = `automation:${event.triggerId}`;
+		meta.automation!.followUps = {
+			...previous,
+			attempts: previous.attempts + 1,
+			requestId,
+			progress: { openTodos: event.openTodos },
+			refund: { checks: previous.checks, names: previous.names, progress: previous.progress },
+			checks: details.checks,
+			names: details.names,
+		};
+		meta.pending ??= [];
+		meta.pending.push({ type: "input", requestId, content, mode: "followUp", onlyIfIdle: true });
 	}
 
 	private setupEligible(meta: SessionMeta): boolean {
