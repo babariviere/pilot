@@ -85,8 +85,14 @@ acknowledgement (`synchronous=FULL`, bounded rollback journal). A crash before a
 committed source identity/revision, never reissue inference. Failed writes expose partial/unavailable status and
 cannot stop, retry, reroute or otherwise change agent work.
 
-Schema version lives in `PRAGMA user_version`. Version 0 initializes transactionally; unknown versions or corrupt
+Storage schema version lives in `PRAGMA user_version`. Version 0 initializes transactionally; unknown versions or corrupt
 databases fail closed without overwriting/quarantining copies. No backup of sensitive accounting is created.
+Storage v2 uses SQLite binary JSON (JSONB) rather than JSON text. Opening a v1 store transactionally converts
+its records without changing identities, revisions, counters, generation or coverage. A one-time worker-only
+`VACUUM` packs the smaller records and indexes; it needs temporary disk space up to the database size.
+If packing fails, the converted store remains usable and freed pages can be reused. Routine writes/reads
+never run `VACUUM`. The public observation/query/status schema remains v1 and returns ordinary JSON.
+Older runtimes reject storage v2 rather than misread it; runtime rollback cannot downgrade this store.
 Existing `ai-usage.json` files remain authoritative compatibility files and are not rewritten by migration.
 Import at most one undated legacy checkpoint per chat/scope from their already-bounded summary on normal session
 load, in bounded batches. Stable IDs and revisions make rerunning migration idempotent. Never walk transcripts or
@@ -96,10 +102,12 @@ on normal recovery, independent of compaction/context availability. Missing pre-
 The store is a bounded materialization, not a second transcript or permanent ledger. Default retention is **30
 days** of locally observed evidence, including checkpoints by their observation time; request dates older than the
 window cannot be resurrected by replay. A monotonic persisted retention floor rejects stale replay. Maximum
-**50,000 rows**, **64 MiB database** (plus bounded SQLite transaction journal), **32 pending messages / 256 KiB
+**250,000 rows**, **512 MiB database** (plus bounded SQLite transaction journal), **32 pending messages / 256 KiB
 ingress**. Expire in <=500-row batches on writes/startup and hourly idle maintenance, not on UI repaint.
 Reads immediately exclude expired rows; idle physical cleanup can lag by at most an hour while the host is running.
 Capacity rejects new writes rather than evicting replay fences or growing without bound.
+The row and byte caps are independent; reaching either still rejects new records. Raising them
+does not guarantee a complete 30-day window at every workload or recover already rejected observations.
 Rejections/expiration/conflicts and store availability are
 visible through content-free status. Counters survive restart; volatile queue overflow is explicitly process-local.
 At most one outstanding maintenance call. Closed/draining stores refuse new work and join before home removal.
@@ -143,6 +151,23 @@ continue excluding provider/model/policy/project/chat/operation/account identiti
 opt-in under its own contract. No network export of this new plane by default.
 
 ## Verification and rollout
+
+### Lossless storage compaction probe
+
+`node packages/daemon/src/usage-compaction.bench.ts 250000` uses only synthetic records in a
+temporary directory. It compares 100,000 canonical v1 text rows with their migrated JSONB rows,
+asserting identical status, request pages, totals, buckets and duplicate acknowledgements. It then
+adds binary rows in bounded transactions until the requested count or byte cap is reached.
+
+One macOS arm64 / Node 24.21.0 run reduced the 100,000-row database from 316,063,744 to
+193,146,880 bytes (38.9%), including page packing, in 4.46 seconds. Twelve full-range daily
+aggregate samples had median/p95 259/283 ms before and 197/217 ms after. This larger synthetic
+record shape reached the byte cap at roughly 238,000 committed rows (535,506,944 bytes), before
+the row cap; aggregate median/p95 there was 493/798 ms. These are single-process synthetic
+observations, not UI latency, event-loop or RSS acceptance evidence. The one-time migration can
+delay initial worker reads/capture acknowledgements; no inference is retried or replayed.
+Actual savings depend on row shape and fragmentation. The running user's store was not modified,
+and historical lost observations were not reconstructed. Existing dashboard release gates remain.
 
 Required fixtures: v0 initialization/unknown schema, restart and duplicate/out-of-order/corrected input, equal-revision
 conflict, crash before/after commit/ack, corrupt/oversize state, bounded queue/capacity, UTC boundaries, retention,

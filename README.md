@@ -1436,7 +1436,8 @@ without changing model, context, compaction, retry or restart behavior. Diagnost
 retained per-chat catalog estimates or authoritative billed spend with an explicitly entered USD budget. No budget
 exists by default, missing or partial data is not zero-filled, and the result never gates or changes execution.
 The separate [local usage-history store](docs/usage-history-contract.md) provides a bounded foundation for the usage
-dashboard: private host-owned accounting, 30-day retention, replay-safe replacement identities and separate
+dashboard: private host-owned accounting, 30-day retention, up to 250,000 records / 512 MiB,
+lossless binary-JSON storage, replay-safe replacement identities and separate
 non-additive legacy checkpoints. Kernel and delegated requests retain physical-model and already-observed virtual
 selection provenance locally, including failed responses with reported usage. Unknown crash responses are not zero,
 and deterministic compaction records activity without invented inference cost. It is not a billing source or

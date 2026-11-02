@@ -53,7 +53,7 @@ The endpoint also rejects mismatched identity. No alternate host is attempted.
 
 API v1 permits a maximum366-day window, at most100 returned groups per response,
 at most400 time buckets, a4096-byte query, and512KiB response JSON. The ledger
-retains at most50,000 records,64MiB, with a30-day retention floor. The overview
+retains at most250,000 records,512MiB, with a30-day retention floor. The overview
 deliberately narrows the date choices to at most90 daily buckets and makes only
 one summary query, one bucket query and one bounded project-breakdown query,
 with no paging. Both content-length and streaming bodies are capped at512KiB before decode. Unknown versions, malformed,

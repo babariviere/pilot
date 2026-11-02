@@ -153,7 +153,7 @@ the fixed numeric/scalar query expressions, avoiding repeated ledger JSON parsin
 Index construction occurs in the existing worker on open, never on repaint. Near-cap older stores that
 cannot fit the index keep the time-index fallback without erasure, eviction or raising the byte cap.
 Fixed SQL reduces values inside the storage worker, never rehydrates ledger objects into daemon/UI memory.
-Candidate work is independently bounded by the 50,000-row/64 MiB store; scope predicates apply inside
+Candidate work is independently bounded by the 250,000-row/512 MiB store; scope predicates apply inside
 that indexed range. There is no precomputed rollup table. Arbitrary SQL/dimensions are not accepted.
 The statement cache is bounded at
 20 entries. At most two queries per store may be outstanding, within the existing 32-message/256 KiB

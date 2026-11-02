@@ -41,7 +41,7 @@ const METRICS = {
 	retries: "retries",
 	durationMs: "durationMs",
 } as const;
-// Time index bounds the candidate set; the store independently caps it at 50,000 rows. SQL reduces
+// Time index bounds the candidate set; the store independently caps it at USAGE_MAX_ROWS. SQL reduces
 // numeric JSON directly inside the worker. Neither the daemon nor UI materializes the ledger.
 const FILTER_SQL = `
  AND (? IS NULL OR lower(json_extract(data,'$.attribution.projectId'))=?)
@@ -179,7 +179,7 @@ export class UsageHistoryDisk {
 		this.db = db;
 		try {
 			const version = db.prepare("PRAGMA user_version").get()?.user_version;
-			if (version !== 0 && version !== 1) throw new Error("Usage schema unavailable");
+			if (version !== 0 && version !== 1 && version !== 2) throw new Error("Usage schema unavailable");
 			if (version === 0 && db.prepare("SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1").get())
 				throw new Error("Usage schema unavailable");
 			db.exec(
@@ -208,6 +208,27 @@ export class UsageHistoryDisk {
 					);
 				});
 			this.status(); // Verify required metadata, fail closed on malformed state.
+			if (version !== 2) {
+				// SQLite JSONB keeps the exact observation while removing text encoding overhead.
+				// The transaction preserves all identities, revisions, counters and erasure fences.
+				this.transaction(() => {
+					if (
+						db
+							.prepare(`SELECT 1 FROM usage_rows WHERE length(CAST(data AS BLOB))>${USAGE_ROW_BYTES} LIMIT 1`)
+							.get()
+					)
+						throw new Error("Usage row unavailable");
+					db.exec("UPDATE usage_rows SET data=jsonb(data); PRAGMA user_version=2;");
+				});
+				if (version === 1) {
+					// One-time, worker-only page packing, not a recurring write-path VACUUM.
+					// Failure (e.g. insufficient temporary disk) leaves the committed migration usable;
+					// its free pages are still reusable by subsequent inserts.
+					try {
+						db.exec("VACUUM");
+					} catch {}
+				}
+			}
 			this.expire(now);
 			try {
 				db.exec(QUERY_INDEX_SQL);
@@ -315,7 +336,7 @@ export class UsageHistoryDisk {
 				)
 					return this.reject();
 				const previous = this.prepare(
-					"SELECT revision, kind, scope, data FROM usage_rows WHERE source=? AND operation=?",
+					"SELECT revision, kind, scope, json(data) AS data FROM usage_rows WHERE source=? AND operation=?",
 				).get(row.sourceId, row.operationId);
 				const data = JSON.stringify(row);
 				if (previous) {
@@ -330,7 +351,7 @@ export class UsageHistoryDisk {
 					}
 					if (row.revision === previous.revision) return "duplicate";
 				} else if (m.rows >= this.maxRows) return this.reject();
-				this.prepare(`INSERT INTO usage_rows VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(source,operation)
+				this.prepare(`INSERT INTO usage_rows VALUES(?,?,?,?,?,?,?,?,jsonb(?)) ON CONFLICT(source,operation)
 				 DO UPDATE SET revision=excluded.revision, completed=excluded.completed, age=excluded.age, chat=excluded.chat, data=excluded.data`).run(
 					row.sourceId,
 					row.operationId,
@@ -396,7 +417,8 @@ export class UsageHistoryDisk {
 		const from = query.kind === "checkpoint" ? 0 : query.from;
 		const to = query.kind === "checkpoint" ? Number.MAX_SAFE_INTEGER : query.to;
 		const rows = this.prepare(`SELECT completed, source, operation,
-		 CASE WHEN length(CAST(data AS BLOB))<=${USAGE_ROW_BYTES} THEN data ELSE NULL END AS data
+		 CASE WHEN length(CAST(data AS BLOB))<=${USAGE_ROW_BYTES}
+		 AND length(CAST(json(data) AS BLOB))<=${USAGE_ROW_BYTES} THEN json(data) ELSE NULL END AS data
 		 FROM usage_rows INDEXED BY usage_time
 			 WHERE kind=? AND completed>=? AND completed<? AND (completed,source,operation)>(?,?,?) AND age>=? ${FILTER_SQL}
 		 ORDER BY completed,source,operation LIMIT ?`).all(

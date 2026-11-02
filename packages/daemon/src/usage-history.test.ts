@@ -13,6 +13,8 @@ import {
 	parseUsageObservation,
 	readUsageObservation,
 	USAGE_DAY_MS,
+	USAGE_MAX_BYTES,
+	USAGE_MAX_ROWS,
 	USAGE_RETENTION_MS,
 } from "./usage-history-validation.ts";
 
@@ -93,7 +95,7 @@ test("bounded stored-row reader preserves strict validation without reserializin
 test("transactional schema v0 migration, private files and restart persistence", async () => {
 	const f = await diskFixture();
 	try {
-		assert.equal(f.disk.db.prepare("PRAGMA user_version").get()!.user_version, 1);
+		assert.equal(f.disk.db.prepare("PRAGMA user_version").get()!.user_version, 2);
 		assert.equal(f.disk.db.prepare("PRAGMA synchronous").get()!.synchronous, 2);
 		assert.equal((await stat(f.file)).mode & 0o777, 0o600);
 		assert.equal((await stat(join(f.home, "accounting"))).mode & 0o777, 0o700);
@@ -106,6 +108,160 @@ test("transactional schema v0 migration, private files and restart persistence",
 			assert.deepEqual(reopened.page(QUERY, NOW).rows, [input]);
 		} finally {
 			reopened.close();
+		}
+	} finally {
+		await rm(f.home, { recursive: true, force: true });
+	}
+});
+
+test("binary storage reduces payload bytes without changing public records or duplicate identity", async () => {
+	const f = await diskFixture();
+	try {
+		const input = row(f.disk);
+		assert.equal(f.disk.put(input, NOW), "stored");
+		const stored = f.disk.db.prepare("SELECT typeof(data) AS type, length(data) AS bytes FROM usage_rows").get()!;
+		assert.equal(stored.type, "blob");
+		assert.ok(Number(stored.bytes) < Buffer.byteLength(JSON.stringify(input)));
+		assert.deepEqual(f.disk.page(QUERY, NOW).rows, [input]);
+		assert.equal(f.disk.put(input, NOW), "duplicate");
+		assert.equal(f.disk.put({ ...input, revision: input.revision + 1 }, NOW), "stored");
+	} finally {
+		await f.close();
+	}
+});
+
+test("full legacy text store compacts and resumes writes under increased capacity without losing history", async () => {
+	const f = await diskFixture({ maxBytes: 65536 });
+	let disk = f.disk;
+	try {
+		// Recreate the old on-disk representation and cap, including a capacity rejection.
+		disk.db.exec("PRAGMA user_version=1");
+		const input = row(disk);
+		const insert = disk.db.prepare("INSERT INTO usage_rows VALUES(?,?,?,?,?,?,?,?,?)");
+		for (let i = 0; i < 200; i++) {
+			const next = parseUsageObservation({ ...input, operationId: `legacy:${i}` });
+			try {
+				insert.run(
+					next.sourceId,
+					next.operationId,
+					next.revision,
+					next.kind,
+					next.scope,
+					next.completedAt!,
+					next.completedAt!,
+					next.attribution?.chatId ?? null,
+					JSON.stringify(next),
+				);
+			} catch (error) {
+				assert.equal((error as { errcode?: number }).errcode, 13);
+				break;
+			}
+		}
+		disk.db.exec("UPDATE usage_meta SET rows=(SELECT COUNT(*) FROM usage_rows), rejected=7, conflicts=3");
+		const before = disk.status();
+		const records = disk.page(QUERY, NOW).rows;
+		assert.ok(records.length > 0 && records.length < 100);
+		const bytesBefore = (await stat(f.file)).size;
+		const totals = disk.analytics({ version: 1, view: "summary", from: QUERY.from, to: QUERY.to }, NOW);
+		disk.close();
+		disk = new UsageHistoryDisk(f.file, NOW);
+		assert.deepEqual(disk.status(), before);
+		assert.deepEqual(disk.page(QUERY, NOW).rows, records);
+		assert.deepEqual(disk.analytics({ version: 1, view: "summary", from: QUERY.from, to: QUERY.to }, NOW), totals);
+		assert.ok((await stat(f.file)).size < bytesBefore, "VACUUM must pack the smaller binary rows");
+		assert.equal(disk.db.prepare("PRAGMA user_version").get()!.user_version, 2);
+		assert.equal(Number(disk.db.prepare("PRAGMA max_page_count").get()!.max_page_count) * 4096, USAGE_MAX_BYTES);
+		assert.equal(disk.put(records[0]!, NOW), "duplicate");
+		assert.equal(disk.put({ ...input, operationId: "after-capacity-increase" }, NOW), "stored");
+		disk.close();
+		disk = new UsageHistoryDisk(f.file, NOW);
+		assert.equal(disk.status().retainedRows, before.retainedRows + 1);
+		assert.equal(disk.status().generation, before.generation);
+	} finally {
+		disk.close();
+		await rm(f.home, { recursive: true, force: true });
+	}
+});
+
+test("increased default row capacity accepts records beyond the former 50,000-row limit", async () => {
+	const f = await diskFixture();
+	try {
+		const input = row(f.disk);
+		f.disk.db
+			.prepare(`WITH RECURSIVE n(i) AS (VALUES(0) UNION ALL SELECT i+1 FROM n WHERE i<49999)
+		 INSERT INTO usage_rows SELECT ?, 'limit:'||i, ?, ?, ?, ?, ?, ?,
+		 jsonb(json_set(?, '$.operationId', 'limit:'||i)) FROM n`)
+			.run(
+				input.sourceId,
+				input.revision,
+				input.kind,
+				input.scope,
+				input.completedAt!,
+				input.completedAt!,
+				input.attribution?.chatId ?? null,
+				JSON.stringify(input),
+			);
+		f.disk.db.exec("UPDATE usage_meta SET rows=50000");
+		assert.equal(f.disk.maxRows, USAGE_MAX_ROWS);
+		assert.equal(USAGE_MAX_ROWS, 250_000);
+		assert.equal(f.disk.put({ ...input, operationId: "beyond-old-limit" }, NOW), "stored");
+		assert.equal(f.disk.status().retainedRows, 50_001);
+		assert.equal(f.disk.status().expired, 0);
+	} finally {
+		await f.close();
+	}
+});
+
+test("failed page packing leaves committed binary migration usable and does not retry on every open", async () => {
+	const f = await diskFixture();
+	const input = row(f.disk);
+	assert.equal(f.disk.put(input, NOW), "stored");
+	f.disk.db.exec("UPDATE usage_rows SET data=json(data); PRAGMA user_version=1");
+	const before = f.disk.status();
+	f.disk.close();
+	const exec = DatabaseSync.prototype.exec;
+	let attempts = 0;
+	DatabaseSync.prototype.exec = function (sql) {
+		if (sql === "VACUUM") {
+			attempts++;
+			throw new Error("Synthetic temporary disk exhaustion");
+		}
+		return exec.call(this, sql);
+	};
+	try {
+		for (let i = 0; i < 2; i++) {
+			const disk = new UsageHistoryDisk(f.file, NOW);
+			try {
+				assert.deepEqual(disk.status(), before);
+				assert.deepEqual(disk.page(QUERY, NOW).rows, [parseUsageObservation(input)]);
+				assert.equal(disk.put(input, NOW), "duplicate");
+				assert.equal(disk.db.prepare("SELECT typeof(data) AS type FROM usage_rows").get()!.type, "blob");
+			} finally {
+				disk.close();
+			}
+		}
+		assert.equal(attempts, 1);
+	} finally {
+		DatabaseSync.prototype.exec = exec;
+		await rm(f.home, { recursive: true, force: true });
+	}
+});
+
+test("failed legacy compaction rolls back data and schema version without erasure", async () => {
+	const f = await diskFixture();
+	const input = row(f.disk);
+	assert.equal(f.disk.put(input, NOW), "stored");
+	f.disk.db.exec("DROP INDEX usage_query_v1; UPDATE usage_rows SET data='invalid'; PRAGMA user_version=1");
+	f.disk.close();
+	try {
+		assert.throws(() => new UsageHistoryDisk(f.file, NOW), /unavailable/);
+		const db = new DatabaseSync(f.file);
+		try {
+			assert.equal(db.prepare("PRAGMA user_version").get()!.user_version, 1);
+			assert.equal(db.prepare("SELECT data FROM usage_rows").get()!.data, "invalid");
+			assert.equal(db.prepare("SELECT generation FROM usage_meta").get()!.generation, input.generation);
+		} finally {
+			db.close();
 		}
 	} finally {
 		await rm(f.home, { recursive: true, force: true });

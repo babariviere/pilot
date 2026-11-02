@@ -3,8 +3,8 @@ import type { UsageAnalyticsQuery, UsageHistoryQuery, UsageObservation, UsageQue
 export const USAGE_ROW_BYTES = 4096;
 export const USAGE_DAY_MS = 86_400_000;
 export const USAGE_RETENTION_MS = 30 * USAGE_DAY_MS;
-export const USAGE_MAX_ROWS = 50_000;
-export const USAGE_MAX_BYTES = 64 * 1024 * 1024;
+export const USAGE_MAX_ROWS = 250_000;
+export const USAGE_MAX_BYTES = 512 * 1024 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$/;
 const PRICE = /^[A-Za-z0-9][A-Za-z0-9._@:/+-]{0,127}$/;
