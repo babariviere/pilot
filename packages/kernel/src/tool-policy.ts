@@ -1,5 +1,6 @@
 /** Command policy shared by the Harness, nested native calls and child agents. No runtime SDK imports. */
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { messageFormatBlock } from "./message-format.ts";
 
 export interface ExecutionPermission {
 	authorizationId: string;
@@ -73,7 +74,8 @@ export function nativeToolPolicy(permission?: ExecutionPermission): ExtensionFac
 			const posting = githubPosting([event.toolName, commandArguments(event.toolName, event.input)]);
 			const reason = posting
 				? `Pilot policy: agents do not ${posting} on GitHub. Report it in your final answer instead.`
-				: executionPermissionBlock(permission, event.toolName, event.input);
+				: (executionPermissionBlock(permission, event.toolName, event.input) ??
+					messageFormatBlock(event.toolName, event.input, commandArguments(event.toolName, event.input)));
 			if (reason) return { block: true, reason };
 		});
 	};

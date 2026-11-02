@@ -3,6 +3,7 @@
 import type { Context } from "@earendil-works/chord";
 import { type Extension, hook, type PromptInput, section, ToolTask } from "@earendil-works/pi-durable";
 import type { DiagnosticTargetReference, MissionDecision, MissionRole, OperationHost } from "@pilot/protocol";
+import { messageFormatBlock } from "./message-format.ts";
 
 import {
 	commandArguments,
@@ -439,6 +440,8 @@ export function withPilotPolicy(
 						};
 					const denied = executionPermissionBlock(context.executionPermission, call.name, call.arguments);
 					if (denied) return { block: denied };
+					const format = messageFormatBlock(call.name, call.arguments, commands);
+					if (format) return { block: format };
 					if (
 						(mission()?.coordinator === "self" || context.coordinatorView) &&
 						/(?:^|__)(?:write|edit|apply_patch|applyPatch)$/.test(call.name)

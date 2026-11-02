@@ -634,6 +634,11 @@ Owned PRs still blocked by conflicts, failing checks, unresolved review threads 
 three attempts, after a follow-up without a push attempt (or without an automatic follow-up route) appear in Needs you once the chat is idle and
 the cooldown has ended. Fixing the problem clears the reason; sending a message resets the follow-up budget.
 
+Pilot rejects literal `\n` escapes in inline Git/jj commit messages and `gh pr create/edit` titles
+and bodies, telling the agent to retry with real line breaks or a heredoc/file. Actual nested shell
+calls are checked too. This is a formatting guard, not a shell interpreter: it does not inspect
+message files, stdin, shell variable expansion or arbitrary GitHub API payloads.
+
 GitHub writes are attributed to the chat in its activity and, for mission members, in mission activity.
 The audit records a sanitized operation, PR or branch target when available, time and exit status, not
 tokens, request bodies or command output. It retains the latest 200 actions per chat and 1,000 GitHub
