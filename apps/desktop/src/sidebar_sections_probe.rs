@@ -22,6 +22,9 @@ const LONG: &str = "stoik-data 日本語 👩‍💻 with a very long project na
 #[path = "sidebar_reorder_probe.rs"]
 mod reorder;
 
+#[path = "sidebar_selection_probe.rs"]
+mod selection;
+
 fn settle(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
     for _ in 0..12 {
         cx.advance_clock(Duration::from_millis(16));
@@ -248,6 +251,7 @@ fn collapsed(view: &Entity<LocalViewer>, key: &str, cx: &mut HeadlessAppContext)
 }
 
 pub fn run_sidebar_sections_probe(cx: &mut HeadlessAppContext) {
+    selection::run(cx);
     run_fold_motion(cx);
     reorder::run(cx);
     let captures = std::env::var_os("PILOT_NEXT_STYLE_DIR").map(std::path::PathBuf::from);

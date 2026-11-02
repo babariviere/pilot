@@ -2373,10 +2373,16 @@ impl LocalViewer {
             Arc::new(all)
         };
         self.chats.update(cx, |list, cx| {
-            let selected = list
+            let mut selected = list
                 .delegate()
                 .selected
                 .and_then(|ix| list.delegate().key_at(ix));
+            let selected_group = list.delegate().selected.is_some_and(|ix| {
+                matches!(
+                    list.delegate().row(ix),
+                    Some(crate::sidebar_tree::Row::Group(_))
+                )
+            });
             let delegate = list.delegate_mut();
             // A data change moves rows; a first load or another scope doesn't.
             let before =
@@ -2388,6 +2394,11 @@ impl LocalViewer {
             if opened != delegate.opened
                 && let Some(id) = &opened
             {
+                // An explicit open elsewhere (Inbox, palette, history) replaces
+                // the old section-label cursor, without moving keyboard focus.
+                if selected_group {
+                    selected = Some(id.clone());
+                }
                 delegate.all = all.clone();
                 delegate.reveal(id);
             }
