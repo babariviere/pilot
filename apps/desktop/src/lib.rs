@@ -308,6 +308,17 @@ pub use local_view::scoped_models_probe::run_scoped_models_probe;
 pub use local_view::settings_probe::run_settings_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::subscription_limit_probe::run_subscription_limit_probe;
+mod knowledge;
+#[cfg(any(test, feature = "native-probes"))]
+mod knowledge_fixture;
+#[cfg(feature = "native-probes")]
+mod knowledge_probe;
+#[cfg(feature = "native-probes")]
+pub use knowledge_probe::run_knowledge_probe;
+mod knowledge_reader;
+#[cfg(test)]
+mod knowledge_tests;
+mod knowledge_view;
 mod nested_scroll;
 mod project_memory;
 #[cfg(feature = "native-probes")]

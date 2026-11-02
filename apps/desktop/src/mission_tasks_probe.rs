@@ -506,7 +506,9 @@ pub fn run_mission_tasks_probe(cx: &mut HeadlessAppContext) {
                     .all(|(_, p)| p == "/api/hello"
                         || p == "/api/mission-catalog"
                         || p.starts_with("/api/missions/mission-")
-                        || p.starts_with("/api/sessions?archived=all&missionId=mission-"))
+                        || p.starts_with("/api/sessions?archived=all&missionId=mission-")
+                        || (p.starts_with("/api/projects/")
+                            && p.contains("/knowledge?missionId=")))
             );
             cx.update(|cx| h.update(cx, |_, w, _| w.remove_window()).unwrap());
             cx.run_until_parked();
@@ -848,7 +850,8 @@ fn phases_journey(
         let before = server.state.lock().unwrap().seen.len();
         click(cx, h, "missions-refresh");
         until(cx, h, host, |b, _| !b.busy);
-        assert_eq!(server.state.lock().unwrap().seen.len(), before + 3);
+        // Hello, detail, linked knowledge, members and the closing hello recheck.
+        assert_eq!(server.state.lock().unwrap().seen.len(), before + 5);
     }
     cx.update(|cx| {
         let b = host.read(cx).browser.read(cx);

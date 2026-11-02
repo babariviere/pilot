@@ -279,6 +279,13 @@ pub struct LocalViewer {
     usage_options: Option<LocalOptions>,
     usage_window: Option<gpui_kit::AnyWindowHandle>,
     memory_windows: std::collections::BTreeMap<String, gpui_kit::AnyWindowHandle>,
+    knowledge_windows: std::collections::BTreeMap<
+        String,
+        (
+            gpui_kit::AnyWindowHandle,
+            gpui_kit::WeakEntity<crate::knowledge_view::Knowledge>,
+        ),
+    >,
     usage_events: Option<Subscription>,
     settings_pane: Option<gpui_kit::WeakEntity<crate::settings_view::SettingsView>>,
     settings_return: Option<gpui_kit::FocusHandle>,
@@ -1194,6 +1201,7 @@ impl LocalViewer {
                 |view, _, event, window, cx| match event {
                     ShellEvent::Project(id) => view.show_project(id.clone(), window, cx),
                     ShellEvent::Memory(id) => view.open_memory(id, window, cx),
+                    ShellEvent::Knowledge(id) => view.open_knowledge(id, None, window, cx),
                     ShellEvent::AllChats => view.show_chats(window, cx),
                     ShellEvent::NewChat => view.new_chat(window, cx),
                     ShellEvent::AddProject => {
@@ -1258,6 +1266,16 @@ impl LocalViewer {
                         if view.missions.read(cx).generation == *generation =>
                     {
                         view.show_missions(window, cx);
+                    }
+                    Event::Knowledge {
+                        key,
+                        project,
+                        entry,
+                        generation,
+                    } if view.page == Page::Mission(key.clone())
+                        && view.missions.read(cx).current(*generation) =>
+                    {
+                        view.open_knowledge(project, entry.clone(), window, cx);
                     }
                     Event::Chat {
                         key,
@@ -1567,6 +1585,7 @@ impl LocalViewer {
             usage_options: None,
             usage_window: None,
             memory_windows: Default::default(),
+            knowledge_windows: Default::default(),
             usage_events: None,
             settings_pane: None,
             settings_return: None,

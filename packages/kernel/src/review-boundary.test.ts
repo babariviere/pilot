@@ -30,6 +30,7 @@ test("minimal construction denies unsafe capabilities, including follow-up attem
 		"codemode",
 		"mission",
 		"memory",
+		"knowledge",
 		"jobs",
 		"mcp",
 		"searchTools",

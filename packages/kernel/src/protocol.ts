@@ -265,6 +265,7 @@ export type KernelCommand =
 			error?: string;
 	  }
 	| { type: "memory.result"; callId: string; result?: JsonValue; error?: string }
+	| { type: "knowledge.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "database.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "slack.result"; callId: string; result?: JsonValue; error?: string }
 	| {
@@ -373,6 +374,14 @@ export type KernelPacket =
 			callId: string;
 			operationId?: string;
 			action: "wake" | "note" | "recall" | "zoom";
+			args: Record<string, JsonValue>;
+	  }
+	/** A `knowledge` tool call. pilotd derives project, author and write capability from this session. */
+	| {
+			type: "knowledge.call";
+			callId: string;
+			operationId?: string;
+			action: import("./knowledge-tools.ts").KnowledgeAction;
 			args: Record<string, JsonValue>;
 	  }
 	/** A `db` tool call, answered by `database.result`. Grants are checked in pilotd. */

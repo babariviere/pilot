@@ -345,6 +345,9 @@ pub(crate) struct Detail {
     pub(crate) resources:
         Result<std::sync::Arc<Vec<crate::mission_resources::Resource>>, &'static str>,
     pub(crate) artifacts: Result<std::sync::Arc<Vec<crate::mission_artifacts::Link>>, &'static str>,
+    /// The mission's linked project knowledge from this read. None when this daemon
+    /// has no knowledge catalog; never a copy of the entries.
+    pub(crate) knowledge: Result<Option<std::sync::Arc<crate::knowledge::Page>>, &'static str>,
     /// Full Tasks projection from this exact read, populated off-thread by the reader.
     pub(crate) task_snapshot: Option<std::sync::Arc<crate::mission_tasks::Snapshot>>,
     pub(crate) decisions: Result<crate::mission_decisions::Snapshot, &'static str>,
@@ -458,6 +461,7 @@ pub(crate) fn detail(key: &Key, v: &Value) -> Result<Detail, &'static str> {
     Ok(Detail {
         resources: crate::mission_resources::project(v, &tasks),
         artifacts: crate::mission_artifacts::project(v),
+        knowledge: Ok(None),
         task_snapshot: None,
         attention: attention(v, coordinator.is_some(), &comments, &decisions),
         comments,

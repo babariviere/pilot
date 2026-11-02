@@ -19,6 +19,7 @@ import { optionalReviewSeeds } from "./mission-review-seeds.ts";
 import { draftMessage, MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
+import { KnowledgeService } from "./project-knowledge.ts";
 import { ProjectStore } from "./projects.ts";
 import type { PullRequestOptions } from "./pull-requests.ts";
 import type { ReviewSnapshot, ReviewSnapshotStore } from "./review-snapshots.ts";
@@ -1223,6 +1224,96 @@ test("coordinator admits explorer research before a brief, preserving reports, p
 	assert.equal(f.store.task(mission.id, task.id).status, "blocked");
 	assert.equal(f.store.require(mission.id).briefRevision, 0);
 	assert.equal(f.service.context(explorer.id)?.role, "explorer");
+});
+
+test("knowledge IPC derives identity from the supervised chat and keeps explorers read-only", async (t) => {
+	const f = await fixture(t);
+	f.sessions.setKnowledge(new KnowledgeService(f.store, f.projects, f.sessions));
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Knowledge",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	const task = f.store.addTask(mission.id, { title: "Investigate" });
+	const explorer = (await f.service.call(lead.id, "start", { id: task.id, role: "explorer" })) as SessionSummary;
+	const member = await f.spawn();
+	f.service.join(member.id, { missionId: mission.id });
+	const call = async (sessionId: string, action: string, args: Record<string, unknown>, operationId?: string) => {
+		const worker = await until(() => f.workers.get(sessionId));
+		const callId = randomUUID();
+		worker.onPacket({ type: "knowledge.call", callId, action: action as never, args: args as never, operationId });
+		return (await until(() =>
+			worker.sent.find((command) => command.type === "knowledge.result" && command.callId === callId),
+		)) as Extract<KernelCommand, { type: "knowledge.result" }>;
+	};
+	const report = await f.sessions["artifactStore"](explorer.id).create({
+		title: "Findings",
+		kind: "html",
+		source: "<p>Sources and limitations</p>",
+	});
+	const entry = {
+		kind: "investigation",
+		title: "Source behavior",
+		synopsis: "What the source does today.",
+		body: "## Question\nWhat happens?\n\n## Findings\nF1 (observed): it works.\n\n## Limitations\nOne path only.",
+		sources: [{ type: "artifact", sessionId: explorer.id, artifactId: report.id, revision: report.revision }],
+	};
+	assert.match((await call(explorer.id, "create", entry, "explorer-op")).error ?? "", /read-only/);
+	assert.match((await call(member.id, "create", { ...entry, projectId: f.other.id }, "x")).error ?? "", /own project/);
+	const created = await call(member.id, "create", { ...entry, taskId: `#${task.number}` }, "member-op");
+	assert.equal(created.error, undefined);
+	const id = (created.result as { entry: { id: string; origin: Record<string, unknown> } }).entry.id;
+	const detail = (await call(explorer.id, "get", { id })).result as {
+		revision: { author: unknown };
+		entry: { origin: Record<string, unknown> };
+		missionLink: { linkRevision: number };
+	};
+	assert.deepEqual(detail.revision.author, { type: "session", sessionId: member.id });
+	assert.equal(detail.entry.origin.missionId, mission.id);
+	assert.equal(detail.entry.origin.taskId, task.id);
+	assert.equal(detail.missionLink.linkRevision, 0);
+	assert.match((await call(member.id, "link", { id, expectedLinkRevision: 0 })).error ?? "", /coordinator/);
+	assert.equal(
+		((await call(lead.id, "link", { id, expectedLinkRevision: 0 })).result as { linkRevision: number }).linkRevision,
+		1,
+	);
+	// The same operation retried after a lost result returns the saved entry.
+	const again = await call(member.id, "create", { ...entry, taskId: `#${task.number}` }, "member-op");
+	assert.equal((again.result as { replayed: boolean }).replayed, true);
+	assert.equal(f.store.knowledge.list(f.project.id, {}, undefined, 50).entries.length, 1);
+	// The IPC result is the ACK: it waits for durability, and a durability failure is an error, not success.
+	const durable = f.store.durable.bind(f.store);
+	let release: (() => void) | undefined;
+	f.store.durable = () => new Promise<void>((resolve) => (release = resolve));
+	const worker = f.workers.get(member.id)!;
+	const held = randomUUID();
+	worker.onPacket({
+		type: "knowledge.call",
+		callId: held,
+		action: "create" as never,
+		args: { ...entry, title: "Held" } as never,
+		operationId: "held-op",
+	});
+	// The entry is committed in memory; its ACK is still waiting on disk.
+	await until(() => release);
+	for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(
+		worker.sent.some((command) => command.type === "knowledge.result" && command.callId === held),
+		false,
+	);
+	release!();
+	f.store.durable = durable;
+	const heldResult = (await until(() =>
+		worker.sent.find((command) => command.type === "knowledge.result" && command.callId === held),
+	)) as Extract<KernelCommand, { type: "knowledge.result" }>;
+	assert.equal(heldResult.error, undefined);
+	f.store.durable = () => Promise.reject(new Error("disk full"));
+	assert.match((await call(member.id, "create", { ...entry, title: "Lost" }, "failed-op")).error ?? "", /disk full/);
+	assert.match((await call(lead.id, "unlink", { id, expectedLinkRevision: 1 })).error ?? "", /disk full/);
+	f.store.durable = durable;
 });
 
 test("role admission refuses legacy adoption, Build conversion and incompatible task-holder reuse", async (t) => {

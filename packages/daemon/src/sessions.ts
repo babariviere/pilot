@@ -2100,6 +2100,10 @@ ${run.excerpt}`,
 		return !active?.controller.signal.aborted && meta.automation?.setup?.state !== "cancelled";
 	}
 
+	private knowledge?: import("./project-knowledge.ts").KnowledgeService;
+	setKnowledge(knowledge: import("./project-knowledge.ts").KnowledgeService): void {
+		this.knowledge = knowledge;
+	}
 	private sharing?: import("./retired-devboxes.ts").LegacySessionOwnership;
 	setSharedContext(sharing: import("./retired-devboxes.ts").LegacySessionOwnership): void {
 		this.sharing = sharing;
@@ -8971,6 +8975,36 @@ ${run.excerpt}`,
 			void call.then(
 				(result) => reply({ result: result ?? null }),
 				(error: unknown) => reply({ error: formatFailure(error, "Tool mission") }),
+			);
+			return;
+		}
+		if (packet.type === "knowledge.call") {
+			const reply = (result: { result?: unknown; error?: string }) => {
+				if (this.workers.get(meta.id) === worker)
+					worker.send({ type: "knowledge.result", callId: packet.callId, ...(result as { result?: never }) });
+			};
+			const call = Promise.resolve().then(() => {
+				// Identity, project and write capability come from this supervised session, never tool arguments.
+				if (this.sharing?.membership(meta.id)) throw new Error("Project knowledge is unavailable in shared chats");
+				if (!this.knowledge || !meta.projectId) throw new Error("Project knowledge is unavailable");
+				return this.knowledge.call(
+					{
+						sessionId: meta.id,
+						projectId: meta.projectId,
+						readOnly:
+							!!meta.ask ||
+							meta.mode === "ask" ||
+							meta.role !== undefined ||
+							meta.executionPermission?.level === "investigate",
+					},
+					packet.action,
+					packet.args,
+					packet.operationId,
+				);
+			});
+			void call.then(
+				(result) => reply({ result: result ?? null }),
+				(error: unknown) => reply({ error: formatFailure(error, "Tool knowledge") }),
 			);
 			return;
 		}

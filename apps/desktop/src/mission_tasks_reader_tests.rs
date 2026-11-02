@@ -31,13 +31,14 @@ async fn loaded_detail_reuses_every_task_field_but_refresh_and_mutations_read_ag
     else {
         panic!("detail")
     };
-    assert_eq!(s.state.lock().unwrap().seen.len(), 5);
+    // Catalog and detail reads each recheck hello afterwards; detail adds linked knowledge.
+    assert_eq!(s.state.lock().unwrap().seen.len(), 7);
     let loaded = d.task_snapshot.clone().unwrap();
     let reused = fetch_loaded(&c, &s.options, &Route(key.clone()), Some(loaded.clone()))
         .await
         .unwrap();
     assert!(Arc::ptr_eq(&loaded, &reused));
-    assert_eq!(s.state.lock().unwrap().seen.len(), 6);
+    assert_eq!(s.state.lock().unwrap().seen.len(), 8);
     assert_eq!(s.state.lock().unwrap().seen.last().unwrap().1, "/api/hello");
     let t = reused.task("task-B").unwrap();
     assert_eq!(t.body, "Exact body 日本語 👩‍💻");
@@ -51,7 +52,7 @@ async fn loaded_detail_reuses_every_task_field_but_refresh_and_mutations_read_ag
     let fresh = fetch(&c, &s.options, &Route(key)).await.unwrap();
     assert_eq!(fresh.task("task-B").unwrap().body, "Updated body");
     assert_eq!(fresh.task("task-B").unwrap().work_status, "in_progress");
-    assert_eq!(s.state.lock().unwrap().seen.len(), 8);
+    assert_eq!(s.state.lock().unwrap().seen.len(), 10);
     // A different mission never gets the handed-off snapshot.
     assert!(
         fetch_loaded(
@@ -63,7 +64,7 @@ async fn loaded_detail_reuses_every_task_field_but_refresh_and_mutations_read_ag
         .await
         .is_err()
     );
-    assert_eq!(s.state.lock().unwrap().seen.len(), 9);
+    assert_eq!(s.state.lock().unwrap().seen.len(), 11);
     // Even an exact snapshot cannot bypass a replaced daemon's hello.
     s.reply(
         "/api/hello",
@@ -74,7 +75,7 @@ async fn loaded_detail_reuses_every_task_field_but_refresh_and_mutations_read_ag
             .await
             .is_err()
     );
-    assert_eq!(s.state.lock().unwrap().seen.len(), 10);
+    assert_eq!(s.state.lock().unwrap().seen.len(), 12);
     assert!(s.all_gets());
 }
 #[tokio::test]

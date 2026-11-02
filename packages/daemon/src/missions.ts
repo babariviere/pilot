@@ -102,6 +102,7 @@ import {
 import { nativeReviewProfile, nativeReviewRecord } from "./native-review-records.ts";
 import { reasonLine } from "./needs-you-reason.ts";
 import { NOTICE_HOURLY_CAP, NOTICE_WINDOW_MS, noticeDeadline, noticeInvolvesSession } from "./notice-dispatcher.ts";
+import { KNOWLEDGE_SCHEMA, ProjectKnowledgeStore } from "./project-knowledge-store.ts";
 import type { PullRequestBinding } from "./sessions.ts";
 
 /** Who changed mission state. Omitted sessionId means the user (or pilotd itself). */
@@ -623,6 +624,14 @@ export class MissionStore {
 	private session?: Session;
 	private readonly phaseReconciliations = new Set<string>();
 	private initializing = true;
+	/** Project-owned knowledge in this same database, replica and transaction model. Missions only link entries. */
+	readonly knowledge = new ProjectKnowledgeStore({
+		all: (sql, ...params) => this.all(sql, ...params),
+		one: (sql, ...params) => this.one(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work),
+		changed: (missionId) => this.changed(missionId, [], true),
+	});
 
 	/** ":memory:" keeps state in memory, for tests. */
 	constructor(file: string) {
@@ -646,6 +655,7 @@ export class MissionStore {
 		this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
 		const migratePrTransitions = !this.one("SELECT 1 FROM sqlite_master WHERE name = 'pull_request_transitions'");
 		this.db.exec(SCHEMA);
+		this.db.exec(KNOWLEDGE_SCHEMA);
 		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "created_by_session_id"))
 			this.db.exec("ALTER TABLE tasks ADD COLUMN created_by_session_id TEXT");
 		// Existing assignments are grandfathered, not retroactively charged.

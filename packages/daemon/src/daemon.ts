@@ -34,6 +34,7 @@ import { ModelCatalog } from "./models.ts";
 import { PilotServiceJournal } from "./pilot-service-journal.ts";
 import { detectPlatformCapabilities } from "./platform.ts";
 import { PowerService } from "./power.ts";
+import { KnowledgeService } from "./project-knowledge.ts";
 import { ProjectMemoryService } from "./project-memory.ts";
 import { ProjectStore } from "./projects.ts";
 import { RetiredDevboxes } from "./retired-devboxes.ts";
@@ -239,6 +240,8 @@ for (const mission of missionStore.list())
 	if (mission.status === "done" && !mission.passiveLifecycle && mission.completedAt !== undefined)
 		await trackedItems.completeSlackMission(mission.projectId, mission.id, mission.completedAt);
 const missionService = new MissionService(missionStore, sessions, projects);
+const knowledge = new KnowledgeService(missionStore, projects, sessions);
+sessions.setKnowledge(knowledge);
 // Keep legacy grants occupied and delegated sessions fenced, without loading any live
 // sharing service, observers, replica recovery or courier endpoints.
 const sharing = new RetiredDevboxes(
@@ -343,6 +346,7 @@ const server = createDaemonServer(
 	{
 		service: missionService,
 		store: missionStore,
+		knowledge,
 	},
 	undefined,
 	memory,

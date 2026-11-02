@@ -91,7 +91,11 @@ export function toolCategory(name: string): ToolDiagnosticCategory {
 	if (["web", "browser"].includes(name)) return "network";
 	if (name === "jobs") return "background";
 	if (name === "codemode") return "codemode";
-	if (["artifact", "subagent", "mission", "memory", "question", "todo", "db", "slack_status"].includes(name))
+	if (
+		["artifact", "subagent", "mission", "memory", "knowledge", "question", "todo", "db", "slack_status"].includes(
+			name,
+		)
+	)
 		return "orchestration";
 	return "other";
 }

@@ -37,6 +37,14 @@ Its case-sensitive literal filter searches only text loaded in the current range
 not unopened notes or the full project, and typing never issues reads.
 See the [Local memory browser contract](apps/desktop/docs/project-memory.md).
 
+Projects keep lasting research and component documentation as **knowledge**: agents in writable
+project chats register entries with readable Markdown bodies and cited sources, append corrections
+as new revisions and never mark an entry checked by saving it. Mission coordinators link entries to
+their mission; archiving or deleting a mission never removes them. In Pilot Next, **Knowledge…** on a
+project's overview opens a read-only window, and Mission Overview lists the mission's linked entries.
+See [project knowledge](apps/desktop/docs/project-knowledge.md) and the
+[catalog design](docs/project-knowledge-catalog.md).
+
 Settings → **MCP connections** shows Local’s last reported global Pi MCP status,
 with read-only details and explicit stale/unavailable states. Refresh only reads
 the daemon report; check, sign-in and setup actions are not included. See the

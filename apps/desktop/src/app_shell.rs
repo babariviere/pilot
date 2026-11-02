@@ -26,6 +26,7 @@ pub(crate) enum Page {
 }
 pub(crate) enum ShellEvent {
     Memory(String),
+    Knowledge(String),
     Project(String),
     Chat(String),
     AllChats,
@@ -730,6 +731,14 @@ impl Render for Overview {
                     .self_start()
                     .on_click(
                         cx.listener(move |_, _, _, cx| cx.emit(ShellEvent::Memory(id.clone()))),
+                    ),
+            );
+            let id = p.id.clone();
+            header = header.child(
+                crate::ui::action("project-knowledge", "Knowledge…", crate::ui::Action::Quiet)
+                    .self_start()
+                    .on_click(
+                        cx.listener(move |_, _, _, cx| cx.emit(ShellEvent::Knowledge(id.clone()))),
                     ),
             );
             header = header.child(

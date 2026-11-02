@@ -435,7 +435,9 @@ pub fn run_mission_resources_probe(cx: &mut HeadlessAppContext) {
                     .iter()
                     .all(|(_, p)| p == "/api/hello"
                         || p.starts_with("/api/missions/")
-                        || p.starts_with("/api/sessions?archived=all&missionId="))
+                        || p.starts_with("/api/sessions?archived=all&missionId=")
+                        // The detail read's linked-knowledge summary list, never a resource fetch.
+                        || (p.starts_with("/api/projects/") && p.contains("/knowledge?missionId=")))
             );
             println!(
                 "mission resources: hidden {width} {} keyboard/open/copy/task/Back/Escape/long/offline/late/error/empty passed",

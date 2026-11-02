@@ -468,6 +468,8 @@ pub fn run_mission_artifacts_probe(cx: &mut HeadlessAppContext) {
                     p == "/api/hello"
                         || p.starts_with("/api/missions/")
                         || p.starts_with("/api/sessions?archived=all&missionId=")
+                        // The detail read's linked-knowledge summary list, not an artifact body.
+                        || (p.starts_with("/api/projects/") && p.contains("/knowledge?missionId="))
                         || [
                             path("image", 5),
                             path("legacy", 2),

@@ -159,6 +159,9 @@ pub(crate) async fn fetch(
             .await?;
             let mut d = model::detail(key, &value)?;
             d.task_snapshot = crate::mission_tasks::parse(key, &value).ok().map(Arc::new);
+            d.knowledge = crate::knowledge_reader::linked(client, options, &d.project, &key.id)
+                .await
+                .map(|page| page.map(Arc::new));
             let d = Arc::new(d);
             let members = match get(
                 client,

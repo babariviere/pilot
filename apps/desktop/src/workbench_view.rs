@@ -118,6 +118,75 @@ impl LocalViewer {
         }
         cx.notify();
     }
+    /// One passive reading window per project. An exact entry (and optional pinned
+    /// revision) opens with Back to the project's list.
+    pub(super) fn open_knowledge(
+        &mut self,
+        id: &str,
+        entry: Option<(String, Option<u64>)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.project_choices_ready(window, cx) || !self.state.projects_loaded {
+            return;
+        }
+        let Some(project) = self.state.projects.iter().find(|p| p.id == id).cloned() else {
+            self.nav_error = Some("This project isn't available here.");
+            cx.notify();
+            return;
+        };
+        if let Some((handle, pane)) = self.knowledge_windows.get(id).cloned()
+            && handle
+                .update(cx, |_, w, cx| {
+                    w.activate_window();
+                    if let Some((entry, revision)) = entry.clone() {
+                        let _ = pane.update(cx, |v, cx| v.reveal(entry, revision, w, cx));
+                    }
+                })
+                .is_ok()
+        {
+            return;
+        }
+        let options = self.usage_options.clone();
+        let result = gpui_kit::open_window(
+            gpui_kit::WindowOptions {
+                window_bounds: Some(gpui_kit::WindowBounds::Windowed(
+                    gpui_kit::Bounds::centered(None, gpui_kit::size(px(820.), px(760.)), cx),
+                )),
+                window_min_size: Some(gpui_kit::size(px(480.), px(440.))),
+                window_background: crate::appearance::window_background(cx),
+                ..Default::default()
+            },
+            cx,
+            |w, cx| {
+                crate::appearance::follow_appearance(w, cx);
+                w.set_window_title("Knowledge · Local");
+                let pane =
+                    cx.new(|cx| crate::knowledge_view::Knowledge::new(options, project, w, cx));
+                pane.update(cx, |v, cx| {
+                    v.focus(w, cx);
+                    match entry {
+                        Some((entry, revision)) => v.reveal(entry, revision, w, cx),
+                        None => v.load_list(w, cx),
+                    }
+                });
+                let weak = pane.downgrade();
+                w.on_window_should_close(cx, move |_, cx| {
+                    let _ = weak.update(cx, |v, cx| v.close(cx));
+                    true
+                });
+                pane
+            },
+        );
+        match result {
+            Ok((handle, pane)) => {
+                self.knowledge_windows
+                    .insert(id.into(), (handle, pane.downgrade()));
+            }
+            Err(_) => self.nav_error = Some("Knowledge could not be opened. Try again."),
+        }
+        cx.notify();
+    }
     pub(super) fn sidebar_width(&self, w: &Window, cx: &App) -> f32 {
         sidebar_extent(
             f32::from(w.viewport_size().width),

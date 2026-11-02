@@ -75,6 +75,8 @@ Layout is a left-aligned reading column, not a grid of nested cards:
 The project **Memory…** browser reuses this column and Kit actions in a separate
 passive window, with literal selectable notes and summary drill-down. It never
 shares retained rows across project IDs. See [Local memory](project-memory.md).
+The project **Knowledge…** window uses the same column for a filtered list, a
+Markdown reading view and revision history. See [Project knowledge](project-knowledge.md).
 
 ```text
 Page title

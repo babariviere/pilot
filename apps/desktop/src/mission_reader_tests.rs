@@ -127,7 +127,8 @@ async fn only_existing_get_routes_and_pinned_local_home_are_admitted() {
             .all(|(_, p)| p == "/api/hello"
                 || p == "/api/mission-catalog"
                 || p == "/api/missions/mission-A"
-                || p == "/api/sessions?archived=all&missionId=mission-A")
+                || p == "/api/sessions?archived=all&missionId=mission-A"
+                || p == "/api/projects/project-A/knowledge?missionId=mission-A&limit=50")
     );
 }
 #[tokio::test]

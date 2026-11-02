@@ -690,6 +690,96 @@ impl Browser {
         }))
         .into_any_element()
     }
+    /// Linked project knowledge: the same entries the project owns, never copies.
+    /// Shown when the mission links any, or when its read failed.
+    pub(super) fn knowledge_view(&self, d: &Detail, cx: &Context<Self>) -> Option<AnyElement> {
+        let page = match &d.knowledge {
+            Ok(Some(page)) if !page.entries.is_empty() => Some(page),
+            Ok(_) => return None,
+            Err(_) => None,
+        };
+        let generation = self.generation;
+        let (key, project) = (d.key.clone(), d.project.clone());
+        let open = move |entry: Option<(String, Option<u64>)>| {
+            let (key, project) = (key.clone(), project.clone());
+            cx.listener(move |v: &mut Self, _, _, cx| {
+                if v.current(generation) {
+                    cx.emit(Event::Knowledge {
+                        key: key.clone(),
+                        project: project.clone(),
+                        entry: entry.clone(),
+                        generation,
+                    });
+                }
+            })
+        };
+        let mut section = div()
+            .id("mission-knowledge")
+            .test_support()
+            .v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_1()
+            .child(
+                div()
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().flex_1().min_w_0().child(ui::heading(
+                        "mission-knowledge-heading",
+                        "Knowledge",
+                        Text::Headline,
+                    )))
+                    .child(
+                        ui::action(
+                            "mission-knowledge-all",
+                            "All project knowledge",
+                            Action::Quiet,
+                        )
+                        .on_click(open(None)),
+                    ),
+            );
+        if let Err(e) = &d.knowledge {
+            section = section.child(
+                div()
+                    .id("mission-knowledge-error")
+                    .test_support()
+                    .child(Notice::new(*e).tone(Tone::Warning)),
+            );
+        }
+        if let Some(page) = page {
+            for entry in page.entries.iter().take(SECTION_ROWS) {
+                let pinned = entry.link.as_ref().and_then(|l| l.pinned_revision);
+                let button = ui::action(
+                    SharedString::from(format!("mission-knowledge-open-{}", entry.id)),
+                    "",
+                    Action::Quiet,
+                )
+                .on_click(open(Some((entry.id.clone(), pinned))));
+                section = section.child(crate::knowledge_view::entry_row(
+                    "mission-knowledge-row",
+                    entry,
+                    false,
+                    button,
+                    cx,
+                ));
+            }
+            section = section.children(overflow(
+                "mission-knowledge-more",
+                page.entries.len(),
+                ["linked entry", "linked entries"],
+                cx,
+            ));
+            if page.more {
+                section = section.child(
+                    ui::text(Text::Caption, "More than 50 entries are linked.")
+                        .px(px(ROW_INSET))
+                        .text_color(cx.theme().muted_foreground),
+                );
+            }
+        }
+        Some(section.into_any_element())
+    }
     /// Working now: in progress, then in review, each with its owner chat.
     pub(super) fn working_view(&self, s: &Summary, cx: &Context<Self>) -> Option<AnyElement> {
         if s.working.is_empty() {

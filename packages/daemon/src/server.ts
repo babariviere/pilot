@@ -93,6 +93,7 @@ import { isAllowedOrigin } from "./origin.ts";
 import { PathCompletionReader } from "./path-completion.ts";
 import type { PowerService } from "./power.ts";
 import { type DashboardProviders, ProjectDashboardService } from "./project-dashboard.ts";
+import type { KnowledgeService } from "./project-knowledge.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
 import { AutomationsRevisionConflict, EnvironmentRevisionConflict, expandHome, type ProjectStore } from "./projects.ts";
 import { PTY_INPUT_CHUNK } from "./pty-input.ts";
@@ -334,7 +335,7 @@ export function createDaemonServer(
 	projects: ProjectStore,
 	models: ModelCatalog,
 	terminals: TerminalManager,
-	missions?: { service: MissionService; store: MissionStore },
+	missions?: { service: MissionService; store: MissionStore; knowledge?: KnowledgeService },
 	dashboardProviders?: DashboardProviders,
 	memory?: ProjectMemoryService,
 	schedules?: ScheduleService,
@@ -1219,6 +1220,78 @@ export function createDaemonServer(
 				if (error instanceof DatabaseSettingsError) return json(res, error.status, { error: error.message });
 				throw error;
 			}
+			throw new HttpError(405, "Method not allowed");
+		}
+		// Project knowledge. GETs read stored rows only; writes act for the local user and ACK after durability.
+		if (parts[1] === "projects" && parts[3] === "knowledge" && parts.length <= 6) {
+			const knowledge = missions?.knowledge;
+			if (!knowledge) throw new ServiceUnavailable("Project knowledge is unavailable");
+			const projectId = parts[2]!;
+			const entryId = parts[4];
+			const query = (name: string) => url.searchParams.get(name) ?? undefined;
+			res.setHeader("cache-control", "no-store");
+			if (parts.length === 4 && req.method === "GET") {
+				return json(
+					res,
+					200,
+					await knowledge.durableRead(() =>
+						knowledge.list(projectId, {
+							kind: query("kind"),
+							missionId: query("missionId"),
+							check: query("check"),
+							q: query("q"),
+							limit: query("limit"),
+							cursor: query("cursor"),
+						}),
+					),
+				);
+			}
+			if (parts.length === 4 && req.method === "POST")
+				return json(
+					res,
+					201,
+					await knowledge.write(projectId, undefined, await readJson(req, 96 * 1024), { type: "user" }),
+				);
+			if (parts.length === 5 && req.method === "GET")
+				return json(
+					res,
+					200,
+					await knowledge.durableRead(() => knowledge.detail(projectId, entryId!, query("revision"))),
+				);
+			if (parts.length === 5 && req.method === "PUT")
+				return json(
+					res,
+					200,
+					await knowledge.write(projectId, entryId, await readJson(req, 96 * 1024), { type: "user" }),
+				);
+			if (parts.length === 6 && parts[5] === "revisions" && req.method === "GET")
+				return json(
+					res,
+					200,
+					await knowledge.durableRead(() =>
+						knowledge.revisions(projectId, entryId!, { cursor: query("cursor"), limit: query("limit") }),
+					),
+				);
+			throw new HttpError(405, "Method not allowed");
+		}
+		if (parts[1] === "missions" && parts[3] === "knowledge" && parts.length === 5) {
+			const knowledge = missions?.knowledge;
+			if (!knowledge) throw new ServiceUnavailable("Project knowledge is unavailable");
+			const missionId = parts[2]!;
+			const entryId = parts[4]!;
+			res.setHeader("cache-control", "no-store");
+			if (req.method === "GET")
+				return json(res, 200, await knowledge.durableRead(() => knowledge.linkState(missionId, entryId)));
+			if (req.method === "PUT")
+				return json(res, 200, await knowledge.link(missionId, entryId, await readJson(req), { type: "user" }));
+			if (req.method === "DELETE")
+				return json(
+					res,
+					200,
+					await knowledge.unlink(missionId, entryId, url.searchParams.get("expectedLinkRevision") ?? undefined, {
+						type: "user",
+					}),
+				);
 			throw new HttpError(405, "Method not allowed");
 		}
 		if (parts[1] === "projects" && parts[3] === "memory" && parts.length <= 5) {

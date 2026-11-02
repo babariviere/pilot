@@ -238,6 +238,8 @@ export function runKernelWorker(): void {
 		callDaemon((callId) => ({ type: "source.scope", callId }), signal, false);
 	const callMemory: import("./memory-tools.ts").MemoryCall = (action, args, operationId) =>
 		callDaemon<JsonValue>((callId) => ({ type: "memory.call", callId, operationId, action, args }));
+	const callKnowledge: import("./knowledge-tools.ts").KnowledgeCall = (action, args, operationId) =>
+		callDaemon<JsonValue>((callId) => ({ type: "knowledge.call", callId, operationId, action, args }));
 	const callDatabase: DatabaseCall = (action, args) =>
 		callDaemon<JsonValue>((callId) => ({ type: "database.call", callId, action, args }));
 	const callSlackStatus: SlackStatusCall = (args) =>
@@ -429,6 +431,7 @@ export function runKernelWorker(): void {
 		if (
 			command.type === "mission.result" ||
 			command.type === "memory.result" ||
+			command.type === "knowledge.result" ||
 			command.type === "database.result" ||
 			command.type === "slack.result" ||
 			command.type === "diagnostics.result" ||
@@ -448,7 +451,11 @@ export function runKernelWorker(): void {
 			else
 				call?.resolve(
 					("result" in command ? command.result : undefined) ??
-						(command.type === "mission.result" || command.type === "memory.result" ? null : undefined),
+						(command.type === "mission.result" ||
+						command.type === "memory.result" ||
+						command.type === "knowledge.result"
+							? null
+							: undefined),
 				);
 			return;
 		}
@@ -547,6 +554,7 @@ export function runKernelWorker(): void {
 					callMission,
 					readCoordinatorSources,
 					callMemory,
+					callKnowledge,
 					callDatabase,
 					callSlackStatus,
 					callDiagnostics,

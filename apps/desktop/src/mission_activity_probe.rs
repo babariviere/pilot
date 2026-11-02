@@ -404,7 +404,9 @@ pub fn run_mission_activity_probe(cx: &mut HeadlessAppContext) {
                     .all(|(_, p)| p == "/api/hello"
                         || p == "/api/mission-catalog"
                         || p.starts_with("/api/missions/")
-                        || p.starts_with("/api/sessions?archived=all&missionId="))
+                        || p.starts_with("/api/sessions?archived=all&missionId=")
+                        || (p.starts_with("/api/projects/")
+                            && p.contains("/knowledge?missionId=")))
             );
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
             drop(view);

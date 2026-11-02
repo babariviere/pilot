@@ -125,7 +125,10 @@ async fn existing_actual_reader_projects_decisions_without_new_endpoints() {
         vec![
             "/api/hello",
             "/api/missions/mission-A",
-            "/api/sessions?archived=all&missionId=mission-A"
+            "/api/projects/project-A/knowledge?missionId=mission-A&limit=50",
+            "/api/sessions?archived=all&missionId=mission-A",
+            // The reader rechecks its pinned hello after the responses.
+            "/api/hello"
         ]
     );
     let seen = server.state.lock().unwrap().seen.len();

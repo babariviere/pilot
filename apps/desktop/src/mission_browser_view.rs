@@ -1,5 +1,8 @@
 //! Read-only mission page. Navigation and draft ownership remain with LocalViewer.
 #[cfg(feature = "native-probes")]
+#[path = "mission_knowledge_probe.rs"]
+pub(crate) mod knowledge_probe;
+#[cfg(feature = "native-probes")]
 #[path = "mission_activity_probe.rs"]
 pub(crate) mod mission_activity_probe;
 #[path = "mission_artifacts_view.rs"]
@@ -66,6 +69,13 @@ pub(crate) enum Event {
     Chat {
         key: Key,
         id: String,
+        generation: u64,
+    },
+    /// Open project knowledge: the list, or an exact linked entry and its pin.
+    Knowledge {
+        key: Key,
+        project: String,
+        entry: Option<(String, Option<u64>)>,
         generation: u64,
     },
 }
@@ -1521,6 +1531,7 @@ impl Browser {
                 .child(self.decisions_view(cx))
                 .children(self.needs_you_view(d, cx))
                 .children(self.working_view(&d.summary, cx))
+                .children(self.knowledge_view(d, cx))
                 .child(self.mission_resources_line(d, cx))
                 .child(self.mission_artifacts_line(d, cx));
             content = content.child(ui::heading(

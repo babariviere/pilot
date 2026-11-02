@@ -1,8 +1,9 @@
 # Linked project knowledge catalog
 
-**Proposal for coordinator validation, 2026-11-02.** D46 already selects project ownership.
-This specifies the smallest catalog for research and component documentation, not runtime/UI
-implementation, provider jobs, automatic repository writes or new approval/retention policy.
+**Design, 2026-11-02; the storage, API, agent tool and native reader below now ship.** D46 already
+selects project ownership. This specifies the smallest catalog for research and component
+documentation, not provider jobs, automatic repository writes or new approval/retention policy.
+See [what shipped](#shipped-slice) for the exact implemented surface.
 Source audit: repository `0c3b3238212603f5daa5a629af94822fd0a0adc3`; source inspection only.
 The [desktop workflow](mission-desktop-workflow.md#explorer-findings-and-source-linked-review)
 remains the surrounding experience. Concrete contracts below are proposed, not shipped APIs.
@@ -267,3 +268,28 @@ cross-project refusal, exact pins/history, lost-ACK/CAS, negative research, pend
 passive GET/Refresh, link A→B→A and unlink/relink CAS, readable bodies without a file reader,
 missed events and docs-only non-recursion. This delivery runs only document/source-link/whitespace
 checks, not runtime tests; validation/publication of this proposal activates no catalog or jobs.
+
+## Shipped slice
+
+- **Storage:** the four tables above in `missions.sqlite`
+  ([store](../packages/daemon/src/project-knowledge-store.ts)), written through MissionStore's
+  transactions and replica. Writes await `durable()` before acknowledging, and HTTP and tool reads use
+  the same barrier before and after reading; a durability failure fails the reply. Only mission deletion
+  removes link rows; nothing removes entries.
+- **HTTP** ([server](../packages/daemon/src/server.ts), [service](../packages/daemon/src/project-knowledge.ts)):
+  the GET/POST/PUT routes in the table above, plus `DELETE /api/missions/:id/knowledge/:entry?expectedLinkRevision=N`.
+  HTTP writes act for the local user. GETs read stored rows only. Types are in
+  [protocol](../packages/protocol/src/knowledge.ts).
+- **Validation:** investigation bodies need Markdown headings for Question, Findings (or Conclusions)
+  and Limitations (or Unknowns); components for Purpose (or Boundary), Interfaces (or Architecture)
+  and Constraints (or Gaps). Artifact, mission, and knowledge citations must exist in the same
+  project at write time; repository paths must be relative and are not opened. Appends need a reason.
+  An operation ID is project-scoped; its request hash covers target, author, origin and content.
+- **Agent tool:** `knowledge` over supervised IPC ([tool](../packages/kernel/src/knowledge-tools.ts)),
+  registered for writable project chats. pilotd derives identity and project from the session and
+  refuses read-only roles and shared chats. Linking requires the caller to coordinate its own mission.
+- **Check state:** `markPending` and `recordCheck` exist as host-internal store methods with
+  generation CAS for later maintenance wiring; no route, tool or job calls them yet.
+- **Native:** see [project knowledge in Pilot Next](../apps/desktop/docs/project-knowledge.md).
+- **Not shipped:** automatic registration, source observation or freshness maintenance, bulk
+  import of existing research, local source opening, knowledge in Ask chats, cross-project links.

@@ -57,6 +57,11 @@ fn click(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &str) {
     reveal(cx, h, id);
     cx.update_window(h, |_, w, cx| w.click(id.to_owned(), cx))
         .unwrap();
+    // Wait out the task dialog's entrance/exit, as the task probes do; its overlay
+    // otherwise still covers the tabs on the next click.
+    if matches!(id, "mission-task-new" | "task-create-close") {
+        cx.advance_clock(Duration::from_millis(300));
+    }
     settle(cx, h);
 }
 fn capture(cx: &mut HeadlessAppContext, h: AnyWindowHandle, name: String) {
