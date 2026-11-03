@@ -24,6 +24,7 @@ import { daemonHello } from "./hello.ts";
 import { legacyRuntimeUpdateFrozen } from "./legacy-runtime-update.ts";
 import { createLinearSizePoller } from "./linear-size.ts";
 import { MissionLinearSource } from "./linear-source.ts";
+import { LiveUpdateService } from "./live-update.ts";
 import { daemonLogTail } from "./logging.ts";
 import { McpStatusService, workerProbe } from "./mcp-status.ts";
 import { MissionLinearPrChecks } from "./mission-linear-prs.ts";
@@ -38,6 +39,7 @@ import { KnowledgeService } from "./project-knowledge.ts";
 import { ProjectMemoryService } from "./project-memory.ts";
 import { ProjectStore } from "./projects.ts";
 import { RetiredDevboxes } from "./retired-devboxes.ts";
+import { RuntimeBackground } from "./runtime-background.ts";
 import { runtimeOwner } from "./runtime-bootstrap.ts";
 import { ScheduleDetection } from "./schedule-detection.ts";
 import { shutdownSchedules } from "./schedule-shutdown.ts";
@@ -80,22 +82,18 @@ await projects.load();
 const trackedItems = new TrackedItemStore(join(config.home, "tracked-items.sqlite"));
 await trackedItems.load(projects.list().map((project) => project.id));
 const sourceMcp = new PiSourceMcpClient(config.agentDir);
-const tracking = new SourceRegistry(projects, trackedItems, sourceMcp);
+const tracking = new SourceRegistry(projects, trackedItems, sourceMcp, undefined, { deferStart: true });
 tracking.setDiagnosticsEnabled(telemetry.settings().localDiagnostics);
-await tracking.retainDiagnosticEvidence(join(config.home, "diagnostics", "refresh"), {
-	hostId: "daemon",
-	daemonId: hello.daemonId,
-	lineageId: hello.lineageId,
-});
+
 const usageHistory = new UsageHistoryStore(config.home);
 const backgroundUsage = new BackgroundUsage(config.home, usageHistory);
-void backgroundUsage.ready();
 tracking.triage = new TriageGroomer(
 	projects,
 	trackedItems,
 	workerTriage(config.agentDir, backgroundUsage),
 	Date.now,
 	tracking.jobDiagnostics,
+	true,
 );
 // Shared MCP status for Settings and Needs you. Checks once now, then only when pi's MCP files change.
 const mcpStatus = new McpStatusService({
@@ -103,43 +101,18 @@ const mcpStatus = new McpStatusService({
 	login: (server, options) => sourceMcp.signInServer(server, options),
 	watchDir: config.agentDir ?? getAgentDir(),
 });
-mcpStatus.start();
 tracking.register("linear", createLinearSizePoller(trackedItems, workerTriage(config.agentDir, backgroundUsage)));
-tracking.startPolling("linear");
 const models = new ModelCatalog(config.agentDir);
 models.setBackgroundUsage(backgroundUsage);
 tracking.register("slack", createSlackPoller(trackedItems, models));
 tracking.slackAdder = createSlackAdder(trackedItems, models);
-tracking.startPolling("slack");
 const memory = new ProjectMemoryService(
 	config.home,
 	(prompt, signal, observe, projectId) => models.summarizeMemory(prompt, signal, observe, { projectId }),
 	30_000,
 	{ hostId: "daemon", daemonId: hello.daemonId, lineageId: hello.lineageId },
 );
-// Load metadata and resume pending compaction, but a damaged/busy memory store cannot stop pilotd.
-const knownMemoryProjects = new Set<string>();
-for (const project of projects.list()) {
-	knownMemoryProjects.add(project.id);
-	try {
-		await memory.load(project.id);
-	} catch (error) {
-		console.warn(`pilotd: memory ${project.id}: ${error}`);
-	}
-}
-const stopMemoryProjects = projects.onChange(() => {
-	const current = new Set(projects.list().map((project) => project.id));
-	for (const id of knownMemoryProjects)
-		if (!current.has(id)) {
-			knownMemoryProjects.delete(id);
-			void memory.unload(id).catch((error) => console.warn(`pilotd: memory unload ${id}: ${error}`));
-		}
-	for (const project of projects.list()) {
-		if (knownMemoryProjects.has(project.id)) continue;
-		knownMemoryProjects.add(project.id);
-		void memory.load(project.id).catch((error) => console.warn(`pilotd: memory ${project.id}: ${error}`));
-	}
-});
+let stopMemoryProjects = () => {};
 const serviceJournal = new PilotServiceJournal({
 	home: homedir(),
 	dataHome: config.home,
@@ -224,25 +197,20 @@ trackedItems.onChange((projectId) => {
 // Membership is read while sessions load (auto-archiving, worker specs), so the bridge comes first.
 const missionStore = new MissionStore(join(config.home, "missions.sqlite"));
 const missionLinear = new MissionLinearSource(missionStore, sourceMcp);
-missionLinear.start();
 const linearSync = new MissionLinearSyncService(missionStore, projects, sourceMcp, tracking.jobDiagnostics);
-linearSync.start();
 const completionWrites = new Set<Promise<void>>();
 const stopSlackCompletions = missionStore.onCompleted((projectId, missionId, at) => {
-	const write = trackedItems
-		.completeSlackMission(projectId, missionId, at)
+	if (!backgroundStarted || stopping || startupWork.frozen) return;
+	const write = startupWork
+		.run("slack-completion", () => trackedItems.completeSlackMission(projectId, missionId, at))
 		.catch((error: unknown) => console.warn(`pilotd: Slack completion failed: ${error}`))
 		.finally(() => completionWrites.delete(write));
 	completionWrites.add(write);
 });
-// Recover a completion committed just before a crash. Per-item events preserve later user reopens.
-for (const mission of missionStore.list())
-	if (mission.status === "done" && !mission.passiveLifecycle && mission.completedAt !== undefined)
-		await trackedItems.completeSlackMission(mission.projectId, mission.id, mission.completedAt);
+
 const missionService = new MissionService(missionStore, sessions, projects);
 const knowledge = new KnowledgeService(missionStore, projects, sessions);
 sessions.setKnowledge(knowledge);
-knowledge.maintenance.start();
 // Keep legacy grants occupied and delegated sessions fenced, without loading any live
 // sharing service, observers, replica recovery or courier endpoints.
 const sharing = new RetiredDevboxes(
@@ -258,21 +226,12 @@ const linearPrChecks = new MissionLinearPrChecks(
 	(id, taskId) => missionService.prGuidance(id, taskId),
 	(projectId) => projects.get(projectId)?.path,
 );
-linearPrChecks.start();
 const power = capabilities.powerManagement ? new PowerService(config.home, sessions) : undefined;
 const systemEventsDetection = capabilities.systemSleepEvents ? new SystemEventsDetection() : undefined;
 const scheduleDetection = new ScheduleDetection({ power: systemEventsDetection });
 const connectivity = new ConnectivityService(join(config.home, "connectivity.json"), scheduleDetection, (online) =>
 	sessions.setConnectivity(online),
 );
-// Persist unknown (admitting) before interrupted work can reopen, even with no app or pending schedule.
-await connectivity.start();
-// macOS path loss pauses agents at once, and a returning path resumes them without waiting for a check.
-power?.onNetworkPath((path) => connectivity.setPath(path));
-// Recover global sleep overrides before any interrupted agent can reopen.
-await power?.start();
-await sessions.load(legacyUpdateFrozen);
-for (const project of projects.list()) sessions.refreshTrackedSources(project.id);
 // A reply in a waiting Slack thread resumes the message's latest chat with it, once chats are loaded.
 tracking.slackWaiting = createSlackWaitingWatcher(trackedItems, async (sessionId, message, requestId) => {
 	const chat = sessions.get(sessionId);
@@ -285,11 +244,6 @@ tracking.slackWaiting = createSlackWaitingWatcher(trackedItems, async (sessionId
 		throw error;
 	}
 });
-power?.refresh();
-if (!legacyUpdateFrozen) {
-	missionService.notices.start();
-	missionService.compaction.start();
-}
 const terminals = new TerminalManager();
 const setup = new SetupService(credentials, { mcp: () => mcpStatus.status() });
 const githubSetup = new GitHubSetupService(config.home, {
@@ -320,9 +274,7 @@ const schedules = new ScheduleService(scheduleStore, {
 		};
 	},
 });
-await schedules.load();
 sessions.setScheduledMessages(schedules);
-if (!legacyUpdateFrozen) schedules.start();
 
 // Environment setup stays off until its user-facing parts ship (hello.capabilities.environmentSetup).
 const environment = hello.capabilities.environmentSetup
@@ -338,6 +290,112 @@ const environment = hello.capabilities.environmentSetup
 			});
 		})()
 	: undefined;
+let backgroundStarted = false;
+let backgroundInitialized = false;
+let memoryObserverStarted = false;
+let stopping = false;
+const knownMemoryProjects = new Set<string>();
+let memorySync: Promise<void> | undefined;
+let memorySyncDirty = false;
+const startupWork = new RuntimeBackground("daemon-recovery", () => {
+	if (!backgroundStarted || stopping) return;
+	void syncMemoryProjects().catch((error) => console.warn(`pilotd: memory recovery: ${error}`));
+	void recoverCompletions().catch((error) => console.warn(`pilotd: completion recovery: ${error}`));
+});
+function syncMemoryProjects(): Promise<void> {
+	if (stopping || !backgroundStarted || startupWork.frozen) return Promise.resolve();
+	if (memorySync) {
+		memorySyncDirty = true;
+		return memorySync;
+	}
+	memorySync = startupWork
+		.run("memory-projects", async () => {
+			do {
+				memorySyncDirty = false;
+				const current = new Set(projects.list().map((project) => project.id));
+				for (const id of knownMemoryProjects)
+					if (!current.has(id)) {
+						await memory.unload(id);
+						knownMemoryProjects.delete(id);
+					}
+				for (const project of projects.list()) {
+					if (knownMemoryProjects.has(project.id)) continue;
+					try {
+						await memory.load(project.id);
+						knownMemoryProjects.add(project.id);
+					} catch (error) {
+						console.warn(`pilotd: memory ${project.id}: ${error}`);
+					}
+				}
+			} while (memorySyncDirty && !startupWork.frozen && !stopping);
+		})
+		.finally(() => {
+			memorySync = undefined;
+		});
+	return memorySync;
+}
+function recoverCompletions(): Promise<void> {
+	if (stopping || !backgroundStarted || startupWork.frozen) return Promise.resolve();
+	const write = startupWork
+		.run("slack-completions", async () => {
+			for (const mission of missionStore.list())
+				if (mission.status === "done" && !mission.passiveLifecycle && mission.completedAt !== undefined)
+					await trackedItems.completeSlackMission(mission.projectId, mission.id, mission.completedAt);
+		})
+		.finally(() => completionWrites.delete(write));
+	completionWrites.add(write);
+	return write;
+}
+async function resumeRuntime(): Promise<void> {
+	if (stopping || legacyUpdateFrozen) return;
+	await sessions.resumeMaintenance();
+	if (!backgroundInitialized) {
+		backgroundStarted = true;
+		mcpStatus.start();
+		tracking.triage?.start();
+		tracking.startPolling("linear");
+		tracking.startPolling("slack");
+		missionLinear.start();
+		linearSync.start();
+		knowledge.maintenance.start();
+		linearPrChecks.start();
+		await startupWork.run("usage-recovery", () => backgroundUsage.ready());
+		await tracking.retainDiagnosticEvidence(join(config.home, "diagnostics", "refresh"), {
+			hostId: "daemon",
+			daemonId: hello.daemonId,
+			lineageId: hello.lineageId!,
+		});
+		await syncMemoryProjects();
+		if (!memoryObserverStarted) {
+			stopMemoryProjects = projects.onChange(() => {
+				void syncMemoryProjects().catch((error) => console.warn(`pilotd: memory projects: ${error}`));
+			});
+			memoryObserverStarted = true;
+		}
+
+		missionService.notices.start();
+		missionService.compaction.start();
+		schedules.start();
+		backgroundInitialized = true;
+	}
+	await recoverCompletions();
+	server.recoverOperations();
+}
+const identity = runtimeOwner?.identity();
+const liveUpdate = new LiveUpdateService(config.home, projects, () => sessions.freezeAdmissions(), resumeRuntime, {
+	runtime:
+		identity?.build && identity.runtimeRoot
+			? {
+					boot: identity.boot,
+					source: identity.build.source,
+					build: identity.build,
+					runtimeRoot: identity.runtimeRoot,
+				}
+			: undefined,
+	pauseForUpdate: () => sessions.pauseForUpdate(),
+});
+sessions.setLiveUpdate(liveUpdate);
+const subscriptions = new SubscriptionRefresh((provider) => models.refreshSubscription(provider));
 const server = createDaemonServer(
 	config,
 	sessions,
@@ -365,21 +423,54 @@ const server = createDaemonServer(
 	undefined,
 	environment,
 	runtimeOwner,
-	new SubscriptionRefresh((provider) => models.refreshSubscription(provider)),
+	subscriptions,
 	chatSettings,
+	{
+		service: liveUpdate,
+		contributors: [
+			startupWork,
+			models.maintenance,
+			memory.runtime,
+			sourceMcp.runtime,
+			tracking.runtime,
+			tracking.triage.runtime,
+			subscriptions.runtime,
+			schedules.runtime,
+			missionService.notices.runtime,
+			missionService.compaction.runtime,
+			knowledge.maintenance.runtime,
+			mcpStatus.runtime,
+			missionLinear.runtime,
+			linearSync.runtime,
+			linearPrChecks.runtime,
+		],
+	},
 );
+await server.runtimeReady;
+// Persist unknown (admitting) before interrupted work can reopen, even with no app or pending schedule.
+await connectivity.start();
+// macOS path loss pauses agents at once, and a returning path resumes them without waiting for a check.
+power?.onNetworkPath((path) => connectivity.setPath(path));
+// Recover global sleep overrides before any interrupted agent can reopen.
+await power?.start();
+await schedules.load();
+await sessions.load(legacyUpdateFrozen || liveUpdate.frozen);
+for (const project of projects.list()) sessions.refreshTrackedSources(project.id);
+power?.refresh();
+if (!liveUpdate.frozen) await resumeRuntime();
 if (runtimeOwner) {
 	runtimeOwner.ready(hello);
 	console.log(`pilotd listening on http://${config.host}:${config.port} (data: ${config.home})`);
 } else throw new Error("Daemon profile owner is required");
 
-let stopping = false;
 async function stop(): Promise<void> {
 	if (stopping) return;
 	stopping = true;
 	console.log("pilotd: pausing sessions");
 	// A worker that is starting while this daemon goes away must not leave its chat broken.
 	sessions.beginClosing();
+	server.runtimeResources.freezeAdmissions();
+	await liveUpdate.close();
 	watchdog.stop();
 	server.close();
 	await shutdownSchedules(

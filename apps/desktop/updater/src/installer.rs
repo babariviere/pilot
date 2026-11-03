@@ -365,7 +365,7 @@ pub fn rollback_bundle(root: &Path, trust: &Trust) -> PathBuf {
     }
 }
 
-const HISTORY: &str = ".pilot-next-updater-history";
+pub(crate) const HISTORY: &str = ".pilot-next-updater-history";
 
 fn transaction_name(root: &Path) -> bool {
     root.file_name()
@@ -391,7 +391,7 @@ fn private_directory(path: &Path) -> Result<(), Error> {
     acl_policy(path, 2)
 }
 
-fn signed_manifest(root: &Path, trust: &Trust) -> Result<VerifiedManifest, Error> {
+pub(crate) fn signed_manifest(root: &Path, trust: &Trust) -> Result<VerifiedManifest, Error> {
     use base64::Engine as _;
     let bytes = read_small(&root.join("manifest.json"), crate::manifest::MAX_MANIFEST)?;
     let envelope: crate::manifest::Envelope =
@@ -1265,7 +1265,7 @@ fn journal_guard(root: &Path) -> Result<File, Error> {
     Ok(file)
 }
 
-fn validate_root(root: &Path, target: &Path) -> Result<(), Error> {
+pub(crate) fn validate_root(root: &Path, target: &Path) -> Result<(), Error> {
     acl_policy(root, 2)?;
     let history = target.parent().ok_or(Error::Identity)?.join(HISTORY);
     let archived = root.parent() == Some(history.as_path());

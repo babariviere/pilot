@@ -10,6 +10,9 @@ export class MissionNotices {
 		this.remoteOccupied = read;
 	}
 	private readonly dispatcher: NoticeDispatcher;
+	get runtime() {
+		return this.dispatcher.runtime;
+	}
 	private stopped = true;
 	private readonly seen = new Map<string, string>();
 	private readonly questions = new Map<string, string>();

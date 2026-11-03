@@ -694,6 +694,34 @@ pub(crate) fn upgrade_daemon_explicit(
     upgrade_daemon(location, daemon_id, lineage_id, cancel, false)
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn upgrade_daemon_coordinated(
+    location: pilot_desktop_updater::coordination::Location,
+    daemon_id: String,
+    lineage_id: String,
+    cancel: Arc<AtomicBool>,
+    binding: serde_json::Value,
+) -> Result<(), pilot_desktop_updater::daemon_upgrade::Failure> {
+    use pilot_desktop_updater::daemon_upgrade::Failure;
+    let executable = std::env::current_exe().map_err(|_| Failure::Unverified)?;
+    let root = package_root(&executable).map_err(|_| Failure::Unverified)?;
+    let trust = pilot_desktop_updater::helper::compiled_trust().map_err(|_| Failure::Unverified)?;
+    let deadline = Instant::now() + Duration::from_secs(45);
+    validate(root, &cancel, deadline).map_err(|_| Failure::Unverified)?;
+    let capsule =
+        service_runtime(root, &trust, &cancel, deadline).map_err(|_| Failure::Unverified)?;
+    // Do not clean transaction evidence before durable coordinated completion.
+    pilot_desktop_updater::daemon_upgrade::upgrade_coordinated(
+        location,
+        &capsule,
+        &trust,
+        &daemon_id,
+        &lineage_id,
+        &cancel,
+        binding,
+    )
+}
+
 fn upgrade_daemon(
     location: pilot_desktop_updater::coordination::Location,
     daemon_id: String,

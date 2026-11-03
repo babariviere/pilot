@@ -10,6 +10,11 @@ pub mod archive;
     all(target_os = "macos", feature = "native-macos"),
     all(target_os = "linux", feature = "native-linux")
 ))]
+pub mod coordinated;
+#[cfg(any(
+    all(target_os = "macos", feature = "native-macos"),
+    all(target_os = "linux", feature = "native-linux")
+))]
 pub mod coordination;
 pub mod daemon_upgrade;
 #[cfg(feature = "fixture")]
@@ -20,7 +25,7 @@ pub mod installer;
     all(target_os = "macos", feature = "native-macos"),
     all(target_os = "linux", feature = "native-linux")
 ))]
-mod iteration;
+pub mod iteration;
 pub mod layout;
 #[cfg(any(test, target_os = "linux"))]
 pub mod linux;
@@ -491,6 +496,15 @@ impl Updater<worker::Worker> {
         directory: std::path::PathBuf,
         now: Duration,
     ) -> Result<(), Error> {
+        self.stage_local_expected(directory, None, now)
+    }
+    /// Proposal-only staging. Exact source/build are checked before a transaction exists.
+    pub fn stage_local_expected(
+        &mut self,
+        directory: std::path::PathBuf,
+        expected: Option<iteration::ExpectedTarget>,
+        now: Duration,
+    ) -> Result<(), Error> {
         if !matches!(
             self.state,
             State::Idle
@@ -502,7 +516,7 @@ impl Updater<worker::Worker> {
             return Err(Error::Busy);
         }
         let operation = self.start(Work::Downloading)?;
-        if let Err(error) = self.backend.stage_local(operation, directory) {
+        if let Err(error) = self.backend.stage_local(operation, directory, expected) {
             self.complete(
                 Completion {
                     operation,

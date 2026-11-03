@@ -221,6 +221,11 @@ With a paged-history daemon, chats open on recent messages and load older histor
 Find can explicitly load the full history. See [lazy Local history](apps/desktop/docs/lazy-history.md).
 Pilot Next supports explicit [source-pinned UI iteration updates](apps/desktop/docs/ui-iteration.md),
 preserving durable drafts and the running daemon, including externally managed connections.
+Pilot-project Build chats can use `pilot_update` to propose a signed local build. Native
+**Settings → Updates → Accept update** authorizes a separate coordinated drain, durable GUI
+restart, verified daemon handoff and resume. Jobs, terminals and unknown children block it;
+uncertain lifecycle outcomes remain inspect-only. Ordinary GUI-only updates are unchanged.
+See [coordinated project updates](apps/desktop/docs/daemon-upgrades.md#project-proposed-coordinated-updates).
 The legacy Swift app is no longer built or published by CI. Its source and existing releases remain available.
 
 For the last legacy Swift release, download `Pilot-arm64.zip` from

@@ -10,6 +10,7 @@ import type {
 import { Conflict } from "./errors.ts";
 import { startedWorkflowStates } from "./linear-workflow.ts";
 import type { MissionStore } from "./missions.ts";
+import { RuntimeBackground } from "./runtime-background.ts";
 import { type SourceMcpClient, SourceRateLimited, SourceSignInRequired } from "./source-mcp.ts";
 import type { SourcePollContext, SourcePollResult } from "./sources.ts";
 import type { TrackedInput } from "./tracked-items.ts";
@@ -70,6 +71,17 @@ export function createMissionLinearPoller(store: MissionStore): (context: TaskPo
 /** Same five-minute cadence and shared, two-slot dedicated MCP client as Inbox tracking.
  * One global batch, one in-flight run, bounded deadline, no Linear writes or new credentials. */
 export class MissionLinearSource {
+	readonly runtime = new RuntimeBackground(
+		"linked-linear",
+		() => {
+			if (this.started) this.start();
+		},
+		() => {
+			clearTimeout(this.timer);
+			this.timer = undefined;
+		},
+	);
+	private started = false;
 	private timer?: ReturnType<typeof setTimeout>;
 	private run?: { controller: AbortController; promise: Promise<void> };
 	private stopped = false;
@@ -80,19 +92,23 @@ export class MissionLinearSource {
 		this.poll = createMissionLinearPoller(store);
 	}
 	start(): void {
+		this.started = true;
 		if (!this.stopped && !this.timer && !this.run) this.schedule(0);
 	}
 	private schedule(delay: number): void {
-		if (this.stopped) return;
+		if (this.stopped || this.runtime.frozen) return;
 		this.timer = setTimeout(() => {
 			this.timer = undefined;
 			const controller = new AbortController();
 			const deadline = setTimeout(() => controller.abort(new Error("Linked Linear poll timed out")), 90_000);
 			let next = 300_000;
-			const promise = this.poll({
-				signal: controller.signal,
-				call: (tool, args) => this.mcp.call("linear", tool, args, controller.signal),
-			})
+			const promise = this.runtime
+				.run("poll", () =>
+					this.poll({
+						signal: controller.signal,
+						call: (tool, args) => this.mcp.call("linear", tool, args, controller.signal),
+					}),
+				)
 				.catch((error) => {
 					if (error instanceof SourceRateLimited) next = Math.max(next, error.retryAfterMs);
 					// An unavailable source leaves task statuses unchanged; retry on the next cadence.

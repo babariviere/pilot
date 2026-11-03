@@ -17,6 +17,14 @@ impl Reservation {
         owner: &Value,
         purpose: &str,
     ) -> Result<Self, Failure> {
+        Self::prepare_bound(location, owner, purpose, None)
+    }
+    pub(super) fn prepare_bound(
+        location: &Location,
+        owner: &Value,
+        purpose: &str,
+        binding: Option<&Value>,
+    ) -> Result<Self, Failure> {
         if !["daemon-upgrade", "daemon-stop", "daemon-restart"].contains(&purpose) {
             return Err(Failure::Unsupported);
         }
@@ -30,7 +38,10 @@ impl Reservation {
         // Server hold is 180s measured before inspection (which may take 10s).
         // Keep five seconds of margin; verify never renews this local deadline.
         let deadline = Instant::now() + Duration::from_secs(175);
-        let request = json!({"operationId":coordination::random_operation().map_err(|_|Failure::Unverified)?,"purpose":purpose});
+        let mut request = json!({"operationId":coordination::random_operation().map_err(|_|Failure::Unverified)?,"purpose":purpose});
+        if let Some(binding) = binding {
+            request["liveUpdate"] = binding.clone();
+        }
         let receipt =
             coordination::signed_update(location, owner, &request, "prepare").map_err(failure)?;
         validate_receipt(&receipt, &request)?;
@@ -70,7 +81,11 @@ fn failure(error: crate::Error) -> Failure {
     }
 }
 fn validate_receipt(receipt: &Value, request: &Value) -> Result<(), Failure> {
-    if receipt.as_object().is_none_or(|v| v.len() != 4)
+    let bound = request.get("liveUpdate");
+    if receipt
+        .as_object()
+        .is_none_or(|v| v.len() != if bound.is_some() { 5 } else { 4 })
+        || receipt.get("liveUpdate") != bound
         || receipt["schema"] != 1
         || receipt["operationId"] != request["operationId"]
         || receipt["purpose"] != request["purpose"]

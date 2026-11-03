@@ -257,6 +257,9 @@ impl LocalViewer {
         ) {
             return;
         }
+        if !updater.read(cx).coordinated_restart_allowed() {
+            return;
+        }
         if updater.read(cx).unsaved_access(cx) {
             updater.update(cx,|u,cx|u.defer("Use or clear the unsaved update access field before installing. It is never written to disk.",cx));
             return;
@@ -528,11 +531,15 @@ impl LocalViewer {
         let Some(updater) = self.updater(cx) else {
             return;
         };
+        let durable = self.editor.read(cx).ready() && self.settings.read(cx).state.persisted();
+        if durable {
+            updater.update(cx, |u, cx| u.coordinated_loaded(cx));
+        }
         let receipt = crate::bundled_runtime::update_receipt();
         if receipt.is_none() && !updater.read(cx).has_startup_recovery() {
             return;
         }
-        if self.editor.read(cx).ready() && self.settings.read(cx).state.persisted() {
+        if durable {
             updater.update(cx, |u, cx| u.acknowledge_startup(receipt, cx));
         }
     }

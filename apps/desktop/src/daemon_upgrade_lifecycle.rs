@@ -19,6 +19,12 @@ impl LocalViewer {
         let Some(updater) = self.settings.read(cx).updater.clone() else {
             return;
         };
+        if let Some(binding) = updater.update(cx, |u, _| u.take_coordinated_daemon_request()) {
+            if let Some(upgrade) = self.daemon_upgrade(cx) {
+                upgrade.update(cx, |u, cx| u.request_coordinated(binding, cx));
+            }
+            return;
+        }
         if !updater.read(cx).daemon_upgrade_ready() {
             return;
         }
@@ -50,6 +56,16 @@ impl LocalViewer {
         if !upgrade.read(cx).checkpoint_requested() {
             return;
         }
+        if self
+            .settings
+            .read(cx)
+            .updater
+            .as_ref()
+            .is_some_and(|u| !u.read(cx).coordinated_manual_daemon_allowed())
+        {
+            upgrade.update(cx, |u,cx| u.set_notice("A coordinated update owns daemon replacement. Inspect its proposal in Updates.",cx));
+            return;
+        }
         if self.restart_pending {
             upgrade.update(cx, |u, cx| {
                 u.set_notice(
@@ -75,6 +91,12 @@ impl LocalViewer {
                 .daemon_upgrade(cx)
                 .is_none_or(|u| !u.read(cx).active() && !u.read(cx).checkpoint_requested())
         {
+            let succeeded = self.daemon_upgrade(cx).is_some_and(|u| {
+                u.read(cx).status() == crate::daemon_upgrade_view::Status::Succeeded
+            });
+            if let Some(updater) = self.settings.read(cx).updater.clone() {
+                updater.update(cx, |u, cx| u.coordinated_daemon_finished(succeeded, cx));
+            }
             self.finish_daemon_checkpoint(cx);
         }
     }

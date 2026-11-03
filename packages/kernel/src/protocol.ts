@@ -183,6 +183,8 @@ export interface KernelSpec {
 	mission?: MissionContext;
 	/** pilotd has a database config; register the `db` tool. Connection details stay in pilotd. */
 	databases?: boolean;
+	/** Supervised host admission for proposal-only updates in writable local Pilot project chats. */
+	liveUpdateProposals?: boolean;
 	/** Host-owned export consent. No credential, arbitrary header or analytics identity crosses IPC. */
 	telemetry?: KernelTelemetryConfiguration;
 }
@@ -266,6 +268,7 @@ export type KernelCommand =
 	  }
 	| { type: "memory.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "knowledge.result"; callId: string; result?: JsonValue; error?: string }
+	| { type: "liveUpdate.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "database.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "slack.result"; callId: string; result?: JsonValue; error?: string }
 	| {
@@ -383,6 +386,13 @@ export type KernelPacket =
 			operationId?: string;
 			action: import("./knowledge-tools.ts").KnowledgeAction;
 			args: Record<string, JsonValue>;
+	  }
+	/** Proposal only, answered by `liveUpdate.result`. Host rechecks scope and validates the release. */
+	| {
+			type: "liveUpdate.propose";
+			callId: string;
+			operationId: string;
+			args: import("@pilot/protocol").LiveUpdateProposalArgs;
 	  }
 	/** A `db` tool call, answered by `database.result`. Grants are checked in pilotd. */
 	| { type: "database.call"; callId: string; action: DatabaseAction; args: Record<string, JsonValue> }

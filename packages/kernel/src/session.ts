@@ -86,6 +86,7 @@ import { submitIdleInput } from "./idle-input.ts";
 import { InputOrigins, inputOrigin } from "./input-origin.ts";
 import { JobsMonitor } from "./jobs.ts";
 import { createKnowledgeTool } from "./knowledge-tools.ts";
+import { createLiveUpdateTools } from "./live-update-tool.ts";
 import { createManualCompaction, queueDuringCompaction } from "./manual-compaction.ts";
 import { mcpActivity } from "./mcp-activity.ts";
 import { createMemoryTools, type MemoryCall } from "./memory-tools.ts";
@@ -195,6 +196,8 @@ export interface KernelSessionHooks {
 	callMemory?: MemoryCall;
 	/** Executes a `knowledge` tool call in pilotd. Registered for writable project chats only. */
 	callKnowledge?: import("./knowledge-tools.ts").KnowledgeCall;
+	/** Proposes a local release for native approval, never executes an update. */
+	callLiveUpdateProposal?: import("./live-update-tool.ts").LiveUpdateProposalCall;
 	/** Executes a `db` tool call in pilotd. Registered only when the spec reports a database config. */
 	callDatabase?: DatabaseCall;
 	/** Executes a `slack_status` tool call in pilotd. The tool is declared only while the chat has a Slack message. */
@@ -653,6 +656,7 @@ export class KernelSession {
 								sessionOptions: {
 									customTools: [
 										...createArtifactTools(artifactOptions),
+										...createLiveUpdateTools(spec, hooks.callLiveUpdateProposal),
 										...(historyRecall ? [createHistoryRecallTool(() => artifactConversation)] : []),
 										...(spec.projectId && hooks.callMemory
 											? createMemoryTools(hooks.callMemory, spec.sessionId)

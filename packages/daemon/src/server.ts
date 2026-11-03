@@ -78,6 +78,7 @@ import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import type { GitHubImportService } from "./github-import.ts";
 import type { GitHubSetupService } from "./github-setup.ts";
+import type { LiveUpdate, LiveUpdateIdentity, LiveUpdateService, LiveUpdateTarget } from "./live-update.ts";
 import { MachineInformationReader } from "./machine.ts";
 import { McpSetupError, McpSetupStore } from "./mcp-setup.ts";
 import { type McpStatusService, SignInUnavailable } from "./mcp-status.ts";
@@ -100,7 +101,9 @@ import { PTY_INPUT_CHUNK } from "./pty-input.ts";
 import { RepositoryBrowser } from "./repository-browser.ts";
 import { isRetiredDevboxOperation } from "./retired-devboxes.ts";
 import { ReviewStore } from "./reviews.ts";
+import type { RuntimeContributor } from "./runtime-admission.ts";
 import { RuntimeAdmission, RuntimeResources } from "./runtime-admission.ts";
+
 import type { ScheduleService } from "./schedules.ts";
 import { NotFound, type SessionManager } from "./sessions.ts";
 import { SetupError, type SetupService } from "./setup.ts";
@@ -114,6 +117,18 @@ import { validatePatch } from "./tracked-items.ts";
 import { type ReservationReceipt, UpdateReservation } from "./update-reservation.ts";
 import { UsageQueryCapacityError } from "./usage-history.ts";
 import { usageAnalyticsQuery } from "./usage-history-validation.ts";
+
+/** Native host capability authenticates locally verified updater checkpoints, not agent assertions.
+ * The capability holder must validate the signed staged candidate and measured source/GUI build,
+ * retain its exact immutable runtime target, and observe the old GUI exit plus the replacement
+ * executable/receipt before reporting gui-ready. The daemon validates the durable transaction and
+ * process-captured daemon identity. It does not claim to verify native signatures from JSON.
+ * Never pass this capability to workers or expose these transitions through session IPC.
+ */
+export interface RuntimeUpdateIntegration {
+	service: LiveUpdateService;
+	contributors?: readonly RuntimeContributor[];
+}
 
 const MAX_BODY = 1024 * 1024;
 const HISTORY_PAGE_DEFAULT = 100;
@@ -354,7 +369,8 @@ export function createDaemonServer(
 	bootstrap?: import("./runtime-owner.ts").RuntimeOwner,
 	subscriptions?: import("./subscription-refresh.ts").SubscriptionRefresh,
 	chatSettings?: ChatSettingsService,
-): Server & { runtimeResources: RuntimeResources } {
+	liveUpdate?: RuntimeUpdateIntegration,
+): Server & { runtimeResources: RuntimeResources; runtimeReady: Promise<void>; recoverOperations(): void } {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	sessions.diagnosticFeatureUsage = telemetry ? (host) => telemetry.featureUsage.snapshot(host) : undefined;
 	sessions.diagnosticDomainRead = async (request) => {
@@ -494,7 +510,10 @@ export function createDaemonServer(
 		...(githubImport ? [githubImport] : []),
 		...(setup ? [setup] : []),
 	];
-	const runtimeResources = new RuntimeResources(runtimeSources);
+	const runtimeResources = new RuntimeResources([...runtimeSources, ...(liveUpdate?.contributors ?? [])]);
+	liveUpdate?.service.attach(runtimeResources);
+	// Freeze synchronously before loading retained maintenance, before any recovery is admitted.
+	const runtimeReady = liveUpdate?.service.load() ?? Promise.resolve();
 	const reservations = new UpdateReservation(
 		new RuntimeResources(
 			// An app update keeps pilotd running, so paused agents and open terminals need not block it.
@@ -519,16 +538,60 @@ export function createDaemonServer(
 		// Stop/Restart cannot interrupt an unfinished run merely because it paused.
 		() => sessions.prepareUpdate().ready,
 	);
+	let coordinatedReservation: { operationId: string; binding: string } | undefined;
 	bootstrap?.updates(async (action, value) => {
+		await runtimeReady;
 		if (!value || typeof value !== "object") throw new Error("update_receipt_invalid");
-		const receipt = value as ReservationReceipt;
+		const receipt = value as ReservationReceipt & {
+			liveUpdate?: LiveUpdateTarget & { id: string; guiBuild: string };
+		};
+		const coordinated = receipt.liveUpdate;
+		let binding: string | undefined;
+		if (liveUpdate?.service.frozen || coordinated) {
+			const update = liveUpdate?.service.snapshot();
+			const target = update?.target as (LiveUpdateTarget & { guiBuild: string }) | undefined;
+			if (
+				!update ||
+				!target ||
+				!coordinated ||
+				Object.keys(coordinated).sort().join(",") !== "build,guiBuild,id,runtimeRoot,source" ||
+				coordinated.id !== update.id ||
+				coordinated.guiBuild !== update.build ||
+				coordinated.guiBuild !== target.guiBuild ||
+				coordinated.source !== target.source ||
+				coordinated.runtimeRoot !== target.runtimeRoot ||
+				!coordinated.build ||
+				Object.keys(coordinated.build).sort().join(",") !== Object.keys(target.build).sort().join(",") ||
+				Object.entries(target.build).some(
+					([key, v]) => coordinated.build[key as keyof typeof target.build] !== v,
+				) ||
+				!(
+					(update.phase === "gui-installing" && receipt.purpose === undefined) ||
+					(update.phase === "daemon-installing" && receipt.purpose === "daemon-upgrade")
+				)
+			)
+				throw new Conflict("Coordinated live update reservation does not match durable intent");
+			binding = JSON.stringify([update.id, target.source, target.guiBuild, target.runtimeRoot, target.build]);
+			if (
+				action !== "prepare" &&
+				action !== "inspect" &&
+				(coordinatedReservation?.operationId !== receipt.operationId || coordinatedReservation.binding !== binding)
+			)
+				throw new Conflict("Coordinated live update reservation changed");
+		}
 		if (action === "inspect") return receipt;
-		if (action === "prepare") return reservations.prepare(receipt.operationId, receipt.purpose);
+		if (action === "prepare") {
+			const prepared = await reservations.prepare(receipt.operationId, receipt.purpose);
+			coordinatedReservation = binding ? { operationId: receipt.operationId, binding } : undefined;
+			return coordinated ? { ...prepared, liveUpdate: structuredClone(coordinated) } : prepared;
+		}
 		if (action === "cancel") {
 			reservations.cancel(receipt);
+			coordinatedReservation = undefined;
 			return receipt;
 		}
-		return reservations.verify(receipt);
+		const verified = reservations.verify(receipt);
+		return coordinated ? { ...verified, liveUpdate: structuredClone(coordinated) } : verified;
 	});
 	if (legacyAdmissionFrozen) runtimeResources.freezeAdmissions();
 	const journal = hello?.lineageId
@@ -605,18 +668,79 @@ export function createDaemonServer(
 		throw new OperationRejected("Unsupported operation kind");
 	};
 	// Only registered idempotent handlers resume. An interrupted handler always retains the same target.
+	let operationRecovery: Promise<void> | undefined;
 	const recoverOperations = () => {
-		if (journal && !legacyAdmissionFrozen)
-			void journal
+		if (journal && !operationRecovery && !legacyAdmissionFrozen && !liveUpdate?.service.frozen)
+			operationRecovery = journal
 				.recover(admitOperation, (op) => !isRetiredDevboxOperation(op.kind))
-				.catch((error) => console.warn("pilotd: operation recovery", error));
+				.catch((error) => console.warn("pilotd: operation recovery", error))
+				.finally(() => {
+					operationRecovery = undefined;
+				});
 	};
-	recoverOperations();
+	// The startup owner calls recovery only after session metadata has loaded.
+	if (!liveUpdate) recoverOperations();
+	let checkpointPending: Promise<unknown> = Promise.resolve();
+	let checkpointQueued = 0;
+	const nativeCheckpoint = <T>(work: () => Promise<T>): Promise<T> => {
+		if (checkpointQueued >= 16) throw new ServiceUnavailable("Native update checkpoints are busy");
+		checkpointQueued++;
+		const result = checkpointPending.then(work).finally(() => {
+			checkpointQueued--;
+		});
+		checkpointPending = result.catch(() => undefined);
+		return result;
+	};
 	const route = async (req: IncomingMessage, res: ServerResponse) => {
 		if (!isAllowedOrigin(req.headers.origin)) throw new HttpError(403, "Browser requests are not allowed");
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (parts[1] === "runtime-update") {
+			res.setHeader("cache-control", "no-store");
+			if (!githubSetup || !liveUpdate) throw new ServiceUnavailable("Coordinated live update is unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			await runtimeReady;
+			if (parts.length === 2 && req.method === "GET")
+				return json(res, 200, { update: liveUpdate.service.snapshot(), frozen: liveUpdate.service.frozen });
+			if (parts.length !== 3 || req.method !== "POST") throw new HttpError(404, "Not found");
+			const body = await readJson<{
+				id: string;
+				phase: LiveUpdate["phase"];
+				target?: LiveUpdateTarget;
+				receipt?: LiveUpdateIdentity;
+			}>(req, 8192);
+			const action = parts[2];
+			const expectedKeys =
+				action === "arm-gui" ? "id,phase,target" : action === "gui-ready" ? "id,phase,receipt" : "id,phase";
+			if (
+				!body ||
+				typeof body !== "object" ||
+				Array.isArray(body) ||
+				Object.keys(body).sort().join(",") !== expectedKeys ||
+				typeof body.id !== "string" ||
+				!/^[a-zA-Z0-9._:-]{1,128}$/u.test(body.id) ||
+				typeof body.phase !== "string"
+			)
+				throw new HttpError(400, "Expected exact native update checkpoint");
+			return nativeCheckpoint(async () => {
+				const service = liveUpdate.service;
+				const update = service.snapshot();
+				if (!update || update.id !== body.id || update.phase !== body.phase)
+					throw new Conflict("Live update changed");
+				if (action === "accept") return json(res, 200, await service.accept(body.id));
+				if (action === "progress") return json(res, 200, await service.progress(body.id));
+				if (action === "cancel") return json(res, 200, await service.cancel(body.id));
+				if (action === "arm-daemon") return json(res, 200, await service.armDaemon(body.id));
+				if (action === "complete") return json(res, 200, await service.complete(body.id));
+				// Only the native capability holder may report checkpoints. The native updater
+				// verifies signatures and measured executable identity before sending these fields.
+				// TypeScript validates their exact transaction binding; it does not verify a signature.
+				if (action === "arm-gui") return json(res, 200, await service.armGui(body.id, body.target!));
+				if (action === "gui-ready") return json(res, 200, await service.guiReady(body.id, body.receipt!));
+				throw new HttpError(404, "Not found");
+			});
+		}
 		if (parts[1] === "subscription-usage") {
 			res.setHeader("cache-control", "no-store");
 			if (!subscriptions || !hello?.lineageId) throw new ServiceUnavailable("Subscription refresh unsupported");
@@ -1809,7 +1933,7 @@ export function createDaemonServer(
 					!natural(view.tail) ||
 					(view.head !== undefined &&
 						(!view.head ||
-						!natural(view.head.id) ||
+							!natural(view.head.id) ||
 							!natural(view.head.start) ||
 							view.head.start > view.head.id ||
 							view.head.id > view.tail)) ||
@@ -2156,7 +2280,7 @@ export function createDaemonServer(
 			// Match the router's path segments. Only receipt lookup avoids mission durability.
 			const parts = path.split("/").filter(Boolean);
 			receiptLookup = req.method === "POST" && parts.length === 3 && parts.join("/") === "api/operations/receipt";
-			const update = path.startsWith("/api/runtime-update");
+			const update = parts[0] === "api" && parts[1] === "runtime-update";
 			const control =
 				/\/(stop|cancel|seal)$/.test(path) || (req.method === "DELETE" && path.startsWith("/api/setup/runs/"));
 			if (!update && req.method !== "GET" && req.method !== "HEAD" && !control)
@@ -2776,6 +2900,8 @@ export function createDaemonServer(
 
 	return Object.assign(server, {
 		runtimeResources,
+		runtimeReady,
+		recoverOperations,
 	});
 }
 /** Mission routes under /api/missions and /api/sessions/:id/mission. Returns false when nothing matched. */

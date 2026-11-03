@@ -76,6 +76,13 @@ test("retained startup pins the live record and signed module root without chang
 		root = join(home, "retained-runtime");
 	const owner = await ownRuntime(home, p, true, build, root);
 	t.after(() => owner.close());
+	const captured = owner.identity();
+	assert.deepEqual(captured.build, build);
+	assert.equal(captured.runtimeRoot, root);
+	assert.match(captured.boot, /^[a-f0-9]{64}$/);
+	assert.equal("secret" in captured, false);
+	captured.build!.source = "0".repeat(40);
+	assert.equal(owner.identity().build!.source, build.source, "identity snapshots are detached");
 	owner.ready(await daemonHello(home, capabilities));
 	assert.equal(await inspectRuntime(home, p, build, root), "ready");
 	await assert.rejects(inspectRuntime(home, p, build, join(home, "replaceable-app")), /runtime_incompatible/);
@@ -83,6 +90,7 @@ test("retained startup pins the live record and signed module root without chang
 	const original = await readFile(recordPath, "utf8");
 	const redirected = join(home, "forged-root");
 	await writeFile(recordPath, JSON.stringify({ ...JSON.parse(original), runtimeRoot: redirected }), { mode: 0o600 });
+	assert.equal(owner.identity().runtimeRoot, root, "disk redirection cannot change captured identity");
 	await assert.rejects(inspectRuntime(home, p, build, redirected), /runtime_proof_invalid/);
 	await writeFile(recordPath, original, { mode: 0o600 });
 	assert.equal(await inspectRuntime(home, p, build), "ready");

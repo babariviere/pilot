@@ -14,6 +14,8 @@ use pilot_desktop_updater::{
     worker::Worker,
 };
 use std::time::{Duration, Instant};
+#[path = "coordinated_update.rs"]
+mod coordinated;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Event {
@@ -27,6 +29,7 @@ pub(crate) enum Event {
     StopDaemonBlocker,
 }
 pub(crate) struct Updates {
+    coordinated: coordinated::State,
     controller: Option<Updater<Worker>>,
     unavailable: Option<Error>,
     epoch: Instant,
@@ -754,6 +757,7 @@ impl Updates {
     /// Controller-free state; `new` attaches the worker.
     fn blank(location: Option<Location>, external: bool) -> Self {
         Self {
+            coordinated: Default::default(),
             startup_started: false,
             startup: None,
             startup_task: None,
@@ -896,6 +900,7 @@ impl Updates {
                     owner.startup_canonical.clone_from(canonical);
                 }
                 owner.startup = Some(result.map(|_| ()));
+                owner.advance_coordinated(cx);
                 // Once this receipt is acknowledged, its transaction no longer blocks
                 // activation; other recovery rows still do.
                 owner.filter_recovery();
@@ -962,6 +967,7 @@ impl Updates {
             }
         }
         self.filter_recovery();
+        self.advance_coordinated(cx);
         self.schedule(cx);
         cx.emit(Event::Changed);
         cx.notify();
@@ -988,7 +994,8 @@ impl Updates {
     }
     /// A daemon boot change must not invalidate a GUI receipt before its durable ACK.
     pub(crate) fn daemon_upgrade_ready(&self) -> bool {
-        self.inspected
+        self.coordinated_daemon_ready()
+            && self.inspected
             && !self.recovery_blocked()
             && (!(crate::bundled_runtime::update_receipt().is_some()
                 || self.startup_receipt.is_some()
@@ -1246,7 +1253,9 @@ impl Updates {
     /// The single status line, shared by the view and its mounted probe.
     pub(crate) fn status(&self) -> &'static str {
         let state = self.state();
-        let local = self.local_build.then(|| local_text(state)).flatten();
+        let local = self
+            .coordinated_ready_text(state)
+            .or_else(|| self.local_build.then(|| local_text(state)).flatten());
         match state {
             _ if local.is_some() => local.unwrap_or_default(),
             None => error_text(self.unavailable.unwrap_or(Error::Unconfigured)),
@@ -1494,7 +1503,8 @@ impl Render for Updates {
         let message = self.status();
         let checking = self.checking();
         let can_download = matches!(state, Some(State::Available(_)));
-        let can_install = !self.recovery_blocked()
+        let can_install = self.coordinated_restart_allowed()
+            && !self.recovery_blocked()
             && can_install(
                 state,
                 self.location.is_some() || self.external,
@@ -1568,6 +1578,7 @@ impl Render for Updates {
             .children(target)
             .children(transfer)
             .child(actions);
+        view = self.coordinated_panel(view, cx);
         if self.external {
             view = view.child(
                 Notice::new("Connected to an existing daemon. Updates replace only this app; the daemon keeps running.")

@@ -101,6 +101,8 @@ function busy(error: unknown): boolean {
 
 export interface RuntimeOwner {
 	server: Server;
+	/** Process-captured identity, never the mutable on-disk owner record or public hello. */
+	identity(): { boot: string; build: RuntimeBuild | null; runtimeRoot?: string };
 	install(handler: RequestListener): void;
 	ready(hello: DaemonHello): void;
 	updates(handler: (action: "prepare" | "verify" | "cancel" | "inspect", value: unknown) => Promise<unknown>): void;
@@ -115,6 +117,7 @@ export async function ownRuntime(
 	build: RuntimeBuild | null,
 	runtimeRoot?: string,
 ): Promise<RuntimeOwner> {
+	build = structuredClone(build);
 	let fresh = false;
 	await mkdir(dirname(resolve(home)), { recursive: true, mode: 0o700 });
 	try {
@@ -260,6 +263,9 @@ export async function ownRuntime(
 	let closed = false;
 	return {
 		server,
+		identity() {
+			return structuredClone({ boot, build, ...(runtimeRoot ? { runtimeRoot } : {}) });
+		},
 		updates(value) {
 			updateHandler = value;
 		},

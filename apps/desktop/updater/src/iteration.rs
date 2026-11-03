@@ -5,7 +5,7 @@ use crate::{
     manifest::{self, Trust, VerifiedManifest},
     transport::Cancellation,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::{Read, Write},
@@ -19,6 +19,49 @@ struct Pin {
     schema: u32,
     source: String,
     archive_asset_id: u64,
+}
+
+/// An explicitly accepted proposal's exact authenticated payload, not a version range.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ExpectedTarget {
+    source: String,
+    build: String,
+}
+impl ExpectedTarget {
+    pub fn new(source: String, build: String) -> Result<Self, Error> {
+        let target = Self { source, build };
+        target.validate()?;
+        Ok(target)
+    }
+    fn validate(&self) -> Result<(), Error> {
+        if self.source.len() != 40
+            || !self
+                .source
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err(Error::Identity);
+        }
+        manifest::Build::parse(&self.build)?;
+        Ok(())
+    }
+    pub fn verify(&self, manifest: &manifest::Manifest) -> Result<(), Error> {
+        self.validate()?;
+        if manifest.source.as_deref() != Some(self.source.as_str()) {
+            return Err(Error::Identity);
+        }
+        if manifest.build != self.build {
+            return Err(Error::Version);
+        }
+        Ok(())
+    }
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+    pub fn build(&self) -> &str {
+        &self.build
+    }
 }
 
 pub(crate) fn read(path: &Path, limit: u64) -> Result<Vec<u8>, Error> {
@@ -75,7 +118,21 @@ pub(crate) fn stage(
     platform: &impl Platform,
     cancel: &Cancellation,
 ) -> Result<Staged, Error> {
+    stage_expected(directory, target, trust, platform, cancel, None)
+}
+
+pub(crate) fn stage_expected(
+    directory: &Path,
+    target: &Path,
+    trust: &Trust,
+    platform: &impl Platform,
+    cancel: &Cancellation,
+    expected: Option<&ExpectedTarget>,
+) -> Result<Staged, Error> {
     let verified = manifest(directory, trust)?;
+    if let Some(expected) = expected {
+        expected.verify(verified.manifest())?;
+    }
     let (root, lock) = installer::new_stage(target, trust, platform)?;
     let result = (|| {
         let mut input = fs::OpenOptions::new()
@@ -132,6 +189,28 @@ pub(crate) fn stage(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn expected_targets_reject_malformed_identity() {
+        for source in ["a".repeat(39), "A".repeat(40), "g".repeat(40)] {
+            assert!(ExpectedTarget::new(source, "101.1".into()).is_err());
+        }
+        assert!(ExpectedTarget::new("a".repeat(40), "not-a-build".into()).is_err());
+    }
+
+    #[test]
+    fn expected_targets_match_exact_signed_source_and_build() {
+        let mut manifest = crate::owned_tests::metadata(b"signed-payload");
+        manifest.source = Some("a".repeat(40));
+        let expected = ExpectedTarget::new("a".repeat(40), manifest.build.clone()).unwrap();
+        assert_eq!(expected.verify(&manifest), Ok(()));
+        manifest.source = None;
+        assert_eq!(expected.verify(&manifest), Err(Error::Identity));
+        manifest.source = Some("b".repeat(40));
+        assert_eq!(expected.verify(&manifest), Err(Error::Identity));
+        manifest.source = Some("a".repeat(40));
+        manifest.build.push_str(".0");
+        assert_eq!(expected.verify(&manifest), Err(Error::Version));
+    }
     #[test]
     fn missing_local_pin_never_creates_an_install_transaction() {
         let trust = crate::owned_tests::trust();

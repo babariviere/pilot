@@ -1220,6 +1220,7 @@ async function fixture(t: TestContext) {
 		options: SessionManagerOptions = {},
 		pullRequests: ConstructorParameters<typeof SessionManager>[4] = {},
 		beforeLoad?: (sessions: SessionManager) => void,
+		maintenance = false,
 	) => {
 		const sessions = new SessionManager(
 			home,
@@ -1235,7 +1236,7 @@ async function fixture(t: TestContext) {
 		);
 		managers.push(sessions);
 		beforeLoad?.(sessions);
-		await sessions.load();
+		await sessions.load(maintenance);
 		return sessions;
 	};
 	const stored = async (
@@ -1261,6 +1262,268 @@ async function fixture(t: TestContext) {
 	});
 	return { root, home, source, projects, project, workers, workerFactory, manager, stored };
 }
+
+test("maintenance recovery clears its tool lease and preserves other admission owners", async (t) => {
+	const f = await fixture(t);
+	let recovering!: () => void;
+	let finishRecovery!: () => void;
+	const recoveryEntered = new Promise<void>((resolve) => {
+		recovering = resolve;
+	});
+	const recoveryHeld = new Promise<void>((resolve) => {
+		finishRecovery = resolve;
+	});
+	const id = randomUUID();
+	await mkdir(join(f.home, "sessions", id), { recursive: true });
+	await writeFile(
+		join(f.home, "sessions", id, "meta.json"),
+		JSON.stringify({
+			id,
+			cwd: f.source,
+			title: "Interrupted",
+			createdAt: 1,
+			updatedAt: 1,
+			working: true,
+			updatePaused: true,
+		}),
+	);
+	let release!: () => void;
+	const sessions = await f.manager(
+		{},
+		{
+			subscriptionUsage: () => ({
+				get: () => undefined,
+				start: async () => {
+					recovering();
+					await recoveryHeld;
+				},
+				close: () => {},
+			}),
+		},
+		{},
+		(manager) => {
+			release = manager.freezeAdmissions();
+		},
+		true,
+	);
+	assert.equal(f.workers.length, 0, "maintenance startup cannot reopen workers");
+	sessions.pauseForUpdate();
+	const otherOwner = sessions.freezeAdmissions();
+	release();
+	await sessions.resumeMaintenance();
+	assert.equal(f.workers.length, 0, "another maintenance owner still fences recovery");
+	otherOwner();
+	const resuming = sessions.resumeMaintenance();
+	await recoveryEntered;
+	assert.equal(sessions["updateGate"].admissions, 1, "recovery owns admission across awaited reads");
+	assert.equal(sessions.prepareUpdate().ready, false, "empty worker map cannot admit a restart during recovery");
+	finishRecovery();
+	await resuming;
+	await sessions["starting"].get(id);
+	assert.equal(f.workers.length, 1, "recovery reopens the original durable chat");
+	assert.equal(f.workers[0]!.spec.sessionId, id);
+	assert.equal(sessions["maintenanceLoaded"], false);
+	assert.equal(sessions["updateGate"].admissions, 0);
+	assert.equal(sessions["updateGate"].paused, false);
+});
+
+test("live update proposals do not reuse eligibility after a project change", async (t) => {
+	const f = await fixture(t);
+	let entered!: () => void;
+	let release!: () => void;
+	const checked = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const sessions = await f.manager({}, {}, {}, (manager) =>
+		manager.setLiveUpdate({
+			eligible: async (projectId: string) => {
+				assert.equal(projectId, f.project.id);
+				entered();
+				await gate;
+				return true;
+			},
+		} as unknown as import("./live-update.ts").LiveUpdateService),
+	);
+	const created = await sessions.spawn({ cwd: f.source, projectId: f.project.id, message: "Open" });
+	await checked;
+	sessions["metas"].get(created.id)!.projectId = "different-project";
+	release();
+	await sessions["starting"].get(created.id);
+	assert.equal(f.workers[0]!.spec.projectId, "different-project");
+	assert.equal(f.workers[0]!.spec.liveUpdateProposals, undefined);
+});
+
+for (const changed of ["project", "worker", "shared", "mission-role", "mission-coordinator"] as const) {
+	test(`live update proposals reject delayed authorization after ${changed} changes`, async (t) => {
+		const f = await fixture(t);
+		let entered!: () => void;
+		let release!: () => void;
+		const checked = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let saved = false;
+		const sessions = await f.manager({}, {}, {}, (manager) =>
+			manager.setLiveUpdate({
+				eligible: async () => true,
+				propose: async (
+					_id: string,
+					_project: string,
+					_operation: string,
+					_args: unknown,
+					authorize: () => void,
+				) => {
+					entered();
+					await gate;
+					authorize();
+					saved = true;
+				},
+			} as unknown as import("./live-update.ts").LiveUpdateService),
+		);
+		const created = await sessions.spawn({ cwd: f.source, projectId: f.project.id, message: "Open" });
+		await sessions["starting"].get(created.id);
+		const worker = f.workers[0]!;
+		const meta = sessions["metas"].get(created.id)!;
+		sessions["onPacket"](meta, worker, {
+			type: "liveUpdate.propose",
+			callId: "delayed",
+			operationId: "delayed",
+			args: { directory: "/release", source: "a".repeat(40), build: "2", summary: "Ready" },
+		});
+		await checked;
+		const sharing = sessions["sharing"];
+		const missions = sessions["missions"];
+		if (changed === "project") meta.projectId = "another-project";
+		if (changed === "worker") sessions["workers"].delete(created.id);
+		if (changed === "shared")
+			sessions["sharing"] = { membership: () => ({}) } as unknown as NonNullable<typeof sharing>;
+		if (changed === "mission-role")
+			sessions["missions"] = { membership: () => ({ role: "reviewer" }) } as unknown as NonNullable<typeof missions>;
+		if (changed === "mission-coordinator")
+			sessions["missions"] = { membership: () => ({ coordinator: true }) } as unknown as NonNullable<
+				typeof missions
+			>;
+		release();
+		await until(() => sessions["updateGate"].admissions === 0);
+		assert.equal(saved, false, "changed ownership cannot persist the proposal");
+		if (changed === "worker") {
+			assert.equal(
+				worker.sent.some((packet) => packet.type === "liveUpdate.result"),
+				false,
+				"retired worker cannot receive the result",
+			);
+			sessions["workers"].set(created.id, worker);
+		} else {
+			await until(() => worker.sent.some((packet) => packet.type === "liveUpdate.result"));
+			assert.ok(worker.sent.find((packet) => packet.type === "liveUpdate.result")?.error);
+		}
+		sessions["sharing"] = sharing;
+		sessions["missions"] = missions;
+	});
+}
+
+test("live update proposals use supervised scope and recheck delayed authorization", async (t) => {
+	const f = await fixture(t);
+	let release!: () => void;
+	let entered!: () => void;
+	let calls = 0;
+	let saved = 0;
+	const pending = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const called = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	const service = {
+		eligible: async (projectId: string) => projectId === f.project.id,
+		propose: async (
+			sessionId: string,
+			projectId: string,
+			operationId: string,
+			_args: unknown,
+			authorize: () => void,
+		) => {
+			calls++;
+			assert.equal(projectId, f.project.id);
+			assert.equal(sessionId, created.id);
+			assert.equal(operationId, "operation-1");
+			entered();
+			await pending;
+			authorize();
+			saved++;
+			return { id: operationId };
+		},
+	};
+	const sessions = await f.manager({}, {}, {}, (manager) =>
+		manager.setLiveUpdate(service as unknown as import("./live-update.ts").LiveUpdateService),
+	);
+	const created = await sessions.spawn({ cwd: f.source, message: "Propose update" });
+	await sessions["starting"].get(created.id);
+	const worker = f.workers.find((entry) => entry.spec.sessionId === created.id)!;
+	assert.equal(worker.spec.liveUpdateProposals, undefined, "unscoped chats do not receive the tool");
+	const meta = sessions["metas"].get(created.id)!;
+	meta.projectId = f.project.id;
+	const packet = {
+		type: "liveUpdate.propose" as const,
+		callId: "call-1",
+		operationId: "operation-1",
+		args: { directory: "/release", source: "a".repeat(40), build: "2", summary: "Ready" },
+	};
+	sessions["onPacket"](meta, worker, packet);
+	await called;
+	meta.mode = "ask";
+	release();
+	await until(() => worker.sent.some((entry) => entry.type === "liveUpdate.result"));
+	assert.equal(saved, 0, "changed permission cannot persist an admitted proposal");
+	assert.ok(worker.sent.find((entry) => entry.type === "liveUpdate.result")?.error);
+	assert.equal(calls, 1);
+	worker.sent.length = 0;
+	sessions["onPacket"](meta, worker, { ...packet, callId: "call-2" });
+	await until(() => worker.sent.some((entry) => entry.type === "liveUpdate.result"));
+	assert.equal(calls, 1, "Ask cannot reach the proposal service");
+	meta.mode = "build";
+	const releaseFreeze = sessions.freezeAdmissions();
+	worker.sent.length = 0;
+	sessions["onPacket"](meta, worker, { ...packet, callId: "call-3" });
+	await until(() => worker.sent.some((entry) => entry.type === "liveUpdate.result"));
+	assert.equal(calls, 1, "maintenance freezes also fence proposals");
+	releaseFreeze();
+	for (const [field, value] of [
+		["ask", {}],
+		["role", "diagnostics"],
+		["executionPermission", { level: "investigate" }],
+		["control", true],
+		["coordinatorView", {}],
+		["delegationFenced", true],
+		["continuedTo", "other-chat"],
+		["archivedAt", 1],
+	] as const) {
+		const previous = meta[field];
+		Object.assign(meta, { [field]: value });
+		worker.sent.length = 0;
+		sessions["onPacket"](meta, worker, packet);
+		await until(() => worker.sent.some((entry) => entry.type === "liveUpdate.result"));
+		assert.equal(calls, 1, `${field} must fence the proposal`);
+		Object.assign(meta, { [field]: previous });
+	}
+	worker.sent.length = 0;
+	sessions["onPacket"](meta, worker, packet);
+	await until(() => worker.sent.some((entry) => entry.type === "liveUpdate.result"));
+	assert.equal(saved, 1);
+	assert.deepEqual(
+		worker.sent.find((entry) => entry.type === "liveUpdate.result"),
+		{
+			type: "liveUpdate.result",
+			callId: "call-1",
+			result: { id: "operation-1" },
+		},
+	);
+});
 
 test("a session whose worker failed on a stale credential endpoint recovers on the next daemon", async (t) => {
 	const f = await fixture(t);

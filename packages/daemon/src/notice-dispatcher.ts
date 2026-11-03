@@ -1,4 +1,5 @@
 /** Durable stores freeze payloads before delivery; this scheduler owns no history. */
+import { RuntimeBackground } from "./runtime-background.ts";
 export const NOTICE_DEBOUNCE_MS = 30_000;
 export const NOTICE_MAX_DELAY_MS = 30 * 60_000;
 export const NOTICE_WINDOW_MS = 3_600_000;
@@ -43,6 +44,14 @@ export interface NoticeDispatchAdapter {
 
 /** One coalesced timer, serial delivery, bounded retries, and shutdown drain. */
 export class NoticeDispatcher {
+	readonly runtime = new RuntimeBackground(
+		"notices",
+		() => this.schedule(),
+		() => {
+			++this.generation;
+			clearTimeout(this.timer);
+		},
+	);
 	private timer?: ReturnType<typeof setTimeout>;
 	private running?: Promise<void>;
 	private stopped = true;
@@ -58,7 +67,7 @@ export class NoticeDispatcher {
 		this.schedule();
 	}
 	schedule(): void {
-		if (this.stopped || this.running || this.scheduled) return;
+		if (this.stopped || this.runtime.frozen || this.running || this.scheduled) return;
 		this.scheduled = true;
 		queueMicrotask(() => {
 			const update = this.updateTimer().catch((error) => console.warn(`pilotd: notice scheduling failed: ${error}`));
@@ -66,7 +75,14 @@ export class NoticeDispatcher {
 			void update.finally(() => this.updates.delete(update));
 		});
 	}
-	private async updateTimer(): Promise<void> {
+	private updateTimer(): Promise<void> {
+		if (this.runtime.frozen) {
+			this.scheduled = false;
+			return Promise.resolve();
+		}
+		return this.runtime.run("schedule", () => this.updateTimerAdmitted());
+	}
+	private async updateTimerAdmitted(): Promise<void> {
 		this.scheduled = false;
 		clearTimeout(this.timer);
 		if (this.stopped || this.running) return;
@@ -88,11 +104,15 @@ export class NoticeDispatcher {
 		);
 		this.timer.unref();
 	}
-	async flush(now = Date.now()): Promise<void> {
+	flush(now = Date.now()): Promise<void> {
+		if (this.runtime.frozen) return Promise.resolve();
+		return this.runtime.run("delivery", () => this.flushAdmitted(now));
+	}
+	private async flushAdmitted(now: number): Promise<void> {
 		const result = this.adapter.deadlines(now);
 		for (const { key, at } of Array.isArray(result) ? result : await result) {
 			// Scheduling eligibility is a cheap projection. Admission uses the sink's authoritative guard.
-			if (this.stopped || at > now) continue;
+			if (this.stopped || this.runtime.frozen || at > now) continue;
 			await this.adapter.deliver(key, now);
 		}
 	}

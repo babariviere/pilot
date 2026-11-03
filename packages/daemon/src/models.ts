@@ -35,6 +35,7 @@ import {
 } from "./mission-model-recommendation.ts";
 import { modelScopeHash, modelScopeUpdate, readModelScopeValue, writeModelScope } from "./model-scope.ts";
 import { readModelSettings, settingsPath } from "./model-settings.ts";
+import { RuntimeBackground } from "./runtime-background.ts";
 import {
 	parseSlackClassification,
 	SLACK_CLASSIFICATION_SCHEMA,
@@ -58,6 +59,8 @@ interface Availability {
 export const TASK_START_REFERENCE_MODELS = ["claude-opus-5-5", "gpt-6.1-sol"] as const;
 
 export class ModelCatalog {
+	/** Actual tool-free completion lifetime, including providers ignoring cancellation. */
+	readonly maintenance = new RuntimeBackground("model-completions");
 	private runtime?: Promise<ModelRuntime>;
 	private backgroundUsage?: BackgroundCapture;
 	setBackgroundUsage(usage: BackgroundCapture): void {
@@ -71,7 +74,8 @@ export class ModelCatalog {
 		purpose: "title" | "classification" | "triage" | "memory" | "compaction",
 		attribution?: BackgroundAttribution,
 	): CompletionRuntime {
-		return this.backgroundUsage?.runtime(runtime, purpose, attribution) ?? runtime;
+		const captured = this.backgroundUsage?.runtime(runtime, purpose, attribution) ?? runtime;
+		return { completeSimple: (...args) => this.maintenance.run(purpose, () => captured.completeSimple(...args)) };
 	}
 	/** Signature of the model definitions the runtime last loaded. */
 	private runtimeModels?: string;
@@ -93,8 +97,10 @@ export class ModelCatalog {
 
 	/** Tool-free limits fetch, using the same canonical OAuth resolver as daemon completions. */
 	async refreshSubscription(provider: "anthropic" | "openai") {
-		const { refreshSubscription } = await import("@pilot/kernel/subscription-refresh");
-		return refreshSubscription(provider, this.agentDir, await this.getRuntime());
+		return this.maintenance.run("subscription", async () => {
+			const { refreshSubscription } = await import("@pilot/kernel/subscription-refresh");
+			return refreshSubscription(provider, this.agentDir, await this.getRuntime());
+		});
 	}
 
 	/** A separate, tool-free completion. Scoped thinking suffixes never apply to titles. */

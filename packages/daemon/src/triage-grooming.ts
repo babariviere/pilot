@@ -3,6 +3,7 @@ import type { TrackedKind, TriageGuide } from "@pilot/protocol";
 import { type BackgroundJobDiagnostics, jobConfigurationKey } from "./background-job-diagnostics.ts";
 import type { BackgroundAttribution, BackgroundUsage } from "./background-usage.ts";
 import type { ProjectStore } from "./projects.ts";
+import { RuntimeBackground } from "./runtime-background.ts";
 import { CASE_SCHEMA, parseCases } from "./slack-cases.ts";
 import type { TrackedItemStore } from "./tracked-items.ts";
 import { isWatchNotice } from "./worker-notice.ts";
@@ -55,9 +56,10 @@ export function workerTriage(
 				settled = true;
 				clearTimeout(timer);
 				signal.removeEventListener("abort", abort);
-				void worker.terminate();
-				if (error) reject(error);
-				else resolve(text!);
+				void Promise.resolve(worker.terminate()).then(() => {
+					if (error) reject(error);
+					else resolve(text!);
+				}, reject);
 			};
 			const abort = () => finish(new Error("Triage cancelled"));
 			const timer = setTimeout(() => finish(new Error("Triage timed out")), 90_000);
@@ -84,6 +86,12 @@ export function workerTriage(
 
 /** Coalesced correction-only grooming. One global run, three new examples or one day, hourly failure backoff. */
 export class TriageGroomer {
+	private started = true;
+	readonly runtime = new RuntimeBackground(
+		"triage",
+		() => this.schedule(),
+		() => clearTimeout(this.timer),
+	);
 	private pending = new Map<string, { projectId: string; kind: TrackedKind; at: number; force: boolean }>();
 	private timer?: ReturnType<typeof setTimeout>;
 	private run?: Promise<void>;
@@ -100,7 +108,9 @@ export class TriageGroomer {
 		complete: TriageComplete,
 		now = Date.now,
 		diagnostics?: BackgroundJobDiagnostics,
+		deferStart = false,
 	) {
+		this.started = !deferStart;
 		this.projects = projects;
 		this.items = items;
 		this.complete = complete;
@@ -150,13 +160,16 @@ export class TriageGroomer {
 	}
 	private schedule(): void {
 		clearTimeout(this.timer);
+		if (!this.started || this.runtime.frozen) return;
 		if (this.run || !this.pending.size || this.controller.signal.aborted) return;
 		this.timer = setTimeout(
 			() => {
-				this.run = this.pump().finally(() => {
-					this.run = undefined;
-					this.schedule();
-				});
+				this.run = this.runtime
+					.run("groom", () => this.pump())
+					.finally(() => {
+						this.run = undefined;
+						this.schedule();
+					});
 			},
 			Math.min(
 				2_147_483_647,
@@ -164,6 +177,10 @@ export class TriageGroomer {
 			),
 		);
 		this.timer.unref();
+	}
+	start(): void {
+		this.started = true;
+		this.schedule();
 	}
 	private async pump(): Promise<void> {
 		const entry = [...this.pending.entries()].find(([, value]) => value.at <= this.now());

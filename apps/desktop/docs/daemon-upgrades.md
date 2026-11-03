@@ -96,6 +96,44 @@ child processes need separate attention. After Stop, refresh and explicitly retr
 the upgrade. A Stop acknowledgment is not exit proof: replacement still requires
 all runtime, storage, ownership and singleton checks above.
 
+## Project-proposed coordinated updates
+
+The `pilot_update` tool is proposal-only and restricted to the configured Pilot
+source project (`github.com/babariviere/pilot`). It supplies a local signed build
+directory, exact source/build and summary. It cannot accept a proposal, install,
+restart, signal processes or release maintenance. Ask, investigate, specialist,
+shared-context and mission reviewer/explorer sessions do not receive this tool.
+The daemon derives chat/project authority from its supervised worker and rechecks
+it after asynchronous origin lookup.
+
+Native **Settings → Updates → Accept update** authorizes the coordinated path:
+freeze new admissions, drain tools and owned subagents, verify the complete
+resource census, save the existing exact GUI writer checkpoint, replace/restart
+the GUI, then use the existing daemon handoff. Jobs, PTYs, unknown children and
+uninspectable resources block; none are killed to make the census pass. The
+durable maintenance record survives both process replacements. Ordinary GUI-only
+updates do not acquire this coordinated drain or change their reservation scope.
+
+Native checkpoints use the existing private app capability and exact proposal
+ID/phase. The native updater, not request JSON or public hello, owns signed
+manifest, full candidate/runtime-stamp, helper COMMIT, writer-close and observed
+exit validation. The backend binds the reported checkpoint to its durable target
+and verifies its replacement daemon identity from process-captured ownership.
+The private HMAC reservation additionally binds the same proposal and target;
+the coordinated freeze is not a general bypass for ordinary reservations.
+
+Cancellation is available before installation intent. A lost or uncertain
+lifecycle acknowledgement retains evidence and stays inspect-only, never an
+automatic retry, rollback or permission to thaw. Successful completion requires
+durable release authorization and both exact target identities. Pre-install
+cancellation releases only its own maintenance hold. A passive snapshot or Refresh
+does not prove installation, process exit or durable GUI state.
+
+This source integration must be verified with temporary profiles, synthetic
+signed candidates and hidden native probes. Implementation checks never install
+or restart the user's app/service, modify live trust/feed configuration or
+publish a build. Isolated checks are not live-user update qualification.
+
 ## Supported ownership
 
 The adapter manages only the current user's known

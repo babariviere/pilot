@@ -20,6 +20,7 @@ export type * from "./diagnostic-repair.ts";
 export type * from "./diagnostics.ts";
 export type * from "./github-import.ts";
 export type * from "./github-setup.ts";
+export type * from "./live-update.ts";
 export type * from "./mcp-setup.ts";
 export type * from "./model-scope.ts";
 export type * from "./native-review.ts";

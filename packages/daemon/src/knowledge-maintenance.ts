@@ -11,6 +11,7 @@ import type {
 import { Conflict, NotFound } from "./errors.ts";
 import type { MissionStore } from "./missions.ts";
 import type { KnowledgeProjects, KnowledgeSessions } from "./project-knowledge.ts";
+import { RuntimeBackground } from "./runtime-background.ts";
 import { execFileOffThread } from "./subprocess.ts";
 
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -41,6 +42,7 @@ export const observeRepository: RepositoryObservation = async (root, paths) => {
 };
 
 export class KnowledgeMaintenance {
+	readonly runtime = new RuntimeBackground("knowledge-maintenance", () => this.hint("*"));
 	private readonly store: MissionStore;
 	private readonly projects: KnowledgeProjects;
 	private readonly sessions: KnowledgeSessions;
@@ -80,20 +82,22 @@ export class KnowledgeMaintenance {
 		if (projectId === "*") this.queued.clear();
 		else if (this.queued.has("*")) return;
 		this.queued.add(projectId);
-		if (this.running) return;
-		this.running = this.drain().finally(() => {
-			this.running = undefined;
-			if (!this.closed && this.queued.size) this.hint(this.queued.values().next().value!);
-		});
+		if (this.running || this.runtime.frozen) return;
+		this.running = this.runtime
+			.run("reconcile", () => this.drain())
+			.finally(() => {
+				this.running = undefined;
+				if (!this.closed && this.queued.size) this.hint(this.queued.values().next().value!);
+			});
 	}
 
 	private async drain(): Promise<void> {
 		await yieldTurn(); // Coalesce related synchronous deliveries/decisions.
-		while (!this.closed && this.queued.size) {
+		while (!this.closed && !this.runtime.frozen && this.queued.size) {
 			const project = this.queued.values().next().value!;
 			this.queued.delete(project);
 			let after = "";
-			while (!this.closed) {
+			while (!this.closed && !this.runtime.frozen) {
 				const batch = this.store.knowledge.maintenanceEntries(after, project === "*" ? undefined : project);
 				if (!batch.length) break;
 				after = batch.at(-1)!.id;
@@ -126,7 +130,7 @@ export class KnowledgeMaintenance {
 
 	private admitted<T>(work: () => Promise<T>): Promise<T> {
 		if (this.closed) return Promise.reject(new Conflict("Knowledge maintenance is closed"));
-		const operation = work();
+		const operation = this.runtime.run("observe", work);
 		this.active.add(operation);
 		void operation.then(
 			() => this.active.delete(operation),

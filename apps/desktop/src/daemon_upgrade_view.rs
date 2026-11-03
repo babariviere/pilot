@@ -145,6 +145,7 @@ pub(crate) struct DaemonUpgrade {
     target: Option<Target>,
     connected: crate::local_client::ConnectedDaemon,
     worker: Worker,
+    coordinated_worker: Option<Worker>,
     phase: Phase,
     /// Last finished attempt. Errors stay until a newer attempt finishes.
     outcome: Option<Result<(), Failure>>,
@@ -205,6 +206,7 @@ impl DaemonUpgrade {
             target,
             connected: Default::default(),
             worker,
+            coordinated_worker: None,
             phase: Phase::Idle,
             outcome: None,
             notice: None,
@@ -340,6 +342,37 @@ impl DaemonUpgrade {
     pub(crate) fn checkpoint_requested(&self) -> bool {
         self.phase == Phase::Requested
     }
+    /// Durable coordinated intent was acknowledged by the daemon. Never a startup retry.
+    pub(crate) fn request_coordinated(
+        &mut self,
+        binding: serde_json::Value,
+        cx: &mut Context<Self>,
+    ) {
+        if self.phase != Phase::Idle || self.uncertain() {
+            return;
+        }
+        self.automatic = false;
+        #[cfg(target_os = "macos")]
+        {
+            self.coordinated_worker = Some(Arc::new(move |location, daemon, lineage, cancel| {
+                crate::bundled_runtime::upgrade_daemon_coordinated(
+                    location,
+                    daemon,
+                    lineage,
+                    cancel,
+                    binding.clone(),
+                )
+            }));
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = binding;
+            return;
+        }
+        self.phase = Phase::Requested;
+        cx.emit(Event::Request);
+        cx.notify();
+    }
     /// A worker is running. Only GUI exit/another activation waits for it;
     /// the editor and secondary forms remain live.
     pub(crate) fn active(&self) -> bool {
@@ -370,7 +403,9 @@ impl DaemonUpgrade {
         };
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();
-        let worker = if self.automatic {
+        let worker = if let Some(worker) = self.coordinated_worker.take() {
+            worker
+        } else if self.automatic {
             self.startup_worker.as_ref().unwrap_or(&self.worker).clone()
         } else {
             self.worker.clone()

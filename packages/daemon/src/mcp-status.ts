@@ -2,6 +2,7 @@ import { type FSWatcher, watch } from "node:fs";
 import { Worker } from "node:worker_threads";
 import type { McpServerState, McpServerStatus, McpSignInState, McpStatus } from "@pilot/protocol";
 import { NotFound } from "./errors.ts";
+import { RuntimeBackground } from "./runtime-background.ts";
 import { type SignInState, SourceSignIns } from "./source-sign-in.ts";
 import { isWatchNotice } from "./worker-notice.ts";
 
@@ -68,6 +69,14 @@ export interface McpStatusOptions {
  * One check runs at a time; requests during a check merge into one follow-up check.
  */
 export class McpStatusService {
+	readonly runtime = new RuntimeBackground(
+		"mcp-status",
+		() => {
+			if (this.started) this.check();
+		},
+		() => clearTimeout(this.debounce),
+	);
+	private started = false;
 	private servers = new Map<string, McpProbeServer & { checkedAt?: number }>();
 	private configProblems = 0;
 	private running?: AbortController;
@@ -91,7 +100,11 @@ export class McpStatusService {
 		this.canLogin = !!options.login;
 		this.signIns = new SourceSignIns<string>(
 			(server, signInOptions) =>
-				options.login ? options.login(server, signInOptions) : Promise.reject(new Error("Sign-in is unavailable")),
+				this.runtime.run("sign-in", () =>
+					options.login
+						? options.login(server, signInOptions)
+						: Promise.reject(new Error("Sign-in is unavailable")),
+				),
 			(state) => this.signInChanged(state),
 			options.signInTimeoutMs,
 		);
@@ -100,6 +113,7 @@ export class McpStatusService {
 	/** First check, then watch pi's MCP files. */
 	start(): void {
 		if (this.stopped) return;
+		this.started = true;
 		this.check();
 		if (!this.watchDir || this.watcher) return;
 		try {
@@ -146,6 +160,10 @@ export class McpStatusService {
 	/** Check every server, or one. Returns at once; the result arrives through onChange. */
 	check(server?: string): McpStatus {
 		if (this.stopped) return this.status();
+		if (this.runtime.frozen) {
+			this.queued = "all";
+			return this.status();
+		}
 		if (server !== undefined && !this.servers.has(server)) server = undefined;
 		if (this.running) {
 			if (server === undefined) this.queued = "all";
@@ -156,6 +174,7 @@ export class McpStatusService {
 			}
 			return this.status();
 		}
+		this.queued = undefined;
 		this.run(server === undefined ? "all" : new Set([server]));
 		return this.status();
 	}
@@ -187,19 +206,24 @@ export class McpStatusService {
 	}
 
 	private run(target: "all" | Set<string>): void {
+		if (this.runtime.frozen) {
+			this.queued = "all";
+			return;
+		}
 		// Several single-server rechecks cost more than one full check.
 		if (target !== "all" && target.size > 2) target = "all";
 		const controller = new AbortController();
 		this.running = controller;
 		const names = target === "all" ? [...this.servers.keys()] : [...target];
-		const checks =
-			target === "all"
-				? [this.probe({ signal: controller.signal })]
-				: names.map((only) => this.probe({ only, signal: controller.signal }));
-		// Servers keep their last state until this finishes; clients show that a check is running.
-		this.emit();
-		this.settled = Promise.all(checks)
-			.then((results) => {
+		this.settled = this.runtime
+			.run("probe", async () => {
+				const checks =
+					target === "all"
+						? [this.probe({ signal: controller.signal })]
+						: names.map((only) => this.probe({ only, signal: controller.signal }));
+				// Admit before invoking probes or observers, including reentrant maintenance.
+				this.emit();
+				const results = await Promise.all(checks);
 				if (controller.signal.aborted || this.stopped) return;
 				const now = Date.now();
 				for (const [index, result] of results.entries()) {

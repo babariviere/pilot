@@ -2458,6 +2458,26 @@ fn local_signed_source_stages_then_normal_release_verification_still_works() {
             .unwrap(),
     )
     .unwrap();
+    for expected in [
+        iteration::ExpectedTarget::new("b".repeat(40), "101.1".into()).unwrap(),
+        iteration::ExpectedTarget::new(source.clone(), "101.2".into()).unwrap(),
+    ] {
+        assert!(
+            iteration::stage_expected(
+                &input,
+                &target,
+                &trust(),
+                &FakePlatform::default(),
+                &Default::default(),
+                Some(&expected)
+            )
+            .is_err()
+        );
+        assert!(
+            installer::recoveries(&target, &trust()).unwrap().is_empty(),
+            "a mismatched proposal creates no transaction"
+        );
+    }
     let stage = iteration::stage(
         &input,
         &target,

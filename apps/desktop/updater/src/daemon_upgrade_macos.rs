@@ -47,6 +47,31 @@ pub fn upgrade(
     execute(&mut host, cancel)
 }
 
+/// Exact durable proposal binding. Separate from ordinary/manual/startup updates.
+pub fn upgrade_coordinated(
+    location: Location,
+    current: &Path,
+    trust: &Trust,
+    daemon: &str,
+    lineage: &str,
+    cancel: &AtomicBool,
+    binding: Value,
+) -> Result<(), Failure> {
+    if binding["runtimeRoot"].as_str() != current.join(crate::layout::RUNTIME).to_str()
+        || binding["build"] != super::native::runtime_stamp(current)?
+        || binding["source"] != binding["build"]["source"]
+        || binding["guiBuild"] != trust.current_build
+        || binding["id"]
+            .as_str()
+            .is_none_or(|s| s.is_empty() || s.len() > 128)
+    {
+        return Err(Failure::Unverified);
+    }
+    let mut host = launch_agent(location, current, trust, daemon, lineage, cancel)?;
+    host.coordinated = Some(binding);
+    execute(&mut host, cancel)
+}
+
 /// One startup attempt, with the automatic ownership/version gate rechecked under lock.
 pub fn upgrade_startup(
     location: Location,
@@ -93,6 +118,7 @@ fn launch_agent<'a>(
         reservation: None,
         original_backup: None,
         automatic: false,
+        coordinated: None,
     })
 }
 
@@ -157,6 +183,7 @@ fn check_needed(host: &mut LaunchAgent<'_>) -> Result<bool, Failure> {
     Ok(needed)
 }
 struct LaunchAgent<'a> {
+    coordinated: Option<Value>,
     automatic: bool,
     location: Location,
     current: PathBuf,
@@ -302,10 +329,16 @@ impl LaunchAgent<'_> {
 }
 impl Handoff for LaunchAgent<'_> {
     fn reserve(&mut self) -> Result<(), Failure> {
-        self.reservation = Some(super::reservation::Reservation::prepare(
-            &self.location,
-            &self.owner,
-        )?);
+        self.reservation = Some(if let Some(binding) = &self.coordinated {
+            super::reservation::Reservation::prepare_bound(
+                &self.location,
+                &self.owner,
+                "daemon-upgrade",
+                Some(binding),
+            )?
+        } else {
+            super::reservation::Reservation::prepare(&self.location, &self.owner)?
+        });
         Ok(())
     }
     fn verify_reservation(&mut self) -> Result<(), Failure> {

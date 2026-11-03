@@ -1,6 +1,7 @@
 import { Worker } from "node:worker_threads";
 import type { TrackedKind, TrackingJson } from "@pilot/protocol";
 import { getPilotConfigDir } from "./config.ts";
+import { RuntimeBackground } from "./runtime-background.ts";
 import { SourceSignInCancelled, SourceSignInFailed } from "./source-sign-in.ts";
 import { isWatchNotice } from "./worker-notice.ts";
 
@@ -175,6 +176,18 @@ const openBrowser: OpenUrl = async (url) => {
 };
 /** No session, model, or separate tokens. Only the selected server connects, off the daemon event loop. */
 export class PiSourceMcpClient implements SourceMcpClient {
+	readonly runtime = new RuntimeBackground("source-mcp");
+	private startWorker(file: string, workerData: Record<string, unknown>): Worker {
+		const end = this.runtime.begin("worker");
+		try {
+			const worker = new Worker(new URL(file, import.meta.url), { workerData });
+			worker.once("exit", end);
+			return worker;
+		} catch (error) {
+			end();
+			throw error;
+		}
+	}
 	private readonly running = new Set<Worker>();
 	/** Sign-ins wait for the user, so they do not take the two MCP call slots. At most one per kind. */
 	private readonly signIns = new Set<Worker>();
@@ -192,13 +205,15 @@ export class PiSourceMcpClient implements SourceMcpClient {
 		return this.signInServer(kind, options);
 	}
 	/** Browser sign-in to any server in the user's global mcp.json, for the Connections settings. */
-	signInServer(name: string, options: { again: boolean; signal: AbortSignal }): Promise<void> {
+	async signInServer(name: string, options: { again: boolean; signal: AbortSignal }): Promise<void> {
 		const { signal } = options;
 		if (this.stopped) return Promise.reject(new Error("MCP client stopped"));
 		if (signal.aborted) return Promise.reject(signal.reason);
 		if (!name || name.length > 200) return Promise.reject(new SourceSignInFailed("Unknown MCP server."));
-		const worker = new Worker(new URL("./source-sign-in-worker.ts", import.meta.url), {
-			workerData: { agentDir: this.agentDir, kind: name, again: options.again },
+		const worker = this.startWorker("./source-sign-in-worker.ts", {
+			agentDir: this.agentDir,
+			kind: name,
+			again: options.again,
 		});
 		this.signIns.add(worker);
 		return new Promise((resolve, reject) => {
@@ -238,7 +253,12 @@ export class PiSourceMcpClient implements SourceMcpClient {
 			});
 		});
 	}
-	call(kind: TrackedKind, tool: string, args: Record<string, unknown>, signal: AbortSignal): Promise<TrackingJson> {
+	async call(
+		kind: TrackedKind,
+		tool: string,
+		args: Record<string, unknown>,
+		signal: AbortSignal,
+	): Promise<TrackingJson> {
 		if (this.stopped) return Promise.reject(new Error("MCP client stopped"));
 		if (signal.aborted) return Promise.reject(signal.reason);
 		if (Buffer.byteLength(JSON.stringify(args)) > 256 * 1024)
@@ -247,8 +267,12 @@ export class PiSourceMcpClient implements SourceMcpClient {
 		if (!validSourceArguments(tool, args)) return Promise.reject(new Error("Invalid Linear or Slack start update"));
 		if (!dedicatedSourceTool(kind, tool) && !(kind === "slack" && tool === "removeSlackEyes"))
 			return Promise.reject(new Error("Unknown dedicated MCP source tool"));
-		const worker = new Worker(new URL("./source-mcp-worker.ts", import.meta.url), {
-			workerData: { agentDir: this.agentDir, configDir: this.configDir, kind, tool, args },
+		const worker = this.startWorker("./source-mcp-worker.ts", {
+			agentDir: this.agentDir,
+			configDir: this.configDir,
+			kind,
+			tool,
+			args,
 		});
 		this.running.add(worker);
 		return new Promise((resolve, reject) => {

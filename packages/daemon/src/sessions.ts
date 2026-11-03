@@ -2413,6 +2413,30 @@ ${run.excerpt}`,
 	}
 
 	private knowledge?: import("./project-knowledge.ts").KnowledgeService;
+	private liveUpdate?: import("./live-update.ts").LiveUpdateService;
+	setLiveUpdate(service: import("./live-update.ts").LiveUpdateService): void {
+		this.liveUpdate = service;
+	}
+	private canProposeLiveUpdate(meta: SessionMeta): boolean {
+		if (!this.liveUpdate || !meta.projectId) return false;
+		const missionRole = this.missions?.membership(meta.id)?.role;
+		return (
+			!!this.liveUpdate &&
+			!!meta.projectId &&
+			!meta.ask &&
+			meta.mode !== "ask" &&
+			meta.role === undefined &&
+			meta.executionPermission?.level !== "investigate" &&
+			!meta.coordinatorView &&
+			!this.isMissionCoordinator(meta.id) &&
+			!meta.control &&
+			!meta.continuationPending &&
+			!this.changingModels.has(meta.id) &&
+			missionRole !== "explorer" &&
+			missionRole !== "reviewer" &&
+			!this.sharing?.membership(meta.id)
+		);
+	}
 	setKnowledge(knowledge: import("./project-knowledge.ts").KnowledgeService): void {
 		this.knowledge = knowledge;
 	}
@@ -5888,6 +5912,9 @@ ${run.excerpt}`,
 	async resumeMaintenance(): Promise<void> {
 		if (this.updateGate.frozen) return;
 		if (this.maintenanceLoaded) {
+			// The maintenance owner has released its freeze. Clear the legacy tool-pause
+			// lease before admitting recovery, not any independent owner's freeze.
+			this.updateGate.release();
 			// Recovery itself owns an admission across its filesystem awaits. Another drain must
 			// not observe an empty worker map and commit a restart ahead of admitted recovery.
 			const end = this.updateGate.begin();
@@ -8872,11 +8899,18 @@ ${run.excerpt}`,
 		let published: SessionWorker | undefined;
 		const earlyPackets: KernelPacket[] = [];
 		let overflow = false;
+		// Optional project tooling must never make an ordinary worker fail to open.
+		const liveUpdateProjectId = meta.projectId;
+		const liveUpdateProposals =
+			this.canProposeLiveUpdate(meta) && (await this.liveUpdate!.eligible(liveUpdateProjectId!).catch(() => false));
 		// Only the factory's synchronous prefix. Awaited isolation/readiness is not main-thread CPU work.
 		const opening = operations.time("worker.construct", () =>
 			createWorker(
 				{
 					sessionId: id,
+					...(liveUpdateProposals && meta.projectId === liveUpdateProjectId && this.canProposeLiveUpdate(meta)
+						? { liveUpdateProposals: true }
+						: {}),
 					autoHandoff: this.autoHandoff,
 					...(repairDiagnostics ? { repairDiagnostics } : {}),
 					...(usageHistory ? { usageHistory } : {}),
@@ -9414,6 +9448,45 @@ ${run.excerpt}`,
 			void call.then(
 				(result) => reply({ result: result ?? null }),
 				(error: unknown) => reply({ error: formatFailure(error, "Tool mission") }),
+			);
+			return;
+		}
+		if (packet.type === "liveUpdate.propose") {
+			const projectId = meta.projectId;
+			const authorize = () => {
+				if (
+					this.workers.get(meta.id) !== worker ||
+					!this.canProposeLiveUpdate(meta) ||
+					meta.projectId !== projectId ||
+					this.closing ||
+					meta.archivedAt !== undefined ||
+					meta.delegationFenced ||
+					meta.continuedTo
+				)
+					throw new Conflict("Live update proposals are unavailable in this chat");
+			};
+			const call = Promise.resolve().then(async () => {
+				authorize();
+				const end = this.updateGate.begin();
+				try {
+					return await this.liveUpdate!.propose(meta.id, projectId!, packet.operationId, packet.args, authorize);
+				} finally {
+					end();
+				}
+			});
+			void call.then(
+				(result) => {
+					if (this.workers.get(meta.id) === worker)
+						worker.send({ type: "liveUpdate.result", callId: packet.callId, result: result as never });
+				},
+				(error: unknown) => {
+					if (this.workers.get(meta.id) === worker)
+						worker.send({
+							type: "liveUpdate.result",
+							callId: packet.callId,
+							error: formatFailure(error, "Pilot update proposal"),
+						});
+				},
 			);
 			return;
 		}

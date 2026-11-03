@@ -242,6 +242,8 @@ export function runKernelWorker(): void {
 		callDaemon<JsonValue>((callId) => ({ type: "knowledge.call", callId, operationId, action, args }));
 	const callDatabase: DatabaseCall = (action, args) =>
 		callDaemon<JsonValue>((callId) => ({ type: "database.call", callId, action, args }));
+	const callLiveUpdateProposal: import("./live-update-tool.ts").LiveUpdateProposalCall = (args, operationId) =>
+		callDaemon<JsonValue>((callId) => ({ type: "liveUpdate.propose", callId, operationId, args }));
 	const callSlackStatus: SlackStatusCall = (args) =>
 		callDaemon<JsonValue>((callId) => ({ type: "slack.call", callId, args }));
 	const callDiagnostics: DiagnosticsCall = (sessionId, limit) =>
@@ -432,6 +434,7 @@ export function runKernelWorker(): void {
 			command.type === "mission.result" ||
 			command.type === "memory.result" ||
 			command.type === "knowledge.result" ||
+			command.type === "liveUpdate.result" ||
 			command.type === "database.result" ||
 			command.type === "slack.result" ||
 			command.type === "diagnostics.result" ||
@@ -453,7 +456,8 @@ export function runKernelWorker(): void {
 					("result" in command ? command.result : undefined) ??
 						(command.type === "mission.result" ||
 						command.type === "memory.result" ||
-						command.type === "knowledge.result"
+						command.type === "knowledge.result" ||
+						command.type === "liveUpdate.result"
 							? null
 							: undefined),
 				);
@@ -555,6 +559,7 @@ export function runKernelWorker(): void {
 					readCoordinatorSources,
 					callMemory,
 					callKnowledge,
+					callLiveUpdateProposal,
 					callDatabase,
 					callSlackStatus,
 					callDiagnostics,

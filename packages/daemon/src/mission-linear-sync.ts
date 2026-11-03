@@ -11,6 +11,7 @@ import { Conflict } from "./errors.ts";
 import { workflowStates } from "./linear-workflow.ts";
 import type { MissionStore } from "./missions.ts";
 import type { ProjectStore } from "./projects.ts";
+import { RuntimeBackground } from "./runtime-background.ts";
 import {
 	SourceConfigurationError,
 	type SourceMcpClient,
@@ -78,6 +79,13 @@ function configKey(config: ProjectTrackingConfig | undefined): string {
 }
 
 export class MissionLinearSyncService {
+	readonly runtime = new RuntimeBackground(
+		"linear-sync",
+		() => {
+			if (this.unsubscribe) this.wake();
+		},
+		() => clearTimeout(this.timer),
+	);
 	private timer?: ReturnType<typeof setTimeout>;
 	private run?: { controller: AbortController; promise: Promise<void> };
 	private stopped = false;
@@ -112,7 +120,7 @@ export class MissionLinearSyncService {
 		this.wake();
 	}
 	private wake(): void {
-		if (this.stopped || this.publishing) return;
+		if (this.stopped || this.runtime.frozen || this.publishing) return;
 		if (this.run) {
 			this.dirty = true;
 			return;
@@ -121,7 +129,7 @@ export class MissionLinearSyncService {
 		this.schedule(250);
 	}
 	private schedule(delay: number): void {
-		if (this.stopped) return;
+		if (this.stopped || this.runtime.frozen) return;
 		this.diagnostics?.queue("linked_linear_sync", "linear", undefined, "host", Date.now() + delay);
 		this.timer = setTimeout(() => {
 			this.timer = undefined;
@@ -153,7 +161,10 @@ export class MissionLinearSyncService {
 	}
 
 	/** Public for offline fixtures. At most 25 tickets, sequential MCP calls, 90s service deadline. */
-	async poll(signal: AbortSignal): Promise<void> {
+	poll(signal: AbortSignal): Promise<void> {
+		return this.runtime.run("poll", () => this.pollAdmitted(signal));
+	}
+	private async pollAdmitted(signal: AbortSignal): Promise<void> {
 		const token = this.diagnostics?.begin("linked_linear_sync", "linear", undefined, "host");
 		let outcome: JobOutcome = "no_work",
 			reason: JobReason | undefined,
@@ -608,7 +619,13 @@ export class MissionLinearSyncService {
 	}
 
 	/** Finality itself is checked by the PR policy; this supplies a fresh fail-closed lifecycle guard. */
-	async closingEligibility(missionId: string, resourceId: string): Promise<{ allowed: boolean; reason?: string }> {
+	closingEligibility(missionId: string, resourceId: string): Promise<{ allowed: boolean; reason?: string }> {
+		return this.runtime.run("closing-guard", () => this.closingEligibilityAdmitted(missionId, resourceId));
+	}
+	private async closingEligibilityAdmitted(
+		missionId: string,
+		resourceId: string,
+	): Promise<{ allowed: boolean; reason?: string }> {
 		const link = this.store.linearSyncResource(resourceId);
 		if (!link || link.missionId !== missionId || this.busy.size)
 			return { allowed: false, reason: "Linear synchronization is unavailable or busy. Retry after it finishes." };

@@ -12,6 +12,7 @@ import type {
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import type { MissionStore } from "./missions.ts";
 import type { ProjectStore } from "./projects.ts";
+import { RuntimeBackground } from "./runtime-background.ts";
 import { RecurrenceCalendar, validateRecurrence } from "./schedule-recurrence.ts";
 import type { ScheduleStore } from "./schedule-store.ts";
 import type { TrackedItemStore } from "./tracked-items.ts";
@@ -64,6 +65,16 @@ export interface ScheduleServiceDeps {
 }
 /** One serial dispatcher. No detection/polling here; one nearest-deadline timer while online. */
 export class ScheduleService {
+	readonly runtime = new RuntimeBackground(
+		"schedules",
+		() => this.requestSweep(),
+		() => {
+			this.cancelTimer?.();
+			this.cancelTimer = undefined;
+			this.deps.triggers?.setActive?.(false);
+			this.deps.triggers?.setCalendarActive?.(false);
+		},
+	);
 	private readonly time: ScheduleClock;
 	private online = false;
 	private sleeping = false;
@@ -109,17 +120,19 @@ export class ScheduleService {
 	private enqueue(work: () => Promise<void>): Promise<void> {
 		if (this.stopped) return Promise.reject(new ServiceUnavailable("Scheduler stopped"));
 		if (this.queued >= 64) return Promise.reject(new ServiceUnavailable("Scheduler busy; retry shortly"));
+		const end = this.runtime.begin("dispatch");
 		this.queued++;
 		const next = this.tail.then(work);
 		this.tail = next
 			.catch(() => {})
 			.finally(() => {
 				this.queued--;
+				end();
 			});
 		return next;
 	}
 	private requestSweep(): void {
-		if (!this.started || this.stopped || this.sweepQueued) return;
+		if (!this.started || this.stopped || this.runtime.frozen || this.sweepQueued) return;
 		this.sweepQueued = true;
 		void this.enqueue(async () => {
 			this.sweepQueued = false;
@@ -137,6 +150,7 @@ export class ScheduleService {
 		if (event.type === "online") this.online = event.online;
 		if (event.type === "sleep") this.sleeping = true;
 		if (event.type === "wake" && event.full) this.sleeping = false;
+		if (this.runtime.frozen) return Promise.resolve();
 		return this.enqueue(async () => {
 			try {
 				await this.sweep();
@@ -149,7 +163,7 @@ export class ScheduleService {
 		return this.store.pendingItems().filter((item) => item.trigger === "at" || this.deps.automationsEnabled?.());
 	}
 	private unavailable(): boolean {
-		return this.stopped || (this.deps.paused ? this.deps.paused() : this.sleeping);
+		return this.stopped || this.runtime.frozen || (this.deps.paused ? this.deps.paused() : this.sleeping);
 	}
 	private async sweep(): Promise<void> {
 		this.cancelTimer?.();
@@ -364,7 +378,10 @@ export class ScheduleService {
 		// A persistence failure leaves the durable claim intact. Never redispatch automatically.
 		await this.store.replace(claimed, next);
 	}
-	async create(request: ScheduleRequest): Promise<ScheduledItem> {
+	create(request: ScheduleRequest): Promise<ScheduledItem> {
+		return this.runtime.run("create", () => this.createAdmitted(request));
+	}
+	private async createAdmitted(request: ScheduleRequest): Promise<ScheduledItem> {
 		this.assertOpen();
 		const data = await this.validate(request);
 		const now = this.time.now();
@@ -379,7 +396,10 @@ export class ScheduleService {
 			updatedAt: now,
 		});
 	}
-	async update(id: string, patch: SchedulePatch): Promise<ScheduledItem> {
+	update(id: string, patch: SchedulePatch): Promise<ScheduledItem> {
+		return this.runtime.run("update", () => this.updateAdmitted(id, patch));
+	}
+	private async updateAdmitted(id: string, patch: SchedulePatch): Promise<ScheduledItem> {
 		this.assertOpen();
 		if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("Schedule patch is required");
 		this.rejectOwned(patch);
@@ -457,7 +477,10 @@ export class ScheduleService {
 	 * Pending rows are cancelled, terminal rows dismissed. In-flight claims cannot be cancelled.
 	 * With expectedRevision, a row that changed since it was read (for example one that sent) is refused.
 	 */
-	async remove(id: string, expectedRevision?: number): Promise<void> {
+	remove(id: string, expectedRevision?: number): Promise<void> {
+		return this.runtime.run("remove", () => this.removeAdmitted(id, expectedRevision));
+	}
+	private async removeAdmitted(id: string, expectedRevision?: number): Promise<void> {
 		this.assertOpen();
 		if (expectedRevision !== undefined && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1))
 			throw new Error("expectedRevision must be a positive integer");

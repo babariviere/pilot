@@ -6,6 +6,7 @@
 import type { SessionSummary } from "@pilot/protocol";
 import { COORDINATOR_MEMORY_FOCUS } from "../../kernel/src/coordinator-memory-policy.ts";
 import type { MissionStore } from "./missions.ts";
+import { RuntimeBackground } from "./runtime-background.ts";
 import type { SessionManager } from "./sessions.ts";
 
 /** Anthropic's default prompt-cache lifetime. Idle chats park after 10 minutes, so this fits before. */
@@ -24,6 +25,11 @@ type Sessions = Pick<SessionManager, "list" | "get" | "onChange" | "canSendNotic
 type Store = Pick<MissionStore, "onChange" | "noticeDeadlines" | "pendingNotice">;
 
 export class CoordinatorCompaction {
+	readonly runtime = new RuntimeBackground(
+		"coordinator-compaction",
+		() => this.schedule(),
+		() => clearTimeout(this.timer),
+	);
 	private timer?: ReturnType<typeof setTimeout>;
 	private running?: Promise<void>;
 	private stopped = true;
@@ -76,7 +82,7 @@ export class CoordinatorCompaction {
 	}
 
 	private schedule(): void {
-		if (this.stopped) return;
+		if (this.stopped || this.runtime.frozen) return;
 		if (this.running) {
 			this.rerun = true;
 			return;
@@ -86,7 +92,7 @@ export class CoordinatorCompaction {
 		// Many synchronous changes (startup, a burst of usage updates) need one scan.
 		queueMicrotask(() => {
 			this.scheduled = false;
-			if (this.stopped || this.running) return;
+			if (this.stopped || this.runtime.frozen || this.running) return;
 			this.running = this.run(Date.now())
 				.catch((error: unknown) => console.warn(`pilotd: coordinator compaction failed: ${error}`))
 				.finally(() => {
@@ -103,7 +109,7 @@ export class CoordinatorCompaction {
 	private async run(now: number): Promise<void> {
 		clearTimeout(this.timer);
 		await this.compactDue(now);
-		if (this.stopped) return;
+		if (this.stopped || this.runtime.frozen) return;
 		let next = Number.POSITIVE_INFINITY;
 		for (const [id, since] of this.idleSince)
 			if (this.attempted.get(id) !== since && since + this.idleMs > now) next = Math.min(next, since + this.idleMs);
@@ -113,9 +119,13 @@ export class CoordinatorCompaction {
 	}
 
 	/** Also callable with a virtual clock by focused tests. */
-	async compactDue(now = Date.now()): Promise<void> {
+	compactDue(now = Date.now()): Promise<void> {
+		if (this.runtime.frozen) return Promise.resolve();
+		return this.runtime.run("compact", () => this.compactDueAdmitted(now));
+	}
+	private async compactDueAdmitted(now: number): Promise<void> {
 		for (const [id, since] of [...this.idleSince]) {
-			if (this.stopped) return;
+			if (this.stopped || this.runtime.frozen) return;
 			if (this.attempted.get(id) === since || since + this.idleMs > now) continue;
 			const session = this.sessions.get(id);
 			if (!session || !this.due(session, now)) continue;

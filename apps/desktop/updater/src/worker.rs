@@ -28,7 +28,13 @@ enum Job {
     Inspect,
     Check(u64, Option<Access>, Cancellation),
     Download(u64, Candidate, Option<Access>, Cancellation),
-    Local(u64, PathBuf, Cancellation),
+    Local(
+        u64,
+        PathBuf,
+        Cancellation,
+        Option<crate::iteration::ExpectedTarget>,
+        Option<String>,
+    ),
     Prepare(
         u64,
         Safety,
@@ -68,6 +74,8 @@ pub struct Worker {
     navigation: serde_json::Value,
     recovery: Option<Receiver<Recovery>>,
     progress: Shared,
+    proposal_id: Option<String>,
+    proposal: Arc<Mutex<Option<crate::coordinated::Receipt>>>,
 }
 impl Worker {
     /// No defaults or credential probing. Both GUI and helper need the same compiled
@@ -83,6 +91,8 @@ impl Worker {
         let event_sender = sender.clone();
         let progress = Shared::default();
         let reporter = progress.clone();
+        let proposal = Arc::new(Mutex::new(None));
+        let proposal_result = proposal.clone();
         std::thread::Builder::new()
             .name("desktop-updater".into())
             .spawn(move || {
@@ -197,18 +207,38 @@ impl Worker {
                             }
                             Ok(Outcome::Staged(candidate))
                         }
-                        Job::Local(_, directory, cancel) => {
-                            let stage = crate::iteration::stage(
-                                &directory,
-                                &target,
-                                &trust,
-                                &NativePlatform,
-                                &cancel,
-                            )?;
+                        Job::Local(_, directory, cancel, expected, proposal_id) => {
+                            let stage = if let Some(expected) = &expected {
+                                crate::iteration::stage_expected(
+                                    &directory,
+                                    &target,
+                                    &trust,
+                                    &NativePlatform,
+                                    &cancel,
+                                    Some(expected),
+                                )?
+                            } else {
+                                crate::iteration::stage(
+                                    &directory,
+                                    &target,
+                                    &trust,
+                                    &NativePlatform,
+                                    &cancel,
+                                )?
+                            };
                             let candidate = Candidate {
                                 version: stage.build().into(),
                                 short_version: stage.short_version().into(),
                             };
+                            if let Some(id) = proposal_id {
+                                let receipt = crate::coordinated::prepare(
+                                    &stage,
+                                    id,
+                                    expected.as_ref().ok_or(Error::Identity)?,
+                                    &trust,
+                                )?;
+                                *proposal_result.lock().map_err(|_| Error::Native)? = Some(receipt);
+                            }
                             staged = Some(stage);
                             Ok(Outcome::Staged(candidate))
                         }
@@ -331,6 +361,8 @@ impl Worker {
             navigation: serde_json::Value::Null,
             recovery: Some(recovery_receive),
             progress,
+            proposal_id: None,
+            proposal,
         })
     }
     /// The latest progress of this download operation; `None` before it starts or after it ends.
@@ -358,10 +390,32 @@ impl Worker {
     pub fn supply_navigation(&mut self, navigation: serde_json::Value) {
         self.navigation = navigation;
     }
-    pub(crate) fn stage_local(&mut self, operation: u64, directory: PathBuf) -> Result<(), Error> {
+    /// Explicit coordinated staging only; never inferred from an ordinary local build.
+    pub fn supply_proposal(&mut self, id: String) {
+        self.proposal_id = Some(id);
+    }
+    pub fn take_proposal(&mut self) -> Option<crate::coordinated::Receipt> {
+        self.proposal.lock().ok()?.take()
+    }
+    pub(crate) fn stage_local(
+        &mut self,
+        operation: u64,
+        directory: PathBuf,
+        expected: Option<crate::iteration::ExpectedTarget>,
+    ) -> Result<(), Error> {
         let cancel = Cancellation::default();
         self.cancellation = Some((operation, cancel.clone()));
-        self.send(Job::Local(operation, directory, cancel))
+        let proposal_id = self.proposal_id.take();
+        if proposal_id.is_some() && expected.is_none() {
+            return Err(Error::Identity);
+        }
+        self.send(Job::Local(
+            operation,
+            directory,
+            cancel,
+            expected,
+            proposal_id,
+        ))
     }
     pub fn supply_runtime(&mut self, runtime: crate::coordination::Location) {
         self.runtime = Some(runtime);

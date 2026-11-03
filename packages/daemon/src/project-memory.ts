@@ -12,6 +12,7 @@ import type {
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { captureMemory, type MemoryCompactionObserver, type MemoryCompactionTrace } from "./memory-compaction.ts";
 import type { MemoryTreeOptions } from "./memory-disk.ts";
+import { RuntimeBackground } from "./runtime-background.ts";
 import { isWatchNotice } from "./worker-notice.ts";
 
 type Nap = { lo: number; hi: number; epoch: number; prompt: string };
@@ -27,6 +28,19 @@ export function emptyMemorySummary(): ProjectMemorySummary {
 
 /** Disk RPC and background compaction. No model work is awaited by public read/write operations. */
 export class ProjectMemoryService {
+	readonly runtime = new RuntimeBackground(
+		"memory",
+		() => {
+			for (const projectId of this.summaries.keys()) this.schedule(projectId);
+			this.pump();
+		},
+		undefined,
+		() =>
+			this.pending.size || this.running.size || this.recalls.size || this.modelLifetimes.size
+				? [{ kind: "background", id: "memory:active" }]
+				: [],
+	);
+	private readonly modelLifetimes = new Set<Promise<string>>();
 	private readonly root: string;
 	private readonly worker: Worker;
 	private serial = 0;
@@ -122,6 +136,9 @@ export class ProjectMemoryService {
 		};
 	}
 	async load(projectId: string): Promise<ProjectMemorySummary> {
+		return this.runtime.run("load", () => this.loadAdmitted(projectId));
+	}
+	private async loadAdmitted(projectId: string): Promise<ProjectMemorySummary> {
 		this.retired.delete(projectId);
 		await this.rpc(projectId, "load");
 		this.schedule(projectId);
@@ -129,6 +146,9 @@ export class ProjectMemoryService {
 	}
 	/** Release a removed project's lock and cancel its queued work. The durable log is retained. */
 	async unload(projectId: string): Promise<void> {
+		return this.runtime.run("unload", () => this.unloadAdmitted(projectId));
+	}
+	private async unloadAdmitted(projectId: string): Promise<void> {
 		this.retired.add(projectId);
 		this.queue.delete(projectId);
 		const retry = this.retries.get(projectId);
@@ -142,26 +162,40 @@ export class ProjectMemoryService {
 	}
 	/** `replaces` lists indices of notes this one corrects; a normalized duplicate of a live note is a Conflict. */
 	async note(projectId: string, text: string, sessionId: string, replaces?: number[]): Promise<MemoryEntry> {
+		return this.runtime.run("note", () => this.noteAdmitted(projectId, text, sessionId, replaces));
+	}
+	private async noteAdmitted(
+		projectId: string,
+		text: string,
+		sessionId: string,
+		replaces?: number[],
+	): Promise<MemoryEntry> {
 		const entry = await this.rpc<MemoryEntry>(projectId, "note", { text, sessionId, replaces });
 		this.schedule(projectId);
 		return entry;
 	}
 	wake(projectId: string, lines = 96): Promise<MemoryView> {
-		return this.rpc(projectId, "wake", { lines });
+		return this.runtime.run("wake", () => this.rpc(projectId, "wake", { lines }));
 	}
 	zoom(projectId: string, lo: number, hi: number): Promise<MemoryNode[]> {
-		return this.rpc(projectId, "zoom", { lo, hi });
+		return this.runtime.run("zoom", () => this.rpc(projectId, "zoom", { lo, hi }));
 	}
 	/** A bounded slice of the browsing tree: top-level blocks or one range's children, to a depth or along reveal paths. */
 	tree(projectId: string, options: MemoryTreeOptions = {}): Promise<MemoryTree> {
-		return this.rpc(projectId, "tree", { ...options });
+		return this.runtime.run("tree", () => this.rpc(projectId, "tree", { ...options }));
 	}
 	async forget(projectId: string, lo: number, hi: number): Promise<{ ok: true }> {
+		return this.runtime.run("forget", () => this.forgetAdmitted(projectId, lo, hi));
+	}
+	private async forgetAdmitted(projectId: string, lo: number, hi: number): Promise<{ ok: true }> {
 		const result = await this.rpc<{ ok: true }>(projectId, "forget", { lo, hi });
 		this.schedule(projectId);
 		return result;
 	}
 	async recall(projectId: string, regex: string, lines = 96): Promise<MemoryRecall> {
+		return this.runtime.run("recall", () => this.recallAdmitted(projectId, regex, lines));
+	}
+	private async recallAdmitted(projectId: string, regex: string, lines: number): Promise<MemoryRecall> {
 		if (typeof regex !== "string" || regex.length > 512 || !Number.isInteger(lines) || lines < 1 || lines > 256)
 			throw new Error("Invalid recall regex or line limit");
 		// Compilation is cheap; matching untrusted regexes happens only in an isolated worker.
@@ -177,9 +211,10 @@ export class ProjectMemoryService {
 			const finish = (error?: Error, value?: MemoryRecall) => {
 				if (!this.recalls.delete(worker)) return;
 				clearTimeout(timer);
-				void worker.terminate();
-				if (error) reject(error);
-				else resolve(value!);
+				void worker.terminate().then(() => {
+					if (error) reject(error);
+					else resolve(value!);
+				}, reject);
 			};
 			this.recalls.set(worker, (error) => finish(error));
 			const timer = setTimeout(
@@ -207,7 +242,7 @@ export class ProjectMemoryService {
 		this.pump();
 	}
 	private pump(): void {
-		if (this.stopped || !this.summarize) return;
+		if (this.stopped || this.runtime.frozen || !this.summarize) return;
 		for (const projectId of this.queue) {
 			if (this.running.size >= 2) break;
 			if (this.running.has(projectId)) continue;
@@ -255,19 +290,22 @@ export class ProjectMemoryService {
 			});
 			timer = setTimeout(() => controller.abort(), 60_000);
 			timer.unref();
-			const text = await Promise.race([
-				this.summarize!(
-					nap.prompt,
-					controller.signal,
-					async (attempt) => {
-						if (controller.signal.aborted || !trace || trace.status !== "running") return;
-						if (attempt.number >= 1 && attempt.number <= 3) trace.attempts[attempt.number - 1] = attempt;
-						await saveTrace();
-					},
-					projectId,
-				),
-				aborted,
-			]);
+			const model = this.summarize!(
+				nap.prompt,
+				controller.signal,
+				async (attempt) => {
+					if (controller.signal.aborted || !trace || trace.status !== "running") return;
+					if (attempt.number >= 1 && attempt.number <= 3) trace.attempts[attempt.number - 1] = attempt;
+					await saveTrace();
+				},
+				projectId,
+			);
+			this.modelLifetimes.add(model);
+			void model.then(
+				() => this.modelLifetimes.delete(model),
+				() => this.modelLifetimes.delete(model),
+			);
+			const text = await Promise.race([model, aborted]);
 			if (this.stopped || controller.signal.aborted) return;
 			const stored = await this.rpc<boolean>(projectId, "put", { ...nap, text });
 			trace.status = stored ? "succeeded" : "failed";

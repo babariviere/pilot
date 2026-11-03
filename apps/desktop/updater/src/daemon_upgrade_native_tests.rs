@@ -901,6 +901,7 @@ fn native_launchd_handoff_preserves_external_profile_and_service() {
     let cancel = AtomicBool::new(false);
     let mut host = LaunchAgent {
         automatic: false,
+        coordinated: None,
         original_backup: None,
         location: location.clone(),
         current: current.clone(),

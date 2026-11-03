@@ -32,6 +32,7 @@ import { linearParentHeaders, linearPrefill, linearStart } from "./linear-source
 import { workflowStates } from "./linear-workflow.ts";
 import type { ProjectStore } from "./projects.ts";
 import { type RefreshEvidenceInput, RefreshEvidenceStore } from "./refresh-evidence.ts";
+import { RuntimeBackground } from "./runtime-background.ts";
 import { SlackModelUnavailable } from "./slack-classifier.ts";
 import { parseSlackMessageLink, SlackFormatChanged } from "./slack-format.ts";
 import type { SlackReactionOwner } from "./slack-reaction-owner.ts";
@@ -101,6 +102,18 @@ type Health = {
 
 /** Bounded manual and background polling. Only explicitly registered sources do work. */
 export class SourceRegistry {
+	readonly runtime = new RuntimeBackground(
+		"tracking",
+		() => {
+			if (this.started) {
+				this.syncLabelEffects();
+				this.schedule();
+			}
+		},
+		() => clearTimeout(this.timer),
+		() => (this.busy() ? [{ kind: "background", id: "tracking:active" }] : []),
+	);
+	private started = false;
 	readonly refreshDiagnostics = new SourceRefreshDiagnostics();
 	readonly jobDiagnostics = new BackgroundJobDiagnostics();
 	private evidence?: RefreshEvidenceStore;
@@ -264,7 +277,9 @@ export class SourceRegistry {
 		items: TrackedItemStore,
 		mcp: SourceMcpClient,
 		signInTimeoutMs?: number,
+		options: { deferStart?: boolean } = {},
 	) {
+		this.started = !options.deferStart;
 		this.projects = projects;
 		this.items = items;
 		this.mcp = mcp;
@@ -325,31 +340,41 @@ export class SourceRegistry {
 	/** Sends changed close labels to the store, which closes and reopens stored messages to match. At startup every
 	 * project is sent, so effects and stored rows agree after a restart or an edit made while pilotd was stopped. */
 	private syncLabelEffects(): void {
+		if (!this.started || this.runtime.frozen || this.stopped) return;
 		const entries = this.projects
 			.list()
 			.map((project) => ({ projectId: project.id, close: closeLabels(project) }))
 			.filter((entry) => this.slackClose.get(entry.projectId) !== JSON.stringify(entry.close));
 		if (!entries.length) return;
 		for (const entry of entries) this.slackClose.set(entry.projectId, JSON.stringify(entry.close));
-		void this.items.slackLabelEffects(entries).catch((error: unknown) => {
-			// Retry with the next settings change.
-			for (const entry of entries)
-				if (this.slackClose.get(entry.projectId) === JSON.stringify(entry.close))
-					this.slackClose.delete(entry.projectId);
-			console.warn(`pilotd: Slack label effects failed: ${logCause(error)}`);
-		});
+		void this.runtime
+			.run("label-effects", () => this.items.slackLabelEffects(entries))
+			.catch((error: unknown) => {
+				// Retry with the next settings change.
+				for (const entry of entries)
+					if (this.slackClose.get(entry.projectId) === JSON.stringify(entry.close))
+						this.slackClose.delete(entry.projectId);
+				console.warn(`pilotd: Slack label effects failed: ${logCause(error)}`);
+			});
 	}
 	/** Five-minute cadence, no app polling, timer released when nothing is configured. */
 	startPolling(kind: TrackedKind): void {
+		this.start();
 		if (!this.pollers.has(kind)) throw new Error("Register the source before scheduling it");
 		this.automatic.add(kind);
 		this.schedule();
+	}
+	start(): void {
+		if (this.stopped || this.started) return;
+		this.started = true;
+		this.syncLabelEffects();
+		for (const project of this.projects.list()) this.queueSlackDone(project.id);
 	}
 	private schedule(): void {
 		this.pumpSlackDone();
 		clearTimeout(this.timer);
 		this.timer = undefined;
-		if (this.stopped) return;
+		if (this.stopped || !this.started || this.runtime.frozen) return;
 		const sources = this.list().filter(
 			(source) => source.configured && this.automatic.has(source.kind) && !this.running.has(source.id),
 		);
@@ -622,7 +647,8 @@ export class SourceRegistry {
 
 	/** Single flight per source, at most two sources. No unbounded backlog from repeated clicks. */
 	poll(id: string, force = false): Promise<TrackingSource> {
-		if (this.stopped) throw new ServiceUnavailable("Tracking is stopped");
+		if (this.stopped || this.runtime.frozen)
+			throw new ServiceUnavailable("Tracking is stopped or paused for maintenance");
 		const source = this.require(id);
 		if (!source.configured) throw new Conflict("Attach a Linear team or Slack channels in project settings first");
 		if (force && source.kind !== "slack") throw new Conflict("Only Slack supports forcing the local budget");
@@ -909,7 +935,8 @@ export class SourceRegistry {
 		return !checkpoint || checkpoint.configKey === configKey(project, kind);
 	}
 	async prefill(itemId: string): Promise<TrackedItemPrefill> {
-		if (this.stopped) throw new ServiceUnavailable("Tracking is stopped");
+		if (this.stopped || this.runtime.frozen)
+			throw new ServiceUnavailable("Tracking is stopped or paused for maintenance");
 		const existing = this.details.get(itemId);
 		if (existing) return existing.promise;
 		if (this.busy() >= 2) throw new ServiceUnavailable("Tracking is busy, retry shortly");
@@ -1000,7 +1027,8 @@ export class SourceRegistry {
 		what: "excerpt" | "thread",
 		read: (context: SourcePollContext, item: TrackedItem) => Promise<T>,
 	): Promise<T> {
-		if (this.stopped) throw new ServiceUnavailable("Tracking is stopped");
+		if (this.stopped || this.runtime.frozen)
+			throw new ServiceUnavailable("Tracking is stopped or paused for maintenance");
 		const previous = this.excerptRun;
 		if (previous?.itemId === itemId && previous.what === what && !previous.controller.signal.aborted)
 			return previous.promise as Promise<T>;
@@ -1012,7 +1040,8 @@ export class SourceRegistry {
 		const item = await this.items.require(itemId);
 		if (generation !== this.excerptGeneration || this.excerptRun)
 			throw new Conflict("Superseded by a newer selection");
-		if (this.stopped) throw new ServiceUnavailable("Tracking is stopped");
+		if (this.stopped || this.runtime.frozen)
+			throw new ServiceUnavailable("Tracking is stopped or paused for maintenance");
 		if (item.kind !== "slack") throw new Conflict(`Only Slack messages have an ${what}`);
 		const id = `${item.projectId}:slack`,
 			key = this.currentKey(id);
@@ -1065,7 +1094,8 @@ export class SourceRegistry {
 	 * in triage is returned as it is, with its local status and links. Failures are plain and leave the source's
 	 * health alone. */
 	addSlackMessage(projectId: string, url: string): Promise<TrackedItem> {
-		if (this.stopped) throw new ServiceUnavailable("Tracking is stopped");
+		if (this.stopped || this.runtime.frozen)
+			throw new ServiceUnavailable("Tracking is stopped or paused for maintenance");
 		const link = parseSlackMessageLink(url);
 		if (!link) throw new Conflict("Paste a link to a Slack message");
 		const project = structuredClone(this.projects.require(projectId));
@@ -1141,7 +1171,8 @@ export class SourceRegistry {
 		if (item.kind !== "linear") return Promise.resolve();
 		const existing = this.starts.get(item.id);
 		if (existing) return existing.promise;
-		if (this.stopped || this.busy() >= 2) return this.items.linearStartResult(item.id, "error");
+		if (this.stopped || this.runtime.frozen || this.busy() >= 2)
+			return this.items.linearStartResult(item.id, "error");
 		const sourceId = `${item.projectId}:linear`;
 		const key = this.currentKey(sourceId) ?? "";
 		const controller = new AbortController();
@@ -1188,7 +1219,7 @@ export class SourceRegistry {
 		if (item.kind !== "slack") return Promise.resolve();
 		const existing = this.starts.get(item.id);
 		if (existing) return existing.promise;
-		if (this.stopped || this.busy() >= 2)
+		if (this.stopped || this.runtime.frozen || this.busy() >= 2)
 			return this.items.reserveSlackStart(item.id).then(async (reserved) => {
 				if (reserved) await this.items.slackStartResult(item.id, "error");
 			});
@@ -1265,7 +1296,7 @@ export class SourceRegistry {
 		});
 	}
 	private pumpSlackDone(): void {
-		if (this.stopped) return;
+		if (this.stopped || !this.started || this.runtime.frozen) return;
 		for (const projectId of this.doneDue) {
 			if (this.busy() >= 2) break;
 			if (this.doneRuns.has(projectId)) continue;
@@ -1416,7 +1447,8 @@ export class SourceRegistry {
 	/** Browser sign-in to the kind's dedicated server (pi's MCP OAuth flow). One per server; repeated starts
 	 * return the waiting one. Once done, that source resyncs in every project. */
 	signIn(kind: TrackedKind, again = false): SourceSignIn {
-		if (this.stopped) throw new ServiceUnavailable("Tracking is stopped");
+		if (this.stopped || this.runtime.frozen)
+			throw new ServiceUnavailable("Tracking is stopped or paused for maintenance");
 		if (!this.mcp.signIn) throw new ServiceUnavailable("Sign-in is unavailable");
 		return this.signIns.start(kind, again);
 	}
@@ -1462,7 +1494,8 @@ export class SourceRegistry {
 			more: boolean;
 		}>,
 	): Promise<TrackingLookup<T>> {
-		if (this.stopped) throw new ServiceUnavailable("Tracking is stopped");
+		if (this.stopped || this.runtime.frozen)
+			throw new ServiceUnavailable("Tracking is stopped or paused for maintenance");
 		const previous = this.lookups.get(kind);
 		if (previous) {
 			previous.controller.abort(new Error("Superseded by a newer lookup"));

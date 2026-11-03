@@ -1,10 +1,12 @@
 /** Explicit app requests only. No timers, agent starts, token retention or credential access here. */
 import type { RefreshResult } from "@pilot/kernel/subscription-refresh";
 import type { SubscriptionRefreshProvider, SubscriptionRefreshSnapshot } from "@pilot/protocol";
+import { RuntimeBackground } from "./runtime-background.ts";
 import { parseUsageCache } from "./subscription-usage.ts";
 
 type Provider = SubscriptionRefreshProvider["provider"];
 export class SubscriptionRefresh {
+	readonly runtime = new RuntimeBackground("subscriptions");
 	private readonly values = new Map<Provider, SubscriptionRefreshProvider>();
 	private readonly pending = new Map<Provider, Promise<SubscriptionRefreshProvider>>();
 	private readonly collect: (provider: Provider) => Promise<RefreshResult>;
@@ -19,11 +21,12 @@ export class SubscriptionRefresh {
 		};
 	}
 	refresh(provider: Provider): Promise<SubscriptionRefreshProvider> {
+		if (this.runtime.frozen) return this.runtime.run("refresh", () => this.run(provider));
 		const pending = this.pending.get(provider);
 		if (pending) return pending;
 		const previous = this.values.get(provider);
 		this.values.set(provider, { ...previous, provider, account: "not_reported", state: "refreshing" });
-		const work = this.run(provider).finally(() => this.pending.delete(provider));
+		const work = this.runtime.run("refresh", () => this.run(provider)).finally(() => this.pending.delete(provider));
 		this.pending.set(provider, work);
 		return work;
 	}

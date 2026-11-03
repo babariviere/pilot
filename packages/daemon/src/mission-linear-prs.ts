@@ -2,6 +2,7 @@
 import { linkedPullRequest, run } from "./github.ts";
 import { closingIssueIds, type linearPrGuidance, ticketScope } from "./mission-linear-pr-guidance.ts";
 import type { MissionStore } from "./missions.ts";
+import { RuntimeBackground } from "./runtime-background.ts";
 import type { Runner } from "./workspaces.ts";
 
 export interface LinearPrText {
@@ -75,6 +76,19 @@ type Guidance = Awaited<ReturnType<typeof linearPrGuidance>>;
 type Read = (url: string, cwd: string, signal: AbortSignal) => Promise<LinearPrText>;
 
 export class MissionLinearPrChecks {
+	readonly runtime = new RuntimeBackground(
+		"linear-prs",
+		() => {
+			if (this.unsubscribe) {
+				this.overflow = true;
+				void this.flush();
+			}
+		},
+		() => {
+			clearTimeout(this.timer);
+			this.timer = undefined;
+		},
+	);
 	private readonly store: MissionStore;
 	private readonly guidance: (missionId: string, taskId: string) => Promise<Guidance>;
 	private readonly cwd: (projectId: string) => string | undefined;
@@ -109,7 +123,7 @@ export class MissionLinearPrChecks {
 		if (this.stopped) return;
 		if (this.pending.size < 256) this.pending.add(id);
 		else this.overflow = true;
-		if (this.running || this.timer) return;
+		if (this.runtime.frozen || this.running || this.timer) return;
 		this.timer = setTimeout(() => {
 			this.timer = undefined;
 			void this.flush();
@@ -118,10 +132,12 @@ export class MissionLinearPrChecks {
 	}
 	/** Bounded one-at-a-time network work, coalesced by mission and existing PR observation. */
 	flush(): Promise<void> {
+		if (this.runtime.frozen) return Promise.resolve();
 		if (this.running) return this.running;
 		clearTimeout(this.timer);
 		this.timer = undefined;
-		this.running = this.drain()
+		this.running = this.runtime
+			.run("check", () => this.drain())
 			.catch((error) =>
 				console.warn(`pilotd: Linear PR check failed: ${error instanceof Error ? error.name : "error"}`),
 			)
@@ -131,7 +147,7 @@ export class MissionLinearPrChecks {
 		return this.running;
 	}
 	private async drain(): Promise<void> {
-		while (!this.stopped && (this.pending.size || this.overflow)) {
+		while (!this.stopped && !this.runtime.frozen && (this.pending.size || this.overflow)) {
 			const batch = this.overflow
 				? this.store.pullRequestMissions().map((mission) => mission.id)
 				: [...this.pending];
