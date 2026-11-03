@@ -537,10 +537,46 @@ fn legacy_changed_or_nonduplicate_evidence_never_archives() {
 }
 
 #[test]
+fn bundle_resource_visibility_policy_only_ignores_explicit_permission_denials() {
+    unsafe extern "C" {
+        fn pnu_bundle_resource_denied(result: libc::c_int, error: libc::c_int) -> bool;
+        fn pnu_bundle_process_unused(
+            root: *const libc::c_char,
+            pid: libc::c_int,
+            ignored_fd: libc::c_int,
+        ) -> bool;
+    }
+    for error in [
+        0,
+        libc::EPERM,
+        libc::EACCES,
+        libc::EIO,
+        libc::EINVAL,
+        libc::ESRCH,
+        libc::EBADF,
+    ] {
+        for result in [-1, 0, 1, 4096] {
+            // SAFETY: pure native policy function, no pointers or resource access.
+            assert_eq!(
+                unsafe { pnu_bundle_resource_denied(result, error) },
+                result <= 0 && matches!(error, libc::EPERM | libc::EACCES)
+            );
+        }
+    }
+    // SAFETY: static NUL-terminated path, invalid PID cannot name a consumer.
+    assert!(!unsafe { pnu_bundle_process_unused(c"/missing-bundle".as_ptr(), -1, -1) });
+}
+
+#[test]
 fn native_census_detects_owned_legacy_cwd_fd_executable_and_mapping_users() {
     use std::{ffi::CString, io::Read, os::unix::ffi::OsStrExt, process::Stdio};
     unsafe extern "C" {
         fn pnu_stage_process_unused(
+            stage: *const libc::c_char,
+            pid: libc::c_int,
+            ignored_fd: libc::c_int,
+        ) -> bool;
+        fn pnu_bundle_process_unused(
             stage: *const libc::c_char,
             pid: libc::c_int,
             ignored_fd: libc::c_int,
@@ -561,13 +597,20 @@ fn native_census_detects_owned_legacy_cwd_fd_executable_and_mapping_users() {
 #include <fcntl.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/fileport.h>
 #include <unistd.h>
 int main(int argc, char **argv) {
     if (argc != 3) return 1;
     int fd = -1;
     if (!strcmp(argv[1], "cwd") && chdir(argv[2])) return 2;
-    if (!strcmp(argv[1], "fd") || !strcmp(argv[1], "map")) {
+    if (!strcmp(argv[1], "fd") || !strcmp(argv[1], "map") ||
+        !strcmp(argv[1], "fileport") || !strcmp(argv[1], "unrelated-fileport")) {
         fd = open(argv[2], O_RDONLY); if (fd < 0) return 3;
+    }
+    if (strstr(argv[1], "fileport")) {
+        fileport_t port;
+        if (fileport_makeport(fd, &port)) return 6;
+        close(fd); fd = -1;
     }
     if (!strcmp(argv[1], "map")) {
         if (mmap(0, 4096, PROT_READ, MAP_PRIVATE, fd, 0) == MAP_FAILED) return 4;
@@ -591,7 +634,16 @@ int main(int argc, char **argv) {
     );
     let resource = stage.join(&trust.bundle_name).join("resource");
     let stage_text = CString::new(stage.as_os_str().as_bytes()).unwrap();
-    for mode in ["clear", "cwd", "fd", "map", "exec", "ditto"] {
+    for mode in [
+        "clear",
+        "cwd",
+        "fd",
+        "map",
+        "exec",
+        "ditto",
+        "fileport",
+        "unrelated-fileport",
+    ] {
         let binary = if mode == "exec" {
             stage.join("owned-user")
         } else if mode == "ditto" {
@@ -602,7 +654,13 @@ int main(int argc, char **argv) {
         if binary != executable {
             fs::copy(&executable, &binary).unwrap();
         }
-        let path = if mode == "cwd" { &stage } else { &resource };
+        let path = if mode == "cwd" {
+            stage.as_path()
+        } else if mode == "unrelated-fileport" {
+            Path::new("/dev/null")
+        } else {
+            resource.as_path()
+        };
         let mut child = Owner(
             Command::new(&binary)
                 .arg(mode)
@@ -625,6 +683,21 @@ int main(int argc, char **argv) {
         let clear =
             unsafe { pnu_stage_process_unused(stage_text.as_ptr(), child.0.id() as i32, -1) };
         assert_eq!(clear, mode == "clear", "native reference proof for {mode}");
+        // SAFETY: the same owned fixture process and valid C string.
+        let bundle_clear =
+            unsafe { pnu_bundle_process_unused(stage_text.as_ptr(), child.0.id() as i32, -1) };
+        assert_eq!(
+            bundle_clear,
+            matches!(mode, "clear" | "ditto" | "unrelated-fileport"),
+            "published bundle reference proof for {mode}"
+        );
+        if mode == "clear" {
+            let exited = child.0.id() as i32;
+            drop(child);
+            // SAFETY: an owned, reaped fixture PID and the same valid C string.
+            assert!(unsafe { pnu_bundle_process_unused(stage_text.as_ptr(), exited, -1) });
+            continue;
+        }
         if mode == "fd" {
             let deadline = Instant::now() + Duration::from_secs(10);
             assert!(

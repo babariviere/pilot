@@ -205,13 +205,17 @@ Failed swap leaves the old app; failed relaunch/startup keeps both bundles and r
 uncertainty. Transactions and backups are not blindly retried or deleted; the one
 exception is a download never committed (phase `Ready`), which startup removes once
 no session or helper holds the target lock. On macOS, staging retries verified
-terminal cleanup first. When protected processes prevent the global no-use proof,
-completed transactions stay intact at their original paths. Up to four transactions
-including the new stage are allowed, but only one may be unfinished. Every retained
-entry needs authenticated acknowledged/aborted completion, exact acknowledged rollback identity
-(if present), and an idle journal with no pending write. Reaching the retention limit
-or failing those proofs blocks staging. Deletion still requires the full no-use
-proof. Normal per-update archive/expanded-payload limits remain in force.
+terminal cleanup first. Live bundled executables, observed resource users and
+unknown executable identities preserve old bundles. Unrelated external executables
+whose resource inspection macOS denies do not veto cleanup. Completed transactions
+do not consume staging capacity; only one transaction may be unfinished. Retained
+disk usage can grow when cleanup preserves a bundle.
+Every retained entry needs authenticated acknowledged/aborted completion, exact
+acknowledged rollback identity (if present), and an idle journal with no pending
+write. Failing those proofs blocks staging. Admission scans at most 4096 parent
+entries and refuses larger directories rather than doing unbounded work. Deletion
+still requires the scoped bundle-user check. Normal per-update archive/expanded-payload
+limits remain in force.
 
 On Linux, two active transactions per install parent remain the admission limit.
 When staging needs room, older acknowledged

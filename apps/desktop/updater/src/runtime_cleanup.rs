@@ -1,4 +1,4 @@
-//! One-shot retirement of positively identified, unused published capsules.
+//! One-shot retirement of verified published capsules without observed bundle users.
 use super::*;
 
 /// Counts only this bounded cleanup attempt, not the entire store.
@@ -19,7 +19,7 @@ pub struct CleanupSummary {
 /// Uncertain or live capsules are preserved, including the running application's
 /// own capsule.
 /// Legacy stores require signed bundle verification; the dedicated service store
-/// permits damaged-root retirement using its private container and no-use proof.
+/// permits damaged-root retirement using its private container and scoped bundle-user inspection.
 ///
 /// # Errors
 /// Rejects unsafe store paths and unavailable permanent locks. Entry failures
@@ -34,7 +34,7 @@ pub fn cleanup_obsolete(store: &Path, trust: &Trust) -> Result<CleanupSummary, E
         &installer::NativePlatform,
         &executable,
         Instant::now() + Duration::from_secs(10),
-        &native_stage_unused,
+        &native_bundle_unused,
     )
 }
 
@@ -407,7 +407,7 @@ mod tests {
         let (_temp, _store, root, _trust) = fixture();
         let _held = File::open(root.join("Pilot Next.app/resource")).unwrap();
         let lease = stage_lease(&root).unwrap();
-        assert!(!native_stage_unused(
+        assert!(!native_bundle_unused(
             &root,
             &lease,
             Instant::now() + Duration::from_secs(2)

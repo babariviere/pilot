@@ -41,6 +41,11 @@ unsafe extern "C" {
         ignored_fd: libc::c_int,
         timeout_ms: u32,
     ) -> bool;
+    fn pnu_bundle_unused(
+        root: *const libc::c_char,
+        ignored_fd: libc::c_int,
+        timeout_ms: u32,
+    ) -> bool;
     fn pnu_bundle_build(
         path: *const libc::c_char,
         output: *mut libc::c_char,
@@ -588,6 +593,19 @@ fn native_stage_unused(stage: &Path, lease: &File, deadline: Instant) -> bool {
         .min(2000) as u32;
     // SAFETY: owned NUL-terminated path, controlled directory fd, bounded read-only census.
     unsafe { pnu_stage_unused(path.as_ptr(), lease.as_raw_fd(), milliseconds) }
+}
+
+fn native_bundle_unused(root: &Path, lease: &File, deadline: Instant) -> bool {
+    use std::{ffi::CString, os::unix::ffi::OsStrExt};
+    let Ok(path) = CString::new(root.as_os_str().as_bytes()) else {
+        return false;
+    };
+    let milliseconds = deadline
+        .saturating_duration_since(Instant::now())
+        .as_millis()
+        .min(5000) as u32;
+    // SAFETY: owned C string and directory lease, bounded published-root inspection.
+    unsafe { pnu_bundle_unused(path.as_ptr(), lease.as_raw_fd(), milliseconds) }
 }
 
 fn sealed_build(app: &Path) -> Result<String, Error> {

@@ -3,12 +3,7 @@ use super::*;
 use std::os::unix::ffi::OsStrExt;
 use std::time::{Duration, Instant};
 
-// Includes the next stage. Keep retention bounded when macOS cannot inspect
-// unrelated protected processes; never move or delete their possible resources.
-const MAX_RETAINED_TRANSACTIONS: usize = 4;
-
 pub(super) fn require_capacity(target: &Path, trust: &Trust) -> Result<(), Error> {
-    let mut retained = 0;
     for (count, entry) in fs::read_dir(target.parent().ok_or(Error::Filesystem)?)
         .map_err(|_| Error::Filesystem)?
         .enumerate()
@@ -22,10 +17,8 @@ pub(super) fn require_capacity(target: &Path, trust: &Trust) -> Result<(), Error
             .as_bytes()
             .starts_with(b".pilot-next-update-")
         {
-            retained += 1;
-            if retained >= MAX_RETAINED_TRANSACTIONS {
-                return Err(Error::StagingCapacity);
-            }
+            // Completed evidence is not an active installer. Preserve its path when
+            // no-use is uncertain without exhausting admission after a few updates.
             let root = entry.path();
             if root.canonicalize().ok().as_deref() != Some(root.as_path())
                 || validate_root(&root, target).is_err()
@@ -143,7 +136,7 @@ fn purge(
             continue;
         }
         // Other profiles and foreground daemons may still use this exchanged app.
-        // The selected service's handoff alone does not establish global absence.
+        // Protect other profiles' bundled executables and observed resource users too.
         let rollback = rollback_bundle(&root, trust);
         match fs::symlink_metadata(&rollback) {
             Ok(meta) => {
@@ -169,7 +162,7 @@ fn purge(
 pub(super) fn native_unused(root: &Path, deadline: Instant) -> bool {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
     unsafe extern "C" {
-        fn pnu_stage_unused(
+        fn pnu_bundle_unused(
             root: *const libc::c_char,
             ignored_fd: libc::c_int,
             timeout_ms: u32,
@@ -178,7 +171,7 @@ pub(super) fn native_unused(root: &Path, deadline: Instant) -> bool {
     let milliseconds = deadline
         .saturating_duration_since(Instant::now())
         .as_millis()
-        .min(2000) as u32;
+        .min(5000) as u32;
     if milliseconds == 0 {
         return false;
     }
@@ -186,7 +179,7 @@ pub(super) fn native_unused(root: &Path, deadline: Instant) -> bool {
         return false;
     };
     // SAFETY: live NUL-terminated path, no ignored descriptor, bounded native census.
-    unsafe { pnu_stage_unused(path.as_ptr(), -1, milliseconds) }
+    unsafe { pnu_bundle_unused(path.as_ptr(), -1, milliseconds) }
 }
 
 fn terminal_proof(root: &Path, trust: &Trust) -> bool {

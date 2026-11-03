@@ -628,20 +628,16 @@ fn staging_preserves_terminal_paths_and_bytes_when_no_use_is_uncertain() {
 
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
 #[test]
-fn staging_capacity_counts_retained_terminal_transactions_including_new_stage() {
-    for count in [3, 4] {
+fn completed_transactions_do_not_exhaust_staging_capacity() {
+    for count in [3, 4, 8] {
         let temp = Temp::new();
         let target = target(&temp);
         let roots: Vec<_> = (1..=count)
             .map(|id| transaction(&target, id, Phase::StartupAcknowledged))
             .collect();
-        let result = new_stage_checked(&target, &trust(), &FixturePlatform, &|_, _| false);
-        if count == 3 {
-            let (stage, _lock) = result.expect("three retained transactions permit a fourth");
-            assert!(stage.exists());
-        } else {
-            assert!(matches!(result, Err(Error::StagingCapacity)));
-        }
+        let (stage, _lock) = new_stage_checked(&target, &trust(), &FixturePlatform, &|_, _| false)
+            .expect("completed transactions must not consume staging capacity");
+        assert!(stage.exists());
         assert!(roots.iter().all(|root| root.exists()));
         assert!(!target.parent().unwrap().join(HISTORY).exists());
     }

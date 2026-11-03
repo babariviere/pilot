@@ -6,7 +6,7 @@ const SERVICE_STAGE: &str = ".service-stage-v1";
 /// Publish an immutable service app, retaining at most active plus candidate.
 ///
 /// `store` must end in [`SERVICE_STORE_NAME`]. No allowlist or history is used.
-/// Other roots require native positive no-use proof before removal. Uncertain
+/// Other roots require scoped native bundle-user inspection before removal. Uncertain
 /// execution roots consume capacity; unknown names are preserved but are not
 /// execution slots. Unrelated legacy stores are never inspected here.
 ///
@@ -36,7 +36,7 @@ pub fn publish_service(
         platform,
         deadline.min(Instant::now() + Duration::from_secs(45)),
         &check,
-        &native_stage_unused,
+        &native_bundle_unused,
     )
 }
 
@@ -135,7 +135,7 @@ fn publish_checked(
 
 // Caller holds the permanent service store lock. This namespace is exclusively
 // owned by this publisher: disposal authenticates the container and absence of
-// users, not obsolete bytes. Interrupted deletion may leave a damaged/empty app.
+// supported users, not obsolete bytes. Interrupted deletion may leave a damaged/empty app.
 pub(super) fn retire_root(
     root: &Path,
     trust: &Trust,

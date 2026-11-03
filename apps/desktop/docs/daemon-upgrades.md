@@ -66,8 +66,13 @@ a safe work boundary. The daemon executes from **one active immutable runtime
 copy**, not the mutable installed app. During handoff there can be one additional
 candidate. It verifies the replacement boot before removing obsolete GUI/runtime
 files. There is no rolling version history or capsule allowlist in this path.
-Cleanup proves the old app is unused by other processes too. A later GUI download
-retries terminal cleanup under its lock, without polling or replaying installation.
+Cleanup checks for old bundled executables and observed cwd, descriptor, fileport
+and mapping users, including other profiles. Unrelated external executables with
+permission-denied resource inspection no longer veto cleanup. Unknown executable
+identity, malformed inspection and exhausted budgets still preserve the bundle.
+A later GUI download retries terminal cleanup under its lock, without polling or
+replaying installation. Supported consumers execute bundled binaries; this scoped
+check does not promise global absence of future reads by external interpreters.
 
 Startup attempts this once after restoring durable GUI state and acknowledging
 the GUI update receipt. It does not retry on reconnect or Settings open.

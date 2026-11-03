@@ -238,26 +238,44 @@ launch, so fast startup acknowledgement cannot be overwritten by a later helper 
 On macOS the old app is retained after swap, including after GUI startup ACK:
 the old daemon may still be using that bundle's files. At most one unfinished GUI
 transaction is admitted. Before another download, staging retries terminal cleanup
-under the target lock. If the global no-use census is busy or denied by macOS,
-authenticated acknowledged/aborted transactions remain untouched at their original
-paths. Up to four transactions including the new stage are admitted; a full
-retention budget still blocks staging. The normal 1 GiB archive and 2 GiB expanded
-payload limits continue to apply per update. This is bounded retention, not proof
-that retained bundles are unused or permission to delete or relocate them.
+under the target lock. Live bundled executables, observed resource users, unknown
+executable identity or exhausted inspection budgets preserve transactions at their
+original paths. Completed transactions do not consume staging capacity. Admission scans
+at most 4096 parent entries and refuses larger directories. The normal 1 GiB
+archive and 2 GiB expanded payload limits continue to apply per update. Retained
+disk usage may grow; admission is not proof that retained bundles are unused or
+permission to delete or relocate them.
 After verifying daemon handoff to the current installed target (or verifying an
 already-current daemon), integration calls `installer::cleanup_completed(target,
 trust)` off-main. GUI ACK alone must never call this API. The permanent target
 lock and each transaction's journal lock exclude active writers. Cleanup requires
 a terminal acknowledged/aborted journal with no pending write and an authenticated
-signed manifest. A bounded native census must prove any remaining rollback app is
-unused, including by other profiles and foreground processes. An acknowledged
+signed manifest. A bounded native check protects remaining rollback apps used by
+bundled executables or observed resources, including other profiles and foreground
+processes. An acknowledged
 swap's rollback entry, if still present, must match
 the exchanged inode; an already-removed rollback is allowed. Obsolete archives need
 not exist or pass rehashing, and rollback contents are not reverified for deletion.
-Every present terminal rollback also requires a bounded native global no-use probe,
-including foreground daemons under other profiles. A busy or uncertain census
-preserves the transaction; a missing rollback needs no probe. Each probe is capped
-at two seconds and the remaining cleanup deadline.
+Every present terminal rollback requires the same scoped probe. It observes exact
+executable paths and accessible cwd, descriptor, vnode-fileport and mapped-file
+references. Unknown executables, malformed replies, overflows and unexpected errors
+preserve the bundle. Only explicit EPERM/EACCES resource denials on positively
+external executables are ignored; observed users always veto deletion. Nonempty
+fileport lists are inspected, not blanket refusals. Supported Pilot consumers run
+bundled GUI, helper and Node executables. This is not a global absence proof for
+external interpreters with denied inspection and future lazy resource reads.
+Process identity and executable are rechecked; unrelated process churn does not
+veto retirement. New/reused PIDs receive resource inspection too. A missing rollback
+needs no probe. Each scoped probe is capped at five seconds, 4096 PIDs and 1,048,576
+resource queries, within the remaining ten-second cleanup deadline. Legacy unleased
+copy stages retain the strict global census and its two-second/131,072-query bounds.
+
+A read-only macOS check on 2026-11-03 with approximately 677 same-user processes
+cleared an unused temporary directory in 3.6 seconds with the scoped probe. The
+strict probe refused in 24 ms on unrelated protected processes. Native fixtures
+cover executing binaries, cwd, open files, mapped files and vnode fileports, plus
+unrelated fileports and copiers. This is local probe evidence, not GUI install or
+live bundle-deletion qualification.
 New staging retries the same terminal cleanup under its already-held target lock,
 without polling. Cleanup is best effort: unrelated unsafe legacy history is preserved,
 while surviving unfinished transactions still block admission of another stage.
