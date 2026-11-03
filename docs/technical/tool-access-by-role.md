@@ -16,6 +16,9 @@ the daemon, tool handlers, project trust and OS sandbox enforce the actual opera
   It has the Build extension runtime, not Ask's tool allowlist.
 - **Subagent**: a named persistent child conversation, not a mission member chat.
 - **Restricted reviewer**: synthetic qualification runtime only. Production entry points remain disabled.
+- **Insights**: internal host-admitted report profile, not an ordinary Ask mission member. Only
+  `insights_history` (`chats`, `projects`, `history`, `search`) is admitted. No generic mission tools,
+  files, shell, MCP, repairs or artifacts. See [admission and limits](insights-history.md).
 - **Background compaction/completion**: host-owned model calls, not general-purpose agent sessions.
 
 Local versus devbox placement does not define a new role or grant extra permissions.
@@ -84,7 +87,7 @@ listed here because they depend on the user's servers, trust decisions and expos
 
 ### Mission overlay
 
-All members, including an Ask member, get these actions:
+Ordinary members, including an Ask member, get these actions. Restricted specialist profiles do not:
 
 `get`, `brief`, `update`, `tasks`, `task`, `claim`, `release`, `decide`,
 `decisions`, `links`, `artifacts`, `comments`, `activity`, `comment`, `resolve`,

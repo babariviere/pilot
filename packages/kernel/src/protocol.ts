@@ -139,7 +139,8 @@ export interface KernelSpec {
 	usageHistory?: import("./usage-capture.ts").UsageCaptureEpoch;
 	usageMission?: NonNullable<import("@pilot/protocol").UsageObservation["attribution"]>["mission"];
 	/** Runtime-enforced specialist profile. Omitted for ordinary Build and Ask sessions. */
-	role?: "diagnostics";
+	role?: import("@pilot/protocol").SessionRole;
+	insightsBinding?: import("@pilot/protocol").InsightsBinding;
 	/** Host-admitted chat that a diagnostics specialist may inspect. */
 	diagnosticTarget?: DiagnosticTargetReference;
 	/** Host-admitted app scope when no chat is attached. */

@@ -84,6 +84,7 @@ import {
 import { createHistoryRecallTool } from "./history-recall.ts";
 import { submitIdleInput } from "./idle-input.ts";
 import { InputOrigins, inputOrigin } from "./input-origin.ts";
+import { createInsightsHistoryTool } from "./insights-history-tool.ts";
 import { JobsMonitor } from "./jobs.ts";
 import { createKnowledgeTool } from "./knowledge-tools.ts";
 import { createLiveUpdateTools } from "./live-update-tool.ts";
@@ -311,6 +312,40 @@ export class KernelSession {
 	}
 
 	static async open(spec: KernelSpec, hooks: KernelSessionHooks): Promise<KernelSession> {
+		if (spec.role !== undefined && spec.role !== "diagnostics" && spec.role !== "insights")
+			throw new Error("Invalid specialist profile");
+		if (spec.role === "insights") {
+			const b = spec.insightsBinding;
+			if (
+				!b ||
+				b.schemaVersion !== 1 ||
+				!b.enabled ||
+				!Number.isSafeInteger(b.revision) ||
+				b.revision < 1 ||
+				!b.grantId ||
+				b.reportSessionId !== spec.sessionId ||
+				b.projectId !== spec.projectId ||
+				b.missionId !== spec.mission?.id ||
+				spec.mission?.coordinator === "self" ||
+				!b.host?.hostId ||
+				!b.host.daemonId ||
+				!b.host.lineageId ||
+				!spec.pilot?.ask ||
+				spec.pilot.role !== "insights" ||
+				spec.pilot.workspace ||
+				spec.pilot.coordinatorView ||
+				spec.pilot.ask.branch ||
+				spec.repairDiagnostics ||
+				spec.diagnosticTarget ||
+				spec.diagnosticScope ||
+				spec.diagnosticHistoryAccess ||
+				spec.liveUpdateProposals ||
+				spec.databases ||
+				Object.keys(b).sort().join(",") !==
+					"enabled,grantId,host,missionId,projectId,reportSessionId,revision,schemaVersion"
+			)
+				throw new Error("Invalid Insights start envelope");
+		} else if (spec.insightsBinding) throw new Error("Insights binding requires its restricted profile");
 		if (spec.mission?.role === "explorer" && !spec.pilot?.ask)
 			throw new Error("Explorer admission requires the read-only Ask runtime");
 		// Reject obsolete persisted start envelopes before opening storage or loading extensions.
@@ -392,7 +427,8 @@ export class KernelSession {
 					}
 				}
 			: undefined;
-		const missionTools = callMission ? [createMissionTool(callMission, mission.current?.coordinator === "self")] : [];
+		const missionTools =
+			callMission && !spec.role ? [createMissionTool(callMission, mission.current?.coordinator === "self")] : [];
 		// Pending questions are transcript entries, so a restart or a codemode call shows them too.
 		let serializeQuestion = (work: () => Promise<void>) => work();
 		const publishQuestion: PublishQuestion = async (callId, question, signal) => {
@@ -512,7 +548,7 @@ export class KernelSession {
 			const active = await activeConversation(owned.storage, context);
 			const [pinned, ghStack] = await Promise.all([
 				pinnedAgent(owned.storage, active),
-				spec.role === "diagnostics" ? Promise.resolve(false) : detectGhStack(spec.cwd),
+				spec.role ? Promise.resolve(false) : detectGhStack(spec.cwd),
 			]);
 			const pilot = {
 				...spec.pilot,
@@ -520,7 +556,7 @@ export class KernelSession {
 				...(spec.pilot?.executionPermission ? { executionPermission: { ...spec.pilot.executionPermission } } : {}),
 				...(spec.role ? { role: spec.role } : {}),
 				ghStack,
-				projectMemory: spec.role !== "diagnostics" && !!spec.projectId && !!hooks.callMemory,
+				projectMemory: !spec.role && !!spec.projectId && !!hooks.callMemory,
 			};
 			const refreshWorkspace = hooks.prepareWorkspace;
 			const prepareWorkspace = refreshWorkspace
@@ -564,7 +600,7 @@ export class KernelSession {
 			const diagnosticScope = spec.diagnosticTarget
 				? ({ kind: "chat", target: spec.diagnosticTarget } as const)
 				: spec.diagnosticScope;
-			const historyRecall = !spec.pilot?.ask && spec.role !== "diagnostics";
+			const historyRecall = !spec.pilot?.ask && !spec.role;
 			// Ordinary chats may compact to a deterministic digest (opt-in until validated with real providers).
 			const digestCompaction = !deterministicCompactionEnabled()
 				? undefined
@@ -601,6 +637,7 @@ export class KernelSession {
 					: {}),
 				ask: spec.pilot?.ask,
 				diagnostics: spec.role === "diagnostics",
+				insights: spec.role === "insights",
 				diagnosticHistory: spec.role === "diagnostics",
 				agentDir: spec.agentDir,
 				trustDirectory: spec.trustDirectory,
@@ -623,6 +660,9 @@ export class KernelSession {
 				],
 				subagents,
 				hostTools: [
+					...(spec.role === "insights" && hooks.callDiagnosticContext
+						? [createInsightsHistoryTool(hooks.callDiagnosticContext)]
+						: []),
 					...(spec.repairDiagnostics && hooks.callDiagnostics && hooks.callDiagnosticLogs
 						? createRepairDiagnosticsTools(spec.repairDiagnostics, {
 								diagnostics: hooks.callDiagnostics,
@@ -648,7 +688,7 @@ export class KernelSession {
 					...(!spec.pilot?.ask ? [createTodoTool(callTodo, () => spec.sessionId)] : []),
 					...(!spec.pilot?.ask && hooks.callSlackStatus ? [createSlackStatusTool(hooks.callSlackStatus)] : []),
 				],
-				...(spec.role === "diagnostics"
+				...(spec.role
 					? {}
 					: spec.pilot?.ask
 						? { askArtifacts: artifactOptions }
@@ -680,7 +720,7 @@ export class KernelSession {
 			});
 			// Only mission chats declare the tool. It stays registered so joining can enable it live.
 			adapter.coordinatorMemoryActive = () =>
-				!spec.pilot?.ask && spec.role !== "diagnostics" && mission.current?.coordinator === "self";
+				!spec.pilot?.ask && !spec.role && mission.current?.coordinator === "self";
 			if (missionTools.length) adapter.setToolActive(MISSION_TOOL, !!mission.current);
 			if (!spec.pilot?.ask) adapter.setToolActive("todo", mission.current?.coordinator !== "self");
 			// Likewise slack_status, declared once pilotd reports the chat attached to a Slack triage message.
@@ -713,7 +753,7 @@ export class KernelSession {
 			};
 			const coordinatorMemory = new CoordinatorMemory({
 				scope: () =>
-					!spec.pilot?.ask && spec.role !== "diagnostics" && mission.current?.coordinator === "self"
+					!spec.pilot?.ask && !spec.role && mission.current?.coordinator === "self"
 						? mission.current.id
 						: undefined,
 				provider: () => adapter!.model.provider,

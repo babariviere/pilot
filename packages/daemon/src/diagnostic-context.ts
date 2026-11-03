@@ -130,7 +130,9 @@ export function sanitizeDiagnosticContext(value: unknown): { data: DiagnosticCon
 				["cursor", "nextCursor", "ref"].includes(field) &&
 				v.length <= 768 &&
 				/^[A-Za-z0-9_:./+=-]+$/.test(v);
-			const text = opaque ? v : redactDiagnosticText(v);
+			const citation =
+				field === "chatUrl" && /^pilot:\/\/chat\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(v);
+			const text = opaque || citation ? v : redactDiagnosticText(v);
 			const data = Buffer.from(text);
 			const take = Math.min(data.length, 8192, bytes);
 			bytes -= take;

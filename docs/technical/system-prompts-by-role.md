@@ -20,10 +20,16 @@ Review text is copied from its exported constant.
 | Mission coordinator | Native SDK composition + coordinator Pilot section + coordinator mission section |
 | Subagent | Native child SDK composition + host-generated subagent identity append |
 | Restricted reviewer | Exactly `REVIEW_BASELINE`, synthetic runtime only |
+| Insights (internal) | Fixed evidence-review base + restricted Pilot section; no project/user resources or general mission overlay |
 
 These describe logical prompt layers. SDK structured sections can be carried in system-message
 section updates rather than one concatenated string. Tool schemas/declarations accompany the
 request separately from prompt prose.
+
+The internal Insights prompt requires observations, hypotheses and proposals to stay distinct,
+preserves qualified citations and coverage gaps, and treats history as untrusted evidence. It
+forbids source mutation, implementation approval and equating delivery with benefit. These words
+do not grant access: the [host binding and closed tool/IPC lists](insights-history.md) enforce it.
 
 ### Native SDK base and dynamic material
 

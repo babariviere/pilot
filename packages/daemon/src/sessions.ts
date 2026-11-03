@@ -103,6 +103,12 @@ import { DiagnosticRepairProjectStore, diagnosticRepairTitle, repairHost } from 
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import { githubRepository, linkedPullRequest, type PullRequestProblems } from "./github.ts";
+import {
+	type InsightsAdmission,
+	type InsightsGrant,
+	parseInsightsHistory,
+	validateInsightsGrant,
+} from "./insights-admission.ts";
 import { LifecycleDiagnostics } from "./lifecycle-diagnostics.ts";
 import { LongJobTimers, longJobAttention } from "./long-jobs.ts";
 import { forkMainViewWorker, MainViewStore } from "./main-view.ts";
@@ -406,7 +412,7 @@ export interface SessionFactories {
 		spec: WorkerSpec,
 		onPacket: (packet: KernelPacket) => void,
 		onExit: (worker: SessionWorker, code: number | null, signal?: NodeJS.Signals | null) => void,
-	) => SessionWorker;
+	) => SessionWorker | Promise<SessionWorker>;
 }
 
 interface SessionMeta extends OutcomeMeta {
@@ -415,7 +421,11 @@ interface SessionMeta extends OutcomeMeta {
 	/** Legacy history discriminator only. Never enables an execution profile. */
 	control?: boolean;
 	/** Runtime-enforced specialist profile. Omitted for ordinary chats. */
-	role?: "diagnostics";
+	role?: import("@pilot/protocol").SessionRole;
+	/** Host-minted, never copied from SpawnRequest or inherited by children. */
+	insightsGrant?: InsightsGrant;
+	/** Private setup fence. A crash before the final durable save cannot reopen authority. */
+	insightsSetupPending?: true;
 	/** App/host diagnostics without an attached chat. Mutually exclusive with diagnosticTarget. */
 	diagnosticScope?: "app";
 	/** Exact host-local chat admitted for this specialist. */
@@ -1170,9 +1180,12 @@ export class SessionManager {
 
 	configureAutoHandoff(enabled: boolean): void {
 		this.autoHandoff = enabled;
-		for (const worker of this.workers.values()) {
+		for (const [id, worker] of this.workers) {
 			try {
-				worker.send({ type: "autoHandoff.configure", enabled });
+				worker.send({
+					type: "autoHandoff.configure",
+					enabled: this.metas.get(id)?.role === "insights" ? false : enabled,
+				});
 			} catch (error) {
 				console.warn(`pilotd: automatic handoff configuration IPC failed: ${error}`);
 			}
@@ -2648,6 +2661,15 @@ ${run.excerpt}`,
 			try {
 				this.recoverCreateMembership(meta);
 			} catch (error) {
+				if (meta.role === "insights" && meta.insightsGrant?.enabled) {
+					meta.insightsGrant = {
+						...meta.insightsGrant,
+						enabled: false,
+						revision: meta.insightsGrant.revision + 1,
+					};
+					delete meta.insightsSetupPending;
+					delete meta.initializing;
+				}
 				meta.failure = `Create membership recovery: ${error}`;
 				await this.save(meta);
 			}
@@ -3365,6 +3387,176 @@ ${run.excerpt}`,
 	diagnosticFeatureUsage?: (host: OperationHost) => import("@pilot/protocol").FeatureUsageSnapshot;
 	private diagnosticContextReads = new Map<string, AbortController>();
 	private coordinatorSourceReads = new Set<string>();
+	/** Already-admitted own-chat accounting drains before revocation acknowledges. */
+	private readonly insightsAccounting = new Map<string, Set<Promise<void>>>();
+
+	/** Trusted native setup only, after durable operation reservation. No HTTP/model surface mints grants. */
+	async spawnInsightsDurable(
+		setup: { projectId: string; missionId: string; message: string; model: string; thinking?: string },
+		targetId: string,
+		operationId: string,
+	): Promise<SessionSummary> {
+		this.sharing?.assertCreate(targetId, operationId);
+		if (
+			!ID_PATTERN.test(targetId) ||
+			!operationId ||
+			operationId.length > 128 ||
+			Object.keys(setup).some((key) => !["projectId", "missionId", "message", "model", "thinking"].includes(key))
+		)
+			throw new Conflict("Invalid Insights setup");
+		if (!this.diagnosticHost || !this.missions || this.missions.spawnProject(setup.missionId) !== setup.projectId)
+			throw new Conflict("Insights requires a local project and exact active backlog");
+		const setupDigest = createHash("sha256")
+			.update(JSON.stringify([setup.projectId, setup.missionId, setup.message, setup.model, setup.thinking ?? null]))
+			.digest("hex");
+		const key = targetId.toLowerCase();
+		const active = this.durableCreateAdmissions.get(key);
+		if (active) {
+			if (active.targetId !== targetId || active.operationId !== operationId || active.insightsSetup !== setupDigest)
+				throw new Conflict("Insights create identity changed");
+			return active.result;
+		}
+		const end = this.updateGate.begin();
+		const result = (async () => {
+			const existing = this.metas.get(targetId);
+			if (existing) {
+				const grant = existing.insightsGrant;
+				if (
+					existing.createOperationId !== operationId ||
+					existing.role !== "insights" ||
+					grant?.projectId !== setup.projectId ||
+					grant.missionId !== setup.missionId ||
+					grant.setupDigest !== setupDigest
+				)
+					throw new Conflict("Insights create identity changed");
+				this.assertInsightsCurrent(existing);
+				await this.saving.get(targetId);
+				const persisted = JSON.parse(await readFile(join(this.dir(targetId), "meta.json"), "utf8")) as SessionMeta;
+				if (JSON.stringify(persisted.insightsGrant) !== JSON.stringify(grant))
+					throw new Conflict("Insights grant is not committed");
+				this.assertInsightsCurrent(existing);
+				return this.summary(existing);
+			}
+			const grant: InsightsGrant = {
+				schemaVersion: 1,
+				grantId: randomUUID(),
+				revision: 1,
+				enabled: true,
+				reportSessionId: targetId,
+				projectId: setup.projectId,
+				missionId: setup.missionId,
+				host: { ...this.diagnosticHost! },
+				home: resolve(this.home),
+				projectPath: this.projects.require(setup.projectId).path,
+				setupDigest,
+			};
+			validateInsightsGrant(grant);
+			return await this.spawnAdmitted(
+				{ ...setup, role: "insights", mode: "ask", title: "Insights" },
+				false,
+				undefined,
+				{ targetId, operationId },
+				undefined,
+				grant,
+			);
+		})();
+		this.durableCreateAdmissions.set(key, { targetId, operationId, insightsSetup: setupDigest, result });
+		try {
+			return await result;
+		} finally {
+			this.durableCreateAdmissions.delete(key);
+			end();
+		}
+	}
+
+	private assertInsightsBinding(grant: InsightsGrant): void {
+		validateInsightsGrant(grant);
+		if (
+			!grant.enabled ||
+			grant.home !== resolve(this.home) ||
+			this.projects.get(grant.projectId)?.path !== grant.projectPath ||
+			!this.diagnosticHost ||
+			["hostId", "daemonId", "lineageId"].some(
+				(key) => grant.host[key as keyof OperationHost] !== this.diagnosticHost![key as keyof OperationHost],
+			) ||
+			this.missions?.spawnProject(grant.missionId) !== grant.projectId
+		)
+			throw new Conflict("Insights binding changed");
+	}
+
+	private assertInsightsCurrent(meta: SessionMeta): InsightsGrant {
+		const grant = meta.insightsGrant;
+		validateInsightsGrant(grant);
+		this.assertInsightsBinding(grant);
+		const member = this.missions?.membership(meta.id);
+		if (
+			meta.role !== "insights" ||
+			meta.insightsSetupPending ||
+			meta.mode !== "ask" ||
+			!grant.enabled ||
+			meta.archivedAt !== undefined ||
+			grant.reportSessionId !== meta.id ||
+			grant.projectId !== meta.projectId ||
+			grant.home !== resolve(this.home) ||
+			!this.projects.get(grant.projectId) ||
+			!member?.active ||
+			member.missionId !== grant.missionId ||
+			member.coordinator ||
+			!this.diagnosticHost ||
+			["hostId", "daemonId", "lineageId"].some(
+				(key) => grant.host[key as keyof OperationHost] !== this.diagnosticHost![key as keyof OperationHost],
+			) ||
+			this.missions!.spawnProject(grant.missionId) !== grant.projectId
+		)
+			throw new Conflict("Insights authority is unavailable or revoked");
+		return grant;
+	}
+
+	/** Derive identity from the supervised worker. Revalidate inside writes and before returning data. */
+	insightsAdmission(callerId: string, worker: SessionWorker): InsightsAdmission {
+		const meta = this.require(callerId);
+		this.validateMode(meta);
+		const grant = structuredClone(this.assertInsightsCurrent(meta));
+		const revalidate = () => {
+			if (
+				this.workers.get(callerId) !== worker ||
+				this.require(callerId) !== meta ||
+				JSON.stringify(this.assertInsightsCurrent(meta)) !== JSON.stringify(grant)
+			)
+				throw new Conflict("Insights admission changed");
+		};
+		revalidate();
+		const { home: _home, projectPath: _path, setupDigest: _digest, ...binding } = grant;
+		Object.freeze(binding.host);
+		return { binding: Object.freeze(binding), revalidate };
+	}
+
+	/** Trusted revocation closes admission synchronously, then durably acknowledges. Never re-enables. */
+	async revokeInsights(id: string, expectedRevision: number): Promise<void> {
+		const meta = this.require(id);
+		validateInsightsGrant(meta.insightsGrant);
+		if (meta.role !== "insights" || meta.insightsGrant.revision !== expectedRevision)
+			throw new Conflict("Insights grant revision changed");
+		meta.insightsGrant = { ...meta.insightsGrant, enabled: false, revision: expectedRevision + 1 };
+		await this.persistInsightsRevocation(meta);
+	}
+
+	private async persistInsightsRevocation(meta: SessionMeta): Promise<void> {
+		await Promise.all(this.insightsAccounting.get(meta.id) ?? []);
+		await this.save(meta, undefined, undefined, true);
+	}
+
+	private async insightsHistory(callerId: string, worker: SessionWorker, input: unknown, signal?: AbortSignal) {
+		const admission = this.insightsAdmission(callerId, worker);
+		const request = parseInsightsHistory(input);
+		const result = await awaitDiagnosticRead(
+			this.readDiagnosticContext({ ...request, host: admission.binding.host }, signal),
+			signal,
+		);
+		admission.revalidate();
+		if (signal?.aborted) throw new Conflict("Insights read cancelled");
+		return result;
+	}
 
 	/** Authorization comes only from supervised worker identity, never request fields. */
 	async diagnosticContext(callerId: string, input: unknown, signal?: AbortSignal): Promise<DiagnosticContextResponse> {
@@ -3913,8 +4105,29 @@ ${run.excerpt}`,
 
 	/** Membership or mission context changed: republish the summary and update a live kernel's context. */
 	missionChanged(id: string, context = this.missions?.context(id), passive = false): void {
+		const insights = this.metas.get(id);
+		if (insights?.role === "insights" && insights.insightsGrant?.enabled && !insights.insightsSetupPending) {
+			try {
+				this.assertInsightsCurrent(insights);
+			} catch {
+				insights.insightsGrant = {
+					...insights.insightsGrant,
+					enabled: false,
+					revision: insights.insightsGrant.revision + 1,
+				};
+				void this.persistInsightsRevocation(insights).catch((error) =>
+					console.warn("Could not persist Insights revocation", error),
+				);
+			}
+		}
 		const meta = this.metas.get(id);
 		if (!meta) return;
+		if (meta.role === "insights") {
+			// Restricted reports never acquire coordinator workspaces or lifecycle powers.
+			this.workers.get(id)?.send({ type: "mission.context", ...(context ? { context } : {}) });
+			this.emit(meta);
+			return;
+		}
 		if (context?.coordinator === "self" && (context.status === "archived" || context.status === "done"))
 			this.coordinatorArchiveMissions.set(id, {
 				id: context.id,
@@ -4019,6 +4232,7 @@ ${run.excerpt}`,
 		}
 		const meta = this.require(id);
 		const promote = this.isMissionCoordinator(id);
+		if (meta.role === "insights") return;
 		if (meta.continuedTo || meta.continuationPending || this.changingModels.has(id)) return;
 		const worker = this.workers.get(id);
 		if (
@@ -4855,6 +5069,8 @@ ${run.excerpt}`,
 		let locked = false;
 		try {
 			const meta = this.require(id);
+			if (meta.role === "insights" || meta.insightsGrant)
+				throw new Conflict("Insights cannot transfer its restricted profile through continuation");
 			if (this.sharing?.membership(id)) this.assertNotContinued(meta);
 			if (this.changingModels.has(id)) throw new Conflict("Session is changing configuration");
 			if (meta.continuedTo) {
@@ -5099,6 +5315,8 @@ ${run.excerpt}`,
 	}
 
 	private async applyContinuation(source: SessionMeta, target: SessionMeta): Promise<void> {
+		if (source.role === "insights" || source.insightsGrant || target.role === "insights" || target.insightsGrant)
+			throw new Conflict("Insights cannot transfer its restricted profile through continuation");
 		if (source.continuedTo && source.continuedTo !== target.id)
 			throw new Conflict("Chat already continued elsewhere");
 		source.continuedTo = target.id;
@@ -5402,7 +5620,30 @@ ${run.excerpt}`,
 
 	/** Corrupt metadata must never silently reopen an Ask chat as an unrestricted Build kernel. */
 	private validateMode(meta: SessionMeta, prepared = false): void {
-		if (meta.role !== undefined && meta.role !== "diagnostics") throw new Error("Invalid session role");
+		if (meta.role !== undefined && meta.role !== "diagnostics" && meta.role !== "insights")
+			throw new Error("Invalid session role");
+		if (meta.role === "insights") {
+			validateInsightsGrant(meta.insightsGrant);
+			if (
+				meta.mode !== "ask" ||
+				meta.control ||
+				meta.workspace ||
+				meta.preparing ||
+				meta.coordinatorView ||
+				meta.repairDiagnostics ||
+				meta.diagnosticScope ||
+				meta.diagnosticTarget ||
+				meta.diagnosticHost ||
+				meta.diagnosticTargetId ||
+				meta.diagnosticHistoryAccess ||
+				meta.diagnosticRepairProposal ||
+				meta.diagnosticRepairStart ||
+				meta.insightsGrant.reportSessionId !== meta.id ||
+				meta.insightsGrant.projectId !== meta.projectId ||
+				meta.insightsGrant.home !== resolve(this.home)
+			)
+				throw new Conflict("Invalid Insights profile");
+		} else if (meta.insightsGrant !== undefined) throw new Conflict("Insights grant requires its restricted profile");
 		if (meta.control) {
 			if (
 				meta.mode !== "ask" ||
@@ -5553,18 +5794,19 @@ ${run.excerpt}`,
 	// IDs on disk and in receipts retain their original bytes on both case-sensitive and APFS hosts.
 	private readonly durableCreateAdmissions = new Map<
 		string,
-		{ targetId: string; operationId: string; result: Promise<SessionSummary> }
+		{ targetId: string; operationId: string; insightsSetup?: string; result: Promise<SessionSummary> }
 	>();
 	private readonly newSessionAdmissions = new Set<string>();
 
 	/** Called only after durable operation reservation. Crash recovery uses this exact target/input ID. */
 	async spawnDurable(request: SpawnRequest, targetId: string, operationId: string): Promise<SessionSummary> {
+		if (request.role === "insights") throw new Conflict("Insights requires trusted native admission");
 		this.sharing?.assertCreate(targetId, operationId);
 		if (!ID_PATTERN.test(targetId)) throw new Conflict("Invalid reserved session ID");
 		const key = targetId.toLowerCase();
 		const active = this.durableCreateAdmissions.get(key);
 		if (active) {
-			if (active.targetId !== targetId || active.operationId !== operationId)
+			if (active.targetId !== targetId || active.operationId !== operationId || active.insightsSetup)
 				throw new Conflict("Reserved session ID aliases another admission");
 			return active.result;
 		}
@@ -5575,6 +5817,7 @@ ${run.excerpt}`,
 		const result = (async () => {
 			const existing = this.metas.get(targetId);
 			if (existing) {
+				if (existing.role === "insights") throw new Conflict("Insights requires trusted native admission");
 				if (existing.createOperationId !== operationId)
 					throw new Conflict("Reserved session belongs to another operation");
 				await this.saving.get(targetId);
@@ -5629,6 +5872,10 @@ ${run.excerpt}`,
 	}
 
 	private recoverCreateMembership(meta: SessionMeta): void {
+		if (meta.role === "insights") {
+			this.assertInsightsCurrent(meta);
+			return;
+		}
 		if (!meta.createMissionId) return;
 		if (!this.missions) throw new Conflict("Create requires its original mission store");
 		const membership = this.missions.membership(meta.id);
@@ -6119,11 +6366,27 @@ ${run.excerpt}`,
 		taskId?: string | string[],
 		admission?: { targetId: string; operationId: string },
 		missionAdmission?: MissionSpawnAdmission,
+		insightsGrant?: InsightsGrant,
 	): Promise<SessionSummary> {
 		if (missionAdmission?.role === "explorer" && (request.mode !== "ask" || coordinator))
 			throw new Conflict("Explorer admission requires a non-coordinator Ask session");
 		if (typeof request.message !== "string" || !request.message.trim()) throw new Error("message is required");
-		if (request.role !== undefined && request.role !== "diagnostics") throw new Error("Unknown session role");
+		if (
+			request.role === "insights" &&
+			(!insightsGrant ||
+				coordinator ||
+				request.projectId !== insightsGrant.projectId ||
+				request.missionId !== insightsGrant.missionId ||
+				admission?.targetId !== insightsGrant.reportSessionId ||
+				request.mode !== "ask" ||
+				request.cwd !== undefined ||
+				request.workspace !== undefined ||
+				request.baseBranch !== undefined ||
+				request.diagnosticRepair !== undefined)
+		)
+			throw new Conflict("Insights requires trusted native admission");
+		if (request.role !== undefined && request.role !== "diagnostics" && request.role !== "insights")
+			throw new Error("Unknown session role");
 		if (request.mode !== undefined && request.mode !== "build" && request.mode !== "ask")
 			throw new Error("mode must be build or ask");
 		if (request.workspace !== undefined && request.workspace !== "clone" && request.workspace !== "direct")
@@ -6253,6 +6516,7 @@ ${run.excerpt}`,
 		// A replaced proposal cannot borrow an earlier native confirmation.
 		this.assertDiagnosticRepairAdmission(request);
 		try {
+			if (insightsGrant) this.assertInsightsBinding(insightsGrant);
 			await mkdir(this.dir(id), { recursive: true, mode: 0o700 });
 		} catch (error) {
 			this.newSessionAdmissions.delete(folded);
@@ -6277,6 +6541,7 @@ ${run.excerpt}`,
 		const meta: SessionMeta = {
 			id,
 			...(request.role ? { role: request.role } : {}),
+			...(insightsGrant ? { insightsGrant, insightsSetupPending: true as const } : {}),
 			...(request.diagnosticScope === "app" ? { diagnosticScope: "app" as const } : {}),
 			...(request.diagnosticScope === "app" && this.diagnosticHost
 				? { diagnosticHost: request.diagnosticHost ?? this.diagnosticHost }
@@ -6316,6 +6581,7 @@ ${run.excerpt}`,
 		try {
 			if (request.diagnosticRepair) await this.repairProject.validateCurrent(request.diagnosticRepair.binding);
 			this.assertDiagnosticRepairAdmission(request);
+			if (insightsGrant) this.assertInsightsBinding(insightsGrant);
 			await this.save(meta, undefined, undefined, Boolean(admission));
 			if (request.diagnosticRepair) await this.repairProject.validateCurrent(request.diagnosticRepair.binding);
 			this.assertDiagnosticRepairAdmission(request);
@@ -6324,8 +6590,29 @@ ${run.excerpt}`,
 				// The new chat may act on its membership as soon as it starts.
 				await this.missions!.whenDurable?.();
 			}
+			if (insightsGrant) {
+				delete meta.insightsSetupPending;
+				this.assertInsightsCurrent(meta);
+				await this.save(meta, undefined, undefined, true);
+				this.assertInsightsCurrent(meta);
+			}
 		} catch (error) {
 			// Admission may lose a coordinator/task claim or race a closed mission.
+			if (insightsGrant) {
+				// Retain a disabled tombstone even for unknown durability. Exact create retries
+				// must not mint fresh authority after revocation or an interrupted setup.
+				meta.insightsGrant = {
+					...(meta.insightsGrant ?? insightsGrant),
+					enabled: false,
+					revision: (meta.insightsGrant ?? insightsGrant).revision + 1,
+				};
+				meta.failure = "Insights setup did not complete";
+				delete meta.insightsSetupPending;
+				delete meta.initializing;
+				this.missions?.leaveSpawn?.(id);
+				await this.save(meta, undefined, undefined, true);
+				throw error;
+			}
 			this.missions?.leaveSpawn?.(id);
 			// Promotion and rollback can queue metadata writes. Drain them before removing their directory,
 			// and preserve the admission error even if one of those writes failed.
@@ -7050,6 +7337,7 @@ ${run.excerpt}`,
 	 */
 	private async deliver(id: string, worker: SessionWorker, command: PendingCommand): Promise<void> {
 		if (command.type !== "input") return worker.request(command);
+		const insights = this.require(id).role === "insights" ? this.insightsAdmission(id, worker) : undefined;
 		this.delivering.set(id, command.requestId);
 		const traceKey = this.inputTraceKey(id, command.requestId);
 		const trace = this.inputTraces.get(traceKey);
@@ -7071,6 +7359,7 @@ ${run.excerpt}`,
 				(command.onlyIfIdle && this.require(id).pending?.some((pending) => pending !== command))
 			)
 				throw new CommandRejected("Input withdrawn before admission", "busy");
+			insights?.revalidate();
 			await worker.request(trace ? { ...command, trace } : command);
 			settled = true;
 		} catch (error) {
@@ -8804,7 +9093,7 @@ ${run.excerpt}`,
 			}
 			await this.syncSubscriptionPolicy(this.require(id));
 			// Edits to the database config apply to the next kernel without restarting pilotd.
-			await this.databases?.refresh();
+			if (this.require(id).role !== "insights") await this.databases?.refresh();
 			return this.openWorker(id);
 		});
 	}
@@ -8903,15 +9192,28 @@ ${run.excerpt}`,
 		const liveUpdateProjectId = meta.projectId;
 		const liveUpdateProposals =
 			this.canProposeLiveUpdate(meta) && (await this.liveUpdate!.eligible(liveUpdateProjectId!).catch(() => false));
+		const insightsGrant = meta.role === "insights" ? this.assertInsightsCurrent(meta) : undefined;
+		const insightsBinding = insightsGrant
+			? (() => {
+					const {
+						home: _home,
+						projectPath: _path,
+						setupDigest: _digest,
+						...binding
+					} = structuredClone(insightsGrant);
+					return binding;
+				})()
+			: undefined;
 		// Only the factory's synchronous prefix. Awaited isolation/readiness is not main-thread CPU work.
 		const opening = operations.time("worker.construct", () =>
 			createWorker(
 				{
 					sessionId: id,
+					...(insightsBinding ? { insightsBinding } : {}),
 					...(liveUpdateProposals && meta.projectId === liveUpdateProjectId && this.canProposeLiveUpdate(meta)
 						? { liveUpdateProposals: true }
 						: {}),
-					autoHandoff: this.autoHandoff,
+					autoHandoff: meta.role === "insights" ? false : this.autoHandoff,
 					...(repairDiagnostics ? { repairDiagnostics } : {}),
 					...(usageHistory ? { usageHistory } : {}),
 					...(usageMission ? { usageMission } : {}),
@@ -8978,6 +9280,16 @@ ${run.excerpt}`,
 		// Preserve synchronous fixture factories, and publish before replaying callbacks from an
 		// asynchronously prepared isolated process. No callback may observe an uninitialized owner.
 		const worker = opening instanceof Promise ? await opening : opening;
+		if (insightsGrant) {
+			try {
+				this.assertInsightsCurrent(meta);
+				if (JSON.stringify(meta.insightsGrant) !== JSON.stringify(insightsGrant))
+					throw new Conflict("Insights changed during startup");
+			} catch (error) {
+				await worker.close();
+				throw error;
+			}
+		}
 		if (overflow) {
 			await worker.close();
 			throw new Error("Kernel startup packet limit exceeded");
@@ -8986,7 +9298,7 @@ ${run.excerpt}`,
 			published = worker;
 			this.workers.set(id, worker);
 			// The saved setting may have changed while the asynchronous factory prepared isolation.
-			worker.send({ type: "autoHandoff.configure", enabled: this.autoHandoff });
+			worker.send({ type: "autoHandoff.configure", enabled: meta.role === "insights" ? false : this.autoHandoff });
 			this.nextWorkerLaunchReason.delete(id);
 			this.aiUsage.observeWorkerLaunch(id, launchReason);
 			for (const packet of earlyPackets) this.onPacket(meta, worker, packet);
@@ -9060,27 +9372,81 @@ ${run.excerpt}`,
 
 	private onPacket(meta: SessionMeta, worker: SessionWorker, packet: KernelPacket): void {
 		if (this.parked.has(worker)) return;
+		// Independent host boundary, including forged IPC from an otherwise restricted kernel.
+		if (meta.role === "insights") {
+			if (this.workers.get(meta.id) !== worker) return;
+			const denied = {
+				"mission.call": "mission.result",
+				"memory.call": "memory.result",
+				"knowledge.call": "knowledge.result",
+				"database.call": "database.result",
+				"slack.call": "slack.result",
+				"liveUpdate.propose": "liveUpdate.result",
+				"diagnostics.call": "diagnostics.result",
+				"diagnostics.history.call": "diagnostics.history.result",
+				"diagnostics.logs.call": "diagnostics.logs.result",
+				"diagnostics.proposal": "diagnostics.proposal.result",
+				"artifact.reference.get": "artifact.reference.result",
+				"source.scope": "source.scope.result",
+			} as const;
+			const resultType = denied[packet.type as keyof typeof denied];
+			if (resultType && "callId" in packet) {
+				if (this.workers.get(meta.id) === worker)
+					worker.send({ type: resultType, callId: packet.callId, error: "Insights denies this capability" });
+				return;
+			}
+			// Closed status/read transport. New packet capabilities are denied until explicitly admitted.
+			if (
+				![
+					"diagnostics.context.call",
+					"diagnostics.context.cancel",
+					"usage-history.epoch",
+					"usage-history",
+					"update.paused",
+					"accepted",
+					"aborted",
+					"ready",
+					"working",
+					"error",
+					"usage",
+					"modelChanged",
+					"rewound",
+					"events",
+					"compacting",
+					"tools.running",
+					"tool.activity",
+					"subscription.limit",
+				].includes(packet.type)
+			)
+				return;
+		}
 		if (packet.type === "usage-history.epoch") {
 			if (this.workers.get(meta.id) !== worker) return;
-			void this.usageHistory.status().then(
-				({ generation, captureFloor, retentionFloor }) =>
-					worker.send({
-						type: "usage-history.epoch.result",
-						callId: packet.callId,
-						result: {
-							generation,
-							captureFloor,
-							retentionFloor,
-							mission: this.missions?.usageAttribution?.(meta.id),
-						},
-					}),
-				() =>
-					worker.send({
-						type: "usage-history.epoch.result",
-						callId: packet.callId,
-						error: "Usage history unavailable",
-					}),
-			);
+			void Promise.resolve()
+				.then(async () => {
+					const admission = meta.role === "insights" ? this.insightsAdmission(meta.id, worker) : undefined;
+					const { generation, captureFloor, retentionFloor } = await this.usageHistory.status();
+					admission?.revalidate();
+					if (this.workers.get(meta.id) === worker)
+						worker.send({
+							type: "usage-history.epoch.result",
+							callId: packet.callId,
+							result: {
+								generation,
+								captureFloor,
+								retentionFloor,
+								mission: this.missions?.usageAttribution?.(meta.id),
+							},
+						});
+				})
+				.catch(() => {
+					if (this.workers.get(meta.id) === worker)
+						worker.send({
+							type: "usage-history.epoch.result",
+							callId: packet.callId,
+							error: "Usage history unavailable",
+						});
+				});
 			return;
 		}
 		if (packet.type === "update.paused") {
@@ -9109,11 +9475,49 @@ ${run.excerpt}`,
 		if (this.parked.has(worker)) return;
 		if (packet.type === "usage-history") {
 			if (this.workers.get(meta.id) !== worker) return;
-			void this.usageHistory.put(packet.row).then(
-				(result) => worker.send({ type: "usage-history.result", callId: packet.callId, result }),
-				() =>
-					worker.send({ type: "usage-history.result", callId: packet.callId, error: "Usage history unavailable" }),
-			);
+			const writing = Promise.resolve()
+				.then(async () => {
+					const admission = meta.role === "insights" ? this.insightsAdmission(meta.id, worker) : undefined;
+					// Accounting is not model authority to write another chat's attribution or source namespace.
+					const row = admission
+						? {
+								...packet.row,
+								sourceId: admission.binding.grantId,
+								operationId: createHash("sha256")
+									.update(JSON.stringify([packet.row.sourceId, packet.row.operationId]))
+									.digest("hex"),
+								scope: "direct" as const,
+								parent: undefined,
+								attribution: {
+									chatId: meta.id,
+									projectId: meta.projectId,
+									mission: this.missions?.usageAttribution?.(meta.id),
+								},
+							}
+						: packet.row;
+					admission?.revalidate();
+					const result = await this.usageHistory.put(row);
+					admission?.revalidate();
+					if (this.workers.get(meta.id) === worker)
+						worker.send({ type: "usage-history.result", callId: packet.callId, result });
+				})
+				.catch(() => {
+					if (this.workers.get(meta.id) === worker)
+						worker.send({
+							type: "usage-history.result",
+							callId: packet.callId,
+							error: "Usage history unavailable",
+						});
+				});
+			if (meta.role === "insights") {
+				const pending = this.insightsAccounting.get(meta.id) ?? new Set<Promise<void>>();
+				this.insightsAccounting.set(meta.id, pending);
+				pending.add(writing);
+				void writing.finally(() => {
+					pending.delete(writing);
+					if (!pending.size) this.insightsAccounting.delete(meta.id);
+				});
+			}
 			return;
 		}
 		if (
@@ -9265,6 +9669,7 @@ ${run.excerpt}`,
 			return;
 		}
 		if (packet.type === "diagnostics.context.call") {
+			let insights: InsightsAdmission | undefined;
 			const key = `${meta.id}:${packet.callId}`;
 			const controller = new AbortController();
 			const timer = setTimeout(() => controller.abort(), 10_000);
@@ -9278,21 +9683,27 @@ ${run.excerpt}`,
 				return;
 			}
 			this.diagnosticContextReads.set(key, controller);
-			void this.diagnosticContext(meta.id, packet.request, controller.signal)
-				.then(
-					(result) => {
-						if (this.workers.get(meta.id) === worker && !controller.signal.aborted)
-							worker.send({ type: "diagnostics.context.result", callId: packet.callId, result });
-					},
-					() => {
-						if (this.workers.get(meta.id) === worker)
-							worker.send({
-								type: "diagnostics.context.result",
-								callId: packet.callId,
-								error: "Diagnostic evidence is unavailable",
-							});
-					},
-				)
+			void Promise.resolve()
+				.then(() => {
+					if (this.workers.get(meta.id) !== worker) throw new Conflict("Worker changed");
+					if (meta.role === "insights") insights = this.insightsAdmission(meta.id, worker);
+					return meta.role === "insights"
+						? this.insightsHistory(meta.id, worker, packet.request, controller.signal)
+						: this.diagnosticContext(meta.id, packet.request, controller.signal);
+				})
+				.then((result) => {
+					insights?.revalidate();
+					if (this.workers.get(meta.id) === worker && !controller.signal.aborted)
+						worker.send({ type: "diagnostics.context.result", callId: packet.callId, result });
+				})
+				.catch(() => {
+					if (this.workers.get(meta.id) === worker)
+						worker.send({
+							type: "diagnostics.context.result",
+							callId: packet.callId,
+							error: "Diagnostic evidence is unavailable",
+						});
+				})
 				.finally(() => {
 					clearTimeout(timer);
 					this.diagnosticContextReads.delete(key);
@@ -11145,11 +11556,16 @@ ${run.excerpt}`,
 		const snapshot = operations.time("sessions.metadata.capture", () => `${JSON.stringify(meta, null, "\t")}\n`);
 		const bindingOperation = meta.prBindingOperation;
 		const write = async () => {
+			// Any queued lifecycle save may carry the tombstone, not only the revoker's save.
+			if (meta.insightsGrant?.enabled === false) await Promise.all(this.insightsAccounting.get(meta.id) ?? []);
 			const file = join(this.dir(meta.id), "meta.json");
 			const temp = `${file}.${randomUUID()}.tmp`;
 			const persisted = operations.time("sessions.metadata.parse", () => JSON.parse(snapshot) as SessionMeta);
 			// Preserve the immutable execution ceiling across queued lifecycle snapshots.
 			persisted.executionPermission = meta.executionPermission;
+			// Captured lifecycle snapshots must never resurrect an earlier enabled grant.
+			if (meta.insightsGrant) persisted.insightsGrant = structuredClone(meta.insightsGrant);
+			else delete persisted.insightsGrant;
 			// Continuation fencing must survive lifecycle snapshots queued before the ownership commit.
 			for (const key of ["continuedTo", "continuationOf", "continuationPending", "workspaceOriginId"] as const) {
 				if (meta[key] === undefined) delete persisted[key];

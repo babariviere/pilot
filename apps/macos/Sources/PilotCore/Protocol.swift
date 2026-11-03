@@ -44,6 +44,7 @@ public enum ChatMode: String, Codable, Hashable, Sendable {
 
 public enum SessionRole: String, Codable, Hashable, Sendable {
     case diagnostics
+    case insights
 }
 
 public enum DiagnosticScope: String, Codable, Hashable, Sendable {

@@ -10,6 +10,9 @@ import { join } from "node:path";
 import { mock, type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { JsonValue } from "@earendil-works/chord";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { createModels } from "@earendil-works/pi-ai/models";
+import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import type { KernelCommand, KernelPacket, KernelSubagent, KernelUsage } from "@pilot/kernel";
 import type {
 	AgentEvent,
@@ -23,6 +26,7 @@ import type {
 	SessionTrackedSource,
 } from "@pilot/protocol";
 import { WebSocket } from "ws";
+import { openSessionStorage } from "../../kernel/src/storage.ts";
 import { DATABASE_CONFIG_FILE, DatabaseService } from "./databases.ts";
 import { diagnosticContextResponse } from "./diagnostic-context.ts";
 import { Conflict, NotFound } from "./errors.ts";
@@ -1262,6 +1266,717 @@ async function fixture(t: TestContext) {
 	});
 	return { root, home, source, projects, project, workers, workerFactory, manager, stored };
 }
+
+async function insightsFixture(t: TestContext, factories: SessionFactories = {}) {
+	const f = await fixture(t);
+	const members = new Map<string, string>();
+	const promoted = new Set<string>();
+	let missionActive = true;
+	let broadCalls = 0;
+	const bridge: Parameters<SessionManager["setMissionBridge"]>[0] = {
+		spawnProject: (id) => {
+			if (id !== "backlog" || !missionActive) throw new Conflict("Backlog unavailable");
+			return f.project.id;
+		},
+		joinSpawn: (id, missionId) => {
+			members.set(id, missionId);
+		},
+		leaveSpawn: (id) => {
+			members.delete(id);
+		},
+		membership: (id) =>
+			members.has(id)
+				? { missionId: members.get(id)!, active: missionActive, coordinator: promoted.has(id) }
+				: undefined,
+		context: (id) =>
+			members.has(id)
+				? {
+						id: members.get(id)!,
+						title: "Example backlog",
+						goal: "",
+						status: "active",
+						coordinator: promoted.has(id) ? "self" : "other",
+						tasks: [],
+						decisions: [],
+					}
+				: undefined,
+		call: async () => {
+			broadCalls++;
+			return {};
+		},
+	};
+	const manager = () => f.manager(factories, { diagnosticHost }, {}, (m) => m.setMissionBridge(bridge));
+	const sessions = await manager();
+	const setup = {
+		projectId: f.project.id,
+		missionId: "backlog",
+		model: "test/offline",
+		message: "Review synthetic evidence",
+	};
+	const id = randomUUID();
+	const operationId = randomUUID();
+	const report = await sessions.spawnInsightsDurable(setup, id, operationId);
+	await sessions["starting"].get(id);
+	const worker = sessions["workers"].get(id)! as FakeWorker;
+	assert.ok(worker);
+	return {
+		...f,
+		sessions,
+		manager,
+		setup,
+		id,
+		operationId,
+		report,
+		worker,
+		members,
+		promoted,
+		bridge,
+		closeMission: () => {
+			missionActive = false;
+		},
+		broadCalls: () => broadCalls,
+	};
+}
+
+test("Insights grant is private, reserved, replay-exact and not generic spawn authority", async (t) => {
+	const f = await insightsFixture(t);
+	const { sessions, setup, id, operationId } = f;
+	assert.equal(f.report.role, "insights");
+	assert.equal(f.worker.spec.role, "insights");
+	assert.equal(f.worker.spec.insightsBinding?.reportSessionId, id);
+	assert.doesNotMatch(JSON.stringify(f.worker.spec.insightsBinding), /home|projectPath|setupDigest/);
+	assert.equal((await sessions.spawnInsightsDurable(setup, id, operationId)).id, id);
+	await assert.rejects(
+		sessions.spawnInsightsDurable({ ...setup, message: "Changed" }, id, operationId),
+		/identity changed/,
+	);
+	await assert.rejects(sessions.spawnInsightsDurable(setup, id, randomUUID()), /identity changed/);
+	await assert.rejects(
+		sessions.spawnDurable({ ...setup, mode: "ask", role: "insights" }, randomUUID(), randomUUID()),
+		/trusted/,
+	);
+	await assert.rejects(sessions.spawn({ ...setup, mode: "ask", role: "insights" }), /trusted/);
+	await assert.rejects(sessions.spawnDurable({ ...setup, mode: "ask" }, id, operationId), /trusted/);
+	const next = randomUUID(),
+		op = randomUUID();
+	const replays = await Promise.all([
+		sessions.spawnInsightsDurable(setup, next, op),
+		sessions.spawnInsightsDurable(setup, next, op),
+	]);
+	assert.equal(replays[0].id, replays[1].id);
+	await sessions["starting"].get(next);
+	assert.equal(f.workers.filter((w) => w.spec.sessionId === next).length, 1);
+});
+
+test("Insights reads bounded cross-project archived evidence without source wake or write", async (t) => {
+	let reads = 0;
+	const f = await insightsFixture(t, {
+		diagnosticHistoryRead: async (_directory, target, before, limit) => {
+			reads++;
+			return {
+				schemaVersion: 1,
+				target,
+				collectedAt: "2026-01-01T00:00:00.000Z",
+				source: { availability: "available", freshness: "fresh" },
+				entries: [
+					{
+						ref: "diagnostic-history:v1:synthetic",
+						entryId: 4,
+						kind: "pi.user",
+						excerpt: "password=synthetic-secret",
+						originalBytes: 10000,
+						truncated: true,
+					},
+				],
+				pagination: {
+					before,
+					more: true,
+					nextBefore: 4,
+					returned: 1,
+					limit,
+					scannedEntries: 20,
+					maxScannedEntries: 200,
+					encodedBytes: 100,
+					maxBytes: 65536,
+					perEntryMaxBytes: 8192,
+					truncatedEntries: 1,
+				},
+			};
+		},
+	});
+	const { sessions, id, worker } = f;
+	const secondPath = join(f.root, "other");
+	await mkdir(secondPath);
+	const second = await f.projects.create({ path: secondPath });
+	const source = await sessions.spawn({ projectId: second.id, mode: "ask", message: "Archived example" });
+	await sessions["starting"].get(source.id);
+	sessions["metas"].get(source.id)!.archivedAt = Date.now();
+	const sourceWorker = sessions["workers"].get(source.id)!;
+	sessions["workers"].delete(source.id);
+	const count = f.workers.length;
+	const before = sessions.get(source.id);
+	const chats = await sessions["insightsHistory"](id, worker, { action: "chats", limit: 1 });
+	assert.equal(chats.page.more, true);
+	const rest = await sessions["insightsHistory"](id, worker, { action: "chats", after: chats.page.after, limit: 20 });
+	assert.match(JSON.stringify(rest), new RegExp(source.id));
+	assert.match(JSON.stringify(rest), /archivedAt/);
+	const history = await sessions["insightsHistory"](id, worker, {
+		action: "history",
+		sessionId: source.id,
+		before: 30,
+		limit: 2,
+	});
+	assert.equal(history.page.before, 4);
+	assert.equal(history.page.truncated, true);
+	assert.equal(history.status, "available"); // Entry-level truncation is explicit in page, not hidden.
+	assert.deepEqual(history.host, diagnosticHost);
+	assert.match(JSON.stringify(history), new RegExp(source.id));
+	assert.doesNotMatch(JSON.stringify(history), /synthetic-secret/);
+	assert.ok(Buffer.byteLength(JSON.stringify(history)) < 65536);
+	const missing = await sessions["insightsHistory"](id, worker, { action: "history", sessionId: randomUUID() });
+	assert.equal(missing.status, "missing");
+	assert.equal(reads, 1);
+	for (const request of [
+		{ action: "logs" },
+		{ action: "missions" },
+		{ action: "features" },
+		{ action: "history", sessionId: source.id, host: diagnosticHost },
+		{ action: "chats", limit: 21 },
+		{ action: "chats", path: "/tmp" },
+	])
+		await assert.rejects(sessions["insightsHistory"](id, worker, request));
+	const unsupported = await sessions["insightsHistory"](id, worker, { action: "projects" });
+	assert.equal(unsupported.status, "unavailable");
+	await assert.rejects(sessions.diagnosticContext(id, { action: "chats" }), /Only diagnostics/);
+	assert.equal(f.workers.length, count);
+	assert.deepEqual(sessions.get(source.id), before);
+	sessions["workers"].set(source.id, sourceWorker);
+});
+
+test("Insights admission fences revocation, membership changes, worker replacement and project moves", async (t) => {
+	let release!: () => void, entered!: () => void;
+	const held = new Promise<void>((r) => {
+		release = r;
+	});
+	const reading = new Promise<void>((r) => {
+		entered = r;
+	});
+	const f = await insightsFixture(t, {
+		diagnosticHistoryRead: async (_dir, target) => {
+			entered();
+			await held;
+			return {
+				schemaVersion: 1,
+				target,
+				collectedAt: "2026-01-01T00:00:00.000Z",
+				source: { availability: "missing", freshness: "unavailable" },
+				entries: [],
+				pagination: {
+					more: false,
+					returned: 0,
+					limit: 8,
+					scannedEntries: 0,
+					maxScannedEntries: 200,
+					encodedBytes: 0,
+					maxBytes: 65536,
+					perEntryMaxBytes: 8192,
+					truncatedEntries: 0,
+				},
+			};
+		},
+	});
+	t.after(release);
+	const { sessions, id, worker } = f;
+	const lease = sessions.insightsAdmission(id, worker);
+	const read = sessions["insightsHistory"](id, worker, { action: "history", sessionId: id });
+	await reading;
+	await sessions.revokeInsights(id, lease.binding.revision);
+	release();
+	await assert.rejects(read, /changed|revoked/);
+	assert.throws(lease.revalidate);
+	await assert.rejects(sessions.revokeInsights(id, lease.binding.revision), /revision changed/);
+	const fresh = await sessions.spawnInsightsDurable(f.setup, randomUUID(), randomUUID());
+	await sessions["starting"].get(fresh.id);
+	const freshWorker = sessions["workers"].get(fresh.id)!;
+	const current = sessions.insightsAdmission(fresh.id, freshWorker);
+	sessions["workers"].delete(fresh.id);
+	assert.throws(current.revalidate, /changed/);
+	sessions["workers"].set(fresh.id, freshWorker);
+	const project = f.projects.get(f.project.id)!;
+	const path = project.path;
+	project.path = join(f.root, "moved");
+	assert.throws(current.revalidate, /binding changed/);
+	project.path = path;
+	f.members.delete(fresh.id);
+	sessions.missionChanged(fresh.id);
+	f.members.set(fresh.id, "backlog");
+	assert.throws(current.revalidate, /changed|revoked/);
+});
+
+test("Insights forged IPC cannot call broad capabilities or deliver stale evidence", async (t) => {
+	const f = await insightsFixture(t);
+	const { sessions, id, worker } = f;
+	const meta = sessions["metas"].get(id)!;
+	for (const type of [
+		"mission.call",
+		"memory.call",
+		"knowledge.call",
+		"database.call",
+		"slack.call",
+		"liveUpdate.propose",
+		"diagnostics.call",
+		"diagnostics.history.call",
+		"diagnostics.logs.call",
+		"diagnostics.proposal",
+		"artifact.reference.get",
+		"source.scope",
+	])
+		sessions["onPacket"](meta, worker, {
+			type,
+			callId: type,
+			request: { action: "spawn" },
+		} as unknown as KernelPacket);
+	assert.equal(worker.sent.filter((p) => "error" in p && p.error === "Insights denies this capability").length, 12);
+	assert.equal(f.broadCalls(), 0);
+	const count = f.workers.length;
+	for (const type of [
+		"workspace.prepare",
+		"pullRequest.created",
+		"github.action",
+		"refs.changed",
+		"mcp.used",
+		"subagents",
+		"artifacts.changed",
+		"systemMessageState",
+	])
+		sessions["onPacket"](meta, worker, { type } as KernelPacket);
+	assert.equal(f.workers.length, count);
+	// Simulate authority changing after the inner reader returns but before IPC delivery.
+	const original = sessions["insightsHistory"].bind(sessions);
+	sessions["insightsHistory"] = async (...args) => {
+		const result = await original(...args);
+		meta.insightsGrant = { ...meta.insightsGrant!, enabled: false, revision: 2 };
+		return result;
+	};
+	sessions["onPacket"](meta, worker, {
+		type: "diagnostics.context.call",
+		callId: "fenced",
+		request: { action: "chats" },
+	});
+	await until(() => worker.sent.some((p) => p.type === "diagnostics.context.result" && p.callId === "fenced"));
+	const result = worker.sent.find((p) => p.type === "diagnostics.context.result" && p.callId === "fenced");
+	assert.ok(result && "error" in result && result.error);
+	assert.equal("result" in result, false);
+});
+
+test("Insights reload retains restricted identity and denies revoked or corrupt grants", async (t) => {
+	const f = await insightsFixture(t);
+	f.worker.finish({ outcome: "done", outcomeAt: Date.now() });
+	await f.sessions.shutdown();
+	const reloaded = await f.manager();
+	const worker = await reloaded["ensureWorker"](f.id);
+	assert.equal((worker as FakeWorker).spec.role, "insights");
+	assert.ok(reloaded.insightsAdmission(f.id, worker));
+	await reloaded.revokeInsights(f.id, 1);
+	await reloaded.shutdown();
+	const revoked = await f.manager();
+	await assert.rejects(revoked["ensureWorker"](f.id), /Retry startup/);
+	assert.throws(() => revoked.insightsAdmission(f.id, f.worker), /changed|revoked/);
+	assert.equal(revoked["workers"].has(f.id), false);
+	assert.equal(revoked.get(f.id)?.role, "insights");
+	await revoked.shutdown();
+	const path = join(f.home, "sessions", f.id, "meta.json");
+	const meta = JSON.parse(await readFile(path, "utf8"));
+	delete meta.insightsGrant;
+	await writeFile(path, JSON.stringify(meta));
+	const corrupt = await f.manager();
+	await assert.rejects(corrupt["ensureWorker"](f.id), /Retry startup/);
+	assert.throws(() => corrupt.insightsAdmission(f.id, f.worker), /Invalid Insights/);
+	assert.equal(corrupt["workers"].has(f.id), false);
+	assert.equal(corrupt.get(f.id)?.role, "insights");
+});
+
+test("Insights reads real committed cold history with redaction, citations, truncation and missing storage", async (t) => {
+	const f = await insightsFixture(t);
+	const path = join(f.root, "archived-project");
+	await mkdir(path);
+	const project = await f.projects.create({ path });
+	const source = await f.sessions.spawn({ projectId: project.id, mode: "ask", message: "Synthetic archive" });
+	await f.sessions["starting"].get(source.id);
+	await f.sessions.stop(source.id);
+	await f.sessions.archive(source.id);
+	const directory = join(f.home, "sessions", source.id, "durable");
+	const owned = await openSessionStorage(directory);
+	const harness = await Harness.open(
+		owned.storage,
+		{ models: createModels(), registry: createRegistry() },
+		BACKGROUND_CONTEXT,
+	);
+	let toolId = 0;
+	try {
+		const root = await harness.root(BACKGROUND_CONTEXT, {
+			agent: { model: { provider: "missing", modelId: "offline" } },
+		});
+		await root.commit(async (tx) => {
+			await tx.appendEntry(root.id, {
+				kind: "pi.user",
+				model: [{ role: "user", content: "old synthetic question", timestamp: 1 }],
+			});
+			const entry = await tx.appendEntry(root.id, {
+				kind: "pi.tool-result",
+				apiKey: "credential-canary",
+				model: [
+					{
+						role: "toolResult",
+						toolCallId: "call",
+						toolName: "read",
+						isError: false,
+						timestamp: 2,
+						content: [
+							{ type: "image", data: "image-canary", mimeType: "image/png" },
+							{ type: "text", text: "Bearer token-canary" },
+							{ type: "text", text: "é".repeat(9000) },
+						],
+					},
+				],
+			} as never);
+			toolId = Number(entry.id);
+			await tx.appendEntry(root.id, {
+				kind: "pi.assistant",
+				model: [
+					{
+						role: "assistant",
+						content: [
+							{ type: "thinking", thinking: "reasoning-canary" },
+							{ type: "text", text: "new answer" },
+						],
+						timestamp: 3,
+					},
+				],
+			} as never);
+		}, BACKGROUND_CONTEXT);
+	} finally {
+		await harness.close(BACKGROUND_CONTEXT);
+		owned.release();
+	}
+	// Removing the original checkout/project does not authorize filesystem fallback or a source wake.
+	await f.projects.remove(project.id);
+	const workers = f.workers.length;
+	const page = await f.sessions["insightsHistory"](f.id, f.worker, {
+		action: "history",
+		sessionId: source.id,
+		limit: 2,
+	});
+	assert.deepEqual(page.host, diagnosticHost);
+	assert.ok(Number.isFinite(Date.parse(page.collectedAt)));
+	assert.equal(page.page.truncated, true);
+	assert.equal(page.page.before, toolId);
+	assert.equal(page.page.more, true);
+	const encoded = JSON.stringify(page);
+	assert.doesNotMatch(encoded, /credential-canary|token-canary|image-canary|reasoning-canary/);
+	assert.match(encoded, /REDACTED|private_reasoning|attachment/);
+	assert.match(encoded, new RegExp(`diagnostic-history:v1:${source.id}:${toolId}`));
+	assert.match(encoded, new RegExp(`pilot://chat/${source.id}`));
+	assert.ok(Buffer.byteLength(encoded) <= 65536);
+	const older = await f.sessions["insightsHistory"](f.id, f.worker, {
+		action: "history",
+		sessionId: source.id,
+		before: page.page.before,
+		limit: 2,
+	});
+	assert.match(JSON.stringify(older), /old synthetic question/);
+	assert.equal(older.page.more, false);
+	const missing = await f.sessions["insightsHistory"](f.id, f.worker, { action: "history", sessionId: f.id });
+	assert.match(JSON.stringify(missing), /storage_missing/);
+	assert.equal(f.workers.length, workers);
+});
+
+test("Insights cancellation settles promptly and never returns held evidence", async (t) => {
+	let release!: () => void, entered!: () => void;
+	const held = new Promise<void>((r) => {
+		release = r;
+	});
+	const reading = new Promise<void>((r) => {
+		entered = r;
+	});
+	const f = await insightsFixture(t, {
+		diagnosticHistoryRead: async () => {
+			entered();
+			await held;
+			throw new Error("late reader failure");
+		},
+	});
+	t.after(release);
+	const controller = new AbortController();
+	const read = f.sessions["insightsHistory"](
+		f.id,
+		f.worker,
+		{ action: "history", sessionId: f.id },
+		controller.signal,
+	);
+	await reading;
+	controller.abort();
+	await assert.rejects(read, /cancelled/);
+	release();
+	await assert.rejects(
+		f.sessions["insightsHistory"](f.id, f.worker, { action: "chats" }, controller.signal),
+		/cancelled/,
+	);
+});
+
+test("Insights cannot continue, recover into ordinary chats, or acquire coordinator workspaces", async (t) => {
+	const f = await insightsFixture(t);
+	await assert.rejects(f.sessions.continueModel(f.id, "other/model"), /restricted profile/);
+	const meta = f.sessions["metas"].get(f.id)!;
+	const target = { ...meta, id: randomUUID(), role: undefined, insightsGrant: undefined, continuationOf: f.id };
+	await assert.rejects(f.sessions["applyContinuation"](meta, target), /restricted profile/);
+	assert.equal(f.sessions.get(target.id), undefined);
+	f.promoted.add(f.id);
+	f.sessions.missionChanged(f.id);
+	await f.sessions["prepareCoordinatorRole"](f.id);
+	assert.equal(meta.insightsGrant?.enabled, false);
+	assert.equal(meta.coordinatorView, undefined);
+	assert.equal(meta.workspace, undefined);
+	assert.equal(meta.title, "Insights");
+	assert.equal(f.sessions["roleTransitions"].size, 0);
+});
+
+test("Insights forged accounting is confined to its grant and revoked writes are denied", async (t) => {
+	const f = await insightsFixture(t);
+	const meta = f.sessions["metas"].get(f.id)!;
+	const rows: import("@pilot/protocol").UsageObservation[] = [];
+	t.mock.method(f.sessions.usageHistory, "put", async (row: import("@pilot/protocol").UsageObservation) => {
+		rows.push(row);
+		return "stored" as const;
+	});
+	const row: import("@pilot/protocol").UsageObservation = {
+		schemaVersion: 1,
+		generation: randomUUID(),
+		sourceId: randomUUID(),
+		operationId: "forged",
+		revision: 1,
+		kind: "request",
+		scope: "child",
+		observedAt: Date.now(),
+		coverage: "partial",
+		purpose: "agent",
+		attribution: { chatId: randomUUID(), projectId: randomUUID() },
+		parent: { sourceId: randomUUID(), operationId: "other" },
+	};
+	f.sessions["onPacket"](meta, f.worker, { type: "usage-history", callId: "first", row });
+	await until(() => f.worker.sent.some((v) => v.type === "usage-history.result" && v.callId === "first"));
+	assert.equal(rows.length, 1);
+	assert.equal(rows[0]!.sourceId, meta.insightsGrant!.grantId);
+	assert.match(rows[0]!.operationId, /^[a-f0-9]{64}$/);
+	assert.deepEqual(rows[0]!.attribution, { chatId: f.id, projectId: f.project.id, mission: undefined });
+	assert.equal(rows[0]!.scope, "direct");
+	assert.equal(rows[0]!.parent, undefined);
+	await f.sessions.revokeInsights(f.id, 1);
+	f.sessions["onPacket"](meta, f.worker, { type: "usage-history", callId: "revoked", row });
+	await until(() => f.worker.sent.some((v) => v.type === "usage-history.result" && v.callId === "revoked"));
+	assert.equal(rows.length, 1);
+});
+
+test("Insights revocation drains admitted real-store accounting before acknowledgement", async (t) => {
+	const f = await insightsFixture(t);
+	const meta = f.sessions["metas"].get(f.id)!;
+	const { generation } = await f.sessions.usageHistory.status();
+	const entered = deferred(),
+		release = deferred();
+	t.after(() => release.resolve());
+	const put = f.sessions.usageHistory.put.bind(f.sessions.usageHistory);
+	t.mock.method(f.sessions.usageHistory, "put", async (row: import("@pilot/protocol").UsageObservation) => {
+		entered.resolve();
+		await release.promise;
+		return put(row);
+	});
+	const row: import("@pilot/protocol").UsageObservation = {
+		schemaVersion: 1,
+		generation,
+		sourceId: randomUUID(),
+		operationId: "real-store",
+		revision: 1,
+		kind: "request",
+		scope: "direct",
+		observedAt: Date.now(),
+		completedAt: Date.now(),
+		coverage: "partial",
+		purpose: "agent",
+	};
+	f.sessions["onPacket"](meta, f.worker, { type: "usage-history", callId: "held", row });
+	await entered.promise;
+	let acknowledged = false;
+	const revocation = f.sessions.revokeInsights(f.id, 1).then(() => {
+		acknowledged = true;
+	});
+	assert.throws(() => f.sessions.insightsAdmission(f.id, f.worker));
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(acknowledged, false);
+	assert.equal((await f.sessions.usageHistory.status()).retainedRows, 0);
+	release.resolve();
+	await revocation;
+	const page = await f.sessions.usageHistory.page({
+		kind: "request",
+		from: row.observedAt - 1,
+		to: row.observedAt + 1,
+	});
+	assert.equal(page.rows.length, 1);
+	assert.equal(page.rows[0]!.sourceId, meta.insightsGrant!.grantId);
+	assert.equal(page.rows[0]!.attribution?.chatId, f.id);
+	assert.equal(page.rows[0]!.attribution?.projectId, f.project.id);
+	assert.equal(page.rows[0]!.scope, "direct");
+	assert.equal(page.rows[0]!.parent, undefined);
+	f.sessions["onPacket"](meta, f.worker, {
+		type: "usage-history",
+		callId: "late",
+		row: { ...row, operationId: "late" },
+	});
+	await until(() => f.worker.sent.some((v) => v.type === "usage-history.result" && v.callId === "late"));
+	assert.equal((await f.sessions.usageHistory.status()).retainedRows, 1);
+});
+
+test("Insights queued lifecycle saves cannot resurrect an enabled grant", async (t) => {
+	const f = await insightsFixture(t);
+	const meta = f.sessions["metas"].get(f.id)!;
+	await f.sessions["saving"].get(f.id);
+	const gate = deferred();
+	t.after(() => gate.resolve());
+	f.sessions["saving"].set(f.id, gate.promise);
+	const old = f.sessions["save"](meta);
+	const revoked = f.sessions.revokeInsights(f.id, 1);
+	const later = f.sessions["save"](meta);
+	gate.resolve();
+	await Promise.all([old, revoked, later]);
+	const persisted = JSON.parse(await readFile(join(f.home, "sessions", f.id, "meta.json"), "utf8"));
+	assert.equal(persisted.insightsGrant.enabled, false);
+	assert.equal(persisted.insightsGrant.revision, 2);
+	f.sessions.configureAutoHandoff(true);
+	assert.equal(f.worker.spec.autoHandoff, false);
+	assert.ok(f.worker.sent.filter((v) => v.type === "autoHandoff.configure").every((v) => !v.enabled));
+});
+
+for (const change of ["removal", "promotion"] as const) {
+	test(`Insights ${change} revocation drains accounting before any tombstone save`, async (t) => {
+		const f = await insightsFixture(t);
+		const meta = f.sessions["metas"].get(f.id)!;
+		await f.sessions["saving"].get(f.id);
+		const { generation } = await f.sessions.usageHistory.status();
+		const entered = deferred(),
+			release = deferred();
+		t.after(() => release.resolve());
+		const put = f.sessions.usageHistory.put.bind(f.sessions.usageHistory);
+		t.mock.method(f.sessions.usageHistory, "put", async (row: import("@pilot/protocol").UsageObservation) => {
+			entered.resolve();
+			await release.promise;
+			const result = await put(row);
+			assert.equal(result, "stored");
+			return result;
+		});
+		const now = Date.now();
+		f.sessions["onPacket"](meta, f.worker, {
+			type: "usage-history",
+			callId: "held",
+			row: {
+				schemaVersion: 1,
+				generation,
+				sourceId: randomUUID(),
+				operationId: "real-store",
+				revision: 1,
+				kind: "request",
+				scope: "direct",
+				observedAt: now,
+				completedAt: now,
+				coverage: "partial",
+				purpose: "agent",
+			},
+		});
+		await entered.promise;
+		if (change === "removal") f.members.delete(f.id);
+		else f.promoted.add(f.id);
+		f.sessions.missionChanged(f.id);
+		assert.throws(() => f.sessions.insightsAdmission(f.id, f.worker));
+		// A separate lifecycle writer must not publish the tombstone ahead of the drain either.
+		let saved = false;
+		const saving = f.sessions["save"](meta).then(() => {
+			saved = true;
+		});
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(saved, false);
+		const before = JSON.parse(await readFile(join(f.home, "sessions", f.id, "meta.json"), "utf8"));
+		assert.equal(before.insightsGrant.enabled, true);
+		assert.equal((await f.sessions.usageHistory.status()).retainedRows, 0);
+		release.resolve();
+		await saving;
+		await f.sessions["saving"].get(f.id);
+		const after = JSON.parse(await readFile(join(f.home, "sessions", f.id, "meta.json"), "utf8"));
+		assert.equal(after.insightsGrant.enabled, false);
+		assert.equal(after.insightsGrant.revision, 2);
+		assert.equal((await f.sessions.usageHistory.status()).retainedRows, 1);
+	});
+}
+
+test("Insights revocation during asynchronous startup closes the unadmitted worker", async (t) => {
+	const f = await insightsFixture(t);
+	const entered = deferred(),
+		release = deferred();
+	t.after(() => release.resolve());
+	const create = f.workerFactory()!;
+	let worker: FakeWorker | undefined;
+	f.sessions["factories"].worker = async (...args) => {
+		worker = (await create(...args)) as FakeWorker;
+		entered.resolve();
+		await release.promise;
+		return worker;
+	};
+	const id = randomUUID();
+	await f.sessions.spawnInsightsDurable(f.setup, id, randomUUID());
+	await entered.promise;
+	const starting = f.sessions["starting"].get(id);
+	await f.sessions.revokeInsights(id, 1);
+	release.resolve();
+	await starting;
+	assert.equal(f.sessions["workers"].has(id), false);
+	assert.equal(worker?.closed, true);
+	assert.equal(worker?.requests.length, 0);
+});
+
+test("Insights failed setup is a disabled tombstone and exact recovery never upgrades authority", async (t) => {
+	const f = await insightsFixture(t);
+	f.bridge.whenDurable = async () => {
+		throw new Error("Synthetic unknown membership commit");
+	};
+	const id = randomUUID(),
+		operationId = randomUUID();
+	await assert.rejects(f.sessions.spawnInsightsDurable(f.setup, id, operationId), /Synthetic unknown/);
+	assert.equal(f.members.has(id), false);
+	assert.equal(f.sessions["metas"].get(id)?.insightsGrant?.enabled, false);
+	assert.equal(f.sessions["metas"].get(id)?.initializing, undefined);
+	assert.equal(f.sessions["workers"].has(id), false);
+	f.bridge.whenDurable = undefined;
+	await assert.rejects(f.sessions.spawnInsightsDurable(f.setup, id, operationId), /changed|revoked/);
+	await f.sessions.shutdown();
+	const recovered = await f.manager();
+	assert.equal(recovered.get(id)?.role, "insights");
+	await assert.rejects(recovered.spawnInsightsDurable(f.setup, id, operationId), /changed|revoked/);
+	assert.equal(recovered["workers"].has(id), false);
+});
+
+test("Insights incomplete durable setup cannot recover authority even with retained membership", async (t) => {
+	const f = await insightsFixture(t);
+	await f.sessions.shutdown();
+	const path = join(f.home, "sessions", f.id, "meta.json");
+	const meta = JSON.parse(await readFile(path, "utf8"));
+	meta.insightsSetupPending = true;
+	await writeFile(path, JSON.stringify(meta));
+	const recovered = await f.manager();
+	assert.equal(f.members.get(f.id), "backlog");
+	assert.equal(recovered["metas"].get(f.id)?.insightsGrant?.enabled, false);
+	assert.equal(recovered["workers"].has(f.id), false);
+	await assert.rejects(recovered.spawnInsightsDurable(f.setup, f.id, f.operationId), /changed|revoked/);
+	const persisted = JSON.parse(await readFile(path, "utf8"));
+	assert.equal(persisted.insightsGrant.enabled, false);
+	assert.equal(persisted.insightsSetupPending, undefined);
+});
 
 test("maintenance recovery clears its tool lease and preserves other admission owners", async (t) => {
 	const f = await fixture(t);

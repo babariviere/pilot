@@ -3746,8 +3746,8 @@ test("daemon restart replays a durable notice once with the same request ID", as
 		undefined,
 		{
 			...f.sessions["factories"],
-			worker: (spec, onPacket, onExit) => {
-				const worker = workerFactory(spec, onPacket, onExit);
+			worker: async (spec, onPacket, onExit) => {
+				const worker = await workerFactory(spec, onPacket, onExit);
 				worker.request = async (command) => {
 					attempts.push(command);
 					accepted.add(command.requestId);

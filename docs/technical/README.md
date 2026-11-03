@@ -79,6 +79,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 
 ## Diagnostics, telemetry, and accounting
 
+- [Restricted cross-project Insights history (internal)](insights-history.md)
 - [Agent diagnostics](agent-diagnostics.md)
 - [Native crash, hang and devbox setup diagnostics](native-diagnostics.md)
 - [pilotd event-loop stalls](daemon-stalls.md)

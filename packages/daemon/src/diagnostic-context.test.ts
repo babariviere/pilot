@@ -52,6 +52,19 @@ test("metadata and issue text are sanitized and bounded independently from telem
 	assert.match(JSON.stringify(result), new RegExp("a".repeat(128)));
 	assert.ok(sanitizeDiagnosticContext(Array(5000).fill({ x: [1, 2, 3] })).truncated);
 });
+test("metadata preserves exact chat citations without exempting arbitrary URLs", () => {
+	const chatUrl = "pilot://chat/01234567-89ab-4cde-8fab-0123456789ab";
+	assert.deepEqual(sanitizeDiagnosticContext({ chatUrl }).data, { chatUrl });
+	assert.doesNotMatch(
+		JSON.stringify(sanitizeDiagnosticContext({ chatUrl: `${chatUrl}?token=secret-canary` })),
+		/secret-canary/,
+	);
+	assert.doesNotMatch(
+		JSON.stringify(sanitizeDiagnosticContext({ chatUrl: "https://example.com?token=secret-canary" })),
+		/secret-canary/,
+	);
+});
+
 test("native courier is bounded, correlated, cancellable and rejects stale responses", async () => {
 	const broker = new DiagnosticReadBroker();
 	const dispatches: string[] = [];

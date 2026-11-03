@@ -1,6 +1,7 @@
 /** Wire protocol between pilotd and its clients. Types only, safe to import from the browser. */
 import type { UserMessage } from "@earendil-works/pi-ai";
 import type { AgentEvent as DurableAgentEvent, EntryRecord } from "@earendil-works/pi-durable";
+import type { DiagnosticContextRequest } from "./diagnostic-context.ts";
 import type { OperationHost } from "./operations.ts";
 import type { ProjectTrackingConfig, TrackingSource } from "./tracking.ts";
 
@@ -727,7 +728,27 @@ export interface ProjectOrigin {
 /** Build may modify its workspace; Ask is read-only. Omitted mode defaults to Build. */
 export type ChatMode = "build" | "ask";
 /** Runtime-enforced specialist profile. Omitted means an ordinary chat. */
-export type SessionRole = "diagnostics";
+export type SessionRole = "diagnostics" | "insights";
+
+/** Trusted host-owned authority. Never accepted from chat text, spawn payloads or schedules. */
+export interface InsightsBinding {
+	schemaVersion: 1;
+	grantId: string;
+	revision: number;
+	enabled: boolean;
+	reportSessionId: string;
+	projectId: string;
+	missionId: string;
+	host: OperationHost;
+}
+
+/** Closed local-only discovery/history subset. Returned evidence remains untrusted. */
+export type InsightsHistoryRequest = Pick<
+	DiagnosticContextRequest,
+	"sessionId" | "query" | "after" | "before" | "limit"
+> & {
+	action: "chats" | "history" | "search" | "projects";
+};
 
 /** Canonical chat link plus the immutable host identity that owns it. */
 export interface DiagnosticTargetReference {
