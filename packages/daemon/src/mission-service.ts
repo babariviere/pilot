@@ -198,6 +198,7 @@ export class MissionService {
 		this.deliverySnapshots = deliverySnapshots;
 		this.reviewProducerObserver = reviewProducerObserver;
 		this.store = store;
+		sessions.setInsightsBacklog(store.insights);
 		this.sessions = sessions;
 		this.projects = projects;
 		this.notices = new MissionNotices(store, sessions);

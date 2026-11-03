@@ -234,6 +234,8 @@ export function runKernelWorker(): void {
 		});
 	const callMission: MissionCall = (action, args) =>
 		callDaemon<JsonValue>((callId) => ({ type: "mission.call", callId, action, args }));
+	const callInsightsBacklog: import("./insights-backlog-tool.ts").InsightsBacklogCall = (request) =>
+		callDaemon<JsonValue>((callId) => ({ type: "insights.backlog.call", callId, request }));
 	const readCoordinatorSources: import("./coordinator-sources.ts").ReadCoordinatorSources = (signal) =>
 		callDaemon((callId) => ({ type: "source.scope", callId }), signal, false);
 	const callMemory: import("./memory-tools.ts").MemoryCall = (action, args, operationId) =>
@@ -434,6 +436,7 @@ export function runKernelWorker(): void {
 			command.type === "mission.result" ||
 			command.type === "memory.result" ||
 			command.type === "knowledge.result" ||
+			command.type === "insights.backlog.result" ||
 			command.type === "liveUpdate.result" ||
 			command.type === "database.result" ||
 			command.type === "slack.result" ||
@@ -457,6 +460,7 @@ export function runKernelWorker(): void {
 						(command.type === "mission.result" ||
 						command.type === "memory.result" ||
 						command.type === "knowledge.result" ||
+						command.type === "insights.backlog.result" ||
 						command.type === "liveUpdate.result"
 							? null
 							: undefined),
@@ -559,6 +563,7 @@ export function runKernelWorker(): void {
 					readCoordinatorSources,
 					callMemory,
 					callKnowledge,
+					callInsightsBacklog,
 					callLiveUpdateProposal,
 					callDatabase,
 					callSlackStatus,

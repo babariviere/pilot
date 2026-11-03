@@ -1,6 +1,6 @@
 # Insights
 
-**Status: internal history-access foundation, not an available weekly review feature.**
+**Status: internal history and backlog foundation, not an available weekly review feature.**
 There is no native setup action or active weekly schedule in this delivery.
 
 Insights is intended to review chat evidence across projects and propose useful improvements.
@@ -12,8 +12,17 @@ Redaction can remove credentials and private reasoning, but cannot guarantee tha
 business text is removed. Before activation, setup must explain that selected-model processing
 can include sanitized excerpts from other projects.
 
-Findings are proposals, not approval to implement fixes or change models, budgets or schedules.
-Report generation, backlog maintenance, native setup and weekly activation remain separate work.
+Findings can retain repeated evidence, affected projects, proposed changes, cost assumptions and
+implementation links in the dedicated mission backlog. Recurring evidence amends a stable finding,
+not a new implementation task. Findings are tracking records only, never permission to change a
+project, start fixes, or change models, budgets or schedules.
+
+The lifecycle distinguishes Proposed, Approved, In progress, Shipped and Verified, with Deferred
+and Dismissed alternatives. Shipped means delivered, not proven useful. Model-written results cannot
+approve a finding or verify its benefit. Native lifecycle confirmation is not yet connected.
+
+Saved reports and checkpoints survive restart, but a save proves persistence, not complete coverage
+or a successful weekly run. Automated report generation, native setup and weekly activation remain separate work.
 Weekly settings and the first real review still require confirmation.
 
 See the [permission and verification contract](technical/insights-history.md) for implementation limits.

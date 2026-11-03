@@ -48,6 +48,7 @@ import type {
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
+import { INSIGHTS_SCHEMA, InsightsBacklog } from "./insights-backlog.ts";
 import type { SharedMissionGroup } from "./mission-catalog.ts";
 import {
 	type AllocationContextFence,
@@ -632,6 +633,48 @@ export class MissionStore {
 		transaction: (work) => this.transaction(work),
 		changed: (missionId) => this.changed(missionId, [], true),
 	});
+	/** Scoped tracking records share canonical tasks, transactions and disk durability. */
+	readonly insights = new InsightsBacklog({
+		all: (sql, ...params) => this.all(sql, ...params),
+		one: (sql, ...params) => this.one(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work),
+		changed: (id) => this.changed(id, [], true),
+		durable: () => this.durable(),
+		validateMission: (id, projectId) => {
+			const mission = this.require(id);
+			if (mission.projectId !== projectId || mission.status !== "active")
+				throw new Conflict("Insights backlog binding changed");
+		},
+		createTask: (id, draft, sessionId) => this.insertTask(id, { title: draft.title }, { sessionId }).id,
+		projectTask: (id, taskId, draft, lifecycle) => {
+			const status =
+				lifecycle === "shipped" || lifecycle === "verified"
+					? "done"
+					: lifecycle === "dismissed"
+						? "dropped"
+						: lifecycle === "in_progress"
+							? "in_progress"
+							: "todo";
+			const body = [
+				`Finding: ${lifecycle}. Priority: ${draft.priority}.`,
+				"Tracking only. Implementation requires separate approval and work.",
+				draft.observation,
+				`Proposal: ${draft.proposedChange}`,
+				`Benefit: ${draft.expectedBenefit}`,
+			].join("\n\n");
+			this.run(
+				"UPDATE tasks SET title=?,body=?,status=?,updated_at=?,completed_at=? WHERE id=? AND mission_id=?",
+				draft.title,
+				body,
+				status,
+				Date.now(),
+				status === "done" ? Date.now() : null,
+				taskId,
+				id,
+			);
+		},
+	});
 
 	/** ":memory:" keeps state in memory, for tests. */
 	constructor(file: string) {
@@ -656,6 +699,7 @@ export class MissionStore {
 		const migratePrTransitions = !this.one("SELECT 1 FROM sqlite_master WHERE name = 'pull_request_transitions'");
 		this.db.exec(SCHEMA);
 		this.db.exec(KNOWLEDGE_SCHEMA);
+		this.db.exec(INSIGHTS_SCHEMA);
 		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "created_by_session_id"))
 			this.db.exec("ALTER TABLE tasks ADD COLUMN created_by_session_id TEXT");
 		// Existing assignments are grandfathered, not retroactively charged.
@@ -1319,6 +1363,7 @@ export class MissionStore {
 		this.sharingPut("grant-history", grant.delegationId, grant);
 	}
 	projectSharedProgress(grant: DelegationGrant, status: "in_progress" | "blocked" | "in_review" | "done"): void {
+		this.insights.assertOrdinaryTask(grant.task.taskId);
 		if (this.sharedDefinitionRevision(grant.task.taskId) !== grant.definitionRevision) return;
 		this.transaction(() => {
 			this.run("INSERT INTO shared_internal_projection VALUES(1)");
@@ -3233,6 +3278,7 @@ export class MissionStore {
 
 	/** Dedicated user preference only: no member callbacks, reconciliation or automation. */
 	taskModel(id: string, projectId: string, taskId: string, write: MissionTaskWrite): MissionTask {
+		this.insights.assertOrdinaryTask(this.resolveTask(id, taskId).id);
 		this.assertPlanner(id, USER);
 		if (this.writing || this.batchedChanges || this.referenceBatch)
 			throw new Conflict("Preference changes cannot be batched");
@@ -3251,6 +3297,7 @@ export class MissionStore {
 
 	/** One immutable, task-owned handoff. Retries return it, never add another event. */
 	completeTask(id: string, ref: unknown, sessionId: string, value: unknown) {
+		this.insights.assertOrdinaryTask(this.resolveTask(id, ref).id);
 		if (this.require(id).planningVersion !== undefined)
 			throw new Conflict("Report evidence with log; coordinator/user marks done separately");
 		this.assertMember(id, sessionId);
@@ -3325,6 +3372,7 @@ export class MissionStore {
 		value: unknown,
 		resolvedArtifacts: ReadonlyMap<string, string> = new Map(),
 	) {
+		this.insights.assertOrdinaryTask(this.resolveTask(id, ref).id);
 		this.assertMember(id, sessionId);
 		const task = this.resolveTask(id, ref);
 		if (task.sessionId !== sessionId && this.require(id).coordinatorSessionId !== sessionId)
@@ -3426,6 +3474,7 @@ export class MissionStore {
 		type: DeliveryRecord["type"],
 		request: DeliveryRecord["request"],
 	): DeliveryRecord | undefined {
+		this.insights.assertOrdinaryTask(taskId);
 		this.assertDeliveryMember(id, sessionId);
 		const row = this.one(
 			"SELECT record FROM task_delivery_evidence WHERE mission_id = ? AND operation_id = ?",
@@ -3458,6 +3507,7 @@ export class MissionStore {
 
 	/** Dormant host-only API. Resolver is host code, never request-supplied observations or passing booleans. */
 	async submitDeliveryEvidence(id: string, ref: string, sessionId: string, value: unknown, resolve: DeliveryResolver) {
+		this.insights.assertOrdinaryTask(this.resolveTask(id, ref).id);
 		const request = deliverySubmissionWrite(value);
 		const taskId = this.resolveTask(id, ref).id;
 		const retry = this.deliveryRetry(id, taskId, sessionId, "submission", request);
@@ -3518,6 +3568,7 @@ export class MissionStore {
 
 	/** Coordinator judgement only. Approval does not imply required checks, authority or integration. */
 	async judgeDeliveryEvidence(id: string, ref: string, sessionId: string, value: unknown) {
+		this.insights.assertOrdinaryTask(this.resolveTask(id, ref).id);
 		const request = deliveryJudgementWrite(value);
 		const taskId = this.resolveTask(id, ref).id;
 		const saved = this.transaction(() => {
@@ -3641,6 +3692,7 @@ export class MissionStore {
 		this.assertAllocationActor(id, sessionId, authorize);
 		const taskId = this.resolveTask(id, ref).id;
 		const request = allocationWrite(value);
+		this.insights.assertOrdinaryTask(taskId);
 		const record = this.allocationRetry(id, taskId, sessionId, request);
 		await this.durable();
 		this.assertAllocationActor(id, sessionId, authorize);
@@ -3660,6 +3712,7 @@ export class MissionStore {
 		this.assertAllocationActor(id, sessionId, host.authorize);
 		const taskId = this.resolveTask(id, ref).id;
 		const request = allocationWrite(value);
+		this.insights.assertOrdinaryTask(taskId);
 		const retry = this.allocationRetry(id, taskId, sessionId, request);
 		if (retry) {
 			await this.durable();
@@ -3798,6 +3851,7 @@ export class MissionStore {
 		this.assertNonCodePolicyActor(id, actor, authorize);
 		const taskId = this.resolveTask(id, ref).id,
 			request = nonCodePolicyWrite(value);
+		this.insights.assertOrdinaryTask(taskId);
 		const record = this.nonCodePolicyRetry(id, taskId, actor, request);
 		await this.durable();
 		this.assertNonCodePolicyActor(id, actor, authorize);
@@ -3839,6 +3893,7 @@ export class MissionStore {
 		this.assertNonCodePolicyActor(id, actor, host.authorize);
 		const taskId = this.resolveTask(id, ref).id,
 			request = nonCodePolicyWrite(value);
+		this.insights.assertOrdinaryTask(taskId);
 		const retry = this.nonCodePolicyRetry(id, taskId, actor, request);
 		if (retry) {
 			await this.durable();
@@ -4248,6 +4303,7 @@ export class MissionStore {
 		};
 	}
 	private assertReviewActor(id: string, sessionId: string, authorize: () => void, taskId?: string): void {
+		if (taskId) this.insights.assertOrdinaryTask(taskId);
 		authorize(); // Trusted host project/session admission precedes even retry lookup.
 		this.assertDeliveryMember(id, sessionId);
 		if (this.require(id).coordinatorSessionId === sessionId) return;
@@ -4430,6 +4486,7 @@ export class MissionStore {
 	}
 
 	updateTask(id: string, taskId: string, write: MissionTaskWrite, actor: MissionActor = USER): MissionTask {
+		this.insights.assertOrdinaryTask(this.resolveTask(id, taskId).id);
 		this.assertTaskWriter(id, taskId, write, actor);
 		if (write.sessionId === null && Object.keys(write).length === 1 && !actor.sessionId)
 			return this.releaseTask(id, taskId, actor);
@@ -4576,6 +4633,7 @@ export class MissionStore {
 			).values(),
 		];
 		const changed = tasks.filter((task) => (task.milestone ?? "") !== group);
+		for (const task of tasks) this.insights.assertOrdinaryTask(task.id);
 		if (!changed.length) return tasks;
 		const now = Date.now();
 		this.transaction(() => {
@@ -4592,6 +4650,7 @@ export class MissionStore {
 	}
 
 	removeTask(id: string, taskId: string, actor: MissionActor = USER): void {
+		this.insights.assertOrdinaryTask(this.resolveTask(id, taskId).id);
 		this.assertPlanner(id, actor);
 		const task = this.resolveTask(id, taskId);
 		if (this.one("SELECT 1 FROM resources WHERE task_id = ? AND linear_role = 'contribution'", task.id))
@@ -4639,6 +4698,7 @@ export class MissionStore {
 		const selected = new Set(tasks.map((task) => task.id));
 		const reasons: string[] = [];
 		for (const task of tasks) {
+			this.insights.assertOrdinaryTask(task.id);
 			if (this.sharedAllocation(task.id))
 				reasons.push(`Task #${task.number} has an occupied remote execution grant`);
 			if (starting?.has(`${id}:${task.id}`))
@@ -4707,6 +4767,7 @@ export class MissionStore {
 		const mission = this.require(id);
 		if (actor.sessionId) this.assertMember(id, actor.sessionId);
 		const before = this.rawTask(this.resolveTask(id, taskId));
+		this.insights.assertOrdinaryTask(before.id);
 		const task = this.transaction(() => {
 			if (
 				actor.sessionId &&
@@ -4853,6 +4914,7 @@ export class MissionStore {
 		actor: MissionActor,
 		overridePhaseGating = false,
 	): MissionTask {
+		this.insights.assertOrdinaryTask(task.id);
 		if (task.sessionId === sessionId) return task;
 		const creator = this.one("SELECT created_by_session_id FROM tasks WHERE id = ?", task.id)?.created_by_session_id;
 		// Delivery still fences unrelated work, but not the member's own feedback follow-ups.
@@ -5310,6 +5372,7 @@ export class MissionStore {
 		this.require(id);
 		const { title, ...parsed } = normalizeResourceWrite(write);
 		const taskId = write.taskId === undefined ? undefined : this.resolveTask(id, write.taskId).id;
+		if (taskId) this.insights.assertOrdinaryTask(taskId);
 		if (write.relationship !== undefined && write.relationship !== "ownership" && write.relationship !== "reference")
 			throw new Error("Invalid link relationship");
 		const relationship = write.relationship ?? (taskId && parsed.kind === "github.pr" ? "ownership" : "reference");
@@ -5585,6 +5648,7 @@ export class MissionStore {
 				pinnedTask && pinnedTask.status !== "done" && pinnedTask.status !== "dropped"
 					? str(pinnedTask.id!)
 					: undefined;
+			if (targetTaskId) this.insights.assertOrdinaryTask(targetTaskId);
 			const missionIds = new Set<string>();
 			if (targetMissionId && this.get(targetMissionId)) missionIds.add(targetMissionId);
 			for (const sessionId of [operation.sessionId, ...operation.previousSessionIds]) {
@@ -5836,6 +5900,7 @@ export class MissionStore {
 		)
 			this.assertMember(id, link.sessionId);
 		const taskId = link.taskId === undefined ? undefined : this.resolveTask(id, link.taskId).id;
+		if (taskId) this.insights.assertOrdinaryTask(taskId);
 		const now = Date.now();
 		const value: MissionArtifactLink = {
 			...(taskId ? { taskId } : {}),
@@ -6083,6 +6148,7 @@ export class MissionStore {
 
 	/** Automatic start activity is task activity, not an authored user note. */
 	recordTaskStart(id: string, taskId: string, model: string, thinking: string): MissionEvent {
+		this.insights.assertOrdinaryTask(this.resolveTask(id, taskId).id);
 		const task = this.task(id, taskId);
 		const event = this.transaction(() =>
 			this.event(id, "task", `Started #${task.number} on ${model}, thinking ${thinking}`, USER, { taskId }),

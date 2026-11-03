@@ -1559,6 +1559,14 @@ export class SessionManager {
 	private readonly commandLists = new Map<string, SessionCommand[]>();
 	private parkTimer?: ReturnType<typeof setTimeout>;
 	private missions?: SessionMissionBridge;
+	private insightsBacklog?: import("./insights-backlog.ts").InsightsBacklog;
+	private insightsBacklogCalls = 0;
+	private readonly insightsBacklogPending = new Map<string, Set<Promise<void>>>();
+	private readonly insightsStopEpochs = new WeakMap<SessionWorker, number>();
+
+	setInsightsBacklog(backlog: import("./insights-backlog.ts").InsightsBacklog): void {
+		this.insightsBacklog = backlog;
+	}
 	private bindingQueue: Promise<unknown> = Promise.resolve();
 	/** Explicit owners, indexed so PR sync does not scan every chat for each fresh head. */
 	private readonly boundPullRequestOwners = new Map<string, string>();
@@ -3517,8 +3525,11 @@ ${run.excerpt}`,
 		const meta = this.require(callerId);
 		this.validateMode(meta);
 		const grant = structuredClone(this.assertInsightsCurrent(meta));
+		const stopEpoch = this.insightsStopEpochs.get(worker);
 		const revalidate = () => {
 			if (
+				this.closing ||
+				this.insightsStopEpochs.get(worker) !== stopEpoch ||
 				this.workers.get(callerId) !== worker ||
 				this.require(callerId) !== meta ||
 				JSON.stringify(this.assertInsightsCurrent(meta)) !== JSON.stringify(grant)
@@ -3542,6 +3553,7 @@ ${run.excerpt}`,
 	}
 
 	private async persistInsightsRevocation(meta: SessionMeta): Promise<void> {
+		await Promise.allSettled(this.insightsBacklogPending.get(meta.id) ?? []);
 		await Promise.all(this.insightsAccounting.get(meta.id) ?? []);
 		await this.save(meta, undefined, undefined, true);
 	}
@@ -7158,6 +7170,9 @@ ${run.excerpt}`,
 		this.assertNotContinued(meta, true);
 		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 		if (this.closing) throw new Error("pilotd is shutting down");
+		const insightsWorker = meta.role === "insights" ? this.workers.get(id) : undefined;
+		if (insightsWorker)
+			this.insightsStopEpochs.set(insightsWorker, (this.insightsStopEpochs.get(insightsWorker) ?? 0) + 1);
 		this.cancelPostRun(meta);
 		if (meta.automation) {
 			meta.automation.stopped = true;
@@ -8742,6 +8757,7 @@ ${run.excerpt}`,
 		await this.dissociation;
 		await Promise.allSettled(this.coordinatorUnbindings.values());
 		await Promise.allSettled(this.roleTransitions.values());
+		await Promise.allSettled([...this.insightsBacklogPending.values()].flatMap((pending) => [...pending]));
 		await Promise.all([...this.workers.values()].map((worker) => worker.close()));
 		await Promise.allSettled([...this.parking.values()]);
 		await this.coldReader.close();
@@ -9398,6 +9414,7 @@ ${run.excerpt}`,
 			// Closed status/read transport. New packet capabilities are denied until explicitly admitted.
 			if (
 				![
+					"insights.backlog.call",
 					"diagnostics.context.call",
 					"diagnostics.context.cancel",
 					"usage-history.epoch",
@@ -9662,6 +9679,53 @@ ${run.excerpt}`,
 						});
 				},
 			);
+			return;
+		}
+		if (packet.type === "insights.backlog.call") {
+			if (this.insightsBacklogCalls >= 8) {
+				worker.send({ type: "insights.backlog.result", callId: packet.callId, error: "Insights backlog is busy" });
+				return;
+			}
+			this.insightsBacklogCalls++;
+			let admission: InsightsAdmission | undefined;
+			let admissionError: unknown;
+			try {
+				// Capture before yielding, so Stop also fences a queued call before its transaction.
+				admission = this.insightsAdmission(meta.id, worker);
+			} catch (error) {
+				admissionError = error;
+			}
+			const pending = this.insightsBacklogPending.get(meta.id) ?? new Set<Promise<void>>();
+			this.insightsBacklogPending.set(meta.id, pending);
+			const call = Promise.resolve()
+				.then(async () => {
+					if (!admission) throw admissionError;
+					if (!this.insightsBacklog) throw new Conflict("Insights backlog unavailable");
+					const result = await this.insightsBacklog.call(admission, packet.request);
+					admission.revalidate();
+					worker.send({
+						type: "insights.backlog.result",
+						callId: packet.callId,
+						result: result as import("@earendil-works/chord").JsonValue,
+					});
+				})
+				.catch((error: unknown) => {
+					if (this.workers.get(meta.id) === worker)
+						worker.send({
+							type: "insights.backlog.result",
+							callId: packet.callId,
+							error:
+								error instanceof Conflict || error instanceof NotFound
+									? error.message
+									: "Insights backlog unavailable; look up the operation receipt before any retry",
+						});
+				})
+				.finally(() => {
+					this.insightsBacklogCalls--;
+					pending.delete(call);
+					if (!pending.size) this.insightsBacklogPending.delete(meta.id);
+				});
+			pending.add(call);
 			return;
 		}
 		if (packet.type === "diagnostics.context.cancel") {

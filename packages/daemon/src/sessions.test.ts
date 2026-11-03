@@ -32,6 +32,7 @@ import { diagnosticContextResponse } from "./diagnostic-context.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { DaemonOperations, EventLoopWatchdog, operations } from "./event-loop-watchdog.ts";
 import type { ModelCatalog } from "./models.ts";
+import { MissionStore } from "./missions.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
 import {
@@ -1267,15 +1268,16 @@ async function fixture(t: TestContext) {
 	return { root, home, source, projects, project, workers, workerFactory, manager, stored };
 }
 
-async function insightsFixture(t: TestContext, factories: SessionFactories = {}) {
+async function insightsFixture(t: TestContext, factories: SessionFactories = {}, backlog?: MissionStore) {
 	const f = await fixture(t);
+	const missionId = backlog?.create({ title: "Review backlog", projectId: f.project.id }).id ?? "backlog";
 	const members = new Map<string, string>();
 	const promoted = new Set<string>();
 	let missionActive = true;
 	let broadCalls = 0;
 	const bridge: Parameters<SessionManager["setMissionBridge"]>[0] = {
 		spawnProject: (id) => {
-			if (id !== "backlog" || !missionActive) throw new Conflict("Backlog unavailable");
+			if (id !== missionId || !missionActive) throw new Conflict("Backlog unavailable");
 			return f.project.id;
 		},
 		joinSpawn: (id, missionId) => {
@@ -1305,11 +1307,15 @@ async function insightsFixture(t: TestContext, factories: SessionFactories = {})
 			return {};
 		},
 	};
-	const manager = () => f.manager(factories, { diagnosticHost }, {}, (m) => m.setMissionBridge(bridge));
+	const manager = () =>
+		f.manager(factories, { diagnosticHost }, {}, (m) => {
+			m.setMissionBridge(bridge);
+			if (backlog) m.setInsightsBacklog(backlog.insights);
+		});
 	const sessions = await manager();
 	const setup = {
 		projectId: f.project.id,
-		missionId: "backlog",
+		missionId,
 		model: "test/offline",
 		message: "Review synthetic evidence",
 	};
@@ -1331,12 +1337,152 @@ async function insightsFixture(t: TestContext, factories: SessionFactories = {})
 		members,
 		promoted,
 		bridge,
+		missionId,
 		closeMission: () => {
 			missionActive = false;
 		},
 		broadCalls: () => broadCalls,
 	};
 }
+
+test("Insights backlog IPC derives scope and rejects ordinary workers and forged fields", async (t) => {
+	const store = new MissionStore(":memory:");
+	t.after(() => store.close());
+	const f = await insightsFixture(t, {}, store);
+	const ordinary = await f.sessions.spawn({ projectId: f.project.id, mode: "ask", message: "Ordinary" });
+	await f.sessions["starting"].get(ordinary.id);
+	const ordinaryWorker = f.sessions["workers"].get(ordinary.id)! as FakeWorker;
+	const request = { action: "list", kind: "finding" };
+	for (const [id, worker, input] of [
+		[ordinary.id, ordinaryWorker, request],
+		[f.id, f.worker, { ...request, missionId: f.missionId }],
+		[f.id, f.worker, { ...request, authority: "user" }],
+		[f.id, f.worker, { action: "confirmLifecycle", lifecycle: "verified" }],
+	] as const) {
+		const callId = randomUUID();
+		f.sessions["onPacket"](f.sessions["metas"].get(id)!, worker, {
+			type: "insights.backlog.call",
+			callId,
+			request: input,
+		});
+		await until(() => worker.sent.some((p) => p.type === "insights.backlog.result" && p.callId === callId));
+		const reply = worker.sent.find((p) => p.type === "insights.backlog.result" && p.callId === callId)!;
+		assert.ok("error" in reply && reply.error);
+		assert.equal("result" in reply, false);
+	}
+	f.sessions["onPacket"](f.sessions["metas"].get(f.id)!, f.worker, {
+		type: "insights.backlog.call",
+		callId: "valid-list",
+		request,
+	});
+	await until(() => f.worker.sent.some((p) => p.type === "insights.backlog.result" && p.callId === "valid-list"));
+	const reply = f.worker.sent.find((p) => p.type === "insights.backlog.result" && p.callId === "valid-list")!;
+	assert.ok("result" in reply);
+	assert.deepEqual(reply.result, { items: [], nextCursor: null });
+	assert.equal(f.broadCalls(), 0);
+	assert.equal(store.tasks(f.missionId).length, 0);
+});
+
+for (const invalidation of ["replacement", "revocation", "Stop"] as const) {
+	test(`Insights backlog withholds committed ACK after ${invalidation} during durability`, async (t) => {
+		const store = new MissionStore(":memory:");
+		t.after(() => store.close());
+		const f = await insightsFixture(t, {}, store);
+		const gate = deferred();
+		const entered = deferred();
+		const durable = store.durable.bind(store);
+		t.mock.method(store, "durable", async () => {
+			entered.resolve();
+			await gate.promise;
+			await durable();
+		});
+		t.after(() => gate.resolve());
+		const key = randomUUID(),
+			operationId = randomUUID();
+		f.sessions["onPacket"](f.sessions["metas"].get(f.id)!, f.worker, {
+			type: "insights.backlog.call",
+			callId: "held-write",
+			request: {
+				action: "save_report",
+				key,
+				expectedRevision: 0,
+				operationId,
+				record: {
+					status: "partial",
+					windowStart: "2026-01-01T00:00:00.000Z",
+					windowEnd: "2026-01-02T00:00:00.000Z",
+					markdown: "Synthetic bounded report, not coverage proof.",
+					checkpoints: [],
+					findingKeys: [],
+					gaps: ["Synthetic sample"],
+				},
+			},
+		});
+		await entered.promise;
+		let drain: Promise<void> | undefined;
+		let drained = false;
+		if (invalidation === "revocation") drain = f.sessions.revokeInsights(f.id, 1);
+		else if (invalidation === "Stop") await f.sessions.stop(f.id);
+		else {
+			f.worker.finish();
+			drain = f.sessions.shutdown();
+		}
+		if (drain) {
+			void drain.then(() => {
+				drained = true;
+			});
+			await new Promise<void>((resolve) => setImmediate(resolve));
+			assert.equal(drained, false, "revocation/shutdown must drain admitted backlog durability");
+		}
+		gate.resolve();
+		await drain;
+		await until(() => f.sessions["insightsBacklogCalls"] === 0);
+		assert.equal(
+			f.worker.sent.some((p) => p.type === "insights.backlog.result" && p.callId === "held-write" && "result" in p),
+			false,
+		);
+		if (invalidation === "revocation") {
+			assert.throws(() => f.sessions.insightsAdmission(f.id, f.worker), /revoked|changed/);
+			return;
+		}
+		if (invalidation === "Stop") {
+			f.worker.finish();
+			await f.sessions.shutdown();
+		}
+		const reloaded = await f.manager();
+		const worker = (await reloaded["ensureWorker"](f.id)) as FakeWorker;
+		assert.notEqual(worker, f.worker);
+		reloaded["onPacket"](reloaded["metas"].get(f.id)!, worker, {
+			type: "insights.backlog.call",
+			callId: "lookup",
+			request: { action: "receipt", operationId },
+		});
+		await until(() => worker.sent.some((p) => p.type === "insights.backlog.result" && p.callId === "lookup"));
+		const reply = worker.sent.find((p) => p.type === "insights.backlog.result" && p.callId === "lookup")!;
+		assert.ok("result" in reply);
+		assert.deepEqual(reply.result, {
+			state: "committed",
+			receipt: { operationId, kind: "report", key, revision: 1, taskId: null },
+		});
+		assert.equal(store.tasks(f.missionId).length, 0);
+	});
+}
+
+test("Stop fences a queued Insights backlog call before its transaction", async (t) => {
+	const store = new MissionStore(":memory:");
+	t.after(() => store.close());
+	const f = await insightsFixture(t, {}, store);
+	f.sessions["onPacket"](f.sessions["metas"].get(f.id)!, f.worker, {
+		type: "insights.backlog.call",
+		callId: "queued-before-stop",
+		request: { action: "list", kind: "finding" },
+	});
+	await f.sessions.stop(f.id);
+	await until(() => f.sessions["insightsBacklogCalls"] === 0);
+	const reply = f.worker.sent.find((p) => p.type === "insights.backlog.result" && p.callId === "queued-before-stop");
+	assert.ok(reply && "error" in reply && reply.error);
+	assert.equal("result" in reply, false);
+});
 
 test("Insights grant is private, reserved, replay-exact and not generic spawn authority", async (t) => {
 	const f = await insightsFixture(t);

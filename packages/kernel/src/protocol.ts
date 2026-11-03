@@ -269,6 +269,7 @@ export type KernelCommand =
 	  }
 	| { type: "memory.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "knowledge.result"; callId: string; result?: JsonValue; error?: string }
+	| { type: "insights.backlog.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "liveUpdate.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "database.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "slack.result"; callId: string; result?: JsonValue; error?: string }
@@ -371,6 +372,7 @@ export type KernelPacket =
 	| { type: "mcp.used"; namespaces: string[]; failed: boolean }
 	/** A `mission` tool call, answered by `mission.result`. */
 	| { type: "mission.call"; callId: string; action: MissionAction; args: Record<string, JsonValue> }
+	| { type: "insights.backlog.call"; callId: string; request: unknown }
 	/** No caller-supplied identity or roots. Only the supervised coordinator may request its current scope. */
 	| { type: "source.scope"; callId: string }
 	| {

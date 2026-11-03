@@ -85,6 +85,7 @@ import { createHistoryRecallTool } from "./history-recall.ts";
 import { submitIdleInput } from "./idle-input.ts";
 import { InputOrigins, inputOrigin } from "./input-origin.ts";
 import { createInsightsHistoryTool } from "./insights-history-tool.ts";
+import { createInsightsBacklogTool, type InsightsBacklogCall } from "./insights-backlog-tool.ts";
 import { JobsMonitor } from "./jobs.ts";
 import { createKnowledgeTool } from "./knowledge-tools.ts";
 import { createLiveUpdateTools } from "./live-update-tool.ts";
@@ -197,6 +198,7 @@ export interface KernelSessionHooks {
 	callMemory?: MemoryCall;
 	/** Executes a `knowledge` tool call in pilotd. Registered for writable project chats only. */
 	callKnowledge?: import("./knowledge-tools.ts").KnowledgeCall;
+	callInsightsBacklog?: InsightsBacklogCall;
 	/** Proposes a local release for native approval, never executes an update. */
 	callLiveUpdateProposal?: import("./live-update-tool.ts").LiveUpdateProposalCall;
 	/** Executes a `db` tool call in pilotd. Registered only when the spec reports a database config. */
@@ -660,6 +662,9 @@ export class KernelSession {
 				],
 				subagents,
 				hostTools: [
+					...(spec.role === "insights" && hooks.callInsightsBacklog
+						? [createInsightsBacklogTool(hooks.callInsightsBacklog)]
+						: []),
 					...(spec.role === "insights" && hooks.callDiagnosticContext
 						? [createInsightsHistoryTool(hooks.callDiagnosticContext)]
 						: []),

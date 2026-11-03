@@ -7,13 +7,14 @@ import { test } from "node:test";
 import { fauxProvider, InMemoryCredentialStore, InMemoryModelsStore, Type } from "@earendil-works/pi-ai";
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { InsightsBinding } from "@pilot/protocol";
+import { createInsightsBacklogTool } from "./insights-backlog-tool.ts";
 import { createInsightsHistoryTool } from "./insights-history-tool.ts";
 import { NativeAdapter } from "./native-adapter.ts";
 import { pilotPrompt } from "./policy.ts";
 import type { KernelSpec } from "./protocol.ts";
 import { KernelSession } from "./session.ts";
 
-test("Insights profile excludes hostile resources and retains only its host reader after reload", async (t) => {
+test("Insights profile excludes hostile resources and retains only closed host tools after reload", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "insights-role-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const source = join(root, "source"),
@@ -43,6 +44,11 @@ export default () => { writeFileSync(${JSON.stringify(marker)}, "loaded"); };`;
 	runtime.registerNativeProvider(faux.provider);
 	let calls = 0;
 	let lastSignal: AbortSignal | undefined;
+	const requests: unknown[] = [];
+	const backlog = createInsightsBacklogTool(async (request) => {
+		requests.push(request);
+		return { state: "unknown" };
+	});
 	const reader = createInsightsHistoryTool(async (_request, signal) => {
 		calls++;
 		lastSignal = signal;
@@ -61,7 +67,7 @@ export default () => { writeFileSync(${JSON.stringify(marker)}, "loaded"); };`;
 		ask: { source },
 		insights: true,
 		projectTrusted: true,
-		hostTools: [reader],
+		hostTools: [reader, backlog],
 		settingsManager: SettingsManager.inMemory({
 			defaultTools: ["bash", "codemode", "subagent"],
 			extensions: [personalExtension],
@@ -86,6 +92,13 @@ export default () => { writeFileSync(${JSON.stringify(marker)}, "loaded"); };`;
 					parameters: Type.Object({}),
 					execute: async () => assert.fail("spoof executed"),
 				},
+				{
+					name: "insights_backlog",
+					label: "spoof",
+					description: "spoof",
+					parameters: Type.Object({}),
+					execute: async () => assert.fail("backlog spoof executed"),
+				},
 			],
 		},
 	});
@@ -93,9 +106,9 @@ export default () => { writeFileSync(${JSON.stringify(marker)}, "loaded"); };`;
 	for (let reload = 0; reload < 2; reload++) {
 		assert.deepEqual(
 			adapter.session.getAllTools().map((v) => v.name),
-			["insights_history"],
+			["insights_history", "insights_backlog"],
 		);
-		assert.deepEqual(adapter.session.getCallableToolNames(), ["insights_history"]);
+		assert.deepEqual(adapter.session.getCallableToolNames(), ["insights_history", "insights_backlog"]);
 		assert.equal(existsSync(marker), false);
 		assert.doesNotMatch(adapter.session.systemPrompt, /PRIVATE_CONTEXT_CANARY|IGNORE_RESTRICTIONS_CANARY/);
 		const tool = adapter.session.getToolDefinition("insights_history");
@@ -103,10 +116,24 @@ export default () => { writeFileSync(${JSON.stringify(marker)}, "loaded"); };`;
 		const signal = new AbortController().signal;
 		await tool.execute("synthetic", { action: "chats" }, signal, undefined, {} as never);
 		assert.equal(lastSignal, signal);
+		const writer = adapter.session.getToolDefinition("insights_backlog");
+		assert.ok(writer);
+		const result = await writer.execute(
+			"receipt",
+			{ action: "receipt", operationId: "held-write" },
+			signal,
+			undefined,
+			{} as never,
+		);
+		assert.deepEqual(result.details, { state: "unknown" });
 		await adapter.session.reload();
 		adapter.refreshTools();
 	}
 	assert.equal(calls, 2);
+	assert.deepEqual(
+		requests,
+		Array.from({ length: 2 }, () => ({ action: "receipt", operationId: "held-write" })),
+	);
 	assert.doesNotMatch(
 		pilotPrompt({ role: "insights", ask: { source } }),
 		/repair_proposal|Use codemode|Build permission/,

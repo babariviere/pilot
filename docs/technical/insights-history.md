@@ -2,10 +2,11 @@
 
 ## Status and scope
 
-Internal Insights profile foundation only. No public HTTP/native setup route, live grant,
-private-history review or recurring rule is enabled by this change. The only model tool in this
-profile is `insights_history`. Backlog writes, report checkpoints, native activation and scheduling
-are separate integrations. This document does not certify end-to-end availability.
+Internal Insights profile and own-backlog persistence foundation only. No public HTTP/native setup
+route, live grant, private-history review or recurring rule is enabled by this change. The closed
+model tools are `insights_history` and `insights_backlog`. Report generation, native lifecycle
+confirmation, activation and scheduling remain separate integrations. This document does not certify
+end-to-end availability.
 
 ## Admission and recovery
 
@@ -28,7 +29,7 @@ cannot mint replacement authority. Recovery never recreates missing membership. 
 setup may be looked up after a lost reply; an unknown result is not permission to rerun creation.
 
 `insightsAdmission(callerId, worker)` derives `{ binding, revalidate() }` from the supervised live
-worker, not model arguments. Future narrow writers must revalidate inside their transaction and
+worker, not model arguments. The backlog writer revalidates inside its transaction and
 before delivering a result. It grants no generic mission-write authority. Startup, input admission,
 history-read completion and final IPC delivery recheck authority. Reload retains the role and its
 closed tool list; it does not upgrade an invalid grant.
@@ -67,15 +68,72 @@ Historical excerpts remain untrusted evidence, not instructions or approval. Ord
 no app-wide history tool. The profile can propose improvements, not approve implementation or change
 models/budgets/limits. Shipped work is not proof of verified benefit.
 
+## Own-backlog records and receipts
+
+`insights_backlog` derives its exact mission, report session and host from admission. It accepts
+only list/get/history/evidence/receipt, propose/amend, and save_report/save_checkpoint. Forged scope,
+lifecycle, approval and unknown nested fields are rejected independently of the model tool schema.
+SessionManager admits at most eight concurrent backlog calls. Requests cap encoded JSON at 64,000
+bytes; responses cap at 64 KiB. Pages contain at most 20 records and may stop earlier for byte limits.
+Use the returned nextCursor; list inventory is insertion-ordered, not an incremental change feed.
+
+Canonical findings are unassigned mission tracking tasks with typed metadata in `missions.sqlite`.
+Generic task editing, claiming, starting, completion, removal and ownership-resource attachment reject
+these tasks. Implementation requires separate approved work. A target-project reference never grants
+access or changes that project's backlog. Stable lowercase UUID finding keys deduplicate exactly
+within the admitted mission; semantic pattern deduplication remains the report author's responsibility.
+
+Each write supplies expectedRevision (zero for creation) and an operationId. A transaction checks CAS,
+appends immutable revisions/evidence, projects the task and saves its receipt together. Evidence UUIDs
+cannot be overwritten; corrections use new evidence keys. Implementation links are append-only.
+Evidence retains host-qualified source identity and observed/inferred labels, but is model-authored,
+not independently certified. Cost findings require baseline, assumptions, estimate, quality risks and
+laterResult; unknown baselines and unverified claims must remain explicit.
+
+Finding lifecycle is separate from mission task execution status. The model can propose/amend but
+cannot set lifecycle. `InsightsBacklog.confirmLifecycle` is a host-only explicit-user seam, not an IPC,
+HTTP or native action in this delivery. Its caller must supply actual user confirmation and its own
+durable operation ID, never derive approval from model prose. It starts no work. Confirmed scope is
+frozen except additional evidence, implementation links and later-result claims. Verified requires
+the current finding to be Shipped and explicit user confirmation; model claims never advance it.
+
+Reports and checkpoints retain bounded claims, finding references, stream identity, paging positions
+and explicit gaps. Missing/changed streams require partial/unavailable coverage and a gap; same-stream
+position regression requires a gap. These checks do not prove continuity, source receipt validity,
+complete discovery or coverage. The report integration must validate reader receipts and preserve
+unvisited sources/unfinished inventory rather than treating a timestamp or save as a coverage proof.
+
+All reads and write acknowledgements wait for MissionStore.durable(), then recheck admission before
+disclosure. Revocation/replacement during durability may leave a committed write without its ACK.
+Revocation and daemon shutdown drain admitted backlog calls before returning; shutdown also closes
+admission before draining. Stop invalidates already-captured admissions, including queued calls and
+ACKs waiting on durability. This in-memory fence does not establish persistent review-run cancellation
+or prevent a scheduler from retrying the same run after restart; the report/schedule integration must
+provide that durable fence.
+Look up receipt with the original operationId through a currently admitted worker; absence is Unknown,
+not proof of rejection and never permission for blind effect replay. Exact same-operation retries
+cannot create another task/revision; a changed payload or binding conflicts. Report/checkpoint receipts
+prove persistence only. Scheduler sent/started or a model-authored completed status is not report
+completion, delivery, coverage or benefit verification. Nothing here enables scheduling or repairs.
+
 ## Synthetic verification
 
 `packages/daemon/src/sessions.test.ts` exercises setup/replay, archived cross-project discovery,
 real committed cold storage, sanitization, missing storage, bounded pagination/truncation, cancellation,
 worker replacement, membership/project/host/revocation fences, forged IPC/accounting, reload,
 continuation refusal, asynchronous startup and failed/interrupted setup. No real accounts are used.
+Backlog IPC fixtures use a real MissionStore to check ordinary-worker/forged-scope denials, replacement
+and revocation while durability is held, withheld stale ACKs and receipt recovery without replay.
+
+`packages/daemon/src/insights-backlog.test.ts` covers exact deduplication, CAS races, append-only
+evidence and links, transaction rollback, unrelated-task preservation, generic execution denials,
+host lifecycle confirmations, separate Shipped/Verified states, report/checkpoint persistence across
+store reopen, stream gaps, closed parsing and UTF-8 page limits. These are synthetic store tests,
+not runtime security certification or proof of a real user's approval.
 
 `packages/kernel/src/insights-role.integration.test.ts` checks hostile project/personal resources,
-spoofed tool definitions, reload and malformed start envelopes before storage opens. Existing Ask,
+spoofed history/backlog tool definitions, reload, receipt forwarding and malformed start envelopes
+before storage opens. Existing Ask,
 Diagnostics, diagnostic-context/history and mission-service tests cover adjacent behavior. Typecheck,
 targeted formatting and whitespace checks cover the changed TypeScript surfaces. Swift only mirrors
 the role enum; no local Swift build or native UI activation is claimed.
@@ -84,4 +142,4 @@ The session suite has a separately reproduced failure on the parent implementati
 `a new execution drain is busy even during a reentrant idle worker factory notification`.
 Its assertion is retained unchanged; the failure is not evidence that the new profile passes that
 unrelated admission scenario. No live native setup, selected-provider disclosure, scheduler dispatch,
-report durability or benefit verification is established by these synthetic checks.
+end-to-end report delivery or benefit verification is established by these synthetic checks.
