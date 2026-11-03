@@ -66,10 +66,11 @@ ghost Buttons with an underline, and an inspector whose triage values are a quie
 label/value list: ghost Buttons showing the value (chevron on hover) that open checked
 Kit dropdown menus. See [Slack triage](slack-triage.md).
 
-The **Automations** page uses the same column and the calm settings list
-pattern: one-line rows with a state mark slot, a right status, at most one
-action and a chevron that discloses the message, with technical fields under
-Details. See [Automations page](scheduled-messages.md).
+The **Automations** page uses the same column with grouped, hairline-bordered
+lists of inset rows: a glyph tile (follow-up, new chat or failure), target over
+a muted message preview, time over status, at most one action (Cancel revealed
+on hover/focus) and a chevron that discloses the message, with technical fields
+under Details. See [Automations page](scheduled-messages.md).
 
 Layout is a left-aligned reading column, not a grid of nested cards:
 

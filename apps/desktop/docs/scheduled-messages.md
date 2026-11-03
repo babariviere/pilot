@@ -6,13 +6,16 @@ replaces the old read-only Settings → Scheduled messages roster (D41).
 
 ```text
 Automations                                              [↻]
-All projects · 2 upcoming · 1 need attention
+2 scheduled · 1 needs attention
 
-Needs attention
-  ▲ Yesterday 14:00 → New chat in Docs        Couldn’t send  Dismiss  ⌄
-One-time · 2
-    Tomorrow at 08:00 → Design review                        Cancel   ⌄
-    Fri at 09:00 → New chat in Pilot                         Cancel   ⌄
+Needs attention 1
+  [▲] New chat in Docs                  Yesterday at 14:00   Dismiss  ⌄
+      Investigate the failing deploy         Couldn’t send
+One-time 2
+  [▭] Design review                      Tomorrow at 08:00            ⌄
+      Check the new tokens
+  [✎] New chat in Pilot                  Fri at 09:00                 ⌄
+      Run the weekly check
 ```
 
 Sections hide when empty: **Needs attention**, **Recurring** (recurring rules,
@@ -23,13 +26,18 @@ for recurring rules. Until then the page has no creation action (see
 
 ## Rows
 
-Calm list pattern (title + one meta line, one-line rows, at most one action,
-chevron details), the same as Settings → MCP connections.
+Calm list pattern (title + one meta line, at most one action per row, chevron
+details). Each section is a hairline-bordered group (white in light, the tray
+color in dark) of inset rows that highlight on hover and while open. A row has a
+glyph tile, the target over a muted one-line preview of the message, and the
+time over its status on the right.
 
-- **One-time** lists pending and sending one-time messages by due time:
-  local time in words, an arrow, then the target chat's current title or
-  "New chat in <project>". A message to a chat the shell doesn't list says
-  "a chat not listed here"; titles never select a target.
+- The glyph says what will happen: a chat-bubble tile for a follow-up in an
+  existing chat, a new-chat tile for a new chat, a red alert tile for a failure.
+- **One-time** lists pending and sending one-time messages by due time. The
+  title is the target chat's current title or "New chat in <project>". A
+  message to a chat the shell doesn't list says "Unlisted chat"; titles never
+  select a target.
 - **Needs attention** lists failed one-time messages, newest first, with a red
   mark and "Couldn’t send". Recurring notices (missed, skipped, late) join it later.
 - Sent and cancelled records are history and stay off the page. Recurring rules
@@ -39,6 +47,10 @@ chevron details), the same as Settings → MCP connections.
   (claimed, delivery not confirmed) or **Couldn’t send**.
 - Times are local, in words: "Today at 18:00", "Tomorrow at 08:00", "Fri at
   09:00", "13 Nov at 09:00".
+- **Cancel** shows on hover, on keyboard focus and while a row is open, so the
+  list stays quiet; **Dismiss** always shows. A fixed action slot keeps the
+  times aligned. The empty page shows the page glyph, "Nothing scheduled" and
+  one line saying what appears here.
 
 Clicking a row or its chevron opens the full local time, the exact message
 (selectable) and any error. Technical fields (title, schedule and target IDs,

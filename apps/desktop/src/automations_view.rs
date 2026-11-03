@@ -7,8 +7,7 @@ use crate::{
     mcp_status::timestamp,
     scheduled_messages::{Item, RowAction, Section, State, Status, Target},
     scheduled_messages_reader::{Outcome, Reader, Request, perform},
-    state_mark::{self, Glyph, Mark},
-    ui::{self, Action, IconRole, Notice, Space, Text, Tone},
+    ui::{self, Action, IconRole, Notice, Radius, Text, Tone},
 };
 use gpui_kit::{
     Context, FocusHandle, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
@@ -262,7 +261,7 @@ impl Automations {
                 .titles
                 .get(session_id)
                 .cloned()
-                .unwrap_or_else(|| "a chat not listed here".into()),
+                .unwrap_or_else(|| "Unlisted chat".into()),
             Target::Chat { .. } => match item
                 .new_chat_project()
                 .and_then(|id| self.projects.iter().find(|p| p.id == id))
@@ -272,14 +271,33 @@ impl Automations {
             },
         }
     }
-    fn row(&self, item: &Item, now: u64, cx: &mut Context<Self>) -> impl IntoElement {
+    fn row(
+        &self,
+        item: &Item,
+        now: u64,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let key = item.id.clone();
         let id = |part: &str| SharedString::from(format!("automation-{part}-{key}"));
         let expanded = self.expanded.as_ref() == Some(&item.id);
-        let muted = cx.theme().muted_foreground;
+        let theme = cx.theme();
+        let (muted, hover, danger) = (theme.muted_foreground, theme.list_hover, theme.danger);
+        let dark = theme.is_dark();
         let read_at = self.state.read_at.unwrap_or(now);
         let status = item.status(read_at);
-        let line_text = format!("{} → {}", item.when(now), self.target(item));
+        let failed = status == Some(Status::Failed);
+        let when = item.when(now);
+        let target = self.target(item);
+        let line_text = format!("{when} → {target}");
+        let preview = item
+            .message()
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("No message")
+            .to_owned();
+        let group = SharedString::from(format!("automation-hover-{key}"));
         let toggle = {
             let key = key.clone();
             move |v: &mut Self, cx: &mut Context<Self>| {
@@ -291,55 +309,97 @@ impl Automations {
                 cx.notify();
             }
         };
-        let mut line = div()
-            .h_flex()
-            .items_center()
-            .w_full()
-            .min_w_0()
-            .gap_2()
-            .min_h(px(36.))
-            .child(
-                div()
-                    .flex_none()
-                    .w(px(state_mark::SLOT))
-                    .flex()
-                    .justify_center()
-                    .when(status == Some(Status::Failed), |d| {
-                        d.child(state_mark::glyph(Glyph::Mark(Mark::Failed), cx))
-                    }),
-            )
-            .child({
-                let toggle = toggle.clone();
-                div()
-                    .id(id("text"))
-                    .test_support()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .cursor_pointer()
-                    .text_size(px(Text::Body.size()))
-                    .child(SharedString::from(line_text.clone()))
-                    .on_click(cx.listener(move |v, _, _, cx| toggle(v, cx)))
-            });
+        // The glyph names what will happen: a follow-up in a chat, or a new chat.
+        let (glyph, tint, ink) = if failed {
+            (IconRole::Error, danger.opacity(0.12), danger)
+        } else {
+            let glyph = match item.target {
+                Target::Message { .. } => IconRole::Chats,
+                Target::Chat { .. } => IconRole::NewChat,
+            };
+            (glyph, tile(dark, cx), muted)
+        };
+        let mut meta = div().v_flex().flex_none().items_end().gap(px(2.)).child(
+            ui::text(Text::Caption, SharedString::from(when))
+                .whitespace_nowrap()
+                .text_color(muted),
+        );
         if let Some(status) = status {
             let tone = match status {
                 Status::Failed => Tone::Error,
                 Status::Overdue => Tone::Warning,
                 Status::Sending => Tone::Quiet,
             };
-            line = line.child(
+            meta = meta.child(
                 ui::text(Text::Caption, status.label())
                     .id(id("status"))
                     .test_support()
-                    .flex_none()
+                    .whitespace_nowrap()
+                    .font_medium()
                     .text_color(tone.color(cx)),
             );
         }
+        let main = {
+            let toggle = toggle.clone();
+            div()
+                .id(id("text"))
+                .test_support()
+                .h_flex()
+                .flex_1()
+                .min_w_0()
+                .items_center()
+                .gap_3()
+                .cursor_pointer()
+                .child(
+                    div()
+                        .flex_none()
+                        .size(px(TILE))
+                        .rounded(px(Radius::ROW))
+                        .bg(tint)
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(glyph.icon().text_color(ink)),
+                )
+                .child(
+                    div()
+                        .v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap(px(1.))
+                        .child(ui::text(Text::Body, SharedString::from(target)).truncate())
+                        .child(
+                            ui::text(Text::Caption, SharedString::from(preview))
+                                .truncate()
+                                .text_color(muted),
+                        ),
+                )
+                .child(meta)
+                .on_click(cx.listener(move |v, _, _, cx| toggle(v, cx)))
+        };
+        let note = self
+            .note
+            .as_ref()
+            .filter(|n| n.id.as_ref() == Some(&item.id));
+        let mut line = div()
+            .h_flex()
+            .items_center()
+            .w_full()
+            .min_w_0()
+            .gap_2()
+            .px(px(INSET))
+            .py(px(8.))
+            .child(main);
+        // A fixed slot keeps times aligned whether or not a row has an action.
+        let mut slot = div().flex_none().w(px(ACTION)).h_flex().justify_end();
         if let Some(action) = item.action() {
             let mine = self.pending.as_ref() == Some(&item.id);
+            // Cancel waits on hover or keyboard focus; Dismiss is why the row is here.
+            let quiet = action == RowAction::Cancel && !expanded && !mine && note.is_none();
             let target = key.clone();
-            line = line.child(
+            slot = slot.child(
                 ui::action(id("action"), action.label(), Action::Quiet)
+                    .small()
                     .flex_none()
                     .tooltip(match action {
                         RowAction::Cancel => "Stops this message from being sent",
@@ -351,10 +411,15 @@ impl Automations {
                     )))
                     .disabled(self.pending.is_some() || !self.open)
                     .loading(mine)
+                    .when(quiet, |b| {
+                        b.opacity(0.)
+                            .group_hover(group.clone(), |s| s.opacity(1.))
+                            .focus_visible(|s| s.opacity(1.))
+                    })
                     .on_click(cx.listener(move |v, _, _, cx| v.run(target.clone(), cx))),
             );
         }
-        line = line.child(
+        line = line.child(slot).child(
             ui::icon_action(
                 id("details"),
                 SharedString::from(if expanded {
@@ -369,19 +434,18 @@ impl Automations {
                 },
                 Action::Quiet,
             )
+            .small()
             .flex_none()
             .on_click(cx.listener(move |v, _, _, cx| toggle(v, cx))),
         );
-        let note = self
-            .note
-            .as_ref()
-            .filter(|n| n.id.as_ref() == Some(&item.id));
         let extra = expanded || note.is_some();
         let mut more = div()
             .v_flex()
             .min_w_0()
-            .gap_1()
-            .pl(px(state_mark::SLOT + Space::CONTROL))
+            .gap_2()
+            .pl(px(INSET + TILE + 12.))
+            .pr(px(INSET))
+            .pb(px(12.))
             .text_size(px(Text::Caption.size()));
         if let Some(note) = note {
             more = more.child(
@@ -402,22 +466,33 @@ impl Automations {
                 .child(ui::text(Text::Caption, SharedString::from(lead)).text_color(muted))
                 .child(
                     div()
-                        .id(id("message"))
-                        .test_support()
                         .w_full()
                         .min_w_0()
-                        .text_size(px(Text::Body.size()))
-                        .child(SelectableText::new(
-                            id("message-text"),
-                            SharedString::from(item.message().to_owned()),
-                        )),
+                        .px_3()
+                        .py_2()
+                        .rounded(px(Radius::CONTROL))
+                        .bg(crate::appearance::card(cx))
+                        .border(crate::appearance::hairline(window))
+                        .border_color(cx.theme().border)
+                        .child(
+                            div()
+                                .id(id("message"))
+                                .test_support()
+                                .w_full()
+                                .min_w_0()
+                                .text_size(px(Text::Body.size()))
+                                .child(SelectableText::new(
+                                    id("message-text"),
+                                    SharedString::from(item.message().to_owned()),
+                                )),
+                        ),
                 );
             if let Some(error) = &item.error {
                 more = more.child(
                     div()
                         .id(id("error"))
                         .test_support()
-                        .text_color(cx.theme().danger)
+                        .text_color(danger)
                         .child(SelectableText::new(
                             id("error-text"),
                             SharedString::from(error.clone()),
@@ -467,48 +542,70 @@ impl Automations {
         div()
             .id(id("row"))
             .test_support()
+            .group(group)
             .v_flex()
             .w_full()
             .min_w_0()
-            .pb(px(if extra { 8. } else { 0. }))
+            .rounded(px(Radius::ROW))
+            .when(expanded, |d| d.bg(hover))
+            .hover(move |s| s.bg(hover))
             .child(line)
             .when(extra, |d| d.child(more))
     }
     fn group(
         &self,
         id: &'static str,
-        label: String,
+        label: &'static str,
         rows: &[&Item],
         now: u64,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let muted = cx.theme().muted_foreground;
+        let dark = cx.theme().is_dark();
+        let mut list = div()
+            .v_flex()
+            .w_full()
+            .min_w_0()
+            .gap(px(2.))
+            .p(px(4.))
+            .rounded(px(Radius::CARD))
+            .border(crate::appearance::hairline(window))
+            .border_color(cx.theme().border)
+            .bg(container(dark, cx));
+        for item in rows.iter().take(ROW_CAP) {
+            list = list.child(self.row(item, now, window, cx));
+        }
         let mut group = div()
             .id(id)
             .test_support()
             .v_flex()
             .w_full()
             .min_w_0()
+            .gap_2()
             .child(
-                ui::text(Text::Caption, SharedString::from(label))
-                    .font_semibold()
-                    .text_color(cx.theme().muted_foreground)
-                    .pb_1(),
-            );
-        for (i, item) in rows.iter().take(ROW_CAP).enumerate() {
-            if i > 0 {
-                group = group.child(ui::rule(window, cx));
-            }
-            group = group.child(self.row(item, now, cx));
-        }
+                div()
+                    .h_flex()
+                    .items_baseline()
+                    .gap_1p5()
+                    .child(
+                        ui::text(Text::Label, label)
+                            .font_semibold()
+                            .text_color(cx.theme().foreground),
+                    )
+                    .child(
+                        ui::text(Text::Caption, SharedString::from(rows.len().to_string()))
+                            .text_color(muted),
+                    ),
+            )
+            .child(list);
         if rows.len() > ROW_CAP {
             group = group.child(
                 ui::text(
                     Text::Caption,
                     SharedString::from(format!("Showing the first {ROW_CAP} of {}", rows.len())),
                 )
-                .text_color(cx.theme().muted_foreground)
-                .pt_1(),
+                .text_color(muted),
             );
         }
         group
@@ -522,12 +619,12 @@ impl Render for Automations {
             || (Vec::new(), Vec::new()),
             |s| (s.section(Section::Attention), s.section(Section::OneTime)),
         );
-        let meta = match (&self.state.snapshot, one_time.len(), attention.len()) {
-            (None, ..) => "All projects".to_owned(),
-            (Some(_), 0, 0) => "All projects · nothing scheduled".to_owned(),
-            (Some(_), n, 0) => format!("All projects · {n} upcoming"),
-            (Some(_), 0, a) => format!("All projects · {a} need attention"),
-            (Some(_), n, a) => format!("All projects · {n} upcoming · {a} need attention"),
+        let needs = |a: usize| format!("{a} {} attention", if a == 1 { "needs" } else { "need" });
+        let meta = match (one_time.len(), attention.len()) {
+            (0, 0) => "Across all projects".to_owned(),
+            (n, 0) => format!("{n} scheduled across all projects"),
+            (0, a) => needs(a),
+            (n, a) => format!("{n} scheduled · {}", needs(a)),
         };
         let refresh_help = match self.state.read_at {
             Some(at) => format!("Refresh · last read {}", timestamp(at)),
@@ -593,7 +690,7 @@ impl Render for Automations {
             if !attention.is_empty() {
                 page = page.child(self.group(
                     "automations-attention",
-                    "Needs attention".into(),
+                    "Needs attention",
                     &attention,
                     now,
                     window,
@@ -603,7 +700,7 @@ impl Render for Automations {
             if !one_time.is_empty() {
                 page = page.child(self.group(
                     "automations-one-time",
-                    format!("One-time · {}", one_time.len()),
+                    "One-time",
                     &one_time,
                     now,
                     window,
@@ -612,11 +709,7 @@ impl Render for Automations {
             }
             // Sent and cancelled records are history, not shown here.
             if attention.is_empty() && one_time.is_empty() {
-                page = page.child(notice(
-                    "automations-empty",
-                    "Nothing scheduled.",
-                    Tone::Quiet,
-                ));
+                page = page.child(empty(muted, cx));
             }
         }
         div()
@@ -635,4 +728,54 @@ fn notice(id: &'static str, text: impl Into<SharedString>, tone: Tone) -> impl I
         .id(id)
         .test_support()
         .child(Notice::new(text).tone(tone))
+}
+/// Row glyph tile and group geometry, in points.
+const TILE: f32 = 28.;
+const INSET: f32 = 10.;
+/// Wide enough for Cancel or Dismiss at the small control size.
+const ACTION: f32 = 64.;
+/// The grouped list: white on the light page, a lifted tray on the dark one.
+fn container(dark: bool, cx: &gpui_kit::App) -> gpui_kit::Hsla {
+    if dark {
+        crate::appearance::tray(cx)
+    } else {
+        crate::appearance::card(cx)
+    }
+}
+/// The glyph tile contrasts with the group it sits in.
+fn tile(dark: bool, cx: &gpui_kit::App) -> gpui_kit::Hsla {
+    if dark {
+        crate::appearance::card(cx)
+    } else {
+        crate::appearance::tray(cx)
+    }
+}
+fn empty(muted: gpui_kit::Hsla, cx: &gpui_kit::App) -> impl IntoElement {
+    div()
+        .id("automations-empty")
+        .test_support()
+        .v_flex()
+        .items_center()
+        .gap_1()
+        .w_full()
+        .pt(px(56.))
+        .child(
+            div()
+                .size(px(44.))
+                .mb_2()
+                .rounded(px(Radius::CARD))
+                .bg(crate::appearance::tray(cx))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(IconRole::Automations.icon().size_5().text_color(muted)),
+        )
+        .child(ui::text(Text::Body, "Nothing scheduled").font_semibold())
+        .child(
+            ui::text(
+                Text::Caption,
+                "Scheduled messages and new chats appear here.",
+            )
+            .text_color(muted),
+        )
 }

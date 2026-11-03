@@ -218,6 +218,10 @@ pub fn run_automations_probe(cx: &mut HeadlessAppContext) {
                 Reply::json(200, json!({"ok": true})),
             );
             s.reply("GET /api/schedules", Reply::json(200, after.clone()));
+            // Cancel waits for hover or keyboard focus on a collapsed row.
+            cx.update_window(h, |_, w, cx| w.hover("automation-row-one", cx))
+                .unwrap();
+            settle(cx, h);
             cx.update_window(h, |_, w, cx| w.click("automation-action-one", cx))
                 .unwrap();
             settle(cx, h);
@@ -230,6 +234,9 @@ pub fn run_automations_probe(cx: &mut HeadlessAppContext) {
             let mut changed = after[3].clone();
             changed["revision"] = json!(9);
             s.reply("GET /api/schedules/four", Reply::json(200, changed));
+            cx.update_window(h, |_, w, cx| w.hover("automation-row-four", cx))
+                .unwrap();
+            settle(cx, h);
             cx.update_window(h, |_, w, cx| w.click("automation-action-four", cx))
                 .unwrap();
             settle(cx, h);
