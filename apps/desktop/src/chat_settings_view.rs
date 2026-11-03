@@ -14,7 +14,7 @@ use gpui_kit::{
 
 pub(crate) const LABEL: &str = "Automatic handoff (experimental)";
 const DESCRIPTION: &str = "Long chats continue in a fresh model context, with full history kept. Applies across this host; mission coordinators are unchanged.";
-const TIMING: &str = "At the lesser of 100k context tokens or 70% of the model window, handoff waits for a tool-safe model-request boundary. An admitted handoff may finish after you turn this off.";
+const TIMING: &str = "At 70% of the model window (earlier for very small windows), handoff waits for a tool-safe model-request boundary. An admitted handoff may finish after you turn this off.";
 
 pub(crate) struct ChatSettings {
     focus: FocusHandle,

@@ -18,13 +18,13 @@ handoffs than the previous handoff and new original messages alone?
 
 The checklist reuses `context-digest.ts`, excluding the free-form assistant report and
 rolling activity transcript. It still contains heuristic historical interpretations,
-not verified facts or permissions. Each arm gets the same instructions and 8,192-byte
+not verified facts or permissions. Each arm gets the same instructions and 16,384-byte
 output ceiling. The checklist's additional input is counted, not hidden or compensated
 by withholding history from the baseline. Neither successor receives a second summary:
 only its own generated handoff is carried to the next writer.
 
 The historical screening below used a 4,096-byte ceiling. Current requests share the
-runtime's 3,000-byte target and 8,192-byte hard limit; changed request hashes require
+runtime's 12,000-byte target and 16,384-byte hard limit; changed request hashes require
 new responses rather than reusing that screening as evidence for the new policy.
 
 Each arm evolves independently. Both must finish a boundary before either successor is

@@ -8,8 +8,8 @@ The settings screen is daemon-backed, not a GUI-only preference or a pi settings
 ## Trigger and continuation
 
 At a native model-request boundary, after the current tool round has settled, handoff
-starts when estimated context exceeds the lesser of 100,000 tokens and 70% of the current
-model window. Windows smaller than the reserve also reduce the trigger. The native
+starts when estimated context exceeds 70% of the current model window, without a fixed
+100,000-token cap. Windows smaller than the reserve also reduce the trigger. The native
 usage measure combines the latest assistant's reported input, cache and output tokens
 with estimates of newer context;
 it is not an exact tokenizer prediction. There is no periodic wake-up or idle handoff.
@@ -26,9 +26,13 @@ must fit the model window with room reserved for the handoff or the operation fa
 Historical image meaning can still be lost: `history_recall` returns text, not pixels.
 Retained transcript/attachment storage is not a promise of model-side visual recall.
 
-The output must be a clean, nonempty, tool-free stop, within 8,192 UTF-8 bytes after
+The output must be a clean, nonempty, tool-free stop, within 16,384 UTF-8 bytes after
 the existing history safeguards redact credentials and neutralize framing. The writer
-targets 3,000 bytes for headroom. A fully received, oversized draft gets one tool-free
+targets at most 12,000 bytes for headroom, using less for simple tasks. Five sections
+cover goal/constraints, decisions/rejected approaches, work state, exact verification
+results and next steps/blockers. Still-relevant prior constraints and unfinished work
+carry forward; repetition and bulky logs are cut before task-critical specifics.
+A fully received, oversized draft gets one tool-free
 rewrite request using that sanitized draft and its measured UTF-8 byte count, provided
 it fits the model window. This is not a replay of an interrupted request.
 Both calls count toward usage; neither can run

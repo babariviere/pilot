@@ -656,8 +656,8 @@ or malformed acknowledgment is Unknown, never success. Check again is read-only.
 An older daemon is Unavailable, never an unchecked default.
 
 A pending PATCH blocks app-owned restart, including after Settings closes.
-Read-only GET and retained Unknown do not. The timing caption names the lesser
-of 100k context tokens and 70% of the model window, the native tool-safe
+Read-only GET and retained Unknown do not. The timing caption names 70% of the
+model window (earlier for very small windows), the native tool-safe
 model-request boundary, and that an admitted handoff may finish after disabling.
 
 Transcript `pi.compaction` markers with `data.mode = "handoff"` say Context

@@ -157,10 +157,16 @@ test("responses reject duplicates, malformed fields, empty output and UTF-8 over
 		assert.throws(() => parseHandoffResponses(input));
 	assert.throws(() => compareHandoffs([response, response]), /Duplicate/);
 	assert.throws(() => compareHandoffs([answer(request, " ")]), /nonempty/);
-	assert.throws(() => compareHandoffs([answer(request, "🦀".repeat(2049))]), /UTF-8/);
+	assert.throws(
+		() => compareHandoffs([answer(request, "🦀".repeat(HANDOFF_EVALUATION.outputBytes / 4 + 1))]),
+		/UTF-8/,
+	);
 	assert.equal(
-		parseHandoffResponses({ version: 1, responses: [answer(request, "🦀".repeat(2048))] })[0]!.handoff.length,
-		4096,
+		parseHandoffResponses({
+			version: 1,
+			responses: [answer(request, "🦀".repeat(HANDOFF_EVALUATION.outputBytes / 4))],
+		})[0]!.handoff.length,
+		HANDOFF_EVALUATION.outputBytes / 2,
 	);
 });
 

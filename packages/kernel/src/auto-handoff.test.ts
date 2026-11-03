@@ -34,6 +34,7 @@ import {
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { AutoHandoff, AutoHandoffDoc, autoHandoffPolicy, handoffSource } from "./auto-handoff.ts";
 import { DeterministicCompaction } from "./deterministic-compaction.ts";
+import { HANDOFF_INSTRUCTIONS, HANDOFF_OUTPUT_BYTES, HANDOFF_TARGET_BYTES } from "./handoff-prompt.ts";
 import { searchHistory } from "./history-recall.ts";
 
 type Chat = Awaited<ReturnType<typeof open>>;
@@ -118,14 +119,29 @@ const entries = async (chat: Chat) =>
 const handoff = () =>
 	fauxAssistantMessage("Handoff: continue the export without pushing. The old check is unverified. #1");
 
-test("handoff trigger is 100k or 70% of the window, with no background or unknown-window work", () => {
-	assert.equal(200_000 - autoHandoffPolicy(200_000).reserveTokens, 100_000);
+test("handoff trigger is 70% of the window without a 100k cap, background or unknown-window work", () => {
+	assert.equal(200_000 - autoHandoffPolicy(200_000).reserveTokens, 140_000);
+	assert.equal(1_000_000 - autoHandoffPolicy(1_000_000).reserveTokens, 700_000);
 	assert.equal(32_000 - autoHandoffPolicy(32_000).reserveTokens, 22_400);
 	assert.equal(8_000 - autoHandoffPolicy(8_000).reserveTokens, 5_600);
+	assert.equal(4_000 - autoHandoffPolicy(4_000).reserveTokens, 1_952);
 	assert.equal(autoHandoffPolicy(32_000).backgroundTokens, 0);
 	assert.equal(autoHandoffPolicy(0).enabled, false);
 	assert.equal(autoHandoffPolicy(Number.NaN).enabled, false);
 });
+
+for (const reportedTokens of [120_000, 145_000])
+	test(`a 200k window at ${reportedTokens} tokens follows the 70% threshold`, async (t) => {
+		const chat = await open(t, new MemoryStorage(), false, 200_000);
+		await seed(chat, reportedTokens);
+		chat.faux.setResponses([...(reportedTokens > 140_000 ? [handoff()] : []), fauxAssistantMessage("Continued")]);
+		assert.equal((await run(chat)).status, "done");
+		assert.equal(chat.faux.state.callCount, reportedTokens > 140_000 ? 2 : 1);
+		assert.equal(
+			(await entries(chat)).some((entry) => entry.kind === "pi.compaction"),
+			reportedTokens > 140_000,
+		);
+	});
 
 test("threshold handoff replaces processed history but carries unconsumed input in the same run", async (t) => {
 	const chat = await open(t);
@@ -436,7 +452,7 @@ for (const failure of [
 			if (failure === "raw-limit") return fauxAssistantMessage("x".repeat(256_001));
 			if (failure === "length") return fauxAssistantMessage("Partial handoff", { stopReason: "length" });
 			if (failure === "tool") return fauxAssistantMessage(fauxToolCall("effect", {}), { stopReason: "toolUse" });
-			if (failure === "oversized") return fauxAssistantMessage("🦀".repeat(2049));
+			if (failure === "oversized") return fauxAssistantMessage("🦀".repeat(HANDOFF_OUTPUT_BYTES / 4 + 1));
 			return fauxAssistantMessage("", { stopReason: "error", errorMessage: "Provider failed" });
 		};
 		chat.faux.setResponses([response, ...(failure === "oversized" ? [response] : [])]);
@@ -454,7 +470,8 @@ for (const failure of [
 			/handoff/i,
 		);
 		const error = (await chat.harness.snapshot(LiveDoc, chat.conversation.id, context))!.compactionFailure!.error;
-		if (failure === "oversized") assert.match(error, /8192-byte limit \(8196 bytes\)/);
+		if (failure === "oversized")
+			assert.ok(error.includes(`${HANDOFF_OUTPUT_BYTES}-byte limit (${HANDOFF_OUTPUT_BYTES + 4} bytes)`));
 		if (failure === "length") assert.match(error, /output-token limit/);
 		if (failure === "provider-error") assert.match(error, /model request failed/);
 		const saved = (await chat.harness.snapshot(AutoHandoffDoc, chat.conversation.id, context))!.last!;
@@ -476,7 +493,7 @@ for (const failure of [
 				assert.equal(
 					saved.diagnostic?.rawBytes,
 					failure === "oversized"
-						? 8196
+						? HANDOFF_OUTPUT_BYTES + 4
 						: Buffer.byteLength(
 								response()
 									.content.filter((block) => block.type === "text")
@@ -575,15 +592,39 @@ test("malformed provider stop categories cannot leak into durable diagnostics", 
 	assert.doesNotMatch(JSON.stringify(saved), /PRIVATE_STOP_REASON_CANARY/);
 });
 
-test("a 4716-byte handoff continues intact without a shortening request", async (t) => {
+test("handoff instructions prioritize structured continuity rather than aggressive compression", () => {
+	assert.equal(HANDOFF_TARGET_BYTES, 12_000);
+	assert.equal(HANDOFF_OUTPUT_BYTES, 16_384);
+	for (const section of ["Goal and constraints", "Decisions", "Work state", "Verification", "Next steps"])
+		assert.ok(HANDOFF_INSTRUCTIONS.includes(section));
+	assert.match(HANDOFF_INSTRUCTIONS, /exact check commands/);
+	assert.match(HANDOFF_INSTRUCTIONS, /rejected approaches/);
+	assert.match(HANDOFF_INSTRUCTIONS, /still-relevant constraints and unfinished work from prior handoffs/);
+	assert.match(HANDOFF_INSTRUCTIONS, /unknown action outcome must not become success or permission to retry/);
+	assert.doesNotMatch(HANDOFF_INSTRUCTIONS, /3000/);
+});
+
+test("a detailed handoff above the old ceiling continues intact without shortening", async (t) => {
 	const chat = await open(t);
 	await seed(chat);
-	const text = "🦀".repeat(1179);
-	assert.equal(Buffer.byteLength(text), 4716);
+	const text = [
+		"Goal and constraints: preserve CSV compatibility; no push authorized. #1",
+		"Decisions: rejected schema migration because old readers still need the original columns. #2",
+		`Work state: unfinished export in src/export.ts. ${"🦀".repeat(2400)}`,
+		"Verification: node --test export.test.ts failed; unrelated.test.ts passed, not a recovery. #3",
+		"Next steps: fix the missing timezone conversion, rerun export.test.ts. Publish outcome unknown; do not retry. #4",
+	].join("\n");
+	assert.ok(Buffer.byteLength(text) > 8192);
+	assert.ok(Buffer.byteLength(text) < HANDOFF_TARGET_BYTES);
 	chat.faux.setResponses([
-		fauxAssistantMessage(text),
 		(request) => {
-			assert.ok(JSON.stringify(request.messages).includes(text));
+			const instructions = JSON.stringify(request.messages);
+			assert.match(instructions, /Prepare a handoff/);
+			assert.ok(instructions.includes(`at most ${HANDOFF_TARGET_BYTES} UTF-8 bytes`));
+			return fauxAssistantMessage(text);
+		},
+		(request) => {
+			assert.ok(JSON.stringify(request.messages).includes(JSON.stringify(text).slice(1, -1)));
 			return fauxAssistantMessage("Continued");
 		},
 	]);
@@ -612,11 +653,14 @@ test("the larger handoff allowance must fit the fresh model window before dispat
 test("the exact UTF-8 byte ceiling accepts complete Unicode text without a rewrite", async (t) => {
 	const chat = await open(t);
 	await seed(chat);
-	chat.faux.setResponses([fauxAssistantMessage("🦀".repeat(2048)), fauxAssistantMessage("Continued")]);
+	chat.faux.setResponses([
+		fauxAssistantMessage("🦀".repeat(HANDOFF_OUTPUT_BYTES / 4)),
+		fauxAssistantMessage("Continued"),
+	]);
 	assert.equal((await run(chat)).status, "done");
 	assert.equal(chat.faux.state.callCount, 2);
 	const saved = (await chat.harness.snapshot(AutoHandoffDoc, chat.conversation.id, context))!.last!;
-	assert.equal(saved.diagnostic?.sanitizedBytes, 8192);
+	assert.equal(saved.diagnostic?.sanitizedBytes, HANDOFF_OUTPUT_BYTES);
 	assert.equal(saved.diagnostic?.reason, "accepted");
 });
 
@@ -635,13 +679,17 @@ test("a completed oversized handoff is rewritten once without clipping or repeat
 	});
 	chat.faux.setResponses([
 		() => {
-			const answer = fauxAssistantMessage(`Keep the export constraint. ${"🦀".repeat(2200)} FINAL_NEXT_STEP`);
+			const answer = fauxAssistantMessage(
+				`Keep the export constraint. ${"🦀".repeat(HANDOFF_OUTPUT_BYTES / 4 + 200)} FINAL_NEXT_STEP`,
+			);
 			return answer;
 		},
 		(request, options) => {
 			const source = JSON.stringify(request.messages);
 			assert.match(source, /Rewrite this completed draft/);
-			assert.match(source, /hard limit is 8192 UTF-8 bytes/);
+			assert.ok(source.includes(`hard limit is ${HANDOFF_OUTPUT_BYTES} UTF-8 bytes`));
+			assert.ok(source.includes(`at most ${HANDOFF_TARGET_BYTES} UTF-8 bytes`));
+			assert.match(source, /Keep the five sections/);
 			const draft = JSON.parse(request.messages.findLast((message) => message.role === "user")!.content as string);
 			assert.ok(draft.instruction.includes(`The draft measures ${Buffer.byteLength(draft.draft)} UTF-8 bytes.`));
 			assert.match(source, /FINAL_NEXT_STEP/);
@@ -744,7 +792,7 @@ for (const interruption of ["throw", "stop", "role-change"] as const)
 			finish = deferred<ReturnType<typeof fauxAssistantMessage>>();
 		t.after(() => finish.resolve(handoff()));
 		chat.faux.setResponses([
-			fauxAssistantMessage("🦀".repeat(2049)),
+			fauxAssistantMessage("🦀".repeat(HANDOFF_OUTPUT_BYTES / 4 + 1)),
 			async (_, options) => {
 				if (interruption === "throw") throw new Error("Unknown rewrite outcome");
 				if (interruption === "role-change") chat.state.coordinator = true;
@@ -1277,7 +1325,7 @@ for (const cut of ["pending", "rewrite-pending", "ready"] as const)
 		t.after(() => release.resolve());
 		if (cut !== "ready") {
 			first.faux.setResponses([
-				...(cut === "rewrite-pending" ? [fauxAssistantMessage("🦀".repeat(2049))] : []),
+				...(cut === "rewrite-pending" ? [fauxAssistantMessage("🦀".repeat(HANDOFF_OUTPUT_BYTES / 4 + 1))] : []),
 				async (_, options) => {
 					options?.signal?.addEventListener("abort", () => release.resolve(), { once: true });
 					entered.resolve();
