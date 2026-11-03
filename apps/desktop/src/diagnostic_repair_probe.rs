@@ -3,7 +3,8 @@
 use super::*;
 use crate::{
     diagnostic_repair::{
-        self as repair, Attempt, Outcome, ProjectState, Review, SUGGEST_MESSAGE, State,
+        self as repair, Attempt, Draft, ModelChoice, Outcome, ProjectState, Review,
+        SUGGEST_MESSAGE, State,
     },
     interaction::{Interaction, WriteCommand},
 };
@@ -56,10 +57,27 @@ fn handoff() -> Value {
 }
 fn review(project: Value, checkouts: bool) -> Review {
     let spec = specialist("test-lineage", true);
+    review_of(
+        project,
+        checkouts,
+        Draft::of(spec.proposal().unwrap()),
+        handoff(),
+    )
+}
+/// What pilotd returns for `draft`, with the repair project's scoped catalog.
+fn review_of(project: Value, checkouts: bool, draft: Draft, handoff: Value) -> Review {
+    let spec = specialist("test-lineage", true);
     let p = spec.proposal().unwrap();
     let subject = spec.subject.clone().unwrap();
+    let available = project["state"] == "available";
     Review {
-        handoff: repair::handoff(&handoff(), p, &subject),
+        draft,
+        models: available.then(|| {
+            Ok(Arc::new(
+                serde_json::from_value(crate::chat_models_fixture::catalog()).unwrap(),
+            ))
+        }),
+        handoff: repair::handoff(&handoff, p, &subject),
         project: repair::project_status(&project),
         checkouts: checkouts.then(|| {
             crate::local_model::projects(
@@ -128,6 +146,36 @@ impl Probe {
             .unwrap();
         settle(cx, self.h);
     }
+    /// Click inside the bounded review scroll, scrolling the target into view first.
+    fn reveal_click(&self, cx: &mut HeadlessAppContext, id: &'static str) {
+        for _ in 0..24 {
+            let clicked = cx
+                .update_window(self.h, |_, w, cx| {
+                    let target = w.find(id).bounds();
+                    let viewport = w.find("diagnostic-repair-review-scroll").bounds();
+                    if viewport.contains(&target.center()) {
+                        w.click(id, cx);
+                        return true;
+                    }
+                    let up = target.center().y > viewport.bottom();
+                    w.scroll(
+                        "diagnostic-repair-review-scroll",
+                        gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                            px(0.),
+                            px(if up { -80. } else { 80. }),
+                        )),
+                        cx,
+                    );
+                    false
+                })
+                .unwrap();
+            settle(cx, self.h);
+            if clicked {
+                return;
+            }
+        }
+        panic!("{id} never scrolled into the review");
+    }
     fn visible(&self, cx: &mut HeadlessAppContext, id: &'static str) -> bool {
         cx.update_window(self.h, |_, w, _| {
             w.try_find(id).is_some_and(|e| e.visible())
@@ -137,6 +185,14 @@ impl Probe {
     fn mounted(&self, cx: &mut HeadlessAppContext, id: &'static str) -> bool {
         cx.update_window(self.h, |_, w, _| w.try_find(id).is_some())
             .unwrap()
+    }
+    fn review(&self, cx: &mut HeadlessAppContext, review: Review) {
+        cx.update_window(self.h, |_, w, cx| {
+            self.v
+                .update(cx, |v, cx| v.probe_repair_review(PROPOSAL, review, w, cx))
+        })
+        .unwrap();
+        settle(cx, self.h);
     }
     fn commands(&self) -> Vec<WriteCommand> {
         std::iter::from_fn(|| self.writes.try_recv().ok()).collect()
@@ -320,15 +376,13 @@ pub fn run_diagnostic_repair_probe(cx: &mut HeadlessAppContext) {
                 "review is disclosed, not forced"
             );
             p.click(cx, "diagnostic-repair-review");
-            p.panel(cx, |panel| {
-                panel.probe_review(
-                    PROPOSAL,
-                    review(
-                        json!({"state":"available","revision":3,"binding":binding()}),
-                        false,
-                    ),
-                )
-            });
+            p.review(
+                cx,
+                review(
+                    json!({"state":"available","revision":3,"binding":binding()}),
+                    false,
+                ),
+            );
             capture(cx, p.h, &format!("review-{tag}"));
             for id in ["diagnostic-repair-findings", "diagnostic-repair-start"] {
                 assert!(p.visible(cx, id), "{id}");
@@ -371,6 +425,7 @@ pub fn run_diagnostic_repair_probe(cx: &mut HeadlessAppContext) {
                 reviewed.handoff.as_ref().unwrap(),
                 &b,
                 true,
+                &ModelChoice::default(),
             )
             .unwrap();
             assert!(
@@ -381,15 +436,107 @@ pub fn run_diagnostic_repair_probe(cx: &mut HeadlessAppContext) {
             assert!(!p.visible(cx, "diagnostic-repair-review-body"));
             p.close(cx);
 
+            // Edited text and an explicit model: Local reviews the edit before the one start.
+            let p = Probe::open(cx, width, specialist("test-lineage", true));
+            p.click(cx, "diagnostic-repair-review");
+            let project = json!({"state":"available","revision":3,"binding":binding()});
+            p.review(cx, review(project.clone(), false));
+            assert!(p.mounted(cx, "diagnostic-repair-models"));
+            for (menu, option) in [
+                ("diagnostic-repair-model", "repair-option-p/b"),
+                ("diagnostic-repair-thinking", "repair-option-high"),
+            ] {
+                p.reveal_click(cx, menu);
+                p.click(cx, option);
+            }
+            capture(cx, p.h, &format!("model-{tag}"));
+            p.reveal_click(cx, "diagnostic-repair-edit");
+            for id in [
+                "diagnostic-repair-edit-title",
+                "diagnostic-repair-edit-findings",
+                "diagnostic-repair-uncertainty",
+                "diagnostic-repair-revert",
+            ] {
+                assert!(p.mounted(cx, id), "{id}");
+            }
+            assert!(
+                !p.mounted(cx, "diagnostic-repair-findings"),
+                "fields replace prose"
+            );
+            let (title, findings) = cx.update(|cx| p.v.read(cx).probe_repair_inputs().unwrap());
+            cx.update_window(p.h, |_, w, cx| {
+                title.update(cx, |i, cx| i.set_value("Edited title 日本語", w, cx));
+                findings.update(cx, |i, cx| {
+                    i.focus(w, cx);
+                    i.replace_text_in_range(None, " Edited 👩‍💻", w, cx);
+                    i.replace_and_mark_text_in_range(None, "にほ", None, w, cx);
+                });
+            })
+            .unwrap();
+            settle(cx, p.h);
+            capture(cx, p.h, &format!("edit-{tag}"));
+            p.click(cx, "diagnostic-repair-start");
+            assert!(
+                p.commands().is_empty(),
+                "an open composition is never started"
+            );
+            assert!(!cx.update(|cx| p.v.read(cx).probe_repair_preparing()));
+            cx.update_window(p.h, |_, w, cx| {
+                findings.update(cx, |i, cx| i.replace_text_in_range(None, "日本", w, cx))
+            })
+            .unwrap();
+            settle(cx, p.h);
+            p.click(cx, "diagnostic-repair-start");
+            assert!(
+                p.commands().is_empty(),
+                "edited text is reviewed before any start"
+            );
+            assert!(cx.update(|cx| p.v.read(cx).probe_repair_preparing()));
+            let draft = cx.update(|cx| p.v.read(cx).probe_repair_draft(cx).unwrap());
+            assert_eq!(draft.title, "Edited title 日本語");
+            assert!(
+                draft.findings.contains(" Edited 👩‍💻日本") && !draft.findings.contains("にほ"),
+                "committed text only: {}",
+                draft.findings
+            );
+            let mut edited = handoff();
+            edited["repairTitle"] = json!("Edited title 日本語");
+            edited["findings"] = json!(draft.findings.clone());
+            let again = review_of(project.clone(), false, draft, edited);
+            p.review(cx, again.clone());
+            let ProjectState::Available(b) = again.project.as_ref().unwrap().state.clone() else {
+                panic!()
+            };
+            let spec = specialist("test-lineage", true);
+            let expected = repair::start_payload(
+                "synthetic",
+                spec.proposal().unwrap(),
+                spec.subject.as_ref().unwrap(),
+                again.handoff.as_ref().unwrap(),
+                &b,
+                true,
+                &ModelChoice {
+                    model: Some("p/b".into()),
+                    thinking: Some("high".into()),
+                },
+            )
+            .unwrap();
+            let sent = p.commands();
+            assert!(
+                matches!(repairs(&sent).as_slice(), [repair::Action::Start { payload, .. }] if *payload == expected),
+                "one start with the reviewed edit and chosen model"
+            );
+            assert!(
+                expected.contains("Edited title 日本語") && expected.contains("\"model\":\"p/b\"")
+            );
+            p.reveal_click(cx, "diagnostic-repair-revert");
+            assert!(p.mounted(cx, "diagnostic-repair-findings"));
+            p.close(cx);
+
             // Setup is required: verified checkouts are offered; Start stays unavailable.
             let p = Probe::open(cx, width, specialist("test-lineage", true));
             p.click(cx, "diagnostic-repair-review");
-            p.panel(cx, |panel| {
-                panel.probe_review(
-                    PROPOSAL,
-                    review(json!({"state":"missing","revision":0}), true),
-                )
-            });
+            p.review(cx, review(json!({"state":"missing","revision":0}), true));
             assert!(p.mounted(cx, "diagnostic-repair-setup"));
             assert!(!p.mounted(cx, "diagnostic-repair-project"));
             capture(cx, p.h, &format!("setup-{tag}"));
@@ -426,7 +573,7 @@ pub fn run_diagnostic_repair_probe(cx: &mut HeadlessAppContext) {
             p.close(cx);
             let _ = Outcome::Pending;
             println!(
-                "diagnostic_repair mounted {tag}: suggest, draft/IME fence, review, exact start, setup, check and cross-host refusal passed"
+                "diagnostic_repair mounted {tag}: suggest, draft/IME fence, review, exact start, edit + model, setup, check and cross-host refusal passed"
             );
         }
     }

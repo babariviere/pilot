@@ -159,7 +159,7 @@ fn specialist_of(extra: Value) -> Specialist {
 fn review_and_start_payloads_are_exact() {
     let proposal = ready();
     assert_eq!(
-        review_request(&proposal, &app_subject()),
+        review_request(&proposal, &super::Draft::of(&proposal), &app_subject()),
         json!({
             "proposalId":PROPOSAL,"findings":"The tool stalled 👩‍💻.","uncertainty":"medium",
             "suggestedRepair":"Add a timeout.","regressionTestGuidance":"Cover the timeout.",
@@ -198,6 +198,7 @@ fn review_and_start_payloads_are_exact() {
             &reviewed,
             &available(),
             true,
+            &ModelChoice::default(),
         )
         .unwrap(),
     )
@@ -228,6 +229,7 @@ fn review_and_start_payloads_are_exact() {
             &reviewed,
             &available(),
             false,
+            &ModelChoice::default(),
         )
         .unwrap(),
     )
@@ -250,7 +252,18 @@ fn review_and_start_payloads_are_exact() {
     else {
         panic!()
     };
-    assert!(start_payload("spec-1", &proposal, &app_subject(), &reviewed, &other, true).is_err());
+    assert!(
+        start_payload(
+            "spec-1",
+            &proposal,
+            &app_subject(),
+            &reviewed,
+            &other,
+            true,
+            &ModelChoice::default()
+        )
+        .is_err()
+    );
     // Oversized handoff material never becomes an operation.
     let mut large = handoff_json();
     large["findings"] = json!("x".repeat(70 * 1024));
@@ -265,10 +278,174 @@ fn review_and_start_payloads_are_exact() {
             &app_subject(),
             &large,
             &available(),
-            true
+            true,
+            &ModelChoice::default()
         )
         .is_err()
     );
+}
+
+#[test]
+fn edited_text_and_model_choice_are_sent_exactly() {
+    let proposal = ready();
+    let original = super::Draft::of(&proposal);
+    assert_eq!(original.title, "Fix stalled tool 日本語");
+    assert_eq!(original.problem(), None);
+
+    // Edits replace the reviewed fields; the shown title is always sent with them.
+    let edited = super::Draft {
+        findings: "The stream closed mid-tool 日本語.".into(),
+        uncertainty: Uncertainty::High,
+        ..original.clone()
+    };
+    assert_eq!(
+        review_request(&proposal, &edited, &app_subject()),
+        json!({
+            "proposalId":PROPOSAL,"findings":"The stream closed mid-tool 日本語.","uncertainty":"high",
+            "suggestedRepair":"Add a timeout.","regressionTestGuidance":"Cover the timeout.",
+            "subject":app_subject(),"repairTitle":"Fix stalled tool 日本語"
+        })
+    );
+    // An untitled proposal keeps pilotd's derived title until the user edits it.
+    let mut untitled = proposal_json();
+    untitled.as_object_mut().unwrap().remove("repairTitle");
+    let untitled = specialist(&summary(json!({"diagnosticRepairProposal":untitled})))
+        .unwrap()
+        .proposal()
+        .unwrap()
+        .clone();
+    let same = super::Draft::of(&untitled);
+    assert!(review_request(&untitled, &same, &app_subject())["repairTitle"].is_null());
+    let renamed = super::Draft {
+        title: "  Stalled tool  ".into(),
+        ..same
+    };
+    assert_eq!(
+        review_request(&untitled, &renamed, &app_subject())["repairTitle"],
+        "Stalled tool"
+    );
+
+    // pilotd's bounds, in UTF-16 units, refuse before anything is read.
+    for (draft, field) in [
+        (
+            super::Draft {
+                title: " ".into(),
+                ..original.clone()
+            },
+            "empty title",
+        ),
+        (
+            super::Draft {
+                title: "two\nlines".into(),
+                ..original.clone()
+            },
+            "multi-line title",
+        ),
+        (
+            super::Draft {
+                title: "\u{202e}rtl".into(),
+                ..original.clone()
+            },
+            "bidi title",
+        ),
+        (
+            super::Draft {
+                title: "😀".repeat(81),
+                ..original.clone()
+            },
+            "long title",
+        ),
+        (
+            super::Draft {
+                findings: "".into(),
+                ..original.clone()
+            },
+            "empty findings",
+        ),
+        (
+            super::Draft {
+                findings: "x".repeat(1_201),
+                ..original.clone()
+            },
+            "long findings",
+        ),
+        (
+            super::Draft {
+                suggested_repair: "a\u{0}b".into(),
+                ..original.clone()
+            },
+            "control",
+        ),
+        (
+            super::Draft {
+                regression: "x".repeat(801),
+                ..original.clone()
+            },
+            "long regression",
+        ),
+    ] {
+        assert!(draft.problem().is_some(), "{field}");
+    }
+    assert_eq!(
+        super::Draft {
+            findings: "line one\nline two\ttab".into(),
+            title: "😀".repeat(80),
+            ..original.clone()
+        }
+        .problem(),
+        None
+    );
+
+    // Model and thinking come only from the repair project's catalog.
+    let catalog: crate::chat_models::Catalog =
+        serde_json::from_value(crate::chat_models_fixture::catalog()).unwrap();
+    let choose = |model: Option<&str>, thinking: Option<&str>| ModelChoice {
+        model: model.map(Into::into),
+        thinking: thinking.map(Into::into),
+    };
+    assert_eq!(
+        ModelChoice::default().problem(None),
+        None,
+        "default needs no catalog"
+    );
+    assert!(choose(Some("p/b"), None).problem(None).is_some());
+    assert_eq!(
+        choose(Some("p/b"), Some("high")).problem(Some(&catalog)),
+        None
+    );
+    assert_eq!(
+        choose(None, Some("low")).problem(Some(&catalog)),
+        None,
+        "default model's levels"
+    );
+    assert!(
+        choose(Some("z/missing"), None)
+            .problem(Some(&catalog))
+            .is_some()
+    );
+    assert!(
+        choose(Some("q/c"), Some("high"))
+            .problem(Some(&catalog))
+            .is_some()
+    );
+
+    let reviewed = handoff(&handoff_json(), &proposal, &app_subject()).unwrap();
+    let payload: Value = serde_json::from_str(
+        &start_payload(
+            "spec-1",
+            &proposal,
+            &app_subject(),
+            &reviewed,
+            &available(),
+            true,
+            &choose(Some("p/b"), Some("high")),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(payload["model"], "p/b");
+    assert_eq!(payload["thinking"], "high");
+    assert_eq!(payload["title"], payload["diagnosticRepair"]["repairTitle"]);
 }
 
 #[test]
@@ -544,6 +721,7 @@ fn start_action() -> crate::diagnostic_repair::Action {
             &reviewed,
             &available(),
             true,
+            &ModelChoice::default(),
         )
         .unwrap(),
     }
@@ -684,8 +862,14 @@ async fn setup_writes_once_then_reads_review_again() {
                 p,
                 "/api/sessions/spec-1/diagnostics/handoff?hostId=local&daemonId=test-daemon&lineageId=test-lineage"
             );
-            assert_eq!(body, &review_request(&ready(), &app_subject()));
+            assert_eq!(
+                body,
+                &review_request(&ready(), &super::Draft::of(&ready()), &app_subject())
+            );
             Some((200, handoff_json()))
+        }
+        ("GET", "/api/models?cwd=%2Fsrc%2Fpilot") => {
+            Some((200, crate::chat_models_fixture::catalog()))
         }
         _ => panic!("unexpected {method} {path}"),
     }));
@@ -701,6 +885,7 @@ async fn setup_writes_once_then_reads_review_again() {
         Job {
             specialist: "spec-1".into(),
             proposal: ready(),
+            draft: super::Draft::of(&ready()),
             subject: app_subject(),
             configure: Some((0, project)),
         },
@@ -725,6 +910,12 @@ async fn setup_writes_once_then_reads_review_again() {
         ProjectState::Available(_)
     ));
     assert!(review.checkouts.is_none());
+    let models = review.models.unwrap().unwrap();
+    assert_eq!(
+        models.default_model.as_deref(),
+        Some("p/a"),
+        "the repair project's scoped catalog"
+    );
 }
 
 #[tokio::test]

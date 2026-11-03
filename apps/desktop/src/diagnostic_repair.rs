@@ -26,6 +26,7 @@ pub(crate) enum Uncertainty {
     High,
 }
 impl Uncertainty {
+    pub(crate) const ALL: [Self; 3] = [Self::Low, Self::Medium, Self::High];
     fn read(value: &Value) -> Option<Self> {
         match value.as_str()? {
             "low" => Some(Self::Low),
@@ -34,12 +35,15 @@ impl Uncertainty {
             _ => None,
         }
     }
-    fn wire(self) -> &'static str {
+    pub(crate) fn wire(self) -> &'static str {
         match self {
             Self::Low => "low",
             Self::Medium => "medium",
             Self::High => "high",
         }
+    }
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        Self::read(&Value::from(value))
     }
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -64,6 +68,101 @@ pub(crate) struct Proposal {
     pub(crate) evidence_refs: Vec<String>,
     subject: Option<Value>,
     target_session_id: Option<String>,
+}
+
+/// The text a repair starts from: the specialist's proposal, or the user's edit of it.
+/// pilotd validates and sanitizes it again during review; nothing here grants authority.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Draft {
+    pub(crate) title: String,
+    pub(crate) findings: String,
+    pub(crate) uncertainty: Uncertainty,
+    pub(crate) suggested_repair: String,
+    pub(crate) regression: String,
+}
+impl Draft {
+    pub(crate) fn of(proposal: &Proposal) -> Self {
+        Self {
+            title: proposal.title.clone(),
+            findings: proposal.findings.clone(),
+            uncertainty: proposal.uncertainty,
+            suggested_repair: proposal.suggested_repair.clone(),
+            regression: proposal.regression.clone(),
+        }
+    }
+    /// pilotd's bounds (UTF-16 units, as JavaScript counts), checked before anything is read.
+    pub(crate) fn problem(&self) -> Option<Failure> {
+        let title = self.title.trim();
+        if title.is_empty() {
+            return Some("Add an issue title.");
+        }
+        if title.encode_utf16().count() > 160
+            || title.len() > 480
+            || title.chars().any(|c| {
+                c.is_control()
+                    || matches!(c, '\u{2028}' | '\u{2029}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+            })
+        {
+            return Some("Keep the issue title to one line of at most 160 characters.");
+        }
+        let bounded = |value: &str, cap: usize| {
+            let value = value.trim();
+            !value.is_empty()
+                && value.encode_utf16().count() <= cap
+                && value.len() <= cap * 3
+                && !value
+                    .chars()
+                    .any(|c| c.is_control() && !matches!(c, '\n' | '\r' | '\t'))
+        };
+        if !bounded(&self.findings, 1_200) {
+            return Some("Findings need 1 to 1,200 characters of plain text.");
+        }
+        if !bounded(&self.suggested_repair, 1_200) {
+            return Some("The suggested repair needs 1 to 1,200 characters of plain text.");
+        }
+        if !bounded(&self.regression, 800) {
+            return Some("The regression test needs 1 to 800 characters of plain text.");
+        }
+        None
+    }
+}
+
+/// The repair chat's model and thinking. None means the repair project's default.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ModelChoice {
+    pub(crate) model: Option<String>,
+    pub(crate) thinking: Option<String>,
+}
+impl ModelChoice {
+    /// The catalog entry this choice runs on: the explicit model or the project default.
+    pub(crate) fn resolve<'a>(
+        &self,
+        catalog: &'a crate::chat_models::Catalog,
+    ) -> Option<&'a crate::chat_models::Model> {
+        let id = self.model.as_deref().or(catalog.default_model.as_deref())?;
+        catalog.models.iter().find(|m| m.id == id)
+    }
+    /// An explicit choice must be in the repair project's scoped catalog.
+    pub(crate) fn problem(&self, catalog: Option<&crate::chat_models::Catalog>) -> Option<Failure> {
+        if self.model.is_none() && self.thinking.is_none() {
+            return None;
+        }
+        let Some(catalog) = catalog else {
+            return Some(
+                "Models for the repair project aren't loaded. Use the default or try again.",
+            );
+        };
+        let model = self.resolve(catalog);
+        if self.model.is_some() && model.is_none() {
+            return Some("That model isn't available for the repair project. Choose another.");
+        }
+        if let Some(level) = &self.thinking
+            && model.is_none_or(|m| !m.thinking_levels.contains(level))
+        {
+            return Some("That thinking level isn't available for this model.");
+        }
+        None
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -402,6 +501,7 @@ pub(crate) fn start_payload(
     handoff: &Handoff,
     project: &Binding,
     read_diagnostics: bool,
+    choice: &ModelChoice,
 ) -> Result<String, Failure> {
     if project.raw["host"] != subject["host"] {
         return Err("The repair project belongs to another host identity. Set it up again.");
@@ -416,7 +516,7 @@ pub(crate) fn start_payload(
     };
     let material =
         serde_json::to_string(&handoff.raw).map_err(|_| "Cannot encode the reviewed repair.")?;
-    let payload = json!({
+    let mut payload = json!({
         "projectId": project.project_id,
         "message": format!("Investigate and repair the diagnosed issue. Use the reviewed specialist proposal and cited bounded evidence below as initial operational context.{access} Verify the findings and suggested repair, add the requested regression coverage, and do not retry, restart, replay, or mutate the diagnosed chat.\n\n{material}"),
         "title": handoff.title,
@@ -430,28 +530,37 @@ pub(crate) fn start_payload(
             "repairTitle": handoff.title,
             "readDiagnostics": read_diagnostics,
         },
-    })
-    .to_string();
+    });
+    if let Some(model) = &choice.model {
+        payload["model"] = model.as_str().into();
+    }
+    if let Some(thinking) = &choice.thinking {
+        payload["thinking"] = thinking.as_str().into();
+    }
+    let payload = payload.to_string();
     if payload.len() > PAYLOAD_CAP {
         return Err("The reviewed repair exceeds the 64 KiB start limit.");
     }
     Ok(payload)
 }
 
-/// The proposal exactly as published, for pilotd's read-only review endpoint.
-pub(crate) fn review_request(proposal: &Proposal, subject: &Value) -> Value {
+/// The proposal (as published, or as the user edited it) for pilotd's read-only review.
+pub(crate) fn review_request(proposal: &Proposal, draft: &Draft, subject: &Value) -> Value {
     let mut request = json!({
         "proposalId": proposal.id,
-        "findings": proposal.findings,
-        "uncertainty": proposal.uncertainty.wire(),
-        "suggestedRepair": proposal.suggested_repair,
-        "regressionTestGuidance": proposal.regression,
+        "findings": draft.findings,
+        "uncertainty": draft.uncertainty.wire(),
+        "suggestedRepair": draft.suggested_repair,
+        "regressionTestGuidance": draft.regression,
         "subject": subject,
     });
     if let Some(id) = &proposal.target_session_id {
         request["targetSessionId"] = id.as_str().into();
     }
-    if let Some(title) = &proposal.repair_title {
+    // An unedited untitled proposal keeps pilotd's derived title; edits keep the shown one.
+    if *draft != Draft::of(proposal) {
+        request["repairTitle"] = draft.title.trim().into();
+    } else if let Some(title) = &proposal.repair_title {
         request["repairTitle"] = title.as_str().into();
     }
     request
@@ -672,6 +781,7 @@ pub(crate) async fn review(
     options: &LocalOptions,
     specialist: &str,
     proposal: &Proposal,
+    draft: &Draft,
     subject: &Value,
 ) -> Result<Handoff, Failure> {
     let host = &subject["host"];
@@ -688,36 +798,52 @@ pub(crate) async fn review(
         client
             .post(url)
             .header("Content-Type", "application/json")
-            .body(review_request(proposal, subject).to_string()),
-        "This proposal is stale or its cited evidence is no longer available. Ask for a new suggestion.",
+            .body(review_request(proposal, draft, subject).to_string()),
+        if *draft == Draft::of(proposal) {
+            "This proposal is stale or its cited evidence is no longer available. Ask for a new suggestion."
+        } else {
+            "Local didn't accept the edited proposal. Check the text, or revert to the specialist's version."
+        },
     )
     .await?;
     handoff(&value, proposal, subject)
 }
 
-/// Everything the review shows, read once per opening.
+/// Everything the review shows, read once per opening and again for edited text.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Review {
+    /// The text pilotd reviewed. A start sends only this exact review.
+    pub(crate) draft: Draft,
     pub(crate) handoff: Result<Handoff, Failure>,
     pub(crate) project: Result<ProjectStatus, Failure>,
     /// Verified Pilot checkouts, read only when setup is needed.
     pub(crate) checkouts: Option<Result<Vec<crate::local_model::Project>, Failure>>,
+    /// The repair project's scoped models, read once it is set up.
+    pub(crate) models: Option<Result<Arc<crate::chat_models::Catalog>, Failure>>,
+}
+impl Review {
+    pub(crate) fn failed(draft: Draft, error: Failure) -> Self {
+        Self {
+            draft,
+            handoff: Err(error),
+            project: Err(error),
+            checkouts: None,
+            models: None,
+        }
+    }
 }
 pub(crate) async fn load_review(
     client: &reqwest::Client,
     options: &LocalOptions,
     specialist: &str,
     proposal: &Proposal,
+    draft: &Draft,
     subject: &Value,
 ) -> Review {
     if let Err(error) = crate::local_client::gate(client, options).await {
-        return Review {
-            handoff: Err(error),
-            project: Err(error),
-            checkouts: None,
-        };
+        return Review::failed(draft.clone(), error);
     }
-    let handoff = review(client, options, specialist, proposal, subject).await;
+    let handoff = review(client, options, specialist, proposal, draft, subject).await;
     let project = read_project(client, options).await;
     let checkouts = match &project {
         Ok(ProjectStatus {
@@ -726,10 +852,23 @@ pub(crate) async fn load_review(
         }) => Some(pilot_checkouts(client, options).await),
         _ => None,
     };
+    let models = match &project {
+        Ok(ProjectStatus {
+            state: ProjectState::Available(binding),
+            ..
+        }) => Some(
+            crate::chat_models::catalog(client, options, &binding.path)
+                .await
+                .map(Arc::new),
+        ),
+        _ => None,
+    };
     Review {
+        draft: draft.clone(),
         handoff,
         project,
         checkouts,
+        models,
     }
 }
 
@@ -858,6 +997,7 @@ pub(crate) async fn check(
 pub(crate) struct Job {
     pub(crate) specialist: String,
     pub(crate) proposal: Arc<Proposal>,
+    pub(crate) draft: Draft,
     pub(crate) subject: Value,
     /// Set up this verified checkout first (CAS on the read revision).
     pub(crate) configure: Option<(u64, crate::local_model::Project)>,
@@ -876,11 +1016,7 @@ pub(crate) fn start(options: LocalOptions, job: Job) -> Option<async_channel::Re
             ) {
                 (Ok(runtime), Ok(client)) => runtime.block_on(run(&client, &options, job)),
                 _ => (
-                    Review {
-                        handoff: Err("Couldn't start the review."),
-                        project: Err("Couldn't start the review."),
-                        checkouts: None,
-                    },
+                    Review::failed(job.draft, "Couldn't start the review."),
                     None,
                 ),
             };
@@ -904,6 +1040,7 @@ pub(crate) async fn run(client: &reqwest::Client, options: &LocalOptions, job: J
         options,
         &job.specialist,
         &job.proposal,
+        &job.draft,
         &job.subject,
     )
     .await;

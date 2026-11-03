@@ -22,18 +22,26 @@ transport, retained start) and [diagnostic_repair_view.rs](../src/diagnostic_rep
    thread: `POST /api/sessions/:id/diagnostics/handoff` with the proposal exactly as
    published and the subject's host query (pilotd's read-only validation of the
    proposal and its cited evidence), and `GET /api/diagnostics/repair-project`.
-   Shows findings, suggested repair, regression test, cited evidence and the
-   configured repair project. **Copy proposal** copies the readable text.
+   Shows findings, suggested repair, regression test, cited evidence, the
+   configured repair project and its scoped models (`GET /api/models?cwd=` for the
+   project path). **Copy proposal** copies the readable (or edited) text.
+   **Edit** turns the title, findings, uncertainty, suggested repair and regression
+   test into fields, bounded as pilotd bounds them; **Revert** returns to the
+   specialist's text. The published proposal never changes. **Model** offers the
+   project default or a catalog model, and its thinking levels.
 4. **Repair project setup**, only when missing/unavailable. Registered projects
    whose local Git origin is the Pilot source (`GET /api/projects/:id/origin`,
    first 32 projects) are offered; **Use** sends one CAS
    `PUT /api/diagnostics/repair-project` for the subject's host and then reads the
    status again, so a lost reply resolves from current state. Invalid settings are
    reported and kept. Setup sets a destination only.
-5. **Start repair** (explicit). Builds the exact `SpawnRequest` (Build, private
-   clone, configured project, pilotd's reviewed title, exact subject and binding,
-   explicit `readDiagnostics` choice, reviewed handoff as context, no model or
-   path overrides). The writer rechecks the chat still carries this proposal,
+5. **Start repair** (explicit). Edited text is first reviewed again by the
+   handoff endpoint (pilotd validates and sanitizes it); Start continues only if
+   that review succeeds for the same text, and an open IME composition is never
+   captured. Builds the exact `SpawnRequest` (Build, private clone, configured
+   project, pilotd's reviewed title, exact subject and binding, explicit
+   `readDiagnostics` choice, reviewed handoff as context, the chosen model and
+   thinking only when not the default, no path overrides). The writer rechecks the chat still carries this proposal,
    saves one immutable `repair-create` operation in private state, then POSTs it
    once with the native capability. Draft autosave continues during the request
    (`DeliveryOwner.effect`); Close leaves it unconfirmed.
@@ -49,8 +57,8 @@ stays Unknown.
 
 ## Known limits
 
-- The repair uses the project's default model; there is no model picker yet.
-- Proposal text is read-only in review (Swift allows editing before Start).
+- Edits live in the open review only. They are not saved as a draft, so quitting
+  or switching chats discards them (as Swift's review sheet does).
 - A daemon `Conflict` during admission can leave the receipt pending; the
   writer preflight narrows, not removes, that race.
 - Hidden native probes cover layout, actions and payloads with synthetic data.
