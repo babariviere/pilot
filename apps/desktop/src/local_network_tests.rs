@@ -476,6 +476,77 @@ async fn until(
 }
 
 #[tokio::test]
+async fn runtime_update_invalidation_is_control_only_and_never_mutates() {
+    let mock = Mock::start(Scenario::SessionList).await;
+    let (client, rx) = LocalClient::start(mock.options.clone());
+    mock.list_frames
+        .send(json!({"type":"sessions","sessions":[
+            {"id":"a","title":"Synthetic A","state":"idle","projectId":"p-a"}
+        ]}))
+        .await
+        .unwrap();
+    until(&rx, |view| view.list_loaded).await;
+    mock.control_frames
+        .send(Frame::Text(
+            json!({"type":"runtime-update.changed"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    let changed = until(&rx, |view| view.runtime_update_revision == 1).await;
+    assert_eq!(
+        changed.generation, 0,
+        "discovery does not open the proposing chat"
+    );
+    assert!(client.command(Command::Open {
+        id: "a".into(),
+        generation: 7
+    }));
+    until(&rx, |view| view.generation == 7 && view.loaded).await;
+    mock.chat_frames
+        .send(Frame::Text(
+            json!({"type":"runtime-update.changed","sessionId":"a"})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    mock.chat_frames
+        .send(Frame::Text(
+            json!({"type":"events","sessionId":"a","seq":2,"events":[
+                {"type":"entry_appended","entry":entry(99,"After foreign invalidation")}
+            ]})
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    let foreign = until(&rx, |view| {
+        view.rows
+            .iter()
+            .any(|row| row.source() == "After foreign invalidation")
+    })
+    .await;
+    assert_eq!(
+        foreign.runtime_update_revision, 1,
+        "chat content cannot invalidate native approval state"
+    );
+    mock.control_frames
+        .send(Frame::Text(
+            json!({"type":"runtime-update.changed"}).to_string().into(),
+        ))
+        .await
+        .unwrap();
+    until(&rx, |view| view.runtime_update_revision == 2).await;
+    assert!(
+        mock.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| request.starts_with("GET "))
+    );
+}
+
+#[tokio::test]
 async fn thinking_deltas_do_not_publish_transcripts_or_wake_the_ui() {
     let mock = Mock::start(Scenario::Thinking).await;
     let (client, rx) = LocalClient::start(mock.options.clone());

@@ -2004,6 +2004,8 @@ export type ServerMessage =
 	| { type: "diagnostics.next-control"; control: import("./telemetry.ts").NextDiagnosticsControl }
 	| { type: "diagnostics.read"; dispatch: import("./diagnostic-context.ts").DiagnosticReadDispatch }
 	| { type: "mission-catalog.changed" }
+	/** Invalidation only. Read the current checkpoint through authenticated GET /api/runtime-update. */
+	| { type: "runtime-update.changed" }
 	| { type: "shared-contexts.changed" }
 	| { type: "power"; power: import("./power.ts").PowerStatus }
 	| { type: "mcp"; mcp: import("./mcp.ts").McpStatus }

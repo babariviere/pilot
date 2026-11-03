@@ -41,6 +41,8 @@ pub(crate) mod chat_rename_probe;
 #[cfg(feature = "native-probes")]
 #[path = "chat_settings_probe.rs"]
 pub(crate) mod chat_settings_probe;
+#[path = "local_chat_update.rs"]
+mod chat_update;
 #[cfg(feature = "native-probes")]
 #[path = "composer_motion_probe.rs"]
 pub(crate) mod composer_motion_probe;
@@ -1804,6 +1806,7 @@ impl LocalViewer {
             return false;
         }
         let leaving_missions = matches!(self.page, Page::Missions | Page::Mission(_));
+        let refresh_update = chat.writable && !chat.archived && !chat.local_draft;
         if chat.local_draft {
             self.page = Page::Chat;
             self.nav_error = None;
@@ -1825,6 +1828,9 @@ impl LocalViewer {
             self.resume_transcript(cx);
             self.rebuild_nav(window, cx);
             self.did_navigate(cx);
+            if refresh_update {
+                self.refresh_chat_update(cx);
+            }
             if leaving_missions {
                 self.focus_mission_chat_destination(window, cx);
             }
@@ -1905,6 +1911,9 @@ impl LocalViewer {
             view.replace_readonly(Vec::new(), true, cx);
         });
         self.did_navigate(cx);
+        if refresh_update {
+            self.refresh_chat_update(cx);
+        }
         if leaving_missions {
             self.focus_mission_chat_destination(window, cx);
         }
@@ -1912,6 +1921,7 @@ impl LocalViewer {
     }
 
     fn accept(&mut self, mut state: Presentation, window: &mut Window, cx: &mut Context<Self>) {
+        self.observe_chat_update(&state, cx);
         self.state.inventory_refreshing = state.inventory_refreshing;
         self.state.inventory_error = state.inventory_error;
         // App-wide, whichever chat this publication belongs to.
@@ -2827,6 +2837,7 @@ impl Render for LocalViewer {
                             .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Open a Local conversation from the sidebar, or start a new chat."))))
                         .when(self.selected.is_some()&&!self.artifacts_open,|this|this.child(self.transcript.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())))
                         .when(self.artifacts_open,|this|this.child(self.artifacts.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0()))))
+                    .when_some(self.chat_update_card(cx), |view, card| view.child(card))
                     .child(div().id("conversation-editor").test_support().w_full().min_w_0().max_w(px(if self.artifacts_open {760.} else {crate::ui::CONVERSATION_MAX_WIDTH})).mx_auto().child(self.composer_slot(window, cx)))
                         .into_any_element();
                 self.side_panel_shell(conversation, window, cx)

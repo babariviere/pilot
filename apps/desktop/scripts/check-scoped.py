@@ -36,6 +36,7 @@ PURE_MODULES.add("daemon_menu")
 PURE_NATIVE.add("archive")
 PURE_NATIVE.add("lost_ack")
 PURE_NATIVE.add("application_quit")
+PURE_NATIVE.add("chat_update")
 
 
 def parser():

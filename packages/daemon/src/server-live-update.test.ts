@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { WebSocket } from "ws";
 import type { GitHubSetupService } from "./github-setup.ts";
 import { daemonHello } from "./hello.ts";
 import { LiveUpdateService } from "./live-update.ts";
@@ -169,6 +170,59 @@ test("background blockers defer daemon updates, not ordinary GUI reservations", 
 		}),
 		/not_idle/,
 	);
+});
+
+test("control stream invalidates durable update changes without payloads, polling or leaked listeners", async (t) => {
+	let detached = 0;
+	const observe = LiveUpdateService.prototype.onChange;
+	t.mock.method(LiveUpdateService.prototype, "onChange", function (this: LiveUpdateService, listener: () => void) {
+		const stop = observe.call(this, listener);
+		return () => {
+			detached++;
+			stop();
+		};
+	});
+	const f = await fixture(t);
+	await f.server.runtimeReady;
+	const ws = new WebSocket(`ws://127.0.0.1:${(f.server.address() as AddressInfo).port}/api/ws`);
+	t.after(() => ws.terminate());
+	const signals: unknown[] = [];
+	const initialized = new Promise<void>((resolve) => {
+		ws.on("message", (data) => {
+			const message = JSON.parse(String(data));
+			if (message.type === "runtime-update.changed") signals.push(message);
+			if (message.type === "sessions") resolve();
+		});
+	});
+	await initialized;
+	const barrier = async () => {
+		const pong = once(ws, "pong");
+		ws.ping("barrier");
+		await pong;
+	};
+	assert.deepEqual(signals, [], "initial state is fetched through the existing passive GET");
+	const args = { directory: proposal.directory, source, build: proposal.build, summary: proposal.summary };
+	await f.service.propose(proposal.sessionId, proposal.projectId, proposal.id, args);
+	await barrier();
+	assert.deepEqual(signals, [{ type: "runtime-update.changed" }]);
+	await f.service.propose(proposal.sessionId, proposal.projectId, proposal.id, args);
+	await assert.rejects(
+		f.service.propose(proposal.sessionId, proposal.projectId, proposal.id, { ...args, summary: "Changed" }),
+	);
+	assert.equal((await f.request()).status, 200);
+	await barrier();
+	assert.equal(signals.length, 1, "deduplication, rejection and passive GET emit no invalidations");
+	assert.equal((await f.request("/cancel", { id: proposal.id, phase: "proposed" })).status, 200);
+	await barrier();
+	assert.deepEqual(signals, [{ type: "runtime-update.changed" }, { type: "runtime-update.changed" }]);
+	assert.deepEqual(f.activity(), { pauses: 0, resumes: 0 }, "invalidation never drives progress or recovery");
+	const closed = once(ws, "close");
+	ws.close();
+	await closed;
+	await new Promise<void>((resolve) => f.server.close(() => resolve()));
+	assert.equal(detached, 1, "server close releases the service observer");
+	await f.service.propose(proposal.sessionId, proposal.projectId, "later", args);
+	assert.equal(signals.length, 2);
 });
 
 test("terminal persistence never starts journal recovery before explicit post-release recovery", async (t) => {

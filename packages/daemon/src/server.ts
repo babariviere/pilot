@@ -2431,6 +2431,9 @@ export function createDaemonServer(
 		const data = JSON.stringify(message);
 		for (const send of clients.values()) send(data);
 	};
+	// A durable change only invalidates native state. Never publish proposal paths or drive maintenance here.
+	const stopRuntimeUpdateWatch = liveUpdate?.service.onChange(() => broadcast({ type: "runtime-update.changed" }));
+	server.once("close", () => stopRuntimeUpdateWatch?.());
 	const nextControl = (): Extract<ServerMessage, { type: "diagnostics.next-control" }> | undefined => {
 		if (!hello?.lineageId || !telemetry) return;
 		const settings = telemetry.settings();

@@ -16,6 +16,7 @@ use pilot_desktop_updater::{
 use std::time::{Duration, Instant};
 #[path = "coordinated_update.rs"]
 mod coordinated;
+pub(crate) use coordinated::ChatProposalGuard;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Event {

@@ -38,6 +38,16 @@ pub use local_view::daemon_upgrade_lifecycle_probe::run_daemon_upgrade_lifecycle
 #[cfg(feature = "native-probes")]
 mod catalog_probe;
 mod chat_actions;
+#[cfg(all(
+    feature = "native-probes",
+    any(target_os = "macos", target_os = "linux")
+))]
+mod chat_update_probe;
+#[cfg(all(
+    feature = "native-probes",
+    any(target_os = "macos", target_os = "linux")
+))]
+pub use chat_update_probe::run_chat_update_probe;
 mod chat_order;
 mod context_meter;
 mod context_usage;

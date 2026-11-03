@@ -35,6 +35,11 @@ packaged managed connections also offer **Pilot Next → Daemon** actions.
 Registration, service replacement, and coordinated project-proposed updates require
 explicit approval. Connecting to an existing daemon does not take ownership of it.
 
+Pilot source-project update proposals appear as cards in their originating chat.
+Review the build and summary, then choose **Accept update** or **Dismiss**.
+Acceptance pauses new work across all chats. Settings → Updates remains the
+recovery fallback.
+
 Live jobs, terminals, unknown child processes, or unsaved state can block a safe
 handoff. Resolve the named blocker rather than forcing replacement. An uncertain
 outcome is not permission to replay it. Keep the daemon on loopback; its local API

@@ -428,6 +428,29 @@ Question/summary hints disappear on resolution or stale source; pending and
 Unknown reply recovery remain independent. The `questions` hidden native probe
 checks light/dark, narrow/wide, focus, preedit, reconnect and resolved layouts.
 
+### Chat update proposal
+
+The originating writable chat shows a compact native proposal above its composer,
+aligned edge-to-edge with the composer tray inside the conversation column.
+Its opaque card surface, shared card radius and subtle border distinguish it
+from transcript text in both appearances. It shares the Settings updater entity,
+not a copied control state or persisted transcript row. The build, summary,
+global pause consequence and one native Accept action lead; Dismiss is secondary.
+Long summaries scroll independently above the fixed action row. Progress, bounded
+blocker categories and retained errors replace the decision in place. Other chats,
+archived/read-only chats, drafts and artifact readers show no card.
+
+Controls capture the exact proposal/chat/phase and recheck them at activation.
+The Local root captures preedit before pointer blur and preserves draft, reader
+and navigation ownership. Busy/disconnected controls cannot act. Payload-free
+control-stream invalidations only coalesce authenticated snapshot reads, never
+approve or retry lifecycle work. Settings remains the recovery fallback.
+
+The `chat_update` hidden production-root probe checks680/1100 light/dark,
+pointer and Tab/Return, IME/draft retention, exact scoped callbacks, busy,
+progress/errors and long Unicode. Its final dispatch is memory-only and does
+not contact a daemon, change a profile or operate the installed app/service.
+
 ### Retained Review
 
 Mission detail's Review tab (`native_review_view`/`native_review_render`) composes the existing

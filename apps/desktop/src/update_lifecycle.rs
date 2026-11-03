@@ -14,12 +14,20 @@ impl LocalViewer {
         self.settings.read(cx).updater.clone()
     }
     pub(super) fn connect_updates(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(updater) = self.updater(cx) {
+            self.update_events
+                .push(cx.observe_in(&updater, window, |_, _, _, cx| cx.notify()));
+        }
         self.update_events.push(cx.subscribe_in(
             &self.settings,
             window,
             |view, _, event, window, cx| match event {
                 crate::updates_view::Event::Restart => view.begin_update_restart(window, cx),
-                crate::updates_view::Event::Changed => view.advance_update_restart(window, cx),
+                crate::updates_view::Event::Changed => {
+                    view.advance_update_restart(window, cx);
+                    // The chat card reads this same owner outside the Settings entity tree.
+                    cx.notify();
+                }
                 crate::updates_view::Event::UpgradeDaemon => view.begin_daemon_upgrade(window, cx),
                 crate::updates_view::Event::DaemonChanged => {
                     view.advance_daemon_upgrade(window, cx)

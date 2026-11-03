@@ -106,7 +106,15 @@ shared-context and mission reviewer/explorer sessions do not receive this tool.
 The daemon derives chat/project authority from its supervised worker and rechecks
 it after asynchronous origin lookup.
 
-Native **Settings → Updates → Accept update** authorizes the coordinated path:
+The proposing chat shows a native update card with its build, summary and
+**Accept update** / **Dismiss** actions. It never appears in a different chat or
+becomes a synthetic transcript message. Acceptance remains a native action,
+not an agent tool or a chat reply. Its controls bind the exact proposal ID,
+phase and originating chat, and stay disabled while busy or disconnected.
+Status, bounded blocker categories and errors remain in the same card.
+Settings → Updates retains the same owner and recovery controls.
+
+Native **Accept update** authorizes the coordinated path:
 freeze new admissions, drain tools and owned subagents, verify the complete
 resource census, save the existing exact GUI writer checkpoint, replace/restart
 the GUI, then use the existing daemon handoff. Jobs, PTYs, unknown children and
@@ -128,6 +136,12 @@ automatic retry, rollback or permission to thaw. Successful completion requires
 durable release authorization and both exact target identities. Pre-install
 cancellation releases only its own maintenance hold. A passive snapshot or Refresh
 does not prove installation, process exit or durable GUI state.
+
+A payload-free `runtime-update.changed` control-stream signal invalidates the
+native snapshot. Discovery is an authenticated passive GET, coalesced across
+busy requests; reconnect and explicit chat opening also refresh it. There is
+no polling or automatic approval, progress request or lifecycle retry. Ordinary
+chat-stream content cannot signal native proposal changes.
 
 This source integration must be verified with temporary profiles, synthetic
 signed candidates and hidden native probes. Implementation checks never install
