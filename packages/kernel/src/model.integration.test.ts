@@ -2681,7 +2681,7 @@ for (const setting of ["startup", "live", "oversized"] as const) {
 		await adapter.refreshUsage(context);
 		f.a.setResponses([
 			...(setting === "oversized"
-				? [() => fauxAssistantMessage(`Completed draft. ${"🦀".repeat(1100)} Keep next step.`)]
+				? [() => fauxAssistantMessage(`Completed draft. ${"🦀".repeat(2200)} Keep next step.`)]
 				: []),
 			(source) => {
 				assert.match(JSON.stringify(source.messages), /Prepare a handoff/);

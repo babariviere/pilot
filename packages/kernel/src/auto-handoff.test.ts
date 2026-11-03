@@ -436,7 +436,7 @@ for (const failure of [
 			if (failure === "raw-limit") return fauxAssistantMessage("x".repeat(256_001));
 			if (failure === "length") return fauxAssistantMessage("Partial handoff", { stopReason: "length" });
 			if (failure === "tool") return fauxAssistantMessage(fauxToolCall("effect", {}), { stopReason: "toolUse" });
-			if (failure === "oversized") return fauxAssistantMessage("🦀".repeat(1025));
+			if (failure === "oversized") return fauxAssistantMessage("🦀".repeat(2049));
 			return fauxAssistantMessage("", { stopReason: "error", errorMessage: "Provider failed" });
 		};
 		chat.faux.setResponses([response, ...(failure === "oversized" ? [response] : [])]);
@@ -454,7 +454,7 @@ for (const failure of [
 			/handoff/i,
 		);
 		const error = (await chat.harness.snapshot(LiveDoc, chat.conversation.id, context))!.compactionFailure!.error;
-		if (failure === "oversized") assert.match(error, /4096-byte limit \(4100 bytes\)/);
+		if (failure === "oversized") assert.match(error, /8192-byte limit \(8196 bytes\)/);
 		if (failure === "length") assert.match(error, /output-token limit/);
 		if (failure === "provider-error") assert.match(error, /model request failed/);
 		const saved = (await chat.harness.snapshot(AutoHandoffDoc, chat.conversation.id, context))!.last!;
@@ -476,7 +476,7 @@ for (const failure of [
 				assert.equal(
 					saved.diagnostic?.rawBytes,
 					failure === "oversized"
-						? 4100
+						? 8196
 						: Buffer.byteLength(
 								response()
 									.content.filter((block) => block.type === "text")
@@ -575,14 +575,48 @@ test("malformed provider stop categories cannot leak into durable diagnostics", 
 	assert.doesNotMatch(JSON.stringify(saved), /PRIVATE_STOP_REASON_CANARY/);
 });
 
-test("the exact UTF-8 byte ceiling accepts complete Unicode text without a rewrite", async (t) => {
+test("a 4716-byte handoff continues intact without a shortening request", async (t) => {
 	const chat = await open(t);
 	await seed(chat);
-	chat.faux.setResponses([fauxAssistantMessage("🦀".repeat(1024)), fauxAssistantMessage("Continued")]);
+	const text = "🦀".repeat(1179);
+	assert.equal(Buffer.byteLength(text), 4716);
+	chat.faux.setResponses([
+		fauxAssistantMessage(text),
+		(request) => {
+			assert.ok(JSON.stringify(request.messages).includes(text));
+			return fauxAssistantMessage("Continued");
+		},
+	]);
 	assert.equal((await run(chat)).status, "done");
 	assert.equal(chat.faux.state.callCount, 2);
 	const saved = (await chat.harness.snapshot(AutoHandoffDoc, chat.conversation.id, context))!.last!;
-	assert.equal(saved.diagnostic?.sanitizedBytes, 4096);
+	assert.deepEqual(saved.result, { kind: "ready", text });
+});
+
+test("the larger handoff allowance must fit the fresh model window before dispatch", async (t) => {
+	const chat = await open(t, new MemoryStorage(), false, 10_000);
+	await seed(chat);
+	assert.equal((await run(chat)).status, "unanswered");
+	assert.equal(chat.faux.state.callCount, 0);
+	assert.match(
+		(await chat.harness.snapshot(LiveDoc, chat.conversation.id, context))!.compactionFailure!.error,
+		/cannot fit the unconsumed input/,
+	);
+	assert.equal(
+		(await entries(chat)).some((entry) => entry.kind === "pi.compaction"),
+		false,
+	);
+	assert.match(JSON.stringify((await chat.conversation.context(context)).messages), /ORIGINAL_ONLY_CANARY/);
+});
+
+test("the exact UTF-8 byte ceiling accepts complete Unicode text without a rewrite", async (t) => {
+	const chat = await open(t);
+	await seed(chat);
+	chat.faux.setResponses([fauxAssistantMessage("🦀".repeat(2048)), fauxAssistantMessage("Continued")]);
+	assert.equal((await run(chat)).status, "done");
+	assert.equal(chat.faux.state.callCount, 2);
+	const saved = (await chat.harness.snapshot(AutoHandoffDoc, chat.conversation.id, context))!.last!;
+	assert.equal(saved.diagnostic?.sanitizedBytes, 8192);
 	assert.equal(saved.diagnostic?.reason, "accepted");
 });
 
@@ -601,17 +635,20 @@ test("a completed oversized handoff is rewritten once without clipping or repeat
 	});
 	chat.faux.setResponses([
 		() => {
-			const answer = fauxAssistantMessage(`Keep the export constraint. ${"🦀".repeat(1100)} FINAL_NEXT_STEP`);
+			const answer = fauxAssistantMessage(`Keep the export constraint. ${"🦀".repeat(2200)} FINAL_NEXT_STEP`);
 			return answer;
 		},
 		(request, options) => {
 			const source = JSON.stringify(request.messages);
 			assert.match(source, /Rewrite this completed draft/);
+			assert.match(source, /hard limit is 8192 UTF-8 bytes/);
+			const draft = JSON.parse(request.messages.findLast((message) => message.role === "user")!.content as string);
+			assert.ok(draft.instruction.includes(`The draft measures ${Buffer.byteLength(draft.draft)} UTF-8 bytes.`));
 			assert.match(source, /FINAL_NEXT_STEP/);
 			assert.doesNotMatch(source, /ORIGINAL_ONLY_CANARY|Continue the unfinished export task/);
 			assert.equal(getCurrentTools(request.messages).length, 0);
 			assert.equal(options?.maxRetries, 0);
-			const answer = fauxAssistantMessage("Keep export constraint. FINAL_NEXT_STEP");
+			const answer = fauxAssistantMessage(`Keep export constraint. ${"🦀".repeat(1100)} FINAL_NEXT_STEP`);
 			return answer;
 		},
 		(request) => {
@@ -707,7 +744,7 @@ for (const interruption of ["throw", "stop", "role-change"] as const)
 			finish = deferred<ReturnType<typeof fauxAssistantMessage>>();
 		t.after(() => finish.resolve(handoff()));
 		chat.faux.setResponses([
-			fauxAssistantMessage("🦀".repeat(1025)),
+			fauxAssistantMessage("🦀".repeat(2049)),
 			async (_, options) => {
 				if (interruption === "throw") throw new Error("Unknown rewrite outcome");
 				if (interruption === "role-change") chat.state.coordinator = true;
@@ -1240,7 +1277,7 @@ for (const cut of ["pending", "rewrite-pending", "ready"] as const)
 		t.after(() => release.resolve());
 		if (cut !== "ready") {
 			first.faux.setResponses([
-				...(cut === "rewrite-pending" ? [fauxAssistantMessage("🦀".repeat(1025))] : []),
+				...(cut === "rewrite-pending" ? [fauxAssistantMessage("🦀".repeat(2049))] : []),
 				async (_, options) => {
 					options?.signal?.addEventListener("abort", () => release.resolve(), { once: true });
 					entered.resolve();
