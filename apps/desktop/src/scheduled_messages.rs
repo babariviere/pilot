@@ -3,17 +3,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Exact UTC, for the technical details only.
-fn timestamp(at: u64) -> String {
-    format!(
-        "{} {:02}:{:02}:{:02} UTC",
-        crate::usage_overview::date(at),
-        at / 3_600_000 % 24,
-        at / 60_000 % 60,
-        at / 1000 % 60
-    )
-}
-
 /// Local time in words: "Today at 18:00", "Tomorrow at 08:00", "Tue at 06:34", "20 Oct at 06:34".
 pub(crate) fn words(at: u64, now: u64, offset: impl Fn(i64) -> i64) -> String {
     let clock =
@@ -25,6 +14,27 @@ pub(crate) fn words(at: u64, now: u64, offset: impl Fn(i64) -> i64) -> String {
     } else {
         format!("Today {clock}")
     }
+}
+
+/// Splits a time in words into a clock over a day for a row's right column:
+/// "Today at 18:00" → ("18:00", "Today"), "Fri at 09:00" → ("09:00", "Friday"),
+/// "Yesterday 14:00" → ("14:00", "Yesterday"), "13 Nov at 09:00" → ("09:00", "13 Nov").
+pub(crate) fn clock_and_day(words: &str) -> (String, String) {
+    let Some((day, clock)) = words.rsplit_once(' ') else {
+        return (words.to_owned(), String::new());
+    };
+    let day = day.strip_suffix(" at").unwrap_or(day);
+    let day = match day {
+        "Mon" => "Monday",
+        "Tue" => "Tuesday",
+        "Wed" => "Wednesday",
+        "Thu" => "Thursday",
+        "Fri" => "Friday",
+        "Sat" => "Saturday",
+        "Sun" => "Sunday",
+        day => day,
+    };
+    (clock.to_owned(), day.to_owned())
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -51,7 +61,6 @@ pub(crate) struct Item {
     pub(crate) notice: Option<Run>,
     #[serde(default)]
     pub(crate) paused: bool,
-    pub(crate) handled_through: Option<u64>,
 }
 /// A recurring rule's calendar, in its own stored time zone.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -99,10 +108,7 @@ pub(crate) enum Target {
     #[serde(rename_all = "camelCase")]
     Message { session_id: String, message: String },
     #[serde(rename_all = "camelCase")]
-    Chat {
-        spawn: Value,
-        tracked_item_id: Option<String>,
-    },
+    Chat { spawn: Value },
 }
 /// Where a record appears. Sent and cancelled records are history and stay off the page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -234,59 +240,6 @@ impl Item {
             }
             Target::Message { .. } => None,
         }
-    }
-    /// IDs, revision and exact UTC times, collapsed under Details.
-    pub(crate) fn technical(&self) -> String {
-        let or = |v: Option<&str>| v.unwrap_or("Not reported").to_owned();
-        let time = |v: Option<u64>| v.map_or_else(|| "Not reported".into(), timestamp);
-        let mut lines = vec![
-            format!("Title: {}", self.title),
-            format!("Schedule ID: {}", self.id),
-            format!("Revision: {}", self.revision),
-            format!("State: {}", self.state),
-            format!("Trigger: {}", self.trigger),
-            format!("Scheduled: {}", time(self.at)),
-            format!("Project ID: {}", or(self.project_id.as_deref())),
-        ];
-        match &self.target {
-            Target::Message { session_id, .. } => {
-                lines.push(format!("Target chat ID: {session_id}"))
-            }
-            Target::Chat {
-                spawn,
-                tracked_item_id,
-            } => {
-                lines.push(format!(
-                    "New-chat request: {}",
-                    serde_json::to_string(spawn).unwrap_or_default()
-                ));
-                lines.push(format!("Tracked item: {}", or(tracked_item_id.as_deref())));
-                lines.push(format!(
-                    "Created chat ID: {}",
-                    or(self.session_id.as_deref())
-                ));
-            }
-        }
-        if let Some(r) = &self.recurrence {
-            lines.push(format!(
-                "Recurrence: {}",
-                serde_json::to_string(r).unwrap_or_default()
-            ));
-            lines.push(format!(
-                "Paused: {}",
-                if self.paused { "yes" } else { "no" }
-            ));
-            lines.push(format!("Handled through: {}", time(self.handled_through)));
-        }
-        lines.push(format!("Created: {}", time(Some(self.created_at))));
-        lines.push(format!("Updated: {}", time(Some(self.updated_at))));
-        if self.claimed_at.is_some() {
-            lines.push(format!("Claimed: {}", time(self.claimed_at)));
-        }
-        if self.fired_at.is_some() {
-            lines.push(format!("Dispatched: {}", time(self.fired_at)));
-        }
-        lines.join("\n")
     }
     pub(crate) fn valid(&self) -> bool {
         !self.id.is_empty()

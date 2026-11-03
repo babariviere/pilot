@@ -9,7 +9,7 @@ use crate::{
     local_model::{Chat, Project},
     mcp_status::timestamp,
     recurring_schedules as words,
-    scheduled_messages::{Item, RowAction, Section, State, Status, Target},
+    scheduled_messages::{Item, RowAction, Section, State, Status, Target, clock_and_day},
     scheduled_messages_reader::{Outcome, Reader, Request, Write, perform},
     ui::{self, Action, IconRole, Notice, Radius, Text, Tone},
 };
@@ -60,8 +60,6 @@ pub(crate) struct Automations {
     focus: FocusHandle,
     /// The row showing its details, by section and record ID.
     expanded: Option<(Section, String)>,
-    /// The row whose technical details are open.
-    technical: Option<(Section, String)>,
     /// A write in flight, by record ID.
     pub(crate) pending: Option<String>,
     action: Option<Task<()>>,
@@ -90,7 +88,6 @@ impl Automations {
             updates: None,
             focus: cx.focus_handle(),
             expanded: None,
-            technical: None,
             pending: None,
             action: None,
             note: None,
@@ -241,9 +238,6 @@ impl Automations {
                 };
                 if !shown(&self.expanded) {
                     self.expanded = None;
-                }
-                if !shown(&self.technical) {
-                    self.technical = None;
                 }
             }
             cx.notify();
@@ -433,8 +427,9 @@ impl Automations {
             ink,
             title,
             line,
-            top,
-            bottom,
+            clock,
+            day,
+            status,
             label,
             dim,
         } = row;
@@ -443,25 +438,41 @@ impl Automations {
         let (muted, hover) = (theme.muted_foreground, theme.list_hover);
         let open = (section, key.clone());
         let expanded = self.expanded.as_ref() == Some(&open);
-        let mut meta = div().v_flex().flex_none().items_end().gap(px(2.));
-        if let Some(top) = top {
+        // The clock leads; the day and any status sit quietly under it.
+        let mut meta = div().v_flex().flex_none().items_end().gap(px(1.));
+        if let Some(clock) = clock {
             meta = meta.child(
-                ui::text(Text::Caption, SharedString::from(top))
+                ui::text(Text::Body, SharedString::from(clock))
                     .id(id("when"))
                     .test_support()
                     .whitespace_nowrap()
-                    .text_color(muted),
+                    .font_medium()
+                    .when(dim, |d| d.text_color(muted)),
             );
         }
-        if let Some((text, color)) = bottom {
-            meta = meta.child(
-                ui::text(Text::Caption, SharedString::from(text))
-                    .id(id("status"))
-                    .test_support()
-                    .whitespace_nowrap()
-                    .font_medium()
-                    .text_color(color),
-            );
+        if day.is_some() || status.is_some() {
+            let mut under = div().h_flex().gap_1().whitespace_nowrap();
+            if let Some(day) = &day {
+                under = under.child(
+                    ui::text(Text::Caption, SharedString::from(day.clone()))
+                        .id(id("day"))
+                        .test_support()
+                        .text_color(muted),
+                );
+            }
+            if let Some((text, color)) = status {
+                if day.is_some() {
+                    under = under.child(ui::text(Text::Caption, "·").text_color(muted));
+                }
+                under = under.child(
+                    ui::text(Text::Caption, SharedString::from(text))
+                        .id(id("status"))
+                        .test_support()
+                        .font_medium()
+                        .text_color(color),
+                );
+            }
+            meta = meta.child(under);
         }
         let main = {
             let open = open.clone();
@@ -556,49 +567,6 @@ impl Automations {
                     .id(id("note"))
                     .test_support()
                     .text_color(note.tone.color(cx)),
-            );
-        }
-        more
-    }
-    fn technical(
-        &self,
-        id: &dyn Fn(&str) -> SharedString,
-        item: &Item,
-        row: (Section, String),
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let open = self.technical.as_ref() == Some(&row);
-        let mut more = div().v_flex().gap_1().child(
-            ui::action(id("technical"), "Details", Action::Quiet)
-                .small()
-                .self_start()
-                .icon(if open {
-                    IconRole::Collapse.icon()
-                } else {
-                    IconRole::Expand.icon()
-                })
-                .accessibility_label(if open { "Hide details" } else { "Show details" })
-                .on_click(cx.listener(move |v, _, _, cx| {
-                    v.technical = if v.technical.as_ref() == Some(&row) {
-                        None
-                    } else {
-                        Some(row.clone())
-                    };
-                    cx.notify();
-                })),
-        );
-        if open {
-            more = more.child(
-                div()
-                    .id(id("technical-text"))
-                    .test_support()
-                    .w_full()
-                    .min_w_0()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(SelectableText::new(
-                        id("technical-content"),
-                        SharedString::from(item.technical()),
-                    )),
             );
         }
         more
@@ -726,14 +694,7 @@ impl Automations {
         let more = (expanded || note).then(|| {
             let mut more = self.more(&id, item, cx);
             if expanded {
-                let lead = match (&item.target, item.at.map(crate::message_time::detail)) {
-                    (Target::Message { .. }, Some(at)) => format!("Sends {at}"),
-                    (Target::Chat { .. }, Some(at)) => format!("Starts a new chat {at}"),
-                    (_, None) => "No time reported".into(),
-                };
-                more = more
-                    .child(ui::text(Text::Caption, SharedString::from(lead)).text_color(muted))
-                    .child(self.message(&id, item, window, cx));
+                more = more.child(self.message(&id, item, window, cx));
                 if let Some(error) = &item.error {
                     more = more.child(
                         div()
@@ -746,11 +707,10 @@ impl Automations {
                             )),
                     );
                 }
-                more = more.child(self.technical(&id, item, (section, item.id.clone()), cx));
             }
             more
         });
-        let bottom = status.map(|status| {
+        let status = status.map(|status| {
             let tone = match status {
                 Status::Failed => Tone::Error,
                 Status::Overdue => Tone::Warning,
@@ -758,6 +718,12 @@ impl Automations {
             };
             (status.label().to_owned(), tone.color(cx))
         });
+        let (clock, day) = if item.at.is_some() {
+            let (clock, day) = clock_and_day(&when);
+            (Some(clock), Some(day))
+        } else {
+            (None, Some(when.clone()))
+        };
         self.shell(
             Row {
                 prefix: "automation",
@@ -768,8 +734,9 @@ impl Automations {
                 ink,
                 title: target,
                 line: preview(item),
-                top: Some(when),
-                bottom,
+                clock,
+                day,
+                status,
                 label: line_text,
                 dim: false,
             },
@@ -831,11 +798,12 @@ impl Automations {
             }
             more
         });
-        let status = match run.outcome.as_str() {
+        let outcome = match run.outcome.as_str() {
             "skipped_running" => "Skipped",
             "missed" => "Missed",
             _ => "Failed",
         };
+        let (clock, day) = clock_and_day(&words::past(run.at.max(run.due), now, offset));
         self.shell(
             Row {
                 prefix: "automation-notice",
@@ -850,8 +818,9 @@ impl Automations {
                 ink: tone,
                 title: item.title.clone(),
                 line: reason,
-                top: Some(words::past(run.at.max(run.due), now, offset)),
-                bottom: Some((status.into(), tone)),
+                clock: Some(clock),
+                day: Some(day),
+                status: Some((outcome.into(), tone)),
                 label,
                 dim: false,
             },
@@ -881,27 +850,26 @@ impl Automations {
             .recurrence
             .as_ref()
             .map_or_else(String::new, |r| words::schedule(r, words::local_zone()));
-        let when = if item.paused {
-            "Paused".to_owned()
+        // The next run as a clock over its day; paused and running rules say so instead.
+        let (clock, day) = if item.paused {
+            (None, "Paused".to_owned())
         } else if item.state == "dispatching" {
-            "Running now".to_owned()
+            (None, "Running now".to_owned())
         } else {
-            // The next run, in the same words as one-time rows' times.
-            item.at.map_or_else(
-                || "No next run".into(),
-                |at| crate::scheduled_messages::words(at, now, offset),
-            )
+            match item.at {
+                Some(at) => {
+                    let (clock, day) =
+                        clock_and_day(&crate::scheduled_messages::words(at, now, offset));
+                    (Some(clock), day)
+                }
+                None => (None, "No next run".to_owned()),
+            }
         };
         let project = self
             .project_name(item.project_id.as_deref())
             .unwrap_or_else(|| "Project unavailable".into());
         let action = words::action(item, |chat| self.titles.get(chat).cloned());
         let line = format!("{schedule} · {project} · {action}");
-        // Needs attention already flags a problem run; here the last result stays quiet.
-        let last = item
-            .runs
-            .last()
-            .map(|r| (words::last_result(r, now, offset), muted));
         let label = format!("{} · {line}", item.title);
         let view = cx.entity().downgrade();
         let target = item.id.clone();
@@ -1024,7 +992,6 @@ impl Automations {
                     )
                     .child(self.row_action(id("delete"), item, RowAction::Delete, &label, cx)),
             )
-            .child(self.technical(&id, item, row.clone(), cx))
         });
         self.shell(
             Row {
@@ -1036,8 +1003,14 @@ impl Automations {
                 ink: muted,
                 title: item.title.clone(),
                 line,
-                top: Some(when),
-                bottom: last,
+                clock,
+                day: Some(day),
+                // A late success isn't a problem; the row only hints at it, details explain.
+                status: item
+                    .notice
+                    .as_ref()
+                    .filter(|n| n.late && !n.needs_attention())
+                    .map(|_| ("Ran late".to_owned(), muted)),
                 label,
                 dim: item.paused,
             },
@@ -1132,8 +1105,10 @@ struct Row {
     ink: Hsla,
     title: String,
     line: String,
-    top: Option<String>,
-    bottom: Option<(String, Hsla)>,
+    /// The clock ("09:00") in medium weight, over the day and status.
+    clock: Option<String>,
+    day: Option<String>,
+    status: Option<(String, Hsla)>,
     /// The row's accessible summary, for its controls.
     label: String,
     dim: bool,

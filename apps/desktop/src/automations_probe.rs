@@ -156,16 +156,12 @@ pub fn run_automations_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             capture(cx, h, format!("{width}-{mode:?}-list"));
-            // The row opens its message; technical fields stay under Details.
+            // The row opens its message only; no technical fields.
             cx.update_window(h, |_, w, cx| w.click("automation-text-one", cx))
                 .unwrap();
             settle(cx, h);
             assert!(exists(cx, h, "automation-message-one"));
-            assert!(!exists(cx, h, "automation-technical-text-one"));
-            cx.update_window(h, |_, w, cx| w.click("automation-technical-one", cx))
-                .unwrap();
-            settle(cx, h);
-            assert!(exists(cx, h, "automation-technical-text-one"));
+            assert!(!exists(cx, h, "automation-technical-one"));
             capture(cx, h, format!("{width}-{mode:?}-details"));
             cx.update_window(h, |_, w, cx| {
                 let b = w.find("automation-message-one").bounds();
@@ -401,7 +397,7 @@ fn recurring(cx: &mut HeadlessAppContext, width: f32, mode: ThemeMode) {
             "automation-rule-switch-slot-weekly",
             "automation-rule-details-weekly",
             "automation-rule-meta-weekly",
-            "automation-rule-status-weekly",
+            "automation-rule-day-weekly",
             "automation-notice-action-daily",
         ] {
             let b = w.find(id).bounds();
@@ -410,10 +406,10 @@ fn recurring(cx: &mut HeadlessAppContext, width: f32, mode: ThemeMode) {
                 "{id}: {b:?} within {right:?}"
             );
         }
-        // Next run over the last result, both inside the row and beside the schedule line.
+        // The next run's clock over its day, both inside the row and beside the schedule line.
         let row = w.find("automation-rule-row-weekly").bounds();
         let when = w.find("automation-rule-when-weekly").bounds();
-        let last = w.find("automation-rule-status-weekly").bounds();
+        let last = w.find("automation-rule-day-weekly").bounds();
         let meta = w.find("automation-rule-meta-weekly").bounds();
         assert!(when.bottom() <= last.top() && last.bottom() <= row.bottom());
         assert!(meta.right() <= when.left().max(last.left()));

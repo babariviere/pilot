@@ -58,7 +58,7 @@ pub(crate) fn install(s: &Server) {
 mod tests {
     use super::*;
     use crate::{
-        scheduled_messages::{RowAction, Section, Snapshot, State, Status, words},
+        scheduled_messages::{RowAction, Section, Snapshot, State, Status, clock_and_day, words},
         scheduled_messages_reader::{Outcome, Reader, Request, Write, act, fetch, write},
     };
     fn parse(v: Value) -> Result<Snapshot, &'static str> {
@@ -81,9 +81,17 @@ mod tests {
             words(TUESDAY + 23 * h + h / 2, now, |_| 3600),
             "Tomorrow at 00:30"
         );
+        let split = |s: &str| clock_and_day(s);
+        assert_eq!(split("Today at 18:00"), ("18:00".into(), "Today".into()));
+        assert_eq!(split("Fri at 09:00"), ("09:00".into(), "Friday".into()));
+        assert_eq!(split("13 Nov at 09:00"), ("09:00".into(), "13 Nov".into()));
+        assert_eq!(
+            split("Yesterday 14:00"),
+            ("14:00".into(), "Yesterday".into())
+        );
     }
     #[test]
-    fn sections_statuses_actions_and_technical_details() {
+    fn sections_statuses_and_actions() {
         let read_at = TUESDAY + 10 * 3_600_000;
         let snapshot = parse(roster()).unwrap();
         let one_time: Vec<_> = snapshot
@@ -119,23 +127,6 @@ mod tests {
             Some(Status::Overdue)
         );
         assert_eq!(item("three").when(read_at), "No time");
-        let technical = item("one").technical();
-        for line in [
-            "Schedule ID: one",
-            "Revision: 1",
-            "State: pending",
-            "Target chat ID: chat-a",
-            "Project ID: project-a",
-            "Scheduled: 2026-11-04 10:00:00 UTC",
-        ] {
-            assert!(technical.contains(line), "{line} in {technical}");
-        }
-        assert!(
-            item("two")
-                .technical()
-                .contains("\"projectId\":\"project-b\"")
-        );
-        assert!(item("six").technical().contains("Claimed: "));
     }
     #[test]
     fn validation_rejects_the_whole_report() {
@@ -198,8 +189,7 @@ mod tests {
             Some(RowAction::DismissNotice)
         );
         assert_eq!(item("daily").action(Section::Recurring), None);
-        assert!(item("monthly").technical().contains("Paused: yes"));
-        assert!(item("weekly").technical().contains("\"weekday\":1"));
+        assert!(item("monthly").paused);
         // The pushed control-stream index validates the same way.
         assert_eq!(
             Snapshot::from_value(&recurring_at(TUESDAY))

@@ -9,20 +9,20 @@ Automations                                   [↻] [New automation]
 3 recurring · 2 scheduled · 2 need attention
 
 Needs attention 2
-  [◇] Daily dependency check             Today 07:12        Dismiss  ⌄
-      Skipped: the previous run is still working  Skipped
-  [▲] New chat in Docs                   Yesterday at 14:00 Dismiss  ⌄
-      Investigate the failing deploy     Couldn’t send
+  [◇] Daily dependency check                         07:12  Dismiss  ⌄
+      Skipped: the previous run is still…    Today · Skipped
+  [▲] New chat in Docs                               14:00  Dismiss  ⌄
+      Investigate the failing deploy  Yesterday · Couldn’t send
 Recurring 3
-  [◇] Weekly DB performance analysis     Next Mon at 09:00   [on]    ⌄
-      Mondays at 09:00 · Pilot · New chat: Analyse…  ✓ Today 09:12, late
-  [◇] Monthly cost report                Paused              [off]   ⌄
-      Monthly on the 1st at 07:00 · Docs · New chat: Summarise costs
+  [◇] Weekly DB performance analysis                 09:00   [on]    ⌄
+      Mondays at 09:00 · Pilot · New…   Monday · Ran late
+  [◇] Monthly cost report                                    [off]   ⌄
+      Monthly on the 1st at 07:00 · Docs · …         Paused
 One-time 2
-  [▭] Design review                      Tomorrow at 08:00            ⌄
-      Check the new tokens
-  [✎] New chat in Pilot                  Fri at 09:00                 ⌄
-      Run the weekly check
+  [▭] Design review                                  08:00            ⌄
+      Check the new tokens                        Tomorrow
+  [✎] New chat in Pilot                              09:00            ⌄
+      Run the weekly check                          Friday
 ```
 
 Sections hide when empty: **Needs attention**, **Recurring**, **One-time** and
@@ -35,7 +35,9 @@ or a one-time message.
 Calm list pattern (title + one meta line, at most one action per row, chevron
 details). Each section is a hairline-bordered group (white in light, the tray
 color in dark) of inset rows that highlight on hover and while open. A row has a
-glyph tile, a title over a muted line, and a right-hand column (time over status).
+glyph tile, a title over a muted line, and a right-hand column: the clock in
+medium weight over a muted day, then the status when it matters ("Tomorrow",
+"Today · Sending", "Yesterday · Couldn’t send").
 
 - The glyph says what will happen: a chat-bubble tile for a follow-up in an
   existing chat, a new-chat tile for a new chat, the Automations glyph for a
@@ -49,32 +51,29 @@ glyph tile, a title over a muted line, and a right-hand column (time over status
   Inbox reason words under the name), newest first, each with **Dismiss**. A
   rule's Dismiss is a revision-checked PATCH (`dismissNotice`) that clears only
   the notice; the rule keeps running. Late successes are not listed here: the
-  rule's row says "✓ Mon 09:12, late" and its details offer Dismiss.
+  rule's row says "Ran late" and its details offer Dismiss.
 - **Recurring** lists active rules by next run, paused rules last (name dimmed).
   The title is the rule's name over the schedule in words ("Mondays at 09:00",
   "Weekdays at 08:30", "Monthly on the 1st at 07:00", with the zone only when it
   isn't the computer's), the project and the action ("New chat: <first prompt
-  line>", "Message to <chat>"). The right column is the next run (or "Paused")
-  over the last result; the action slot holds the pause switch. Details show the
-  saved prompt or message, up to five recent runs with links to their chats,
-  **Edit** and **Delete**; technical fields (recurrence JSON, handled cursor,
-  IDs) stay under Details.
+  line>", "Message to <chat>"). The right column is the next run's clock over its
+  day (or just "Paused" / "Running now"); the action slot holds the pause
+  switch. Opening it shows the saved prompt or message, up to five recent runs
+  with links to their chats, **Edit** and **Delete**.
 - Sent and cancelled records are history and stay off the page.
-- Right-hand status only when it matters: **Overdue** (pending past its time at
-  the last read: Local hasn't sent it yet, which is not delivery), **Sending**
-  (claimed, delivery not confirmed) or **Couldn’t send**.
-- Times are local, in words: "Today at 18:00", "Tomorrow at 08:00", "Fri at
-  09:00", "13 Nov at 09:00".
+- Status follows the day only when it matters: **Overdue** (pending past its
+  time at the last read: Local hasn't sent it yet, which is not delivery),
+  **Sending** (claimed, delivery not confirmed) or **Couldn’t send**.
+- Times are local: the clock ("18:00") over the day ("Today", "Tomorrow",
+  "Friday", "13 Nov"). Accessibility labels keep the words ("Fri at 09:00").
 - **Cancel** shows on hover, on keyboard focus and while a row is open, so the
   list stays quiet; **Dismiss** always shows. A fixed action slot keeps the
   times aligned. The empty page shows the page glyph, "Nothing scheduled" and
   one line saying what appears here.
 
-Clicking a row or its chevron opens the full local time, the exact message
-(selectable) and any error. Technical fields (title, schedule and target IDs,
-revision, state, trigger, exact UTC times, a new-chat request's JSON) stay
-collapsed under **Details**. More than 200 rows in a section show the first
-200 with a count.
+Clicking a row or its chevron opens the exact message (selectable) and any
+error. IDs, revisions, UTC times and request JSON stay off the page. More than
+200 rows in a section show the first 200 with a count.
 
 ## New automation and Edit
 
@@ -152,7 +151,7 @@ old unconditional behaviour.
 ## Verification
 
 `scheduled_messages_tests` covers local time words (including the offset
-deciding the day), sections, statuses, actions, technical details, whole-report
+deciding the day), clock and day labels, sections, statuses, actions, whole-report
 validation, generation fencing, identity checks around reads and actions,
 read budgets, replacement cancellation, Cancel/Dismiss (revision/state
 precondition, exactly one DELETE, refusals and unconfirmed outcomes), recurring
@@ -165,7 +164,7 @@ create bodies, validation and edit diffs.
 The hidden `automations` native probe drives the real LocalViewer at 680/1100
 in light and dark (theme asserted after window-open appearance): sidebar
 navigation and ⌘4, loading, sections and hidden history, bounds, row and
-keyboard chevron disclosure, Details, Unicode selection/copy, Cancel with one
+keyboard chevron disclosure, Unicode selection/copy, Cancel with one
 DELETE and a re-read, a refused Cancel, stale error, empty state, and leaving
 the page cancelling an in-flight read. Its recurring pass covers Inbox notice
 rows and their order, a notice opening its rule, the three sections, row
