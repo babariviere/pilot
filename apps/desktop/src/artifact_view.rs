@@ -20,6 +20,9 @@ pub(crate) mod link_probe;
 #[path = "native_mermaid_probe.rs"]
 pub(crate) mod mermaid_probe;
 #[cfg(feature = "native-probes")]
+#[path = "visual_mockups_probe.rs"]
+pub(crate) mod mockups_probe;
+#[cfg(feature = "native-probes")]
 #[path = "artifact_slider_probe.rs"]
 pub(crate) mod slider_probe;
 #[cfg(test)]
@@ -69,7 +72,7 @@ const LINE_HEIGHT: f32 = 1.618;
 /// override's run with its neighbours (it applies only to whole runs).
 fn text_runs(value: &Value, cx: &gpui_kit::App) -> (String, Highlights, Families) {
     let theme = cx.theme();
-    let node_mono = value["mono"] == true;
+    let node_family = font_family(&value["font"], value["mono"] == true, cx);
     let (mut text, mut highlights, mut families) = (String::new(), Vec::new(), Vec::new());
     for run in value["runs"].as_array().into_iter().flatten() {
         let Some(piece) = run["text"].as_str() else {
@@ -103,18 +106,156 @@ fn text_runs(value: &Value, cx: &gpui_kit::App) -> (String, Highlights, Families
                 ..Default::default()
             },
         ));
-        if let Some(mono) = run["mono"].as_bool()
-            && mono != node_mono
+        if (run["font"].is_string() || run["mono"].is_boolean())
+            && let Some(family) = font_family(&run["font"], run["mono"] == true, cx)
+                .or_else(|| Some(theme.font_family.clone()))
+            && Some(&family) != node_family.as_ref()
         {
-            let family = if mono {
-                &theme.mono_font_family
-            } else {
-                &theme.font_family
-            };
-            families.push((range, family.clone()));
+            families.push((range, family));
         }
     }
     (text, highlights, families)
+}
+/// An embedded family for `font` (or the legacy `mono` flag); None inherits.
+fn font_family(font: &Value, mono: bool, cx: &gpui_kit::App) -> Option<SharedString> {
+    let theme = cx.theme();
+    match font.as_str() {
+        Some("ui") => Some(theme.font_family.clone()),
+        Some("display") => Some(crate::appearance::DISPLAY_FONT.into()),
+        Some("mono") => Some(theme.mono_font_family.clone()),
+        _ => mono.then(|| theme.mono_font_family.clone()),
+    }
+}
+/// Surface props of column, row and grid. Each omitted prop draws nothing, so
+/// existing visuals keep their plain layout.
+fn surface<E: Styled>(mut e: E, v: &Value, cx: &gpui_kit::App) -> E {
+    let n = |key: &str| v[key].as_f64().map(|n| px(n as f32));
+    if let Some(p) = v["padding"].as_array()
+        && let [t, r, b, l] = p.as_slice()
+    {
+        let side = |n: &Value| px(n.as_f64().unwrap_or(0.) as f32);
+        e = e.pt(side(t)).pr(side(r)).pb(side(b)).pl(side(l));
+    }
+    if v["width"] == "fill" {
+        e = e.w_full();
+    } else if let Some(w) = n("width") {
+        // A point width holds in a narrower row; maxWidth or scroll fits it.
+        e = e.w(w).flex_shrink_0();
+    }
+    if v["height"] == "fill" {
+        e = e.h_full();
+    } else if let Some(h) = n("height") {
+        e = e.h(h);
+    }
+    if let Some(w) = n("minWidth") {
+        e = e.min_w(w);
+    }
+    if let Some(w) = n("maxWidth") {
+        e = e.max_w(w);
+    }
+    if let Some(h) = n("minHeight") {
+        e = e.min_h(h);
+    }
+    if let Some(h) = n("maxHeight") {
+        e = e.max_h(h);
+    }
+    if let Some(grow) = v["grow"].as_f64() {
+        e.style().flex_grow = Some(grow as f32);
+        if !v["width"].is_number() {
+            e = e.flex_basis(px(0.));
+        }
+    }
+    if let Some(span) = v["span"].as_u64() {
+        e = e.col_span(span as u16);
+    }
+    if ["x", "y", "right", "bottom"]
+        .iter()
+        .any(|k| v[*k].is_number())
+    {
+        e = e.absolute();
+        if let Some(x) = n("x") {
+            e = e.left(x);
+        }
+        if let Some(y) = n("y") {
+            e = e.top(y);
+        }
+        if let Some(r) = n("right") {
+            e = e.right(r);
+        }
+        if let Some(b) = n("bottom") {
+            e = e.bottom(b);
+        }
+    }
+    let color = |c: &Value| c.as_str().map(|c| crate::visual_chart_view::color(c, cx));
+    match &v["fill"] {
+        Value::String(c) => e = e.bg(crate::visual_chart_view::color(c, cx)),
+        g @ Value::Object(_) => {
+            if let (Some(from), Some(to)) = (color(&g["from"]), color(&g["to"])) {
+                e = e.bg(gpui_kit::linear_gradient(
+                    g["angle"].as_f64().unwrap_or(180.) as f32,
+                    gpui_kit::linear_color_stop(from, 0.),
+                    gpui_kit::linear_color_stop(to, 1.),
+                ));
+            }
+        }
+        _ => {}
+    }
+    if let Some(c) = color(&v["border"]) {
+        e = e.border_color(c).border(n("borderWidth").unwrap_or(px(1.)));
+    }
+    if let Some(r) = n("radius") {
+        e = e.rounded(r);
+    }
+    match &v["shadow"] {
+        Value::String(s) => {
+            e = match s.as_str() {
+                "sm" => e.shadow_sm(),
+                "lg" => e.shadow_lg(),
+                _ => e.shadow_md(),
+            }
+        }
+        s @ Value::Object(_) => {
+            let at = |k: &str| px(s[k].as_f64().unwrap_or(0.) as f32);
+            e = e.shadow(vec![gpui_kit::BoxShadow {
+                color: color(&s["color"]).unwrap_or(gpui_kit::hsla(0., 0., 0., 0.2)),
+                offset: gpui_kit::point(at("x"), at("y")),
+                blur_radius: at("blur"),
+                spread_radius: at("spread"),
+                inset: false,
+            }]);
+        }
+        _ => {}
+    }
+    if let Some(o) = v["opacity"].as_f64() {
+        e = e.opacity(o as f32);
+    }
+    if v["clip"] == true {
+        e = e.overflow_hidden();
+    }
+    if let Some(c) = color(&v["color"]) {
+        e = e.text_color(c);
+    }
+    e
+}
+/// A vector node: its reader-planned geometry at its own size, shrunk
+/// proportionally to fit a narrower parent. Painting only places vertices.
+fn vector(plan: Arc<crate::visual_canvas_plan::Plan>, cx: &gpui_kit::App) -> AnyElement {
+    let colors = crate::visual_canvas_view::palette(cx);
+    let mono = cx.theme().mono_font_family.clone();
+    let (width, height) = (plan.width, plan.height);
+    gpui_kit::canvas(
+        |_, _, _| {},
+        move |bounds, _, window, cx| {
+            let scale = f32::from(bounds.size.width) / width;
+            crate::visual_canvas_view::paint_scaled(
+                &plan, bounds, &colors, &mono, scale, window, cx,
+            );
+        },
+    )
+    .w(px(width))
+    .max_w_full()
+    .aspect_ratio(width / height)
+    .into_any_element()
 }
 /// Swift's table default: end when every non-empty cell of a column is a number.
 fn column_aligns(columns: &[Value], rows: &[Value]) -> Vec<&'static str> {
@@ -1157,7 +1298,9 @@ impl ArtifactPane {
                     .min_w_0()
                     .gap(px(value["gap"].as_f64().unwrap_or(12.) as f32));
                 box_ = if kind == "row" {
-                    box_.h_flex().items_start().flex_wrap()
+                    box_.h_flex()
+                        .items_start()
+                        .when(value["wrap"] != false, |d| d.flex_wrap())
                 } else if kind == "grid" {
                     box_.grid()
                         .grid_cols(value["columns"].as_u64().unwrap_or(2) as u16)
@@ -1189,7 +1332,41 @@ impl ArtifactPane {
                     }
                     box_ = box_.child(self.node(child, &format!("{path}.{i}"), budget, cx));
                 }
-                box_.into_any_element()
+                box_ = surface(box_, value, cx);
+                box_ = match value["scroll"].as_str() {
+                    Some("x") => box_.overflow_x_scroll(),
+                    Some("y") => box_.overflow_y_scroll(),
+                    _ => box_,
+                };
+                if value["id"].is_string() {
+                    // Pressable: pointer click, or Enter/Space while focused.
+                    let ring = cx.theme().ring;
+                    box_ = box_
+                        .tab_index(0)
+                        .cursor_pointer()
+                        .focus_visible(move |s| {
+                            s.shadow(vec![gpui_kit::BoxShadow {
+                                color: ring,
+                                offset: gpui_kit::point(px(0.), px(0.)),
+                                blur_radius: px(0.),
+                                spread_radius: px(2.),
+                                inset: false,
+                            }])
+                        })
+                        .when(enabled, |d| {
+                            d.on_click(cx.listener(move |view, _, _, cx| {
+                                view.surface_event(
+                                    generation,
+                                    version,
+                                    id.clone(),
+                                    Value::Null,
+                                    inline,
+                                    cx,
+                                )
+                            }))
+                        });
+                }
+                box_.test_support().into_any_element()
             }
             "text" => {
                 let (text, highlights, families) = text_runs(value, cx);
@@ -1198,26 +1375,30 @@ impl ArtifactPane {
                         "Text exceeds the current native display limit. Copy Source retains it.",
                     );
                 }
-                let size = match value["size"].as_str() {
-                    Some("xs") => 11.,
-                    Some("sm") => 13.,
-                    Some("lg") => 20.,
-                    Some("xl") => 26.,
-                    _ => 15.,
+                let size = match &value["size"] {
+                    Value::Number(n) => n.as_f64().unwrap_or(15.) as f32,
+                    v => match v.as_str() {
+                        Some("xs") => 11.,
+                        Some("sm") => 13.,
+                        Some("lg") => 20.,
+                        Some("xl") => 26.,
+                        _ => 15.,
+                    },
                 };
-                let line = (size * LINE_HEIGHT).round();
+                let ratio = value["lineHeight"].as_f64().map_or(LINE_HEIGHT, |n| n as f32);
+                let line = (size * ratio).round();
+                let family = font_family(&value["font"], value["mono"] == true, cx);
                 div()
                     .text_size(px(size))
+                    .when(value["lineHeight"].is_number(), |d| d.line_height(px(line)))
                     .font_weight(gpui_kit::FontWeight(
                         value["weight"].as_f64().unwrap_or(400.) as f32,
                     ))
-                    .text_color(crate::visual_chart_view::color(
-                        value["color"].as_str().unwrap_or("text"),
-                        cx,
-                    ))
-                    .when(value["mono"] == true, |d| {
-                        d.font_family(cx.theme().mono_font_family.clone())
+                    // Without a color, text takes its surface's (the theme text color at the root).
+                    .when_some(value["color"].as_str(), |d, c| {
+                        d.text_color(crate::visual_chart_view::color(c, cx))
                     })
+                    .when_some(family, |d, family| d.font_family(family))
                     .when(value["italic"] == true, |d| d.italic())
                     // Clip to whole lines rather than truncating, so the laid-out text
                     // stays the exact source and remains selectable.
@@ -1286,9 +1467,13 @@ impl ArtifactPane {
                 .h(px(1.))
                 .bg(cx.theme().border)
                 .into_any_element(),
-            "space" => div()
-                .h(px(value["size"].as_f64().unwrap_or(12.) as f32))
-                .into_any_element(),
+            // Space runs along the enclosing stack: a size is a fixed main-axis basis, no size grows to push
+            // row children apart (columns hug their content, so it adds nothing there).
+            "space" => match value["size"].as_f64() {
+                Some(size) => div().flex_none().flex_basis(px(size as f32)),
+                None => div().flex_1(),
+            }
+            .into_any_element(),
             "link" => self.link(value, path, cx),
             "button" => Button::new(SharedString::from(path.to_owned()))
                 .small()
@@ -1519,12 +1704,15 @@ impl ArtifactPane {
                 let live = self.snapshot.live;
                 let animated = value["animated"] == true;
                 let canvas = self.canvas_element(id.clone(), height, scale, animated, plan, cx);
+                let width = value["width"].as_f64().map(|w| w as f32 * scale);
                 div()
                     .id(SharedString::from(path.to_owned()))
                     .test_support()
                     .relative()
-                    .w_full()
-                    .max_w(px(2000. * scale))
+                    .map(|d| match width {
+                        Some(w) => d.w(px(w)).max_w_full(),
+                        None => d.w_full().max_w(px(2000. * scale)),
+                    })
                     .h(px(height as f32 * scale))
                     .min_h(px(height as f32 * scale))
                     .max_h(px(height as f32 * scale))
@@ -1542,6 +1730,32 @@ impl ArtifactPane {
                     })
                     .into_any_element()
             }
+            "icon" => {
+                let size = value["size"].as_f64().unwrap_or(16.) as f32;
+                match crate::visual_scene::icon(value["name"].as_str().unwrap_or("")) {
+                    // The glyph takes its surface's text color unless the icon sets one.
+                    Some(icon) => div()
+                        .flex_shrink_0()
+                        .size(px(size))
+                        .text_size(px(size))
+                        .when_some(value["color"].as_str(), |d, c| {
+                            d.text_color(crate::visual_chart_view::color(c, cx))
+                        })
+                        .child(icon)
+                        .into_any_element(),
+                    None => Self::note("Unknown icon. Source retained."),
+                }
+            }
+            "vector" => match self
+                .snapshot
+                .scene
+                .as_ref()
+                .and_then(|s| s.vectors.get(path))
+            {
+                Some(Ok(plan)) => vector(plan.clone(), cx),
+                Some(Err(message)) => Self::note(message),
+                None => Self::note("Vector plan is unavailable; source retained."),
+            },
             "chart" => match self
                 .snapshot
                 .scene
@@ -1950,6 +2164,8 @@ impl Render for ArtifactPane {
                 let native = div()
                     .flex_shrink_0()
                     .w(px(natural * self.reader_scale()))
+                    // Text without its own color takes its surface's, starting here.
+                    .text_color(cx.theme().foreground)
                     .child(self.node(&scene.root, "0", &mut 4096, cx))
                     .into_any_element();
                 content = content.child(self.zoom.surface(native, cx));

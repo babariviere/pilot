@@ -560,6 +560,11 @@ harness = false
 required-features = ["native-probes"]
 
 [[test]]
+name = "visual_mockups"
+harness = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "chart_keyboard"
 harness = false
 required-features = ["native-probes"]

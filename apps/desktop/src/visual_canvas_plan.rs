@@ -115,6 +115,16 @@ impl Plan {
         if !(1.0..=2000.).contains(&width) || !(24.0..=600.).contains(&height) {
             return Err("Canvas dimensions exceed native limits");
         }
+        Self::build(d, width, height)
+    }
+    /// A vector node's drawing, in its own width x height units.
+    pub(crate) fn vector(d: &Drawing, width: f64, height: f64) -> Result<Self, &'static str> {
+        if !(1.0..=2000.).contains(&width) || !(1.0..=2000.).contains(&height) {
+            return Err("Vector dimensions exceed native limits");
+        }
+        Self::build(d, width, height)
+    }
+    fn build(d: &Drawing, width: f64, height: f64) -> Result<Self, &'static str> {
         let mut plan = Self {
             width: width as f32,
             height: height as f32,
@@ -231,6 +241,29 @@ impl Plan {
                     }
                     tessellator.path(&mut plan, &points, n[4] == 1., state.paint(n)?)?;
                 }
+                15. => {
+                    let n = &d.ops[i..i + 5];
+                    i += 5;
+                    let paint = state.paint(n)?;
+                    let mut subpaths = Vec::with_capacity(n[4] as usize);
+                    for _ in 0..n[4] as usize {
+                        let (closed, count) = (d.ops[i] == 1., d.ops[i + 1] as usize);
+                        i += 2;
+                        let mut points = Vec::with_capacity(count);
+                        for _ in 0..count {
+                            points.push(state.point(d.ops[i], d.ops[i + 1])?);
+                            i += 2;
+                        }
+                        subpaths.push((closed, points));
+                    }
+                    if paint.stroke {
+                        for (closed, points) in &subpaths {
+                            tessellator.path(&mut plan, points, *closed, paint)?;
+                        }
+                    } else {
+                        tessellator.compound(&mut plan, &subpaths, paint)?;
+                    }
+                }
                 14. => {
                     let n = &d.ops[i..i + 10];
                     i += 10;
@@ -307,7 +340,6 @@ impl Plan {
         Ok(plan)
     }
     /// Total triangle vertices across every batch.
-    #[cfg(any(test, feature = "native-probes"))]
     pub(crate) fn vertices(&self) -> usize {
         self.primitives
             .iter()
@@ -447,6 +479,56 @@ impl Tessellator {
             self.fill
                 .tessellate_polygon(polygon, &FillOptions::default(), &mut sink)
         };
+        let full = sink.full;
+        self.total += vertices.len() - before;
+        if full && room < left {
+            return Err("Canvas filled path crosses itself too often to draw natively");
+        }
+        if full {
+            return Err(TOO_DETAILED);
+        }
+        result.map_err(|_| "Canvas path could not be tessellated natively")
+    }
+    /// An SVG path's subpaths filled together with the nonzero rule, so holes
+    /// stay open. Bounded like a single free-form fill.
+    fn compound(
+        &mut self,
+        plan: &mut Plan,
+        subpaths: &[(bool, Vec<Point>)],
+        paint: Paint,
+    ) -> Result<(), &'static str> {
+        let total: usize = subpaths.iter().map(|(_, p)| p.len()).sum();
+        if Self::hidden(paint) || total < 3 {
+            return Ok(());
+        }
+        if total > FILL_POINTS {
+            return Err("Canvas filled path exceeds the native limit of 4,096 points");
+        }
+        let mut builder = lyon_tessellation::path::Path::builder();
+        for (_, points) in subpaths {
+            let Some((first, rest)) = points.split_first() else {
+                continue;
+            };
+            builder.begin(*first);
+            for p in rest {
+                builder.line_to(*p);
+            }
+            builder.end(true);
+        }
+        let path = builder.build();
+        let left = MAX_VERTICES - self.total;
+        let room = (3 * (total + 1024)).min(left);
+        let vertices = Self::batch(plan, paint);
+        let before = vertices.len();
+        self.points.clear();
+        let mut sink = Sink {
+            points: &mut self.points,
+            out: vertices,
+            room,
+            full: false,
+        };
+        let options = FillOptions::default().with_fill_rule(lyon_tessellation::FillRule::NonZero);
+        let result = self.fill.tessellate_path(&path, &options, &mut sink);
         let full = sink.full;
         self.total += vertices.len() - before;
         if full && room < left {

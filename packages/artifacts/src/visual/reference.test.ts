@@ -10,7 +10,14 @@ import { test } from "node:test";
 import { loadQuickJSWasm } from "@earendil-works/pi-codemode";
 import { runVisualCheck } from "./check.ts";
 import { checkVisual } from "./index.ts";
-import { VISUAL_COLORS, VISUAL_LIMITS, VISUAL_TEXT_SIZES, VISUAL_WEIGHTS } from "./schema.ts";
+import {
+	VISUAL_COLORS,
+	VISUAL_FONTS,
+	VISUAL_ICONS,
+	VISUAL_LIMITS,
+	VISUAL_TEXT_SIZES,
+	VISUAL_WEIGHTS,
+} from "./schema.ts";
 import { visualRuntime } from "./session.ts";
 
 const references = new URL("../../../kernel/skills/pilot-artifacts/references/", import.meta.url);
@@ -114,16 +121,19 @@ const unknownProp: Record<string, string> = {
 	link: 'ui.link("x", { zzz: 1 })',
 	space: "ui.space({ zzz: 1 })",
 	mermaid: 'ui.mermaid("graph TD", { zzz: 1 })',
+	icon: 'ui.icon("search", { zzz: 1 })',
 };
 
 test("visual.d.ts declares every ui function and exactly the props the runtime accepts", async () => {
-	const ui = methods(body(await declarations(), "UI"));
+	const dts = await declarations();
+	const ui = methods(body(dts, "UI"));
+	const surface = objectProps(`{${body(dts, "Surface")}}`);
 	const names = (await logged('({ ui }) => { console.log(Object.keys(ui).join(",")); return () => ui.text("x"); }'))
 		.split(",")
 		.sort();
 	assert.deepEqual([...ui.keys()].sort(), names);
 	for (const [name, params] of ui) {
-		const declared = [...new Set(objectProps(params))].sort();
+		const declared = [...new Set([...objectProps(params), ...(params.includes("Surface") ? surface : [])])].sort();
 		const error = await failure(`({ ui }) => () => ${unknownProp[name] ?? `ui.${name}({ zzz: 1 })`}`);
 		if (/not yet supported/.test(error)) {
 			assert.deepEqual(declared, [], `${name} is unsupported but declares props`);
@@ -163,9 +173,11 @@ test("visual.d.ts declares every pen call, style and frame field the runtime acc
 
 test("visual.d.ts tokens and the quoted limits match schema.ts", async () => {
 	const dts = await declarations();
-	assert.deepEqual(union(dts, "Color"), [...VISUAL_COLORS]);
+	assert.deepEqual(union(dts, "Token"), [...VISUAL_COLORS]);
 	assert.deepEqual(union(dts, "TextSize"), [...VISUAL_TEXT_SIZES]);
 	assert.deepEqual(union(dts, "Weight").map(Number), [...VISUAL_WEIGHTS]);
+	assert.deepEqual(union(dts, "Font"), [...VISUAL_FONTS]);
+	assert.deepEqual(union(dts, "IconName"), [...VISUAL_ICONS]);
 	const text = `${dts}\n${await guide()}`;
 	const count = (value: number) => value.toLocaleString("en-US");
 	for (const quoted of [
@@ -217,4 +229,23 @@ test("the examples in visuals.md pass the publication check", async () => {
 		id: "reference",
 	});
 	assert.equal(shaded.shaders?.length, 1);
+});
+
+test("the vector example and the complete mockup examples pass the publication check", async () => {
+	const blocks = [...(await guide()).matchAll(/```js\n([\s\S]*?)```/g)].map((match) => match[1]!);
+	const vector = blocks.find((block) => block.startsWith("ui.vector("));
+	assert.ok(vector, "visuals.md has no ui.vector example");
+	const drawn = await check(`({ ui }) => () => ${vector.trim()}`);
+	assert.ok(drawn.ok, JSON.stringify(drawn));
+	assert.ok(
+		blocks.some((block) => block.includes("onClick") && block.includes("ui.icon(")),
+		"visuals.md has no mockup example",
+	);
+	for (const name of ["mockup-mobile.js", "mockup-desktop.js"]) {
+		const text = await readFile(new URL(name, references), "utf8");
+		const source = text.slice(text.indexOf("function visual")).trim();
+		const result = await check(source);
+		assert.ok(result.ok, `${name}: ${JSON.stringify(result)}`);
+		assert.ok(result.report.controls >= 6 && result.report.interactions >= 6, name);
+	}
 });

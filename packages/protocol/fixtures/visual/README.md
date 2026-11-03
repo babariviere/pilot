@@ -59,13 +59,28 @@ its third child). Send events to ids from the latest tree:
 | `toggle` | the new boolean |
 | `slider` | a number; the runtime clamps it to `min...max` and snaps it to `step` |
 | `button` | `null` (ignored when `disabled`) |
+| `column`, `row`, `grid` with an `id` (the visual set `onClick`) | `null` |
 
 Coalesce slider drags to one event per display frame. A handler only assigns to state; the next `render` reflects it.
 
+## Surfaces, type, icons and vectors
+
+Layout nodes may carry surface props (schema `surface`): `padding` (always four numbers in the tree), `width` and
+`height` (points or `"fill"`), `min`/`max` sizes, `grow`, grid `span`, `x`/`y`/`right`/`bottom` (absolute
+within the parent), `fill` (color or `{ from, to, angle }`), `border`, `borderWidth`, `radius`, `shadow`,
+`opacity`, `clip`, `scroll` and `color` (inherited by text and icons without their own). Omitted props draw
+nothing. Anywhere a color is accepted, a literal `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa` is too. Text `size` may
+be points, `weight` any multiple of 100 from 100 to 900, and `font` `ui`, `display` or `mono`.
+
+An `icon` node names one of the embedded Lucide icons (the schema enum). A `vector` node carries the pen commands
+its draw function recorded while the view rendered (`commands`, `ops`, `strings`, in the format below), in its own
+`width` x `height` units; hosts plan it off the UI thread and draw it at that size, shrunk proportionally to fit.
+Vectors in one view share 20,000 commands and 100,000 path points.
+
 ## Canvas
 
-A `canvas` node carries an `id` like a control, its `height` and whether it is `animated`; it is as wide as the
-column. Draw it with `draw(id, width, height, t, ...)` on resize and pointer moves, and once per display frame while
+A `canvas` node carries an `id` like a control, its `height`, an optional `width` and whether it is `animated`; it is
+as wide as the column, or its `width` when narrower. Draw it with `draw(id, width, height, t, ...)` on resize and pointer moves, and once per display frame while
 animated and visible (`t` in seconds since it started; 0 when not animated). Two misses of the 8 ms limit in a row
 stop the canvas and show the error. `ops` is a flat list of commands, each starting with its op code:
 
@@ -81,10 +96,11 @@ stop the canvas and show the error. `ops` is a flat list of commands, each start
 | 12 | line | paint, x1, y1, x2, y2 |
 | 13 | path | paint, closed (0 or 1), n, then n x, y pairs |
 | 14 | arc | paint, cx, cy, r, inner, start, end (radians, clockwise from 3 o'clock) |
+| 15 | paths (SVG path data) | paint, m, then m subpaths of closed (0 or 1), n, n x, y pairs; fills use the nonzero rule |
 | 20 | text | color, opacity, x, y, string index, size index, weight, align index, baseline index, mono |
 
-`paint` is four numbers: mode (1 fill, 2 stroke), color index, opacity and line width (0 for fills). Color indices
-follow the color tokens in schema order; sizes are `xs`...`xl`, align `start`, `center`, `end`, baseline `top`,
+`paint` is four numbers: mode (1 fill, 2 stroke), color, opacity and line width (0 for fills). A color is a token
+index in schema order (0-12), or 256 + 0xRRGGBBAA for a literal color; sizes are `xs`...`xl`, align `start`, `center`, `end`, baseline `top`,
 `middle`, `bottom`. A filled arc is a wedge, or a ring segment when inner > 0; a stroked arc is the arc at r.
 
 ## Mermaid

@@ -66,7 +66,146 @@ export const VISUAL_COLORS = [
 	"chart6",
 ] as const;
 export const VISUAL_TEXT_SIZES = ["xs", "sm", "md", "lg", "xl"] as const;
-export const VISUAL_WEIGHTS = [400, 500, 600, 700] as const;
+export const VISUAL_WEIGHTS = [100, 200, 300, 400, 500, 600, 700, 800, 900] as const;
+/** Embedded families: Inter (ui), Inter Display (display) and JetBrains Mono (mono). */
+export const VISUAL_FONTS = ["ui", "display", "mono"] as const;
+/** Lucide icons the app embeds; ui.icon accepts exactly these names. */
+export const VISUAL_ICONS = [
+	"a-large-small",
+	"activity",
+	"archive",
+	"arrow-down",
+	"arrow-left",
+	"arrow-right",
+	"arrow-up",
+	"arrow-up-to-line",
+	"asterisk",
+	"ban",
+	"battery",
+	"battery-charging",
+	"battery-full",
+	"battery-low",
+	"battery-medium",
+	"battery-warning",
+	"bell",
+	"book-open",
+	"bot",
+	"building-2",
+	"calendar",
+	"case-sensitive",
+	"chart-pie",
+	"check",
+	"chevron-down",
+	"chevron-left",
+	"chevron-right",
+	"chevron-up",
+	"chevrons-up-down",
+	"circle",
+	"circle-alert",
+	"circle-check",
+	"circle-user",
+	"circle-x",
+	"clock",
+	"close",
+	"code-xml",
+	"compass",
+	"copy",
+	"corner-down-right",
+	"cpu",
+	"dash",
+	"delete",
+	"ellipsis",
+	"ellipsis-vertical",
+	"eraser",
+	"external-link",
+	"eye",
+	"eye-off",
+	"file",
+	"file-text",
+	"folder",
+	"folder-closed",
+	"folder-open",
+	"folder-plus",
+	"folders",
+	"frame",
+	"gallery-vertical-end",
+	"git-branch",
+	"git-compare",
+	"git-pull-request",
+	"github",
+	"globe",
+	"hard-drive",
+	"heart",
+	"heart-off",
+	"house",
+	"inbox",
+	"info",
+	"inspector",
+	"layers",
+	"layout-dashboard",
+	"link",
+	"list-filter",
+	"list-todo",
+	"loader",
+	"loader-circle",
+	"map",
+	"maximize",
+	"maximize-2",
+	"memory-stick",
+	"menu",
+	"message-circle-question-mark",
+	"messages-square",
+	"mic",
+	"minimize",
+	"minimize-2",
+	"minus",
+	"moon",
+	"network",
+	"palette",
+	"panel-bottom",
+	"panel-bottom-open",
+	"panel-left",
+	"panel-left-close",
+	"panel-left-open",
+	"panel-right",
+	"panel-right-close",
+	"panel-right-open",
+	"paperclip",
+	"pause",
+	"play",
+	"plus",
+	"redo",
+	"redo-2",
+	"refresh-cw",
+	"replace",
+	"resize-corner",
+	"rotate-cw",
+	"search",
+	"settings",
+	"settings-2",
+	"sort-ascending",
+	"sort-descending",
+	"square",
+	"square-pen",
+	"square-terminal",
+	"star",
+	"star-fill",
+	"star-off",
+	"sun",
+	"thumbs-down",
+	"thumbs-up",
+	"trash",
+	"triangle-alert",
+	"undo",
+	"undo-2",
+	"user",
+	"window-close",
+	"window-maximize",
+	"window-minimize",
+	"window-restore",
+	"workflow",
+	"wrench",
+] as const;
 
 const strict = { additionalProperties: false } as const;
 const Key = Type.String({
@@ -79,18 +218,111 @@ const Id = Type.String({
 	description:
 		"Controls only: the node's path of child indices from the root (root is 0). The host sends events to this id.",
 });
-const Color = Type.Enum([...VISUAL_COLORS], { description: "Theme token name. Values follow light and dark mode." });
-const Size = Type.Enum([...VISUAL_TEXT_SIZES], { description: "Step on the chat's type scale. Default md." });
+const Token = Type.Enum([...VISUAL_COLORS], { description: "Theme token name. Values follow light and dark mode." });
+const Color = Type.Union(
+	[
+		Token,
+		Type.String({
+			pattern: "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+			description: "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode.",
+		}),
+	],
+	{ description: "A theme token or a literal color." },
+);
+const Size = Type.Union(
+	[
+		Type.Enum([...VISUAL_TEXT_SIZES], { description: "Step on the chat's type scale." }),
+		Type.Number({ minimum: 6, maximum: 200, description: "Points." }),
+	],
+	{ description: "Default md." },
+);
+const Font = Type.Enum([...VISUAL_FONTS], { description: "Embedded family. Default ui." });
 const Weight = Type.Enum([...VISUAL_WEIGHTS], { description: "Font weight. Default 400." });
 const Gap = Type.Number({ minimum: 0, maximum: 64, description: "Spacing between children in points." });
+const Length = Type.Number({ minimum: 0, maximum: 4000 });
+const Offset = Type.Number({ minimum: -4000, maximum: 4000 });
+const Justify = Type.Enum(["start", "center", "end", "between"], {
+	description: "Distribution along the stack. Default start; between spreads children to both edges.",
+});
 const Text = Type.String({ maxLength: 10_000 });
 const Label = Type.String({ maxLength: 500 });
+
+/** Surface props of column, row and grid. Omitted props draw nothing: no fill, border, shadow or padding. */
+const surface = {
+	padding: Type.Optional(
+		Type.Array(Type.Number({ minimum: 0, maximum: 256 }), {
+			minItems: 4,
+			maxItems: 4,
+			description: "Top, right, bottom, left in points.",
+		}),
+	),
+	width: Type.Optional(Type.Union([Length, Type.Literal("fill")], { description: "Points, or fill the parent." })),
+	height: Type.Optional(Type.Union([Length, Type.Literal("fill")], { description: "Points, or fill the parent." })),
+	minWidth: Type.Optional(Length),
+	maxWidth: Type.Optional(Length),
+	minHeight: Type.Optional(Length),
+	maxHeight: Type.Optional(Length),
+	grow: Type.Optional(
+		Type.Number({ minimum: 0, maximum: 100, description: "Share of the parent stack's free space." }),
+	),
+	span: Type.Optional(Type.Integer({ minimum: 1, maximum: 12, description: "Grid columns this node spans." })),
+	x: Type.Optional(Offset),
+	y: Type.Optional(Offset),
+	right: Type.Optional(Offset),
+	bottom: Type.Optional(Offset),
+	fill: Type.Optional(
+		Type.Union([
+			Color,
+			Type.Object(
+				{
+					from: Color,
+					to: Color,
+					angle: Type.Optional(
+						Type.Number({ minimum: 0, maximum: 360, description: "Degrees; 0 is up. Default 180." }),
+					),
+				},
+				{ ...strict, description: "Linear gradient." },
+			),
+		]),
+	),
+	border: Type.Optional(Color),
+	borderWidth: Type.Optional(Type.Number({ minimum: 0, maximum: 16, description: "Default 1 with a border." })),
+	radius: Type.Optional(Type.Number({ minimum: 0, maximum: 1000 })),
+	shadow: Type.Optional(
+		Type.Union([
+			Type.Enum(["sm", "md", "lg"]),
+			Type.Object(
+				{
+					x: Type.Optional(Type.Number({ minimum: -100, maximum: 100 })),
+					y: Type.Optional(Type.Number({ minimum: -100, maximum: 100 })),
+					blur: Type.Optional(Type.Number({ minimum: 0, maximum: 100 })),
+					spread: Type.Optional(Type.Number({ minimum: -100, maximum: 100 })),
+					color: Type.Optional(Color),
+				},
+				strict,
+			),
+		]),
+	),
+	opacity: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+	clip: Type.Optional(Type.Boolean({ description: "Clip children to the rounded bounds." })),
+	scroll: Type.Optional(
+		Type.Enum(["x", "y"], { description: "Scroll overflowing children; y needs height or maxHeight." }),
+	),
+	color: Type.Optional(Color),
+	id: Type.Optional(
+		Type.String({
+			pattern: "^0(\\.[0-9]+)*$",
+			description: "Present when the visual set onClick: the node is pressable. Event value: null.",
+		}),
+	),
+};
 
 const Run = Type.Object(
 	{
 		text: Text,
 		weight: Type.Optional(Weight),
 		color: Type.Optional(Color),
+		font: Type.Optional(Font),
 		mono: Type.Optional(Type.Boolean()),
 		italic: Type.Optional(Type.Boolean()),
 		strike: Type.Optional(Type.Boolean()),
@@ -107,9 +339,11 @@ const nodes = {
 			key: Type.Optional(Key),
 			gap: Type.Optional(Gap),
 			align: Type.Optional(Type.Enum(["start", "center", "end"], { description: "Horizontal. Default start." })),
+			justify: Type.Optional(Justify),
+			...surface,
 			children: Children,
 		},
-		{ ...strict, description: "Vertical stack. Layout nodes have no fill, border or shadow." },
+		{ ...strict, description: "Vertical stack, with optional surface styling." },
 	),
 	Row: Type.Object(
 		{
@@ -119,14 +353,12 @@ const nodes = {
 			align: Type.Optional(
 				Type.Enum(["start", "center", "end", "baseline"], { description: "Vertical. Default center." }),
 			),
-			justify: Type.Optional(
-				Type.Enum(["start", "center", "end", "between"], {
-					description: "Horizontal distribution. Default start; between spreads children to both edges.",
-				}),
-			),
+			justify: Type.Optional(Justify),
+			wrap: Type.Optional(Type.Boolean({ description: "Wrap children onto more lines. Default true." })),
+			...surface,
 			children: Children,
 		},
-		{ ...strict, description: "Horizontal stack." },
+		{ ...strict, description: "Horizontal stack, with optional surface styling." },
 	),
 	Grid: Type.Object(
 		{
@@ -134,6 +366,7 @@ const nodes = {
 			key: Type.Optional(Key),
 			columns: Type.Integer({ minimum: 1, maximum: 12 }),
 			gap: Type.Optional(Gap),
+			...surface,
 			children: Children,
 		},
 		{ ...strict, description: "Equal-width columns, filled row by row." },
@@ -146,10 +379,14 @@ const nodes = {
 			size: Type.Optional(Size),
 			weight: Type.Optional(Weight),
 			color: Type.Optional(Color),
+			font: Type.Optional(Font),
 			mono: Type.Optional(Type.Boolean()),
 			italic: Type.Optional(Type.Boolean()),
 			align: Type.Optional(Type.Enum(["start", "center", "end"], { description: "Default start." })),
 			lines: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, description: "Line limit. Default none." })),
+			lineHeight: Type.Optional(
+				Type.Number({ minimum: 0.8, maximum: 3, description: "Multiple of the size. Default 1.618." }),
+			),
 		},
 		{ ...strict, description: "Selectable text. Node styles apply to every run; run styles override them." },
 	),
@@ -294,6 +531,9 @@ const nodes = {
 			type: Type.Literal("canvas"),
 			key: Type.Optional(Key),
 			id: Id,
+			width: Type.Optional(
+				Type.Number({ minimum: 1, maximum: 2000, description: "Width in points. Default the column's width." }),
+			),
 			height: Type.Number({ minimum: 24, maximum: 600, description: "Height in points. Default 240." }),
 			animated: Type.Optional(
 				Type.Boolean({ description: "Redraw every display frame while visible, with t in seconds." }),
@@ -305,6 +545,33 @@ const nodes = {
 			description:
 				"2D drawing, as wide as the column. The host calls draw(id, width, height, t, pointer) for its commands; it redraws on resize and pointer moves, and every frame when animated.",
 		},
+	),
+	Vector: Type.Object(
+		{
+			type: Type.Literal("vector"),
+			key: Type.Optional(Key),
+			width: Type.Number({ minimum: 1, maximum: 2000 }),
+			height: Type.Number({ minimum: 1, maximum: 2000 }),
+			label: Type.Optional(Type.String({ maxLength: 500, description: "Accessibility description." })),
+			commands: Type.Integer({ minimum: 0, maximum: 20_000 }),
+			ops: Type.Array(Type.Number(), { description: "Pen commands in DRAW_FORMAT (runtime.js)." }),
+			strings: Type.Array(Type.String()),
+		},
+		{
+			...strict,
+			description:
+				"A fixed-size drawing recorded while the view renders, in width x height units. Hosts draw it at that size, shrunk proportionally to fit a narrower parent.",
+		},
+	),
+	Icon: Type.Object(
+		{
+			type: Type.Literal("icon"),
+			key: Type.Optional(Key),
+			name: Type.Enum([...VISUAL_ICONS]),
+			size: Type.Optional(Type.Number({ minimum: 8, maximum: 128, description: "Points. Default 16." })),
+			color: Type.Optional(Color),
+		},
+		{ ...strict, description: "A bundled Lucide icon. Default color: the inherited text color." },
 	),
 	Shader: Type.Object(
 		{
@@ -359,6 +626,8 @@ const Node = Type.Union(
 		nodes.Slider,
 		nodes.Button,
 		nodes.Canvas,
+		nodes.Vector,
+		nodes.Icon,
 		nodes.Shader,
 		nodes.Mermaid,
 	],

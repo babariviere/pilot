@@ -50,7 +50,10 @@ export type VisualCheckResult =
 	| { ok: true; engine: string; report: VisualCheckReport; shaders: VisualShaderSpec[] }
 	| { ok: false; error: string; logs: string[] };
 
-type Control = Exclude<Extract<VisualNode, { id: string }>, { type: "canvas" }>;
+/** Controls, and layout nodes made pressable with onClick. */
+type Control =
+	| Extract<VisualNode, { type: "tabs" | "toggle" | "slider" | "button" }>
+	| (Extract<VisualNode, { type: "column" | "row" | "grid" }> & { id: string });
 type Canvas = Extract<VisualNode, { type: "canvas" }>;
 type Shader = Extract<VisualNode, { type: "shader" }>;
 
@@ -69,7 +72,8 @@ interface Step {
 
 function describeStep(step: Step): string {
 	const head = `${step.type} ${JSON.stringify(step.name)}`;
-	return step.type === "button" ? head : `${head} = ${JSON.stringify(step.value)}`;
+	// Buttons and pressable surfaces carry no value.
+	return step.value === null ? head : `${head} = ${JSON.stringify(step.value)}`;
 }
 
 export async function runVisualCheck(input: VisualCheckInput): Promise<VisualCheckResult> {
@@ -119,7 +123,8 @@ export async function runVisualCheck(input: VisualCheckInput): Promise<VisualChe
 		let draws = 0;
 		const drawAll = (tree: VisualTree, steps: Step[]) => {
 			for (const canvas of canvasesOf(tree.root))
-				for (const width of CHECK_DRAW_WIDTHS)
+				for (const column of CHECK_DRAW_WIDTHS) {
+					const width = Math.min(column, canvas.width ?? column);
 					for (const t of canvas.animated ? [0, 1.5] : [0])
 						for (const pointer of [undefined, { x: width / 2, y: canvas.height / 2 }]) {
 							if (draws >= VISUAL_LIMITS.checkedDraws) return;
@@ -137,6 +142,7 @@ export async function runVisualCheck(input: VisualCheckInput): Promise<VisualChe
 								throw new VisualFailure(`${failed.message} (${where})`, failed.line);
 							}
 						}
+				}
 		};
 		drawAll(first, []);
 		const seen = new Set<string>();
@@ -219,7 +225,7 @@ export function countNodes(node: VisualNode): number {
 }
 
 export function controlsOf(node: VisualNode, into: Control[] = []): Control[] {
-	if ("id" in node && node.type !== "canvas") into.push(node as Control);
+	if ("id" in node && node.id !== undefined && node.type !== "canvas") into.push(node as Control);
 	if ("children" in node) for (const child of node.children) controlsOf(child as VisualNode, into);
 	return into;
 }
@@ -284,5 +290,8 @@ function plan(control: Control): unknown[][] {
 			return [[control.min], [control.max]];
 		case "button":
 			return control.disabled ? [] : [null].map((value) => [value]);
+		default:
+			// A pressable layout node.
+			return [[null]];
 	}
 }

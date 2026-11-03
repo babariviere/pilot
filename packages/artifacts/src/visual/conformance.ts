@@ -162,6 +162,39 @@ const canvas = `function visual({ ui, state }) {
   ]);
 }`;
 
+const surfaces = `function visual({ ui, state }) {
+  const s = state({ plan: "pro", seats: 3 });
+  const plans = [{ id: "free", name: "Free", price: 0 }, { id: "pro", name: "Pro", price: 12 }];
+  return () =>
+    ui.row({ gap: 16, wrap: false, padding: [20, 24], fill: { from: "#0f172a", to: "#1e293b", angle: 135 }, radius: 16, color: "#e2e8f0", shadow: "lg", clip: true, height: 220 }, [
+      ui.column({ grow: 1, gap: 6, justify: "between" }, [
+        ui.row({ gap: 8, align: "center" }, [
+          ui.vector({ width: 28, height: 28, label: "Logo", draw: (g, size) => {
+            g.circle(size.width / 2, size.height / 2, 14, { fill: "#6366f1" });
+            g.path("M8 14l4 4 8-9", { stroke: "#fff", width: 2.5 });
+            g.path("M2 2h24v24H2z M7 7v14h14V7z", { fill: "#ffffff22" });
+            g.path("M14 4a10 10 0 1 1-.01 0zM3 25q4-6 8 0t8 0c2 2 4 2 6 0s2-2 3 0", { stroke: "chart2", width: 1 });
+            g.text(14, 14, "A", { color: "#fff", weight: 800, align: "center" });
+          } }),
+          ui.text("Acme", { size: 22, weight: 800, font: "display", lineHeight: 1.1 }),
+        ]),
+        ui.text(["Seats: ", ui.span(String(s.seats), { weight: 700, color: "#38bdf8", font: "mono" })], { size: "sm", color: "#94a3b8" }),
+        ui.grid({ columns: 3, gap: 4 }, [ui.column({ span: 2, fill: "#fff1", radius: 4, padding: [2, 6] }, ["wide"]), "narrow"]),
+      ]),
+      plans.map((plan) =>
+        ui.column({ key: plan.id, width: 140, padding: 12, radius: 10, border: s.plan === plan.id ? "#6366f1" : "#334155", borderWidth: 2, fill: s.plan === plan.id ? "#312e81" : undefined, onClick: () => (s.plan = plan.id) }, [
+          ui.row({ gap: 6 }, [ui.icon(plan.price ? "star" : "circle", { size: 14, color: "#fbbf24" }), ui.text(plan.name, { weight: 600 })]),
+          ui.text("$" + plan.price, { size: 28, weight: 700 }),
+        ]),
+      ),
+      ui.column({ x: 12, y: 8, padding: [2, 6], radius: 999, fill: "success", opacity: 0.9 }, [ui.text("New", { size: 10, weight: 700, color: "#052e16" })]),
+      ui.column({ maxHeight: 60, scroll: "y", minWidth: 40, maxWidth: 120, right: 8, bottom: 8, shadow: { y: 2, blur: 6, color: "#00000066" } }, [
+        ui.button({ label: "Add seat", onClick: () => s.seats++ }),
+      ]),
+      ui.canvas({ width: 48, height: 32, label: "Spark", draw: (g, frame) => g.path([0, frame.height, frame.width, 0], { stroke: "#22d3ee" }) }),
+    ]);
+}`;
+
 export const CASES: Case[] = [
 	{
 		name: "every node and prop",
@@ -248,6 +281,18 @@ export const CASES: Case[] = [
 		now: NOW,
 		events: [{ id: "0.0", value: true }],
 	},
+	{
+		name: "surfaces, type, icons and vectors",
+		source: surfaces,
+		data: null,
+		id: "00000000-0000-4000-8000-000000000008",
+		now: NOW,
+		events: [
+			{ id: "0.1", value: null },
+			{ id: "0.4.0", value: null },
+		],
+		draws: [{ id: "0.5", input: { width: 48, height: 32, t: 0 } }],
+	},
 ];
 
 const lines = (...parts: string[]) => parts.join("\n");
@@ -333,6 +378,29 @@ export const ERRORS: ErrorCase[] = [
 		data: null,
 	},
 	{ name: "link scheme", source: '({ ui }) => () => ui.link("x", { href: "file:///etc/passwd" })', data: null },
+	{ name: "literal color", source: '({ ui }) => () => ui.column({ fill: "#12" }, [])', data: null },
+	{ name: "unknown icon", source: '({ ui }) => () => ui.icon("rocket")', data: null },
+	{ name: "padding shape", source: "({ ui }) => () => ui.row({ padding: [1, 2, 3] }, [])", data: null },
+	{ name: "scroll needs a height", source: '({ ui }) => () => ui.column({ scroll: "y" }, [])', data: null },
+	{
+		name: "vector path data",
+		source: lines(
+			"({ ui }) => () => ui.vector({ width: 24, height: 24, draw: (g) => {",
+			'  g.path("M4 4 L20 20 X", { stroke: "text" });',
+			"} })",
+		),
+		data: null,
+	},
+	{
+		name: "vector reads state only",
+		source: lines(
+			"({ ui, state }) => {",
+			"  const s = state({ n: 0 });",
+			"  return () => ui.vector({ width: 24, height: 24, draw: () => { s.n = 1; } });",
+			"}",
+		),
+		data: null,
+	},
 	...drawErrors(),
 	{ name: "mermaid type", source: '({ ui }) => () =>\n  ui.mermaid("A --> B")', data: null },
 	{ name: "mermaid source", source: "({ ui }) => () => ui.mermaid(42)", data: null },
@@ -408,7 +476,7 @@ function drawErrors(): ErrorCase[] {
 		{ name: "canvas without draw", source: "({ ui }) => () => ui.canvas({ height: 100 })", data: null },
 		{ name: "canvas height", source: "({ ui }) => () => ui.canvas({ height: 1000, draw() {} })", data: null },
 		draw("draw style", 'g.rect(0, 0, 10, 10, { fill: "chart1", color: "red" });'),
-		draw("draw color", 'g.circle(5, 5, 5, { fill: "#f00" });'),
+		draw("draw color", 'g.circle(5, 5, 5, { fill: "red" });'),
 		draw("draw needs paint", "g.rect(0, 0, 10, 10);"),
 		draw("draw coordinate", 'g.rect(0, f.missing, 10, 10, { fill: "text" });'),
 		draw("draw line fill", 'g.line(0, 0, 10, 10, { fill: "text" });'),

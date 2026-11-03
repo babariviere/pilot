@@ -63,7 +63,152 @@ public enum VisualRuntime {
 		"chart6",
 	];
 	const SIZES = ["xs", "sm", "md", "lg", "xl"];
-	const WEIGHTS = [400, 500, 600, 700];
+	const WEIGHTS = [100, 200, 300, 400, 500, 600, 700, 800, 900];
+	/** Embedded font families: Inter, Inter Display and JetBrains Mono. */
+	const FONTS = ["ui", "display", "mono"];
+	const SHADOWS = ["sm", "md", "lg"];
+	const JUSTIFY = ["start", "center", "end", "between"];
+	/** Largest length a layout prop takes, in points. */
+	const LENGTH = 4000;
+	/** Literal colors: #rgb, #rgba, #rrggbb or #rrggbbaa. They stay the same in light and dark mode. */
+	const HEX = /^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+	/** Lucide icons the app embeds. ui.icon draws only these; there is no other image or asset source. */
+	const ICONS = [
+		"a-large-small",
+		"activity",
+		"archive",
+		"arrow-down",
+		"arrow-left",
+		"arrow-right",
+		"arrow-up",
+		"arrow-up-to-line",
+		"asterisk",
+		"ban",
+		"battery",
+		"battery-charging",
+		"battery-full",
+		"battery-low",
+		"battery-medium",
+		"battery-warning",
+		"bell",
+		"book-open",
+		"bot",
+		"building-2",
+		"calendar",
+		"case-sensitive",
+		"chart-pie",
+		"check",
+		"chevron-down",
+		"chevron-left",
+		"chevron-right",
+		"chevron-up",
+		"chevrons-up-down",
+		"circle",
+		"circle-alert",
+		"circle-check",
+		"circle-user",
+		"circle-x",
+		"clock",
+		"close",
+		"code-xml",
+		"compass",
+		"copy",
+		"corner-down-right",
+		"cpu",
+		"dash",
+		"delete",
+		"ellipsis",
+		"ellipsis-vertical",
+		"eraser",
+		"external-link",
+		"eye",
+		"eye-off",
+		"file",
+		"file-text",
+		"folder",
+		"folder-closed",
+		"folder-open",
+		"folder-plus",
+		"folders",
+		"frame",
+		"gallery-vertical-end",
+		"git-branch",
+		"git-compare",
+		"git-pull-request",
+		"github",
+		"globe",
+		"hard-drive",
+		"heart",
+		"heart-off",
+		"house",
+		"inbox",
+		"info",
+		"inspector",
+		"layers",
+		"layout-dashboard",
+		"link",
+		"list-filter",
+		"list-todo",
+		"loader",
+		"loader-circle",
+		"map",
+		"maximize",
+		"maximize-2",
+		"memory-stick",
+		"menu",
+		"message-circle-question-mark",
+		"messages-square",
+		"mic",
+		"minimize",
+		"minimize-2",
+		"minus",
+		"moon",
+		"network",
+		"palette",
+		"panel-bottom",
+		"panel-bottom-open",
+		"panel-left",
+		"panel-left-close",
+		"panel-left-open",
+		"panel-right",
+		"panel-right-close",
+		"panel-right-open",
+		"paperclip",
+		"pause",
+		"play",
+		"plus",
+		"redo",
+		"redo-2",
+		"refresh-cw",
+		"replace",
+		"resize-corner",
+		"rotate-cw",
+		"search",
+		"settings",
+		"settings-2",
+		"sort-ascending",
+		"sort-descending",
+		"square",
+		"square-pen",
+		"square-terminal",
+		"star",
+		"star-fill",
+		"star-off",
+		"sun",
+		"thumbs-down",
+		"thumbs-up",
+		"trash",
+		"triangle-alert",
+		"undo",
+		"undo-2",
+		"user",
+		"window-close",
+		"window-maximize",
+		"window-minimize",
+		"window-restore",
+		"workflow",
+		"wrench",
+	];
 	const TONES = ["neutral", "success", "warning", "danger"];
 	const ALIGN = ["start", "center", "end"];
 	const CHARTS = ["bar", "line", "area", "scatter"];
@@ -81,6 +226,8 @@ public enum VisualRuntime {
 	const WeakMapRef = WeakMap;
 	const Float64ArrayRef = Float64Array;
 	const arrayFrom = Array.from;
+	const parseHex = Number.parseInt;
+	const { abs, atan2, ceil, cos, max, min, round, sin, sqrt, PI } = Math;
 
 	class VisualError extends Error {}
 	VisualError.prototype.name = "VisualError";
@@ -175,7 +322,16 @@ public enum VisualRuntime {
 			fail(`${name}: ${prop} ${stringify(value) ?? String(value)} is not ${what ?? "one of"} ${list.join(", ")}`);
 		return value;
 	}
-	const color = (name, prop, value) => pick(name, prop, value, COLORS, "a color token:");
+	const isHex = (value) => typeof value === "string" && HEX.test(value);
+	/** A token name or a literal color. */
+	function color(name, prop, value) {
+		if (value === undefined || isHex(value)) return value;
+		if (!COLORS.includes(value))
+			fail(
+				`${name}: ${prop} ${stringify(value) ?? String(value)} is not a color token (${COLORS.join(", ")}) or a "#rrggbb" color`,
+			);
+		return value;
+	}
 	function key(name, value) {
 		if (value === undefined) return undefined;
 		if (typeof value === "number" && finite(value)) return String(value);
@@ -196,9 +352,9 @@ public enum VisualRuntime {
 		return result;
 	}
 
-	function node(out, text, children, control) {
+	function node(out, text, children, control, vector) {
 		const value = freeze({ type: out.type });
-		records.set(value, { out: compact(out), text, children, control });
+		records.set(value, { out: compact(out), text, children, control, vector });
 		return value;
 	}
 
@@ -258,7 +414,18 @@ public enum VisualRuntime {
 	}
 
 	function text(content, options) {
-		const p = props("text", options, ["key", "size", "weight", "color", "mono", "italic", "align", "lines"]);
+		const p = props("text", options, [
+			"key",
+			"size",
+			"weight",
+			"color",
+			"font",
+			"mono",
+			"italic",
+			"align",
+			"lines",
+			"lineHeight",
+		]);
 		const [list, length] = runs("text", content);
 		const lines = num("text", "lines", p.lines, true, 1, 50);
 		if (lines !== undefined && !isInteger(lines)) fail("text: lines must be an integer");
@@ -267,20 +434,25 @@ public enum VisualRuntime {
 				type: "text",
 				key: key("text", p.key),
 				runs: list,
-				size: pick("text", "size", p.size, SIZES, "a text size:"),
+				size:
+					typeof p.size === "number"
+						? num("text", "size", p.size, false, 6, 200)
+						: pick("text", "size", p.size, SIZES, "a text size (or a number of points):"),
 				weight: pick("text", "weight", p.weight, WEIGHTS, "a weight:"),
 				color: color("text", "color", p.color),
+				font: pick("text", "font", p.font, FONTS),
 				mono: bool("text", "mono", p.mono),
 				italic: bool("text", "italic", p.italic),
 				align: pick("text", "align", p.align, ALIGN),
 				lines,
+				lineHeight: num("text", "lineHeight", p.lineHeight, true, 0.8, 3),
 			},
 			length,
 		);
 	}
 
 	function span(content, options) {
-		const p = props("span", options, ["weight", "color", "mono", "italic", "strike"]);
+		const p = props("span", options, ["weight", "color", "font", "mono", "italic", "strike"]);
 		const value = freeze({ type: "span" });
 		spans.set(
 			value,
@@ -288,6 +460,7 @@ public enum VisualRuntime {
 				text: str("span", "text", content),
 				weight: pick("span", "weight", p.weight, WEIGHTS, "a weight:"),
 				color: color("span", "color", p.color),
+				font: pick("span", "font", p.font, FONTS),
 				mono: bool("span", "mono", p.mono),
 				italic: bool("span", "italic", p.italic),
 				strike: bool("span", "strike", p.strike),
@@ -524,10 +697,11 @@ public enum VisualRuntime {
 	}
 
 	function canvas(options) {
-		const p = props("canvas", options, ["key", "height", "animated", "label", "draw"], true);
+		const p = props("canvas", options, ["key", "width", "height", "animated", "label", "draw"], true);
 		const out = {
 			type: "canvas",
 			key: key("canvas", p.key),
+			width: num("canvas", "width", p.width, true, 1, 2000),
 			height: num("canvas", "height", p.height ?? 240, false, 24, 600),
 			animated: bool("canvas", "animated", p.animated),
 			label: str("canvas", "label", p.label, true),
@@ -535,14 +709,145 @@ public enum VisualRuntime {
 		return node(out, textLength(out.label), undefined, { draw: handler("canvas", "draw", p.draw) });
 	}
 
+	/** A fixed-size drawing recorded once per view: its pen commands travel in the tree, with no host callback. */
+	function vector(options) {
+		const p = props("vector", options, ["key", "width", "height", "label", "draw"], true);
+		const out = {
+			type: "vector",
+			key: key("vector", p.key),
+			width: num("vector", "width", p.width, false, 1, 2000),
+			height: num("vector", "height", p.height, false, 1, 2000),
+			label: str("vector", "label", p.label, true),
+		};
+		return node(out, textLength(out.label), undefined, undefined, handler("vector", "draw", p.draw));
+	}
+
+	const ICON_SET = new Set(ICONS);
+	function icon(name, options) {
+		const p = props("icon", options, ["key", "size", "color"]);
+		if (typeof name !== "string" || !ICON_SET.has(name))
+			fail(
+				`icon: ${stringify(name) ?? String(name)} is not a bundled icon name, for example "search" (IconName in visual.d.ts lists them)`,
+			);
+		return node(
+			{
+				type: "icon",
+				key: key("icon", p.key),
+				name,
+				size: num("icon", "size", p.size, true, 8, 128),
+				color: color("icon", "color", p.color),
+			},
+			0,
+		);
+	}
+
+	// Surface props every layout node (column, row, grid) takes. Tokens are defaults, not restrictions.
+	const SURFACE = [
+		"padding",
+		"width",
+		"height",
+		"minWidth",
+		"maxWidth",
+		"minHeight",
+		"maxHeight",
+		"grow",
+		"span",
+		"x",
+		"y",
+		"right",
+		"bottom",
+		"fill",
+		"border",
+		"borderWidth",
+		"radius",
+		"shadow",
+		"opacity",
+		"clip",
+		"scroll",
+		"color",
+		"onClick",
+	];
+	function length(name, prop, value) {
+		if (value === undefined || value === "fill") return value;
+		if (typeof value !== "number") fail(`${name}: ${prop} must be a number of points or "fill", got ${show(value)}`);
+		return num(name, prop, value, false, 0, LENGTH);
+	}
+	function padding(name, value) {
+		if (value === undefined) return undefined;
+		const list = typeof value === "number" ? [value] : value;
+		if (!isArray(list) || (list.length !== 1 && list.length !== 2 && list.length !== 4))
+			fail(`${name}: padding must be a number, [vertical, horizontal] or [top, right, bottom, left]`);
+		const v = [];
+		for (let index = 0; index < list.length; index++) v.push(num(name, "padding", list[index], false, 0, 256));
+		if (v.length === 1) return [v[0], v[0], v[0], v[0]];
+		if (v.length === 2) return [v[0], v[1], v[0], v[1]];
+		return v;
+	}
+	function background(name, value) {
+		if (value === undefined || typeof value === "string") return color(name, "fill", value);
+		const g = props(`${name} fill`, value, ["from", "to", "angle"], true);
+		if (g.from === undefined || g.to === undefined)
+			fail(`${name}: a gradient fill needs from and to, for example { from: "#4f46e5", to: "#06b6d4" }`);
+		return compact({
+			from: color(name, "fill from", g.from),
+			to: color(name, "fill to", g.to),
+			angle: num(name, "fill angle", g.angle, true, 0, 360),
+		});
+	}
+	function shadow(name, value) {
+		if (value === undefined || typeof value === "string") return pick(name, "shadow", value, SHADOWS);
+		const s = props(`${name} shadow`, value, ["x", "y", "blur", "spread", "color"], true);
+		return compact({
+			x: num(name, "shadow x", s.x, true, -100, 100),
+			y: num(name, "shadow y", s.y, true, -100, 100),
+			blur: num(name, "shadow blur", s.blur, true, 0, 100),
+			spread: num(name, "shadow spread", s.spread, true, -100, 100),
+			color: color(name, "shadow color", s.color),
+		});
+	}
+	function surface(name, p) {
+		const span = num(name, "span", p.span, true, 1, 12);
+		if (span !== undefined && !isInteger(span)) fail(`${name}: span must be an integer`);
+		const out = {
+			padding: padding(name, p.padding),
+			width: length(name, "width", p.width),
+			height: length(name, "height", p.height),
+			minWidth: num(name, "minWidth", p.minWidth, true, 0, LENGTH),
+			maxWidth: num(name, "maxWidth", p.maxWidth, true, 0, LENGTH),
+			minHeight: num(name, "minHeight", p.minHeight, true, 0, LENGTH),
+			maxHeight: num(name, "maxHeight", p.maxHeight, true, 0, LENGTH),
+			grow: num(name, "grow", p.grow, true, 0, 100),
+			span,
+			x: num(name, "x", p.x, true, -LENGTH, LENGTH),
+			y: num(name, "y", p.y, true, -LENGTH, LENGTH),
+			right: num(name, "right", p.right, true, -LENGTH, LENGTH),
+			bottom: num(name, "bottom", p.bottom, true, -LENGTH, LENGTH),
+			fill: background(name, p.fill),
+			border: color(name, "border", p.border),
+			borderWidth: num(name, "borderWidth", p.borderWidth, true, 0, 16),
+			radius: num(name, "radius", p.radius, true, 0, 1000),
+			shadow: shadow(name, p.shadow),
+			opacity: num(name, "opacity", p.opacity, true, 0, 1),
+			clip: bool(name, "clip", p.clip),
+			scroll: pick(name, "scroll", p.scroll, ["x", "y"]),
+			color: color(name, "color", p.color),
+		};
+		if (out.scroll === "y" && out.height === undefined && out.maxHeight === undefined)
+			fail(`${name}: scroll "y" needs a height or maxHeight`);
+		return out;
+	}
+	const press = (name, p) => (p.onClick === undefined ? undefined : { handler: handler(name, "onClick", p.onClick) });
+
 	/*
 	 * DRAW_FORMAT: a draw records commands into one Float64Array, each a run of numbers starting with its op:
 	 *   SAVE 1 | RESTORE 2 | TRANSLATE 3 x y | ROTATE 4 radians | SCALE 5 x y | OPACITY 6 factor
-	 *   Shapes: op, mode (1 fill, 2 stroke), color (index in COLORS), opacity, line width (0 when filling), then
+	 *   Shapes: op, mode (1 fill, 2 stroke), color, opacity, line width (0 when filling), then
 	 *   RECT 10 x y w h radius | CIRCLE 11 cx cy r | LINE 12 x1 y1 x2 y2 | PATH 13 closed n x1 y1 ... xn yn |
 	 *   ARC 14 cx cy r inner start end (fill: a wedge, or a ring segment when inner > 0; stroke: the arc at r)
+	 *   PATHS 15 m, then m subpaths of closed n x1 y1 ... xn yn (an SVG path; a fill uses the nonzero rule)
 	 *   TEXT 20 color opacity x y string size weight align baseline mono, where string indexes frame().strings,
 	 *   size indexes SIZES, align ALIGN and baseline BASELINES, and mono is 0 or 1.
+	 * A color is an index in COLORS, or 256 + 0xRRGGBBAA for a literal color.
 	 * A shape with both fill and stroke records twice, fill first. Every record counts as one command.
 	 */
 	const BASELINES = ["top", "middle", "bottom"];
@@ -592,9 +897,20 @@ public enum VisualRuntime {
 	}
 	function token(name, prop, value) {
 		if (value === undefined) return -1;
+		if (isHex(value)) {
+			let hex = value.slice(1);
+			if (hex.length < 6) {
+				let full = "";
+				for (let index = 0; index < hex.length; index++) full += hex[index] + hex[index];
+				hex = full;
+			}
+			return 256 + parseHex(hex.length === 6 ? `${hex}ff` : hex, 16);
+		}
 		const index = typeof value === "string" ? COLOR_INDEX[value] : undefined;
 		if (index === undefined)
-			fail(`g.${name}: ${prop} ${stringify(value) ?? String(value)} is not a color token: ${COLORS.join(", ")}`);
+			fail(
+				`g.${name}: ${prop} ${stringify(value) ?? String(value)} is not a color token (${COLORS.join(", ")}) or a "#rrggbb" color`,
+			);
 		return index;
 	}
 	function fraction(name, prop, value, max) {
@@ -660,6 +976,220 @@ public enum VisualRuntime {
 		if (size > 1) ops[used++] = b;
 	}
 
+	const PATH_NUMBER = /[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/y;
+	/**
+	 * SVG path data as subpaths of flat point lists: M L H V C S Q T A Z, absolute and lowercase relative. Curves and
+	 * arcs become short straight segments.
+	 */
+	function svgPath(d) {
+		const subpaths = [];
+		let at = 0;
+		let x = 0;
+		let y = 0;
+		let startX = 0;
+		let startY = 0;
+		let controlX = 0;
+		let controlY = 0;
+		let current;
+		let closed = false;
+		let command = "";
+		let previous = "";
+		const where = () => `at character ${at} of the path data`;
+		const skip = () => {
+			while (at < d.length && (d[at] === " " || d[at] === "," || d[at] === "\n" || d[at] === "\t" || d[at] === "\r"))
+				at++;
+		};
+		const number = () => {
+			skip();
+			PATH_NUMBER.lastIndex = at;
+			const match = PATH_NUMBER.exec(d);
+			if (!match) fail(`g.path: expected a number ${where()}`);
+			at = PATH_NUMBER.lastIndex;
+			const value = +match[0];
+			if (!finite(value)) fail(`g.path: ${match[0]} is not a finite number`);
+			return value;
+		};
+		const flag = () => {
+			skip();
+			const char = d[at];
+			if (char !== "0" && char !== "1") fail(`g.path: expected an arc flag (0 or 1) ${where()}`);
+			at++;
+			return char === "1";
+		};
+		const finish = () => {
+			if (current && current.length >= 4) subpaths.push({ closed, points: current });
+			current = undefined;
+			closed = false;
+		};
+		const add = (nx, ny) => {
+			if (!current) current = [x, y];
+			current.push(nx, ny);
+			x = nx;
+			y = ny;
+		};
+		const steps = (length, low, high) => min(high, max(low, ceil(length / 2)));
+		const cubic = (x1, y1, x2, y2, x3, y3) => {
+			const x0 = x;
+			const y0 = y;
+			const n = steps(
+				abs(x1 - x0) + abs(y1 - y0) + abs(x2 - x1) + abs(y2 - y1) + abs(x3 - x2) + abs(y3 - y2),
+				4,
+				32,
+			);
+			for (let i = 1; i <= n; i++) {
+				const t = i / n;
+				const u = 1 - t;
+				add(
+					u * u * u * x0 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3,
+					u * u * u * y0 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3,
+				);
+			}
+			controlX = x2;
+			controlY = y2;
+		};
+		const quadratic = (x1, y1, x2, y2) => {
+			const x0 = x;
+			const y0 = y;
+			const n = steps(abs(x1 - x0) + abs(y1 - y0) + abs(x2 - x1) + abs(y2 - y1), 4, 32);
+			for (let i = 1; i <= n; i++) {
+				const t = i / n;
+				const u = 1 - t;
+				add(u * u * x0 + 2 * u * t * x1 + t * t * x2, u * u * y0 + 2 * u * t * y1 + t * t * y2);
+			}
+			controlX = x1;
+			controlY = y1;
+		};
+		// The endpoint-to-center conversion of SVG 1.1, appendix F.6.5.
+		const arc = (rx, ry, degrees, large, sweep, x2, y2) => {
+			rx = abs(rx);
+			ry = abs(ry);
+			if (rx === 0 || ry === 0 || (x === x2 && y === y2)) return add(x2, y2);
+			const c = cos((degrees * PI) / 180);
+			const s = sin((degrees * PI) / 180);
+			const dx = (x - x2) / 2;
+			const dy = (y - y2) / 2;
+			const x1p = c * dx + s * dy;
+			const y1p = -s * dx + c * dy;
+			const lambda = (x1p * x1p) / (rx * rx) + (y1p * y1p) / (ry * ry);
+			if (lambda > 1) {
+				rx *= sqrt(lambda);
+				ry *= sqrt(lambda);
+			}
+			const numerator = rx * rx * ry * ry - rx * rx * y1p * y1p - ry * ry * x1p * x1p;
+			const denominator = rx * rx * y1p * y1p + ry * ry * x1p * x1p;
+			const coefficient = (large === sweep ? -1 : 1) * sqrt(max(0, numerator / denominator));
+			const cxp = (coefficient * rx * y1p) / ry;
+			const cyp = (-coefficient * ry * x1p) / rx;
+			const cx = c * cxp - s * cyp + (x + x2) / 2;
+			const cy = s * cxp + c * cyp + (y + y2) / 2;
+			const angle = (ux, uy, vx, vy) => atan2(ux * vy - uy * vx, ux * vx + uy * vy);
+			const ux = (x1p - cxp) / rx;
+			const uy = (y1p - cyp) / ry;
+			const start = angle(1, 0, ux, uy);
+			let delta = angle(ux, uy, (-x1p - cxp) / rx, (-y1p - cyp) / ry);
+			if (!sweep && delta > 0) delta -= 2 * PI;
+			else if (sweep && delta < 0) delta += 2 * PI;
+			const n = steps(abs(delta) * max(rx, ry), 4, 64);
+			// sin, cos and atan2 may differ in the last bit between engines, so arc points snap to a
+			// 1/4096 grid that every engine represents exactly.
+			const snap = (value) => round(value * 4096) / 4096;
+			for (let i = 1; i < n; i++) {
+				const t = start + (delta * i) / n;
+				add(snap(cx + rx * cos(t) * c - ry * sin(t) * s), snap(cy + rx * cos(t) * s + ry * sin(t) * c));
+			}
+			add(x2, y2);
+		};
+		for (;;) {
+			skip();
+			if (at >= d.length) break;
+			const char = d[at];
+			if ("MmLlHhVvCcSsQqTtAaZz".includes(char)) {
+				command = char;
+				at++;
+			} else if (!command || command === "z" || command === "Z" || !"+-.0123456789".includes(char))
+				fail(`g.path: expected a command (M, L, H, V, C, S, Q, T, A or Z) ${where()}`);
+			const relative = command === command.toLowerCase();
+			const ox = relative ? x : 0;
+			const oy = relative ? y : 0;
+			switch (command.toUpperCase()) {
+				case "M": {
+					finish();
+					x = ox + number();
+					y = oy + number();
+					startX = x;
+					startY = y;
+					current = [x, y];
+					// Pairs after a move are lines.
+					command = relative ? "l" : "L";
+					break;
+				}
+				case "L": {
+					const nx = ox + number();
+					add(nx, oy + number());
+					break;
+				}
+				case "H":
+					add(ox + number(), y);
+					break;
+				case "V":
+					add(x, oy + number());
+					break;
+				case "C": {
+					const x1 = ox + number();
+					const y1 = oy + number();
+					const x2 = ox + number();
+					const y2 = oy + number();
+					const x3 = ox + number();
+					cubic(x1, y1, x2, y2, x3, oy + number());
+					break;
+				}
+				case "S": {
+					const smooth = previous === "C" || previous === "S";
+					const x2 = ox + number();
+					const y2 = oy + number();
+					const x3 = ox + number();
+					const y3 = oy + number();
+					cubic(smooth ? 2 * x - controlX : x, smooth ? 2 * y - controlY : y, x2, y2, x3, y3);
+					break;
+				}
+				case "Q": {
+					const x1 = ox + number();
+					const y1 = oy + number();
+					const x2 = ox + number();
+					quadratic(x1, y1, x2, oy + number());
+					break;
+				}
+				case "T": {
+					const smooth = previous === "Q" || previous === "T";
+					const x2 = ox + number();
+					quadratic(smooth ? 2 * x - controlX : x, smooth ? 2 * y - controlY : y, x2, oy + number());
+					break;
+				}
+				case "A": {
+					const rx = number();
+					const ry = number();
+					const degrees = number();
+					const large = flag();
+					const sweep = flag();
+					const x2 = ox + number();
+					arc(rx, ry, degrees, large, sweep, x2, oy + number());
+					break;
+				}
+				case "Z":
+					if (current) {
+						closed = true;
+						finish();
+					}
+					x = startX;
+					y = startY;
+					break;
+			}
+			previous = command.toUpperCase();
+		}
+		finish();
+		return subpaths;
+	}
+
 	const pen = freeze({
 		rect(x, y, w, h, options) {
 			style("rect", options, "radius");
@@ -701,7 +1231,32 @@ public enum VisualRuntime {
 		path(list, options) {
 			style("path", options, "close");
 			const closed = bool("g.path", "close", extraValue) ? 1 : 0;
-			if (!isArray(list)) fail(`g.path expects an array of points, got ${describe(list)}`);
+			if (typeof list === "string") {
+				const subpaths = svgPath(list);
+				if (!subpaths.length) fail("g.path: the path data draws nothing");
+				let count = 0;
+				let size = 1;
+				for (let index = 0; index < subpaths.length; index++) {
+					count += subpaths[index].points.length / 2;
+					size += 2 + subpaths[index].points.length;
+				}
+				points += count;
+				if (points > LIMITS.drawPoints) fail(`the drawing has more than ${LIMITS.drawPoints} path points`);
+				paint("path");
+				for (let mode = 1; mode <= 2; mode++) {
+					if ((mode === 1 ? fillColor : strokeColor) < 0) continue;
+					head("path", 15, mode, size);
+					ops[used++] = subpaths.length;
+					for (let index = 0; index < subpaths.length; index++) {
+						const subpath = subpaths[index];
+						ops[used++] = subpath.closed || closed ? 1 : 0;
+						ops[used++] = subpath.points.length / 2;
+						for (let value = 0; value < subpath.points.length; value++) ops[used++] = subpath.points[value];
+					}
+				}
+				return;
+			}
+			if (!isArray(list)) fail(`g.path expects an array of points or SVG path data, got ${describe(list)}`);
 			const pairs = list.length > 0 && isArray(list[0]);
 			const count = pairs ? list.length : list.length / 2;
 			if (!pairs && !isInteger(count)) fail("g.path: a flat point list needs an even number of values");
@@ -918,40 +1473,53 @@ public enum VisualRuntime {
 
 	const ui = freeze({
 		column: (...args) => {
-			const [p, list] = container("column", args, ["key", "gap", "align"]);
+			const [p, list] = container("column", args, ["key", "gap", "align", "justify", ...SURFACE]);
 			return node(
 				{
 					type: "column",
 					key: key("column", p.key),
 					gap: num("column", "gap", p.gap, true, 0, 64),
 					align: pick("column", "align", p.align, ALIGN),
+					justify: pick("column", "justify", p.justify, JUSTIFY),
+					...surface("column", p),
 				},
 				0,
 				list,
+				press("column", p),
 			);
 		},
 		row: (...args) => {
-			const [p, list] = container("row", args, ["key", "gap", "align", "justify"]);
+			const [p, list] = container("row", args, ["key", "gap", "align", "justify", "wrap", ...SURFACE]);
 			return node(
 				{
 					type: "row",
 					key: key("row", p.key),
 					gap: num("row", "gap", p.gap, true, 0, 64),
 					align: pick("row", "align", p.align, ["start", "center", "end", "baseline"]),
-					justify: pick("row", "justify", p.justify, ["start", "center", "end", "between"]),
+					justify: pick("row", "justify", p.justify, JUSTIFY),
+					wrap: bool("row", "wrap", p.wrap),
+					...surface("row", p),
 				},
 				0,
 				list,
+				press("row", p),
 			);
 		},
 		grid: (...args) => {
-			const [p, list] = container("grid", args, ["key", "columns", "gap"], true);
+			const [p, list] = container("grid", args, ["key", "columns", "gap", ...SURFACE], true);
 			const columns = num("grid", "columns", p.columns, false, 1, 12);
 			if (!isInteger(columns)) fail("grid: columns must be an integer");
 			return node(
-				{ type: "grid", key: key("grid", p.key), columns, gap: num("grid", "gap", p.gap, true, 0, 64) },
+				{
+					type: "grid",
+					key: key("grid", p.key),
+					columns,
+					gap: num("grid", "gap", p.gap, true, 0, 64),
+					...surface("grid", p),
+				},
 				0,
 				list,
+				press("grid", p),
 			);
 		},
 		text,
@@ -970,6 +1538,8 @@ public enum VisualRuntime {
 		slider,
 		button,
 		canvas,
+		vector,
+		icon,
 		shader,
 		mermaid,
 	});
@@ -1015,7 +1585,8 @@ public enum VisualRuntime {
 		const write = (name) => {
 			if (typeof name !== "string") fail("state keys must be strings");
 			if (phase === "view") fail(`state can only change in handlers, not while the view renders (state.${name})`);
-			if (phase === "draw") fail(`state can only change in handlers, not while a canvas draws (state.${name})`);
+			if (phase === "draw")
+				fail(`state can only change in handlers, not while a canvas or vector draws (state.${name})`);
 			if (phase === "handler" && !changed.includes(name)) changed.push(name);
 		};
 		return new RealProxy(target, {
@@ -1119,6 +1690,10 @@ public enum VisualRuntime {
 		const count = { nodes: 0, text: 0 };
 		const next = new Map();
 		const nextCanvases = new Map();
+		// Vectors draw while the tree is walked and share one drawing budget across the view.
+		commands = 0;
+		points = 0;
+		textChars = 0;
 		const walk = (value, path) => {
 			if (++count.nodes > LIMITS.nodes) fail(`the view has more than ${LIMITS.nodes} nodes`);
 			const record = records.get(value);
@@ -1131,6 +1706,28 @@ public enum VisualRuntime {
 				out.id = path;
 				if (record.control.draw) nextCanvases.set(path, record.control.draw);
 				else next.set(path, { out, handler: record.control.handler });
+			}
+			if (record.vector) {
+				const before = commands;
+				used = 0;
+				strings = [];
+				depth = 0;
+				phase = "draw";
+				drawing = true;
+				let result;
+				try {
+					result = record.vector(pen, freeze({ width: out.width, height: out.height }));
+				} finally {
+					phase = "idle";
+					drawing = false;
+				}
+				if (result !== null && typeof result === "object" && typeof result.then === "function")
+					fail("vector: draw must be synchronous");
+				out.commands = commands - before;
+				out.ops = arrayFrom(ops.subarray(0, used));
+				out.strings = strings;
+				used = 0;
+				strings = [];
 			}
 			if (record.children) {
 				const list = [];

@@ -384,6 +384,8 @@ pub use artifact_view::link_probe::run_visual_links_probe;
 #[cfg(feature = "native-probes")]
 pub use artifact_view::mermaid_probe::run_native_mermaid_probe;
 #[cfg(feature = "native-probes")]
+pub use artifact_view::mockups_probe::run_visual_mockups_probe;
+#[cfg(feature = "native-probes")]
 pub use artifact_view::slider_probe::run_slider_probe;
 pub use local_client::{LocalOptions, check_local_read, read_local_capture};
 #[cfg(feature = "native-probes")]

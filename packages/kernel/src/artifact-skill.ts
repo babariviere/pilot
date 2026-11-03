@@ -7,6 +7,8 @@ export const ARTIFACT_SKILL_PATH = fileURLToPath(new URL("../skills/pilot-artifa
 export const ARTIFACT_SKILL_REFERENCES = [
 	"visuals.md",
 	"visual.d.ts",
+	"mockup-mobile.js",
+	"mockup-desktop.js",
 	"web.md",
 	"swiftui.md",
 	"images.md",

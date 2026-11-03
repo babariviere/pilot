@@ -73,10 +73,16 @@ await tools.artifact({ action: "create", kind: "visual", title: "Latency", sourc
   (bar, line, area, scatter), `rule`, `space`, `link`; controls `tabs`, `toggle`, `slider`, `button`;
   `canvas` (2D draw commands); `shader` (the GLSL surface from the shader artifact kind, plus named
   inputs bound to state); `mermaid` (a diagram drawn like Mermaid in chat, D15). There is no 3D scene node.
-- Style rules are part of the API, as in Zeron: colors are Theme token names (`text`, `muted`,
-  `accent`, `success`, `warning`, `danger`, `border`, `chart1`...`chart6`), text sizes are steps on
-  the chat's type scale, and layout nodes have no fills, borders or shadows. Visuals sit on the chat,
-  not in cards. Target the 760 pt column and 160-600 pt heights (D7, D8).
+- Style tokens are defaults, not restrictions. Theme token colors (`text`, `muted`, `accent`,
+  `success`, `warning`, `danger`, `border`, `chart1`...`chart6`) and the chat's text steps follow
+  light and dark mode and suit data visuals, which sit on the chat. For UI mockups (Pilot Next), every
+  color also takes a literal `#rrggbb`, text takes point sizes, weights 100-900 and the three embedded
+  families, and `column`/`row`/`grid` take surface props: padding, sizes, grow, grid span, layered
+  positions, fill or gradient, border, radius, shadow, opacity, clip, scroll, content color and
+  `onClick`. `icon` names an embedded Lucide icon and `vector` records pen commands (with SVG path
+  data) into the tree, planned by the host's reader, never by the UI thread. There are no images,
+  fonts or other assets, no hover/drag states and no generated code. Target the 760 pt column and
+  160-600 pt heights for data visuals (D7, D8).
 
 
 ## Where the script runs

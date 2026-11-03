@@ -1,10 +1,11 @@
 # Native visual artifacts
 
 `kind: "visual"` is the **first choice** for charts, stats, tables, small dashboards, controls (tabs, toggles,
-sliders, buttons), Mermaid diagrams (`ui.mermaid`) and 2D drawings or animations (`ui.canvas`). Pilot draws visuals natively in the chat: light and
-dark, the chat's fonts, selectable text and no web page. Use HTML or React only for what visuals can't express: custom
-layouts, rich documents, wide content and web libraries such as d3 force graphs or three.js. For GLSL effects
-inside a visual, use `ui.shader`; a standalone shader artifact suits a shader on its own.
+sliders, buttons), UI mockups and design alternatives, Mermaid diagrams (`ui.mermaid`) and 2D drawings or animations
+(`ui.canvas`). Pilot draws visuals natively in the chat: light and dark, the chat's fonts, selectable text and no web
+page. Use HTML or React only for what visuals can't express: rich documents, wide content and web libraries such as d3
+force graphs or three.js. For GLSL effects inside a visual, use `ui.shader`; a standalone shader artifact suits a
+shader on its own.
 
 The API is in [visual.d.ts](visual.d.ts). A visual is a **plain JavaScript function** defined in your codemode script
 and published as its text with `String(visual)` (tool arguments are JSON, so a function passed directly arrives
@@ -48,13 +49,121 @@ try {
   during setup, and its values must be JSON. `data` is frozen.
 - **Sandboxed and deterministic.** No `fetch`, timers, modules or files: gather everything with tools first and pass
   it as `data`. `Math.random` is seeded from the artifact id and `Date` is fixed.
-- **Style with tokens.** Colors are token names (`text`, `muted`, `accent`, `success`, `warning`, `danger`,
-  `border`, `chart1`...`chart6`), text sizes are steps (`xs`...`xl`). Layout nodes have no fills, borders or
-  shadows: visuals sit on the chat, not in cards.
+- **Tokens are defaults, not restrictions.** Token colors (`text`, `muted`, `accent`, `success`, `warning`,
+  `danger`, `border`, `chart1`...`chart6`) and text steps (`xs`...`xl`) follow the chat and its light and dark
+  mode; data visuals read best with them and without cards. Any color also takes a literal `"#rrggbb"` (or `#rgb`,
+  `#rgba`, `#rrggbbaa`), and text any size in points. Mockups use surfaces: see UI mockups below.
 - **Size for the chat.** Design for the 760 pt column; aim for about 160-600 pt for compact visuals. Taller visuals
   grow with their content and scroll with the chat, without an overall height cap. Give charts an explicit
   `height` (80-480); canvases and shaders also keep their explicit heights.
 - **Keys.** Give children that move or appear conditionally a `key`, unique among siblings.
+
+## UI mockups
+
+Use a visual for UI proposals, screens and side-by-side alternatives, not just data. Layout nodes (`column`, `row`,
+`grid`) take **surface** props, and text, icons and vectors take their own styling, so a mockup is real layout and
+real text, not a canvas of painted labels. Tokens are convenient defaults, not restrictions: pick the palette, type
+and geometry the design needs. Literal colors stay the same in light and dark mode, so a mockup looks like itself in
+either; use tokens for the captions around it.
+
+```js
+function visual({ ui, state }) {
+  const s = state({ plan: "team" });
+  const plans = [
+    { id: "solo", name: "Solo", price: 9, perks: ["1 project", "Email support"] },
+    { id: "team", name: "Team", price: 29, perks: ["Unlimited projects", "Shared workspaces", "Priority support"] },
+  ];
+  const logo = ui.vector({
+    width: 32,
+    height: 32,
+    label: "Logo",
+    draw: (g) => {
+      g.rect(0, 0, 32, 32, { fill: "#4f46e5", radius: 9 });
+      g.path("M9 22V10l7 7 7-7v12", { stroke: "#ffffff", width: 2.5 });
+    },
+  });
+  return () =>
+    ui.column({ padding: 24, radius: 20, gap: 18, color: "#e2e8f0", shadow: "lg",
+      fill: { from: "#0f172a", to: "#1e1b4b", angle: 135 } }, [
+      ui.row({ gap: 12, align: "center" }, [logo, ui.text("Pick a plan", { size: 24, weight: 700, font: "display" })]),
+      ui.row({ gap: 14, align: "start" }, plans.map((p) => {
+        const on = s.plan === p.id;
+        return ui.column({ key: p.id, grow: 1, minWidth: 200, padding: 16, radius: 14, gap: 8,
+          fill: on ? "#312e81" : "#ffffff0d", border: on ? "#818cf8" : "#ffffff1f", borderWidth: on ? 2 : 1,
+          onClick: () => (s.plan = p.id) }, [
+          ui.row({ justify: "between", align: "center" }, [
+            ui.text(p.name, { size: 15, weight: 600 }),
+            on && ui.icon("circle-check", { size: 18, color: "#a5b4fc" }),
+          ]),
+          ui.row({ gap: 4, align: "baseline" }, [
+            ui.text("$" + p.price, { size: 30, weight: 800 }),
+            ui.text("/ month", { size: 13, color: "#94a3b8" }),
+          ]),
+          p.perks.map((perk) => ui.row({ key: perk, gap: 6, align: "center" }, [
+            ui.icon("check", { size: 14, color: "#34d399" }),
+            ui.text(perk, { size: 13 }),
+          ])),
+        ]);
+      })),
+    ]);
+}
+```
+
+What you can express:
+
+- **Layout.** Stacks and grids with `gap`, `align`, `justify`, `wrap` (rows) and `span` (grid cells); `padding`;
+  `width`/`height` in points or `"fill"`, `min`/`max` sizes and `grow` to share free space. Rows wrap by default, so
+  side-by-side alternatives stack on a narrow window; pass `wrap: false` to keep a toolbar on one line. A point
+  `width` holds in a narrower parent: put a fixed desktop window in a `scroll: "x"` row.
+- **Layers.** `x`, `y`, `right` or `bottom` take a node out of the flow and place it over its parent: badges,
+  overlays, labels centred on a ring (`{ x: 0, y: 0, right: 0, bottom: 0, align: "center", justify: "center" }`).
+  Give the parent a size for a fixed stage. `clip` clips to rounded bounds; `scroll: "x"` or `"y"` scrolls overflow.
+- **Surfaces.** `fill` (color or linear gradient), `border` and `borderWidth`, `radius`, `shadow` (`"sm"`, `"md"`,
+  `"lg"` or `{ x, y, blur, spread, color }`), `opacity`, and `color`, the default for text and icons inside.
+- **Type.** `size` in points (6-200) or steps, `weight` 100-900, `font` `"ui"` (Inter), `"display"` (Inter Display)
+  or `"mono"` (JetBrains Mono), `lineHeight`, `lines`, `italic`; spans restyle runs.
+- **Icons and vectors.** `ui.icon(name)` draws one of the app's bundled Lucide icons (`IconName` in visual.d.ts).
+  `ui.vector` draws logos, avatars, rings, illustrations and custom glyphs with the canvas pen, including SVG path
+  data: `g.path("M4 12h16M12 4v16", { stroke: "#0f172a", width: 2 })`. See Vector below.
+- **Artboards and alternatives.** Fixed-size columns are artboards: a phone (390 x 844), a tablet or a window. Put
+  alternatives side by side in a wrapping row, and drive their width, palette or screen from state with a slider,
+  toggle or tabs. Any surface with `onClick` is pressable (pointer, or Enter/Space when focused): tab bars, list
+  rows, cards. Its handler only assigns to state, like every control's.
+
+Two complete examples render in the app's own checks: [mockup-mobile.js](mockup-mobile.js) (two phone directions
+with a working tab bar and a width slider) and [mockup-desktop.js](mockup-desktop.js) (a desktop window with a
+sidebar, KPI sparklines and a release list, a light/dark window toggle and a responsive width slider). Each file is
+one visual function: read it, adapt it and publish it with `String(visual)`.
+
+Not supported, so don't promise them: images, photos or other assets inside a visual (publish an image artifact
+beside it), fonts other than the three above, hover, pressed or drag states and transitions on surfaces (use
+`ui.canvas` for pointer-driven or animated drawing), editable text fields, per-side borders, several shadows,
+radial gradients, blur, rotation of layout nodes, letter spacing and text transforms (change the string instead).
+The legacy macOS app does not draw icons, vectors or surface styling.
+
+## Vector
+
+`ui.vector({ width, height, label, draw })` records a fixed drawing while the view renders: the same pen as a canvas,
+in `width` x `height` units, shown at that size and shrunk proportionally in a narrower parent. Pilot plans it once
+and paints it natively, with no further calls into the visual, so use it freely for logos, avatars, progress rings,
+sparklines and decorative shapes. All vectors in one view share 20,000 commands. Use `ui.canvas` instead for
+drawings that follow the pointer, animate or fill the column's width.
+
+```js
+ui.vector({
+  width: 120, height: 120, label: "Weekly goal, 74%",
+  draw: (g, { width }) => {
+    const c = width / 2;
+    g.arc(c, c, c - 2, 0, Math.PI * 2, { fill: "#d1fae5", inner: c - 14 });
+    g.arc(c, c, c - 2, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * 0.74, { fill: "#10b981", inner: c - 14 });
+    g.path("M44 60l11 11 22-24", { stroke: "#047857", width: 6 });
+  },
+})
+```
+
+`g.path` takes SVG path data (`M L H V C S Q T A Z`, lowercase relative), so icon and logo paths can be pasted in;
+its subpaths fill together with the nonzero rule, so cut-outs stay open. Every pen color, here and in canvases, also
+takes a literal color.
 
 ## Canvas
 
@@ -130,8 +239,9 @@ the line in its GLSL. Keep per-pixel work modest: it runs on the reader's GPU ev
 ## Publication check
 
 Before saving, Pilot runs the function, renders the first view, validates the tree (known nodes and props, token
-names, finite numbers, one series value per x, unique keys) and exercises every control once (each tab, both toggle
-states, slider min and max, each button; up to 24 interactions). It draws every canvas at widths 760 and 360, with and
+names and literal colors, icon names, finite numbers, one series value per x, unique keys, every vector's drawing)
+and exercises every control once (each tab, both toggle states, slider min and max, each button and pressable
+surface; up to 24 interactions). It draws every canvas at widths 760 and 360 (or its own narrower width), with and
 without a pointer, and at `t` 0 and 1.5 when animated, and compiles every shader. The first failure comes back as an
 error with the line inside your function (or shader) and what triggered it. Nothing is saved until the check passes,
 so catch the error, fix the function or the data and publish again in the same script.
@@ -144,6 +254,7 @@ so catch the error, fix the function or the data and publish again in the same s
 | Setup, view | 250 ms each |
 | Handler | 100 ms |
 | Canvas draw | 8 ms; 20,000 commands |
+| Vectors | 20,000 commands per view, together |
 | Tree | 5,000 nodes, 64 KiB of text |
 | State | 64 KiB of JSON |
 

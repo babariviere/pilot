@@ -29,6 +29,349 @@
 							"enum": ["start", "center", "end"],
 							"description": "Horizontal. Default start."
 						},
+						"justify": {
+							"enum": ["start", "center", "end", "between"],
+							"description": "Distribution along the stack. Default start; between spreads children to both edges."
+						},
+						"padding": {
+							"type": "array",
+							"items": {
+								"type": "number",
+								"minimum": 0,
+								"maximum": 256
+							},
+							"minItems": 4,
+							"maxItems": 4,
+							"description": "Top, right, bottom, left in points."
+						},
+						"width": {
+							"anyOf": [
+								{
+									"type": "number",
+									"minimum": 0,
+									"maximum": 4000
+								},
+								{
+									"type": "string",
+									"const": "fill"
+								}
+							],
+							"description": "Points, or fill the parent."
+						},
+						"height": {
+							"anyOf": [
+								{
+									"type": "number",
+									"minimum": 0,
+									"maximum": 4000
+								},
+								{
+									"type": "string",
+									"const": "fill"
+								}
+							],
+							"description": "Points, or fill the parent."
+						},
+						"minWidth": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 4000
+						},
+						"maxWidth": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 4000
+						},
+						"minHeight": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 4000
+						},
+						"maxHeight": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 4000
+						},
+						"grow": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 100,
+							"description": "Share of the parent stack's free space."
+						},
+						"span": {
+							"type": "integer",
+							"minimum": 1,
+							"maximum": 12,
+							"description": "Grid columns this node spans."
+						},
+						"x": {
+							"type": "number",
+							"minimum": -4000,
+							"maximum": 4000
+						},
+						"y": {
+							"type": "number",
+							"minimum": -4000,
+							"maximum": 4000
+						},
+						"right": {
+							"type": "number",
+							"minimum": -4000,
+							"maximum": 4000
+						},
+						"bottom": {
+							"type": "number",
+							"minimum": -4000,
+							"maximum": 4000
+						},
+						"fill": {
+							"anyOf": [
+								{
+									"anyOf": [
+										{
+											"enum": [
+												"text",
+												"muted",
+												"accent",
+												"success",
+												"warning",
+												"danger",
+												"border",
+												"chart1",
+												"chart2",
+												"chart3",
+												"chart4",
+												"chart5",
+												"chart6"
+											],
+											"description": "Theme token name. Values follow light and dark mode."
+										},
+										{
+											"type": "string",
+											"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+											"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+										}
+									],
+									"description": "A theme token or a literal color."
+								},
+								{
+									"type": "object",
+									"required": ["from", "to"],
+									"properties": {
+										"from": {
+											"anyOf": [
+												{
+													"enum": [
+														"text",
+														"muted",
+														"accent",
+														"success",
+														"warning",
+														"danger",
+														"border",
+														"chart1",
+														"chart2",
+														"chart3",
+														"chart4",
+														"chart5",
+														"chart6"
+													],
+													"description": "Theme token name. Values follow light and dark mode."
+												},
+												{
+													"type": "string",
+													"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+													"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+												}
+											],
+											"description": "A theme token or a literal color."
+										},
+										"to": {
+											"anyOf": [
+												{
+													"enum": [
+														"text",
+														"muted",
+														"accent",
+														"success",
+														"warning",
+														"danger",
+														"border",
+														"chart1",
+														"chart2",
+														"chart3",
+														"chart4",
+														"chart5",
+														"chart6"
+													],
+													"description": "Theme token name. Values follow light and dark mode."
+												},
+												{
+													"type": "string",
+													"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+													"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+												}
+											],
+											"description": "A theme token or a literal color."
+										},
+										"angle": {
+											"type": "number",
+											"minimum": 0,
+											"maximum": 360,
+											"description": "Degrees; 0 is up. Default 180."
+										}
+									},
+									"additionalProperties": false,
+									"description": "Linear gradient."
+								}
+							]
+						},
+						"border": {
+							"anyOf": [
+								{
+									"enum": [
+										"text",
+										"muted",
+										"accent",
+										"success",
+										"warning",
+										"danger",
+										"border",
+										"chart1",
+										"chart2",
+										"chart3",
+										"chart4",
+										"chart5",
+										"chart6"
+									],
+									"description": "Theme token name. Values follow light and dark mode."
+								},
+								{
+									"type": "string",
+									"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+									"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+								}
+							],
+							"description": "A theme token or a literal color."
+						},
+						"borderWidth": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 16,
+							"description": "Default 1 with a border."
+						},
+						"radius": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 1000
+						},
+						"shadow": {
+							"anyOf": [
+								{
+									"enum": ["sm", "md", "lg"]
+								},
+								{
+									"type": "object",
+									"properties": {
+										"x": {
+											"type": "number",
+											"minimum": -100,
+											"maximum": 100
+										},
+										"y": {
+											"type": "number",
+											"minimum": -100,
+											"maximum": 100
+										},
+										"blur": {
+											"type": "number",
+											"minimum": 0,
+											"maximum": 100
+										},
+										"spread": {
+											"type": "number",
+											"minimum": -100,
+											"maximum": 100
+										},
+										"color": {
+											"anyOf": [
+												{
+													"enum": [
+														"text",
+														"muted",
+														"accent",
+														"success",
+														"warning",
+														"danger",
+														"border",
+														"chart1",
+														"chart2",
+														"chart3",
+														"chart4",
+														"chart5",
+														"chart6"
+													],
+													"description": "Theme token name. Values follow light and dark mode."
+												},
+												{
+													"type": "string",
+													"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+													"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+												}
+											],
+											"description": "A theme token or a literal color."
+										}
+									},
+									"additionalProperties": false
+								}
+							]
+						},
+						"opacity": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 1
+						},
+						"clip": {
+							"type": "boolean",
+							"description": "Clip children to the rounded bounds."
+						},
+						"scroll": {
+							"enum": ["x", "y"],
+							"description": "Scroll overflowing children; y needs height or maxHeight."
+						},
+						"color": {
+							"anyOf": [
+								{
+									"enum": [
+										"text",
+										"muted",
+										"accent",
+										"success",
+										"warning",
+										"danger",
+										"border",
+										"chart1",
+										"chart2",
+										"chart3",
+										"chart4",
+										"chart5",
+										"chart6"
+									],
+									"description": "Theme token name. Values follow light and dark mode."
+								},
+								{
+									"type": "string",
+									"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+									"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+								}
+							],
+							"description": "A theme token or a literal color."
+						},
+						"id": {
+							"type": "string",
+							"pattern": "^0(\\.[0-9]+)*$",
+							"description": "Present when the visual set onClick: the node is pressable. Event value: null."
+						},
 						"children": {
 							"type": "array",
 							"items": {
@@ -37,7 +380,7 @@
 						}
 					},
 					"additionalProperties": false,
-					"description": "Vertical stack. Layout nodes have no fill, border or shadow."
+					"description": "Vertical stack, with optional surface styling."
 				},
 				{
 					"type": "object",
@@ -65,7 +408,350 @@
 						},
 						"justify": {
 							"enum": ["start", "center", "end", "between"],
-							"description": "Horizontal distribution. Default start; between spreads children to both edges."
+							"description": "Distribution along the stack. Default start; between spreads children to both edges."
+						},
+						"wrap": {
+							"type": "boolean",
+							"description": "Wrap children onto more lines. Default true."
+						},
+						"padding": {
+							"type": "array",
+							"items": {
+								"type": "number",
+								"minimum": 0,
+								"maximum": 256
+							},
+							"minItems": 4,
+							"maxItems": 4,
+							"description": "Top, right, bottom, left in points."
+						},
+						"width": {
+							"anyOf": [
+								{
+									"type": "number",
+									"minimum": 0,
+									"maximum": 4000
+								},
+								{
+									"type": "string",
+									"const": "fill"
+								}
+							],
+							"description": "Points, or fill the parent."
+						},
+						"height": {
+							"anyOf": [
+								{
+									"type": "number",
+									"minimum": 0,
+									"maximum": 4000
+								},
+								{
+									"type": "string",
+									"const": "fill"
+								}
+							],
+							"description": "Points, or fill the parent."
+						},
+						"minWidth": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 4000
+						},
+						"maxWidth": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 4000
+						},
+						"minHeight": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 4000
+						},
+						"maxHeight": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 4000
+						},
+						"grow": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 100,
+							"description": "Share of the parent stack's free space."
+						},
+						"span": {
+							"type": "integer",
+							"minimum": 1,
+							"maximum": 12,
+							"description": "Grid columns this node spans."
+						},
+						"x": {
+							"type": "number",
+							"minimum": -4000,
+							"maximum": 4000
+						},
+						"y": {
+							"type": "number",
+							"minimum": -4000,
+							"maximum": 4000
+						},
+						"right": {
+							"type": "number",
+							"minimum": -4000,
+							"maximum": 4000
+						},
+						"bottom": {
+							"type": "number",
+							"minimum": -4000,
+							"maximum": 4000
+						},
+						"fill": {
+							"anyOf": [
+								{
+									"anyOf": [
+										{
+											"enum": [
+												"text",
+												"muted",
+												"accent",
+												"success",
+												"warning",
+												"danger",
+												"border",
+												"chart1",
+												"chart2",
+												"chart3",
+												"chart4",
+												"chart5",
+												"chart6"
+											],
+											"description": "Theme token name. Values follow light and dark mode."
+										},
+										{
+											"type": "string",
+											"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+											"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+										}
+									],
+									"description": "A theme token or a literal color."
+								},
+								{
+									"type": "object",
+									"required": ["from", "to"],
+									"properties": {
+										"from": {
+											"anyOf": [
+												{
+													"enum": [
+														"text",
+														"muted",
+														"accent",
+														"success",
+														"warning",
+														"danger",
+														"border",
+														"chart1",
+														"chart2",
+														"chart3",
+														"chart4",
+														"chart5",
+														"chart6"
+													],
+													"description": "Theme token name. Values follow light and dark mode."
+												},
+												{
+													"type": "string",
+													"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+													"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+												}
+											],
+											"description": "A theme token or a literal color."
+										},
+										"to": {
+											"anyOf": [
+												{
+													"enum": [
+														"text",
+														"muted",
+														"accent",
+														"success",
+														"warning",
+														"danger",
+														"border",
+														"chart1",
+														"chart2",
+														"chart3",
+														"chart4",
+														"chart5",
+														"chart6"
+													],
+													"description": "Theme token name. Values follow light and dark mode."
+												},
+												{
+													"type": "string",
+													"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+													"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+												}
+											],
+											"description": "A theme token or a literal color."
+										},
+										"angle": {
+											"type": "number",
+											"minimum": 0,
+											"maximum": 360,
+											"description": "Degrees; 0 is up. Default 180."
+										}
+									},
+									"additionalProperties": false,
+									"description": "Linear gradient."
+								}
+							]
+						},
+						"border": {
+							"anyOf": [
+								{
+									"enum": [
+										"text",
+										"muted",
+										"accent",
+										"success",
+										"warning",
+										"danger",
+										"border",
+										"chart1",
+										"chart2",
+										"chart3",
+										"chart4",
+										"chart5",
+										"chart6"
+									],
+									"description": "Theme token name. Values follow light and dark mode."
+								},
+								{
+									"type": "string",
+									"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+									"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+								}
+							],
+							"description": "A theme token or a literal color."
+						},
+						"borderWidth": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 16,
+							"description": "Default 1 with a border."
+						},
+						"radius": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 1000
+						},
+						"shadow": {
+							"anyOf": [
+								{
+									"enum": ["sm", "md", "lg"]
+								},
+								{
+									"type": "object",
+									"properties": {
+										"x": {
+											"type": "number",
+											"minimum": -100,
+											"maximum": 100
+										},
+										"y": {
+											"type": "number",
+											"minimum": -100,
+											"maximum": 100
+										},
+										"blur": {
+											"type": "number",
+											"minimum": 0,
+											"maximum": 100
+										},
+										"spread": {
+											"type": "number",
+											"minimum": -100,
+											"maximum": 100
+										},
+										"color": {
+											"anyOf": [
+												{
+													"enum": [
+														"text",
+														"muted",
+														"accent",
+														"success",
+														"warning",
+														"danger",
+														"border",
+														"chart1",
+														"chart2",
+														"chart3",
+														"chart4",
+														"chart5",
+														"chart6"
+													],
+													"description": "Theme token name. Values follow light and dark mode."
+												},
+												{
+													"type": "string",
+													"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+													"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+												}
+											],
+											"description": "A theme token or a literal color."
+										}
+									},
+									"additionalProperties": false
+								}
+							]
+						},
+						"opacity": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 1
+						},
+						"clip": {
+							"type": "boolean",
+							"description": "Clip children to the rounded bounds."
+						},
+						"scroll": {
+							"enum": ["x", "y"],
+							"description": "Scroll overflowing children; y needs height or maxHeight."
+						},
+						"color": {
+							"anyOf": [
+								{
+									"enum": [
+										"text",
+										"muted",
+										"accent",
+										"success",
+										"warning",
+										"danger",
+										"border",
+										"chart1",
+										"chart2",
+										"chart3",
+										"chart4",
+										"chart5",
+										"chart6"
+									],
+									"description": "Theme token name. Values follow light and dark mode."
+								},
+								{
+									"type": "string",
+									"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+									"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+								}
+							],
+							"description": "A theme token or a literal color."
+						},
+						"id": {
+							"type": "string",
+							"pattern": "^0(\\.[0-9]+)*$",
+							"description": "Present when the visual set onClick: the node is pressable. Event value: null."
 						},
 						"children": {
 							"type": "array",
@@ -75,7 +761,7 @@
 						}
 					},
 					"additionalProperties": false,
-					"description": "Horizontal stack."
+					"description": "Horizontal stack, with optional surface styling."
 				},
 				{
 					"type": "object",
@@ -101,6 +787,345 @@
 							"minimum": 0,
 							"maximum": 64,
 							"description": "Spacing between children in points."
+						},
+						"padding": {
+							"type": "array",
+							"items": {
+								"type": "number",
+								"minimum": 0,
+								"maximum": 256
+							},
+							"minItems": 4,
+							"maxItems": 4,
+							"description": "Top, right, bottom, left in points."
+						},
+						"width": {
+							"anyOf": [
+								{
+									"type": "number",
+									"minimum": 0,
+									"maximum": 4000
+								},
+								{
+									"type": "string",
+									"const": "fill"
+								}
+							],
+							"description": "Points, or fill the parent."
+						},
+						"height": {
+							"anyOf": [
+								{
+									"type": "number",
+									"minimum": 0,
+									"maximum": 4000
+								},
+								{
+									"type": "string",
+									"const": "fill"
+								}
+							],
+							"description": "Points, or fill the parent."
+						},
+						"minWidth": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 4000
+						},
+						"maxWidth": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 4000
+						},
+						"minHeight": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 4000
+						},
+						"maxHeight": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 4000
+						},
+						"grow": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 100,
+							"description": "Share of the parent stack's free space."
+						},
+						"span": {
+							"type": "integer",
+							"minimum": 1,
+							"maximum": 12,
+							"description": "Grid columns this node spans."
+						},
+						"x": {
+							"type": "number",
+							"minimum": -4000,
+							"maximum": 4000
+						},
+						"y": {
+							"type": "number",
+							"minimum": -4000,
+							"maximum": 4000
+						},
+						"right": {
+							"type": "number",
+							"minimum": -4000,
+							"maximum": 4000
+						},
+						"bottom": {
+							"type": "number",
+							"minimum": -4000,
+							"maximum": 4000
+						},
+						"fill": {
+							"anyOf": [
+								{
+									"anyOf": [
+										{
+											"enum": [
+												"text",
+												"muted",
+												"accent",
+												"success",
+												"warning",
+												"danger",
+												"border",
+												"chart1",
+												"chart2",
+												"chart3",
+												"chart4",
+												"chart5",
+												"chart6"
+											],
+											"description": "Theme token name. Values follow light and dark mode."
+										},
+										{
+											"type": "string",
+											"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+											"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+										}
+									],
+									"description": "A theme token or a literal color."
+								},
+								{
+									"type": "object",
+									"required": ["from", "to"],
+									"properties": {
+										"from": {
+											"anyOf": [
+												{
+													"enum": [
+														"text",
+														"muted",
+														"accent",
+														"success",
+														"warning",
+														"danger",
+														"border",
+														"chart1",
+														"chart2",
+														"chart3",
+														"chart4",
+														"chart5",
+														"chart6"
+													],
+													"description": "Theme token name. Values follow light and dark mode."
+												},
+												{
+													"type": "string",
+													"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+													"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+												}
+											],
+											"description": "A theme token or a literal color."
+										},
+										"to": {
+											"anyOf": [
+												{
+													"enum": [
+														"text",
+														"muted",
+														"accent",
+														"success",
+														"warning",
+														"danger",
+														"border",
+														"chart1",
+														"chart2",
+														"chart3",
+														"chart4",
+														"chart5",
+														"chart6"
+													],
+													"description": "Theme token name. Values follow light and dark mode."
+												},
+												{
+													"type": "string",
+													"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+													"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+												}
+											],
+											"description": "A theme token or a literal color."
+										},
+										"angle": {
+											"type": "number",
+											"minimum": 0,
+											"maximum": 360,
+											"description": "Degrees; 0 is up. Default 180."
+										}
+									},
+									"additionalProperties": false,
+									"description": "Linear gradient."
+								}
+							]
+						},
+						"border": {
+							"anyOf": [
+								{
+									"enum": [
+										"text",
+										"muted",
+										"accent",
+										"success",
+										"warning",
+										"danger",
+										"border",
+										"chart1",
+										"chart2",
+										"chart3",
+										"chart4",
+										"chart5",
+										"chart6"
+									],
+									"description": "Theme token name. Values follow light and dark mode."
+								},
+								{
+									"type": "string",
+									"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+									"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+								}
+							],
+							"description": "A theme token or a literal color."
+						},
+						"borderWidth": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 16,
+							"description": "Default 1 with a border."
+						},
+						"radius": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 1000
+						},
+						"shadow": {
+							"anyOf": [
+								{
+									"enum": ["sm", "md", "lg"]
+								},
+								{
+									"type": "object",
+									"properties": {
+										"x": {
+											"type": "number",
+											"minimum": -100,
+											"maximum": 100
+										},
+										"y": {
+											"type": "number",
+											"minimum": -100,
+											"maximum": 100
+										},
+										"blur": {
+											"type": "number",
+											"minimum": 0,
+											"maximum": 100
+										},
+										"spread": {
+											"type": "number",
+											"minimum": -100,
+											"maximum": 100
+										},
+										"color": {
+											"anyOf": [
+												{
+													"enum": [
+														"text",
+														"muted",
+														"accent",
+														"success",
+														"warning",
+														"danger",
+														"border",
+														"chart1",
+														"chart2",
+														"chart3",
+														"chart4",
+														"chart5",
+														"chart6"
+													],
+													"description": "Theme token name. Values follow light and dark mode."
+												},
+												{
+													"type": "string",
+													"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+													"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+												}
+											],
+											"description": "A theme token or a literal color."
+										}
+									},
+									"additionalProperties": false
+								}
+							]
+						},
+						"opacity": {
+							"type": "number",
+							"minimum": 0,
+							"maximum": 1
+						},
+						"clip": {
+							"type": "boolean",
+							"description": "Clip children to the rounded bounds."
+						},
+						"scroll": {
+							"enum": ["x", "y"],
+							"description": "Scroll overflowing children; y needs height or maxHeight."
+						},
+						"color": {
+							"anyOf": [
+								{
+									"enum": [
+										"text",
+										"muted",
+										"accent",
+										"success",
+										"warning",
+										"danger",
+										"border",
+										"chart1",
+										"chart2",
+										"chart3",
+										"chart4",
+										"chart5",
+										"chart6"
+									],
+									"description": "Theme token name. Values follow light and dark mode."
+								},
+								{
+									"type": "string",
+									"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+									"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+								}
+							],
+							"description": "A theme token or a literal color."
+						},
+						"id": {
+							"type": "string",
+							"pattern": "^0(\\.[0-9]+)*$",
+							"description": "Present when the visual set onClick: the node is pressable. Event value: null."
 						},
 						"children": {
 							"type": "array",
@@ -137,26 +1162,40 @@
 										"maxLength": 10000
 									},
 									"weight": {
-										"enum": [400, 500, 600, 700],
+										"enum": [100, 200, 300, 400, 500, 600, 700, 800, 900],
 										"description": "Font weight. Default 400."
 									},
 									"color": {
-										"enum": [
-											"text",
-											"muted",
-											"accent",
-											"success",
-											"warning",
-											"danger",
-											"border",
-											"chart1",
-											"chart2",
-											"chart3",
-											"chart4",
-											"chart5",
-											"chart6"
+										"anyOf": [
+											{
+												"enum": [
+													"text",
+													"muted",
+													"accent",
+													"success",
+													"warning",
+													"danger",
+													"border",
+													"chart1",
+													"chart2",
+													"chart3",
+													"chart4",
+													"chart5",
+													"chart6"
+												],
+												"description": "Theme token name. Values follow light and dark mode."
+											},
+											{
+												"type": "string",
+												"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+												"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+											}
 										],
-										"description": "Theme token name. Values follow light and dark mode."
+										"description": "A theme token or a literal color."
+									},
+									"font": {
+										"enum": ["ui", "display", "mono"],
+										"description": "Embedded family. Default ui."
 									},
 									"mono": {
 										"type": "boolean"
@@ -174,30 +1213,55 @@
 							"maxItems": 500
 						},
 						"size": {
-							"enum": ["xs", "sm", "md", "lg", "xl"],
-							"description": "Step on the chat's type scale. Default md."
+							"anyOf": [
+								{
+									"enum": ["xs", "sm", "md", "lg", "xl"],
+									"description": "Step on the chat's type scale."
+								},
+								{
+									"type": "number",
+									"minimum": 6,
+									"maximum": 200,
+									"description": "Points."
+								}
+							],
+							"description": "Default md."
 						},
 						"weight": {
-							"enum": [400, 500, 600, 700],
+							"enum": [100, 200, 300, 400, 500, 600, 700, 800, 900],
 							"description": "Font weight. Default 400."
 						},
 						"color": {
-							"enum": [
-								"text",
-								"muted",
-								"accent",
-								"success",
-								"warning",
-								"danger",
-								"border",
-								"chart1",
-								"chart2",
-								"chart3",
-								"chart4",
-								"chart5",
-								"chart6"
+							"anyOf": [
+								{
+									"enum": [
+										"text",
+										"muted",
+										"accent",
+										"success",
+										"warning",
+										"danger",
+										"border",
+										"chart1",
+										"chart2",
+										"chart3",
+										"chart4",
+										"chart5",
+										"chart6"
+									],
+									"description": "Theme token name. Values follow light and dark mode."
+								},
+								{
+									"type": "string",
+									"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+									"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+								}
 							],
-							"description": "Theme token name. Values follow light and dark mode."
+							"description": "A theme token or a literal color."
+						},
+						"font": {
+							"enum": ["ui", "display", "mono"],
+							"description": "Embedded family. Default ui."
 						},
 						"mono": {
 							"type": "boolean"
@@ -214,6 +1278,12 @@
 							"minimum": 1,
 							"maximum": 50,
 							"description": "Line limit. Default none."
+						},
+						"lineHeight": {
+							"type": "number",
+							"minimum": 0.8,
+							"maximum": 3,
+							"description": "Multiple of the size. Default 1.618."
 						}
 					},
 					"additionalProperties": false,
@@ -379,22 +1449,32 @@
 										"description": "One value per x entry. Null is a gap."
 									},
 									"color": {
-										"enum": [
-											"text",
-											"muted",
-											"accent",
-											"success",
-											"warning",
-											"danger",
-											"border",
-											"chart1",
-											"chart2",
-											"chart3",
-											"chart4",
-											"chart5",
-											"chart6"
+										"anyOf": [
+											{
+												"enum": [
+													"text",
+													"muted",
+													"accent",
+													"success",
+													"warning",
+													"danger",
+													"border",
+													"chart1",
+													"chart2",
+													"chart3",
+													"chart4",
+													"chart5",
+													"chart6"
+												],
+												"description": "Theme token name. Values follow light and dark mode."
+											},
+											{
+												"type": "string",
+												"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+												"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+											}
 										],
-										"description": "Theme token name. Values follow light and dark mode."
+										"description": "A theme token or a literal color."
 									}
 								},
 								"additionalProperties": false
@@ -675,6 +1755,12 @@
 							"pattern": "^0(\\.[0-9]+)*$",
 							"description": "Controls only: the node's path of child indices from the root (root is 0). The host sends events to this id."
 						},
+						"width": {
+							"type": "number",
+							"minimum": 1,
+							"maximum": 2000,
+							"description": "Width in points. Default the column's width."
+						},
 						"height": {
 							"type": "number",
 							"minimum": 24,
@@ -693,6 +1779,247 @@
 					},
 					"additionalProperties": false,
 					"description": "2D drawing, as wide as the column. The host calls draw(id, width, height, t, pointer) for its commands; it redraws on resize and pointer moves, and every frame when animated."
+				},
+				{
+					"type": "object",
+					"required": ["type", "width", "height", "commands", "ops", "strings"],
+					"properties": {
+						"type": {
+							"type": "string",
+							"const": "vector"
+						},
+						"key": {
+							"type": "string",
+							"minLength": 1,
+							"maxLength": 200,
+							"description": "Identity among siblings, unique within one children list. Numbers become strings."
+						},
+						"width": {
+							"type": "number",
+							"minimum": 1,
+							"maximum": 2000
+						},
+						"height": {
+							"type": "number",
+							"minimum": 1,
+							"maximum": 2000
+						},
+						"label": {
+							"type": "string",
+							"maxLength": 500,
+							"description": "Accessibility description."
+						},
+						"commands": {
+							"type": "integer",
+							"minimum": 0,
+							"maximum": 20000
+						},
+						"ops": {
+							"type": "array",
+							"items": {
+								"type": "number"
+							},
+							"description": "Pen commands in DRAW_FORMAT (runtime.js)."
+						},
+						"strings": {
+							"type": "array",
+							"items": {
+								"type": "string"
+							}
+						}
+					},
+					"additionalProperties": false,
+					"description": "A fixed-size drawing recorded while the view renders, in width x height units. Hosts draw it at that size, shrunk proportionally to fit a narrower parent."
+				},
+				{
+					"type": "object",
+					"required": ["type", "name"],
+					"properties": {
+						"type": {
+							"type": "string",
+							"const": "icon"
+						},
+						"key": {
+							"type": "string",
+							"minLength": 1,
+							"maxLength": 200,
+							"description": "Identity among siblings, unique within one children list. Numbers become strings."
+						},
+						"name": {
+							"enum": [
+								"a-large-small",
+								"activity",
+								"archive",
+								"arrow-down",
+								"arrow-left",
+								"arrow-right",
+								"arrow-up",
+								"arrow-up-to-line",
+								"asterisk",
+								"ban",
+								"battery",
+								"battery-charging",
+								"battery-full",
+								"battery-low",
+								"battery-medium",
+								"battery-warning",
+								"bell",
+								"book-open",
+								"bot",
+								"building-2",
+								"calendar",
+								"case-sensitive",
+								"chart-pie",
+								"check",
+								"chevron-down",
+								"chevron-left",
+								"chevron-right",
+								"chevron-up",
+								"chevrons-up-down",
+								"circle",
+								"circle-alert",
+								"circle-check",
+								"circle-user",
+								"circle-x",
+								"clock",
+								"close",
+								"code-xml",
+								"compass",
+								"copy",
+								"corner-down-right",
+								"cpu",
+								"dash",
+								"delete",
+								"ellipsis",
+								"ellipsis-vertical",
+								"eraser",
+								"external-link",
+								"eye",
+								"eye-off",
+								"file",
+								"file-text",
+								"folder",
+								"folder-closed",
+								"folder-open",
+								"folder-plus",
+								"folders",
+								"frame",
+								"gallery-vertical-end",
+								"git-branch",
+								"git-compare",
+								"git-pull-request",
+								"github",
+								"globe",
+								"hard-drive",
+								"heart",
+								"heart-off",
+								"house",
+								"inbox",
+								"info",
+								"inspector",
+								"layers",
+								"layout-dashboard",
+								"link",
+								"list-filter",
+								"list-todo",
+								"loader",
+								"loader-circle",
+								"map",
+								"maximize",
+								"maximize-2",
+								"memory-stick",
+								"menu",
+								"message-circle-question-mark",
+								"messages-square",
+								"mic",
+								"minimize",
+								"minimize-2",
+								"minus",
+								"moon",
+								"network",
+								"palette",
+								"panel-bottom",
+								"panel-bottom-open",
+								"panel-left",
+								"panel-left-close",
+								"panel-left-open",
+								"panel-right",
+								"panel-right-close",
+								"panel-right-open",
+								"paperclip",
+								"pause",
+								"play",
+								"plus",
+								"redo",
+								"redo-2",
+								"refresh-cw",
+								"replace",
+								"resize-corner",
+								"rotate-cw",
+								"search",
+								"settings",
+								"settings-2",
+								"sort-ascending",
+								"sort-descending",
+								"square",
+								"square-pen",
+								"square-terminal",
+								"star",
+								"star-fill",
+								"star-off",
+								"sun",
+								"thumbs-down",
+								"thumbs-up",
+								"trash",
+								"triangle-alert",
+								"undo",
+								"undo-2",
+								"user",
+								"window-close",
+								"window-maximize",
+								"window-minimize",
+								"window-restore",
+								"workflow",
+								"wrench"
+							]
+						},
+						"size": {
+							"type": "number",
+							"minimum": 8,
+							"maximum": 128,
+							"description": "Points. Default 16."
+						},
+						"color": {
+							"anyOf": [
+								{
+									"enum": [
+										"text",
+										"muted",
+										"accent",
+										"success",
+										"warning",
+										"danger",
+										"border",
+										"chart1",
+										"chart2",
+										"chart3",
+										"chart4",
+										"chart5",
+										"chart6"
+									],
+									"description": "Theme token name. Values follow light and dark mode."
+								},
+								{
+									"type": "string",
+									"pattern": "^#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$",
+									"description": "Literal #rgb, #rgba, #rrggbb or #rrggbbaa. The same in light and dark mode."
+								}
+							],
+							"description": "A theme token or a literal color."
+						}
+					},
+					"additionalProperties": false,
+					"description": "A bundled Lucide icon. Default color: the inherited text color."
 				},
 				{
 					"type": "object",

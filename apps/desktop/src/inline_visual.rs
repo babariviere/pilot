@@ -321,7 +321,13 @@ impl ArtifactPane {
                     ),
                 );
             } else if let Some(scene) = self.snapshot.scene.clone() {
-                content = content.child(self.node(&scene.root, "0", &mut 4096, cx));
+                // Text without its own color takes its surface's, starting here.
+                content = content.text_color(cx.theme().foreground).child(self.node(
+                    &scene.root,
+                    "0",
+                    &mut 4096,
+                    cx,
+                ));
             }
             view = view.child(content);
         }

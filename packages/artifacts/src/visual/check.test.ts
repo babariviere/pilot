@@ -214,6 +214,47 @@ test("a draw that misses the frame limit twice in a row fails, as it stops the c
 	);
 });
 
+test("pressable surfaces are exercised like buttons, and their failures name the surface", async () => {
+	const result = await run(`({ ui, state }) => {
+  const s = state({ tab: "a" });
+  return () => ui.row({ gap: 8 }, ["a", "b"].map((id) =>
+    ui.column({ key: id, padding: 8, radius: 8, fill: s.tab === id ? "#4f46e5" : undefined, onClick: () => (s.tab = id) }, [id]),
+  ));
+}`);
+	assert.ok(result.ok, JSON.stringify(result));
+	assert.equal(result.report.controls, 2);
+	assert.equal(result.report.interactions, 2);
+	const broken = await run(`({ ui, state }) => {
+  const s = state({ open: false });
+  return () => ui.column([
+    ui.row({ key: "card", onClick: () => (s.open = true) }, ["Open"]),
+    s.open && ui.icon("rocket"),
+  ]);
+}`);
+	assert.match(failed(broken), /^line 5: icon: "rocket" is not a bundled icon name.*\(after row "open"\)$/);
+});
+
+test("vectors record their drawing in the tree and share one budget per view", async () => {
+	const tree = await run(`({ ui }) => () => ui.row([
+  ui.vector({ width: 24, height: 24, draw: (g, size) => g.path("M4 4h16v16H4z M8 8v8h8V8z", { fill: "#0f172a" }) }),
+  ui.vector({ width: 12, height: 12, draw: (g) => g.circle(6, 6, 6, { fill: "accent", stroke: "#ffffff80" }) }),
+])`);
+	assert.ok(tree.ok, JSON.stringify(tree));
+	const over = await run(`({ ui }) => () => ui.row([1, 2].map((key) =>
+  ui.vector({ key, width: 24, height: 24, draw: (g) => { for (let i = 0; i < 10001; i++) g.rect(0, 0, 1, 1, { fill: "text" }); } }),
+))`);
+	assert.match(failed(over), /the drawing has more than 20000 commands/);
+});
+
+test("a canvas narrower than the column draws at its own width", async () => {
+	const result = await run(`({ ui }) => () => ui.canvas({ width: 120, height: 40, draw: (g, f) => {
+  if (f.width > 120) throw new Error("drawn at " + f.width);
+  g.rect(0, 0, f.width, f.height, { fill: "#22d3ee" });
+} })`);
+	assert.ok(result.ok, JSON.stringify(result));
+	assert.equal(result.report.draws, 4);
+});
+
 test("publication limits and source shape are checked before the engine starts", () => {
 	assert.throws(() => validateVisualWrite(`() => "${"x".repeat(VISUAL_LIMITS.sourceBytes)}"`, null), /256 KiB/);
 	assert.throws(() => validateVisualWrite("() => null", "x".repeat(VISUAL_LIMITS.dataBytes)), /1 MiB/);
@@ -235,7 +276,7 @@ test("the worker check reports errors with console output and accepts valid visu
 		(error: unknown) =>
 			error instanceof VisualCheckError &&
 			error.message ===
-				'Visual check failed. Nothing was published. line 3: text: unknown prop "colour" (allowed: key, size, weight, color, mono, italic, align, lines)\nconsole output:\nbuilding',
+				'Visual check failed. Nothing was published. line 3: text: unknown prop "colour" (allowed: key, size, weight, color, font, mono, italic, align, lines, lineHeight)\nconsole output:\nbuilding',
 	);
 	await assert.rejects(
 		checkVisual({ source: "() => {\n  const f = (n) => f(n + 1) + 1;\n  return f(0);\n}", data: "null", id: "a" }),

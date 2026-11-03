@@ -12,6 +12,9 @@ use std::{rc::Rc, sync::Arc};
 /// Reports the readout's x entry, or `None` when the readout closes.
 pub(crate) type OnHover = Rc<dyn Fn(Option<usize>, &mut Window, &mut App)>;
 pub(crate) fn color(name: &str, cx: &gpui_kit::App) -> Hsla {
+    if let Some([r, g, b, a]) = crate::visual_scene::hex(name) {
+        return gpui_kit::rgba(u32::from_be_bytes([r, g, b, a])).into();
+    }
     let t = cx.theme();
     match name {
         "muted" => t.muted_foreground,

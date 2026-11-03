@@ -9,6 +9,65 @@ const COLORS: &[&str] = &[
     "text", "muted", "accent", "success", "warning", "danger", "border", "chart1", "chart2",
     "chart3", "chart4", "chart5", "chart6",
 ];
+/// Literal `#rgb`, `#rgba`, `#rrggbb` or `#rrggbbaa` as RGBA bytes.
+pub(crate) fn hex(value: &str) -> Option<[u8; 4]> {
+    let digits = value.strip_prefix('#')?;
+    if !matches!(digits.len(), 3 | 4 | 6 | 8) || !digits.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let nibble = |i: usize| u8::from_str_radix(&digits[i..=i], 16).unwrap();
+    let byte = |i: usize| u8::from_str_radix(&digits[i..i + 2], 16).unwrap();
+    Some(match digits.len() {
+        3 | 4 => {
+            let a = if digits.len() == 4 {
+                nibble(3) * 17
+            } else {
+                255
+            };
+            [nibble(0) * 17, nibble(1) * 17, nibble(2) * 17, a]
+        }
+        _ => {
+            let a = if digits.len() == 8 { byte(6) } else { 255 };
+            [byte(0), byte(2), byte(4), a]
+        }
+    })
+}
+/// A token name or a literal color.
+fn color(v: &Value) -> Result<(), Bad> {
+    let s = v.as_str().ok_or("Expected color")?;
+    if COLORS.contains(&s) || hex(s).is_some() {
+        Ok(())
+    } else {
+        Err("Unknown visual color")
+    }
+}
+const FONTS: &[&str] = &["ui", "display", "mono"];
+/// Surface props of column, row and grid (schema.ts `surface`).
+const SURFACE: &[&str] = &[
+    "padding",
+    "width",
+    "height",
+    "minWidth",
+    "maxWidth",
+    "minHeight",
+    "maxHeight",
+    "grow",
+    "span",
+    "x",
+    "y",
+    "right",
+    "bottom",
+    "fill",
+    "border",
+    "borderWidth",
+    "radius",
+    "shadow",
+    "opacity",
+    "clip",
+    "scroll",
+    "color",
+    "id",
+];
 #[derive(Clone, Debug)]
 pub(crate) enum Control {
     Tabs(Vec<String>),
@@ -38,6 +97,8 @@ pub(crate) struct Scene {
     pub(crate) nodes: usize,
     pub(crate) charts: BTreeMap<String, Result<Arc<crate::visual_chart::Chart>, Bad>>,
     pub(crate) mermaids: BTreeMap<String, Arc<crate::native_mermaid::Prepared>>,
+    /// Vector drawings, tessellated here in the reader rather than while painting.
+    pub(crate) vectors: BTreeMap<String, Result<Arc<crate::visual_canvas_plan::Plan>, Bad>>,
 }
 struct Check {
     links: BTreeMap<String, String>,
@@ -49,6 +110,9 @@ struct Check {
     chart_points: usize,
     charts: BTreeMap<String, Result<Arc<crate::visual_chart::Chart>, Bad>>,
     mermaids: BTreeMap<String, Arc<crate::native_mermaid::Prepared>>,
+    vectors: BTreeMap<String, Result<Arc<crate::visual_canvas_plan::Plan>, Bad>>,
+    vector_commands: usize,
+    vector_vertices: usize,
 }
 fn object<'a>(v: &'a Value, allowed: &[&str]) -> Result<&'a Map<String, Value>, Bad> {
     let o = v.as_object().ok_or("Expected object")?;
@@ -105,16 +169,95 @@ fn array(v: &Value, min: usize, max: usize) -> Result<&Vec<Value>, Bad> {
 fn style(o: &Map<String, Value>) -> Result<(), Bad> {
     optional(o, "weight", |v| {
         let n = number(v)?;
-        if ![400., 500., 600., 700.].contains(&n) {
+        if !(100. ..=900.).contains(&n) || n % 100. != 0. {
             return Err("Unknown font weight");
         }
         Ok(())
     })?;
-    optional(o, "color", |v| choice(v, COLORS))?;
+    optional(o, "color", color)?;
+    optional(o, "font", |v| choice(v, FONTS))?;
     for key in ["mono", "italic", "strike"] {
         optional(o, key, boolean)?;
     }
     Ok(())
+}
+fn length(v: &Value) -> Result<(), Bad> {
+    if v == "fill" {
+        return Ok(());
+    }
+    range(v, 0., 4000., false).map(|_| ())
+}
+/// Validates surface props. Layout only: no I/O, images or callbacks.
+fn surface(o: &Map<String, Value>) -> Result<(), Bad> {
+    optional(o, "padding", |v| {
+        for n in array(v, 4, 4)? {
+            range(n, 0., 256., false)?;
+        }
+        Ok(())
+    })?;
+    optional(o, "width", length)?;
+    optional(o, "height", length)?;
+    for key in ["minWidth", "maxWidth", "minHeight", "maxHeight"] {
+        optional(o, key, |v| range(v, 0., 4000., false).map(|_| ()))?;
+    }
+    for key in ["x", "y", "right", "bottom"] {
+        optional(o, key, |v| range(v, -4000., 4000., false).map(|_| ()))?;
+    }
+    optional(o, "grow", |v| range(v, 0., 100., false).map(|_| ()))?;
+    optional(o, "span", |v| range(v, 1., 12., true).map(|_| ()))?;
+    optional(o, "fill", |v| {
+        if v.is_string() {
+            return color(v);
+        }
+        let g = object(v, &["from", "to", "angle"])?;
+        color(&v["from"])?;
+        color(&v["to"])?;
+        optional(g, "angle", |v| range(v, 0., 360., false).map(|_| ()))
+    })?;
+    optional(o, "border", color)?;
+    optional(o, "color", color)?;
+    optional(o, "borderWidth", |v| range(v, 0., 16., false).map(|_| ()))?;
+    optional(o, "radius", |v| range(v, 0., 1000., false).map(|_| ()))?;
+    optional(o, "opacity", |v| range(v, 0., 1., false).map(|_| ()))?;
+    optional(o, "clip", boolean)?;
+    optional(o, "scroll", |v| choice(v, &["x", "y"]))?;
+    optional(o, "shadow", |v| {
+        if v.is_string() {
+            return choice(v, &["sm", "md", "lg"]);
+        }
+        let s = object(v, &["x", "y", "blur", "spread", "color"])?;
+        for key in ["x", "y", "spread"] {
+            optional(s, key, |v| range(v, -100., 100., false).map(|_| ()))?;
+        }
+        optional(s, "blur", |v| range(v, 0., 100., false).map(|_| ()))?;
+        optional(s, "color", color)
+    })?;
+    if o.get("scroll").and_then(Value::as_str) == Some("y")
+        && !o.contains_key("height")
+        && !o.contains_key("maxHeight")
+    {
+        return Err("Vertical visual scroll needs a height");
+    }
+    Ok(())
+}
+/// Embedded Lucide icons by name (`search` for `icons/search.svg`), the only
+/// icon or image assets a visual can name.
+pub(crate) fn icon(name: &str) -> Option<gpui_kit::assets::IconName> {
+    use gpui_kit::AssetSource;
+    static ICONS: std::sync::LazyLock<BTreeMap<String, gpui_kit::assets::IconName>> =
+        std::sync::LazyLock::new(|| {
+            let embedded = crate::ChromeAssets.list("icons/").unwrap_or_default();
+            gpui_kit::assets::IconName::ALL
+                .iter()
+                .filter(|icon| embedded.contains(&icon.path()))
+                .filter_map(|icon| {
+                    let path = icon.path();
+                    let name = path.strip_prefix("icons/")?.strip_suffix(".svg")?;
+                    Some((name.to_owned(), *icon))
+                })
+                .collect()
+        });
+    ICONS.get(name).copied()
 }
 impl Scene {
     pub(crate) fn parse(value: Value) -> Result<Self, Bad> {
@@ -132,6 +275,9 @@ impl Scene {
             chart_points: 0,
             charts: BTreeMap::new(),
             mermaids: BTreeMap::new(),
+            vectors: BTreeMap::new(),
+            vector_commands: 0,
+            vector_vertices: 0,
         };
         c.node(&value["root"], "0", 0)?;
         Ok(Self {
@@ -143,6 +289,7 @@ impl Scene {
             nodes: c.nodes,
             charts: c.charts,
             mermaids: c.mermaids,
+            vectors: c.vectors,
         })
     }
 }
@@ -170,12 +317,33 @@ impl Check {
         }
         let kind = v["type"].as_str().ok_or("Missing visual type")?;
         let allowed: &[&str] = match kind {
-            "column" => &["type", "key", "gap", "align", "children"],
-            "row" => &["type", "key", "gap", "align", "justify", "children"],
-            "grid" => &["type", "key", "gap", "columns", "children"],
+            "column" | "row" | "grid" => {
+                let o = v.as_object().ok_or("Expected object")?;
+                let own: &[&str] = match kind {
+                    "column" => &["type", "key", "gap", "align", "justify", "children"],
+                    "row" => &["type", "key", "gap", "align", "justify", "wrap", "children"],
+                    _ => &["type", "key", "gap", "columns", "children"],
+                };
+                if o.keys()
+                    .any(|k| !own.contains(&k.as_str()) && !SURFACE.contains(&k.as_str()))
+                {
+                    return Err("Unknown visual property");
+                }
+                &[]
+            }
             "text" => &[
-                "type", "key", "runs", "size", "weight", "color", "mono", "italic", "align",
+                "type",
+                "key",
+                "runs",
+                "size",
+                "weight",
+                "color",
+                "mono",
+                "italic",
+                "align",
                 "lines",
+                "font",
+                "lineHeight",
             ],
             "stat" => &[
                 "type", "key", "label", "value", "unit", "delta", "tone", "caption",
@@ -194,14 +362,22 @@ impl Check {
                 "type", "key", "id", "label", "min", "max", "step", "value", "unit",
             ],
             "button" => &["type", "key", "id", "label", "primary", "disabled"],
-            "canvas" => &["type", "key", "id", "height", "animated", "label"],
+            "canvas" => &["type", "key", "id", "width", "height", "animated", "label"],
+            "vector" => &[
+                "type", "key", "width", "height", "label", "commands", "ops", "strings",
+            ],
+            "icon" => &["type", "key", "name", "size", "color"],
             "shader" => &[
                 "type", "key", "height", "animated", "label", "glsl", "inputs",
             ],
             "mermaid" => &["type", "key", "source"],
             _ => return Err("Unknown visual node"),
         };
-        let o = object(v, allowed)?;
+        let o = if allowed.is_empty() {
+            v.as_object().ok_or("Expected object")?
+        } else {
+            object(v, allowed)?
+        };
         optional(o, "key", |v| {
             let s = string(v, 200)?;
             if s.is_empty() {
@@ -225,6 +401,11 @@ impl Check {
                 optional(o, "justify", |v| {
                     choice(v, &["start", "center", "end", "between"])
                 })?;
+                optional(o, "wrap", boolean)?;
+                surface(o)?;
+                if o.contains_key("id") {
+                    self.control(v, path, Control::Button { disabled: false })?;
+                }
                 if kind == "grid" {
                     range(&v["columns"], 1., 12., true)?;
                 }
@@ -242,13 +423,22 @@ impl Check {
             }
             "text" => {
                 style(o)?;
-                optional(o, "size", |v| choice(v, &["xs", "sm", "md", "lg", "xl"]))?;
+                optional(o, "size", |v| {
+                    if v.is_number() {
+                        range(v, 6., 200., false).map(|_| ())
+                    } else {
+                        choice(v, &["xs", "sm", "md", "lg", "xl"])
+                    }
+                })?;
                 optional(o, "align", |v| choice(v, &["start", "center", "end"]))?;
                 optional(o, "lines", |v| range(v, 1., 50., true).map(|_| ()))?;
+                optional(o, "lineHeight", |v| range(v, 0.8, 3., false).map(|_| ()))?;
                 for run in array(&v["runs"], 0, 500)? {
                     let r = object(
                         run,
-                        &["text", "weight", "color", "mono", "italic", "strike"],
+                        &[
+                            "text", "weight", "color", "font", "mono", "italic", "strike",
+                        ],
                     )?;
                     self.text(&run["text"], 10_000)?;
                     style(r)?;
@@ -293,7 +483,7 @@ impl Check {
                 for series in array(&v["series"], 1, 12)? {
                     let s = object(series, &["name", "values", "color"])?;
                     self.text(&series["name"], 500)?;
-                    optional(s, "color", |v| choice(v, COLORS))?;
+                    optional(s, "color", color)?;
                     for val in array(&series["values"], x.len(), x.len())? {
                         if !val.is_null() {
                             number(val)?;
@@ -403,6 +593,7 @@ impl Check {
             }
             "canvas" => {
                 let height = range(&v["height"], 24., 600., false)?;
+                optional(o, "width", |v| range(v, 1., 2000., false).map(|_| ()))?;
                 self.texts(o, &["label"], 500)?;
                 optional(o, "animated", boolean)?;
                 if v["id"].as_str() != Some(path) {
@@ -412,6 +603,48 @@ impl Check {
                     return Err("Too many canvas nodes");
                 }
                 self.canvases.push((path.into(), height));
+            }
+            "vector" => {
+                let width = range(&v["width"], 1., 2000., false)?;
+                let height = range(&v["height"], 1., 2000., false)?;
+                self.texts(o, &["label"], 500)?;
+                let commands = range(&v["commands"], 0., 20_000., true)? as usize;
+                self.vector_commands += commands;
+                if self.vector_commands > 20_000 {
+                    return Err("Visual vectors exceed 20,000 commands");
+                }
+                let ops = array(&v["ops"], 0, 2 * 1024 * 1024 / 8)?
+                    .iter()
+                    .map(number)
+                    .collect::<Result<Vec<_>, _>>()?;
+                let mut strings = Vec::new();
+                for s in array(&v["strings"], 0, 20_000)? {
+                    self.text(s, 64 * 1024)?;
+                    strings.push(s.as_str().unwrap().to_owned());
+                }
+                let drawing = crate::visual_drawing::Drawing::checked(commands, ops, strings)
+                    .map_err(|_| "Invalid vector drawing")?;
+                // Planned here, in the isolated reader, so painting only places vertices.
+                // A refused plan shows its error locally; siblings still render.
+                let plan = crate::visual_canvas_plan::Plan::vector(&drawing, width, height)
+                    .and_then(|plan| {
+                        let vertices = plan.vertices();
+                        if self.vector_vertices + vertices > crate::visual_canvas_plan::MAX_VERTICES
+                        {
+                            return Err("Visual vectors exceed the native geometry limit");
+                        }
+                        self.vector_vertices += vertices;
+                        Ok(Arc::new(plan))
+                    });
+                self.vectors.insert(path.into(), plan);
+            }
+            "icon" => {
+                let name = v["name"].as_str().ok_or("Expected icon name")?;
+                if icon(name).is_none() {
+                    return Err("Unknown visual icon");
+                }
+                optional(o, "size", |v| range(v, 8., 128., false).map(|_| ()))?;
+                optional(o, "color", color)?;
             }
             "shader" => {
                 range(&v["height"], 24., 600., false)?;
@@ -511,5 +744,176 @@ mod tests {
         ] {
             assert!(Scene::parse(json!({"api":1,"root":root})).is_err());
         }
+    }
+    #[test]
+    fn surfaces_literal_colors_icons_and_pressables_validate_like_the_runtime() {
+        assert_eq!(hex("#0f172a"), Some([0x0f, 0x17, 0x2a, 255]));
+        assert_eq!(hex("#fff8"), Some([255, 255, 255, 0x88]));
+        assert_eq!(hex("#11223344"), Some([0x11, 0x22, 0x33, 0x44]));
+        for bad in ["#12", "#12345", "red", "0f172a", "#gggggg", "#+12345"] {
+            assert_eq!(hex(bad), None, "{bad}");
+        }
+        let card = json!({"type":"column","id":"0","padding":[12,16,12,16],"width":"fill","maxWidth":420,
+        "grow":1,"x":4,"y":-2,"fill":{"from":"#4f46e5","to":"accent","angle":135},"border":"#ffffff1f",
+        "borderWidth":2,"radius":14,"shadow":{"y":8,"blur":24,"color":"#00000040"},"opacity":0.9,
+        "clip":true,"scroll":"y","height":300,"color":"#e2e8f0","children":[
+            {"type":"text","runs":[{"text":"Plan","font":"mono","weight":300}],"size":30,"weight":800,
+                "font":"display","lineHeight":1.1,"color":"#ffffff"},
+            {"type":"icon","name":"circle-check","size":18,"color":"#a5b4fc"},
+            {"type":"row","wrap":false,"justify":"between","span":2,"shadow":"lg","children":[]},
+        ]});
+        let scene = Scene::parse(json!({"api":1,"root":card})).unwrap();
+        assert!(scene.controls["0"].accepts(&Value::Null));
+        assert!(!scene.controls["0"].accepts(&json!(true)));
+        for (key, value) in [
+            ("padding", json!([1, 2, 3])),
+            ("fill", json!("#12")),
+            ("fill", json!({"from":"#fff"})),
+            ("shadow", json!("xl")),
+            ("width", json!("auto")),
+            ("radius", json!(-1)),
+            ("id", json!("0.3")),
+            ("onClick", json!(true)),
+            ("image", json!("file:///private.png")),
+        ] {
+            let mut node = json!({"type":"row","children":[]});
+            node[key] = value;
+            assert!(Scene::parse(json!({"api":1,"root":node})).is_err(), "{key}");
+        }
+        for root in [
+            json!({"type":"column","scroll":"y","children":[]}),
+            json!({"type":"icon","name":"rocket"}),
+            json!({"type":"icon","name":"search","size":4}),
+            json!({"type":"text","runs":[],"size":300}),
+            json!({"type":"text","runs":[],"weight":450}),
+            json!({"type":"text","runs":[],"font":"Comic Sans"}),
+            json!({"type":"grid","columns":2,"justify":"center","children":[]}),
+        ] {
+            assert!(
+                Scene::parse(json!({"api":1,"root":root.clone()})).is_err(),
+                "{root}"
+            );
+        }
+    }
+    /// The runtime's icon names (the shared JSON Schema) are exactly the icons the
+    /// app embeds, so a published icon always has a glyph.
+    #[test]
+    fn published_icon_names_are_exactly_the_embedded_icons() {
+        let schema: Value = serde_json::from_str(include_str!(
+            "../../../packages/protocol/fixtures/visual/api-1.schema.json"
+        ))
+        .unwrap();
+        let node = schema["$defs"]["Node"]["anyOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["properties"]["type"]["const"] == "icon")
+            .unwrap();
+        let published: BTreeSet<&str> = node["properties"]["name"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        use gpui_kit::AssetSource;
+        let embedded: BTreeSet<String> = crate::ChromeAssets
+            .list("icons/")
+            .unwrap()
+            .iter()
+            .filter_map(|p| Some(p.strip_prefix("icons/")?.strip_suffix(".svg")?.to_owned()))
+            .collect();
+        assert_eq!(
+            published,
+            embedded.iter().map(String::as_str).collect::<BTreeSet<_>>()
+        );
+        assert!(published.iter().all(|name| icon(name).is_some()));
+    }
+    #[test]
+    fn vectors_plan_in_the_reader_and_fail_locally() {
+        // A square with a square hole, as SVG subpaths (PATHS 15) in a literal color.
+        let hole = vec![
+            15.,
+            1.,
+            256. + 0x0f172aff_u32 as f64,
+            1.,
+            0.,
+            2.,
+            1.,
+            4.,
+            0.,
+            0.,
+            24.,
+            0.,
+            24.,
+            24.,
+            0.,
+            24.,
+            1.,
+            4.,
+            6.,
+            6.,
+            6.,
+            18.,
+            18.,
+            18.,
+            18.,
+            6.,
+        ];
+        let vector = |ops: Vec<f64>, commands: usize| json!({"type":"vector","width":24,"height":24,"commands":commands,"ops":ops,"strings":[]});
+        let scene = Scene::parse(json!({"api":1,"root":{"type":"row","children":[
+            vector(hole.clone(), 1),
+            vector(vec![11., 1., 7., 1., 0., 12., 12., 4.], 1),
+        ]}}))
+        .unwrap();
+        let plan = scene.vectors["0.0"].as_ref().unwrap();
+        assert_eq!((plan.width, plan.height), (24., 24.));
+        let area: f32 = plan
+            .primitives
+            .iter()
+            .filter_map(|p| match p {
+                crate::visual_canvas_plan::Primitive::Triangles { vertices, .. } => Some(vertices),
+                _ => None,
+            })
+            .flat_map(|v| v.as_chunks::<3>().0)
+            .map(|t| {
+                ((t[1][0] - t[0][0]) * (t[2][1] - t[0][1])
+                    - (t[2][0] - t[0][0]) * (t[1][1] - t[0][1]))
+                    .abs()
+                    / 2.
+            })
+            .sum();
+        assert!(
+            (area - (576. - 144.)).abs() < 0.5,
+            "the hole stays open: {area}"
+        );
+        // Color index 13 is neither a token nor a literal; a wrong command count is refused.
+        assert!(
+            Scene::parse(
+                json!({"api":1,"root":vector(vec![11., 1., 13., 1., 0., 12., 12., 4.], 1)})
+            )
+            .is_err()
+        );
+        assert!(
+            Scene::parse(
+                json!({"api":1,"root":vector(vec![11., 1., 12., 1., 0., 12., 12., 4.], 2)})
+            )
+            .is_err()
+        );
+        assert!(
+            Scene::parse(json!({"api":1,"root":{"type":"vector","width":0,"height":24,"commands":0,"ops":[],"strings":[]}}))
+                .is_err()
+        );
+        // Views share one 20,000-command budget across vectors.
+        let mut many = Vec::new();
+        for _ in 0..10_001 {
+            many.extend([11., 1., 7., 1., 0., 1., 1., 1.]);
+        }
+        assert!(
+            Scene::parse(json!({"api":1,"root":{"type":"row","children":[
+                vector(many.clone(), 10_001),
+                vector(many, 10_001),
+            ]}}))
+            .is_err()
+        );
     }
 }

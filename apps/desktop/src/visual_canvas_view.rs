@@ -11,6 +11,13 @@ pub(crate) fn palette(cx: &App) -> [Hsla; 13] {
     ]
     .map(|n| crate::visual_chart_view::color(n, cx))
 }
+/// A draw color: a token index into `colors`, or 256 + 0xRRGGBBAA for a literal.
+pub(crate) fn resolve(colors: &[Hsla; 13], code: usize) -> Hsla {
+    match code.checked_sub(256) {
+        Some(rgba) => gpui_kit::rgba(rgba as u32).into(),
+        None => colors.get(code).copied().unwrap_or(colors[0]),
+    }
+}
 pub(crate) fn paint_scaled(
     plan: &Plan,
     bounds: Bounds<Pixels>,
@@ -62,7 +69,7 @@ fn paint_primitives(
                         content_mask: Default::default(),
                     })
                     .collect();
-                let mut color = colors[*color];
+                let mut color = resolve(colors, *color);
                 color.a *= *opacity;
                 window.paint_path(path, color);
             }
@@ -85,7 +92,7 @@ fn paint_primitives(
                 if *fixed {
                     font.family = mono.clone();
                 }
-                let mut color = colors[*color];
+                let mut color = resolve(colors, *color);
                 color.a *= *opacity;
                 let run = TextRun {
                     len: text.len(),

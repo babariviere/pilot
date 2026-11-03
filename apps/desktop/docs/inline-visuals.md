@@ -118,6 +118,25 @@ raster renderer is reused when an untyped pin resolves to an image.
 Pane expansion preserves local state and source mode. Back closes the pane;
 the visible inline reader resumes from that exact revision's remembered state.
 
+Layout nodes render surface props (padding, sizes, grow, grid span, absolute
+layers, literal or gradient fills, borders, radii, shadows, opacity, clip,
+scroll, inherited content color) as plain GPUI styles; omitted props draw
+nothing, so earlier visuals keep their layout. Text without its own color takes
+its surface's, starting from the theme foreground at the scene root. `icon`
+resolves only embedded Lucide assets (`visual_scene::icon`). `vector` pen
+commands are validated and tessellated when the reader parses the scene, the
+same planner canvases use, with one shared vertex budget per scene, so painting
+only places vertices; a refused vector shows its error in place. A surface with
+an `id` is pressable: pointer click, or Enter/Space while focused (`tab_index`),
+through the same generation/version-fenced event path as buttons. There is no
+hover or drag styling. `visual_mockups` renders the bundled skill examples from
+the real helper at 680/1100 in light and dark, presses a tab by pointer and
+keyboard and drives the sliders and toggle:
+
+```sh
+PILOT_NEXT_IMAGE_DIR=/tmp/mockups python3 scripts/check-scoped.py --test visual_mockups
+```
+
 Charts show Swift's hover readout: a rule at the x entry nearest the pointer
 (the category under it, or the nearest scatter x with a value), dots on line and
 area series, and a small card with the x label and every series' colour, name

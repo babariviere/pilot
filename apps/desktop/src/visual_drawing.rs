@@ -154,6 +154,20 @@ impl Drawing {
                     }
                     r.take(count * 2)?;
                 }
+                15. => {
+                    let n = r.take(5)?;
+                    paint(n)?;
+                    for _ in 0..integer(n[4], 1, 100_000)? {
+                        let s = r.take(2)?;
+                        integer(s[0], 0, 1)?;
+                        let count = integer(s[1], 0, 100_000)?;
+                        points += count;
+                        if points > 100_000 {
+                            return Err(InvalidWire);
+                        }
+                        r.take(count * 2)?;
+                    }
+                }
                 14. => {
                     let n = r.take(10)?;
                     paint(n)?;
@@ -163,14 +177,14 @@ impl Drawing {
                 }
                 20. => {
                     let n = r.take(10)?;
-                    integer(n[0], 0, 12)?;
+                    color(n[0])?;
                     unit(n[1])?;
                     if self.strings.is_empty() {
                         return Err(InvalidWire);
                     }
                     integer(n[4], 0, self.strings.len() - 1)?;
                     integer(n[5], 0, 4)?;
-                    if ![400., 500., 600., 700.].contains(&n[6]) {
+                    if integer(n[6], 100, 900)? % 100 != 0 {
                         return Err(InvalidWire);
                     }
                     integer(n[7], 0, 2)?;
@@ -198,9 +212,17 @@ fn unit(n: f64) -> Result<(), InvalidWire> {
     }
     Ok(())
 }
+/// A token index (0-12), or 256 + 0xRRGGBBAA for a literal color.
+fn color(n: f64) -> Result<usize, InvalidWire> {
+    let code = integer(n, 0, 256 + u32::MAX as usize)?;
+    if code > 12 && code < 256 {
+        return Err(InvalidWire);
+    }
+    Ok(code)
+}
 fn paint(n: &[f64]) -> Result<(), InvalidWire> {
     integer(n[0], 1, 2)?;
-    integer(n[1], 0, 12)?;
+    color(n[1])?;
     unit(n[2])?;
     if n[3] < 0. || (n[0] == 1. && n[3] != 0.) {
         return Err(InvalidWire);
@@ -263,5 +285,29 @@ pub(crate) mod tests {
         let mut utf8 = encode(0, &[], &["a".into()]);
         *utf8.last_mut().unwrap() = 255;
         assert!(Drawing::decode(&utf8).is_err());
+    }
+    #[test]
+    fn literal_colors_svg_subpaths_and_weights_follow_the_shared_format() {
+        let literal = 256. + 0x4f46e5ff_u32 as f64;
+        let paths = [
+            15., 1., literal, 1., 0., 2., 1., 3., 0., 0., 4., 0., 4., 4., 0., 2., 1., 1., 2., 2.,
+        ];
+        assert!(Drawing::decode(&encode(1, &paths, &[])).is_ok());
+        let text = [20., literal, 1., 0., 0., 0., 2., 300., 0., 1., 0.];
+        assert!(Drawing::decode(&encode(1, &text, &["A".into()])).is_ok());
+        for ops in [
+            vec![11., 1., 13., 1., 0., 0., 0., 1.],
+            vec![11., 1., 255., 1., 0., 0., 0., 1.],
+            vec![11., 1., 256. + u32::MAX as f64 + 1., 1., 0., 0., 0., 1.],
+            vec![15., 1., 1., 1., 0., 0.],
+            vec![15., 1., 1., 1., 0., 1., 2., 0.],
+            vec![15., 1., 1., 1., 0., 2., 0., 1., 0., 0.],
+            vec![20., 1., 1., 0., 0., 0., 2., 450., 0., 1., 0.],
+        ] {
+            assert!(
+                Drawing::decode(&encode(1, &ops, &["A".into()])).is_err(),
+                "{ops:?}"
+            );
+        }
     }
 }
