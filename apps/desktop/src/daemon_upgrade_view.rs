@@ -6,7 +6,7 @@ use crate::{
 };
 use gpui_kit::{
     App, Context, EventEmitter, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent,
-    ParentElement, Render, Styled, Task, TestSupportExt, Window,
+    ParentElement, Render, StatefulInteractiveElement, Styled, Task, TestSupportExt, Window,
     component::{ActiveTheme, Disableable, StyledExt},
     div,
 };
@@ -46,6 +46,69 @@ pub(crate) enum Event {
     Request,
     /// Any phase or outcome change, including worker completion.
     Changed,
+    OpenBlocker,
+    StopBlocker,
+}
+
+#[derive(Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Blocker {
+    kind: String,
+    id: String,
+    session_id: Option<String>,
+    title: Option<String>,
+}
+impl Blocker {
+    fn action_id(&self, action: &str) -> gpui_kit::SharedString {
+        format!(
+            "{action}-blocker:{}",
+            serde_json::json!([self.kind, self.id, self.session_id])
+        )
+        .into()
+    }
+    fn reason(&self) -> &'static str {
+        match self.kind.as_str() {
+            "active-work" => "Agent work is active",
+            "automation" => "Automation is running",
+            "job" => "Background job is running",
+            "child-process" => "Child processes remain",
+            "terminal" => "Terminal is open",
+            "admission" => "A daemon operation is still settling",
+            _ => "Work could not be verified as stopped",
+        }
+    }
+    fn stoppable(&self) -> bool {
+        self.session_id.is_some() && matches!(self.kind.as_str(), "active-work" | "automation")
+    }
+}
+#[derive(Clone, serde::Deserialize)]
+pub(crate) struct Blockers {
+    blockers: Vec<Blocker>,
+    truncated: bool,
+}
+impl Blockers {
+    pub(crate) fn parse(value: serde_json::Value) -> Option<Self> {
+        let snapshot: Self = serde_json::from_value(value).ok()?;
+        (snapshot.blockers.len() <= 256
+            && snapshot.blockers.iter().enumerate().all(|(index, b)| {
+                !snapshot.blockers[..index].iter().any(|previous| {
+                    previous.kind == b.kind
+                        && previous.id == b.id
+                        && previous.session_id == b.session_id
+                })
+            })
+            && snapshot.blockers.iter().all(|b| {
+                !b.id.is_empty()
+                    && b.id.len() <= 512
+                    && !b.kind.is_empty()
+                    && b.kind.len() <= 64
+                    && b.session_id
+                        .as_deref()
+                        .is_none_or(crate::local_model::valid_id)
+                    && b.title.as_ref().is_none_or(|s| s.len() <= 1024)
+            }))
+        .then_some(snapshot)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +135,13 @@ enum Phase {
 }
 
 pub(crate) struct DaemonUpgrade {
+    options: Option<LocalOptions>,
+    blockers: Option<Blockers>,
+    inspection: Option<Task<()>>,
+    inspection_generation: u64,
+    inspection_error: Option<&'static str>,
+    pub(crate) selected_blocker: Option<String>,
+    stop_confirmation: Option<Blocker>,
     target: Option<Target>,
     connected: crate::local_client::ConnectedDaemon,
     worker: Worker,
@@ -102,6 +172,7 @@ impl DaemonUpgrade {
     pub(crate) fn new(options: Option<LocalOptions>, cx: &mut Context<Self>) -> Self {
         let worker: Worker = Arc::new(crate::bundled_runtime::upgrade_daemon_explicit);
         let mut owner = Self::with_target(options.as_ref().and_then(target), worker, cx);
+        owner.options = options.clone();
         // External connections, fixtures and unconfigured development binaries
         // never acquire service-management authority merely by opening a window.
         if cfg!(target_os = "macos")
@@ -124,6 +195,13 @@ impl DaemonUpgrade {
         cx: &mut Context<Self>,
     ) -> Self {
         Self {
+            options: None,
+            blockers: None,
+            inspection: None,
+            inspection_generation: 0,
+            inspection_error: None,
+            selected_blocker: None,
+            stop_confirmation: None,
             target,
             connected: Default::default(),
             worker,
@@ -149,6 +227,10 @@ impl DaemonUpgrade {
     ) {
         if self.connected != connected {
             self.connected = connected;
+            self.inspection_generation += 1;
+            self.stop_confirmation = None;
+            self.blockers = None;
+            self.inspection_error = Some("Connection changed. Refresh blockers before acting.");
             cx.emit(Event::Changed);
             cx.notify();
         }
@@ -271,7 +353,11 @@ impl DaemonUpgrade {
         self.outcome == Some(Err(Failure::Unknown))
     }
     fn can_open(&self) -> bool {
-        self.target.is_some() && self.phase == Phase::Idle && !self.uncertain()
+        self.target.is_some()
+            && self.phase == Phase::Idle
+            && self.inspection.is_none()
+            && self.stop_confirmation.is_none()
+            && !self.uncertain()
     }
 
     /// Consumes the request and starts the single worker. Parent-only, after its checkpoint.
@@ -323,7 +409,109 @@ impl DaemonUpgrade {
         self.cancel = None;
         self.completion = None;
         self.outcome = Some(result);
+        if result == Err(Failure::Busy) {
+            self.inspect(cx);
+        }
         cx.emit(Event::Changed);
+        cx.notify();
+    }
+
+    fn inspect(&mut self, cx: &mut Context<Self>) {
+        if self.inspection.is_some()
+            || self.phase != Phase::Idle
+            || self.uncertain()
+            || self.stop_confirmation.is_some()
+        {
+            return;
+        }
+        let Some(options) = self.options.clone() else {
+            return;
+        };
+        let (tx, rx) = async_channel::bounded(1);
+        let generation = self.inspection_generation;
+        self.inspection_error = None;
+        if std::thread::Builder::new()
+            .name("daemon-blockers".into())
+            .spawn(move || {
+                let result = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|_| "Cannot read daemon blockers.")
+                    .and_then(|runtime| {
+                        runtime.block_on(crate::local_client::daemon_update_blockers(&options))
+                    });
+                let _ = tx.send_blocking(result);
+            })
+            .is_err()
+        {
+            self.inspection_error = Some("Cannot read daemon blockers.");
+            cx.notify();
+            return;
+        }
+        self.inspection = Some(cx.spawn(async move |owner, cx| {
+            let result = rx
+                .recv()
+                .await
+                .unwrap_or(Err("Cannot read daemon blockers."));
+            let _ = owner.update(cx, |owner, cx| {
+                owner.inspection = None;
+                if owner.inspection_generation != generation {
+                    cx.notify();
+                    return;
+                }
+                match result {
+                    Ok(snapshot) => owner.blockers = Some(snapshot),
+                    Err(error) => owner.inspection_error = Some(error),
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    fn blocker_actions_ready(&self) -> bool {
+        self.outcome == Some(Err(Failure::Busy))
+            && self.phase == Phase::Idle
+            && self.inspection.is_none()
+            && self.inspection_error.is_none()
+            && self.blockers.is_some()
+            && matches!(
+                self.connected,
+                crate::local_client::ConnectedDaemon::Connected(_)
+            )
+    }
+
+    fn choose_blocker(&mut self, blocker: &Blocker, stop: bool, cx: &mut Context<Self>) {
+        if !self.blocker_actions_ready()
+            || self.stop_confirmation.is_some()
+            || !self
+                .blockers
+                .as_ref()
+                .is_some_and(|snapshot| snapshot.blockers.contains(blocker))
+        {
+            return;
+        }
+        if stop {
+            if blocker.stoppable() {
+                self.stop_confirmation = Some(blocker.clone());
+            }
+        } else if blocker.session_id.is_some() {
+            self.selected_blocker = blocker.session_id.clone();
+            cx.emit(Event::OpenBlocker);
+        }
+        cx.notify();
+    }
+
+    fn confirm_stop(&mut self, cx: &mut Context<Self>) {
+        if !self.blocker_actions_ready() {
+            return;
+        }
+        if let Some(blocker) = self.stop_confirmation.take() {
+            self.selected_blocker = blocker.session_id;
+            cx.emit(Event::StopBlocker);
+            // A Stop ACK is not exit proof. Require a new passive observation.
+            self.inspection_error = Some("Stop requested. Refresh blockers before acting again.");
+        }
         cx.notify();
     }
 
@@ -447,6 +635,12 @@ impl Render for DaemonUpgrade {
             .id("daemon-upgrade")
             .test_support()
             .track_focus(&self.focus)
+            .on_key_down(cx.listener(|v, e: &KeyDownEvent, _, cx| {
+                if e.keystroke.key == "escape" && v.stop_confirmation.take().is_some() {
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+            }))
             .v_flex()
             .w_full()
             .min_w_0()
@@ -503,6 +697,114 @@ impl Render for DaemonUpgrade {
                     .child(notice),
             );
         }
+        if self.outcome == Some(Err(Failure::Busy)) {
+            let ready = self.blocker_actions_ready();
+            view = view.child(ui::text(Text::Caption,
+                "Stop only the work you choose. Jobs, terminals and child processes may need separate attention. An upgrade still verifies they have exited."));
+            if let Some(snapshot) = &self.blockers {
+                let mut rows = div()
+                    .id("daemon-blockers")
+                    .test_support()
+                    .v_flex()
+                    .gap_3()
+                    .max_h_64()
+                    .flex_shrink_0()
+                    .overflow_y_scroll();
+                for blocker in &snapshot.blockers {
+                    let row = div()
+                        .v_flex()
+                        .min_w_0()
+                        .gap_1()
+                        .child(ui::text(
+                            Text::Body,
+                            blocker.title.clone().unwrap_or_else(|| {
+                                if blocker.session_id.is_some() {
+                                    "Untitled chat".into()
+                                } else {
+                                    "Daemon work".into()
+                                }
+                            }),
+                        ))
+                        .child(
+                            ui::text(Text::Caption, blocker.reason())
+                                .text_color(cx.theme().muted_foreground),
+                        );
+                    let mut actions = div().h_flex().flex_wrap().gap_2();
+                    if blocker.session_id.is_some() {
+                        let blocker = blocker.clone();
+                        actions = actions.child(
+                            ui::action(blocker.action_id("open"), "Open chat", Action::Quiet)
+                                .disabled(!ready || self.stop_confirmation.is_some())
+                                .on_click(cx.listener(move |v, _, _, cx| {
+                                    v.choose_blocker(&blocker, false, cx);
+                                })),
+                        );
+                    }
+                    if blocker.stoppable() {
+                        let blocker = blocker.clone();
+                        actions = actions.child(
+                            ui::action(blocker.action_id("stop"), "Stop work…", Action::Quiet)
+                                .disabled(!ready || self.stop_confirmation.is_some())
+                                .on_click(cx.listener(move |v, _, _, cx| {
+                                    v.choose_blocker(&blocker, true, cx);
+                                })),
+                        );
+                    }
+                    rows = rows.child(row.child(actions));
+                }
+                view = view.child(rows);
+                if snapshot.truncated {
+                    view = view.child(
+                        Notice::new("More blockers remain. Refresh after resolving these.")
+                            .tone(Tone::Warning),
+                    );
+                } else if snapshot.blockers.is_empty() {
+                    view = view.child(ui::text(
+                        Text::Caption,
+                        "No blockers observed. This is not proof that upgrading is safe.",
+                    ));
+                }
+            }
+            if let Some(error) = self.inspection_error {
+                view = view.child(
+                    Notice::new(error)
+                        .detail("Previous observations may be stale. Refresh before stopping work.")
+                        .tone(Tone::Warning),
+                );
+            }
+            view = view.child(
+                div().h_flex().child(
+                    ui::action(
+                        "daemon-blockers-refresh",
+                        if self.inspection.is_some() {
+                            "Reading blockers…"
+                        } else {
+                            "Refresh blockers"
+                        },
+                        Action::Secondary,
+                    )
+                    .disabled(
+                        self.phase != Phase::Idle
+                            || self.inspection.is_some()
+                            || self.stop_confirmation.is_some(),
+                    )
+                    .on_click(cx.listener(|v, _, _, cx| v.inspect(cx))),
+                ),
+            );
+        }
+        if let Some(blocker) = self.stop_confirmation.clone() {
+            view = view.child(div().v_flex().gap_2()
+                .child(Notice::new(format!("Stop work in {}?", blocker.title.unwrap_or_else(|| "this chat".into())))
+                    .detail("Interrupts this chat's current work. Withdrawn queued text is retained for recovery. Background jobs and terminals may remain. This does not upgrade the daemon.")
+                    .tone(Tone::Warning))
+                .child(div().h_flex().gap_2()
+                    .child(ui::action("daemon-stop-cancel", "Cancel", Action::Quiet).on_click(cx.listener(|v, _, _, cx| {
+                        v.stop_confirmation = None; cx.notify();
+                    })))
+                    .child(ui::action("daemon-stop-confirm", "Stop this chat", Action::Danger)
+                        .disabled(!self.blocker_actions_ready())
+                        .on_click(cx.listener(|v, _, _, cx| v.confirm_stop(cx))))));
+        }
         if self.uncertain()
             && let Some(target) = &self.target
         {
@@ -548,6 +850,7 @@ impl Render for DaemonUpgrade {
                     .child(
                         div().h_flex().child(
                             ui::action("daemon-upgrade-open", "Upgrade daemon…", Action::Secondary)
+                                .disabled(!self.can_open())
                                 .on_click(cx.listener(|v, _, w, cx| v.open(w, cx))),
                         ),
                     );

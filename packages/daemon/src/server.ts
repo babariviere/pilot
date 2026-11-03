@@ -1346,6 +1346,34 @@ export function createDaemonServer(
 			}
 			throw new HttpError(404, "Unknown memory operation");
 		}
+		if (parts[1] === "update" && parts[2] === "blockers" && parts.length === 3 && req.method === "GET") {
+			if (!hello?.lineageId) throw new ServiceUnavailable("Daemon identity unavailable");
+			if (
+				url.searchParams.get("daemonId") !== hello.daemonId ||
+				url.searchParams.get("lineageId") !== hello.lineageId
+			)
+				throw new Conflict("Daemon identity changed");
+			// Display only. In particular, do not call sessions.blockers(): that checkpoints workers.
+			const observed = await new RuntimeResources(
+				runtimeSources.map((source) =>
+					source === sessions
+						? { freezeAdmissions: () => () => {}, blockers: () => sessions.observeUpdateBlockers() }
+						: source,
+				),
+			).blockers();
+			const blockers = observed.slice(0, 256).map((blocker) => ({
+				...blocker,
+				...(blocker.sessionId ? { title: sessions.get(blocker.sessionId)?.title?.slice(0, 256) } : {}),
+			}));
+			res.setHeader("cache-control", "no-store");
+			return json(res, 200, {
+				processId: process.pid,
+				daemonId: hello.daemonId,
+				lineageId: hello.lineageId,
+				blockers,
+				truncated: observed.length > 256 || observed.some((b) => b.id.endsWith("overflow")),
+			} satisfies import("@pilot/protocol").DaemonUpdateBlockers);
+		}
 		if (parts[1] === "update" && parts[2] === "pause" && parts.length === 3 && req.method === "POST")
 			return json(res, 200, sessions.pauseForUpdate());
 		if (

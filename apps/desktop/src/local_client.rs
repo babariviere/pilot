@@ -199,6 +199,15 @@ impl LocalOptions {
     }
 
     fn http_url(&self, route: &ReadRoute) -> String {
+        if matches!(route, ReadRoute::UpdateBlockers) {
+            let mut url =
+                reqwest::Url::parse(&format!("http://127.0.0.1:{}{}", self.port, route.path()))
+                    .expect("loopback URL");
+            url.query_pairs_mut()
+                .append_pair("daemonId", &self.daemon_id)
+                .append_pair("lineageId", &self.lineage_id);
+            return url.into();
+        }
         format!("http://127.0.0.1:{}{}", self.port, route.path())
     }
     fn ws_path(&self, chat: Option<&str>, resume: Option<&Resume>) -> Result<String, Failure> {
@@ -248,6 +257,7 @@ fn identity_file(path: PathBuf) -> Result<String, Failure> {
 
 enum ReadRoute {
     Hello,
+    UpdateBlockers,
     Sessions,
     Session {
         id: String,
@@ -270,6 +280,9 @@ enum ReadRoute {
 impl ReadRoute {
     fn budget(&self) -> Option<(usize, &'static str)> {
         match self {
+            Self::UpdateBlockers => {
+                Some((256 * 1024, "Daemon blocker response exceeds its budget."))
+            }
             Self::Hello
             | Self::Sessions
             | Self::History { .. }
@@ -285,6 +298,7 @@ impl ReadRoute {
     fn path(&self) -> String {
         match self {
             Self::Hello => "/api/hello".into(),
+            Self::UpdateBlockers => "/api/update/blockers".into(),
             Self::Sessions => "/api/sessions?archived=all".into(),
             Self::Subagent { id, name } => {
                 let mut url = reqwest::Url::parse("http://localhost/").expect("static URL");
@@ -810,6 +824,20 @@ pub(crate) async fn linked_chat(options: &LocalOptions, id: &str) -> Result<Chat
 }
 pub(crate) async fn gate(client: &reqwest::Client, options: &LocalOptions) -> Result<(), Failure> {
     hello(client, options).await.map(|_| ())
+}
+
+/// Passive observations only, never the checkpointing handoff inspection.
+pub(crate) async fn daemon_update_blockers(
+    options: &LocalOptions,
+) -> Result<crate::daemon_upgrade_view::Blockers, Failure> {
+    let client = crate::chat_settings::client().map_err(|_| "Cannot read daemon blockers.")?;
+    gate(&client, options).await?;
+    let value = get(&client, options, ReadRoute::UpdateBlockers).await?;
+    gate(&client, options).await?;
+    if value["daemonId"] != options.daemon_id || value["lineageId"] != options.lineage_id {
+        return Err("Daemon blocker identity changed.");
+    }
+    crate::daemon_upgrade_view::Blockers::parse(value).ok_or("Cannot read daemon blockers.")
 }
 
 async fn history(

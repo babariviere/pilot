@@ -103,6 +103,12 @@ impl SettingsPreferences {
                         crate::daemon_upgrade_view::Event::Changed => {
                             crate::updates_view::Event::DaemonChanged
                         }
+                        crate::daemon_upgrade_view::Event::OpenBlocker => {
+                            crate::updates_view::Event::OpenDaemonBlocker
+                        }
+                        crate::daemon_upgrade_view::Event::StopBlocker => {
+                            crate::updates_view::Event::StopDaemonBlocker
+                        }
                     });
                 }));
             self.daemon_upgrade = Some(daemon);

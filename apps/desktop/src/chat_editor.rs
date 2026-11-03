@@ -892,6 +892,50 @@ impl ChatEditor {
         self.submit_mode(stop, false, window, cx);
     }
 
+    /// Explicitly confirmed Stop from the upgrade blocker list. Uses the same private
+    /// writer, Unknown fence and withdrawn-text recovery as the composer button.
+    pub(crate) fn stop_update_blocker(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !crate::local_model::valid_id(id)
+            || !self.ready()
+            || self.closing
+            || self.marked(window, cx)
+            || self.error.is_some()
+        {
+            return false;
+        }
+        self.changed(cx);
+        if self.error.is_some() {
+            return false;
+        }
+        let key = format!("chat:{id}");
+        let draft = self.cache.get(&key).cloned().unwrap_or_default();
+        if self.waiting_for(&key) || !draft.editable() {
+            return false;
+        }
+        self.next_request += 1;
+        let request = self.next_request;
+        if !self.client.as_ref().is_some_and(|client| {
+            client.command(WriteCommand::Submit {
+                key: key.clone(),
+                draft: Box::new(draft),
+                follow_up: false,
+                stop: true,
+                request,
+            })
+        }) {
+            return false;
+        }
+        self.pending.insert(key.clone(), request);
+        cx.emit(EditorEvent::StopRequested { key });
+        cx.notify();
+        true
+    }
+
     /// Whether this key has a delivery that is not yet confirmed.
     pub(crate) fn waiting_for(&self, key: &str) -> bool {
         self.pending.contains_key(key) || self.cache.get(key).is_some_and(|d| d.pending.is_some())

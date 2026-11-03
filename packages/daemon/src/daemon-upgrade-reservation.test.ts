@@ -100,8 +100,64 @@ async function fixture(t: TestContext) {
 		assert.equal(proof.boot, record.boot);
 		return { status: response.status, receipt: proof.receipt };
 	}
-	return { home, owner, sessions, worker, terminals, commands, chat, request, shellStarts: () => shellStarts };
+	return {
+		home,
+		owner,
+		sessions,
+		worker,
+		terminals,
+		commands,
+		chat,
+		request,
+		shellStarts: () => shellStarts,
+		base: `http://127.0.0.1:${port}`,
+		hello,
+	};
 }
+
+test("update blocker GET pins identity and only observes work", async (t) => {
+	const f = await fixture(t);
+	const before = f.commands.length;
+	const checkpoint = t.mock.method(f.sessions, "blockers", async () => {
+		throw new Error("must not checkpoint");
+	});
+	const pause = t.mock.method(f.sessions, "pauseForUpdate", () => {
+		throw new Error("must not pause");
+	});
+	const stop = t.mock.method(f.sessions, "stop", async () => {
+		throw new Error("must not stop");
+	});
+	f.worker.jobs = async () => [
+		{ id: "job", name: "live", state: "running", startedAt: 1, outputPath: "/private/job" },
+	];
+	f.worker.hasChildren = async () => true;
+	const path = `${f.base}/api/update/blockers`;
+	for (const query of ["", "?daemonId=wrong&lineageId=wrong"]) {
+		const response = await fetch(`${path}${query}`);
+		assert.equal(response.status, 409);
+		await response.arrayBuffer();
+	}
+	const response = await fetch(
+		`${path}?${new URLSearchParams({ daemonId: f.hello.daemonId, lineageId: f.hello.lineageId! })}`,
+	);
+	assert.equal(response.status, 200);
+	assert.equal(response.headers.get("cache-control"), "no-store");
+	const body = (await response.json()) as import("@pilot/protocol").DaemonUpdateBlockers;
+	assert.equal(body.daemonId, f.hello.daemonId);
+	assert.equal(body.lineageId, f.hello.lineageId);
+	assert.equal(body.processId, process.pid);
+	assert.ok(body.blockers.some((b) => b.kind === "job" && b.sessionId === f.chat.id));
+	assert.ok(body.blockers.some((b) => b.kind === "child-process" && b.sessionId === f.chat.id));
+	assert.ok(body.blockers.length <= 256);
+	assert.equal(JSON.stringify(body).includes("/private/job"), false);
+	assert.equal(f.commands.length, before);
+	assert.equal(checkpoint.mock.callCount(), 0);
+	assert.equal(pause.mock.callCount(), 0);
+	assert.equal(stop.mock.callCount(), 0);
+	checkpoint.mock.restore();
+	pause.mock.restore();
+	stop.mock.restore();
+});
 
 for (const purpose of ["daemon-upgrade", "daemon-stop", "daemon-restart"] as const) {
 	for (const busy of ["job", "child", "unknown", "terminal"] as const) {

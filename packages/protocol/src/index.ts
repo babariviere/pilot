@@ -282,6 +282,21 @@ export interface UpdatePreparation {
 	ready: boolean;
 }
 
+/** Point-in-time observations, not an upgrade reservation or proof of idle work. */
+export interface DaemonUpdateBlocker {
+	kind: string;
+	id: string;
+	sessionId?: string;
+	title?: string;
+}
+export interface DaemonUpdateBlockers {
+	processId: number;
+	daemonId: string;
+	lineageId: string;
+	blockers: DaemonUpdateBlocker[];
+	truncated: boolean;
+}
+
 /** Passive preference only. Applying it requires a separate explicit user recovery. */
 export interface NextAttemptModel {
 	model: string;

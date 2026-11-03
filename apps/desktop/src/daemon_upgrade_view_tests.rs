@@ -1,4 +1,5 @@
 use super::*;
+use gpui_kit::test::TestWindowExt;
 use gpui_kit::{
     AnyWindowHandle, AppContext, Bounds, Entity, TestAppContext, WindowBounds, WindowOptions, px,
     size,
@@ -15,6 +16,29 @@ fn synthetic() -> Target {
         "synthetic-daemon".into(),
         "synthetic-lineage".into(),
     )
+}
+
+#[test]
+fn blocker_observations_keep_unknown_reasons_and_validate_chat_links() {
+    let value = serde_json::json!({"blockers":[{"kind":"new-kind","id":"resource","sessionId":"11111111-1111-4111-8111-111111111111","title":"A chat"}],"truncated":false});
+    let snapshot = Blockers::parse(value.clone()).unwrap();
+    let mut duplicate = value.clone();
+    duplicate["blockers"]
+        .as_array_mut()
+        .unwrap()
+        .push(value["blockers"][0].clone());
+    assert!(Blockers::parse(duplicate).is_none());
+    assert_eq!(
+        snapshot.blockers[0].reason(),
+        "Work could not be verified as stopped"
+    );
+    assert!(!snapshot.blockers[0].stoppable());
+    let mut invalid = value.clone();
+    invalid["blockers"][0]["sessionId"] = "../../other".into();
+    assert!(Blockers::parse(invalid).is_none());
+    let mut active = value;
+    active["blockers"][0]["kind"] = "active-work".into();
+    assert!(Blockers::parse(active).unwrap().blockers[0].stoppable());
 }
 fn counting(result: Result<(), Failure>) -> (Worker, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
@@ -70,6 +94,103 @@ fn init(cx: &mut TestAppContext) {
         gpui_kit::init(cx);
         crate::init_appearance(cx);
     });
+}
+
+fn blocked(
+    cx: &mut TestAppContext,
+) -> (
+    AnyWindowHandle,
+    Entity<DaemonUpgrade>,
+    Arc<Mutex<Vec<Event>>>,
+    Blocker,
+) {
+    init(cx);
+    let (worker, _) = counting(Err(Failure::Busy));
+    let (handle, view, events) = mount(cx, Some(synthetic()), worker);
+    let blocker = Blocker {
+        kind: "active-work".into(),
+        id: "work".into(),
+        session_id: Some("11111111-1111-4111-8111-111111111111".into()),
+        title: Some("Synthetic chat".into()),
+    };
+    view.update(cx, |v, cx| {
+        v.connected(crate::local_client::ConnectedDaemon::Connected(None), cx);
+        v.outcome = Some(Err(Failure::Busy));
+        v.inspection_error = None;
+        v.blockers = Some(Blockers {
+            blockers: vec![blocker.clone()],
+            truncated: false,
+        });
+    });
+    events.lock().unwrap().clear();
+    (handle, view, events, blocker)
+}
+
+#[gpui_kit::test]
+fn blocker_open_and_confirmed_stop_are_separate_from_upgrading(cx: &mut TestAppContext) {
+    let (h, v, events, blocker) = blocked(cx);
+    cx.update_window(h, |_, w, cx| {
+        w.render_frame(cx);
+        w.click(blocker.action_id("open"), cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(events.lock().unwrap().contains(&Event::OpenBlocker));
+    assert!(!events.lock().unwrap().contains(&Event::StopBlocker));
+    cx.update_window(h, |_, w, cx| {
+        w.render_frame(cx);
+        w.click(blocker.action_id("stop"), cx);
+        w.render_frame(cx);
+        assert!(v.read(cx).stop_confirmation.is_some());
+        assert!(!events.lock().unwrap().contains(&Event::StopBlocker));
+        w.click("daemon-stop-confirm", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let log = events.lock().unwrap();
+    assert_eq!(log.iter().filter(|e| **e == Event::StopBlocker).count(), 1);
+    assert!(!log.contains(&Event::Request));
+    cx.read(|cx| {
+        assert_eq!(v.read(cx).started, 0);
+        assert!(!v.read(cx).blocker_actions_ready());
+    });
+}
+
+#[gpui_kit::test]
+fn blocker_cancel_escape_disconnect_and_unknown_never_stop_work(cx: &mut TestAppContext) {
+    let (h, v, events, blocker) = blocked(cx);
+    cx.update_window(h, |_, w, cx| {
+        v.update(cx, |v, cx| v.choose_blocker(&blocker, true, cx));
+        w.render_frame(cx);
+        w.click("daemon-stop-cancel", cx);
+        assert!(v.read(cx).stop_confirmation.is_none());
+        v.update(cx, |v, cx| {
+            let mut stale = blocker.clone();
+            stale.title = Some("Old chat title".into());
+            v.choose_blocker(&stale, true, cx);
+            assert!(v.stop_confirmation.is_none());
+            v.choose_blocker(&blocker, true, cx);
+            v.focus.focus(w, cx);
+        });
+        w.render_frame(cx);
+        w.press("escape", cx);
+        assert!(v.read(cx).stop_confirmation.is_none());
+        v.update(cx, |v, cx| {
+            v.choose_blocker(&blocker, true, cx);
+            v.connected(crate::local_client::ConnectedDaemon::NotConnected, cx);
+            v.confirm_stop(cx);
+            assert!(v.stop_confirmation.is_none());
+            assert!(v.blockers.is_none());
+            v.outcome = Some(Err(Failure::Unknown));
+            v.choose_blocker(&blocker, true, cx);
+            v.confirm_stop(cx);
+            assert!(v.uncertain());
+        });
+    })
+    .unwrap();
+    cx.run_until_parked();
+    assert!(!events.lock().unwrap().contains(&Event::StopBlocker));
+    assert!(!events.lock().unwrap().contains(&Event::Request));
 }
 fn open(cx: &mut TestAppContext, h: AnyWindowHandle, v: &Entity<DaemonUpgrade>) {
     cx.update_window(h, |_, w, cx| v.update(cx, |v, cx| v.open(w, cx)))

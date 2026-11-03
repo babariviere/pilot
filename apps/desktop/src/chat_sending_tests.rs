@@ -7,6 +7,52 @@ use std::sync::Arc;
 
 const TEXT: &str = "Ship it 👩‍💻 e\u{301}";
 
+#[gpui_kit::test]
+fn upgrade_blocker_stop_keeps_nonselected_draft_and_fences_pending_delivery(
+    cx: &mut TestAppContext,
+) {
+    let (handle, view, commands) = setup(cx);
+    let id = "11111111-1111-4111-8111-111111111111";
+    let key = format!("chat:{id}");
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |editor, cx| {
+            editor.cache.insert(
+                key.clone(),
+                crate::delivery_store::Draft {
+                    text: TEXT.into(),
+                    revision: 7,
+                    ..Default::default()
+                },
+            );
+            assert!(editor.stop_update_blocker(id, w, cx));
+            assert!(!editor.stop_update_blocker(id, w, cx));
+            assert_eq!(editor.selected.as_deref(), Some("chat:a"));
+            assert_eq!(editor.cache[&key].text, TEXT);
+            assert!(!editor.stop_update_blocker("../bad", w, cx));
+        });
+    })
+    .unwrap();
+    cx.run_until_parked();
+    let mut stops = 0;
+    while let Ok(command) = commands.try_recv() {
+        if let WriteCommand::Submit {
+            key: target,
+            draft,
+            stop,
+            follow_up,
+            ..
+        } = command
+        {
+            assert_eq!(target, key);
+            assert!(stop && !follow_up);
+            assert_eq!(draft.text, TEXT);
+            assert_eq!(draft.revision, 7);
+            stops += 1;
+        }
+    }
+    assert_eq!(stops, 1);
+}
+
 struct Sent {
     handle: AnyWindowHandle,
     view: Entity<ChatEditor>,

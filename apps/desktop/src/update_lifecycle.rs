@@ -25,6 +25,12 @@ impl LocalViewer {
                     view.advance_daemon_upgrade(window, cx)
                 }
                 crate::updates_view::Event::ShowBlocker => view.show_update_blocker(window, cx),
+                crate::updates_view::Event::OpenDaemonBlocker => {
+                    view.daemon_blocker_action(false, window, cx)
+                }
+                crate::updates_view::Event::StopDaemonBlocker => {
+                    view.daemon_blocker_action(true, window, cx)
+                }
             },
         ));
         self.update_events.push(
@@ -32,6 +38,41 @@ impl LocalViewer {
                 view.advance_update_restart(window, cx)
             }),
         );
+    }
+    fn daemon_blocker_action(&mut self, stop: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(owner) = self.settings.read(cx).daemon_upgrade.clone() else {
+            return;
+        };
+        let Some(id) = owner.update(cx, |owner, _| owner.selected_blocker.take()) else {
+            return;
+        };
+        if self.restart_pending || self.daemon_upgrade_pending {
+            return;
+        }
+        let Some(chat) = self.state.chats.iter().find(|chat| chat.id == id).cloned() else {
+            owner.update(cx, |owner, cx| {
+                owner.set_notice(
+                    "This chat is no longer in the connected inventory. Refresh before acting.",
+                    cx,
+                )
+            });
+            return;
+        };
+        if stop {
+            let sent = chat.writable
+                && !chat.archived
+                && self
+                    .editor
+                    .update(cx, |editor, cx| editor.stop_update_blocker(&id, window, cx));
+            owner.update(cx, |owner, cx| owner.set_notice(if sent {
+                "Stop requested. Open the chat for its result and recovered text. Refresh blockers before trying the upgrade again."
+            } else {
+                "Stop was not submitted. Open the chat and resolve any pending delivery or composer problem first."
+            }, cx));
+        } else {
+            window.activate_window();
+            self.open(chat, window, cx);
+        }
     }
     /// The first preference or secondary form state an update restart would lose or leave
     /// unconfirmed. The composer, its drafts and deliveries are checked by the checkpoint itself.

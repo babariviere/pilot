@@ -94,6 +94,52 @@ test("runtime safety snapshot preserves parent jobs, child OS processes and unkn
 	}
 });
 
+test("passive update observations report work without pausing or checkpointing", async (t) => {
+	const { sessions, workers } = await updateSleepFixture(t);
+	const worker = workers[0]!;
+	const before = worker.commands.length;
+	let requests = 0;
+	worker.request = async () => {
+		requests++;
+	};
+	worker.jobs = async () => [
+		{ id: "still-running", name: "job", state: "running", startedAt: 1, outputPath: "/tmp/job" },
+	];
+	worker.hasChildren = async () => true;
+	let busy = true;
+	Object.defineProperty(worker, "busy", { get: () => busy });
+	const first = sessions.observeUpdateBlockers();
+	assert.equal(first, sessions.observeUpdateBlockers(), "concurrent reads coalesce");
+	const blockers = await first;
+	assert.ok(blockers.some((b) => b.kind === "active-work"));
+	assert.ok(blockers.some((b) => b.kind === "job" && b.id === "still-running"));
+	assert.ok(blockers.some((b) => b.kind === "child-process"));
+	assert.equal(worker.commands.length, before);
+	assert.equal(requests, 0, "display inspection never requests a checkpoint");
+	worker.jobs = async () => {
+		throw new Error("lost IPC");
+	};
+	assert.ok((await sessions.observeUpdateBlockers()).some((b) => b.kind === "unknown-process"));
+	busy = false;
+});
+
+test("passive update observations retain overflow instead of claiming complete coverage", async (t) => {
+	const { sessions, workers } = await updateSleepFixture(t);
+	const worker = workers[0]!;
+	worker.hasChildren = async () => false;
+	worker.jobs = async () =>
+		Array.from({ length: 300 }, (_, i) => ({
+			id: `job-${i}`,
+			name: "job",
+			state: "running" as const,
+			startedAt: 1,
+			outputPath: "/tmp/job",
+		}));
+	const blockers = await sessions.observeUpdateBlockers();
+	assert.ok(blockers.length <= 256);
+	assert.ok(blockers.some((b) => b.id === "blocker-overflow"));
+});
+
 test("runtime inspection bounds concurrency/output, retains overflow and fences replaced workers", async (t) => {
 	const { sessions } = await updateSleepFixture(t);
 	const release = sessions.freezeAdmissions();

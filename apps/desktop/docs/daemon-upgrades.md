@@ -27,7 +27,7 @@ control reservation rechecks that condition under the full freeze. Upgrade-only
 permission to checkpoint an unfinished run is not reused. Tool-boundary pause alone is
 insufficient. The permanent handoff lock, private ownership claim, exact definition,
 boot/HMAC, selected profile/identities, same-PID lease and native exit proofs remain
-mandatory. No force-stop or arbitrary PID/service control is exposed.
+mandatory. No forced service shutdown or arbitrary PID/service control is exposed.
 
 The existing single `.daemon-upgrade.json` records the intent and exact receipt
 before any service effect. Cancellation works only before that boundary. A failed
@@ -83,6 +83,18 @@ block replacement. Drained, job-free subagents checkpoint and exit, then resume
 unfinished inputs after replacement. No completed tools are replayed.
 **Settings → Updates → Daemon → Upgrade daemon…** remains an explicitly confirmed
 manual option. Cancel is effective until shutdown begins.
+
+When an upgrade is refused as busy, Settings shows a bounded, read-only
+blocker inventory with chat titles and **Open chat** links where available.
+**Refresh blockers** observes current work without pausing or checkpointing it.
+Missing inspection and overflow remain visible, not evidence of safety.
+For active agent work and chat automation, **Stop work…** asks for confirmation
+for that chat's current work. This is the ordinary, separately journaled chat Stop,
+not a force-upgrade or bulk stop. Withdrawn queued text is retained for recovery;
+an uncertain Stop is never automatically retried. Jobs, terminals and remaining
+child processes need separate attention. After Stop, refresh and explicitly retry
+the upgrade. A Stop acknowledgment is not exit proof: replacement still requires
+all runtime, storage, ownership and singleton checks above.
 
 ## Supported ownership
 

@@ -1437,6 +1437,7 @@ export class SessionManager {
 	private readonly workspaceSetups = new Map<string, { controller: AbortController; done: Promise<void> }>();
 	private readonly workspaceSetupWaiters = new Map<string, Set<() => void>>();
 	private runtimeInspecting?: Promise<import("./runtime-admission.ts").RuntimeBlocker[]>;
+	private updateObserving?: Promise<import("./runtime-admission.ts").RuntimeBlocker[]>;
 	private updatePauseTimer?: ReturnType<typeof setTimeout>;
 	private readonly updatePausing = new Map<SessionWorker, { id: string; ready: boolean; error?: string }>();
 	/** Admissions waiting for acknowledgement must not race archiving. */
@@ -5620,6 +5621,84 @@ ${run.excerpt}`,
 			gate();
 			actions?.();
 		};
+	}
+
+	/** Passive, bounded observations. Never pauses, checkpoints, starts or closes workers. */
+	observeUpdateBlockers(): Promise<import("./runtime-admission.ts").RuntimeBlocker[]> {
+		this.updateObserving ??= this.observeUpdateWork().finally(() => {
+			this.updateObserving = undefined;
+		});
+		return this.updateObserving;
+	}
+	private async observeUpdateWork(): Promise<import("./runtime-admission.ts").RuntimeBlocker[]> {
+		const result: import("./runtime-admission.ts").RuntimeBlocker[] = [];
+		const add = (blocker: import("./runtime-admission.ts").RuntimeBlocker) => {
+			if (result.length < 255) result.push(blocker);
+			else if (result.length === 255) result.push({ kind: "unknown", id: "blocker-overflow" });
+		};
+		for (const blocker of this.actionRunner?.blockers() ?? []) add(blocker);
+		for (const [id, meta] of this.metas) {
+			const worker = this.workers.get(id);
+			if (
+				meta.working ||
+				meta.preparing ||
+				meta.initializing ||
+				meta.pending?.length ||
+				meta.kernelRestartPending ||
+				worker?.busy
+			)
+				add({ kind: "active-work", id, sessionId: id });
+		}
+		for (const id of this.workspaceSetups.keys())
+			add({ kind: "automation", id: `workspace-setup:${id}`, sessionId: id });
+		for (const [id, task] of this.postRunTasks)
+			if (task.checking) add({ kind: "automation", id: `post-run:${id}`, sessionId: id });
+		const workers: [string, SessionWorker][] = [];
+		for (const entry of this.workers) {
+			if (workers.length === 128) break;
+			workers.push(entry);
+		}
+		if (workers.length !== this.workers.size) add({ kind: "unknown", id: "worker-inspection-overflow" });
+		const deadline = Date.now() + 4_000;
+		for (let offset = 0; offset < workers.length; offset += 4) {
+			await Promise.all(
+				workers.slice(offset, offset + 4).map(async ([sessionId, worker]) => {
+					let timer: ReturnType<typeof setTimeout> | undefined;
+					try {
+						if (Date.now() >= deadline || !worker.jobs || !worker.hasChildren)
+							throw new Error("Unavailable inspection");
+						const [jobs, children] = await Promise.race([
+							Promise.all([worker.jobs(), worker.hasChildren()]),
+							new Promise<never>((_, reject) => {
+								timer = setTimeout(
+									() => reject(new Error("Inspection timed out")),
+									Math.min(2_000, deadline - Date.now()),
+								);
+							}),
+						]);
+						if (this.workers.get(sessionId) !== worker) throw new Error("Worker changed");
+						for (const job of jobs.slice(0, 256)) add({ kind: "job", id: job.id, sessionId });
+						if (jobs.length > 256) add({ kind: "unknown", id: "job-inspection-overflow", sessionId });
+						if (children) add({ kind: "child-process", id: sessionId, sessionId });
+					} catch {
+						add({ kind: "unknown-process", id: sessionId, sessionId });
+					} finally {
+						clearTimeout(timer);
+					}
+				}),
+			);
+		}
+		if (
+			this.starting.size ||
+			this.preparations.size ||
+			this.parking.size ||
+			this.saving.size ||
+			this.closing ||
+			this.sleepTransition ||
+			this.sleepResuming
+		)
+			add({ kind: "admission", id: "sessions-changing" });
+		return result;
 	}
 
 	/** Handoff preflight checkpoints owned drained subagents before independent safety inspection.

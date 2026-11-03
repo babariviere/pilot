@@ -23,6 +23,8 @@ pub(crate) enum Event {
     DaemonChanged,
     /// Show the place named by the current install refusal.
     ShowBlocker,
+    OpenDaemonBlocker,
+    StopDaemonBlocker,
 }
 pub(crate) struct Updates {
     controller: Option<Updater<Worker>>,
