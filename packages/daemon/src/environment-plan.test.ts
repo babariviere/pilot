@@ -6,7 +6,7 @@ import type { EnvironmentProbes } from "./environment-probes.ts";
 
 const pin = { files: [{ path: "Makefile", sha256: "a".repeat(64) }], reviewedAt: 1 };
 
-/** The Go service worked example profile from docs/environment-setup.md. */
+/** The Go service worked example profile from docs/technical/environment-setup.md. */
 const profile: ProjectEnvironment = {
 	revision: 1,
 	tools: [

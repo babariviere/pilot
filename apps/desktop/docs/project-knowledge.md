@@ -46,7 +46,7 @@ fail; a 512 KiB wire cap bounds each read. Requests carry a window generation, a
 only the latest request's exact route can change what is shown. Closing drops the
 reader. No writes, linking, check or source verification exist in the app; agents
 and the daemon's HTTP API own those (see
-[the catalog design](../../../docs/project-knowledge-catalog.md)).
+[the catalog design](../../../docs/technical/project-knowledge-catalog.md)).
 
 ## Verification
 

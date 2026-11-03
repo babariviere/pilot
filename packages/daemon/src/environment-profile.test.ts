@@ -20,7 +20,7 @@ import { EnvironmentRevisionConflict, ProjectStore } from "./projects.ts";
 const A = "a".repeat(64);
 const B = "b".repeat(64);
 
-/** The Go service worked example from docs/environment-setup.md. */
+/** The Go service worked example from docs/technical/environment-setup.md. */
 export function goServiceProfile(): Omit<ProjectEnvironment, "revision"> {
 	return {
 		tools: [

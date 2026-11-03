@@ -1,4 +1,4 @@
-//! Project hooks as the Automations page shows and edits them (docs/automations.md §1).
+//! Project hooks as the Automations page shows and edits them (docs/technical/automations.md §1).
 //! Reads keep each definition's exact JSON; edits change only the fields the editor owns,
 //! so a save never drops settings this app doesn't show (cwd, env, timeouts).
 use serde_json::{Map, Value, json};

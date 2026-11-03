@@ -14,11 +14,12 @@ Pilot runs background [pi](https://github.com/earendil-works/pi) agents on durab
 
 Docs to use when the task touches them:
 
-- [README.md](README.md) describes the current product, setup and architecture. Keep it accurate when
-  user-facing capabilities or requirements change; use the implementation and tests for detailed behavior.
+- [README.md](README.md) is a short product introduction and setup entry point. Keep it short.
+  Update concise feature guides in [docs/README.md](docs/README.md) when user-facing behavior changes.
+  Put architecture, APIs, proposals and verification detail in [docs/technical](docs/technical/README.md).
 - [DESIGN.md](DESIGN.md) holds the UI intent, state vocabulary and review checklist for UI changes.
 - `scripts/bench` holds reopen, workspace, memory and daemon-stall benchmarks for hot-path changes;
-  [docs/performance-check.md](docs/performance-check.md) records a past CPU and memory audit and its method.
+  [docs/technical/performance-check.md](docs/technical/performance-check.md) records a past CPU and memory audit and its method.
 - Agent-facing text (the Pilot prompt in `packages/kernel/src/policy.ts`, tool descriptions and the bundled
   `pilot-artifacts` skill) is loaded on every turn or tool listing. Keep it short, state boundaries plainly,
   and move detail into skill references or tool descriptions that load only when needed.
@@ -77,7 +78,7 @@ Docs to use when the task touches them:
 - Tests use `node:test` and `node:assert/strict`, beside their implementation as `*.test.ts`. `pnpm test` fails any
   test that runs longer than two minutes (`PILOT_TEST_TIMEOUT_MS`), so a test awaiting an event that never comes
   fails instead of stalling the whole run.
-- `docs/testing.md` covers suite selection and replay-only service fixtures. `pnpm test:fast` is for
+- `docs/technical/testing.md` covers suite selection and replay-only service fixtures. `pnpm test:fast` is for
   quick feedback; `pnpm test` remains the complete gate, including integration and stress groups.
 - Local checks use temporary directories and faux model providers, not real accounts. Run the ones that cover
   your change, fix failures it causes, and rerun them without asking: `pnpm typecheck`, `pnpm test` (two

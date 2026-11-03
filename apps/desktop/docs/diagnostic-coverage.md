@@ -137,8 +137,8 @@ temporary roots/settings/hosts and no provider, linked forwarding, target wake,
 repair or live mutation. This is not end-to-end delivery, native frame, OS input,
 performance or Linux acceptance.
 
-See [agent diagnostics](../../../docs/agent-diagnostics.md),
-[telemetry contract](../../../docs/telemetry-contract.md),
+See [agent diagnostics](../../../docs/technical/agent-diagnostics.md),
+[telemetry contract](../../../docs/technical/telemetry-contract.md),
 [manual dogfooding diagnostics](dogfooding-diagnostics.md) and
 [scoped checks](scoped-checks.md).
 

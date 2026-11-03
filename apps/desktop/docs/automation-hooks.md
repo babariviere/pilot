@@ -1,6 +1,6 @@
 # Hooks and hook results
 
-Project hooks (docs/automations.md) appear in two places in the Rust desktop app:
+Project hooks (docs/technical/automations.md) appear in two places in the Rust desktop app:
 the chat timeline and the **Hooks** section of the [Automations page](scheduled-messages.md).
 
 ## Chat timeline

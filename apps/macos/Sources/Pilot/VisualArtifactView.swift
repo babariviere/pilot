@@ -4,7 +4,7 @@ import PilotCore
 import PilotVisualsKit
 import SwiftUI
 
-// Native agent visuals (docs/native-visuals.md): the sandboxed visual service runs the agent's function and returns
+// Native agent visuals (docs/technical/native-visuals.md): the sandboxed visual service runs the agent's function and returns
 // a node tree; these views draw it with Theme tokens, Swift Charts and Pilot's controls, and send control events back.
 
 /// Reader state and the last tree of each visual revision. State persists across launches, bounded; trees stay in

@@ -1,5 +1,5 @@
 /**
- * Environment setup service (docs/environment-setup.md). Constructed only when the host advertises
+ * Environment setup service (docs/technical/environment-setup.md). Constructed only when the host advertises
  * DaemonCapabilities.environmentSetup; routes answer environment_unavailable otherwise.
  */
 import { createHash } from "node:crypto";

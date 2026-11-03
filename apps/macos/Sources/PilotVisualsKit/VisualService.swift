@@ -21,7 +21,7 @@ import Foundation
     func probe(_ reply: @escaping (Data) -> Void)
 }
 
-/// Limits from docs/native-visuals.md, identical to the kernel's publish-time pre-check. The engine reports a
+/// Limits from docs/technical/native-visuals.md, identical to the kernel's publish-time pre-check. The engine reports a
 /// breach in the pre-check's words ("the handler took longer than 100 ms").
 public enum VisualLimits {
     public static let heapBytes = 32 << 20

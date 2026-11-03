@@ -1,6 +1,6 @@
 import Foundation
 
-// Project environment setup. Mirrors packages/protocol/src/environment.ts; see docs/environment-setup.md.
+// Project environment setup. Mirrors packages/protocol/src/environment.ts; see docs/technical/environment-setup.md.
 // The profile is configuration saved on the Project. Plans, readiness and errors are per-host daemon state.
 
 /// A file the profile was confirmed against. Paths are checkout-relative.

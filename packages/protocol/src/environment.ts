@@ -1,5 +1,5 @@
 /**
- * Project environment setup. See docs/environment-setup.md.
+ * Project environment setup. See docs/technical/environment-setup.md.
  *
  * The profile (ProjectEnvironment) is configuration saved on the Project in projects.json. Plans, readiness and
  * errors are per-host daemon state and never sync. Hosts advertise the feature with

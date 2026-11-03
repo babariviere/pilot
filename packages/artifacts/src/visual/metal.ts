@@ -1,5 +1,5 @@
 /**
- * Metal for shader nodes (docs/native-visuals.md, phase 3). The kernel translates each shader's GLSL to Metal Shading
+ * Metal for shader nodes (docs/technical/native-visuals.md, phase 3). The kernel translates each shader's GLSL to Metal Shading
  * Language at publish with naga (pinned, WebAssembly), so translation errors reach the agent and the app only compiles
  * the stored MSL. The GLSL is the same Shadertoy-style mainImage as shader artifacts, checked first with glslang.
  */

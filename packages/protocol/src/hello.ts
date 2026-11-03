@@ -33,7 +33,7 @@ export interface DaemonCapabilities {
 	independentExecution: boolean;
 	/** Instance/boot-fenced workspace terminal handshake. Absent on older runtimes. */
 	workspaceTerminalProtocol?: 2;
-	/** Project environment setup (docs/environment-setup.md). Absent on older runtimes and while the feature is off. */
+	/** Project environment setup (docs/technical/environment-setup.md). Absent on older runtimes and while the feature is off. */
 	environmentSetup?: 1;
 	/** Personal lifecycle hooks. Absent while disabled. */
 	automations?: 1;

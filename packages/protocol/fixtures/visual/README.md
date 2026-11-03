@@ -3,7 +3,7 @@
 Shared by the kernel's pre-check and the app's visual helper. Both run the same runtime,
 [`packages/artifacts/src/visual/runtime.js`](../../../artifacts/src/visual/runtime.js), in QuickJS-NG
 (quickjs-wasi in the kernel, the C library in the app), so a visual that passes the pre-check renders the same tree
-in the app. Design: [docs/native-visuals.md](../../../../docs/native-visuals.md).
+in the app. Design: [docs/technical/native-visuals.md](../../../../docs/technical/native-visuals.md).
 
 - `api-1.schema.json`: JSON Schema (2020-12) of the tree the runtime returns, `{"api":1,"root":Node}`. Generated
   from `packages/artifacts/src/visual/schema.ts`, the source of truth. Every object is closed

@@ -86,10 +86,10 @@ The compiled helper is **not launched** by these checks. Native power APIs, real
 assertions, sudo/authorization, pmset, sleep/lid actions and live services are untested
 and deliberately unperformed. No installation, restart, release or signing/feed
 configuration changes. Hardware qualification remains the separately authorized
-test-Mac procedure in `docs/agent-sleep.md`, not a claim from compilation or mocks.
+test-Mac procedure in `docs/technical/agent-sleep.md`, not a claim from compilation or mocks.
 Linux has a separate native D-Bus backend in `src/linux.rs`, retaining the daemon
 protocol/settings/activity accounting rather than porting macOS sensors or overrides.
 Its backend contract, API audit, limitations and qualification procedure are in
-[`docs/agent-sleep.md`](../../docs/agent-sleep.md#linux-kde-wayland).
+[`docs/technical/agent-sleep.md`](../../docs/technical/agent-sleep.md#linux-kde-wayland).
 Linux CI builds the helper and runs private fake-bus fixtures. This is not actual
 KDE, hardware sleep/lid or service-owned lifecycle qualification.

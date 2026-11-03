@@ -8,7 +8,7 @@ import Type, { type Static } from "typebox";
 
 export const VISUAL_API_VERSION = 1;
 
-/** Limits from docs/native-visuals.md. The runtime enforces the tree, state and log limits itself. */
+/** Limits from docs/technical/native-visuals.md. The runtime enforces the tree, state and log limits itself. */
 export const VISUAL_LIMITS = Object.freeze({
 	/** UTF-8 bytes of the function's source text. */
 	sourceBytes: 256 * 1024,

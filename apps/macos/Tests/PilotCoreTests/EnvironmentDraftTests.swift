@@ -6,7 +6,7 @@ private func source(_ path: String, _ line: Int, sha: String = "aa") -> Environm
     EnvironmentFindingSource(path: path, line: line, excerpt: "", sha256: sha)
 }
 
-/// Discovery for the Go service worked example in docs/environment-setup.md.
+/// Discovery for the Go service worked example in docs/technical/environment-setup.md.
 private let goServiceDiscovery = EnvironmentDiscovery(
     projectId: "p",
     computedAt: 1,

@@ -5,7 +5,7 @@ import PilotVisualsKit
 import QuartzCore
 import SwiftUI
 
-// Shader nodes of native visuals (docs/native-visuals.md, phase 3): the kernel translated each shader's GLSL to Metal
+// Shader nodes of native visuals (docs/technical/native-visuals.md, phase 3): the kernel translated each shader's GLSL to Metal
 // at publish, and the revision carries it. Pilot compiles each translation once, off the main thread, and draws
 // straight into a CAMetalLayer's drawable on the shared display clock, with the canvas's visibility and Reduce Motion
 // rules.

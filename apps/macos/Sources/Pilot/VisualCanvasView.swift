@@ -3,7 +3,7 @@ import PilotVisualsKit
 import QuartzCore
 import SwiftUI
 
-// Canvas nodes of native visuals (docs/native-visuals.md, phase 2): the visual service runs a canvas's draw function
+// Canvas nodes of native visuals (docs/technical/native-visuals.md, phase 2): the visual service runs a canvas's draw function
 // and returns its commands, which replay into a SwiftUI Canvas. Animated canvases draw once per display frame from one
 // shared clock, only while they are on screen in a visible window and Reduce Motion is off.
 

@@ -1,7 +1,7 @@
 import Foundation
 
 // Editing an environment profile from discovery findings, and presenting a host's plan. Pure values for the
-// Environment section in project settings; see docs/environment-setup.md.
+// Environment section in project settings; see docs/technical/environment-setup.md.
 
 /// Display names for normalized subjects.
 public enum EnvironmentNames {

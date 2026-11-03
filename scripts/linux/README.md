@@ -2,7 +2,7 @@
 
 The standalone daemon can run on Linux x86-64 for development. This is not a remote execution
 feature in the macOS app. SSH setup, cross-host sharing/Control, automatic remote updates and
-their workflow fixtures have been removed. See [retained devbox data](../../docs/devboxes.md).
+their workflow fixtures have been removed. See [retained devbox data](../../docs/technical/devboxes.md).
 
 ## Package
 

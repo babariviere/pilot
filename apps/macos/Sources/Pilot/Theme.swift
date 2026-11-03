@@ -77,7 +77,7 @@ enum Theme {
     static let pullRequestMerged = Color(light: 0x7C3AED, dark: 0xA78BFA)
     static let pullRequestClosed = Color(light: 0xB91C1C, dark: 0xF87171)
 
-    /// Agent visuals' text tokens (docs/native-visuals.md): ink readable on the chat background in both appearances.
+    /// Agent visuals' text tokens (docs/technical/native-visuals.md): ink readable on the chat background in both appearances.
     /// `accent` marks links and emphasized figures; `danger` uses `error`. Chrome keeps its neutral palette.
     static let accent = Color(light: 0x2563EB, dark: 0x60A5FA)
     static let successInk = Color(light: 0x047857, dark: 0x34D399)

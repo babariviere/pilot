@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import PilotCore
 
-/// The Go service worked example from docs/environment-setup.md.
+/// The Go service worked example from docs/technical/environment-setup.md.
 let goServiceProfileJSON = """
 {
     "revision": 1,

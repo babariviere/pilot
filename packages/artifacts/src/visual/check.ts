@@ -1,5 +1,5 @@
 /**
- * The visual pre-check (docs/native-visuals.md): set up the visual, render the first view, then exercise every
+ * The visual pre-check (docs/technical/native-visuals.md): set up the visual, render the first view, then exercise every
  * control once, re-rendering and validating after each event, and run every canvas draw of the views it sees.
  * Synchronous once the VM exists, so the kernel runs it in a worker thread (check-worker.ts).
  */

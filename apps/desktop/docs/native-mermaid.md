@@ -106,7 +106,7 @@ Audited Swift `VisualMermaidView.swift`, `InlineDiagramView.swift`,
 (2389-research/MermaidKit, tag commit4ed6f8a7ede26301faacfe4313896e223040e3e9),
 `MermaidParser.swift` and `DiagramLayoutFlowchart.swift`. Swift uses native
 MermaidKit plus WebKit fallback. Its permissive parser skips statements (the
-existing75-real-diagram audit in `docs/native-mermaid-evaluation.md` found silent
+existing75-real-diagram audit in `docs/technical/native-mermaid-evaluation.md` found silent
 loss). That fallback/admission model cannot be reused here. Retain the useful
 source-scan/typed-plan/presentation split; use a closed scanner and bounded
 iterative ranks instead of importing the broad parser or claiming all its

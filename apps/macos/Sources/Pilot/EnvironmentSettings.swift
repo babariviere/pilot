@@ -4,7 +4,7 @@ import SwiftUI
 
 // Project settings → Environment: what the repository declares (with citations), the confirmed profile, and the
 // project's host's install plan preview. Shown only when the host advertises environmentSetup. Nothing here installs
-// or runs anything; see docs/environment-setup.md.
+// or runs anything; see docs/technical/environment-setup.md.
 
 /// The last plan each host returned, for display while it is offline. Titles and states only: no commands, paths or
 /// output. Bounded, in Application Support.

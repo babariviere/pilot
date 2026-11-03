@@ -815,7 +815,7 @@ export interface ArtifactRevision extends ArtifactSummary {
 	visual?: ArtifactVisual;
 }
 
-/** A visual revision's runtime versions and publish-time check (docs/native-visuals.md). */
+/** A visual revision's runtime versions and publish-time check (docs/technical/native-visuals.md). */
 export interface ArtifactVisual {
 	/** Node tree API version the visual was checked against. Apps show an update hint for unknown versions. */
 	api: number;

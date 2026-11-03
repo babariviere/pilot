@@ -158,7 +158,7 @@ fn first_text(entry: &Value) -> Option<&str> {
 }
 
 /// One line for an `<automation>` follow-up, read from its opening tag only
-/// (docs/automations.md §5): `<automation name="…" kind="check|continue" attempt="n/m">`.
+/// (docs/technical/automations.md §5): `<automation name="…" kind="check|continue" attempt="n/m">`.
 /// Anything else reads as the origin's title.
 fn follow_up_summary(source: &str) -> Option<String> {
     let line = source.lines().next()?.trim();

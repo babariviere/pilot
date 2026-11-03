@@ -32,7 +32,7 @@ function parse(path: string, text: string) {
 	return parseDiscoveredFile({ path, text, sha256: "0".repeat(64) });
 }
 
-/** The Go service worked example from docs/environment-setup.md, section 11. */
+/** The Go service worked example from docs/technical/environment-setup.md, section 11. */
 export const goServiceCheckout = {
 	"go.mod": "module github.com/acme/orders\n\ngo 1.22.0\n\ntoolchain go1.23.4\n\nrequire github.com/lib/pq v1.10.9\n",
 	".tool-versions": "golang 1.23.4\ngolangci-lint 1.61.0\n",

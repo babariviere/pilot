@@ -3,7 +3,7 @@ import Foundation
 public enum ArtifactKind: String, Codable, Hashable, Sendable {
     case html, react, image, swiftui, shader
     /// A native agent visual: a JavaScript function the app runs in its sandboxed visual service
-    /// (docs/native-visuals.md).
+    /// (docs/technical/native-visuals.md).
     case visual
 
     public var sourceLanguage: String {

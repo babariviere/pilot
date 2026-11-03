@@ -45,5 +45,5 @@ python3 query_traces.py live-tools diagnostics.json
 That command reads only `tool.in_flight` evidence and prints safe category, active/progress/liveness ages, state and
 whether the call is nested. It does not infer that an old call is dead or recommend automatic retry.
 
-See [starter queries](../../docs/telemetry-starter-queries.md) before adapting this example to a backend. Keep the
+See [starter queries](../../docs/technical/telemetry-starter-queries.md) before adapting this example to a backend. Keep the
 collector close to each host; a devbox should export to its own loopback collector rather than relay through a Mac.

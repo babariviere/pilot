@@ -439,7 +439,7 @@ leaves source, then returns to Overview; Option-Up/Down moves between changes in
 No add-annotation callback, draft entity or submission/approval handler is installed.
 All data/cancellation/admission and exact selection belong to the pane/reader, never render.
 No live Changes/Open file capability is reused. Empty, partial, unsupported and refused inputs
-remain explicit. See [native Review](../../../docs/mission-native-review.md) for scope and limits.
+remain explicit. See [native Review](../../../docs/technical/mission-native-review.md) for scope and limits.
 The `native_review` hidden production-root target checks680/1100 light/dark, native controls,
 exact layer/stack identity, newer-revision pinning, source/back, resize, empty and denied reads.
 It is synthetic native interaction evidence, not OS IME/AX/performance qualification.
