@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.109.0](https://github.com/babariviere/pilot/compare/v1.108.0...v1.109.0) (2026-11-03)
+
+
+### Features
+
+* **desktop:** diagnostic repair proposals and confirmed repair start ([2cc0f80](https://github.com/babariviere/pilot/commit/2cc0f80634611d2fe9e34e4192350ec4597ae588))
+* **desktop:** edit diagnostic repair proposals and choose the repair model ([e410c4c](https://github.com/babariviere/pilot/commit/e410c4cf988084a38315c0bbb4516e8a98b7ff7c))
+* **desktop:** recurring rules, notices and a schedule editor ([54679c0](https://github.com/babariviere/pilot/commit/54679c02c1f2cb8c0e704b26b46aeb5a66f65364))
+* **desktop:** show hook results and edit project hooks ([dfb70a4](https://github.com/babariviere/pilot/commit/dfb70a4609af8409bff1e10fa61af3ea839f184c))
+
 ## [1.108.0](https://github.com/babariviere/pilot/compare/v1.107.0...v1.108.0) (2026-11-02)
 
 
