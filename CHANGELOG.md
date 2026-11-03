@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.111.0](https://github.com/babariviere/pilot/compare/v1.110.0...v1.111.0) (2026-11-03)
+
+
+### Features
+
+* **desktop:** show update proposals as composer-aligned chat cards ([78018ba](https://github.com/babariviere/pilot/commit/78018ba902001fb4bf6b69b60496327679d8ed55))
+* **updates:** coordinate project-proposed runtime replacement ([45bdbdb](https://github.com/babariviere/pilot/commit/45bdbdbe7cf46560ee06467ba78afea8254a251e))
+
+
+### Bug Fixes
+
+* **updater:** reclaim completed bundles without global process vetoes ([8c67b98](https://github.com/babariviere/pilot/commit/8c67b98e30569b3c62df96b0665a7759463c98b5))
+
 ## [1.110.0](https://github.com/babariviere/pilot/compare/v1.109.0...v1.110.0) (2026-11-03)
 
 
