@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.110.0](https://github.com/babariviere/pilot/compare/v1.109.0...v1.110.0) (2026-11-03)
+
+
+### Features
+
+* **desktop:** identify daemon upgrade blockers and confirm chat stop ([30a22cc](https://github.com/babariviere/pilot/commit/30a22cc9935356a531328a9712ec562ed7ac4ff0))
+* **desktop:** retry failed chats from the failure banner ([085a287](https://github.com/babariviere/pilot/commit/085a287a126fb95f176692db56db4eaf7b111ea1))
+
+
+### Bug Fixes
+
+* **kernel:** allow handoff summaries up to eight KiB ([880dbaf](https://github.com/babariviere/pilot/commit/880dbafb03dcc24c78edc028776a42f159b7011f))
+* **kernel:** preserve richer context across later handoffs ([8e62df4](https://github.com/babariviere/pilot/commit/8e62df4d766bf00096f012745d8e10b73e72fba3))
+* **kernel:** target smaller handoff summaries ([b8aa5a3](https://github.com/babariviere/pilot/commit/b8aa5a3e12215b4514b7b8446a20911c0dea2a71))
+
 ## [1.109.0](https://github.com/babariviere/pilot/compare/v1.108.0...v1.109.0) (2026-11-03)
 
 
