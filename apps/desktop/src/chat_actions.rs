@@ -42,6 +42,9 @@ pub(crate) struct Evidence {
     pub(crate) can_convert: bool,
     /// The daemon can reload this chat's worker after a failed startup.
     pub(crate) can_retry_startup: bool,
+    /// The chat's last run failed and nothing visible blocks pilotd's turn
+    /// retry. pilotd remains authoritative for its own guards.
+    pub(crate) can_retry_turn: bool,
 }
 impl Evidence {
     pub(crate) fn read(target: &Target, raw: &Value, guarded: bool) -> Result<Self, Failure> {
@@ -111,10 +114,23 @@ impl Evidence {
             "workspaceRecovery",
             "kernelRestartPending",
             "canRetryStartup",
+            "outcome",
+            "outcomeAt",
         ] {
             stamp.insert(key.into(), raw[key].clone());
         }
         stamp.insert("failed".into(), Value::Bool(!raw["failure"].is_null()));
+        stamp.insert(
+            "nextAttemptModel".into(),
+            Value::Bool(!raw["nextAttemptModel"].is_null()),
+        );
+        stamp.insert(
+            "attempt".into(),
+            raw["attempts"]
+                .as_array()
+                .and_then(|a| a.iter().find(|a| a["active"] == true))
+                .map_or(Value::Null, |a| a["id"].clone()),
+        );
         for key in ["pending", "runningJobs"] {
             stamp.insert(
                 key.into(),
@@ -138,16 +154,35 @@ impl Evidence {
                 && raw["missionId"].is_null()
                 && target.chat.project_id.is_some(),
             can_retry_startup: raw["canRetryStartup"] == true,
+            can_retry_turn: raw["outcome"] == "failed"
+                && raw["canRetryStartup"] != true
+                && raw["nextAttemptModel"].is_null()
+                && !archived
+                && !working
+                && matches!(raw["state"].as_str(), Some("idle" | "parked"))
+                && raw["sleepPaused"] != true
+                && raw["offlinePaused"] != true
+                && raw["runningJobs"].as_array().is_none_or(Vec::is_empty)
+                && crate::local_model::messageable_local(raw),
         })
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Action {
     Archive,
     Convert,
     /// Reload a chat whose worker failed to start, keeping its outbox.
     Retry,
+    /// Swift's failed-turn Retry: pilotd starts a new attempt from before the
+    /// user message that began this failed assistant entry and sends that
+    /// message again. The failed attempt stays in history.
+    RetryTurn(u64),
+}
+impl Action {
+    pub(crate) fn retry(self) -> bool {
+        matches!(self, Self::Retry | Self::RetryTurn(_))
+    }
 }
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) enum Outcome {
@@ -160,6 +195,7 @@ pub(crate) enum Outcome {
 pub(crate) struct Report {
     pub(crate) id: u64,
     pub(crate) evidence: Evidence,
+    pub(crate) action: Action,
     pub(crate) outcome: Option<Outcome>,
     pub(crate) observed_current: bool,
 }

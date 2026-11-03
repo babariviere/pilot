@@ -3,6 +3,8 @@
 mod archived;
 #[path = "chat_actions_capacity_probe.rs"]
 mod capacity;
+#[path = "chat_actions_retry_probe.rs"]
+mod retry;
 #[path = "chat_actions_selected_probe.rs"]
 mod selected;
 use super::*;
@@ -139,10 +141,16 @@ pub fn run_chat_actions_probe(cx: &mut HeadlessAppContext) {
     capacity::run(cx);
     let case = std::env::var("PILOT_NEXT_CHAT_ACTIONS_CASE").ok();
     assert!(
-        case.as_deref()
-            .is_none_or(|s| matches!(s, "review" | "selected-archive" | "archived-composer")),
+        case.as_deref().is_none_or(|s| matches!(
+            s,
+            "review" | "selected-archive" | "archived-composer" | "failure-retry"
+        )),
         "unknown chat-actions native case"
     );
+    if case.as_deref() == Some("failure-retry") {
+        retry::run(cx);
+        return;
+    }
     if case.as_deref() == Some("selected-archive") {
         selected::run(cx);
         return;
@@ -659,6 +667,7 @@ pub fn run_chat_actions_probe(cx: &mut HeadlessAppContext) {
     selected::run(cx);
     if case.is_none() {
         archived::run(cx);
+        retry::run(cx);
     }
 }
 

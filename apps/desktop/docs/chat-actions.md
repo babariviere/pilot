@@ -124,7 +124,8 @@ and local errors remain visible. Hiding success does not release ACK fences.
 One off-UI worker has one in-flight request and one bounded queued command.
 There are no retries, idle polling, environment/disk reads in render or per-row
 timers. Requests/responses use bounded channels; HTTP has 2-second connect and
-5-second request deadlines, redirects/proxies/retries disabled, 256 KiB response
+5-second request deadlines (60 seconds for the two retries, which wait for a
+worker to start), redirects/proxies/retries disabled, 256 KiB response
 admission and 64 KiB retained action-metadata admission. Pending text and job
 content are not retained in evidence, only counts. Reports retain the latest
 operation per target without a distinct-chat lifetime admission limit. Completed
@@ -190,3 +191,14 @@ profiling or remote-CI wait was run for this slice.
 Remaining Rename, Pin/Unpin, Copy canonical link/path, Go to project and linked
 mission actions are inventoried in the parent checklist, not enabled stubs and
 not part of this feature. No browser/terminal/updater/backend/permission expansion.
+
+## Retry after a failure
+
+The row menu's **Retry startup** and the failure banner's **Retry** share this
+owner and its reports, labelled by action (`Report::action`). The banner and
+its two contracts are described in [session-failure.md](session-failure.md#retry).
+A retry in flight waits input like a pending archive; an unconfirmed failed-turn
+retry blocks this chat's actions (it may have resent the message), while an
+unconfirmed startup retry may be requested again because it only reloads the
+same outbox. The selected failure shows its own retry status, so the sidebar
+status omits it (`Actions::show_retry_inline`).

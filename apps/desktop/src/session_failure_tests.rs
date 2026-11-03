@@ -116,3 +116,50 @@ fn durable_reader_errors_are_not_promoted_to_session_failure_diagnostics() {
     assert_eq!(t.failure_run_serial, 1);
     assert!(!t.rows().iter().any(|r| r.source().contains("private")));
 }
+
+fn failed_assistant(id: u64) -> serde_json::Value {
+    json!({"id":id,"kind":"pi.assistant","model":[{"role":"assistant","stopReason":"error","errorMessage":"Synthetic provider error","content":[]}]})
+}
+#[test]
+fn only_the_newest_settled_failed_assistant_turn_is_retryable() {
+    use crate::local_model::LiveTranscript;
+    let user =
+        json!({"id":1,"kind":"pi.user","model":[{"role":"user","content":"Plan 日本語 👩🏽‍💻"}]});
+    let mut t = LiveTranscript::default();
+    assert_eq!(t.retry_entry(), None, "nothing loaded");
+    t.apply(&json!({"type":"snapshot","entries":[user.clone(), failed_assistant(2)]}));
+    assert_eq!(t.retry_entry(), Some(2));
+    // A run, stream, queued input or newer entry ends the offer.
+    t.apply(&json!({"type":"run_start"}));
+    assert_eq!(t.retry_entry(), None);
+    t.apply(&json!({"type":"run_error"}));
+    assert_eq!(t.retry_entry(), Some(2));
+    t.apply(
+        &json!({"type":"message_start","message":{"role":"assistant","timestamp":5,"content":[]}}),
+    );
+    assert_eq!(t.retry_entry(), None);
+    t.apply(&json!({"type":"message_end","entry":failed_assistant(3)}));
+    assert_eq!(
+        t.retry_entry(),
+        Some(3),
+        "Swift: the last row's committed error"
+    );
+    t.apply(
+        &json!({"type":"queue_update","items":[{"id":1,"content":"queued","mode":"followUp"}]}),
+    );
+    assert_eq!(t.retry_entry(), None);
+    t.apply(&json!({"type":"queue_update","items":[]}));
+    t.settle_departed();
+    assert_eq!(t.retry_entry(), Some(3));
+    t.apply(&json!({"type":"entry_appended","entry":{"id":4,"kind":"pilot.activity","model":[],"data":{"text":"Later activity"}}}));
+    assert_eq!(t.retry_entry(), None, "no longer the last row");
+    // Older history arriving never re-targets the newest entry.
+    let mut t = LiveTranscript::default();
+    t.apply(&json!({"type":"snapshot","entries":[failed_assistant(2), {"id":3,"kind":"pi.assistant","model":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Recovered"}]}]}]}));
+    assert_eq!(t.retry_entry(), None, "a successful reply is not retried");
+    // A new snapshot (another attempt) replaces the target.
+    t.apply(&json!({"type":"snapshot","entries":[user.clone(), failed_assistant(9)]}));
+    assert_eq!(t.retry_entry(), Some(9));
+    t.apply(&json!({"type":"snapshot","entries":[user]}));
+    assert_eq!(t.retry_entry(), None);
+}

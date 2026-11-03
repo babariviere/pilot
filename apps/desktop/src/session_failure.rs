@@ -13,6 +13,9 @@ pub(crate) struct Failure {
     pub(crate) startup: bool,
     pub(crate) historical: bool,
     pub(crate) truncated: bool,
+    /// A next-attempt model/thinking choice is saved. pilotd applies it only
+    /// to a startup retry or the user's next message, never to a turn retry.
+    pub(crate) next_model: bool,
 }
 fn time(value: &Value) -> Option<u64> {
     value
@@ -128,6 +131,7 @@ pub(crate) fn read(value: &Value) -> Option<Failure> {
             || matches!(value["state"].as_str(), Some("working" | "starting"))
             || older_attempt,
         truncated,
+        next_model: value["nextAttemptModel"].is_object(),
     })
 }
 

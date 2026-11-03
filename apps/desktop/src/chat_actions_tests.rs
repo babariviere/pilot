@@ -118,6 +118,7 @@ fn completion_is_immutable_and_exact_owner_not_current_selection() {
     let mut r = Report {
         id: 42,
         evidence: e.clone(),
+        action: Action::Archive,
         outcome: None,
         observed_current: false,
     };
@@ -302,4 +303,168 @@ async fn a_failed_startup_reloads_once_on_the_exact_route() {
     ));
     let seen = d.seen.lock().unwrap();
     assert_eq!(seen.requests.iter().filter(|r| r.0 == "POST").count(), 1);
+}
+
+fn failed_turn() -> Value {
+    let mut raw = source();
+    raw["state"] = json!("parked");
+    raw["outcome"] = json!("failed");
+    raw["outcomeAt"] = json!(42);
+    raw["outcomeReason"] = json!("Synthetic provider error 日本語");
+    raw
+}
+#[test]
+fn turn_retry_follows_visible_guards_and_never_a_saved_model() {
+    let o = LocalOptions::synthetic(1);
+    let raw = failed_turn();
+    let e = Evidence::read(&target(&o, &raw), &raw, true).unwrap();
+    assert!(e.can_retry_turn && !e.can_retry_startup);
+    assert_eq!(e.stamp["outcomeAt"], 42);
+    for (field, value) in [
+        ("working", json!(true)),
+        ("state", json!("working")),
+        ("state", json!("failed")),
+        ("runningJobs", json!([{"id":"job"}])),
+        ("archivedAt", json!(5)),
+        ("control", json!(true)),
+        ("continuedTo", json!("next")),
+        ("sleepPaused", json!(true)),
+        ("offlinePaused", json!(true)),
+        ("canRetryStartup", json!(true)),
+        ("outcome", json!("done")),
+        // pilotd applies a saved choice only to a startup retry or a new message.
+        ("nextAttemptModel", json!({"model":"provider/next"})),
+    ] {
+        let mut raw = raw.clone();
+        raw[field] = value;
+        let e = Evidence::read(&target(&o, &raw), &raw, true).unwrap();
+        assert!(!e.can_retry_turn, "{field}");
+    }
+    // A changed attempt or completion version is a different failure.
+    for (field, value) in [
+        ("outcomeAt", json!(43)),
+        ("attempts", json!([{"id":"2","active":true}])),
+    ] {
+        let mut other = raw.clone();
+        other[field] = value;
+        assert!(
+            matches!(Evidence::read(&target(&o, &raw), &other, true), Err(e) if e == CHANGED),
+            "{field}"
+        );
+    }
+}
+#[tokio::test]
+async fn a_failed_turn_retries_once_through_pilotd_and_never_reposts() {
+    let d = Daemon::start(Behavior::Accept).await;
+    let c = transport::client().unwrap();
+    d.seen.lock().unwrap().source = failed_turn();
+    let raw = failed_turn();
+    let e = transport::inspect(&c, &d.options, &target(&d.options, &raw))
+        .await
+        .unwrap();
+    assert!(
+        transport::set(&c, &d.options, &e, Action::RetryTurn(7)).await == Outcome::Acknowledged
+    );
+    let seen = d.seen.lock().unwrap();
+    let posts: Vec<_> = seen.requests.iter().filter(|r| r.0 == "POST").collect();
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0].1, "/api/sessions/source/rewind");
+    assert_eq!(posts[0].2, json!({"action":"retry","entryId":7}));
+    assert!(
+        !seen.requests.iter().any(|r| r.1.ends_with("/messages")),
+        "the client never reposts the earlier message"
+    );
+}
+#[tokio::test]
+async fn turn_retry_refuses_before_post_when_stale_or_ineligible() {
+    for change in [
+        "outcomeAt",
+        "working",
+        "nextAttemptModel",
+        "attempt",
+        "daemonId",
+    ] {
+        let d = Daemon::start(Behavior::Accept).await;
+        let c = transport::client().unwrap();
+        d.seen.lock().unwrap().source = failed_turn();
+        let raw = failed_turn();
+        let e = transport::inspect(&c, &d.options, &target(&d.options, &raw))
+            .await
+            .unwrap();
+        {
+            let mut s = d.seen.lock().unwrap();
+            match change {
+                "outcomeAt" => s.source["outcomeAt"] = json!(43),
+                "working" => s.source["working"] = json!(true),
+                "nextAttemptModel" => {
+                    s.source["nextAttemptModel"] = json!({"model":"provider/next"})
+                }
+                "attempt" => s.source["attempts"] = json!([{"id":"2","active":true}]),
+                _ => s.hello[change] = json!("wrong"),
+            }
+        }
+        assert!(
+            matches!(
+                transport::set(&c, &d.options, &e, Action::RetryTurn(7)).await,
+                Outcome::Rejected(_)
+            ),
+            "{change}"
+        );
+        assert!(
+            d.seen.lock().unwrap().requests.iter().all(|r| r.0 == "GET"),
+            "{change}"
+        );
+    }
+    // Ineligible evidence never posts, even when it is current.
+    let d = Daemon::start(Behavior::Accept).await;
+    let c = transport::client().unwrap();
+    let mut raw = failed_turn();
+    raw["nextAttemptModel"] = json!({"model":"provider/next"});
+    d.seen.lock().unwrap().source = raw.clone();
+    let e = transport::inspect(&c, &d.options, &target(&d.options, &raw))
+        .await
+        .unwrap();
+    assert!(matches!(
+        transport::set(&c, &d.options, &e, Action::RetryTurn(7)).await,
+        Outcome::Rejected(_)
+    ));
+    assert!(d.seen.lock().unwrap().requests.iter().all(|r| r.0 == "GET"));
+}
+#[tokio::test]
+async fn turn_retry_lost_conflict_or_mismatched_ack_is_unknown_and_validation_is_refused() {
+    for (behavior, unknown) in [
+        (Behavior::Lost, true),
+        (Behavior::ErrorAfter, true),
+        (Behavior::WrongId, true),
+        (Behavior::Refuse(409), true),
+        (Behavior::Refuse(500), true),
+        (Behavior::Refuse(400), false),
+        (Behavior::Refuse(404), false),
+    ] {
+        let d = Daemon::start(behavior).await;
+        let c = transport::client().unwrap();
+        d.seen.lock().unwrap().source = failed_turn();
+        let raw = failed_turn();
+        let e = transport::inspect(&c, &d.options, &target(&d.options, &raw))
+            .await
+            .unwrap();
+        let outcome = transport::set(&c, &d.options, &e, Action::RetryTurn(7)).await;
+        if unknown {
+            assert!(outcome == Outcome::Unknown);
+        } else {
+            assert!(matches!(outcome, Outcome::Rejected(_)));
+        }
+        // A later read observes the new run; it is not a receipt and nothing is repeated.
+        let _ = transport::inspect(&c, &d.options, &target(&d.options, &raw)).await;
+        assert_eq!(
+            d.seen
+                .lock()
+                .unwrap()
+                .requests
+                .iter()
+                .filter(|r| r.0 == "POST")
+                .count(),
+            1
+        );
+    }
 }

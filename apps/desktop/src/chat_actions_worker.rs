@@ -1,10 +1,13 @@
-//! Bounded off-UI Local HTTP. A dispatched archive/restore is never retried.
+//! Bounded off-UI Local HTTP. A dispatched archive/restore/retry is never repeated.
 use crate::{
     LocalOptions,
     chat_actions::{Action, Evidence, Failure, Outcome, Target},
 };
 use serde_json::Value;
 use std::time::Duration;
+
+/// Both retries wait for pilotd to start a worker before answering.
+const RETRY_DEADLINE: Duration = Duration::from_secs(60);
 
 enum Request {
     Inspect(Target, async_channel::Sender<Result<Evidence, Failure>>),
@@ -144,6 +147,45 @@ pub(crate) async fn set(
         }
         Err(error) => return Outcome::Rejected(error),
     };
+    if let Action::RetryTurn(entry) = action {
+        // pilotd forks a new attempt and sends the failed turn's user message
+        // itself. Nothing is reposted by this client, and an unconfirmed POST
+        // is never repeated.
+        if !current.can_retry_turn {
+            return Outcome::Rejected(
+                "This failure can no longer be retried here. Nothing was resent.",
+            );
+        }
+        let response = client
+            .post(format!(
+                "{}/api/sessions/{}/rewind",
+                options.loopback(),
+                current.target.chat.id
+            ))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body(serde_json::json!({"action":"retry","entryId":entry}).to_string())
+            .timeout(RETRY_DEADLINE)
+            .send()
+            .await;
+        let Ok(response) = response else {
+            return Outcome::Unknown;
+        };
+        // Only request validation precedes every change. A conflict can follow
+        // the attempt switch (the resend is a separate admission), so it is
+        // not proof that nothing happened.
+        return match response.status() {
+            reqwest::StatusCode::OK => match body(response).await {
+                Ok(value) if value["session"]["id"] == current.target.chat.id => {
+                    Outcome::Acknowledged
+                }
+                _ => Outcome::Unknown,
+            },
+            reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::NOT_FOUND => {
+                Outcome::Rejected("Local refused this retry. Nothing was resent.")
+            }
+            _ => Outcome::Unknown,
+        };
+    }
     if action == Action::Retry {
         // The daemon reloads the worker with the existing outbox. It is never resent.
         if !current.can_retry_startup {
@@ -157,6 +199,7 @@ pub(crate) async fn set(
                 options.loopback(),
                 current.target.chat.id
             ))
+            .timeout(RETRY_DEADLINE)
             .send()
             .await;
         let Ok(response) = response else {

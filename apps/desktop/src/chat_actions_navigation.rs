@@ -293,7 +293,7 @@ impl LocalViewer {
         let menu = menu.item(PopupMenuItem::new("Checking chat actions…").disabled(true));
         crate::session_clipboard::items(menu, Some(&chat))
     }
-    fn chat_row_action(
+    pub(super) fn chat_row_action(
         &mut self,
         evidence: Evidence,
         action: Action,
@@ -325,6 +325,14 @@ impl LocalViewer {
                 // keeps its history, draft and permissions; nothing is resent.
                 self.chat_actions
                     .update(cx, |a, cx| a.submit(evidence, Action::Retry, w, cx));
+                self.sync_chat_action_permission(cx);
+            }
+            Action::RetryTurn(entry) if evidence.can_retry_turn => {
+                // pilotd starts a new attempt and resends the failed turn's message
+                // itself. The draft, queue and the failed attempt are kept.
+                self.chat_actions.update(cx, |a, cx| {
+                    a.submit(evidence, Action::RetryTurn(entry), w, cx)
+                });
                 self.sync_chat_action_permission(cx);
             }
             Action::Convert if evidence.can_convert => {

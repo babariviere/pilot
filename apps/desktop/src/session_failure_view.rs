@@ -1,6 +1,9 @@
-//! Contextual, read-only report. No retry, log reads or changes to composer authority.
+//! Contextual report with one explicit Retry (`session_failure_retry.rs`).
+//! No log reads, repairs or changes to composer authority.
+use super::session_failure_retry::RetryOffer;
 use super::*;
 use crate::{
+    chat_actions_view::RetryView,
     session_failure::Failure,
     ui::{self, Action, Text},
 };
@@ -76,7 +79,15 @@ impl LocalViewer {
         }
     }
     pub(super) fn session_failure_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let failure = self.selected_failure()?.clone();
+        let failure = self.selected_failure().cloned();
+        // This banner shows the selected chat's own retry status, not the sidebar.
+        let inline = failure.as_ref().and(self.selected.as_deref());
+        self.chat_actions.update(cx, |a, cx| {
+            if a.show_retry_inline(inline) {
+                cx.notify();
+            }
+        });
+        let failure = failure?;
         let historical = self.session_failure_fence.historical(&failure);
         let disconnected =
             self.state.status != "Connected · Local" && !self.state.status.starts_with("Synthetic");
@@ -112,6 +123,41 @@ impl LocalViewer {
         let chat = self.selected.clone();
         let generation = self.generation;
         let copy = failure.clone();
+        let retry = self.failure_retry(&failure, cx).map(|offer| {
+            let (label, busy, offered, note) = match offer {
+                RetryOffer::View(RetryView::Ready) => ("Retry", false, true, None),
+                RetryOffer::View(RetryView::Busy) => ("Retrying…", true, false, None),
+                RetryOffer::View(RetryView::Sent) => ("Retry sent", false, false, None),
+                RetryOffer::View(RetryView::Failed(e)) => {
+                    ("Retry", false, true, Some((e, ui::Tone::Error)))
+                }
+                RetryOffer::View(RetryView::Blocked(e)) => {
+                    ("Retry", false, false, Some((e, ui::Tone::Warning)))
+                }
+                RetryOffer::Unavailable(e) => ("Retry", false, false, Some((e, ui::Tone::Quiet))),
+            };
+            let help = if failure.startup {
+                "Start this chat again with its queued messages"
+            } else {
+                "Run the failed turn again in a new attempt"
+            };
+            let button = ui::action("session-failure-retry", label, Action::Secondary)
+                .icon(AppIcon::Retry.asset())
+                .flex_none()
+                .loading(busy)
+                .disabled(!offered)
+                .tooltip(help)
+                .on_click(cx.listener(|v, _, w, cx| {
+                    if v.project_choices_ready(w, cx) {
+                        v.retry_failure(w, cx);
+                    }
+                }));
+            (button, note)
+        });
+        let (retry, note) = match retry {
+            Some((button, note)) => (Some(button), note),
+            None => (None, None),
+        };
         Some(div().id("session-failure").test_support().v_flex().flex_none().min_w_0().w_full()
             .track_focus(&self.session_failure_focus).px_3().py_2().gap_1().border_b_1().border_color(cx.theme().border)
             // Capture before a sibling pointer can blur/commit composer IME preedit.
@@ -122,6 +168,7 @@ impl LocalViewer {
                 .child(div().id("session-failure-title").flex_1().min_w_0()
                     .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(metadata.clone()).build(w, cx))
                     .child(ui::text(Text::Label, title).text_color(if historical {cx.theme().muted_foreground} else {cx.theme().danger})))
+                .children(retry)
                 .child(ui::action("session-failure-copy", "Copy reason", Action::Quiet).icon(AppIcon::Copy.asset())
                     .accessibility_label("Copy reported failure reason")
                     .on_click(cx.listener(move |v, _, w, cx| {
@@ -131,6 +178,8 @@ impl LocalViewer {
                         }
                     }))))
             .children(provenance.map(|text| ui::text(Text::Caption, text).id("session-failure-provenance").test_support().text_color(cx.theme().muted_foreground)))
+            .children(note.map(|(text, tone)| ui::text(Text::Caption, text).id("session-failure-retry-note").test_support()
+                .aria_label(text).text_color(tone.color(cx))))
             .child(div().id(("session-failure-scroll", tag)).test_support().overflow_y_scroll().max_h_32().min_w_0().w_full()
                 .on_mouse_down(gpui_kit::MouseButton::Left, cx.listener(|v, _, w, cx| v.session_failure_focus.focus(w, cx)))
                 .child(div().id("session-failure-reason").test_support().w_full().min_w_0().text_size(px(appearance::TextRole::BODY))

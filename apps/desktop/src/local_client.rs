@@ -347,6 +347,8 @@ pub(crate) struct Presentation {
     pub(crate) passive_history: bool,
     pub(crate) control_connection_generation: u64,
     pub(crate) failure_run_serial: u64,
+    /// The selected chat's retryable failed turn (`LiveTranscript::retry_entry`).
+    pub(crate) retry_entry: Option<u64>,
     pub(crate) todos: crate::session_todos::Feed,
     pub(crate) question: crate::question::Projection,
     /// The live run awaits `question`; see `LiveTranscript::question_awaited`.
@@ -1479,6 +1481,11 @@ async fn run(
         view.thinking = model.thinking && !reader.fenced();
         view.compacting = model.compacting() && !reader.fenced();
         view.failure_run_serial = model.failure_run_serial;
+        view.retry_entry = if reader.fenced() {
+            None
+        } else {
+            model.retry_entry()
+        };
         view.question = if reader.fenced() {
             crate::question::Projection::Unavailable
         } else {

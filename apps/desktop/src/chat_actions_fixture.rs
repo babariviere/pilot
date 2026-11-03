@@ -15,6 +15,8 @@ pub(crate) enum Behavior {
     ErrorAfter,
     WrongId,
     Slow,
+    /// Answer the POST with this status and no change.
+    Refuse(u16),
 }
 pub(crate) struct Seen {
     pub(crate) source: Value,
@@ -94,6 +96,26 @@ impl Daemon {
                                             Behavior::WrongId => (200,json!({"id":"other"}),false),
                                             Behavior::Slow => (200,s.source.clone(),true),
                                             Behavior::Accept => (200,s.source.clone(),false),
+                                            Behavior::Refuse(code) => (code,json!({"error":"synthetic refusal"}),false),
+                                        }
+                                    }
+                                    ("POST", "/api/sessions/source/rewind") => {
+                                        assert_eq!(payload["action"], "retry");
+                                        assert!(payload["entryId"].is_u64());
+                                        assert_eq!(payload.as_object().unwrap().len(), 2);
+                                        if let Behavior::Refuse(code) = s.behavior {
+                                            (code,json!({"error":"synthetic refusal"}),false)
+                                        } else {
+                                            // A new attempt runs the resent message.
+                                            for key in ["outcome","outcomeAt","outcomeReason"] { s.source.as_object_mut().unwrap().remove(key); }
+                                            s.source["state"]=json!("working"); s.source["working"]=json!(true);
+                                            match s.behavior {
+                                                Behavior::Lost => return,
+                                                Behavior::ErrorAfter => (409,json!({"error":"synthetic post-switch conflict"}),false),
+                                                Behavior::WrongId => (200,json!({"session":{"id":"other"}}),false),
+                                                Behavior::Slow => (200,json!({"session":s.source.clone()}),true),
+                                                _ => (200,json!({"session":s.source.clone()}),false),
+                                            }
                                         }
                                     }
                                     ("POST", path) if ["archive", "restore"].iter().any(|verb| path == format!("/api/sessions/{}/{verb}", s.source["id"].as_str().unwrap())) => {
@@ -105,6 +127,7 @@ impl Daemon {
                                             Behavior::WrongId => {let mut v=s.source.clone();v["id"]=json!("other");(200,v,false)}
                                             Behavior::Slow => (200,s.source.clone(),true),
                                             Behavior::Accept => (200,s.source.clone(),false),
+                                            Behavior::Refuse(code) => (code,json!({"error":"synthetic refusal"}),false),
                                         }
                                     }
                                     _ => panic!("unexpected synthetic route {method} {path}"),

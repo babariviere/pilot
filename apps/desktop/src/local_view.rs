@@ -150,6 +150,8 @@ mod scroll_work;
 #[cfg(feature = "native-probes")]
 #[path = "session_failure_probe.rs"]
 pub(crate) mod session_failure_probe;
+#[path = "session_failure_retry.rs"]
+mod session_failure_retry;
 #[path = "session_failure_view.rs"]
 mod session_failure_view;
 #[path = "session_jobs_log_view.rs"]

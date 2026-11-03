@@ -23,6 +23,34 @@ const RESTORE_UNKNOWN: Failure =
     "Restore wasn't confirmed. Don't repeat it. Check this chat in Swift.";
 const ARCHIVE_UNKNOWN: Failure =
     "Archiving wasn't confirmed. Don't repeat it. Check this chat in Swift.";
+pub(crate) const RETRY_UNKNOWN: Failure = "Retry wasn't confirmed, so it may have started. Check the conversation. It won't be retried again from here.";
+pub(crate) const STARTUP_UNKNOWN: Failure =
+    "Restart wasn't confirmed. Check whether the chat started before retrying.";
+
+/// What the failed chat's Retry offers. Derived from the shared reports, so the
+/// row menu's Retry startup and the failure's Retry show the same state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RetryView {
+    Ready,
+    /// Checking eligibility or waiting for Local's answer.
+    Busy,
+    /// Acknowledged for this failure; the chat hasn't updated yet.
+    Sent,
+    /// Offered again: nothing was submitted, or an idempotent restart is unconfirmed.
+    Failed(Failure),
+    /// Not offered: unconfirmed turn retry, or another chat action is pending.
+    Blocked(Failure),
+}
+
+/// The failure's own eligibility check, before the shared submit.
+#[derive(Default)]
+pub(crate) struct RetryCheck {
+    checking: Option<(u64, String)>,
+    error: Option<(String, Failure)>,
+    next: u64,
+    /// The selected chat whose failure shows its own retry status.
+    inline: Option<String>,
+}
 
 /// What the archived chat's notice offers. Derived from the shared reports, so a
 /// row-menu Restore and the notice's Restore show the same state.
@@ -63,6 +91,7 @@ pub(crate) struct Actions {
     pub(crate) latest_rename: Option<String>,
     pub(crate) renames: BTreeMap<String, gpui_kit::Entity<crate::chat_rename_view::Rename>>,
     pub(crate) restore: Restore,
+    pub(crate) retry: RetryCheck,
 }
 impl EventEmitter<Changed> for Actions {}
 impl Actions {
@@ -105,6 +134,7 @@ impl Actions {
             latest_rename: None,
             rename_observers: BTreeMap::new(),
             restore: Restore::default(),
+            retry: RetryCheck::default(),
         }
     }
     pub(crate) fn connect(&mut self, options: LocalOptions, cx: &mut Context<Self>) {
@@ -129,10 +159,12 @@ impl Actions {
         self.blocked_reason(id).is_some()
     }
     pub(crate) fn blocked_reason(&self, id: &str) -> Option<Failure> {
+        // An unconfirmed startup retry only reloads the same outbox; it may be
+        // asked for again. Other unconfirmed actions are never repeated.
         if self
             .reports
             .get(id)
-            .is_some_and(|r| r.outcome == Some(Outcome::Unknown))
+            .is_some_and(|r| r.outcome == Some(Outcome::Unknown) && r.action != Action::Retry)
         {
             Some("Earlier action unconfirmed. Do not repeat it.")
         } else if self.reports.values().any(|r| r.outcome.is_none()) {
@@ -143,6 +175,10 @@ impl Actions {
     }
     pub(crate) fn read_only(&self, id: &str) -> bool {
         self.reports.get(id).is_some_and(|r| {
+            if r.action.retry() {
+                // Input waits only while the retry is in flight.
+                return r.outcome.is_none();
+            }
             r.evidence.archive && matches!(r.outcome, None | Some(Outcome::Unknown))
                 || (r.evidence.archive
                     && r.outcome == Some(Outcome::Acknowledged)
@@ -195,6 +231,8 @@ impl Actions {
         }
         let eligible = if action == Action::Retry {
             evidence.can_retry_startup
+        } else if let Action::RetryTurn(_) = action {
+            evidence.can_retry_turn
         } else {
             evidence.can_archive
         };
@@ -221,6 +259,7 @@ impl Actions {
             Report {
                 id,
                 evidence: evidence.clone(),
+                action,
                 outcome: None,
                 observed_current: false,
             },
@@ -255,25 +294,114 @@ impl Actions {
                 RestoreView::Blocked(PENDING)
             };
         }
+        if self.retry.checking.is_some() {
+            return RestoreView::Blocked(PENDING);
+        }
         if let Some(r) = self.reports.get(id) {
-            match (&r.outcome, r.evidence.archive) {
-                (None, false) => return RestoreView::Busy,
-                (Some(Outcome::Acknowledged), false) if !r.observed_current => {
+            match (&r.outcome, r.evidence.archive, r.action) {
+                (_, _, action) if action.retry() => {}
+                (None, false, _) => return RestoreView::Busy,
+                (Some(Outcome::Acknowledged), false, _) if !r.observed_current => {
                     return RestoreView::Restored;
                 }
-                (Some(Outcome::Rejected(error)), false) => return RestoreView::Failed(error),
-                (Some(Outcome::Unknown), false) => return RestoreView::Blocked(RESTORE_UNKNOWN),
-                (Some(Outcome::Unknown), true) => return RestoreView::Blocked(ARCHIVE_UNKNOWN),
+                (Some(Outcome::Rejected(error)), false, _) => return RestoreView::Failed(error),
+                (Some(Outcome::Unknown), false, _) => {
+                    return RestoreView::Blocked(RESTORE_UNKNOWN);
+                }
+                (Some(Outcome::Unknown), true, _) => return RestoreView::Blocked(ARCHIVE_UNKNOWN),
                 _ => {}
             }
         }
-        if self.reports.values().any(|r| r.outcome.is_none()) {
-            return RestoreView::Blocked(PENDING);
+        if let Some(reason) = self.blocked_reason(id) {
+            return RestoreView::Blocked(reason);
         }
         match &self.restore.error {
             Some((chat, error)) if chat == id => RestoreView::Failed(error),
             _ => RestoreView::Ready,
         }
+    }
+    /// `at` is the shown failure's completion version: a report for an earlier
+    /// failure of the same chat neither shows as sent nor offers its error.
+    pub(crate) fn retry_view(&self, id: &str, at: Option<u64>) -> RetryView {
+        if let Some((_, chat)) = &self.retry.checking {
+            return if chat == id {
+                RetryView::Busy
+            } else {
+                RetryView::Blocked(PENDING)
+            };
+        }
+        if self.restore.checking.is_some() {
+            return RetryView::Blocked(PENDING);
+        }
+        if let Some(r) = self.reports.get(id)
+            && r.action.retry()
+        {
+            let same = match at {
+                Some(at) => r.evidence.stamp["outcomeAt"].as_f64() == Some(at as f64),
+                None => r.evidence.stamp["outcomeAt"].is_null(),
+            };
+            match (&r.outcome, r.action) {
+                (None, _) => return RetryView::Busy,
+                (Some(Outcome::Unknown), Action::RetryTurn(_)) => {
+                    return RetryView::Blocked(RETRY_UNKNOWN);
+                }
+                (Some(Outcome::Unknown), _) if same => return RetryView::Failed(STARTUP_UNKNOWN),
+                (Some(Outcome::Acknowledged), _) if same => return RetryView::Sent,
+                (Some(Outcome::Rejected(error)), _) if same => return RetryView::Failed(error),
+                _ => {}
+            }
+        }
+        if let Some(reason) = self.blocked_reason(id) {
+            return RetryView::Blocked(reason);
+        }
+        match &self.retry.error {
+            Some((chat, error)) if chat == id => RetryView::Failed(error),
+            _ => RetryView::Ready,
+        }
+    }
+    /// Starts the one eligibility check for this exact chat, when Retry is offered.
+    pub(crate) fn begin_retry_check(&mut self, id: &str, at: Option<u64>) -> Option<u64> {
+        if !matches!(
+            self.retry_view(id, at),
+            RetryView::Ready | RetryView::Failed(_)
+        ) {
+            return None;
+        }
+        // Refused or unconfirmed restarts submitted nothing that a new request repeats.
+        if self.reports.get(id).is_some_and(|r| {
+            r.action.retry() && matches!(r.outcome, Some(Outcome::Rejected(_) | Outcome::Unknown))
+        }) && self.blocked_reason(id).is_none()
+        {
+            self.reports.remove(id);
+        }
+        self.retry.next += 1;
+        self.retry.checking = Some((self.retry.next, id.to_owned()));
+        self.retry.error = None;
+        Some(self.retry.next)
+    }
+    /// False for a stale or repeated completion, which must not submit anything.
+    pub(crate) fn end_retry_check(&mut self, token: u64, id: &str) -> bool {
+        if self
+            .retry
+            .checking
+            .as_ref()
+            .is_some_and(|(t, chat)| *t == token && chat == id)
+        {
+            self.retry.checking = None;
+            return true;
+        }
+        false
+    }
+    pub(crate) fn retry_failed(&mut self, id: &str, error: Failure) {
+        self.retry.error = Some((id.to_owned(), error));
+    }
+    /// Returns whether the inline target changed.
+    pub(crate) fn show_retry_inline(&mut self, id: Option<&str>) -> bool {
+        if self.retry.inline.as_deref() == id {
+            return false;
+        }
+        self.retry.inline = id.map(str::to_owned);
+        true
     }
     /// Starts the one eligibility check for this exact chat, when Restore is offered.
     pub(crate) fn begin_restore_check(&mut self, id: &str) -> Option<u64> {
@@ -331,6 +459,9 @@ impl Actions {
             .as_ref()
             .filter(|id| self.restore.inline.as_ref() != Some(*id))
             .and_then(|id| self.reports.get(id))
+            .filter(|r| {
+                !r.action.retry() || self.retry.inline.as_ref() != Some(&r.evidence.target.chat.id)
+            })
     }
     #[cfg(feature = "native-probes")]
     pub(crate) fn outcome(&self, id: &str) -> Option<&Outcome> {
@@ -344,13 +475,23 @@ impl Render for Actions {
         let report = self.sidebar_report();
         div().id("chat-action-status").test_support().w_full().min_w_0()
             .children(report.and_then(|r| {
-                let verb = if r.evidence.archive { "Archive" } else { "Restore" };
+                let verb = match r.action {
+                    Action::Retry => "Retry startup",
+                    Action::RetryTurn(_) => "Retry",
+                    _ if r.evidence.archive => "Archive",
+                    _ => "Restore",
+                };
+                let unknown = match r.action {
+                    Action::Retry => STARTUP_UNKNOWN,
+                    Action::RetryTurn(_) => RETRY_UNKNOWN,
+                    _ => "No valid acknowledgment. Do not repeat this action. Check this exact chat in Swift; later visibility is not a receipt.",
+                };
                 let (status, detail, tone) = match r.outcome {
                     None => ("Pending", "Waiting for Local. This request will not be retried automatically.", Tone::Quiet),
                     // Keep the exact ACK/report for fences and inspection, not routine success chrome.
                     Some(Outcome::Acknowledged) => return None,
                     Some(Outcome::Rejected(error)) => ("Not submitted", error, Tone::Error),
-                    Some(Outcome::Unknown) => ("Unconfirmed", "No valid acknowledgment. Do not repeat this action. Check this exact chat in Swift; later visibility is not a receipt.", Tone::Warning),
+                    Some(Outcome::Unknown) => ("Unconfirmed", unknown, Tone::Warning),
                 };
                 Some(div().p_2().child(Notice::new(SharedString::from(format!("{verb} · {status}")))
                     .detail(SharedString::from(format!("{} ({})\n{detail}", r.evidence.target.chat.title, r.evidence.target.chat.id))).tone(tone)))

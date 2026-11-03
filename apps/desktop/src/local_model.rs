@@ -533,6 +533,9 @@ pub(crate) struct LiveTranscript {
     github: Vec<crate::github_event::Action>,
     /// Stable row IDs per audit action ID, retained while the action is.
     github_keys: HashMap<String, u64>,
+    /// The newest retained entry when it is a committed assistant turn that
+    /// ended in error, as Swift's error row. See `retry_entry`.
+    failed_turn: Option<u64>,
 }
 
 struct SavedHistory {
@@ -696,6 +699,22 @@ impl LiveTranscript {
             || self.passive_history
             || (self.entries.len() < ENTRY_CAP && !self.limited)
     }
+    /// Swift `TranscriptPresentation.retryEntryID`: the failed turn a chat may
+    /// retry, when it is the newest loaded entry and nothing is running,
+    /// streaming, queued or newer than this window. Presentation only; pilotd
+    /// re-checks the conversation when the user retries.
+    pub(crate) fn retry_entry(&self) -> Option<u64> {
+        let (last, _) = self.entries.last_key_value()?;
+        (self.loaded
+            && !self.prefix_pending
+            && !self.run_live
+            && self.live.is_none()
+            && !self.behind
+            && self.queued == 0
+            && self.departed.is_empty()
+            && self.failed_turn == Some(*last))
+        .then_some(*last)
+    }
     fn register_calls(&mut self, value: &Value, historical: bool) {
         if let Some(blocks) = value["content"].as_array() {
             for block in blocks.iter().filter(|b| b["type"] == "toolCall") {
@@ -832,6 +851,14 @@ impl LiveTranscript {
         };
         if self.entries.contains_key(&id) {
             return;
+        }
+        let newest = self
+            .entries
+            .last_key_value()
+            .is_none_or(|(last, _)| id > *last);
+        if newest {
+            // A newer entry, even one this window cannot admit, ends the failed turn.
+            self.failed_turn = None;
         }
         if !self.admit(id, 0) {
             return;
@@ -1039,6 +1066,14 @@ impl LiveTranscript {
                 });
             }
         }
+        if newest {
+            self.failed_turn = (kind == "pi.assistant"
+                && entry["model"]
+                    .as_array()
+                    .and_then(|models| models.last())
+                    .is_some_and(|m| m["role"] == "assistant" && m["stopReason"] == "error"))
+            .then_some(id);
+        }
         self.entries.insert(id, rows);
     }
 
@@ -1151,6 +1186,7 @@ impl LiveTranscript {
                 });
                 self.entries.clear();
                 self.question_replies.clear();
+                self.failed_turn = None;
                 self.question_pending = crate::question::Pending::default();
                 self.question_run_active =
                     event["run"].is_object() || event["generation"].is_object();

@@ -21,12 +21,14 @@ fn chat_actions_old_completion_and_inspection_cannot_release_newer_operation() {
         latest_rename: None,
         rename_observers: Default::default(),
         restore: Default::default(),
+        retry: Default::default(),
     };
     actions.reports.insert(
         "source".into(),
         Report {
             id: 2,
             evidence: evidence.clone(),
+            action: Action::Archive,
             outcome: None,
             observed_current: false,
         },
@@ -76,6 +78,7 @@ fn chat_actions_inspection_started_before_ack_cannot_release_its_editor_fence() 
         latest_rename: None,
         rename_observers: Default::default(),
         restore: Default::default(),
+        retry: Default::default(),
         options: Some(options),
         worker: None,
         reports: BTreeMap::from([(
@@ -83,6 +86,7 @@ fn chat_actions_inspection_started_before_ack_cannot_release_its_editor_fence() 
             Report {
                 id: 1,
                 evidence: evidence.clone(),
+                action: Action::Archive,
                 outcome: None,
                 observed_current: false,
             },

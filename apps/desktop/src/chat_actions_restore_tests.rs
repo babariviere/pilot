@@ -12,6 +12,7 @@ fn actions() -> Actions {
         latest_rename: None,
         rename_observers: Default::default(),
         restore: Default::default(),
+        retry: Default::default(),
     }
 }
 /// Evidence for the fixture chat as Local reports it: archived or open.
@@ -30,6 +31,7 @@ fn report(actions: &mut Actions, id: u64, evidence: Evidence, outcome: Option<Ou
         Report {
             id,
             evidence,
+            action: Action::Archive,
             outcome,
             observed_current: false,
         },
@@ -171,4 +173,131 @@ fn archived_restore_focus_intent_is_taken_once_for_its_chat() {
     assert!(a.begin_restore_check("source").is_some());
     assert!(a.take_restore_focus("source"));
     assert!(!a.take_restore_focus("source"));
+}
+
+fn failed(at: u64) -> Evidence {
+    let options = LocalOptions::synthetic(1);
+    let mut raw = crate::chat_actions_fixture::source();
+    raw["state"] = serde_json::json!("parked");
+    raw["outcome"] = serde_json::json!("failed");
+    raw["outcomeAt"] = serde_json::json!(at);
+    let target = Target::new(&options, crate::local_model::chat(&raw).unwrap());
+    Evidence::read(&target, &raw, true).unwrap()
+}
+fn retried(a: &mut Actions, action: Action, outcome: Option<Outcome>) {
+    a.reports.insert(
+        "source".into(),
+        Report {
+            id: 1,
+            evidence: failed(42),
+            action,
+            outcome,
+            observed_current: false,
+        },
+    );
+}
+
+#[test]
+fn failure_retry_checks_once_and_only_its_own_chat() {
+    let mut a = actions();
+    assert_eq!(a.retry_view("source", Some(42)), RetryView::Ready);
+    let token = a.begin_retry_check("source", Some(42)).unwrap();
+    assert_eq!(a.retry_view("source", Some(42)), RetryView::Busy);
+    // Repeat activation while the read runs submits nothing more.
+    assert_eq!(a.begin_retry_check("source", Some(42)), None);
+    assert_eq!(a.retry_view("other", None), RetryView::Blocked(PENDING));
+    assert_eq!(a.restore_view("other"), RestoreView::Blocked(PENDING));
+    assert!(!a.end_retry_check(token, "other"));
+    assert!(!a.end_retry_check(token + 1, "source"));
+    assert!(a.end_retry_check(token, "source"));
+    assert!(!a.end_retry_check(token, "source"), "completes once");
+    a.retry_failed("source", "This Local chat is unavailable.");
+    assert_eq!(
+        a.retry_view("source", Some(42)),
+        RetryView::Failed("This Local chat is unavailable.")
+    );
+    assert_eq!(a.retry_view("other", None), RetryView::Ready);
+    assert!(a.begin_retry_check("source", Some(42)).is_some());
+}
+
+#[test]
+fn failure_retry_follows_the_shared_report_for_this_failure_only() {
+    for action in [Action::Retry, Action::RetryTurn(7)] {
+        let mut a = actions();
+        retried(&mut a, action, None);
+        assert_eq!(a.retry_view("source", Some(42)), RetryView::Busy);
+        assert!(
+            a.read_only("source"),
+            "input waits while the retry is in flight"
+        );
+        assert_eq!(a.begin_retry_check("source", Some(42)), None);
+
+        retried(&mut a, action, Some(Outcome::Acknowledged));
+        assert!(!a.read_only("source"));
+        assert_eq!(a.retry_view("source", Some(42)), RetryView::Sent);
+        assert_eq!(a.begin_retry_check("source", Some(42)), None, "no repeat");
+        // A later failure of the same chat is a new decision.
+        assert_eq!(a.retry_view("source", Some(50)), RetryView::Ready);
+
+        retried(&mut a, action, Some(Outcome::Rejected("Refused")));
+        assert_eq!(
+            a.retry_view("source", Some(42)),
+            RetryView::Failed("Refused")
+        );
+        assert!(a.begin_retry_check("source", Some(42)).is_some());
+        assert!(a.reports.get("source").is_none(), "nothing was submitted");
+    }
+    // An unconfirmed turn retry may have resent the message: never offered again.
+    let mut a = actions();
+    retried(&mut a, Action::RetryTurn(7), Some(Outcome::Unknown));
+    assert!(!a.read_only("source"), "the composer stays usable");
+    assert_eq!(
+        a.retry_view("source", Some(42)),
+        RetryView::Blocked(RETRY_UNKNOWN)
+    );
+    assert_eq!(
+        a.retry_view("source", Some(50)),
+        RetryView::Blocked(RETRY_UNKNOWN)
+    );
+    assert_eq!(a.begin_retry_check("source", Some(42)), None);
+    assert!(a.blocked("source"));
+    // An unconfirmed startup retry only reloads the same outbox: it may be asked again.
+    let mut a = actions();
+    retried(&mut a, Action::Retry, Some(Outcome::Unknown));
+    assert!(!a.blocked("source"));
+    assert_eq!(
+        a.retry_view("source", Some(42)),
+        RetryView::Failed(STARTUP_UNKNOWN)
+    );
+    assert!(a.begin_retry_check("source", Some(42)).is_some());
+}
+
+#[test]
+fn failure_retry_is_blocked_by_other_actions_and_owns_its_status() {
+    let mut a = actions();
+    report(&mut a, 1, evidence(false), Some(Outcome::Unknown));
+    assert!(matches!(
+        a.retry_view("source", Some(42)),
+        RetryView::Blocked(_)
+    ));
+    let mut a = actions();
+    let mut other = evidence(false);
+    other.target.chat.id = "other".into();
+    report(&mut a, 1, other, None);
+    assert_eq!(
+        a.retry_view("source", Some(42)),
+        RetryView::Blocked(PENDING)
+    );
+
+    let mut a = actions();
+    retried(&mut a, Action::RetryTurn(7), Some(Outcome::Unknown));
+    a.latest = Some("source".into());
+    assert!(
+        a.sidebar_report().is_some(),
+        "a row-menu or background retry reports in the sidebar"
+    );
+    assert!(a.show_retry_inline(Some("source")));
+    assert!(a.sidebar_report().is_none(), "the failure shows it instead");
+    assert!(a.show_retry_inline(None));
+    assert!(a.sidebar_report().is_some());
 }
