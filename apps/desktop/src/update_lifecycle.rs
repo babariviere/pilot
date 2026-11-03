@@ -166,6 +166,9 @@ impl LocalViewer {
         {
             return Some(Blocker::Automation(hold));
         }
+        if let Some(hold) = self.automations.read(cx).hooks.read(cx).update_hold(cx) {
+            return Some(Blocker::Hook(hold));
+        }
         // A chosen folder outlives the closed sheet (and a finished registration) but holds
         // no typed input; the writer's book owns sent registrations.
         if self.add_project_open || add.choosing {

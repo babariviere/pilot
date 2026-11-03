@@ -11,6 +11,31 @@ fn hooks() -> ProjectHooks {
 }
 
 #[test]
+fn working_line_names_setup_or_checks_while_a_hook_runs() {
+    let line = |automation: Value| model::working_line(&json!({ "automation": automation }));
+    assert_eq!(
+        line(
+            json!({"state":"running","name":"Install dependencies","trigger":"workspace.created","startedAt":1})
+        ),
+        Some("Setting up workspace · Install dependencies".into())
+    );
+    assert_eq!(
+        line(json!({"state":"waiting","name":"Tests","trigger":"run.finished","startedAt":1})),
+        Some("Running checks · Tests".into())
+    );
+    assert_eq!(
+        line(json!({"state":"running","name":"","trigger":"manual"})),
+        Some("Setting up workspace".into())
+    );
+    assert_eq!(
+        line(json!({"state":"running","name":"a\nb","trigger":"workspace.restored"})),
+        Some("Setting up workspace · a".into())
+    );
+    assert_eq!(line(json!({"state":"ok","name":"Tests"})), None);
+    assert_eq!(model::working_line(&json!({})), None);
+}
+
+#[test]
 fn reads_hooks_with_their_kind_and_words() {
     let h = hooks();
     assert_eq!(h.revision, 3);

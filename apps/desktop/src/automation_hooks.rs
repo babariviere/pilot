@@ -483,6 +483,26 @@ impl RunState {
     }
 }
 /// At most the daemon's 20 retained records per chat.
+/// The working line for a hook a chat is running or waiting on now (`SessionSummary.automation`,
+/// docs/automations.md §5): checks after a run, otherwise workspace setup.
+pub(crate) fn working_line(summary: &Value) -> Option<String> {
+    let automation = &summary["automation"];
+    if !matches!(automation["state"].as_str(), Some("running" | "waiting")) {
+        return None;
+    }
+    let activity = if automation["trigger"] == "run.finished" {
+        "Running checks"
+    } else {
+        "Setting up workspace"
+    };
+    let name = one_line(automation["name"].as_str().unwrap_or_default(), NAME_CHARS);
+    Some(if name.is_empty() {
+        activity.to_owned()
+    } else {
+        format!("{activity} · {name}")
+    })
+}
+
 pub(crate) fn runs(summary: &Value) -> Arc<[Run]> {
     let Some(records) = summary["automationRuns"].as_array() else {
         return Arc::new([]);

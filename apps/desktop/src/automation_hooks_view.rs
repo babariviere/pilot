@@ -91,6 +91,12 @@ impl Hooks {
     pub(crate) fn connect(&mut self, options: LocalOptions) {
         self.options = Some(options);
     }
+    /// A save in flight, or editor fields that differ from what it opened with, hold an app
+    /// update. A save whose answer was lost holds nothing: it is never resent.
+    pub(crate) fn update_hold(&self, cx: &App) -> Option<crate::update_hold::Hold> {
+        let unsaved = self.editor.as_ref().is_some_and(|e| e.read(cx).changed(cx));
+        crate::update_hold::Hold::of(self.pending.is_some(), unsaved)
+    }
     pub(crate) fn sync(
         &mut self,
         chats: &Arc<Vec<Chat>>,
@@ -832,6 +838,8 @@ pub(crate) struct Editor {
     pub(crate) send_failures: bool,
     confirm_delete: bool,
     note: Option<(SharedString, Tone)>,
+    /// The fields as opened, so an untouched dialog holds nothing.
+    opened: Draft,
     focus: FocusHandle,
     _inputs: Vec<Subscription>,
 }
@@ -898,6 +906,7 @@ impl Editor {
             send_failures: draft.send_failures,
             confirm_delete: false,
             note: None,
+            opened: draft,
             focus: cx.focus_handle(),
             _inputs: inputs,
         }
@@ -934,6 +943,9 @@ impl Editor {
             send_failures: self.send_failures,
             message: self.message.read(cx).value().to_string(),
         }
+    }
+    fn changed(&self, cx: &App) -> bool {
+        self.draft(cx) != self.opened
     }
     pub(crate) fn marked(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
         [

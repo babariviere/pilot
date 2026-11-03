@@ -1372,6 +1372,34 @@ fn compaction_reuses_transient_status_preserves_stop_and_question(cx: &mut TestA
 }
 
 #[gpui_kit::test]
+fn running_hook_names_the_working_line_below_a_live_turn(cx: &mut TestAppContext) {
+    let (handle, view, _commands) = setup(cx);
+    cx.update_window(handle, |_, window, cx| {
+        view.update(cx, |view, cx| {
+            view.automation_line(Some("Setting up workspace · Install"), cx)
+        });
+        window.render_frame(cx);
+        assert_eq!(
+            view.read(cx).activity_label(),
+            Some("Setting up workspace · Install")
+        );
+        assert_eq!(window.find_all("activity-indicator").len(), 1);
+        view.update(cx, |view, cx| view.activity(true, cx));
+        assert_eq!(view.read(cx).activity_label(), Some("Thinking..."));
+        view.update(cx, |view, cx| {
+            view.activity(false, cx);
+            view.select("chat:b".into(), true, false, window, cx);
+        });
+        assert_eq!(
+            view.read(cx).activity_label(),
+            None,
+            "navigation clears the hook line"
+        );
+    })
+    .unwrap();
+}
+
+#[gpui_kit::test]
 fn thinking_reuses_one_indicator_and_stop_fences_late_presentations(cx: &mut TestAppContext) {
     let (handle, view, commands) = setup(cx);
     cx.update_window(handle, |_, window, cx| {

@@ -297,6 +297,7 @@ impl LocalViewer {
                     failure: None,
                     setup_failure: None,
                     automation_runs: Default::default(),
+                    automation: None,
                     pull_requests: Vec::new(),
                     context_usage: Default::default(),
                     subscription_usage: None,

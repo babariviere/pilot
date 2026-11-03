@@ -762,6 +762,7 @@ impl LocalViewer {
                 failure: None,
                 setup_failure: None,
                 automation_runs: Default::default(),
+                automation: None,
                 pull_requests: Vec::new(),
                 context_usage: Default::default(),
                 subscription_usage: None,
@@ -790,6 +791,7 @@ impl LocalViewer {
                 failure: None,
                 setup_failure: None,
                 automation_runs: Default::default(),
+                automation: None,
                 pull_requests: Vec::new(),
                 context_usage: Default::default(),
                 subscription_usage: None,
@@ -818,6 +820,7 @@ impl LocalViewer {
                 failure: None,
                 setup_failure: None,
                 automation_runs: Default::default(),
+                automation: None,
                 pull_requests: Vec::new(),
                 context_usage: Default::default(),
                 subscription_usage: None,
@@ -1023,6 +1026,7 @@ impl LocalViewer {
             failure: None,
             setup_failure: None,
             automation_runs: Default::default(),
+            automation: None,
             pull_requests: Vec::new(),
             context_usage: Default::default(),
             subscription_usage: None,
@@ -1465,6 +1469,7 @@ impl LocalViewer {
                             failure: None,
                             setup_failure: None,
                             automation_runs: Default::default(),
+                            automation: None,
                             pull_requests: Vec::new(),
                             context_usage: Default::default(),
                             subscription_usage: None,
@@ -2021,6 +2026,7 @@ impl LocalViewer {
                 editor.background(chat.background_work, cx);
                 // Only jobs run: their strip above the composer says so instead.
                 editor.jobs_only(chat.background_work && !chat.running_jobs.is_empty(), cx);
+                editor.automation_line(chat.automation.as_deref(), cx);
                 if let Some(configuration) = &chat.model_configuration {
                     editor.model_context(&chat.id, &chat.cwd, configuration.clone(), window, cx);
                 }
@@ -2473,6 +2479,7 @@ impl LocalViewer {
                     failure: None,
                     setup_failure: None,
                     automation_runs: Default::default(),
+                    automation: None,
                     pull_requests: Vec::new(),
                     context_usage: Default::default(),
                     subscription_usage: None,
@@ -3355,6 +3362,7 @@ mod refresh_tests {
                         failure: None,
                         setup_failure: None,
                         automation_runs: Default::default(),
+                        automation: None,
                         pull_requests: Vec::new(),
                         context_usage: Default::default(),
                         subscription_usage: None,
@@ -3546,6 +3554,46 @@ mod refresh_tests {
                 state.control_connection_generation = 2;
                 view.accept(state, window, cx);
                 assert_eq!(view.model_connection_generation, 3);
+            });
+        })
+        .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn running_hook_names_the_working_line_until_it_ends(cx: &mut TestAppContext) {
+        cx.update(gpui_kit::init);
+        let (handle, view) = cx.update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    show: false,
+                    ..Default::default()
+                },
+                cx,
+                |window, cx| cx.new(|cx| LocalViewer::synthetic(window, cx)),
+            )
+            .unwrap()
+        });
+        cx.update_window(handle, |_, window, cx| {
+            view.update(cx, |view, cx| {
+                let with = |line: Option<&str>, view: &LocalViewer| {
+                    let mut state = view.state.clone();
+                    let mut chats = state.chats.to_vec();
+                    chats[0].automation = line.map(str::to_owned);
+                    state.chats = Arc::new(chats);
+                    state
+                };
+                let state = with(Some("Running checks · Tests"), view);
+                view.accept(state, window, cx);
+                assert_eq!(
+                    view.editor.read(cx).activity_label(),
+                    Some("Running checks · Tests")
+                );
+                let state = with(None, view);
+                view.accept(state, window, cx);
+                assert_ne!(
+                    view.editor.read(cx).activity_label(),
+                    Some("Running checks · Tests")
+                );
             });
         })
         .unwrap();

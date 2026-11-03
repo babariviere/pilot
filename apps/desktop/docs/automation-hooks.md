@@ -24,6 +24,14 @@ An exhausted attempt limit or a no-progress stop is pilotd's `automation`
 attention reason. The chat shows **Needs you** with pilotd's one-line detail
 (`2 open todos, agent made no progress`), and it blocks **Ready to merge**.
 
+While a hook runs, the composer's working line names it, from the session
+summary's `automation` field: `Setting up workspace · Install dependencies`, or
+`Running checks · Lint` for after-run hooks. Thinking still wins; the hook line
+replaces the generic **Working** and background-job lines.
+
+There is no **Run setup again** action: pilotd has no manual setup trigger, so
+setup only runs on workspace creation and after restore.
+
 ## Hooks section
 
 ```text
@@ -51,6 +59,9 @@ Pilot
   switch off, saved hooks stay listed read-only with a note pointing to
   Settings → Chats. Invalid saved definitions show their error; saving a new
   hook replaces them.
+- An open hook dialog with edits, or a save in flight, holds an app update
+  (`Blocker::Hook`) until it is saved or cancelled. An untouched dialog and a
+  save whose answer was lost hold nothing.
 
 ## Reads and writes
 
@@ -64,4 +75,3 @@ triggers a passive re-read. One save runs at a time.
 
 Checks: `automation_hooks` unit tests (model, edits, exact-ACK transport) and the
 hidden native `automation_hooks` probe at 680/1100 pt in light and dark.
-

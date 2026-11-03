@@ -220,6 +220,8 @@ pub(crate) struct Chat {
     pub(crate) setup_failure: Option<String>,
     /// Retained hook command results, newest first, without output (`automation_hooks`).
     pub(crate) automation_runs: std::sync::Arc<[crate::automation_hooks::Run]>,
+    /// Working line of the hook running or waiting now (`automation_hooks::working_line`).
+    pub(crate) automation: Option<String>,
     pub(crate) context_usage: crate::context_usage::Usage,
     pub(crate) subscription_usage: Option<crate::provider_usage::Snapshot>,
     pub(crate) model_configuration: Option<crate::chat_models::SessionModel>,
@@ -313,6 +315,7 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
         failure: crate::session_failure::read(value),
         setup_failure: crate::workspace_setup::failure(value),
         automation_runs: crate::automation_hooks::runs(value),
+        automation: crate::automation_hooks::working_line(value),
         context_usage: crate::context_usage::Usage::read(&value["usage"]),
         subscription_usage: crate::provider_usage::Snapshot::read(&value["usage"]["subscription"]),
         model_configuration: Some(crate::chat_models::SessionModel::read(value)),

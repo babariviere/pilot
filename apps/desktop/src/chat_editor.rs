@@ -131,6 +131,8 @@ pub(crate) struct ChatEditor {
     thinking_held: bool,
     background_work: bool,
     jobs_only: bool,
+    /// Working line of a hook the chat runs now, e.g. "Running checks · Tests".
+    automation: Option<String>,
     pending: BTreeMap<String, u64>,
     /// Ordinary chat sends in flight, by captured draft revision.
     sending: BTreeMap<String, u64>,
@@ -229,6 +231,7 @@ impl ChatEditor {
             thinking_held: false,
             background_work: false,
             jobs_only: false,
+            automation: None,
             pending: BTreeMap::new(),
             sending: BTreeMap::new(),
             delivered: BTreeMap::new(),
@@ -332,6 +335,7 @@ impl ChatEditor {
         self.busy = false;
         self.background_work = false;
         self.jobs_only = false;
+        self.automation = None;
         self.thinking = false;
         self.compacting = false;
         self.text.update(cx, |v, cx| v.set_value("", window, cx));
@@ -473,6 +477,7 @@ impl ChatEditor {
         self.thinking_held = false;
         self.background_work = false;
         self.jobs_only = false;
+        self.automation = None;
         self.error = None;
         self.load_input(window, cx);
         self.open_completed(cx);
@@ -498,13 +503,16 @@ impl ChatEditor {
         }
     }
 
-    pub(crate) fn activity_label(&self) -> Option<&'static str> {
+    pub(crate) fn activity_label(&self) -> Option<&str> {
         if self.question_needs_you() {
             Some("Needs you")
         } else if self.compacting {
             Some("Preparing context…")
         } else if self.thinking {
             Some("Thinking...")
+        } else if let Some(line) = &self.automation {
+            // Setup and checks run outside the model, so they name themselves.
+            Some(line)
         } else if self.jobs_only {
             None
         } else if self.busy || self.background_work {
@@ -582,6 +590,13 @@ impl ChatEditor {
     pub(crate) fn jobs_only(&mut self, active: bool, cx: &mut Context<Self>) {
         if self.jobs_only != active {
             self.jobs_only = active;
+            cx.notify();
+        }
+    }
+    /// The hook the chat runs now, shown as the working line (`Chat::automation`).
+    pub(crate) fn automation_line(&mut self, line: Option<&str>, cx: &mut Context<Self>) {
+        if self.automation.as_deref() != line {
+            self.automation = line.map(str::to_owned);
             cx.notify();
         }
     }
@@ -1869,7 +1884,11 @@ impl Render for ChatEditor {
                 .gap(px(crate::ui::Space::SIDEBAR))
                 .child(self.new_chat_setup(draft, blocked, window, cx));
         }
-        if let Some(label) = self.activity_label().filter(|_| !self.question_needs_you()) {
+        if let Some(label) = self
+            .activity_label()
+            .filter(|_| !self.question_needs_you())
+            .map(|label| SharedString::from(label.to_owned()))
+        {
             let indicator = div()
                 .id("activity-indicator")
                 .px(px(10.))

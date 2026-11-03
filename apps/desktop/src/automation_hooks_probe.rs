@@ -66,6 +66,15 @@ fn editor_open(cx: &mut HeadlessAppContext, v: &Entity<LocalViewer>) -> bool {
     let hooks = hooks(cx, v);
     cx.update(|cx| hooks.read(cx).editor.is_some())
 }
+/// What an app update would wait for, as the update lifecycle asks.
+fn blocker(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    v: &Entity<LocalViewer>,
+) -> Option<crate::update_hold::Blocker> {
+    cx.update_window(h, |_, w, cx| v.update(cx, |v, cx| v.update_blocker(w, cx)))
+        .unwrap()
+}
 /// Types into the open editor's fields through their real input states.
 fn fill(
     cx: &mut HeadlessAppContext,
@@ -202,11 +211,27 @@ pub fn run_automation_hooks_probe(cx: &mut HeadlessAppContext) {
             click(cx, h, "hook-edit-project-a-checks");
             assert!(editor_open(cx, &v));
             assert!(exists(cx, h, "hook-editor-paths"));
+            assert_eq!(
+                blocker(cx, h, &v),
+                None,
+                "an untouched dialog holds nothing"
+            );
             capture(cx, h, format!("{width}-{mode:?}-editor"));
             fill(cx, h, &v, "Lint", "pnpm lint");
+            assert_eq!(
+                blocker(cx, h, &v),
+                Some(crate::update_hold::Blocker::Hook(
+                    crate::update_hold::Hold::Unsaved
+                ))
+            );
             click(cx, h, "hook-editor-save");
             until(cx, h, &v, idle);
             assert!(!editor_open(cx, &v));
+            assert_eq!(
+                blocker(cx, h, &v),
+                None,
+                "a confirmed save releases the hold"
+            );
             let sent = puts(&s);
             assert_eq!(sent.len(), 2);
             assert_eq!(sent[1]["expectedRevision"], 4);

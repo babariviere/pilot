@@ -60,6 +60,8 @@ pub(crate) enum Blocker {
     },
     /// The New/Edit automation sheet.
     Automation(Hold),
+    /// The New/Edit hook dialog, or a hook save in flight.
+    Hook(Hold),
 }
 
 /// Where the Show action takes the user.
@@ -147,6 +149,8 @@ impl Blocker {
             Self::Automation(_) => {
                 "Create or cancel the automation you're editing first. Nothing was discarded."
             }
+            Self::Hook(Sending) => "A hook is still saving. Try again when it finishes.",
+            Self::Hook(_) => "Save or cancel the hook you're editing first. Nothing was discarded.",
         }
     }
     /// None when the blocker is already on screen beside the message (Settings Save/Revert)
@@ -164,7 +168,8 @@ impl Blocker {
             | Self::Jump
             | Self::Conversion(_)
             | Self::AddProject(_)
-            | Self::Automation(_) => Some(Destination::MainWindow),
+            | Self::Automation(_)
+            | Self::Hook(_) => Some(Destination::MainWindow),
             Self::QueuedMessage { chat } | Self::ChatRename { chat, .. } => {
                 Some(Destination::Chat(chat.clone()))
             }
@@ -232,6 +237,8 @@ mod tests {
             },
             Blocker::Automation(Hold::Unsaved),
             Blocker::Automation(Hold::Sending),
+            Blocker::Hook(Hold::Unsaved),
+            Blocker::Hook(Hold::Sending),
         ];
         let messages: std::collections::BTreeSet<_> = all.iter().map(Blocker::message).collect();
         assert_eq!(messages.len(), all.len(), "each blocker is distinguishable");
