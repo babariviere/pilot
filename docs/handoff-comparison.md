@@ -24,7 +24,7 @@ by withholding history from the baseline. Neither successor receives a second su
 only its own generated handoff is carried to the next writer.
 
 The historical screening below used a 4,096-byte ceiling. Current requests share the
-runtime's 12,000-byte target and 16,384-byte hard limit; changed request hashes require
+runtime's 8,000-byte target and 16,384-byte hard limit; changed request hashes require
 new responses rather than reusing that screening as evidence for the new policy.
 
 Each arm evolves independently. Both must finish a boundary before either successor is

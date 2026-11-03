@@ -515,7 +515,7 @@ clear, or when the provider itself rejects a request. **Pause at limit** restore
 with a fresh model context. It is off by default. When on, Pilot prepares a tool-free handoff using the chat's
 current model at the next safe model-request boundary above 70% of the model's
 window (small windows reserve additional room). The structured handoff targets at most
-12,000 UTF-8 bytes (16,384-byte hard limit), preserving constraints, decisions, work state, verification and
+8,000 UTF-8 bytes (16,384-byte hard limit), preserving constraints, decisions, work state, verification and
 next steps. It saves the handoff before replacing
 processed history. Unconsumed inputs and unseen tool-image rounds keep their original entries. The conversation,
 workspace, full history, artifacts and mission membership stay the same;

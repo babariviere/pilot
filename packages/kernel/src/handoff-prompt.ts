@@ -1,5 +1,5 @@
 /** Shared by the offline comparison and the tool-free runtime handoff writer. */
-export const HANDOFF_TARGET_BYTES = 12_000;
+export const HANDOFF_TARGET_BYTES = 8_000;
 export const HANDOFF_OUTPUT_BYTES = 16_384;
 export const HANDOFF_INSTRUCTIONS = `Prepare a handoff so a fresh coding agent can continue the same task.
 Use these sections, marking unknown or absent information explicitly rather than inventing it:

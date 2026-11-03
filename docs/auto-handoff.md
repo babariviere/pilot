@@ -28,7 +28,7 @@ Retained transcript/attachment storage is not a promise of model-side visual rec
 
 The output must be a clean, nonempty, tool-free stop, within 16,384 UTF-8 bytes after
 the existing history safeguards redact credentials and neutralize framing. The writer
-targets at most 12,000 bytes for headroom, using less for simple tasks. Five sections
+targets at most 8,000 bytes for headroom, using less for simple tasks. Five sections
 cover goal/constraints, decisions/rejected approaches, work state, exact verification
 results and next steps/blockers. Still-relevant prior constraints and unfinished work
 carry forward; repetition and bulky logs are cut before task-critical specifics.

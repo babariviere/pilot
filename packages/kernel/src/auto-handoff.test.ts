@@ -593,7 +593,7 @@ test("malformed provider stop categories cannot leak into durable diagnostics", 
 });
 
 test("handoff instructions prioritize structured continuity rather than aggressive compression", () => {
-	assert.equal(HANDOFF_TARGET_BYTES, 12_000);
+	assert.equal(HANDOFF_TARGET_BYTES, 8_000);
 	assert.equal(HANDOFF_OUTPUT_BYTES, 16_384);
 	for (const section of ["Goal and constraints", "Decisions", "Work state", "Verification", "Next steps"])
 		assert.ok(HANDOFF_INSTRUCTIONS.includes(section));
@@ -615,7 +615,8 @@ test("a detailed handoff above the old ceiling continues intact without shorteni
 		"Next steps: fix the missing timezone conversion, rerun export.test.ts. Publish outcome unknown; do not retry. #4",
 	].join("\n");
 	assert.ok(Buffer.byteLength(text) > 8192);
-	assert.ok(Buffer.byteLength(text) < HANDOFF_TARGET_BYTES);
+	assert.ok(Buffer.byteLength(text) > HANDOFF_TARGET_BYTES);
+	assert.ok(Buffer.byteLength(text) < HANDOFF_OUTPUT_BYTES);
 	chat.faux.setResponses([
 		(request) => {
 			const instructions = JSON.stringify(request.messages);
