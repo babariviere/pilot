@@ -32,6 +32,16 @@ use std::{collections::HashMap, sync::Arc};
 const ROW_CAP: usize = 200;
 /// Runs listed in a rule's details, newest first. Local keeps ten.
 const RUNS_SHOWN: usize = 5;
+/// Page groups in order: section, element ID and label.
+const GROUPS: [(Section, &str, &str); 3] = [
+    (
+        Section::Attention,
+        "automations-attention",
+        "Needs attention",
+    ),
+    (Section::Recurring, "automations-recurring", "Recurring"),
+    (Section::OneTime, "automations-one-time", "One-time"),
+];
 
 struct Note {
     id: Option<String>,
@@ -668,11 +678,16 @@ impl Automations {
     fn row(
         &self,
         item: &Item,
-        section: Section,
         now: u64,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        // A one-time record is listed once: failed under Needs attention, else under One-time.
+        let section = if item.in_section(Section::Attention) {
+            Section::Attention
+        } else {
+            Section::OneTime
+        };
         let key = item.id.clone();
         let id = |part: &str| SharedString::from(format!("automation-{part}-{key}"));
         let expanded = self.expanded.as_ref() == Some(&(section, item.id.clone()));
@@ -1039,17 +1054,18 @@ impl Automations {
     }
     fn group(
         &self,
-        section: Section,
+        id: &'static str,
+        label: &'static str,
         rows: &[&Item],
         now: u64,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let (id, label) = match section {
-            Section::Attention => ("automations-attention", "Needs attention"),
-            Section::Recurring => ("automations-recurring", "Recurring"),
-            Section::OneTime => ("automations-one-time", "One-time"),
-        };
+        // A recurring rule can be listed twice, so its row kind follows the group.
+        let section = GROUPS
+            .iter()
+            .find(|(_, group, _)| *group == id)
+            .map_or(Section::OneTime, |(section, ..)| *section);
         let muted = cx.theme().muted_foreground;
         let dark = cx.theme().is_dark();
         let mut list = div()
@@ -1068,7 +1084,7 @@ impl Automations {
                     list.child(self.rule_row(item, now, window, cx).into_any_element())
                 }
                 (Section::Attention, true) => list.child(self.notice_row(item, now, cx)),
-                _ => list.child(self.row(item, section, now, window, cx).into_any_element()),
+                _ => list.child(self.row(item, now, window, cx).into_any_element()),
             };
         }
         let mut group = div()
@@ -1236,13 +1252,11 @@ impl Render for Automations {
                     Tone::Quiet,
                 ));
             }
-            for (section, rows) in [
-                (Section::Attention, &attention),
-                (Section::Recurring, &recurring),
-                (Section::OneTime, &one_time),
-            ] {
+            for ((_, id, label), rows) in
+                GROUPS.into_iter().zip([&attention, &recurring, &one_time])
+            {
                 if !rows.is_empty() {
-                    page = page.child(self.group(section, rows, now, window, cx));
+                    page = page.child(self.group(id, label, rows, now, window, cx));
                 }
             }
             // Sent and cancelled records are history, not shown here.
