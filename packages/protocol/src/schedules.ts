@@ -79,6 +79,8 @@ export interface ScheduledItem {
 	claimedAt?: number;
 	/** Host-derived fixed-chat intent. Never grants access or downgrades to a generic send. */
 	insightsDestination?: { sessionId: string; projectId: string; missionId: string };
+	/** Host-only setup provenance. Not history authority or review-completion evidence. */
+	insightsEnableOperationId?: string;
 	/** Daemon-owned occurrence claim, retained across uncertain delivery and restart. */
 	insightsReview?: { sessionId: string; request: InsightsReviewDispatch };
 	firedAt?: number;

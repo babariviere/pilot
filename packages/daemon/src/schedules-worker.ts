@@ -102,6 +102,21 @@ parentPort!.on("message", ({ id, method, item, expected, now }) => {
 			}
 			value = list();
 		} else if (method === "create") {
+			// All native/manual paths share this transaction-free single-worker admission point.
+			// Do not add an overlapping fixed-chat rule while enable awaits its create ACK.
+			if (
+				item.trigger === "recurring" &&
+				item.insightsDestination &&
+				list().some(
+					(r) =>
+						r.trigger === "recurring" &&
+						r.target.kind === "message" &&
+						item.target.kind === "message" &&
+						r.target.sessionId === item.target.sessionId &&
+						(r.state === "pending" || r.state === "dispatching"),
+				)
+			)
+				throw new Error("Insights chat already has a recurring rule");
 			if (
 				item.trigger === "recurring" &&
 				!item.paused &&
@@ -125,6 +140,25 @@ parentPort!.on("message", ({ id, method, item, expected, now }) => {
 			);
 			value = item;
 		} else if (method === "replace" || method === "remove") {
+			if (
+				method === "replace" &&
+				item.insightsDestination &&
+				item.trigger === "recurring" &&
+				item.target.kind === "message" &&
+				!item.paused &&
+				(expected.target.kind !== "message" ||
+					expected.target.sessionId !== item.target.sessionId ||
+					expected.paused) &&
+				list().some(
+					(r) =>
+						r.id !== item.id &&
+						r.trigger === "recurring" &&
+						r.target.kind === "message" &&
+						r.target.sessionId === item.target.sessionId &&
+						(r.state === "pending" || r.state === "dispatching"),
+				)
+			)
+				throw new Error("Insights chat already has a recurring rule");
 			if (
 				method === "replace" &&
 				item.trigger === "recurring" &&

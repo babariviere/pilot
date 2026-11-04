@@ -34,6 +34,67 @@ export interface InsightsSetupDefaults {
 	model: InsightsInitialModelResolution;
 }
 
+/** Exact admitted identity, not a title, membership hint or permission to change settings. */
+export interface InsightsEnableChat {
+	sessionId: string;
+	grantId: string;
+	revision: number;
+	inputGeneration: number;
+	model: string;
+	thinking?: string;
+}
+
+/** Frozen by native confirmation and the durable operation's immutable payload bytes. */
+export interface InsightsEnablePayload {
+	projectId: string;
+	missionId: string;
+	expectedHome: import("./operations.ts").OperationHost;
+	/** Host-derived hash of local storage home, project path and backlog identity. */
+	context: string;
+	model: string;
+	thinking?: string;
+	recurrence: ScheduleRecurrence;
+	scope: InsightsInitialDefaults["scope"];
+	bounds: InsightsInitialDefaults["bounds"];
+	budget: InsightsInitialDefaults["budget"];
+	disclosure: "insights-weekly-v1";
+	chat: InsightsEnableChat | null;
+	schedule: { id: string; revision: number } | null;
+}
+
+/** Passive GET /api/insights/enable/preflight?projectId=…&missionId=… */
+export interface InsightsEnablePreflight {
+	projectId: string;
+	missionId: string;
+	cost: { pricing: "unknown"; spendUsd: null };
+	model: InsightsInitialModelResolution;
+	state: "ready" | "existing" | "blocked";
+	reason: string | null;
+	/** Null means there is no confirmable operation. */
+	payload: InsightsEnablePayload | null;
+	/** Stable report target for the operation envelope, including fresh setup. */
+	targetId: string;
+	nextAt: number | null;
+}
+
+/** Pending receipt result. Entered steps are lookup-only on recovery, never effect replay. */
+export interface InsightsEnableProgress {
+	phase: "chat_pending" | "chat_ready" | "schedule_pending" | "enabled";
+	sessionId: string;
+	scheduleId: string;
+	chat: InsightsEnableChat | null;
+}
+
+/** Passive POST /api/insights/enable/status with the complete immutable DurableOperation. */
+export interface InsightsEnableStatus {
+	receipt: import("./operations.ts").OperationDelivery;
+	state: "not_found" | "partial" | "unknown" | "enabled" | "blocked";
+	sessionId: string;
+	scheduleId: string | null;
+	nextAt: number | null;
+	reason: string | null;
+}
+
 /** Finding state is not task execution status or permission to execute. */
 export type InsightsLifecycle =
 	| "proposed"

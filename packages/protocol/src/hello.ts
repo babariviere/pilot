@@ -23,6 +23,8 @@ export interface DaemonCapabilities {
 	durableInputGeneration?: 1;
 	/** Explicit native Insights setup, passive reads and lifecycle confirmations. */
 	insights?: 1;
+	/** One native-confirmed durable report-chat and weekly-rule setup. */
+	insightsEnable?: 1;
 	/** Bounded active-session cwd path candidates; no home/project-root fallback. */
 	sessionPathCandidates?: 1;
 	/** Failure-fenced passive next-attempt model preferences. */

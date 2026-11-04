@@ -3851,6 +3851,7 @@ ${run.excerpt}`,
 		setup: { projectId: string; missionId: string; message: string; model: string; thinking?: string },
 		targetId: string,
 		operationId: string,
+		deferInput = false,
 	): Promise<SessionSummary> {
 		this.sharing?.assertCreate(targetId, operationId);
 		if (
@@ -3863,7 +3864,16 @@ ${run.excerpt}`,
 		if (!this.diagnosticHost || !this.missions || this.missions.spawnProject(setup.missionId) !== setup.projectId)
 			throw new Conflict("Insights requires a local project and exact active backlog");
 		const setupDigest = createHash("sha256")
-			.update(JSON.stringify([setup.projectId, setup.missionId, setup.message, setup.model, setup.thinking ?? null]))
+			.update(
+				JSON.stringify([
+					setup.projectId,
+					setup.missionId,
+					setup.message,
+					setup.model,
+					setup.thinking ?? null,
+					...(deferInput ? [true] : []),
+				]),
+			)
 			.digest("hex");
 		const key = targetId.toLowerCase();
 		const active = this.durableCreateAdmissions.get(key);
@@ -3914,6 +3924,8 @@ ${run.excerpt}`,
 				{ targetId, operationId },
 				undefined,
 				grant,
+				undefined,
+				deferInput,
 			);
 		})();
 		this.durableCreateAdmissions.set(key, { targetId, operationId, insightsSetup: setupDigest, result });
@@ -3923,6 +3935,67 @@ ${run.excerpt}`,
 			this.durableCreateAdmissions.delete(key);
 			end();
 		}
+	}
+
+	/** Metadata-only identity. Never starts a worker or repairs an incomplete grant. */
+	insightsEnableCandidates(projectId: string, missionId: string): import("@pilot/protocol").InsightsStatus[] {
+		const candidates: import("@pilot/protocol").InsightsStatus[] = [];
+		for (const meta of this.metas.values()) {
+			if (
+				meta.role !== "insights" ||
+				meta.insightsGrant?.missionId !== missionId ||
+				(meta.projectId !== projectId && meta.insightsGrant.projectId !== projectId)
+			)
+				continue;
+			candidates.push(this.insightsStatus(meta.id)!);
+			if (candidates.length === 2) break; // Two is already ambiguous. Never build an all-chat summary index.
+		}
+		return candidates;
+	}
+
+	insightsEnableChat(id: string): import("@pilot/protocol").InsightsEnableChat {
+		const meta = this.require(id);
+		const grant = this.assertInsightsCurrent(meta);
+		if (!meta.model || this.changingModels.has(id) || meta.nextAttemptModel || meta.failure || meta.initializing)
+			throw new Conflict("Insights chat settings are unavailable or changing");
+		return {
+			sessionId: id,
+			grantId: grant.grantId,
+			revision: grant.revision,
+			inputGeneration: meta.inputGeneration ?? 0,
+			model: meta.model,
+			...(meta.thinking ? { thinking: meta.thinking } : {}),
+		};
+	}
+
+	/** Recovery proves this operation's passive creation, never a similarly titled chat. */
+	insightsEnableCreated(id: string, operationId: string): import("@pilot/protocol").InsightsEnableChat {
+		const meta = this.require(id);
+		if (
+			meta.createOperationId !== operationId ||
+			meta.pending?.length ||
+			meta.insightsGrant?.revision !== 1 ||
+			(meta.inputGeneration ?? 0) !== 0
+		)
+			throw new Conflict("Insights passive create identity changed");
+		return this.insightsEnableChat(id);
+	}
+
+	async insightsEnableCommitted(id: string): Promise<import("@pilot/protocol").InsightsEnableChat> {
+		const identity = this.insightsEnableChat(id);
+		const admission = this.insightsHostAdmission(id);
+		await this.saving.get(id);
+		const saved = JSON.parse(await readFile(join(this.dir(id), "meta.json"), "utf8")) as SessionMeta;
+		admission.revalidate();
+		if (
+			saved.insightsSetupPending ||
+			JSON.stringify(saved.insightsGrant) !== JSON.stringify(this.require(id).insightsGrant) ||
+			saved.model !== identity.model ||
+			(saved.inputGeneration ?? 0) !== identity.inputGeneration ||
+			saved.thinking !== identity.thinking
+		)
+			throw new Conflict("Insights identity is not committed");
+		return identity;
 	}
 
 	private assertInsightsBinding(grant: InsightsGrant): void {
@@ -7159,7 +7232,10 @@ ${run.excerpt}`,
 		missionAdmission?: MissionSpawnAdmission,
 		insightsGrant?: InsightsGrant,
 		flowAdmission?: { rootId: string; flow?: FlowState },
+		deferInsightsInput = false,
 	): Promise<SessionSummary> {
+		if (deferInsightsInput && (!insightsGrant || request.role !== "insights"))
+			throw new Conflict("Deferred input requires trusted Insights creation");
 		if (missionAdmission?.role === "explorer" && (request.mode !== "ask" || coordinator))
 			throw new Conflict("Explorer admission requires a non-coordinator Ask session");
 		if (typeof request.message !== "string" || !request.message.trim()) throw new Error("message is required");
@@ -7357,15 +7433,17 @@ ${run.excerpt}`,
 			cwd,
 			...(project ? { projectId: project.id } : {}),
 			...(preparing ? { preparing } : {}),
-			initializing: true,
-			pending: [
-				{
-					type: "input",
-					requestId: admission?.operationId ?? randomUUID(),
-					content: request.message,
-					mode: "followUp",
-				},
-			],
+			...(deferInsightsInput ? {} : { initializing: true as const }),
+			pending: deferInsightsInput
+				? []
+				: [
+						{
+							type: "input",
+							requestId: admission?.operationId ?? randomUUID(),
+							content: request.message,
+							mode: "followUp",
+						},
+					],
 			createdAt: now,
 			updatedAt: now,
 			lastUserMessageAt: now,
@@ -7429,7 +7507,7 @@ ${run.excerpt}`,
 		}
 		const summary = this.summary(meta);
 		this.emit(meta);
-		void this.start(id, true);
+		if (!deferInsightsInput) void this.start(id, true);
 		return summary;
 	}
 

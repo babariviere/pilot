@@ -89,6 +89,10 @@ were **not exercised** in the final selection; see [current checks](#synthetic-c
 
 ## Fixed preset and native seam
 
+The one-confirmation host setup contract is documented in [weekly enable](insights-enable.md).
+It provisions/reuses the report chat and recurring rule without an immediate review; legacy
+explicit setup endpoints below remain available but are not the new enable flow.
+
 `packages/daemon/src/insights-defaults.ts` centralizes the typed initial preset. Scheduled review
 dispatch copies its unchanged conservative bounds; no existing recurrence or model is rewritten.
 The existing calendar computes Friday 18:00 Europe/Paris occurrences and previous-occurrence windows,

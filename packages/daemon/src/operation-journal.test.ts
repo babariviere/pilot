@@ -132,6 +132,8 @@ test("recovery finishes receipt deletion interrupted after replay-floor publicat
 	await writeFile(file, original); // Simulate a crash-left retired record.
 	const reopened = new OperationJournal(directory, destination);
 	await assert.rejects(reopened.lookup(op), OperationExpired);
+	assert.deepEqual(await readFile(file), original, "passive lookup never cleans up files");
+	await reopened.recover(async () => null);
 	await assert.rejects(readFile(file), { code: "ENOENT" });
 	assert.equal((await reopened.reserve(operation(2))).state, "pending");
 });

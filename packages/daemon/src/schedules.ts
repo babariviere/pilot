@@ -532,6 +532,39 @@ export class ScheduleService {
 			updatedAt: now,
 		});
 	}
+	/** Native-confirmed orchestration only. Stable ID and atomic overlap guard close lost-ACK races. */
+	createInsights(
+		request: ScheduleRequest,
+		id: string,
+		operationId: string,
+		revalidate: () => void,
+	): Promise<ScheduledItem> {
+		return this.runtime.run("create", async () => {
+			this.assertOpen();
+			const data = await this.validate(request);
+			if (!data.insightsDestination || data.trigger !== "recurring")
+				throw new Conflict("Insights schedule requires admitted fixed chat");
+			this.checkHome(request.expectedHome, true);
+			revalidate();
+			const now = this.time.now();
+			return this.store.create({
+				...data,
+				id,
+				revision: 1,
+				state: "pending",
+				handledThrough: now,
+				runs: [],
+				createdAt: now,
+				updatedAt: now,
+				insightsEnableOperationId: operationId,
+			});
+		});
+	}
+
+	insightsEnableAvailable(expectedHome: ScheduleHome): void {
+		this.assertOpen();
+		this.checkHome(expectedHome, true);
+	}
 	update(id: string, patch: SchedulePatch): Promise<ScheduledItem> {
 		return this.runtime.run("update", () => this.updateAdmitted(id, patch));
 	}
@@ -675,6 +708,7 @@ export class ScheduleService {
 			"claimedAt",
 			"insightsReview",
 			"insightsDestination",
+			"insightsEnableOperationId",
 			"firedAt",
 			"state",
 			"sessionId",

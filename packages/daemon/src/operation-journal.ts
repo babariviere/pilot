@@ -70,6 +70,8 @@ export class OperationJournal {
 	private readonly sequences = new Map<string, string>();
 	private floors: Record<string, number> = {};
 	private initialized?: Promise<void>;
+	private directoryReady?: Promise<void>;
+	private readonly retiredFiles = new Set<string>();
 	private queue: Promise<unknown> = Promise.resolve();
 	private queued = 0;
 	private fault?: unknown;
@@ -83,13 +85,6 @@ export class OperationJournal {
 
 	private async init(): Promise<void> {
 		this.initialized ??= (async () => {
-			await mkdir(this.directory, { recursive: true, mode: 0o700 });
-			const parent = await open(join(this.directory, ".."), "r");
-			try {
-				await parent.sync();
-			} finally {
-				await parent.close();
-			}
 			try {
 				if ((await stat(join(this.directory, "floors.json"))).size > 128 * 1024)
 					throw new Error("Oversized replay floors");
@@ -106,7 +101,10 @@ export class OperationJournal {
 				)
 			)
 				throw new Error("Invalid replay floors");
-			const files = await readdir(this.directory);
+			const files = await readdir(this.directory).catch((error: NodeJS.ErrnoException) => {
+				if (error.code === "ENOENT") return [];
+				throw error;
+			});
 			if (files.filter((f) => f.endsWith(".json") && f !== "floors.json").length > MAX_RECORDS)
 				throw new Error("Operation journal capacity exceeded");
 			for (const file of files) {
@@ -126,8 +124,8 @@ export class OperationJournal {
 				)
 					throw new Error("Corrupt operation receipt");
 				if (op.sequence <= (this.floors[streamKey(op)] ?? 0)) {
-					// A crash can interrupt GC after publishing its floor. Finish that deletion on recovery.
-					await unlink(join(this.directory, file));
+					// A durable floor already retires this record. Passive lookup never cleans up files.
+					this.retiredFiles.add(file);
 					continue;
 				}
 				if (this.records.has(op.operationId) || this.sequences.has(`${streamKey(op)}:${op.sequence}`))
@@ -167,6 +165,24 @@ export class OperationJournal {
 			(!identifier.test(op.bindingId) || !Number.isSafeInteger(op.bindingGeneration) || op.bindingGeneration! < 1)
 		)
 			throw new OperationConflict("Invalid binding fence");
+	}
+	private async prepareDirectory(): Promise<void> {
+		this.directoryReady ??= (async () => {
+			await mkdir(this.directory, { recursive: true, mode: 0o700 });
+			const parent = await open(join(this.directory, ".."), "r");
+			try {
+				await parent.sync();
+			} finally {
+				await parent.close();
+			}
+		})();
+		await this.directoryReady;
+	}
+	private async cleanRetired(): Promise<void> {
+		for (const file of this.retiredFiles) {
+			await unlink(join(this.directory, file));
+			this.retiredFiles.delete(file);
+		}
 	}
 	private serial<T>(action: () => Promise<T>): Promise<T> {
 		if (this.queued >= 64) return Promise.reject(new Error("Operation journal busy"));
@@ -209,13 +225,25 @@ export class OperationJournal {
 			return structuredClone(this.checked(op)?.receipt);
 		});
 	}
+	async targetReceipts(kind: string, targetId: string): Promise<OperationReceipt[]> {
+		return this.serial(async () => {
+			await this.init();
+			return structuredClone(
+				[...this.records.values()]
+					.filter((r) => r.operation.kind === kind && r.operation.targetId === targetId)
+					.map((r) => r.receipt),
+			);
+		});
+	}
 	async reserve(op: DurableOperation): Promise<OperationReceipt> {
 		op = structuredClone(op);
 		return this.serial(async () => {
 			await this.init();
+			await this.cleanRetired();
 			const existing = this.checked(op);
 			if (existing) return structuredClone(existing.receipt);
 			if (this.records.size >= MAX_RECORDS) throw new Error("Operation receipt retention is full");
+			await this.prepareDirectory();
 			const record: StoredOperation = {
 				operation: structuredClone(op),
 				receipt: {
@@ -245,7 +273,7 @@ export class OperationJournal {
 			try {
 				result = await handler(structuredClone(op));
 			} catch (e) {
-				if (!(e instanceof OperationRejected)) return receipt;
+				if (!(e instanceof OperationRejected)) return (await this.lookup(op))!;
 				reason = e.message.slice(0, 512);
 				result = e.result;
 			}
@@ -277,11 +305,28 @@ export class OperationJournal {
 		this.running.set(op.operationId, work);
 		return work;
 	}
+	/** Durable bounded progress before entering an effect. Lookup never invokes a handler. */
+	async checkpoint(op: DurableOperation, result: unknown): Promise<void> {
+		const snapshot = structuredClone(result);
+		await this.serial(async () => {
+			await this.init();
+			const previous = this.checked(op);
+			if (previous?.receipt.state !== "pending") throw new OperationConflict("Operation is not pending");
+			const updated = { operation: previous.operation, receipt: { ...previous.receipt, result: snapshot } };
+			if (Buffer.byteLength(JSON.stringify(updated)) > MAX_PAYLOAD * 2)
+				throw new OperationConflict("Receipt too large");
+			await this.persist(join(this.directory, `${payloadHash(op.operationId)}.json`), updated);
+			this.records.set(op.operationId, updated);
+		});
+	}
 	async recover(
 		handler: (op: DurableOperation) => Promise<unknown>,
 		eligible: (op: Readonly<DurableOperation>) => boolean = () => true,
 	): Promise<void> {
-		await this.init();
+		await this.serial(async () => {
+			await this.init();
+			await this.cleanRetired();
+		});
 		const pending = [...this.records.values()].filter(
 			({ receipt, operation }) => receipt.state === "pending" && eligible(operation),
 		);
@@ -310,6 +355,7 @@ export class OperationJournal {
 			if (records.some(({ receipt }) => receipt.state === "pending"))
 				throw new OperationConflict("Pending operations cannot retire");
 			const floors = { ...this.floors, [key]: Math.max(this.floors[key] ?? 0, through) };
+			await this.prepareDirectory();
 			await this.persist(join(this.directory, "floors.json"), floors);
 			this.floors = floors;
 			for (const { operation } of records) {
