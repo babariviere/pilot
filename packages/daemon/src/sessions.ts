@@ -2202,8 +2202,49 @@ export class SessionManager {
 	private setupHooks(meta: SessionMeta, trigger: WorkspaceSetupTrigger): import("@pilot/protocol").Automation[] {
 		const definitions = meta.projectId ? this.projects.get(meta.projectId)?.automations : undefined;
 		return definitions && !definitions.error
-			? definitions.items.filter((hook) => hook.enabled && hook.on.includes(trigger) && hook.action.type === "shell")
+			? definitions.items.filter(
+					(hook) =>
+						hook.enabled &&
+						hook.action.type === "shell" &&
+						(trigger === "manual"
+							? hook.on.some((on) => on === "workspace.created" || on === "workspace.restored")
+							: hook.on.includes(trigger)),
+				)
 			: [];
+	}
+
+	/** Native action: queue a fresh setup boundary without opening a model or recreating the workspace. */
+	async rerunWorkspaceSetup(id: string): Promise<SessionSummary> {
+		const meta = this.require(id);
+		if (!this.automationsEnabled()) throw new ServiceUnavailable("Automations are disabled");
+		this.assertWritable(id);
+		if (!this.setupEligible(meta) || meta.archivedAt !== undefined)
+			throw new Conflict("An active isolated Build workspace is required");
+		const end = this.updateGate.begin();
+		try {
+			if (
+				!this.pullRequestFollowUpIdle(meta) ||
+				this.summary(meta).working ||
+				this.backgroundWorking(meta) ||
+				this.postRunTasks.has(id) ||
+				this.workspaceRefreshes.has(id) ||
+				this.rebasingWorkspaces.has(id) ||
+				meta.automation?.setup?.state === "pending"
+			)
+				throw new Conflict("Session must be idle with no active setup or queued work");
+			if (!this.workspaceSetup && !this.setupHooks(meta, "manual").length)
+				throw new Conflict("No enabled workspace setup hooks");
+			this.queueWorkspaceSetup(meta, "manual", `manual:${randomUUID()}`);
+			// Reserve synchronously, but never execute before the boundary is durable. Stop and input
+			// admissions see the same owner while the metadata write is still in flight.
+			const saved = this.save(meta, undefined, undefined, true);
+			void this.startWorkspaceSetup(meta, saved);
+			await saved;
+			this.emit(meta);
+			return this.summary(meta);
+		} finally {
+			end();
+		}
 	}
 
 	/** Called before the metadata write that publishes the workspace or clears archival. */
@@ -2223,7 +2264,7 @@ export class SessionManager {
 		};
 	}
 
-	private startWorkspaceSetup(meta: SessionMeta): Promise<void> {
+	private startWorkspaceSetup(meta: SessionMeta, ready = Promise.resolve()): Promise<void> {
 		const active = this.workspaceSetups.get(meta.id);
 		if (active) return active.done;
 		const setup = meta.automation?.setup;
@@ -2239,7 +2280,7 @@ export class SessionManager {
 		)
 			return Promise.resolve();
 		const controller = new AbortController();
-		const done = Promise.resolve()
+		const done = ready
 			.then(() => this.runWorkspaceSetup(meta, setup, controller.signal))
 			.catch(async (error: unknown) => {
 				if (this.closing || this.sleepPause) return;
@@ -2358,7 +2399,9 @@ export class SessionManager {
 							)
 						: setup.trigger === "workspace.restored"
 							? "Workspace set up again after restore"
-							: "Workspace set up";
+							: setup.trigger === "manual"
+								? "Workspace set up again"
+								: "Workspace set up";
 			if (hooks.length || this.workspaceSetup) {
 				const activity = {
 					type: "activity" as const,

@@ -2024,6 +2024,16 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "sessions" && parts.length === 4 && req.method === "POST") {
 			const id = parts[2]!;
+			if (parts[3] === "setup") {
+				if (!chatSettings?.automationsEnabled()) return json(res, 404, { error: "automations_unavailable" });
+				if (!githubSetup) return json(res, 503, { error: "automations_unavailable" });
+				try {
+					await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				} catch {
+					return json(res, 403, { error: "native_action_required" });
+				}
+				return json(res, 202, await sessions.rerunWorkspaceSetup(id));
+			}
 			if (parts[3] === "subscription-force") {
 				const body = await readJson<SubscriptionForceRequest>(req);
 				if (!body || typeof body.force !== "boolean") throw new HttpError(400, "force must be a boolean");

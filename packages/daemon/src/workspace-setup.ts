@@ -1,8 +1,8 @@
 import type { Automation, AutomationTrigger } from "@pilot/protocol";
 
-export type WorkspaceSetupTrigger = Extract<AutomationTrigger, "workspace.created" | "workspace.restored">;
+export type WorkspaceSetupTrigger = Extract<AutomationTrigger, "workspace.created" | "workspace.restored"> | "manual";
 
-/** One workspace lifecycle boundary. Restore cannot overlap an active workspace. */
+/** One workspace setup boundary. Manual requests cannot overlap active work. */
 export interface WorkspaceSetupState {
 	trigger: WorkspaceSetupTrigger;
 	triggerId: string;

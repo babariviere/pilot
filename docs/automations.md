@@ -26,5 +26,22 @@ Hook results appear in the chat timeline and on the Automations page. **Stop**
 cancels setup/checks and holds queued automatic inputs. Disabling automations
 prevents new commands; already admitted commands may finish.
 
-There are no teardown or archive-time hooks. Manual **Run setup again** remains planned.
+## Run setup again
+
+An idle isolated Build chat can rerun its enabled workspace setup commands without
+recreating the workspace or starting an agent. Commands run in their saved order,
+including create-only and restore-only hooks, once each. Existing files remain in
+place, so commands should be safe to repeat. Progress and results use the same chat
+status and timeline as automatic setup. **Stop** cancels the rerun.
+
+The native action uses `POST /api/sessions/:id/setup`, with no body and the native
+`x-pilot-github-capability` header. It returns `202` with the current session summary;
+`automation` reports waiting/running commands with trigger `manual`, and
+`workspaceSetup` retains the final result. It is unavailable while Automations is
+off, and refuses archived, Ask, direct-checkout, coordinator, continuation, busy
+or already-setting-up chats. Chats without enabled setup commands are also refused.
+After an uncertain response, inspect the chat status rather than automatically retrying.
+The desktop **Run setup again** button uses this action.
+
+There are no teardown or archive-time hooks.
 For time-based work, use [schedules](schedules.md).
