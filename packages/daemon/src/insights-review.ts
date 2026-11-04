@@ -85,8 +85,19 @@ function validate(request: InsightsReviewDispatch): void {
 
 export class InsightsReviews {
 	private readonly db: InsightsDb;
+	private readonly listeners = new Set<() => void>();
 	constructor(db: InsightsDb) {
 		this.db = db;
+	}
+	onChange(listener: () => void): () => void {
+		this.listeners.add(listener);
+		return () => {
+			this.listeners.delete(listener);
+		};
+	}
+	/** Notify only after the corresponding transaction is durable. Listeners do passive lookups. */
+	changed(): void {
+		for (const listener of this.listeners) listener();
 	}
 	private scope(admission: InsightsAdmission): string {
 		admission.revalidate();
@@ -154,7 +165,7 @@ export class InsightsReviews {
 		return inserted;
 	}
 	/** Stop/revocation/shutdown fence synchronously, then wait for durable terminal state. */
-	interrupt(
+	async interrupt(
 		sessionId: string,
 		state: "cancelled" | "interrupted" | "unknown",
 		detail: string,
@@ -168,7 +179,8 @@ export class InsightsReviews {
 			runId ?? null,
 			runId ?? null,
 		);
-		return this.db.durable();
+		await this.db.durable();
+		this.changed();
 	}
 	interruptAll(): Promise<void> {
 		this.recover();
@@ -235,6 +247,7 @@ export class InsightsReviews {
 		);
 		await this.db.durable();
 		this.assertActive(admission, runId);
+		this.changed();
 	}
 	/** Prefetch a bounded packet without waking source workers. Positions commit only with the report. */
 	async prepare(admission: InsightsAdmission, request: InsightsReviewDispatch, read: Read): Promise<void> {

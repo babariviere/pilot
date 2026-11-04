@@ -5,7 +5,8 @@
 The internal Insights profile, own-backlog persistence, a trusted bounded review seam
 ([review orchestration](insights-review.md)) and explicit native routes exist. These routes do not
 automatically create a grant, review or schedule. The closed model tools are `insights_history` and
-`insights_backlog`. Scheduling remains a separate integration. This document does not certify
+`insights_backlog`. Existing fixed-chat recurring rules now use the bounded review seam for Insights
+destinations; see [schedule integration](insights-review.md#recurring-schedule-integration). This document does not certify
 end-to-end availability.
 
 ## Native routes
@@ -154,7 +155,7 @@ Revocation and daemon shutdown drain admitted backlog calls before returning; sh
 admission before draining. Stop invalidates already-captured admissions, including queued calls and
 ACKs waiting on durability. Dispatched review runs add a durable cancellation/interruption fence and
 exact-ID lookup without input replay. The scheduler must consume those terminal outcomes rather than
-retrying their input; this foundation does not wire or activate a schedule.
+retrying their input; the integration never activates a real schedule by itself.
 Look up a model backlog receipt with the original operationId through a currently admitted worker;
 native operations use the journal receipt route above. Absence is Unknown,
 not proof of rejection and never permission for blind effect replay. Exact same-operation retries

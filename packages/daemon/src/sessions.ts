@@ -3615,6 +3615,18 @@ ${run.excerpt}`,
 		return this.insightsBacklog.reviews.status(this.insightsHostAdmission(id), runId);
 	}
 
+	/** Passive scheduler wakeups, not a source-chat subscription or a dispatch authorization. */
+	onInsightsReviewChange(listener: () => void): () => void {
+		const stopReview = this.insightsBacklog?.reviews.onChange(listener);
+		const stopIdle = this.onChange((session) => {
+			if (session.role === "insights" && !session.working) listener();
+		});
+		return () => {
+			stopReview?.();
+			stopIdle();
+		};
+	}
+
 	private async dispatchInsightsReviewAdmitted(
 		id: string,
 		input: import("@pilot/protocol").InsightsReviewDispatch,

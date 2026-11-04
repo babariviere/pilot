@@ -34,4 +34,10 @@ A save proves persistence, not complete coverage or a successful weekly run. Sto
 review inputs never automatically replay. Weekly activation remains separate work, and weekly
 settings still require confirmation.
 
+Once those settings are agreed, use **Automations → New automation → Repeats → Send to a chat**
+with the Insights chat as the destination. This runs a bounded review using the chat's existing
+access, not the saved message as review instructions. Existing pause/resume controls apply.
+Stopped, interrupted or uncertain reviews appear as schedule failures and are never resent after
+restart. A later weekly occurrence is a distinct review, not proof that an older gap was resolved.
+
 See the [permission and verification contract](technical/insights-history.md) for implementation limits.

@@ -415,6 +415,7 @@ export class InsightsBacklog {
 			return receipt;
 		});
 		await this.db.durable();
+		if (request.action === "save_report") this.reviews.changed();
 		if (["propose", "amend", "save_report", "save_checkpoint"].includes(request.action))
 			this.db.changed(admission.binding.missionId);
 		this.validate(admission);

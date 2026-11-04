@@ -144,6 +144,17 @@ The saved prompt stays the user's own input (request IDs `schedule:…` map to u
 - Sleep pause: no dispatch while the daemon is in the sleep pause; due work waits and runs after wake (late if
   more than 5 minutes).
 
+### Restricted Insights destinations
+
+Recurring fixed-chat messages to an Insights chat use the existing bounded review dispatcher, with
+host-recorded session/project/mission intent and a UUID reserved in the durable occurrence claim.
+They never acquire authority from schedule text or fall back to generic message delivery when the
+grant is unavailable. Restart and ambiguous dispatch use exact-ID passive status lookup, never resend.
+Interrupted/cancelled/unknown/unresolved outcomes use existing failure notices; sent means input
+placement and partial means bounded persistence only. Pause, overlap, catch-up and late/missed
+semantics remain the same. See [the full dispatch and bounds contract](insights-review.md#recurring-schedule-integration).
+No real recurring rule is created by this integration.
+
 ## 4. Wake and network detection
 
 Removing the one-shot wake/online/back triggers removes the sleep/wake latches. Recurring rules do not need

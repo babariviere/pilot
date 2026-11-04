@@ -40,6 +40,8 @@ import { MissionStore } from "./missions.ts";
 import type { ModelCatalog } from "./models.ts";
 import { payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
+import { ScheduleStore } from "./schedule-store.ts";
+import { ScheduleService } from "./schedules.ts";
 import { createDaemonServer } from "./server.ts";
 import {
 	CommandRejected,
@@ -1457,6 +1459,105 @@ test("Insights review dispatch places one bounded input, persists a partial repo
 	await f.sessions["insightsHistory"](f.id, f.worker, { action: "chats" });
 	assert.equal(f.reads(), 3, "a new explicit input ends the bounded turn");
 	assert.equal(f.workers.length, 1, "source workers never start");
+});
+
+test("Insights weekly schedule uses admitted profile and mission, saves bounded report, and recovers without replay", async (t) => {
+	const f = await reviewSessionFixture(t);
+	let now = Date.parse("2026-11-02T08:00Z");
+	let sessions = f.sessions;
+	const file = join(f.root, "review-schedules.sqlite");
+	const home = { daemonId: diagnosticHost.daemonId, lineageId: diagnosticHost.lineageId };
+	const deps = () => ({
+		sessions,
+		projects: f.projects,
+		home,
+		automationsEnabled: () => true,
+		clock: { now: () => now, setTimeout: () => () => {} },
+		triggers: { online: true, subscribe: () => () => {} },
+	});
+	let store = new ScheduleStore(file),
+		schedules = new ScheduleService(store, deps());
+	await schedules.load();
+	const row = await schedules.create({
+		title: "Weekly review",
+		trigger: "recurring",
+		expectedHome: home,
+		recurrence: { every: "week", weekday: 1, time: "09:00", timeZone: "UTC" },
+		target: { kind: "message", sessionId: f.id, message: "Review the week" },
+	});
+	t.after(async () => {
+		await schedules.stop();
+		await store.close();
+	});
+	schedules.start();
+	now = Date.parse("2026-11-02T09:00Z");
+	await schedules.signal({ type: "online", online: true });
+	const run = schedules.require(row.id).runs![0];
+	assert.equal(run.outcome, "sent");
+	const runId = run.insightsReview!.runId;
+	assert.equal(f.worker.spec.role, "insights");
+	assert.equal(f.worker.spec.insightsBinding?.missionId, f.missionId);
+	assert.equal(f.worker.spec.insightsBinding?.reportSessionId, f.id);
+	assert.equal(f.worker.requests.filter((c) => c.requestId.startsWith("schedule:")).length, 0);
+	assert.equal(f.worker.requests.filter((c) => c.requestId === `insights-review:${runId}`).length, 1);
+	const admission = sessions.insightsAdmission(f.id, f.worker);
+	let cursor: number | null = 0;
+	while (cursor !== null) {
+		const context = (await f.store.insights.call(admission, { action: "review_context", cursor })) as {
+			nextCursor: number | null;
+		};
+		cursor = context.nextCursor;
+	}
+	const status = (await sessions.insightsReviewStatus(f.id, runId))!;
+	await f.store.insights.call(admission, {
+		action: "save_report",
+		key: runId,
+		expectedRevision: 0,
+		operationId: randomUUID(),
+		record: {
+			status: "partial",
+			windowStart: status.windowStart,
+			windowEnd: status.windowEnd,
+			markdown: "Observed synthetic correction. Proposed check only; baseline and benefit unknown.",
+			checkpoints: [],
+			findingKeys: [],
+			gaps: ["Synthetic bounded sample"],
+		},
+	});
+	await schedules.signal({ type: "online", online: true });
+	assert.equal(schedules.require(row.id).runs![0].insightsReview?.state, "partial");
+	f.worker.finish();
+	await schedules.stop();
+	await store.close();
+	await sessions.shutdown();
+	sessions = await f.manager();
+	store = new ScheduleStore(file);
+	schedules = new ScheduleService(store, deps());
+	await schedules.load();
+	schedules.start();
+	await schedules.signal({ type: "online", online: true });
+	assert.equal((await sessions.insightsReviewStatus(f.id, runId))?.state, "partial");
+	assert.equal(schedules.require(row.id).runs![0].insightsReview?.runId, runId);
+	assert.equal(sessions["workers"].size, 0, "status-only recovery never starts the report/source workers");
+	// Next occurrence is distinct. Stop leaves a durable cancellation visible after reload.
+	now = Date.parse("2026-11-09T09:00Z");
+	await schedules.signal({ type: "online", online: true });
+	const next = schedules.require(row.id).runs!.at(-1)!;
+	assert.notEqual(next.insightsReview?.runId, runId);
+	await sessions.stop(f.id);
+	await schedules.signal({ type: "online", online: true });
+	assert.equal(schedules.require(row.id).notice?.insightsReview?.state, "cancelled");
+	await schedules.stop();
+	await store.close();
+	await sessions.shutdown();
+	sessions = await f.manager();
+	store = new ScheduleStore(file);
+	schedules = new ScheduleService(store, deps());
+	await schedules.load();
+	schedules.start();
+	await schedules.signal({ type: "online", online: true });
+	assert.equal(schedules.require(row.id).notice?.insightsReview?.state, "cancelled");
+	assert.equal(sessions["workers"].size, 0);
 });
 
 test("Insights review rejects overlap and busy placement without silently retrying", async (t) => {

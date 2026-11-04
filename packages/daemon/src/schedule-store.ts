@@ -70,6 +70,19 @@ export class ScheduleStore {
 				at,
 			}));
 	}
+	/** Copy only rows needing passive review reconciliation, not every saved prompt on session events. */
+	reviewItems(includeUnresolved = false): ScheduledItem[] {
+		return [...this.items.values()]
+			.filter((item) =>
+				item.runs?.some(
+					(run) =>
+						run.insightsReview &&
+						(["preparing", "ready", "sent"].includes(run.insightsReview.state) ||
+							(includeUnresolved && run.insightsReview.state === "unresolved")),
+				),
+			)
+			.map((item) => structuredClone(item));
+	}
 	/** Lightweight projection: dashboard builds never copy stored prompt payloads. */
 	dashboard(projectId: string): DashboardScheduledItem[] {
 		return [...this.items.values()]

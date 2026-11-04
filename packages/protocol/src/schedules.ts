@@ -1,4 +1,5 @@
 import type { SpawnRequest } from "./index.ts";
+import type { InsightsReviewDispatch, InsightsReviewRun } from "./insights.ts";
 
 /** Calendar deadlines, stored and executed on one host. */
 export type ScheduleTrigger = "at" | "recurring";
@@ -18,6 +19,8 @@ export interface ScheduleRun {
 	sessionId?: string;
 	count?: number;
 	error?: string;
+	/** Exact host-reserved review identity. Sent is placement, partial is bounded persistence only. */
+	insightsReview?: { runId: string; state: InsightsReviewRun["state"] | "unresolved" };
 }
 export interface ScheduleHome {
 	daemonId: string;
@@ -74,6 +77,10 @@ export interface ScheduledItem {
 	createdAt: number;
 	updatedAt: number;
 	claimedAt?: number;
+	/** Host-derived fixed-chat intent. Never grants access or downgrades to a generic send. */
+	insightsDestination?: { sessionId: string; projectId: string; missionId: string };
+	/** Daemon-owned occurrence claim, retained across uncertain delivery and restart. */
+	insightsReview?: { sessionId: string; request: InsightsReviewDispatch };
 	firedAt?: number;
 	/** Created chat, or target of a follow-up. */
 	sessionId?: string;

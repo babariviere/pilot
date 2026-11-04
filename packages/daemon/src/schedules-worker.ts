@@ -62,6 +62,15 @@ parentPort!.on("message", ({ id, method, item, expected, now }) => {
 									at: now,
 									outcome: "failed" as const,
 									error: "Interrupted; delivery is uncertain, check the chats",
+									...(row.insightsReview
+										? {
+												sessionId: row.insightsReview.sessionId,
+												insightsReview: {
+													runId: row.insightsReview.request.runId,
+													state: "unresolved" as const,
+												},
+											}
+										: {}),
 								};
 								row.runs = [...(row.runs ?? []), run].slice(-10);
 								row.notice = run;

@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type {
 	DashboardScheduledItem,
+	InsightsReviewDispatch,
+	InsightsReviewRun,
+	InsightsStatus,
 	ScheduledItem,
 	ScheduleHome,
 	SchedulePatch,
@@ -49,6 +52,10 @@ export interface ScheduleDispatch {
 	spawn(request: SpawnRequest): Promise<{ id: string }>;
 	send(id: string, message: string, mode: "followUp", requestId: string): Promise<void>;
 	get(id: string): { projectId?: string; working?: boolean } | undefined;
+	insightsStatus?(id: string): InsightsStatus | undefined;
+	dispatchInsightsReview?(id: string, request: InsightsReviewDispatch): Promise<InsightsReviewRun>;
+	insightsReviewStatus?(id: string, runId: string): Promise<InsightsReviewRun | null>;
+	onInsightsReviewChange?(listener: () => void): () => void;
 }
 export interface ScheduleServiceDeps {
 	sessions: ScheduleDispatch;
@@ -83,6 +90,7 @@ export class ScheduleService {
 	private tail: Promise<void> = Promise.resolve();
 	private queued = 0;
 	private sweepQueued = false;
+	private recoveryPending = true;
 	private cancelTimer?: () => void;
 	private disposers: Array<() => void> = [];
 	readonly store: ScheduleStore;
@@ -115,6 +123,8 @@ export class ScheduleService {
 				}),
 			);
 		if (this.deps.subscribeAdmission) this.disposers.push(this.deps.subscribeAdmission(() => this.requestSweep()));
+		if (this.deps.sessions.onInsightsReviewChange)
+			this.disposers.push(this.deps.sessions.onInsightsReviewChange(() => this.requestSweep()));
 		this.requestSweep();
 	}
 	private enqueue(work: () => Promise<void>): Promise<void> {
@@ -168,6 +178,9 @@ export class ScheduleService {
 	private async sweep(): Promise<void> {
 		this.cancelTimer?.();
 		this.cancelTimer = undefined;
+		// Passive terminal lookup also runs while dispatch is paused/offline/disabled.
+		await this.reconcileReviews(this.recoveryPending);
+		this.recoveryPending = false;
 		const pending = this.activeItems();
 		this.deps.triggers?.setCalendarActive?.(pending.length > 0);
 		if (this.unavailable()) {
@@ -251,6 +264,7 @@ export class ScheduleService {
 			handledThrough: run.due,
 			at: new RecurrenceCalendar(item.recurrence!).next(run.due),
 			claimedAt: undefined,
+			insightsReview: undefined,
 			updatedAt: this.time.now(),
 			runs: [...(item.runs ?? []), run].slice(-10),
 			notice: noteworthy ? run : undefined,
@@ -269,6 +283,31 @@ export class ScheduleService {
 			await this.finishOccurrence(item, { due, at: this.time.now(), outcome: "missed", count });
 			return;
 		}
+		// Reserve the identity in the occurrence CAS, before any review preparation or input placement.
+		// Destination role is host-owned. Message text cannot select/mint Insights authority.
+		const insights =
+			item.target.kind === "message" ? this.deps.sessions.insightsStatus?.(item.target.sessionId) : undefined;
+		const destination =
+			item.insightsDestination ??
+			(insights
+				? {
+						sessionId: insights.sessionId,
+						projectId: insights.projectId,
+						missionId: insights.missionId,
+					}
+				: undefined);
+		const review =
+			destination && item.target.kind === "message"
+				? {
+						sessionId: item.target.sessionId,
+						request: {
+							runId: randomUUID(),
+							windowStart: new Date(calendar.latest(due - 1)).toISOString(),
+							windowEnd: new Date(due).toISOString(),
+							bounds: { inventoryPages: 1, historyPages: 2, entriesPerPage: 4 },
+						},
+					}
+				: undefined;
 		let claimed: ScheduledItem;
 		try {
 			claimed = await this.store.replace(item, {
@@ -277,12 +316,25 @@ export class ScheduleService {
 				handledThrough: due,
 				claimedAt: this.time.now(),
 				updatedAt: this.time.now(),
+				insightsReview: review,
+				insightsDestination: destination,
 			});
 		} catch (error) {
 			if (error instanceof Conflict || error instanceof NotFound) return;
 			throw error;
 		}
-		const run: ScheduleRun = { due, at: this.time.now(), outcome: "failed", ...(count > 1 ? { count } : {}) };
+		const run: ScheduleRun = {
+			due,
+			at: this.time.now(),
+			outcome: "failed",
+			...(count > 1 ? { count } : {}),
+			...(review
+				? {
+						sessionId: review.sessionId,
+						insightsReview: { runId: review.request.runId, state: "unresolved" as const },
+					}
+				: {}),
+		};
 		let permanentlyMissing = false;
 		try {
 			// Gates can change while SQLite commits. Consume the claim, never admit across a pause/disable.
@@ -306,6 +358,7 @@ export class ScheduleService {
 			if (previous?.working) {
 				run.outcome = "skipped_running";
 				run.sessionId = priorId;
+				delete run.insightsReview; // No review was admitted for a skipped occurrence.
 			} else {
 				run.at = this.time.now();
 				const late = run.at - due > 300_000;
@@ -322,20 +375,102 @@ export class ScheduleService {
 					run.outcome = "started";
 				} else {
 					run.sessionId = claimed.target.sessionId;
-					await this.deps.sessions.send(
-						run.sessionId,
-						prefix + claimed.target.message,
-						"followUp",
-						`schedule:${claimed.id}:${due}`,
-					);
-					run.outcome = "sent";
+					if (claimed.insightsReview) {
+						const { sessionId, request } = claimed.insightsReview;
+						run.insightsReview = { runId: request.runId, state: "unresolved" };
+						if (
+							!insights?.available ||
+							insights.projectId !== claimed.projectId ||
+							insights.projectId !== destination?.projectId ||
+							insights.sessionId !== destination?.sessionId ||
+							insights.missionId !== destination?.missionId ||
+							!this.deps.sessions.dispatchInsightsReview
+						)
+							throw new Conflict("Insights authority unavailable; review not sent");
+						const status = await this.deps.sessions.dispatchInsightsReview(sessionId, request);
+						this.applyReviewStatus(run, status);
+					} else {
+						await this.deps.sessions.send(
+							run.sessionId,
+							prefix + claimed.target.message,
+							"followUp",
+							`schedule:${claimed.id}:${due}`,
+						);
+						run.outcome = "sent";
+					}
 				}
 				if (late) run.late = true;
 			}
 		} catch (error) {
 			run.error = (error instanceof Error ? error.message : String(error)).slice(0, 1000);
+			// A lost dispatch ACK is lookup-only. Never call dispatch again for this occurrence.
+			if (run.insightsReview) await this.lookupReview(run);
 		}
 		await this.finishOccurrence(claimed, run, permanentlyMissing);
+	}
+	private applyReviewStatus(run: ScheduleRun, status: InsightsReviewRun | null): void {
+		if (!run.insightsReview) return;
+		if (!status || status.runId !== run.insightsReview.runId) {
+			run.insightsReview.state = "unresolved";
+			run.outcome = "failed";
+			run.error = "Insights review outcome unresolved; never replay this occurrence. Check the chat.";
+			return;
+		}
+		run.insightsReview.state = status.state;
+		if (status.state === "partial" || status.state === "sent") {
+			run.outcome = "sent"; // Placement/persistence only, never completed review or delivery proof.
+			delete run.error;
+		} else {
+			run.outcome = "failed";
+			run.error = `Insights review ${status.state}; never replay this occurrence. ${status.detail}`.slice(0, 1000);
+		}
+	}
+	private async lookupReview(run: ScheduleRun): Promise<void> {
+		try {
+			const status = await this.deps.sessions.insightsReviewStatus?.(run.sessionId!, run.insightsReview!.runId);
+			this.applyReviewStatus(run, status ?? null);
+			if (status?.state === "sent" && !this.deps.sessions.get(run.sessionId!)?.working) {
+				run.outcome = "failed";
+				run.error =
+					"Insights input placed, but no bounded report persisted and chat is idle; outcome unresolved. Never replay this occurrence.";
+			}
+		} catch {
+			this.applyReviewStatus(run, null);
+		}
+	}
+	private async reconcileReviews(includeUnresolved = false): Promise<void> {
+		for (const item of this.store.reviewItems(includeUnresolved)) {
+			const runs = structuredClone(item.runs!);
+			let notice = item.notice;
+			for (const run of runs) {
+				if (
+					!run.insightsReview ||
+					(!["preparing", "ready", "sent"].includes(run.insightsReview.state) &&
+						!(includeUnresolved && run.insightsReview.state === "unresolved"))
+				)
+					continue;
+				await this.lookupReview(run);
+				// Do not replace a newer occurrence's notice or resurrect a dismissed old notice.
+				if (notice?.due === run.due) notice = run.outcome === "sent" && !run.late ? undefined : run;
+				else if (
+					run === runs.at(-1) &&
+					run.outcome === "failed" &&
+					item.runs!.at(-1)!.outcome !== "failed" &&
+					!notice
+				)
+					notice = run;
+			}
+			if (
+				JSON.stringify(runs) === JSON.stringify(item.runs) &&
+				JSON.stringify(notice) === JSON.stringify(item.notice)
+			)
+				continue;
+			try {
+				await this.store.replace(item, { ...item, runs, notice, updatedAt: this.time.now() });
+			} catch (error) {
+				if (!(error instanceof Conflict || error instanceof NotFound)) throw error;
+			}
+		}
 	}
 	private async fire(item: ScheduledItem): Promise<void> {
 		if (this.stopped) return;
@@ -452,6 +587,13 @@ export class ScheduleService {
 		return this.store.replace(old, {
 			...old,
 			...data,
+			// Same-chat edits/pause cannot discard a previously recorded Insights destination.
+			insightsDestination:
+				old.target.kind === "message" &&
+				data.target.kind === "message" &&
+				old.target.sessionId === data.target.sessionId
+					? (old.insightsDestination ?? data.insightsDestination)
+					: data.insightsDestination,
 			at: data.at,
 			...(patch.dismissNotice ? { notice: undefined } : {}),
 			projectId: data.projectId,
@@ -530,6 +672,8 @@ export class ScheduleService {
 			"runs",
 			"notice",
 			"claimedAt",
+			"insightsReview",
+			"insightsDestination",
 			"firedAt",
 			"state",
 			"sessionId",
@@ -562,7 +706,12 @@ export class ScheduleService {
 	}
 	private async validate(
 		request: ScheduleRequest,
-	): Promise<Pick<ScheduledItem, "title" | "trigger" | "at" | "target" | "projectId" | "sessionId" | "recurrence">> {
+	): Promise<
+		Pick<
+			ScheduledItem,
+			"title" | "trigger" | "at" | "target" | "projectId" | "sessionId" | "recurrence" | "insightsDestination"
+		>
+	> {
 		if (!request || typeof request !== "object" || Array.isArray(request))
 			throw new Error("Schedule request is required");
 		this.rejectOwned(request);
@@ -655,7 +804,20 @@ export class ScheduleService {
 		}
 		if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
 		if (Buffer.byteLength(JSON.stringify(target)) > 16_384) throw new Error("Schedule target exceeds 16 KiB");
+		const insights =
+			trigger === "recurring" && target.kind === "message"
+				? this.deps.sessions.insightsStatus?.(target.sessionId)
+				: undefined;
 		return {
+			...(insights
+				? {
+						insightsDestination: {
+							sessionId: insights.sessionId,
+							projectId: insights.projectId,
+							missionId: insights.missionId,
+						},
+					}
+				: {}),
 			title:
 				request.title?.trim() ??
 				(target.kind === "chat" ? target.spawn.title?.trim().slice(0, 200) : undefined) ??
