@@ -737,7 +737,12 @@ mod tests {
         })).unwrap()
         };
         assert!(!cx.read(reload::enabled), "old daemons do not offer reload");
-        cx.update(|cx| reload::pushed(status(serde_json::Value::Null, 0, 0), cx));
+        // Reader pushes arrive while LocalViewer::accept holds this entity.
+        // Rebuilding menus synchronously would reread the leased viewer.
+        view.update(cx, |_, cx| {
+            reload::pushed(status(serde_json::Value::Null, 0, 0), cx);
+        });
+        cx.run_until_parked();
         assert!(cx.read(reload::enabled));
         cx.update(|cx| {
             cx.dispatch_action(&ReloadPi);
@@ -757,7 +762,7 @@ mod tests {
             "no duplicate, Submit, Stop or service command"
         );
         let complete = status(serde_json::json!(operation_id), 0, 1);
-        cx.update(|cx| reload::pushed(complete.clone(), cx));
+        view.update(cx, |_, cx| reload::pushed(complete.clone(), cx));
         reply
             .try_send(reload::Outcome::Accepted(status(
                 serde_json::json!(operation_id),

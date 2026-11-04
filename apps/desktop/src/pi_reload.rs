@@ -151,7 +151,8 @@ pub(crate) fn pushed(status: Status, cx: &mut App) {
         return;
     }
     owner.update(cx, |o, _| o.status = Some(status));
-    crate::app_menu::refresh(cx);
+    // Reader pushes can hold LocalViewer's lease; menu availability reads it.
+    cx.defer(crate::app_menu::refresh);
 }
 pub(crate) fn enabled(cx: &App) -> bool {
     owner(cx).is_some_and(|owner| {
