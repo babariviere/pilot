@@ -29,6 +29,24 @@ audience; pins are not redirected. This does not approve policy or change the us
 decision edit/removal and proposal-approval rules. Exact retries are safe; relinking
 and cycles are rejected. Existing decisions stay active until explicitly replaced.
 
+For withdrawal without a successor, coordinators can propose
+`mission({action: "propose", decisionId: "D7", withdraw: true, reason: "No longer needed", operationId: "unique-request-id"})`.
+Only your acceptance withdraws the decision. Pending or rejected proposals leave guidance
+active. Withdrawal preserves original text, history and task pins, records the reason,
+and removes binding guidance from new and existing agent contexts. A withdrawn decision
+cannot be replaced or used as a replacement; a replaced decision cannot be withdrawn.
+Reuse the operation ID only for exact retries; conflicting requests/outcomes are rejected.
+Do not automatically replay an unknown result.
+User edits/removals reject pending withdrawal proposals while preserving their history.
+Resolve an existing pending proposal before suggesting a different change.
+
+This is a backend/tool capability requiring user confirmation, not autonomous coordinator
+withdrawal. Existing records do not establish delegated withdrawal authority, including
+coordinator-authored records. Native Withdraw presentation/acceptance is not yet supported;
+older native proposal readers reject the distinct `withdraw` kind rather than treating it
+as hard Remove. Hard deletion and other user-only approvals are unchanged. No historical
+withdrawals or delegation are inferred.
+
 ## Finish or archive
 
 **Mark done** is available when all remaining tasks are done, excluding dropped tasks,

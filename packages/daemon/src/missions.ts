@@ -768,6 +768,13 @@ export class MissionStore {
 			this.db.exec("ALTER TABLE decisions ADD COLUMN audience TEXT NOT NULL DEFAULT 'reference'");
 		if (!this.all("PRAGMA table_info(decisions)").some((row) => row.name === "replacement"))
 			this.db.exec("ALTER TABLE decisions ADD COLUMN replacement TEXT");
+		if (!this.all("PRAGMA table_info(decisions)").some((row) => row.name === "withdrawn"))
+			this.db.exec("ALTER TABLE decisions ADD COLUMN withdrawn TEXT");
+		if (!this.all("PRAGMA table_info(decision_proposals)").some((row) => row.name === "operation_id"))
+			this.db.exec("ALTER TABLE decision_proposals ADD COLUMN operation_id TEXT");
+		this.db.exec(
+			"CREATE UNIQUE INDEX IF NOT EXISTS decision_proposal_operations ON decision_proposals(mission_id, operation_id) WHERE operation_id IS NOT NULL",
+		);
 		this.transaction(() => {
 			const migrateNumbers = !this.all("PRAGMA table_info(decisions)").some((row) => row.name === "number");
 			const migrateSequence = !this.all("PRAGMA table_info(missions)").some(
@@ -5014,6 +5021,7 @@ export class MissionStore {
 		}
 		this.assertPlanner(id, actor);
 		const before = this.decision(id, decisionId);
+		if (before.withdrawn) throw new Conflict("Withdrawn decisions cannot be replaced");
 		if (before.replacement) {
 			if (
 				before.replacement.id === replacementDecisionId ||
@@ -5026,6 +5034,7 @@ export class MissionStore {
 		const visited = new Set([before.id]);
 		let next: MissionDecision | undefined = replacement;
 		while (next) {
+			if (next.withdrawn) throw new Conflict("A withdrawn decision cannot be a replacement");
 			if (visited.has(next.id)) throw new Conflict("Decision replacement cannot be self-referential or cyclic");
 			visited.add(next.id);
 			const row: Row | undefined = next.replacement
@@ -5137,8 +5146,15 @@ export class MissionStore {
 	}
 
 	private dropProposal(id: string, decisionId: string): void {
+		// User edits/removals invalidate pending withdrawal, but never erase its history.
 		this.run(
-			"DELETE FROM decision_proposals WHERE mission_id = ? AND decision_id = ? AND status = 'pending'",
+			"UPDATE decision_proposals SET status = 'rejected', resolved_at = ? WHERE mission_id = ? AND decision_id = ? AND status = 'pending' AND kind = 'withdraw'",
+			Date.now(),
+			id,
+			decisionId,
+		);
+		this.run(
+			"DELETE FROM decision_proposals WHERE mission_id = ? AND decision_id = ? AND status = 'pending' AND kind != 'withdraw'",
 			id,
 			decisionId,
 		);
@@ -5157,6 +5173,14 @@ export class MissionStore {
 			throw new Conflict("Only the mission coordinator can propose decision changes");
 		this.assertMember(id, actor.sessionId);
 		const decision = this.decision(id, decisionId);
+		if (
+			this.one(
+				"SELECT 1 FROM decision_proposals WHERE mission_id = ? AND decision_id = ? AND status = 'pending' AND kind = 'withdraw'",
+				id,
+				decision.id,
+			)
+		)
+			throw new Conflict("Resolve the pending withdrawal proposal first");
 		if (remove !== undefined && remove !== true) throw new Error("remove must be true");
 		if (remove === true && value !== undefined) throw new Error("Use text or remove, not both");
 		const proposal: MissionDecisionProposal = {
@@ -5189,6 +5213,78 @@ export class MissionStore {
 		return proposal;
 	}
 
+	/** No decision has inferred delegation: only user acceptance can retire its guidance. */
+	proposeWithdrawal(
+		id: string,
+		decisionId: string,
+		reason: unknown,
+		operationId: unknown,
+		actor: MissionActor,
+	): MissionDecisionProposal {
+		const mission = this.require(id);
+		if (!actor.sessionId || mission.coordinatorSessionId !== actor.sessionId)
+			throw new Conflict("Only the mission coordinator can propose decision withdrawal");
+		this.assertMember(id, actor.sessionId);
+		this.assertPlanner(id, actor);
+		const decision = this.decision(id, decisionId);
+		text(reason, "reason", MAX_TEXT);
+		const why = reason as string;
+		text(operationId, "operationId", 128);
+		const operation = operationId as string;
+		const prior = this.one(
+			"SELECT * FROM decision_proposals WHERE mission_id = ? AND operation_id = ?",
+			id,
+			operation,
+		);
+		if (prior) {
+			const proposal = proposalFrom(prior);
+			if (
+				proposal.kind !== "withdraw" ||
+				proposal.decisionId !== decision.id ||
+				proposal.reason !== why ||
+				proposal.authorSessionId !== actor.sessionId
+			)
+				throw new Conflict("Withdrawal operationId already has a different request");
+			return proposal;
+		}
+		if (decision.replacement || decision.withdrawn) throw new Conflict("Only active decisions can be withdrawn");
+		if (
+			this.one(
+				"SELECT 1 FROM decision_proposals WHERE mission_id = ? AND decision_id = ? AND status = 'pending'",
+				id,
+				decision.id,
+			)
+		)
+			throw new Conflict("Resolve the pending decision proposal first");
+		const proposal: MissionDecisionProposal = {
+			id: randomUUID(),
+			decisionId: decision.id,
+			kind: "withdraw",
+			operationId: operation,
+			reason: why,
+			authorSessionId: actor.sessionId,
+			status: "pending",
+			createdAt: Date.now(),
+		};
+		this.transaction(() => {
+			this.run(
+				"INSERT INTO decision_proposals (id, mission_id, decision_id, kind, reason, author_session_id, status, created_at, operation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				proposal.id,
+				id,
+				decision.id,
+				proposal.kind,
+				why,
+				proposal.authorSessionId,
+				proposal.status,
+				proposal.createdAt,
+				operation,
+			);
+			this.event(id, "decision", `Withdrawal proposed for decision D${decision.number}: ${why}`, actor);
+		});
+		this.changed(id);
+		return proposal;
+	}
+
 	resolveProposal(
 		id: string,
 		proposalId: string,
@@ -5198,14 +5294,20 @@ export class MissionStore {
 	): MissionDecisionProposal {
 		if (actor.sessionId) throw new Error("Only the user can resolve decision proposals");
 		if (!accept && replacement !== undefined) throw new Error("Replacement text requires acceptance");
-		const row = this.one(
-			"SELECT * FROM decision_proposals WHERE mission_id = ? AND id = ? AND status = 'pending'",
-			id,
-			proposalId,
-		);
+		const row = this.one("SELECT * FROM decision_proposals WHERE mission_id = ? AND id = ?", id, proposalId);
 		if (!row) throw new NotFound("Unknown pending decision proposal");
 		const proposal = proposalFrom(row);
+		if (proposal.kind === "withdraw" && replacement !== undefined)
+			throw new Error("Withdrawal has no replacement text");
+		if (proposal.status !== "pending") {
+			if (proposal.kind !== "withdraw") throw new NotFound("Unknown pending decision proposal");
+			if (proposal.status !== (accept ? "accepted" : "rejected"))
+				throw new Conflict("Withdrawal proposal already has a different outcome");
+			return proposal;
+		}
 		const decision = this.decision(id, proposal.decisionId);
+		if (accept && proposal.kind === "withdraw" && (decision.replacement || decision.withdrawn))
+			throw new Conflict("Only active decisions can be withdrawn");
 		if (proposal.kind === "remove" && replacement !== undefined) throw new Error("Removal has no replacement text");
 		// Reuse user-only writers, suppressing their broadcasts until the whole transaction commits.
 		this.referenceBatch = id;
@@ -5219,7 +5321,23 @@ export class MissionStore {
 				);
 				if (accept) {
 					const user = { proposedBySessionId: proposal.authorSessionId };
-					if (proposal.kind === "remove") this.removeDecision(id, decision.id, user);
+					if (proposal.kind === "withdraw") {
+						const at = Date.now();
+						this.run(
+							"UPDATE decisions SET withdrawn = ?, updated_at = ? WHERE id = ?",
+							JSON.stringify({ at, reason: proposal.reason, proposalId }),
+							at,
+							decision.id,
+						);
+						this.knowledge.invalidateMission(id, "decisionId", decision.id);
+						this.event(
+							id,
+							"decision",
+							`Decision D${decision.number} withdrawn${proposalAttribution(user)}: ${proposal.reason}`,
+							user,
+							{ at, wake: true },
+						);
+					} else if (proposal.kind === "remove") this.removeDecision(id, decision.id, user);
 					else {
 						const applied = this.updateDecision(id, decision.id, replacement ?? proposal.text, user);
 						this.run("UPDATE decision_proposals SET text = ? WHERE id = ?", applied.text, proposalId);
@@ -5235,6 +5353,7 @@ export class MissionStore {
 			this.referenceBatch = undefined;
 		}
 		this.changed(id, accept ? this.members(id) : []);
+		if (accept && proposal.kind === "withdraw") this.knowledgeChanged(id);
 		return proposalFrom(this.one("SELECT * FROM decision_proposals WHERE id = ?", proposalId)!);
 	}
 
@@ -6486,6 +6605,7 @@ function decisionFrom(row: Row): MissionDecision {
 		text: str(row.text!),
 		audience: decisionAudience(row.audience),
 		...(row.replacement ? { replacement: JSON.parse(str(row.replacement)) as MissionDecision["replacement"] } : {}),
+		...(row.withdrawn ? { withdrawn: JSON.parse(str(row.withdrawn)) as MissionDecision["withdrawn"] } : {}),
 		...optionalAuthor(row.author_session_id),
 		createdAt: num(row.created_at!),
 		updatedAt: num(row.updated_at!),
@@ -6639,6 +6759,7 @@ function proposalFrom(row: Row): MissionDecisionProposal {
 		id: str(row.id!),
 		decisionId: str(row.decision_id!),
 		kind: str(row.kind!) as MissionDecisionProposal["kind"],
+		...(row.operation_id ? { operationId: str(row.operation_id) } : {}),
 		...(row.text !== null ? { text: str(row.text!) } : {}),
 		reason: str(row.reason!),
 		authorSessionId: str(row.author_session_id!),

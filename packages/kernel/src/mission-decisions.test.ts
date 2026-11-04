@@ -95,6 +95,32 @@ test("replacement notices retire old guidance without copying replacement text o
 	);
 });
 
+test("withdrawal notices require exact acknowledged state and preserve external user changes", () => {
+	const withdrawn = {
+		...decision,
+		selected: false,
+		withdrawn: { at: 42, reason: "Obsolete", proposalId: "proposal" },
+	};
+	const before = context([decision]);
+	const after = context([withdrawn]);
+	const notice = decisionNotice(before, after)!;
+	assert.match(notice.summary, /D1 withdrawn \(no longer binding\)/);
+	assert.match(notice.detail, /Historical text and task pins are unchanged/);
+	assert.match(notice.detail, /Reason:\n> Obsolete/);
+	assert.equal(decisionNotice(after, after), undefined);
+	assert.match(decisionNotice(context([]), after)!.detail, /withdrawn/);
+	const own = new Map([[decision.id, withdrawn]]);
+	assert.equal(decisionNotice(before, after, own), undefined);
+	assert.equal(decisionNotice(context([]), after, own), undefined);
+	assert.match(decisionNotice(context([]), after, new Map([[decision.id, decision]]))!.detail, /withdrawn/);
+	for (const metadata of [{ at: 43 }, { reason: "User correction" }, { proposalId: "other" }])
+		assert.ok(
+			decisionNotice(after, context([{ ...withdrawn, withdrawn: { ...withdrawn.withdrawn, ...metadata } }]), own),
+		);
+	assert.match(decisionNotice(after, context([{ ...withdrawn, text: "User edit" }]), own)!.detail, /User edit/);
+	assert.match(decisionNotice(after, context([{ ...withdrawn, audience: "reference" }]), own)!.detail, /Audience/);
+});
+
 test("summary is bounded while disclosure keeps the full decision", () => {
 	const text = "Long rule ".repeat(1000);
 	const notice = decisionNotice(context([]), context([{ ...decision, text }]))!;

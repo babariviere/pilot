@@ -546,6 +546,121 @@ for (const origin of ["own", "external", "lost acknowledgement"] as const) {
 	});
 }
 
+for (const lostAcknowledgement of [false, true]) {
+	test(`user withdrawal removes frozen guidance without suppressing notices (lost proposal ACK: ${lostAcknowledgement})`, async (t) => {
+		const f = await fixture(t);
+		const open = NativeAdapter.open;
+		t.mock.method(NativeAdapter, "open", (options: NativeAdapterOptions) =>
+			open.call(NativeAdapter, {
+				...options,
+				...f.options,
+				sessionOptions: { ...options.sessionOptions, ...f.options.sessionOptions },
+			}),
+		);
+		const old = { id: "old", number: 1, text: "Original protected rule", audience: "all" as const, selected: true };
+		const mission: MissionContext = {
+			id: "m",
+			title: "Choices",
+			goal: "Choose",
+			status: "active",
+			coordinator: "self",
+			tasks: [],
+			decisions: ["D1: Original protected rule"],
+			decisionEntries: [{ id: old.id, text: old.text }],
+			decisionState: [old],
+			decisionVersion: "before",
+		};
+		let calls = 0;
+		const session = await KernelSession.open(
+			{ sessionId: "lead", cwd: f.root, storageDir: join(f.root, "durable"), mission },
+			{
+				onWorking: () => {},
+				callMission: async () => {
+					calls++;
+					if (lostAcknowledgement) throw new Error("Unknown proposal outcome");
+					return { id: "proposal", decisionId: old.id, kind: "withdraw", status: "pending" };
+				},
+			},
+		);
+		f.cleanup.push(() => session.close());
+		const prompts: string[] = [];
+		f.faux.setResponses(
+			[0, 1, 2].map(() => async (context) => {
+				prompts.push(getCurrentSystemPrompt(context.messages));
+				return fauxAssistantMessage("Checked");
+			}),
+		);
+		await session.submit("before", "Begin", "followUp");
+		await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+		const request = (
+			session as unknown as { callMission: (action: "propose", args: Record<string, JsonValue>) => Promise<unknown> }
+		).callMission("propose", { decisionId: "D1", withdraw: true, reason: "Obsolete", operationId: "request" });
+		if (lostAcknowledgement) await assert.rejects(request, /Unknown proposal outcome/);
+		else await request;
+		await session.setMission(mission);
+		await session.submit("pending", "Check pending", "followUp");
+		await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+		assert.match(prompts[1]!, /Decisions \(binding.*D1: Original protected rule/);
+		const withdrawn = { ...old, selected: false, withdrawn: { at: 42, reason: "Obsolete", proposalId: "proposal" } };
+		const changed: MissionContext = {
+			...mission,
+			decisions: [],
+			decisionEntries: [],
+			withdrawnDecisions: [{ number: 1 }],
+			decisionState: [withdrawn],
+			decisionVersion: "accepted",
+		};
+		await session.setMission(changed);
+		await session.setMission(changed);
+		assert.equal(prompts.length, 2, "user acceptance notice does not start generation");
+		await session.submit("after", "Continue", "followUp");
+		await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+		assert.doesNotMatch(prompts[2]!, /Original protected rule/);
+		assert.match(prompts[2]!, /Withdrawn decisions \(not binding; historical pins unchanged\): D1/);
+		let notices = (await session.conversation.entries({}, 100, undefined, BACKGROUND_CONTEXT)).items.filter(
+			(e) => e.kind === "pilot.activity",
+		);
+		assert.equal(notices.length, 1, "proposal ACK never suppresses the separate user acceptance");
+		assert.match(JSON.stringify(notices[0]!.data), /withdrawn|Obsolete/);
+		await session.setMission({
+			...changed,
+			decisionVersion: "user-edit",
+			decisionState: [{ ...withdrawn, text: "Later user edit" }],
+		});
+		notices = (await session.conversation.entries({}, 100, undefined, BACKGROUND_CONTEXT)).items.filter(
+			(e) => e.kind === "pilot.activity",
+		);
+		assert.equal(notices.length, 2);
+		assert.equal(calls, 1, "unknown proposal effects are never replayed automatically");
+	});
+}
+
+test("withdrawal proposal schema is coordinator-only and distinct from hard removal", async () => {
+	const calls: unknown[] = [];
+	const tool = createMissionTool(async (action, args) => {
+		calls.push([action, args]);
+		return {};
+	}, true);
+	const member = createMissionTool(async () => ({}));
+	const params = { action: "propose", decisionId: "D7", withdraw: true, reason: "Obsolete", operationId: "request" };
+	validateToolArguments(tool, { type: "toolCall", id: "proposal", name: "mission", arguments: params });
+	assert.throws(() =>
+		validateToolArguments(member, { type: "toolCall", id: "proposal", name: "mission", arguments: params }),
+	);
+	assert.throws(() =>
+		validateToolArguments(tool, {
+			type: "toolCall",
+			id: "direct",
+			name: "mission",
+			arguments: { action: "withdraw", decisionId: "D7" },
+		}),
+	);
+	await tool.execute("proposal", params as never, undefined, undefined, {} as never);
+	assert.deepEqual(calls, [
+		["propose", { decisionId: "D7", withdraw: true, reason: "Obsolete", operationId: "request" }],
+	]);
+});
+
 test("only coordinators expose the replacement action and forward D-number references", async () => {
 	const calls: unknown[] = [];
 	const coordinator = createMissionTool(async (action, args) => {

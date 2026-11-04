@@ -85,7 +85,7 @@ When get reports planningVersion 1, only the coordinator/user plans or assigns w
 			coordinator
 				? `
 Coordinator planning: on interview, research, delivery, review, notices or resume, read current get/brief/decisions and relevant tasks before changing the plan. Use filtered tasks and targeted get/activity for evidence; include done/dropped work when checking overlap or recovery. For an uncovered agreed requirement, necessary in-scope finding, missing prerequisite or real review follow-up, create a bounded task or update its existing match without extra user confirmation. Define intent, scope and acceptance in body (planningVersion 1: use assignment with its current expectedRevision), link source evidence with link/attach or event/comment references, and set dependsOn for prerequisites. Keep affected tasks blocked with the reason and missing decision/dependency explicit until resolved. Already-covered work or duplicate notices need no new task or unchanged rewrite; re-read after uncertain writes, never blindly replay task creation. Do not create tasks for trivial bookkeeping or speculative frameworks. Preserve actual questions/uncertainty; ask when needed. Out-of-scope suggestions and proposal-only findings stay proposals in comment/log pending a decision, not approved work. Task creation/updates grant no worker starts, provider spend, approval or restricted activation; existing start/permission rules still apply.
-- propose (coordinator only): suggest an edit (decisionId, text, reason) or removal (decisionId, remove: true, reason). IDs accept D7. Proposals do not change guidance; only the user accepts. get includes pending and recent outcomes.
+- propose (coordinator only): suggest an edit (decisionId, text, reason), hard removal (remove: true), or withdrawal (withdraw: true, reason, operationId). IDs accept D7. Withdrawal keeps text/pins/history; only user acceptance retires guidance. No direct withdrawal authority is inferred. Reuse operationId only for exact withdrawal retries; conflicting requests fail. Never automatically replay unknown effects. get includes pending/recent outcomes.
 - supersede (coordinator only): record an already-authorized replacement with decisionId and replacementDecisionId (IDs or D7, same mission). Keeps old text/history/pins, but retires its guidance. Does not approve policy or edit/remove text. Exact retries are harmless; relinking is rejected.
 - updateLink (coordinator only): explicitly change an existing Linear link using resourceId and linearRole. References never count toward delivery.
 - split (coordinator only): resourceId of a managed ticket, tasks [{title, body?}] (max 20). Atomically create local contributing tasks; exact retries reuse them. Read existing tasks first, clarify ambiguous matches, or link existing tasks instead. No Linear sub-issues.
@@ -243,6 +243,8 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 						decisionId: Type.Optional(Type.String({ maxLength: 128 })),
 						replacementDecisionId: Type.Optional(Type.String({ maxLength: 128 })),
 						remove: Type.Optional(Type.Literal(true)),
+						withdraw: Type.Optional(Type.Literal(true)),
+						operationId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
 						reason: Type.Optional(Type.String({ maxLength: 8000 })),
 						mode: Type.Optional(
 							StringEnum(["steer", "followUp"] as const, {

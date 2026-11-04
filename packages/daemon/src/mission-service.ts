@@ -832,7 +832,7 @@ export class MissionService {
 				(decision.audience === "coordinator" && mission.coordinatorSessionId === sessionId) ||
 				pins.has(decision.id),
 		);
-		const selected = relevant.filter((decision) => !decision.replacement);
+		const selected = relevant.filter((decision) => !decision.replacement && !decision.withdrawn);
 		const owned = new Map(
 			detail.tasks
 				.filter((task) => task.sessionId === sessionId && isOpen(task))
@@ -870,13 +870,19 @@ export class MissionService {
 							.map((d) => ({ number: d.number, replacementNumber: d.replacement!.number })),
 					}
 				: {}),
+			...(relevant.some((d) => d.withdrawn)
+				? {
+						withdrawnDecisions: relevant.filter((d) => d.withdrawn).map((d) => ({ number: d.number })),
+					}
+				: {}),
 			decisionEntries: selected.map(({ id, text }) => ({ id, text })),
-			decisionState: detail.decisions.map(({ id, number, text, audience, replacement }) => ({
+			decisionState: detail.decisions.map(({ id, number, text, audience, replacement, withdrawn }) => ({
 				id,
 				number,
 				text,
 				audience,
 				...(replacement ? { replacement } : {}),
+				...(withdrawn ? { withdrawn } : {}),
 				selected: selectedIds.has(id),
 			})),
 			remainingDecisions: detail.decisions.length - selected.length,
@@ -897,8 +903,12 @@ export class MissionService {
 				})),
 			decisionVersion:
 				JSON.stringify(
-					detail.decisions.map(({ id, text, audience, replacement }) =>
-						replacement ? [id, text, audience, replacement] : [id, text, audience],
+					detail.decisions.map(({ id, text, audience, replacement, withdrawn }) =>
+						withdrawn
+							? [id, text, audience, null, withdrawn]
+							: replacement
+								? [id, text, audience, replacement]
+								: [id, text, audience],
 					),
 				) + JSON.stringify([...pins]),
 		};
@@ -1751,14 +1761,16 @@ export class MissionService {
 						.filter(
 							(decision) =>
 								decision.replacement ||
+								decision.withdrawn ||
 								!prompt.some((entry) => entry.id === decision.id && entry.text === decision.text),
 						)
-						.map(({ id, number, text, audience, replacement }) => ({
+						.map(({ id, number, text, audience, replacement, withdrawn }) => ({
 							id,
 							number,
 							text,
 							audience,
 							...(replacement ? { replacement } : {}),
+							...(withdrawn ? { withdrawn } : {}),
 						})),
 				};
 			}
@@ -1889,7 +1901,15 @@ export class MissionService {
 					: this.store.claimTask(missionId, refs[0], sessionId);
 			}
 			case "propose":
+				this.assertSameProject(sessionId, missionId);
 				if (!str("decisionId")) throw new Error("propose requires decisionId");
+				if (args.withdraw !== undefined) {
+					if (args.withdraw !== true || args.text !== undefined || args.remove !== undefined)
+						throw new Error("Use withdraw: true without text or remove");
+					return this.store.proposeWithdrawal(missionId, str("decisionId")!, args.reason, args.operationId, actor);
+				}
+				if (args.operationId !== undefined)
+					throw new Error("operationId is only supported for withdrawal proposals");
 				return this.store.proposeDecision(
 					missionId,
 					str("decisionId")!,
@@ -2143,12 +2163,13 @@ class MissionAgentView {
 				? {
 						decisions: this.detail.decisions
 							.filter((d) => task.decisionIds?.includes(d.id))
-							.map(({ id, number, text, audience, replacement }) => ({
+							.map(({ id, number, text, audience, replacement, withdrawn }) => ({
 								id,
 								number,
 								text,
 								audience,
 								...(replacement ? { replacement } : {}),
+								...(withdrawn ? { withdrawn } : {}),
 							})),
 					}
 				: {}),

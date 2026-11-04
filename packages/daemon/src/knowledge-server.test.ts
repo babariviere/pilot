@@ -21,6 +21,7 @@ test("knowledge HTTP reads are passive and writes act for the user with CAS", as
 	await projects.load();
 	const project = await projects.create({ path: home, workspace: "direct" });
 	const sessions = {
+		piReload: { onChange: () => () => {} },
 		setWorkspaceProcessGuard() {},
 		list: () => [] as SessionSummary[],
 		get: () => undefined,

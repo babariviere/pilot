@@ -237,6 +237,38 @@ test("explicit decision replacement invalidates knowledge once without writing b
 	assert.equal(f.service.detail("p1", id).freshness.state, "checked");
 });
 
+test("only accepted withdrawal invalidates decision knowledge; retries preserve checked state", async (t) => {
+	const f = fixture();
+	t.after(() => f.store.close());
+	const mission = f.store.create({ projectId: "p1", title: "Test" });
+	f.store.join("lead", mission.id);
+	f.store.update(mission.id, { coordinatorSessionId: "lead" });
+	const old = f.store.addDecision(mission.id, "Rule");
+	const id = await f.create([{ type: "mission", missionId: mission.id, decisionId: old.id }]);
+	await f.check(id);
+	const before = f.service.detail("p1", id);
+	const propose = (op: string) => f.store.proposeWithdrawal(mission.id, "D1", "Obsolete", op, { sessionId: "lead" });
+	const rejected = propose("reject");
+	f.store.resolveProposal(mission.id, rejected.id, false);
+	assert.equal(f.service.detail("p1", id).freshness.state, "checked");
+	const pending = propose("accept");
+	const [observation] = await f.observe([id]);
+	assert.ok(observation && !("error" in observation));
+	assert.equal(f.service.detail("p1", id).freshness.state, "checked");
+	f.store.resolveProposal(mission.id, pending.id, true);
+	assert.equal(f.service.detail("p1", id).freshness.state, "needs_check");
+	assert.deepEqual(f.service.detail("p1", id).revision, before.revision);
+	assert.deepEqual(f.store.tasks(mission.id), []);
+	await assert.rejects(f.service.maintenance.recordCheck("p1", observation, "worker", "Stale"), /changed|stale/i);
+	await f.check(id);
+	const generation = f.store.knowledge.pendingGeneration(id);
+	f.store.resolveProposal(mission.id, pending.id, true);
+	propose("accept");
+	assert.equal(f.store.knowledge.pendingGeneration(id), generation);
+	await f.observe([id]);
+	assert.equal(f.service.detail("p1", id).freshness.state, "checked");
+});
+
 test("coordinator reuses one task, records host origin, and never launches or recursively creates tasks", async () => {
 	const f = fixture();
 	const mission = f.store.create({

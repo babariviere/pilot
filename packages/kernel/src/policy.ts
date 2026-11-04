@@ -86,6 +86,7 @@ export interface MissionContext {
 	decisions: string[];
 	/** Relevant historical links only, never replacement text or implicit repinning. */
 	replacedDecisions?: Array<{ number: number; replacementNumber: number }>;
+	withdrawnDecisions?: Array<{ number: number }>;
 	/** Selected prompt content, used to avoid duplicate decision reads. */
 	decisionEntries?: Array<{ id: string; text: string }>;
 	remainingDecisions?: number;
@@ -95,7 +96,7 @@ export interface MissionContext {
 	decisionVersion?: string;
 	/** Latest decision state for specific live notices, separate from the frozen prompt selection. */
 	decisionState?: Array<
-		Pick<MissionDecision, "id" | "number" | "text" | "audience" | "replacement"> & { selected: boolean }
+		Pick<MissionDecision, "id" | "number" | "text" | "audience" | "replacement" | "withdrawn"> & { selected: boolean }
 	>;
 }
 
@@ -212,6 +213,10 @@ export function missionPrompt(
 			`- Decisions (binding, they override the brief): ${mission.decisions.map((d) => d.replace(/\s+/g, " ")).join(" | ")}`,
 		);
 	if (mission.remainingDecisions) lines.push(`- ${mission.remainingDecisions} more decisions: mission decisions.`);
+	if (mission.withdrawnDecisions?.length)
+		lines.push(
+			`- Withdrawn decisions (not binding; historical pins unchanged): ${mission.withdrawnDecisions.map((d) => `D${d.number}`).join(", ")}. Read mission decisions for reasons.`,
+		);
 	if (mission.replacedDecisions?.length)
 		lines.push(
 			`- Replaced decisions (not binding; historical pins unchanged): ${mission.replacedDecisions.map((d) => `D${d.number} replaced by D${d.replacementNumber}`).join(" | ")}. Read mission decisions for replacement text.`,

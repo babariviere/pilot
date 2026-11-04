@@ -25,6 +25,7 @@ export function missionContextFixture(taskCount = 480, memberCount = 400) {
 		});
 	const delivered = new Map<string, MissionContext | undefined>();
 	const sessions = {
+		setInsightsBacklog: () => {},
 		setMissionBridge: () => {},
 		onChange: () => () => {},
 		refreshMissionPullRequests: () => {},

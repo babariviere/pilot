@@ -416,7 +416,7 @@ export class KernelSession {
 							typeof result === "object" &&
 							!Array.isArray(result)
 						) {
-							const { id, number, text, audience, replacement } = result;
+							const { id, number, text, audience, replacement, withdrawn } = result;
 							if (
 								typeof id === "string" &&
 								typeof number === "number" &&
@@ -429,6 +429,9 @@ export class KernelSession {
 									audience: audience as AcknowledgedDecision["audience"],
 									...(replacement && typeof replacement === "object"
 										? { replacement: replacement as AcknowledgedDecision["replacement"] }
+										: {}),
+									...(withdrawn && typeof withdrawn === "object"
+										? { withdrawn: withdrawn as AcknowledgedDecision["withdrawn"] }
 										: {}),
 								});
 						}
@@ -1350,14 +1353,14 @@ export class KernelSession {
 				}).catch((error: unknown) => console.warn("pilot: could not place decision notice", error));
 			}
 			// Keep the stable prompt, except explicitly retired guidance must stop being binding.
-			const replaced = new Map(
-				(context.decisionState ?? []).filter((d) => d.replacement).map((d) => [d.id, d.number]),
+			const retired = new Map(
+				(context.decisionState ?? []).filter((d) => d.replacement || d.withdrawn).map((d) => [d.id, d.number]),
 			);
-			const replacedLabels = new Set([...replaced.values()].map((number) => `D${number}`));
+			const retiredLabels = new Set([...retired.values()].map((number) => `D${number}`));
 			this.#mission.current = {
 				...context,
-				decisions: previous.decisions.filter((d) => !replacedLabels.has(d.split(":", 1)[0]!)),
-				decisionEntries: previous.decisionEntries?.filter((d) => !replaced.has(d.id)),
+				decisions: previous.decisions.filter((d) => !retiredLabels.has(d.split(":", 1)[0]!)),
+				decisionEntries: previous.decisionEntries?.filter((d) => !retired.has(d.id)),
 				remainingDecisions: previous.remainingDecisions,
 			};
 		} else {

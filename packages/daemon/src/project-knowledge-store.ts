@@ -752,12 +752,13 @@ export class ProjectKnowledgeStore {
 		const records: unknown[] = [];
 		if (source.decisionId) {
 			const decision = this.db.one(
-				"SELECT id, text, audience, replacement FROM decisions WHERE mission_id = ? AND id = ?",
+				"SELECT id, text, audience, replacement, withdrawn FROM decisions WHERE mission_id = ? AND id = ?",
 				source.missionId,
 				source.decisionId,
 			);
 			// Preserve pre-link observation tokens for unchanged legacy decisions.
 			if (decision && !decision.replacement) delete decision.replacement;
+			if (decision && !decision.withdrawn) delete decision.withdrawn;
 			records.push(decision);
 		}
 		if (source.taskId)

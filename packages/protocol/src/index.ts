@@ -1056,6 +1056,8 @@ export interface MissionDecision {
 	text: string;
 	/** Explicitly retired guidance. Target identity survives a later user removal; text is read separately. */
 	replacement?: { id: string; number: number; at: number };
+	/** User-accepted withdrawal. Original text and historical pins remain readable. */
+	withdrawn?: { at: number; reason: string; proposalId: string };
 	authorSessionId?: string;
 	createdAt: number;
 	updatedAt: number;
@@ -1065,7 +1067,9 @@ export interface MissionDecision {
 export interface MissionDecisionProposal {
 	id: string;
 	decisionId: string;
-	kind: "edit" | "remove";
+	kind: "edit" | "remove" | "withdraw";
+	/** Withdrawal proposals require an explicit retry identity, never inferred authority. */
+	operationId?: string;
 	text?: string;
 	reason: string;
 	authorSessionId: string;

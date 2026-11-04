@@ -2436,6 +2436,181 @@ test("local user replacement route preserves text and rejects bad links and inpu
 	assert.deepEqual(((await detail.json()) as MissionDetail).decisions[0], saved);
 });
 
+test("withdrawal proposals retain guidance until user acceptance and IPC waits for durability", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Choices",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.store.join(worker.id, mission.id);
+	const old = f.store.addDecision(mission.id, "Protected rule", {}, "reference");
+	const task = f.store.addTask(mission.id, { title: "Pinned", sessionId: worker.id, decisionIds: [old.id] });
+	const before = f.service.context(worker.id)!;
+	const args = { decisionId: "D1", withdraw: true, reason: "Obsolete", operationId: "request" };
+	await assert.rejects(f.service.call(worker.id, "propose", args), /Only the mission coordinator/);
+	for (const invalid of [
+		{ withdraw: false },
+		{ text: "Edit" },
+		{ remove: true },
+		{ reason: "" },
+		{ operationId: undefined },
+	])
+		await assert.rejects(f.service.call(lead.id, "propose", { ...args, ...invalid }));
+	const foreign = f.store.create({ projectId: f.project.id, title: "Other" });
+	const foreignDecision = f.store.addDecision(foreign.id, "Foreign");
+	await assert.rejects(
+		f.service.call(lead.id, "propose", { ...args, decisionId: foreignDecision.id }),
+		/Unknown decision/,
+	);
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	t.after(() => release());
+	let waiting = false;
+	t.mock.method(f.store, "whenDurable", () => {
+		waiting = true;
+		return gate;
+	});
+	const native = f.workers.get(lead.id)!;
+	native.onPacket({ type: "mission.call", callId: "withdrawal", action: "propose", args });
+	await until(() => waiting);
+	const proposal = f.store.proposals(mission.id)[0]!;
+	assert.equal(proposal.kind, "withdraw");
+	assert.equal(
+		native.sent.some((c) => c.type === "mission.result" && c.callId === "withdrawal"),
+		false,
+	);
+	assert.deepEqual(f.service.context(worker.id)?.decisions, before.decisions);
+	assert.equal(f.service.context(worker.id)?.decisionVersion, before.decisionVersion);
+	release();
+	const reply = await until(() => native.sent.find((c) => c.type === "mission.result" && c.callId === "withdrawal"));
+	assert.equal(reply.type, "mission.result");
+	if (reply.type === "mission.result") assert.equal(reply.error, undefined);
+	assert.deepEqual(await f.service.call(lead.id, "propose", args), proposal);
+	const definition = f.store.sharedDefinitionRevision(task.id);
+	f.store.resolveProposal(mission.id, proposal.id, true);
+	const saved = f.store.detail(mission.id).decisions[0]!;
+	const after = f.service.context(worker.id)!;
+	assert.deepEqual(after.decisions, []);
+	assert.deepEqual(after.decisionEntries, []);
+	assert.deepEqual(after.withdrawnDecisions, [{ number: 1 }]);
+	assert.equal(
+		f.service.context(lead.id)?.withdrawnDecisions,
+		undefined,
+		"unpinned reference is not selected for coordinator prompt",
+	);
+	assert.notEqual(after.decisionVersion, before.decisionVersion);
+	assert.deepEqual(f.store.task(mission.id, task.id).decisionIds, [old.id]);
+	assert.equal(f.store.sharedDefinitionRevision(task.id), definition);
+	const read = (await f.service.call(worker.id, "decisions", { _promptDecisions: before.decisionEntries })) as {
+		decisions: MissionDecision[];
+	};
+	assert.deepEqual(
+		read.decisions[0]!.withdrawn,
+		saved.withdrawn,
+		"same text cannot hide retirement from frozen reads",
+	);
+	const pinned = (await f.service.call(worker.id, "get", { id: task.id })) as { decisions: MissionDecision[] };
+	assert.deepEqual(pinned.decisions[0]!.withdrawn, saved.withdrawn);
+	await until(() =>
+		f.workers
+			.get(worker.id)!
+			.sent.some(
+				(c) =>
+					c.type === "mission.context" && c.context?.decisionState?.some((d) => d.id === old.id && d.withdrawn),
+			),
+	);
+	const wrongProject = await f.spawn(f.other.id);
+	f.store.join(wrongProject.id, mission.id);
+	f.store.update(mission.id, { coordinatorSessionId: wrongProject.id });
+	await assert.rejects(f.service.call(wrongProject.id, "propose", args), /own project/);
+	f.store.join(lead.id, foreign.id);
+	f.store.update(foreign.id, { coordinatorSessionId: lead.id });
+	await assert.rejects(f.service.call(lead.id, "propose", { ...args, decisionId: old.id }), /Unknown decision/);
+});
+
+test("user withdrawal acceptance HTTP waits for durability, preserves history and rejects conflicting outcomes", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Choices",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	const old = f.store.addDecision(mission.id, "Protected rule", {}, "all");
+	const proposal = f.store.proposeWithdrawal(mission.id, "D1", "Obsolete", "request", { sessionId: lead.id });
+	const terminals = new TerminalManager();
+	const server = createDaemonServer(
+		{ home: f.home, host: "127.0.0.1", port: 0 },
+		f.sessions,
+		f.projects,
+		new ModelCatalog(f.home),
+		terminals,
+		{ service: f.service, store: f.store },
+	);
+	t.after(async () => {
+		terminals.shutdown();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/missions/${mission.id}`;
+	const post = (outcome: string, body: unknown = {}) =>
+		fetch(`${base}/decision-proposals/${proposal.id}/${outcome}`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(body),
+		});
+	const bad = await post("accept", { text: "Edit" });
+	assert.equal(bad.status, 400);
+	await bad.arrayBuffer();
+	assert.equal(f.store.proposals(mission.id)[0]!.status, "pending");
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	t.after(() => release());
+	let waiting = false;
+	const durable = f.store.durable.bind(f.store);
+	t.mock.method(f.store, "durable", async () => {
+		waiting = true;
+		await gate;
+		await durable();
+	});
+	let acknowledged = false;
+	const pending = post("accept").then((response) => {
+		acknowledged = true;
+		return response;
+	});
+	await until(() => waiting);
+	assert.ok(f.store.detail(mission.id).decisions[0]!.withdrawn);
+	assert.equal(acknowledged, false);
+	release();
+	const response = await pending;
+	assert.equal(response.status, 200);
+	const accepted = await response.json();
+	const retry = await post("accept");
+	assert.equal(retry.status, 200);
+	assert.deepEqual(await retry.json(), accepted);
+	const conflict = await post("reject");
+	assert.equal(conflict.status, 409);
+	await conflict.arrayBuffer();
+	const detail = await fetch(base);
+	const saved = ((await detail.json()) as MissionDetail).decisions[0]!;
+	assert.equal(saved.text, old.text);
+	assert.equal(saved.withdrawn?.reason, "Obsolete");
+	assert.equal(saved.withdrawn?.proposalId, proposal.id);
+	assert.equal(saved.replacement, undefined);
+});
+
 test("decision audiences and task pins select prompts and avoid duplicate detail reads", async (t) => {
 	const f = await fixture(t);
 	const lead = await f.spawn();
