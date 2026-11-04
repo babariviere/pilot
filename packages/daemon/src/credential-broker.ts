@@ -470,7 +470,7 @@ export class CredentialBroker {
 		};
 		socket.on("data", (bytes) => {
 			if (busy) return socket.destroy();
-			buffer = Buffer.concat([buffer, bytes]);
+			buffer = Buffer.concat([buffer, typeof bytes === "string" ? Buffer.from(bytes) : bytes]);
 			if (buffer.length > AUTH_FRAME_LIMIT) return socket.destroy();
 			const end = buffer.indexOf(10);
 			if (end < 0) return;

@@ -154,7 +154,7 @@ export class SubprocessPool {
 			}
 			if (thread.pending.size === 0) this.release(thread);
 		});
-		worker.on("error", (error) => fail(error));
+		worker.on("error", (error) => fail(error instanceof Error ? error : new Error("Worker failed")));
 		worker.on("exit", (code) => fail(new Error(`Subprocess worker exited with code ${code}`)));
 		return thread;
 	}

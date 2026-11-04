@@ -152,7 +152,11 @@ export async function fixture(t: TestContext, options: SessionManagerOptions = {
 		assert.ok(startup, "spawn should publish its startup task before returning");
 		await startup;
 		assert.equal(sessions["starting"].has(created.id), false, "startup task should be removed when settled");
-		assert.equal(sessions.get(created.id)?.state, "working", sessions["metas"].get(created.id)?.failure);
+		assert.equal(
+			sessions.get(created.id)?.state,
+			"working",
+			sessions["metas"].get(created.id)?.failure ?? "Assertion failed",
+		);
 		await sessions.stop(created.id);
 		await Promise.all([...sessions["titleTasks"], ...sessions["saving"].values()]);
 		return sessions.get(created.id)!;

@@ -205,7 +205,7 @@ export class ColdViewReader {
 			});
 			worker.once("error", (error) => {
 				received = true;
-				job.reject(error);
+				job.reject(error instanceof Error ? error : new Error("Worker failed"));
 			});
 			worker.once("exit", (code) => {
 				clearTimeout(timer);

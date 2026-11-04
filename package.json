@@ -28,8 +28,8 @@
 		"test:timings": "node scripts/test.ts --timings"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "2.6.4",
-		"@types/node": "^24.19.2",
+		"@biomejs/biome": "2.6.5",
+		"@types/node": "^26.6.6",
 		"@typescript/native-preview": "latest",
 		"tsx": "^4.23.15"
 	}

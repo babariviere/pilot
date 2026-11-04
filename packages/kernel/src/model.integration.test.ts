@@ -2425,7 +2425,7 @@ test("performance timings observe real SDK HTTP dispatch, SSE headers and first 
 			},
 		},
 	);
-	assert.equal(result.stopReason, "stop", result.errorMessage);
+	assert.equal(result.stopReason, "stop", result.errorMessage ?? "Assertion failed");
 	assert.deepEqual(
 		result.content.map((c) => (c.type === "text" ? c.text : "")),
 		["sensitive answer"],

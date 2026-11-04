@@ -109,7 +109,7 @@ test("real Linux boundary protects alternate paths and descendants while preserv
 }, async (t) => {
 	const capability = await probeLinuxCoordinatorIsolation();
 	if (!capability.available) {
-		assert.notEqual(process.env.PILOT_REQUIRE_LINUX_ISOLATION, "1", capability.detail);
+		assert.notEqual(process.env.PILOT_REQUIRE_LINUX_ISOLATION, "1", capability.detail ?? "Assertion failed");
 		t.skip(capability.detail);
 		return;
 	}
@@ -303,7 +303,7 @@ test("namespace/security-policy denial and missing sandbox tooling remain action
 		assert.match(capability.detail!, /bubblewrap|namespace/);
 		assert.match(capability.detail!, /dnf install bubblewrap/);
 		assert.match(capability.detail!, /Refusing an unrestricted/);
-		assert.notEqual(process.env.PILOT_REQUIRE_LINUX_ISOLATION, "1", capability.detail);
+		assert.notEqual(process.env.PILOT_REQUIRE_LINUX_ISOLATION, "1", capability.detail ?? "Assertion failed");
 		return;
 	}
 	const probe = fileURLToPath(new URL("./linux-coordinator-probe.ts", import.meta.url));
@@ -367,7 +367,7 @@ test("real Linux kernel opens durable storage and native resources only after bo
 }, async (t) => {
 	const capability = await probeLinuxCoordinatorIsolation();
 	if (!capability.available) {
-		assert.notEqual(process.env.PILOT_REQUIRE_LINUX_ISOLATION, "1", capability.detail);
+		assert.notEqual(process.env.PILOT_REQUIRE_LINUX_ISOLATION, "1", capability.detail ?? "Assertion failed");
 		t.skip(capability.detail);
 		return;
 	}

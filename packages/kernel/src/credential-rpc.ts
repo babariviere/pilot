@@ -69,7 +69,7 @@ export class CredentialChannel {
 			this.close("stale");
 		});
 		this.socket.on("data", (bytes) => {
-			this.buffer = Buffer.concat([this.buffer, bytes]);
+			this.buffer = Buffer.concat([this.buffer, typeof bytes === "string" ? Buffer.from(bytes) : bytes]);
 			if (this.buffer.length > this.responseLimit) return this.close();
 			const end = this.buffer.indexOf(10);
 			if (end < 0) return;

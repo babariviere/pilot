@@ -217,7 +217,7 @@ test("preview expands selected host home, creates no files, then clone/register 
 	await f.service.start(req);
 	await settled(f.service);
 	const op = (await f.service.list())[0]!;
-	assert.equal(op.phase, "done", op.problem);
+	assert.equal(op.phase, "done", op.problem ?? "Assertion failed");
 	assert.equal(f.clones, 1);
 	assert.equal(await readFile(join(op.destination, "README.md"), "utf8"), "committed fixture\n");
 	await assert.rejects(readFile(join(f.user, "unsafe-filter-ran")), /ENOENT/);

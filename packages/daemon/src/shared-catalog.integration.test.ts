@@ -236,7 +236,7 @@ test("a held discovery does not serialize an independent model request", { timeo
 			},
 			{ maxRetries: 0, signal: AbortSignal.timeout(3000) },
 		);
-		assert.equal(response.stopReason, "stop", response.errorMessage);
+		assert.equal(response.stopReason, "stop", response.errorMessage ?? "Assertion failed");
 	} finally {
 		release.resolve();
 		await blocked;

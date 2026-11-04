@@ -75,7 +75,7 @@ export async function activateRuntime(owner: RuntimeOwner): Promise<void> {
 				return;
 			}
 			process.send?.("activated", () => {
-				if (process.connected) process.disconnect();
+				if (process.connected) process.disconnect?.();
 				ok();
 			});
 		});

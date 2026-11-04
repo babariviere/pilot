@@ -451,7 +451,7 @@ test("a server refusing TLS receives no plaintext startup or retry", async () =>
 		connections++;
 		socket.on("error", () => {});
 		socket.on("data", (bytes) => {
-			received.push(bytes);
+			received.push(typeof bytes === "string" ? Buffer.from(bytes) : bytes);
 			socket.end("N");
 		});
 	});

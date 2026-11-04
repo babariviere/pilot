@@ -36,7 +36,7 @@ export class MissionReplica {
 		// Never keeps pilotd or a test process alive; close() drains on the caller's thread.
 		this.worker.unref();
 		this.worker.on("message", (reply: unknown) => this.applyReply(reply));
-		this.worker.on("error", (error) => this.fail(error));
+		this.worker.on("error", (error) => this.fail(error instanceof Error ? error : new Error("Worker failed")));
 		this.worker.on("exit", (code) => {
 			if (!this.closed) this.fail(new Error(`Mission store replica exited with code ${code}`));
 		});

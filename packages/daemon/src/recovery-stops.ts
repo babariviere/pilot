@@ -29,7 +29,7 @@ export class RecoveryStops {
 						packet = value;
 					});
 					worker.once("error", (error) => {
-						failure = error;
+						failure = error instanceof Error ? error : new Error("Worker failed");
 					});
 					worker.once("exit", (code) => {
 						clearTimeout(timer);

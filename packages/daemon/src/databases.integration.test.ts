@@ -386,7 +386,7 @@ test("an expired trusted certificate stops TLS before PostgreSQL startup, withou
 			socket.write("S");
 			const tls = new TLSSocket(socket, { isServer: true, secureContext: context });
 			tls.on("error", () => tls.destroy());
-			tls.on("data", (bytes) => startup.push(bytes));
+			tls.on("data", (bytes) => startup.push(typeof bytes === "string" ? Buffer.from(bytes) : bytes));
 		};
 		socket.on("data", negotiate);
 	});

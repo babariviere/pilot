@@ -225,7 +225,7 @@ export class ProjectMemoryService {
 				if (isWatchNotice(reply)) return;
 				finish(reply.error ? new Error(reply.error) : undefined, reply.value);
 			});
-			worker.on("error", (error) => finish(error));
+			worker.on("error", (error) => finish(error instanceof Error ? error : new Error("Worker failed")));
 			worker.on("exit", (code) => finish(new Error(`Memory search exited (${code})`)));
 		});
 	}

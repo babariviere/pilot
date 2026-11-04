@@ -30,7 +30,7 @@ export const startSubagentWatchWorker: SubagentWatchStarter = (directory, conver
 		else onUpdate(update);
 	});
 	worker.on("error", (error) => {
-		if (!stopped) onUpdate({ error: error.message });
+		if (!stopped) onUpdate({ error: error instanceof Error ? error.message : "Worker failed" });
 	});
 	worker.unref();
 	return () => {

@@ -94,7 +94,7 @@ export class DiscoveryWorker {
 			}
 		});
 		worker.on("error", (error) => {
-			if (this.worker === worker) void this.close(error);
+			if (this.worker === worker) void this.close(error instanceof Error ? error : new Error("Worker failed"));
 		});
 		worker.on("exit", () => {
 			if (this.worker === worker) void this.close(new Error("Environment discovery stopped"));

@@ -1,29 +1,43 @@
 packages:
-  - packages/*
+   - packages/*
 
 overrides:
-  # Keep every Pi SDK package on one release: mixed releases have incompatible APIs.
-  "@earendil-works/pi-coding-agent>@earendil-works/pi-codemode": 1.4.0
-  mermaid>katex: 0.19.1
-  # Pi 1.4 pins vulnerable undici 8.10.2; retain Pi and its downstream patches.
-  "@earendil-works/pi-coding-agent>undici": 8.12.3
-  "@earendil-works/pi-codemode": 1.4.0
-  "@earendil-works/chord": 1.4.0
-  "@earendil-works/pi-agent-core": 1.4.0
-  "@earendil-works/pi-ai": 1.4.0
-  "@earendil-works/pi-durable": 1.4.0
-  "@earendil-works/pi-mcp": 1.4.0
-  "@earendil-works/pi-tui": 1.4.0
+   # Keep every Pi SDK package on one release: mixed releases have incompatible APIs.
+   "@earendil-works/pi-coding-agent>@earendil-works/pi-codemode": 1.4.0
+   mermaid>katex: 0.19.1
+   # Pi 1.4 pins vulnerable undici 8.10.2; retain Pi and its downstream patches.
+   "@earendil-works/pi-coding-agent>undici": 8.12.3
+   "@earendil-works/pi-codemode": 1.4.0
+   "@earendil-works/chord": 1.4.0
+   "@earendil-works/pi-agent-core": 1.4.0
+   "@earendil-works/pi-ai": 1.4.0
+   "@earendil-works/pi-durable": 1.4.0
+   "@earendil-works/pi-mcp": 1.4.0
+   "@earendil-works/pi-tui": 1.4.0
 
 # Only these dependencies may run install scripts.
 allowBuilds:
-  esbuild: true
-  node-pty: true
-  fsevents: true
-  protobufjs: true
-  "@google/genai": true
+   esbuild: true
+   node-pty: true
+   fsevents: true
+   protobufjs: true
+   "@google/genai": true
 
 patchedDependencies:
-  '@babariviere/pi-extensions@0.1.0': patches/@babariviere__pi-extensions@0.1.0.patch
-  '@earendil-works/pi-coding-agent@1.4.0': patches/@earendil-works__pi-coding-agent@1.4.0.patch
-  '@earendil-works/pi-durable@1.4.0': patches/@earendil-works__pi-durable@1.4.0.patch
+   "@babariviere/pi-extensions@0.1.0": patches/@babariviere__pi-extensions@0.1.0.patch
+   "@earendil-works/pi-coding-agent@1.4.0": patches/@earendil-works__pi-coding-agent@1.4.0.patch
+   "@earendil-works/pi-durable@1.4.0": patches/@earendil-works__pi-durable@1.4.0.patch
+
+minimumReleaseAgeExclude:
+   - "@biomejs/biome@2.6.5"
+   - "@biomejs/cli-android-arm64@2.6.5"
+   - "@biomejs/cli-android-x64@2.6.5"
+   - "@biomejs/cli-darwin-arm64@2.6.5"
+   - "@biomejs/cli-darwin-x64@2.6.5"
+   - "@biomejs/cli-linux-arm64-musl@2.6.5"
+   - "@biomejs/cli-linux-arm64@2.6.5"
+   - "@biomejs/cli-linux-x64-musl@2.6.5"
+   - "@biomejs/cli-linux-x64@2.6.5"
+   - "@biomejs/cli-win32-arm64@2.6.5"
+   - "@biomejs/cli-win32-x64@2.6.5"
+   - typebox@1.4.4

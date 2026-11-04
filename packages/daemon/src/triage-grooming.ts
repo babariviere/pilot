@@ -76,7 +76,7 @@ export function workerTriage(
 				}
 				finish(result.error ? new Error("Triage model failed") : undefined, result.text);
 			});
-			worker.once("error", (error) => finish(error));
+			worker.once("error", (error) => finish(error instanceof Error ? error : new Error("Worker failed")));
 			worker.once("exit", (code) => {
 				if (code) finish(new Error("Triage worker exited"));
 			});

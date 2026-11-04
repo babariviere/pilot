@@ -3044,7 +3044,7 @@ test("only a diagnostics specialist can inspect its parked admitted target", asy
 		(command): command is Extract<KernelCommand, { type: "diagnostics.result" }> =>
 			command.type === "diagnostics.result" && command.callId === "peer-read",
 	);
-	assert.ok(allowed?.result, allowed?.error);
+	assert.ok(allowed?.result, allowed?.error ?? "Assertion failed");
 	assert.ok("sessionId" in allowed.result);
 	assert.equal(allowed.result.sessionId, peer.id);
 	assert.equal(f.workers.length, 2, "reading the parked peer never constructs a worker");
@@ -3063,7 +3063,7 @@ test("only a diagnostics specialist can inspect its parked admitted target", asy
 		(command): command is Extract<KernelCommand, { type: "diagnostics.result" }> =>
 			command.type === "diagnostics.result" && command.callId === "cross-target",
 	);
-	assert.ok(denied?.result, denied?.error);
+	assert.ok(denied?.result, denied?.error ?? "Assertion failed");
 });
 
 test("Next logs require persisted specialist and current app-scope identity on every read", async (t) => {
@@ -3171,7 +3171,7 @@ test("diagnostic log IPC stays fixed to the persisted host and parked target", a
 		(command): command is Extract<KernelCommand, { type: "diagnostics.logs.result" }> =>
 			command.type === "diagnostics.logs.result" && command.callId === "inventory",
 	);
-	assert.ok(allowed?.result, allowed?.error);
+	assert.ok(allowed?.result, allowed?.error ?? "Assertion failed");
 	assert.equal(allowed.result.host.hostId, "selected-alias");
 	assert.equal(allowed.result.targetSessionId, target.id);
 	const daemonSource = allowed.result.sources?.find((source) => source.id === "daemon");
@@ -3302,7 +3302,7 @@ test("diagnostics role reads other parked histories without legacy grants and va
 		(command): command is Extract<KernelCommand, { type: "diagnostics.history.result" }> =>
 			command.type === "diagnostics.history.result" && command.callId === "no-link",
 	);
-	assert.ok(noLinkResult?.result, noLinkResult?.error);
+	assert.ok(noLinkResult?.result, noLinkResult?.error ?? "Assertion failed");
 	assert.equal(reads.length, 1);
 	reads.length = 0;
 
@@ -3325,7 +3325,7 @@ test("diagnostics role reads other parked histories without legacy grants and va
 		(command): command is Extract<KernelCommand, { type: "diagnostics.history.result" }> =>
 			command.type === "diagnostics.history.result" && command.callId === "allowed",
 	);
-	assert.ok(allowed?.result, allowed?.error);
+	assert.ok(allowed?.result, allowed?.error ?? "Assertion failed");
 	assert.deepEqual(reads, [
 		{
 			directory: join(f.home, "sessions", target.id, "durable"),
@@ -3354,7 +3354,7 @@ test("diagnostics role reads other parked histories without legacy grants and va
 		(command): command is Extract<KernelCommand, { type: "diagnostics.history.result" }> =>
 			command.type === "diagnostics.history.result" && command.callId === "archived-failed-offline",
 	);
-	assert.ok(archived?.result, archived?.error);
+	assert.ok(archived?.result, archived?.error ?? "Assertion failed");
 	assert.equal(reads.length, 2, "archived, failed and offline targets remain available through cold storage");
 	assert.equal(f.workers.length, workerCount);
 	sessions["onPacket"](sessions["metas"].get(granted.id)!, grantedWorker, {
@@ -3391,7 +3391,7 @@ test("diagnostics role reads other parked histories without legacy grants and va
 		(command): command is Extract<KernelCommand, { type: "diagnostics.history.result" }> =>
 			command.type === "diagnostics.history.result" && command.callId === "cross-target",
 	);
-	assert.ok(denied?.result, denied?.error);
+	assert.ok(denied?.result, denied?.error ?? "Assertion failed");
 	assert.equal(reads.length, 4);
 });
 
@@ -3954,7 +3954,7 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 	const repairWorker = sessions["workers"].get(repair.id)! as FakeWorker;
 	const repairMeta = sessions["metas"].get(repair.id)!;
 	assert.deepEqual(repairMeta.repairDiagnostics, { kind: "chat", ...remoteTarget });
-	assert.ok(repairWorker, sessions.get(repair.id)?.error);
+	assert.ok(repairWorker, sessions.get(repair.id)?.error ?? "Assertion failed");
 	assert.deepEqual(repairWorker.spec.repairDiagnostics, repairMeta.repairDiagnostics);
 	assert.equal(repairWorker.spec.role, undefined, "repair remains an ordinary Build");
 	sessions["workers"].delete(target.id);
@@ -3981,7 +3981,7 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 		>;
 	};
 	const operational = await repairRead({ type: "diagnostics.call", callId: "repair-operational" });
-	assert.ok(operational.result, operational.error);
+	assert.ok(operational.result, operational.error ?? "Assertion failed");
 	assert.ok("sessionId" in operational.result && operational.result.sessionId === target.id);
 	const history = await repairRead({
 		type: "diagnostics.history.call",
@@ -3989,13 +3989,16 @@ test("diagnostics role survives reopen and prepares only a bounded read-only han
 		sessionId: target.id,
 		limit: 1,
 	});
-	assert.ok(history.result, history.error);
+	assert.ok(history.result, history.error ?? "Assertion failed");
 	const logs = await repairRead({
 		type: "diagnostics.logs.call",
 		callId: "repair-logs",
 		request: { action: "inventory" },
 	});
-	assert.ok(logs.result && "targetSessionId" in logs.result && logs.result.targetSessionId === target.id, logs.error);
+	assert.ok(
+		logs.result && "targetSessionId" in logs.result && logs.result.targetSessionId === target.id,
+		logs.error ?? "Assertion failed",
+	);
 	for (const [type, callId] of [
 		["diagnostics.call", "repair-other-chat"],
 		["diagnostics.history.call", "repair-other-history"],
@@ -4301,13 +4304,13 @@ test("standalone app proposals use fixed source bindings, reject destination ove
 	);
 	assert.ok(
 		replies[0]?.result && "scope" in replies[0].result && replies[0].result.scope === "app",
-		replies[0]?.error,
+		replies[0]?.error ?? "Assertion failed",
 	);
 	assert.match(replies[1]?.error ?? "", /does not authorize chat diagnostics/);
 	assert.match(replies[2]?.error ?? "", /exact approved repair subject/);
 	assert.ok(
 		replies[3]?.result && "scope" in replies[3].result && replies[3].result.scope === "app",
-		replies[3]?.error,
+		replies[3]?.error ?? "Assertion failed",
 	);
 	assert.equal(f.workers.length, beforeReads);
 	await sessions.rename(repair.id, "My own repair title");

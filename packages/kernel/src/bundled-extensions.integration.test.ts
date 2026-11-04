@@ -623,7 +623,7 @@ for (const apiKey of ["sk-ant-api03-offline-fixture", "sk-ant-oat01-offline-fixt
 				},
 			},
 		);
-		assert.equal(result.stopReason, "stop", result.errorMessage);
+		assert.equal(result.stopReason, "stop", result.errorMessage ?? "Assertion failed");
 		assert.deepEqual(body?.metadata, { user_id: "caller-hook" });
 		const payload = JSON.stringify(body);
 		assert.match(payload, /PRESERVE_PILOT_POLICY/);
