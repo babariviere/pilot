@@ -26,6 +26,8 @@ const ARCHIVE_UNKNOWN: Failure =
 pub(crate) const RETRY_UNKNOWN: Failure = "Retry wasn't confirmed, so it may have started. Check the conversation. It won't be retried again from here.";
 pub(crate) const STARTUP_UNKNOWN: Failure =
     "Restart wasn't confirmed. Check whether the chat started before retrying.";
+pub(crate) const SETUP_UNKNOWN: Failure =
+    "Setup wasn't confirmed, so it may be running. Check the chat's setup before running it again.";
 
 /// What the failed chat's Retry offers. Derived from the shared reports, so the
 /// row menu's Retry startup and the failure's Retry show the same state.
@@ -173,8 +175,19 @@ impl Actions {
             None
         }
     }
+    /// The latest Run setup again for this chat: None while in flight.
+    pub(crate) fn setup_rerun(&self, id: &str) -> Option<Option<Outcome>> {
+        self.reports
+            .get(id)
+            .filter(|r| r.action == Action::RerunSetup)
+            .map(|r| r.outcome.clone())
+    }
     pub(crate) fn read_only(&self, id: &str) -> bool {
         self.reports.get(id).is_some_and(|r| {
+            if r.action == Action::RerunSetup {
+                // Setup runs beside the conversation; the composer stays as it is.
+                return false;
+            }
             if r.action.retry() {
                 // Input waits only while the retry is in flight.
                 return r.outcome.is_none();
@@ -233,6 +246,8 @@ impl Actions {
             evidence.can_retry_startup
         } else if let Action::RetryTurn(_) = action {
             evidence.can_retry_turn
+        } else if action == Action::RerunSetup {
+            evidence.can_rerun_setup
         } else {
             evidence.can_archive
         };
@@ -478,12 +493,14 @@ impl Render for Actions {
                 let verb = match r.action {
                     Action::Retry => "Retry startup",
                     Action::RetryTurn(_) => "Retry",
+                    Action::RerunSetup => "Run setup again",
                     _ if r.evidence.archive => "Archive",
                     _ => "Restore",
                 };
                 let unknown = match r.action {
                     Action::Retry => STARTUP_UNKNOWN,
                     Action::RetryTurn(_) => RETRY_UNKNOWN,
+                    Action::RerunSetup => SETUP_UNKNOWN,
                     _ => "No valid acknowledgment. Do not repeat this action. Check this exact chat in Swift; later visibility is not a receipt.",
                 };
                 let (status, detail, tone) = match r.outcome {

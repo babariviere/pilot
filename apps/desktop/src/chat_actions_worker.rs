@@ -213,6 +213,9 @@ pub(crate) async fn set(
             _ => Outcome::Unknown,
         };
     }
+    if action == Action::RerunSetup {
+        return rerun_setup(client, options, &current).await;
+    }
     if !current.can_archive {
         return Outcome::Rejected(crate::chat_actions::INELIGIBLE);
     }
@@ -256,4 +259,53 @@ pub(crate) async fn set(
         return Outcome::Unknown;
     }
     Outcome::Acknowledged
+}
+/// Queue setup again with native authority. pilotd checks idleness, Automations and
+/// the workspace before queueing; refusals (403/404/409/503) changed nothing.
+async fn rerun_setup(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    current: &Evidence,
+) -> Outcome {
+    const UNAUTHORIZED: Failure = "Pilot couldn't authorize this on Local. Nothing was started.";
+    if !current.can_rerun_setup {
+        return Outcome::Rejected(
+            "Setup can run again only while this chat is idle. Nothing was started.",
+        );
+    }
+    let Ok(capability) = options.model_scope_capability() else {
+        return Outcome::Rejected(UNAUTHORIZED);
+    };
+    let Ok(mut header) = reqwest::header::HeaderValue::from_str(&capability) else {
+        return Outcome::Rejected(UNAUTHORIZED);
+    };
+    header.set_sensitive(true);
+    let response = client
+        .post(format!(
+            "{}/api/sessions/{}/setup",
+            options.loopback(),
+            current.target.chat.id
+        ))
+        .header("x-pilot-github-capability", header)
+        .timeout(RETRY_DEADLINE)
+        .send()
+        .await;
+    let Ok(response) = response else {
+        return Outcome::Unknown;
+    };
+    match response.status().as_u16() {
+        202 => match body(response).await {
+            Ok(value) if value["id"] == current.target.chat.id => Outcome::Acknowledged,
+            _ => Outcome::Unknown,
+        },
+        403 => Outcome::Rejected(UNAUTHORIZED),
+        404 => Outcome::Rejected(
+            "Local didn't start setup. Check that automations are on in Settings → Chats.",
+        ),
+        409 => Outcome::Rejected(
+            "Local can't run setup now: the chat must be idle, with no setup running and setup hooks on. Nothing was started.",
+        ),
+        503 => Outcome::Rejected("Local can't run setup right now. Nothing was started."),
+        _ => Outcome::Unknown,
+    }
 }

@@ -20,6 +20,27 @@ fn failed_startup() -> serde_json::Value {
     raw["error"] = json!("Session startup: synthetic extension load failed");
     raw
 }
+fn setup_failed() -> serde_json::Value {
+    let mut raw = f::source();
+    raw["workspaceSetup"] =
+        json!({"state":"failed","detail":"Setup failed: Install dependencies (exit 1) 日本語"});
+    raw
+}
+/// The private native-action file pilotd's GUI home holds; only setup reruns read it.
+fn with_capability(options: LocalOptions) -> LocalOptions {
+    use std::os::unix::fs::PermissionsExt;
+    let home = std::env::temp_dir().join(format!("faux-capability-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&home).unwrap();
+    let cap = home.join("github-app-capability");
+    std::fs::write(
+        &cap,
+        json!({"daemonId":"test-daemon","lineageId":"test-lineage","token":"b".repeat(64)})
+            .to_string(),
+    )
+    .unwrap();
+    std::fs::set_permissions(&cap, std::fs::Permissions::from_mode(0o600)).unwrap();
+    options.with_scope_home(home)
+}
 
 struct Journey {
     server: Server,
@@ -37,7 +58,8 @@ impl Journey {
         behavior: Behavior,
         raw: serde_json::Value,
     ) -> Self {
-        let server = Server::start(behavior);
+        let mut server = Server::start(behavior);
+        server.options = with_capability(server.options.clone());
         server.seen.lock().unwrap().source = raw.clone();
         let root = std::env::temp_dir()
             .canonicalize()
@@ -487,6 +509,7 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
                 )
             });
             journey(cx, width, mode, mode == ThemeMode::Light, &dir);
+            setup_rerun(cx, width, mode, &dir);
         }
     }
     cx.update(|cx| {
@@ -495,6 +518,61 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
     edges(cx, &dir);
     println!(
         "{}",
-        json!({"failed_turn_retry":true,"startup_retry":true,"pointer_and_keyboard":true,"layouts":"680/1100 light/dark","preedit_guard":true,"pending_repeat_single_post":true,"unknown_never_repeated":true,"stale_disconnected_unavailable_refused":true,"draft_retained":true})
+        json!({"failed_turn_retry":true,"setup_rerun":true,"startup_retry":true,"pointer_and_keyboard":true,"layouts":"680/1100 light/dark","preedit_guard":true,"pending_repeat_single_post":true,"unknown_never_repeated":true,"stale_disconnected_unavailable_refused":true,"draft_retained":true})
     );
+}
+/// Run setup again from the setup failure banner: one capability-carrying POST,
+/// then the banner leaves once Local reports the queued setup.
+fn setup_rerun(cx: &mut HeadlessAppContext, width: f32, mode: ThemeMode, dir: &Option<PathBuf>) {
+    let j = Journey::open(cx, width, Behavior::Accept, setup_failed());
+    cx.update_window(j.h, |_, w, _| {
+        let banner = w.find("workspace-setup-failure").bounds();
+        let b = w.find("workspace-setup-rerun");
+        assert!(b.visible() && b.disabled() != Some(true));
+        assert!(b.bounds().right() <= banner.right());
+        assert!(
+            w.try_find("session-failure").is_none(),
+            "setup never claims the agent failed"
+        );
+    })
+    .unwrap();
+    if let Some(d) = dir {
+        cx.capture_screenshot(j.h)
+            .unwrap()
+            .save(d.join(format!("setup-rerun-{width}-{mode:?}.png")))
+            .unwrap();
+    }
+    cx.update_window(j.h, |_, w, cx| w.click("workspace-setup-rerun", cx))
+        .unwrap();
+    settle(cx, j.h);
+    until(cx, j.h, |_, cx| {
+        j.view
+            .read(cx)
+            .chat_actions
+            .read(cx)
+            .setup_rerun("source")
+            .is_some_and(|o| o == Some(crate::chat_actions::Outcome::Acknowledged))
+    });
+    assert_eq!(j.server.posts(), 1);
+    assert_eq!(
+        j.server.seen.lock().unwrap().requests.last().unwrap().1,
+        "/api/sessions/source/setup"
+    );
+    cx.update_window(j.h, |_, w, _| {
+        assert!(w.find("workspace-setup-rerun").disabled() == Some(true));
+        assert!(w.find("workspace-setup-rerun-note").visible());
+    })
+    .unwrap();
+    assert!(
+        !cx.update(|cx| j.view.read(cx).chat_actions.read(cx).read_only("source")),
+        "setup never locks the composer"
+    );
+    // Local's next summary reports the queued setup: the failure banner leaves.
+    j.publish(cx, |_| {});
+    cx.update_window(j.h, |_, w, _| {
+        assert!(w.try_find("workspace-setup-failure").is_none());
+    })
+    .unwrap();
+    assert_eq!(j.server.posts(), 1, "never repeated");
+    j.close(cx);
 }

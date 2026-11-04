@@ -111,6 +111,7 @@ pub fn run_session_failure_probe(cx: &mut HeadlessAppContext) {
             settle(cx, h);
             cx.update_window(h, |_, w, _| {
                 assert!(w.find("workspace-setup-failure").visible());
+                assert!(w.find("workspace-setup-rerun").visible());
                 assert!(
                     w.try_find("session-failure").is_none(),
                     "setup never claims the agent failed"

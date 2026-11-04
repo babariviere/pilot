@@ -29,8 +29,14 @@ summary's `automation` field: `Setting up workspace · Install dependencies`, or
 `Running checks · Lint` for after-run hooks. Thinking still wins; the hook line
 replaces the generic **Working** and background-job lines.
 
-There is no **Run setup again** action: pilotd has no manual setup trigger, so
-setup only runs on workspace creation and after restore.
+**Run setup again** is a chat action (`chat_actions` `RerunSetup`), in the chat
+row's … menu for chats whose summary records a `workspaceSetup`, and on the
+setup failure notice. Each press reads the chat once (idle, unarchived, no setup
+pending), then sends one `POST /api/sessions/:id/setup` with the native
+capability. 403/404/409/503 changed nothing and say why; a lost or mismatched
+answer is Unconfirmed and is never offered again for that failure. The
+composer stays usable throughout. Checks: `chat_actions` transport tests and
+the `failure-retry` case of the `chat_actions` probe.
 
 ## Hooks section
 

@@ -226,6 +226,8 @@ impl LocalViewer {
                         let convert = evidence.clone();
                         let c = owner.clone();
                         let retry = evidence.clone();
+                        let d = owner.clone();
+                        let setup = evidence.clone();
                         let open = Self::open_mission_item(owner.clone(), &copy);
                         // The row already names the chat; the menu holds only actions.
                         menu.max_w(px(310.))
@@ -265,6 +267,23 @@ impl LocalViewer {
                                         });
                                     }),
                             )
+                            // Only chats whose workspace ran setup offer it again.
+                            .when(evidence.has_setup, |menu| {
+                                menu.item(
+                                    PopupMenuItem::new("Run setup again")
+                                        .disabled(blocked || !evidence.can_rerun_setup)
+                                        .on_click(move |_, w, cx| {
+                                            let _ = d.update(cx, |v, cx| {
+                                                v.chat_row_action(
+                                                    setup.clone(),
+                                                    Action::RerunSetup,
+                                                    w,
+                                                    cx,
+                                                )
+                                            });
+                                        }),
+                                )
+                            })
                             .separator()
                             .when_some(open, |menu, item| menu.item(item))
                             .item(
@@ -337,6 +356,12 @@ impl LocalViewer {
             }
             Action::Convert if evidence.can_convert => {
                 self.open_row_mission(evidence.target, w, cx)
+            }
+            Action::RerunSetup if evidence.can_rerun_setup => {
+                // Setup runs in the chat's workspace without a model turn; the
+                // conversation, draft and queue are untouched.
+                self.chat_actions
+                    .update(cx, |a, cx| a.submit(evidence, Action::RerunSetup, w, cx));
             }
             _ => {}
         }

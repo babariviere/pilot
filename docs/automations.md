@@ -41,7 +41,8 @@ The native action uses `POST /api/sessions/:id/setup`, with no body and the nati
 off, and refuses archived, Ask, direct-checkout, coordinator, continuation, busy
 or already-setting-up chats. Chats without enabled setup commands are also refused.
 After an uncertain response, inspect the chat status rather than automatically retrying.
-The desktop **Run setup again** button uses this action.
+In the app, use **Run setup again** in the chat's … menu or on the setup failure
+notice above the conversation.
 
 There are no teardown or archive-time hooks.
 For time-based work, use [schedules](schedules.md).

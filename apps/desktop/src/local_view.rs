@@ -286,6 +286,9 @@ pub enum PreviewState {
 pub struct LocalViewer {
     session_failure_fence: crate::session_failure::Fence,
     session_failure_focus: gpui_kit::FocusHandle,
+    /// Run setup again from the setup failure banner: the chat and failure it answers,
+    /// and whether its eligibility read is still in flight.
+    setup_rerun: Option<session_failure_view::SetupRerun>,
     queue_forms: Vec<(Entity<queued_message_view::Form>, Subscription)>,
     conversation_links: Option<Entity<conversation_links_view::Pane>>,
     workspace_changes: Option<Entity<workspace_changes_view::Pane>>,
@@ -1715,6 +1718,7 @@ impl LocalViewer {
             workspace_changes: None,
             session_failure_fence: Default::default(),
             session_failure_focus: cx.focus_handle().tab_stop(true),
+            setup_rerun: None,
             projects_open: false,
             jump: None,
             jump_subscription: None,
@@ -2875,7 +2879,7 @@ impl Render for LocalViewer {
                     // One 48pt row: title over a quiet project subtitle, then named icon actions and the … menu.
                     .child(self.chat_header_element(window, cx))
                     .when_some(self.session_failure_banner(cx), |d, banner| d.child(banner))
-                    .when_some(self.workspace_setup_banner(), |d, banner| d.child(banner))
+                    .when_some(self.workspace_setup_banner(cx), |d, banner| d.child(banner))
                     .child(div().v_flex().flex_1().min_h_0().min_w_0().w_full().when(self.artifacts_open, |d| d.max_w(px(760.)).mx_auto())
                         // Placeholders keep the readable column; only the transcript scroller spans the pane.
                         .when(self.selected.is_some()&&!self.state.loaded,|this|this.child(div().w_full().max_w(px(crate::ui::CONVERSATION_MAX_WIDTH)).mx_auto().p_3().text_sm().text_color(cx.theme().muted_foreground).child("Loading history…")))

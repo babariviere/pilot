@@ -65,9 +65,10 @@ impl Daemon {
                             let mut reader = BufReader::new(stream); let mut first = String::new();
                             if reader.read_line(&mut first).await.unwrap_or(0) == 0 { return; }
                             let words: Vec<_> = first.split_whitespace().collect(); assert_eq!(words.len(),3);
-                            let (method,path) = (words[0].to_owned(), words[1].to_owned()); let mut length = 0;
+                            let (method,path) = (words[0].to_owned(), words[1].to_owned()); let mut length = 0; let mut capability = false;
                             loop { let mut line = String::new(); if reader.read_line(&mut line).await.unwrap_or(0) == 0 {return;}
                                 if line == "\r\n" { break; } assert!(!line.to_ascii_lowercase().starts_with("origin:"));
+                                capability |= line.to_ascii_lowercase().starts_with("x-pilot-github-capability:");
                                 if let Some(s) = line.to_ascii_lowercase().strip_prefix("content-length:") { length = s.trim().parse::<usize>().unwrap(); }
                                 assert!(length <= 64*1024);
                             }
@@ -100,6 +101,7 @@ impl Daemon {
                                         }
                                     }
                                     ("POST", "/api/sessions/source/rewind") => {
+                                        assert!(!capability);
                                         assert_eq!(payload["action"], "retry");
                                         assert!(payload["entryId"].is_u64());
                                         assert_eq!(payload.as_object().unwrap().len(), 2);
@@ -128,6 +130,22 @@ impl Daemon {
                                             Behavior::Slow => (200,s.source.clone(),true),
                                             Behavior::Accept => (200,s.source.clone(),false),
                                             Behavior::Refuse(code) => (code,json!({"error":"synthetic refusal"}),false),
+                                        }
+                                    }
+                                    ("POST", "/api/sessions/source/setup") => {
+                                        assert!(payload.is_null());
+                                        assert!(capability, "setup reruns carry native authority");
+                                        if let Behavior::Refuse(code) = s.behavior {
+                                            (code,json!({"error":"synthetic refusal"}),false)
+                                        } else {
+                                            s.source["workspaceSetup"]=json!({"state":"pending"});
+                                            match s.behavior {
+                                                Behavior::Lost => return,
+                                                Behavior::ErrorAfter => (500,json!({"error":"synthetic post-commit failure"}),false),
+                                                Behavior::WrongId => (202,json!({"id":"other"}),false),
+                                                Behavior::Slow => (202,s.source.clone(),true),
+                                                _ => (202,s.source.clone(),false),
+                                            }
                                         }
                                     }
                                     _ => panic!("unexpected synthetic route {method} {path}"),

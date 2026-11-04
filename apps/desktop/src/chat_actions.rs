@@ -45,6 +45,11 @@ pub(crate) struct Evidence {
     /// The chat's last run failed and nothing visible blocks pilotd's turn
     /// retry. pilotd remains authoritative for its own guards.
     pub(crate) can_retry_turn: bool,
+    /// The chat's workspace has a recorded setup (created or restored with setup hooks).
+    pub(crate) has_setup: bool,
+    /// Setup can be queued again: an idle, unarchived chat with no setup running.
+    /// pilotd also requires Automations on and an isolated Build workspace.
+    pub(crate) can_rerun_setup: bool,
 }
 impl Evidence {
     pub(crate) fn read(target: &Target, raw: &Value, guarded: bool) -> Result<Self, Failure> {
@@ -64,6 +69,7 @@ impl Evidence {
             .iter()
             .any(|key| !raw[*key].is_null() && !raw[*key].is_boolean())
             || (!raw["runningJobs"].is_null() && !raw["runningJobs"].is_array())
+            || (!raw["workspaceSetup"].is_null() && !raw["workspaceSetup"]["state"].is_string())
         {
             return Err("Chat action metadata is incomplete or invalid.");
         }
@@ -124,6 +130,7 @@ impl Evidence {
             "nextAttemptModel".into(),
             Value::Bool(!raw["nextAttemptModel"].is_null()),
         );
+        stamp.insert("setup".into(), raw["workspaceSetup"]["state"].clone());
         stamp.insert(
             "attempt".into(),
             raw["attempts"]
@@ -144,6 +151,13 @@ impl Evidence {
         {
             return Err("Chat action metadata exceeds its limit.");
         }
+        let idle = !archived
+            && !working
+            && matches!(raw["state"].as_str(), Some("idle" | "parked"))
+            && raw["sleepPaused"] != true
+            && raw["offlinePaused"] != true
+            && raw["runningJobs"].as_array().is_none_or(Vec::is_empty);
+        let has_setup = raw["workspaceSetup"]["state"].is_string();
         Ok(Self {
             target: target.clone(),
             stamp: Value::Object(stamp),
@@ -157,13 +171,13 @@ impl Evidence {
             can_retry_turn: raw["outcome"] == "failed"
                 && raw["canRetryStartup"] != true
                 && raw["nextAttemptModel"].is_null()
-                && !archived
-                && !working
-                && matches!(raw["state"].as_str(), Some("idle" | "parked"))
-                && raw["sleepPaused"] != true
-                && raw["offlinePaused"] != true
-                && raw["runningJobs"].as_array().is_none_or(Vec::is_empty)
+                && idle
                 && crate::local_model::messageable_local(raw),
+            has_setup,
+            can_rerun_setup: has_setup
+                && idle
+                && raw["control"] != true
+                && raw["workspaceSetup"]["state"] != "pending",
         })
     }
 }
@@ -178,6 +192,9 @@ pub(crate) enum Action {
     /// user message that began this failed assistant entry and sends that
     /// message again. The failed attempt stays in history.
     RetryTurn(u64),
+    /// Queue the workspace setup hooks again (`POST /api/sessions/:id/setup`).
+    /// No model turn; never repeated after an unconfirmed answer.
+    RerunSetup,
 }
 impl Action {
     pub(crate) fn retry(self) -> bool {

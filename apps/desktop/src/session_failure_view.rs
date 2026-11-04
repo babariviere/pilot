@@ -10,36 +10,211 @@ use crate::{
 use gpui_kit::{AnyElement, ClipboardItem, StatefulInteractiveElement, base::SelectableText};
 use std::hash::{Hash, Hasher};
 
+/// Run setup again, as asked from the setup failure banner.
+pub(super) struct SetupRerun {
+    /// The chat and the failure detail it answers; a newer failure starts fresh.
+    chat: String,
+    detail: String,
+    /// The eligibility read is in flight.
+    checking: bool,
+    /// A refusal before anything was submitted.
+    error: Option<crate::chat_actions::Failure>,
+}
+const SETUP_HELP: &str = "Run this project's setup hooks again in this chat's workspace";
+
 impl LocalViewer {
-    pub(super) fn workspace_setup_banner(&self) -> Option<AnyElement> {
+    pub(super) fn workspace_setup_banner(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if self.page != Page::Chat
             || self.artifacts_open
             || self.state.generation != self.generation
         {
             return None;
         }
-        let detail = self
+        let chat = self.selected.as_ref().and_then(|id| {
+            self.state
+                .chats
+                .iter()
+                .find(|chat| &chat.id == id && !chat.local_draft)
+        })?;
+        let detail = chat.setup_failure.as_ref()?;
+        let actions = self.chat_actions.read(cx);
+        let mine = self
+            .setup_rerun
+            .as_ref()
+            .filter(|r| r.chat == chat.id && &r.detail == detail);
+        let report = mine.and_then(|_| actions.setup_rerun(&chat.id));
+        use crate::chat_actions::Outcome;
+        let (busy, done, note) = match (mine, report) {
+            (Some(r), _) if r.checking => (true, false, None),
+            (Some(SetupRerun { error: Some(e), .. }), None) => {
+                (false, false, Some((*e, ui::Tone::Error)))
+            }
+            (_, Some(None)) => (true, false, None),
+            (_, Some(Some(Outcome::Rejected(e)))) => (false, false, Some((e, ui::Tone::Error))),
+            // Never offered again for this failure: it may be running already.
+            (_, Some(Some(Outcome::Unknown))) => (
+                false,
+                true,
+                Some((crate::chat_actions_view::SETUP_UNKNOWN, ui::Tone::Warning)),
+            ),
+            (_, Some(Some(Outcome::Acknowledged))) => {
+                (false, true, Some(("Setup started.", ui::Tone::Quiet)))
+            }
+            _ => (false, false, None),
+        };
+        let available = chat.writable && actions.options.is_some() && !actions.blocked(&chat.id);
+        let rerun = ui::action(
+            "workspace-setup-rerun",
+            "Run setup again",
+            Action::Secondary,
+        )
+        .icon(AppIcon::Retry.asset())
+        .flex_none()
+        .loading(busy)
+        .disabled(busy || done || !available)
+        .tooltip(SETUP_HELP)
+        .on_click(cx.listener(|v, _, w, cx| {
+            if v.project_choices_ready(w, cx) {
+                v.rerun_setup(w, cx);
+            }
+        }));
+        Some(
+            div()
+                .id("workspace-setup-failure")
+                .test_support()
+                .flex_none()
+                .v_flex()
+                .gap_1()
+                .min_w_0()
+                .w_full()
+                .px_3()
+                .py_2()
+                .child(
+                    div()
+                        .h_flex()
+                        .items_center()
+                        .gap_2()
+                        .min_w_0()
+                        .child(
+                            div().flex_1().min_w_0().child(
+                                ui::Notice::new(SharedString::from(detail.clone()))
+                                    .tone(ui::Tone::Error),
+                            ),
+                        )
+                        .child(rerun),
+                )
+                .children(note.map(|(text, tone)| {
+                    ui::text(Text::Caption, text)
+                        .id("workspace-setup-rerun-note")
+                        .test_support()
+                        .text_color(tone.color(cx))
+                }))
+                .into_any_element(),
+        )
+    }
+    /// One eligibility read, then the shared non-replayable chat action.
+    fn rerun_setup(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        let Some(chat) = self
             .selected
             .as_ref()
             .and_then(|id| {
                 self.state
                     .chats
                     .iter()
-                    .find(|chat| &chat.id == id && !chat.local_draft)
+                    .find(|c| &c.id == id && !c.local_draft)
             })
-            .and_then(|chat| chat.setup_failure.as_ref())?;
-        Some(
-            div()
-                .id("workspace-setup-failure")
-                .test_support()
-                .flex_none()
-                .min_w_0()
-                .w_full()
-                .px_3()
-                .py_2()
-                .child(ui::Notice::new(SharedString::from(detail.clone())).tone(ui::Tone::Error))
-                .into_any_element(),
-        )
+            .cloned()
+        else {
+            return;
+        };
+        let Some(detail) = chat.setup_failure.clone() else {
+            return;
+        };
+        if self.setup_rerun.as_ref().is_some_and(|r| r.checking)
+            || self.chat_actions.read(cx).blocked(&chat.id)
+        {
+            return;
+        }
+        let id = chat.id.clone();
+        let refuse = |v: &mut Self, error, cx: &mut Context<Self>| {
+            v.setup_rerun = Some(SetupRerun {
+                chat: id.clone(),
+                detail: detail.clone(),
+                checking: false,
+                error: Some(error),
+            });
+            cx.notify();
+        };
+        let Some(target) = self.chat_actions.read(cx).target(chat) else {
+            return refuse(self, "Chat actions aren't available right now.", cx);
+        };
+        if !self.chat_action_ready(&target, w, cx) {
+            return refuse(
+                self,
+                "This chat changed or Local is unavailable. Nothing was started.",
+                cx,
+            );
+        }
+        let known_ack = self.chat_actions.read(cx).inspection_ack(&id);
+        let rx = self
+            .chat_actions
+            .read(cx)
+            .worker
+            .as_ref()
+            .ok_or("Chat actions aren't available right now.")
+            .and_then(|worker| worker.inspect(target));
+        let rx = match rx {
+            Ok(rx) => rx,
+            Err(error) => return refuse(self, error, cx),
+        };
+        self.setup_rerun = Some(SetupRerun {
+            chat: id.clone(),
+            detail: detail.clone(),
+            checking: true,
+            error: None,
+        });
+        cx.notify();
+        let generation = self.generation;
+        cx.spawn_in(w, async move |v, cx| {
+            let result = rx
+                .recv()
+                .await
+                .unwrap_or(Err("Chat actions aren't available right now."));
+            let _ = v.update_in(cx, |v, w, cx| {
+                let Some(r) = v
+                    .setup_rerun
+                    .as_mut()
+                    .filter(|r| r.chat == id && r.detail == detail && r.checking)
+                else {
+                    return;
+                };
+                r.checking = false;
+                cx.notify();
+                let evidence = match result {
+                    Ok(evidence) => evidence,
+                    Err(error) => {
+                        r.error = Some(error);
+                        return;
+                    }
+                };
+                v.chat_actions
+                    .update(cx, |a, _| a.inspected(&evidence, known_ack));
+                // Navigating away abandons the request before anything was submitted.
+                if v.selected.as_deref() != Some(id.as_str()) || v.generation != generation {
+                    return;
+                }
+                if !evidence.can_rerun_setup {
+                    if let Some(r) = v.setup_rerun.as_mut() {
+                        r.error = Some(
+                            "Setup can run again only while this chat is idle. Nothing was started.",
+                        );
+                    }
+                    return;
+                }
+                v.chat_row_action(evidence, crate::chat_actions::Action::RerunSetup, w, cx);
+            });
+        })
+        .detach();
     }
 
     pub(super) fn selected_failure(&self) -> Option<&Failure> {

@@ -305,6 +305,105 @@ async fn a_failed_startup_reloads_once_on_the_exact_route() {
     assert_eq!(seen.requests.iter().filter(|r| r.0 == "POST").count(), 1);
 }
 
+/// Options with a private native-action capability file, as pilotd's GUI home has.
+fn with_capability(options: &LocalOptions) -> LocalOptions {
+    use std::os::unix::fs::PermissionsExt;
+    let home = std::env::temp_dir().join(format!("faux-capability-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&home).unwrap();
+    let cap = home.join("github-app-capability");
+    std::fs::write(
+        &cap,
+        json!({"daemonId":"test-daemon","lineageId":"test-lineage","token":"b".repeat(64)})
+            .to_string(),
+    )
+    .unwrap();
+    std::fs::set_permissions(&cap, std::fs::Permissions::from_mode(0o600)).unwrap();
+    options.clone().with_scope_home(home)
+}
+fn posts(d: &Daemon) -> Vec<String> {
+    let seen = d.seen.lock().unwrap();
+    seen.requests
+        .iter()
+        .filter(|r| r.0 == "POST")
+        .map(|r| r.1.clone())
+        .collect()
+}
+#[tokio::test]
+async fn setup_runs_again_once_with_native_authority_on_an_idle_chat() {
+    let d = Daemon::start(Behavior::Accept).await;
+    let c = transport::client().unwrap();
+    let options = with_capability(&d.options);
+    // A workspace without a recorded setup isn't offered one.
+    let raw = d.seen.lock().unwrap().source.clone();
+    let e = transport::inspect(&c, &options, &target(&options, &raw))
+        .await
+        .unwrap();
+    assert!(!e.has_setup && !e.can_rerun_setup);
+    assert!(matches!(
+        transport::set(&c, &options, &e, Action::RerunSetup).await,
+        Outcome::Rejected(_)
+    ));
+    assert!(posts(&d).is_empty());
+    d.seen.lock().unwrap().source["workspaceSetup"] =
+        json!({"state":"failed","detail":"Setup failed: Install (exit 1)"});
+    let raw = d.seen.lock().unwrap().source.clone();
+    let e = transport::inspect(&c, &options, &target(&options, &raw))
+        .await
+        .unwrap();
+    assert!(e.has_setup && e.can_rerun_setup);
+    assert!(transport::set(&c, &options, &e, Action::RerunSetup).await == Outcome::Acknowledged);
+    assert_eq!(posts(&d), ["/api/sessions/source/setup"]);
+    // Queued setup isn't offered again; neither is a working chat's.
+    let raw = d.seen.lock().unwrap().source.clone();
+    let e = transport::inspect(&c, &options, &target(&options, &raw))
+        .await
+        .unwrap();
+    assert!(e.has_setup && !e.can_rerun_setup);
+    let mut working = raw.clone();
+    working["workspaceSetup"] = json!({"state":"ok"});
+    working["working"] = json!(true);
+    let e = Evidence::read(&target(&options, &working), &working, true).unwrap();
+    assert!(e.has_setup && !e.can_rerun_setup);
+}
+#[tokio::test]
+async fn setup_rerun_refusals_change_nothing_and_lost_answers_stay_unknown() {
+    for (behavior, unknown) in [
+        (Behavior::Refuse(409), false),
+        (Behavior::Refuse(404), false),
+        (Behavior::Refuse(403), false),
+        (Behavior::Refuse(503), false),
+        (Behavior::Lost, true),
+        (Behavior::ErrorAfter, true),
+        (Behavior::WrongId, true),
+    ] {
+        let d = Daemon::start(behavior).await;
+        let c = transport::client().unwrap();
+        let options = with_capability(&d.options);
+        d.seen.lock().unwrap().source["workspaceSetup"] = json!({"state":"failed"});
+        let raw = d.seen.lock().unwrap().source.clone();
+        let e = transport::inspect(&c, &options, &target(&options, &raw))
+            .await
+            .unwrap();
+        let outcome = transport::set(&c, &options, &e, Action::RerunSetup).await;
+        assert_eq!(outcome == Outcome::Unknown, unknown);
+        assert!(unknown || matches!(outcome, Outcome::Rejected(_)));
+        assert_eq!(posts(&d).len(), 1, "one POST, never repeated");
+    }
+    // Without native authority nothing is sent.
+    let d = Daemon::start(Behavior::Accept).await;
+    let c = transport::client().unwrap();
+    d.seen.lock().unwrap().source["workspaceSetup"] = json!({"state":"failed"});
+    let raw = d.seen.lock().unwrap().source.clone();
+    let e = transport::inspect(&c, &d.options, &target(&d.options, &raw))
+        .await
+        .unwrap();
+    assert!(matches!(
+        transport::set(&c, &d.options, &e, Action::RerunSetup).await,
+        Outcome::Rejected(_)
+    ));
+    assert!(posts(&d).is_empty());
+}
+
 fn failed_turn() -> Value {
     let mut raw = source();
     raw["state"] = json!("parked");
