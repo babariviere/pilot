@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { type TestContext, test } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { fauxAssistantMessage, fauxProvider, fauxToolCall, type Message, Type } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxProvider, fauxToolCall, type Message } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 import {
@@ -14,6 +14,7 @@ import {
 	MemoryStorage,
 	UserEntry,
 } from "@earendil-works/pi-durable";
+import { Type } from "typebox";
 import { reconcileCompletion } from "./attention.ts";
 import { COMPACTION_TARGETS, compactionPolicy } from "./compaction-policy.ts";
 import { DIGEST_MARK, DigestCompiler } from "./context-digest.ts";
@@ -158,7 +159,8 @@ test("beyond 100k total input inside a tool loop, the next request compacts to a
 	const settled = await turn(
 		chat,
 		"Investigate the export failure. Always use pnpm, never npm.",
-		...dumps(7),
+		// Pi 1.5 faux usage counts each prompt token once, including cache writes.
+		...dumps(9),
 		call("dump", { fact: "migration checksum ab12 applied to ledger_db" }),
 		(ctx) => {
 			lastRequestChars = JSON.stringify(ctx.messages).length;

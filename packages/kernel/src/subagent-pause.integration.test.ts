@@ -33,7 +33,7 @@ function childProvider(root: string, mode: string): string {
 import { existsSync, watch, writeFileSync, appendFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { join } from "node:path";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { fauxProvider, fauxAssistantMessage, fauxToolCall } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai/providers/faux"))};
 const root = ${JSON.stringify(root)};
 const mode = ${JSON.stringify(mode)};

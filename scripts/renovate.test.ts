@@ -18,7 +18,7 @@ test("Renovate uses native npm Git updates with pnpm artifact generation", () =>
 	assert.equal(extensions.versioning, "git");
 	assert.equal(extensions.followTag, "main");
 	assert.equal(extensions.pinDigests, true);
-	assert.equal(extensions.enabled, false, "upstream main does not yet export Pilot's embedding API");
+	assert.equal(extensions.enabled, true, "upstream includes the embedding and lifecycle APIs");
 });
 
 test("the compatible bundled pin matches the lockfile's specifier and resolution", () => {

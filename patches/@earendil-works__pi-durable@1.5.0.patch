@@ -1,8 +1,7 @@
 diff --git a/dist/harness/compaction.js b/dist/harness/compaction.js
-index 156e258ddfd39d87675f57a8961f3e3a1c3f6c55..0fe880d68968a1c6c2efa96c86088d56f5d08d23 100644
 --- a/dist/harness/compaction.js
 +++ b/dist/harness/compaction.js
-@@ -64,7 +64,8 @@ export const CompactionTask = defineTask({
+@@ -66,7 +66,8 @@
              const model = ref === undefined ? undefined : runtime.models.getModel(ref.provider, ref.modelId);
              if (ref === undefined || model === undefined)
                  return failNoModel(runtime, ref, context);
@@ -12,7 +11,7 @@ index 156e258ddfd39d87675f57a8961f3e3a1c3f6c55..0fe880d68968a1c6c2efa96c86088d56
              const view = await runtime.context(conversationId, context);
              const cut = selectCut(view, policy.keepRecentTokens);
              if (cut === undefined)
-@@ -85,8 +86,12 @@ export const CompactionTask = defineTask({
+@@ -87,8 +88,12 @@
              });
              if (decision !== undefined && "decline" in decision)
                  return complete(runtime, context);
@@ -26,7 +25,7 @@ index 156e258ddfd39d87675f57a8961f3e3a1c3f6c55..0fe880d68968a1c6c2efa96c86088d56
              const request = {
                  attempt: 1,
                  model: ref,
-@@ -200,6 +205,7 @@ export function compactionPolicy(settings, model) {
+@@ -206,6 +211,7 @@
          reserveTokens: override?.reserveTokens ?? policy.reserveTokens,
          keepRecentTokens: override?.keepRecentTokens ?? policy.keepRecentTokens,
          backgroundTokens: override?.backgroundTokens ?? policy.backgroundTokens,
@@ -34,7 +33,7 @@ index 156e258ddfd39d87675f57a8961f3e3a1c3f6c55..0fe880d68968a1c6c2efa96c86088d56
      };
  }
  /**
-@@ -359,8 +365,8 @@ function truncate(text, maxChars) {
+@@ -365,8 +371,8 @@
      return `${text.slice(0, maxChars)}\n\n[... ${text.length - maxChars} more characters truncated]`;
  }
  /** Place a summary supplied by a hook in its own commit. */
@@ -45,7 +44,7 @@ index 156e258ddfd39d87675f57a8961f3e3a1c3f6c55..0fe880d68968a1c6c2efa96c86088d56
  }
  /**
   * Place the summary entry and complete (spec §8.7). A blocking compaction, owned by its generation, appends it: the
-@@ -368,15 +374,34 @@ async function place(runtime, firstKept, summary, context) {
+@@ -374,15 +380,34 @@
   * idle, otherwise at the next boundary, or settled `stale`.
   * REMINDER: nothing else may append to a busy conversation, so every non-blocking summary goes through admission.
   */
@@ -84,8 +83,8 @@ index 156e258ddfd39d87675f57a8961f3e3a1c3f6c55..0fe880d68968a1c6c2efa96c86088d56
      };
      const result = current.owner === undefined
          ? {
-@@ -392,6 +417,15 @@ async function complete(runtime, context) {
-         return { status: "terminal", outcome: { status: "completed", result: {} } };
+@@ -409,6 +434,15 @@
+         };
      }, context);
  }
 +async function failDecision(runtime, message, context) {
@@ -101,10 +100,9 @@ index 156e258ddfd39d87675f57a8961f3e3a1c3f6c55..0fe880d68968a1c6c2efa96c86088d56
      const message = ref === undefined ? "No model is configured" : `Model ${ref.provider}/${ref.modelId} is not available`;
      await runtime.commit(async (tx) => {
 diff --git a/dist/harness/inbox.js b/dist/harness/inbox.js
-index 5ef33aa67d8435deecfb92dcbae0a987e8332976..81baf42088535954b89c0f1a6e98f31a2fa5bb9a 100644
 --- a/dist/harness/inbox.js
 +++ b/dist/harness/inbox.js
-@@ -26,8 +26,8 @@ export async function prepareBoundary(tx, conversationId, modes) {
+@@ -26,8 +26,8 @@
      };
  }
  /**
@@ -115,7 +113,7 @@ index 5ef33aa67d8435deecfb92dcbae0a987e8332976..81baf42088535954b89c0f1a6e98f31a
   * items after them, each in ID order, so user items queued before a reset run in the new context. A write whose head
   * targets an entry before the active range, including a range started earlier in this commit, is stale. Selected and
   * stale items are removed positionally.
-@@ -42,7 +42,8 @@ export async function applyBoundary(tx, boundary, at, now) {
+@@ -42,7 +42,8 @@
          return queueMode === "all" ? indexes : indexes.slice(0, 1);
      };
      const writes = items.flatMap((item, index) => (item.mode === "write" ? [index] : []));
@@ -124,12 +122,11 @@ index 5ef33aa67d8435deecfb92dcbae0a987e8332976..81baf42088535954b89c0f1a6e98f31a
 +    const users = steers.length > 0 ? steers : final ? pick("followUp", boundary.followUpMode) : [];
      users.sort((a, b) => a - b);
      // `appendEntry()` copies the drafts' values; the items are removed only afterwards.
-     for (const index of writes) {
+     let first;
 diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
-index 192a9cce35ad4729009d2e3f75f475c8dffa16c8..7ad02fb828b611dcaaa2fb7b3691bd859b2815b2 100644
 --- a/dist/harness/types.d.ts
 +++ b/dist/harness/types.d.ts
-@@ -455,6 +455,8 @@ export type CompactionPolicy = {
+@@ -508,6 +508,8 @@
      keepRecentTokens: number;
      /** Background compaction starts `backgroundTokens` below the blocking threshold; `0` disables it. */
      backgroundTokens: number;
@@ -138,7 +135,7 @@ index 192a9cce35ad4729009d2e3f75f475c8dffa16c8..7ad02fb828b611dcaaa2fb7b3691bd85
  };
  /**
   * Harness-wide compaction settings. `modelOverrides` is keyed by exact `"provider/modelId"`; each field it sets
-@@ -830,6 +832,15 @@ export interface CompactionHooks {
+@@ -988,6 +990,15 @@
          readonly decline: true;
      } | {
          readonly summary: string;
@@ -153,4 +150,4 @@ index 192a9cce35ad4729009d2e3f75f475c8dffa16c8..7ad02fb828b611dcaaa2fb7b3691bd85
 +        readonly error: string;
      }>;
  }
- //# sourceMappingURL=types.d.ts.map
+ export {};

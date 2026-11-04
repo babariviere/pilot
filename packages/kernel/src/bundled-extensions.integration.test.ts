@@ -374,7 +374,7 @@ test("real Build subagent inherits PR delivery, required auth and safeguards wit
 		`
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { fauxProvider, fauxAssistantMessage } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai/providers/faux"))};
-import { Type } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai"))};
+import { Type } from ${JSON.stringify(import.meta.resolve("typebox"))};
 export default pi => {
 	pi.registerTool({ name: "bash", label: "bash", description: "Offline publication stub", parameters: Type.Object({command: Type.String()}), execute: async (_id, {command}) => { appendFileSync(${JSON.stringify(publication)}, command + "\\n"); return {content:[{type:"text",text:"stub"}],details:undefined}; } });
  const faux = fauxProvider({provider:'openai-codex',models:[{id:'offline'}]});

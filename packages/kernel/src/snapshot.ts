@@ -29,6 +29,7 @@ import { readQuestionBoundary, readRecentEntries, readTranscriptPage } from "./p
 import { queueUpdate, queueUpdateForDisplay } from "./queue.ts";
 import { openSessionReader } from "./storage.ts";
 import { TodoProgressDoc, todosUpdate } from "./todos.ts";
+import { wireCompactionFailure, wireCompactions } from "./wire-compaction.ts";
 
 export interface PersistedSessionView {
 	events: AgentEvent[];
@@ -93,8 +94,8 @@ async function conversationView(
 			...(live?.generation ? { generation: live.generation } : {}),
 			tools: live?.tools ?? [],
 			nestedTools: live?.nestedTools ?? [],
-			compactions: live?.compactions ?? [],
-			...(live?.compactionFailure ? { compactionFailure: live.compactionFailure } : {}),
+			compactions: wireCompactions(live?.compactions),
+			...(live?.compactionFailure ? { compactionFailure: wireCompactionFailure(live.compactionFailure) } : {}),
 			inbox: (inbox?.items ?? []).map(({ id, mode }) => ({ id, mode })),
 			agent: agent ?? {},
 			usage: usage ?? { models: {}, tools: {} },

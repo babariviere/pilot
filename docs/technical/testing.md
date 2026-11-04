@@ -161,9 +161,47 @@ matrix covers arrivals during drain, duplicate request IDs, captured-row edits/r
 follow-ups, model failure, Stop, SQLite reopen, held-input revisions and pending questions. Queue
 controls cannot answer a question; only an explicit user reply releases its deferred automatic input.
 
-The pinned `pi-durable@1.4.0` patch keeps final/reset boundaries steer-first like pi: follow-ups
+The pinned `pi-durable@1.5.0` patch keeps final/reset boundaries steer-first like pi: follow-ups
 wait until no steer is selected, then retain their own one-at-a-time/all setting. It changes only
 selection, leaving atomic placement, individual submission ACKs and question holding unchanged.
+
+Pi 1.5 removes its event API. Pilot owns the unchanged wire event types in
+`packages/protocol/src/agent-events.ts` and translates public bounded conversation
+observations plus stored commits in `packages/kernel/src/agent-events.ts`. It keeps
+only the legacy active context, not compacted raw history. Slow listeners retain
+at most 100 pending batches before replacement by a current snapshot. Attachment,
+compaction, cancellation and window-crossing coverage is in `agent-events.test.ts`.
+`progress.persistWithinMs: 0` preserves Pilot's existing stored-progress boundary;
+this migration does not opt into the SDK's new one-second crash-loss window.
+`node packages/kernel/src/agent-events.bench.ts 3` measures attachment and streaming
+with 10,000 entries and a 64 KiB faux answer, without network or account access.
+
+The 2026-11-04 SDK migration full run passed 3,519 of 3,549 tests (five skipped).
+Three SDK-sensitive failures were fixed and their files rerun: faux cache tokens
+are no longer double-counted, and mission authoring now uses `prepareArguments`
+instead of unsupported TypeBox refinements. The MCP bundle-hash fixture was also
+updated and rerun. The remaining 21 failures reproduce on the preceding main
+snapshot with Pi 1.4: 15 daemon fixtures lack the newer Insights subscription,
+two session lifecycle expectations are stale, two Ask tests select the wrong
+fixture file, the mission-context CPU budget fails locally, and the usage-worker
+fixture cannot relocate this Homebrew Node 26's dynamic libnode. The full gate
+is not green; these baseline failures were not suppressed or changed.
+
+After the suites, three warm samples per version on macOS arm64/Node 26.13.0
+(one warmup discarded) compared Pi 1.4 at `9584c973` with this migration. The
+benchmark used 10,000 entries, a 64 KiB answer at 16,384 tokens/sec, and 256-token
+chunks, with immediate progress persistence on both versions:
+
+| Median                  | Pi 1.4   | Pi 1.5   |
+| ----------------------- | -------- | -------- |
+| Legacy watch attachment | 5.2 ms   | 7.9 ms   |
+| Streaming wall time     | 1,037 ms | 1,024 ms |
+| Streaming CPU           | 56 ms    | 61 ms    |
+| Whole-process RSS       | 183 MB   | 192 MB   |
+
+Attachment and CPU cost increased; no speedup or memory reduction is claimed.
+RSS includes previous samples and GC, not isolated retained/idle memory. This
+does not qualify real-provider latency, large tool output, disk I/O or GUI smoothness.
 
 `shell-deadline.test.ts` uses isolated real shell process groups plus fake-clock deadline boundaries.
 It covers a nonterminating process and child, explicit cancellation, silent valid work with an extended

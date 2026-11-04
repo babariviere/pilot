@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { Type } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import {
@@ -17,6 +16,7 @@ import {
 	MemoryStorage,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { Type } from "typebox";
 import { reconcileCompletion } from "./attention.ts";
 import { queueUpdate, removeQueuedMessage, watchQueue } from "./queue.ts";
 
@@ -50,7 +50,9 @@ test("removal commits one withdrawn input and the queue together, broadcasts, an
 		}, context);
 		const watch = await watchQueue(session, conversation.id, context);
 		const published = deferred();
-		watch.start(async (inbox) => {
+		watch.start(async (call) => {
+			if (call.kind !== "value") return;
+			const inbox = call.retired ? null : call.value;
 			if (inbox?.items.length !== 3) return;
 			assert.equal((await storage.submission(second.id, context))?.status, "unanswered");
 			assert.deepEqual(queueUpdate(inbox).items, [

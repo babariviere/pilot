@@ -11,9 +11,9 @@ import {
 	fauxToolCall,
 	InMemoryCredentialStore,
 	InMemoryModelsStore,
-	Type,
 } from "@earendil-works/pi-ai";
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { KernelSession } from "./session.ts";
 import { setToolActivityCollectionEnabled } from "./tool-activity.ts";

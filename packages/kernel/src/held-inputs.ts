@@ -121,7 +121,9 @@ export async function waitForQuestionAnswer(
 				if (question?.callId === callId && question.answer !== undefined) resolve(question.answer);
 			};
 			check(watch.value);
-			watch.start(async (state) => check(state));
+			watch.start(async (call) => {
+				if (call.kind === "value" && !call.retired) check(call.value);
+			});
 			void watch.closed.then(() => reject(new Error("Question watch closed")), reject);
 		});
 	} finally {
@@ -487,6 +489,7 @@ export async function admitWithHeld(
 				});
 				tx.placeSubmission(submission.id, entry.id);
 				live.run = {
+					turns: 0,
 					taskId: await tx.createTask(GenerationTask, {}, { ownership: { kind: "conversation" }, conversationId }),
 					inputs: [submission.id],
 				};
@@ -552,6 +555,7 @@ export async function admitWithHeld(
 		held.items = [];
 		held.stopped = false;
 		live.run = {
+			turns: 0,
 			taskId: await tx.createTask(GenerationTask, {}, { ownership: { kind: "conversation" }, conversationId }),
 			inputs: ids,
 		};

@@ -1,5 +1,5 @@
-import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import type { DiagnosticContextCall } from "./diagnostic-context-tool.ts";
 
 export const INSIGHTS_HISTORY_TOOL = "insights_history";

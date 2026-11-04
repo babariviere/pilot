@@ -1,5 +1,6 @@
-import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { defineTool } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { StringEnum } from "./schema.ts";
 import { TODO_BODY_BYTES, type TodoCall } from "./todos.ts";
 
 export function createTodoTool(call: TodoCall, actor: () => string) {

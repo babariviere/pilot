@@ -1,8 +1,9 @@
 /** The `mission` tool: shared mission state, owned by pilotd and reached over the worker's IPC channel. */
 import type { JsonValue } from "@earendil-works/chord";
-import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { type Static, Type } from "typebox";
 import { validateMissionAuthoring } from "./mission-authoring.ts";
+import { StringEnum } from "./schema.ts";
 
 export const MISSION_TOOL = "mission";
 
@@ -372,9 +373,8 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 			return { content: [{ type: "text", text: JSON.stringify(data) }], details: data, structuredContent: data };
 		},
 	});
-	// TypeBox's maxLength counts graphemes and short-circuits custom errors. Use descriptions
-	// for model-facing limits and enforce code points with an explicit runtime
-	// refinement and actionable errors. Keep executable metadata out of model declarations.
+	// Pi 1.5 validates JSON Schema, not TypeBox refinements. Prepare before validation
+	// and unsafe intent, retaining code-point limits and actionable authoring errors.
 	const authoringError = (value: unknown) => {
 		if (!value || typeof value !== "object") return undefined;
 		const { action, ...args } = value as Record<string, unknown>;
@@ -385,11 +385,12 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 		}
 		return undefined;
 	};
-	const parameters = Type.Refine(
-		tool.parameters,
-		(value) => !authoringError(value),
-		(value) => authoringError(value) ?? "Invalid mission authoring input",
-	);
-	Object.defineProperty(parameters, "~refine", { enumerable: false });
-	return { ...tool, parameters };
+	return {
+		...tool,
+		prepareArguments(value) {
+			const error = authoringError(value);
+			if (error) throw new Error(error);
+			return value as Static<typeof tool.parameters>;
+		},
+	};
 }

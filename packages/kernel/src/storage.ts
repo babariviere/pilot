@@ -3,14 +3,14 @@ import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync } from 
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Storage } from "@earendil-works/pi-durable";
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import {
 	CURRENT_SQLITE_SCHEMA_VERSION,
 	type SqliteDatabase,
 	type SqliteExecutor,
-	type SqliteValue,
 	SqliteStorage,
+	type SqliteValue,
 } from "@earendil-works/pi-durable/storage/sqlite";
+import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 
 function privateFile(file: string): void {
 	const fd = openSync(file, constants.O_CREAT | constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW, 0o600);
@@ -60,6 +60,9 @@ export async function openSessionReader(directory: string, name = "harness.sqlit
 		throw new Error("Session snapshot storage is read-only");
 	};
 	const executor: SqliteExecutor = {
+		async runCounted() {
+			return rejectWrite();
+		},
 		async get<T extends object>(sql: string, ...params: SqliteValue[]) {
 			// A validated older schema reports as current so SqliteStorage.open attempts no migration.
 			if (bootstrap && sql === SCHEMA_VERSION_QUERY) return { version: CURRENT_SQLITE_SCHEMA_VERSION } as T;
@@ -85,6 +88,7 @@ export async function openSessionReader(directory: string, name = "harness.sqlit
 		},
 	};
 	const facade: SqliteDatabase = {
+		runCounted: (sql, ...params) => enqueue(() => executor.runCounted(sql, ...params)),
 		get: <T extends object>(sql: string, ...params: SqliteValue[]) => enqueue(() => executor.get<T>(sql, ...params)),
 		all: <T extends object>(sql: string, ...params: SqliteValue[]) => enqueue(() => executor.all<T>(sql, ...params)),
 		exec: (sql) => enqueue(() => executor.exec(sql)),
@@ -98,6 +102,10 @@ export async function openSessionReader(directory: string, name = "harness.sqlit
 					if (!active) throw new Error("Session reader transaction is no longer active");
 				};
 				const transaction: SqliteExecutor = {
+					async runCounted() {
+						check();
+						return rejectWrite();
+					},
 					async get<T extends object>(sql: string, ...params: SqliteValue[]) {
 						check();
 						return executor.get<T>(sql, ...params);

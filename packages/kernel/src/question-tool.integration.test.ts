@@ -13,10 +13,10 @@ import {
 	fauxToolCall,
 	InMemoryCredentialStore,
 	InMemoryModelsStore,
-	Type,
 } from "@earendil-works/pi-ai";
 import { createCodemodeExtension, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { AgentEvent, SessionCompletion } from "@pilot/protocol";
+import { Type } from "typebox";
 import type { DatabaseCall } from "./database-tool.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { QUESTION_ENTRY } from "./question-tool.ts";

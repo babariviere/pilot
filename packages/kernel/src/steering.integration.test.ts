@@ -13,6 +13,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { ConversationBusy, Harness, InboxDoc } from "@earendil-works/pi-durable";
+import { observeCommits } from "./commits.ts";
 import { HeldInputsDoc } from "./held-inputs.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { QUESTION_ENTRY } from "./question-tool.ts";
@@ -174,7 +175,7 @@ test("arrival during drain waits for the next boundary; duplicate request IDs ne
 	]);
 	const placements: string[][] = [];
 	let arrival: ReturnType<KernelSession["submit"]> | undefined;
-	const unsubscribe = f.session.harness.subscribeCommits(({ changes }) => {
+	const unsubscribe = observeCommits(f.session.harness, ({ changes }) => {
 		const placed = changes.flatMap((change) =>
 			change.type === "submission" && change.value.status === "placed" && change.value.requestId !== "start"
 				? [change.value.requestId!]

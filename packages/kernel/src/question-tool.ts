@@ -1,7 +1,8 @@
 /** The `ask_user` tool waits for the user's explicit reply, including inside codemode. */
-import { Type } from "@earendil-works/pi-ai";
+
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { AgentQuestion } from "@pilot/protocol";
+import { Type } from "typebox";
 
 export const QUESTION_TOOL = "ask_user";
 /** Transcript entry kind holding an `AgentQuestion`. Written outside model context, so codemode calls show it too. */

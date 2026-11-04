@@ -17,8 +17,9 @@ import {
 	InMemoryModelsStore,
 } from "@earendil-works/pi-ai";
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { createRegistry, Harness, UserEntry, watchEvents } from "@earendil-works/pi-durable";
+import { createRegistry, Harness, UserEntry } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { watchEvents } from "../agent-events.ts";
 import { NativeAdapter } from "../src/native-adapter.ts";
 
 globalThis.fetch = async () => {

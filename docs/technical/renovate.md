@@ -3,7 +3,12 @@
 Renovate's native npm and Cargo managers use `config:recommended`, the existing
 24-hour release age and three-PR concurrency limit. Updates require review;
 automerge remains disabled. There is no additional Cargo schedule or grouping.
-The npm Git dependency pause and Pi SDK grouping are unchanged.
+Pi SDK releases remain grouped. Git digest updates track upstream pi-extensions
+with pnpm artifact generation.
+
+Pi SDK dependencies and overrides currently share 1.5.0. The pi-extensions Git
+pin includes its embedding exports and host lifecycle/tool-drain fixes. Pilot
+no longer carries an extension patch; these APIs are maintained upstream.
 
 Cargo discovers the desktop workspace (`apps/desktop/Cargo.toml`), its
 `visual-worker` member and the independent `updater` workspace. The desktop and

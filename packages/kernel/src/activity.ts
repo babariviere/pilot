@@ -1,18 +1,20 @@
+import { observeCommits } from "./commits.ts";
+import { wireCompactions } from "./wire-compaction.ts";
 /** Small, commit-consistent run/inbox monitor. Never hydrates transcript history. */
 
 import { execFile } from "node:child_process";
 import { type Context, copyJson } from "@earendil-works/chord";
 import type { McpTransportFactory } from "@earendil-works/pi-coding-agent";
 import {
-	type AgentEventStream,
 	type ConversationId,
 	InboxDoc,
 	type InboxState,
 	LiveDoc,
 	type LiveState,
 	type Session,
-	type SnapshotEvent,
 } from "@earendil-works/pi-durable";
+import type { SnapshotEvent } from "@pilot/protocol";
+import type { AgentEventStream } from "./agent-events.ts";
 
 export type ActivityStream = Pick<AgentEventStream, "snapshot" | "start"> & {
 	/** Latest commit, updated synchronously even while notification delivery is blocked. */
@@ -116,7 +118,7 @@ function snapshot(live: Readonly<LiveState> | null, inbox: Readonly<InboxState> 
 		// Manual compactions run without a run; an idle kernel must not be parked under them.
 		// tx.doc returns drafts. Spreading the array retains element/retry Proxies that
 		// Node's advanced IPC cannot clone, and leaks them beyond the transaction.
-		compactions: copyJson(live?.compactions ?? []) as unknown as SnapshotEvent["compactions"],
+		compactions: copyJson(wireCompactions(live?.compactions)) as unknown as SnapshotEvent["compactions"],
 		agent: {},
 		usage: { models: {}, tools: {} },
 		...(live?.run ? { run: { inputs: [...live.run.inputs] } } : {}),
@@ -179,7 +181,7 @@ export async function watchActivity(session: Session, id: ConversationId, contex
 			let run = initial.run;
 			let queued = initial.inbox;
 			let compactions = initial.compactions;
-			detachCommit = session.subscribeCommits((publication) => {
+			detachCommit = observeCommits(session, (publication) => {
 				if (stopped) return;
 				let touched = false;
 				let aborted = false;
@@ -194,12 +196,12 @@ export async function watchActivity(session: Session, id: ConversationId, contex
 					if (change.type !== "document" || change.conversationId !== id || change.record.key !== undefined)
 						continue;
 					if (change.record.kind === LiveDoc.definition.kind) {
-						const live = change.value as Readonly<LiveState> | null;
+						const live = change.kind === "change" ? (change.value as Readonly<LiveState>) : null;
 						run = live?.run ? { inputs: [...live.run.inputs] } : undefined;
-						compactions = copyJson(live?.compactions ?? []) as unknown as SnapshotEvent["compactions"];
+						compactions = copyJson(wireCompactions(live?.compactions)) as unknown as SnapshotEvent["compactions"];
 						touched = true;
 					} else if (change.record.kind === InboxDoc.definition.kind) {
-						const inbox = change.value as Readonly<InboxState> | null;
+						const inbox = change.kind === "change" ? (change.value as Readonly<InboxState>) : null;
 						queued = (inbox?.items ?? []).map(({ id, mode }) => ({ id, mode }));
 						touched = true;
 					}

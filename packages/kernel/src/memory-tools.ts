@@ -1,10 +1,11 @@
 /** Project memory tools are backed by pilotd over the supervised worker channel. */
 
 import type { JsonValue } from "@earendil-works/chord";
-import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { redactHistoryText } from "./history-privacy.ts";
 import { queryTerms } from "./history-recall.ts";
+import { StringEnum } from "./schema.ts";
 
 export const MEMORY_TOOL_NAMES: readonly string[] = ["memory"];
 

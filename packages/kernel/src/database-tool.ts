@@ -1,8 +1,8 @@
 /** The `db` tool: user-configured Postgres access, executed by pilotd. The kernel never sees connection URLs. */
 import type { JsonValue } from "@earendil-works/chord";
-import { Type } from "@earendil-works/pi-ai";
 import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { AgentQuestion } from "@pilot/protocol";
+import { Type } from "typebox";
 import { normalizeQuestion, type PublishQuestion } from "./question-tool.ts";
 
 export const DATABASE_TOOL = "db";

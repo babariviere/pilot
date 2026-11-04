@@ -9,7 +9,6 @@ import {
 	fauxProvider,
 	fauxToolCall,
 	type Message,
-	Type,
 	type UserMessage,
 } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
@@ -32,6 +31,7 @@ import {
 	UserEntry,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { Type } from "typebox";
 import { AutoHandoff, AutoHandoffDoc, autoHandoffPolicy, handoffSource } from "./auto-handoff.ts";
 import { DeterministicCompaction } from "./deterministic-compaction.ts";
 import { HANDOFF_INSTRUCTIONS, HANDOFF_OUTPUT_BYTES, HANDOFF_TARGET_BYTES } from "./handoff-prompt.ts";

@@ -94,7 +94,7 @@ const sdk = import.meta.resolve("@earendil-works/pi-coding-agent");
 const configEditors: SdkConfig[] = [
 	await import(new URL("./extensions/mcp/config.js", sdk).href),
 	// The published CLI has its own compiled copy. Test its actual public editing functions too.
-	await import(new URL("./bundle/chunks/chunk-INGZIYBC.js", sdk).href),
+	await import(new URL("./bundle/chunks/chunk-NZY7EIPA.js", sdk).href),
 ];
 
 test("MCP and SDK writes preserve untouched numeric literals without rounding or null conversion", async (t) => {

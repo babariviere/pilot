@@ -10,11 +10,11 @@ import {
 	fauxToolCall,
 	InMemoryCredentialStore,
 	InMemoryModelsStore,
-	Type,
 } from "@earendil-works/pi-ai";
 import { createCodemodeExtension, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { JsonObject } from "@earendil-works/pi-durable";
 import type { AgentEvent, GitHubAction } from "@pilot/protocol";
+import { Type } from "typebox";
 import { GitHubActionsDoc } from "./github-actions.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { PullRequestsDoc } from "./pull-request-provenance.ts";

@@ -25,7 +25,7 @@ assert.equal(dep.gitRef, true);
 
 const config = JSON.parse(await readFile("/repo/renovate.json", "utf8"));
 const configured = await applyPackageRules({ ...dep, manager: "npm", packageRules: config.packageRules });
-assert.equal(configured.enabled, false, "incompatible upstream main updates must stay paused");
+assert.equal(configured.enabled, true, "upstream includes the embedding and lifecycle APIs");
 assert.equal(configured.datasource, "git-refs");
 assert.equal(configured.packageName, "https://github.com/babariviere/pi-extensions.git");
 assert.equal(configured.followTag, "main");

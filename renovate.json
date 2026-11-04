@@ -27,7 +27,7 @@
 			"enabled": false
 		},
 		{
-			"description": "Use npm Git digest updates and pnpm artifacts; enable after upstream main includes embedding exports",
+			"description": "Track upstream embedding profiles with pnpm Git digest updates",
 			"matchManagers": ["npm"],
 			"matchPackageNames": ["babariviere/pi-extensions"],
 			"overrideDatasource": "git-refs",
@@ -35,7 +35,7 @@
 			"versioning": "git",
 			"followTag": "main",
 			"pinDigests": true,
-			"enabled": false
+			"enabled": true
 		},
 		{
 			"description": "Update Pi SDK dependencies and pnpm overrides together",

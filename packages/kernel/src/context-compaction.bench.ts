@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { fauxAssistantMessage, fauxProvider, fauxToolCall, type Message, Type } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxProvider, fauxToolCall, type Message } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { estimateTextTokens } from "@earendil-works/pi-ai/utils/estimate";
 import {
@@ -29,6 +29,7 @@ import {
 	UserEntry,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { Type } from "typebox";
 import { COMPACTION_TARGETS } from "./compaction-policy.ts";
 import { createDigestState, DigestCompiler, foldEntry, renderDigest, validateDigest } from "./context-digest.ts";
 import { type CompactionRecord, DeterministicCompaction } from "./deterministic-compaction.ts";

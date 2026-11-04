@@ -1,5 +1,5 @@
 /** Source relationships only, never an observed runtime stack. */
-import { type Static, Type } from "@earendil-works/pi-ai";
+import { type Static, Type } from "typebox";
 import { ExplorationOutput } from "./exploration-contract.ts";
 
 export const CallSymbol = Type.Object({

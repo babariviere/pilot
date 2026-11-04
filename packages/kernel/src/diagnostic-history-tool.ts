@@ -1,7 +1,8 @@
 /** Explicit-target transcript reader. pilotd owns scope authorization and performs bounded cold storage reads. */
-import { Type } from "@earendil-works/pi-ai";
+
 import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { DiagnosticHistoryPage, DiagnosticTargetReference } from "@pilot/protocol";
+import { Type } from "typebox";
 
 export const DIAGNOSTIC_HISTORY_TOOL = "diagnostic_history";
 export type DiagnosticHistoryCall = (

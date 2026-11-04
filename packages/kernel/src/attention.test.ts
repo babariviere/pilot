@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { Type } from "@earendil-works/pi-ai";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import {
@@ -16,6 +15,7 @@ import {
 	type SubmissionRecord,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { Type } from "typebox";
 import { AttentionDoc, classifyCompletion, normalizeCompletion, reconcileCompletion } from "./attention.ts";
 import { QUESTION_ENTRY } from "./question-entry.ts";
 
@@ -292,8 +292,8 @@ test("a compaction summary after a question is not its answer, but the user's re
 	});
 	registry.install({ name: "native", tools: [ask] });
 	const storage = new MemoryStorage();
-	// A tiny window makes the reply after the question start with a blocking threshold compaction.
-	const compaction = { enabled: true, reserveTokens: 100, keepRecentTokens: 10, backgroundTokens: 0 };
+	// Explicit compaction keeps this attention test independent of faux cache accounting.
+	const compaction = { enabled: false, reserveTokens: 100, keepRecentTokens: 10, backgroundTokens: 0 };
 	const harness = await Harness.open(
 		storage,
 		{ models, registry, settings: { retry: { maxRetries: 0 }, compaction } },
@@ -309,10 +309,11 @@ test("a compaction summary after a question is not its answer, but the user's re
 		await (await conversation.submit({ type: "input", content: "warm up" }, context)).wait(context);
 		faux.setResponses([
 			fauxAssistantMessage(fauxToolCall("ask_user", { question: "Which database?" }), { stopReason: "toolUse" }),
-			fauxAssistantMessage("## Goal\nStorage"),
 			fauxAssistantMessage("Waiting for your choice."),
 		]);
 		await (await conversation.submit({ type: "input", content: "implement storage" }, context)).wait(context);
+		faux.setResponses([fauxAssistantMessage("## Goal\nStorage")]);
+		await harness.waitForTask(await conversation.compact(undefined, context), context);
 		const kinds = (await conversation.entries({}, 50, undefined, context)).items.toReversed().map((e) => e.kind);
 		assert.ok(
 			kinds.indexOf(QUESTION_ENTRY) >= 0 && kinds.lastIndexOf("pi.compaction") > kinds.indexOf(QUESTION_ENTRY),

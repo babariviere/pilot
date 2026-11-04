@@ -122,7 +122,7 @@ test("coordinator planning recipes cover actionable gaps without unconditional t
 	assert.doesNotMatch(createMissionTool(async () => null).description, /Coordinator planning:/);
 });
 
-test("mission authoring boundaries match runtime schema and reject before IPC", async () => {
+test("mission authoring preparation rejects oversized writes before validation and IPC", async () => {
 	for (const coordinator of [false, true]) {
 		let calls = 0;
 		const tool = createMissionTool(async () => {
@@ -148,7 +148,7 @@ test("mission authoring boundaries match runtime schema and reject before IPC", 
 				const before = calls;
 				const over = { ...args, [field]: `${value}x` };
 				assert.throws(
-					() => validateToolArguments(tool, { type: "toolCall", id: "over", name: "mission", arguments: over }),
+					() => tool.prepareArguments!(over),
 					new RegExp(`${max + 1} characters; limit is ${max}.*Summarize and link`),
 				);
 				await assert.rejects(
@@ -175,9 +175,7 @@ test("mission authoring boundaries match runtime schema and reject before IPC", 
 				validateToolArguments(tool, { type: "toolCall", id: "split", name: "mission", arguments: args });
 				await tool.execute("split", args as never, undefined, undefined, {} as never);
 				args.tasks[0]![field] += "x";
-				assert.throws(() =>
-					validateToolArguments(tool, { type: "toolCall", id: "split", name: "mission", arguments: args }),
-				);
+				assert.throws(() => tool.prepareArguments!(args));
 				await assert.rejects(
 					tool.execute("split", args as never, undefined, undefined, {} as never),
 					new RegExp(`${max + 1} characters; limit is ${max}`),

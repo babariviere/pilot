@@ -1,7 +1,8 @@
 /** Content-free, read-only local diagnostics. pilotd owns authorization, host identity and bounded storage reads. */
-import { Type } from "@earendil-works/pi-ai";
+
 import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { DiagnosticSnapshot, DiagnosticTargetReference, OperationHost } from "@pilot/protocol";
+import { Type } from "typebox";
 
 export const DIAGNOSTICS_TOOL = "diagnostics";
 export type DiagnosticsCall = (sessionId?: string, limit?: number) => Promise<DiagnosticSnapshot>;

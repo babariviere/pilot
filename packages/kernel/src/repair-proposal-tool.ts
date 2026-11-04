@@ -1,7 +1,8 @@
 /** Bounded proposal publication for diagnostics specialists. It cannot create or mutate a repair or target chat. */
-import { Type } from "@earendil-works/pi-ai";
+
 import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { DiagnosticRepairProposal, DiagnosticRepairProposalDraft } from "@pilot/protocol";
+import { Type } from "typebox";
 
 export const REPAIR_PROPOSAL_TOOL = "repair_proposal";
 export type RepairProposalCall = (draft: DiagnosticRepairProposalDraft) => Promise<DiagnosticRepairProposal>;

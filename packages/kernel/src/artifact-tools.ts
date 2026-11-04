@@ -1,6 +1,5 @@
 /** Pi SDK tools for publishing and inspecting session-local, offline artifacts. */
 import type { JsonValue } from "@earendil-works/chord";
-import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
 	ArtifactNotFound,
@@ -18,7 +17,9 @@ import type {
 	ArtifactSummary,
 	ArtifactWrite,
 } from "@pilot/protocol";
+import { Type } from "typebox";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
+import { StringEnum } from "./schema.ts";
 
 const MAX_SOURCE_BYTES = 512 * 1024;
 const library = StringEnum(["react", "react-dom", "mermaid", "echarts", "motion", "d3", "three"] as const);

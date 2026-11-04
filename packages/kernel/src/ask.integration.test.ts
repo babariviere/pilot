@@ -13,11 +13,11 @@ import {
 	getSystemMessageText,
 	InMemoryCredentialStore,
 	InMemoryModelsStore,
-	Type,
 } from "@earendil-works/pi-ai";
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { ArtifactStore } from "@pilot/artifacts";
 import type { AgentEvent, SessionCompletion } from "@pilot/protocol";
+import { Type } from "typebox";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { ASK_TOOL_NAMES } from "./ask-tools.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";

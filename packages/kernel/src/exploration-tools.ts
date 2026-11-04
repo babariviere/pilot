@@ -1,5 +1,5 @@
-import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionToolContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { CallPathOutput, type CallPathQuery, CallSymbol } from "./call-path-contract.ts";
 import { ExplorationOutput, type ExplorationQuery } from "./exploration-contract.ts";
 import { runExploration } from "./exploration-runner.ts";

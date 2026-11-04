@@ -1,7 +1,8 @@
 /** The `knowledge` tool: project-owned research and component documentation, kept by pilotd. */
 import type { JsonValue } from "@earendil-works/chord";
-import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { StringEnum } from "./schema.ts";
 
 export const KNOWLEDGE_ACTIONS = [
 	"list",

@@ -10,7 +10,6 @@ import { estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 import {
 	type AgentChange,
 	AgentDoc,
-	type AgentEventStream,
 	type Conversation,
 	ConversationBusy,
 	type ConversationId,
@@ -28,7 +27,6 @@ import {
 	type Storage,
 	type SubmissionId,
 	UsageDoc,
-	watchEvents,
 } from "@earendil-works/pi-durable";
 import { ArtifactStore } from "@pilot/artifacts";
 import type {
@@ -43,6 +41,7 @@ import type {
 } from "@pilot/protocol";
 import type { TraceCarrier } from "@pilot/telemetry";
 import { watchActivity } from "./activity.ts";
+import { type AgentEventStream, watchEvents } from "./agent-events.ts";
 import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
 import {
 	AttemptsDoc,
@@ -803,7 +802,7 @@ export class KernelSession {
 				steeringMode: "all" as const,
 				// Progress is durable and drives display. Four checkpoints/sec bound page-write
 				// amplification while keeping streaming responsive; admissions/final results bypass it.
-				progress: { partialIntervalMs: 250, outputIntervalMs: 250 },
+				progress: { partialIntervalMs: 250, outputIntervalMs: 250, persistWithinMs: 0 },
 			};
 			const window = () => {
 				const ref = adapter!.model;
@@ -1869,7 +1868,9 @@ export class KernelSession {
 		this.#watches.set(watchId, async () => {
 			await Promise.all([stream.stop(), queue.stop(), heldQueue?.stop(), audit?.stop(), todos?.stop()]);
 		});
-		todos?.start(async (state) => {
+		todos?.start(async (call) => {
+			if (call.kind !== "value") return;
+			const state = call.retired ? undefined : call.value;
 			await listener([todosUpdate(state)]);
 		});
 		stream.start(async (events) => {
@@ -1887,13 +1888,17 @@ export class KernelSession {
 				),
 			);
 		});
-		queue.start(async (inbox) => {
+		queue.start(async (call) => {
+			if (call.kind !== "value") return;
+			const inbox = call.retired ? null : call.value;
 			await listener([await displayQueue(inbox)]);
 		});
 		heldQueue?.start(async () => {
 			await listener([await displayQueue(queue.value)]);
 		});
-		audit?.start(async (state) => {
+		audit?.start(async (call) => {
+			if (call.kind !== "value") return;
+			const state = call.retired ? undefined : call.value;
 			await listener([{ type: "github_actions_update", actions: [...(state?.actions ?? [])] }]);
 		});
 	}

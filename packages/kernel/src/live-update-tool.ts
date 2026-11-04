@@ -1,8 +1,8 @@
 /** Non-executing update proposals, admitted and validated by the supervising daemon. */
 import type { JsonValue } from "@earendil-works/chord";
-import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { LiveUpdateProposalArgs } from "@pilot/protocol";
+import { Type } from "typebox";
 import type { KernelSpec } from "./protocol.ts";
 
 export type LiveUpdateProposalCall = (args: LiveUpdateProposalArgs, operationId: string) => Promise<JsonValue>;

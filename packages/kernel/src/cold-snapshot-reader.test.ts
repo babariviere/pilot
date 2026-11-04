@@ -17,9 +17,10 @@ import {
 	type SubmissionId,
 	type TaskId,
 	UsageDoc,
-	watchEvents,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { commitWrites } from "@earendil-works/pi-durable/testing";
+import { watchEvents } from "./agent-events.ts";
 import { AttentionDoc } from "./attention.ts";
 import { queueGuardToken } from "./queue.ts";
 import {
@@ -52,7 +53,7 @@ test("paged cold snapshot and pinned older pages preserve metadata and exact leg
 					kind: "pi.user",
 					model: [{ role: "user", content: `exact 日本 ${i}`, timestamp: i }],
 				});
-			(await tx.doc(LiveDoc, root.id)).run = { taskId: 900 as TaskId, inputs: [901 as SubmissionId] };
+			(await tx.doc(LiveDoc, root.id)).run = { turns: 0, taskId: 900 as TaskId, inputs: [901 as SubmissionId] };
 		}, context);
 		const legacy = (await readSessionSnapshot(dir, dir)).events[0];
 		const recent = (await readSessionSnapshot(dir, dir, true, true)).events[0];
@@ -108,7 +109,7 @@ test("cold snapshot matches durable active view under a writer lease, without ru
 			tx.appendEntry(root.id, { kind: "pi.compaction", head: kept, data: { summary: "summary" } });
 			tx.appendEntry(root.id, { kind: "pilot.artifact", data: { artifact: { id: "artifact" } } });
 			const live = await tx.doc(LiveDoc, root.id);
-			live.run = { taskId: 900 as TaskId, inputs: [901 as SubmissionId] };
+			live.run = { turns: 0, taskId: 900 as TaskId, inputs: [901 as SubmissionId] };
 			live.generation = {
 				attempt: 2,
 				message: JSON.parse(JSON.stringify(fauxAssistantMessage("partial"))),
@@ -128,7 +129,7 @@ test("cold snapshot matches durable active view under a writer lease, without ru
 			live.compactions = [
 				{
 					taskId: 903 as TaskId<CompactionResult>,
-					reason: "manual",
+					trigger: "manual",
 					attempt: 1,
 					blocking: false,
 					retry: { at: 456, error: "retry" },
@@ -183,7 +184,7 @@ test("cold snapshot matches durable active view under a writer lease, without ru
 		);
 		const reader = await openSessionReader(durable);
 		assert.ok(reader);
-		await assert.rejects(reader.commit([], context), /read-only/);
+		await assert.rejects(commitWrites(reader, [], context), /read-only/);
 		const readonlySession = createSession(reader);
 		await root.commit(async (tx) => {
 			(await tx.doc(LiveDoc, root.id)).tools![0]!.output = "newer writer commit";

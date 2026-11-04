@@ -179,6 +179,7 @@ test("a blocking reply resolves current work during pause but preserves held aut
 		await f.session.commit(async (tx) => {
 			(await tx.doc(InboxDoc, f.id)).items = [];
 			(await tx.doc(LiveDoc, f.id)).run = {
+				turns: 0,
 				taskId: await tx.createTask(
 					GenerationTask,
 					{},
@@ -421,7 +422,7 @@ test("pause preserves the active task and resume restores queue modes without cr
 				{},
 				{ ownership: { kind: "conversation" }, conversationId: f.id },
 			);
-			(await tx.doc(LiveDoc, f.id)).run = { taskId, inputs: [] };
+			(await tx.doc(LiveDoc, f.id)).run = { turns: 0, taskId, inputs: [] };
 			return taskId;
 		}, context);
 		await pauseInputs(f.session, f.id, context);

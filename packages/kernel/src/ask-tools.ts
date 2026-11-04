@@ -2,8 +2,8 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
-import { Type } from "@earendil-works/pi-ai";
 import { createReadToolDefinition, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { ARTIFACT_SKILL_FILES } from "./artifact-skill.ts";
 import { createExplorationTools, EXPLORATION_TOOL_NAMES } from "./exploration-tools.ts";
 import type { AskContext } from "./policy.ts";

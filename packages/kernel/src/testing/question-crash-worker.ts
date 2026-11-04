@@ -8,9 +8,9 @@ import {
 	fauxToolCall,
 	InMemoryCredentialStore,
 	InMemoryModelsStore,
-	Type,
 } from "@earendil-works/pi-ai";
 import { createCodemodeExtension, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { HeldInputsDoc } from "../held-inputs.ts";
 import { NativeAdapter } from "../native-adapter.ts";
 import { KernelSession } from "../session.ts";
@@ -86,7 +86,9 @@ const session = await KernelSession.open(
 	{ onWorking: () => {} },
 );
 const watch = await session.harness.watchDoc(HeldInputsDoc, session.conversation.id, context);
-watch!.start(async (value) => {
+watch!.start(async (call) => {
+	if (call.kind !== "value" || call.retired) return;
+	const value = call.value;
 	if (value?.questionPending) process.send?.("waiting");
 });
 await session.submit("ask", "Ask", "followUp");

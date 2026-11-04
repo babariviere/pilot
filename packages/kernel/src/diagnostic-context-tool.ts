@@ -1,6 +1,6 @@
-import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { DiagnosticContextRequest, DiagnosticContextResponse } from "@pilot/protocol";
+import { Type } from "typebox";
 
 export const DIAGNOSTIC_CONTEXT_TOOL = "diagnostic_context";
 export type DiagnosticContextCall = (

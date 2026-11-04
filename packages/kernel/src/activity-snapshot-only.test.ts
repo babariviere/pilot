@@ -2,23 +2,24 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { serialize } from "node:v8";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import { serialize } from "node:v8";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import type { McpTransportFactory } from "@earendil-works/pi-coding-agent";
 import {
-	createSession,
 	type CompactionStatus,
+	createSession,
 	InboxDoc,
 	LiveDoc,
 	MemoryStorage,
-	type SnapshotEvent,
 	type SubmissionId,
 	type TaskId,
 } from "@earendil-works/pi-durable";
-import { hasUnownedChildren, InfrastructureChildren, inspectChildren, watchActivity } from "./activity.ts";
-import type { McpTransportFactory } from "@earendil-works/pi-coding-agent";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import type { SnapshotEvent } from "@pilot/protocol";
+import { hasUnownedChildren, InfrastructureChildren, inspectChildren, watchActivity } from "./activity.ts";
+import { wireCompactions } from "./wire-compaction.ts";
 
 test("reopened activity snapshots detach compactions and nested retries for advanced IPC", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pilot-activity-reopen-"));
@@ -27,7 +28,7 @@ test("reopened activity snapshots detach compactions and nested retries for adva
 	let session = createSession(await openNodeSqliteStorage(file));
 	const compaction: CompactionStatus = {
 		taskId: 100 as CompactionStatus["taskId"],
-		reason: "manual",
+		trigger: "manual",
 		blocking: false,
 		attempt: 1,
 	};
@@ -48,7 +49,7 @@ test("reopened activity snapshots detach compactions and nested retries for adva
 		assert.deepEqual(structuredClone(packet), packet);
 	};
 	checkIpc(stream.snapshot);
-	assert.deepEqual(stream.snapshot.compactions, [compaction]);
+	assert.deepEqual(stream.snapshot.compactions, wireCompactions([compaction]));
 	assert.equal(stream.idle, false, "a compaction without a run must prevent parking");
 	const frames: SnapshotEvent[] = [];
 	stream.start(async (events) => {
@@ -65,8 +66,15 @@ test("reopened activity snapshots detach compactions and nested retries for adva
 	}, context);
 	await delay(1);
 	assert.equal(frames.length, 1);
-	assert.deepEqual(stream.snapshot.compactions, [compaction], "later commits cannot mutate the captured snapshot");
-	assert.deepEqual(frames[0]!.compactions, [{ ...compaction, attempt: 2, retry: { at: 123, error: "retry later" } }]);
+	assert.deepEqual(
+		stream.snapshot.compactions,
+		wireCompactions([compaction]),
+		"later commits cannot mutate the captured snapshot",
+	);
+	assert.deepEqual(
+		frames[0]!.compactions,
+		wireCompactions([{ ...compaction, attempt: 2, retry: { at: 123, error: "retry later" } }]),
+	);
 	// Attachment during a persisted retry must detach the nested draft as well.
 	const retry = await watchActivity(session, conversation.id, context);
 	checkIpc(retry.snapshot);
@@ -94,13 +102,13 @@ test("settlement retains a run's cancellation through compaction, but not into l
 	t.after(() => stream.stop());
 	const compaction: CompactionStatus = {
 		taskId: 100 as CompactionStatus["taskId"],
-		reason: "manual",
+		trigger: "manual",
 		blocking: false,
 		attempt: 1,
 	};
 	const input = await session.commit(async (tx) => {
 		const input = await tx.createSubmission({ conversationId: conversation.id, type: "input", status: "queued" });
-		(await tx.doc(LiveDoc, conversation.id)).run = { taskId: 1 as TaskId, inputs: [input.id] };
+		(await tx.doc(LiveDoc, conversation.id)).run = { turns: 0, taskId: 1 as TaskId, inputs: [input.id] };
 		return input;
 	}, context);
 	await session.commit(async (tx) => {
@@ -238,7 +246,7 @@ test("activity coalesces small committed snapshots while async delivery is block
 		const update = (running: boolean) =>
 			session.commit(async (tx) => {
 				const live = await tx.doc(LiveDoc, conversation.id);
-				if (running) live.run = { taskId: 1 as TaskId, inputs: [] };
+				if (running) live.run = { turns: 0, taskId: 1 as TaskId, inputs: [] };
 				else delete live.run;
 			}, context);
 		await update(true);
@@ -288,7 +296,7 @@ test("activity attachment reads no history, writes no existing docs and delivers
 			const count = frames.length;
 			await session.commit(async (tx) => {
 				const live = await tx.doc(LiveDoc, conversation.id);
-				if (run) live.run = { taskId: 100 as TaskId, inputs: [101 as SubmissionId] };
+				if (run) live.run = { turns: 0, taskId: 100 as TaskId, inputs: [101 as SubmissionId] };
 				else delete live.run;
 				(await tx.doc(InboxDoc, conversation.id)).items = queued
 					? [{ id: 102 as SubmissionId, mode: "followUp", content: "large content not sent" }]

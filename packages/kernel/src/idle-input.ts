@@ -43,6 +43,7 @@ export async function submitIdleInput(
 			entry: entry.id,
 		});
 		live.run = {
+			turns: 0,
 			taskId: await tx.createTask(
 				GenerationTask,
 				{},

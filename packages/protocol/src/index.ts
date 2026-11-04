@@ -1,6 +1,7 @@
 /** Wire protocol between pilotd and its clients. Types only, safe to import from the browser. */
 import type { UserMessage } from "@earendil-works/pi-ai";
-import type { AgentEvent as DurableAgentEvent, EntryRecord } from "@earendil-works/pi-durable";
+import type { EntryRecord } from "@earendil-works/pi-durable";
+import type { AgentEvent as DurableAgentEvent } from "./agent-events.ts";
 import type { DiagnosticContextRequest } from "./diagnostic-context.ts";
 import type { OperationHost } from "./operations.ts";
 import type { ProjectTrackingConfig, TrackingSource } from "./tracking.ts";
@@ -8,10 +9,15 @@ import type { ProjectTrackingConfig, TrackingSource } from "./tracking.ts";
 export type { AssistantMessage, Message, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 export type {
 	EntryRecord,
-	MessageChange,
-	SnapshotEvent,
 	ToolSlot,
 } from "@earendil-works/pi-durable";
+export type {
+	AgentEvent as BaseAgentEvent,
+	MessageChange,
+	QueuedItem,
+	SnapshotEvent,
+	ToolEventCall,
+} from "./agent-events.ts";
 export type * from "./automations.ts";
 export type * from "./chat-settings.ts";
 export type * from "./critical-review.ts";

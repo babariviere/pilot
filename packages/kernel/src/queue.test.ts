@@ -37,7 +37,9 @@ test("queue watch sends durable contents initially, on changes, and after reatta
 		);
 		const updates: QueueUpdateEvent[] = [];
 		let received = deferred();
-		watch.start(async (inbox) => {
+		watch.start(async (call) => {
+			if (call.kind !== "value") return;
+			const inbox = call.retired ? null : call.value;
 			updates.push(queueUpdate(inbox));
 			received.resolve();
 		});
@@ -60,7 +62,9 @@ test("queue watch sends durable contents initially, on changes, and after reatta
 		const reattached = await watchQueue(session, conversation.id, context);
 		assert.deepEqual(queueUpdate(reattached.value), updates.at(-1));
 		received = deferred();
-		reattached.start(async (inbox) => {
+		reattached.start(async (call) => {
+			if (call.kind !== "value") return;
+			const inbox = call.retired ? null : call.value;
 			updates.push(queueUpdate(inbox));
 			received.resolve();
 		});
@@ -177,7 +181,9 @@ test("editing queued messages preserves IDs, delivery modes, order, and broadcas
 		}, context);
 		const watch = await watchQueue(session, conversation.id, context);
 		const updated = deferred();
-		watch.start(async (inbox) => {
+		watch.start(async (call) => {
+			if (call.kind !== "value") return;
+			const inbox = call.retired ? null : call.value;
 			if (queueUpdate(inbox).items[0]?.content === "Edited follow-up\nWith details") updated.resolve();
 		});
 		await editQueuedMessage(session, conversation.id, first.id, "Edited follow-up\nWith details", context);

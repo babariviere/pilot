@@ -6,10 +6,11 @@
  */
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { Conversation, Cursor, EntryId, EntryRecord } from "@earendil-works/pi-durable";
+import { Type } from "typebox";
 import { authorityKind, neutralizeUntrusted, redactHistoryText } from "./history-privacy.ts";
+import { StringEnum } from "./schema.ts";
 
 export const HISTORY_RECALL_TOOL = "history_recall";
 

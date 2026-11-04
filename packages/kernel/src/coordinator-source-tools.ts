@@ -1,7 +1,6 @@
 /** Bounded native source tools. Each execution obtains a fresh host scope, never a saved grant. */
 import { lstatSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { Type } from "@earendil-works/pi-ai";
 import {
 	defineTool,
 	getDocsPath,
@@ -9,6 +8,7 @@ import {
 	getReadmePath,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { ARTIFACT_SKILL_FILES } from "./artifact-skill.ts";
 import { ASK_ATTACHMENTS, createAskTools } from "./ask-tools.ts";
 import { coordinatorSkillRead } from "./coordinator-skill-resources.ts";

@@ -3,17 +3,17 @@ packages:
 
 overrides:
    # Keep every Pi SDK package on one release: mixed releases have incompatible APIs.
-   "@earendil-works/pi-coding-agent>@earendil-works/pi-codemode": 1.4.0
+   "@earendil-works/pi-coding-agent>@earendil-works/pi-codemode": 1.5.0
    mermaid>katex: 0.19.1
-   # Pi 1.4 pins vulnerable undici 8.10.2; retain Pi and its downstream patches.
+   # Keep the bundled CLI on the same external undici as the SDK.
    "@earendil-works/pi-coding-agent>undici": 8.12.3
-   "@earendil-works/pi-codemode": 1.4.0
-   "@earendil-works/chord": 1.4.0
-   "@earendil-works/pi-agent-core": 1.4.0
-   "@earendil-works/pi-ai": 1.4.0
-   "@earendil-works/pi-durable": 1.4.0
-   "@earendil-works/pi-mcp": 1.4.0
-   "@earendil-works/pi-tui": 1.4.0
+   "@earendil-works/pi-codemode": 1.5.0
+   "@earendil-works/chord": 1.5.0
+   "@earendil-works/pi-agent-core": 1.5.0
+   "@earendil-works/pi-ai": 1.5.0
+   "@earendil-works/pi-durable": 1.5.0
+   "@earendil-works/pi-mcp": 1.5.0
+   "@earendil-works/pi-tui": 1.5.0
 
 # Only these dependencies may run install scripts.
 allowBuilds:
@@ -24,9 +24,8 @@ allowBuilds:
    "@google/genai": true
 
 patchedDependencies:
-   "@babariviere/pi-extensions@0.1.0": patches/@babariviere__pi-extensions@0.1.0.patch
-   "@earendil-works/pi-coding-agent@1.4.0": patches/@earendil-works__pi-coding-agent@1.4.0.patch
-   "@earendil-works/pi-durable@1.4.0": patches/@earendil-works__pi-durable@1.4.0.patch
+   "@earendil-works/pi-coding-agent@1.5.0": patches/@earendil-works__pi-coding-agent@1.5.0.patch
+   "@earendil-works/pi-durable@1.5.0": patches/@earendil-works__pi-durable@1.5.0.patch
 
 minimumReleaseAgeExclude:
    - "@biomejs/biome@2.6.5"

@@ -13,7 +13,6 @@ import {
 	InMemoryCredentialStore,
 	InMemoryModelsStore,
 	type ModelsSimpleStreamOptions,
-	Type,
 } from "@earendil-works/pi-ai";
 import {
 	createCodemodeExtension,
@@ -25,7 +24,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { ConversationBusy, Harness, InboxDoc, type JsonObject, LiveDoc } from "@earendil-works/pi-durable";
 import type { SessionCompletion, SessionJob } from "@pilot/protocol";
+import { Type } from "typebox";
 import { userText } from "./attempts.ts";
+import { observeCommits } from "./commits.ts";
 import { CoordinatorMemoryDoc } from "./coordinator-memory.ts";
 import type { MemoryModel } from "./coordinator-memory-model.ts";
 import { MAX_FAILURE_CHARS } from "./failure.ts";
@@ -1086,13 +1087,13 @@ test("kernel coalesces durable progress without losing short final responses", {
 		{
 			toolExecution: "sequential",
 			steeringMode: "all",
-			progress: { partialIntervalMs: 250, outputIntervalMs: 250 },
+			progress: { partialIntervalMs: 250, outputIntervalMs: 250, persistWithinMs: 0 },
 			compaction: undefined,
 		},
 		{
 			toolExecution: "sequential",
 			steeringMode: "all",
-			progress: { partialIntervalMs: 250, outputIntervalMs: 250 },
+			progress: { partialIntervalMs: 250, outputIntervalMs: 250, persistWithinMs: 0 },
 			compaction: undefined,
 		},
 	]);
@@ -1323,7 +1324,7 @@ test("native idle checks read committed compaction/inbox activity before async e
 	]);
 	const session = await f.open();
 	const idleAtCommit: boolean[] = [];
-	const stop = session.harness.subscribeCommits((publication) => {
+	const stop = observeCommits(session.harness, (publication) => {
 		if (
 			publication.changes.some(
 				(change) =>
@@ -1336,7 +1337,7 @@ test("native idle checks read committed compaction/inbox activity before async e
 	t.after(stop);
 	await session.conversation.commit(async (tx) => {
 		(await tx.doc(LiveDoc, session.conversation.id)).compactions = [
-			{ taskId: 999 as never, reason: "manual", blocking: false, attempt: 0 },
+			{ taskId: 999 as never, trigger: "manual", blocking: false, attempt: 0 },
 		];
 	}, context);
 	assert.equal(ctx.isIdle(), false);
@@ -2019,7 +2020,7 @@ test("idle-only input rejects live runs and retained inbox items but permits ide
 	await session.conversation.commit(async (tx) => {
 		(await tx.doc(InboxDoc, session.conversation.id)).items = [];
 		(await tx.doc(LiveDoc, session.conversation.id)).compactions = [
-			{ taskId: 999 as never, reason: "manual", blocking: false, attempt: 0 },
+			{ taskId: 999 as never, trigger: "manual", blocking: false, attempt: 0 },
 		];
 	}, context);
 	await assert.rejects(session.submit("idle-compacting", "No compaction race", "followUp", true), ConversationBusy);

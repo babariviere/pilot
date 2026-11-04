@@ -1,6 +1,7 @@
 import type { JsonValue } from "@earendil-works/chord";
-import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
+import { StringEnum } from "./schema.ts";
 
 export const INSIGHTS_BACKLOG_TOOL = "insights_backlog";
 export type InsightsBacklogCall = (request: unknown) => Promise<unknown>;

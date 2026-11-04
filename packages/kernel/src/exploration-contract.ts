@@ -1,5 +1,5 @@
 /** Public, bounded data contract. Worker imports these types only, not the SDK. */
-import { type Static, Type } from "@earendil-works/pi-ai";
+import { type Static, Type } from "typebox";
 
 const Position = Type.Object({ offset: Type.Integer(), line: Type.Integer(), column: Type.Integer() });
 const Span = Type.Object({ start: Position, end: Position });

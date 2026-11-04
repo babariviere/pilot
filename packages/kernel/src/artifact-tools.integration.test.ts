@@ -834,11 +834,11 @@ test("busy codemode publications and automatic completion survive native tool re
 	await assertReplaySafety(session);
 	const submit = session.conversation.submit.bind(session.conversation);
 	const writes: Array<{ draft: SubmissionDraft; id: number; status: string }> = [];
-	t.mock.method(session.conversation, "submit", async (...args: Parameters<typeof submit>) => {
-		const admitted = await submit(...args);
-		if (args[0].type === "write") {
+	t.mock.method(session.conversation, "submit", async (draft: SubmissionDraft, ctx: typeof context) => {
+		const admitted = await submit(draft, ctx);
+		if (draft.type === "write") {
 			const record = await admitted.status(context);
-			writes.push({ draft: args[0], id: admitted.id, status: record.status });
+			writes.push({ draft, id: admitted.id, status: record.status });
 		}
 		return admitted;
 	});

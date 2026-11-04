@@ -1,7 +1,7 @@
 /** The `slack_status` tool: a chat started from a Slack message reports its message as waiting, in progress or done. Executed by pilotd. */
 import type { JsonValue } from "@earendil-works/chord";
-import { Type } from "@earendil-works/pi-ai";
 import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 
 export const SLACK_STATUS_TOOL = "slack_status";
 export type SlackStatusCall = (args: Record<string, JsonValue>) => Promise<JsonValue>;

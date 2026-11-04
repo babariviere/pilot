@@ -80,7 +80,7 @@ for (const raced of ["inbox", "compaction"] as const) {
 					});
 				} else {
 					(await tx.doc(LiveDoc, conversation.id)).compactions = [
-						{ taskId: 999 as never, reason: "manual", blocking: false, attempt: 1 },
+						{ taskId: 999 as never, trigger: "manual", blocking: false, attempt: 1 },
 					];
 				}
 			}, context);

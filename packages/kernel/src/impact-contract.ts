@@ -1,5 +1,5 @@
 /** Bounded reverse-call witnesses, never complete change impact or runtime evidence. */
-import { type Static, Type } from "@earendil-works/pi-ai";
+import { type Static, Type } from "typebox";
 import { CallPathOutput, CallSymbol, Frame } from "./call-path-contract.ts";
 
 export const ImpactOutput = Type.Object({

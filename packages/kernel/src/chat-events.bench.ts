@@ -9,6 +9,7 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createSession, ROOT_CONVERSATION_ID } from "@earendil-works/pi-durable";
+import { commitWrites } from "@earendil-works/pi-durable/testing";
 import { CompactionStatsDoc } from "./chat-events.ts";
 import { GitHubActionsDoc } from "./github-actions.ts";
 import { readSessionSnapshot } from "./snapshot.ts";
@@ -23,7 +24,7 @@ try {
 	const owned = await openSessionStorage(home);
 	const session = createSession(owned.storage);
 	const root = { id: ROOT_CONVERSATION_ID };
-	await owned.storage.commit([{ type: "conversation", value: root }], context);
+	await commitWrites(owned.storage, [{ type: "conversation", value: root }], context);
 	let first = 0;
 	let last = 0;
 	for (let batch = 0; batch < 100; batch++)

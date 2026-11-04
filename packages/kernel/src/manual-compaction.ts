@@ -82,7 +82,7 @@ export function createManualCompaction(
 				{ ownership: { kind: "task", taskId: barrier } },
 			);
 			live.compactions ??= [];
-			live.compactions.push({ taskId: child, reason: "manual", blocking: true, attempt: 1 });
+			live.compactions.push({ taskId: child, trigger: "manual", blocking: true, attempt: 1 });
 			return true;
 		}, context);
 		if (reserved) harness.resume();
@@ -104,7 +104,7 @@ export async function queueDuringCompaction(
 ) {
 	const id = await conversation.commit(async (tx) => {
 		const live = await tx.doc(LiveDoc, conversation.id);
-		if (live.run || !live.compactions?.some(({ reason }) => reason === "manual")) return undefined;
+		if (live.run || !live.compactions?.some(({ trigger }) => trigger === "manual")) return undefined;
 		const existing = await tx.submissionByRequest(conversation.id, requestId);
 		if (existing) {
 			if (existing.type !== "input") throw new Error(`Request ${requestId} already identifies a write`);

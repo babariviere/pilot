@@ -10,11 +10,11 @@ import {
 	fauxToolCall,
 	InMemoryCredentialStore,
 	InMemoryModelsStore,
-	Type,
 } from "@earendil-works/pi-ai";
 import { createEventBus, type ExtensionFactory, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { AssistantEntry, Harness, InboxDoc, ToolTask } from "@earendil-works/pi-durable";
 import type { QueueUpdateEvent } from "@pilot/protocol";
+import { Type } from "typebox";
 import { type ExtensionInput, NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import type { KernelSubagent } from "./protocol.ts";
 import { KernelSession } from "./session.ts";

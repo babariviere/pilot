@@ -1,7 +1,8 @@
 /** Fixed-host Pilot log reader. pilotd owns source catalogues, path safety, authorization and redaction. */
-import { Type } from "@earendil-works/pi-ai";
+
 import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { DiagnosticTargetReference, OperationHost } from "@pilot/protocol";
+import { Type } from "typebox";
 import type { DiagnosticLogRequest, DiagnosticLogResult, DiagnosticLogSourceId } from "./protocol.ts";
 
 export const DIAGNOSTIC_LOG_TOOL = "diagnostic_logs";

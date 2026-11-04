@@ -18,18 +18,19 @@
 		"./runtime-environment": "./src/runtime-environment.ts"
 	},
 	"dependencies": {
-		"@babariviere/pi-extensions": "git+https://github.com/babariviere/pi-extensions.git#8a7655ee43b87a7fd57290c2cf55e8b6eed3a056",
+		"@babariviere/pi-extensions": "git+https://github.com/babariviere/pi-extensions.git#2ef1f34f1792bc4afc9ef875942cb520dd7273ff",
 		"@babel/parser": "8.1.0",
-		"@earendil-works/chord": "1.4.0",
-		"@earendil-works/pi-agent-core": "1.4.0",
-		"@earendil-works/pi-ai": "1.4.0",
-		"@earendil-works/pi-coding-agent": "1.4.0",
-		"@earendil-works/pi-durable": "1.4.0",
-		"@earendil-works/pi-mcp": "1.4.0",
+		"@earendil-works/chord": "1.5.0",
+		"@earendil-works/pi-agent-core": "1.5.0",
+		"@earendil-works/pi-ai": "1.5.0",
+		"@earendil-works/pi-coding-agent": "1.5.0",
+		"@earendil-works/pi-durable": "1.5.0",
+		"@earendil-works/pi-mcp": "1.5.0",
 		"@gotgenes/pi-anthropic-auth": "3.4.4",
 		"@pilot/artifacts": "workspace:*",
 		"@pilot/protocol": "workspace:*",
 		"@pilot/telemetry": "workspace:*",
-		"jiti": "2.7.0"
+		"jiti": "2.7.0",
+		"typebox": "1.4.4"
 	}
 }

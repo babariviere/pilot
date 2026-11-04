@@ -11,10 +11,10 @@ import {
 	fauxToolCall,
 	InMemoryCredentialStore,
 	InMemoryModelsStore,
-	Type,
 } from "@earendil-works/pi-ai";
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { createRegistry, Harness, MemoryStorage, UserEntry } from "@earendil-works/pi-durable";
+import { Type } from "typebox";
 import { NativeAdapter } from "../src/native-adapter.ts";
 import { PerformanceLog } from "../src/performance.ts";
 
