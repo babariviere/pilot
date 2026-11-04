@@ -1,40 +1,120 @@
-//! Insights report chat: the header entry, its access panel and mission setup.
+//! Insights entry points owned by LocalViewer: the report chat's backlog button and
+//! settings, mission setup, and finding decisions chosen from Tasks rows.
 //! LocalViewer owns the writer; the panel only emits explicit user actions.
 use super::*;
 use crate::insights_view::{Event as InsightsEvent, Panel, Scope};
 use gpui_kit::component::WindowExt as _;
 
+/// At most this many findings pages (20 each) behind the header count.
+const COUNT_PAGES: usize = 10;
+
 impl LocalViewer {
-    /// Header entry for a report chat: its scope, backlog and decisions.
-    pub(super) fn insights_action(&self, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
-        let chat = self
-            .selected
+    fn selected_insights_chat(&self) -> Option<&Chat> {
+        self.selected
             .as_ref()
             .and_then(|id| self.state.chats.iter().find(|c| &c.id == id))
-            .filter(|c| c.insights && !c.local_draft)?;
+            .filter(|c| c.insights && !c.local_draft)
+    }
+    /// Header entry for a report chat: its backlog, with findings awaiting a decision.
+    pub(super) fn insights_action(&self, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
+        let chat = self.selected_insights_chat()?;
         let id = chat.id.clone();
+        let mission = match &chat.mission {
+            crate::local_model::MissionAssociation::Linked(m) => Some(m.clone()),
+            _ => None,
+        };
+        let count = self.insights_counts.get(&id).copied().unwrap_or(0);
+        let label: SharedString = if count > 0 {
+            format!("Insights backlog, {count} to decide").into()
+        } else {
+            "Insights backlog".into()
+        };
         Some(
-            crate::ui::action(
-                "insights-access",
-                "Insights access",
-                crate::ui::Action::Quiet,
-            )
-            .small()
-            .tooltip("Scope, backlog and finding decisions")
-            .on_click(cx.listener(move |v, _, w, cx| {
-                if v.editor.update(cx, |e, cx| e.marked(w, cx)) {
-                    return;
-                }
-                v.open_insights(
-                    Scope::Chat {
-                        session: id.clone(),
-                    },
-                    w,
-                    cx,
-                );
-            }))
-            .into_any_element(),
+            div()
+                .relative()
+                .flex_none()
+                .child(
+                    crate::ui::icon_action(
+                        "insights-access",
+                        label,
+                        AppIcon::Tasks,
+                        crate::ui::Action::Quiet,
+                    )
+                    .on_click(cx.listener(move |v, _, w, cx| {
+                        if v.editor.update(cx, |e, cx| e.marked(w, cx)) {
+                            return;
+                        }
+                        match &mission {
+                            Some(m) => v.open_insights_backlog(m.clone(), w, cx),
+                            None => v.open_insights(
+                                Scope::Chat {
+                                    session: id.clone(),
+                                },
+                                w,
+                                cx,
+                            ),
+                        }
+                    })),
+                )
+                .when(count > 0, |d| {
+                    d.child(
+                        div()
+                            .id("insights-access-count")
+                            .test_support()
+                            .absolute()
+                            .top(px(-2.))
+                            .right(px(-4.))
+                            .min_w(px(14.))
+                            .h(px(14.))
+                            .px(px(3.))
+                            .rounded_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .bg(cx.theme().primary)
+                            .text_color(cx.theme().primary_foreground)
+                            .text_size(px(9.))
+                            .font_semibold()
+                            .child(SharedString::from(count.min(99).to_string())),
+                    )
+                })
+                .into_any_element(),
         )
+    }
+    /// The selected report chat's compact settings, from its … menu.
+    pub(super) fn can_open_insights_settings(&self) -> bool {
+        self.selected_insights_chat().is_some() && self.usage_options.is_some()
+    }
+    pub(super) fn open_insights_settings(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        let Some(session) = self.selected_insights_chat().map(|c| c.id.clone()) else {
+            return;
+        };
+        if self.editor.update(cx, |e, cx| e.marked(w, cx)) {
+            return;
+        }
+        self.open_insights(Scope::Chat { session }, w, cx);
+    }
+    /// The linked mission's Tasks, through ordinary mission navigation.
+    pub(super) fn open_insights_backlog(
+        &mut self,
+        mission: String,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let key = self
+            .missions
+            .read(cx)
+            .local_home()
+            .map(|home| crate::mission_browser::Key {
+                home,
+                id: mission.clone(),
+            })
+            .filter(|key| key.valid());
+        if self.show_chat_mission(&mission, w, cx)
+            && let Some(key) = key
+        {
+            self.missions.update(cx, |b, cx| b.want_tasks(key, w, cx));
+        }
     }
 
     /// Explicit setup for an active mission, from its overview menu.
@@ -73,15 +153,21 @@ impl LocalViewer {
         let Some(options) = self.usage_options.clone() else {
             return;
         };
-        let model_label = match &scope {
+        // The report chat's model ID, and its directory to read the display name.
+        let (model, path) = match &scope {
             Scope::Chat { session } => self
                 .state
                 .chats
                 .iter()
                 .find(|c| &c.id == session)
-                .and_then(|c| c.model_configuration.as_ref())
-                .and_then(|m| m.model.clone()),
-            Scope::Setup { .. } => None,
+                .map(|c| {
+                    (
+                        c.model_configuration.as_ref().and_then(|m| m.model.clone()),
+                        Some(c.cwd.clone()).filter(|p| !p.is_empty()),
+                    )
+                })
+                .unwrap_or_default(),
+            _ => (None, None),
         };
         let panel = match &self.insights {
             Some((p, _)) if p.read(cx).matches(&scope, &options) => {
@@ -96,7 +182,7 @@ impl LocalViewer {
                 if self.insights.is_some() {
                     self.close_insights(w, cx);
                 }
-                let panel = cx.new(|cx| Panel::new(scope, options, model_label, cx));
+                let panel = cx.new(|cx| Panel::new(scope, options, model, path, cx));
                 let events = cx.subscribe_in(&panel, w, |v, panel, event, w, cx| {
                     v.insights_event(panel, event, w, cx)
                 });
@@ -120,8 +206,19 @@ impl LocalViewer {
         if self.insights.as_ref().is_none_or(|(p, _)| p != panel) {
             return;
         }
+        let decided = match &panel.read(cx).scope {
+            // A decision, or settings that may have revoked access, can change the count.
+            Scope::Decide { session, .. } | Scope::Chat { session } => Some(session.clone()),
+            _ => None,
+        };
         match event {
-            InsightsEvent::Close => self.close_insights(w, cx),
+            InsightsEvent::Close => {
+                self.close_insights(w, cx);
+                // A rejected or unconfirmed decision may have changed the finding.
+                if let Some(session) = decided {
+                    self.insights_decided(session, cx);
+                }
+            }
             InsightsEvent::Write { request, action } => {
                 let sent = self.writer.as_ref().is_some_and(|writer| {
                     writer.command(crate::interaction::WriteCommand::Insights {
@@ -133,15 +230,21 @@ impl LocalViewer {
                     panel.update(cx, |p, cx| p.not_sent(cx));
                 }
             }
+            InsightsEvent::Decided => {
+                self.close_insights(w, cx);
+                if let Some(session) = decided {
+                    self.insights_decided(session, cx);
+                }
+            }
             InsightsEvent::OpenBacklog(mission) => {
                 let mission = mission.clone();
                 self.close_insights(w, cx);
-                self.show_chat_mission(&mission, w, cx);
+                self.open_insights_backlog(mission, w, cx);
             }
             InsightsEvent::OpenChat(id) => {
                 let mission = match &panel.read(cx).scope {
                     Scope::Setup { mission, .. } => Some(mission.clone()),
-                    Scope::Chat { .. } => None,
+                    _ => None,
                 };
                 self.close_insights(w, cx);
                 if let Some(chat) = self
@@ -158,6 +261,13 @@ impl LocalViewer {
                 }
             }
         }
+    }
+    /// Re-read the Tasks rows and the header count after a decision closes.
+    pub(super) fn insights_decided(&mut self, session: String, cx: &mut Context<Self>) {
+        let tasks = self.missions.read(cx).tasks_browser.clone();
+        tasks.update(cx, |p, cx| p.refresh_insights(cx));
+        self.insights_counts.remove(&session);
+        self.read_insights_count(session, cx);
     }
 
     pub(super) fn close_insights(&mut self, w: &mut Window, cx: &mut Context<Self>) {
@@ -178,5 +288,72 @@ impl LocalViewer {
             focus.focus(w, cx);
         }
         cx.notify();
+    }
+
+    /// The selected report chat's findings awaiting a decision, read once per chat.
+    pub(super) fn sync_insights_count(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.selected_insights_chat().map(|c| c.id.clone()) else {
+            return;
+        };
+        if self.insights_counts.contains_key(&id)
+            || self
+                .insights_count_read
+                .as_ref()
+                .is_some_and(|(s, _)| s == &id)
+        {
+            return;
+        }
+        self.read_insights_count(id, cx);
+    }
+    fn read_insights_count(&mut self, session: String, cx: &mut Context<Self>) {
+        let Some(options) = self.usage_options.clone() else {
+            return;
+        };
+        let reading = session.clone();
+        let task = cx.spawn(async move |view, cx| {
+            use crate::insights::{Lifecycle, Read, ReadReply};
+            let mut count = 0;
+            let mut cursor = None;
+            for _ in 0..COUNT_PAGES {
+                let Some(rx) = crate::insights::read(
+                    options.clone(),
+                    Read::Findings {
+                        session: session.clone(),
+                        cursor,
+                    },
+                ) else {
+                    break;
+                };
+                match rx.recv().await {
+                    Ok(ReadReply::Findings(Ok(page))) => {
+                        count += page
+                            .items
+                            .iter()
+                            .filter(|f| f.lifecycle == Lifecycle::Proposed)
+                            .count();
+                        match page.next_cursor {
+                            Some(n) => cursor = Some(n),
+                            None => break,
+                        }
+                    }
+                    // Unavailable, unsupported or failed: no hint, never a guess.
+                    _ => {
+                        count = 0;
+                        break;
+                    }
+                }
+            }
+            let _ = view.update(cx, |v, cx| {
+                if v.insights_count_read
+                    .as_ref()
+                    .is_some_and(|(s, _)| s == &session)
+                {
+                    v.insights_count_read = None;
+                }
+                v.insights_counts.insert(session, count);
+                cx.notify();
+            });
+        });
+        self.insights_count_read = Some((reading, task));
     }
 }

@@ -22,10 +22,13 @@ use gpui_kit::{
     px,
 };
 use std::sync::Arc;
+#[path = "mission_tasks_insights.rs"]
+mod insights;
 #[path = "task_edit_pane.rs"]
 mod task_edit_pane;
 #[path = "task_model_pane.rs"]
 mod task_model_pane;
+pub(crate) use insights::Decide;
 
 pub(crate) struct Rows {
     owner: WeakEntity<Pane>,
@@ -35,6 +38,8 @@ pub(crate) struct Rows {
     current: Option<IndexPath>,
     visibility: Visibility,
     rows: Vec<Vec<usize>>,
+    /// Insights findings on these tasks, by exact task ID.
+    insights: Arc<std::collections::HashMap<String, crate::insights::Finding>>,
 }
 impl Rows {
     fn header(&self, section: usize) -> bool {
@@ -104,6 +109,7 @@ impl ListDelegate for Rows {
         let title = s.title.clone()?;
         let key = s.key.clone();
         let collapsed = self.visibility.collapsed.contains(&key);
+        let deciding = insights::deciding(s, &self.snapshot, &self.insights);
         let owner = self.owner.clone();
         let generation = self.generation;
         Some(
@@ -151,7 +157,22 @@ impl ListDelegate for Rows {
                             ui::text(Text::Caption, SharedString::from(s.progress.clone()))
                                 .flex_none()
                                 .text_color(cx.theme().muted_foreground),
-                        ),
+                        )
+                        .when(deciding > 0, |d| {
+                            d.child(
+                                ui::text(
+                                    Text::Caption,
+                                    SharedString::from(format!("{deciding} to decide")),
+                                )
+                                .id(SharedString::from(format!(
+                                    "mission-tasks-deciding-{section}"
+                                )))
+                                .test_support()
+                                .flex_none()
+                                .font_semibold()
+                                .text_color(cx.theme().primary),
+                            )
+                        }),
                 ),
         )
     }
@@ -166,10 +187,17 @@ impl Rows {
         let current = self.current == Some(ix);
         let (menu_owner, menu_id) = (self.owner.clone(), t.id.clone());
         let (button_owner, button_id) = (self.owner.clone(), t.id.clone());
-        // Status, then the description's first line, as Swift's collapsed row.
-        let detail = match t.body.lines().map(str::trim).find(|l| !l.is_empty()) {
-            Some(line) => format!("{label} · {line}"),
-            None => label.to_string(),
+        let finding = self.insights.get(&t.id).cloned();
+        let (menu_finding, button_finding) = (finding.clone(), finding.clone());
+        // A finding: its priority, projects and estimate. Otherwise status, then the
+        // description's first line, as Swift's collapsed row.
+        let detail = match (
+            &finding,
+            t.body.lines().map(str::trim).find(|l| !l.is_empty()),
+        ) {
+            (Some(f), _) => insights::meta(f),
+            (None, Some(line)) => format!("{label} · {line}"),
+            (None, None) => label.to_string(),
         };
         Some(
             ListItem::new(SharedString::from(format!("mission-tasks-row-{}", t.id)))
@@ -210,6 +238,11 @@ impl Rows {
                                     .muted(t.status == "dropped"),
                                 ),
                         )
+                        .children(
+                            finding
+                                .as_ref()
+                                .map(|f| insights::chip(&t.id, f.lifecycle, cx)),
+                        )
                         // Shown on hover and on the highlighted row, which keeps
                         // it as a Tab stop; the right-click menu is the same.
                         .child(
@@ -230,20 +263,50 @@ impl Rows {
                                     .tab_stop(current)
                                     .dropdown_menu(
                                         move |menu, _, _| {
-                                            row_menu(menu, &button_owner, &button_id, generation)
+                                            row_menu(
+                                                menu,
+                                                &button_owner,
+                                                &button_id,
+                                                generation,
+                                                button_finding.as_ref(),
+                                            )
                                         },
                                     ),
                                 ),
                         )
                         .context_menu(move |menu, _, _| {
-                            row_menu(menu, &menu_owner, &menu_id, generation)
+                            row_menu(
+                                menu,
+                                &menu_owner,
+                                &menu_id,
+                                generation,
+                                menu_finding.as_ref(),
+                            )
                         }),
                 ),
         )
     }
 }
-/// A row's commands, each run on that exact task.
-fn row_menu(mut menu: PopupMenu, owner: &WeakEntity<Pane>, id: &str, generation: u64) -> PopupMenu {
+/// A row's commands, each run on that exact task. A finding's decisions come first.
+fn row_menu(
+    mut menu: PopupMenu,
+    owner: &WeakEntity<Pane>,
+    id: &str,
+    generation: u64,
+    finding: Option<&crate::insights::Finding>,
+) -> PopupMenu {
+    if let Some(f) = finding {
+        for to in crate::insights_view::lifecycle_choices(f.lifecycle) {
+            let (owner, id) = (owner.clone(), id.to_string());
+            let label = format!("{}…", crate::insights_view::decision_label(to));
+            menu = menu.item(PopupMenuItem::new(SharedString::from(label)).on_click(
+                move |_, w, cx| {
+                    let _ = owner.update(cx, |v, cx| v.decide(&id, to, generation, w, cx));
+                },
+            ));
+        }
+        menu = menu.separator();
+    }
     for (label, action) in [
         ("Change status…", RowAction::Status),
         ("Edit title and description…", RowAction::Edit),
@@ -291,6 +354,7 @@ pub(crate) struct Pane {
     edits: Vec<(Entity<crate::task_edit_view::Form>, Subscription)>,
     pub(crate) model_form: Option<Entity<crate::task_model_view::Form>>,
     models: Vec<(Entity<crate::task_model_view::Form>, Subscription)>,
+    pub(crate) insights: insights::Insights,
 }
 impl Pane {
     fn toggle_phase(
@@ -380,6 +444,7 @@ impl Pane {
             edits: Vec::new(),
             model_form: None,
             models: Vec::new(),
+            insights: Default::default(),
         }
     }
     pub(crate) fn owns_focus(&self, w: &Window, cx: &App) -> bool {
@@ -766,6 +831,8 @@ impl Pane {
         }) {
             self.state.busy = false;
             self.state.error = Some("Couldn't request tasks. Refresh to try again.");
+        } else {
+            self.read_insights(cx);
         }
         cx.notify();
     }
@@ -776,6 +843,7 @@ impl Pane {
         let generation = self.state.generation;
         let visibility = self.state.visibility.clone();
         let rows = visibility.rows(&snapshot);
+        let findings = self.insights.findings.clone();
         if self
             .state
             .selected
@@ -790,6 +858,7 @@ impl Pane {
                 l.delegate_mut().generation = generation;
                 l.delegate_mut().visibility = visibility;
                 l.delegate_mut().rows = rows;
+                l.delegate_mut().insights = findings;
                 let ix = self
                     .state
                     .selected
@@ -809,6 +878,7 @@ impl Pane {
                         current: None,
                         visibility,
                         rows,
+                        insights: findings,
                     },
                     w,
                     cx,

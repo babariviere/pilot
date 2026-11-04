@@ -110,7 +110,16 @@ fn open(
             },
             cx,
             |_, cx| {
-                let p = cx.new(|cx| Panel::new(scope, options, Some("Claude Opus 5.5".into()), cx));
+                let path = matches!(scope, Scope::Chat { .. }).then(|| "/tmp/pilot".to_owned());
+                let p = cx.new(|cx| {
+                    Panel::new(
+                        scope,
+                        options,
+                        Some("anthropic/claude-opus-5-5".into()),
+                        path,
+                        cx,
+                    )
+                });
                 panel = Some(p.clone());
                 cx.new(|_| Frame { title, panel: p })
             },
@@ -140,7 +149,7 @@ pub fn run_insights_probe(cx: &mut HeadlessAppContext) {
             Scope::Chat {
                 session: SESSION.into(),
             },
-            "Insights access",
+            "Insights",
             &server,
             dark,
         );
@@ -148,14 +157,25 @@ pub fn run_insights_probe(cx: &mut HeadlessAppContext) {
         capture(cx, h, &format!("access-{mode}"));
         cx.update(|cx| panel.update(cx, |p, cx| p.probe_scope(cx)));
         capture(cx, h, &format!("scope-{mode}"));
-        cx.update(|cx| {
-            panel.update(cx, |p, cx| {
-                p.probe_decide(0, crate::insights::Lifecycle::Approved, cx)
-            })
-        });
-        capture(cx, h, &format!("decision-{mode}"));
         cx.update(|cx| panel.update(cx, |p, cx| p.probe_revoke(cx)));
         capture(cx, h, &format!("revoke-{mode}"));
+        let (h, panel) = open(
+            cx,
+            Scope::Decide {
+                session: SESSION.into(),
+                key: "0b5c2f7e-1d2a-4c3b-9e8f-0a1b2c3d4e5f".into(),
+                number: 12,
+                title: "Retry flaky desktop probes once before failing CI".into(),
+                from: crate::insights::Lifecycle::Proposed,
+                to: crate::insights::Lifecycle::Approved,
+                expected_revision: 3,
+            },
+            "Approve #12?",
+            &server,
+            dark,
+        );
+        until(cx, h, |cx| panel.read(cx).probe_ready());
+        capture(cx, h, &format!("decision-{mode}"));
         let (h, panel) = open(
             cx,
             Scope::Setup {
@@ -164,7 +184,7 @@ pub fn run_insights_probe(cx: &mut HeadlessAppContext) {
                 project: "project-a".into(),
                 path: "/tmp/pilot".into(),
             },
-            "Set up Insights chat",
+            "Set up Insights",
             &server,
             dark,
         );

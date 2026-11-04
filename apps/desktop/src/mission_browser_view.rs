@@ -78,6 +78,12 @@ pub(crate) enum Event {
         project: String,
         generation: u64,
     },
+    /// One explicit finding decision chosen from this mission's Tasks rows.
+    DecideInsights {
+        key: Key,
+        decision: crate::insights_view::Scope,
+        generation: u64,
+    },
     /// Open project knowledge: the list, or an exact linked entry and its pin.
     Knowledge {
         key: Key,
@@ -152,6 +158,8 @@ pub(crate) struct Browser {
     pub(crate) creation: Option<gpui_kit::Entity<crate::mission_create_view::Form>>,
     pub(crate) lifecycle: Vec<gpui_kit::Entity<crate::mission_lifecycle_view::Form>>,
     pub(crate) metadata: Vec<gpui_kit::Entity<crate::mission_metadata_view::Form>>,
+    /// Open this mission on its Tasks tab once its detail is current.
+    tasks_pending: Option<Key>,
 }
 impl EventEmitter<Event> for Browser {}
 impl Browser {
@@ -222,6 +230,21 @@ impl Browser {
     }
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         let tasks_browser = cx.new(crate::mission_tasks_view::Pane::new);
+        cx.subscribe(
+            &tasks_browser,
+            |b, _, e: &crate::mission_tasks_view::Decide, cx| {
+                if let Some(Route::Detail(key)) = &b.route
+                    && b.tasks_browser.read(cx).state.key.as_ref() == Some(key)
+                {
+                    cx.emit(Event::DecideInsights {
+                        key: key.clone(),
+                        decision: e.0.clone(),
+                        generation: b.generation,
+                    });
+                }
+            },
+        )
+        .detach();
         Self {
             resources: Default::default(),
             resources_current: false,
@@ -263,6 +286,7 @@ impl Browser {
             brief_events: None,
             creation: None,
             metadata: Vec::new(),
+            tasks_pending: None,
             lifecycle: Vec::new(),
         }
     }
@@ -294,12 +318,47 @@ impl Browser {
         }
         let options = self.options.clone();
         let show = self.tab == Tab::Tasks;
+        let session = key.as_ref().and_then(|k| self.insights_chat(k));
         self.tasks_browser.update(cx, |p, cx| {
             p.sync(key, options, w, cx);
+            p.set_insights(session, cx);
             if show {
                 p.show(false, w, cx);
             }
         });
+    }
+    /// The mission's own Insights report chat in the cached Local chat list.
+    fn insights_chat(&self, key: &Key) -> Option<String> {
+        let linked = crate::local_model::MissionAssociation::Linked(key.id.clone());
+        self.chats
+            .iter()
+            .find(|c| c.insights && !c.local_draft && !c.archived && c.mission == linked)
+            .map(|c| c.id.clone())
+    }
+    /// Show this mission's Tasks once its detail is current, as from the report chat.
+    pub(crate) fn want_tasks(&mut self, key: Key, w: &mut Window, cx: &mut Context<Self>) {
+        self.tasks_pending = Some(key);
+        self.settle_tasks_pending(w, cx);
+    }
+    fn settle_tasks_pending(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        let Some(key) = self.tasks_pending.clone() else {
+            return;
+        };
+        match &self.route {
+            Some(Route::Detail(k)) if *k == key => {
+                if self.detail.as_ref().is_some_and(|d| d.key == key)
+                    && self.current(self.generation)
+                {
+                    self.tasks_pending = None;
+                    if self.tasks_browser.read(cx).state.key.is_some() {
+                        self.choose_tab(Tab::Tasks, true, w, cx);
+                    }
+                }
+            }
+            // Still on the way through the list.
+            Some(Route::Catalog) | None => {}
+            _ => self.tasks_pending = None,
+        }
     }
     /// Switch tabs. Showing Tasks reads it once; leaving keeps its snapshot,
     /// selection and drafts. `focus` moves focus into the task list.
@@ -668,6 +727,16 @@ impl Browser {
         if let Some(brief) = &self.brief {
             brief.update(cx, |v, cx| v.sync(source.as_ref(), self.online, cx));
         }
+        // A report chat that appears or goes away updates its mission's Tasks rows.
+        let session = self
+            .tasks_browser
+            .read(cx)
+            .state
+            .key
+            .clone()
+            .and_then(|k| self.insights_chat(&k));
+        self.tasks_browser
+            .update(cx, |p, cx| p.set_insights(session, cx));
     }
     fn brief_source(&self) -> Option<crate::mission_brief::Source> {
         let Some(Route::Detail(key)) = &self.route else {
@@ -917,7 +986,10 @@ impl Browser {
                     self.updates = Some(cx.spawn_in(w, async move |view, cx| {
                         while let Ok(response) = updates.recv().await {
                             if view
-                                .update(cx, |view, cx| view.accept(response, cx))
+                                .update_in(cx, |view, w, cx| {
+                                    view.accept(response, cx);
+                                    view.settle_tasks_pending(w, cx);
+                                })
                                 .is_err()
                             {
                                 return;

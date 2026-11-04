@@ -405,6 +405,9 @@ pub struct LocalViewer {
     /// The open Insights access/setup panel and its event subscription.
     insights: Option<(Entity<crate::insights_view::Panel>, Subscription)>,
     insights_return: Option<gpui_kit::FocusHandle>,
+    /// Report chats' findings awaiting a decision (header hint), and the one read.
+    insights_counts: std::collections::HashMap<String, usize>,
+    insights_count_read: Option<(String, Task<()>)>,
     /// Writer-retained Insights attempts and its latest reply, for a panel opened later.
     insights_book: Option<Arc<crate::delivery_store::Book>>,
     insights_reply: Option<crate::insights::Reply>,
@@ -1379,6 +1382,15 @@ impl LocalViewer {
                             cx,
                         );
                     }
+                    Event::DecideInsights {
+                        key,
+                        decision,
+                        generation,
+                    } if view.page == Page::Mission(key.clone())
+                        && view.missions.read(cx).current(*generation) =>
+                    {
+                        view.open_insights(decision.clone(), window, cx);
+                    }
                     Event::Chat {
                         key,
                         id,
@@ -1806,6 +1818,8 @@ impl LocalViewer {
             repair: Default::default(),
             insights: None,
             insights_return: None,
+            insights_counts: Default::default(),
+            insights_count_read: None,
             insights_book: None,
             insights_reply: None,
             #[cfg(feature = "native-probes")]
@@ -2370,6 +2384,7 @@ impl LocalViewer {
         self.did_navigate(cx);
     }
     fn rebuild_nav(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.sync_insights_count(cx);
         if self.page == Page::Archive {
             self.archive
                 .update(cx, |v, cx| v.sync(&self.state, window, cx));

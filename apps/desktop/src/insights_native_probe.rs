@@ -1,11 +1,13 @@
-//! Mounted Insights entry points and panels in the real LocalViewer, over an owned
-//! synthetic Local only. The standalone pixel probe is `insights_probe`.
-//! No real grant, private history, provider turn, schedule or visible window.
+//! Mounted Insights entry points in the real LocalViewer, over an owned synthetic Local
+//! only: the report chat's backlog button and settings, finding decisions from the
+//! mission's Tasks rows, revocation and setup. The standalone pixel probe is
+//! `insights_probe`. No real grant, private history, provider turn, schedule or visible window.
 use super::*;
 use crate::{
     app_shell::Page,
-    insights::{DISCLOSURE, State},
+    insights::{DISCLOSURE, Lifecycle, State},
     mission_browser_fixture::{self as f, Reply, Server},
+    mission_browser_view::Tab,
 };
 use gpui_kit::{
     AnyWindowHandle, Bounds, ElementId, HeadlessAppContext, ScrollDelta, WindowBounds,
@@ -27,8 +29,15 @@ const LONG_MODEL: &str =
 fn key(ix: usize) -> String {
     format!("{ix:08x}-0000-4000-8000-{ix:012x}")
 }
-fn finding(ix: usize) -> Value {
-    let lifecycle = [
+fn title(ix: usize) -> String {
+    if ix == 0 {
+        "Cut repeated full-repository scans in long review chats: agents re-read apps/desktop/src/local_view_navigation_and_sidebar_reconciliation_module.rs after every compaction 日本語 👩‍💻".to_owned()
+    } else {
+        format!("Finding {ix}: tighten scoped-check guidance so agents choose one native target")
+    }
+}
+fn lifecycle(ix: usize) -> &'static str {
+    [
         "proposed",
         "approved",
         "in_progress",
@@ -36,38 +45,37 @@ fn finding(ix: usize) -> Value {
         "deferred",
         "dismissed",
         "verified",
-    ][ix % 7];
-    let title = if ix == 0 {
-        "Cut repeated full-repository scans in long review chats: agents re-read apps/desktop/src/local_view_navigation_and_sidebar_reconciliation_module.rs and other 2,000-line files after every compaction, which inflates context and retries 日本語 👩‍💻".to_owned()
-    } else {
-        format!("Finding {ix}: tighten scoped-check guidance so agents choose one native target")
-    };
+    ][ix % 7]
+}
+fn finding(ix: usize, life: &str, revision: u64) -> Value {
     let targets = match ix % 3 {
         0 if ix == 0 => json!([
             {"projectId":"project-A","label":"Pilot (apps/desktop and packages/kernel)"},
-            {"projectId":"project-B","label":"Personal dotfiles with a deliberately long project label that must wrap rather than overflow the panel"}
+            {"projectId":"project-B","label":"Personal dotfiles with a deliberately long project label"}
         ]),
         0 => json!([]),
         _ => json!([{"projectId":"project-A","label":"Pilot"}]),
     };
     let cost = if ix.is_multiple_of(2) {
-        let later = if ix == 2 {
-            "Input tokens fell 18% over two weeks"
-        } else {
-            ""
-        };
-        json!({
-            "baseline":"About 41 tool calls per review (observed in 3 chats)",
-            "assumptions":"Same weekly review volume",
-            "estimate":"About 30% fewer input tokens per review, roughly $4 per week at observed pricing",
-            "qualityRisks":"Stale cached summaries",
-            "laterResult": later,
-        })
+        let later = if ix == 2 { "−18% input tokens" } else { "" };
+        json!({"baseline":"41 tool calls per review","assumptions":"Same volume","estimate":"−30% input tokens","qualityRisks":"Stale summaries","laterResult":later})
     } else {
         Value::Null
     };
     let priority = ["high", "medium", "low"][ix % 3];
-    json!({"key":key(ix),"revision":ix as u64 + 1,"taskId":format!("task-{ix}"),"lifecycle":lifecycle,"title":title,"priority":priority,"targets":targets,"cost":cost})
+    json!({"key":key(ix),"revision":revision,"taskId":format!("task-{ix}"),"lifecycle":life,"title":title(ix),"priority":priority,"targets":targets,"cost":cost})
+}
+fn page(range: std::ops::Range<usize>, next: Option<u64>, first: &str) -> Value {
+    let items: Vec<Value> = range
+        .map(|ix| {
+            if ix == 0 {
+                finding(0, first, if first == "proposed" { 1 } else { 2 })
+            } else {
+                finding(ix, lifecycle(ix), ix as u64 + 1)
+            }
+        })
+        .collect();
+    json!({"items":items,"nextCursor":next})
 }
 fn status(enabled: bool, revision: u64) -> Value {
     json!({"sessionId":REPORT,"enabled":enabled,"revision":revision,"projectId":"project-A","missionId":"mission-A","setupPending":false,"archived":false,"available":true,"disclosure":DISCLOSURE})
@@ -77,6 +85,15 @@ fn models() -> Value {
         {"id":"anthropic/claude-sonnet","provider":"anthropic","name":"Claude Sonnet","thinkingLevels":["off","low","high"],"thinking":"low"},
         {"id":"openai/gpt-long","provider":"openai","name":LONG_MODEL,"thinkingLevels":["off"]}
     ]})
+}
+/// Mission A's tasks are the findings' own tasks, in one phase.
+fn detail() -> Value {
+    let mut d = f::detail("mission-A");
+    d["phases"] = json!([{"id":"phase-f","name":"Findings","order":1}]);
+    d["tasks"] = json!((0..23).map(|ix| json!({"id":format!("task-{ix}"),"number":10 + ix,"title":title(ix),"status":"todo","order":ix,"phaseId":"phase-f"})).collect::<Vec<_>>());
+    d["mission"]["tasksTotal"] = json!(23);
+    d["mission"]["tasksDone"] = json!(0);
+    d
 }
 fn server() -> Server {
     let s = Server::start().with_capability();
@@ -90,19 +107,11 @@ fn server() -> Server {
     s.reply(STATUS, Reply::json(200, status(true, 3)));
     s.reply(
         FINDINGS,
-        Reply::json(
-            200,
-            json!({"items":(0..20).map(finding).collect::<Vec<_>>(),"nextCursor":20}),
-        ),
+        Reply::json(200, page(0..20, Some(20), "proposed")),
     );
-    s.reply(
-        MORE,
-        Reply::json(
-            200,
-            json!({"items":(20..23).map(finding).collect::<Vec<_>>(),"nextCursor":null}),
-        ),
-    );
+    s.reply(MORE, Reply::json(200, page(20..23, None, "proposed")));
     s.reply(MODELS, Reply::json(200, models()));
+    s.reply("/api/missions/mission-A", Reply::json(200, detail()));
     s
 }
 fn receipt(op: &crate::delivery_store::Operation, state: &str, result: Value) -> Value {
@@ -134,13 +143,13 @@ fn until(
     }
     settle(cx, h);
 }
-/// Scroll the panel so the target is inside its visible region, then click it.
 fn click(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: impl Into<ElementId>) {
     let id: ElementId = id.into();
     reveal(cx, h, id.clone());
     cx.update_window(h, |_, w, cx| w.click(id, cx)).unwrap();
     settle(cx, h);
 }
+/// Scroll the panel body so a target inside it is visible.
 fn reveal(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: ElementId) {
     cx.update_window(h, |_, w, cx| {
         if w.try_find("insights-body").is_none() || w.find(id.clone()).visible() {
@@ -160,7 +169,7 @@ fn reveal(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: ElementId) {
 fn pick(cx: &mut HeadlessAppContext, h: AnyWindowHandle, label: &str) {
     until(cx, h, |w, _| w.try_find("popup-menu").is_some());
     cx.update_window(h, |_, w, cx| {
-        let item = (0..16usize)
+        let item = (0..24usize)
             .find(|i| {
                 w.within("popup-menu")
                     .try_find(*i)
@@ -171,6 +180,19 @@ fn pick(cx: &mut HeadlessAppContext, h: AnyWindowHandle, label: &str) {
     })
     .unwrap();
     settle(cx, h);
+}
+fn menu_labels(cx: &mut HeadlessAppContext, h: AnyWindowHandle) -> Vec<String> {
+    until(cx, h, |w, _| w.try_find("popup-menu").is_some());
+    cx.update_window(h, |_, w, _| {
+        (0..24usize)
+            .filter_map(|i| {
+                w.within("popup-menu")
+                    .try_find(i)
+                    .and_then(|e| e.label().map(str::to_owned))
+            })
+            .collect()
+    })
+    .unwrap()
 }
 fn shot(cx: &mut HeadlessAppContext, h: AnyWindowHandle, dir: &Option<PathBuf>, name: &str) {
     if let Some(d) = dir {
@@ -183,25 +205,20 @@ fn shot(cx: &mut HeadlessAppContext, h: AnyWindowHandle, dir: &Option<PathBuf>, 
 fn panel_open(w: &mut Window) -> bool {
     w.try_find("insights-panel").is_some()
 }
-fn access_loaded(w: &mut Window) -> bool {
-    w.try_find("insights-state").is_some() && w.try_find(("insights-finding", 19usize)).is_some()
+fn escape(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
+    cx.update_window(h, |_, w, cx| w.press("escape", cx))
+        .unwrap();
+    settle(cx, h);
 }
-/// No row or panel may extend past the window or the panel horizontally.
-fn assert_contained(w: &mut Window, width: f32) {
-    let panel = w.find("insights-panel").bounds();
+fn closed(cx: &mut HeadlessAppContext, h: AnyWindowHandle) -> bool {
+    !cx.update_window(h, |_, w, _| panel_open(w)).unwrap()
+}
+fn contained(w: &mut Window, width: f32) {
+    let p = w.find("insights-panel").bounds();
     assert!(
-        panel.left() >= px(0.) && panel.right() <= px(width),
-        "panel {panel:?} exceeds {width}"
+        p.left() >= px(0.) && p.right() <= px(width),
+        "panel {p:?} exceeds {width}"
     );
-    let mut ix = 0usize;
-    while let Some(row) = w.try_find(("insights-finding", ix)) {
-        let b = row.bounds();
-        assert!(
-            b.right() <= panel.right() + px(0.5) && b.left() >= panel.left() - px(0.5),
-            "finding {ix} {b:?} overflows panel {panel:?}"
-        );
-        ix += 1;
-    }
 }
 
 struct Mounted {
@@ -348,37 +365,82 @@ fn settled_as(view: &Entity<LocalViewer>, slot: &str, state: State, cx: &App) ->
         .and_then(|b| b.insights.get(slot))
         .is_some_and(|a| a.state == state)
 }
-fn open_access(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
+fn lifecycle_of(view: &Entity<LocalViewer>, task: &str, cx: &App) -> Option<Lifecycle> {
+    view.read(cx)
+        .missions
+        .read(cx)
+        .tasks_browser
+        .read(cx)
+        .probe_lifecycle(task)
+}
+/// The report chat's … menu, then Insights settings….
+fn open_settings(cx: &mut HeadlessAppContext, h: AnyWindowHandle, view: &Entity<LocalViewer>) {
+    cx.update_window(h, |_, w, cx| w.click("history-menu", cx))
+        .unwrap();
+    settle(cx, h);
+    pick(cx, h, "Insights settings…");
+    let p = panel(cx, view);
+    until(cx, h, |w, cx| {
+        panel_open(w) && w.try_find("insights-state").is_some() && p.read(cx).probe_ready()
+    });
+}
+/// The header's backlog button, onto the mission's Tasks with its findings.
+fn open_backlog(cx: &mut HeadlessAppContext, h: AnyWindowHandle, view: &Entity<LocalViewer>) {
     cx.update_window(h, |_, w, cx| {
         let entry = w.find("insights-access");
         assert!(entry.visible());
-        assert_eq!(entry.label(), Some("Insights access"));
         w.click("insights-access", cx);
     })
     .unwrap();
-    until(cx, h, |w, _| panel_open(w) && access_loaded(w));
+    to_tasks(cx, h, view);
+}
+fn to_tasks(cx: &mut HeadlessAppContext, h: AnyWindowHandle, view: &Entity<LocalViewer>) {
+    until(cx, h, |w, cx| {
+        let v = view.read(cx);
+        v.page == Page::Mission(f::key("mission-A"))
+            && v.missions.read(cx).tab == Tab::Tasks
+            && lifecycle_of(view, "task-22", cx).is_some()
+            && w.try_find("mission-task-insight-task-0").is_some()
+    });
+}
+/// A row's own context menu, then one decision.
+fn decide(cx: &mut HeadlessAppContext, h: AnyWindowHandle, task: &str, label: &str) {
+    cx.update_window(h, |_, w, cx| {
+        w.right_click(format!("mission-tasks-item-{task}"), cx)
+    })
+    .unwrap();
+    pick(cx, h, label);
+    until(cx, h, |w, _| {
+        panel_open(w) && w.try_find("insights-decide-title").is_some()
+    });
 }
 fn open_setup(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
+    click(cx, h, "mission-tab-overview");
     crate::mission_browser_view::probe_menu_command(cx, h, "Set up Insights chat…");
     until(cx, h, |w, _| {
         panel_open(w) && w.try_find("insights-model").is_some()
     });
 }
-fn to_mission(cx: &mut HeadlessAppContext, h: AnyWindowHandle, view: &Entity<LocalViewer>) {
-    until(cx, h, |_, cx| {
-        let v = view.read(cx);
-        v.page == Page::Mission(f::key("mission-A"))
-            && v.missions.read(cx).detail.is_some()
-            && !v.missions.read(cx).busy
+fn back_to_chat(cx: &mut HeadlessAppContext, h: AnyWindowHandle, view: &Entity<LocalViewer>) {
+    // The same open path a sidebar row uses.
+    cx.update_window(h, |_, w, cx| {
+        view.update(cx, |v, cx| {
+            let chat = v
+                .state
+                .chats
+                .iter()
+                .find(|c| c.id == REPORT)
+                .cloned()
+                .unwrap();
+            v.open(chat, w, cx);
+        })
+    })
+    .unwrap();
+    until(cx, h, |w, cx| {
+        view.read(cx).page == Page::Chat
+            && view.read(cx).selected.as_deref() == Some(REPORT)
+            && w.try_find("insights-access").is_some()
     });
-}
-fn escape(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
-    cx.update_window(h, |_, w, cx| w.press("escape", cx))
-        .unwrap();
-    settle(cx, h);
-}
-fn closed(cx: &mut HeadlessAppContext, h: AnyWindowHandle) -> bool {
-    !cx.update_window(h, |_, w, _| panel_open(w)).unwrap()
 }
 
 pub fn run_insights_native_probe(cx: &mut HeadlessAppContext) {
@@ -403,33 +465,33 @@ pub fn run_insights_native_probe(cx: &mut HeadlessAppContext) {
     println!("insights: full flow and 3 render-only layouts passed");
 }
 
-/// Every entry and panel at another size/theme: render, scroll, Escape, nothing sent.
+/// Every entry and surface at another size/theme: render, Escape, nothing sent.
 fn render_only(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>, width: f32, mode: ThemeMode) {
     let s = server();
     let m = mount(cx, &s, width, mode);
     let (h, view) = (m.h, m.view.clone());
     let tag = format!("{}-{mode:?}", width as u32);
-    open_access(cx, h);
-    cx.update_window(h, |_, w, _| assert_contained(w, width))
-        .unwrap();
-    shot(cx, h, dir, &format!("access-top-{tag}"));
-    click(cx, h, "insights-more");
-    until(cx, h, |w, _| {
-        w.try_find(("insights-finding", 22usize)).is_some()
-    });
-    reveal(cx, h, ("insights-finding", 22usize).into());
+    until(cx, h, |w, _| w.try_find("insights-access-count").is_some());
+    open_settings(cx, h, &view);
+    click(cx, h, "insights-scope-toggle");
     cx.update_window(h, |_, w, _| {
+        contained(w, width);
         assert!(w.find("insights-close").visible());
-        assert_contained(w, width);
     })
     .unwrap();
-    shot(cx, h, dir, &format!("access-bottom-{tag}"));
-    click(cx, h, "insights-backlog");
-    to_mission(cx, h, &view);
+    shot(cx, h, dir, &format!("settings-{tag}"));
+    escape(cx, h);
+    assert!(closed(cx, h));
+    open_backlog(cx, h, &view);
+    shot(cx, h, dir, &format!("tasks-{tag}"));
+    decide(cx, h, "task-0", "Approve…");
+    cx.update_window(h, |_, w, _| contained(w, width)).unwrap();
+    shot(cx, h, dir, &format!("decide-{tag}"));
+    escape(cx, h);
+    assert!(closed(cx, h));
     open_setup(cx, h);
     cx.update_window(h, |_, w, _| {
-        let p = w.find("insights-panel").bounds();
-        assert!(p.right() <= px(width) && p.left() >= px(0.));
+        contained(w, width);
         assert!(w.find("insights-setup").visible());
     })
     .unwrap();
@@ -441,9 +503,7 @@ fn render_only(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>, width: f32, m
         "rendering and navigation must not write"
     );
     unmount(cx, m, &s, None);
-    println!(
-        "insights render-only {tag}: access, findings paging, backlog, setup and Escape passed"
-    );
+    println!("insights render-only {tag}: settings, tasks, decision and setup passed");
 }
 
 fn full(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
@@ -452,7 +512,9 @@ fn full(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     let m = mount(cx, &s, width, ThemeMode::Light);
     let (h, view) = (m.h, m.view.clone());
 
-    // An ordinary chat has no Insights entry.
+    // The header hint counts Proposed findings with passive reads only.
+    until(cx, h, |w, _| w.try_find("insights-access-count").is_some());
+    cx.update(|cx| assert_eq!(view.read(cx).insights_counts.get(REPORT), Some(&4)));
     cx.update_window(h, |_, w, cx| {
         view.update(cx, |v, cx| {
             v.selected = Some("plain".into());
@@ -467,8 +529,9 @@ fn full(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     })
     .unwrap();
     settle(cx, h);
+    assert!(s.writes().is_empty());
 
-    // A composer draft survives every panel interaction below.
+    // A composer draft survives every interaction below.
     let input = cx.update(|cx| view.read(cx).editor.read(cx).shell_probe().0);
     cx.update_window(h, |_, w, cx| {
         input.update(cx, |i, cx| i.focus(w, cx));
@@ -477,68 +540,75 @@ fn full(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     .unwrap();
     settle(cx, h);
     let draft = cx.update(|cx| input.read(cx).value());
+    shot(cx, h, dir, "full-header");
 
-    // Opening is passive: GETs only, focus moves into the panel.
-    open_access(cx, h);
+    // Settings from the chat's … menu: passive, focused, model by display name.
+    open_settings(cx, h, &view);
     let p = panel(cx, &view);
     cx.update_window(h, |_, w, cx| {
-        assert!(p.read(cx).owns_focus(w, cx), "panel takes focus on open");
-        assert_contained(w, width);
-        let first = w.find(("insights-finding", 0usize)).bounds();
-        let second = w.find(("insights-finding", 1usize)).bounds();
-        assert!(first.size.height > second.size.height, "long finding wraps");
+        assert!(p.read(cx).owns_focus(w, cx), "settings take focus");
+        assert_eq!(
+            p.read(cx).probe_model_name().as_deref(),
+            Some("Claude Sonnet")
+        );
+        assert!(w.try_find("insights-scope").is_none());
+        assert!(w.find("insights-revoke").visible());
+        contained(w, width);
     })
     .unwrap();
-    // Scope is disclosed on request in the report chat; the toggle reveals it.
-    cx.update_window(h, |_, w, _| assert!(w.try_find("insights-scope").is_none()))
-        .unwrap();
     click(cx, h, "insights-scope-toggle");
     cx.update_window(h, |_, w, _| assert!(w.find("insights-scope").visible()))
         .unwrap();
-    assert!(s.writes().is_empty(), "opening access must not write");
-    shot(cx, h, dir, "full-access-open");
-
-    // Escape closes, restores focus outside the panel and keeps the draft.
+    shot(cx, h, dir, "full-settings");
+    assert!(s.writes().is_empty(), "opening settings must not write");
     escape(cx, h);
     cx.update_window(h, |_, w, cx| {
         assert!(!panel_open(w));
-        assert!(!p.read(cx).owns_focus(w, cx));
         assert!(w.focused(cx).is_some(), "focus is restored, not dropped");
         assert_eq!(input.read(cx).value(), draft);
     })
     .unwrap();
 
-    // Decision: menu, explicit confirmation; Escape cancels only the confirmation.
-    open_access(cx, h);
-    click(cx, h, ("insights-decide", 0usize));
-    pick(cx, h, "Approve");
-    cx.update_window(h, |_, w, _| {
-        assert!(w.try_find("insights-confirm-decision").is_some());
-        // Pinned below the list: no scrolling from the clicked row is needed.
-        assert!(w.find("insights-decision-confirm").visible());
-        assert!(w.find("insights-close").visible());
-        assert_eq!(w.find(("insights-decide", 1usize)).disabled(), Some(true));
+    // The header button opens the backlog's Tasks with findings on their own rows.
+    open_backlog(cx, h, &view);
+    cx.update_window(h, |_, w, cx| {
+        assert!(w.find("mission-tasks-deciding-0").visible());
+        assert_eq!(lifecycle_of(&view, "task-0", cx), Some(Lifecycle::Proposed));
     })
     .unwrap();
+    assert!(s.writes().is_empty(), "the backlog reads only");
+    shot(cx, h, dir, "full-tasks");
+    // A proposed finding offers decisions first; Verify only after Shipped.
+    cx.update_window(h, |_, w, cx| w.right_click("mission-tasks-item-task-0", cx))
+        .unwrap();
+    let labels = menu_labels(cx, h);
+    assert_eq!(labels[0], "Approve…");
+    assert!(!labels.iter().any(|l| l == "Verify benefit…"));
+    assert!(labels.iter().any(|l| l == "Change status…"));
+    shot(cx, h, dir, "full-row-menu");
     escape(cx, h);
+    cx.update_window(h, |_, w, cx| w.right_click("mission-tasks-item-task-3", cx))
+        .unwrap();
+    assert!(menu_labels(cx, h).iter().any(|l| l == "Verify benefit…"));
+    escape(cx, h);
+
+    // Decision: explicit dialog; Escape sends nothing.
+    decide(cx, h, "task-0", "Approve…");
     cx.update_window(h, |_, w, _| {
-        assert!(
-            panel_open(w),
-            "Escape cancels the confirmation, not the panel"
-        );
-        assert!(w.try_find("insights-confirm-decision").is_none());
+        assert!(w.find("insights-decision-confirm").visible());
+        contained(w, width);
     })
     .unwrap();
+    shot(cx, h, dir, "full-decide");
+    escape(cx, h);
+    assert!(closed(cx, h));
     assert!(s.writes().is_empty());
-    // Lost ACK: Unknown, retained, never replayed by a repeat decision.
+    // Lost ACK: one exact POST, then a single Unknown row and no confirm button.
     s.reply(
         OPERATIONS,
         Reply::json(500, json!({"error":"synthetic lost acknowledgement"})),
     );
-    click(cx, h, ("insights-decide", 0usize));
-    pick(cx, h, "Approve");
-    reveal(cx, h, "insights-decision-confirm".into());
-    shot(cx, h, dir, "full-decision-confirm");
+    decide(cx, h, "task-0", "Approve…");
     click(cx, h, "insights-decision-confirm");
     let slot = format!("lifecycle:{REPORT}:{}", key(0));
     until(cx, h, |w, _| w.try_find("insights-unconfirmed").is_some());
@@ -560,31 +630,21 @@ fn full(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     assert_eq!(decided.state, State::Unknown);
     cx.update_window(h, |_, w, _| {
         assert!(w.find("insights-check").visible());
-        assert!(w.try_find("insights-confirm-decision").is_none());
-        assert_ne!(w.find(("insights-decide", 1usize)).disabled(), Some(true));
-        assert_ne!(w.find("insights-revoke").disabled(), Some(true));
+        assert!(w.try_find("insights-outcome").is_none(), "one message only");
+        assert!(w.try_find("insights-decision-confirm").is_none());
     })
     .unwrap();
-    shot(cx, h, dir, "full-decision-unknown");
-    // Retrying the same decision is refused locally; nothing is sent.
-    click(cx, h, ("insights-decide", 0usize));
-    pick(cx, h, "Approve");
-    click(cx, h, "insights-decision-confirm");
-    assert!(
-        s.writes().is_empty(),
-        "an open slot is never replaced or resent"
-    );
-    assert_eq!(attempt(cx, &view, &slot).unwrap(), decided);
-    // Close/reopen keeps the unconfirmed row; opening sends nothing.
+    shot(cx, h, dir, "full-decide-unknown");
+    // Closing and reopening the same decision never resends.
     escape(cx, h);
-    assert!(closed(cx, h));
-    open_access(cx, h);
+    decide(cx, h, "task-0", "Approve…");
     cx.update_window(h, |_, w, _| {
-        assert!(w.try_find("insights-unconfirmed").is_some())
+        assert!(w.try_find("insights-unconfirmed").is_some());
+        assert!(w.try_find("insights-decision-confirm").is_none());
     })
     .unwrap();
-    assert!(s.writes().is_empty());
-    // Explicit Check: unauthenticated receipt lookup, then the identical bytes once.
+    assert!(s.writes().is_empty(), "an open slot is never resent");
+    // Explicit Check: unauthenticated lookup, then the identical bytes once.
     let op = decided.operation.clone();
     s.reply(RECEIPT, Reply::json(200, json!({"state":"unknown"})));
     s.reply(
@@ -598,8 +658,15 @@ fn full(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
             ),
         ),
     );
+    s.reply(
+        FINDINGS,
+        Reply::json(200, page(0..20, Some(20), "approved")),
+    );
+    s.reply(MORE, Reply::json(200, page(20..23, None, "approved")));
     click(cx, h, "insights-check");
-    until(cx, h, |_, cx| settled_as(&view, &slot, State::Accepted, cx));
+    until(cx, h, |w, cx| {
+        settled_as(&view, &slot, State::Accepted, cx) && !panel_open(w)
+    });
     let sent = s.writes();
     assert_eq!(sent.len(), 2, "receipt lookup then one send: {sent:?}");
     assert_eq!(sent[0].1, "/api/operations/receipt");
@@ -608,20 +675,26 @@ fn full(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     assert!(sent[1].2);
     assert_eq!(sent[0].3, body);
     assert_eq!(sent[1].3, body, "Check resends the exact saved operation");
-    until(cx, h, |w, _| {
-        access_loaded(w) && w.try_find("insights-unconfirmed").is_none()
+    // The rows and the header hint re-read passively.
+    until(cx, h, |_, cx| {
+        lifecycle_of(&view, "task-0", cx) == Some(Lifecycle::Approved)
+            && view.read(cx).insights_counts.get(REPORT) == Some(&3)
     });
+    shot(cx, h, dir, "full-tasks-decided");
 
-    // Revocation: explicit confirmation; slow write shows progress and survives closing.
+    // Revocation from settings: confirmation, slow write survives closing.
+    back_to_chat(cx, h, &view);
+    open_settings(cx, h, &view);
+    let p = panel(cx, &view);
     click(cx, h, "insights-revoke");
     cx.update_window(h, |_, w, _| {
-        assert!(w.try_find("insights-confirm-revoke").is_some())
+        assert!(w.find("insights-confirm-revoke").visible())
     })
     .unwrap();
     escape(cx, h);
     cx.update_window(h, |_, w, _| {
-        assert!(panel_open(w));
-        assert!(w.try_find("insights-confirm-revoke").is_none())
+        assert!(panel_open(w), "Escape cancels the confirmation only");
+        assert!(w.try_find("insights-confirm-revoke").is_none());
     })
     .unwrap();
     assert!(s.writes().is_empty());
@@ -629,7 +702,6 @@ fn full(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     slow.delay_ms = 900;
     s.reply(OPERATIONS, slow);
     click(cx, h, "insights-revoke");
-    reveal(cx, h, "insights-revoke-confirm".into());
     shot(cx, h, dir, "full-revoke-confirm");
     click(cx, h, "insights-revoke-confirm");
     let revoke = format!("revoke:{REPORT}");
@@ -637,9 +709,9 @@ fn full(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     cx.update_window(h, |_, w, _| {
         assert!(w.try_find("insights-confirm-revoke").is_none());
         assert_eq!(w.find("insights-revoke").disabled(), Some(true));
+        assert!(w.try_find("insights-waiting").is_some());
     })
     .unwrap();
-    // Closing doesn't cancel; reopening sends nothing new.
     escape(cx, h);
     assert!(closed(cx, h));
     until(cx, h, |_, cx| {
@@ -647,17 +719,19 @@ fn full(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     });
     let sent = s.writes();
     assert_eq!(sent.len(), 1);
-    let revoke_body = sent[0].3.clone();
-    assert_eq!(revoke_body["kind"], "insights-revoke");
-    assert_eq!(revoke_body["targetId"], REPORT);
+    assert_eq!(sent[0].3["kind"], "insights-revoke");
+    assert_eq!(sent[0].3["targetId"], REPORT);
     assert_eq!(
-        revoke_body["payload"],
+        sent[0].3["payload"],
         json!({"expectedRevision":3}).to_string()
     );
-    open_access(cx, h);
-    reveal(cx, h, "insights-unconfirmed".into());
+    open_settings(cx, h, &view);
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("insights-unconfirmed").visible());
+        assert!(w.try_find("insights-outcome").is_none(), "one message only");
+    })
+    .unwrap();
     shot(cx, h, dir, "full-revoke-unknown");
-    // Check reports still pending; nothing is resent and the row stays.
     let op = attempt(cx, &view, &revoke).unwrap().operation;
     s.reply(
         RECEIPT,
@@ -674,7 +748,6 @@ fn full(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
         cx.update_window(h, |_, w, _| w.try_find("insights-unconfirmed").is_some())
             .unwrap()
     );
-    // Accepted on the next Check: access re-reads as revoked; history stays.
     s.reply(
         RECEIPT,
         Reply::json(
@@ -687,17 +760,31 @@ fn full(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     until(cx, h, |w, _| {
         w.try_find("insights-state").is_some()
             && w.try_find("insights-revoke").is_none()
-            && w.try_find("insights-findings").is_none()
+            && w.try_find("insights-unconfirmed").is_none()
     });
     assert_eq!(s.writes().len(), 1);
-    cx.update_window(h, |_, w, _| assert!(w.find("insights-backlog").visible()))
-        .unwrap();
     shot(cx, h, dir, "full-revoked");
-
-    // Backlog opens the linked mission through ordinary navigation.
+    // Open backlog still navigates to Tasks.
     click(cx, h, "insights-backlog");
-    to_mission(cx, h, &view);
+    to_tasks(cx, h, &view);
     assert!(closed(cx, h));
+    assert!(s.writes().is_empty());
+    // Revoked access: rows and the header hint re-read and offer nothing to decide.
+    s.reply(
+        FINDINGS,
+        Reply::json(409, json!({"error":"insights_unavailable"})),
+    );
+    s.reply(
+        MORE,
+        Reply::json(409, json!({"error":"insights_unavailable"})),
+    );
+    cx.update(|cx| {
+        view.update(cx, |v, cx| v.insights_decided(REPORT.into(), cx));
+    });
+    until(cx, h, |_, cx| {
+        view.read(cx).insights_counts.get(REPORT) == Some(&0)
+            && lifecycle_of(&view, "task-0", cx).is_none()
+    });
     assert!(s.writes().is_empty());
 
     // Setup from the active mission's More menu: passive model read, explicit choice.
@@ -710,23 +797,12 @@ fn full(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
             Some("Model: Claude Sonnet")
         );
         assert_ne!(w.find("insights-setup").disabled(), Some(true));
+        assert!(w.find("insights-scope").visible(), "setup always discloses");
     })
     .unwrap();
     escape(cx, h);
     assert!(closed(cx, h));
-    assert!(
-        s.writes().is_empty(),
-        "opening and dismissing setup must not write"
-    );
-    assert!(
-        s.state
-            .lock()
-            .unwrap()
-            .seen
-            .iter()
-            .any(|(m, p)| m == "GET" && p == MODELS),
-        "setup reads the mission project's scoped models"
-    );
+    assert!(s.writes().is_empty(), "setup opens passively");
     open_setup(cx, h);
     click(cx, h, "insights-model");
     pick(cx, h, LONG_MODEL);
@@ -737,18 +813,19 @@ fn full(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
         );
         let p = w.find("insights-panel").bounds();
         assert!(w.find("insights-model").bounds().right() <= p.right() + px(0.5));
+        contained(w, width);
     })
     .unwrap();
-    shot(cx, h, dir, "full-setup-chosen");
+    shot(cx, h, dir, "full-setup");
     s.reply(
         OPERATIONS,
         Reply::json(500, json!({"error":"synthetic lost acknowledgement"})),
     );
     click(cx, h, "insights-setup");
-    let create = "create:mission-A".to_owned();
     until(cx, h, |w, _| w.try_find("insights-unconfirmed").is_some());
     cx.update_window(h, |_, w, _| {
-        assert_eq!(w.find("insights-setup").disabled(), Some(true))
+        assert_eq!(w.find("insights-setup").disabled(), Some(true));
+        assert!(w.try_find("insights-outcome").is_none());
     })
     .unwrap();
     let sent = s.writes();
@@ -761,7 +838,7 @@ fn full(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
         json!({"disclosure":DISCLOSURE,"missionId":"mission-A","model":"openai/gpt-long","projectId":"project-A"})
     );
     shot(cx, h, dir, "full-setup-unknown");
-    let op = attempt(cx, &view, &create).unwrap().operation;
+    let op = attempt(cx, &view, "create:mission-A").unwrap().operation;
     s.reply(
         RECEIPT,
         Reply::json(
@@ -770,13 +847,10 @@ fn full(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
         ),
     );
     click(cx, h, "insights-check");
-    // Accepted: the created chat isn't listed yet, so its mission stays shown.
     until(cx, h, |w, _| !panel_open(w));
     let sent = s.writes();
     assert_eq!(sent.len(), 1, "accepted receipt needs no resend: {sent:?}");
     assert_eq!(sent[0].1, "/api/operations/receipt");
-    assert!(cx.update(|cx| view.read(cx).page == Page::Mission(f::key("mission-A"))));
-    // Reopening setup offers no second create.
     open_setup(cx, h);
     cx.update_window(h, |_, w, _| {
         assert!(w.try_find("insights-setup").is_none());
@@ -792,6 +866,6 @@ fn full(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     let draft = draft.to_string();
     unmount(cx, m, &s, Some(&draft));
     println!(
-        "insights full 1100 Light: header entry, passive open, Escape/focus, decision confirm, lost-ACK Unknown no-replay, explicit Check, slow revoke survives close, pending/accepted receipts, backlog navigation and setup with explicit model passed"
+        "insights full 1100 Light: header count, settings from … menu, backlog Tasks rows, row decisions with lost-ACK Unknown/no-replay/Check, revoke with pending/accepted receipts, setup with explicit model passed"
     );
 }

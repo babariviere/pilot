@@ -86,6 +86,7 @@ impl LocalViewer {
         } else {
             "Make a mission…"
         };
+        let insights = self.can_open_insights_settings();
         div()
             .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
                 if !v.project_choices_ready(w, cx) {
@@ -105,6 +106,7 @@ impl LocalViewer {
                     let b = weak.clone();
                     let new_source = source.clone();
                     let c = weak.clone();
+                    let d = weak.clone();
                     menu.item(
                         PopupMenuItem::new("Load earlier messages")
                             .disabled(!older)
@@ -138,6 +140,13 @@ impl LocalViewer {
                                 let _ = c.update(cx, |v, cx| v.open_mission(w, cx));
                             }),
                     )
+                    .when(insights, |menu| {
+                        menu.item(PopupMenuItem::new("Insights settings…").on_click(
+                            move |_, w, cx| {
+                                let _ = d.update(cx, |v, cx| v.open_insights_settings(w, cx));
+                            },
+                        ))
+                    })
                     .map(|menu| crate::session_clipboard::items(menu, copy.as_ref()))
                 }),
             )

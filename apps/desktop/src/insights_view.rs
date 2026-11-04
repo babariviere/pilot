@@ -1,10 +1,11 @@
-//! Insights report access: scope disclosure, setup, revocation and explicit finding
-//! decisions. Reads are passive GETs. Every write is one durable native operation
-//! saved by the writer before it is sent; an unconfirmed one is only ever Checked.
-//! A decision records the user's choice. It never starts implementation work.
+//! Insights report access: a compact settings sheet, setup, revocation and the explicit
+//! finding decision opened from the mission's Tasks rows. Reads are passive GETs. Every
+//! write is one durable native operation saved by the writer before it is sent; an
+//! unconfirmed one is only ever Checked. A decision records the user's choice. It never
+//! starts implementation work.
 use crate::{
     LocalOptions,
-    insights::{self as model, Finding, Lifecycle, Outcome, ReadReply, Request, Status},
+    insights::{self as model, Lifecycle, Outcome, ReadReply, Request, Status},
     ui::{self, Action, Notice, Text, Tone},
 };
 use gpui_kit::{
@@ -12,7 +13,7 @@ use gpui_kit::{
     ParentElement, Render, SharedString, StatefulInteractiveElement as _, Styled, Task,
     TestSupportExt, Window,
     component::{
-        Disableable, StyledExt, WindowExt,
+        ActiveTheme, Disableable, StyledExt, WindowExt,
         menu::{DropdownMenu, PopupMenuItem},
     },
     div,
@@ -28,16 +29,18 @@ pub(crate) enum Event {
         request: u64,
         action: model::Action,
     },
-    /// Show the linked backlog mission through ordinary mission navigation.
+    /// Show the linked backlog's Tasks through ordinary mission navigation.
     OpenBacklog(String),
     /// Open the created report chat.
     OpenChat(String),
+    /// A finding decision was accepted; its Tasks rows may re-read.
+    Decided,
 }
 
 /// What the panel is about. Identity is captured when it opens and never changes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Scope {
-    /// An existing report chat.
+    /// An existing report chat's settings.
     Chat { session: String },
     /// Explicit setup of a report chat for this active mission.
     Setup {
@@ -45,6 +48,16 @@ pub(crate) enum Scope {
         mission_title: String,
         project: String,
         path: String,
+    },
+    /// One explicit lifecycle decision for one finding, chosen from its task row.
+    Decide {
+        session: String,
+        key: String,
+        number: u64,
+        title: String,
+        from: Lifecycle,
+        to: Lifecycle,
+        expected_revision: u64,
     },
 }
 
@@ -56,35 +69,20 @@ enum Load<T> {
     Failed(SharedString),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum Confirm {
-    Revoke,
-    Decide {
-        key: String,
-        title: String,
-        from: Lifecycle,
-        to: Lifecycle,
-        expected_revision: u64,
-    },
-}
-
 pub(crate) struct Panel {
     pub(crate) scope: Scope,
     options: LocalOptions,
     pub(crate) visible: bool,
-    /// Display name of the chat's model, when known.
-    model_label: Option<String>,
     focus: FocusHandle,
     status: Load<Status>,
-    findings: Load<Vec<Finding>>,
-    next_cursor: Option<u64>,
     reading: Option<Task<()>>,
-    finding_reads: Option<Task<()>>,
-    /// Setup only: the project's scoped models and the explicit choice.
+    /// Scoped models: setup's explicit choice, or the report chat's display name.
     catalog: Load<Arc<crate::chat_models::Catalog>>,
+    catalog_path: Option<String>,
     model: Option<String>,
     catalog_read: Option<Task<()>>,
-    confirm: Option<Confirm>,
+    /// Revocation awaiting its explicit confirmation.
+    confirm_revoke: bool,
     book: Option<Arc<crate::delivery_store::Book>>,
     reply: Option<model::Reply>,
     request: u64,
@@ -98,13 +96,14 @@ pub(crate) struct Panel {
 }
 impl EventEmitter<Event> for Panel {}
 
-fn lifecycle_choices(current: Lifecycle) -> Vec<Lifecycle> {
+/// The decisions a finding offers from its current lifecycle; Verify only after Shipped.
+pub(crate) fn lifecycle_choices(current: Lifecycle) -> Vec<Lifecycle> {
     Lifecycle::ALL
         .into_iter()
         .filter(|l| *l != current && (*l != Lifecycle::Verified || current == Lifecycle::Shipped))
         .collect()
 }
-fn decision_label(l: Lifecycle) -> &'static str {
+pub(crate) fn decision_label(l: Lifecycle) -> &'static str {
     match l {
         Lifecycle::Proposed => "Back to proposed",
         Lifecycle::Approved => "Approve",
@@ -117,27 +116,31 @@ fn decision_label(l: Lifecycle) -> &'static str {
 }
 
 impl Panel {
+    /// `model` is the report chat's model ID; `catalog_path` reads its display name.
     pub(crate) fn new(
         scope: Scope,
         options: LocalOptions,
-        model_label: Option<String>,
+        model: Option<String>,
+        catalog_path: Option<String>,
         cx: &mut Context<Self>,
     ) -> Self {
+        let catalog_path = match &scope {
+            Scope::Setup { path, .. } => Some(path.clone()),
+            Scope::Chat { .. } => catalog_path,
+            Scope::Decide { .. } => None,
+        };
         let mut panel = Self {
             scope,
             options,
             visible: true,
-            model_label,
             focus: cx.focus_handle(),
             status: Load::Loading,
-            findings: Load::Loading,
-            next_cursor: None,
             reading: None,
-            finding_reads: None,
             catalog: Load::Loading,
-            model: None,
+            catalog_path,
+            model,
             catalog_read: None,
-            confirm: None,
+            confirm_revoke: false,
             book: None,
             reply: None,
             request: 0,
@@ -160,18 +163,28 @@ impl Panel {
     pub(crate) fn focus(&self, w: &mut Window, cx: &mut App) {
         self.focus.focus(w, cx);
     }
+    fn title(&self) -> SharedString {
+        match &self.scope {
+            Scope::Chat { .. } => "Insights".into(),
+            Scope::Setup { .. } => "Set up Insights".into(),
+            Scope::Decide { number, to, .. } => {
+                format!("{} #{number}?", decision_label(*to)).into()
+            }
+        }
+    }
     /// Show the panel as a dialog; Close and Escape go through the owner.
     pub(crate) fn open(panel: Entity<Self>, w: &mut Window, cx: &mut App) {
-        let title: SharedString = match &panel.read(cx).scope {
-            Scope::Chat { .. } => "Insights access".into(),
-            Scope::Setup { .. } => "Set up Insights chat".into(),
+        let title = panel.read(cx).title();
+        let width = match panel.read(cx).scope {
+            Scope::Decide { .. } => 400.,
+            _ => 440.,
         };
         w.open_dialog(cx, {
             let panel = panel.clone();
             move |d, _, cx| {
                 ui::dialog(d, cx)
                     .title(title.clone())
-                    .w(px(560.))
+                    .w(px(width))
                     .overlay_closable(false)
                     .close_button(false)
                     .keyboard(false)
@@ -184,132 +197,85 @@ impl Panel {
 
     /// Re-read passive state. Never sends a write.
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
-        match self.scope.clone() {
-            Scope::Chat { session } => {
-                self.status = Load::Loading;
-                let Some(rx) = model::read(
-                    self.options.clone(),
-                    model::Read::Status {
-                        session: session.clone(),
-                    },
-                ) else {
-                    self.status = Load::Failed("Couldn't start reading Insights access.".into());
-                    return;
-                };
-                self.reading = Some(cx.spawn(async move |view, cx| {
-                    let reply = rx.recv().await;
-                    let _ = view.update(cx, |v, cx| {
-                        v.status = match reply {
-                            Ok(ReadReply::Status(Ok(status))) => Load::Ready(status),
-                            Ok(ReadReply::Status(Err(e))) => Load::Failed(e.into()),
-                            Ok(ReadReply::NotInsights) => {
-                                Load::Failed("This chat isn't an Insights report chat.".into())
-                            }
-                            Ok(ReadReply::Unsupported) => Load::Failed(
-                                "This Local doesn't support Insights yet. Update Pilot.".into(),
-                            ),
-                            _ => Load::Failed("Couldn't read Insights access. Try again.".into()),
-                        };
-                        if matches!(&v.status, Load::Ready(s) if s.enabled && s.available) {
-                            v.read_findings(None, cx);
-                        } else {
-                            v.findings = Load::Ready(Vec::new());
-                            v.next_cursor = None;
+        if let Scope::Chat { session } = self.scope.clone() {
+            self.status = Load::Loading;
+            let Some(rx) = model::read(self.options.clone(), model::Read::Status { session })
+            else {
+                self.status = Load::Failed("Couldn't read Insights.".into());
+                return;
+            };
+            self.reading = Some(cx.spawn(async move |view, cx| {
+                let reply = rx.recv().await;
+                let _ = view.update(cx, |v, cx| {
+                    v.status = match reply {
+                        Ok(ReadReply::Status(Ok(status))) => Load::Ready(status),
+                        Ok(ReadReply::Status(Err(e))) => Load::Failed(e.into()),
+                        Ok(ReadReply::NotInsights) => {
+                            Load::Failed("Not an Insights report chat.".into())
                         }
-                        cx.notify();
-                    });
-                }));
-            }
-            Scope::Setup { path, .. } => {
-                self.catalog = Load::Loading;
-                let options = self.options.clone();
-                let (tx, rx) = async_channel::bounded(1);
-                let spawned = std::thread::Builder::new()
-                    .name("local-insights-models".into())
-                    .spawn(move || {
-                        let reply = match (
-                            tokio::runtime::Builder::new_current_thread()
-                                .enable_all()
-                                .build(),
-                            crate::chat_settings::client(),
-                        ) {
-                            (Ok(runtime), Ok(client)) => runtime
-                                .block_on(crate::chat_models::catalog(&client, &options, &path)),
-                            _ => Err("Couldn't load models."),
-                        };
-                        let _ = tx.send_blocking(reply);
-                    })
-                    .is_ok();
-                if !spawned {
-                    self.catalog = Load::Failed("Couldn't load models.".into());
-                    return;
-                }
-                self.catalog_read = Some(cx.spawn(async move |view, cx| {
-                    let reply = rx.recv().await;
-                    let _ = view.update(cx, |v, cx| {
-                        v.catalog = match reply {
-                            Ok(Ok(catalog)) => {
-                                if v.model
-                                    .as_ref()
-                                    .is_none_or(|m| !catalog.models.iter().any(|c| &c.id == m))
-                                {
-                                    v.model = catalog
-                                        .default_model
-                                        .clone()
-                                        .filter(|d| catalog.models.iter().any(|c| &c.id == d));
-                                }
-                                Load::Ready(Arc::new(catalog))
-                            }
-                            Ok(Err(e)) => Load::Failed(e.into()),
-                            Err(_) => Load::Failed("Couldn't load models.".into()),
-                        };
-                        cx.notify();
-                    });
-                }));
-            }
+                        Ok(ReadReply::Unsupported) => {
+                            Load::Failed("Update Pilot to use Insights.".into())
+                        }
+                        _ => Load::Failed("Couldn't read Insights. Try again.".into()),
+                    };
+                    cx.notify();
+                });
+            }));
         }
+        self.read_catalog(cx);
     }
-    fn read_findings(&mut self, cursor: Option<u64>, cx: &mut Context<Self>) {
-        let Scope::Chat { session } = &self.scope else {
+    fn read_catalog(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.catalog_path.clone() else {
             return;
         };
-        if cursor.is_none() {
-            self.findings = Load::Loading;
+        if matches!(self.catalog, Load::Ready(_)) && !matches!(self.scope, Scope::Setup { .. }) {
+            return;
         }
-        let Some(rx) = model::read(
-            self.options.clone(),
-            model::Read::Findings {
-                session: session.clone(),
-                cursor,
-            },
-        ) else {
-            self.findings = Load::Failed("Couldn't start reading findings.".into());
+        self.catalog = Load::Loading;
+        let options = self.options.clone();
+        let (tx, rx) = async_channel::bounded(1);
+        let spawned = std::thread::Builder::new()
+            .name("local-insights-models".into())
+            .spawn(move || {
+                let reply = match (
+                    tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build(),
+                    crate::chat_settings::client(),
+                ) {
+                    (Ok(runtime), Ok(client)) => {
+                        runtime.block_on(crate::chat_models::catalog(&client, &options, &path))
+                    }
+                    _ => Err("Couldn't load models."),
+                };
+                let _ = tx.send_blocking(reply);
+            })
+            .is_ok();
+        if !spawned {
+            self.catalog = Load::Failed("Couldn't load models.".into());
             return;
-        };
-        self.finding_reads = Some(cx.spawn(async move |view, cx| {
+        }
+        self.catalog_read = Some(cx.spawn(async move |view, cx| {
             let reply = rx.recv().await;
             let _ = view.update(cx, |v, cx| {
-                match reply {
-                    Ok(ReadReply::Findings(Ok(page))) => {
-                        let mut items = match (&v.findings, cursor) {
-                            (Load::Ready(old), Some(_)) => old.clone(),
-                            _ => Vec::new(),
-                        };
-                        for f in page.items {
-                            if !items.iter().any(|o| o.key == f.key) {
-                                items.push(f);
-                            }
+                v.catalog = match reply {
+                    Ok(Ok(catalog)) => {
+                        // Setup preselects the default; a report chat keeps its own model.
+                        if matches!(v.scope, Scope::Setup { .. })
+                            && v.model
+                                .as_ref()
+                                .is_none_or(|m| !catalog.models.iter().any(|c| &c.id == m))
+                        {
+                            v.model = catalog
+                                .default_model
+                                .clone()
+                                .filter(|d| catalog.models.iter().any(|c| &c.id == d));
                         }
-                        v.findings = Load::Ready(items);
-                        v.next_cursor = page.next_cursor;
+                        Load::Ready(Arc::new(catalog))
                     }
-                    Ok(ReadReply::Findings(Err(e))) => v.findings = Load::Failed(e.into()),
-                    Ok(ReadReply::Unavailable) => v.findings = Load::Failed(
-                        "Findings can't be read while access is off. They remain mission tasks."
-                            .into(),
-                    ),
-                    _ => v.findings = Load::Failed("Couldn't read findings. Try again.".into()),
-                }
+                    Ok(Err(e)) => Load::Failed(e.into()),
+                    Err(_) => Load::Failed("Couldn't load models.".into()),
+                };
                 cx.notify();
             });
         }));
@@ -361,7 +327,7 @@ impl Panel {
     fn attempt(&self, slot: &str) -> Option<&model::Attempt> {
         self.book.as_ref()?.insights.get(slot)
     }
-    /// An accepted write: re-read, and open a created chat once.
+    /// An accepted write: re-read, open a created chat once, or report a decision.
     fn settled(&mut self, result: &serde_json::Value, cx: &mut Context<Self>) {
         match &self.scope {
             Scope::Setup { .. } => {
@@ -373,8 +339,14 @@ impl Panel {
                 }
             }
             Scope::Chat { .. } => {
-                self.confirm = None;
+                self.confirm_revoke = false;
                 self.refresh(cx);
+            }
+            Scope::Decide { .. } => {
+                if !self.opened {
+                    self.opened = true;
+                    cx.emit(Event::Decided);
+                }
             }
         }
     }
@@ -384,7 +356,7 @@ impl Panel {
         }
         // A confirmation is consumed by its one explicit send, whatever the outcome.
         if let model::Action::Start(_) = &action {
-            self.confirm = None;
+            self.confirm_revoke = false;
         }
         let slot = match &action {
             model::Action::Start(request) => request.slot(),
@@ -393,8 +365,7 @@ impl Panel {
         if let model::Action::Start(_) = &action
             && self.attempt(&slot).is_some_and(|a| a.open())
         {
-            self.error =
-                Some("An earlier action is still unconfirmed. Check it; nothing new was sent.");
+            self.error = Some("Still unconfirmed. Check it first.");
             cx.notify();
             return;
         }
@@ -410,7 +381,7 @@ impl Panel {
     /// The owner could not hand the command to the writer.
     pub(crate) fn not_sent(&mut self, cx: &mut Context<Self>) {
         self.slot = None;
-        self.error = Some("Local writer is busy. Nothing was sent.");
+        self.error = Some("Busy. Nothing was sent.");
         cx.notify();
     }
 
@@ -435,80 +406,134 @@ impl Panel {
             thinking: model.thinking.clone(),
         })
     }
-    fn chosen_model_name(&self) -> Option<String> {
-        let Load::Ready(catalog) = &self.catalog else {
+    fn decide_request(&self) -> Option<Request> {
+        let Scope::Decide {
+            session,
+            key,
+            to,
+            expected_revision,
+            ..
+        } = &self.scope
+        else {
             return None;
         };
-        self.model
-            .as_ref()
-            .and_then(|id| catalog.models.iter().find(|m| &m.id == id))
-            .map(|m| m.name.clone())
+        Some(Request::Lifecycle {
+            session_id: session.clone(),
+            key: key.clone(),
+            expected_revision: *expected_revision,
+            lifecycle: *to,
+        })
+    }
+    /// The chosen or the chat's model by display name, else its ID.
+    fn model_name(&self) -> Option<String> {
+        let id = self.model.as_ref()?;
+        Some(match &self.catalog {
+            Load::Ready(c) => c
+                .models
+                .iter()
+                .find(|m| &m.id == id)
+                .map_or_else(|| id.clone(), |m| m.name.clone()),
+            _ => id.clone(),
+        })
+    }
+    /// This panel's own operation slot.
+    fn slot_for_scope(&self) -> Option<String> {
+        match &self.scope {
+            Scope::Chat { session } => Some(format!("revoke:{session}")),
+            Scope::Setup { mission, .. } => Some(format!("create:{mission}")),
+            Scope::Decide { session, key, .. } => Some(format!("lifecycle:{session}:{key}")),
+        }
     }
 }
 
-/// Plain statement of scope, shown before setup and in the report chat.
+/// Plain statement of scope: always before setup, on request for a report chat.
 fn disclosure(model: &str) -> impl IntoElement {
     let line = |id: &'static str, text: String| {
         div()
             .id(id)
             .test_support()
-            .child(ui::text(Text::Body, SharedString::from(text)))
+            .child(ui::text(Text::Caption, SharedString::from(text)))
     };
     div()
         .id("insights-scope")
         .test_support()
         .v_flex()
+        .min_w_0()
         .gap_1()
         .child(line(
             "insights-scope-read",
-            "Reads sanitized excerpts of chats in all projects on this Mac, including archived ones. Never changes them.".into(),
+            "Sanitized chat excerpts from all projects, incl. archived. Read-only.".into(),
         ))
         .child(line(
             "insights-scope-model",
-            format!("Sends them to {model}. Redaction isn't a privacy guarantee."),
+            format!("Sent to {model}. Redaction isn't a guarantee."),
         ))
         .child(line(
             "insights-scope-write",
-            "Writes only its reports and findings. It can't approve or start work.".into(),
+            "Writes only its reports and findings.".into(),
         ))
+}
+
+/// A short, final outcome. Unknown and Pending stay on the Check row instead.
+fn outcome_notice(outcome: &Outcome) -> Option<Notice> {
+    match outcome {
+        Outcome::Rejected(reason) => {
+            Some(Notice::new(format!("Not applied: {reason}")).tone(Tone::Error))
+        }
+        Outcome::Refused(e) => Some(Notice::new(*e).tone(Tone::Error)),
+        Outcome::Accepted(_) | Outcome::Pending | Outcome::Unknown(_) => None,
+    }
 }
 
 /// A pinned confirmation names the finding without letting a long title fill the panel.
 fn brief(title: &str) -> String {
-    const MAX: usize = 140;
-    if title.chars().count() <= MAX {
+    shorten(title, 140)
+}
+fn shorten(title: &str, max: usize) -> String {
+    if title.chars().count() <= max {
         return title.to_owned();
     }
-    let mut short: String = title.chars().take(MAX - 1).collect();
+    let mut short: String = title.chars().take(max - 1).collect();
     short.truncate(short.trim_end().len());
     short.push('…');
     short
 }
 
-fn outcome_notice(outcome: &Outcome, accepted: &'static str) -> Option<Notice> {
-    Some(match outcome {
-        Outcome::Accepted(_) => Notice::new(accepted).tone(Tone::Success),
-        Outcome::Pending => {
-            Notice::new("Local is still applying this. Check again shortly.").tone(Tone::Normal)
-        }
-        Outcome::Rejected(reason) => {
-            Notice::new(format!("Not applied: {reason}")).tone(Tone::Error)
-        }
-        Outcome::Unknown(e) => Notice::new(*e)
-            .detail("It may have applied. Check it; it is never sent twice.")
-            .tone(Tone::Warning),
-        Outcome::Refused(e) => Notice::new(*e).tone(Tone::Error),
-    })
+fn field(
+    id: &'static str,
+    label: &'static str,
+    value: impl IntoElement,
+    cx: &App,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .test_support()
+        .h_flex()
+        .items_start()
+        .gap_3()
+        .min_w_0()
+        .child(
+            div()
+                .w(px(56.))
+                .flex_none()
+                .child(ui::text(Text::Body, label).text_color(cx.theme().muted_foreground)),
+        )
+        .child(div().flex_1().min_w_0().child(value))
 }
 
 impl Panel {
-    /// The saved attempt for a slot, if it still needs an explicit Check.
-    fn check_row(&self, slot: &str, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
-        let attempt = self.attempt(slot)?;
+    /// The saved attempt for this panel, when it still needs an explicit Check: one line.
+    fn check_row(&self, cx: &mut Context<Self>) -> Option<gpui_kit::AnyElement> {
+        let slot = self.slot_for_scope()?;
+        let attempt = self.attempt(&slot)?;
         if !attempt.open() || self.waiting() {
             return None;
         }
-        let slot = slot.to_owned();
+        let label = if attempt.state == model::State::Pending {
+            "Still applying."
+        } else {
+            "Not confirmed. Never resent."
+        };
         Some(
             div()
                 .id("insights-unconfirmed")
@@ -516,46 +541,67 @@ impl Panel {
                 .h_flex()
                 .items_center()
                 .gap_2()
+                .px_2()
+                .py_1()
+                .rounded(px(crate::appearance::Radius::CONTROL))
+                .bg(cx.theme().warning.opacity(0.12))
                 .child(
-                    div().flex_1().min_w_0().child(
-                        Notice::new("An earlier action wasn't confirmed.")
-                            .detail("Check sends it only if Local never received it.")
-                            .tone(Tone::Warning),
-                    ),
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(ui::text(Text::Caption, label).text_color(Tone::Warning.color(cx))),
                 )
                 .child(
-                    ui::action("insights-check", "Check", Action::Secondary).on_click(cx.listener(
+                    ui::action("insights-check", "Check", Action::Quiet).on_click(cx.listener(
                         move |v, _, _, cx| v.send(model::Action::Check { slot: slot.clone() }, cx),
                     )),
                 )
                 .into_any_element(),
         )
     }
+    /// Progress, the final outcome and local errors, in that order.
+    fn notices(&self, tail: gpui_kit::Div, busy: &'static str) -> gpui_kit::Div {
+        let mut tail = tail;
+        if self.waiting() {
+            tail = tail.child(
+                div()
+                    .id("insights-waiting")
+                    .test_support()
+                    .child(ui::text(Text::Caption, busy)),
+            );
+        } else if let Some(n) = self.latest().and_then(outcome_notice) {
+            tail = tail.child(div().id("insights-outcome").test_support().child(n));
+        }
+        if let Some(e) = self.error {
+            tail = tail.child(
+                div()
+                    .id("insights-error")
+                    .test_support()
+                    .child(Notice::new(e).tone(Tone::Error)),
+            );
+        }
+        tail
+    }
+    fn close_button(
+        &self,
+        label: &'static str,
+        role: Action,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::component::button::Button {
+        ui::action("insights-close", label, role).on_click(cx.listener(|v, _, _, cx| {
+            if v.visible {
+                cx.emit(Event::Close);
+            }
+        }))
+    }
 
-    /// The scrolling body and the pinned status/action area below it.
     fn render_setup(&mut self, cx: &mut Context<Self>) -> (gpui_kit::Div, gpui_kit::Div) {
-        let Scope::Setup {
-            mission_title,
-            mission,
-            ..
-        } = self.scope.clone()
-        else {
+        let Scope::Setup { mission_title, .. } = self.scope.clone() else {
             return (div(), div());
         };
-        let slot = format!("create:{mission}");
         let model_name = self
-            .chosen_model_name()
+            .model_name()
             .unwrap_or_else(|| "the selected model".into());
-        let mut root = div()
-            .v_flex()
-            .gap_3()
-            .child(ui::text(
-                Text::Body,
-                SharedString::from(format!(
-                    "Creates a report chat for “{mission_title}”. Reviews run only when you ask."
-                )),
-            ))
-            .child(disclosure(&model_name));
         let picker = match &self.catalog {
             Load::Loading => ui::text(Text::Caption, "Loading models…").into_any_element(),
             Load::Failed(e) => Notice::new(e.clone()).tone(Tone::Error).into_any_element(),
@@ -564,9 +610,12 @@ impl Panel {
                 let catalog = catalog.clone();
                 ui::action(
                     "insights-model",
-                    SharedString::from(format!("Model: {model_name}")),
+                    SharedString::from(shorten(&model_name, 40)),
                     Action::Secondary,
                 )
+                .accessibility_label(SharedString::from(format!("Model: {model_name}")))
+                .tooltip(SharedString::from(model_name.clone()))
+                .dropdown_caret(true)
                 .disabled(self.waiting())
                 .dropdown_menu(move |mut menu, _, _| {
                     for m in catalog.models.iter() {
@@ -589,140 +638,104 @@ impl Panel {
                 .into_any_element()
             }
         };
-        root = root.child(div().h_flex().child(picker));
-        let mut tail = div().v_flex().gap_3().w_full().min_w_0();
-        tail = tail.children(self.check_row(&slot, cx));
-        if self.waiting() {
-            tail = tail.child(Notice::new("Setting up… Closing doesn't cancel it."));
-        } else if let Some(n) = self
-            .latest()
-            .and_then(|o| outcome_notice(o, "Insights chat created."))
-        {
-            tail = tail.child(n);
-        }
-        if let Some(e) = self.error {
-            tail = tail.child(Notice::new(e).tone(Tone::Error));
-        }
-        let request = self.setup_request();
+        let body = div()
+            .v_flex()
+            .gap_3()
+            .min_w_0()
+            .child(
+                ui::text(
+                    Text::Body,
+                    SharedString::from(format!("Report chat for “{mission_title}”.")),
+                )
+                .text_color(cx.theme().muted_foreground),
+            )
+            .child(field(
+                "insights-field-model",
+                "Model",
+                div().h_flex().child(picker),
+                cx,
+            ))
+            .child(field(
+                "insights-field-reads",
+                "Reads",
+                disclosure(&model_name),
+                cx,
+            ));
+        let slot = self.slot_for_scope().unwrap_or_default();
         let done = self
             .attempt(&slot)
             .is_some_and(|a| a.state == model::State::Accepted);
-        let tail = tail.child(
-            div()
-                .h_flex()
-                .justify_end()
-                .gap_2()
-                .child(
+        let request = self.setup_request();
+        let mut tail = div().v_flex().gap_3().w_full().min_w_0();
+        tail = tail.children(self.check_row(cx));
+        tail = self.notices(tail, "Setting up… Closing doesn't cancel it.");
+        let actions = div()
+            .h_flex()
+            .justify_end()
+            .gap_2()
+            .child(self.close_button(if done { "Close" } else { "Cancel" }, Action::Quiet, cx))
+            .when(!done, |d| {
+                d.child(
+                    ui::action("insights-setup", "Set up", Action::Primary)
+                        .disabled(
+                            request.is_none()
+                                || self.waiting()
+                                || self.attempt(&slot).is_some_and(|a| a.open()),
+                        )
+                        .on_click(cx.listener(move |v, _, _, cx| {
+                            if let Some(r) = v.setup_request() {
+                                v.send(model::Action::Start(r), cx);
+                            }
+                        })),
+                )
+            });
+        (body, tail.child(actions))
+    }
+
+    fn render_decide(&mut self, cx: &mut Context<Self>) -> (gpui_kit::Div, gpui_kit::Div) {
+        let Scope::Decide { title, to, .. } = self.scope.clone() else {
+            return (div(), div());
+        };
+        let body = div()
+            .v_flex()
+            .gap_2()
+            .min_w_0()
+            .child(
+                div().id("insights-decide-title").test_support().child(
+                    ui::text(Text::Body, SharedString::from(brief(&title)))
+                        .text_color(cx.theme().muted_foreground),
+                ),
+            )
+            .child(
+                ui::text(Text::Caption, "Records your choice. No work starts.")
+                    .text_color(cx.theme().muted_foreground),
+            );
+        let slot = self.slot_for_scope().unwrap_or_default();
+        let open = self.attempt(&slot).is_some_and(|a| a.open());
+        let mut tail = div().v_flex().gap_3().w_full().min_w_0();
+        tail = tail.children(self.check_row(cx));
+        tail = self.notices(tail, "Saving… Closing doesn't cancel it.");
+        let actions = div()
+            .h_flex()
+            .justify_end()
+            .gap_2()
+            .child(self.close_button(if open { "Close" } else { "Cancel" }, Action::Quiet, cx))
+            .when(!open, |d| {
+                d.child(
                     ui::action(
-                        "insights-close",
-                        if done { "Close" } else { "Cancel" },
-                        Action::Quiet,
+                        "insights-decision-confirm",
+                        decision_label(to),
+                        Action::Primary,
                     )
+                    .disabled(self.waiting())
                     .on_click(cx.listener(|v, _, _, cx| {
-                        if v.visible {
-                            cx.emit(Event::Close);
+                        if let Some(r) = v.decide_request() {
+                            v.send(model::Action::Start(r), cx);
                         }
                     })),
                 )
-                .when(!done, |d| {
-                    d.child(
-                        ui::action("insights-setup", "Set up Insights chat", Action::Primary)
-                            .disabled(
-                                request.is_none()
-                                    || self.waiting()
-                                    || self.attempt(&slot).is_some_and(|a| a.open()),
-                            )
-                            .on_click(cx.listener(move |v, _, _, cx| {
-                                if let Some(r) = v.setup_request() {
-                                    v.send(model::Action::Start(r), cx);
-                                }
-                            })),
-                    )
-                }),
-        );
-        (root, tail)
-    }
-
-    fn finding_row(
-        &self,
-        f: &Finding,
-        ix: usize,
-        enabled: bool,
-        cx: &mut Context<Self>,
-    ) -> gpui_kit::AnyElement {
-        let mut priority = f.priority.clone();
-        if let Some(first) = priority.get_mut(..1) {
-            first.make_ascii_uppercase();
-        }
-        let mut meta = vec![f.lifecycle.label().to_owned(), priority];
-        if !f.targets.is_empty() {
-            meta.push(
-                f.targets
-                    .iter()
-                    .map(|t| t.label.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            );
-        }
-        let meta = meta.join(" · ");
-        let weak = cx.weak_entity();
-        let finding = f.clone();
-        let mut text = div()
-            .v_flex()
-            .flex_1()
-            .min_w_0()
-            .gap_0p5()
-            .child(ui::text(Text::Body, SharedString::from(f.title.clone())))
-            .child(
-                ui::text(Text::Caption, SharedString::from(meta)).text_color(Tone::Quiet.color(cx)),
-            );
-        if let Some(cost) = &f.cost {
-            // One line, always naming the estimate as unmeasured.
-            let line = if cost.later_result.trim().is_empty() {
-                format!("Est. {} (not measured)", cost.estimate)
-            } else {
-                format!("Est. {} · Measured: {}", cost.estimate, cost.later_result)
-            };
-            text = text.child(
-                ui::text(Text::Caption, SharedString::from(line)).text_color(Tone::Quiet.color(cx)),
-            );
-        }
-        div()
-            .id(("insights-finding", ix))
-            .test_support()
-            .h_flex()
-            .items_start()
-            .gap_2()
-            .py_1()
-            .child(text)
-            .child(
-                ui::action(("insights-decide", ix), "Decide", Action::Quiet)
-                    .disabled(!enabled)
-                    .dropdown_menu(move |mut menu, _, _| {
-                        for to in lifecycle_choices(finding.lifecycle) {
-                            let (weak, f) = (weak.clone(), finding.clone());
-                            menu = menu.item(PopupMenuItem::new(decision_label(to)).on_click(
-                                move |_, _, cx| {
-                                    let _ = weak.update(cx, |v, cx| {
-                                        if v.visible && !v.waiting() {
-                                            v.confirm = Some(Confirm::Decide {
-                                                key: f.key.clone(),
-                                                title: f.title.clone(),
-                                                from: f.lifecycle,
-                                                to,
-                                                expected_revision: f.revision,
-                                            });
-                                            v.error = None;
-                                            cx.notify();
-                                        }
-                                    });
-                                },
-                            ));
-                        }
-                        menu
-                    }),
-            )
-            .into_any_element()
+            });
+        (body, tail.child(actions))
     }
 
     fn render_chat(&mut self, cx: &mut Context<Self>) -> (gpui_kit::Div, gpui_kit::Div) {
@@ -730,230 +743,117 @@ impl Panel {
             return (div(), div());
         };
         let model_name = self
-            .model_label
-            .clone()
+            .model_name()
             .unwrap_or_else(|| "this chat's model".into());
-        let mut root = div().v_flex().gap_3();
+        let body = div().v_flex().gap_3().min_w_0();
         let status = match &self.status {
             Load::Loading => {
                 return (
-                    root.child(ui::text(Text::Caption, "Reading access…")),
+                    body.child(ui::text(Text::Caption, "Reading…")),
                     self.footer(None, cx),
                 );
             }
             Load::Failed(e) => {
                 return (
-                    root.child(Notice::new(e.clone()).tone(Tone::Error)),
+                    body.child(Notice::new(e.clone()).tone(Tone::Error)),
                     self.footer(None, cx),
                 );
             }
             Load::Ready(s) => s.clone(),
         };
-        let (state, tone) = if status.setup_pending {
-            ("Setup didn't finish. Access stays off.", Tone::Warning)
+        let (state, color) = if status.setup_pending {
+            ("Setup unfinished", cx.theme().warning)
         } else if !status.enabled {
-            ("Access revoked. History and reports are kept.", Tone::Quiet)
+            ("Revoked", cx.theme().muted_foreground)
         } else if status.archived {
-            (
-                "Chat archived. Access stays off while archived.",
-                Tone::Quiet,
-            )
+            ("Archived", cx.theme().muted_foreground)
         } else if !status.available {
-            (
-                "Access unavailable: its project, mission or host changed.",
-                Tone::Warning,
-            )
+            ("Unavailable", cx.theme().warning)
         } else {
-            ("Access on", Tone::Normal)
+            ("On", cx.theme().success)
         };
-        let state = if state == "Access on" {
-            format!("Access on · {model_name}")
-        } else {
-            state.to_owned()
-        };
-        root = root
-            .child(
+        let state_value = div()
+            .id("insights-state")
+            .test_support()
+            .h_flex()
+            .items_center()
+            .gap_2()
+            .child(div().size(px(7.)).rounded_full().bg(color))
+            .child(ui::text(Text::Body, state));
+        let reads = div()
+            .id("insights-scope-toggle")
+            .test_support()
+            .h_flex()
+            .items_center()
+            .gap_1()
+            .cursor_pointer()
+            .child(ui::text(Text::Body, "Chat excerpts, all projects"))
+            .child(ui::disclosure_chevron("insights-scope", self.scope_open))
+            .on_click(cx.listener(|v, _, _, cx| {
+                v.scope_open = !v.scope_open;
+                cx.notify();
+            }));
+        let body = body
+            .child(field("insights-field-status", "Status", state_value, cx))
+            .child(field(
+                "insights-field-model",
+                "Model",
+                ui::text(Text::Body, SharedString::from(model_name.clone())),
+                cx,
+            ))
+            .child(field(
+                "insights-field-reads",
+                "Reads",
                 div()
-                    .id("insights-state")
+                    .v_flex()
+                    .gap_1()
+                    .min_w_0()
+                    .child(reads)
+                    .when(self.scope_open, |d| d.child(disclosure(&model_name))),
+                cx,
+            ));
+        let mut tail = div().v_flex().gap_3().w_full().min_w_0();
+        tail = tail.children(self.check_row(cx));
+        if self.confirm_revoke {
+            let revision = status.revision;
+            tail = tail.child(
+                div()
+                    .id("insights-confirm-revoke")
                     .test_support()
                     .h_flex()
                     .items_center()
                     .gap_2()
-                    .child(div().flex_1().min_w_0().child(
-                        ui::text(Text::Body, SharedString::from(state)).text_color(tone.color(cx)),
-                    ))
                     .child(
-                        ui::action(
-                            "insights-scope-toggle",
-                            if self.scope_open {
-                                "Hide scope"
-                            } else {
-                                "What can it read?"
-                            },
-                            Action::Quiet,
-                        )
-                        .on_click(cx.listener(|v, _, _, cx| {
-                            v.scope_open = !v.scope_open;
-                            cx.notify();
-                        })),
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(ui::text(Text::Body, "Revoke access? Reports stay.")),
+                    )
+                    .child(
+                        ui::action("insights-revoke-cancel", "Cancel", Action::Quiet).on_click(
+                            cx.listener(|v, _, _, cx| {
+                                v.confirm_revoke = false;
+                                cx.notify();
+                            }),
+                        ),
+                    )
+                    .child(
+                        ui::action("insights-revoke-confirm", "Revoke", Action::Danger)
+                            .disabled(self.waiting())
+                            .on_click(cx.listener(move |v, _, _, cx| {
+                                v.send(
+                                    model::Action::Start(Request::Revoke {
+                                        session_id: session.clone(),
+                                        expected_revision: revision,
+                                    }),
+                                    cx,
+                                );
+                            })),
                     ),
-            )
-            .when(self.scope_open, |d| d.child(disclosure(&model_name)));
-        let live = status.enabled && status.available && !status.archived && !status.setup_pending;
-        if live {
-            let mut list = div()
-                .id("insights-findings")
-                .test_support()
-                .v_flex()
-                .gap_1()
-                .child(ui::text(Text::Label, "Findings"));
-            match &self.findings {
-                Load::Loading => list = list.child(ui::text(Text::Caption, "Loading findings…")),
-                Load::Failed(e) => list = list.child(Notice::new(e.clone()).tone(Tone::Error)),
-                Load::Ready(items) if items.is_empty() => {
-                    list = list.child(ui::text(Text::Caption, "No findings yet."))
-                }
-                Load::Ready(items) => {
-                    let enabled = !self.waiting() && self.confirm.is_none();
-                    let items = items.clone();
-                    for (ix, f) in items.iter().enumerate() {
-                        list = list.child(self.finding_row(f, ix, enabled, cx));
-                    }
-                    if let Some(cursor) = self.next_cursor {
-                        list = list.child(
-                            ui::action("insights-more", "Show more findings", Action::Quiet)
-                                .on_click(cx.listener(move |v, _, _, cx| {
-                                    v.read_findings(Some(cursor), cx)
-                                })),
-                        );
-                    }
-                }
-            }
-            root = root.child(list);
+            );
         }
-        // Pinned below the scrolling list: unconfirmed actions, confirmations, outcomes and footer.
-        let mut tail = div().v_flex().gap_3().w_full().min_w_0();
-        let revoke_slot = format!("revoke:{session}");
-        tail = tail.children(self.check_row(&revoke_slot, cx));
-        if let Some(slot) = self.book.as_ref().and_then(|b| {
-            b.insights
-                .iter()
-                .find(|(s, a)| s.starts_with(&format!("lifecycle:{session}:")) && a.open())
-                .map(|(s, _)| s.clone())
-        }) {
-            tail = tail.children(self.check_row(&slot, cx));
-        }
-        match self.confirm.clone() {
-            Some(Confirm::Decide {
-                key,
-                title,
-                from,
-                to,
-                expected_revision,
-            }) => {
-                tail = tail.child(
-                    div()
-                        .id("insights-confirm-decision")
-                        .test_support()
-                        .v_flex()
-                        .gap_2()
-                        .child(
-                            Notice::new(format!("{}: “{}”?", decision_label(to), brief(&title)))
-                                .detail(format!(
-                                    "{} → {}. This records your decision only. No work starts.",
-                                    from.label(),
-                                    to.label()
-                                )),
-                        )
-                        .child(
-                            div()
-                                .h_flex()
-                                .justify_end()
-                                .gap_2()
-                                .child(
-                                    ui::action("insights-decision-cancel", "Cancel", Action::Quiet)
-                                        .on_click(cx.listener(|v, _, _, cx| {
-                                            v.confirm = None;
-                                            cx.notify();
-                                        })),
-                                )
-                                .child(
-                                    ui::action(
-                                        "insights-decision-confirm",
-                                        "Record decision",
-                                        Action::Primary,
-                                    )
-                                    .disabled(self.waiting())
-                                    .on_click(cx.listener(
-                                        move |v, _, _, cx| {
-                                            v.send(
-                                                model::Action::Start(Request::Lifecycle {
-                                                    session_id: session.clone(),
-                                                    key: key.clone(),
-                                                    expected_revision,
-                                                    lifecycle: to,
-                                                }),
-                                                cx,
-                                            );
-                                        },
-                                    )),
-                                ),
-                        ),
-                );
-            }
-            Some(Confirm::Revoke) => {
-                let session = session.clone();
-                let revision = status.revision;
-                tail = tail.child(
-                    div()
-                        .id("insights-confirm-revoke")
-                        .test_support()
-                        .v_flex()
-                        .gap_2()
-                        .child(
-                            Notice::new("Revoke Insights access?")
-                                .detail("The chat keeps its history and reports but can't read other chats or update the backlog. A new Insights chat is needed to restore access.")
-                                .tone(Tone::Warning),
-                        )
-                        .child(
-                            div()
-                                .h_flex()
-                                .justify_end()
-                                .gap_2()
-                                .child(
-                                    ui::action("insights-revoke-cancel", "Cancel", Action::Quiet)
-                                        .on_click(cx.listener(|v, _, _, cx| {
-                                            v.confirm = None;
-                                            cx.notify();
-                                        })),
-                                )
-                                .child(
-                                    ui::action("insights-revoke-confirm", "Revoke access", Action::Danger)
-                                        .disabled(self.waiting())
-                                        .on_click(cx.listener(move |v, _, _, cx| {
-                                            v.send(
-                                                model::Action::Start(Request::Revoke {
-                                                    session_id: session.clone(),
-                                                    expected_revision: revision,
-                                                }),
-                                                cx,
-                                            );
-                                        })),
-                                ),
-                        ),
-                );
-            }
-            None => {}
-        }
-        if self.waiting() {
-            tail = tail.child(Notice::new("Saving… Closing doesn't cancel it."));
-        } else if let Some(n) = self.latest().and_then(|o| outcome_notice(o, "Done.")) {
-            tail = tail.child(n);
-        }
-        if let Some(e) = self.error {
-            tail = tail.child(Notice::new(e).tone(Tone::Error));
-        }
-        (root, tail.child(self.footer(Some(status), cx)))
+        tail = self.notices(tail, "Saving… Closing doesn't cancel it.");
+        (body, tail.child(self.footer(Some(status), cx)))
     }
 
     fn footer(&self, status: Option<Status>, cx: &mut Context<Self>) -> gpui_kit::Div {
@@ -963,13 +863,15 @@ impl Panel {
         let mission = status.as_ref().map(|s| s.mission_id.clone());
         div()
             .h_flex()
+            .items_center()
             .gap_2()
             .child(div().flex_1().h_flex().when(revocable, |d| {
                 d.child(
-                    ui::action("insights-revoke", "Revoke access…", Action::Quiet)
-                        .disabled(self.waiting() || self.confirm.is_some())
+                    ui::action("insights-revoke", "Revoke…", Action::Quiet)
+                        .text_color(cx.theme().danger)
+                        .disabled(self.waiting() || self.confirm_revoke)
                         .on_click(cx.listener(|v, _, _, cx| {
-                            v.confirm = Some(Confirm::Revoke);
+                            v.confirm_revoke = true;
                             v.error = None;
                             cx.notify();
                         })),
@@ -986,15 +888,7 @@ impl Panel {
                     ),
                 )
             })
-            .child(
-                ui::action("insights-close", "Close", Action::Quiet).on_click(cx.listener(
-                    |v, _, _, cx| {
-                        if v.visible {
-                            cx.emit(Event::Close);
-                        }
-                    },
-                )),
-            )
+            .child(self.close_button("Done", Action::Primary, cx))
     }
 }
 
@@ -1008,34 +902,23 @@ impl Render for Panel {
 #[cfg(feature = "native-probes")]
 impl Panel {
     pub(crate) fn probe_ready(&self) -> bool {
+        let catalog = self.catalog_path.is_none() || !matches!(self.catalog, Load::Loading);
         match &self.scope {
-            Scope::Chat { .. } => {
-                !matches!(self.status, Load::Loading) && !matches!(self.findings, Load::Loading)
-            }
-            Scope::Setup { .. } => !matches!(self.catalog, Load::Loading),
-        }
-    }
-    pub(crate) fn probe_decide(&mut self, ix: usize, to: Lifecycle, cx: &mut Context<Self>) {
-        if let Load::Ready(items) = &self.findings
-            && let Some(f) = items.get(ix)
-        {
-            self.confirm = Some(Confirm::Decide {
-                key: f.key.clone(),
-                title: f.title.clone(),
-                from: f.lifecycle,
-                to,
-                expected_revision: f.revision,
-            });
-            cx.notify();
+            Scope::Chat { .. } => !matches!(self.status, Load::Loading) && catalog,
+            Scope::Setup { .. } => catalog,
+            Scope::Decide { .. } => true,
         }
     }
     pub(crate) fn probe_revoke(&mut self, cx: &mut Context<Self>) {
-        self.confirm = Some(Confirm::Revoke);
+        self.confirm_revoke = true;
         cx.notify();
     }
     pub(crate) fn probe_scope(&mut self, cx: &mut Context<Self>) {
         self.scope_open = true;
         cx.notify();
+    }
+    pub(crate) fn probe_model_name(&self) -> Option<String> {
+        self.model_name()
     }
 }
 
@@ -1044,6 +927,7 @@ impl Panel {
         let (body, tail) = match &self.scope {
             Scope::Chat { .. } => self.render_chat(cx),
             Scope::Setup { .. } => self.render_setup(cx),
+            Scope::Decide { .. } => self.render_decide(cx),
         };
         // Only the content scrolls; confirmations, outcomes and actions stay in view.
         let height = (f32::from(w.viewport_size().height) * 0.45).clamp(160., 480.);
@@ -1051,14 +935,14 @@ impl Panel {
             .id("insights-panel")
             .test_support()
             .v_flex()
-            .gap_3()
+            .gap_4()
             .w_full()
             .min_w_0()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|v, e: &gpui_kit::KeyDownEvent, _, cx| {
                 if e.keystroke.key == "escape" && v.visible {
                     cx.stop_propagation();
-                    if v.confirm.take().is_some() {
+                    if std::mem::take(&mut v.confirm_revoke) {
                         cx.notify();
                     } else {
                         cx.emit(Event::Close);
@@ -1097,5 +981,11 @@ mod tests {
         assert_eq!(short.chars().count(), 140);
         assert!(short.ends_with('…'));
         assert_eq!(brief(&"x".repeat(140)), "x".repeat(140));
+    }
+    #[test]
+    fn unknown_and_pending_have_no_second_notice() {
+        assert!(outcome_notice(&Outcome::Pending).is_none());
+        assert!(outcome_notice(&Outcome::Unknown("x")).is_none());
+        assert!(outcome_notice(&Outcome::Rejected("stale".into())).is_some());
     }
 }
