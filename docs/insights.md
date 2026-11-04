@@ -11,8 +11,11 @@ The global Automations switch in **Settings → Chats** must be on. Weekly Insig
 If Terra 6.1 is missing, nothing else is used instead; if several models share that name, choose one.
 
 If enabling is interrupted, the confirmation shows **Check**. Check reads its status and only
-resends the exact same request when Local has no record of it. Closing, reopening or restarting
-never repeats it. The result is On only when both the report chat and its weekly automation exist.
+re-admits the saved enable command when its receipt is unknown, using the same bytes and ID.
+An unknown lookup does not prove nothing happened. The host journal prevents entered setup steps
+from repeating; pending steps stay status-only in the app. Closing, reopening or restarting the app
+never resends the command. Daemon recovery may finish a setup step not yet entered, not resend a review.
+The result is On only when both the report chat and its weekly automation are confirmed.
 **More → Set up Insights chat…** on a mission still creates just the report chat.
 
 In the report chat, the **Insights backlog** header button opens the mission's **Tasks** tab.
@@ -71,7 +74,8 @@ the display name **Terra 6.1**. Missing or ambiguous matches stay unresolved, wi
 Sol fallback. Explicit model choices and existing schedules are unchanged.
 
 Editable settings are a follow-up. Opening the confirmation, reading status or restarting the
-daemon grants no access and starts no review or schedule; only **Enable** does.
+app grants no access and starts no review or schedule. **Enable** authorizes weekly setup, not an
+immediate review. A daemon restart can reconcile an already confirmed setup without new consent.
 
 See the [permission contract](technical/insights-history.md) and
-[verification and limits](technical/insights-review.md#synthetic-checks-and-limits) for technical detail.
+[enable verification and limits](technical/insights-enable.md#verification-and-limits) for technical detail.

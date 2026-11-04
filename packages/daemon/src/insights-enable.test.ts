@@ -20,7 +20,7 @@ import { InsightsEnable } from "./insights-enable.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import type { ModelCatalog } from "./models.ts";
-import { OperationJournal, payloadHash } from "./operation-journal.ts";
+import { OperationExpired, OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
@@ -594,6 +594,83 @@ for (const phase of ["chat_pending", "chat_ready", "schedule_pending"] as const)
 	});
 }
 
+for (const phase of ["chat_pending", "chat_ready", "schedule_pending"] as const) {
+	test(`same confirmed command re-admission after ${phase} never replays entered effects`, async (t) => {
+		const f = await fixture(t),
+			op = await f.intent();
+		const frozen = structuredClone(op);
+		assert.equal((await f.enable.status(op)).receipt.state, "unknown");
+		// That observation can be stale before Check re-admits the immutable command.
+		const checkpoint = f.journal.checkpoint.bind(f.journal);
+		const injected = t.mock.method(f.journal, "checkpoint", async (intent: DurableOperation, value: unknown) => {
+			await checkpoint(intent, value);
+			if ((value as InsightsEnableProgress).phase === phase) throw new Error("Synthetic interrupted command");
+		});
+		assert.equal((await f.run(op)).state, "pending");
+		injected.mock.restore();
+		await f.reopen();
+		const file = join(f.home, "operations", `${payloadHash(op.operationId)}.json`);
+		const saved = await readFile(file);
+		const spawn = t.mock.method(f.sessions, "spawnInsightsDurable");
+		const create = t.mock.method(f.schedules, "createInsights");
+		for (let i = 0; i < 3; i++) assert.equal((await f.enable.status(op)).receipt.state, "pending");
+		assert.deepEqual(await readFile(file), saved, "status cannot advance an entered step");
+		assert.equal(spawn.mock.callCount(), 0);
+		assert.equal(create.mock.callCount(), 0);
+		for (let i = 0; i < 3; i++) await f.run(op);
+		assert.equal(spawn.mock.callCount(), 0, "even stale unknown lookup cannot replay entered chat create");
+		assert.equal(create.mock.callCount(), phase === "chat_ready" ? 1 : 0, "only an unentered step can run");
+		assert.deepEqual(JSON.parse(await readFile(file, "utf8")).operation, frozen);
+		assert.deepEqual(op, frozen, "no new attempt, sequence, target or payload");
+		assert.equal(f.workerStarts, 0, "command re-admission is not review/provider-input resend");
+	});
+}
+
+test("unknown lookup grants no authority; changed settings and retired commands refuse without effects", async (t) => {
+	const f = await fixture(t),
+		op = await f.intent();
+	assert.equal((await f.enable.status(op)).state, "not_found");
+	f.disable();
+	const spawn = t.mock.method(f.sessions, "spawnInsightsDurable");
+	const create = t.mock.method(f.schedules, "createInsights");
+	assert.equal((await f.run(op)).state, "rejected");
+	await f.journal.retire(op.origin, op.producerId, op.sequence);
+	await f.reopen();
+	await assert.rejects(f.enable.status(op), OperationExpired);
+	await assert.rejects(f.run(op), OperationExpired);
+	assert.equal(spawn.mock.callCount(), 0);
+	assert.equal(create.mock.callCount(), 0);
+	assert.equal(f.sessions.list().length, 0);
+	assert.equal(f.schedules.list().length, 0);
+	assert.equal(f.workerStarts, 0);
+});
+
+test("disconnect after report placement plus missing index retains Unknown, never replacement authority", async (t) => {
+	const f = await fixture(t),
+		op = await f.intent();
+	const original = f.sessions.spawnInsightsDurable.bind(f.sessions);
+	const spawn = t.mock.method(
+		f.sessions,
+		"spawnInsightsDurable",
+		async (...args: Parameters<SessionManager["spawnInsightsDurable"]>) => {
+			await original(...args);
+			throw new Error("Synthetic IPC disconnect after placement");
+		},
+	);
+	assert.equal((await f.run(op)).state, "pending");
+	const file = join(f.home, "sessions", op.targetId, "meta.json");
+	const bytes = await readFile(file);
+	f.sessions["metas"].delete(op.targetId); // Index unavailable, not deletion or revocation.
+	assert.equal((await f.enable.status(op)).state, "unknown");
+	assert.equal((await f.preflight()).reason, "enable_pending_use_status");
+	assert.equal((await f.run(op)).state, "pending");
+	assert.equal(spawn.mock.callCount(), 1, "no re-placement after disconnect");
+	assert.deepEqual(await readFile(file), bytes);
+	assert.equal(JSON.parse(bytes.toString()).insightsGrant.enabled, true);
+	assert.equal(f.schedules.list().length, 0);
+	assert.equal(f.workerStarts, 0);
+});
+
 for (const effect of ["chat", "schedule"] as const) {
 	test(`lost ${effect} ACK is read-only reconciled after restart without duplicate effects`, async (t) => {
 		const f = await fixture(t),
@@ -619,8 +696,22 @@ for (const effect of ["chat", "schedule"] as const) {
 				},
 			);
 		}
-		assert.equal((await f.run(op)).state, "pending");
-		assert.equal((await f.enable.status(op)).state, effect === "chat" ? "partial" : "enabled");
+		const pending = await f.run(op);
+		assert.equal(pending.state, "pending");
+		const progress = pending.result as InsightsEnableProgress;
+		assert.equal(progress.phase, effect === "chat" ? "chat_pending" : "schedule_pending");
+		const file = join(f.home, "operations", `${payloadHash(op.operationId)}.json`);
+		const saved = await readFile(file);
+		const status = await f.enable.status(op);
+		assert.deepEqual(status.receipt, pending, "current enabled is not an invented accepted receipt");
+		assert.equal(status.sessionId, op.targetId);
+		assert.equal(status.scheduleId, progress.scheduleId);
+		assert.equal(status.state, effect === "chat" ? "partial" : "enabled");
+		if (effect === "schedule") {
+			assert.deepEqual(progress.chat, f.sessions.insightsEnableChat(op.targetId));
+			assert.equal(status.nextAt, f.schedules.list()[0]!.at);
+		}
+		assert.deepEqual(await readFile(file), saved, "passive reconciliation preserves the pending marker");
 		assert.equal(f.schedules.list().length, effect === "chat" ? 0 : 1, "status never provisions a missing step");
 		await f.reopen();
 		await f.journal.recover((intent) => f.enable.enable(intent, JSON.parse(intent.payload)));
@@ -630,6 +721,40 @@ for (const effect of ["chat", "schedule"] as const) {
 		assert.equal(f.workerStarts, 0);
 	});
 }
+
+test("pending enabled status becomes blocked on revoke without changing the receipt or replaying", async (t) => {
+	const f = await fixture(t),
+		op = await f.intent();
+	const original = f.schedules.createInsights.bind(f.schedules);
+	const create = t.mock.method(
+		f.schedules,
+		"createInsights",
+		async (...args: Parameters<ScheduleService["createInsights"]>) => {
+			await original(...args);
+			throw new Error("Synthetic lost schedule ACK");
+		},
+	);
+	const pending = await f.run(op);
+	assert.equal(pending.state, "pending");
+	assert.equal((pending.result as InsightsEnableProgress).phase, "schedule_pending");
+	assert.equal((await f.enable.status(op)).state, "enabled");
+	const file = join(f.home, "operations", `${payloadHash(op.operationId)}.json`);
+	const bytes = await readFile(file);
+	await f.sessions.revokeInsights(op.targetId, 1);
+	for (let i = 0; i < 3; i++) {
+		const blocked = await f.enable.status(op);
+		assert.equal(blocked.state, "blocked", "same pending receipt must not cache an earlier enabled observation");
+		assert.deepEqual(blocked.receipt, pending);
+		assert.equal(blocked.sessionId, op.targetId);
+		assert.equal(blocked.scheduleId, (pending.result as InsightsEnableProgress).scheduleId);
+	}
+	assert.deepEqual(await readFile(file), bytes);
+	assert.deepEqual(await f.run(op), pending, "re-admission cannot bypass revocation");
+	assert.equal(create.mock.callCount(), 1);
+	assert.equal(f.sessions.list().length, 1);
+	assert.equal(f.schedules.list().length, 1);
+	assert.equal(f.workerStarts, 0);
+});
 
 for (const fence of ["Stop", "revoke", "home", "project", "backlog", "disable"] as const) {
 	test(`${fence} fences partial recovery and never mints replacement authority`, async (t) => {

@@ -24,6 +24,11 @@ never create a mission or infer one from its title. Missing/invalid project/back
 5. On lost/malformed/pending ACK, retain the **same bytes and operation ID**. Passive
    `POST /api/insights/enable/status` takes that complete envelope. It does not execute/resume steps.
    Generic `/api/operations/receipt` remains available for the durable receipt alone.
+   Native **Check** performs that lookup first. Only an `unknown` receipt permits re-admitting the
+   retained command through the native-gated operations route, never constructing another attempt.
+   A lookup observation is not proof that no effects occurred: concurrent admission may have
+   entered an effect since the read. Journal reservation and durable step markers, not absence,
+   make this same-command re-admission safe. Pending/accepted/rejected receipts are not resent.
 
 All these reads return `Cache-Control: no-store`. GET preflight requires both IDs (400 if absent,
 404 if missing, 409 for a wrong/inactive backlog); wrong methods return 405. Status needs no native
@@ -91,6 +96,14 @@ Neither receipt nor `enabled` certifies a report, provider execution, future acc
 Status rechecks present admission/Stop/settings and both resources. A later edit/revoke can make
 an accepted operation's current status blocked. `not_found` is a lookup observation, not permission
 to generate a fresh ID. Unknown/partial must never clear the saved attempt or blindly replay effects.
+
+Check reuses the stored native-confirmed envelope, not a newly resolved preflight. The writer's
+Check branch never calls `prepare_insights`; it loads the open attempt from the same private host
+book. Sending still requires the pinned hello and native capability. The host validates exact
+operation identity/hash/producer sequence and destination lineage, rejects retired sequence floors,
+and rechecks current home/project/backlog, model, settings and grant/Stop fences before new steps.
+The only enable effects are passive report creation and rule creation. Re-admitting this command
+is not review dispatch, message delivery or provider-input resend.
 
 ## Existing and partial setups
 
@@ -164,3 +177,59 @@ the newest read lands. Present state (enabled, blocked, partial) outranks the re
 - `packages/daemon/src/insights-enable.test.ts`: synthetic temporary homes, real metadata/SQLite,
   native HTTP, concurrent dedupe, crash boundaries, lost ACK and authority fences. Worker factory
   refuses all starts. No live grant, history read, provider turn or schedule activation is tested.
+
+## Verification and limits
+
+The joined audit inspects the actual native assertions, not only their pass counts. The original
+22 `insights`-filtered units include seven weekly-enable tests: exact JSON-value freeze, malformed
+scope/budget/model/home/chat refusals, explicit model choice, durable attempt round-trip, exact
+receipt binding, bounded backlog choices and unavailable reasons. Retained report pinning adds a
+23rd test refusing a substitute target; its mounted restart case removes the report from the list
+and asserts that only a pinned preflight is requested, blocked/substitute offers cannot confirm,
+and no operation is sent. Lost schedule ACK validation adds a 24th test using a complete host-shaped
+pending marker plus enabled status, preserving the pending attempt and refusing malformed markers,
+contradictory receipts and changed identities. The other tests cover shared Insights parsing, storage,
+writer and reader behavior. The HTTP fixture uses native `local` envelope
+labels with verbatim `daemon` expectedHome, verifies the capability gate and cold receipt loading,
+and rejects daemon/lineage changes and relabeled retries before effects.
+
+Host tests additionally exercise stale-unknown observations followed by persisted entry at each
+chat/schedule boundary, repeated exact-command re-admission, passive status preserving journal bytes,
+retirement floors, disabled Automations and disconnect after report placement with a missing index.
+Entered effects never replay even when unresolved; only an unentered rule step may run. Existing
+cases cover concurrent dedupe, model refusal, unchanged user choices/cadence, Stop/revoke/home and
+binding fences, refused membership, retained identities and future Paris DST occurrences. The
+synthetic disconnect is fault injection, not reproduction or diagnosis of a real IPC incident.
+
+The hidden `insights_enable` probe mounts LocalViewer against owned synthetic HTTP. It checks
+Automations entry, no write before confirmation, payload/ID persistence across close and writer
+restart, unknown-receipt same-command Check, pending status-only Check, accepted status, report
+navigation, backlog/model choices, late replies, rejection and global Automations off without writes.
+Its main recovery interaction is 1100 light; chooser/refusal interactions also run at 680 dark,
+and lost schedule ACK/status-transition interactions run at 680 light. The separate 680 light/dark
+and 1100 dark layout passes are render-only, not repeated complete journeys. The
+existing `insights_native`, standalone `insights` and `automations` probes cover their own surfaces.
+This is macOS arm64 headless TestPlatform evidence, not OS IME/accessibility, Linux/Wayland, live
+Local, actual model availability, report quality, spending or realized-benefit acceptance.
+
+The host may say `enabled` with a still-pending `schedule_pending` receipt after rule placement/lost
+ACK. Native now accepts the matching marker without inventing acceptance and uses cause-neutral
+unavailability copy. Each settled reply triggers a fresh passive status read even if the attempt
+remains pending; a sequence fence discards older replies. The mounted probe changes nextAt, then
+shows pending+blocked in the same view with the same phase, waits for an overtaken slow reply and
+asserts it cannot restore On. Blocked/partial present state outranks pending-step words. Close,
+restart and eventual acceptance preserve the same envelope, and every POST in that recovery path
+is status-only. Host tests verify blocked-on-revoke with the exact same pending receipt and no replay.
+This costs one extra passive status read per settled reply. The pending Check row still says
+"Still applying." beside On or blocked words; that pairing has not been visually qualified.
+Preserve retained identity and Unknown outcomes, never substitute/rebind/regrant or resend a review.
+
+Existing unrelated baseline failures/warnings remain recorded in
+[review verification](insights-review.md#synthetic-checks-and-limits). Focused passes are not a broad
+suite pass; synthetic HTTP still emits its existing MaxListeners warning. Desktop checks also
+report the existing `block 0.1.6` future-incompatibility warning. The pending-marker delivery's
+Clippy run including test bodies failed `-D warnings` in unrelated `chat_actions_restore_tests` and
+`interaction_automatic_tests`; a clean scoped production/probe lint is not a claim those passed.
+Real activation and the first authorized review require the user's native confirmation; this audit
+performs neither. The real IPC-disconnect/binding-change incident's cause and previous delivery
+remain unknown; synthetic passing tests do not classify it or authorize live recovery.

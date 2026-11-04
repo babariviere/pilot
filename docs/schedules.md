@@ -10,6 +10,10 @@ Open **Automations** in the sidebar, then **New automation**.
 
 A rule in another time zone shows its next run in your computer's time.
 
+For weekly chat-evidence reports, use **Weekly Insights…** on this same page.
+Its [one confirmation](insights.md) creates or reuses the report chat and rule;
+do not assemble a second rule through **New automation**.
+
 Recurring rule changes require **Settings → Chats → Automations** to be enabled.
 Repeating messages target a chat in a project. Monthly dates beyond the end of a
 short month use its last day.

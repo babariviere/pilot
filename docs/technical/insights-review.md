@@ -114,14 +114,13 @@ authenticated project-scoped catalog. There is no fuzzy ID inference, provider p
 selection, Pi/project-default substitution or Sol fallback. This metadata is not model admission;
 normal create admission still validates the submitted choice.
 
-Remaining native work: `apps/desktop/src/insights_view.rs`, `Panel::read_catalog`, currently preselects
-the Pi catalog default for setup. Fetch this passive preset for `Scope::Setup`'s project, suggest its
-resolved ID only before a user choice, and keep missing/ambiguous state visible instead of falling
-back. `Panel::setup_request` must continue freezing an explicit exact `model` into the native-confirmed
-`insights-create` payload; resolving an omitted model during journal replay would break immutable
-intent. The recurrence suggestion belongs in the existing Automation editor's explicit creation flow,
-not startup or an automatic schedule. Existing choices, grants and schedules must not migrate.
-No Rust/UI changes, editable settings, real provider resolution or real activation are included here.
+The native weekly path now uses `insights_enable.rs` preflight and one confirmation from
+**Automations → Weekly Insights…**, not a preset in the generic Automation editor. It freezes the
+exact resolved model, scope and recurrence in `insights-enable`. Missing/ambiguous models block or
+require an explicit configured choice. Existing choices, grants and schedules do not migrate.
+The legacy mission **Set up Insights chat…** path still uses `Panel::read_catalog`'s Pi default and
+an explicit `insights-create` model; it creates no weekly rule and is not the required enable path.
+Editable settings remain later. See the [enable contract](insights-enable.md) for recovery limits.
 
 Synthetic coverage is in `insights-defaults.test.ts`, `insights-review.test.ts` and
 `schedules-insights.test.ts`: passive metadata reads and sanitized failures, exact/unavailable/ambiguous
