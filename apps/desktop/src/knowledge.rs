@@ -138,19 +138,18 @@ pub(crate) struct Summary {
     pub(crate) link: Option<Link>,
 }
 impl Summary {
-    /// "Component · revision 3 · Needs a check"
+    /// "Component · revision 3 · Needs a check". Row check state always belongs to the
+    /// current revision, so a pin to an earlier revision says whose state it is and never
+    /// reads as that earlier body's own check. Exact detail carries the pinned revision's.
     pub(crate) fn meta(&self) -> String {
-        let pinned = self
-            .link
-            .as_ref()
-            .and_then(|l| l.pinned_revision)
-            .map_or(String::new(), |r| format!(" · pinned to {r}"));
-        format!(
-            "{} · revision {}{pinned} · {}",
-            self.kind.label(),
-            self.revision,
-            self.freshness.label()
-        )
+        let (kind, revision, check) = (self.kind.label(), self.revision, self.freshness.label());
+        match self.link.as_ref().and_then(|l| l.pinned_revision) {
+            Some(p) if p != revision => {
+                format!("{kind} · pinned revision {p} · current revision {revision}: {check}")
+            }
+            Some(p) => format!("{kind} · revision {revision} · pinned to {p} · {check}"),
+            None => format!("{kind} · revision {revision} · {check}"),
+        }
     }
 }
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -382,6 +381,10 @@ fn summary_ok(project: &str, s: &Summary) -> bool {
     s.project_id == project
         && crate::local_model::valid_id(&s.id)
         && s.revision > 0
+        && s.link
+            .as_ref()
+            .and_then(|l| l.pinned_revision)
+            .is_none_or(|p| (1..=s.revision).contains(&p))
         && bounded(&s.title, 200)
         && bounded(&s.synopsis, 1000)
 }

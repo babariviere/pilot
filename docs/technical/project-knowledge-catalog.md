@@ -341,9 +341,9 @@ It is not a documentation author or a new worker lifecycle:
 
 Stored detail responses include the exact revision's observation and successful check's source versions;
 summary pages omit the potentially large version arrays. The native reader remains read-only and shows
-its existing pending/check state. Known presentation limit: linked pinned **list rows** still label the
-current revision's check state; exact historical detail does not inherit a newer revision's check.
-This slice changes no native UI and does not claim a pinned body passed a current-body check.
+its existing pending/check state. Linked list rows pinned to an earlier revision attribute the row's check
+state to the current revision ("pinned revision 1 · current revision 2: Checked …"); exact historical
+detail shows the pinned revision's own stored state and never inherits a newer revision's check.
 
 Focused tests in [knowledge-maintenance.test.ts](../../packages/daemon/src/knowledge-maintenance.test.ts)
 cover coalescence/50-entry bounds, passive reads, canonical/source/revision races, no-change checks,

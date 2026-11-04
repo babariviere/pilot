@@ -15,7 +15,10 @@ the catalog shows no section rather than claiming the mission has none.
 ## Reading
 
 - The list shows title, summary and one meta line: kind, revision, pin and check
-  state. **All**, **Components**, **Investigations** and **Needs a check** filter
+  state. A row's check state is always the current revision's, so a mission pin to
+  an earlier revision reads "pinned revision 1 · current revision 2: Checked …";
+  the pinned revision's own state is in its entry. **All**, **Components**,
+  **Investigations** and **Needs a check** filter
   on the daemon. The text field drafts a literal title/summary filter; Return
   applies it as one read, and typing never reads. An empty filtered result says
   so; loading, refusal and failure stay distinct from empty.
@@ -60,4 +63,3 @@ failed refresh and GET-only traffic. It also opens an archived mission's Overvie
 in the production mission browser, follows a pinned linked entry into the
 knowledge window and reads its history. This is synthetic native verification, not
 a live daemon, OS IME/AX or performance claim.
-

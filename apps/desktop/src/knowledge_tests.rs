@@ -132,6 +132,64 @@ fn knowledge_responses_must_match_the_exact_request() {
 }
 
 #[test]
+fn pinned_rows_never_borrow_the_current_check() {
+    let mission = Route::List(Query {
+        mission: Some("mission-A".into()),
+        ..Query::default()
+    });
+    let row = |pinned: Option<u64>, state: &str| {
+        let mut s = f::summary(f::COMPONENT, "component", "Code exploration", 2, state);
+        s["link"] = match pinned {
+            Some(p) => json!({"linkRevision":3,"pinnedRevision":p}),
+            None => json!({"linkRevision":3}),
+        };
+        let Ok(Data::Page(p)) = parse("project-A", &mission, f::page(vec![s])) else {
+            panic!()
+        };
+        p.entries[0].meta()
+    };
+    let checked = format!("Checked {}", crate::usage_overview::date(1_793_000_000_000));
+    // An earlier pin names the current revision as the owner of the check state.
+    assert_eq!(
+        row(Some(1), "checked"),
+        format!("Component · pinned revision 1 · current revision 2: {checked}")
+    );
+    assert_eq!(
+        row(Some(1), "needs_check"),
+        "Component · pinned revision 1 · current revision 2: Needs a check"
+    );
+    // The state still describes the pinned body when the pin is the current revision.
+    assert_eq!(
+        row(Some(2), "checked"),
+        format!("Component · revision 2 · pinned to 2 · {checked}")
+    );
+    assert_eq!(
+        row(None, "checked"),
+        format!("Component · revision 2 · {checked}")
+    );
+    // A pin outside the entry's revisions is not this entry's link.
+    for bad in [0, 3] {
+        let mut s = f::summary(f::COMPONENT, "component", "T", 2, "checked");
+        s["link"] = json!({"linkRevision":3,"pinnedRevision":bad});
+        assert!(parse("project-A", &mission, f::page(vec![s])).is_err());
+    }
+    // Exact historical detail keeps its own state beside a checked current entry.
+    let mut old = f::detail(f::COMPONENT, 1);
+    old["entry"] = f::summary(f::COMPONENT, "component", "Code exploration", 2, "checked");
+    old["freshness"] = json!({"state":"not_checked"});
+    let pinned = Route::Detail {
+        id: f::COMPONENT.into(),
+        revision: Some(1),
+    };
+    let Ok(Data::Detail(d)) = parse("project-A", &pinned, old) else {
+        panic!()
+    };
+    assert!(d.historical());
+    assert_eq!(d.entry.freshness.label(), checked);
+    assert_eq!(d.freshness.label(), "Not checked");
+}
+
+#[test]
 fn knowledge_state_and_sources_stay_honest() {
     let Ok(Data::Detail(d)) = parse(
         "project-A",

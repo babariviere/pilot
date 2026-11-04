@@ -41,6 +41,36 @@ pub(crate) fn linked() -> Value {
     s["link"] = json!({"linkRevision":1});
     page(vec![c, s])
 }
+/// A mission pin to revision 1 beside a checked current revision 2. Revision 1 itself
+/// was never checked, so nothing may present it as checked.
+pub(crate) fn pinned_beside_checked(s: &Server) {
+    let current = summary(COMPONENT, "component", "Code exploration", 2, "checked");
+    let mut c = current.clone();
+    c["link"] = json!({"linkRevision":3,"pinnedRevision":1});
+    let mut linked = linked();
+    linked["entries"][0] = c;
+    s.reply(
+        &list(Query {
+            mission: Some("mission-A".into()),
+            ..Query::default()
+        }),
+        Reply::json(200, linked),
+    );
+    let mut old = detail(COMPONENT, 1);
+    old["entry"] = current;
+    old["freshness"] = json!({"state":"not_checked"});
+    s.reply(
+        &path(
+            PROJECT,
+            &Route::Detail {
+                id: COMPONENT.into(),
+                revision: Some(1),
+            },
+        )
+        .unwrap(),
+        Reply::json(200, old),
+    );
+}
 pub(crate) const BODY: &str = "## Purpose\nBounded, literal source exploration for agents.\n\n## Interfaces\n- `code_search` and `code_symbols`\n- `code_call_paths` from an exact callable\n\n## Gaps\nNo persistent index. Results are source-inferred, not runtime proof.";
 pub(crate) fn detail(id: &str, revision: u64) -> Value {
     let entry = if id == COMPONENT {

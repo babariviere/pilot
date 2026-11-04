@@ -47,6 +47,7 @@ pub(crate) fn run(cx: &mut HeadlessAppContext) {
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
             let server = Server::start();
             kf::install(&server);
+            kf::pinned_beside_checked(&server);
             let mut archived = f::detail("mission-A");
             archived["mission"]["status"] = serde_json::json!("archived");
             server.reply("/api/missions/mission-A", Reply::json(200, archived));
@@ -102,6 +103,17 @@ pub(crate) fn run(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, cx| {
                 let d = v.read(cx).detail.clone().unwrap();
                 assert_eq!(d.status, "archived");
+                // The row's check belongs to current revision 2, never to pinned revision 1.
+                let page = d.knowledge.as_ref().unwrap().as_ref().unwrap();
+                let pinned = &page.entries[0];
+                assert_eq!(pinned.freshness.state, "checked");
+                assert_eq!(
+                    pinned.meta(),
+                    format!(
+                        "Component · pinned revision 1 · current revision 2: Checked {}",
+                        crate::usage_overview::date(1_793_000_000_000)
+                    )
+                );
                 assert_eq!(
                     d.knowledge
                         .as_ref()
@@ -149,6 +161,10 @@ pub(crate) fn run(cx: &mut HeadlessAppContext) {
                 assert_eq!(d.revision.summary.revision, 1);
                 assert!(w.find("knowledge-historical").visible());
                 assert!(w.find("knowledge-body").visible());
+                // The pinned body shows its own stored state, not the newer revision's check.
+                assert_eq!(d.entry.freshness.state, "checked");
+                assert_eq!(d.freshness.label(), "Not checked");
+                assert!(w.find("knowledge-freshness").visible());
                 w.click("knowledge-history", cx);
             })
             .unwrap();
