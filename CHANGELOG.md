@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.113.1](https://github.com/babariviere/pilot/compare/v1.113.0...v1.113.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* **desktop:** pin Insights panel actions and add a mounted probe ([a025811](https://github.com/babariviere/pilot/commit/a0258116571731e7f6816bcf382369cd9a45cae7))
+* **insights:** bind active reports to their review run ([8d1b3c7](https://github.com/babariviere/pilot/commit/8d1b3c77da6bce9aa8147f0c02597d874b4be8c1))
+
 ## [1.113.0](https://github.com/babariviere/pilot/compare/v1.112.0...v1.113.0) (2026-11-04)
 
 
