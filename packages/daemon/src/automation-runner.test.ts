@@ -161,6 +161,55 @@ test("FIFO per chat, three per host, bounded queue, freeze and update pause", as
 	frozen();
 });
 
+test("explicit lifecycle interrupts commands, joins exit and records queued work without replay", async (t) => {
+	const pool = new SubprocessPool();
+	const entered = deferred<void>();
+	const exit = deferred<ProcessResult>();
+	let spawns = 0;
+	t.mock.method(pool, "run", async () => {
+		spawns++;
+		entered.resolve();
+		return exit.promise;
+	});
+	const runner = new ActionRunner(pool);
+	t.after(async () => {
+		exit.resolve(empty);
+		await runner.close();
+		await pool.close();
+	});
+	const states: string[] = [];
+	const request: ActionRequest = {
+		actionId: "running",
+		sessionId: "a",
+		projectId: "p",
+		cwd: tmpdir(),
+		run: { argv: ["fake"] },
+		record: async (state) => {
+			states.push(state);
+		},
+	};
+	const first = runner.runAction(request);
+	await entered.promise;
+	const second = runner.runAction({ ...request, actionId: "waiting" });
+	runner.setUpdatePaused(true);
+	let joined = false;
+	const checkpoint = runner.checkpointLifecycle().then(() => {
+		joined = true;
+	});
+	await Promise.resolve();
+	assert.equal(joined, false, "an abort signal is not process exit");
+	exit.resolve(empty);
+	await checkpoint;
+	assert.equal((await first).outcome, "interrupted");
+	assert.equal((await second).outcome, "interrupted");
+	assert.equal(spawns, 1);
+	assert.equal(runner.blockers().length, 0);
+	assert.equal(states.filter((state) => state === "interrupted").length, 2);
+	runner.setUpdatePaused(false);
+	assert.equal((await runner.runAction({ ...request, actionId: "fresh" })).outcome, "ok");
+	assert.equal(spawns, 2, "only a new explicit intent starts another command");
+});
+
 test("sleep records interruption before process exit, keeps queued work and resumes on wake", async (t) => {
 	const pool = new SubprocessPool();
 	const entered = deferred<void>();

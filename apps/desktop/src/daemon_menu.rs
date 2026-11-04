@@ -19,6 +19,7 @@ gpui_kit::actions!(
         StartDaemon,
         StopDaemon,
         RestartDaemon,
+        UpgradeDaemon,
         ReloadPi,
         PiReloadDetails,
         InspectDaemon,
@@ -77,9 +78,10 @@ pub(crate) fn init(cx: &mut App) {
     cx.on_action(|_: &ReloadPi, cx| reload::request(cx));
     cx.on_action(|_: &PiReloadDetails, cx| reload_details(cx));
     cx.on_action(|_: &InspectDaemon, cx| request(None, cx));
-    cx.on_action(|_: &StartDaemon, cx| confirm(Command::Start, cx));
-    cx.on_action(|_: &StopDaemon, cx| confirm(Command::Stop, cx));
-    cx.on_action(|_: &RestartDaemon, cx| confirm(Command::Restart, cx));
+    cx.on_action(|_: &StartDaemon, cx| request(Some(Command::Start), cx));
+    cx.on_action(|_: &StopDaemon, cx| request(Some(Command::Stop), cx));
+    cx.on_action(|_: &RestartDaemon, cx| request(Some(Command::Restart), cx));
+    cx.on_action(|_: &UpgradeDaemon, cx| crate::local_view::menu_routing::upgrade_daemon(cx));
     cx.on_action(|_: &DaemonDetails, cx| details(cx));
     cx.on_action(|_: &CancelDaemonControl, cx| {
         if let Some(owner) = owner(cx) {
@@ -190,9 +192,9 @@ pub(crate) fn menu(cx: Option<&App>) -> MenuItem {
             MenuItem::action(message, DaemonDetails)
                 .disabled(cx.is_none_or(|cx| window(cx).is_none())),
             MenuItem::separator(),
-            MenuItem::action("Start…", StartDaemon).disabled(!enabled(Command::Start)),
-            MenuItem::action("Stop…", StopDaemon).disabled(!enabled(Command::Stop)),
-            MenuItem::action("Restart…", RestartDaemon).disabled(!enabled(Command::Restart)),
+            MenuItem::action("Start", StartDaemon).disabled(!enabled(Command::Start)),
+            MenuItem::action("Stop", StopDaemon).disabled(!enabled(Command::Stop)),
+            MenuItem::action("Restart", RestartDaemon).disabled(!enabled(Command::Restart)),
             MenuItem::action("Reload", ReloadPi).disabled(cx.is_none_or(|cx| !reload::enabled(cx))),
             MenuItem::separator(),
             MenuItem::action("Check Status", InspectDaemon)
@@ -204,52 +206,18 @@ pub(crate) fn menu(cx: Option<&App>) -> MenuItem {
                     .unwrap_or("Reload pi extensions and MCP configuration".into()),
                 PiReloadDetails,
             ),
+            MenuItem::separator(),
+            MenuItem::action("Upgrade", UpgradeDaemon).disabled(
+                !enabled(Command::Restart)
+                    || cx.is_none_or(|cx| {
+                        !crate::local_view::menu_routing::daemon_upgrade_available(cx)
+                    }),
+            ),
         ]),
     )
 }
 fn refresh(cx: &mut App) {
     crate::app_menu::refresh(cx);
-}
-fn label(command: Command) -> &'static str {
-    match command {
-        Command::Start => "Start",
-        Command::Stop => "Stop",
-        Command::Restart => "Restart",
-    }
-}
-
-fn confirm(command: Command, cx: &mut App) {
-    let Some(owner) = owner(cx) else {
-        return;
-    };
-    if !permitted(owner.read(cx), command, cx) {
-        return;
-    }
-    let Some(handle) = window(cx) else {
-        return;
-    };
-    owner.update(cx, |o, _| o.confirming = true);
-    refresh(cx);
-    cx.defer(move |cx| {
-        let result = handle.update(cx, |_, w, cx| {
-            w.prompt(gpui_kit::PromptLevel::Warning, &format!("{} Local daemon?",label(command)),
-                Some(match command {
-                    Command::Start => "Starts the managed service with its current runtime. Login settings are unchanged.",
-                    Command::Stop => "Stops the managed service for this login session. Refused while work is active or can't be checked. Pilot Next stays open.",
-                    Command::Restart => "Restarts the managed service on the same runtime; no upgrade. Refused while work is active or can't be checked.",
-                }), &[label(command), "Cancel"], cx)
-        });
-        match result {
-            Ok(answer) => { cx.spawn(async move |cx| {
-                let answer = answer.await;
-                cx.update(|cx| {
-                    owner.update(cx, |o,_| o.confirming = false);
-                    if matches!(answer, Ok(0)) { request(Some(command), cx); } else { refresh(cx); }
-                });
-            }).detach(); },
-            Err(_) => { owner.update(cx, |o,_| o.confirming=false); refresh(cx); }
-        }
-    });
 }
 fn request(command: Option<Command>, cx: &mut App) {
     let Some(owner) = owner(cx) else {
@@ -315,7 +283,7 @@ fn request(command: Option<Command>, cx: &mut App) {
                                 }
                                 .into();
                             }
-                            if command == Some(Command::Start) {
+                            if matches!(command, Some(Command::Start | Command::Restart)) {
                                 cx.emit(Started);
                             }
                         }
@@ -328,7 +296,9 @@ fn request(command: Option<Command>, cx: &mut App) {
                                 "Outcome unknown. Inspect only".into()
                             } else {
                                 match failure {
-                                    Failure::Busy => "Work is active or cannot be inspected",
+                                    Failure::Busy => {
+                                        "Checkpoint unavailable or maintenance still settling"
+                                    }
                                     Failure::Cancelled => "Cancelled before service changes",
                                     Failure::Unsupported => "Managed service unavailable",
                                     _ => "Service could not be verified",

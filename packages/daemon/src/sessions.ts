@@ -866,6 +866,7 @@ export class Worker implements SessionWorker {
 			timer: ReturnType<typeof setTimeout>;
 			onlyIfIdle?: boolean;
 			inspection?: boolean;
+			checkpoint?: boolean;
 		}
 	>();
 	private startupTimer?: ReturnType<typeof setTimeout>;
@@ -965,7 +966,7 @@ export class Worker implements SessionWorker {
 			} else if (packet.type === "accepted" || packet.type === "aborted") {
 				// IPC acceptance can precede working=true. A fresh committed snapshot is the idle barrier,
 				// including idempotent retries which produce no new run/inbox events.
-				if (packet.type === "accepted") this.refreshActivity();
+				if (packet.type === "accepted" && !this.pending.get(packet.requestId)?.checkpoint) this.refreshActivity();
 				this.settle(packet.requestId);
 			} else if (packet.type === "error") {
 				const inspection =
@@ -1113,6 +1114,7 @@ export class Worker implements SessionWorker {
 				reject,
 				timer,
 				...(inspection ? { inspection: true } : {}),
+				...(command.type === "checkpointLifecycle" ? { checkpoint: true } : {}),
 				...(command.type === "reloadPi" || (command.type === "input" && command.onlyIfIdle)
 					? { onlyIfIdle: true }
 					: {}),
@@ -6603,6 +6605,78 @@ ${run.excerpt}`,
 			actions?.();
 			this.piReload.wakeAll();
 		};
+	}
+
+	private lifecycleCheckpoint?: Promise<void>;
+
+	/** Explicit managed lifecycle only. Save recovery before interrupting any kernel. */
+	checkpointLifecycle(): Promise<void> {
+		this.lifecycleCheckpoint ??= this.checkpointLifecycleWorkers().finally(() => {
+			this.lifecycleCheckpoint = undefined;
+		});
+		return this.lifecycleCheckpoint;
+	}
+
+	private async checkpointLifecycleWorkers(): Promise<void> {
+		if (!this.updateGate.frozen) throw new Error("Lifecycle checkpoint requires frozen admissions");
+		this.updateGate.pause();
+		this.actionRunner?.setUpdatePaused(true);
+		for (const setup of this.workspaceSetups.values()) setup.controller.abort();
+		let preparationTimer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await Promise.race([
+				Promise.all([
+					...this.preparations,
+					...this.parking.values(),
+					...[...this.workspaceSetups.values()].map((setup) => setup.done),
+					this.actionRunner.checkpointLifecycle(),
+				]),
+				new Promise<never>((_, reject) => {
+					preparationTimer = setTimeout(
+						() => reject(new Error("Lifecycle preparation checkpoint timed out")),
+						120_000,
+					);
+				}),
+			]);
+		} finally {
+			clearTimeout(preparationTimer);
+		}
+		const workers = [...this.workers];
+		// A crash here reopens the same durable inbox/run, never a fresh user input.
+		await Promise.all(
+			workers.map(async ([id]) => {
+				const meta = this.require(id);
+				meta.updatePaused = true;
+				await this.save(meta, undefined, undefined, true);
+			}),
+		);
+		const results = await Promise.allSettled(
+			workers.map(async ([id, worker]) => {
+				this.parked.add(worker);
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				let acknowledged = false;
+				try {
+					await Promise.race([
+						worker.request({ type: "checkpointLifecycle", requestId: randomUUID() }).then(() => {
+							acknowledged = true;
+						}),
+						new Promise<never>((_, reject) => {
+							timer = setTimeout(() => reject(new Error("Kernel lifecycle checkpoint timed out")), 10_000);
+						}),
+					]);
+				} finally {
+					clearTimeout(timer);
+					// Join confirmed exit even on a failed ACK. Never overlap storage owners.
+					await worker.close();
+					if (this.workers.get(id) === worker) this.workers.delete(id);
+					this.lastUse.delete(id);
+				}
+				if (!acknowledged) throw new Error("Kernel lifecycle checkpoint was not acknowledged");
+			}),
+		);
+		await Promise.all([...this.saving.values()]);
+		const failure = results.find((result) => result.status === "rejected");
+		if (failure?.status === "rejected") throw failure.reason;
 	}
 
 	/** Passive, bounded observations. Never pauses, checkpoints, starts or closes workers. */

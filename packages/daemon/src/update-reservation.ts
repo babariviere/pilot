@@ -9,6 +9,8 @@ export interface ReservationReceipt {
 	token: string;
 	/** Omitted for legacy GUI-only updates, which leave pilotd running. */
 	purpose?: "daemon-upgrade" | "daemon-stop" | "daemon-restart";
+	/** Explicit user lifecycle action, never inferred for startup or GUI updates. */
+	interrupt?: true;
 }
 
 export class UpdateReservation {
@@ -20,6 +22,10 @@ export class UpdateReservation {
 	private readonly resources: Pick<RuntimeResources, "freezeAdmissions" | "blockers">;
 	private readonly daemonResources?: Pick<RuntimeResources, "freezeAdmissions" | "blockers">;
 	private readonly controlsIdle?: () => boolean;
+	private readonly checkpoint?: (
+		operationId: string,
+		purpose: NonNullable<ReservationReceipt["purpose"]>,
+	) => Promise<void>;
 	private readonly now: () => number;
 	private readonly duration: number;
 	constructor(
@@ -28,10 +34,12 @@ export class UpdateReservation {
 		duration = 180_000,
 		daemonResources?: Pick<RuntimeResources, "freezeAdmissions" | "blockers">,
 		controlsIdle?: () => boolean,
+		checkpoint?: (operationId: string, purpose: NonNullable<ReservationReceipt["purpose"]>) => Promise<void>,
 	) {
 		this.resources = resources;
 		this.daemonResources = daemonResources;
 		this.controlsIdle = controlsIdle;
+		this.checkpoint = checkpoint;
 		this.now = now;
 		this.duration = duration;
 	}
@@ -52,9 +60,15 @@ export class UpdateReservation {
 		);
 		this.timer.unref();
 	}
-	async prepare(operationId: string, purpose?: ReservationReceipt["purpose"]): Promise<ReservationReceipt> {
+	async prepare(
+		operationId: string,
+		purpose?: ReservationReceipt["purpose"],
+		interrupt?: true,
+	): Promise<ReservationReceipt> {
 		this.expire();
 		const control = purpose === "daemon-stop" || purpose === "daemon-restart";
+		if (interrupt !== undefined && (interrupt !== true || !purpose || !this.checkpoint))
+			throw new Error("update_reservation_purpose_invalid");
 		if (
 			purpose !== undefined &&
 			(!["daemon-upgrade", "daemon-stop", "daemon-restart"].includes(purpose) ||
@@ -79,9 +93,10 @@ export class UpdateReservation {
 		try {
 			const resources = purpose !== undefined ? this.daemonResources! : this.resources;
 			release = resources.freezeAdmissions();
-			// An upgrade may checkpoint an unfinished run. Explicit Stop/Restart
-			// must instead decline it, even after its tools have acknowledged pause.
-			if (control && !this.controlsIdle!()) throw new Error("update_reservation_not_idle");
+			// Only the explicit interrupt contract may checkpoint unfinished work.
+			// Legacy callers keep their idle/tool-boundary admission.
+			if (interrupt) await this.checkpoint!(operationId, purpose!);
+			if (control && !interrupt && !this.controlsIdle!()) throw new Error("update_reservation_not_idle");
 			const blockers = await Promise.race([
 				resources.blockers(),
 				new Promise<never>((_, reject) => {
@@ -91,13 +106,14 @@ export class UpdateReservation {
 					);
 				}),
 			]);
-			if (blockers.length || this.closed || this.now() >= until || (control && !this.controlsIdle!()))
+			if (blockers.length || this.closed || this.now() >= until || (control && !interrupt && !this.controlsIdle!()))
 				throw new Error("update_reservation_not_idle");
 			const receipt: ReservationReceipt = {
 				schema: 1,
 				operationId,
 				token: randomBytes(32).toString("hex"),
 				...(purpose ? { purpose } : {}),
+				...(interrupt ? { interrupt } : {}),
 			};
 			this.active = { ...receipt, until, release };
 			this.scheduleExpiry();
@@ -119,6 +135,7 @@ export class UpdateReservation {
 			receipt.schema !== 1 ||
 			receipt.operationId !== this.active.operationId ||
 			receipt.purpose !== this.active.purpose ||
+			receipt.interrupt !== this.active.interrupt ||
 			receipt.token !== this.active.token
 		)
 			throw new Error("update_reservation_expired");
@@ -127,6 +144,7 @@ export class UpdateReservation {
 			operationId: this.active.operationId,
 			token: this.active.token,
 			...(this.active.purpose ? { purpose: this.active.purpose } : {}),
+			...(this.active.interrupt ? { interrupt: true } : {}),
 		};
 	}
 	cancel(receipt: ReservationReceipt): void {

@@ -36,10 +36,6 @@ fn click(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &'static str) {
     cx.update_window(h, |_, w, cx| w.click(id, cx)).unwrap();
     settle(cx, h);
 }
-fn press(cx: &mut HeadlessAppContext, h: AnyWindowHandle, key: &str) {
-    cx.update_window(h, |_, w, cx| w.press(key, cx)).unwrap();
-    settle(cx, h);
-}
 fn present(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &'static str) -> bool {
     cx.update_window(h, |_, w, _| w.try_find(id).is_some())
         .unwrap()
@@ -148,52 +144,9 @@ pub fn run_daemon_upgrade_probe(cx: &mut HeadlessAppContext) {
         assert!(present(cx, h, "daemon-upgrade-open"));
         assert!(!present(cx, h, "daemon-upgrade-confirm"));
 
-        // Opening moves focus into the confirmation, not onto its destructive action.
+        // A single activation requests the parent checkpoint, never a second confirmation.
         click(cx, h, "daemon-upgrade-open");
-        cx.update_window(h, |_, w, cx| {
-            assert!(v.read(cx).confirmation_focused(w, cx));
-            assert_eq!(v.read(cx).status(), Status::Confirming);
-        })
-        .unwrap();
-        press(cx, h, "enter");
-        press(cx, h, "shift-escape");
-        cx.update(|cx| assert_eq!(v.read(cx).status(), Status::Confirming));
-        assert_eq!(requests(&events), 0, "plain Enter never confirms");
-        press(cx, h, "escape");
-        cx.update_window(h, |_, w, cx| {
-            assert_eq!(v.read(cx).status(), Status::Idle);
-            assert!(
-                v.read(cx).owns_focus(w, cx),
-                "escape restores section focus"
-            );
-        })
-        .unwrap();
-        click(cx, h, "daemon-upgrade-open");
-        click(cx, h, "daemon-upgrade-dismiss");
-        cx.update(|cx| assert_eq!(v.read(cx).status(), Status::Idle));
-
-        // Confirmation only asks the parent. It never starts the worker.
-        click(cx, h, "daemon-upgrade-open");
-        cx.update_window(h, |_, w, _| {
-            let bounds = w.find("daemon-upgrade-confirm").bounds();
-            assert!(bounds.left() >= px(0.) && bounds.right() <= px(width));
-            assert!(bounds.size.width > px(300.));
-        })
-        .unwrap();
-        if let Some(dir) = std::env::var_os("PILOT_NEXT_DAEMON_UPGRADE_DIR") {
-            let dir = std::path::PathBuf::from(dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            cx.capture_screenshot(h)
-                .unwrap()
-                .save(dir.join(format!(
-                    "{}-{}-confirm-{}.png",
-                    width as u32,
-                    if dark { "dark" } else { "light" },
-                    cases
-                )))
-                .unwrap();
-        }
-        click(cx, h, "daemon-upgrade-confirm-action");
+        assert!(!present(cx, h, "daemon-upgrade-confirm"));
         cx.update(|cx| {
             assert!(v.read(cx).checkpoint_requested());
             assert_eq!(v.read(cx).started, 0);
@@ -215,7 +168,6 @@ pub fn run_daemon_upgrade_probe(cx: &mut HeadlessAppContext) {
 
         // Parent checkpoint succeeded: begin starts exactly one worker.
         click(cx, h, "daemon-upgrade-open");
-        click(cx, h, "daemon-upgrade-confirm-action");
         cx.update(|cx| v.update(cx, |v, cx| assert!(v.begin(cx) && !v.begin(cx))));
         until(cx, h, |_| calls.load(Ordering::SeqCst) == 1);
         cx.update(|cx| assert_eq!(v.read(cx).status(), Status::Running));

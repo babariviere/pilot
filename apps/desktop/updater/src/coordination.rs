@@ -862,7 +862,13 @@ pub(crate) fn signed_update(
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(1))
-        .timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(
+            if action == "prepare" && receipt["interrupt"] == true {
+                165
+            } else {
+                15
+            },
+        ))
         .build()
         .map_err(|_| Error::Native)?;
     let mut response = client

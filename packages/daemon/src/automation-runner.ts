@@ -201,6 +201,12 @@ export class ActionRunner {
 	}
 	async close(): Promise<void> {
 		this.closing = true;
+		await this.checkpointLifecycle();
+		this.listeners.clear();
+	}
+
+	/** Explicit daemon control interrupts owned commands, never replays their shell effects. */
+	async checkpointLifecycle(): Promise<void> {
 		const entries = [...this.queue, ...this.running];
 		for (const entry of entries) {
 			entry.interrupted = true;
@@ -208,7 +214,6 @@ export class ActionRunner {
 		}
 		this.pump();
 		await Promise.allSettled(entries.map((entry) => entry.done));
-		this.listeners.clear();
 	}
 
 	private pump(): void {

@@ -193,11 +193,7 @@ fn blocker_cancel_escape_disconnect_and_unknown_never_stop_work(cx: &mut TestApp
     assert!(!events.lock().unwrap().contains(&Event::Request));
 }
 fn open(cx: &mut TestAppContext, h: AnyWindowHandle, v: &Entity<DaemonUpgrade>) {
-    cx.update_window(h, |_, w, cx| v.update(cx, |v, cx| v.open(w, cx)))
-        .unwrap();
-}
-fn confirm(cx: &mut TestAppContext, h: AnyWindowHandle, v: &Entity<DaemonUpgrade>) {
-    cx.update_window(h, |_, w, cx| v.update(cx, |v, cx| v.confirm(w, cx)))
+    cx.update_window(h, |_, _, cx| v.update(cx, |v, cx| v.request_explicit(cx)))
         .unwrap();
 }
 fn settle(cx: &mut TestAppContext, v: &Entity<DaemonUpgrade>) {
@@ -213,13 +209,12 @@ fn settle(cx: &mut TestAppContext, v: &Entity<DaemonUpgrade>) {
 }
 
 #[gpui_kit::test]
-fn confirmation_only_requests_and_never_runs_the_worker(cx: &mut TestAppContext) {
+fn one_click_requests_checkpoint_before_running_the_worker(cx: &mut TestAppContext) {
     init(cx);
     let (worker, calls) = counting(Ok(()));
     let (h, v, events) = mount(cx, Some(synthetic()), worker);
     open(cx, h, &v);
-    cx.read(|cx| assert_eq!(v.read(cx).status(), Status::Confirming));
-    confirm(cx, h, &v);
+    cx.read(|cx| assert_eq!(v.read(cx).status(), Status::Requested));
     cx.run_until_parked();
     cx.read(|cx| {
         let v = v.read(cx);
@@ -236,8 +231,8 @@ fn confirmation_only_requests_and_never_runs_the_worker(cx: &mut TestAppContext)
             .count(),
         1
     );
-    // A second confirmation without reopening is ignored.
-    confirm(cx, h, &v);
+    // A duplicate activation while the checkpoint is pending is ignored.
+    open(cx, h, &v);
     cx.run_until_parked();
     assert_eq!(
         events
@@ -256,7 +251,6 @@ fn refusal_and_cancel_clear_the_request(cx: &mut TestAppContext) {
     let (worker, calls) = counting(Ok(()));
     let (h, v, _) = mount(cx, Some(synthetic()), worker);
     open(cx, h, &v);
-    confirm(cx, h, &v);
     v.update(cx, |v, cx| {
         v.set_notice("Finish preedit before upgrading.", cx)
     });
@@ -266,7 +260,6 @@ fn refusal_and_cancel_clear_the_request(cx: &mut TestAppContext) {
         assert!(!v.begin(cx), "a refused request can never begin");
     });
     open(cx, h, &v);
-    confirm(cx, h, &v);
     v.update(cx, |v, cx| {
         v.cancel(cx);
         assert!(!v.checkpoint_requested() && !v.active());
@@ -274,7 +267,8 @@ fn refusal_and_cancel_clear_the_request(cx: &mut TestAppContext) {
     });
     open(cx, h, &v);
     v.update(cx, |v, cx| {
-        assert!(!v.begin(cx), "unconfirmed never begins")
+        v.cancel(cx);
+        assert!(!v.begin(cx), "cancelled request never begins")
     });
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
@@ -285,7 +279,6 @@ fn begin_consumes_the_request_once_and_reports_verified_success(cx: &mut TestApp
     let (worker, calls) = counting(Ok(()));
     let (h, v, events) = mount(cx, Some(synthetic()), worker);
     open(cx, h, &v);
-    confirm(cx, h, &v);
     v.update(cx, |v, cx| {
         assert!(v.begin(cx));
         assert!(!v.checkpoint_requested() && v.active());
@@ -317,7 +310,6 @@ fn failures_are_preserved_and_unknown_blocks_retry(cx: &mut TestAppContext) {
         let (worker, calls) = counting(Err(failure));
         let (h, v, _) = mount(cx, Some(synthetic()), worker);
         open(cx, h, &v);
-        confirm(cx, h, &v);
         v.update(cx, |v, cx| assert!(v.begin(cx)));
         settle(cx, &v);
         v.update(cx, |v, cx| v.set_notice("unrelated refusal", cx));
@@ -326,7 +318,6 @@ fn failures_are_preserved_and_unknown_blocks_retry(cx: &mut TestAppContext) {
             assert_eq!(v.read(cx).uncertain(), failure == Failure::Unknown);
         });
         open(cx, h, &v);
-        confirm(cx, h, &v);
         let requested = cx.read(|cx| v.read(cx).checkpoint_requested());
         assert_eq!(requested, failure != Failure::Unknown, "{failure:?}");
         if requested {
@@ -345,7 +336,6 @@ fn panicking_worker_is_unknown(cx: &mut TestAppContext) {
     });
     let (h, v, _) = mount(cx, Some(synthetic()), worker);
     open(cx, h, &v);
-    confirm(cx, h, &v);
     v.update(cx, |v, cx| assert!(v.begin(cx)));
     settle(cx, &v);
     cx.read(|cx| assert!(v.read(cx).uncertain()));
@@ -368,7 +358,6 @@ fn running_cancel_is_cooperative(cx: &mut TestAppContext) {
     );
     let (h, v, _) = mount(cx, Some(synthetic()), worker);
     open(cx, h, &v);
-    confirm(cx, h, &v);
     v.update(cx, |v, cx| {
         assert!(v.begin(cx));
         v.cancel(cx);
@@ -512,10 +501,9 @@ fn opening_never_takes_focus_from_another_owner(cx: &mut TestAppContext) {
     let other = cx.update(|cx| cx.focus_handle());
     cx.update_window(h, |_, w, cx| {
         other.focus(w, cx);
-        v.update(cx, |v, cx| v.open(w, cx));
+        v.update(cx, |v, cx| v.request_explicit(cx));
         assert!(other.is_focused(w), "a composing owner keeps focus");
-        assert!(!v.read(cx).confirm_focus.contains_focused(w, cx));
-        assert_eq!(v.read(cx).status(), Status::Confirming);
+        assert_eq!(v.read(cx).status(), Status::Requested);
     })
     .unwrap();
 }

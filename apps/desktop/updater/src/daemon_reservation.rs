@@ -25,6 +25,23 @@ impl Reservation {
         purpose: &str,
         binding: Option<&Value>,
     ) -> Result<Self, Failure> {
+        Self::prepare_request(location, owner, purpose, binding, false)
+    }
+    pub(super) fn prepare_explicit(
+        location: &Location,
+        owner: &Value,
+        purpose: &str,
+        binding: Option<&Value>,
+    ) -> Result<Self, Failure> {
+        Self::prepare_request(location, owner, purpose, binding, true)
+    }
+    fn prepare_request(
+        location: &Location,
+        owner: &Value,
+        purpose: &str,
+        binding: Option<&Value>,
+        interrupt: bool,
+    ) -> Result<Self, Failure> {
         if !["daemon-upgrade", "daemon-stop", "daemon-restart"].contains(&purpose) {
             return Err(Failure::Unsupported);
         }
@@ -39,6 +56,9 @@ impl Reservation {
         // Keep five seconds of margin; verify never renews this local deadline.
         let deadline = Instant::now() + Duration::from_secs(175);
         let mut request = json!({"operationId":coordination::random_operation().map_err(|_|Failure::Unverified)?,"purpose":purpose});
+        if interrupt {
+            request["interrupt"] = true.into();
+        }
         if let Some(binding) = binding {
             request["liveUpdate"] = binding.clone();
         }
@@ -82,10 +102,11 @@ fn failure(error: crate::Error) -> Failure {
 }
 fn validate_receipt(receipt: &Value, request: &Value) -> Result<(), Failure> {
     let bound = request.get("liveUpdate");
-    if receipt
-        .as_object()
-        .is_none_or(|v| v.len() != if bound.is_some() { 5 } else { 4 })
-        || receipt.get("liveUpdate") != bound
+    if receipt.as_object().is_none_or(|v| {
+        v.len()
+            != 4 + usize::from(bound.is_some()) + usize::from(request.get("interrupt").is_some())
+    }) || receipt.get("liveUpdate") != bound
+        || receipt.get("interrupt") != request.get("interrupt")
         || receipt["schema"] != 1
         || receipt["operationId"] != request["operationId"]
         || receipt["purpose"] != request["purpose"]

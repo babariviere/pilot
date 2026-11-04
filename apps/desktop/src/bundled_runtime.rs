@@ -708,6 +708,7 @@ pub(crate) fn upgrade_daemon_coordinated(
     let trust = pilot_desktop_updater::helper::compiled_trust().map_err(|_| Failure::Unverified)?;
     let deadline = Instant::now() + Duration::from_secs(45);
     validate(root, &cancel, deadline).map_err(|_| Failure::Unverified)?;
+    pilot_desktop_updater::daemon_upgrade::check_pending(&location)?;
     let capsule =
         service_runtime(root, &trust, &cancel, deadline).map_err(|_| Failure::Unverified)?;
     // Do not clean transaction evidence before durable coordinated completion.
@@ -739,6 +740,8 @@ fn upgrade_daemon(
         validate(root, &cancel, deadline).map_err(|_| Failure::Unverified)?;
         let trust =
             pilot_desktop_updater::helper::compiled_trust().map_err(|_| Failure::Unverified)?;
+        #[cfg(target_os = "macos")]
+        pilot_desktop_updater::daemon_upgrade::check_pending(&location)?;
         #[cfg(target_os = "macos")]
         let capsule = service_runtime(root, &trust, &cancel, deadline).map_err(|error| {
             if cancel.load(Ordering::Acquire) {

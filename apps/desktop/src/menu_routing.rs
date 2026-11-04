@@ -134,6 +134,41 @@ pub(crate) fn daemon_control_available(cx: &App) -> bool {
 
 /// Reload uses the current main window's courier, never a new transport owner.
 #[cfg(target_os = "macos")]
+pub(crate) fn daemon_upgrade_available(cx: &App) -> bool {
+    cx.try_global::<QuitOwner>()
+        .and_then(|owner| owner.view.upgrade())
+        .is_some_and(|view| {
+            let view = view.read(cx);
+            !view.restart_pending
+                && !view.daemon_upgrade_pending
+                && view
+                    .settings
+                    .read(cx)
+                    .daemon_upgrade
+                    .as_ref()
+                    .is_some_and(|u| u.read(cx).can_open())
+        })
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn upgrade_daemon(cx: &mut App) {
+    if !daemon_upgrade_available(cx) || crate::daemon_menu::active(cx) {
+        return;
+    }
+    let Some(owner) = cx.try_global::<QuitOwner>().cloned() else {
+        return;
+    };
+    cx.defer(move |cx| {
+        let _ = owner.view.update(cx, |view, cx| {
+            if let Some(upgrade) = view.settings.read(cx).daemon_upgrade.clone() {
+                upgrade.update(cx, |u, cx| u.request_explicit(cx));
+            }
+        });
+    });
+}
+
+/// Reload uses the current main window's courier, never a new transport owner.
+#[cfg(target_os = "macos")]
 pub(crate) fn reload_writer(cx: &App) -> Option<Interaction> {
     let owner = cx.try_global::<QuitOwner>()?;
     if !cx

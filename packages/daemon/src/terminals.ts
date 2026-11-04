@@ -292,6 +292,11 @@ export class TerminalManager {
 
 	async shutdown(): Promise<void> {
 		this.stopped = true;
+		await this.checkpointLifecycle();
+	}
+
+	/** Explicit lifecycle interrupts owned shells; a cancelled handoff can attach again. */
+	async checkpointLifecycle(): Promise<void> {
 		const terminals = [...this.processes.values()].flatMap((processes) => [...processes]);
 		for (const terminal of terminals) terminal.kill();
 		this.terminals.clear();

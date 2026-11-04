@@ -40,7 +40,7 @@ impl std::fmt::Display for Failure {
             Self::Unverified => {
                 "daemon identity, service definition or runtime could not be verified"
             }
-            Self::Busy => "work is active or cannot be inspected; no daemon was stopped",
+            Self::Busy => "checkpoint unavailable or maintenance still settling; no daemon was stopped",
             Self::Cancelled => "upgrade cancelled before shutdown; agents resume within 30 seconds",
             Self::StagingCapacity => {
                 "retained runtimes or staging evidence fill ~/Library/Application Support/Pilot Next Runtimes; nothing was staged or stopped. Inspect them before retrying"
@@ -124,6 +124,12 @@ mod macos;
 pub use macos::control;
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
 pub use macos::{migrate_stopped, needed, upgrade, upgrade_coordinated, upgrade_startup};
+
+/// Preserve incomplete handoff evidence before runtime publication can retire old roots.
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
+pub fn check_pending(location: &crate::coordination::Location) -> Result<(), Failure> {
+    native::no_incomplete_handoff(location)
+}
 #[cfg(all(target_os = "linux", feature = "native-linux"))]
 #[path = "daemon_upgrade_linux.rs"]
 mod linux;

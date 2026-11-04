@@ -17,8 +17,8 @@ configuration-load status, not proof of successful MCP connections.
 
 **Pilot Next → Daemon** contains Start, Stop and Restart for an already
 Next-managed Local service. It is an ordinary app-menu submenu, not a tray icon.
-Each action asks for explicit confirmation; the submenu retains progress and
-errors. **Check Status** refreshes the last-checked state without changing the
+Each explicit action runs its stages automatically; the submenu retains progress
+and errors. **Check Status** refreshes the last-checked state without changing the
 service. Unpackaged, external, custom and unregistered connections do not gain
 controls. No mutation is available without a Pilot window.
 
@@ -31,18 +31,19 @@ unchanged login policy still applies on the next login. Restart follows that sam
 safe stop and starts the **same** sealed runtime, never the GUI's newer candidate.
 Missing runtime files prevent Start/Restart rather than substituting another build.
 
-Stop/Restart require the existing full-resource gate with distinct, exactly echoed
-`daemon-stop`/`daemon-restart` receipt purposes on the same private channel. Legacy
-GUI and `daemon-upgrade` behavior is unchanged. Active/uninspectable jobs, PTYs,
-children, transfers and mutations refuse the action. The existing idle admission
-first refuses unfinished agent runs before requesting tool pause; the signed
-control reservation rechecks that condition under the full freeze. Upgrade-only
-permission to checkpoint an unfinished run is not reused. Tool-boundary pause alone is
-insufficient. The permanent handoff lock, private ownership claim, exact definition,
-boot/HMAC, selected profile/identities, same-PID lease and native exit proofs remain
-mandatory. No forced service shutdown or arbitrary PID/service control is exposed.
+Stop/Restart use distinct, exactly echoed `daemon-stop`/`daemon-restart` receipt
+purposes on the private channel. Explicit lifecycle preparation signs and echoes
+`interrupt:true`. It freezes admissions, durably records recovery metadata, closes
+kernels, interrupts owned shell jobs/terminals and joins their exits before the
+full-resource reservation. Shell commands are never automatically rerun. Kernel
+close has bounded owned-process escalation; failure to checkpoint stays a failure.
+Legacy and automatic startup preparation remain noninterrupting. The permanent
+handoff lock, private ownership claim, exact definition, boot/HMAC, selected
+profile/identities, same-PID lease and native exit proofs remain mandatory.
 
-The existing single `.daemon-upgrade.json` records the intent and exact receipt
+The existing single `.daemon-upgrade.json` records native intent and exact receipt;
+the daemon's `.daemon-lifecycle.json` retains interruption recovery before shutdown.
+The native journal is saved
 before any service effect. Cancellation works only before that boundary. A failed
 or lost result after possible effect is Unknown, inspect-only, with no replay or
 rollback. Check Status cannot clear an Unknown in the GUI or an interrupted journal.
@@ -52,19 +53,18 @@ Start/Restart cannot immediately turn into a version change. Acknowledged Start
 reconnects the startup screen without registering or starting again.
 Cancelled or refused requests do not change that startup policy.
 
-The menu uses the existing native-menu owner and OS prompt. Hidden verification
-substitutes only a memory driver and hidden GPUI prompt renderer, never a live
-profile or native alert. Service verification uses the existing opt-in random-label
+The menu uses the existing native-menu owner. Hidden verification substitutes a
+memory driver, never a live profile or native alert. Service verification uses the existing opt-in random-label
 launchd fixture. Linux lifecycle/UI support is not added by these controls.
 
 Focused verification: `check-scoped.py --unit daemon_menu --test native_menus --lint`
 exercises actual AppKit menu dispatch/enabled state with no window and with a
-hidden window, plus confirmation, progress/cancellation and Unknown/no-replay
+hidden window, plus one-shot activation, progress/cancellation and Unknown/no-replay
 through a memory-only driver. The existing application-Quit corpus separately
 checks the real Local root and native Close/Quit/termination paths. Its native
 Quit lookup is title-based, so adding the submenu cannot retarget Quit to About.
 `native_launchd_registration_offline_seed_and_singleton` also covers real private
-service Start/Stop/same-runtime Restart, active-agent/resource refusal, stale boot,
+service Start/Stop/same-runtime Restart, explicit interruption, legacy busy refusal, stale boot,
 lost prepare ACK and missing replacement-ready ACK with inspect-only recovery.
 No fixture enables login or operates the installed service. These isolated tests
 are not full packaged GUI/service, hardware PilotPower or Linux qualification;
@@ -99,20 +99,18 @@ up to ten minutes, with cancellation, then defers. Active jobs, terminals,
 unknown child processes, transfers, mutations or failed resource inspection
 block replacement. Drained, job-free subagents checkpoint and exit, then resume
 unfinished inputs after replacement. No completed tools are replayed.
-**Settings → Updates → Daemon → Upgrade daemon…** remains an explicitly confirmed
-manual option. Cancel is effective until shutdown begins.
+**Settings → Updates → Daemon → Upgrade daemon** and **Daemon → Upgrade** are
+one-shot explicit actions. They checkpoint and interrupt running work automatically,
+then verify the intended replacement runtime. Cancel works before shutdown begins.
 
 When an upgrade is refused as busy, Settings shows a bounded, read-only
 blocker inventory with chat titles and **Open chat** links where available.
 **Refresh blockers** observes current work without pausing or checkpointing it.
 Missing inspection and overflow remain visible, not evidence of safety.
-For active agent work and chat automation, **Stop work…** asks for confirmation
-for that chat's current work. This is the ordinary, separately journaled chat Stop,
-not a force-upgrade or bulk stop. Withdrawn queued text is retained for recovery;
-an uncertain Stop is never automatically retried. Jobs, terminals and remaining
-child processes need separate attention. After Stop, refresh and explicitly retry
-the upgrade. A Stop acknowledgment is not exit proof: replacement still requires
-all runtime, storage, ownership and singleton checks above.
+The inventory remains diagnostic, not a requirement to stop each chat manually.
+Its per-chat Stop remains separate and is never automatically replayed. A Stop
+acknowledgment is not exit proof: replacement still requires the runtime, storage,
+ownership and singleton checks above.
 
 ## Project-proposed coordinated updates
 

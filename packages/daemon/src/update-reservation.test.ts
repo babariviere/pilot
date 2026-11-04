@@ -139,6 +139,38 @@ test("daemon purpose cannot silently fall back to GUI resources", async () => {
 });
 
 for (const purpose of ["daemon-stop", "daemon-restart"] as const) {
+	test(`${purpose} explicit interruption checkpoints under freeze, preserving exact receipt`, async () => {
+		const work = new RuntimeAdmission();
+		const resources = new RuntimeResources([work]);
+		const end = work.begin({ kind: "job", id: "owned" });
+		let checkpoints = 0;
+		const gate = new UpdateReservation(
+			resources,
+			undefined,
+			undefined,
+			resources,
+			() => false,
+			async (id, action) => {
+				assert.equal(id, operation);
+				assert.equal(action, purpose);
+				assert.throws(() => work.begin({ kind: "new", id: "race" }), /frozen/);
+				checkpoints++;
+				end();
+			},
+		);
+		try {
+			const receipt = await gate.prepare(operation, purpose, true);
+			assert.equal(checkpoints, 1);
+			assert.equal(receipt.interrupt, true);
+			assert.deepEqual(gate.verify(receipt), receipt);
+			assert.throws(() => gate.verify({ ...receipt, interrupt: undefined }), /expired/);
+			await assert.rejects(gate.prepare(operation, purpose, true), /busy/);
+			gate.cancel(receipt);
+			assert.equal(checkpoints, 1);
+		} finally {
+			gate.close();
+		}
+	});
 	test(`${purpose} uses full resources and cannot change receipt intent`, async () => {
 		const gui = new RuntimeResources([]);
 		const work = new RuntimeAdmission();

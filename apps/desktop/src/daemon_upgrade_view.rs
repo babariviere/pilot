@@ -1,11 +1,11 @@
 //! Daemon upgrades share one lifecycle owner. Startup checks once after the GUI
-//! is durable; manual confirmation and automatic checks use the same parent gate.
+//! is durable; explicit actions and automatic checks use the same parent gate.
 use crate::{
     LocalOptions,
     ui::{self, Action, Notice, Text, Tone},
 };
 use gpui_kit::{
-    App, Context, EventEmitter, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent,
+    Context, EventEmitter, FocusHandle, InteractiveElement, IntoElement, KeyDownEvent,
     ParentElement, Render, StatefulInteractiveElement, Styled, Task, TestSupportExt, Window,
     component::{ActiveTheme, Disableable, StyledExt},
     div,
@@ -116,7 +116,6 @@ pub(crate) enum Status {
     Unavailable,
     Idle,
     Checking,
-    Confirming,
     Requested,
     Running,
     Cancelling,
@@ -128,7 +127,6 @@ pub(crate) enum Status {
 enum Phase {
     Idle,
     Checking,
-    Confirming,
     Requested,
     Running,
     Cancelling,
@@ -156,7 +154,6 @@ pub(crate) struct DaemonUpgrade {
     startup_worker: Option<Worker>,
     automatic: bool,
     focus: FocusHandle,
-    confirm_focus: FocusHandle,
     #[cfg(any(test, feature = "native-probes"))]
     pub(crate) started: usize,
 }
@@ -216,7 +213,6 @@ impl DaemonUpgrade {
             startup_worker: None,
             automatic: false,
             focus: cx.focus_handle(),
-            confirm_focus: cx.focus_handle(),
             #[cfg(any(test, feature = "native-probes"))]
             started: 0,
         }
@@ -332,7 +328,6 @@ impl DaemonUpgrade {
                 Some(Ok(())) => Status::Succeeded,
                 Some(Err(failure)) => Status::Failed(failure),
             },
-            Phase::Confirming => Status::Confirming,
             Phase::Requested => Status::Requested,
             Phase::Running => Status::Running,
             Phase::Cancelling => Status::Cancelling,
@@ -385,12 +380,24 @@ impl DaemonUpgrade {
     pub(crate) fn uncertain(&self) -> bool {
         self.outcome == Some(Err(Failure::Unknown))
     }
-    fn can_open(&self) -> bool {
+    pub(crate) fn can_open(&self) -> bool {
         self.target.is_some()
             && self.phase == Phase::Idle
             && self.inspection.is_none()
             && self.stop_confirmation.is_none()
             && !self.uncertain()
+    }
+
+    pub(crate) fn request_explicit(&mut self, cx: &mut Context<Self>) {
+        if !self.can_open() {
+            return;
+        }
+        self.automatic = false;
+        self.notice = None;
+        self.phase = Phase::Requested;
+        cx.emit(Event::Request);
+        cx.emit(Event::Changed);
+        cx.notify();
     }
 
     /// Consumes the request and starts the single worker. Parent-only, after its checkpoint.
@@ -553,7 +560,7 @@ impl DaemonUpgrade {
     /// A parent refusal or deferral. Clears a pending request so it cannot begin later.
     pub(crate) fn set_notice(&mut self, message: &'static str, cx: &mut Context<Self>) {
         self.notice = Some(message);
-        if matches!(self.phase, Phase::Confirming | Phase::Requested) {
+        if self.phase == Phase::Requested {
             self.phase = Phase::Idle;
         }
         cx.emit(Event::Changed);
@@ -564,7 +571,7 @@ impl DaemonUpgrade {
     /// worker to stop before shutdown; a shutdown already under way continues.
     pub(crate) fn cancel(&mut self, cx: &mut Context<Self>) {
         match self.phase {
-            Phase::Confirming | Phase::Requested => self.phase = Phase::Idle,
+            Phase::Requested => self.phase = Phase::Idle,
             Phase::Checking | Phase::Running => {
                 if let Some(cancel) = &self.cancel {
                     cancel.store(true, Ordering::Release);
@@ -577,33 +584,7 @@ impl DaemonUpgrade {
         cx.notify();
     }
 
-    fn open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.can_open() {
-            return;
-        }
-        self.phase = Phase::Confirming;
-        self.automatic = false;
-        self.notice = None;
-        // Kit buttons keep focus on mouse down. Never take focus from another owner,
-        // which may hold IME marked text; Cancel stays reachable by pointer and Tab.
-        if window.focused(cx).is_none() || self.focus.contains_focused(window, cx) {
-            self.confirm_focus.focus(window, cx);
-        }
-        cx.emit(Event::Changed);
-        cx.notify();
-    }
-    fn confirm(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.phase != Phase::Confirming || self.uncertain() {
-            return;
-        }
-        self.restore_focus(window, cx);
-        self.phase = Phase::Requested;
-        cx.emit(Event::Request);
-        cx.emit(Event::Changed);
-        cx.notify();
-    }
-    /// Probe-only stand-in for a confirmed click, for parent lifecycle checks.
-    /// Same guards and events as confirm(); the standalone probe covers the real click.
+    /// Probe-only activation for parent lifecycle checks.
     #[cfg(feature = "native-probes")]
     pub(crate) fn request_probe(&mut self, cx: &mut Context<Self>) -> bool {
         if !self.can_open() {
@@ -626,21 +607,11 @@ impl DaemonUpgrade {
         self.startup(cx);
     }
     fn dismiss(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.restore_focus(window, cx);
-        self.cancel(cx);
-    }
-    fn restore_focus(&self, window: &mut Window, cx: &mut App) {
-        if self.confirm_focus.contains_focused(window, cx) {
+        // Do not take focus from an editor holding marked text.
+        if window.focused(cx).is_none() {
             self.focus.focus(window, cx);
         }
-    }
-    #[cfg(feature = "native-probes")]
-    pub(crate) fn owns_focus(&self, window: &Window, cx: &App) -> bool {
-        self.focus.contains_focused(window, cx)
-    }
-    #[cfg(feature = "native-probes")]
-    pub(crate) fn confirmation_focused(&self, window: &Window, cx: &App) -> bool {
-        self.confirm_focus.contains_focused(window, cx)
+        self.cancel(cx);
     }
 }
 impl Drop for DaemonUpgrade {
@@ -703,10 +674,7 @@ impl Render for DaemonUpgrade {
             Status::Requested => Some(("Starting the daemon upgrade…", None, Tone::Normal)),
             Status::Running => Some((
                 "Upgrading the daemon…",
-                Some(
-                    "Running tools finish first. Cancel may not stop a shutdown already underway."
-                        .into(),
-                ),
+                Some("Checkpointing work, then restarting.".into()),
                 Tone::Normal,
             )),
             Status::Cancelling => Some((
@@ -724,7 +692,7 @@ impl Render for DaemonUpgrade {
                 let detail = (failure != Failure::Unknown).then(|| failure.to_string());
                 Some((title, detail, tone))
             }
-            Status::Idle | Status::Confirming | Status::Unavailable => None,
+            Status::Idle | Status::Unavailable => None,
         };
         if let Some((title, detail, tone)) = status {
             let mut notice = Notice::new(title).tone(tone);
@@ -890,51 +858,11 @@ impl Render for DaemonUpgrade {
                     )
                     .child(
                         div().h_flex().child(
-                            ui::action("daemon-upgrade-open", "Upgrade daemon…", Action::Secondary)
+                            ui::action("daemon-upgrade-open", "Upgrade daemon", Action::Secondary)
                                 .disabled(!self.can_open())
-                                .on_click(cx.listener(|v, _, w, cx| v.open(w, cx))),
+                                .on_click(cx.listener(|v, _, _, cx| v.request_explicit(cx))),
                         ),
                     );
-            }
-            Phase::Confirming => {
-                view = view.child(
-                    div()
-                        .id("daemon-upgrade-confirm")
-                        .test_support()
-                        .track_focus(&self.confirm_focus)
-                        .v_flex()
-                        .gap_3()
-                        .on_key_down(cx.listener(|v, e: &KeyDownEvent, w, cx| {
-                            // Escape dismisses. Plain Enter here never confirms.
-                            if e.keystroke.key == "escape"
-                                && !e.is_held
-                                && !e.keystroke.modifiers.modified()
-                                && v.phase == Phase::Confirming
-                            {
-                                cx.stop_propagation();
-                                v.dismiss(w, cx);
-                            }
-                        }))
-                        .child(
-                            Notice::new("Upgrade the daemon now?")
-                                .detail("Running tools finish first; active jobs, terminals or child work defer it. Service, profile and login settings stay. You can cancel until shutdown begins.")
-                                .tone(Tone::Warning),
-                        )
-                        .child(
-                            div()
-                                .h_flex()
-                                .flex_wrap()
-                                .gap_2()
-                                .child(
-                                    ui::action("daemon-upgrade-dismiss", "Cancel", Action::Quiet)
-                                        .on_click(cx.listener(|v, _, w, cx| v.dismiss(w, cx))),
-                                )
-                                .child(
-                                    ui::action("daemon-upgrade-confirm-action", "Upgrade daemon", Action::Danger)
-                                        .on_click(cx.listener(|v, _, w, cx| v.confirm(w, cx))),
-                                ),
-                        ),
-                );
             }
             Phase::Checking | Phase::Requested | Phase::Running | Phase::Cancelling => {
                 view = view.child(

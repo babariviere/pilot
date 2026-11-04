@@ -83,8 +83,8 @@ fn settle(cx: &mut TestAppContext, owner: &Entity<Owner>) {
     panic!("fixture worker did not finish");
 }
 #[gpui_kit::test]
-fn no_window_never_executes_and_stopped_only_offers_start(cx: &mut TestAppContext) {
-    let (_, calls) = install(cx, State::Stopped, Ok(State::Running));
+fn no_window_never_executes_and_start_is_one_action(cx: &mut TestAppContext) {
+    let (owner, calls) = install(cx, State::Stopped, Ok(State::Running));
     assert!(!enabled(cx, 2));
     assert!(!enabled(cx, 3));
     assert!(!enabled(cx, 4));
@@ -97,13 +97,10 @@ fn no_window_never_executes_and_stopped_only_offers_start(cx: &mut TestAppContex
     assert!(!enabled(cx, 3));
     assert!(!enabled(cx, 4));
     cx.update(|cx| cx.dispatch_action(&StartDaemon));
-    cx.run_until_parked();
-    assert!(cx.has_pending_prompt());
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-    cx.simulate_prompt_answer("Cancel");
-    cx.run_until_parked();
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-    assert!(enabled(cx, 2));
+    settle(cx, &owner);
+    assert!(!cx.has_pending_prompt());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(!enabled(cx, 2));
 }
 #[gpui_kit::test]
 fn confirmed_restart_dispatches_once_and_unknown_stays_inspect_only(cx: &mut TestAppContext) {
@@ -118,10 +115,8 @@ fn confirmed_restart_dispatches_once_and_unknown_stays_inspect_only(cx: &mut Tes
         cx.dispatch_action(&RestartDaemon);
     });
     cx.run_until_parked();
-    assert!(cx.has_pending_prompt());
-    assert!(!enabled(cx, 4));
-    cx.simulate_prompt_answer("Restart");
     settle(cx, &owner);
+    assert!(!cx.has_pending_prompt());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert!(!enabled(cx, 3));
     assert!(!enabled(cx, 4));
@@ -154,8 +149,6 @@ fn held_control_progress_cancels_without_replay_and_quit_is_independent(cx: &mut
         })
     });
     cx.update(|cx| cx.dispatch_action(&StopDaemon));
-    cx.run_until_parked();
-    cx.simulate_prompt_answer("Stop");
     cx.run_until_parked();
     assert!(!enabled(cx, 3));
     assert!(enabled(cx, 8));

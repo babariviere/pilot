@@ -411,6 +411,12 @@ export function runKernelWorker(): void {
 				await session.checkpointForUpdate();
 				await send({ type: "accepted", requestId: command.requestId });
 				break;
+			case "checkpointLifecycle":
+				// Close pauses durable runs, interrupts unsafe tools and joins extension
+				// shutdown (including owned jobs/children) before acknowledging storage release.
+				await session.close();
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
 			case "watch":
 				await session.watch(
 					command.watchId,

@@ -110,15 +110,8 @@ pub(crate) fn run(cx: &mut App) {
         let _ = done.try_send(());
     })
     .detach();
-    // Substitute only the platform prompt renderer, not the production command,
-    // confirmation gate, worker bridge or result projection. Never show an alert.
-    cx.set_prompt_builder(|_, message, _, _, handle, w, cx| {
-        assert!(message.ends_with("Local daemon?"));
-        let prompt = cx.new(|cx| Prompt(cx.focus_handle()));
-        let answer = prompt.clone();
-        let view = handle.with_view(prompt, w, cx);
-        cx.defer(move |cx| answer.update(cx, |_, cx| cx.emit(gpui_kit::PromptResponse(0))));
-        view
+    cx.set_prompt_builder(|_, _, _, _, _, _, _| {
+        panic!("Daemon actions must not require a second confirmation")
     });
     let (window, _) = gpui_kit::open_window(
         WindowOptions {
@@ -159,7 +152,7 @@ pub(crate) fn run(cx: &mut App) {
         cx.update(|cx| {
             assert_eq!(calls.lock().unwrap().len(),5,"window close/no-window action never stops a daemon");
             cx.on_app_quit(move |_| {assert_eq!(calls.lock().unwrap().len(),5);async{}}).detach();
-            println!("native_menus: hidden Daemon Start/Stop/Restart, confirmation, state, inspection and no-window/Quit independence passed");
+            println!("native_menus: hidden one-shot Daemon Start/Stop/Restart, state, inspection and no-window/Quit independence passed");
             cx.quit();
         });
     }).detach();

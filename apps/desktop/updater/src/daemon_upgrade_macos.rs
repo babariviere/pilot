@@ -329,12 +329,12 @@ impl LaunchAgent<'_> {
 }
 impl Handoff for LaunchAgent<'_> {
     fn reserve(&mut self) -> Result<(), Failure> {
-        self.reservation = Some(if let Some(binding) = &self.coordinated {
-            super::reservation::Reservation::prepare_bound(
+        self.reservation = Some(if !self.automatic {
+            super::reservation::Reservation::prepare_explicit(
                 &self.location,
                 &self.owner,
                 "daemon-upgrade",
-                Some(binding),
+                self.coordinated.as_ref(),
             )?
         } else {
             super::reservation::Reservation::prepare(&self.location, &self.owner)?
@@ -430,6 +430,11 @@ impl Handoff for LaunchAgent<'_> {
         Ok(())
     }
     fn drained(&mut self) -> Result<bool, Failure> {
+        // Explicit actions checkpoint and interrupt through the signed reservation.
+        // Startup still uses the non-interrupting tool drain.
+        if !self.automatic {
+            return Ok(true);
+        }
         let client = reqwest::blocking::Client::builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())

@@ -38,8 +38,8 @@ import type {
 	QueuedMessageGuard,
 	RenameSessionRequest,
 	RepositorySelection,
-	ReviewRequest,
 	RetryHandoffRequest,
+	ReviewRequest,
 	RewindRequest,
 	SchedulePatch,
 	ScheduleRequest,
@@ -90,7 +90,7 @@ import type { MissionStore } from "./missions.ts";
 import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } from "./model-scope.ts";
 import type { ModelCatalog } from "./models.ts";
 import { MAX_NATIVE_DIAGNOSTIC_BYTES } from "./native-diagnostics.ts";
-import { OperationJournal, OperationRejected } from "./operation-journal.ts";
+import { durableJSON, OperationJournal, OperationRejected } from "./operation-journal.ts";
 import { isAllowedOrigin } from "./origin.ts";
 import { PathCompletionReader } from "./path-completion.ts";
 import type { PowerService } from "./power.ts";
@@ -515,6 +515,7 @@ export function createDaemonServer(
 	liveUpdate?.service.attach(runtimeResources);
 	// Freeze synchronously before loading retained maintenance, before any recovery is admitted.
 	const runtimeReady = liveUpdate?.service.load() ?? Promise.resolve();
+	let lifecycleInterrupted = false;
 	const reservations = new UpdateReservation(
 		new RuntimeResources(
 			// An app update keeps pilotd running, so paused agents and open terminals need not block it.
@@ -534,10 +535,44 @@ export function createDaemonServer(
 		),
 		undefined,
 		undefined,
-		// Explicit daemon handoffs must also prove that jobs, descendants and PTYs are absent.
-		runtimeResources,
+		{
+			freezeAdmissions: () => {
+				const release = runtimeResources.freezeAdmissions();
+				return () => {
+					release();
+					if (lifecycleInterrupted) {
+						lifecycleInterrupted = false;
+						void sessions.resumeMaintenance().catch((error) => console.warn("pilotd: lifecycle recovery", error));
+					}
+				};
+			},
+			blockers: () => runtimeResources.blockers(),
+		},
 		// Stop/Restart cannot interrupt an unfinished run merely because it paused.
 		() => sessions.prepareUpdate().ready,
+		async (operationId, purpose) => {
+			// Intent is on disk before the first interrupted tool/job. The native
+			// handoff journal separately owns service stop/start and runtime identity.
+			await durableJSON(join(_config.home, ".daemon-lifecycle.json"), {
+				schema: 1,
+				operationId,
+				purpose,
+				phase: "checkpointing",
+			});
+			lifecycleInterrupted = true;
+			const checkpoints = await Promise.allSettled([
+				sessions.checkpointLifecycle(),
+				terminals.checkpointLifecycle(),
+			]);
+			const failed = checkpoints.find((result) => result.status === "rejected");
+			if (failed?.status === "rejected") throw failed.reason;
+			await durableJSON(join(_config.home, ".daemon-lifecycle.json"), {
+				schema: 1,
+				operationId,
+				purpose,
+				phase: "checkpointed",
+			});
+		},
 	);
 	let coordinatedReservation: { operationId: string; binding: string } | undefined;
 	bootstrap?.updates(async (action, value) => {
@@ -582,7 +617,7 @@ export function createDaemonServer(
 		}
 		if (action === "inspect") return receipt;
 		if (action === "prepare") {
-			const prepared = await reservations.prepare(receipt.operationId, receipt.purpose);
+			const prepared = await reservations.prepare(receipt.operationId, receipt.purpose, receipt.interrupt);
 			coordinatedReservation = binding ? { operationId: receipt.operationId, binding } : undefined;
 			return coordinated ? { ...prepared, liveUpdate: structuredClone(coordinated) } : prepared;
 		}

@@ -160,6 +160,38 @@ test("update blocker GET pins identity and only observes work", async (t) => {
 });
 
 for (const purpose of ["daemon-upgrade", "daemon-stop", "daemon-restart"] as const) {
+	test(`${purpose} explicit interruption journals recovery before closing active kernels`, async (t) => {
+		const f = await fixture(t);
+		f.worker.state = "working";
+		f.worker.jobs = async () => [
+			{ id: "active", name: "job", state: "running", startedAt: 1, outputPath: "/synthetic/log" },
+		];
+		f.worker.hasChildren = async () => true;
+		let checkpoints = 0;
+		f.worker.request = async (command) => {
+			assert.equal(command.type, "checkpointLifecycle");
+			const journal = JSON.parse(await readFile(join(f.home, ".daemon-lifecycle.json"), "utf8"));
+			assert.equal(journal.purpose, purpose);
+			assert.equal(journal.phase, "checkpointing");
+			const meta = JSON.parse(await readFile(join(f.home, "sessions", f.chat.id, "meta.json"), "utf8"));
+			assert.equal(meta.updatePaused, true);
+			checkpoints++;
+		};
+		const input = { operationId: randomUUID(), purpose, interrupt: true };
+		const held = await f.request("prepare", input);
+		assert.equal(held.status, 200);
+		assert.equal(held.receipt.interrupt, true);
+		assert.equal(checkpoints, 1);
+		assert.equal((await f.request("verify", held.receipt)).status, 200);
+		assert.equal((await f.request("prepare", input)).status, 409);
+		assert.equal(checkpoints, 1);
+		assert.equal(JSON.parse(await readFile(join(f.home, ".daemon-lifecycle.json"), "utf8")).phase, "checkpointed");
+		assert.equal(
+			f.commands.some((command) => command.type === "abort"),
+			false,
+			"no durable Stop/cancellation is synthesized",
+		);
+	});
 	for (const busy of ["job", "child", "unknown", "terminal"] as const) {
 		test(`${purpose} refuses ${busy} despite pause.ready and GUI reservation acceptance`, async (t) => {
 			const f = await fixture(t);

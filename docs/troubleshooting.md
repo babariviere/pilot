@@ -41,6 +41,11 @@ does not confirm that every MCP server connected; check **Settings → Connectio
 
 Use **Settings → Updates** for the available app and daemon controls. On macOS,
 packaged managed connections also offer **Pilot Next → Daemon** actions.
+**Stop**, **Restart**, and **Upgrade** run their stages automatically. Stop leaves
+the service stopped. Restart keeps its current runtime; Upgrade selects this app's
+verified runtime. Explicit lifecycle actions interrupt work after saving recovery
+state. Durable chats resume on Start, Restart, or Upgrade. Shell jobs and terminals
+do not replay their commands; interrupted tools remain visible in history.
 Registration, service replacement, and coordinated project-proposed updates require
 explicit approval. Connecting to an existing daemon does not take ownership of it.
 
@@ -49,7 +54,7 @@ Review the build and summary, then choose **Accept update** or **Dismiss**.
 Acceptance pauses new work across all chats. Settings → Updates remains the
 recovery fallback.
 
-Live jobs, terminals, unknown child processes, or unsaved state can block a safe
-handoff. Resolve the named blocker rather than forcing replacement. An uncertain
+Automatic startup upgrades still wait for a safe tool boundary. Unverified service
+ownership, failed checkpoints, or unsaved state can block a handoff. An uncertain
 outcome is not permission to replay it. Keep the daemon on loopback; its local API
 has no network authentication and must not be exposed publicly.

@@ -24,6 +24,89 @@ const gate = () => {
 	return { promise, resolve };
 };
 
+test("explicit lifecycle closes an active unsafe tool and resumes without replaying its effect", {
+	timeout: 20_000,
+}, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-lifecycle-interrupt-"));
+	const started = gate();
+	let calls = 0;
+	let session: KernelSession | undefined;
+	const runtime = await ModelRuntime.create({
+		credentials: new InMemoryCredentialStore(),
+		modelsPath: null,
+		modelsStore: new InMemoryModelsStore(),
+		allowModelNetwork: false,
+		refreshOnCreate: false,
+	});
+	const faux = fauxProvider({ provider: "pilot-lifecycle-test", models: [{ id: "offline" }] });
+	runtime.registerNativeProvider(faux.provider);
+	const openAdapter = NativeAdapter.open;
+	t.mock.method(NativeAdapter, "open", (options: NativeAdapterOptions) =>
+		openAdapter.call(NativeAdapter, {
+			...options,
+			bundledExtensions: false,
+			projectTrusted: false,
+			settingsManager: SettingsManager.inMemory({ defaultTools: ["effect"] }),
+			sessionOptions: {
+				...options.sessionOptions,
+				modelRuntime: runtime,
+				model: faux.getModel(),
+				customTools: [
+					{
+						name: "effect",
+						label: "Effect",
+						description: "Offline unsafe effect",
+						parameters: Type.Object({}),
+						execute: async (_id, _args, signal) => {
+							calls++;
+							started.resolve();
+							await new Promise<void>((_, reject) => {
+								if (signal?.aborted) reject(new Error("interrupted"));
+								else signal?.addEventListener("abort", () => reject(new Error("interrupted")), { once: true });
+							});
+							return { content: [{ type: "text", text: "effect" }], details: {} };
+						},
+					},
+				],
+			},
+			loaderOptions: {
+				cwd: root,
+				agentDir: join(root, "agent"),
+				noExtensions: true,
+				noSkills: true,
+				noPromptTemplates: true,
+				noThemes: true,
+				noContextFiles: true,
+			},
+		}),
+	);
+	const open = () =>
+		KernelSession.open(
+			{ sessionId: "lifecycle", cwd: root, storageDir: join(root, "durable"), agentDir: join(root, "agent") },
+			{ onWorking() {} },
+		);
+	faux.setResponses([
+		fauxAssistantMessage([fauxToolCall("effect", {})], { stopReason: "toolUse" }),
+		fauxAssistantMessage("Recovered the interrupted tool."),
+	]);
+	try {
+		session = await open();
+		await session.submit("immutable-input", "work", "followUp");
+		await started.promise;
+		await session.close();
+		session = await open();
+		await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+		assert.equal(calls, 1, "an unsafe external effect is never replayed after close/reopen");
+		await session.submit("immutable-input", "work", "followUp");
+		await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+		assert.equal(calls, 1, "lost input ACK dedupes across the kernel restart");
+		assert.match(JSON.stringify((await session.conversation.context(BACKGROUND_CONTEXT)).entries), /interrupted/i);
+	} finally {
+		await session?.close();
+		await rm(root, { recursive: true, force: true });
+	}
+});
+
 for (const nested of [false, true]) {
 	test(`native update pause drains ${nested ? "nested scripts" : "direct calls"} across kernel replacement`, {
 		timeout: 20_000,

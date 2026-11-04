@@ -319,6 +319,7 @@ export type KernelCommand =
 	| { type: "workspace.prepared"; callId: string; workspace?: WorkspaceContext }
 	| { type: "update.pause"; id: string }
 	| { type: "checkpointUpdate"; requestId: string }
+	| { type: "checkpointLifecycle"; requestId: string }
 	| { type: "update.resume" }
 	| { type: "telemetry.configure"; configuration: KernelTelemetryConfiguration }
 	| { type: "diagnostics.configure"; enabled: boolean }

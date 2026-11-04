@@ -7,7 +7,7 @@ const OWNER: &str = include_str!("../../../../packages/daemon/src/runtime-owner.
 const MAIN: &str = r#"
 import { ownRuntime } from './runtime-owner.ts';
 import { UpdateReservation } from './update-reservation.ts';
-import { readFileSync, existsSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync, unlinkSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 const root=fileURLToPath(new URL('../../../',import.meta.url)).replace(/\/$/,'');
 const stamp=root+'/runtime-build.json';
@@ -16,10 +16,16 @@ const owner=await ownRuntime(process.env.PILOT_HOME,Number(process.env.PILOT_POR
 writeFileSync(process.env.PILOT_HOME+'/daemon-id','fixture-daemon',{mode:0o600});
 writeFileSync(process.env.PILOT_HOME+'/storage-lineage','fixture-lineage',{mode:0o600});
 const resources={freezeAdmissions:()=>()=>{},blockers:async()=>existsSync(process.env.PILOT_HOME+'/blocker')?[{kind:readFileSync(process.env.PILOT_HOME+'/blocker','utf8'),id:'fixture'}]:[]};
-const reservation=new UpdateReservation(resources,undefined,180000,resources,()=>!existsSync(process.env.PILOT_HOME+'/active-agent'));
+const reservation=new UpdateReservation(resources,undefined,180000,resources,()=>!existsSync(process.env.PILOT_HOME+'/active-agent'),async()=>{
+ if(existsSync(process.env.PILOT_HOME+'/active-agent')) {
+   if(!existsSync(process.env.PILOT_HOME+'/allow-checkpoint')) throw new Error('fixture checkpoint refused');
+   writeFileSync(process.env.PILOT_HOME+'/checkpointed','1',{mode:0o600});
+   unlinkSync(process.env.PILOT_HOME+'/active-agent');
+ }
+});
 owner.updates(async(action,value)=>{
  if(action==='prepare'){
-   const exact=await reservation.prepare(value.operationId,value.purpose);
+   const exact=await reservation.prepare(value.operationId,value.purpose,value.interrupt);
    if(existsSync(process.env.PILOT_HOME+'/lost-prepare')){
      writeFileSync(process.env.PILOT_HOME+'/fixture-receipt',JSON.stringify(exact),{mode:0o600});
      await new Promise(()=>{});
@@ -735,11 +741,17 @@ fn native_launchd_registration_offline_seed_and_singleton() {
     // A newer GUI must restart the selected runtime, not publish its own version.
     let mut newer = trust.clone();
     newer.current_build = "999.1".into();
+    fs::write(profile.join("active-agent"), "1").unwrap();
+    fs::write(profile.join("allow-checkpoint"), "1").unwrap();
     assert_eq!(
         control::execute(&running, Control::Restart, &newer, &cancel),
         Ok(State::Running)
     );
     let second = coordination::record(&location).unwrap();
+    assert!(
+        profile.join("checkpointed").exists(),
+        "explicit restart checkpoints unfinished work"
+    );
     assert_ne!(second["boot"], first["boot"]);
     assert_eq!(second["runtimeRoot"], first["runtimeRoot"]);
     assert_eq!(second["build"], first["build"]);

@@ -174,39 +174,6 @@ fn verify_runtime(host: &LaunchAgent<'_>) -> Result<(), Failure> {
     Ok(())
 }
 
-// The existing idle admission refuses whole unfinished runs before asking them
-// to pause. The signed control reservation rechecks idle under the full freeze.
-fn idle_before_pause(host: &LaunchAgent<'_>) -> Result<(), Failure> {
-    prove(&host.location, &host.owner, host.daemon, host.lineage)?;
-    let client = reqwest::blocking::Client::builder()
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(5))
-        .build()
-        .map_err(|_| Failure::Unverified)?;
-    let mut response = client
-        .post(format!(
-            "http://127.0.0.1:{}/api/update/prepare",
-            host.location.port
-        ))
-        .header("content-type", "application/json")
-        .body("{}")
-        .send()
-        .and_then(|r| r.error_for_status())
-        .map_err(|_| Failure::Unverified)?;
-    let mut bytes = Vec::new();
-    io(response.by_ref().take(4097).read_to_end(&mut bytes))?;
-    if bytes.len() > 4096 {
-        return Err(Failure::Unverified);
-    }
-    let value: Value = serde_json::from_slice(&bytes).map_err(|_| Failure::Unverified)?;
-    prove(&host.location, &host.owner, host.daemon, host.lineage)?;
-    if value["ready"] != true {
-        return Err(Failure::Busy);
-    }
-    host.check_cancel()
-}
-
 /// One explicit action against an exact inspected snapshot. After durable intent,
 /// every error is inspect-only. No Drop handler, GUI exit or transport loss replays it.
 pub fn execute(
@@ -254,15 +221,12 @@ pub fn execute(
             verify_runtime(&host)?;
         }
         if command != Command::Start {
-            idle_before_pause(&host)?;
             host.watch = Some(verified(helper::ParentWatch::new(host.pid()?))?);
-            if !host.drained()? {
-                return Err(Failure::Busy);
-            }
-            host.reservation = Some(super::super::reservation::Reservation::prepare_for(
+            host.reservation = Some(super::super::reservation::Reservation::prepare_explicit(
                 &host.location,
                 &host.owner,
                 command.purpose(),
+                None,
             )?);
             host.revalidate()?;
             host.verify_reservation()?;
