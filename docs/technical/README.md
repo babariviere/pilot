@@ -33,6 +33,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Descriptor-anchored source traversal (design only)](descriptor-anchored-source-traversal.md)
 - [Experimental automatic handoff](auto-handoff.md)
 - [Ordinary-chat context compaction and history recall](context-compaction.md)
+- [Passive model and thinking defaults](model-defaults.md)
 - [In-place context edits for compaction (design note)](context-edit-compaction.md)
 - [Ordinary-chat handoff comparison](handoff-comparison.md)
 - [Shared context and independent task execution](shared-context.md)

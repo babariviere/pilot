@@ -7,7 +7,7 @@
  */
 import { stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import {
 	CONFIG_DIR_NAME,
 	getAgentDir,
@@ -33,6 +33,7 @@ import {
 	type ModelRecommendationTask,
 	recommendMissionModel,
 } from "./mission-model-recommendation.ts";
+import { modelChangeThinking, newChatDefaults, taskDefaultThinking } from "./model-defaults.ts";
 import { modelScopeHash, modelScopeUpdate, readModelScopeValue, writeModelScope } from "./model-scope.ts";
 import { readModelSettings, settingsPath } from "./model-settings.ts";
 import { RuntimeBackground } from "./runtime-background.ts";
@@ -348,8 +349,17 @@ export class ModelCatalog {
 
 	/** The same scoped, price-capped choices used by start admission. */
 	async listTaskModels(cwd: string): Promise<ModelList> {
-		const { list, allowed } = await this.taskModels(cwd);
-		return { ...list, models: allowed.map(({ option }) => option) };
+		const { list, settings, allowed } = await this.taskModels(cwd);
+		const { resolvedDefaultModel: _newChatDefault, ...legacy } = list;
+		const name = list.defaultModel ?? allowed[0]?.option.id;
+		return {
+			...legacy,
+			models: allowed.map(({ option, model }) => ({
+				...option,
+				taskDefaultThinking: taskDefaultThinking(settings, model!, option.thinking),
+			})),
+			...(allowed.some(({ option }) => option.id === name) ? { resolvedDefaultModel: name } : {}),
+		};
 	}
 
 	/** Ephemeral advice only. Reuses task-start eligibility; never selects/switches a running chat. */
@@ -409,13 +419,7 @@ export class ModelCatalog {
 		}
 		if (thinking !== undefined && (typeof thinking !== "string" || !choice.option.thinkingLevels?.includes(thinking)))
 			throw new Error(`Thinking level is not supported by ${name}: ${thinking}. ${choices()}`);
-		const configured =
-			choice.option.thinking ??
-			settings.getModelThinkingLevel(choice.model!.provider, choice.model!.id) ??
-			settings.getDefaultThinkingLevel() ??
-			"medium";
-		const level =
-			thinking ?? clampThinkingLevel(choice.model!, configured as Parameters<typeof clampThinkingLevel>[1]);
+		const level = thinking ?? taskDefaultThinking(settings, choice.model!, choice.option.thinking);
 		return { model: choice.option.id, thinking: level };
 	}
 
@@ -507,13 +511,30 @@ export class ModelCatalog {
 
 	private async load(cwd: string) {
 		const { settings, models: scoped } = await this.scoped(cwd);
+		const defaults = await newChatDefaults(settings, await this.getRuntime());
 		const provider = settings.getDefaultProvider();
 		const model = settings.getDefaultModel();
 		const defaultModel = provider && model ? `${provider}/${model}` : model;
-		let models = scoped.map(({ model, thinkingLevel }) => option(model, thinkingLevel));
+		let models = scoped.map(({ model, thinkingLevel }) => {
+			const defaultThinking = defaults.thinking(model);
+			const changeThinking = modelChangeThinking(settings, model, thinkingLevel);
+			return {
+				...option(model, thinkingLevel),
+				...(defaultThinking !== undefined ? { defaultThinking } : {}),
+				...(changeThinking !== undefined ? { modelChangeThinking: changeThinking } : {}),
+			};
+		});
 		const seen = new Set<string>();
 		models = models.filter((entry) => !seen.has(entry.id) && seen.add(entry.id));
-		return { settings, list: { models, ...(defaultModel ? { defaultModel } : {}) } };
+		const resolved = defaults.model && `${defaults.model.provider}/${defaults.model.id}`;
+		return {
+			settings,
+			list: {
+				models,
+				...(defaultModel ? { defaultModel } : {}),
+				...(resolved && models.some(({ id }) => id === resolved) ? { resolvedDefaultModel: resolved } : {}),
+			},
+		};
 	}
 }
 

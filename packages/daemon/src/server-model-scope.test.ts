@@ -96,6 +96,82 @@ function models(t: TestContext, fail = false) {
 	);
 }
 
+test("models GET resolves exact cwd or project path without writes or session/provider actions", async (t) => {
+	const local = await fixture(t);
+	const projectPath = join(local.home, "project");
+	const nested = join(projectPath, "nested");
+	await mkdir(join(projectPath, ".pi"), { recursive: true });
+	await mkdir(nested);
+	const globalFile = join(local.home, "settings.json");
+	const projectFile = join(projectPath, ".pi", "settings.json");
+	const globalBytes = '{"defaultProvider":"fixture","defaultModel":"one","defaultThinkingLevel":"low"}';
+	const projectBytes = '{"defaultModel":"two","defaultThinkingLevel":"high","enabledModels":["fixture/two:off"]}';
+	await writeFile(globalFile, globalBytes);
+	await writeFile(projectFile, projectBytes);
+	// Project.model remains separate, authoritative /api/projects data, not a Pi setting.
+	const project = await local.projects.create({ path: projectPath, model: "fixture/one" });
+	const projectsFile = join(local.home, "projects.json");
+	const projectsBytes = await readFile(projectsFile);
+	const forbidden = () => assert.fail("GET must not start work or resolve credentials");
+	t.mock.method(local.sessions, "spawn", forbidden);
+	const choices = ["one", "two"].map((id) => ({
+		id,
+		name: id,
+		provider: "fixture",
+		api: "openai-completions",
+		baseUrl: "https://unused.invalid",
+		input: ["text"],
+		reasoning: true,
+		contextWindow: 32000,
+		maxTokens: 1024,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	}));
+	let availabilityReads = 0;
+	t.mock.method(
+		ModelRuntime,
+		"create",
+		async () =>
+			({
+				...requiredAuthRegistration,
+				getAvailable: async () => {
+					availabilityReads++;
+					return choices;
+				},
+				getAvailableSnapshot: () => choices,
+				getModel: (provider: string, id: string) => choices.find((m) => m.provider === provider && m.id === id),
+				hasConfiguredAuth: (provider: string) => provider === "fixture",
+				checkAuth: forbidden,
+				getAuth: forbidden,
+				completeSimple: forbidden,
+			}) as unknown as ModelRuntime,
+	);
+	const read = async (query: string) => {
+		const response = await fetch(`${local.origin}/api/models?${query}`);
+		assert.equal(response.status, 200);
+		return (await response.json()) as ModelList;
+	};
+	const global = await read(`cwd=${encodeURIComponent(local.home)}`);
+	const scoped = await read(`projectId=${project.id}&cwd=${encodeURIComponent(local.home)}`);
+	const exact = await read(`cwd=${encodeURIComponent(projectPath)}`);
+	const child = await read(`cwd=${encodeURIComponent(nested)}`);
+	assert.equal(global.resolvedDefaultModel, "fixture/one");
+	assert.equal(scoped.resolvedDefaultModel, "fixture/two");
+	assert.deepEqual(scoped, exact, "projectId chooses only that project's exact path, overriding cwd");
+	assert.equal(child.resolvedDefaultModel, "fixture/one", "cwd does not discover parent project settings");
+	assert.equal(global.models[0]?.defaultThinking, "low");
+	assert.equal(scoped.models[0]?.defaultThinking, "high");
+	assert.equal(scoped.models[0]?.modelChangeThinking, "off");
+	t.mock.method(console, "warn", () => {});
+	const task = await read(`projectId=${project.id}&purpose=task-start`);
+	assert.equal(task.resolvedDefaultModel, "fixture/two");
+	assert.equal(task.models[0]?.taskDefaultThinking, "off");
+	assert.equal(local.sessions.list().length, 0);
+	assert.equal(availabilityReads, 1, "new metadata adds no availability/provider checks");
+	assert.equal(await readFile(globalFile, "utf8"), globalBytes);
+	assert.equal(await readFile(projectFile, "utf8"), projectBytes);
+	assert.deepEqual(await readFile(projectsFile), projectsBytes);
+});
+
 test("scope HTTP contract supports CAS, unscoped candidates, idempotent retries and independent hosts", async (t) => {
 	models(t);
 	const local = await fixture(t);

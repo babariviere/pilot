@@ -1755,13 +1755,27 @@ export interface ModelOption {
 	thinkingLevels?: string[];
 	/** Thinking level pinned by the scope pattern ("model:high"). */
 	thinking?: string;
+	/** Effective thinking for an explicit model in a fresh Build chat at the requested cwd.
+	 * Ignores scope pins. Per-model/global settings win; otherwise inherits SDK startup thinking.
+	 * Omitted when passive startup metadata is unavailable. Not a running-session switch default. */
+	defaultThinking?: string;
+	/** Effective omitted-thinking changeModel choice: scope pin, per-model, then global setting.
+	 * Omitted when the switch must inherit current session thinking (or metadata is unavailable). */
+	modelChangeThinking?: string;
+	/** Effective omitted thinking for task-start admission. Only present with purpose=task-start. */
+	taskDefaultThinking?: string;
 }
 
 /** GET /api/models?projectId=… or ?cwd=…; purpose=task-start applies the task-start price cap. */
 export interface ModelList {
 	models: ModelOption[];
-	/** pi's default model for that directory. */
+	/** Raw configured pi default for that directory, not a resolved/validated fallback. */
 	defaultModel?: string;
+	/** Passive fresh Build Pi startup selection without a request.model/Project.model override,
+	 * only when included in models. With purpose=task-start,
+	 * the actual admitted default instead. Omitted if unavailable/outside scope/rejected by the cap.
+	 * Does not predict extensions, workspace preparation, Ask roles or restored sessions. */
+	resolvedDefaultModel?: string;
 }
 
 /** Native-confirmed source authority for a separate Build spawned from a diagnostics proposal. */
