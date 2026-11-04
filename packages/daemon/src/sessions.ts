@@ -296,9 +296,9 @@ export interface SessionMissionBridge {
 
 /** An explicit kernel rejection, unlike a disconnect with uncertain durable admission. */
 export class CommandRejected extends Error {
-	readonly code?: "busy" | "stopped";
+	readonly code?: "busy" | "stopped" | "stale_question";
 
-	constructor(message: string, code?: "busy" | "stopped") {
+	constructor(message: string, code?: "busy" | "stopped" | "stale_question") {
 		super(message);
 		if (code) this.code = code;
 	}
@@ -480,6 +480,8 @@ interface SessionMeta extends OutcomeMeta {
 	/** Durable desired input hold, including while its kernel is parked or sleeping. */
 	inputsPaused?: boolean;
 	inputControlRevision?: number;
+	/** Explicit Stop/model changes advance this durable native-send cancellation fence. */
+	inputGeneration?: number;
 	/** Interrupted durable work, retained until a replacement kernel is ready. */
 	kernelRestartPending?: boolean;
 	id: string;
@@ -6240,6 +6242,8 @@ ${run.excerpt}`,
 			this.assertModelIdle(meta, reopening);
 			const requestId = randomUUID();
 			let result: { switched: boolean } | undefined;
+			meta.inputGeneration = (meta.inputGeneration ?? 0) + 1;
+			await this.save(meta, undefined, undefined, true);
 			try {
 				await worker.request({
 					type: "changeModel",
@@ -7707,6 +7711,8 @@ ${run.excerpt}`,
 			explicitModelRecovery?: boolean;
 			trace?: TraceCarrier;
 			event?: import("@pilot/protocol").ChatEventSummary;
+			questionReplyId?: number;
+			inputGeneration?: number;
 		} = {},
 	): Promise<void> {
 		const end = this.updateGate.begin();
@@ -7723,6 +7729,8 @@ ${run.excerpt}`,
 				options.explicitModelRecovery,
 				undefined,
 				options.event,
+				options.questionReplyId,
+				options.inputGeneration,
 			);
 		} finally {
 			end();
@@ -7741,16 +7749,34 @@ ${run.excerpt}`,
 		explicitModelRecovery = false,
 		answerQuestionId?: number,
 		event?: import("@pilot/protocol").ChatEventSummary,
+		questionReplyId?: number,
+		inputGeneration?: number,
 	): Promise<void> {
 		const meta = this.require(id);
 		this.assertHistoryWritable(meta);
 		const resumesStoppedRecovery = meta.recoveryStopped === true;
+		const staleGeneration = inputGeneration !== undefined && inputGeneration !== (meta.inputGeneration ?? 0);
 		this.assertNotContinued(meta);
 		if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
 		const transition = this.archiveTransitions.get(id);
 		if (transition) await transition.promise;
 		if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before sending a message");
 		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
+		if (inputGeneration !== undefined && inputGeneration !== (meta.inputGeneration ?? 0)) {
+			const worker = this.workers.get(id);
+			if (worker) {
+				await worker.ready;
+				await worker.request({ type: "input", requestId, content: message, mode, dedupeOnly: true });
+				return;
+			}
+			await this.unparked(id);
+			if (await this.coldReader.readAcceptedInput(join(this.dir(id), "durable"), requestId)) return;
+			// unparked() joined any removed writer. A new live owner can still
+			// commit after this read, so absence alone cannot reject its admission.
+			if (this.workers.has(id)) throw new WorkerUnavailable("Input receipt is still being resolved");
+			if (this.delivering.get(id) === requestId) this.delivering.delete(id);
+			throw new CommandRejected("This message was cancelled by Stop or a model change. Input retained.", "stopped");
+		}
 		if (answerQuestionId !== undefined) {
 			this.assertQuestionAnswerActor(id, requestId);
 		}
@@ -7792,9 +7818,9 @@ ${run.excerpt}`,
 		try {
 			if (this.closing) throw new Error("pilotd is shutting down");
 			if (meta.failure) throw new Error(meta.failure);
-			if (meta.nextAttemptModel && (!explicitModelRecovery || report || inputOrigin(requestId)))
+			if (meta.nextAttemptModel && !staleGeneration && (!explicitModelRecovery || report || inputOrigin(requestId)))
 				throw new Conflict("Saved next-attempt model requires explicit user recovery");
-			if (meta.nextAttemptModel && explicitModelRecovery && !report && !inputOrigin(requestId)) {
+			if (meta.nextAttemptModel && !staleGeneration && explicitModelRecovery && !report && !inputOrigin(requestId)) {
 				if (!this.failedModelSource(meta, true))
 					throw new Conflict("Failed chat is no longer available for explicit model recovery");
 				this.activateNextModel(meta);
@@ -7814,8 +7840,10 @@ ${run.excerpt}`,
 			}
 			if (meta.recoveryStopped && (report || inputOrigin(requestId)))
 				throw new CommandRejected("Chat recovery is stopped. Send a new message to continue.", "stopped");
-			delete meta.cancelled;
-			delete meta.recoveryStopped;
+			if (inputGeneration === undefined || inputGeneration === (meta.inputGeneration ?? 0)) {
+				delete meta.cancelled;
+				delete meta.recoveryStopped;
+			}
 			// Pending duplicates retain their original payload; accepted retries are deduped by the kernel.
 			if (!meta.pending?.some((command) => command.requestId === requestId)) {
 				meta.pending ??= [];
@@ -7827,6 +7855,8 @@ ${run.excerpt}`,
 					...(report ? { reportDelivery: true } : {}),
 					...(resumeHeld ? { resumeHeld: true } : {}),
 					...(answerQuestionId !== undefined ? { answerQuestionId } : {}),
+					...(questionReplyId !== undefined ? { questionReplyId } : {}),
+					...(inputGeneration !== undefined ? { inputGeneration } : {}),
 					...(event ? { event } : {}),
 				});
 			}
@@ -8015,6 +8045,8 @@ ${run.excerpt}`,
 
 	private async stopAdmitted(meta: SessionMeta): Promise<StopResponse> {
 		const id = meta.id;
+		meta.inputGeneration = (meta.inputGeneration ?? 0) + 1;
+		await this.save(meta, undefined, undefined, true);
 		this.cancelPostRun(meta);
 		if (meta.automation) {
 			meta.automation.stopped = true;
@@ -8255,7 +8287,9 @@ ${run.excerpt}`,
 				insights.revalidate();
 				assertReview();
 			}
-			await worker.request(trace ? { ...command, trace } : command);
+			const dedupeOnly =
+				command.inputGeneration !== undefined && command.inputGeneration !== (meta.inputGeneration ?? 0);
+			await worker.request({ ...command, ...(trace ? { trace } : {}), ...(dedupeOnly ? { dedupeOnly: true } : {}) });
 			settled = true;
 		} catch (error) {
 			settled = error instanceof CommandRejected;
@@ -9034,6 +9068,8 @@ ${run.excerpt}`,
 			const worker = await this.ensureWorker(id);
 			await worker.ready;
 			let result: { switched: boolean; content?: string } | undefined;
+			meta.inputGeneration = (meta.inputGeneration ?? 0) + 1;
+			await this.save(meta, undefined, undefined, true);
 			try {
 				await worker.request(command);
 			} catch (error) {
@@ -11442,6 +11478,7 @@ ${run.excerpt}`,
 					(meta.workspace?.base.startsWith("origin/") ? meta.workspace.base.slice("origin/".length) : undefined));
 		return {
 			id: meta.id,
+			inputGeneration: meta.inputGeneration ?? 0,
 			...(meta.control ? { control: true } : {}),
 			...(meta.role ? { role: meta.role } : {}),
 			...(meta.diagnosticScope === "app" ? { diagnosticScope: "app" as const } : {}),

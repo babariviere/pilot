@@ -65,6 +65,8 @@ pub(crate) struct Delivery {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Draft {
     pub(crate) revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) input_generation: Option<u64>,
     /// Explicit read-only specialist creation, never an ordinary Build draft.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) diagnostics: bool,
@@ -94,6 +96,7 @@ impl Default for Draft {
     fn default() -> Self {
         Self {
             revision: 0,
+            input_generation: None,
             diagnostics: false,
             text: String::new(),
             attachments: Vec::new(),
@@ -179,6 +182,10 @@ pub(crate) struct Intent {
     pub(crate) diagnostic: Option<Diagnostic>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) answer: Option<crate::question::ReplyIdentity>,
+    /// Only newly captured sends opt in. Historical Unknown operations stay manual.
+    /// Retain validation inputs, never rebuild the immutable envelope from live edits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) automatic: Option<Box<Draft>>,
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -287,6 +294,12 @@ pub(crate) fn hash_bytes(value: &[u8]) -> String {
 }
 
 fn validate_draft(key: &str, draft: &Draft) -> Result<(), Failure> {
+    if draft
+        .input_generation
+        .is_some_and(|generation| generation > 9_007_199_254_740_990)
+    {
+        return Err("Invalid input generation");
+    }
     if draft.diagnostics
         && (!key.starts_with("new:")
             || draft.mode != "ask"
@@ -463,6 +476,19 @@ impl Book {
             }
         }
         for (id, intent) in &self.pending {
+            if let Some(captured) = &intent.automatic {
+                validate_draft(&intent.key, captured)?;
+                if captured.revision != intent.revision
+                    || intent.operation.as_ref().is_none_or(|op| {
+                        !matches!(
+                            op.kind.as_str(),
+                            "chat-send" | "chat-create" | "diagnostics-create"
+                        )
+                    })
+                {
+                    return Err("Automatic delivery capture differs");
+                }
+            }
             if let Some(answer) = &intent.answer {
                 answer.validate()?;
                 if !intent.key.starts_with("chat:")
@@ -771,7 +797,15 @@ impl Store {
         follow_up: bool,
         stop: bool,
     ) -> Result<Intent, Failure> {
-        self.prepare_delivery(key, captured, follow_up, stop, None)
+        self.prepare_delivery(key, captured, follow_up, stop, None, false)
+    }
+    pub(crate) fn prepare_automatic(
+        &mut self,
+        key: &str,
+        captured: &Draft,
+        follow_up: bool,
+    ) -> Result<Intent, Failure> {
+        self.prepare_delivery(key, captured, follow_up, false, None, true)
     }
     pub(crate) fn prepare_answer(
         &mut self,
@@ -792,6 +826,29 @@ impl Store {
             false,
             false,
             Some((answer.identity.clone(), message)),
+            false,
+        )
+    }
+    pub(crate) fn prepare_automatic_answer(
+        &mut self,
+        key: &str,
+        captured: &Draft,
+        question: &crate::question::Question,
+    ) -> Result<Intent, Failure> {
+        let answer = captured
+            .answer
+            .as_ref()
+            .ok_or("Question reply capture is missing")?;
+        let message = answer
+            .reply(question)?
+            .ok_or("Choose an answer or write a reply")?;
+        self.prepare_delivery(
+            key,
+            captured,
+            false,
+            false,
+            Some((answer.identity.clone(), message)),
+            true,
         )
     }
     fn prepare_delivery(
@@ -801,6 +858,7 @@ impl Store {
         follow_up: bool,
         stop: bool,
         answer: Option<(crate::question::ReplyIdentity, String)>,
+        automatic: bool,
     ) -> Result<Intent, Failure> {
         validate_draft(key, captured)?;
         if stop && crate::session_subagents::Target::from_key(key).is_some() {
@@ -846,6 +904,8 @@ impl Store {
                 let mut payload=if create {serde_json::json!({"message":message,"projectId":captured.project_id,"mode":"build"})} else {serde_json::json!({"message":message,"mode":if follow_up {"followUp"} else {"steer"}})};
                 if create&&captured.diagnostics {payload=serde_json::json!({"message":message,"mode":"ask","role":"diagnostics","diagnosticScope":"app","diagnosticHost":book.host});}
                 if let Some(child)=&child {payload["name"]=child.name.clone().into();payload["createdAt"]=child.created_at.into();}
+                if automatic && let Some((identity, _)) = &answer {payload["questionReplyId"] = identity.question.entry.into();}
+                if automatic && !create {payload["inputGeneration"] = captured.input_generation.unwrap_or(0).into();}
                 if create&&let Some(choice)=&captured.model_choice{
                     if captured.project_id.as_deref()!=Some(choice.project_id.as_str())||captured.cwd!=choice.cwd{return Err("Model choice belongs to another project directory. Choose it again explicitly.");}
                     payload["model"]=choice.choice.model.clone().into();
@@ -856,7 +916,7 @@ impl Store {
                 let sequence=book.next_sequence;book.next_sequence+=1;
                 Some(Operation {schema_version:1,operation_id:id.clone(),producer_id:book.producer_id.clone(),sequence,origin:book.host.clone(),destination:book.host.clone(),kind:if create {if captured.diagnostics {"diagnostics-create"} else {"chat-create"}} else if child.is_some() {"subagent-send"} else {"chat-send"}.into(),target_id:target.clone(),payload_hash:hash(&payload),payload})
             };
-            let intent=Intent {id:id.clone(),key:key.into(),revision:captured.revision,target,operation,state:"unknown".into(),diagnostic:None,answer:answer.as_ref().map(|(a,_)|a.clone())};
+            let intent=Intent {id:id.clone(),key:key.into(),revision:captured.revision,target,operation,state:"unknown".into(),diagnostic:None,answer:answer.as_ref().map(|(a,_)|a.clone()),automatic:automatic.then(||Box::new(captured.clone()))};
             book.drafts.get_mut(key).ok_or("Missing owning draft")?.pending=Some(id.clone());
             book.pending.insert(id,intent.clone());Ok(intent)
         })

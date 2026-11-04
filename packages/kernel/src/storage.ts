@@ -2,6 +2,7 @@
 import { chmodSync, closeSync, constants, lstatSync, mkdirSync, openSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import type { Context } from "@earendil-works/chord";
 import type { Storage } from "@earendil-works/pi-durable";
 import {
 	CURRENT_SQLITE_SCHEMA_VERSION,
@@ -10,7 +11,7 @@ import {
 	SqliteStorage,
 	type SqliteValue,
 } from "@earendil-works/pi-durable/storage/sqlite";
-import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { openNodeSqliteDatabase } from "@earendil-works/pi-durable/storage/sqlite/node";
 
 function privateFile(file: string): void {
 	const fd = openSync(file, constants.O_CREAT | constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW, 0o600);
@@ -22,6 +23,20 @@ function privateFile(file: string): void {
 export class StorageBusy extends Error {}
 
 const SCHEMA_VERSION_QUERY = "SELECT version FROM durable_schema WHERE singleton = 1";
+
+/** Stable request IDs survive model changes, rewind and reset, including detached attempts. */
+export async function findInputReceipt(storage: Storage, requestId: string, context: Context) {
+	let cursor: import("@earendil-works/pi-durable").Cursor | undefined;
+	do {
+		const page = await storage.scanConversations({}, 64, cursor, context);
+		for (const conversation of page.items) {
+			const receipt = await storage.submissionByRequest(conversation.id, requestId, context);
+			if (receipt) return receipt;
+		}
+		cursor = page.next;
+	} while (cursor !== undefined);
+	return undefined;
+}
 
 /**
  * Schema 2 (pi-durable 1.4) only widens the task status CHECK constraint by rebuilding the table, so a
@@ -178,7 +193,17 @@ export async function openSessionStorage(directory: string): Promise<{ storage: 
 	try {
 		const file = join(root, "harness.sqlite");
 		privateFile(file);
-		return { storage: await openNodeSqliteStorage(file), release };
+		const database = await openNodeSqliteDatabase(file);
+		try {
+			// A receipt can outlive pilotd and the kernel. Sync each committing WAL
+			// transaction before acknowledging admission, not only at clean close.
+			await database.exec("PRAGMA synchronous = FULL");
+			await database.exec("PRAGMA fullfsync = ON");
+			return { storage: await SqliteStorage.open(database), release };
+		} catch (error) {
+			await database.close();
+			throw error;
+		}
 	} catch (error) {
 		release();
 		throw error;

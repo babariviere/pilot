@@ -106,7 +106,7 @@ import type { RuntimeContributor } from "./runtime-admission.ts";
 import { RuntimeAdmission, RuntimeResources } from "./runtime-admission.ts";
 
 import type { ScheduleService } from "./schedules.ts";
-import { NotFound, type SessionManager } from "./sessions.ts";
+import { CommandRejected, NotFound, type SessionManager } from "./sessions.ts";
 import { SetupError, type SetupService } from "./setup.ts";
 import { parseSlackMessageLink } from "./slack-format.ts";
 import type { SourceRegistry } from "./sources.ts";
@@ -692,17 +692,32 @@ export function createDaemonServer(
 			return { sessionId: session.id };
 		}
 		if (op.kind === "chat-send" || op.kind === "chat-send-attached") {
-			const request = payload as SendRequest;
+			const request = payload as SendRequest & { questionReplyId?: number; inputGeneration?: number };
 			if (
 				typeof request.message !== "string" ||
 				!request.message.trim() ||
-				(request.mode !== undefined && request.mode !== "steer" && request.mode !== "followUp")
+				(request.mode !== undefined && request.mode !== "steer" && request.mode !== "followUp") ||
+				(request.questionReplyId !== undefined &&
+					(!Number.isSafeInteger(request.questionReplyId) || request.questionReplyId <= 0)) ||
+				(request.inputGeneration !== undefined &&
+					(!Number.isSafeInteger(request.inputGeneration) || request.inputGeneration < 0))
 			)
 				throw new OperationRejected("Invalid message");
-			await sessions.sendDurable(op.targetId, request.message, request.mode ?? "followUp", op.operationId, {
-				explicitModelRecovery: true,
-				trace,
-			});
+			try {
+				await sessions.sendDurable(op.targetId, request.message, request.mode ?? "followUp", op.operationId, {
+					explicitModelRecovery: true,
+					trace,
+					questionReplyId: request.questionReplyId,
+					inputGeneration: request.inputGeneration,
+				});
+			} catch (error) {
+				if (
+					error instanceof CommandRejected &&
+					(error.code === "stale_question" || (error.code === "stopped" && request.inputGeneration !== undefined))
+				)
+					throw new OperationRejected(error.message);
+				throw error;
+			}
 			return { sessionId: op.targetId };
 		}
 		throw new OperationRejected("Unsupported operation kind");
@@ -1005,6 +1020,8 @@ export function createDaemonServer(
 				...hello,
 				capabilities: {
 					...hello.capabilities,
+					questionReplies: 1,
+					durableInputGeneration: 1,
 					insights: missions && githubSetup && hello.lineageId ? 1 : undefined,
 					automations: chatSettings?.automationsEnabled() ? 1 : undefined,
 					guardedMissionConversion: missions ? true : undefined,

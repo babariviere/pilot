@@ -7,12 +7,15 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
+import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import { createSession } from "@earendil-works/pi-durable";
 import type { DaemonHello, DurableOperation, OperationReceipt } from "@pilot/protocol";
+import { openSessionStorage } from "../../kernel/src/storage.ts";
 import { ModelCatalog } from "./models.ts";
 import { OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
-import { SessionManager, type SessionMissionBridge } from "./sessions.ts";
+import { CommandRejected, SessionManager, type SessionMissionBridge } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
 
 const host = { hostId: "box", daemonId: "remote", lineageId: "remote-lineage" };
@@ -158,6 +161,70 @@ test("startup recovers an already-pending uppercase create without rewriting ide
 	assert.equal((await restarted.post(op)).state, "accepted");
 	const meta = JSON.parse(await readFile(join(home, "sessions", op.targetId, "meta.json"), "utf8"));
 	assert.equal(meta.pending.filter((input: { requestId: string }) => input.requestId === op.operationId).length, 1);
+});
+
+test("Stop rejects unseen captures, but exact stored admission settles without starting a worker", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-generation-receipt-"));
+	const f = await fixture(t, home);
+	t.after(() => shutdownAndRemoveHome(home, f.close));
+	const creation = intent(home);
+	await f.post(creation);
+	await f.sessions.stop(creation.targetId);
+	const payload = JSON.stringify({ message: "captured before Stop", mode: "steer", inputGeneration: 0 });
+	const op = {
+		...creation,
+		operationId: randomUUID(),
+		sequence: 2,
+		kind: "chat-send" as const,
+		payload,
+		payloadHash: payloadHash(payload),
+	};
+	const rejected = await f.post(op);
+	assert.equal(rejected.state, "rejected");
+	assert.deepEqual(await f.post(op), rejected);
+	const accepted = { ...op, operationId: randomUUID(), sequence: 3 };
+	const owned = await openSessionStorage(join(home, "sessions", creation.targetId, "durable"));
+	const storage = createSession(owned.storage);
+	try {
+		await storage.commit(async (tx) => {
+			const conversation = await tx.createConversation({ ownership: { kind: "ownerless" } });
+			await tx.createSubmission({
+				conversationId: conversation.id,
+				requestId: accepted.operationId,
+				type: "input",
+				status: "queued",
+			});
+		}, context);
+		assert.equal((await f.post(accepted)).state, "accepted");
+		assert.equal(f.sessions.get(creation.targetId)?.inputGeneration, 1);
+		const meta = JSON.parse(await readFile(join(home, "sessions", creation.targetId, "meta.json"), "utf8"));
+		assert.ok(!meta.pending.some((command: { requestId: string }) => command.requestId === accepted.operationId));
+	} finally {
+		await storage.close(context);
+		owned.release();
+	}
+});
+
+test("stale native question reply becomes a final receipt across retry and restart", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-question-receipt-"));
+	const f = await fixture(t, home);
+	const payload = JSON.stringify({ message: "answer", mode: "steer", questionReplyId: 4 });
+	const op = { ...intent(home), kind: "chat-send" as const, payload, payloadHash: payloadHash(payload) };
+	let calls = 0;
+	t.mock.method(f.sessions, "sendDurable", async (...args: Parameters<SessionManager["sendDurable"]>) => {
+		calls++;
+		assert.equal(args[4]?.questionReplyId, 4);
+		throw new CommandRejected("That question is no longer pending", "stale_question");
+	});
+	const receipt = await f.post(op);
+	assert.equal(receipt.state, "rejected");
+	assert.deepEqual(await f.post(op), receipt);
+	assert.equal(calls, 1);
+	await f.close();
+	const reopened = await fixture(t, home);
+	t.after(() => shutdownAndRemoveHome(home, reopened.close));
+	assert.deepEqual(await reopened.post(op, true), receipt);
+	assert.deepEqual(await reopened.post(op), receipt);
 });
 
 test("not found is not rejection; a rejected ordinary create has a durable reason and no chat", async (t) => {

@@ -67,7 +67,13 @@ impl ChatEditor {
                     Some(Acknowledgment::Accepted) => "Sent",
                     Some(Acknowledgment::Pending) => "Sending…",
                     Some(Acknowledgment::Rejected) => "Not sent",
-                    _ => "Not confirmed",
+                    _ => {
+                        if intent.automatic.is_some() {
+                            "Reconnecting…"
+                        } else {
+                            "Not confirmed"
+                        }
+                    }
                 }
             };
             return Some(Sending {

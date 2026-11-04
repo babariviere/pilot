@@ -129,6 +129,7 @@ pub(crate) struct ChatEditor {
     selected: Option<String>,
     writable: bool,
     busy: bool,
+    input_generation: Option<(String, u64)>,
     thinking: bool,
     compacting: bool,
     thinking_held: bool,
@@ -235,6 +236,7 @@ impl ChatEditor {
             selected: None,
             writable: false,
             busy: false,
+            input_generation: None,
             thinking: false,
             compacting: false,
             thinking_held: false,
@@ -304,6 +306,16 @@ impl ChatEditor {
             && self.state.error.is_none()
             && !self.closing
             && self.update_checkpoint.is_none()
+    }
+    pub(crate) fn input_generation(&mut self, chat: &str, generation: Option<u64>) {
+        self.input_generation = generation.map(|generation| (format!("chat:{chat}"), generation));
+    }
+    pub(super) fn capture_generation(&self, key: &str, draft: &mut Draft) {
+        draft.input_generation = self
+            .input_generation
+            .as_ref()
+            .filter(|(owner, _)| owner == key)
+            .map(|(_, generation)| *generation);
     }
     /// Manual compaction shares delivery/model fences, but never consumes a draft.
     pub(crate) fn compact_ready(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
@@ -1055,9 +1067,10 @@ impl ChatEditor {
         {
             return;
         }
-        let (Some(key), Some(draft)) = (self.selected.clone(), self.draft().cloned()) else {
+        let (Some(key), Some(mut draft)) = (self.selected.clone(), self.draft().cloned()) else {
             return;
         };
+        self.capture_generation(&key, &mut draft);
         if !draft.editable()
             || (!stop && draft.text.trim().is_empty() && draft.attachments.is_empty())
             || (!stop && self.attachments.importing.is_some())
@@ -1873,6 +1886,18 @@ impl Render for ChatEditor {
                 "Couldn't confirm that Stop reached the agent."
             } else if intent.state == "pending" {
                 "Sending…"
+            } else if intent.automatic.is_some() && acknowledged == Some(Acknowledgment::Unknown) {
+                let issue = self
+                    .delivery_observation(&key, draft)
+                    .is_some_and(|(_, d, _)| {
+                        d.category == crate::delivery_store::diagnostic::Category::Refused
+                            && d.status.is_none_or(|status| status < 500)
+                    });
+                if issue && self.state.notice_key.as_deref() == Some(key.as_str()) {
+                    self.state.notice
+                } else {
+                    "Reconnecting…"
+                }
             } else {
                 match acknowledged {
                     Some(Acknowledgment::Accepted) => "Sent. Pilot couldn't save the receipt.",

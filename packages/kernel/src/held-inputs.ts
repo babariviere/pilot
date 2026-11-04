@@ -23,6 +23,11 @@ import type { DeliveryMode } from "@pilot/protocol";
 import { HeldInputsDoc, type HeldInput as Input, type SystemMessageStateEvent } from "./held-inputs-doc.ts";
 import { inputOrigin } from "./input-origin.ts";
 import { QUESTION_ENTRY } from "./question-entry.ts";
+
+/** A native reply's exact immutable question is no longer answerable. */
+export class QuestionReplyRefused extends Error {}
+export class InputGenerationRefused extends Error {}
+
 import { previewText, type WithdrawnMessage } from "./queue.ts";
 
 export { HeldInputsDoc, type SystemMessageStateEvent } from "./held-inputs-doc.ts";
@@ -345,6 +350,8 @@ export async function admitWithHeld(
 				mode: DeliveryMode;
 				entry?: Input["entry"];
 				answerQuestionId?: number;
+				questionReplyId?: number;
+				dedupeOnly?: boolean;
 		  }
 		| undefined,
 	context: Context,
@@ -355,18 +362,28 @@ export async function admitWithHeld(
 	return session.commit(async (tx) => {
 		const held = await tx.doc(HeldInputsDoc, conversationId);
 		if (revision !== undefined && revision <= (held.controlRevision ?? 0)) return { started: false };
-		const coordinatorAnswer = input?.answerQuestionId !== undefined;
+		if (input?.dedupeOnly) {
+			const existing = await tx.submissionByRequest(conversationId, input.requestId);
+			if (existing) return { id: existing.id, held: held.items.some((item) => item.id === existing.id) };
+			throw new InputGenerationRefused("This message was cancelled by Stop. Input retained.");
+		}
+		const nativeReply = input?.questionReplyId !== undefined;
+		const questionId = input?.questionReplyId ?? input?.answerQuestionId;
+		const coordinatorAnswer = questionId !== undefined;
+		const refuse = (message: string) => (nativeReply ? new QuestionReplyRefused(message) : new Error(message));
 		// Dedupe before checking the boundary: an accepted answer may already have resumed the chat.
-		if (coordinatorAnswer) {
+		if (coordinatorAnswer && input) {
 			const existing = await tx.submissionByRequest(conversationId, input.requestId);
 			if (existing) return { id: existing.id, held: held.items.some((item) => item.id === existing.id) };
 			if (
-				!Number.isSafeInteger(input.answerQuestionId) ||
-				input.answerQuestionId! <= 0 ||
-				inputOrigin(input.requestId) !== "coordinator"
+				!Number.isSafeInteger(questionId) ||
+				questionId! <= 0 ||
+				(nativeReply
+					? inputOrigin(input.requestId) !== undefined || input.answerQuestionId !== undefined
+					: inputOrigin(input.requestId) !== "coordinator")
 			)
-				throw new Error("Invalid coordinator question reply");
-			const question = await tx.entry(input.answerQuestionId as EntryId);
+				throw refuse(nativeReply ? "Invalid native question reply" : "Invalid coordinator question reply");
+			const question = await tx.entry(questionId as EntryId);
 			const data = question?.data;
 			if (
 				!held.questionPending ||
@@ -379,14 +396,14 @@ export async function admitWithHeld(
 				typeof data.question !== "string" ||
 				data.databaseAccess !== undefined
 			)
-				throw new Error("That ordinary question is no longer pending");
+				throw refuse("That ordinary question is no longer pending");
 			// A previous question's entry must never answer a later question in the same chat.
 			let cursor: Cursor | undefined;
 			do {
 				const page = await tx.scanEntries({ conversationId }, 64, cursor);
 				const latest = page.items.find((entry) => entry.kind === QUESTION_ENTRY);
 				if (latest) {
-					if (latest.id !== question.id) throw new Error("That question is no longer pending");
+					if (latest.id !== question.id) throw refuse("That question is no longer pending");
 					break;
 				}
 				cursor = page.next;

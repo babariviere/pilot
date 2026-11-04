@@ -17,6 +17,16 @@ or copied without retrying the run.
 Stop cancels work, not prior file edits. A crash-interrupted native tool is not
 automatically replayed.
 
+New message sends and chat creation save an immutable delivery intent before
+contacting the daemon. Lost replies and offline periods reconcile automatically,
+including after restarting the app. Pending or Reconnecting is not Sent. Delivery…
+keeps details, copy and discard available without a routine Check or Send again.
+Older unresolved messages and one-shot actions remain inspectable and are not
+silently opted into retries. A newer daemon may be required for automatic sends.
+Stop and model changes fence older, not-yet-accepted captures; edit a rejected
+message to send a new intent. Discard prevents future retries, but cannot retract
+an already accepted message.
+
 ## Ask about Pilot
 
 On macOS, **Help → Ask about Pilot…** opens a read-only diagnostics conversation.

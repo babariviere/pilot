@@ -108,7 +108,8 @@ impl LocalViewer {
                     chat.busy,
                     window,
                     cx,
-                )
+                );
+                e.input_generation(&chat.id, chat.input_generation);
             });
         }
         if self.session_failure_focus.contains_focused(window, cx) {
@@ -292,6 +293,7 @@ impl LocalViewer {
             }
             Target::Draft(key) => self.open(
                 Chat {
+                    input_generation: None,
                     mission: Default::default(),
                     mission_coordinator: false,
                     failure: None,

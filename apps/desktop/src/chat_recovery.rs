@@ -9,6 +9,12 @@ impl ChatEditor {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let editor = cx.entity().downgrade();
+        let automatic = self
+            .cache
+            .get(key)
+            .and_then(|draft| draft.pending.as_ref())
+            .and_then(|id| self.state.book.as_ref()?.pending.get(id))
+            .is_some_and(|intent| intent.automatic.is_some());
         let key = key.to_string();
         div()
             .self_start()
@@ -22,11 +28,17 @@ impl ChatEditor {
                     .trigger(
                         crate::ui::action(
                             "composer-recovery",
-                            "Resolve…",
+                            if automatic {
+                                "Delivery…"
+                            } else {
+                                "Resolve…"
+                            },
                             crate::ui::Action::Quiet,
                         )
                         .disabled(self.update_checkpoint.is_some())
-                        .tooltip(if key.starts_with("subagent:") {
+                        .tooltip(if automatic {
+                            "Delivery details, copy or discard"
+                        } else if key.starts_with("subagent:") {
                             "Copy or discard. Subagent messages are never retried."
                         } else {
                             "Check, send again or discard this draft"
@@ -76,7 +88,8 @@ impl ChatEditor {
             actions = actions.child(detail);
         }
         if let Some(intent) = pending {
-            if intent.state == "unknown" && intent.operation.is_some() {
+            if intent.automatic.is_none() && intent.state == "unknown" && intent.operation.is_some()
+            {
                 let note = div()
                     .id("delivery-restart-note")
                     .min_w_0()
@@ -95,7 +108,7 @@ impl ChatEditor {
                 div()
                     .v_flex()
                     .gap_2()
-                    .when(intent.operation.as_ref().is_some_and(|op| op.kind != "subagent-send"), |actions| {
+                    .when(intent.automatic.is_none() && intent.operation.as_ref().is_some_and(|op| op.kind != "subagent-send"), |actions| {
                         actions
                             .child(
                                 Button::new("check-delivery")

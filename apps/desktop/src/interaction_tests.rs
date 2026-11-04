@@ -69,6 +69,8 @@ async fn diagnostic_creation_and_reply_preserve_role_without_project_reads_or_re
 
 #[path = "interaction_access_tests.rs"]
 mod access_waits;
+#[path = "interaction_automatic_tests.rs"]
+mod automatic;
 #[path = "interaction_catalog_tests.rs"]
 mod catalog_waits;
 #[path = "interaction_draft_discard_tests.rs"]
@@ -1077,7 +1079,7 @@ async fn delivery_diagnostic_valid_acknowledgments_never_retain_arbitrary_reject
                 id: report.delivery.id.clone(),
                 retry: false,
             });
-            until(&updates, |s| s.notice.starts_with("Pending:")).await;
+            until(&updates, |s| s.notice == "Sending…").await;
             assert_eq!(daemon.seen.lock().unwrap().envelopes.len(), before);
         }
         client.command(WriteCommand::Close);
@@ -1346,6 +1348,8 @@ enum Behavior {
 }
 #[derive(Default)]
 struct Seen {
+    offline: bool,
+    question_replies: bool,
     image_coordinator: bool,
     bad_identity: bool,
     requests: Vec<(String, String)>,
@@ -1402,6 +1406,7 @@ impl Daemon {
                             let mut body=vec![0;length];reader.read_exact(&mut body).await.unwrap();
                             let payload=if body.is_empty(){Value::Null}else{serde_json::from_slice::<Value>(&body).unwrap()};
                             let mut stream=reader.into_inner();
+                            if record.lock().unwrap().offline { return; }
                             let reject_then_refuse=behavior==Behavior::RejectThenLookupRefused && path=="/api/operations/receipt" && !record.lock().unwrap().envelopes.is_empty();
                             let fault=if (path=="/api/operations/receipt" && matches!(behavior,Behavior::LookupRefused|Behavior::LookupMalformed|Behavior::LookupOversize|Behavior::LookupTruncated)) || reject_then_refuse
                                 || (path=="/api/hello" && behavior==Behavior::HelloRefused)
@@ -1424,7 +1429,7 @@ impl Daemon {
                             let mut lose_response = false;
                             let response={
                                 let mut seen=record.lock().unwrap();seen.requests.push((method.clone(),path.clone()));
-                                if method=="GET"&&path=="/api/hello" {json!({"daemonId":if behavior==Behavior::BadIdentity||seen.bad_identity{"wrong"}else{"test-daemon"},"lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true}})}
+                                if method=="GET"&&path=="/api/hello" {json!({"daemonId":if behavior==Behavior::BadIdentity||seen.bad_identity{"wrong"}else{"test-daemon"},"lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true,"durableInputGeneration":1,"questionReplies":if seen.question_replies {Some(1)} else {None}}})}
                                 else if method=="GET"&&path=="/api/projects" {
                                     if behavior==Behavior::ProjectsUnavailable {json!({"error":"Synthetic unavailable"})}
                                     else if behavior==Behavior::ProjectRemoved {json!([{"id":"project-a","name":"Synthetic Atlas","path":"/tmp"}])}
@@ -1505,16 +1510,18 @@ async fn until(
     rx: &async_channel::Receiver<WriteState>,
     predicate: impl Fn(&WriteState) -> bool,
 ) -> WriteState {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    let mut last_notice = "no update";
+    let result = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let value = rx.recv().await.unwrap();
+            last_notice = value.notice;
             if predicate(&value) {
                 return value;
             }
         }
     })
-    .await
-    .expect("bounded synthetic courier update")
+    .await;
+    result.unwrap_or_else(|_| panic!("bounded synthetic courier update: {last_notice}"))
 }
 async fn ready(daemon: &Daemon, temp: &Temp) -> (Interaction, async_channel::Receiver<WriteState>) {
     let (client, updates) = Interaction::start(daemon.options.clone(), Ok(temp.0.clone()));
@@ -1674,7 +1681,7 @@ async fn same_folder_projects_use_exact_supported_identity_and_canonical_readbac
 }
 
 #[tokio::test]
-async fn invalid_or_stale_project_catalog_never_reserves_or_posts_creation() {
+async fn invalid_or_stale_project_catalog_retains_capture_without_posting_creation() {
     for behavior in [
         Behavior::ProjectsUnavailable,
         Behavior::ProjectRemoved,
@@ -1695,7 +1702,9 @@ async fn invalid_or_stale_project_catalog_never_reserves_or_posts_creation() {
         }));
         let state = until(&updates, |s| s.handled.get("new:project") == Some(&1)).await;
         let book = state.book.as_ref().unwrap();
-        assert!(book.pending.is_empty());
+        let intent = book.pending.values().next().unwrap();
+        assert!(intent.automatic.is_some());
+        assert_eq!(intent.state, "unknown");
         assert_eq!(
             book.drafts["new:project"].text,
             "Keep draft when project changes"
@@ -1807,7 +1816,7 @@ async fn explicit_retry_reuses_original_envelope_when_no_receipt_exists() {
 }
 
 #[tokio::test]
-async fn pending_never_reposts_and_restart_never_automatically_executes() {
+async fn pending_checks_do_not_repost_and_cold_load_waits_for_recovery_tick() {
     let daemon = Daemon::start(Behavior::Pending).await;
     let temp = Temp::new();
     let (client, updates) = ready(&daemon, &temp).await;
@@ -1821,7 +1830,7 @@ async fn pending_never_reposts_and_restart_never_automatically_executes() {
         id: id.clone(),
         retry: true,
     });
-    until(&updates, |s| s.notice.starts_with("Pending:")).await;
+    until(&updates, |s| s.notice == "Sending…").await;
     assert_eq!(daemon.seen.lock().unwrap().envelopes.len(), 1);
     client.command(WriteCommand::Close);
     until(&updates, |s| s.flushed).await;
@@ -1831,7 +1840,7 @@ async fn pending_never_reposts_and_restart_never_automatically_executes() {
     let (client, updates) = ready(&daemon, &temp).await;
     assert_eq!(daemon.seen.lock().unwrap().requests.len(), before);
     client.command(WriteCommand::Check { id, retry: false });
-    until(&updates, |s| s.notice.starts_with("Pending:")).await;
+    until(&updates, |s| s.notice == "Sending…").await;
     assert_eq!(daemon.seen.lock().unwrap().envelopes.len(), 1);
 }
 

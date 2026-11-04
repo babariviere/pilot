@@ -71,6 +71,8 @@ public struct FailedModelSource: Codable, Equatable, Hashable, Sendable {
 }
 
 public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendable {
+    /// Cancellation fence for opt-in durable sends. Absent on older daemons.
+    public var inputGeneration: Int? = nil
     /// The single project-less control chat. Its tools, not a workspace, perform orchestration.
     public var control: Bool? = nil
     /// On-demand operational specialist with a runtime-enforced read-only tool profile.

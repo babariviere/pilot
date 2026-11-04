@@ -330,6 +330,8 @@ export interface FailedModelResponse extends FailedModelRequest {
 }
 
 export interface SessionSummary {
+	/** Monotonic explicit-Stop fence for opt-in durable native sends. */
+	inputGeneration?: number;
 	/** Passive progress for manually started sequential chat flows. */
 	flow?: import("./automations.ts").FlowProgress;
 	/** Latest workspace setup boundary, independent of the agent's run outcome. */

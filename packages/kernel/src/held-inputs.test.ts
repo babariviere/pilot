@@ -41,6 +41,24 @@ async function fixture() {
 	return { storage, session, id: conversation.id, read };
 }
 
+test("a newer Stop permits exact dedupe but cannot admit an unseen captured send", async () => {
+	const f = await fixture();
+	try {
+		await holdOnStop(f.session, f.id, f.read, context);
+		const input = { requestId: "native-captured", content: "same immutable input", mode: "steer" as const };
+		await assert.rejects(
+			admitWithHeld(f.session, f.id, { ...input, dedupeOnly: true }, context),
+			/cancelled by Stop/,
+		);
+		const admitted = await admitWithHeld(f.session, f.id, input, context);
+		assert.ok(admitted?.id);
+		await holdOnStop(f.session, f.id, f.read, context);
+		assert.equal((await admitWithHeld(f.session, f.id, { ...input, dedupeOnly: true }, context))?.id, admitted.id);
+	} finally {
+		await f.session.close(context);
+	}
+});
+
 test("automation input arriving after Stop stays held and deduplicates until Send now", async () => {
 	const f = await fixture();
 	try {
@@ -133,6 +151,35 @@ test("coordinator answers require the current ordinary question and preserve que
 		await assert.rejects(reply(database, "mission:send:from:lead:mission:database"), /ordinary question/);
 		await holdOnStop(f.session, f.id, f.read, context);
 		await assert.rejects(reply(database, "mission:send:from:lead:mission:stopped"), /no longer pending/);
+	} finally {
+		await f.session.close(context);
+	}
+});
+
+test("native question reply IDs dedupe before checking a replaced question or Stop", async () => {
+	const f = await fixture();
+	try {
+		await f.session.commit(async (tx) => {
+			(await tx.doc(InboxDoc, f.id)).items = [];
+		}, context);
+		const publish = async (requestId: string) => {
+			await publishQuestionWithHeld(f.session, f.id, f.read, requestId, { question: "Which?" }, context);
+			return Number(
+				(await f.storage.scanEntries({ conversationId: f.id }, 100, undefined, context)).items.find(
+					(entry) => entry.kind === "pilot.question",
+				)!.id,
+			);
+		};
+		const first = await publish("question:first");
+		const reply = (questionReplyId: number, requestId: string) =>
+			admitWithHeld(f.session, f.id, { requestId, questionReplyId, content: "SQLite", mode: "steer" }, context);
+		const accepted = await reply(first, "native-user-one");
+		const second = await publish("question:second");
+		assert.deepEqual(await reply(first, "native-user-one"), { id: accepted!.id, held: false });
+		await assert.rejects(reply(first, "native-user-two"), /no longer pending/);
+		await assert.rejects(reply(second, "mission:send:lead:answer"), /Invalid native/);
+		await holdOnStop(f.session, f.id, f.read, context);
+		await assert.rejects(reply(second, "native-user-three"), /no longer pending/);
 	} finally {
 		await f.session.close(context);
 	}

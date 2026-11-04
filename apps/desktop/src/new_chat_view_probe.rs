@@ -549,6 +549,7 @@ pub fn run_new_chat_view_probe(cx: &mut HeadlessAppContext) {
                         state: "unknown".into(),
                         diagnostic: None,
                         answer: None,
+                        automatic: None,
                     },
                 );
                 editor.update(cx, |e, cx| {

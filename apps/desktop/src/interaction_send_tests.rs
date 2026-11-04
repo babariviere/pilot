@@ -107,7 +107,7 @@ async fn ordinary_send_autosaves_exact_newer_input_before_preflight_and_delivery
         submit(&client, key, 1, "Original 日本語 👩‍💻", 1, false);
         let envelope = arrived(&reached).await;
         let reserved = disk(&temp).pending.values().next().cloned();
-        assert_eq!(reserved.is_some(), path.starts_with("/api/operations"));
+        assert!(reserved.is_some(), "capture precedes every network wait");
 
         let mut newer = draft(2, "Newer 未送信 e\u{301} 🦀");
         newer.answer = original.answer.clone();
@@ -135,10 +135,12 @@ async fn ordinary_send_autosaves_exact_newer_input_before_preflight_and_delivery
         assert_eq!(before.drafts["chat:other"].text, "Other exact 日本語");
         if let Some(intent) = &reserved {
             assert!(before.pending[&intent.id] == *intent);
-            assert_eq!(
-                envelope,
-                serde_json::to_value(intent.operation.as_ref().unwrap()).unwrap()
-            );
+            if path.starts_with("/api/operations") {
+                assert_eq!(
+                    envelope,
+                    serde_json::to_value(intent.operation.as_ref().unwrap()).unwrap()
+                );
+            }
         }
         assert_eq!(
             daemon.seen.lock().unwrap().executions,
@@ -288,10 +290,7 @@ async fn ordinary_send_close_cancels_gated_http_despite_saturated_mutation_queue
         let restored = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
         assert_eq!(restored.book.drafts["chat:a"].text, "latest unsaved 日本語");
         assert_eq!(restored.book.drafts["chat:other"].text, "other unsaved");
-        assert_eq!(
-            restored.book.pending.len(),
-            usize::from(path != "/api/hello")
-        );
+        assert_eq!(restored.book.pending.len(), 1);
         assert!(restored.book.pending.values().all(|i| i.state == "unknown"));
         assert_eq!(daemon.seen.lock().unwrap().stops, 0);
         assert_eq!(
@@ -355,10 +354,7 @@ async fn ordinary_send_io_fault_fences_dispatch_but_retains_an_already_issued_ex
         fs::rename(&backup, &snapshot).unwrap();
         let restored = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
         assert_eq!(restored.book.drafts["chat:a"].revision, 1);
-        assert_eq!(
-            restored.book.pending.len(),
-            usize::from(path != "/api/hello")
-        );
+        assert_eq!(restored.book.pending.len(), 1);
     }
 }
 

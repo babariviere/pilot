@@ -10,6 +10,7 @@ import type { DatabaseCall } from "./database-tool.ts";
 import type { DiagnosticHistoryCall } from "./diagnostic-history-tool.ts";
 import type { DiagnosticsCall } from "./diagnostics-tool.ts";
 import { formatFailure } from "./failure.ts";
+import { InputGenerationRefused, QuestionReplyRefused } from "./held-inputs.ts";
 import type { MissionCall } from "./mission-tools.ts";
 import { preparePerformanceClear, setPerformanceCollectionEnabled } from "./performance.ts";
 import type { MissionContext, WorkspaceContext } from "./policy.ts";
@@ -342,6 +343,8 @@ export function runKernelWorker(): void {
 						admissionSpan?.carrier() ?? command.trace,
 						command.resumeHeld,
 						command.answerQuestionId,
+						command.questionReplyId,
+						command.dedupeOnly,
 					);
 					await send({ type: "accepted", requestId: command.requestId, ...delivery });
 					admissionSpan?.end();
@@ -685,6 +688,8 @@ export function runKernelWorker(): void {
 					requestId: "requestId" in command ? command.requestId : undefined,
 					message: formatFailure(error, `Command ${command.type}`),
 					...(error instanceof ConversationBusy ? { code: "busy" as const } : {}),
+					...(error instanceof QuestionReplyRefused ? { code: "stale_question" as const } : {}),
+					...(error instanceof InputGenerationRefused ? { code: "stopped" as const } : {}),
 				}).catch(() => undefined),
 			);
 	});

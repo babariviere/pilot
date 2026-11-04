@@ -24,8 +24,33 @@ durably adopt the receipt and clear/transfer the owning draft and attachments be
 Unknown or pending delivery must retain that ownership and must not create a fresh operation.
 
 Existing local-only composer APIs are retained for older daemons. Unified remote UI must use deliver()
-and explicit acknowledgment, rather than those legacy send/spawn calls. No offline chat-send queue
+and explicit acknowledgment, rather than those legacy send/spawn calls. No cross-host offline chat-send queue
 is enabled. Shared-context provisional write outboxes are separately allowed and may use the same
 generic journal mechanics without sharing chat-send policy. The generic journal is available to
 daemon couriers; cross-host context permissions/validation are not implemented by this primitive.
 
+## Native Local delivery
+
+New ordinary Next sends opt into recovery in the existing private `Book`. The
+writer reserves immutable bytes, operation/target IDs, model/project choice and
+attachment hashes before network preflight. Its FIFO owner services autosave and
+Close while HTTP waits, then reconciles with bounded 1–30 second backoff. It never
+constructs a replacement operation for an ambiguous outcome. Historical intents,
+subagent one-shot sends and Stop are not silently opted in.
+
+Receipt lookup precedes execution. Re-entering a pending journal joins its running
+handler or recovers admission with the same kernel request ID. Acceptance dedupes
+before extension input hooks, including detached attempts. Unknown receipts alone
+are not proof of nonacceptance. Stop, model changes and attempt moves durably
+advance `inputGeneration`; stale captures may settle an existing exact submission,
+but cannot start new input. Native question replies atomically bind `questionReplyId`.
+The hello capabilities are `durableInputGeneration:1` and `questionReplies:1`.
+
+The kernel SQLite writer uses `synchronous=FULL` and `fullfsync=ON` before exposing
+storage. This improves acknowledged WAL durability, not proof of physical power-loss
+survival. A synthetic 1000 × 1 KiB commit probe measured 3.5–4.2 seconds with FULL
+versus 50–70 ms with NORMAL; this is not an app-latency benchmark. Interrupted
+external tools remain interrupted and are never made replay-safe by input dedupe.
+An isolated missing-receipt scan measured median 0.02/0.46/1.93 ms for 1/256/1024
+conversations (10 reads each). Pages retain at most 64 conversation rows; total
+scan work grows with attempts. These are warm synthetic reads, not live recovery latency.

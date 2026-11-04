@@ -132,6 +132,7 @@ pub fn run_lost_ack_probe(cx: &mut HeadlessAppContext) {
                 (Receipt::Exact, 2),
             ] {
                 let server = Server::start();
+                server.seen.lock().unwrap().receipt = Receipt::Error;
                 let private = Private(
                     std::env::temp_dir().join(format!("native-lost-ack-{}", uuid::Uuid::new_v4())),
                 );
@@ -329,11 +330,7 @@ pub fn run_lost_ack_probe(cx: &mut HeadlessAppContext) {
                     j.view.read(cx).state.summary_fresh
                 });
                 retained(&private.book(), &original);
-                assert_eq!(
-                    server.seen.lock().unwrap().lookups,
-                    1,
-                    "no automatic recovery lookup"
-                );
+                assert!(server.seen.lock().unwrap().lookups >= 1);
 
                 // Reject foreign-owner and duplicate-sequence events before a
                 // following valid frame establishes that the socket consumed them.
@@ -497,6 +494,12 @@ pub fn run_lost_ack_probe(cx: &mut HeadlessAppContext) {
                     (restored.offset - return_mark.offset).abs() < 1.,
                     "navigation keeps history offset"
                 );
+                j.click(cx, "composer-recovery");
+                cx.update_window(h, |_, w, _| {
+                    assert!(w.find_all("check-delivery").is_empty());
+                    assert!(w.find_all("retry-delivery").is_empty());
+                })
+                .unwrap();
                 {
                     let mut s = server.seen.lock().unwrap();
                     s.receipt = receipt;
@@ -532,17 +535,19 @@ pub fn run_lost_ack_probe(cx: &mut HeadlessAppContext) {
                             .any(|r| r.source() == "stale foreign event")
                     }));
                 }
-                let before = j.last.delivery_reports.get(&original.id).cloned();
-                j.click(cx, "composer-recovery");
-                j.click(cx, "check-delivery");
-                j.until(cx, "explicit exact Check completes", |j, _| {
+                let known = identity == 0 && matches!(receipt, Receipt::Exact | Receipt::Absent);
+                let lookups = server.seen.lock().unwrap().lookups;
+                j.until(cx, "automatic exact reconciliation completes", |j, _| {
+                    if known { return j.last.book.as_ref().is_some_and(|b| !b.pending.contains_key(&original.id)); }
                     j.last.delivery_reports.get(&original.id).is_some_and(|r| {
-                        before
-                            .as_ref()
-                            .is_none_or(|b| r.delivery.diagnostic != b.delivery.diagnostic)
+                        r.saved && r.delivery.diagnostic.is_some_and(|d| {
+                            if identity != 0 { return d.category == crate::delivery_store::diagnostic::Category::Identity; }
+                            server.seen.lock().unwrap().lookups > lookups
+                                && if matches!(receipt, Receipt::Pending) { d.acknowledgment == crate::delivery_store::diagnostic::Acknowledgment::Pending }
+                                else { matches!(d.category, crate::delivery_store::diagnostic::Category::ReceiptMismatch | crate::delivery_store::diagnostic::Category::Refused) }
+                        })
                     })
                 });
-                let known = identity == 0 && matches!(receipt, Receipt::Exact);
                 let b = private.book();
                 if known {
                     assert!(b.pending.is_empty());
@@ -567,10 +572,7 @@ pub fn run_lost_ack_probe(cx: &mut HeadlessAppContext) {
                 assert!(b.drafts["chat:a"].answer == captured.answer);
                 assert!(b.drafts["chat:a"].model_choice == captured.model_choice);
                 server.assert_no_replay();
-                assert_eq!(
-                    server.seen.lock().unwrap().lookups,
-                    if identity == 0 { 2 } else { 1 }
-                );
+                assert!(server.seen.lock().unwrap().lookups >= 1);
                 cx.update_window(h, |_, w, cx| {
                     w.press("escape", cx);
                     editor.update(cx, |e, cx| assert!(!e.request_close(cx)));
@@ -595,7 +597,7 @@ pub fn run_lost_ack_probe(cx: &mut HeadlessAppContext) {
                 cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
                 cx.run_until_parked();
                 println!(
-                    "lost_ack {width} {} {receipt:?} identity={identity}: exact capture, held autosave, socket baseline, paged Find, target return, Check, Close/reopen passed",
+                    "lost_ack {width} {} {receipt:?} identity={identity}: exact capture, held autosave, socket baseline, paged Find, target return, automatic recovery, Close/reopen passed",
                     mode.name()
                 );
             }

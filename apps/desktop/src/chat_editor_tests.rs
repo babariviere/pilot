@@ -669,6 +669,7 @@ fn question_retry_carries_only_the_exact_fresh_awaited_question(cx: &mut TestApp
                     state: "unknown".into(),
                     diagnostic: None,
                     answer: Some(identity.clone()),
+                    automatic: None,
                 },
             );
             e.state.book = Some(std::sync::Arc::new(book));

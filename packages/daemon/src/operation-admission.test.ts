@@ -36,10 +36,22 @@ test("reserved create recovers exact metadata and opening admission, and send re
 	assert.equal((await reopened.spawnDurable(request, targetId, operationId)).id, targetId);
 	await assert.rejects(reopened.spawnDurable(request, targetId, randomUUID()), /another operation/);
 	const sendId = randomUUID();
-	await reopened.sendDurable(targetId, "second input", "followUp", sendId);
-	await reopened.sendDurable(targetId, "second input", "followUp", sendId);
+	await reopened.sendDurable(targetId, "second input", "followUp", sendId, { inputGeneration: 0 });
+	await reopened.sendDurable(targetId, "second input", "followUp", sendId, { inputGeneration: 0 });
 	assert.equal(
 		(await metadata()).pending.filter((item: { requestId: string }) => item.requestId === sendId).length,
 		1,
 	);
+	assert.equal(
+		(await metadata()).pending.find((item: { requestId: string }) => item.requestId === sendId).inputGeneration,
+		0,
+	);
+	await reopened.stop(targetId);
+	assert.equal(reopened.get(targetId)?.inputGeneration, 1);
+	const stale = randomUUID();
+	await assert.rejects(
+		reopened.sendDurable(targetId, "old offline capture", "steer", stale, { inputGeneration: 0 }),
+		/cancelled/,
+	);
+	assert.ok(!(await metadata()).pending.some((item: { requestId: string }) => item.requestId === stale));
 });

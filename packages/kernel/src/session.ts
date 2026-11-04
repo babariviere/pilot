@@ -114,7 +114,7 @@ import { refActivity } from "./ref-activity.ts";
 import { createRepairDiagnosticsTools } from "./repair-diagnostics-tools.ts";
 import { createRepairProposalTool, type RepairProposalCall } from "./repair-proposal-tool.ts";
 import { createSlackStatusTool, SLACK_STATUS_TOOL, type SlackStatusCall } from "./slack-status-tool.ts";
-import { openSessionStorage } from "./storage.ts";
+import { findInputReceipt, openSessionStorage } from "./storage.ts";
 import { SubagentBridge, type SubagentCommand } from "./subagents.ts";
 import { startTodoBridge } from "./todo-bridge.ts";
 import { createTodoTool } from "./todo-tool.ts";
@@ -1404,6 +1404,8 @@ export class KernelSession {
 		trace?: TraceCarrier,
 		resumeHeld = false,
 		answerQuestionId?: number,
+		questionReplyId?: number,
+		dedupeOnly = false,
 	): Promise<{ delivery: "delivered" | "queued" | "not_started"; reason?: string } | undefined> {
 		// Reserve admission before serialization yields, so model changes and idle-only sends cannot race preparation.
 		if (this.#closing || this.#changingModel || this.#moving || (onlyIfIdle && this.#admissions))
@@ -1420,6 +1422,8 @@ export class KernelSession {
 				trace,
 				resumeHeld,
 				answerQuestionId,
+				questionReplyId,
+				dedupeOnly,
 			),
 		);
 	}
@@ -1434,12 +1438,22 @@ export class KernelSession {
 		trace?: TraceCarrier,
 		resumeHeld = false,
 		answerQuestionId?: number,
+		questionReplyId?: number,
+		dedupeOnly = false,
 	): Promise<{ delivery: "delivered" | "queued" | "not_started"; reason?: string } | undefined> {
 		const traced = trace ? this.adapter.beginInteraction(requestId, trace) : false;
 		try {
 			if (this.#closing || this.#changingModel || this.#moving) throw new ConversationBusy(this.conversation.id);
 			// Native input handlers (prompt templates, skill commands) expand the text first.
-			const prepared = await this.adapter.prepareInput(content);
+			// Accepted retries must not rerun extension input hooks, even after Stop.
+			const existing = await findInputReceipt(this.#storage, requestId, context);
+			if (existing) {
+				if (!reportDelivery) return;
+				return existing.status === "unanswered"
+					? { delivery: "not_started", reason: "stopped" }
+					: { delivery: existing.status === "queued" ? "queued" : "delivered" };
+			}
+			const prepared = dedupeOnly ? content : await this.adapter.prepareInput(content);
 			const heldAdmission = await admitWithHeld(
 				this.harness,
 				this.conversation.id,
@@ -1448,6 +1462,8 @@ export class KernelSession {
 					content: prepared,
 					mode,
 					...(answerQuestionId !== undefined ? { answerQuestionId } : {}),
+					...(questionReplyId !== undefined ? { questionReplyId } : {}),
+					...(dedupeOnly ? { dedupeOnly: true } : {}),
 					...(event ? { entry: { kind: "pi.user", data: { event: { ...event } } } } : {}),
 				},
 				context,

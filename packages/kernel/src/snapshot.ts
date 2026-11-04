@@ -27,7 +27,7 @@ import { HeldInputsDoc } from "./held-inputs.ts";
 import { InputOrigins } from "./input-origin.ts";
 import { readQuestionBoundary, readRecentEntries, readTranscriptPage } from "./paged-history.ts";
 import { queueUpdate, queueUpdateForDisplay } from "./queue.ts";
-import { openSessionReader } from "./storage.ts";
+import { findInputReceipt, openSessionReader } from "./storage.ts";
 import { TodoProgressDoc, todosUpdate } from "./todos.ts";
 import { wireCompactionFailure, wireCompactions } from "./wire-compaction.ts";
 
@@ -38,6 +38,17 @@ export interface PersistedSessionView {
 }
 
 const context = BACKGROUND_CONTEXT;
+
+/** Exact committed request lookup, with no agent, initialization or filesystem write. */
+export async function readAcceptedInput(directory: string, requestId: string): Promise<boolean> {
+	const storage = await openSessionReader(directory);
+	if (!storage) return false;
+	try {
+		return (await findInputReceipt(storage, requestId, context)) !== undefined;
+	} finally {
+		await storage.close(context);
+	}
+}
 
 /** The durable structural view of one conversation, as a single snapshot event plus its queue. */
 async function conversationView(

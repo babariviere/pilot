@@ -214,6 +214,12 @@ export type KernelCommand =
 			resumeHeld?: boolean;
 			/** Coordinator reply to this exact pending ordinary question entry. */
 			answerQuestionId?: number;
+			/** Native user reply, atomically fenced to the exact immutable question entry. */
+			questionReplyId?: number;
+			/** Native capture's Stop generation, retained in pilotd's outbox. */
+			inputGeneration?: number;
+			/** A newer Stop permits receipt dedupe only, never a new submission. */
+			dedupeOnly?: boolean;
 			/** Ephemeral W3C parent context from pilotd. Never contains baggage or conversation data. */
 			trace?: TraceCarrier;
 			event?: import("@pilot/protocol").ChatEventSummary;
@@ -444,4 +450,4 @@ export type KernelPacket =
 	/** A compaction started or ended. Shown as work, but it is not a turn and produces no result. */
 	| { type: "compacting"; compacting: boolean }
 	| { type: "events"; watchId: string; events: AgentEvent[] }
-	| { type: "error"; requestId?: string; message: string; code?: "busy" };
+	| { type: "error"; requestId?: string; message: string; code?: "busy" | "stale_question" | "stopped" };

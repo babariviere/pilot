@@ -594,13 +594,14 @@ impl ChatEditor {
         if !self.question_editable() || self.error.is_some() {
             return;
         }
-        let (Some(key), Some(question), Some(draft)) = (
+        let (Some(key), Some(question), Some(mut draft)) = (
             self.selected.clone(),
             self.questions.current.clone(),
             self.draft().cloned(),
         ) else {
             return;
         };
+        self.capture_generation(&key, &mut draft);
         if expected.is_some_and(|expected| *expected != question.identity) {
             return;
         }

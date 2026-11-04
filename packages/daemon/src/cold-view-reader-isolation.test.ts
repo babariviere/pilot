@@ -35,6 +35,31 @@ test("cold todo counts read committed progress under a live writer lease without
 	assert.equal(await reader.readTodoCount(join(directory, "unopened")), 0);
 });
 
+test("input receipt reads exact committed IDs across detached conversations, without a worker", async (t) => {
+	const directory = await mkdtemp(join(tmpdir(), "pilot-input-receipt-"));
+	const reader = new ColdViewReader();
+	const owned = await openSessionStorage(directory);
+	const session = createSession(owned.storage);
+	t.after(async () => {
+		await reader.close();
+		await session.close(context);
+		owned.release();
+		await rm(directory, { recursive: true, force: true });
+	});
+	await session.commit(async (tx) => {
+		const detached = await tx.createConversation({ ownership: { kind: "ownerless" } });
+		await tx.createSubmission({
+			conversationId: detached.id,
+			requestId: "exact-operation",
+			type: "input",
+			status: "queued",
+		});
+	}, context);
+	assert.equal(await reader.readAcceptedInput(directory, "exact-operation"), true);
+	assert.equal(await reader.readAcceptedInput(directory, "Exact-operation"), false);
+	assert.equal(await reader.readAcceptedInput(join(directory, "unopened"), "exact-operation"), false);
+});
+
 test("a watch-mode notice never consumes the one real read result", async (t) => {
 	const directory = await mkdtemp(join(tmpdir(), "pilot-watch-notice-reader-"));
 	const reader = new ColdViewReader(new URL("./testing/watch-notice-reader-worker.ts", import.meta.url));

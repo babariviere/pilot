@@ -232,6 +232,7 @@ mod mission_association_tests {
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Chat {
+    pub(crate) input_generation: Option<u64>,
     pub(crate) mission: MissionAssociation,
     /// Swift `isMissionCoordinator`: a passive role, never proof of membership.
     pub(crate) mission_coordinator: bool,
@@ -359,6 +360,9 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
         local_draft: false,
         session_path: crate::session_clipboard::path(value),
         writable: messageable_local(value),
+        input_generation: value["inputGeneration"]
+            .as_u64()
+            .filter(|n| *n <= 9_007_199_254_740_990),
         busy: value["working"] == true
             || matches!(value["state"].as_str(), Some("working" | "starting")),
         signal,

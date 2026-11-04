@@ -13,7 +13,8 @@ or a claim about why a particular user's earlier creation failed.
   and private failure classes. No arbitrary message fields.
 - [interaction.rs](../src/interaction.rs): the existing worker performs typed bounded
   HTTP reads and exact-operation observation/retention. Redirects and automatic
-  retries remain disabled. Non-200 bodies are not parsed or echoed.
+  transport retries remain disabled. New opted-in intents reconcile through their
+  durable operation IDs, not implicit HTTP retries. Non-200 bodies are not parsed or echoed.
 - [delivery_store.rs](../src/delivery_store.rs): optional diagnostics on existing
   pending Intent and latest Delivery summary. Existing Book remains the only file.
 - [chat_editor.rs](../src/chat_editor.rs): exact owner/id/target/kind/revision matching,
@@ -71,7 +72,9 @@ bytes are absent; reopening uses only the actual validated private snapshot. Mem
 observations cannot be promised across process restart. A diagnostic-only write failure
 after successful adoption cannot remove the already durable accepted summary.
 
-Restart loads optional notes with the Book and performs no lookup, execution or retry.
+Restart loads optional notes with the Book. New intents carrying an `automatic`
+capture resume exact-operation reconciliation; historical intents without it
+perform no automatic lookup, execution or retry.
 Legacy schema1 records without notes remain readable, with no inferred historical
 diagnostic or envelope change. Invalid enum/status/extra diagnostic fields fail closed.
 Older binaries that reject new fields must not overwrite the private file on downgrade.
@@ -86,11 +89,13 @@ separate uncertainty/dismissal behavior.
 
 The conversation remains primary. The caption replaces duplicate transient delivery
 notices/ordinary autosave success, not private-write or unsaved-input errors. Existing
-Check/Retry/Stop/recovery actions remain explicit, reachable native controls; diagnostics
-do not auto-invoke them, authorize a send, clear Unknown or change permission/IME guards.
+Historical Check/Retry and Stop/recovery remain explicit native controls. New
+ordinary sends reconcile automatically; their Delivery disclosure keeps details,
+copy and discard, without routine Check/Send again. Diagnostics do not authorize a
+send, clear Unknown or change permission/IME guards.
 The discard is one more explicit control: it never runs on its own, never sends, and
 leaves a settled chat draft alone. No new entity, animation, input, timer or render-time
-I/O is introduced.
+I/O is introduced by diagnostic rendering. Retry timing belongs to the existing writer.
 
 Pure/store and faux courier cases live beside their owners. They cover loss before/after
 admission, typed HTTP boundaries/mismatches, lookup-only zero-execution, acknowledgment

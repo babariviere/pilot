@@ -395,23 +395,34 @@ impl DeliveryOwner<'_> {
             .key
             .strip_prefix("chat:")
             .is_some_and(|target| self.store.book.model_changes.contains_key(target));
-        self.effect(send_preflight(
-            client,
-            options,
-            &request,
-            model_pending,
-            false,
-        ))
-        .await?;
+        let automatic =
+            !request.stop && crate::session_subagents::Target::from_key(request.key).is_none();
+        if model_pending && !request.stop {
+            return Err("A model switch is unconfirmed. Draft retained.");
+        }
+        if !automatic {
+            self.effect(send_preflight(
+                client,
+                options,
+                &request,
+                model_pending,
+                false,
+            ))
+            .await?;
+        }
         // Preflight may have overlapped newer input. Save it without replacing the
         // captured request. Store::prepare reserves that exact older intent.
         self.save()?;
         if self.store.book.host != options.host() {
             return Err("Local identity changed. Draft retained.");
         }
-        let intent =
+        let intent = if automatic {
             self.store
-                .prepare(request.key, request.draft, request.follow_up, request.stop)?;
+                .prepare_automatic(request.key, request.draft, request.follow_up)?
+        } else {
+            self.store
+                .prepare(request.key, request.draft, request.follow_up, request.stop)?
+        };
         ensure_owned(self.store, options, &intent)?;
         self.prepared("Intent saved. Waiting for Local delivery.");
         if request.stop {
@@ -505,9 +516,57 @@ impl DeliveryOwner<'_> {
         let mut receipt = self
             .effect(operation(client, options, op, true, diagnostic))
             .await?;
-        if receipt["state"] == "unknown" && retry {
-            // Explicit Retry retains the same envelope/target. Pending is NEVER re-posted.
-            if op.kind == "chat-send" {
+        if retry
+            && (receipt["state"] == "unknown"
+                || (intent.automatic.is_some() && receipt["state"] == "pending"))
+        {
+            // Re-enter the durable journal with the exact envelope. It joins running
+            // handlers or recovers pending admission; settled receipts never rerun.
+            if intent.automatic.is_some() {
+                let hello = self
+                    .effect(observe(
+                        options,
+                        diagnostic,
+                        Stage::Identity,
+                        client.get(format!("{}/api/hello", options.loopback())),
+                    ))
+                    .await?;
+                options
+                    .verify(&hello)
+                    .inspect_err(|_| diagnostic.category = Category::Identity)?;
+                if (op.kind == "chat-send" && hello["capabilities"]["durableInputGeneration"] != 1)
+                    || (intent.answer.is_some() && hello["capabilities"]["questionReplies"] != 1)
+                {
+                    diagnostic.category = Category::Refused;
+                    return Err("Update the daemon to deliver this saved message.");
+                }
+            }
+            if receipt["state"] == "unknown"
+                && let Some(captured) = &intent.automatic
+            {
+                let payload: Value =
+                    serde_json::from_str(&op.payload).map_err(|_| "Corrupt message capture")?;
+                self.effect(send_preflight(
+                    client,
+                    options,
+                    &Submission {
+                        key: &intent.key,
+                        draft: captured,
+                        follow_up: payload["mode"] == "followUp",
+                        stop: false,
+                    },
+                    self.store.book.model_changes.contains_key(&intent.target),
+                    false,
+                ))
+                .await
+                .inspect_err(|_| diagnostic.category = Category::Refused)?;
+                for image in &captured.attachments {
+                    image
+                        .verify()
+                        .inspect_err(|_| diagnostic.category = Category::Refused)?;
+                }
+            }
+            if op.kind == "chat-send" && intent.automatic.is_none() {
                 if !crate::delivery_store::token(&op.target_id) {
                     return Err("Invalid Local chat target");
                 }
@@ -578,23 +637,39 @@ impl DeliveryOwner<'_> {
         if answer.reply(question)?.is_none() {
             return Err("Choose an answer or write a reply");
         }
-        self.effect(gate(client, options)).await?;
         if self.store.book.model_changes.contains_key(target) {
             return Err("A model switch is unconfirmed. Question reply retained");
         }
-        question_turn_ready(
-            &self.effect(writable(client, options, target)).await?,
-            question.content.blocking,
-        )?;
-        // The native owner has checked its exact current question projection.
-        // Local only offers ordinary steering, not an atomic question-CAS endpoint.
-        // Preflight may overlap a newer answer or ordinary edit. Persist first;
-        // prepare_answer retains its existing stale-capture and selection fences.
+        let hello = self
+            .effect(read_json(
+                client.get(format!("{}/api/hello", options.loopback())),
+            ))
+            .await;
+        let automatic = match hello {
+            Ok(hello) => {
+                options.verify(&hello)?;
+                hello["capabilities"]["questionReplies"] == 1
+            }
+            Err(error) if *self.closing => return Err(error),
+            // Offline explicit replies still retain intent. The atomic capability
+            // is required before any later transmission, never guessed on retry.
+            Err(_) => true,
+        };
+        if !automatic {
+            question_turn_ready(
+                &self.effect(writable(client, options, target)).await?,
+                question.content.blocking,
+            )?;
+        }
         self.save()?;
         if self.store.book.host != options.host() {
             return Err("Local identity changed. Question reply retained.");
         }
-        let intent = self.store.prepare_answer(key, draft, question, answer)?;
+        let intent = if automatic {
+            self.store.prepare_automatic_answer(key, draft, question)?
+        } else {
+            self.store.prepare_answer(key, draft, question, answer)?
+        };
         ensure_owned(self.store, options, &intent)?;
         self.prepared("Reply saved. Sending…");
         self.reconcile(client, options, &intent.id, true, Some(question), report)

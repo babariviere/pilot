@@ -785,6 +785,7 @@ impl LocalViewer {
         view.state.list_loaded = true;
         view.state.chats = Arc::new(vec![
             Chat {
+                input_generation: None,
                 mission: Default::default(),
                 mission_coordinator: false,
                 failure: None,
@@ -815,6 +816,7 @@ impl LocalViewer {
                 attention: None,
             },
             Chat {
+                input_generation: None,
                 mission: Default::default(),
                 mission_coordinator: false,
                 failure: None,
@@ -845,6 +847,7 @@ impl LocalViewer {
                 attention: None,
             },
             Chat {
+                input_generation: None,
                 mission: Default::default(),
                 mission_coordinator: false,
                 failure: None,
@@ -1052,6 +1055,7 @@ impl LocalViewer {
         let mut view = Self::synthetic(window, cx);
         let mut chats = view.state.chats.as_ref().clone();
         chats.push(Chat {
+            input_generation: None,
             mission: Default::default(),
             mission_coordinator: false,
             failure: None,
@@ -1524,6 +1528,7 @@ impl LocalViewer {
                     }
                     view.open(
                         Chat {
+                            input_generation: None,
                             mission: Default::default(),
                             mission_coordinator: false,
                             failure: None,
@@ -1942,6 +1947,7 @@ impl LocalViewer {
         let key = format!("chat:{}", chat.id);
         self.editor.update(cx, |editor, cx| {
             editor.select(key, chat.writable, chat.busy, window, cx);
+            editor.input_generation(&chat.id, chat.input_generation);
             editor.attachment_coordinator(chat.mission_coordinator, cx);
         });
         self.selected = Some(chat.id);
@@ -2094,6 +2100,7 @@ impl LocalViewer {
             let (writable, busy) = (chat.writable, chat.busy || self.state.queued > 0);
             self.editor.update(cx, |editor, cx| {
                 editor.permission(writable, busy, cx);
+                editor.input_generation(&chat.id, chat.input_generation);
                 editor.attachment_coordinator(chat.mission_coordinator, cx);
                 editor.background(chat.background_work, cx);
                 // Only jobs run: their strip above the composer says so instead.
@@ -2547,6 +2554,7 @@ impl LocalViewer {
             let mut all: Vec<_> = drafts
                 .into_iter()
                 .map(|(key, title)| Chat {
+                    input_generation: None,
                     mission: Default::default(),
                     mission_coordinator: false,
                     failure: None,
@@ -3431,6 +3439,7 @@ mod refresh_tests {
             view.update(cx, |v, cx| {
                 v.open(
                     Chat {
+                        input_generation: None,
                         mission: Default::default(),
                         mission_coordinator: false,
                         failure: None,

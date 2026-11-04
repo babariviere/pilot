@@ -1,5 +1,5 @@
-//! User-driven Local courier and private draft writer. No legacy send/create POST.
-//! Recovery never executes: only explicit Retry can reuse a stored immutable intent.
+//! Local courier and private draft writer. New sends recover through durable dedupe.
+//! Historical Unknown and replay-unsafe actions remain explicit and inspectable.
 use crate::delivery_store::diagnostic::{Acknowledgment, Category, Diagnostic, Stage};
 use crate::{
     LocalOptions,
@@ -449,7 +449,35 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
     publish(updates, replace, status.clone());
     let mut autosave = Autosave::default();
     let mut closing = false;
+    let mut retries = BTreeMap::<String, (tokio::time::Instant, Duration)>::new();
     loop {
+        let now = tokio::time::Instant::now();
+        retries.retain(|id, _| {
+            store.as_ref().is_ok_and(|s| {
+                s.book
+                    .pending
+                    .get(id)
+                    .is_some_and(|i| i.automatic.is_some())
+            })
+        });
+        if let Ok(store) = &store
+            && !store.is_faulted()
+        {
+            for intent in store
+                .book
+                .pending
+                .values()
+                .filter(|i| i.automatic.is_some())
+            {
+                retries
+                    .entry(intent.id.clone())
+                    .or_insert((now + Duration::from_secs(1), Duration::from_secs(1)));
+            }
+        }
+        let next_retry = retries
+            .iter()
+            .min_by_key(|(_, (at, _))| *at)
+            .map(|(id, (at, _))| (id.clone(), *at));
         let command = tokio::select! {
             biased;
             signal=close.recv()=>match signal {
@@ -467,6 +495,14 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
             }},
             // An expired ceiling wins over even a continuously ready edit wake.
             _=tokio::time::sleep_until(autosave.deadline.unwrap_or_else(||tokio::time::Instant::now()+Duration::from_secs(3600))),if autosave.deadline.is_some()=>None,
+            _=tokio::time::sleep_until(next_retry.as_ref().map_or(now+Duration::from_secs(3600), |(_, at)| *at)),if next_retry.is_some()=>{
+                let (id, _) = next_retry.unwrap();
+                if let Some((at, delay)) = retries.get_mut(&id) {
+                    *delay = (*delay * 2).min(Duration::from_secs(30));
+                    *at = tokio::time::Instant::now() + *delay;
+                }
+                Some(WriteCommand::Check { id, retry: true })
+            },
             signal=wake.recv()=>{
                 if signal.is_err(){if let Ok(store)=&mut store{let _=flush(store,edits);}break;}
                 autosave.edited(tokio::time::Instant::now());
@@ -969,7 +1005,7 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                 if key.starts_with("subagent:") {
                                     "Draft discarded locally. The earlier message may have arrived."
                                 } else {
-                                    "Draft discarded. Nothing was sent."
+                                    "Draft discarded locally. Delivery may already have arrived."
                                 }
                             })
                         }
@@ -1515,6 +1551,9 @@ fn adopt_receipt(
         .ok_or("Missing immutable operation")?;
     if receipt["state"] == "unknown" {
         diagnostic.category = Category::Unknown;
+        if intent.automatic.is_some() {
+            return Ok("Reconnecting…");
+        }
         return Ok("Couldn't confirm this was sent. Use Resolve to check or send it again.");
     }
     if receipt["operationId"] != op.operation_id
@@ -1536,7 +1575,11 @@ fn adopt_receipt(
                 adoption_failure(diagnostic, store, error);
                 return Err(error);
             }
-            Ok("Pending: daemon owns this delivery. Check later; it was not posted again.")
+            Ok(if intent.automatic.is_some() {
+                "Sending…"
+            } else {
+                "Pending: daemon owns this delivery. Check later; it was not posted again."
+            })
         }
         Some("accepted") => {
             if receipt["result"]["sessionId"] != op.target_id {

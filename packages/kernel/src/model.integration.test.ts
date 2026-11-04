@@ -2184,6 +2184,32 @@ test("retry, edit and restore continue from earlier points in attempts that surv
 	assert.equal(f.a.state.callCount + f.b.state.callCount, 4, "rewinding and switching never run a model");
 });
 
+test("accepted native input dedupes across detached attempts without repeating input hooks", {
+	timeout: 15_000,
+}, async (t) => {
+	const f = await fixture(t);
+	let session = await f.open();
+	const requestId = randomUUID();
+	f.a.setResponses([fauxAssistantMessage("Original answer")]);
+	await session.submit(requestId, "exact captured input", "followUp");
+	await session.conversation.waitForIdle(context);
+	const first = (await session.conversation.entries({}, 100, undefined, context)).items.find(
+		(entry) => entry.kind === "pi.user",
+	)!;
+	await session.rewind("edit", first.id);
+	await session.close();
+	session = await f.open();
+	const hook = t.mock.method(f.adapters.at(-1)!, "prepareInput", async () => {
+		throw new Error("Accepted input must not repeat hooks");
+	});
+	await session.submit(requestId, "exact captured input", "followUp");
+	await session.conversation.waitForIdle(context);
+	assert.equal(hook.mock.callCount(), 0);
+	assert.equal(f.a.state.callCount, 1);
+	assert.equal((await session.conversation.entries({}, 100, undefined, context)).items.length, 0);
+	await session.close();
+});
+
 test("rewinding rejects unknown entries and points that cannot be resent", { timeout: 15_000 }, async (t) => {
 	const f = await fixture(t);
 	const session = await f.open();

@@ -18,6 +18,12 @@ pub(crate) struct Attachment {
     pub(crate) hash: String,
 }
 impl Attachment {
+    pub(crate) fn verify(&self) -> Result<(), &'static str> {
+        if !self.validate() || crate::delivery_store::hash_bytes(&read(&self.path)?) != self.hash {
+            return Err("Attached image changed. Original message retained.");
+        }
+        Ok(())
+    }
     pub(crate) fn validate(&self) -> bool {
         uuid::Uuid::parse_str(&self.id).is_ok()
             && self.path.is_absolute()

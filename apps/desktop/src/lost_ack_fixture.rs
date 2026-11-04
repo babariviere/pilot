@@ -236,13 +236,29 @@ async fn serve(stream: TcpStream, c: Channels) {
     let value = match (method, path) {
         ("GET", "/api/hello") => {
             let s = c.seen.lock().unwrap();
-            json!({"daemonId":if s.wrong_daemon{"wrong-daemon"}else{"test-daemon"},"lineageId":if s.wrong_lineage{"wrong-lineage"}else{"test-lineage"},"protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true}})
+            json!({"daemonId":if s.wrong_daemon{"wrong-daemon"}else{"test-daemon"},"lineageId":if s.wrong_lineage{"wrong-lineage"}else{"test-lineage"},"protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true,"durableInputGeneration":1}})
         }
         ("GET", "/api/projects") => json!([]),
         ("GET", "/api/sessions/a") => summary("a"),
         ("GET", "/api/sessions/b") => summary("b"),
         ("POST", "/api/operations") => {
             let op: Value = serde_json::from_slice(&body).unwrap();
+            let duplicate = {
+                let s = c.seen.lock().unwrap();
+                s.envelope.as_ref().is_some_and(|captured| {
+                    assert_eq!(captured, &op);
+                    true
+                })
+            };
+            if duplicate {
+                let state = if matches!(c.seen.lock().unwrap().receipt, Receipt::Pending) {
+                    "pending"
+                } else {
+                    "accepted"
+                };
+                response(&mut stream, "200 OK", json!({"operationId":op["operationId"],"payloadHash":op["payloadHash"],"destination":op["destination"],"targetId":op["targetId"],"state":state,"result":{"sessionId":"a"}})).await;
+                return;
+            }
             {
                 let mut s = c.seen.lock().unwrap();
                 s.executes += 1;

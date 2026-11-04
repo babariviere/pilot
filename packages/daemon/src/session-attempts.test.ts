@@ -148,6 +148,11 @@ test("retry stops the kernel, reopens the new attempt for every viewer, clears t
 	assert.deepEqual(stored.attempts, attempts);
 	assert.equal(stored.outcome, undefined);
 	assert.equal(stored.lastOutcomeAt, 300);
+	assert.equal(stored.inputGeneration, 1, "attempt changes fence previously captured native sends");
+	await f.sessions.sendDurable(f.id, "old capture", "steer", randomUUID(), { inputGeneration: 0 });
+	const captured = f.workers[1]!.commands.at(-1)!;
+	assert.equal(captured.type, "input");
+	assert.ok(captured.type === "input" && captured.dedupeOnly, "stale capture can only inspect an existing receipt");
 });
 
 test("edit returns the draft without sending, and an unchanged attempt keeps its kernel", async (t) => {

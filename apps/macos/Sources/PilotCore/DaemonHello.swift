@@ -39,6 +39,8 @@ public struct DaemonCapabilities: Codable, Equatable, Sendable {
     public let passiveTaskModel: Bool?
     public let passiveFailedModel: Bool?
     public let guardedQueue: Bool?
+    public var questionReplies: Int? = nil
+    public var durableInputGeneration: Int? = nil
 
     public var supportsEnvironmentSetup: Bool { environmentSetup == 1 }
 }

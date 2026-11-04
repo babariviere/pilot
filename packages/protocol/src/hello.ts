@@ -18,6 +18,9 @@ export interface DaemonHello {
 
 /** Availability on this host, not permissions granted by a client or lifecycle control for another host. */
 export interface DaemonCapabilities {
+	/** Idempotent native user replies fenced to an immutable question entry. */
+	questionReplies?: 1;
+	durableInputGeneration?: 1;
 	/** Explicit native Insights setup, passive reads and lifecycle confirmations. */
 	insights?: 1;
 	/** Bounded active-session cwd path candidates; no home/project-root fallback. */

@@ -28,6 +28,7 @@ type Job = {
 	/** Read a bounded page from one explicitly authorized diagnostics target. */
 	diagnosticHistory?: { target: DiagnosticTargetReference; before?: number; limit: number };
 	todoCount?: boolean;
+	inputReceipt?: string;
 	resolve(view: SizedSessionView): void;
 	reject(error: Error): void;
 };
@@ -41,6 +42,27 @@ export class ColdViewReader {
 
 	constructor(entry: URL = snapshotWorkerEntry) {
 		this.entry = entry;
+	}
+
+	readAcceptedInput(directory: string, requestId: string): Promise<boolean> {
+		if (this.closed) return Promise.reject(new Error("Session reader is closed"));
+		if (this.waiting.length >= MAX_QUEUED_READS)
+			return Promise.reject(new ServiceUnavailable("Session history is busy"));
+		return new Promise<SizedSessionView>((resolve, reject) => {
+			this.waiting.push({
+				directory,
+				cwd: directory,
+				includeTodos: false,
+				inputReceipt: requestId,
+				resolve,
+				reject,
+			});
+			this.drain();
+		}).then((view) => {
+			const accepted = (view as unknown as { acceptedInput?: unknown }).acceptedInput;
+			if (typeof accepted !== "boolean") throw new Error("Invalid input receipt read");
+			return accepted;
+		});
 	}
 
 	/** Abort only queued work. Once started, a read can still populate a shared snapshot cache. */
@@ -179,6 +201,7 @@ export class ColdViewReader {
 						...(job.earlier === undefined ? {} : { earlier: job.earlier }),
 						...(job.diagnosticHistory === undefined ? {} : { diagnosticHistory: job.diagnosticHistory }),
 						...(job.todoCount ? { todoCount: true } : {}),
+						...(job.inputReceipt === undefined ? {} : { inputReceipt: job.inputReceipt }),
 					},
 					execArgv: [],
 				});
