@@ -1,5 +1,12 @@
 # Coordinator-first desktop workflow
 
+**Current scope correction (D48):** Review is project-owned and chat-first, open directly from a
+chat, including a standalone chat. Project Review aggregates chats/changes; mission is optional
+context/filter. Historical wireframes below do not choose scope, request policy or submission defaults.
+The remaining material choices are the [three-question menu](mission-authority-review-policy.md#remaining-decision-menu-46-and-47),
+with the [request/disposition recommendation](mission-native-review.md#request-and-disposition-decision-47).
+All unselected recommendations remain proposed; no execution/spending/authority expansion follows.
+
 ## Screen and flow inventory
 
 Lightweight interaction proposal for **apps/desktop**, not implementation or a visual redesign.
@@ -12,7 +19,7 @@ Companion artifact: **Coordinator-first desktop: flow and wireframe vignettes**,
 | --- | --- | --- |
 | Interview and approval | Coordinator conversation; mission brief workspace | Establish the outcome, inspect findings, then explicitly approve an exact brief/authority package. New approval sheet, not a new destination. |
 | Oversight and tasks | Mission Overview / Tasks; conversation mission inspector | Show what needs a decision, what continues and why. Disclose effective authority and exact task evidence without managing worker conversations. |
-| Inbox to Review | Inbox; mission Review tab | Open the exact required review, with a return path to the filtered Inbox. Request-backed attention and deep links are future work. |
+| Inbox to Review | Inbox; chat Review; project Review aggregate | Open the same exact chat/change Review, with a return path to the filtered Inbox. Request-backed attention and deep links are future work. |
 | Help and recovery | Coordinator conversation; mission Overview | Explain the blocker and smallest human action. New request detail within the existing page, not a worker-chat queue. |
 | Worker history | Mission Members disclosure; archived-chat filter | Find retained deliveries, revisions and conversations after workers retire. Proposed history detail extends existing browsing. |
 | Guidance and provenance | Review Details; mission Overview menu | Optionally inspect what guidance was supplied and correct its scope or interpretation. New on-demand inspector, not a learning dashboard. |
@@ -98,8 +105,9 @@ and companion patterns; none requires a new global destination. Detailed annotat
 5. **Review only when needed.** Agent-only policy work continues quietly after its required gates;
    future human-required requests enter Inbox. Opening the item selects the exact worker-owned
    change/comparison in Review. Multiple changes remain individually selectable within one request.
-   Opening, source inspection or Viewed does not approve anything. Today the equivalent browse path
-   is Missions → mission → Review, with no Inbox request, human verdict or acceptance action.
+   Opening, source inspection or Viewed does not approve anything. D48's direct chat/project entry
+   is the selected scope; #88 corrects the historical mission-only browse path separately, without
+   Inbox requests, human verdicts or acceptance actions.
 6. **Assess delivery separately.** Coordinator checks each criterion against exact evidence,
    limitations and required reviews/checks; later allocation identifies selected assessment scope,
    never historical task purpose. Acceptance, eligibility, integration and worker-finished approval
@@ -317,7 +325,7 @@ Retained identity is historical content identity, **not live freshness, runtime 
 attribution, independence, passing checks, acceptance, integration or permission**. Refresh keeps the
 selected comparison; a newer capture offers an explicit switch with old drafts/history retained.
 
-## One attention flow, scope still open
+## One attention flow, project/chat scope decided
 
 Proposed request-backed attention: worker → coordinator triage → user only for required human review,
 out-of-authority decision or genuine help. Coordinator answers ordinary factual questions itself.
@@ -326,7 +334,7 @@ approval or a demand to inspect every worker chat. Existing fallback remains unt
 
 Inbox and Overview show the **same request**, not independent acknowledgements. One row per logical
 request lineage, not per change/capture/message; distinct review and scope/help requests stay distinct.
-The row names mission, intent and next action; worker identity is secondary. New revisions update the
+The row names chat/change, intent and next action; mission is optional context. New revisions update the
 existing lineage without stealing selection. Opening/reading/dismissing does not resolve required
 action. Authoritative submission, answer consumption, withdrawal or completion resolves the relevant
 request under its contract, not an arbitrary read flag. No new attention source is activated here.
@@ -338,17 +346,16 @@ Automatic retirement success and routine learning create no Inbox chores. Cleanu
 the coordinator first, then the user only when their action/authority is needed. Preserve urgent
 failure and Stop/recovery paths independently of batching; no new timing/SLA is selected.
 
-| Review scope option (not selected) | Benefit | Cost / constraint |
-| --- | --- | --- |
-| Mission-specific Review only | Matches existing implemented tab/custody and preserves task context | Cross-mission review requires navigation; Inbox must still link directly to exact targets. |
-| Project-wide Review browser | Compare all proven worker-owned subjects in a project | Requires new admitted cross-mission discovery/history; risks a second required queue. Unknown legacy ownership cannot be filled in. |
-| Inbox across projects plus mission Review; optional project browse later | One action queue, exact mission context, no new mandatory destination | Deep links/return state still need implementation; a later project browser needs explicit scope and custody design. |
+D48 removes the placement choice: direct chat Review and project aggregation, including standalone
+chats. A coordinator suggestion links to that same exact change; it cannot require a mission detour.
+Preserve visible filters and originating scope on Back; missing/unauthorized targets never broaden
+silently. The historical artifact is not a selected request policy.
 
-**Recommendation, not a binding default:** the third option. Retain current mission-scoped browse;
-add exact Inbox entry when request primitives exist, then validate whether optional project browsing
-is needed. Preserve visible project/mission filters and the originating scope on Back; do not silently
-broaden missing/unauthorized targets or let a filter hide the fact that more requests exist elsewhere.
-The artifact illustrates an exact mission target, not a selected global review-scope policy.
+The [question 3 recommendation](mission-native-review.md#request-and-disposition-decision-47) is
+agent-first attention, an explicit exact-comparison-set disposition, user-only snooze, and narrowly
+scoped withdrawal that never waives a human gate. Parallel review and per-change approval are the
+material alternatives. This recommendation remains unselected; #60/#65 implement chosen submission
+semantics, #70 request persistence and #79 Inbox routing only after their separate authorization.
 
 ## Meaningful exceptions and recovery
 
@@ -409,9 +416,9 @@ at every write; blocked human takeover with unknown writers; Stop during wait/re
 failure after archive; optional scoped guidance correction without routine confirmation chores.
 Use owned synthetic fixtures before live adoption; dedicated Review owns detailed annotation tests.
 
-Unselected choices: project versus mission Review browsing; review prerequisite ordering; trusted
-user-action transport and exact-package amendment UI; historical roster/custody reads; request
-withdrawal and optional snooze rules; scope-inspector placement/details and safe takeover support.
+Review placement is decided by D48. Unselected material policy is consolidated into the three-question
+menu above, not the old mock's defaults. Historical roster/custody reads, scope-inspector details and
+safe takeover support remain separate scoped implementation work; they do not add policy questions.
 Recommendations here select no new policy, schema, endpoint, review write, gate or migration.
 Publication of this design is not activation. No UI code, Swift work, worker starts, live capture,
 automatic attention, learning job, merge, archive/delete, release or restart is authorized here.

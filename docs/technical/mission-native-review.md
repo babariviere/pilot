@@ -8,6 +8,10 @@ later Opus refinement remains separate.
 
 ## Implemented read-only slice
 
+This section describes the pinned historical implementation below, not the selected product scope.
+D48 settles **project-owned, chat-first Review**, including standalone chats; #88 tracks that
+read-only correction separately. Mission membership must not become a prerequisite in new consumers.
+
 Mission detail has **Overview / Tasks / Review**. Review is mission-scoped browsing, not a required
 queue or an Inbox attention source. Choose a current worker, then one exact retained comparison.
 Choices use readable worker titles and saved-revision/layer/stack labels; full jj subjects and immutable head/base revisions live in Details;
@@ -154,8 +158,9 @@ version is 0.8.1 and both versions have the same annotation shape.
   ancestor), with retained before/after bytes, patch and manifest. Review never reads live files.
 - **Revision:** the next retained comparison for the same subject and comparison scope, in host
   capture order (displayed as Revision 1, 2...). A stable change ID is a line of work, not stable bytes.
-- **Review request:** a coordinator- or policy-created requirement for human review of an exact set
-  of comparisons tied to exact submissions (and, once recorded, a #22 allocation). It creates attention.
+- **Review request:** a proposed project/chat-owned record for an exact set of comparisons, with
+  optional mission/submission/allocation context. Required review and optional suggestions differ;
+  neither the chat nor a mission link grants authority. Request writes/attention are not installed.
 - **Review:** one human's submitted set of annotations, ratings and a verdict on exact comparisons.
 - **Annotation:** a human comment anchored to a summary, file, line or range of one comparison.
 
@@ -171,39 +176,71 @@ The page keeps five sources visibly separate. They are never merged into one sta
 
 ## Placement and entry points
 
-**Recommendation: Needs review in Inbox is the primary entry for required human review.** The
-"Review tab" of D14 is a dedicated main-pane page, `Page::Review(ReviewTarget)`, opened by exact
-deep link. A mission-detail **Review** section lists that mission's subjects for browsing.
+**Decided by D48:** open Review directly from the chat; project Review aggregates that project's
+chats/changes. Each agent-created change remains individually reviewable with continuous full-file
+diffs. Mission is optional context/filter, never an access/navigation prerequisite. Inbox and a
+coordinator suggestion link to the same chat/change Review, not a separate mission queue.
+Opening it never approves work or submits feedback. #88 implements the read-only correction;
+#60/#65 own annotations/submission, #70 request persistence and #79 Inbox routing. No visual polish
+is added here; #44/#45 remain deferred. Earlier mock placement/defaults do not select policy.
 
-Evaluation of Needs review as the primary entry:
+## Request and disposition decision (#47)
 
-- For: one attention place (brief: Inbox with Needs review, Needs decision, Needs your help), the
-  existing "opening is not reviewing" contract, project filter and keyboard paths already exist, and
-  required review never competes with a second mandatory queue.
-- Against: a flat list loses mission/task context and makes several related changes feel like
-  separate chores. Mitigation: one item per review request (not per change or revision), the item
-  opens the full Review page, and Review offers "Next review" to continue without returning.
-- Not chosen: a top-level Review sidebar destination with its own counts. It would duplicate Inbox
-  attention and invite a second required queue. An optional project-wide "All changes" browser may
-  come later as browse-only, without counts or dots.
+This is **question 3** of the [consolidated decision menu](mission-authority-review-policy.md#remaining-decision-menu-46-and-47),
+not an approved request policy. The coordinator will present the actual missing choices to the user.
+Do not infer agreement from stopping/cancellation or a generic request to finish. #47 remains
+unfinished until choices, exceptions and consumer scopes are recorded by the coordinator/user.
 
-Proposed defaults (open for coordinator/user choice): Inbox Needs review spans all projects like the
-current Inbox, honoring its project filter; mission Review lists current revisions of that mission
-only, with "Show completed" off.
+**Recommendation: agent-first attention, one request, exact comparison-set disposition.** Parallel
+human review is the material alternative; it saves elapsed time but may ask the user to review work
+already being corrected. Per-change approval is another possible choice, but adds partial-request
+bookkeeping. Recommend the following small initial flow, not another queue or hierarchy:
+
+- **Timing:** create actionable required-human attention only after complete retained comparisons,
+  required checks and agent reviews are current/passing. Waiting remains visible quietly in the
+  same Review. Browsing and commenting early remain possible; under this recommendation approval
+  waits for actionability. Missing agent capability never silently turns into parallel human approval.
+- **Filters:** direct chat entry shows that chat's known changes, project Review that project's
+  chats/changes, including standalone chats. Current comparisons first, historical comparisons
+  disclosed; preserve an exact pinned link even when history is hidden. Inbox reuses its existing
+  project filter, preset from the focused project, not an automatic mission filter. Honor an
+  explicitly selected mission filter without making it required; keep active filters visible.
+- **Coverage:** submission explicitly lists the exact requested comparisons (layer/stack and revision),
+  never the whole chat, task, future revision, other change or unseen ancestor by implication.
+  Approve covers the complete displayed request set; a viewed file is progress, not partial approval.
+  Outside a request, manually selected comparisons can receive explicit feedback without inventing
+  a mission, tier or human gate for a standalone chat.
+- **Dispositions:** Comment records feedback, not approval or closure of a required-human request.
+  Request changes records a blocking outcome; resubmission updates the same request lineage.
+  Approve records human review of that exact set only. None supplies coordinator acceptance,
+  checks, agent review or delivery permission. Changed content/base/context needs current review;
+  no automatic approval carry-forward. Generated suggestions stay attributed as human-submitted,
+  not necessarily human-authored, when explicitly submitted.
+- **Permissions:** the user can withdraw any attention request with a reason, without waiving its
+  underlying gate. A coordinator may withdraw only its own optional suggestion, or retire a required
+  request when authoritative scope/delivery cancellation removes the need; it cannot clear a user
+  request, policy human gate or live blocking review. Worker authors can propose withdrawal only.
+  A still-required gate retains unsatisfied status, not an approved outcome.
+- **Snooze:** user-only attention suppression until a chosen time, not request withdrawal or approval;
+  the gate remains pending and the request stays findable in chat/project Review. New requested
+  content or expiry ends the snooze. No coordinator/worker snoozing the user's obligations.
+- **Threads:** coordinator can report Addressed with evidence or Declined with reason; only the
+  human resolves/retracts their thread. Approval does not silently resolve other open threads or
+  dismiss agent findings. A standalone review routes explicit submitted feedback to its owning
+  chat; a mission-linked review routes through its coordinator. Drafts dispatch nothing.
+- **Suggestions:** a coordinator may suggest reviewing a named chat/change with the same exact link.
+  A suggestion is optional and does not create a required-human gate or automatic Inbox obligation.
+  No request creation, withdrawal, snooze or submission activates from this document.
 
 ## Inbox integration
 
-**Attention trigger.** Only a human-required review creates Needs review: effective tier T3, or an
-explicit authorized mission/tier override requiring human review. Optional agent reviews and
-coordinator curiosity do not. Proposed: the item becomes actionable once the request's ordered
-prerequisites hold (complete retained comparison for every selected subject, plus any checks or agent
-reviews the policy orders before human review). Before that it appears only in mission Review as
-"Waiting for agent review", not in Inbox. Whether humans may review in parallel is an open choice.
+The following details are conditional on question 3, not additional selected defaults.
 
-**Identity and deduplication.** Key items by `reviewLineageId`: the first request for a task's
-human review; re-requests after changes extend the lineage. One live item per lineage, whatever the
-number of changes, revisions or wake notices. Several tasks sharing a contribution create one request
-under the strictest tier, listing all tasks (never the most convenient one).
+**Identity and deduplication.** One live item per project/chat request lineage, not one per task,
+file, revision or wake. A request may cover several changes in that chat. Re-requests retain its
+history; unrelated changes do not acquire review coverage. Optional mission/task context carries
+all applicable obligations, never the most convenient tier. No mission identity is needed for a
+standalone request. Cross-chat grouping is not needed for the first implementation.
 
 **Lifecycle.** Opening, scrolling or marking files viewed never changes it.
 
@@ -211,24 +248,43 @@ under the strictest tier, listing all tasks (never the most convenient one).
 | --- | --- | --- |
 | Request becomes actionable | Needs review: "Review revision 2 · 3 changes" | n/a |
 | New revision captured while open | Stays, reason becomes "Revised: revision 3" | Kept on revision 2, carry-forward offered (below) |
-| Review submitted for current revision | Leaves Needs review; history shows verdict | Become part of the submitted review |
+| Comment submitted for current revision | Required-human request stays pending | Submitted comments retained; unsent drafts stay private |
+| Approve or Request changes submitted | Human action recorded; delivery stays gated on exact outcome | Submitted drafts become immutable review history |
 | Request changes, then re-request | Returns under same lineage: "Revised after your review" | Prior review stays read-only history |
-| Withdrawn by coordinator (dropped, reassigned, rescoped) | Leaves with "Withdrawn: reason" in history | Kept, labeled not submitted; may be submitted as non-gate feedback |
+| Authorized withdrawal | Leaves attention with reason; any underlying gate remains unsatisfied | Kept, never submitted by withdrawal |
 | Task completed or superseded elsewhere | Resolves only on the authoritative record, never on open | Same as withdrawn |
 
 **Acknowledgement versus approval.** "Viewed" file marks and "Seen" are private progress. They
 reset for files that change in a new revision. Approval is only the explicit submitted verdict
 "Approve revision N" on the exact request. Neither is coordinator acceptance or merge authority.
 
-**Filters.** Reuse the Inbox project filter; add an optional mission filter and kind filter (All,
-Needs review, Needs decision, Needs help) sharing the same records. An active filter stays visible;
-section counts describe the filtered set and say so.
+Request changes moves the next action to the responsible chat/coordinator; it is not a passing human
+gate. A plain Comment does not clear the user's required disposition. Snooze hides attention only.
 
-**Exact deep links.** `ReviewTarget { missionId, requestId?, repositoryId, changeId, snapshotId,
+**Exact deep links.** Conceptually `ReviewTarget { projectId, chatId, missionId?, requestId?, repositoryId, changeId, snapshotId,
 anchor? }` with `anchor` either an annotation ID or `{side, path, line}`. A link opens that exact
 revision. If newer revisions exist it shows "Revision 3 is newer" with a switch action, never a silent
 redirect. Unauthorized or missing targets show Unavailable with the retained text, no guessing.
-Links reuse the existing exact-ID link guard and navigation history.
+Links reuse exact-ID guards and navigation history; this is not a wire schema.
+
+### Normal multi-change example
+
+Standalone Build chat **Improve search** has two proven agent-created changes: A (query parser)
+and B (result ordering). Open its Review directly, select A revision 1 or B revision 1, and read every
+file diff continuously. No mission, coordinator or PR is required; no request or review is created
+by opening. Missing retained captures show Unavailable, not No changes. Standalone capture/admission
+remains separate work, not authorized or demonstrated by this example.
+
+For a user-created review request covering A1 and B1, the proposed agent-first policy waits for its
+configured prerequisites. A user submission explicitly covers that set. Approving it does not cover
+another change C in the same chat or B2 created later. Drafts on B1 remain on B1; a new B2 request
+keeps the lineage/history and requires current disposition, rather than relabeling the old approval.
+
+In a mission-linked chat with the same two changes, the coordinator can say “Please look at result
+ordering” and link directly to B1 in that chat's Review. That optional suggestion neither requires
+a mission detour nor creates a human gate. If approved policy actually requires human review of
+A1+B1, one actionable request covers that exact set after its prerequisites, regardless of the
+suggestion. A coordinator can report a fix, not submit the human's review or resolve their thread.
 
 ## The Review page
 
@@ -326,11 +382,12 @@ equivalence. It is optional: loading, failure or absence never blocks or delays 
 - **Approval is gated by facts**, not hidden: it is unavailable for partial/unreadable comparisons,
   outdated revisions or withdrawn requests, with the reason shown. Gate effect needs the missing
   trusted human-origin primitive (below); until then it records feedback only.
-- **Coordinator mediation.** A submitted review creates one coordinator wake reason (#27's proposed
+- **Coordinator mediation.** A mission-linked submitted review creates one coordinator wake reason (#27's proposed
   durable reasons). The coordinator triages each thread: scoped follow-up assignment for the same or a
   fresh worker citing annotation IDs and the snapshot, an answer, a reasoned decline, or a user
   decision request. Workers never receive raw drafts and do not post in review threads; they answer
-  with a new revision and evidence. Human text forwarded to workers is quoted with provenance.
+  with a new revision and evidence. For standalone chats, the explicit submission routes to the
+  owning chat instead; no coordinator is invented. Human text is quoted with provenance.
 - **Thread dispositions:** Open, Addressed in revision N (coordinator-asserted with evidence), Declined
   (coordinator reason; the human can reopen), Resolved by you, Outdated, Withdrawn by you. Only the
   human resolves their own thread; an approval on a later revision covers threads still open only when
@@ -338,7 +395,8 @@ equivalence. It is optional: loading, failure or absence never blocks or delays 
 
 ## Durable annotation contract
 
-Proposed record domain, append-only, in the daemon's app-owned storage beside mission records:
+Proposed record domain, append-only, in project-owned app storage outside workspaces; optional
+mission context must not own or gate standalone reviews. Exact storage design belongs to #60:
 
 ```text
 Anchor v1 =
@@ -428,20 +486,17 @@ comment, judgement or review is replayed under a new identity.
 
 ## Staged implementation
 
-Foundations precede consumers; each slice is separately verified and published.
+Smallest sequence, conditional on actual user policy choices and separately scoped execution:
 
-1. **R0 read transport (non-UI).** Admitted, bounded GETs for mission subjects (#13), snapshot
-   manifest/patch/blob (#20) and #17/#18/#22 records, with session/project/membership checks.
-2. **R1 read-only Review (Opus).** `Page::Review`, mission Review section, deep links, header,
-   evidence/gates, assessments, Kit Diff of retained patches, every state in the table above.
-3. **R2 human review records (non-UI).** Drafts, annotations, submitted reviews, trusted user origin,
-   exact retry/lookup, durability before ACK.
-4. **R3 annotate and submit (Opus).** Kit annotations, editor, keyboard, submit with Unknown handling.
-5. **R4 requests and Inbox (both).** Request records, Needs review projection, lineage dedup,
-   withdrawal/completion, coordinator wake on submission and thread dispositions.
-6. **R5 revisions.** reanchor-v1 projection, Outdated disclosure, optional changes-since view.
-7. **R6 changed paths (after #21 snapshot analysis).** D29 section; diff unaffected when absent.
-8. **R7 learning inputs (#12)** and, only with #5/#19 activation, gate consumption of approvals.
+1. **#88 read-only correction:** direct chat entry and project aggregation, mission optional; full-file
+   diffs and exact selection preserved. Separate capture prerequisites must not be inferred on read.
+2. **#60/#65 submission:** project/chat-owned private drafts and exact dispositions, selected #52
+   user-action assurance, durable operation lookup and native annotations/submit. No approval carry-forward.
+3. **#70/#79 requests:** one durable request lineage and chosen permission/snooze/timing rules, exact
+   link into the same Review and Inbox return state. No second queue or automatic gate activation.
+
+Reanchor details and keyboard conflict audit are implementation details within #60/#65. Changed paths,
+learning and visual polish remain their existing separate tasks, not prerequisites added here.
 
 **Native acceptance probes** (production root, hidden 680/1100 windows, light and dark, faux daemon):
 open from Inbox to the exact revision; pointer and keyboard range selection → draft → restart →
@@ -453,14 +508,14 @@ IME, accessibility, smoothness or performance acceptance; visible measurement ne
 
 ## Open choices for the coordinator
 
-1. Placement: confirm Inbox Needs review as primary entry plus mission Review section, and whether a
-   browse-only project-wide All changes view is wanted.
-2. Default filters: all projects (current Inbox) versus current mission when opened from a mission.
-3. Ordering: human review after required agent reviews/checks (recommended) or in parallel.
-4. Draft storage: daemon-side private store (recommended) versus desktop-local.
-5. Approval coverage: whole request (recommended) versus per subject.
-6. Who may withdraw a request (coordinator only, recommended) and whether humans can snooze items.
-7. reanchor-v1 context size (two lines proposed) and whether moved comments need human confirmation.
-8. Trusted human-origin action and independence standards (shared with #5/#2), required before any
-   approval has gate effect.
-9. Keyboard bindings after a conflict audit against existing app shortcuts.
+Only question 3 above remains here: agent-first versus parallel timing, exact disposition coverage,
+and request withdrawal/snooze/filter rules as one small flow. Assurance/consent/reviewer policy is
+questions 1/2 in the authority document. D48 placement/project ownership is not reopened. The old
+mock's whole-request, coordinator-only withdrawal and mission-scoped defaults are not adopted.
+
+Source check: `2ae03ca59fd4514e459d23044d263f6433e10b41`, `packages/daemon/src/server.ts:1363-1434`
+admits mission-scoped GETs only; `packages/protocol/src/critical-review.ts:1-3` distinguishes
+critical review from chat read marks. Human dispositions/requests are not supplied by those routes.
+Current source and #88 may advance separately; this is not a runtime observation or a claim that
+standalone capture, submissions, attention or gates have shipped. No UI artifact was produced:
+this is a policy recommendation, not new UI or acceptance of the old visual mock.
