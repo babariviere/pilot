@@ -1,9 +1,41 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+
+test("runtime smoke invocation supports file-based workers", () => {
+	const script = readFileSync(new URL("../check-runtime.sh", import.meta.url), "utf8");
+	const invocation = script.match(/^\.\/node\/bin\/node(.*?) <<'JS'$/m);
+	assert.ok(invocation, "Find the production smoke invocation");
+	const dir = mkdtempSync(join(tmpdir(), "pilot runtime worker-"));
+	try {
+		writeFileSync(
+			join(dir, "worker.mjs"),
+			'import { parentPort } from "node:worker_threads"; parentPort.postMessage("ok");',
+		);
+		const args = invocation[1].trim().split(/\s+/).filter(Boolean);
+		const check = spawnSync(process.execPath, args, {
+			cwd: dir,
+			encoding: "utf8",
+			timeout: 10000,
+			input: `
+import assert from 'node:assert/strict';
+import { Worker } from 'node:worker_threads';
+const worker = new Worker(new URL('./worker.mjs', import.meta.url));
+const result = await new Promise((resolve, reject) => {
+  worker.once('message', resolve);
+  worker.once('error', reject);
+});
+assert.equal(result, 'ok');
+`,
+		});
+		assert.equal(check.status, 0, check.stderr || String(check.error));
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
 
 test("runtime architecture check accepts arm64 and rejects x86_64", { skip: process.platform !== "darwin" }, () => {
 	const dir = mkdtempSync(join(tmpdir(), "pilot runtime test-"));

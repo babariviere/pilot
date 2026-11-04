@@ -7,7 +7,8 @@ python3 "$here/scripts/release_metadata.py" symlinks "$runtime"
 cd "$runtime"
 ./node/bin/node packages/daemon/scripts/build-usage-worker.mjs check packages/daemon/src
 # No loader: pilotd uses native TS stripping; accounting's leaf worker is generated JS.
-./node/bin/node --input-type=module <<'JS'
+# Node 24 detects ESM syntax on stdin. An explicit --input-type would leak to file-based workers.
+./node/bin/node <<'JS'
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 assert.equal(process.platform, 'darwin');
