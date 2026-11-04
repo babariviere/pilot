@@ -1,4 +1,4 @@
-# Project hooks
+# Automations
 
 Hooks run personal commands around Build work. They are stored in Pilot's project
 settings, not committed to the repository.
@@ -46,3 +46,20 @@ notice above the conversation.
 
 There are no teardown or archive-time hooks.
 For time-based work, use [schedules](schedules.md).
+
+## Agent flows (design)
+
+A flow runs one Build worker, then read-only Ask reviewers, one chat at a time.
+The worker keeps its isolated workspace and chat across review rounds. Reviewers
+inspect that workspace; their outcome either finishes the flow or returns feedback
+to the worker. Every loop has a fixed round limit. Approval routes the flow only,
+never grants permission to merge or publish.
+
+Flows use personal project settings alongside hooks. Starts are manual and require
+the native app's authority and the Automations switch. Questions pause the current
+node until answered. Stop never silently restarts a flow. Progress and failures use
+session automation state, with no new desktop controls in the engine MVP.
+
+The [flow format and execution contract](technical/agent-flows.md) defines the JSON
+format, worker → reviewer example, durable recovery and limits. Multiple writing
+nodes, automatic starts and advanced graphs are later options, not part of this MVP.

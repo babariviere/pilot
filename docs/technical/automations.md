@@ -16,8 +16,8 @@ The switch uses `GET/PATCH /api/chat-settings` with `{ automations, expectedRevi
 PATCH requires native host-action authority and preserves the automatic handoff setting.
 The unsupported Swift app is not part of this implementation; no PilotCore mirror is required.
 This is the lifecycle hook layer: small, personal automations
-around a chat's workspace and runs. Agent flows (sequences of agents, such as a bug-fix flow with a reviewer)
-get their own design later and may reuse these parts.
+around a chat's workspace and runs. [Agent flows](agent-flows.md) extend these parts
+with sequential chat nodes and one bounded worker/reviewer loop.
 
 Scope is **setup only** for workspace lifecycle: there are no teardown scripts and no archive-time hooks.
 [Project environment setup](environment-setup.md) builds on the triggers and the runner described here; this
