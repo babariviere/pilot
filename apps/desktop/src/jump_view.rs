@@ -1,6 +1,7 @@
 //! Ephemeral bounded search UI. Dropping it cancels work and releases metadata.
 use crate::app_icon::AppIcon;
-use crate::jump::{Catalog, Destination, Matches, Query, Snapshot};
+use crate::jump::{Catalog, Destination, Entry, Group, Kind, Matches, Query, Snapshot};
+use crate::slack_triage::{LinkLookup, MessageLink};
 use gpui_kit::{
     App, AppContext, Context, Entity, EntityInputHandler, EventEmitter, InteractiveElement,
     IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Task, TestSupportExt,
@@ -21,16 +22,23 @@ pub(crate) enum JumpEvent {
 pub(crate) struct JumpList {
     owner: WeakEntity<JumpPalette>,
     catalog: Option<Arc<Catalog>>,
+    /// Rows for a pasted Slack link, which the catalog never holds.
+    slack: Arc<Vec<Entry>>,
+    /// What the Slack lookup says when it has no rows to show.
+    note: Option<&'static str>,
     matches: Matches,
     selected: Option<String>,
     epoch: u64,
 }
 impl JumpList {
-    fn entry(&self, ix: IndexPath) -> Option<&crate::jump::Entry> {
-        self.catalog
-            .as_ref()?
-            .entries
-            .get(*self.matches.groups.get(ix.section)?.rows.get(ix.row)?)
+    fn entry(&self, ix: IndexPath) -> Option<&Entry> {
+        let group = self.matches.groups.get(ix.section)?;
+        let row = *group.rows.get(ix.row)?;
+        if group.kind == Kind::Slack {
+            self.slack.get(row)
+        } else {
+            self.catalog.as_ref()?.entries.get(row)
+        }
     }
     fn index(&self, id: &str) -> Option<IndexPath> {
         self.matches
@@ -38,10 +46,9 @@ impl JumpList {
             .iter()
             .enumerate()
             .find_map(|(section, g)| {
-                g.rows
-                    .iter()
-                    .position(|ix| self.catalog.as_ref().unwrap().entries[*ix].id == id)
+                (0..g.rows.len())
                     .map(|row| IndexPath::new(row).section(section))
+                    .find(|ix| self.entry(*ix).is_some_and(|e| e.id == id))
             })
     }
 }
@@ -104,6 +111,7 @@ impl ListDelegate for JumpList {
             .child(
                 self.matches
                     .error
+                    .or(self.note)
                     .unwrap_or("No matching loaded resources."),
             )
     }
@@ -120,7 +128,7 @@ impl ListDelegate for JumpList {
             .detail(e, &self.owner.upgrade()?.read(cx).query);
         let owner = self.owner.clone();
         let destination = e.destination.clone();
-        let icon = match &destination {
+        let glyph = match &destination {
             Destination::Home => AppIcon::Home,
             Destination::Inbox => AppIcon::Inbox,
             Destination::Chats | Destination::Chat(_) => AppIcon::Chats,
@@ -129,6 +137,11 @@ impl ListDelegate for JumpList {
             Destination::ArchiveChat(_) => AppIcon::Chats,
             Destination::OpenLink { .. } if e.is_pr => AppIcon::PullRequest,
             Destination::OpenLink { .. } => AppIcon::OpenLink,
+            Destination::SlackOpen(_) | Destination::SlackAdd { .. } => AppIcon::Inbox,
+        };
+        let icon = match &destination {
+            Destination::SlackOpen(_) => crate::app_icon::BrandMark::Slack.icon().size_4(),
+            _ => glyph.icon(),
         };
         let epoch = self.epoch;
         Some(
@@ -148,7 +161,7 @@ impl ListDelegate for JumpList {
                         .min_w_0()
                         .px_2()
                         .py_1()
-                        .child(icon.icon())
+                        .child(icon)
                         .child(
                             div()
                                 .v_flex()
@@ -186,6 +199,21 @@ pub(crate) struct JumpPalette {
     task: Option<Task<()>>,
     _subscription: Subscription,
     rows: Arc<Vec<crate::model::Message>>,
+    /// The Slack board's pinned connection, for passive link lookups only.
+    options: Option<crate::LocalOptions>,
+    slack: Option<SlackLookup>,
+    slack_task: Option<Task<()>>,
+    slack_generation: u64,
+}
+/// The lookup for the link the query holds. Replaced, never reused, when the link changes.
+struct SlackLookup {
+    link: MessageLink,
+    state: SlackState,
+}
+enum SlackState {
+    Pending,
+    Ready(LinkLookup),
+    Failed(&'static str),
 }
 impl EventEmitter<JumpEvent> for JumpPalette {}
 impl JumpPalette {
@@ -211,6 +239,8 @@ impl JumpPalette {
                 JumpList {
                     owner,
                     catalog: None,
+                    slack: Arc::default(),
+                    note: None,
                     matches: Matches {
                         groups: vec![],
                         suggested: true,
@@ -252,9 +282,98 @@ impl JumpPalette {
             task: None,
             _subscription: subscription,
             rows: Arc::new(rows),
+            options: None,
+            slack: None,
+            slack_task: None,
+            slack_generation: 0,
         };
         v.request(Query::new(""), w, cx);
         v
+    }
+    /// Lets a pasted Slack link be looked up in triage through this connection.
+    pub(crate) fn slack_options(&mut self, options: Option<crate::LocalOptions>) {
+        self.options = options;
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_slack(&self, cx: &App) -> Vec<String> {
+        self.list
+            .read(cx)
+            .delegate()
+            .slack
+            .iter()
+            .map(|e| e.id.clone())
+            .collect()
+    }
+    /// Starts one passive lookup when the query becomes a different Slack message link.
+    /// Typing, pasting and searching never add anything.
+    fn lookup_slack(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        let link = MessageLink::parse(&self.query.text);
+        if link.as_ref() == self.slack.as_ref().map(|s| &s.link) {
+            return;
+        }
+        self.slack_task = None;
+        self.slack_generation += 1;
+        let Some(link) = link else {
+            self.slack = None;
+            return;
+        };
+        let Some(options) = self.options.clone() else {
+            self.slack = Some(SlackLookup {
+                link,
+                state: SlackState::Failed("Slack triage needs a connection to Pilot."),
+            });
+            return;
+        };
+        let generation = self.slack_generation;
+        let read = link.clone();
+        let started = crate::slack_triage_transport::spawn(
+            "local-slack-link-lookup",
+            std::time::Duration::from_secs(10),
+            move |client| async move {
+                crate::slack_triage_transport::lookup(&client, &options, &read).await
+            },
+        );
+        let state = match started {
+            Err(error) => SlackState::Failed(error),
+            Ok(rx) => {
+                self.slack_task = Some(cx.spawn_in(w, async move |v, cx| {
+                    let result = rx
+                        .recv()
+                        .await
+                        .unwrap_or(Err("Couldn't check Slack triage."));
+                    let _ = v.update_in(cx, |v, w, cx| {
+                        if v.slack_generation != generation {
+                            return;
+                        }
+                        if let Some(s) = &mut v.slack {
+                            s.state = match result {
+                                Ok(lookup) => SlackState::Ready(lookup),
+                                Err(error) => SlackState::Failed(error),
+                            };
+                        }
+                        v.request(v.query.clone(), w, cx);
+                    });
+                }));
+                SlackState::Pending
+            }
+        };
+        self.slack = Some(SlackLookup { link, state });
+    }
+    /// Rows and the status line for the current link, if the query is one.
+    fn slack_rows(&self) -> (Vec<Entry>, Option<&'static str>) {
+        let Some(s) = &self.slack else {
+            return (Vec::new(), None);
+        };
+        match &s.state {
+            SlackState::Pending => (Vec::new(), Some("Checking Slack triage…")),
+            SlackState::Failed(error) => (Vec::new(), Some(error)),
+            SlackState::Ready(lookup) => {
+                let rows =
+                    crate::jump::slack::entries(&s.link, lookup, self.source.scope.as_deref());
+                let note = rows.is_empty().then_some("No project tracks Slack");
+                (rows, note)
+            }
+        }
     }
     pub(crate) fn marked(&self, w: &mut Window, cx: &mut Context<Self>) -> bool {
         self.list
@@ -279,6 +398,7 @@ impl JumpPalette {
     }
     fn request(&mut self, query: Query, w: &mut Window, cx: &mut Context<Self>) {
         self.query = query.clone();
+        self.lookup_slack(w, cx);
         self.epoch += 1;
         let epoch = self.epoch;
         self.ready = false;
@@ -307,18 +427,40 @@ impl JumpPalette {
                 v.applied_query = Some(v.query.clone());
                 v.catalog = Some(catalog.clone());
                 v.ready = true;
+                let (slack, note) = v.slack_rows();
                 v.list.update(cx, |l, cx| {
                     let old = l.delegate().selected.clone();
+                    let old_ix = old.as_deref().and_then(|id| l.delegate().index(id));
+                    let had_slack = !l.delegate().slack.is_empty();
                     let d = l.delegate_mut();
                     d.catalog = Some(catalog);
                     d.matches = matches;
+                    // A pasted link names one message: its rows lead.
+                    if !slack.is_empty() {
+                        d.matches.groups.insert(
+                            0,
+                            Group {
+                                kind: Kind::Slack,
+                                rows: (0..slack.len()).collect(),
+                            },
+                        );
+                    }
+                    d.slack = Arc::new(slack);
+                    d.note = note;
                     d.epoch = epoch;
-                    let index = if changed || epoch == 1 {
-                        d.matches
-                            .groups
-                            .first()
-                            .filter(|g| !g.rows.is_empty())
-                            .map(|_| IndexPath::new(0))
+                    let first = d
+                        .matches
+                        .groups
+                        .first()
+                        .filter(|g| !g.rows.is_empty())
+                        .map(|_| IndexPath::new(0));
+                    // Slack rows arrive after the lookup; they take the selection unless
+                    // the user already moved it.
+                    let arrived = !had_slack
+                        && !d.slack.is_empty()
+                        && old_ix.is_none_or(|ix| ix == IndexPath::new(0));
+                    let index = if changed || epoch == 1 || arrived {
+                        first
                     } else {
                         old.as_deref().and_then(|id| d.index(id))
                     };
@@ -341,10 +483,9 @@ impl JumpPalette {
         if !self.ready || epoch != self.epoch || live != self.query || self.marked(w, cx) {
             return;
         }
-        if self
-            .catalog
-            .as_ref()
-            .is_some_and(|c| c.entries.iter().any(|e| e.destination == destination))
+        let listed = |entries: &[Entry]| entries.iter().any(|e| e.destination == destination);
+        if self.catalog.as_ref().is_some_and(|c| listed(&c.entries))
+            || listed(&self.list.read(cx).delegate().slack)
         {
             cx.emit(JumpEvent::Activate(destination));
         }
@@ -426,6 +567,17 @@ impl Render for JumpPalette {
                     .text_color(cx.theme().muted_foreground)
                     .child(if !self.ready {
                         "Updating matches…"
+                    } else if let Some(note) = self.list.read(cx).delegate().note
+                        && self
+                            .list
+                            .read(cx)
+                            .delegate()
+                            .matches
+                            .groups
+                            .iter()
+                            .any(|g| !g.rows.is_empty())
+                    {
+                        note
                     } else if self.catalog.as_ref().is_some_and(|c| c.links_limited) {
                         "Scan limit reached · more loaded links may be omitted"
                     } else if self.source.projects_error {

@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-    slack_triage::Status,
-    slack_triage_fixture::{Reply, Server, item, project, source},
+    slack_triage::{MessageLink, Status},
+    slack_triage_fixture::{Reply, Server, item, message, project, source},
 };
 use serde_json::json;
 
@@ -288,5 +288,199 @@ async fn threads_and_polls_keep_pilotd_reasons() {
             .iter()
             .all(|(m, p, b)| m == "POST" && p == "/api/sources/p1:slack/poll" && b.is_null()),
         "never forced"
+    );
+}
+
+fn link(seconds: u64) -> MessageLink {
+    MessageLink::parse(&format!(
+        "https://acme.slack.com/archives/C1/p{seconds}000100?team=T1"
+    ))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn link_lookup_finds_the_exact_message_and_never_writes() {
+    let s = server();
+    {
+        let mut state = s.state.lock().unwrap();
+        state.items.push(message(
+            "tracked",
+            "p1",
+            "Pasted bug",
+            "dismissed",
+            1_791_892_800,
+        ));
+        // Same message in a project that no longer tracks Slack, and a lookalike key.
+        state
+            .items
+            .push(message("stale", "p2", "Old copy", "open", 1_791_892_800));
+        state
+            .items
+            .push(message("near", "p3", "Neighbour", "open", 1_791_892_801));
+    }
+    let found = lookup(&client(), &s.options, &link(1_791_892_800))
+        .await
+        .unwrap();
+    let ids: Vec<_> = found.items.iter().map(|i| i.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        ["tracked"],
+        "dismissed included, other messages and projects not"
+    );
+    assert_eq!(found.items[0].triage.status, Status::Dismissed);
+    let projects: Vec<_> = found.projects.iter().map(|p| p.id.as_str()).collect();
+    assert_eq!(
+        projects,
+        ["p1", "p3"],
+        "only Slack-tracking projects take adds"
+    );
+    let none = lookup(&client(), &s.options, &link(1_791_000_000))
+        .await
+        .unwrap();
+    assert!(none.items.is_empty() && none.projects.len() == 2);
+    let seen = s.state.lock().unwrap().seen.clone();
+    assert!(
+        seen.iter().all(|(m, _, _)| m == "GET"),
+        "zero writes: {seen:?}"
+    );
+    let searches: Vec<_> = seen
+        .iter()
+        .filter(|(_, p, _)| p.starts_with("/api/tracking/slack/search?"))
+        .collect();
+    assert_eq!(searches.len(), 2);
+    assert!(
+        searches[0].1.contains(
+            "query=https%3A%2F%2Facme.slack.com%2Farchives%2FC1%2Fp1791892800000100%3Fteam%3DT1"
+        ),
+        "the exact pasted link: {}",
+        searches[0].1
+    );
+    // A reply that names another message is never shown as this one.
+    s.reply(
+        "GET",
+        "/api/tracking/slack/search",
+        Reply::status(
+            Some(200),
+            json!({"items":[message("near", "p3", "Neighbour", "open", 1_791_892_801)],"total":1}),
+        ),
+    );
+    assert!(
+        lookup(&client(), &s.options, &link(1_791_892_800))
+            .await
+            .unwrap()
+            .items
+            .is_empty()
+    );
+    s.reply(
+        "GET",
+        "/api/tracking/slack/search",
+        Reply::status(Some(404), json!({})),
+    );
+    assert_eq!(
+        lookup(&client(), &s.options, &link(1_791_892_800)).await,
+        Err("This Pilot can't look up Slack links.")
+    );
+    s.reply(
+        "GET",
+        "/api/tracking/slack/search",
+        Reply::status(Some(200), json!({"items":[{"kind":"slack"}]})),
+    );
+    assert_eq!(
+        lookup(&client(), &s.options, &link(1_791_892_800)).await,
+        Err("Couldn't check Slack triage.")
+    );
+    s.state.lock().unwrap().daemon = "other".into();
+    assert!(
+        lookup(&client(), &s.options, &link(1_791_892_800))
+            .await
+            .is_err()
+    );
+    assert!(s.state.lock().unwrap().writes().is_empty());
+}
+
+#[tokio::test]
+async fn an_explicit_add_posts_once_and_confirms_this_message() {
+    let s = server();
+    let pasted = link(1_791_892_800);
+    let AddOutcome::Added(added) = add(&client(), &s.options, "p3", &pasted).await else {
+        panic!("not added")
+    };
+    assert_eq!(added.project_id, "p3");
+    assert!(pasted.names(&added));
+    assert_eq!(
+        s.state.lock().unwrap().writes(),
+        [(
+            "POST".to_owned(),
+            "/api/tracking/slack/messages".to_owned(),
+            json!({"projectId":"p3","url":"https://acme.slack.com/archives/C1/p1791892800000100?team=T1"})
+        )]
+    );
+    // Refusals carry pilotd's plain reason; Unknown never claims either way.
+    for (status, body, refused) in [
+        (
+            Some(409),
+            json!({"error":"Couldn't read this message from Slack. Check the link and that you can see it in Slack."}),
+            true,
+        ),
+        (
+            Some(503),
+            json!({"error":"Slack is limiting requests. Try again in a minute."}),
+            true,
+        ),
+        (
+            Some(503),
+            json!({"error":"Tracking is stopped or paused for maintenance"}),
+            true,
+        ),
+        (Some(400), json!({}), true),
+        (Some(500), json!({"error":"disk"}), false),
+        (None, Value::Null, false),
+        (
+            Some(200),
+            message("other", "p3", "Other", "open", 1_791_892_801),
+            false,
+        ),
+        (
+            Some(200),
+            message("elsewhere", "p1", "Other", "open", 1_791_892_800),
+            false,
+        ),
+    ] {
+        let s = server();
+        s.reply(
+            "POST",
+            "/api/tracking/slack/messages",
+            Reply::status(status, body.clone()),
+        );
+        let outcome = add(&client(), &s.options, "p3", &pasted).await;
+        match (&outcome, refused) {
+            (AddOutcome::Refused(reason), true) => assert!(!reason.is_empty()),
+            (AddOutcome::Unknown(_), false) => {}
+            _ => panic!("{status:?} {body} {outcome:?}"),
+        }
+        assert_eq!(s.state.lock().unwrap().writes().len(), 1, "sent once");
+    }
+    let s = server();
+    s.reply(
+        "POST",
+        "/api/tracking/slack/messages",
+        Reply::status(
+            Some(503),
+            json!({"error":"Slack is limiting requests. Try again in a minute."}),
+        ),
+    );
+    assert_eq!(
+        add(&client(), &s.options, "p3", &pasted).await,
+        AddOutcome::Refused("Slack is limiting requests. Try again in a minute.".into())
+    );
+    let s = server();
+    s.state.lock().unwrap().daemon = "other".into();
+    assert!(matches!(
+        add(&client(), &s.options, "p3", &pasted).await,
+        AddOutcome::Refused(_)
+    ));
+    assert!(
+        s.state.lock().unwrap().writes().is_empty(),
+        "foreign daemon is never written"
     );
 }

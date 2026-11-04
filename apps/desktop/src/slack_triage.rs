@@ -240,6 +240,8 @@ impl Triage {
 pub(crate) struct Item {
     pub(crate) id: String,
     pub(crate) project_id: String,
+    /// pilotd's source key, `<channel>/<thread ts>`, when it reports one.
+    pub(crate) external_id: Option<String>,
     pub(crate) title: String,
     /// pilotd's canonical message link, opened and copied exactly.
     pub(crate) url: String,
@@ -320,6 +322,7 @@ impl Item {
         Ok(Self {
             id,
             project_id,
+            external_id: text(&value["externalId"]),
             title: value["title"]
                 .as_str()
                 .ok_or("A Slack message from Pilot couldn't be read (title).")?
@@ -466,6 +469,39 @@ impl Board {
             }
         }
         false
+    }
+    /// Keeps one message on the board, as for a message opened from elsewhere that the loaded
+    /// pages left out. A listed copy wins. False when its project is not on the board.
+    pub(crate) fn pin(&mut self, item: &Item) -> bool {
+        if self.item(&item.id).is_some() {
+            return true;
+        }
+        match self
+            .projects
+            .iter_mut()
+            .find(|p| p.project.id == item.project_id)
+        {
+            Some(project) => {
+                project.items.push(item.clone());
+                true
+            }
+            None => false,
+        }
+    }
+    /// Filters that show `item`: Show hidden for a hiding or closing label, Show dismissed for
+    /// one the user (not a label) dismissed. Filters already on stay on.
+    pub(crate) fn revealing(&self, item: &Item, filter: Filter) -> Filter {
+        let t = &item.triage;
+        let hides = self.project(&item.project_id).is_some_and(|p| {
+            t.label
+                .as_deref()
+                .is_some_and(|label| p.project.hides(label))
+        });
+        Filter {
+            show_hidden: filter.show_hidden || hides || t.closed_by_label.is_some(),
+            show_dismissed: filter.show_dismissed
+                || (t.status == Status::Dismissed && t.closed_by_label.is_none()),
+        }
     }
     pub(crate) fn tracking(&self) -> impl Iterator<Item = &ProjectBoard> {
         self.projects.iter().filter(|p| p.project.tracks_slack())
@@ -723,6 +759,124 @@ pub(crate) enum Save {
     Pending(Change),
     NotSent(String),
     Unknown(String),
+}
+
+/// A pasted Slack message link, read exactly as pilotd reads one (`parseSlackMessageLink`):
+/// `https://<workspace>.slack.com/archives/<channel>/p<ts>`, optionally with `thread_ts`.
+/// The link is kept as pasted so pilotd sees the same workspace and team.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MessageLink {
+    pub(crate) url: String,
+    pub(crate) channel: String,
+    pub(crate) ts: String,
+    /// The thread's parent, which is what triage tracks.
+    pub(crate) thread_ts: String,
+}
+impl MessageLink {
+    pub(crate) fn parse(text: &str) -> Option<Self> {
+        let trimmed = text.trim();
+        if trimmed.len() > 2000 {
+            return None;
+        }
+        // Refuses controls, bidi overrides, backslashes and credentials.
+        let url = crate::external_links::web(trimmed)?;
+        let host = url.host_str()?;
+        if url.scheme() != "https"
+            || url.port().is_some()
+            || (host != "slack.com" && !host.ends_with(".slack.com"))
+        {
+            return None;
+        }
+        let path = url.path();
+        let mut parts = path
+            .strip_suffix('/')
+            .unwrap_or(path)
+            .strip_prefix("/archives/")?
+            .split('/');
+        let (channel, message) = (parts.next()?, parts.next()?);
+        let digits = message.strip_prefix('p')?;
+        let valid_channel = (2..=200).contains(&channel.len())
+            && channel.starts_with(['C', 'D', 'G'])
+            && channel
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit());
+        if parts.next().is_some()
+            || !valid_channel
+            || !(16..=18).contains(&digits.len())
+            || !digits.bytes().all(|b| b.is_ascii_digit())
+        {
+            return None;
+        }
+        let ts = format!(
+            "{}.{}",
+            &digits[..digits.len() - 6],
+            &digits[digits.len() - 6..]
+        );
+        let thread_ts = url
+            .query_pairs()
+            .find(|(key, _)| key == "thread_ts")
+            .map(|(_, value)| value.into_owned())
+            .filter(|value| timestamp(value))
+            .unwrap_or_else(|| ts.clone());
+        Some(Self {
+            url: trimmed.to_owned(),
+            channel: channel.to_owned(),
+            ts,
+            thread_ts,
+        })
+    }
+    /// pilotd's source keys for this message: its thread, then the message itself.
+    pub(crate) fn keys(&self) -> [String; 2] {
+        [
+            format!("{}/{}", self.channel, self.thread_ts),
+            format!("{}/{}", self.channel, self.ts),
+        ]
+    }
+    /// Whether pilotd's item is this message, by its source key alone.
+    pub(crate) fn names(&self, item: &Item) -> bool {
+        item.external_id
+            .as_ref()
+            .is_some_and(|id| self.keys().contains(id))
+    }
+}
+fn timestamp(value: &str) -> bool {
+    value.split_once('.').is_some_and(|(s, us)| {
+        (1..=12).contains(&s.len())
+            && us.len() == 6
+            && s.bytes().chain(us.bytes()).all(|b| b.is_ascii_digit())
+    })
+}
+
+/// What pilotd holds for a pasted link: the projects that track Slack, in pilotd's order,
+/// and this message wherever it is already in triage (hidden and dismissed included).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LinkLookup {
+    pub(crate) projects: Vec<Project>,
+    pub(crate) items: Vec<Item>,
+}
+impl LinkLookup {
+    /// Projects to offer an explicit add to, best first: those tracking the message's
+    /// channel, then `focused`, then the rest. Projects already holding it are left out.
+    pub(crate) fn add_targets(&self, link: &MessageLink, focused: Option<&str>) -> Vec<&Project> {
+        let mut out: Vec<(usize, &Project)> = self
+            .projects
+            .iter()
+            .filter(|p| p.tracks_slack() && !self.items.iter().any(|i| i.project_id == p.id))
+            .map(|p| {
+                let rank = if p.channels.contains(&link.channel) {
+                    0
+                } else if Some(p.id.as_str()) == focused {
+                    1
+                } else {
+                    2
+                };
+                (rank, p)
+            })
+            .collect();
+        // Stable: pilotd's order within a rank.
+        out.sort_by_key(|(rank, _)| *rank);
+        out.into_iter().map(|(_, p)| p).collect()
+    }
 }
 
 #[cfg(test)]

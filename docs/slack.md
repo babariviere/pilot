@@ -17,6 +17,13 @@ a failed reaction does not block the chat.
 - **Done:** resolved locally.
 - **Dismissed:** removed from your active queue.
 
+## Open or add a message from a link
+
+Paste a Slack message link in the Command Palette (⌘K). A message already in triage
+opens there as it is, even when hidden or dismissed. Otherwise choose **Add to Slack
+triage** for a project: Pilot reads and sorts the message, then selects it. Pasting
+alone never adds anything.
+
 Waiting items stay outside the Inbox. On refresh, a reply from someone other than
 you can resume the linked chat or reopen the item. Your own replies do not end a wait.
 Attached chats can report Waiting or Done, but only you reopen closed items.
@@ -27,7 +34,8 @@ Pilot's eyes reaction needs a separate opt-in configuration.
 
 ## Labels and refresh limits
 
-Labels can hide or locally close reports. Use **Show hidden** to include them.
+Labels can hide or locally close reports. Use **Show hidden** or **Show dismissed**
+(the **Filters** menu in Pilot Next) to include them.
 Corrections help future classification. Common cases group related reports so you
 can review recurring problems together.
 

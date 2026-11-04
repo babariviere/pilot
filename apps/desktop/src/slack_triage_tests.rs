@@ -255,3 +255,219 @@ fn sources_only_speak_when_they_say_something() {
     );
     assert!(Source::parse(&json!({"kind":"linear","status":"error"})).is_none());
 }
+
+#[test]
+fn message_links_read_exactly_as_pilotd_and_refuse_lookalikes() {
+    let link = MessageLink::parse("  https://acme.slack.com/archives/C0123ABC/p1791892800000123  ")
+        .unwrap();
+    assert_eq!(
+        link.url,
+        "https://acme.slack.com/archives/C0123ABC/p1791892800000123"
+    );
+    assert_eq!(link.channel, "C0123ABC");
+    assert_eq!(link.ts, "1791892800.000123");
+    assert_eq!(link.thread_ts, link.ts);
+    assert_eq!(
+        link.keys(),
+        ["C0123ABC/1791892800.000123", "C0123ABC/1791892800.000123"]
+    );
+    // A reply names its thread's parent, which triage tracks; the link stays as pasted.
+    let reply = MessageLink::parse(
+        "https://acme.slack.com/archives/C1X/p1791892900000456?thread_ts=1791892800.000123&cid=C1X&team=T042",
+    )
+    .unwrap();
+    assert_eq!(reply.ts, "1791892900.000456");
+    assert_eq!(reply.thread_ts, "1791892800.000123");
+    assert!(reply.url.ends_with("&team=T042"), "workspace and team kept");
+    assert_eq!(
+        reply.keys(),
+        ["C1X/1791892800.000123", "C1X/1791892900.000456"]
+    );
+    for (text, ts) in [
+        (
+            "https://slack.com/archives/D12/p1791892800000123",
+            "1791892800.000123",
+        ),
+        (
+            "https://Acme.Slack.COM/archives/G12/p1791892800000123/",
+            "1791892800.000123",
+        ),
+        (
+            "https://e.slack.com/archives/C12/p123456789012000123",
+            "123456789012.000123",
+        ),
+        (
+            "https://e.slack.com/archives/C12/p1000000000000000",
+            "1000000000.000000",
+        ),
+        // A malformed thread_ts falls back to the message, as in pilotd.
+        (
+            "https://e.slack.com/archives/C12/p1791892800000123?thread_ts=17.1",
+            "1791892800.000123",
+        ),
+    ] {
+        let link = MessageLink::parse(text).unwrap_or_else(|| panic!("{text}"));
+        assert_eq!(link.thread_ts, ts, "{text}");
+    }
+    for bad in [
+        "",
+        "acme.slack.com/archives/C12/p1791892800000123",
+        "http://acme.slack.com/archives/C12/p1791892800000123",
+        "https://acme.slack.com.evil.example/archives/C12/p1791892800000123",
+        "https://evilslack.com/archives/C12/p1791892800000123",
+        "https://slack.co/archives/C12/p1791892800000123",
+        "https://xn--slck-loa.com/archives/C12/p1791892800000123",
+        "https://user@acme.slack.com/archives/C12/p1791892800000123",
+        "https://acme.slack.com:8443/archives/C12/p1791892800000123",
+        "https://acme.slack.com/archives/C12",
+        "https://acme.slack.com/archives/c12/p1791892800000123",
+        "https://acme.slack.com/archives/X12/p1791892800000123",
+        "https://acme.slack.com/archives/C/p1791892800000123",
+        "https://acme.slack.com/archives/C12/1791892800000123",
+        "https://acme.slack.com/archives/C12/p179189280000012",
+        "https://acme.slack.com/archives/C12/p1791892800000123456",
+        "https://acme.slack.com/archives/C12/p17918928000001x3",
+        "https://acme.slack.com/archives/C12/p1791892800000123/extra",
+        "https://app.slack.com/client/T042/C12",
+        "https://acme.slack.com/archives/C12/p1791892800000123\\x",
+        "https://acme.slack.com/archives/C12/p1791892800000123\u{202e}",
+        "see https://acme.slack.com/archives/C12/p1791892800000123",
+    ] {
+        assert!(MessageLink::parse(bad).is_none(), "{bad:?}");
+    }
+    let long = format!(
+        "https://acme.slack.com/archives/C12/p1791892800000123?x={}",
+        "a".repeat(2000)
+    );
+    assert!(MessageLink::parse(&long).is_none());
+    // Only an item whose source key is this message matches, never one by title or URL.
+    let mut held = Item::parse(&item("m", "p1", "t", "open", "low", 1)).unwrap();
+    held.external_id = Some("C1X/1791892800.000123".into());
+    assert!(reply.names(&held));
+    held.external_id = Some("C1X/1791892800.000124".into());
+    assert!(!reply.names(&held));
+    held.external_id = None;
+    assert!(!reply.names(&held));
+}
+
+#[test]
+fn add_targets_rank_the_tracking_channel_then_the_focused_project() {
+    let p = |id: &str, channels: &[&str]| {
+        Project::parse(&project(id, &format!("Project {id}"), channels)).unwrap()
+    };
+    let link = MessageLink::parse("https://acme.slack.com/archives/C7/p1791892800000123").unwrap();
+    let mut lookup = LinkLookup {
+        projects: vec![
+            p("a", &["C1"]),
+            p("b", &["C2"]),
+            p("c", &["C7"]),
+            p("off", &[]),
+            p("d", &["C3"]),
+        ],
+        items: Vec::new(),
+    };
+    let ids = |l: &LinkLookup, focused: Option<&str>| {
+        l.add_targets(&link, focused)
+            .into_iter()
+            .map(|p| p.id.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&lookup, None), ["c", "a", "b", "d"]);
+    assert_eq!(ids(&lookup, Some("b")), ["c", "b", "a", "d"]);
+    assert_eq!(
+        ids(&lookup, Some("off")),
+        ["c", "a", "b", "d"],
+        "never a project without Slack"
+    );
+    // A project already holding the message offers it to open, never to add again.
+    let mut held = Item::parse(&item("m", "c", "t", "dismissed", "low", 1)).unwrap();
+    held.external_id = Some("C7/1791892800.000123".into());
+    lookup.items.push(held);
+    assert_eq!(ids(&lookup, Some("b")), ["b", "a", "d"]);
+    let rows = crate::jump::slack::entries(&link, &lookup, Some("b"));
+    let rows: Vec<_> = rows
+        .iter()
+        .map(|e| (e.id.as_str(), e.title.as_str(), e.detail.as_str()))
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("slack:open:m", "t", "Dismissed · #support · Project c"),
+            (
+                "slack:add:b",
+                "Add to Slack triage in Project b",
+                "Reads the message from Slack"
+            ),
+            (
+                "slack:add:a",
+                "Add to Slack triage in Project a",
+                "Reads the message from Slack"
+            ),
+            (
+                "slack:add:d",
+                "Add to Slack triage in Project d",
+                "Reads the message from Slack"
+            ),
+        ]
+    );
+    assert!(crate::jump::slack::entries(&link, &LinkLookup::default(), None).is_empty());
+}
+
+#[test]
+fn revealing_shows_exactly_what_hides_a_message_and_pins_it() {
+    let mut hidden = item("hidden", "p1", "Noise", "open", "low", 5);
+    hidden["slack"]["label"] = json!("Noise");
+    let mut closed = item("closed", "p1", "Spam", "dismissed", "low", 6);
+    closed["slack"]["closedByLabel"] = json!("Spam");
+    let mut both = item("both", "p1", "Noise", "dismissed", "low", 7);
+    both["slack"]["label"] = json!("Noise");
+    let b = board(vec![item("open", "p1", "a", "open", "low", 9)]);
+    let reveal = |v: &Value| {
+        let f = b.revealing(&Item::parse(v).unwrap(), Filter::default());
+        (f.show_hidden, f.show_dismissed)
+    };
+    assert_eq!(
+        reveal(&item("open", "p1", "a", "open", "low", 9)),
+        (false, false)
+    );
+    assert_eq!(
+        reveal(&item("done", "p1", "a", "done", "low", 9)),
+        (false, false),
+        "done is not dismissed"
+    );
+    assert_eq!(reveal(&hidden), (true, false));
+    assert_eq!(
+        reveal(&closed),
+        (true, false),
+        "label-closed shows through Show hidden"
+    );
+    assert_eq!(
+        reveal(&item("gone", "p1", "a", "dismissed", "low", 9)),
+        (false, true)
+    );
+    assert_eq!(reveal(&both), (true, true));
+    let on = Filter {
+        show_hidden: true,
+        show_dismissed: true,
+    };
+    assert_eq!(
+        b.revealing(
+            &Item::parse(&item("open", "p1", "a", "open", "low", 9)).unwrap(),
+            on
+        ),
+        on
+    );
+    // Pinning keeps a message past the loaded pages, never in another project's board.
+    let mut b = b;
+    let gone = Item::parse(&item("gone", "p1", "a", "dismissed", "low", 9)).unwrap();
+    assert!(b.pin(&gone));
+    assert!(b.pin(&gone));
+    assert_eq!(b.projects[0].items.len(), 2, "pinned once");
+    let dismissed = Filter {
+        show_dismissed: true,
+        ..Filter::default()
+    };
+    assert!(b.visible(&dismissed).iter().any(|i| i.id == "gone"));
+    let other = Item::parse(&item("x", "p9", "a", "open", "low", 9)).unwrap();
+    assert!(!b.pin(&other));
+}

@@ -78,6 +78,9 @@ impl LocalViewer {
             Vec::new()
         };
         let palette = cx.new(|cx| JumpPalette::new(source, rows, w, cx));
+        // Pasted Slack links are looked up through the Slack board's own connection.
+        let slack = self.inbox.read(cx).slack.read(cx).connection();
+        palette.update(cx, |p, _| p.slack_options(slack));
         self.jump_subscription = Some(cx.subscribe_in(&palette, w, |v, p, event, w, cx| {
             if v.jump.as_ref() != Some(p) {
                 return;
@@ -106,6 +109,13 @@ impl LocalViewer {
                             v.jump_source().reader.as_ref() == Some(reader)
                                 && crate::external_links::web(url).is_some()
                         }
+                        Destination::SlackOpen(item) => {
+                            v.state.projects.iter().any(|p| p.id == item.project_id)
+                        }
+                        Destination::SlackAdd { project, url } => {
+                            v.state.projects.iter().any(|p| &p.id == project)
+                                && crate::slack_triage::MessageLink::parse(url).is_some()
+                        }
                         _ => true,
                     };
                     if !valid {
@@ -129,6 +139,20 @@ impl LocalViewer {
                                 crate::external_links::open(&url, cx);
                             }
                         }
+                        Destination::SlackOpen(item) => {
+                            if v.show_slack_triage(&item.project_id, w, cx) {
+                                let board = v.inbox.read(cx).slack.clone();
+                                board.update(cx, |b, cx| b.reveal(*item, w, cx));
+                            }
+                        }
+                        Destination::SlackAdd { project, url } => {
+                            if let Some(link) = crate::slack_triage::MessageLink::parse(&url)
+                                && v.show_slack_triage(&project, w, cx)
+                            {
+                                let board = v.inbox.read(cx).slack.clone();
+                                board.update(cx, |b, cx| b.add(project, link, w, cx));
+                            }
+                        }
                     }
                 }
             }
@@ -136,6 +160,22 @@ impl LocalViewer {
         palette.update(cx, |p, cx| p.focus(w, cx));
         self.jump = Some(palette);
         cx.notify();
+    }
+    /// The Inbox's Slack tab, keeping its project filter unless it names another project.
+    fn show_slack_triage(&mut self, project: &str, w: &mut Window, cx: &mut Context<Self>) -> bool {
+        let current = match &self.page {
+            Page::Inbox(filter) => filter.clone(),
+            _ => self.project_scope.clone(),
+        };
+        // As in Swift: All projects stays All; another project gives way to this one.
+        let filter = current.map(|_| project.to_owned());
+        self.show_inbox(filter.clone(), w, cx);
+        if self.page != Page::Inbox(filter) {
+            return false;
+        }
+        self.inbox
+            .update(cx, |i, cx| i.choose_tab(crate::inbox::Tab::Slack, w, cx));
+        true
     }
     pub(super) fn jump_overlay(
         &self,

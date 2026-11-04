@@ -7,10 +7,10 @@ use crate::{
     app_icon::AppIcon,
     local_model::Chat,
     slack_triage::{
-        self as model, Board, Change, Filter, Item, Kind, Save, Severity, Status, ThreadState,
-        Threads,
+        self as model, Board, Change, Filter, Item, Kind, MessageLink, Save, Severity, Status,
+        ThreadState, Threads,
     },
-    slack_triage_transport::{self as transport, Outcome, PollOutcome},
+    slack_triage_transport::{self as transport, AddOutcome, Outcome, PollOutcome},
     ui::{self, Action, Notice, ResourceLabel, Space, Surface, Text, Tone},
 };
 use gpui_kit::{
@@ -66,6 +66,22 @@ struct ReadKey {
 enum Poll {
     Running,
     Message(String),
+}
+
+/// A pasted link being added to one project's triage, or what became of it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Adding {
+    pub(crate) project: String,
+    pub(crate) link: MessageLink,
+    pub(crate) state: AddState,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AddState {
+    Pending,
+    /// pilotd refused; Try again sends a new explicit request.
+    Refused(String),
+    /// It may have been added. Never resent; the board's next read settles it.
+    Unknown(String),
 }
 
 /// A card being dragged to another column, which changes the message's status on drop.
@@ -243,6 +259,12 @@ pub(crate) struct SlackBoard {
     reload: Option<Task<()>>,
     pub(crate) saves: HashMap<String, Save>,
     polls: HashMap<String, Poll>,
+    /// A message opened from elsewhere (the Command Palette). It stays on the board while
+    /// the scope is unchanged, even past the loaded pages.
+    pinned: Option<Item>,
+    /// The pinned message still needs its filters, once the board has read its project.
+    revealing: bool,
+    pub(crate) adding: Option<Adding>,
     _subscriptions: Vec<Subscription>,
 }
 impl EventEmitter<BoardEvent> for SlackBoard {}
@@ -306,11 +328,18 @@ impl SlackBoard {
             reload: None,
             saves: HashMap::new(),
             polls: HashMap::new(),
+            pinned: None,
+            revealing: false,
+            adding: None,
             _subscriptions: vec![rows],
         }
     }
     pub(crate) fn options(&mut self, options: LocalOptions) {
         self.options = Some(options);
+    }
+    /// The connection Slack reads and writes go through.
+    pub(crate) fn connection(&self) -> Option<LocalOptions> {
+        self.options.clone()
     }
     /// Shows the board for `scope`. A new scope reads at once; pilotd's change signals
     /// are coalesced. An unchanged request reads nothing.
@@ -339,6 +368,8 @@ impl SlackBoard {
             self.selected = None;
             self.open = false;
             self.polls.clear();
+            self.pinned = None;
+            self.revealing = false;
             self.rebuild(window, cx);
         }
         self.want = Some(key);
@@ -411,10 +442,40 @@ impl SlackBoard {
             .is_some_and(|w| w.scope == key.scope && w.dismissed == key.dismissed);
         if current {
             match result {
-                Ok(board) => {
+                Ok(mut board) => {
+                    if let Some(item) = &self.pinned {
+                        if board.pin(item) {
+                            // The listed copy is pilotd's latest.
+                            self.pinned = board.item(&item.id).cloned();
+                        } else {
+                            self.pinned = None;
+                            self.revealing = false;
+                        }
+                    }
+                    let added = self.adding.as_ref().and_then(|a| {
+                        matches!(a.state, AddState::Unknown(_))
+                            .then(|| {
+                                board
+                                    .projects
+                                    .iter()
+                                    .filter(|p| p.project.id == a.project)
+                                    .flat_map(|p| &p.items)
+                                    .find(|i| a.link.names(i))
+                                    .cloned()
+                            })
+                            .flatten()
+                    });
                     self.board = Some(Arc::new(board));
                     self.error = None;
-                    self.rebuild(window, cx);
+                    if let Some(item) = added {
+                        // The unconfirmed add did land: show it, as a confirmed one.
+                        self.adding = None;
+                        self.reveal(item, window, cx);
+                    } else if std::mem::take(&mut self.revealing) {
+                        self.show_pinned(window, cx);
+                    } else {
+                        self.rebuild(window, cx);
+                    }
                 }
                 // The last report stays, marked stale.
                 Err(error) => self.error = Some(error),
@@ -425,6 +486,142 @@ impl SlackBoard {
             self.load(window, cx);
         }
         cx.notify();
+    }
+    /// Opens one exact message, as from the Command Palette: selected, in the inspector, with
+    /// the filters that show it. Its status is never changed.
+    pub(crate) fn reveal(&mut self, item: Item, window: &mut Window, cx: &mut Context<Self>) {
+        self.selected = Some(item.id.clone());
+        self.open = true;
+        self.pinned = Some(item);
+        if self.board.is_some() {
+            self.show_pinned(window, cx);
+        } else {
+            // Shown once the board has read the item's project.
+            self.revealing = true;
+            cx.notify();
+        }
+    }
+    fn show_pinned(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(item), Some(board)) = (self.pinned.clone(), self.board.as_mut()) else {
+            return;
+        };
+        if !Arc::make_mut(board).pin(&item) {
+            // Another project's scope: nothing to show here.
+            self.pinned = None;
+            return;
+        }
+        let filter = board.revealing(&item, self.filter);
+        let reread = filter.show_dismissed != self.filter.show_dismissed;
+        self.filter = filter;
+        self.tab = item.triage.status;
+        self.selected = Some(item.id.clone());
+        self.open = true;
+        self.rebuild(window, cx);
+        if reread && let Some(want) = &mut self.want {
+            want.dismissed = filter.show_dismissed;
+            self.load(window, cx);
+        }
+        self.list.update(cx, |l, cx| {
+            let ix = l.delegate().index(&item.id);
+            l.set_selected_index(ix, window, cx);
+        });
+        self.reveal_card();
+        self.read_thread(Duration::ZERO, window, cx);
+        self.focus(window, cx);
+        cx.notify();
+    }
+    /// One explicit add of a pasted link: pilotd reads and sorts the message, then the board
+    /// selects it. One add at a time; a repeated activation while it runs sends nothing.
+    pub(crate) fn add(
+        &mut self,
+        project: String,
+        link: MessageLink,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(&self.adding, Some(a) if a.state == AddState::Pending) {
+            return;
+        }
+        let Some(options) = self.options.clone() else {
+            self.adding = Some(Adding {
+                project,
+                link,
+                state: AddState::Refused("Slack triage needs a connection to Pilot.".into()),
+            });
+            cx.notify();
+            return;
+        };
+        let (id, sent) = (project.clone(), link.clone());
+        // Beyond pilotd's own 50 s limit, so its plain reason arrives first.
+        let started = transport::spawn(
+            "local-slack-triage-add",
+            Duration::from_secs(60),
+            move |client| async move { transport::add(&client, &options, &id, &sent).await },
+        );
+        let state = match started {
+            Err(error) => AddState::Refused(format!("{error} Nothing was added.")),
+            Ok(rx) => {
+                let (project, link) = (project.clone(), link.clone());
+                cx.spawn_in(window, async move |this, cx| {
+                    let outcome = rx.recv().await.unwrap_or(AddOutcome::Unknown(
+                        "Pilot didn't confirm it. It may have been added.".into(),
+                    ));
+                    let _ = this.update_in(cx, |v, w, cx| v.added(&project, &link, outcome, w, cx));
+                })
+                .detach();
+                AddState::Pending
+            }
+        };
+        self.adding = Some(Adding {
+            project,
+            link,
+            state,
+        });
+        cx.notify();
+    }
+    fn added(
+        &mut self,
+        project: &str,
+        link: &MessageLink,
+        outcome: AddOutcome,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let current = self.adding.as_ref().is_some_and(|a| {
+            a.project == project && &a.link == link && a.state == AddState::Pending
+        });
+        if !current {
+            return;
+        }
+        match outcome {
+            AddOutcome::Added(item) => {
+                self.adding = None;
+                self.reveal(*item, window, cx);
+            }
+            AddOutcome::Refused(reason) => {
+                if let Some(a) = &mut self.adding {
+                    a.state = AddState::Refused(reason);
+                }
+            }
+            AddOutcome::Unknown(reason) => {
+                if let Some(a) = &mut self.adding {
+                    a.state = AddState::Unknown(reason);
+                }
+                self.load(window, cx);
+            }
+        }
+        cx.notify();
+    }
+    fn retry_add(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(Adding {
+            project,
+            link,
+            state: AddState::Refused(_),
+        }) = self.adding.clone()
+        {
+            self.adding = None;
+            self.add(project, link, window, cx);
+        }
     }
     fn layout(&self) -> Layout {
         if self.wide { self.layout } else { Layout::List }
@@ -688,6 +885,9 @@ impl SlackBoard {
         match outcome {
             Outcome::Saved(item) => {
                 self.saves.remove(id);
+                if self.pinned.as_ref().is_some_and(|p| p.id == item.id) {
+                    self.pinned = Some((*item).clone());
+                }
                 if let Some(board) = &mut self.board {
                     Arc::make_mut(board).replace(*item);
                 }
@@ -790,6 +990,10 @@ impl SlackBoard {
     pub(crate) fn probe_thread(&self, id: &str) -> Option<ThreadState> {
         self.threads.get(id).cloned()
     }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_filter(&self) -> (bool, bool) {
+        (self.filter.show_hidden, self.filter.show_dismissed)
+    }
 }
 
 impl SlackBoard {
@@ -801,17 +1005,36 @@ impl SlackBoard {
             .as_ref()
             .map_or(0, |b| b.hidden_count(filter.show_dismissed));
         let owner = cx.weak_entity();
-        let filters = ui::icon_action(
-            "slack-filter",
-            if filter.show_hidden || filter.show_dismissed {
-                "Filters (on)"
+        // A named control: what it shows beyond the default stays apparent.
+        let shown: Vec<&str> = [
+            (filter.show_hidden, "Hidden"),
+            (filter.show_dismissed, "Dismissed"),
+        ]
+        .into_iter()
+        .filter_map(|(on, name)| on.then_some(name))
+        .collect();
+        let spoken = if shown.is_empty() {
+            "Filters".to_owned()
+        } else {
+            format!("Filters, showing {}", shown.join(" and ").to_lowercase())
+        };
+        // Wide windows name the filter; narrow ones keep the icon beside the status tabs.
+        let filters = if self.wide {
+            let label = if shown.is_empty() {
+                "Filters".to_owned()
             } else {
-                "Filters"
-            },
-            AppIcon::Filter,
-            Action::Quiet,
-        )
-        .selected(filter.show_hidden || filter.show_dismissed)
+                let list = shown.join(", ");
+                let (first, rest) = list.split_at(1);
+                format!("{first}{}", rest.to_lowercase())
+            };
+            ui::action("slack-filter", label, Action::Quiet)
+                .icon(AppIcon::Filter.icon())
+                .accessibility_label(spoken)
+        } else {
+            ui::icon_action("slack-filter", spoken, AppIcon::Filter, Action::Quiet)
+        }
+        .flex_none()
+        .selected(!shown.is_empty())
         .dropdown_menu(move |mut menu, _, _| {
             let choose = |next: Filter| {
                 let owner = owner.clone();
@@ -917,6 +1140,9 @@ impl SlackBoard {
             .id("slack-status-tabs")
             .test_support()
             .h_flex()
+            // Tabs scroll rather than run under the toolbar's controls.
+            .w_full()
+            .overflow_x_scroll()
             .items_end()
             .gap_1()
             .children(self.columns.iter().map(|(status, rows)| {
@@ -950,8 +1176,11 @@ impl SlackBoard {
                     )
             }))
     }
-    fn notices(&self, cx: &App) -> Vec<AnyElement> {
+    fn notices(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut out = Vec::new();
+        if let Some(adding) = &self.adding {
+            out.push(self.add_banner(adding, cx));
+        }
         if let Some(error) = self.error
             && self.board.is_some()
         {
@@ -1024,6 +1253,56 @@ impl SlackBoard {
             }
         }
         out
+    }
+    /// An explicit add's progress, refusal or uncertainty, beside the board it lands on.
+    fn add_banner(&self, adding: &Adding, cx: &mut Context<Self>) -> AnyElement {
+        let (notice, retry) = match &adding.state {
+            AddState::Pending => (
+                Notice::new("Adding the Slack message…").tone(Tone::Quiet),
+                false,
+            ),
+            AddState::Refused(reason) => (
+                Notice::new("Couldn't add the Slack message")
+                    .detail(SharedString::from(reason.clone()))
+                    .tone(Tone::Error),
+                true,
+            ),
+            AddState::Unknown(reason) => (
+                Notice::new("Slack message not confirmed")
+                    .detail(SharedString::from(reason.clone()))
+                    .tone(Tone::Error),
+                false,
+            ),
+        };
+        let pending = adding.state == AddState::Pending;
+        div()
+            .id("slack-add")
+            .test_support()
+            .h_flex()
+            .w_full()
+            .min_w_0()
+            .items_start()
+            .gap(px(Space::CONTROL))
+            .child(div().flex_1().min_w_0().child(notice))
+            .when(retry, |d| {
+                d.child(
+                    ui::action("slack-add-retry", "Try again", Action::Secondary)
+                        .flex_none()
+                        .on_click(cx.listener(|v, _, w, cx| v.retry_add(w, cx))),
+                )
+            })
+            .when(!pending, |d| {
+                d.child(
+                    ui::action("slack-add-dismiss", "Dismiss", Action::Quiet)
+                        .flex_none()
+                        .on_click(cx.listener(|v, _, w, cx| {
+                            v.adding = None;
+                            v.focus(w, cx);
+                            cx.notify();
+                        })),
+                )
+            })
+            .into_any_element()
     }
     fn body(&self, cx: &mut Context<Self>) -> AnyElement {
         let notice = |id: &'static str, n: Notice| div().id(id).test_support().child(n);

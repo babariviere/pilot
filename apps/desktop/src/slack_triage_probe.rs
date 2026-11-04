@@ -174,6 +174,8 @@ fn thread_reads(s: &Server) -> usize {
         .filter(|(_, p, _)| p.ends_with("/thread"))
         .count()
 }
+#[path = "slack_links_probe.rs"]
+mod links;
 
 pub fn run_slack_triage_probe(cx: &mut HeadlessAppContext) {
     let captures = std::env::var_os("PILOT_NEXT_SLACK_DIR").map(std::path::PathBuf::from);
@@ -555,4 +557,6 @@ pub fn run_slack_triage_probe(cx: &mut HeadlessAppContext) {
             );
         }
     }
+    // Command Palette Slack links land on this same board.
+    links::run(cx);
 }

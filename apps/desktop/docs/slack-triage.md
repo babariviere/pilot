@@ -29,7 +29,35 @@ The Slack tab uses the pane's full width; the Chats tab keeps the reading column
 
 The toolbar carries the status tabs (list) or the message count (board), the Board/List
 switch (wide windows), a Filters menu (Show hidden (N), Show dismissed) and Sync when a
-single project is in scope.
+single project is in scope. Wide windows label the menu and, while a filter is on, name
+it (Hidden, Dismissed or both); narrow ones keep the icon beside the status tabs, which
+scroll rather than run under it. An active filter keeps the control selected.
+
+## Command Palette links
+
+Pasting a Slack message link (`https://<workspace>.slack.com/archives/<channel>/p<ts>`,
+with an optional `thread_ts`, read exactly as pilotd's `parseSlackMessageLink`) into the
+Command Palette runs one passive lookup: `GET /api/projects` and the local-only
+`GET /api/tracking/slack/search?query=<link>`, gated by the pinned daemon identity before
+and after. Lookalike hosts, other schemes, ports, credentials and other paths are not
+looked up. Only items whose source key is this message (thread, then message) count.
+
+- **Open:** each project already holding the message gets a row that opens its Inbox
+  triage with that exact item selected in the inspector. The filters that show it turn
+  on (Show hidden for a hiding or closing label, Show dismissed for a dismissed item); the
+  item keeps its status, and stays on the board while the scope is unchanged even past
+  the loaded pages. Nothing is written.
+- **Add to Slack triage in <project>:** one row per other Slack-tracking project,
+  projects tracking the message's channel first, then the focused project, then pilotd's
+  order. Only activating it sends `POST /api/tracking/slack/messages` with the link as
+  pasted (trimmed); pilotd reads and sorts the message. One add runs at a time; a second
+  activation while it runs sends nothing. A 200 reply naming this message in this project
+  selects it. pilotd's refusals (400/404/409/503) keep its reason with Try again, a new
+  explicit request. Anything else, including a lost reply, is Unknown: never resent; the
+  board rereads and selects the message if it did land.
+
+The palette's All/project choice follows Swift: All projects stays All, another project
+gives way to the message's. No project, account or team is guessed.
 
 ## Existing contracts, plus one read
 
@@ -64,14 +92,14 @@ by a fresh read that shows what pilotd reports. A refused daemon identity sends 
 
 Overrides stay in Pilot. pilotd itself may add a done reaction in Slack when a message
 whose work Pilot started is marked Done; the inspector says so for those messages. Sync
-is an ordinary source poll within the local hourly budget. No message is posted, no
-link is ingested from pasted text and no credentials are read.
+is an ordinary source poll within the local hourly budget. No message is posted, a
+pasted link is added only by an explicit Add, and no credentials are read.
 
 ## Not in this slice
 
-Starting a chat or mission from a message, common cases, adding a message from a pasted
-link, search and Force sync stay in Swift for now. The board does not virtualize its
-cards (each project holds at most 500 messages).
+Starting a chat or mission from a message, common cases, word search of message text
+and Force sync stay in Swift for now. The board does not virtualize its cards (each
+project holds at most 500 messages).
 
 ## Verification
 
@@ -87,7 +115,10 @@ cards (each project holds at most 500 messages).
   filter, arrow keys, thread read only on open, exact link open/copy, property menu
   changes, drag to a column (wide), exact chat navigation, Unknown without resend, list
   layout and Close (wide), Escape (narrow), project scope, unforced sync and identity
-  refusal with the stale report.
+  refusal with the stale report. Then Command Palette links: lookalikes and words
+  unsearched, a tracked dismissed link opened exactly without writes, ranked explicit
+  adds with pending/double activation, a refusal with pointer Try again, Unknown not
+  resent (reconciled when it landed), identity refusal and the composer draft kept.
 
 Static captures are appearance evidence, not motion, OS IME/AX or performance
 acceptance. No real Slack, account or settings were used.

@@ -1,5 +1,6 @@
 //! Owned synthetic pilotd for Slack triage checks: projects, sources, tracked items, threads,
-//! override PATCHes and polls. Loopback only, no real accounts, Slack or settings.
+//! override PATCHes, polls, the local link search and pasted-link adds. Loopback only, no real
+//! accounts, Slack or settings.
 use crate::LocalOptions;
 use serde_json::{Value, json};
 use std::{
@@ -80,6 +81,17 @@ pub(crate) fn item(
             "type":"bug","severity":severity,"label":null},
         "slack":{"type":"bug","label":null,"severity":severity,"status":status,"overrides":{}},
         "createdAt":updated,"updatedAt":updated})
+}
+
+/// A stored message whose permalink and source key are a real Slack message link's:
+/// `https://acme.slack.com/archives/C1/p<seconds>000100`, keyed `C1/<seconds>.000100`.
+pub(crate) fn message(id: &str, project: &str, title: &str, status: &str, seconds: u64) -> Value {
+    let mut value = item(id, project, title, status, "medium", seconds * 1000);
+    value["externalId"] = json!(format!("C1/{seconds}.000100"));
+    value["url"] = json!(format!(
+        "https://acme.slack.com/archives/C1/p{seconds}000100?team=T1"
+    ));
+    value
 }
 
 pub(crate) struct Server {
@@ -258,6 +270,72 @@ fn respond(state: &mut State, method: &str, path: &str, body: Value) -> (Option<
         }
         ("POST", r) if r.starts_with("/api/sources/") && r.ends_with("/poll") => {
             ok(json!({"kind":"slack","status":"ok"}))
+        }
+        ("GET", "/api/tracking/slack/search") => {
+            // pilotd's link form: exact source keys in Slack-tracking projects, done and
+            // dismissed included. Words are not modelled.
+            let url = reqwest::Url::parse(&format!("http://fixture{path}")).unwrap();
+            let text = url
+                .query_pairs()
+                .find(|(k, _)| k == "query")
+                .map(|(_, v)| v.into_owned())
+                .unwrap_or_default();
+            let Some(link) = crate::slack_triage::MessageLink::parse(&text) else {
+                return ok(json!({"items":[],"total":0}));
+            };
+            let tracking: Vec<&Value> = state
+                .projects
+                .iter()
+                .filter(|p| {
+                    p["tracking"]["slackChannels"]
+                        .as_array()
+                        .is_some_and(|c| !c.is_empty())
+                })
+                .collect();
+            let items: Vec<Value> = state
+                .items
+                .iter()
+                .filter(|i| tracking.iter().any(|p| p["id"] == i["projectId"]))
+                .filter(|i| link.keys().iter().any(|k| i["externalId"] == k.as_str()))
+                .cloned()
+                .collect();
+            ok(json!({"total":items.len(),"items":items}))
+        }
+        ("POST", "/api/tracking/slack/messages") => {
+            let (Some(project), Some(link)) = (
+                body["projectId"].as_str(),
+                body["url"]
+                    .as_str()
+                    .and_then(crate::slack_triage::MessageLink::parse),
+            ) else {
+                return (
+                    Some(400),
+                    json!({"error":"projectId and url are required"}),
+                    0,
+                );
+            };
+            let key = link.keys()[0].clone();
+            if let Some(existing) = state
+                .items
+                .iter()
+                .find(|i| i["projectId"] == project && i["externalId"] == key.as_str())
+            {
+                // A message already in triage is returned as it is.
+                return ok(existing.clone());
+            }
+            let mut added = item(
+                &format!("added-{}", state.items.len()),
+                project,
+                "Added from a link",
+                "open",
+                "medium",
+                1_791_892_800_000,
+            );
+            added["externalId"] = json!(key);
+            added["url"] = json!(link.url);
+            added["metadata"]["manual"] = json!(true);
+            state.items.push(added.clone());
+            ok(added)
         }
         _ => (Some(404), json!({"error":"Unsupported synthetic path"}), 0),
     }

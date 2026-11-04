@@ -5,6 +5,8 @@ use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 pub(crate) const GROUP_LIMIT: usize = 6;
 #[path = "jump_links.rs"]
 pub(crate) mod links;
+#[path = "jump_slack.rs"]
+pub(crate) mod slack;
 
 // Exact summary association, including its validated opener target.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,7 +92,17 @@ pub(crate) enum Destination {
     Project(String),
     Chat(String),
     ArchiveChat(String),
-    OpenLink { reader: links::Reader, url: String },
+    OpenLink {
+        reader: links::Reader,
+        url: String,
+    },
+    /// The exact message pilotd already holds, opened in its Inbox triage as it is.
+    SlackOpen(Box<crate::slack_triage::Item>),
+    /// One explicit add of a pasted link to one project's triage.
+    SlackAdd {
+        project: String,
+        url: String,
+    },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Kind {
@@ -99,6 +111,7 @@ pub(crate) enum Kind {
     Chat,
     Action,
     Link,
+    Slack,
 }
 impl Kind {
     pub(crate) fn title(self, suggested: bool) -> &'static str {
@@ -109,6 +122,7 @@ impl Kind {
             Self::Chat => "Chats",
             Self::Action => "Actions",
             Self::Link => "Current chat links (loaded)",
+            Self::Slack => "Slack message",
         }
     }
 }

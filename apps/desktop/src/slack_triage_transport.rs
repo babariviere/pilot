@@ -1,13 +1,16 @@
 //! Loopback reads and explicit writes for the Inbox Slack board, through existing pilotd routes:
 //! GET /api/projects, /api/sources, /api/tracked-items and /api/tracked-items/:id/thread;
 //! PATCH /api/tracked-items/:id with Slack overrides only; POST /api/sources/:id/poll without
-//! force. Each runs on its own short-lived thread. Writes check the pinned daemon identity first
-//! and are never retried: a lost or unconfirmed reply stays Unknown.
+//! force. A pasted link is looked up with the local-only GET /api/tracking/slack/search and added
+//! only by an explicit POST /api/tracking/slack/messages. Each runs on its own short-lived
+//! thread. Writes check the pinned daemon identity first and are never retried: a lost or
+//! unconfirmed reply stays Unknown.
 use crate::{
     LocalOptions,
     local_model::valid_id,
     slack_triage::{
-        Board, Change, Item, PAGE, PROJECT_ITEMS, Project, ProjectBoard, Source, Thread,
+        Board, Change, Item, LinkLookup, MessageLink, PAGE, PROJECT_ITEMS, Project, ProjectBoard,
+        Source, Thread,
     },
 };
 use serde_json::Value;
@@ -100,6 +103,7 @@ fn reason(value: &Option<Value>) -> Option<String> {
 const OFFLINE: &str = "Couldn't reach Pilot.";
 const UNREADABLE: &str = "Pilot's Slack messages couldn't be read.";
 const PROJECTS: &str = "Pilot's project list couldn't be read.";
+const LOOKUP: &str = "Couldn't check Slack triage.";
 
 async fn get(
     client: &reqwest::Client,
@@ -222,6 +226,103 @@ pub(crate) async fn read(
     // A reply from another daemon must not be shown as this one's messages.
     crate::local_client::gate(client, options).await?;
     Ok(board)
+}
+
+/// Where a pasted link already is in triage, and which projects track Slack. Reads only what
+/// pilotd stores: no Slack read, no write.
+pub(crate) async fn lookup(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    link: &MessageLink,
+) -> Result<LinkLookup, &'static str> {
+    crate::local_client::gate(client, options).await?;
+    let projects = get(client, options, "/api/projects").await?;
+    let projects: Vec<Project> = projects
+        .as_array()
+        .ok_or(PROJECTS)?
+        .iter()
+        .map(Project::parse)
+        .collect::<Option<Vec<_>>>()
+        .ok_or(PROJECTS)?
+        .into_iter()
+        .filter(Project::tracks_slack)
+        .collect();
+    let mut items = Vec::new();
+    if !projects.is_empty() {
+        let response = client
+            .get(format!("{}/api/tracking/slack/search", options.loopback()))
+            .query(&[("query", link.url.as_str()), ("limit", "20")])
+            .send()
+            .await
+            .map_err(|_| OFFLINE)?;
+        let value = match body(response).await {
+            (200, Some(value)) => value,
+            (404, _) => return Err("This Pilot can't look up Slack links."),
+            _ => return Err(LOOKUP),
+        };
+        for raw in value["items"].as_array().ok_or(LOOKUP)? {
+            let item = Item::read(raw).map_err(|_| LOOKUP)?;
+            // Only this exact message, in a project that still tracks Slack.
+            if link.names(&item) && projects.iter().any(|p| p.id == item.project_id) {
+                items.push(item);
+            }
+        }
+    }
+    crate::local_client::gate(client, options).await?;
+    Ok(LinkLookup { projects, items })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AddOutcome {
+    Added(Box<Item>),
+    /// pilotd refused, with its reason. Trying again is a new explicit request.
+    Refused(String),
+    /// The message may have been added. It is not resent.
+    Unknown(String),
+}
+
+/// Adds one pasted message to a project's triage: pilotd reads and sorts it. Only a 200 reply
+/// carrying this message in this project counts as added.
+pub(crate) async fn add(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    project: &str,
+    link: &MessageLink,
+) -> AddOutcome {
+    if !valid_id(project) {
+        return AddOutcome::Refused("This project can't take Slack messages.".into());
+    }
+    if let Err(failure) = crate::local_client::gate(client, options).await {
+        return AddOutcome::Refused(format!("{failure} Nothing was added."));
+    }
+    let response = client
+        .post(format!(
+            "{}/api/tracking/slack/messages",
+            options.loopback()
+        ))
+        .header("Content-Type", "application/json")
+        .body(serde_json::json!({"projectId": project, "url": link.url}).to_string())
+        .send()
+        .await;
+    let Ok(response) = response else {
+        return AddOutcome::Unknown("No reply from Pilot. It may have been added.".into());
+    };
+    match body(response).await {
+        (200, Some(value)) => match Item::parse(&value) {
+            Some(item) if item.project_id == project && link.names(&item) => {
+                AddOutcome::Added(Box::new(item))
+            }
+            _ => AddOutcome::Unknown("Pilot's reply didn't confirm it.".into()),
+        },
+        // pilotd's plain refusals: not a message link, Slack setup, sign-in, rate limit, busy.
+        (400 | 404 | 409 | 503, value) => AddOutcome::Refused(
+            reason(&value).unwrap_or_else(|| "Pilot couldn't add this message.".into()),
+        ),
+        (_, value) => AddOutcome::Unknown(match reason(&value) {
+            Some(reason) => format!("Pilot reported: {reason} It may have been added."),
+            None => "Pilot didn't confirm it. It may have been added.".into(),
+        }),
+    }
 }
 
 /// The message's thread, parent first, read by pilotd from Slack on demand. Never stored.
