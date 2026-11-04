@@ -528,7 +528,10 @@ export class InsightsReviews {
 	/** Within the report transaction: derive coverage from receipts, never model checkpoint text. */
 	finish(admission: InsightsAdmission, key: string, record: InsightsReviewRecord): InsightsReviewRecord {
 		const row = this.row(admission.binding.reportSessionId, key);
-		if (!row) return record; // Legacy model-authored reports are still claims only.
+		if (!row) {
+			if (this.hasActive(admission)) throw new Conflict("Report key must match the active review run");
+			return record; // Outside dispatched reviews, legacy model-authored reports remain claims only.
+		}
 		this.assertActive(admission, key);
 		if (!row.packet || !["ready", "sent"].includes(String(row.state)))
 			throw new Conflict("Review evidence not ready");

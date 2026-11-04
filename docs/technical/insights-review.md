@@ -135,12 +135,63 @@ The identity is immutable once assigned. Semantic equivalence across
 different labels still needs reviewer judgement; matching labels do not certify a real pattern.
 
 Save one `partial` report under the exact run ID, with the dispatched window and revision zero.
+During an active dispatched review, another report key is rejected before any report or receipt
+commits. Outside dispatched reviews, legacy model-authored report records remain claims only.
 Host-derived checkpoints and a coverage appendix replace completion claims and preserve limitations.
 Report/finding operation receipts remain lookup-only evidence of persistence after lost ACKs.
 Shipped stays distinct from Verified. Nothing approves changes, starts implementation, edits source
 chats/AGENTS.md/checks or changes models, budgets, grants or schedules.
 
 ## Synthetic checks and limits
+
+### Integrated daemon/security review (2026-11-04)
+
+These are isolated synthetic checks, not activation. The native layout is being revised separately;
+the earlier access-dialog probe is evidence for that earlier surface, not final Tasks-tab acceptance.
+No real grant, private-history access, provider turn or recurring activation was used.
+
+| Boundary | Evidence and result |
+| --- | --- |
+| Source admission | Insights cases in `sessions.test.ts`: cross-project and archived discovery, real committed synthetic cold storage, credential/reasoning/attachment withholding, missing storage, bounds, cancellation and no source wake or writes. Supervised identity, exact mission, membership/project/host/worker replacement and revocation are rechecked before disclosure. |
+| Closed capabilities | `insights-role.integration.test.ts`: hostile project/personal extensions and context do not load; spoofed tools cannot replace the closed history/backlog tools; reload retains restrictions. Malformed starts fail before storage opens. Ordinary workers and forged IPC remain denied in session tests. |
+| Native authority | Native HTTP cases in `sessions.test.ts`: explicit capability required before operation reservation, versioned disclosure and exact setup target/model, stable same-operation receipts, changed-payload conflicts, lifecycle CAS, passive GETs/receipt lookup and no worker start from decisions. A recovery call after a committed effect returns its receipt, not a second effect. Missing receipts remain Unknown. This checks the daemon API, not an actual user's confirmation. |
+| Two cycles | The admitted weekly-schedule session test drives context/findings/report calls through synthetic worker IPC, then reloads the manager and schedules. Both reports survive; the second cycle probes the saved boundary and continues below the exclusive cursor instead of starting the old sweep over. It amends two stable findings and retains Shipped separately from Verified. Store-level review tests additionally close/reopen `missions.sqlite`. |
+| Proposals, not authority | The two-cycle fixture proposes another project's `AGENTS.md`/check/tooling change and a separate tool-economy change. Only the admitted backlog gets tasks; the foreign backlog stays untouched, generic mission calls stay unused and no source worker starts. Unknown baseline/pricing/later benefit remain unknown. A conditional call-count estimate is not measured or monetary savings. |
+| Report identity | Review tests reject the wrong run key and window without committing an effect receipt; all prepared parts must be accessed. Model `completed` is replaced by host `partial`; access/persistence is not semantic review or delivery proof. The wrong-key assertion reproduced a bypass before its bounded fix. |
+| Restart/uncertainty | Review, backlog, session, scheduler and operation-journal tests cover durable positions/receipts, Stop/revocation, lost input ACKs, passive exact-ID lookup, terminal no-replay, changed immutable identities, overlap, pause/disable, coalesced/late/missed runs, unavailable destinations and failure dismissal. A future occurrence is distinct, not recovery proof for an old window. |
+
+Run the focused Node files explicitly (two per invocation, `--test-concurrency=2`,
+`--test-force-exit`); `pnpm test file.ts` does **not** select that file. Unset inherited `PILOT_*`
+variables. The relevant selections are:
+
+- `insights-review.test.ts` + `insights-backlog.test.ts` in `packages/daemon/src`.
+- `schedules-insights.test.ts` + `schedules.test.ts` in `packages/daemon/src`.
+- `insights-role.integration.test.ts` + `diagnostics-role.integration.test.ts` in `packages/kernel/src`.
+- `diagnostic-context.test.ts` + `operation-journal.test.ts` in `packages/daemon/src`.
+- `node --test --test-force-exit --test-name-pattern='Insights|insights' packages/daemon/src/sessions.test.ts`.
+
+These five selections passed 97/97 tests (17 store/review, 34 scheduler, 3 kernel-role,
+12 reader/journal, 31 Insights session/API cases). Scoped Biome and whitespace checks pass.
+Native Tasks-tab acceptance and final user-facing guidance remain pending separately.
+
+Current-main baseline checks remain separate from feature-only passes. Typecheck fails at
+`workspace-setup-manual.test.ts:87` (undefined assertion predicate); the session reentrant idle-drain
+assertion still fails. Schedule HTTP/passive/creation-contract fixtures currently fail earlier at
+`server.ts:2544`: their old SessionManager fakes omit `piReload.onChange`. This reproduces before
+these verification edits and masks the previously reproduced cached `recurrence: undefined` versus
+HTTP omission failures. The assertions and unrelated fixtures are unchanged. Desktop registration
+also fails for `insights` plus six unrelated targets; the Insights portion is routed to native UI
+ownership. Scoped Biome reports the existing schema-version notice. These are not green full-suite
+or runtime-security claims.
+
+Coverage remains bounded: scheduled dispatch uses one inventory page, two history pages and four
+entries per page. Inventory is mutable; boundary/stream receipts are not storage-incarnation proof;
+old sweeps can defer new activity; truncated/offline/partial content and unresolved windows stay gaps.
+Artifact source/rendering and attachment bodies are not inspected. Redaction cannot guarantee all
+sensitive business text is removed. No synthetic fixture establishes live report quality, OS input,
+IME, VoiceOver, real-account/provider processing, production performance or realized benefit.
+
+### Earlier implementation checks
 
 `insights-review.test.ts` covers multi-run cursors, boundary probes, empty scan pages, unknown streams,
 partial/unavailable reads, inventory carryover, queue rotation, restart, exact identity, normalized

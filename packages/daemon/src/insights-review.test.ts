@@ -185,6 +185,19 @@ test("weekly sources carry exclusive cursors through boundary probes and store r
 	assert.equal(await f.reviews.reserve(f.admission, first), false);
 	await assert.rejects(f.reviews.reserve(f.admission, dispatch()), /already active/);
 	await f.reviews.prepare(f.admission, first, read);
+	const mismatched = {
+		action: "save_report",
+		key: randomUUID(),
+		operationId: randomUUID(),
+		expectedRevision: 0,
+		record: record(),
+	};
+	await assert.rejects(f.store.insights.call(f.admission, mismatched), /Report key must match/);
+	assert.deepEqual(
+		await f.store.insights.call(f.admission, { action: "receipt", operationId: mismatched.operationId }),
+		{ state: "unknown" },
+		"a refused mismatched run never commits a report or receipt",
+	);
 	await assert.rejects(
 		f.store.insights.call(f.admission, {
 			action: "save_report",
@@ -194,6 +207,15 @@ test("weekly sources carry exclusive cursors through boundary probes and store r
 			record: record(),
 		}),
 		/Read all/,
+	);
+	await consume(f);
+	await assert.rejects(
+		f.store.insights.call(f.admission, {
+			...mismatched,
+			key: first.runId,
+			record: { ...record(), windowEnd: "2026-01-09T00:00:00.000Z" },
+		}),
+		/Report window does not match/,
 	);
 	const saved = await finish(f, first);
 	assert.equal((await f.reviews.status(f.admission, first.runId))?.state, "partial");

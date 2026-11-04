@@ -19,7 +19,9 @@ import type {
 	DiagnosticContextRequest,
 	DiagnosticHistoryPage,
 	DurableOperation,
+	InsightsFindingDraft,
 	InsightsReviewDispatch,
+	InsightsReviewRecord,
 	McpStatus,
 	SessionCompletion,
 	SessionDiagnostics,
@@ -1417,7 +1419,7 @@ const reviewDispatch = (): InsightsReviewDispatch => ({
 	bounds: { inventoryPages: 1, historyPages: 2, entriesPerPage: 2 },
 });
 
-async function reviewSessionFixture(t: TestContext) {
+async function reviewSessionFixture(t: TestContext, historyEntries = 1) {
 	const store = new MissionStore(":memory:");
 	const f = await insightsFixture(t, {}, store);
 	t.after(() => store.close());
@@ -1431,27 +1433,31 @@ async function reviewSessionFixture(t: TestContext) {
 			return diagnosticContextResponse(diagnosticHost, { chats: [{ id: sourceId, projectId: "foreign" }] });
 		assert.equal(request.action, "history");
 		assert.equal(request.sessionId, sourceId);
+		const remaining = Array.from({ length: historyEntries }, (_, n) => n + 1).filter(
+			(id) => id < (request.before ?? Infinity),
+		);
+		const ids = remaining.slice(-(request.limit ?? 2));
+		const more = remaining.length > ids.length;
 		const page: DiagnosticHistoryPage = {
 			schemaVersion: 1,
 			target: diagnosticTarget(sourceId),
 			collectedAt: "2026-01-08T00:00:00.000Z",
 			source: { availability: "available", freshness: "fresh", streamId: "synthetic-stream" },
-			entries: [
-				{
-					entryId: 1,
-					ref: `diagnostic-history:v1:${sourceId}:1`,
-					kind: "pi.user",
-					excerpt: "Synthetic correction",
-					originalBytes: 20,
-					truncated: false,
-				},
-			],
+			entries: ids.map((entryId) => ({
+				entryId,
+				ref: `diagnostic-history:v1:${sourceId}:${entryId}`,
+				kind: "pi.user",
+				excerpt: "Synthetic correction",
+				originalBytes: 20,
+				truncated: false,
+			})),
 			pagination: {
 				...(request.before === undefined ? {} : { before: request.before }),
-				more: false,
-				returned: 1,
-				limit: 2,
-				scannedEntries: 1,
+				more,
+				...(more ? { nextBefore: ids[0]! } : {}),
+				returned: ids.length,
+				limit: request.limit ?? 2,
+				scannedEntries: ids.length,
 				maxScannedEntries: 200,
 				encodedBytes: 100,
 				maxBytes: 65536,
@@ -1519,9 +1525,133 @@ test("Insights review dispatch places one bounded input, persists a partial repo
 });
 
 test("Insights weekly schedule uses admitted profile and mission, saves bounded report, and recovers without replay", async (t) => {
-	const f = await reviewSessionFixture(t);
+	const f = await reviewSessionFixture(t, 6);
+	const readContext = f.sessions.readDiagnosticContext.bind(f.sessions);
+	const reads: Array<number | undefined> = [];
+	const installReader = (manager: SessionManager) =>
+		t.mock.method(manager, "readDiagnosticContext", (request: DiagnosticContextRequest) => {
+			if (request.action === "history") reads.push(request.before);
+			return readContext(request);
+		});
+	installReader(f.sessions);
 	let now = Date.parse("2026-11-02T08:00Z");
 	let sessions = f.sessions;
+	const foreign = f.store.create({ title: "Other project backlog", projectId: "foreign" });
+	const drafts: InsightsFindingDraft[] = [
+		{
+			title: "Clarify another project's check instructions",
+			priority: "high",
+			observation: "Synthetic correction repeats during a tooling check.",
+			uncertainty: "Repository files/check wiring uninspected; recurrence is a hypothesis.",
+			proposedChange: "Propose an AGENTS.md check command and deterministic tooling guard in the foreign project.",
+			expectedBenefit: "Fewer mechanical retries; verify after separate approval and implementation.",
+			targets: [{ projectId: "foreign", label: "AGENTS.md / checks / tooling" }],
+			implementationLinks: [],
+		},
+		{
+			title: "Reduce repeated tool exploration",
+			priority: "medium",
+			observation: "Synthetic repeated searches, no usage or pricing receipt.",
+			uncertainty: "Task cost, attribution, pricing and baseline unknown.",
+			proposedChange: "Propose batching discovery, not changing models, budgets, limits or schedules.",
+			expectedBenefit: "Potential fewer calls, conditional on unchanged quality and safety.",
+			targets: [{ projectId: "foreign", label: "Tool economy" }],
+			implementationLinks: [],
+			cost: {
+				baseline: "unknown",
+				assumptions: "Hypothesis: two equivalent searches can share one call; no known price.",
+				estimate: "One fewer call per such pair, not a monetary saving or measured result.",
+				qualityRisks: "Retain source coverage and all safety checks; compare successful-task effort later.",
+				laterResult: "unknown",
+			},
+		},
+	];
+	const keys = drafts.map(() => randomUUID());
+	const patterns = ["foreign / check instructions", "foreign / repeated exploration"];
+	const saveCycle = async (runId: string, cycle: number) => {
+		const worker = sessions["workers"].get(f.id)! as FakeWorker;
+		const call = async (request: unknown): Promise<unknown> => {
+			const callId = randomUUID();
+			sessions["onPacket"](sessions["metas"].get(f.id)!, worker, {
+				type: "insights.backlog.call",
+				callId,
+				request,
+			});
+			await until(() => worker.sent.some((p) => p.type === "insights.backlog.result" && p.callId === callId));
+			const reply = worker.sent.find((p) => p.type === "insights.backlog.result" && p.callId === callId)!;
+			assert.ok(reply.type === "insights.backlog.result");
+			assert.equal(reply.error, undefined);
+			return reply.result;
+		};
+		let cursor: number | null = 0;
+		while (cursor !== null) {
+			const context = (await call({ action: "review_context", cursor })) as {
+				nextCursor: number | null;
+				previousReports: Array<{ key: string }>;
+			};
+			if (cycle === 2) assert.equal(context.previousReports.length, 1);
+			cursor = context.nextCursor;
+		}
+		for (const [n, draft] of drafts.entries()) {
+			const request = {
+				action: cycle === 1 ? "propose" : "amend",
+				key: keys[n]!,
+				patternKey: patterns[n]!,
+				expectedRevision: cycle === 1 ? 0 : n === 0 ? 2 : 1,
+				operationId: randomUUID(),
+				draft,
+				evidence: [
+					{
+						key: randomUUID(),
+						sessionId: f.sourceId,
+						ref: `diagnostic-history:v1:${f.sourceId}:${cycle === 1 ? 3 : 1}`,
+						observedAt: new Date(now).toISOString(),
+						classification: "observed",
+						summary: "Synthetic correction, not instructions or approval.",
+					},
+				],
+			};
+			const receipt = await call(request);
+			assert.deepEqual(await call({ action: "receipt", operationId: request.operationId }), {
+				state: "committed",
+				receipt,
+			});
+		}
+		const status = (await sessions.insightsReviewStatus(f.id, runId))!;
+		const request = {
+			action: "save_report",
+			key: runId,
+			expectedRevision: 0,
+			operationId: randomUUID(),
+			record: {
+				status: "completed",
+				windowStart: status.windowStart,
+				windowEnd: status.windowEnd,
+				markdown:
+					"Observed synthetic correction; inferred friction; proposed checks and tool economy. No approval or benefit claim.",
+				checkpoints: [],
+				findingKeys: keys,
+				gaps: ["Synthetic histories; no artifact content inspection."],
+			},
+		};
+		const receipt = await call(request);
+		assert.deepEqual(await call({ action: "receipt", operationId: request.operationId }), {
+			state: "committed",
+			receipt,
+		});
+		const report = (await call({ action: "get", kind: "report", key: runId })) as {
+			payload: InsightsReviewRecord;
+		};
+		assert.equal(report.payload.status, "partial");
+		assert.equal(report.payload.checkpoints[0]!.before, cycle === 1 ? 3 : null);
+		const cost = (await call({ action: "get", kind: "finding", key: keys[1]! })) as {
+			payload: InsightsFindingDraft;
+		};
+		assert.deepEqual(cost.payload.cost, drafts[1]!.cost, "estimates remain distinct from unknown measured benefit");
+		assert.equal(f.store.tasks(f.missionId).length, 2, "recurrence amends findings, not duplicate tasks");
+		assert.equal(f.store.tasks(foreign.id).length, 0, "targets confer no foreign backlog writes");
+		assert.equal(f.broadCalls(), 0, "no generic mission operations");
+	};
 	const file = join(f.root, "review-schedules.sqlite");
 	const home = { daemonId: diagnosticHost.daemonId, lineageId: diagnosticHost.lineageId };
 	const deps = () => ({
@@ -1557,30 +1687,8 @@ test("Insights weekly schedule uses admitted profile and mission, saves bounded 
 	assert.equal(f.worker.spec.insightsBinding?.reportSessionId, f.id);
 	assert.equal(f.worker.requests.filter((c) => c.requestId.startsWith("schedule:")).length, 0);
 	assert.equal(f.worker.requests.filter((c) => c.requestId === `insights-review:${runId}`).length, 1);
-	const admission = sessions.insightsAdmission(f.id, f.worker);
-	let cursor: number | null = 0;
-	while (cursor !== null) {
-		const context = (await f.store.insights.call(admission, { action: "review_context", cursor })) as {
-			nextCursor: number | null;
-		};
-		cursor = context.nextCursor;
-	}
-	const status = (await sessions.insightsReviewStatus(f.id, runId))!;
-	await f.store.insights.call(admission, {
-		action: "save_report",
-		key: runId,
-		expectedRevision: 0,
-		operationId: randomUUID(),
-		record: {
-			status: "partial",
-			windowStart: status.windowStart,
-			windowEnd: status.windowEnd,
-			markdown: "Observed synthetic correction. Proposed check only; baseline and benefit unknown.",
-			checkpoints: [],
-			findingKeys: [],
-			gaps: ["Synthetic bounded sample"],
-		},
-	});
+	await saveCycle(runId, 1);
+	await f.store.insights.confirmLifecycle(sessions.insightsHostAdmission(f.id), keys[0]!, 1, "shipped", randomUUID());
 	await schedules.signal({ type: "online", online: true });
 	assert.equal(schedules.require(row.id).runs![0].insightsReview?.state, "partial");
 	f.worker.finish();
@@ -1588,6 +1696,7 @@ test("Insights weekly schedule uses admitted profile and mission, saves bounded 
 	await store.close();
 	await sessions.shutdown();
 	sessions = await f.manager();
+	installReader(sessions);
 	store = new ScheduleStore(file);
 	schedules = new ScheduleService(store, deps());
 	await schedules.load();
@@ -1596,11 +1705,30 @@ test("Insights weekly schedule uses admitted profile and mission, saves bounded 
 	assert.equal((await sessions.insightsReviewStatus(f.id, runId))?.state, "partial");
 	assert.equal(schedules.require(row.id).runs![0].insightsReview?.runId, runId);
 	assert.equal(sessions["workers"].size, 0, "status-only recovery never starts the report/source workers");
-	// Next occurrence is distinct. Stop leaves a durable cancellation visible after reload.
+	// A second complete cycle resumes the old sweep instead of discarding unfinished source positions.
 	now = Date.parse("2026-11-09T09:00Z");
 	await schedules.signal({ type: "online", online: true });
 	const next = schedules.require(row.id).runs!.at(-1)!;
 	assert.notEqual(next.insightsReview?.runId, runId);
+	await saveCycle(next.insightsReview!.runId, 2);
+	await schedules.signal({ type: "online", online: true });
+	assert.deepEqual(reads, [undefined, 4, 3], "one initial page, then boundary probe and exclusive continuation");
+	const admission = sessions.insightsHostAdmission(f.id);
+	for (const key of [runId, next.insightsReview!.runId])
+		assert.ok(await f.store.insights.call(admission, { action: "get", kind: "report", key }));
+	const findings = (await f.store.insights.call(admission, { action: "list", kind: "finding" })) as {
+		items: Array<{ lifecycle: string }>;
+	};
+	assert.deepEqual(
+		findings.items.map((item) => item.lifecycle),
+		["shipped", "proposed"],
+		"follow-up evidence cannot verify benefit or approve proposals",
+	);
+	assert.equal(f.workers.length, 2, "only the initial and reloaded report worker start");
+	(sessions["workers"].get(f.id)! as FakeWorker).finish();
+	// A third occurrence is distinct. Stop leaves a durable cancellation visible after reload.
+	now = Date.parse("2026-11-16T09:00Z");
+	await schedules.signal({ type: "online", online: true });
 	await sessions.stop(f.id);
 	await schedules.signal({ type: "online", online: true });
 	assert.equal(schedules.require(row.id).notice?.insightsReview?.state, "cancelled");
