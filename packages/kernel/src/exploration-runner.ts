@@ -94,20 +94,31 @@ export async function runExploration(
 	if (query.limit !== undefined && (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > 50))
 		throw new Error("Exploration limit must be 1..50");
 	if (query.cursor !== undefined && query.cursor.length > 512) throw new Error("Exploration cursor too long");
+	return runExplorationWorker(new URL("./exploration-worker.ts", import.meta.url), { source, query }, signal);
+}
+
+/** Shared admission, permission inheritance, deadline and join rules for disposable analyses. */
+export async function runExplorationWorker<T>(
+	url: URL,
+	data: unknown,
+	signal?: AbortSignal,
+	read?: (ref: unknown) => Promise<Uint8Array>,
+): Promise<T> {
 	const release = await slot(signal);
 	let worker: Worker | undefined;
 	let deadline: ReturnType<typeof setTimeout> | undefined;
 	let hardStop: ReturnType<typeof setTimeout> | undefined;
 	let abort: (() => void) | undefined;
+	let reading: Promise<void> | undefined;
 	try {
 		signal?.throwIfAborted();
-		worker = new Worker(new URL("./exploration-worker.ts", import.meta.url), {
+		worker = new Worker(url, {
 			// Preserve permission limits, not incompatible eval/test/V8 flags. NODE_OPTIONS still inherits.
 			execArgv: workerPermissions(),
-			workerData: { source, query },
+			workerData: data,
 			resourceLimits: { maxOldGenerationSizeMb: 128 },
 		});
-		return await new Promise<ExplorationResult>((resolve, reject) => {
+		return await new Promise<T>((resolve, reject) => {
 			let cancellation: unknown;
 			const stop = (reason: unknown) => {
 				if (cancellation) return;
@@ -120,7 +131,24 @@ export async function runExploration(
 			abort = () => stop(signal?.reason ?? new Error("Exploration cancelled"));
 			signal?.addEventListener("abort", abort, { once: true });
 			deadline = setTimeout(() => stop(new Error("Exploration deadline exceeded; narrow path/query")), 15_000);
-			worker!.once("message", (message: { result?: ExplorationResult; error?: string }) => {
+			worker!.on("message", (message: { result?: T; error?: string; read?: unknown }) => {
+				if (message.read !== undefined) {
+					if (!read || reading || cancellation) {
+						stop(new Error("Invalid exploration byte request"));
+						return;
+					}
+					reading = (async () => {
+						try {
+							const bytes = await read(message.read);
+							if (!cancellation) worker!.postMessage({ bytes });
+						} catch (error) {
+							stop(error);
+						} finally {
+							reading = undefined;
+						}
+					})();
+					return;
+				}
 				if (cancellation) reject(cancellation);
 				else if (message.error) reject(new Error(message.error));
 				else if (message.result) resolve(message.result);
@@ -134,6 +162,7 @@ export async function runExploration(
 		clearTimeout(deadline);
 		clearTimeout(hardStop);
 		if (worker) await worker.terminate();
+		await reading;
 		release();
 	}
 }

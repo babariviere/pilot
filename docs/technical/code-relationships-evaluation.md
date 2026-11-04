@@ -2,6 +2,13 @@
 
 ## Recommendation and evidence boundary
 
+Implementation update (2026-11-04): the bounded internal A/B slice is implemented in
+`retained-call-{contract,runner,scan,worker}.ts` with a host-only `NativeReviewReader.compareCalls`
+adapter. See [current behavior and qualification](code-exploration.md#internal-retained-tsjs-comparison).
+This does not adopt a public tool/transport, runtime claim, broader resolver, persistent index, UI or
+acceptance policy. The source-pinned evaluation below remains historical rationale, not a claim that
+these APIs existed at its inspected pin. Broader evaluation proposals remain unimplemented.
+
 **Next, qualify exact retained input, then a bounded TS/JS body/static-edge comparison using the
 existing graph. Defer general references, type resolution, new languages and persistent indexing.**
 These are separately scoped proposals for coordinator validation, not approved APIs or implementation.

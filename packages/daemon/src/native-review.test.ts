@@ -101,6 +101,78 @@ test("legacy/direct workers explain missing retained custody without opening a c
 	await assert.rejects(reader.get("d".repeat(64)), NoRetainedBinding);
 	assert.equal(touched, false);
 });
+test("internal retained analysis preserves BOM bytes and rechecks current custody before reads and return", async () => {
+	const retained = snapshot();
+	const own = retained.manifest.provenance.ledger.ownership;
+	assert.equal(own.status, "owned");
+	if (own.status !== "owned") return;
+	const bytes = Buffer.from('\uFEFFexport function f() { return "😀"; }\r\n');
+	const sha256 = createHash("sha256").update(bytes).digest("hex");
+	retained.manifest.before = retained.manifest.after = [
+		{ path: "a.ts", mode: "100644", gitOid: "a".repeat(40), state: "text", bytes: bytes.length, sha256 },
+	];
+	let allowed = true,
+		revokeRead = false,
+		reads = 0;
+	const reader = new NativeReviewReader(
+		{
+			get: async () => retained,
+			list: async () => ({ comparisons: [], next: null }),
+			identity: async () => "a".repeat(64),
+			diff: async () => new Uint8Array(),
+			read: async () => {
+				reads++;
+				if (revokeRead) allowed = false;
+				return bytes;
+			},
+		},
+		{ get: async () => retained.manifest.provenance.ledger },
+		async () => {
+			if (!allowed) throw new Error("Current scope revoked");
+			return own.binding;
+		},
+	);
+	assert.deepEqual(
+		await reader.readExact(retained.snapshotId, {
+			snapshotId: retained.snapshotId,
+			side: "before",
+			path: "a.ts",
+			sha256,
+		}),
+		bytes,
+	);
+	assert.ok(
+		!(
+			await reader.source(retained.snapshotId, {
+				snapshotId: retained.snapshotId,
+				side: "before",
+				path: "a.ts",
+				sha256,
+			})
+		).startsWith("\uFEFF"),
+		"display decoder is intentionally not byte-exact",
+	);
+	const result = await reader.compareCalls(retained.snapshotId);
+	assert.equal(result.results[0]!.bodyChanged, false);
+	assert.equal(result.results[0]!.before[0]!.declaration.sha256, sha256);
+	assert.equal(result.results[0]!.before[0]!.declaration.utf8.start, 10);
+	allowed = false;
+	const prior = reads;
+	await assert.rejects(reader.compareCalls(retained.snapshotId), /Current scope revoked/);
+	assert.equal(reads, prior);
+	allowed = true;
+	revokeRead = true;
+	await assert.rejects(reader.compareCalls(retained.snapshotId), /Current scope revoked/);
+	assert.equal(reads, prior + 1, "revocation fences the second side");
+	allowed = true;
+	revokeRead = false;
+	own.binding.sessionId = "other-worker";
+	await assert.rejects(
+		reader.readExact(retained.snapshotId, { snapshotId: "0".repeat(64), side: "before", path: "a.ts", sha256 }),
+		/Cross-comparison/,
+	);
+});
+
 test("required retained manifest fields, custody and reference identities fail closed", () => {
 	const valid = snapshot();
 	snapshotManifest(valid.manifest);

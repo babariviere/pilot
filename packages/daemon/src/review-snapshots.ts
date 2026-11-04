@@ -1,4 +1,5 @@
-import { stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { realpath, stat } from "node:fs/promises";
 import { Worker } from "node:worker_threads";
 import type { JjOwnershipStore } from "./jj-ownership.ts";
 import type { JjOwnershipBinding } from "./jj-ownership-contract.ts";
@@ -120,6 +121,13 @@ export class ReviewSnapshotStore {
 		this.open();
 		if (!(await this.exists())) throw new Error("No retained comparison store");
 		return this.rpc("get", { snapshotId });
+	}
+	/** Read-only canonical store identity. Does not create an absent store. */
+	async identity(): Promise<string> {
+		this.open();
+		return createHash("sha256")
+			.update(await realpath(this.file))
+			.digest("hex");
 	}
 	/** Read-only discovery never creates a store or captures a comparison. */
 	async list(

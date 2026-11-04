@@ -4,6 +4,7 @@
 	"private": true,
 	"type": "module",
 	"exports": {
+		"./retained-calls": "./src/retained-call-runner.ts",
 		"./subscription-refresh": "./src/subscription-refresh.ts",
 		"./mission-authoring": "./src/mission-authoring.ts",
 		"./review-boundary": "./src/review-boundary.ts",

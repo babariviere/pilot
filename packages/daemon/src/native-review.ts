@@ -1,5 +1,6 @@
 /** Bounded read projection. The caller is the Local app, not an authenticated session. */
 import { TextDecoder } from "node:util";
+import { compareRetainedCalls, type RetainedCallQuery } from "@pilot/kernel/retained-calls";
 import type { NativeReviewCaptureStatus, NativeReviewSnapshot } from "@pilot/protocol";
 import type { JjOwnershipStore } from "./jj-ownership.ts";
 import { bindingRecord, identifier, type JjOwnershipBinding, repositoryIdPattern } from "./jj-ownership-contract.ts";
@@ -11,11 +12,13 @@ import type { ReviewSnapshotStore } from "./review-snapshots.ts";
 export class NoRetainedBinding extends Error {}
 
 export class NativeReviewReader {
-	private readonly snapshots: Pick<ReviewSnapshotStore, "get" | "list" | "diff" | "read">;
+	private readonly snapshots: Pick<ReviewSnapshotStore, "get" | "list" | "diff" | "read"> &
+		Partial<Pick<ReviewSnapshotStore, "identity">>;
 	private readonly ledger: Pick<JjOwnershipStore, "get"> & Partial<Pick<JjOwnershipStore, "deliveryStatus">>;
 	private readonly admit: () => Promise<JjOwnershipBinding>;
 	constructor(
-		snapshots: Pick<ReviewSnapshotStore, "get" | "list" | "diff" | "read">,
+		snapshots: Pick<ReviewSnapshotStore, "get" | "list" | "diff" | "read"> &
+			Partial<Pick<ReviewSnapshotStore, "identity">>,
 		ledger: Pick<JjOwnershipStore, "get"> & Partial<Pick<JjOwnershipStore, "deliveryStatus">>,
 		admit: () => Promise<JjOwnershipBinding>,
 	) {
@@ -106,18 +109,50 @@ export class NativeReviewReader {
 		await this.check(binding);
 		return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 	}
-	async source(snapshotId: string, ref: ReviewSourceRef) {
+	/** Original retained bytes, not the display decoder's BOM-normalized text. */
+	async readExact(snapshotId: string, ref: ReviewSourceRef) {
 		const { binding, snapshot } = await this.snapshot(snapshotId);
 		if (ref.snapshotId !== snapshotId || !["before", "after"].includes(ref.side))
 			throw new Error("Cross-comparison source");
 		reviewPath(ref.path);
 		identifier(ref.sha256, repositoryIdPattern);
 		const entry = snapshot.manifest[ref.side].find((e) => e.path === ref.path);
-		if (!entry || entry.state !== "text" || entry.sha256 !== ref.sha256)
+		if (entry?.state !== "text" || entry.sha256 !== ref.sha256)
 			throw new Error("Retained text is unavailable, binary or unsupported");
 		const bytes = await this.snapshots.read(snapshotId, ref);
 		await this.owner(binding, snapshot.manifest.request.repositoryId, snapshot.manifest.request.changeId);
 		await this.check(binding);
-		return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+		return bytes;
+	}
+	async source(snapshotId: string, ref: ReviewSourceRef) {
+		return new TextDecoder("utf-8", { fatal: true }).decode(await this.readExact(snapshotId, ref));
+	}
+	/** Internal host operation only. No HTTP route, agent tool, capture or acceptance authority. */
+	async compareCalls(snapshotId: string, query: RetainedCallQuery = {}, signal?: AbortSignal) {
+		signal?.throwIfAborted();
+		const { binding, snapshot } = await this.snapshot(snapshotId);
+		if (!this.snapshots.identity) throw new Error("Retained analysis store identity unavailable");
+		const storeId = await this.snapshots.identity();
+		return compareRetainedCalls(
+			{
+				input: {
+					storeId,
+					snapshotId,
+					request: snapshot.manifest.request,
+					status: snapshot.manifest.status,
+					before: snapshot.manifest.before,
+					after: snapshot.manifest.after,
+				},
+				authorize: async () => {
+					await this.owner(binding, snapshot.manifest.request.repositoryId, snapshot.manifest.request.changeId);
+					await this.check(binding);
+				},
+				// Immutable manifest qualified once above. The runner rechecks scope/custody around
+				// each raw read; the store independently validates the exact ref, manifest and bytes.
+				read: (ref) => this.snapshots.read(snapshotId, ref),
+			},
+			query,
+			signal,
+		);
 	}
 }

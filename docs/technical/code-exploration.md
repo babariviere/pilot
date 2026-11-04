@@ -162,6 +162,70 @@ observed non-root files or coverage reject navigation even when the root's conte
 Every page still rescans; its cursor binds the full normalized query/root list, expected revision and
 observed receipt. This invalidates stale/cross-source pages without caching or mixing workspace overlays.
 
+## Internal retained TS/JS comparison
+
+`NativeReviewReader.compareCalls(snapshotId, query?, signal?)` is a host-internal operation, not an
+HTTP route, agent tool, UI feature or acceptance record. It implements the retained-input prerequisite
+and narrow callable projection in [the relationships evaluation](code-relationships-evaluation.md).
+It selects one existing validated manifest, never captures or enrolls work, and rechecks current scope
+and custody at each side, around original-byte reads and before returning. `readExact` retains the BOM;
+the existing `source` display decoder does not. No `AskContext`, filesystem scan, live HEAD fallback,
+second resolver, new language, persistent index, provider call or review authority is introduced.
+
+Both sides feed the same `callSyntax`, lexical/relative-ESM resolver and SCC implementation as live
+exploration. Imports see only that side's successfully retained modules within `query.path` (a whole
+scan scope). The opaque revision binds canonical store identity, snapshot, full retained request/base/
+head/scope, inventories, scan path, engine and observed omissions. Results retain that pair explicitly.
+`offset`/`limit` select pages after a fresh pair analysis; pass `expectedRevision` on continuation.
+Revisions are navigation receipts, not permission or persistent callable identities.
+
+Correspondence is only unique same-path/full-name/kind top-level function declarations and `const`
+arrow/function bindings. Declaration/header/body spans carry original blob SHA-256, zero-based UTF-16
+offsets (one-based line/column) and explicitly separate UTF-8 byte ranges, all with exclusive ends.
+Header is the raw prefix and suffix outside the body; const bindings use their declarator extent.
+Hashes use original bytes without normalizing BOM, CRLF, Unicode, whitespace or comments. Body and
+header changes are independent of outgoing relationship changes. Unchanged callers are not modified
+by a callee's body edit; import edits can change relationships without changing caller bytes.
+
+Relationships compare outgoing endpoint/count multisets for matched callers and matched targets.
+All retained sites keep separate before/after refs; moved sites are not paired by offset. Unknown or
+unpaired targets, failed/omitted source coverage and edge limits make relationship change `null`, not
+false. `lostResolution` reports caller-wide loss of previously available resolution, not a guessed
+site match or proof that a call disappeared. Duplicate/overloaded/kind-changed declarations stay
+unknown. Rename/move identity is never inferred: add/remove is only same-path/name/kind absence with
+successful opposite parsing or a complete missing-path inventory. Methods/nested/anonymous/module
+frames stay unpaired context with explicit counts/partial reasons, not falsely modified functions.
+`exhaustive:false` and `source-inferred-not-runtime` always apply, even to empty results.
+
+The disposable worker uses the existing two-active/eight-queued admission, inherited permissions,
+128 MiB old-generation cap, 15-second cancellation deadline and 250 ms synchronous-parser grace.
+Entered host reads drain before slot release. Sides are serial; ASTs and original text/byte maps do not
+survive each file. Aggregate ceilings across both sides are 10,000 inventory visits, 32 MiB read,
+512 KiB/file, 20,000 graph records, 1,000 projected comparison edges and 1,000 delta rows. Pages have
+at most 50 rows/48 KiB; oversized edge lists are explicitly omitted with unknown relationship change.
+Unrepresentable metadata/rows, deadline, cancellation, corrupt bytes or failed byte providers are
+errors, not empty successful analyses. The independently retained raw diff remains available.
+
+`retained-call.test.ts`, `native-review.test.ts` and the retained-store integration fixture cover exact
+bytes/spans, independent deltas, ambiguity/lost resolution, scope/store/pair fences, custody revocation,
+original-source rewrite/removal/reopen, cancellation/drain and aggregate limits. Existing graph/search
+tests remain unchanged. `node packages/kernel/src/retained-call.bench.ts` measures five alternating
+132/396-file offline pair samples, with 5 aggregate CPU-second/256 MiB sampled-RSS stop rules.
+
+On 2026-11-04, macOS arm64/Node 24.21.0 with inherited `PILOT_*`/`NODE_OPTIONS` unset, fresh workers
+over in-memory retained-byte providers observed:
+
+| Files per side | Total bytes / reads / parses | Median wall / process CPU | Largest sampled RSS increase / heartbeat gap | First-page bytes / rows |
+| --- | --- | --- | --- | --- |
+| 132 | 21,384 / 264 / 264 | 71 / 119 ms | 61.7 MiB / 6.7 ms | 47,581 / 9 |
+| 396 | 64,152 / 792 / 792 | 122 / 248 ms | 44.2 MiB / 6.6 ms | 47,582 / 9 |
+
+Each sample asserts two callables/file, body-only leaf changes, unchanged callers/relationships,
+complete supported coverage and one read/parse per side/file. First pages are bounded navigation, not
+the full retained row set (264/792). Process sampling includes workers, can miss peaks and is affected
+by allocator carry-over/order. These are synthetic costs, not a before/after speedup, disk/store-I/O,
+production preload, packaged-release or GUI responsiveness qualification.
+
 ## Source and trust
 
 Shared Ask `SourceReader` supplies path/traversal/symlink checks and regular-file bounded reads. A source

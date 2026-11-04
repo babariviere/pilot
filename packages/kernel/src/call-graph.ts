@@ -81,6 +81,11 @@ export async function scanCallGraph(source: AskContext, path: string, signal?: A
 			}
 		},
 	});
+	return { scanned, ...resolveCallGraph(modules, signal) };
+}
+
+/** Both live scans and retained inventories use exactly this resolver and SCC implementation. */
+export function resolveCallGraph(modules: Map<string, CallModule>, signal?: AbortSignal) {
 	const outgoing = new Map<string, CallEdge[]>();
 	const incoming = new Map<string, CallEdge[]>();
 	let unresolvedCalls = 0;
@@ -119,7 +124,7 @@ export async function scanCallGraph(source: AskContext, path: string, signal?: A
 	for (const edges of [...outgoing.values(), ...incoming.values()]) edges.sort(order);
 	// Mark cycles by strongly-connected components, not by mistaking diamond convergence for recursion.
 	const cyclic = cycleEdges(outgoing);
-	return { scanned, modules, outgoing, incoming, cyclic, unresolvedCalls, ambiguousCalls };
+	return { modules, outgoing, incoming, cyclic, unresolvedCalls, ambiguousCalls };
 }
 
 export function selectCallFrame(modules: Map<string, CallModule>, symbol: CallPathQuery["symbol"]): CallFrame {

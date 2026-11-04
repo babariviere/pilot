@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { Worker } from "node:worker_threads";
+import { compareRetainedCalls } from "@pilot/kernel/retained-calls";
 import { type JjWorkerScope, jjRepositoryIdentity } from "./jj-ownership.ts";
 import {
 	REVIEW_SNAPSHOT_LIMITS,
@@ -157,6 +158,61 @@ test("edit/rebase cannot change retained source; reads and exact retries survive
 		);
 		assert.match(text(await reopened.diff(snapshot.snapshotId)), /\+original revision/);
 		assert.equal(createHash("sha256").update(JSON.stringify(snapshot.manifest)).digest("hex"), snapshot.snapshotId);
+	} finally {
+		await reopened?.close();
+		await s.close();
+	}
+});
+
+test("retained TS/JS analysis uses original before/after bytes after rewrite, source deletion and store reopen", async () => {
+	const s = await setup();
+	let reopened: ReviewSnapshotStore | undefined;
+	try {
+		const before = '\uFEFFexport function leaf() { return "é😀"; }\r\nexport function caller() { return leaf(); }';
+		const after = before.replace('"é😀"', '"changed😀"');
+		writeFileSync(join(s.w.path, "code.ts"), before);
+		jj(s.w.path, "commit", "-m", "base code");
+		writeFileSync(join(s.w.path, "code.ts"), after);
+		jj(s.w.path, "commit", "-m", "changed code");
+		const snapshot = await s.store.capture(await s.request());
+		const storeId = await s.store.identity();
+		const analyze = (store: ReviewSnapshotStore) =>
+			compareRetainedCalls({
+				input: {
+					storeId,
+					snapshotId: snapshot.snapshotId,
+					request: snapshot.manifest.request,
+					status: snapshot.manifest.status,
+					before: snapshot.manifest.before,
+					after: snapshot.manifest.after,
+				},
+				authorize: async () => {}, // Host-admitted offline fixture; no live product access grant.
+				read: (ref) => store.read(snapshot.snapshotId, ref),
+			});
+		const first = await analyze(s.store);
+		jj(s.w.path, "edit", snapshot.manifest.request.changeId);
+		writeFileSync(join(s.w.path, "code.ts"), "function entirelyDifferent() {}\n");
+		jj(s.w.path, "describe", "-m", "rewritten code");
+		await s.store.close();
+		await s.f.store.close();
+		rmSync(s.w.path, { recursive: true, force: true });
+		rmSync(s.w.shared!.repository, { recursive: true, force: true });
+		reopened = new ReviewSnapshotStore(s.file, {
+			get: async () => {
+				throw new Error("No live source permitted");
+			},
+		});
+		assert.equal(await reopened.identity(), storeId);
+		const next = await analyze(reopened);
+		assert.deepEqual(next, first);
+		const leaf = next.results.find((r) => r.before[0]?.name === "leaf")!;
+		const caller = next.results.find((r) => r.before[0]?.name === "caller")!;
+		assert.equal(leaf.bodyChanged, true);
+		assert.equal(caller.bodyChanged, false);
+		assert.equal(caller.outgoingRelationshipChanged, false);
+		assert.equal(leaf.before[0]!.declaration.utf16.start.offset, 8);
+		assert.equal(leaf.before[0]!.declaration.utf8.start, 10, "BOM stays in original byte coordinates");
+		assert.equal(leaf.before[0]!.declaration.sha256, createHash("sha256").update(before).digest("hex"));
 	} finally {
 		await reopened?.close();
 		await s.close();
