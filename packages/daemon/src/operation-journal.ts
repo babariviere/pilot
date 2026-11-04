@@ -235,6 +235,40 @@ export class OperationJournal {
 			);
 		});
 	}
+	/** Retained intent is a refusal fence, not proof a resource still exists or a grant remains valid. */
+	async retainedTargets(
+		kinds: readonly string[],
+		fields: Readonly<Record<string, string>>,
+		excludeOperationId?: string,
+	): Promise<string[]> {
+		const selectors = Object.entries(fields);
+		const allowed = new Set(kinds);
+		return this.serial(async () => {
+			await this.init();
+			const targets = new Set<string>();
+			for (const { operation, receipt } of this.records.values()) {
+				if (
+					!allowed.has(operation.kind) ||
+					receipt.state === "rejected" ||
+					operation.operationId === excludeOperationId
+				)
+					continue;
+				try {
+					const payload = JSON.parse(operation.payload);
+					if (
+						payload &&
+						typeof payload === "object" &&
+						!Array.isArray(payload) &&
+						selectors.every(([key, value]) => payload[key] === value)
+					)
+						targets.add(operation.targetId);
+				} catch {
+					/* Non-object operation payloads cannot establish these identity references. */
+				}
+			}
+			return [...targets];
+		});
+	}
 	async reserve(op: DurableOperation): Promise<OperationReceipt> {
 		op = structuredClone(op);
 		return this.serial(async () => {

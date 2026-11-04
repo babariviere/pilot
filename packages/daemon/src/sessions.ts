@@ -3943,8 +3943,8 @@ ${run.excerpt}`,
 		for (const meta of this.metas.values()) {
 			if (
 				meta.role !== "insights" ||
-				meta.insightsGrant?.missionId !== missionId ||
-				(meta.projectId !== projectId && meta.insightsGrant.projectId !== projectId)
+				(meta.insightsGrant?.missionId !== missionId && meta.createMissionId !== missionId) ||
+				(meta.projectId !== projectId && meta.insightsGrant?.projectId !== projectId)
 			)
 				continue;
 			candidates.push(this.insightsStatus(meta.id)!);

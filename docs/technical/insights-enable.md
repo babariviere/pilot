@@ -9,6 +9,8 @@ never create a mission or infer one from its title. Missing/invalid project/back
 1. Require `GET /api/hello` capability `insightsEnable:1` and pin its daemon/lineage identity.
 2. `GET /api/insights/enable/preflight?projectId=P&missionId=M`. Optional `model` and `thinking`
    select an explicit configured model for fresh setup, never overwrite an existing chat choice.
+   When a report identity is already known, also pass `reportSessionId` to pin it. An unavailable
+   pinned report refuses even if no receipt/rule reference survives, never falls back to new setup.
 3. Show the returned **effective** settings in one native confirmation, including selected-provider
    processing of sanitized local cross-project/archive evidence, partial 1/2/4 sampling and
    approximately $5 **per report**, advisory, unknown pricing/spend, not a cap or guarantee.
@@ -98,6 +100,14 @@ block confirmation. Legacy rules without trusted destination metadata are explic
 is not a report chat and gains no authority; fresh setup uses a separate stable target identity.
 
 `enable_pending_use_status` requires the retained operation's status lookup, not a new setup.
+`report_identity_unavailable` means a retained native setup/enable intent or trusted rule references
+a report missing from the current session index. It does **not** prove deletion or revocation.
+Preserve that exact identity and refuse before any create step, even if home/path/lineage changed;
+never derive a substitute report ID. Unavailable live bindings refuse as `report_chat_unavailable`;
+an otherwise admitted identity pointing outside the selected project/backlog refuses as
+`report_binding_mismatch`. Retained intent is only a refusal fence, never permission to rebind,
+regrant, restart a report or replay a review. With no retained identity at all, preflight cannot
+certify historical absence. Real incident recovery must investigate separately, not guess a cause.
 Other reason codes include `model_unavailable`, `model_ambiguous`, `thinking_unavailable`,
 `existing_model_choice_differs`, `report_chat_unavailable`, `multiple_report_chats`,
 `multiple_recurring_rules`, `existing_rule_not_ready`, `preflight_changed`,

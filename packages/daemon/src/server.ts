@@ -987,6 +987,8 @@ export function createDaemonServer(
 						missionId,
 						url.searchParams.get("model") ?? undefined,
 						url.searchParams.get("thinking") ?? undefined,
+						undefined,
+						url.searchParams.get("reportSessionId") ?? undefined,
 					),
 				);
 			}

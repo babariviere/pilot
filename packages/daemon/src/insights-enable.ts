@@ -84,10 +84,12 @@ export class InsightsEnable {
 		explicitModel?: string,
 		thinking?: string,
 		ownOperationId?: string,
+		reportSessionId?: string,
 	): Promise<InsightsEnablePreflight> {
 		const context = this.context(projectId, missionId);
 		const candidates = this.candidates(projectId, missionId);
-		const targetId = candidates.length === 1 ? candidates[0]!.sessionId : uuid(`insights-chat:${context}`);
+		let targetId =
+			reportSessionId ?? (candidates.length === 1 ? candidates[0]!.sessionId : uuid(`insights-chat:${context}`));
 		const result: InsightsEnablePreflight = {
 			projectId,
 			missionId,
@@ -101,13 +103,32 @@ export class InsightsEnable {
 		};
 		const block = (reason: string) => ({ ...result, reason });
 		try {
+			// Intent may outlive a readable session. Never interpret a missing index row as deletion
+			// or use changed home/path/lineage to derive a substitute report target.
+			const references = new Set(
+				await this.deps.journal.retainedTargets(
+					["insights-create", "insights-enable"],
+					{ projectId, missionId },
+					ownOperationId,
+				),
+			);
+			if (reportSessionId !== undefined) references.add(reportSessionId);
+			for (const rule of this.deps.schedules.list()) {
+				if (rule.insightsDestination?.projectId === projectId && rule.insightsDestination.missionId === missionId)
+					references.add(rule.insightsDestination.sessionId);
+			}
+			if (reportSessionId === undefined && !candidates.length && references.size === 1)
+				result.targetId = targetId = [...references][0]!;
 			const receipts = await this.deps.journal.targetReceipts("insights-enable", targetId);
 			if (receipts.some((r) => r.operationId !== ownOperationId && r.state === "pending"))
 				return block("enable_pending_use_status");
-			if (!candidates.length && receipts.some((r) => r.state === "accepted")) return block("report_target_retired");
+			if ([...references].some((id) => !candidates.some((candidate) => candidate.sessionId === id)))
+				return block("report_identity_unavailable");
 			this.deps.schedules.insightsEnableAvailable(this.deps.host);
 			if (candidates.length > 1) return block("multiple_report_chats");
 			if (candidates[0] && !candidates[0].available) return block("report_chat_unavailable");
+			if (candidates[0] && (candidates[0].projectId !== projectId || candidates[0].missionId !== missionId))
+				return block("report_binding_mismatch");
 			const chat = candidates[0] ? this.deps.sessions.insightsEnableChat(targetId) : null;
 			const rules = this.rules(targetId);
 			if (rules.length > 1) return block("multiple_recurring_rules");
@@ -231,6 +252,7 @@ export class InsightsEnable {
 					payload.model,
 					payload.thinking,
 					op.operationId,
+					payload.chat?.sessionId,
 				);
 				if (
 					!preflight.payload ||
@@ -251,6 +273,8 @@ export class InsightsEnable {
 					// Recheck the frozen local identities after marker durability, before minting authority.
 					if (payload.context !== this.context(payload.projectId, payload.missionId))
 						throw new Conflict("Insights context changed");
+					if (this.candidates(payload.projectId, payload.missionId).length)
+						throw new Conflict("An existing report binding appeared; do not create a substitute");
 					this.deps.schedules.insightsEnableAvailable(payload.expectedHome);
 					await this.deps.sessions.spawnInsightsDurable(
 						{

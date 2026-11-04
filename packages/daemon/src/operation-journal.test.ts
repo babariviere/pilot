@@ -137,3 +137,40 @@ test("recovery finishes receipt deletion interrupted after replay-floor publicat
 	await assert.rejects(readFile(file), { code: "ENOENT" });
 	assert.equal((await reopened.reserve(operation(2))).state, "pending");
 });
+
+test("retained identity references are exact read-only observations, not resource or authority proof", async (t) => {
+	const { directory, journal } = await fixture(t);
+	const intent = (sequence: number, missionId = "m", kind = "insights-enable") => {
+		const op = operation(sequence);
+		const payload = JSON.stringify({ projectId: "p", missionId });
+		return { ...op, kind, payload, payloadHash: payloadHash(payload) };
+	};
+	const pending = intent(1),
+		accepted = intent(2, "m", "insights-create");
+	await journal.reserve(pending);
+	await journal.execute(accepted, async () => ({ sessionId: accepted.targetId }));
+	await journal.execute(intent(3), async () => {
+		throw new OperationRejected("refused before effects");
+	});
+	await journal.reserve(intent(4, "other"));
+	await journal.reserve(intent(5, "m", "chat-create"));
+	const rows = [pending, accepted];
+	const before = await Promise.all(rows.map((op) => readFile(join(directory, `${payloadHash(op.operationId)}.json`))));
+	assert.deepEqual(
+		await journal.retainedTargets(["insights-create", "insights-enable"], { projectId: "p", missionId: "m" }),
+		[pending.targetId, accepted.targetId],
+	);
+	assert.deepEqual(
+		await journal.retainedTargets(
+			["insights-create", "insights-enable"],
+			{ projectId: "p", missionId: "m" },
+			pending.operationId,
+		),
+		[accepted.targetId],
+	);
+	assert.deepEqual(await journal.retainedTargets(["insights-enable"], { projectId: "other", missionId: "m" }), []);
+	assert.deepEqual(
+		await Promise.all(rows.map((op) => readFile(join(directory, `${payloadHash(op.operationId)}.json`)))),
+		before,
+	);
+});

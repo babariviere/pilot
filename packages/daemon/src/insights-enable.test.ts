@@ -192,6 +192,12 @@ test("passive preflight/status creates nothing, resolves exact default and requi
 	);
 	const op = f.operation(p.payload!, p.targetId);
 	assert.equal((await f.enable.status(op)).state, "not_found");
+	const knownMissing = randomUUID();
+	const pinned = await f.enable.preflight(f.project.id, f.mission.id, undefined, undefined, undefined, knownMissing);
+	assert.equal(pinned.state, "blocked");
+	assert.equal(pinned.reason, "report_identity_unavailable");
+	assert.equal(pinned.targetId, knownMissing);
+	assert.equal(pinned.payload, null);
 	await assert.rejects(f.enable.preflight(f.project.id, "missing"));
 	const other = f.missions.create({ projectId: "other", title: "Not this project" });
 	await assert.rejects(f.enable.preflight(f.project.id, other.id), /Backlog/);
@@ -365,6 +371,132 @@ test("refused membership leaves a disabled partial chat, never an automatic repl
 	assert.equal(f.sessions.list().length, 1);
 	assert.equal(f.schedules.list().length, 0);
 });
+
+for (const field of [
+	"enabled",
+	"home",
+	"projectPath",
+	"hostId",
+	"daemonId",
+	"lineageId",
+	"projectId",
+	"missionId",
+	"missingGrant",
+	"missionProject",
+] as const) {
+	test(`stale ${field} binding explicitly refuses preflight and frozen reuse before effects`, async (t) => {
+		const f = await fixture(t),
+			id = randomUUID();
+		await f.sessions.spawnInsightsDurable(
+			{ projectId: f.project.id, missionId: f.mission.id, model: model.id, message: "Synthetic admitted report" },
+			id,
+			randomUUID(),
+			true,
+		);
+		const before = await f.preflight();
+		assert.equal(before.targetId, id);
+		const op = f.operation(before.payload!, id);
+		const meta = f.sessions["metas"].get(id)!;
+		const grant = meta.insightsGrant!;
+		if (field === "enabled") grant.enabled = false;
+		else if (field === "missingGrant") delete meta.insightsGrant;
+		else if (field === "missionProject")
+			t.mock.method(f.sessions["missions"]!, "spawnProject", () => "different-project");
+		else if (field === "home" || field === "projectPath") grant[field] = "/synthetic/different";
+		else if (field === "projectId" || field === "missionId") grant[field] = "different";
+		else grant.host[field] = "different";
+		const unchanged = structuredClone(meta);
+		const preflight = await f.preflight();
+		assert.equal(preflight.state, "blocked");
+		assert.equal(preflight.reason, "report_chat_unavailable");
+		assert.equal(preflight.targetId, id, "retain the exact unavailable identity, never derive a substitute");
+		assert.equal(preflight.payload, null);
+		const spawn = t.mock.method(f.sessions, "spawnInsightsDurable");
+		const schedule = t.mock.method(f.schedules, "createInsights");
+		const receipt = await f.run(op);
+		assert.equal(receipt.state, "rejected");
+		assert.equal(receipt.result, undefined, "no step entered for stale binding");
+		assert.deepEqual(meta, unchanged, "no rebind or regrant");
+		assert.equal(spawn.mock.callCount(), 0);
+		assert.equal(schedule.mock.callCount(), 0);
+		assert.equal(f.schedules.list().length, 0);
+		assert.equal(f.workerStarts, 0);
+	});
+}
+
+for (const reference of ["enable-receipt", "legacy-create-receipt", "schedule-intent"] as const) {
+	test(`Unknown session with retained ${reference} refuses substitution, without inferring deletion/revocation`, async (t) => {
+		const f = await fixture(t);
+		let id: string;
+		if (reference === "enable-receipt") {
+			const op = await f.intent();
+			id = op.targetId;
+			await f.run(op);
+		} else {
+			id = randomUUID();
+			const create = () =>
+				f.sessions.spawnInsightsDurable(
+					{
+						projectId: f.project.id,
+						missionId: f.mission.id,
+						model: model.id,
+						message: "Synthetic existing report",
+					},
+					id,
+					"synthetic-legacy-create",
+					true,
+				);
+			if (reference === "legacy-create-receipt") {
+				const template = await f.intent();
+				const payload = JSON.stringify({
+					projectId: f.project.id,
+					missionId: f.mission.id,
+					model: model.id,
+					disclosure: "insights-history-v1",
+				});
+				await f.journal.execute(
+					{ ...template, kind: "insights-create", targetId: id, payload, payloadHash: payloadHash(payload) },
+					async () => {
+						await create();
+						return { sessionId: id };
+					},
+				);
+			} else {
+				await create();
+				await f.schedules.create({
+					trigger: "recurring",
+					recurrence: { ...INSIGHTS_INITIAL_DEFAULTS.recurrence },
+					expectedHome: host,
+					target: { kind: "message", sessionId: id, message: "Existing manual rule" },
+				});
+			}
+		}
+		const frozen = await f.preflight();
+		assert.ok(frozen.payload);
+		const stale = f.operation(frozen.payload, id);
+		const file = join(f.home, "sessions", id, "meta.json");
+		const bytes = await readFile(file);
+		f.sessions["metas"].delete(id); // Synthetic unavailable index only; retain actual bytes and enabled grant.
+		const nextSource = join(f.home, "other-project-path");
+		await mkdir(nextSource);
+		await f.projects.update(f.project.id, { path: nextSource }); // Changed context must not mint another ID.
+		const preflight = await f.preflight();
+		assert.equal(preflight.state, "blocked");
+		assert.equal(preflight.reason, "report_identity_unavailable");
+		assert.equal(preflight.targetId, id);
+		assert.equal(preflight.payload, null);
+		assert.equal((await f.run(stale)).state, "rejected");
+		assert.deepEqual(await readFile(file), bytes);
+		assert.equal(
+			JSON.parse(bytes.toString()).insightsGrant.enabled,
+			true,
+			"Unknown index is not evidence of revocation",
+		);
+		assert.equal(f.sessions.list().length, 0);
+		assert.equal(f.schedules.list().length, reference === "legacy-create-receipt" ? 0 : 1);
+		assert.equal(f.workerStarts, 0);
+	});
+}
 
 test("autumn Paris recurrence remains strictly future and 169 hours across DST", async (t) => {
 	const f = await fixture(t);
@@ -565,6 +697,15 @@ test("native HTTP contract gates only enable, passive reads/status never provisi
 	const root = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
 	assert.equal((await (await fetch(`${root}/hello`)).json()).capabilities.insightsEnable, 1);
 	assert.equal((await fetch(`${root}/insights/enable/preflight`)).status, 400);
+	const knownMissing = randomUUID();
+	const pinned = await (
+		await fetch(
+			`${root}/insights/enable/preflight?projectId=${f.project.id}&missionId=${f.mission.id}&reportSessionId=${knownMissing}`,
+		)
+	).json();
+	assert.equal(pinned.reason, "report_identity_unavailable");
+	assert.equal(pinned.targetId, knownMissing);
+	assert.equal(pinned.payload, null);
 	const preflight = await (
 		await fetch(`${root}/insights/enable/preflight?projectId=${f.project.id}&missionId=${f.mission.id}`)
 	).json();
