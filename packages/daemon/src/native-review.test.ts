@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -291,6 +291,343 @@ test("native Review HTTP admits current scope and rejects writes, cross-scope an
 	response = await fetch(`${root}/worker/${retained.snapshotId}`);
 	assert.equal(response.status, 403);
 	assert.doesNotMatch(await response.text(), /snapshotId|\/host\//);
+});
+
+test("project/chat Review adapters preserve bodies, narrow current scope and perform no capture or enrollment", async (t) => {
+	const home = mkdtempSync(join(tmpdir(), "chat-review-api-"));
+	const projects = new ProjectStore(home);
+	await projects.load();
+	const project = await projects.create({ path: home });
+	mkdirSync(join(home, "other"));
+	const other = await projects.create({ path: join(home, "other") });
+	const sessions = new SessionManager(home, projects);
+	const store = new MissionStore(":memory:");
+	const service = new MissionService(store, sessions, projects);
+	const mission = store.create({ title: "Review", projectId: project.id });
+	const second = store.create({ title: "Other", projectId: project.id });
+	const foreign = store.create({ title: "Foreign", projectId: other.id });
+	const chats = new Map<string, SessionSummary>();
+	for (const [id, projectId, missionId] of [
+		["worker", project.id, mission.id],
+		["unbound", project.id, mission.id],
+		["standalone", project.id, undefined],
+		["lead", project.id, mission.id],
+		["second", project.id, second.id],
+		["foreign", other.id, foreign.id],
+	] as const) {
+		chats.set(id, { id, title: id, projectId } as SessionSummary);
+		if (missionId) store.join(id, missionId);
+	}
+	store.update(mission.id, { coordinatorSessionId: "lead" });
+	t.mock.method(sessions, "get", (id: string) => chats.get(id));
+	t.mock.method(sessions, "list", (query: { projectId: string }) =>
+		[...chats.values()].filter((chat) => chat.projectId === query.projectId),
+	);
+	t.mock.method(sessions, "hasNativeReviewBinding", async (id: string, _m: string, _p: string, auth: () => void) => {
+		auth();
+		return id !== "unbound";
+	});
+	const retained = snapshot();
+	const ownership = retained.manifest.provenance.ledger.ownership;
+	assert.equal(ownership.status, "owned");
+	if (ownership.status !== "owned") return;
+	ownership.binding.missionId = mission.id;
+	const digest = createHash("sha256").update("source").digest("hex");
+	retained.manifest.after = [
+		{ path: "a.txt", mode: "100644", gitOid: "c".repeat(40), state: "text", sha256: digest, bytes: 6 },
+	];
+	let mutate: (() => void) | undefined;
+	let mutationStage: "get" | "list" | "diff" | "read" = "get";
+	let broken = false;
+	const invokeMutation = (stage: typeof mutationStage) => {
+		if (stage !== mutationStage) return;
+		const call = mutate;
+		mutate = undefined;
+		call?.();
+	};
+	t.mock.method(sessions, "nativeReviewReader", (id: string, m: string, p: string, authorize: () => void) => {
+		assert.equal(m, mission.id);
+		assert.equal(p, project.id);
+		return new NativeReviewReader(
+			{
+				get: async (snapshotId) => {
+					invokeMutation("get");
+					if (broken || snapshotId !== retained.snapshotId) throw new Error("private corrupt manifest /host/path");
+					return retained;
+				},
+				list: async () => {
+					invokeMutation("list");
+					return { comparisons: [], next: null };
+				},
+				diff: async () => {
+					invokeMutation("diff");
+					return Buffer.from("patch");
+				},
+				read: async () => {
+					invokeMutation("read");
+					return Buffer.from("source");
+				},
+			},
+			{ get: async () => retained.manifest.provenance.ledger },
+			async () => {
+				authorize();
+				if (id === "unbound") throw new NoRetainedBinding();
+				return structuredClone(ownership.binding);
+			},
+		);
+	});
+	const terminals = new TerminalManager();
+	const server = createDaemonServer(
+		{ home, host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog("/unused"),
+		terminals,
+		{ store, service },
+	);
+	await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+	t.after(async () => {
+		await new Promise<void>((r) => server.close(() => r()));
+		await service.notices.stop();
+		terminals.shutdown();
+		await sessions.shutdown();
+		await store.durable();
+		store.close();
+		rmSync(home, { recursive: true, force: true });
+	});
+	const forbidden = () => {
+		throw new Error("GET attempted a write or workspace initialization");
+	};
+	t.mock.method(sessions, "spawn", forbidden);
+	// biome-ignore lint/complexity/useLiteralKeys: Private test seam.
+	t.mock.method(sessions["sharedWorkspaces"], "create", forbidden);
+	// biome-ignore lint/complexity/useLiteralKeys: Private test seam.
+	t.mock.method(sessions["reviewSnapshots"], "capture", forbidden);
+	// biome-ignore lint/complexity/useLiteralKeys: Private test seam.
+	t.mock.method(sessions["sharedWorkspaces"].ownership, "register", forbidden);
+	t.mock.method(store, "create", forbidden);
+	t.mock.method(store, "addTask", forbidden);
+	const files = readdirSync(home, { recursive: true });
+	const api = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
+	const root = `${api}/sessions/worker/review`;
+	const projectRoot = `${api}/projects/${project.id}/review`;
+	let response = await fetch(projectRoot);
+	assert.equal(response.status, 200);
+	assert.equal(response.headers.get("cache-control"), "no-store");
+	assert.deepEqual(await response.json(), {
+		projectId: project.id,
+		chats: [
+			{ id: "worker", title: "worker", missionId: mission.id },
+			{ id: "second", title: "second", missionId: second.id },
+		],
+		more: false,
+	});
+	response = await fetch(`${projectRoot}?missionId=${mission.id}`);
+	assert.deepEqual(((await response.json()) as any).chats, [{ id: "worker", title: "worker", missionId: mission.id }]);
+	assert.equal((await fetch(`${projectRoot}?missionId=${foreign.id}`)).status, 403);
+	assert.equal((await fetch(`${projectRoot}?missionId=`)).status, 403);
+	assert.equal((await fetch(projectRoot, { method: "POST" })).status, 405);
+	for (const id of ["standalone", "lead", "unbound"]) {
+		response = await fetch(`${api}/sessions/${id}/review`);
+		assert.equal(response.status, 200);
+		const page = (await response.json()) as any;
+		assert.deepEqual(page.comparisons, []);
+		assert.equal(page.next, null);
+		assert.match(page.unavailable, /does not enroll/);
+		assert.equal((await fetch(`${api}/sessions/${id}/review/${retained.snapshotId}`)).status, 403);
+		assert.equal((await fetch(`${api}/sessions/${id}/review?expectedProjectId=${project.id}`)).status, 200);
+		assert.equal((await fetch(`${api}/sessions/${id}/review?expectedProjectId=${other.id}`)).status, 403);
+		assert.equal((await fetch(`${api}/sessions/${id}/review?expectedProjectId=`)).status, 403);
+	}
+	assert.equal((await fetch(`${api}/sessions/missing/review`)).status, 404);
+	response = await fetch(`${root}?missionId=${foreign.id}&projectId=${other.id}`);
+	assert.deepEqual(await response.json(), { comparisons: [], next: null }, "caller assertions do not select scope");
+	for (const cursor of ["-1", "1.5", "NaN", "1000000000000000", ""]) {
+		assert.equal((await fetch(`${root}?after=${cursor}`)).status, 403);
+		assert.equal((await fetch(`${api}/sessions/standalone/review?after=${cursor}`)).status, 403);
+	}
+	assert.equal((await fetch(root, { method: "POST" })).status, 405);
+	assert.equal((await fetch(root, { headers: { origin: "https://evil.example" } })).status, 403);
+	response = await fetch(`${root}/${retained.snapshotId}`);
+	assert.equal(response.status, 200);
+	assert.equal(((await response.json()) as any).workerId, "worker");
+	assert.deepEqual(await (await fetch(`${root}/${retained.snapshotId}/patch`)).json(), {
+		snapshotId: retained.snapshotId,
+		patch: "patch",
+	});
+	const source = `${root}/${retained.snapshotId}/source?side=after&path=a.txt&sha256=${digest}`;
+	assert.deepEqual(await (await fetch(source)).json(), { snapshotId: retained.snapshotId, text: "source" });
+	assert.equal((await fetch(source.replace("side=after", "side=wrong"))).status, 403);
+	assert.equal((await fetch(source.replace(digest, "e".repeat(64)))).status, 403);
+	assert.equal((await fetch(`${root}/${"e".repeat(64)}`)).status, 403);
+	broken = true;
+	response = await fetch(`${root}/${retained.snapshotId}`);
+	assert.equal(response.status, 403);
+	assert.doesNotMatch(await response.text(), /private|\/host\//);
+	broken = false;
+	response = await fetch(`${root}/${retained.snapshotId}/records`);
+	assert.equal(response.status, 200);
+	const records = await response.json();
+	const unsupported = t.mock.method(store, "nativeReviewRecords", () => {
+		throw new Error("unsupported exact scope");
+	});
+	assert.equal((await fetch(`${root}/${retained.snapshotId}/records`)).status, 422);
+	unsupported.mock.restore();
+	assert.deepEqual(await (await fetch(`${root}/${retained.snapshotId}/records`)).json(), records);
+	await t.test("expected project fences every chat Review read without selecting its scope", async () => {
+		for (const url of [
+			root,
+			`${root}/${retained.snapshotId}`,
+			`${root}/${retained.snapshotId}/patch`,
+			source,
+			`${root}/${retained.snapshotId}/records`,
+		]) {
+			const expected = new URL(url);
+			expected.searchParams.set("expectedProjectId", project.id);
+			const legacy = await fetch(url);
+			const matching = await fetch(expected);
+			assert.equal(matching.status, legacy.status);
+			assert.deepEqual(await matching.json(), await legacy.json(), "matching precondition leaves bodies unchanged");
+			for (const staleOrInvalid of [other.id, "", " ", "not-a-project", "null", "../project"]) {
+				expected.searchParams.set("expectedProjectId", staleOrInvalid);
+				assert.equal(
+					(await fetch(expected)).status,
+					403,
+					"stale pane project or invalid precondition refuses every read",
+				);
+			}
+			expected.searchParams.set("expectedProjectId", project.id);
+			expected.searchParams.append("expectedProjectId", other.id);
+			assert.equal((await fetch(expected)).status, 403, "ambiguous preconditions refuse");
+			expected.searchParams.delete("expectedProjectId");
+			expected.searchParams.set("expectedProjectId", project.id);
+			mutationStage = url === root ? "list" : url === source ? "read" : url.endsWith("/patch") ? "diff" : "get";
+			mutate = () => {
+				chats.get("worker")!.projectId = other.id;
+			};
+			try {
+				assert.equal((await fetch(expected)).status, 403, "project changes during I/O refuse the pinned pane");
+			} finally {
+				chats.get("worker")!.projectId = project.id;
+				mutate = undefined;
+			}
+		}
+	});
+	for (const url of [
+		root,
+		`${root}/${retained.snapshotId}`,
+		`${root}/${retained.snapshotId}/patch`,
+		source,
+		`${root}/${retained.snapshotId}/records`,
+	]) {
+		mutationStage = url === root ? "list" : url === source ? "read" : url.endsWith("/patch") ? "diff" : "get";
+		mutate = () => {
+			chats.get("worker")!.projectId = other.id;
+		};
+		assert.equal((await fetch(url)).status, 403, "project changed during I/O");
+		chats.get("worker")!.projectId = project.id;
+		mutate = () => {
+			ownership.binding.workspace = "pilot-changed-1234567890abcdef";
+		};
+		assert.equal((await fetch(url)).status, 403, "binding changed during I/O");
+		ownership.binding.workspace = "pilot-worker-1234567890abcdef";
+		mutate = () => store.join("worker", second.id);
+		assert.equal((await fetch(url)).status, 403, "membership moved during I/O");
+		store.join("worker", mission.id);
+	}
+	mutate = () => store.leave("worker");
+	assert.equal((await fetch(`${root}/${retained.snapshotId}`)).status, 403, "removed membership during I/O");
+	assert.equal((await fetch(`${root}/${retained.snapshotId}/patch`)).status, 403);
+	assert.match(((await (await fetch(root)).json()) as any).unavailable, /Not captured/);
+	assert.deepEqual(readdirSync(home, { recursive: true }), files, "GETs do not initialize new disk/workspace stores");
+	// Discovery truncates eligible chats, not unrelated or unbound entries.
+	for (let i = 0; i < 101; i++) {
+		const id = `page-${i}`;
+		chats.set(id, { id, title: id, projectId: project.id } as SessionSummary);
+		store.join(id, mission.id);
+	}
+	response = await fetch(projectRoot);
+	const page = (await response.json()) as any;
+	assert.equal(page.chats.length, 100);
+	assert.equal(page.more, true);
+	await t.test("project access is rechecked after an asynchronous unbound probe", async (t) => {
+		t.mock.method(sessions, "list", () => [chats.get("unbound")!]);
+		const getProject = projects.get.bind(projects);
+		let revoked = false;
+		let probes = 0;
+		t.mock.method(projects, "get", (id: string) => (revoked && id === project.id ? undefined : getProject(id)));
+		t.mock.method(
+			sessions,
+			"hasNativeReviewBinding",
+			async (_id: string, _m: string, _p: string, authorize: () => void) => {
+				authorize();
+				await Promise.resolve();
+				probes++;
+				revoked = true;
+				return false;
+			},
+		);
+		const response = await fetch(projectRoot);
+		assert.equal(probes, 1, "discovery crossed the asynchronous false-binding probe");
+		assert.equal(response.status, 404, "revoked project access must not return a stale successful empty list");
+		assert.equal("chats" in ((await response.json()) as object), false);
+	});
+});
+
+test("standalone Review GETs work without a mission service and create no retained stores", async (t) => {
+	const home = mkdtempSync(join(tmpdir(), "standalone-review-api-"));
+	const projects = new ProjectStore(home);
+	await projects.load();
+	const project = await projects.create({ path: home });
+	const sessions = new SessionManager(home, projects);
+	const terminals = new TerminalManager();
+	// biome-ignore lint/complexity/useLiteralKeys: Inject host metadata without spawning work.
+	sessions["metas"].set("standalone", {
+		id: "standalone",
+		title: "Standalone",
+		projectId: project.id,
+		cwd: home,
+		createdAt: 1,
+		updatedAt: 1,
+	});
+	// biome-ignore lint/complexity/useLiteralKeys: Legacy projectless chat has no content grant.
+	sessions["metas"].set("projectless", {
+		id: "projectless",
+		title: "Projectless",
+		cwd: home,
+		createdAt: 1,
+		updatedAt: 1,
+	});
+	const server = createDaemonServer(
+		{ home, host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog("/unused"),
+		terminals,
+	);
+	await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+	t.after(async () => {
+		await new Promise<void>((r) => server.close(() => r()));
+		terminals.shutdown();
+		await sessions.shutdown();
+		rmSync(home, { recursive: true, force: true });
+	});
+	const files = readdirSync(home, { recursive: true });
+	const api = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
+	const response = await fetch(`${api}/sessions/standalone/review`);
+	assert.equal(response.status, 200);
+	assert.match(((await response.json()) as any).unavailable, /Not captured/);
+	assert.equal((await fetch(`${api}/sessions/standalone/review/${"d".repeat(64)}`)).status, 403);
+	assert.equal((await fetch(`${api}/sessions/projectless/review`)).status, 200);
+	assert.equal((await fetch(`${api}/sessions/projectless/review/${"d".repeat(64)}`)).status, 403);
+	assert.equal((await fetch(`${api}/sessions/projectless/review?expectedProjectId=${project.id}`)).status, 403);
+	assert.equal((await fetch(`${api}/sessions/projectless/review?expectedProjectId=`)).status, 403);
+	assert.deepEqual(await (await fetch(`${api}/projects/${project.id}/review`)).json(), {
+		projectId: project.id,
+		chats: [],
+		more: false,
+	});
+	assert.deepEqual(readdirSync(home, { recursive: true }), files);
 });
 
 test("exact dimension results remain reported/unavailable, context changes make them outdated", async () => {

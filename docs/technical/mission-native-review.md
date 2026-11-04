@@ -65,6 +65,23 @@ capture/enrollment/migration has occurred. No synthetic fixture data enters prod
 
 ### Local transport and admission
 
+Project/chat read adapters also expose `GET /api/projects/:projectId/review?missionId=` as
+`{projectId,chats:[{id,title,missionId?}],more}`. It returns at most100 current same-project,
+non-coordinator chats with retained bindings, including archived chats that retain current membership.
+The optional mission filter only narrows this list. No binding is created by discovery.
+`GET /api/sessions/:sessionId/review?after=<sequence>` returns the existing
+`{comparisons,next,unavailable?,capture?}` page; `/:snapshotId` and its `patch`, `source` and `records`
+subresources retain the bodies below. Project and current membership come from host metadata, not
+query assertions. Standalone/coordinator/unbound chats return an explicit empty not-captured page;
+they cannot read retained snapshots without current custody. Standalone capture is not enabled by
+these adapters. Related records remain optional and exact-mission scoped. The mission routes below
+remain compatible; these reads do not migrate consumers or records.
+
+Session Review reads accept optional `expectedProjectId` as an equality precondition only. It must
+match the host-derived current chat project at admission and every existing recheck; stale, empty,
+invalid or duplicate values refuse. It never selects custody or changes response bodies. Omission
+retains legacy behavior; `projectId`/`missionId` query assertions still grant no scope.
+
 `GET /api/missions/:missionId/review` lists up to100 current same-project non-coordinator members.
 `.../review/:workerId?after=<sequence>` returns a keyset page of up to20 retained comparisons and
 an explicit continuation. The scope is derived from the mission's current project, current durable

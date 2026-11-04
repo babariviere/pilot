@@ -5758,6 +5758,16 @@ ${run.excerpt}`,
 			this.retainedWorkerBinding(id, missionId, projectId, authorize),
 		);
 	}
+	/** Discovery reads custody only, without opening snapshots or enrolling a workspace. */
+	async hasNativeReviewBinding(id: string, missionId: string, projectId: string, authorize: () => void) {
+		try {
+			await this.retainedWorkerBinding(id, missionId, projectId, authorize);
+			return true;
+		} catch (error) {
+			if (error instanceof NoRetainedBinding) return false;
+			throw error;
+		}
+	}
 	private async retainedWorkerBinding(id: string, missionId: string, projectId: string, authorize: () => void) {
 		const scope = () => {
 			authorize();
