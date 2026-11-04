@@ -680,6 +680,27 @@ impl ChatEditor {
     fn can_choose_model(&self) -> bool {
         self.model_restriction().is_none()
     }
+    /// Opens the composer's model menu as a click would. The menu keeps its own
+    /// busy, pending and read-only rows; choosing still uses its guarded handler.
+    pub(super) fn open_model_menu(
+        &mut self,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), &'static str> {
+        let picker = self
+            .models
+            .as_ref()
+            .and_then(|m| m.picker.as_ref())
+            .filter(|p| p.catalog.is_some())
+            .ok_or("Models are still loading.")?;
+        let state = picker.models.clone();
+        state.update(cx, |s, cx| s.focus(w, cx));
+        w.dispatch_action(
+            Box::new(gpui_kit::base::actions::Confirm { secondary: false }),
+            cx,
+        );
+        Ok(())
+    }
     fn model_restriction(&self) -> Option<&'static str> {
         if !self.ready() {
             return Some(

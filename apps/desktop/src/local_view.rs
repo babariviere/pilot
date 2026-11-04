@@ -90,11 +90,11 @@ mod history_shortcut_tests;
 #[cfg(feature = "native-probes")]
 #[path = "inbox_probe.rs"]
 pub(crate) mod inbox_probe;
-#[path = "insights_navigation.rs"]
-mod insights_navigation;
 #[cfg(feature = "native-probes")]
 #[path = "insights_native_probe.rs"]
 pub(crate) mod insights_native_probe;
+#[path = "insights_navigation.rs"]
+mod insights_navigation;
 #[path = "jump_navigation.rs"]
 mod jump_navigation;
 #[cfg(feature = "native-probes")]
@@ -200,6 +200,11 @@ pub(crate) mod sidebar_sections_probe;
 #[cfg(feature = "native-probes")]
 #[path = "slack_triage_probe.rs"]
 pub(crate) mod slack_triage_probe;
+#[path = "slash_command_actions.rs"]
+mod slash_command_actions;
+#[cfg(feature = "native-probes")]
+#[path = "slash_commands_probe.rs"]
+pub(crate) mod slash_commands_probe;
 #[cfg(feature = "native-probes")]
 #[path = "style_probe.rs"]
 pub(crate) mod style_probe;
@@ -1305,7 +1310,10 @@ impl LocalViewer {
         });
         let editor = cx.new(|cx| ChatEditor::new(writer.clone(), window, cx));
         let path_owner = cx.weak_entity();
-        editor.update(cx, |editor, cx| editor.enable_paths(path_owner, window, cx));
+        editor.update(cx, |editor, cx| {
+            editor.enable_slash(path_owner.clone());
+            editor.enable_paths(path_owner, window, cx)
+        });
         let context_entry = context_usage_view::entry(cx);
         let todos_entry = session_todos_tray::entry(window, cx);
         let jobs_entry = session_jobs_tray::entry(window, cx);

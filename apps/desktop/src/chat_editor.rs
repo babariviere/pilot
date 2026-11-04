@@ -22,6 +22,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[path = "path_completion_view.rs"]
 pub(crate) mod paths;
+#[path = "slash_commands_view.rs"]
+mod slash;
 
 #[path = "composer_attachments.rs"]
 mod attachments;
@@ -110,6 +112,7 @@ pub(crate) struct ChatEditor {
     height: crate::composer_height::State,
     attachments: attachments::Previews,
     paths: paths::Paths,
+    slash: slash::Slash,
     context_entry: Option<gpui_kit::AnyView>,
     todos_entry: Option<gpui_kit::AnyView>,
     jobs_entry: Option<gpui_kit::AnyView>,
@@ -193,8 +196,12 @@ impl ChatEditor {
                 InputEvent::Change => {
                     view.changed(cx);
                     view.path_input_changed(window, cx, true);
+                    view.slash_input_changed(window, cx, true);
                 }
-                InputEvent::Blur => view.close_paths(cx),
+                InputEvent::Blur => {
+                    view.close_paths(cx);
+                    view.close_slash(cx);
+                }
                 InputEvent::PressEnter { shift: false, .. } => view.submit(false, window, cx),
                 _ => {}
             });
@@ -204,12 +211,14 @@ impl ChatEditor {
             }
         });
         let path_watch = cx.observe_in(&text, window, |v, _, w, cx| {
-            v.path_input_changed(w, cx, false)
+            v.path_input_changed(w, cx, false);
+            v.slash_input_changed(w, cx, false);
         });
         Self {
             height: Default::default(),
             attachments: Default::default(),
             paths: Default::default(),
+            slash: Default::default(),
             context_entry: None,
             todos_entry: None,
             jobs_entry: None,
@@ -262,6 +271,9 @@ impl ChatEditor {
     }
     pub(crate) fn set_jobs_entry(&mut self, entry: gpui_kit::AnyView) {
         self.jobs_entry = Some(entry);
+    }
+    pub(crate) fn jobs_entry(&self) -> Option<gpui_kit::AnyView> {
+        self.jobs_entry.clone()
     }
     pub(crate) fn set_subagents_entry(&mut self, entry: gpui_kit::AnyView) {
         self.subagents_entry = Some(entry);
@@ -327,6 +339,7 @@ impl ChatEditor {
             return;
         }
         self.close_paths(cx);
+        self.reset_slash(cx);
         self.changed(cx);
         self.questions.reset();
         self.selected = None;
@@ -457,6 +470,7 @@ impl ChatEditor {
             return;
         }
         self.close_paths(cx);
+        self.reset_slash(cx);
         self.changed(cx);
         self.questions.reset();
         self.prune_cache();
@@ -1015,6 +1029,10 @@ impl ChatEditor {
             return;
         }
         self.changed(cx);
+        // Native commands open their control; they are never sent, queued or created.
+        if !stop && self.slash_submit(window, cx) {
+            return;
+        }
         if !self.ready()
             || !self.writable
             || self.waiting()
@@ -1592,6 +1610,11 @@ impl Render for ChatEditor {
                         cx.stop_propagation();
                         return;
                     }
+                    if v.slash_open() {
+                        cx.stop_propagation();
+                        v.slash_choose_selected(false, w, cx);
+                        return;
+                    }
                     if v.path_tab(w, cx) {
                         cx.stop_propagation();
                     }
@@ -1601,6 +1624,11 @@ impl Render for ChatEditor {
                 if v.path_open() && !e.shift {
                     cx.stop_propagation();
                     v.path_accept_selected(w, cx);
+                } else if v.slash_open() && !e.shift && !e.secondary {
+                    cx.stop_propagation();
+                    if !v.marked(w, cx) {
+                        v.slash_choose_selected(true, w, cx);
+                    }
                 }
             }))
             .capture_action(cx.listener(|v, _: &gpui_kit::base::input::Escape, w, cx| {
@@ -1609,6 +1637,11 @@ impl Render for ChatEditor {
                     if !v.marked(w, cx) {
                         v.close_paths(cx);
                     }
+                } else if v.slash_open() {
+                    cx.stop_propagation();
+                    if !v.marked(w, cx) {
+                        v.slash_dismiss(cx);
+                    }
                 }
             }))
             .capture_action(cx.listener(|v, _: &gpui_kit::base::input::MoveUp, w, cx| {
@@ -1616,6 +1649,11 @@ impl Render for ChatEditor {
                     cx.stop_propagation();
                     if !v.marked(w, cx) {
                         v.path_move(-1, cx);
+                    }
+                } else if v.slash_open() {
+                    cx.stop_propagation();
+                    if !v.marked(w, cx) {
+                        v.slash_move(-1, cx);
                     }
                 }
             }))
@@ -1626,6 +1664,11 @@ impl Render for ChatEditor {
                         if !v.marked(w, cx) {
                             v.path_move(1, cx);
                         }
+                    } else if v.slash_open() {
+                        cx.stop_propagation();
+                        if !v.marked(w, cx) {
+                            v.slash_move(1, cx);
+                        }
                     }
                 }),
             )
@@ -1635,6 +1678,13 @@ impl Render for ChatEditor {
                     if view.path_open() && key.key == "enter" && !key.modifiers.shift {
                         cx.stop_propagation();
                         view.path_accept_selected(window, cx);
+                        return;
+                    }
+                    if view.slash_open() && key.key == "enter" && !key.modifiers.modified() {
+                        cx.stop_propagation();
+                        if !view.marked(window, cx) {
+                            view.slash_choose_selected(true, window, cx);
+                        }
                         return;
                     }
                     if key.key == "enter"
@@ -1786,6 +1836,16 @@ impl Render for ChatEditor {
                     .child(error)
                     .into_any_element(),
             );
+        }
+        if let Some(note) = self.slash_note(&key) {
+            let note = div()
+                .id("slash-command-note")
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(note);
+            #[cfg(any(test, feature = "native-probes"))]
+            let note = note.test_support();
+            recovery.push(note.into_any_element());
         }
         // While the request runs, Sending… in the controls row is the whole story.
         let delivery_status = if submitting {
@@ -1941,6 +2001,7 @@ impl Render for ChatEditor {
             )
             .relative()
             .children(self.path_suggestions(cx))
+            .children(self.slash_menu(cx))
             .children(self.attachment_strip(cx))
             .child(footer)
             .into_any_element()

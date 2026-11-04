@@ -62,6 +62,11 @@ pub(super) fn entry(window: &mut Window, cx: &mut Context<LocalViewer>) -> Entit
 }
 
 impl Entry {
+    /// Opens this chat's job list, as its summary row does (/jobs).
+    pub(super) fn expand(&mut self, chat: &str, cx: &mut Context<Self>) {
+        self.expanded.insert(chat.to_owned());
+        cx.notify();
+    }
     fn allowed(&self, w: &mut Window, cx: &mut Context<Self>) -> bool {
         self.viewer
             .update(cx, |v, cx| v.project_choices_ready(w, cx))

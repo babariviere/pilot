@@ -51,6 +51,23 @@ impl Render for ChatHeader {
 #[path = "chat_header_probe.rs"]
 pub(super) mod probe;
 impl LocalViewer {
+    /// The header's Artifacts/Back to chat action, also opened by /artifacts.
+    pub(super) fn toggle_artifacts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.prepare_navigation(window, cx) {
+            return;
+        }
+        self.artifacts_open = !self.artifacts_open;
+        self.sync_mission_context(cx);
+        if self.artifacts_open {
+            self.artifacts
+                .update(cx, |p, cx| p.show_gallery(window, cx));
+        } else {
+            self.artifacts.update(cx, |p, cx| p.hide_gallery(cx));
+            self.editor
+                .update(cx, |editor, cx| editor.focus(window, cx));
+        }
+        cx.notify();
+    }
     pub(super) fn chat_header_element(
         &mut self,
         _window: &mut Window,
@@ -212,22 +229,7 @@ impl LocalViewer {
                                         .tooltip("Artifacts")
                                 }
                                 .on_click(cx.listener(
-                                    |view, _, window, cx| {
-                                        if !view.prepare_navigation(window, cx) {
-                                            return;
-                                        }
-                                        view.artifacts_open = !view.artifacts_open;
-                                        view.sync_mission_context(cx);
-                                        if view.artifacts_open {
-                                            view.artifacts
-                                                .update(cx, |p, cx| p.show_gallery(window, cx));
-                                        } else {
-                                            view.artifacts.update(cx, |p, cx| p.hide_gallery(cx));
-                                            view.editor
-                                                .update(cx, |editor, cx| editor.focus(window, cx));
-                                        }
-                                        cx.notify();
-                                    },
+                                    |view, _, window, cx| view.toggle_artifacts(window, cx),
                                 ))
                             })
                         },

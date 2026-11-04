@@ -86,6 +86,11 @@ harness = false
 required-features = ["native-probes"]
 
 [[test]]
+name = "slash_commands"
+harness = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "session_file_view"
 harness = false
 required-features = ["native-probes"]

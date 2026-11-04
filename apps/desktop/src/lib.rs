@@ -53,8 +53,11 @@ mod context_meter;
 mod context_usage;
 mod path_completion;
 mod path_completion_reader;
+mod slash_commands;
 #[cfg(feature = "native-probes")]
 pub use local_view::path_completion_probe::run_path_completion_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::slash_commands_probe::run_slash_commands_probe;
 mod automatic_input;
 mod message_time;
 mod provider_refresh;

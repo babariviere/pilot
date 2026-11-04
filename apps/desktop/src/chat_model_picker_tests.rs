@@ -64,6 +64,43 @@ fn source(e: &ChatEditor) -> (Scope, String) {
 }
 
 #[gpui_kit::test]
+fn slash_model_opens_the_model_menu_without_sending(cx: &mut TestAppContext) {
+    let (_server, h, e, commands) = setup(cx);
+    cx.update_window(h, |_, w, cx| {
+        e.update(cx, |e, cx| e.focus(w, cx));
+        let input = e.read(cx).text.clone();
+        input.update(cx, |i, cx| i.replace_text_in_range(None, "/mo", w, cx));
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(h, |_, w, cx| {
+        assert_eq!(e.read(cx).slash_probe().unwrap().0, ["model"]);
+        w.render_frame(cx);
+        w.press("enter", cx);
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(h, |_, w, cx| {
+        w.render_frame(cx);
+        assert!(
+            w.try_find("model-option-p/a").is_some(),
+            "model menu is open"
+        );
+        assert_eq!(e.read(cx).text.read(cx).value().as_ref(), "");
+    })
+    .unwrap();
+    while let Ok(command) = commands.try_recv() {
+        assert!(
+            !matches!(
+                command,
+                WriteCommand::Submit { .. } | WriteCommand::Model { .. }
+            ),
+            "opening the menu sends nothing"
+        );
+    }
+}
+
+#[gpui_kit::test]
 fn scope_change_revalidates_retained_reader_and_preserves_draft(cx: &mut TestAppContext) {
     let (_, h, e, _) = setup(cx);
     cx.update_window(h, |_, w, cx| {

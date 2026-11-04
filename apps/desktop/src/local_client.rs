@@ -276,6 +276,9 @@ enum ReadRoute {
         id: String,
         name: String,
     },
+    Commands {
+        id: String,
+    },
 }
 impl ReadRoute {
     fn budget(&self) -> Option<(usize, &'static str)> {
@@ -283,6 +286,7 @@ impl ReadRoute {
             Self::UpdateBlockers => {
                 Some((256 * 1024, "Daemon blocker response exceeds its budget."))
             }
+            Self::Commands { .. } => Some((256 * 1024, "Chat command list exceeds its budget.")),
             Self::Hello
             | Self::Sessions
             | Self::History { .. }
@@ -313,6 +317,7 @@ impl ReadRoute {
                 url.path().into()
             }
             Self::Session { id } => format!("/api/sessions/{id}"),
+            Self::Commands { id } => format!("/api/sessions/{id}/commands"),
             Self::Artifact {
                 owner,
                 id,
@@ -828,6 +833,29 @@ pub(crate) async fn linked_chat(options: &LocalOptions, id: &str) -> Result<Chat
 }
 pub(crate) async fn gate(client: &reqwest::Client, options: &LocalOptions) -> Result<(), Failure> {
     hello(client, options).await.map(|_| ())
+}
+
+/// The chat's prompt templates and skills: the existing GET-only command list,
+/// pinned before and after the read. It may reopen a parked chat's worker, never a model.
+pub(crate) async fn session_commands(
+    options: &LocalOptions,
+    id: &str,
+) -> Result<Vec<crate::slash_commands::Command>, Failure> {
+    if !local_model::valid_id(id) {
+        return Err("Invalid canonical chat identity.");
+    }
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .retry(reqwest::retry::never())
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|_| "Cannot read chat commands.")?;
+    gate(&client, options).await?;
+    let value = get(&client, options, ReadRoute::Commands { id: id.into() }).await?;
+    gate(&client, options).await?;
+    crate::slash_commands::parse_session(&value).ok_or("Chat command list is invalid.")
 }
 
 /// Passive observations only, never the checkpointing handoff inspection.
