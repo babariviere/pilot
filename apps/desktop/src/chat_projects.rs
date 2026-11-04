@@ -221,12 +221,20 @@ impl ChatEditor {
             .any(|p| &p.id == id && p.path == draft.cwd))
         .then_some("The selected project or folder changed. Choose the project again.")
     }
+    pub(super) fn project_name(&self, id: &str) -> Option<&str> {
+        self.project_catalog
+            .rows
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| p.name.as_str())
+    }
     /// Whether a click or Enter on a project row can change this draft now.
     fn projects_choosable(&self, draft: &Draft) -> bool {
         self.ready()
             && self.writable
             && !self.waiting()
             && draft.editable()
+            && draft.tracked.is_none()
             && self.project_catalog.loaded
             && !self.project_catalog.rows.is_empty()
             && self.project_catalog.error.is_none()
@@ -360,6 +368,7 @@ impl ChatEditor {
             || !self.project_catalog.loaded
             || self.project_catalog.error.is_some()
             || !self.draft().is_some_and(Draft::editable)
+            || self.draft().is_some_and(|d| d.tracked.is_some())
             || self.project_picker.as_ref().is_none_or(|p| {
                 p.source != source || !Arc::ptr_eq(&p.catalog, &self.project_catalog.rows)
             })
@@ -407,6 +416,7 @@ impl ChatEditor {
         // Rows only while this draft's destination can still change. Loading,
         // empty, failed and sent drafts keep their notice/caption instead.
         let shown = draft.editable()
+            && draft.tracked.is_none()
             && self.project_catalog.loaded
             && self.project_catalog.error.is_none()
             && !self.project_catalog.rows.is_empty();
@@ -442,7 +452,7 @@ impl ChatEditor {
                 frame
             });
         // A sent draft's destination is fixed, so Add project would be noise there.
-        let add = draft.editable().then(|| {
+        let add = (draft.editable() && draft.tracked.is_none()).then(|| {
             div().h_flex().child(
                 ui::action("new-chat-add-project", "Add project…", ui::Action::Quiet)
                     .disabled(!self.ready() || self.waiting())

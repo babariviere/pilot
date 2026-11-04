@@ -61,6 +61,25 @@ pub(crate) struct Delivery {
     pub(crate) answer: Option<crate::question::ReplyIdentity>,
 }
 
+/// The tracked item (a Slack message) a new chat starts from. pilotd links them with the
+/// existing tracked-item PATCH only once the chat exists; the create request never carries it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct Tracked {
+    pub(crate) item_id: String,
+    pub(crate) project_id: String,
+    /// What the draft shows, such as "#support".
+    pub(crate) label: String,
+}
+impl Tracked {
+    fn valid(&self) -> bool {
+        token(&self.item_id)
+            && token(&self.project_id)
+            && !self.label.is_empty()
+            && self.label.len() <= 256
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Draft {
@@ -91,6 +110,9 @@ pub(crate) struct Draft {
     pub(crate) settled_revision: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) answer: Option<crate::question::AnswerDraft>,
+    /// A new chat started from a tracked item. Its project is that item's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) tracked: Option<Tracked>,
 }
 impl Default for Draft {
     fn default() -> Self {
@@ -111,6 +133,7 @@ impl Default for Draft {
             recovery_revision: 0,
             settled_revision: None,
             answer: None,
+            tracked: None,
         }
     }
 }
@@ -133,6 +156,7 @@ fn question_settled_guard(old: &Draft, next: &Draft) -> Option<u64> {
         && old.model_choice == next.model_choice
         && old.mode == next.mode
         && old.diagnostics == next.diagnostics
+        && old.tracked == next.tracked
     {
         guard.map(|revision| revision.max(next.revision))
     } else {
@@ -211,6 +235,10 @@ pub(crate) struct Book {
     /// Operation ids the user explicitly abandoned. They are never retried or executed again.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) abandoned: Vec<String>,
+    /// Created chats, by session id, still to be linked to the tracked item they started from.
+    /// Saved with the accepted creation, so a crash or lost reply never loses the link.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) links: BTreeMap<String, Tracked>,
 }
 impl Book {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -319,6 +347,11 @@ fn validate_draft(key: &str, draft: &Draft) -> Result<(), Failure> {
     if let Some(choice) = &draft.model_choice {
         choice.validate()?;
     }
+    if let Some(tracked) = &draft.tracked
+        && (!key.starts_with("new:") || draft.diagnostics || !tracked.valid())
+    {
+        return Err("Draft exceeds private state limits or is invalid");
+    }
     if !valid_key(key)
         || draft.revision > 9_007_199_254_740_990
         || draft.text.len() > TEXT_CAP
@@ -362,6 +395,7 @@ impl Book {
             repairs: BTreeMap::new(),
             insights: BTreeMap::new(),
             abandoned: Vec::new(),
+            links: BTreeMap::new(),
         }
     }
     fn validate(&self, host: &Host) -> Result<(), Failure> {
@@ -386,6 +420,11 @@ impl Book {
             || self.repairs.len() > 32
             || self.insights.len() > 64
             || self.abandoned.len() > ABANDONED_CAP
+            || self.links.len() > DRAFT_CAP
+            || self
+                .links
+                .iter()
+                .any(|(session, tracked)| !token(session) || !tracked.valid())
         {
             return Err(
                 "Private state identity/version/limits differ. Writes are disabled; original state is preserved.",
@@ -780,6 +819,7 @@ impl Store {
                         draft.model_choice = old.model_choice.clone();
                         draft.project_id = old.project_id.clone();
                         draft.cwd = old.cwd.clone();
+                        draft.tracked = old.tracked.clone();
                     }
                 } else if book.drafts.len() >= DRAFT_CAP {
                     return Err("Draft capacity reached; nothing was evicted");
@@ -899,6 +939,7 @@ impl Store {
                 if message.trim().is_empty() {return Err("Message is empty");}
                 let create=key.starts_with("new:");
                 if create&&!captured.diagnostics&&(captured.project_id.is_none()||!Path::new(&captured.cwd).is_absolute()) {return Err("Choose a configured Local project before creating this chat");}
+                if create&&captured.tracked.as_ref().is_some_and(|t|captured.project_id.as_deref()!=Some(t.project_id.as_str())) {return Err("This chat's project differs from its Slack message's. Nothing was sent.");}
                 // Project ID is the supported SpawnRequest contract. No cwd
                 // override: the daemon owns project/workspace resolution.
                 let mut payload=if create {serde_json::json!({"message":message,"projectId":captured.project_id,"mode":"build"})} else {serde_json::json!({"message":message,"mode":if follow_up {"followUp"} else {"steer"}})};
@@ -1226,6 +1267,11 @@ impl Store {
                 if matches!(kind.as_str(), "chat-create" | "diagnostics-create") {
                     draft.created = Some(intent.target.clone());
                 }
+                if kind == "chat-create"
+                    && let Some(tracked) = draft.tracked.clone()
+                {
+                    book.links.insert(intent.target.clone(), tracked);
+                }
             }
             if state == "rejected"
                 && intent.answer.is_none()
@@ -1432,6 +1478,16 @@ impl Store {
                     && d.created.as_deref() == Some(target)
             }) {
                 book.drafts.remove(key);
+            }
+            Ok(())
+        })
+    }
+
+    /// Forgets a created chat's pending link once pilotd confirmed it, or the item is gone.
+    pub(crate) fn linked(&mut self, session: &str, tracked: &Tracked) -> Result<(), Failure> {
+        self.change(|book| {
+            if book.links.get(session) == Some(tracked) {
+                book.links.remove(session);
             }
             Ok(())
         })

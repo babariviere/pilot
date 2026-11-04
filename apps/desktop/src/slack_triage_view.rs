@@ -30,7 +30,10 @@ use gpui_kit::{
 };
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-gpui_kit::actions!(slack_triage, [Up, Down, Left, Right, Open, CloseDetail]);
+gpui_kit::actions!(
+    slack_triage,
+    [Up, Down, Left, Right, Open, CloseDetail, StartChat]
+);
 
 /// Below this window width the board's columns do not fit: the list shows, and the inspector
 /// replaces it instead of sitting beside it.
@@ -52,6 +55,8 @@ pub(crate) enum Layout {
 pub(crate) enum BoardEvent {
     /// The exact chat started from or linked to a message.
     OpenChat(String),
+    /// A new chat draft from this message. Nothing is sent until the user sends it.
+    StartChat(Box<Item>),
 }
 
 /// What a read covers: the project scope, whether dismissed messages are read, and pilotd's
@@ -784,6 +789,29 @@ impl SlackBoard {
             self.activate(&id, true, window, cx);
         }
     }
+    /// The chat the message is linked to, when it is listed.
+    fn linked_chat(&self, item: &Item) -> Option<String> {
+        item.session_id
+            .clone()
+            .filter(|sid| self.chats.iter().any(|c| &c.id == sid))
+    }
+    /// Start chat for an unlinked message; a linked one opens its chat instead.
+    fn start_chat(&mut self, item: &Item, another: bool, cx: &mut Context<Self>) {
+        match self.linked_chat(item).filter(|_| !another) {
+            Some(chat) => cx.emit(BoardEvent::OpenChat(chat)),
+            None => cx.emit(BoardEvent::StartChat(Box::new(item.clone()))),
+        }
+    }
+    fn start_selected(&mut self, _: &StartChat, _: &mut Window, cx: &mut Context<Self>) {
+        let item = self
+            .selected
+            .as_deref()
+            .and_then(|id| self.board.as_ref()?.item(id))
+            .cloned();
+        if let Some(item) = item {
+            self.start_chat(&item, false, cx);
+        }
+    }
     /// Reads the selected thread once the selection settles, only while the inspector shows it.
     fn read_thread(&mut self, settle: Duration, window: &mut Window, cx: &mut Context<Self>) {
         self.thread_task = None;
@@ -1361,7 +1389,7 @@ impl SlackBoard {
         }
         let main = match self.layout() {
             Layout::Board => self.board_view(cx).into_any_element(),
-            Layout::List => self.list_view(),
+            Layout::List => self.list_view(cx),
         };
         let Some(item) = item else {
             return main;
@@ -1388,7 +1416,7 @@ impl SlackBoard {
             )
             .into_any_element()
     }
-    fn list_view(&self) -> AnyElement {
+    fn list_view(&self, cx: &mut Context<Self>) -> AnyElement {
         if self.column(self.tab).is_empty() {
             return div()
                 .id("slack-empty")
@@ -1404,6 +1432,8 @@ impl SlackBoard {
         div()
             .id("slack-list")
             .test_support()
+            .key_context("SlackList")
+            .on_action(cx.listener(Self::start_selected))
             .size_full()
             .min_w_0()
             .min_h_0()
@@ -1425,6 +1455,7 @@ impl SlackBoard {
             .on_action(cx.listener(Self::right))
             .on_action(cx.listener(Self::open_selected))
             .on_action(cx.listener(Self::close_detail))
+            .on_action(cx.listener(Self::start_selected))
             .h_flex()
             .size_full()
             .min_h_0()
@@ -1588,10 +1619,8 @@ impl SlackBoard {
             context.insert(0, name.clone());
         }
         context.push(model::ago(item.updated_at, now));
-        let chat = item
-            .session_id
-            .clone()
-            .filter(|sid| self.chats.iter().any(|c| &c.id == sid));
+        let chat = self.linked_chat(item);
+        let linked = chat.is_some();
         let url = crate::external_links::web(&item.url);
         let link = item.url.clone();
         // Quiet label/value rows: plain text that opens a checked menu on click.
@@ -1778,24 +1807,18 @@ impl SlackBoard {
                     move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(link.clone())),
                 ),
             )
-            .when_some(chat, |d, sid| {
-                d.child(
-                    ui::icon_action(
-                        "slack-open-chat",
-                        "Open chat",
-                        AppIcon::Chats,
-                        Action::Quiet,
-                    )
-                    .on_click(
-                        cx.listener(move |_, _, _, cx| cx.emit(BoardEvent::OpenChat(sid.clone()))),
-                    ),
-                )
-            })
             .child({
-                let (owner, id) = (cx.weak_entity(), dismiss_id.clone());
+                let (owner, id, started) = (cx.weak_entity(), dismiss_id.clone(), item.clone());
                 ui::icon_action("slack-more", "More actions", AppIcon::More, Action::Quiet)
                     .dropdown_menu(move |menu, _, _| {
                         let (owner, id) = (owner.clone(), id.clone());
+                        let another = {
+                            let (owner, item) = (owner.clone(), started.clone());
+                            PopupMenuItem::new("Start another chat").on_click(move |_, _, cx| {
+                                let _ = owner.update(cx, |v, cx| v.start_chat(&item, true, cx));
+                            })
+                        };
+                        let menu = if linked { menu.item(another) } else { menu };
                         menu.item(
                             PopupMenuItem::new(if dismissed { "Restore" } else { "Dismiss" })
                                 .disabled(pending)
@@ -1819,6 +1842,7 @@ impl SlackBoard {
             .track_focus(&self.detail_focus)
             .key_context("SlackDetail")
             .on_action(cx.listener(Self::close_detail))
+            .on_action(cx.listener(Self::start_selected))
             .v_flex()
             .size_full()
             .min_h_0()
@@ -1877,8 +1901,32 @@ impl SlackBoard {
                                 )
                             }),
                     )
+                    .child(self.chat_action(item, chat, cx))
                     .child(self.thread_view(item, cx)),
             )
+    }
+    /// The message's one action: Start chat, or Open chat once a chat is linked.
+    fn chat_action(
+        &self,
+        item: &Item,
+        chat: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let button = match chat {
+            Some(sid) => ui::action("slack-open-chat", "Open chat", Action::Secondary).on_click(
+                cx.listener(move |_, _, _, cx| cx.emit(BoardEvent::OpenChat(sid.clone()))),
+            ),
+            None => {
+                let item = item.clone();
+                ui::action("slack-start-chat", "Start chat", Action::Primary)
+                    .on_click(cx.listener(move |v, _, _, cx| v.start_chat(&item, false, cx)))
+            }
+        };
+        div()
+            .id("slack-chat-action")
+            .test_support()
+            .h_flex()
+            .child(button)
     }
     /// The thread, parent first: who wrote each message, when, and its selectable text.
     fn thread_view(&self, item: &Item, cx: &mut Context<Self>) -> impl IntoElement + use<> {

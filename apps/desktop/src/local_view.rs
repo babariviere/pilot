@@ -530,6 +530,25 @@ impl LocalViewer {
                 crate::slack_triage_view::CloseDetail,
                 Some("SlackDetail"),
             ),
+            // Start chat for the selected message, or open its chat.
+            crate::ui::shortcut(
+                "secondary-enter",
+                crate::slack_triage_view::StartChat,
+                Some("SlackBoard"),
+                cx,
+            ),
+            crate::ui::shortcut(
+                "secondary-enter",
+                crate::slack_triage_view::StartChat,
+                Some("SlackDetail"),
+                cx,
+            ),
+            crate::ui::shortcut(
+                "secondary-enter",
+                crate::slack_triage_view::StartChat,
+                Some("SlackList > List"),
+                cx,
+            ),
             crate::ui::shortcut("secondary-n", NewChat, None, cx),
             crate::ui::shortcut("secondary-f", FocusChats, None, cx),
             crate::ui::shortcut("secondary-1", GoHome, None, cx),
@@ -1235,6 +1254,9 @@ impl LocalViewer {
                         if let Some(chat) = view.state.chats.iter().find(|c| &c.id == id).cloned() {
                             view.open(chat, window, cx);
                         }
+                    }
+                    crate::inbox::InboxEvent::StartChat(item) => {
+                        view.start_tracked_chat(item, window, cx);
                     }
                     crate::inbox::InboxEvent::Schedule(id) => {
                         if view.show_automations(window, cx) {
@@ -2299,6 +2321,87 @@ impl LocalViewer {
         self.title = "New Local chat".into();
         self.editor
             .update(cx, |editor, cx| editor.new_draft(cwd, window, cx));
+        self.sync_visible_draft(window, cx);
+        self.did_navigate(cx);
+    }
+    /// Start chat from a Slack message: its existing draft or chat when it has one, else a new
+    /// draft in its project with the message as context. Nothing is sent until the user sends.
+    fn start_tracked_chat(
+        &mut self,
+        item: &crate::slack_triage::Item,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::chat_editor::Existing;
+        if !self.editor.read(cx).ready() {
+            return;
+        }
+        match self.editor.read(cx).tracked_draft(&item.id) {
+            Some(Existing::Chat(id)) => {
+                match self.state.chats.iter().find(|c| c.id == id).cloned() {
+                    Some(chat) => {
+                        self.open(chat, window, cx);
+                    }
+                    None => {
+                        self.nav_error = Some("That chat isn't listed yet. Try again shortly.");
+                        cx.notify();
+                    }
+                }
+                return;
+            }
+            Some(Existing::Draft(key)) => {
+                if !self.prepare_navigation(window, cx) {
+                    return;
+                }
+                self.page = Page::Chat;
+                self.nav_error = None;
+                self.clear_chat(cx);
+                self.title = "New chat".into();
+                self.editor.update(cx, |editor, cx| {
+                    editor.select(key, true, false, window, cx);
+                    editor.focus(window, cx);
+                });
+                self.rebuild_nav(window, cx);
+                self.did_navigate(cx);
+                return;
+            }
+            None => {}
+        }
+        let Some(project) = self
+            .state
+            .projects
+            .iter()
+            .find(|p| p.id == item.project_id)
+            .cloned()
+        else {
+            self.nav_error = Some("That project is no longer available.");
+            cx.notify();
+            return;
+        };
+        if !self.prepare_navigation(window, cx) {
+            return;
+        }
+        self.page = Page::Chat;
+        self.change_scope(None, window, cx);
+        self.chats.update(cx, |list, cx| {
+            list.delegate_mut().project = None;
+            list.delegate_mut().filter();
+            cx.notify();
+        });
+        self.nav_error = None;
+        self.clear_chat(cx);
+        self.title = "New Local chat".into();
+        let tracked = crate::delivery_store::Tracked {
+            item_id: item.id.clone(),
+            project_id: project.id,
+            label: item.channel(),
+        };
+        let text = item.chat_prompt();
+        self.editor.update(cx, |editor, cx| {
+            if editor.new_tracked_draft(tracked, project.path, text, window, cx) {
+                editor.focus(window, cx);
+            }
+        });
         self.sync_visible_draft(window, cx);
         self.did_navigate(cx);
     }

@@ -59,6 +59,9 @@ pub(crate) mod project_creation_probe;
 mod project_wait_probe;
 #[path = "chat_projects.rs"]
 mod projects;
+#[path = "chat_tracked.rs"]
+mod tracked;
+pub(crate) use tracked::Existing;
 #[cfg(feature = "native-probes")]
 #[path = "question_probe.rs"]
 pub(crate) mod question_probe;
@@ -454,6 +457,7 @@ impl ChatEditor {
                         .is_some_and(|(capture, _)| capture == *key)
                     && draft.pending.is_none()
                     && draft.created.is_none()
+                    && draft.tracked.is_none()
                     && draft.recovered.is_empty()
                     && !self.pending.contains_key(*key)
             })

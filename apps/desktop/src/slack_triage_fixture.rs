@@ -40,6 +40,8 @@ pub(crate) struct State {
     /// Keyed by method and exact path (without the query).
     pub(crate) replies: BTreeMap<(String, String), Reply>,
     pub(crate) daemon: String,
+    /// Chat-creation receipts by operation id.
+    pub(crate) receipts: BTreeMap<String, Value>,
 }
 impl State {
     pub(crate) fn writes(&self) -> Vec<(String, String, Value)> {
@@ -154,7 +156,6 @@ impl Server {
             .replies
             .insert((method.into(), path.into()), reply);
     }
-    #[cfg(feature = "native-probes")]
     pub(crate) fn clear(&self, method: &str, path: &str) {
         self.state
             .lock()
@@ -185,6 +186,22 @@ fn query(path: &str) -> (&str, BTreeMap<&str, &str>) {
 
 fn apply(state: &mut State, id: &str, body: &Value) -> Option<Value> {
     let item = state.items.iter_mut().find(|i| i["id"] == id)?;
+    // A confirmed start links one chat, as pilotd does: each chat once, the latest last, and
+    // only a new link moves the message to In progress.
+    if let Some(session) = body["sessionId"].as_str() {
+        let mut ids: Vec<Value> = item["sessionIds"].as_array().cloned().unwrap_or_default();
+        let new = !ids.iter().any(|s| s == session);
+        ids.retain(|s| s != session);
+        ids.push(json!(session));
+        item["sessionIds"] = json!(ids);
+        item["sessionId"] = json!(session);
+        if new && body["start"] == true {
+            item["slack"]["status"] = json!("in_progress");
+            item["metadata"]["slackStart"] = json!({"outcome":"reacted"});
+        }
+        item["updatedAt"] = json!(item["updatedAt"].as_u64().unwrap() + 1);
+        return Some(item.clone());
+    }
     let slack = body["slack"].as_object()?;
     for (key, value) in slack {
         item["slack"][key] = value.clone();
@@ -270,6 +287,19 @@ fn respond(state: &mut State, method: &str, path: &str, body: Value) -> (Option<
         }
         ("POST", r) if r.starts_with("/api/sources/") && r.ends_with("/poll") => {
             ok(json!({"kind":"slack","status":"ok"}))
+        }
+        // The draft courier's chat creation: every new operation is accepted once.
+        ("POST", "/api/operations/receipt") => ok(state
+            .receipts
+            .get(body["operationId"].as_str().unwrap_or_default())
+            .cloned()
+            .unwrap_or_else(|| json!({"state":"unknown"}))),
+        ("POST", "/api/operations") => {
+            let id = body["operationId"].as_str().unwrap_or_default().to_owned();
+            let receipt = json!({"operationId":id,"payloadHash":body["payloadHash"],
+                "destination":body["destination"],"targetId":body["targetId"],
+                "state":"accepted","result":{"sessionId":body["targetId"]}});
+            ok(state.receipts.entry(id).or_insert(receipt).clone())
         }
         ("GET", "/api/tracking/slack/search") => {
             // pilotd's link form: exact source keys in Slack-tracking projects, done and

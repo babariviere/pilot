@@ -10,6 +10,8 @@ use serde_json::Value;
 
 #[path = "interaction_delivery.rs"]
 mod delivery;
+#[path = "interaction_links.rs"]
+mod links;
 use delivery::DeliveryOwner;
 use std::{
     collections::BTreeMap,
@@ -40,6 +42,9 @@ pub(crate) struct WriteState {
     pub(crate) access: Option<crate::database_access::Reply>,
     pub(crate) mission_receipts:
         Arc<std::collections::BTreeMap<String, crate::mission_conversion::Receipt>>,
+    /// Tracked items linked to a created chat during this run, by item id. Volatile: it
+    /// bridges the moment before the Inbox reads the item's link from pilotd.
+    pub(crate) linked: BTreeMap<String, String>,
 }
 
 /// Volatile observation of an exact retained operation, not another authority or store.
@@ -450,6 +455,11 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
     let mut autosave = Autosave::default();
     let mut closing = false;
     let mut retries = BTreeMap::<String, (tokio::time::Instant, Duration)>::new();
+    // Links of created chats to their tracked items, sent between commands.
+    let mut link_at = store
+        .as_ref()
+        .is_ok_and(|s| !s.book.links.is_empty())
+        .then(tokio::time::Instant::now);
     loop {
         let now = tokio::time::Instant::now();
         retries.retain(|id, _| {
@@ -503,6 +513,15 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                 }
                 Some(WriteCommand::Check { id, retry: true })
             },
+            _=tokio::time::sleep_until(link_at.unwrap_or_else(||tokio::time::Instant::now()+Duration::from_secs(3600))),if link_at.is_some()=>{
+                link_at=None;
+                if let Ok(store)=&mut store {
+                    link_at=links::drain(&mut DeliveryOwner{store,status:&mut status,channels:Some(&channels),autosave:&mut autosave,closing:&mut closing},&client,&options).await;
+                    status.book=Some(Arc::new(store.book.clone()));
+                }
+                // A Close that arrived meanwhile was taken by the link request; finish it here.
+                if closing {Some(WriteCommand::Close)} else {publish(updates,replace,status.clone());continue;}
+            }
             signal=wake.recv()=>{
                 if signal.is_err(){if let Ok(store)=&mut store{let _=flush(store,edits);}break;}
                 autosave.edited(tokio::time::Instant::now());
@@ -1090,6 +1109,9 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
         }
         if let Ok(store) = &store {
             status.book = Some(Arc::new(store.book.clone()));
+            if link_at.is_none() && !store.book.links.is_empty() {
+                link_at = Some(tokio::time::Instant::now());
+            }
         }
         if status.flushed {
             // The app may exit as soon as this publication wakes its listener.

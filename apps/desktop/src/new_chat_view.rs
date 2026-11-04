@@ -33,6 +33,12 @@ impl ChatEditor {
             .child(
                 ui::header("new-chat-heading", "New chat", Text::Title).mb(px(ui::Space::SIDEBAR)),
             )
+            .children(
+                draft
+                    .tracked
+                    .as_ref()
+                    .map(|t| self.tracked_row(t, draft.editable(), cx)),
+            )
             .child(self.project_field(draft, window, cx))
             .children(self.project_setup_problem(draft).map(|error| {
                 ui::Notice::new(error).tone(if error.starts_with("Loading") {

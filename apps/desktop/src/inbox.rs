@@ -48,6 +48,8 @@ pub(crate) struct InboxInput {
 }
 pub(crate) enum InboxEvent {
     Chat(String),
+    /// Start a chat from this Slack message: a new draft, or the one it already has.
+    StartChat(Box<crate::slack_triage::Item>),
     Filter(Option<String>),
     /// A recurring rule's notice without a listed chat: show the rule.
     Schedule(String),
@@ -589,6 +591,7 @@ impl Inbox {
         let slack = cx.new(|cx| SlackBoard::new(window, cx));
         let opened = cx.subscribe(&slack, |_, _, event: &BoardEvent, cx| match event {
             BoardEvent::OpenChat(id) => cx.emit(InboxEvent::Chat(id.clone())),
+            BoardEvent::StartChat(item) => cx.emit(InboxEvent::StartChat(item.clone())),
         });
         Self {
             list,

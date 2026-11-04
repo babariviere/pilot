@@ -1407,3 +1407,90 @@ fn mission_unicode_admission_refuses_new_blank_attempts_but_preserves_legacy_unk
         "compatibility does not accept formerly invalid ASCII blanks"
     );
 }
+
+fn tracked(project: &str) -> Tracked {
+    Tracked {
+        item_id: "m1".into(),
+        project_id: project.into(),
+        label: "#support".into(),
+    }
+}
+
+#[test]
+fn tracked_creation_saves_its_link_with_the_accepted_chat_and_survives_reopen() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    let mut captured = draft(1, "Look into this Slack message");
+    captured.tracked = Some(tracked("project-a"));
+    save(&mut store, "new:a", captured.clone());
+    let intent = store.prepare("new:a", &captured, false, false).unwrap();
+    let payload: serde_json::Value =
+        serde_json::from_str(&intent.operation.as_ref().unwrap().payload).unwrap();
+    assert!(
+        payload.get("trackedItemId").is_none() && !payload.to_string().contains("m1"),
+        "the create request never carries the message"
+    );
+    assert!(
+        store.book.links.is_empty(),
+        "nothing to link before acceptance"
+    );
+    // While the start is unconfirmed, edits cannot drop or swap its message.
+    let mut edit = captured.clone();
+    edit.revision = 2;
+    edit.text.clear();
+    edit.tracked = None;
+    save(&mut store, "new:a", edit);
+    assert_eq!(
+        store.book.drafts["new:a"].tracked,
+        Some(tracked("project-a"))
+    );
+    store.finish(&intent.id, "accepted", None).unwrap();
+    assert_eq!(store.book.links[&intent.target], tracked("project-a"));
+    drop(store);
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    assert_eq!(store.book.links[&intent.target], tracked("project-a"));
+    // Retiring the created draft keeps the pending link.
+    store.retire_created("new:a", 2, &intent.target).unwrap();
+    assert!(!store.book.drafts.contains_key("new:a"));
+    assert_eq!(store.book.links.len(), 1);
+    // Only the exact link is forgotten.
+    store.linked(&intent.target, &tracked("other")).unwrap();
+    assert_eq!(store.book.links.len(), 1);
+    store.linked(&intent.target, &tracked("project-a")).unwrap();
+    assert!(store.book.links.is_empty());
+}
+
+#[test]
+fn tracked_creation_is_refused_for_another_project_and_rejection_links_nothing() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    let mut captured = draft(1, "Look into this");
+    captured.tracked = Some(tracked("project-b"));
+    assert!(store.prepare("new:a", &captured, false, false).is_err());
+    assert!(store.book.pending.is_empty());
+    captured.tracked = Some(tracked("project-a"));
+    let intent = store.prepare("new:a", &captured, false, false).unwrap();
+    store.finish(&intent.id, "rejected", None).unwrap();
+    assert!(store.book.links.is_empty());
+    assert_eq!(
+        store.book.drafts["new:a"].tracked,
+        Some(tracked("project-a"))
+    );
+    // Only new-chat drafts carry a message.
+    let mut chat = draft(1, "follow-up");
+    chat.tracked = Some(tracked("project-a"));
+    assert!(
+        store
+            .save_edits(BTreeMap::from([("chat:a".into(), chat)]))
+            .is_err()
+    );
+}
+
+#[test]
+fn legacy_state_without_links_reads_and_writes_unchanged() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    save(&mut store, "new:a", draft(1, "plain"));
+    let bytes = serde_json::to_string(&store.book).unwrap();
+    assert!(!bytes.contains("links") && !bytes.contains("tracked"));
+}
