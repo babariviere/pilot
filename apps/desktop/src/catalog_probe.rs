@@ -203,6 +203,37 @@ impl Render for Catalogue {
                     .child(resource),
             )
             .child(
+                // Every fold uses this glyph: right while folded, down while open.
+                // The owning row keeps the click, keyboard and label.
+                div()
+                    .v_flex()
+                    .gap(px(Space::CONTROL))
+                    .child(ui::heading(
+                        "catalog-disclosures",
+                        "Disclosure",
+                        Text::Headline,
+                    ))
+                    .children([("catalog-folded", false), ("catalog-open", true)].map(
+                        |(scope, open)| {
+                            div()
+                                .h_flex()
+                                .gap(px(Space::CONTROL))
+                                .child(ui::text(
+                                    Text::Label,
+                                    if open {
+                                        "Open example"
+                                    } else {
+                                        "Folded example"
+                                    },
+                                ))
+                                .child(
+                                    ui::disclosure_chevron(scope, open)
+                                        .text_color(cx.theme().muted_foreground),
+                                )
+                        },
+                    )),
+            )
+            .child(
                 div()
                     .v_flex()
                     .gap(px(Space::CONTROL))
@@ -367,6 +398,9 @@ pub fn run_catalog_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
             settle(cx, h);
             let image = cx.capture_screenshot(h).unwrap();
+            for (scope, open) in [("catalog-folded", false), ("catalog-open", true)] {
+                crate::icon_probe::assert_disclosure_chevron(cx, h, scope, open);
+            }
             let scale = image.width() as f32 / width;
             crate::icon_probe::assert_painted(glyph, scale, "resource Project glyph", |x, y| {
                 image.get_pixel(x, y).0

@@ -50,7 +50,7 @@ use gpui_kit::{
     ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription,
     TestSupportExt, WeakEntity, Window,
     component::{
-        ActiveTheme, Icon, IconName, Sizable, StyledExt,
+        ActiveTheme, Icon, Sizable, StyledExt,
         button::{Button, ButtonVariants},
         text::{TextView, TextViewState},
     },
@@ -292,12 +292,8 @@ fn disclosure_lead(
         )
 }
 fn chevron(open: bool) -> Icon {
-    Icon::new(if open {
-        IconName::ChevronDown
-    } else {
-        IconName::ChevronRight
-    })
-    .small()
+    // Transcript size; direction from the shared disclosure mapping.
+    Icon::new(AppIcon::disclosure(open).asset()).small()
 }
 fn kind_icon(kind: Kind) -> AppIcon {
     match kind {

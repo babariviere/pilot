@@ -270,6 +270,9 @@ pub fn run_session_todos_probe(cx: &mut HeadlessAppContext) {
             ];
             for (name, items) in variants {
                 publish(cx, h, &view, items);
+                let folded = (name != "zero").then(|| {
+                    crate::icon_probe::assert_disclosure_chevron(cx, h, "session-todos", false)
+                });
                 cx.update_window(h, |_, w, cx| {
                     if name == "zero" {
                         assert_no_tasks(w);
@@ -320,7 +323,8 @@ pub fn run_session_todos_probe(cx: &mut HeadlessAppContext) {
                         input.focus_handle(cx).is_focused(w),
                         "updates never steal focus"
                     );
-                    w.click("session-todos-toggle", cx);
+                    // The glyph is content: a click on it reaches the strip's toggle.
+                    w.click(crate::ui::disclosure_chevron_id("session-todos", false), cx);
                 })
                 .unwrap();
                 settle(cx, h);
@@ -337,6 +341,14 @@ pub fn run_session_todos_probe(cx: &mut HeadlessAppContext) {
                     }
                     continue;
                 }
+                let open =
+                    crate::icon_probe::assert_disclosure_chevron(cx, h, "session-todos", true);
+                let folded = folded.unwrap();
+                assert_eq!(
+                    (open.right(), open.size),
+                    (folded.right(), folded.size),
+                    "the chevron turns in place"
+                );
                 cx.update_window(h, |_, w, _| {
                     if name != "zero" {
                         assert!(w.find("session-todos-list").bounds().size.height <= px(112.));
@@ -441,6 +453,7 @@ pub fn run_session_todos_probe(cx: &mut HeadlessAppContext) {
                 })
                 .unwrap();
                 settle(cx, h);
+                crate::icon_probe::assert_disclosure_chevron(cx, h, "session-todos", false);
             }
             // Pointer siblings cannot end marked text, nor can Escape fold the strip.
             cx.update_window(h, |_, w, cx| {

@@ -227,15 +227,8 @@ impl Entry {
                 )
             })
             .child(
-                // The strip sits on the composer, so the list opens upward:
-                // chevron up to open, down to close.
-                if expanded {
-                    AppIcon::Expand
-                } else {
-                    AppIcon::Collapse
-                }
-                .inline()
-                .text_color(cx.theme().muted_foreground),
+                ui::disclosure_chevron("session-jobs", expanded)
+                    .text_color(cx.theme().muted_foreground),
             )
     }
 

@@ -273,6 +273,7 @@ pub fn run_session_jobs_probe(cx: &mut HeadlessAppContext) {
                 job("quick", "lint", 12_000, None),
             ]);
             publish(cx, h, &view, three.clone(), true);
+            let folded = crate::icon_probe::assert_disclosure_chevron(cx, h, "session-jobs", false);
             cx.update_window(h, |_, w, cx| {
                 let text = label(w);
                 assert!(
@@ -282,10 +283,18 @@ pub fn run_session_jobs_probe(cx: &mut HeadlessAppContext) {
                 assert!(text.ends_with("for 1 hour 5 minutes"), "{text}");
                 let strip = w.find("session-jobs-strip").bounds();
                 assert!(w.find("session-jobs-name").bounds().right() <= strip.right());
-                w.click("session-jobs-toggle", cx);
+                assert!(folded.right() <= strip.right() && folded.left() >= strip.left());
+                // The glyph is content: a click on it reaches the strip's toggle.
+                w.click(crate::ui::disclosure_chevron_id("session-jobs", false), cx);
             })
             .unwrap();
             settle(cx, h);
+            let open = crate::icon_probe::assert_disclosure_chevron(cx, h, "session-jobs", true);
+            assert_eq!(
+                (open.right(), open.size),
+                (folded.right(), folded.size),
+                "the chevron turns in place"
+            );
             cx.update_window(h, |_, w, cx| {
                 assert!(
                     input.focus_handle(cx).is_focused(w),
@@ -499,15 +508,18 @@ pub fn run_session_jobs_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
-            cx.update_window(h, |_, w, cx| {
+            cx.update_window(h, |_, w, _| {
                 assert!(
                     w.find("session-jobs-list").visible(),
                     "Space opens the list"
                 );
-                w.press("enter", cx);
             })
             .unwrap();
+            crate::icon_probe::assert_disclosure_chevron(cx, h, "session-jobs", true);
+            cx.update_window(h, |_, w, cx| w.press("enter", cx))
+                .unwrap();
             settle(cx, h);
+            crate::icon_probe::assert_disclosure_chevron(cx, h, "session-jobs", false);
             cx.update_window(h, |_, w, cx| {
                 assert!(w.try_find("session-jobs-list").is_none(), "Enter closes it");
                 w.press("space", cx);

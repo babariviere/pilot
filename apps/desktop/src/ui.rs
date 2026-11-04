@@ -615,6 +615,68 @@ impl RenderOnce for FieldRow {
     }
 }
 
+/// The shared disclosure chevron: right while folded, down while open, inline size.
+/// Pass the owner's actual open state. It is content, not a control: the owning
+/// Button/row keeps the click, keyboard path, accessible label and any transition.
+/// `scope` names the observed part, `{scope}-chevron-right` or `{scope}-chevron-down`.
+pub fn disclosure_chevron(scope: &str, open: bool) -> impl IntoElement + Styled {
+    div()
+        .id(disclosure_chevron_id(scope, open))
+        .test_support()
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(IconRole::disclosure(open).inline())
+}
+/// Test-visible ID used by `disclosure_chevron`: `{scope}-chevron-right` or `-down`.
+pub fn disclosure_chevron_id(scope: &str, open: bool) -> SharedString {
+    SharedString::from(format!(
+        "{scope}-chevron-{}",
+        if open { "down" } else { "right" }
+    ))
+}
+
+#[cfg(test)]
+mod disclosure_tests {
+    use super::*;
+
+    #[test]
+    fn chevron_id_names_the_painted_direction() {
+        assert_eq!(
+            disclosure_chevron_id("x", false).as_ref(),
+            "x-chevron-right"
+        );
+        assert_eq!(disclosure_chevron_id("x", true).as_ref(), "x-chevron-down");
+    }
+
+    #[test]
+    fn folds_reuse_the_shared_chevron() {
+        // New folds should call ui::disclosure_chevron, not pick glyphs locally.
+        for (name, source) in [
+            (
+                "session_subagents_view",
+                include_str!("session_subagents_view.rs"),
+            ),
+            ("session_todos_view", include_str!("session_todos_view.rs")),
+            ("session_jobs_tray", include_str!("session_jobs_tray.rs")),
+        ] {
+            assert!(source.contains("ui::disclosure_chevron("), "{name}");
+            for local in [
+                "AppIcon::Expand",
+                "AppIcon::Collapse",
+                "ChevronUp",
+                "ChevronDown",
+            ] {
+                assert!(!source.contains(local), "{name} picks {local} itself");
+            }
+        }
+        let work = include_str!("work_view.rs");
+        assert!(work.contains("AppIcon::disclosure(open)"));
+        assert!(!work.contains("IconName::ChevronDown"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -220,6 +220,20 @@ a glyph: assert actual slot width, gap, containment and original leading inset.
 
 ## Motion, exceptions and ownership
 
+### Disclosure chevron
+
+Every fold uses one direction: a right chevron while folded, a down chevron
+while open, never up (even for the composer strips whose lists open upward) and
+the same under reduced motion. `AppIcon::disclosure(open)` owns that mapping and
+`ui::disclosure_chevron(scope, open)` draws it at inline size. Pass the owner's
+actual open state. The chevron is content, not a control: the owning row or Kit
+Button keeps the click, keyboard path, accessible label and any shared transition.
+Its observed ID is `{scope}-chevron-right` or `{scope}-chevron-down`, and
+`icon_probe::assert_disclosure_chevron` checks the painted direction. The
+subagents, todos and jobs strips use it, the work line reuses the mapping at its
+transcript size, and the catalog shows both states. New folds call the helper
+instead of picking glyphs; `ui::disclosure_tests` guards the adopted surfaces.
+
 ### Work line
 
 `work_view` shows a turn's tool work as one effects-first line (D94): edited

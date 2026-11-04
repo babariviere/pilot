@@ -166,9 +166,26 @@ pub fn run_session_subagents_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
-            cx.update_window(h, |_, w, cx| w.click("session-subagents-toggle", cx))
-                .unwrap();
+            let folded =
+                crate::icon_probe::assert_disclosure_chevron(cx, h, "session-subagents", false);
+            // The glyph is content: a click on it reaches the strip's toggle.
+            cx.update_window(h, |_, w, cx| {
+                let toggle = w.find("session-subagents-toggle").bounds();
+                assert!(folded.right() <= toggle.right() && folded.left() >= toggle.left());
+                w.click(
+                    crate::ui::disclosure_chevron_id("session-subagents", false),
+                    cx,
+                )
+            })
+            .unwrap();
             settle(cx, h);
+            let open =
+                crate::icon_probe::assert_disclosure_chevron(cx, h, "session-subagents", true);
+            assert_eq!(
+                (open.right(), open.size),
+                (folded.right(), folded.size),
+                "the chevron turns in place"
+            );
             if let Some(p) = &captures {
                 cx.capture_screenshot(h)
                     .unwrap()

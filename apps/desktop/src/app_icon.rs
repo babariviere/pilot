@@ -90,6 +90,12 @@ app_icons! {
     Reset => Eraser,
 }
 impl AppIcon {
+    /// Every fold's direction: right while folded, down while open. Never up,
+    /// even where a list opens upward; reduced motion does not change it.
+    pub(crate) fn disclosure(open: bool) -> Self {
+        // Reuses the existing chevron roles (Forward is ChevronRight).
+        if open { Self::Expand } else { Self::Forward }
+    }
     /// Row/toolbar glyph: one rem, without an entity or independent animation.
     pub(crate) fn icon(self) -> Icon {
         Icon::new(self.asset()).size_4()
@@ -159,6 +165,19 @@ mod tests {
             .unwrap();
         let svg = std::str::from_utf8(&bytes).unwrap();
         assert!(svg.contains("<circle") && svg.contains("fill=\"none\""));
+    }
+
+    #[test]
+    fn disclosure_points_right_when_folded_and_down_when_open() {
+        // One mapping for every fold, never up, also under reduced motion.
+        for (open, path) in [
+            (false, "icons/chevron-right.svg"),
+            (true, "icons/chevron-down.svg"),
+        ] {
+            let icon = AppIcon::disclosure(open).asset();
+            assert_eq!(icon.path().as_ref(), path);
+            assert!(ChromeAssets.load(path).unwrap().is_some());
+        }
     }
 
     #[test]

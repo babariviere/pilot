@@ -169,14 +169,7 @@ impl Render for Entry {
                                     .min_w_0()
                                     .truncate(),
                             )
-                            .child(
-                                if expanded {
-                                    AppIcon::Expand
-                                } else {
-                                    AppIcon::Collapse
-                                }
-                                .inline(),
-                            ),
+                            .child(ui::disclosure_chevron("session-subagents", expanded)),
                     )
                     .on_mouse_down(gpui_kit::MouseButton::Left, move |_, w, cx| {
                         if !owner.update(cx, |v, cx| v.project_choices_ready(w, cx)) {
