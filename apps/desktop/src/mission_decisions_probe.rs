@@ -366,6 +366,7 @@ pub fn run_mission_decisions_probe(cx: &mut HeadlessAppContext) {
         }
     }
     run_withdrawal(cx);
+    run_navigation(cx);
     crate::local_view::mission_decisions_root_probe::run(cx);
 }
 
@@ -613,6 +614,247 @@ fn run_withdrawal(cx: &mut HeadlessAppContext) {
 fn w_has(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &str) -> bool {
     cx.update_window(h, |_, w, _| w.try_find(id.to_owned()).is_some())
         .unwrap()
+}
+fn go(cx: &mut HeadlessAppContext, h: AnyWindowHandle, v: &Entity<Browser>, route: Route) {
+    cx.update_window(h, |_, w, cx| {
+        v.update(cx, |v, cx| {
+            v.sync(
+                Input {
+                    route: Some(route.clone()),
+                    filter: None,
+                    projects: Arc::new(vec![]),
+                    chats: Arc::new(vec![]),
+                    online: true,
+                    loaded: true,
+                },
+                w,
+                cx,
+            )
+        })
+    })
+    .unwrap();
+    until(cx, h, v, |b| {
+        !b.busy
+            && match &route {
+                Route::Catalog => b.catalog.is_some(),
+                Route::Detail(k) => b.detail.as_ref().is_some_and(|d| &d.key == k),
+            }
+    });
+}
+fn outcome(
+    cx: &mut HeadlessAppContext,
+    v: &Entity<Browser>,
+    s: &crate::mission_brief::Source,
+    p: &str,
+) -> Option<Outcome> {
+    cx.update(|cx| {
+        v.read(cx)
+            .decisions
+            .attempts
+            .get(s, p)
+            .map(|(_, o)| o.clone())
+    })
+}
+fn blocker(
+    cx: &mut HeadlessAppContext,
+    v: &Entity<Browser>,
+) -> Option<crate::update_hold::Blocker> {
+    cx.update(|cx| v.read(cx).update_blocker(cx))
+}
+/// Visual disclosure resets on navigation; the response ledger and its observer don't.
+fn visual_reset(cx: &mut HeadlessAppContext, v: &Entity<Browser>) {
+    cx.update(|cx| {
+        let d = &v.read(cx).decisions;
+        assert!(!d.opened && !d.source && !d.retired && d.expanded.is_empty());
+    });
+}
+fn open_decisions(cx: &mut HeadlessAppContext, h: AnyWindowHandle, v: &Entity<Browser>) {
+    if !cx.update(|cx| v.read(cx).decisions.opened) {
+        click(cx, h, "mission-decisions-open");
+    }
+}
+/// Held, lost and failed responses survive mission A -> B -> catalog -> A, keep the
+/// update hold while unanswered, finish wherever the user is, and never send twice.
+fn run_navigation(cx: &mut HeadlessAppContext) {
+    let server = Server::start();
+    let (a, b) = (f::key("mission-A"), f::key("mission-B"));
+    let source_b = crate::mission_brief::Source {
+        key: b.clone(),
+        project: "project-B".into(),
+    };
+    let mut detail = f::detail("mission-A");
+    detail["decisions"] = json!([
+        {"id":"d5","number":5,"audience":"all","text":"Target of the acknowledged withdrawal."},
+        {"id":"d6","number":6,"audience":"all","text":"Target of the lost response."},
+        {"id":"d7","number":7,"audience":"all","text":"Target of the failed response."}
+    ]);
+    detail["decisionProposals"] = json!([
+        {"id":"p3","decisionId":"d5","kind":"withdraw","reason":"Acknowledged","status":"pending"},
+        {"id":"p4","decisionId":"d6","kind":"withdraw","reason":"Lost","status":"pending"},
+        {"id":"p5","decisionId":"d7","kind":"withdraw","reason":"Failed","status":"pending"}
+    ]);
+    server.reply("/api/missions/mission-A", Reply::json(200, detail));
+    // Mission B reuses the proposal ID p3 under a different Source.
+    let mut other = f::detail("mission-B");
+    other["decisions"] =
+        json!([{"id":"d5","number":5,"audience":"all","text":"Mission B's own decision."}]);
+    other["decisionProposals"] = json!([{"id":"p3","decisionId":"d5","kind":"withdraw","reason":"Mission B","status":"pending"}]);
+    server.reply("/api/missions/mission-B", Reply::json(200, other));
+    let post =
+        |p: &str, c: &str| format!("POST /api/missions/mission-A/decision-proposals/{p}/{c}");
+    server.reply(
+        &post("p3", "accept"),
+        Reply::json(
+            200,
+            json!({"id":"p3","decisionId":"d5","kind":"withdraw","status":"accepted"}),
+        ),
+    );
+    server.reply(&post("p4", "reject"), Reply::json(0, json!({})));
+    server.reply(
+        &post("p5", "accept"),
+        Reply::json(500, json!({"error":"boom"})),
+    );
+    let (h, view) = cx
+        .update(|cx| {
+            gpui_kit::open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Default::default(),
+                        size(px(1100.), px(1000.)),
+                    ))),
+                    show: false,
+                    focus: false,
+                    ..Default::default()
+                },
+                cx,
+                |_, cx| {
+                    let view = cx.new(Browser::new);
+                    view.update(cx, |v, _| {
+                        v.options(server.options.clone());
+                        v.catalog = Some(Arc::new(
+                            crate::mission_browser::catalog(&f::catalog()).unwrap(),
+                        ));
+                        v.catalog_current = true;
+                    });
+                    view
+                },
+            )
+        })
+        .unwrap();
+    go(cx, h, &view, Route::Detail(a.clone()));
+    let sending = Some(crate::update_hold::Blocker::Mission {
+        key: a.clone(),
+        hold: crate::update_hold::Hold::Sending,
+    });
+    // (proposal, control, request, where the response is released, settled outcome)
+    let cases = [
+        (
+            "p4",
+            "proposal-keep-p4",
+            post("p4", "reject"),
+            Route::Detail(b.clone()),
+            false,
+        ),
+        (
+            "p5",
+            "proposal-withdraw-p5",
+            post("p5", "accept"),
+            Route::Catalog,
+            false,
+        ),
+        (
+            "p3",
+            "proposal-withdraw-p3",
+            post("p3", "accept"),
+            Route::Detail(a.clone()),
+            true,
+        ),
+    ];
+    for (n, (p, control, request, release, ack)) in cases.into_iter().enumerate() {
+        server.hold(&request);
+        open_decisions(cx, h, &view);
+        click(cx, h, "decisions-source");
+        click(cx, h, &format!("decisions-toggle-proposal-{p}"));
+        click(cx, h, control);
+        let deadline = Instant::now() + Duration::from_secs(12);
+        while server.write_count() < 1 {
+            assert!(Instant::now() < deadline, "the held POST arrives");
+            settle(cx, h);
+            std::thread::yield_now();
+        }
+        assert_eq!(outcome(cx, &view, &source(), p), Some(Outcome::Pending));
+        assert_eq!(blocker(cx, &view), sending);
+        let mut settled = false;
+        let settle_here = |cx: &mut HeadlessAppContext, here: &Route, settled: &mut bool| {
+            if !*settled && *here == release {
+                server.release(&request);
+                until(cx, h, &view, |v| v.decisions.attempts.sending().is_none());
+                *settled = true;
+            }
+        };
+        go(cx, h, &view, Route::Detail(b.clone()));
+        visual_reset(cx, &view);
+        open_decisions(cx, h, &view);
+        click(cx, h, "decisions-toggle-proposal-p3");
+        // A foreign Source never inherits A's state, and a held response blocks B's.
+        assert!(!w_has(cx, h, "proposal-result-p3"));
+        cx.update_window(h, |_, w, cx| w.click("proposal-withdraw-p3", cx))
+            .unwrap();
+        settle(cx, h);
+        assert_eq!(outcome(cx, &view, &source_b, "p3"), None);
+        settle_here(cx, &Route::Detail(b.clone()), &mut settled);
+        go(cx, h, &view, Route::Catalog);
+        settle_here(cx, &Route::Catalog, &mut settled);
+        go(cx, h, &view, Route::Detail(a.clone()));
+        visual_reset(cx, &view);
+        open_decisions(cx, h, &view);
+        click(cx, h, &format!("decisions-toggle-proposal-{p}"));
+        assert!(!w_has(cx, h, "decisions-source-text"));
+        if !settled {
+            // Still unanswered after the round trip and a normal refresh.
+            assert_eq!(outcome(cx, &view, &source(), p), Some(Outcome::Pending));
+            assert_eq!(blocker(cx, &view), sending);
+            cx.update_window(h, |_, w, cx| view.update(cx, |v, cx| v.read(w, cx)))
+                .unwrap();
+            until(cx, h, &view, |v| !v.busy);
+            assert_eq!(outcome(cx, &view, &source(), p), Some(Outcome::Pending));
+            assert!(!w_has(cx, h, control));
+            settle_here(cx, &Route::Detail(a.clone()), &mut settled);
+        }
+        assert!(settled);
+        let o = outcome(cx, &view, &source(), p).unwrap();
+        assert!(
+            if ack {
+                o == Outcome::Ack
+            } else {
+                matches!(o, Outcome::Unknown(_))
+            },
+            "{p}: {o:?}"
+        );
+        assert_eq!(blocker(cx, &view), None);
+        // A GET is not settlement: the proposal is still pending on the daemon's
+        // snapshot, yet the retained outcome keeps it locked.
+        cx.update_window(h, |_, w, cx| view.update(cx, |v, cx| v.read(w, cx)))
+            .unwrap();
+        until(cx, h, &view, |v| !v.busy);
+        assert_eq!(outcome(cx, &view, &source(), p), Some(o));
+        assert!(w_has(cx, h, &format!("proposal-result-{p}")));
+        assert!(!w_has(cx, h, &format!("proposal-withdraw-{p}")));
+        assert!(!w_has(cx, h, &format!("proposal-keep-{p}")));
+        let writes = server.writes();
+        assert_eq!(writes.len(), 1, "{p}: exactly one POST");
+        assert_eq!(format!("{} {}", writes[0].0, writes[0].1), request);
+        assert_eq!(outcome(cx, &view, &source_b, "p3"), None);
+        println!("PASS decision navigation {n} {p}: retained across A->B->catalog->A, one POST");
+    }
+    // Earlier outcomes remain locked after every later round trip.
+    for p in ["p3", "p4", "p5"] {
+        assert!(!matches!(
+            outcome(cx, &view, &source(), p),
+            None | Some(Outcome::Pending)
+        ));
+    }
+    cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
 }
 fn source() -> crate::mission_brief::Source {
     crate::mission_brief::Source {

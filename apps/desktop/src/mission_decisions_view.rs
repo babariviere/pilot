@@ -55,6 +55,15 @@ impl Disclosure {
     pub(super) fn sending(&self) -> Option<&Key> {
         self.attempts.sending().map(|s| &s.source.key)
     }
+    /// Navigation clears what was shown, never what was sent: the response ledger
+    /// and its observer stay, keyed by exact Source and proposal.
+    pub(super) fn reset(&mut self) {
+        *self = Self {
+            attempts: std::mem::take(&mut self.attempts),
+            sending: self.sending.take(),
+            ..Self::default()
+        };
+    }
 }
 impl Browser {
     pub(super) fn can_review(&self, generation: u64) -> bool {
@@ -931,6 +940,71 @@ mod mission_decisions_source_tests {
                 clipped: false
             })
             .contains("Empty text")
+        );
+    }
+    #[test]
+    fn navigation_reset_clears_visual_state_but_keeps_exact_source_responses() {
+        use crate::mission_brief::Source;
+        let mut v = f::detail("mission-A");
+        v["decisions"] =
+            serde_json::json!([{"id":"d1","number":1,"audience":"all","text":"Binding"}]);
+        v["decisionProposals"] = serde_json::json!([{"id":"p1","decisionId":"d1","kind":"withdraw","reason":"R","status":"pending"}]);
+        let p = crate::mission_decisions::project(&v)
+            .unwrap()
+            .proposals
+            .rows
+            .unwrap()
+            .remove(0);
+        let a = Source {
+            key: f::key("mission-A"),
+            project: "project-A".into(),
+        };
+        let mut state = Disclosure {
+            opened: true,
+            source: true,
+            retired: true,
+            decisions: 16,
+            proposals: 16,
+            retired_rows: 16,
+            ..Default::default()
+        };
+        state.expanded.insert("proposal-p1".into());
+        *state.reveal.borrow_mut() = Some("proposal-p1".into());
+        let send = state.attempts.begin(&a, &p, true, Choice::Accept).unwrap();
+        state.reset();
+        assert!(!state.opened && !state.source && !state.retired && state.expanded.is_empty());
+        assert_eq!(
+            (state.decisions, state.proposals, state.retired_rows),
+            (0, 0, 0)
+        );
+        assert!(state.reveal.borrow().is_none());
+        assert_eq!(state.sending(), Some(&a.key), "the pending hold survives");
+        assert!(
+            state.attempts.begin(&a, &p, true, Choice::Reject).is_err(),
+            "no second response"
+        );
+        // Foreign Sources (other mission, or same mission ID under another project) inherit nothing.
+        for foreign in [
+            Source {
+                key: f::key("mission-B"),
+                project: "project-B".into(),
+            },
+            Source {
+                key: f::key("mission-A"),
+                project: "project-B".into(),
+            },
+        ] {
+            assert!(state.attempts.get(&foreign, "p1").is_none());
+        }
+        assert!(state.attempts.finish(&send, Outcome::Ack));
+        state.reset();
+        assert!(matches!(
+            state.attempts.get(&a, "p1"),
+            Some((_, Outcome::Ack))
+        ));
+        assert!(
+            state.attempts.begin(&a, &p, true, Choice::Accept).is_err(),
+            "Ack stays locked"
         );
     }
     #[gpui_kit::test]

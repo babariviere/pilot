@@ -5,7 +5,7 @@ use crate::{
 };
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
     thread::JoinHandle,
 };
@@ -79,6 +79,8 @@ pub(crate) struct State {
     pub(crate) overrides: BTreeMap<String, Reply>,
     /// Non-GET requests: method, path, whether native authority was attached, JSON body.
     pub(crate) writes: Vec<(String, String, bool, Value)>,
+    /// "METHOD /path" requests that are recorded but not answered until released.
+    pub(crate) held: BTreeSet<String>,
 }
 pub(crate) struct Server {
     pub(crate) options: LocalOptions,
@@ -150,6 +152,17 @@ impl Server {
     pub(crate) fn writes(&self) -> Vec<(String, String, bool, Value)> {
         std::mem::take(&mut self.state.lock().unwrap().writes)
     }
+    /// Records matching requests on arrival but withholds their reply until `release`.
+    pub(crate) fn hold(&self, request: &str) {
+        self.state.lock().unwrap().held.insert(request.into());
+    }
+    pub(crate) fn release(&self, request: &str) {
+        self.state.lock().unwrap().held.remove(request);
+    }
+    /// Writes received so far, without draining them.
+    pub(crate) fn write_count(&self) -> usize {
+        self.state.lock().unwrap().writes.len()
+    }
 }
 impl Drop for Server {
     fn drop(&mut self) {
@@ -220,6 +233,10 @@ async fn serve(mut socket: TcpStream, state: Arc<Mutex<State>>) -> std::io::Resu
         }
         Reply::json(404,json!({"error":"unsupported"}))
     });
+    let request = format!("{method} {path}");
+    while state.lock().unwrap().held.contains(&request) {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
     if reply.delay_ms > 0 {
         tokio::time::sleep(std::time::Duration::from_millis(reply.delay_ms)).await;
     }

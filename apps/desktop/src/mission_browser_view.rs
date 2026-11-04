@@ -685,7 +685,7 @@ impl Browser {
             if self.decisions.opened && self.focus.contains_focused(w, cx) {
                 self.focus.focus(w, cx);
             }
-            self.decisions = Default::default();
+            self.decisions.reset();
             self.comments = Default::default();
             let owned = self
                 .metadata
