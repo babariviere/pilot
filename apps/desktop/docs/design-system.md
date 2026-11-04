@@ -222,9 +222,11 @@ a glyph: assert actual slot width, gap, containment and original leading inset.
 
 ### Disclosure chevron
 
-Every fold uses one direction: a right chevron while folded, a down chevron
+Fold rows use one direction: a right chevron while folded, a down chevron
 while open, never up (even for the composer strips whose lists open upward) and
-the same under reduced motion. `AppIcon::disclosure(open)` owns that mapping and
+the same under reduced motion. Read-more toggles that expand content in place,
+such as a long message's Show more / Show less, keep down and up chevrons.
+`AppIcon::disclosure(open)` owns the fold mapping and
 `ui::disclosure_chevron(scope, open)` draws it at inline size. Pass the owner's
 actual open state. The chevron is content, not a control: the owning row or Kit
 Button keeps the click, keyboard path, accessible label and any shared transition.
