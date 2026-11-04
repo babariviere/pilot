@@ -35,7 +35,6 @@ pub(super) fn eligible(row: &Message) -> bool {
         || row.label().starts_with("Automatic input")
         || row.is_assistant())
         && row.work_data().is_none()
-        && !row.work_note()
         && row.artifact_data().is_none()
         && row.image_data().is_none()
 }

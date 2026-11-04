@@ -3,7 +3,7 @@
 //! Copyright (c) 2026 Nick, MIT, see licenses/MONOCODE.txt. No upstream runtime.
 //! Only the existing tool-local argument preview is eligible, never output/Git/files.
 use crate::{
-    tool_presentation::{Status, Step, Tool},
+    tool_presentation::{Status, Tool},
     transcript_view::TranscriptView,
     ui::{self, Action, Text},
 };
@@ -125,8 +125,7 @@ struct Source {
     write: bool,
 }
 impl Source {
-    fn from_step(step: &Step) -> Option<Self> {
-        let Step::Tool(tool) = step else { return None };
+    fn from_step(tool: &Tool) -> Option<Self> {
         if tool.diff.is_empty() {
             return None;
         }
@@ -205,7 +204,7 @@ impl Preview {
             ink: DiffInk::new(cx.theme().success, cx.theme().danger),
         }
     }
-    pub(crate) fn set(&mut self, step: &Step, cx: &mut Context<Self>) {
+    pub(crate) fn set(&mut self, step: &Tool, cx: &mut Context<Self>) {
         let source = Source::from_step(step);
         if source == self.source {
             return;
@@ -552,11 +551,11 @@ mod tests {
         m.apply(&json!({"type":"entry_appended","entry":{"id":20,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"a","name":"edit","arguments":{"path":"日本.rs","oldText":"a<&>\n","newText":"b\n"}}]}]}}));
         m.apply(&json!({"type":"tool_execution_start","toolCallId":"a","toolName":"edit"}));
         let before = tool(&mut m);
-        let source = Source::from_step(&Step::Tool(before.clone())).unwrap();
+        let source = Source::from_step(&before).unwrap();
         assert_eq!(source.diff, before.diff);
         assert_eq!(shown(&source.diff), before.diff.as_ref().as_str());
         m.apply(&json!({"type":"tool_execution_update","toolCallId":"a","output":{"set":"--- fake\n+++ fake\n+must not appear"}}));
-        assert!(Source::from_step(&Step::Tool(tool(&mut m))).is_some_and(|s| s == source));
+        assert!(Source::from_step(&tool(&mut m)).is_some_and(|s| s == source));
         let mut changed = (*before).clone();
         changed.key += 1;
         assert!(
@@ -577,10 +576,7 @@ mod tests {
         );
         changed.diff = Arc::new(String::new());
         changed.output = source.diff.clone();
-        assert!(
-            Source::from_step(&Step::Tool(Arc::new(changed))).is_none(),
-            "No output fallback"
-        );
+        assert!(Source::from_step(&changed).is_none(), "No output fallback");
     }
     #[test]
     fn bounded_source_is_an_exact_utf8_prefix() {

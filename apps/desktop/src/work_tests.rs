@@ -866,7 +866,9 @@ fn tool_output_selection_and_expansion_survive_real_unmount_and_prepend_regroup(
 }
 
 #[gpui_kit::test]
-fn a_selected_assistant_note_keeps_its_document_when_it_folds_into_work(cx: &mut TestAppContext) {
+fn a_selected_assistant_message_keeps_its_row_and_document_when_work_follows(
+    cx: &mut TestAppContext,
+) {
     let mut model = LiveTranscript::default();
     model.apply(&json!({"type":"entry_appended","entry":{"id":20,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"text","text":"Selected note 日本語 stays owned."}]}]}}));
     let (handle, view) = super::readonly_tests::setup(cx, model.rows());
@@ -882,9 +884,14 @@ fn a_selected_assistant_note_keeps_its_document_when_it_folds_into_work(cx: &mut
             (text, copied)
         })
         .unwrap();
+    let message = model.rows()[0].id();
     model.apply(&json!({"type":"entry_appended","entry":{"id":21,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"a","name":"read","arguments":{"path":"a.rs"}}]}]}}));
     model.apply(&json!({"type":"tool_execution_end","toolCallId":"a","result":{"content":[{"type":"text","text":"complete"}]}}));
-    let group = model.rows()[0].id();
+    let rows = model.rows();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].id(), message, "the message keeps its row");
+    assert!(rows[0].work_data().is_none(), "text never folds into work");
+    assert!(rows[1].work_data().is_some());
     cx.update_window(handle, |_, window, cx| {
         view.update(cx, |view, cx| {
             view.replace_readonly(model.rows(), false, cx)
@@ -893,9 +900,10 @@ fn a_selected_assistant_note_keeps_its_document_when_it_folds_into_work(cx: &mut
         window.press("secondary-c", cx);
         assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), copied);
         assert!(text.read(cx).selected_source_range().is_some());
-        assert!(
-            view.read(cx).work_ui.group_open(group, cx),
-            "grouping must not auto-hide the selected note even when work is complete"
+        assert_eq!(
+            view.read(cx).text_states[0].as_ref().map(|s| s.entity_id()),
+            Some(text.entity_id()),
+            "the same document stays the message's reader"
         );
     })
     .unwrap();

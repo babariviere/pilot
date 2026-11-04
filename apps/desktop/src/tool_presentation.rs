@@ -243,21 +243,13 @@ impl Tool {
             .count();
     }
 }
-#[derive(Clone, PartialEq, Eq)]
-pub(crate) enum Step {
-    Tool(Arc<Tool>),
-    Note {
-        id: u64,
-        text: Arc<String>,
-        thinking: bool,
-        streaming: bool,
-    },
-}
+/// A run of calls between assistant messages. Assistant text is never a
+/// step: it stays a transcript message of its own, between groups.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Work {
     pub(crate) readers: Vec<crate::model::ReaderKey>,
     pub(crate) id: u64,
-    pub(crate) steps: Vec<Step>,
+    pub(crate) steps: Vec<Arc<Tool>>,
     pub(crate) title: String,
     pub(crate) active: bool,
     pub(crate) failures: usize,
@@ -265,19 +257,10 @@ pub(crate) struct Work {
 }
 impl Work {
     pub(crate) fn calls(&self) -> impl Iterator<Item = &Arc<Tool>> {
-        self.steps.iter().filter_map(|step| {
-            if let Step::Tool(tool) = step {
-                Some(tool)
-            } else {
-                None
-            }
-        })
+        self.steps.iter()
     }
     fn tool(&self, index: usize) -> Option<&Arc<Tool>> {
-        match self.steps.get(index) {
-            Some(Step::Tool(tool)) => Some(tool),
-            _ => None,
-        }
+        self.steps.get(index)
     }
     /// A call's presented outcome. Live calls only read as running while the
     /// group follows a live run; otherwise their status is unknown.
@@ -290,8 +273,8 @@ impl Work {
             Status::Pending | Status::Running => Mark::Unknown,
         }
     }
-    /// Steps counted the way Swift's WorkGroupView does: every thinking, note
-    /// and call, with consecutive successful reads as one step.
+    /// Steps counted the way Swift's WorkGroupView does: every call, with
+    /// consecutive successful reads as one step.
     pub(crate) fn units(&self) -> Vec<Unit> {
         let read = |index: usize| {
             self.tool(index)
@@ -328,18 +311,7 @@ impl Work {
                 .calls()
                 .filter(|tool| tool.status.live())
                 .last()
-                .map(|tool| lower_first(&sentence(tool)))
-                .or_else(|| {
-                    matches!(
-                        self.steps.last(),
-                        Some(Step::Note {
-                            thinking: true,
-                            streaming: true,
-                            ..
-                        })
-                    )
-                    .then(|| "thinking".to_owned())
-                });
+                .map(|tool| lower_first(&sentence(tool)));
             if let Some(current) = current {
                 line.push(Segment::new(current, Tone::Muted));
             }
@@ -472,7 +444,7 @@ impl Work {
         let index = self
             .steps
             .iter()
-            .position(|step| matches!(step, Step::Tool(tool) if tool.status == Status::Error))?;
+            .position(|tool| tool.status == Status::Error)?;
         let tool = self.tool(index)?;
         let mut output = tool.output.as_str();
         if tool.name == "codemode"
@@ -816,9 +788,26 @@ impl Tools {
             let mut work = rows[index].work_data().unwrap().as_ref().clone();
             work.active = true;
             rows[index] = Message::work(Arc::new(finish(work)));
+            // Text between one turn's calls splits them; a call still running
+            // in an earlier part of that turn is live, not unknown.
+            for row in rows[..index]
+                .iter_mut()
+                .rev()
+                .take_while(|row| row.is_assistant() || row.work_data().is_some())
+            {
+                if let Some(work) = row.work_data()
+                    && work.calls().any(|tool| tool.status.live())
+                {
+                    let mut work = work.as_ref().clone();
+                    work.active = true;
+                    *row = Message::work(Arc::new(finish(work)));
+                }
+            }
         }
         rows
     }
+    /// Assistant text in a run stays a message in place; only the calls
+    /// between messages group.
     fn flush(
         &mut self,
         run: &mut Vec<Message>,
@@ -826,33 +815,34 @@ impl Tools {
         seen: &mut BTreeSet<String>,
         used: &mut BTreeSet<u64>,
     ) {
-        let Some(last) = run
-            .iter()
-            .rposition(|row| row.tool_ids().is_some() || row.work_note())
-        else {
-            rows.append(run);
-            return;
-        };
-        let tail = run.split_off(last + 1);
+        let mut calls = Vec::new();
+        for row in run.drain(..) {
+            if row.tool_ids().is_some() {
+                calls.push(row);
+            } else {
+                self.group(&mut calls, rows, seen, used);
+                rows.push(row);
+            }
+        }
+        self.group(&mut calls, rows, seen, used);
+    }
+    fn group(
+        &mut self,
+        calls: &mut Vec<Message>,
+        rows: &mut Vec<Message>,
+        seen: &mut BTreeSet<String>,
+        used: &mut BTreeSet<u64>,
+    ) {
         let mut steps = Vec::new();
         let mut readers = Vec::new();
         let mut reader_seen = BTreeSet::new();
         let mut anchor = None;
         let mut first = None;
-        for row in run.drain(..) {
+        for row in calls.drain(..) {
             if let Some(key) = row.reader_key()
                 && reader_seen.insert(key.clone())
             {
                 readers.push(key);
-            }
-            if row.source() != "[No text content]" && !row.source().is_empty() {
-                steps.push(Step::Note {
-                    id: row.id(),
-                    text: row.shared_source(),
-                    thinking: row.work_note(),
-                    streaming: row.label().starts_with("Assistant · streaming"),
-                });
-                first.get_or_insert(row.id());
             }
             for id in row.tool_ids().into_iter().flatten() {
                 if !seen.insert(id.clone()) {
@@ -863,35 +853,33 @@ impl Tools {
                     if anchor.is_none() {
                         anchor = self.groups.get(id).copied();
                     }
-                    steps.push(Step::Tool(tool.clone()));
+                    steps.push(tool.clone());
                 }
             }
         }
-        if !steps.is_empty() {
-            // A row placed inside an earlier group (an event arriving after
-            // its calls) splits it; only the first part keeps the old ID, so
-            // each group keeps its own row, view and disclosure state.
-            let id = anchor
-                .filter(|id| !used.contains(id))
-                .or(first)
-                .expect("nonempty work");
-            used.insert(id);
-            for step in &steps {
-                if let Step::Tool(tool) = step {
-                    self.groups.insert(tool.id.clone(), id);
-                }
-            }
-            rows.push(Message::work(Arc::new(finish(Work {
-                readers,
-                id,
-                steps,
-                title: String::new(),
-                active: false,
-                failures: 0,
-                uncertain: 0,
-            }))));
+        if steps.is_empty() {
+            return;
         }
-        rows.extend(tail);
+        // A row placed inside an earlier group (a message or an event
+        // arriving between its calls) splits it; only the first part keeps
+        // the old ID, so each group keeps its own row, view and disclosure.
+        let id = anchor
+            .filter(|id| !used.contains(id))
+            .or(first)
+            .expect("nonempty work");
+        used.insert(id);
+        for tool in &steps {
+            self.groups.insert(tool.id.clone(), id);
+        }
+        rows.push(Message::work(Arc::new(finish(Work {
+            readers,
+            id,
+            steps,
+            title: String::new(),
+            active: false,
+            failures: 0,
+            uncertain: 0,
+        }))));
     }
 }
 /// Derived counts and the line's plain text, which is also its accessible name.

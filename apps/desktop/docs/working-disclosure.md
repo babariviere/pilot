@@ -4,8 +4,8 @@ Working groups start collapsed. Activity, streamed output, success, failure and
 unknown results update the compact header, not disclosure intent. The existing
 canonical-call choice map retains explicit open/closed choices across regrouping
 and virtualized unmounts. The most recent explicit choice wins on merge. Child
-details remain independently controlled and lazily constructed. Existing selected
-assistant-note adoption still preserves its selected document when folded into work.
+details remain independently controlled and lazily constructed. Assistant text never
+folds into work: it stays its own message row, so its document and selection stay put.
 
 Failure and unknown counts stay in the nonshrinking header status slot, with the
 existing error styling. Opening the group exposes every retained step, including
@@ -24,7 +24,8 @@ No scroller, execution, model, transport or backend contract changes.
 - `check-scoped.py --unit transcript_view::work_tests --test disclosure --lint`:
   7 work tests, matching library/native Clippy, and the offscreen native production
   root. Covers exact copy, hidden-parser laziness, selection, real unmount/regroup,
-  clicked-header anchors, user wheel/Latest follow resumption and note adoption.
+  clicked-header anchors, user wheel/Latest follow resumption and selected messages
+  keeping their row when work follows.
 - The native probe adds 72 transition records: 680/1100, light/dark, unopened/open/
   closed, active/stream/success/next-tool/failure-plus-unknown/settled. It asserts
   retained group identity, stable header position, truthful header labels/counts,

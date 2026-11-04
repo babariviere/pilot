@@ -40,7 +40,6 @@ pub(crate) struct Message {
     display: Option<Arc<String>>,
     work: Option<Arc<crate::tool_presentation::Work>>,
     tool_ids: Option<Arc<Vec<String>>>,
-    work_note: bool,
     artifact: Option<Arc<crate::artifact_model::Reference>>,
     artifact_size: Option<crate::artifact_model::RasterSize>,
     image: Option<Arc<crate::conversation_images::Source>>,
@@ -78,7 +77,6 @@ impl Message {
             display,
             work: None,
             tool_ids: None,
-            work_note: false,
             artifact: None,
             artifact_size: None,
             image: None,
@@ -261,9 +259,6 @@ impl Message {
     pub(crate) fn is_assistant(&self) -> bool {
         self.label.starts_with("assistant") || self.label.starts_with("Assistant")
     }
-    pub(crate) fn work_note(&self) -> bool {
-        self.work_note
-    }
     pub(crate) fn attach_tools(&mut self, ids: Vec<String>) {
         if !ids.is_empty() {
             self.tool_ids = Some(Arc::new(ids));
@@ -407,7 +402,6 @@ impl Transcript {
             display: None,
             work: None,
             tool_ids: None,
-            work_note: false,
             artifact: None,
             artifact_size: None,
             image: None,
@@ -500,7 +494,6 @@ fn history_message(ix: usize) -> Message {
         display: None,
         work: None,
         tool_ids: None,
-        work_note: false,
         artifact: None,
         artifact_size: None,
         image: None,

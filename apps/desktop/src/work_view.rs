@@ -41,7 +41,7 @@ mod tooltip_regression {
 }
 use crate::{
     app_icon::AppIcon,
-    tool_presentation::{Kind, Status, Step, Tone, Unit, Work},
+    tool_presentation::{Kind, Status, Tone, Tool, Unit, Work},
     transcript_view::TranscriptView,
     transcript_view::disclosure_motion::Height,
 };
@@ -87,15 +87,7 @@ struct Choices {
 }
 impl Choices {
     fn members(work: &Work) -> Vec<String> {
-        let tools: Vec<_> = work
-            .calls()
-            .map(|tool| format!("call:{}", tool.id))
-            .collect();
-        if tools.is_empty() {
-            vec![format!("note:{}", work.id)]
-        } else {
-            tools
-        }
+        work.calls().map(|tool| step_id(tool)).collect()
     }
     fn choice(&self, work: &Work) -> Option<bool> {
         Self::members(work)
@@ -142,11 +134,8 @@ impl Default for WorkUi {
         }
     }
 }
-fn step_id(step: &Step) -> String {
-    match step {
-        Step::Tool(tool) => format!("call:{}", tool.id),
-        Step::Note { id, .. } => format!("note:{id}"),
-    }
+fn step_id(tool: &Tool) -> String {
+    format!("call:{}", tool.id)
 }
 #[derive(Default)]
 pub(crate) struct Caption {
@@ -381,7 +370,6 @@ impl WorkUi {
         &mut self,
         works: Vec<Arc<Work>>,
         reset: bool,
-        adopted: &BTreeMap<u64, (Entity<TextViewState>, Arc<String>)>,
         cx: &mut Context<TranscriptView>,
     ) {
         if reset {
@@ -396,7 +384,6 @@ impl WorkUi {
         for work in works {
             group_ids.insert(work.id);
             let mut children = Vec::new();
-            let mut selected_note = false;
             for step in &work.steps {
                 let id = step_id(step);
                 step_ids.insert(id.clone());
@@ -425,18 +412,7 @@ impl WorkUi {
                     self.steps.insert(id, view.clone());
                     view
                 };
-                if let Step::Note { id, .. } = step
-                    && let Some((state, source)) = adopted.get(id)
-                {
-                    selected_note = true;
-                    view.update(cx, |view, cx| {
-                        view.adopt_note(state.clone(), source.clone(), cx)
-                    });
-                }
                 children.push(view);
-            }
-            if selected_note {
-                self.choices.borrow_mut().choose(&work, true);
             }
             if let Some(view) = self.groups.get(&work.id) {
                 view.update(cx, |view, cx| {
@@ -482,13 +458,7 @@ impl WorkUi {
                     .is_some_and(|id| group_ids.contains(&id))
         });
         let mut choices = self.choices.borrow_mut();
-        choices.groups.retain(|id, _| {
-            step_ids.contains(id)
-                || id
-                    .strip_prefix("note:")
-                    .and_then(|id| id.parse::<u64>().ok())
-                    .is_some_and(|id| group_ids.contains(&id))
-        });
+        choices.groups.retain(|id, _| step_ids.contains(id));
         choices.selected.retain(|id| step_ids.contains(id));
         choices.reads.retain(|id| step_ids.contains(id));
     }
@@ -503,10 +473,7 @@ fn shape(work: &Work) -> (bool, String, Vec<Unit>, Option<String>) {
     )
 }
 fn call_key(work: &Work, index: usize) -> Option<String> {
-    match work.steps.get(index) {
-        Some(Step::Tool(tool)) => Some(format!("call:{}", tool.id)),
-        _ => None,
-    }
+    work.steps.get(index).map(|tool| step_id(tool))
 }
 pub(crate) struct WorkView {
     owner: WeakEntity<TranscriptView>,
@@ -726,7 +693,7 @@ impl WorkView {
         let first = call_key(&self.data, items[0]).unwrap_or_default();
         let mut names: Vec<&str> = Vec::new();
         for index in items {
-            if let Some(Step::Tool(tool)) = self.data.steps.get(*index) {
+            if let Some(tool) = self.data.steps.get(*index) {
                 for name in tool.subject.split(", ").filter(|name| !name.is_empty()) {
                     if !names.contains(&name) {
                         names.push(name);
@@ -973,7 +940,7 @@ struct Body {
 
 pub(crate) struct StepView {
     preview: Entity<crate::tool_diff_preview::Preview>,
-    step: Step,
+    step: Arc<Tool>,
     /// The group follows a live run, so live calls read as running.
     active: bool,
     open: bool,
@@ -985,31 +952,6 @@ pub(crate) struct StepView {
 }
 impl EventEmitter<Change> for StepView {}
 impl StepView {
-    fn adopt_note(
-        &mut self,
-        state: Entity<TextViewState>,
-        source: Arc<String>,
-        cx: &mut Context<Self>,
-    ) {
-        if self.bodies.contains_key("Note") {
-            return;
-        }
-        self.subscriptions.push(cx.observe(&state, |view, _, cx| {
-            view.changed(cx);
-            cx.notify();
-        }));
-        self.bodies.insert(
-            "Note",
-            Body {
-                parsed: source.as_ref().clone(),
-                source,
-                state,
-                scroll: Default::default(),
-            },
-        );
-        self.open = true;
-        cx.notify();
-    }
     fn changed(&self, cx: &mut Context<Self>) {
         cx.emit(Change::Step(step_id(&self.step)));
     }
@@ -1022,7 +964,7 @@ impl StepView {
         }
         cx.notify();
     }
-    fn set(&mut self, step: Step, active: bool, cx: &mut Context<Self>) {
+    fn set(&mut self, step: Arc<Tool>, active: bool, cx: &mut Context<Self>) {
         if self.step != step || self.active != active {
             if self.step != step {
                 self.preview.update(cx, |v, cx| v.set(&step, cx));
@@ -1170,19 +1112,6 @@ impl StepView {
                                     },
                                     cx,
                                 )
-                                .map(|view| match &self.step {
-                                    // An adopted note keeps the same parser configuration
-                                    // as its standalone transcript row. Dropping the hooks
-                                    // here would reparse and clear its retained selection.
-                                    Step::Note { id, .. } => {
-                                        crate::markdown_service_links::install(
-                                            crate::markdown_mermaid::install(view, *id),
-                                            *id,
-                                            Arc::new(|_, _, _| {}),
-                                        )
-                                    }
-                                    Step::Tool(_) => view,
-                                })
                                 .selectable(true)
                                 .scrollable(false)
                                 .on_link_click(|_, _, _, _| {}),
@@ -1197,76 +1126,56 @@ impl Render for StepView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let id = step_id(&self.step);
         // A live call outside a live run has an unknown outcome.
-        let stale = matches!(&self.step, Step::Tool(tool) if tool.status.live()) && !self.active;
-        let (caption, limited) = match &self.step {
-            Step::Tool(tool) => (
-                Caption {
-                    verb: tool.title.clone(),
-                    subject: if tool.diff.is_empty() || tool.name == "codemode" {
-                        tool.subject.clone()
+        let tool = &self.step;
+        let stale = tool.status.live() && !self.active;
+        let (caption, limited) = (
+            Caption {
+                verb: tool.title.clone(),
+                subject: if tool.diff.is_empty() || tool.name == "codemode" {
+                    tool.subject.clone()
+                } else {
+                    String::new()
+                },
+                meta: [
+                    tool.meta.clone(),
+                    if tool.additions + tool.deletions > 0 {
+                        format!(
+                            "{}+{} −{}",
+                            if tool.limited { "shown " } else { "" },
+                            tool.additions,
+                            tool.deletions
+                        )
                     } else {
                         String::new()
                     },
-                    meta: [
-                        tool.meta.clone(),
-                        if tool.additions + tool.deletions > 0 {
-                            format!(
-                                "{}+{} −{}",
-                                if tool.limited { "shown " } else { "" },
-                                tool.additions,
-                                tool.deletions
-                            )
-                        } else {
-                            String::new()
-                        },
-                    ]
-                    .into_iter()
-                    .filter(|part| !part.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" · "),
-                    status: if stale {
-                        Status::Interrupted.label().into()
-                    } else {
-                        tool.status.label().into()
-                    },
-                    error: tool.status == Status::Error,
-                    mono: matches!(
-                        tool.kind,
-                        Kind::Read | Kind::Edit | Kind::Command | Kind::Script | Kind::Search
-                    ) && !(tool.name == "codemode" && tool.subject.is_empty()),
+                ]
+                .into_iter()
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join(" · "),
+                status: if stale {
+                    Status::Interrupted.label().into()
+                } else {
+                    tool.status.label().into()
                 },
-                tool.limited,
-            ),
-            Step::Note {
-                thinking,
-                streaming,
-                ..
-            } => (
-                Caption {
-                    verb: (if *thinking {
-                        if *streaming { "Thinking…" } else { "Thought" }
-                    } else {
-                        "Note"
-                    })
-                    .into(),
-                    ..Default::default()
-                },
-                false,
-            ),
-        };
+                error: tool.status == Status::Error,
+                mono: matches!(
+                    tool.kind,
+                    Kind::Read | Kind::Edit | Kind::Command | Kind::Script | Kind::Search
+                ) && !(tool.name == "codemode" && tool.subject.is_empty()),
+            },
+            tool.limited,
+        );
         // Only a call running in a live run bounces; its outcome or a
         // stale run settles it.
-        let running = !caption.error
-            && self.active
-            && matches!(&self.step, Step::Tool(tool) if tool.status.live());
-        let lead = match &self.step {
-            Step::Tool(_) if caption.error => Some(AppIcon::Error.inline().into_any_element()),
-            Step::Tool(_) if running => {
-                Some(dots(&id, self.pulse.phase(DOTS_PERIOD, window, cx), cx))
-            }
-            Step::Tool(tool) => Some(kind_icon(tool.kind).inline().into_any_element()),
-            Step::Note { .. } => None,
-        };
+        let running = !caption.error && self.active && tool.status.live();
+        let lead = Some(if caption.error {
+            AppIcon::Error.inline().into_any_element()
+        } else if running {
+            dots(&id, self.pulse.phase(DOTS_PERIOD, window, cx), cx)
+        } else {
+            kind_icon(tool.kind).inline().into_any_element()
+        });
         if !running {
             self.pulse.stop();
         }
@@ -1295,10 +1204,10 @@ impl Render for StepView {
                 .child(self.preview.clone()),
         );
         if self.open {
-            let step = self.step.clone();
+            let tool = self.step.clone();
             let mut details = div().v_flex().gap_2().pl_4().min_w_0();
-            match step {
-                Step::Tool(tool) => {
+            {
+                {
                     let script = (tool.name == "codemode")
                         .then(|| crate::tool_presentation::script_output(&tool.output))
                         .flatten();
@@ -1397,15 +1306,6 @@ impl Render for StepView {
                                     .child(section)
                             })),
                     );
-                }
-                Step::Note { text, .. } => {
-                    details = details.child(self.body(
-                        Block {
-                            plain: false,
-                            ..Block::code("Note", text)
-                        },
-                        cx,
-                    ));
                 }
             }
             if limited {

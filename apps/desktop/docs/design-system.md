@@ -233,6 +233,11 @@ earlier; an explicit open or close always wins. A folded finished group keeps
 its first error line (a failed script's own error, not its printed output),
 which opens just that call.
 
+Assistant text is never a step (D128). Text written before, between or after
+calls stays a normal visible message in its place, so a collapsed group or the
+latest-five tail can't hide it; it splits the turn's calls into groups around it.
+Thinking stays the transient status, not a transcript block.
+
 Working follows the run (`run_start`/`run_end`, snapshot, stale connection),
 not gaps between tool events; a committed reply or a new user turn ends it.
 Codemode names (`tool_script.rs`) come only from literal nested `tools.*` calls

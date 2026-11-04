@@ -407,15 +407,6 @@ impl TranscriptView {
             }
         }
         self.transcript.replace_readonly(rows);
-        let adopted = retained
-            .iter()
-            .filter_map(|(id, (row, state))| {
-                state
-                    .as_ref()
-                    .filter(|state| state.read(cx).selected_source_range().is_some())
-                    .map(|state| (*id, (state.clone(), row.shared_source())))
-            })
-            .collect();
         self.work_ui.sync(
             self.transcript
                 .messages()
@@ -423,7 +414,6 @@ impl TranscriptView {
                 .filter_map(|row| row.work_data().cloned())
                 .collect(),
             reset,
-            &adopted,
             cx,
         );
         for ix in 0..self.transcript.messages().len() {
@@ -777,7 +767,7 @@ impl TranscriptView {
         change: &crate::work_view::Change,
         cx: &mut Context<Self>,
     ) {
-        use crate::{tool_presentation::Step, work_view::Change};
+        use crate::work_view::Change;
         if matches!(change, Change::Disclosure(_)) {
             self.scroller
                 .update(cx, |state, cx| state.hold_for_disclosure(cx));
@@ -786,10 +776,10 @@ impl TranscriptView {
             row.work_data().is_some_and(|work| match change {
                 Change::Group(id) => work.id == *id,
                 Change::Step(id) | Change::Disclosure(id) => {
-                    work.steps.iter().any(|step| match step {
-                        Step::Tool(tool) => format!("call:{}", tool.id) == *id,
-                        Step::Note { id: key, .. } => format!("note:{key}") == *id,
-                    }) || *id == format!("group:{}", work.id)
+                    work.steps
+                        .iter()
+                        .any(|tool| format!("call:{}", tool.id) == *id)
+                        || *id == format!("group:{}", work.id)
                 }
             })
         });

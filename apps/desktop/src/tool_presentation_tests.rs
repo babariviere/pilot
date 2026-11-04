@@ -183,7 +183,7 @@ fn steps_count_like_swift_with_consecutive_successful_reads_merged() {
     read_done(&mut model, 3, "r2");
     read_done(&mut model, 5, "r3");
     assert_eq!(units(&mut model), [Unit::Reads(vec![0, 1, 2])]);
-    model.apply(&json!({"type":"entry_appended","entry":call_entry(7,vec![json!({"type":"text","text":"A note between steps."}),call("b","bash",json!({"command":"cargo test"})),call("r4","read",json!({"path":"src/r4.rs"}))])}));
+    model.apply(&json!({"type":"entry_appended","entry":call_entry(7,vec![call("b","bash",json!({"command":"cargo test"})),call("r4","read",json!({"path":"src/r4.rs"}))])}));
     // A failed read never merges; a running read waits until it succeeds.
     model.apply(&json!({"type":"tool_execution_end","toolCallId":"b","isError":true,"entry":result_entry(8,"b",true,"synthetic failure")}));
     model.apply(&json!({"type":"tool_execution_start","toolCallId":"r4","toolName":"read"}));
@@ -200,9 +200,8 @@ fn steps_count_like_swift_with_consecutive_successful_reads_merged() {
             Unit::Step(4),
             Unit::Step(5),
             Unit::Step(6),
-            Unit::Step(7),
         ],
-        "six mixed steps: merged reads, note, failure, live read, read, failed read"
+        "five mixed steps: merged reads, failure, live read, read, failed read"
     );
     assert!(work.active);
     // Each call keeps its own outcome; failures stay distinct.
@@ -385,15 +384,125 @@ fn streaming_commit_snapshot_and_prepend_keep_work_and_call_identity() {
     assert_eq!(rows[0].work_data().unwrap().calls().count(), 2);
 }
 #[test]
-fn final_answer_is_outside_work_and_note_tool_order_is_not_rearranged() {
+fn final_answer_and_earlier_text_stay_outside_work_in_order() {
     let mut model = LiveTranscript::default();
     model.apply(&json!({"type":"entry_appended","entry":call_entry(1,vec![json!({"type":"text","text":"before"}),call("a","read",json!({"path":"a"})),json!({"type":"text","text":"after"})])}));
+    assert_eq!(outline(&model.rows()), ["before", "work[a]", "after"]);
+}
+/// Each row as text: a work group by its call IDs, any other row by its source.
+fn outline(rows: &[Message]) -> Vec<String> {
+    rows.iter()
+        .map(|row| match row.work_data() {
+            Some(work) => format!(
+                "work{}[{}]",
+                if work.active { "*" } else { "" },
+                work.calls()
+                    .map(|tool| tool.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+            None => row.source().to_owned(),
+        })
+        .collect()
+}
+#[test]
+fn assistant_text_between_calls_stays_a_visible_message_in_order() {
+    let plan = "Plan:\n\n- **first** step\n- second step\n\n```rust\nlet x = 1;\n```";
+    let mut model = LiveTranscript::default();
+    model.apply(&json!({"type":"run_start"}));
+    model.apply(&json!({"type":"entry_appended","entry":call_entry(1,vec![json!({"type":"text","text":plan}),call("a","read",json!({"path":"a.rs"}))])}));
+    model.apply(&json!({"type":"tool_execution_end","toolCallId":"a","entry":result_entry(2,"a",false,"contents")}));
+    read_done(&mut model, 3, "b");
+    model.apply(&json!({"type":"entry_appended","entry":call_entry(5,vec![json!({"type":"text","text":"Between calls."})])}));
+    for n in 0..7 {
+        read_done(&mut model, 10 + 2 * n, &format!("r{n}"));
+    }
+    model.apply(&json!({"type":"entry_appended","entry":call_entry(30,vec![json!({"type":"text","text":"I recommend option B."}),call("q","ask_user",json!({"question":"Which option?"}))])}));
     let rows = model.rows();
-    assert_eq!(rows.len(), 2);
-    assert_eq!(rows[1].source(), "after");
-    let steps = &rows[0].work_data().unwrap().steps;
-    assert!(matches!(&steps[0],Step::Note{text,..}if text.as_str()=="before"));
-    assert!(matches!(&steps[1],Step::Tool(t)if t.id=="a"));
+    let expected = [
+        plan,
+        "work[a,b]",
+        "Between calls.",
+        "work[r0,r1,r2,r3,r4,r5,r6]",
+        "I recommend option B.",
+        "work*[q]",
+    ];
+    assert_eq!(outline(&rows), expected);
+    for index in [0, 2, 4] {
+        assert!(rows[index].is_assistant() && rows[index].work_data().is_none());
+        assert!(
+            rows[index].reader_key().is_some(),
+            "text keeps its own reader"
+        );
+    }
+    let ids: BTreeSet<_> = rows.iter().map(Message::id).collect();
+    assert_eq!(ids.len(), rows.len(), "every row keeps its own identity");
+    // Completion and a reopened snapshot show the same rows with the same IDs.
+    model.apply(&json!({"type":"tool_execution_end","toolCallId":"q","entry":result_entry(31,"q",false,"B")}));
+    model.apply(&json!({"type":"run_end"}));
+    let done = model.rows();
+    assert_eq!(outline(&done)[..5], expected[..5]);
+    assert_eq!(outline(&done)[5], "work[q]");
+    let mut entries = vec![
+        call_entry(
+            1,
+            vec![
+                json!({"type":"text","text":plan}),
+                call("a", "read", json!({"path":"a.rs"})),
+            ],
+        ),
+        result_entry(2, "a", false, "contents"),
+        call_entry(3, vec![call("b", "read", json!({"path":"src/b.rs"}))]),
+        result_entry(4, "b", false, "contents"),
+        call_entry(5, vec![json!({"type":"text","text":"Between calls."})]),
+    ];
+    for n in 0..7u64 {
+        let id = format!("r{n}");
+        entries.push(call_entry(
+            10 + 2 * n,
+            vec![call(&id, "read", json!({"path":format!("src/{id}.rs")}))],
+        ));
+        entries.push(result_entry(11 + 2 * n, &id, false, "contents"));
+    }
+    entries.push(call_entry(
+        30,
+        vec![
+            json!({"type":"text","text":"I recommend option B."}),
+            call("q", "ask_user", json!({"question":"Which option?"})),
+        ],
+    ));
+    entries.push(result_entry(31, "q", false, "B"));
+    let mut reopened = LiveTranscript::default();
+    reopened.apply(&json!({"type":"snapshot","entries":entries}));
+    let again = reopened.rows();
+    assert_eq!(outline(&again), outline(&done));
+    // Messages keep their entry identity; group IDs are local to each model.
+    let text_ids = |rows: &[Message]| {
+        rows.iter()
+            .filter(|row| row.work_data().is_none())
+            .map(Message::id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(text_ids(&again), text_ids(&done));
+    assert_eq!(text_ids(&done), text_ids(&rows));
+}
+#[test]
+fn streamed_text_keeps_its_row_when_calls_follow() {
+    let mut model = LiveTranscript::default();
+    model.apply(&json!({"type":"run_start"}));
+    read_done(&mut model, 1, "a");
+    let text = json!({"type":"text","text":"Looking closer."});
+    model.apply(
+        &json!({"type":"message_start","message":{"timestamp":10,"content":[text.clone()]}}),
+    );
+    let streaming = model.rows();
+    assert_eq!(outline(&streaming), ["work*[a]", "Looking closer."]);
+    let id = streaming[1].id();
+    let entry = call_entry(3, vec![text, call("b", "read", json!({"path":"b.rs"}))]);
+    model.apply(&json!({"type":"message_end","entry":entry}));
+    let rows = model.rows();
+    assert_eq!(outline(&rows), ["work[a]", "Looking closer.", "work*[b]"]);
+    assert_eq!(rows[1].id(), id, "streaming identity survives the commit");
 }
 #[test]
 fn tool_detail_budget_and_unicode_trim_are_bounded_without_terminal_regression() {

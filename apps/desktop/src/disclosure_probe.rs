@@ -12,11 +12,17 @@ use std::time::Duration;
 mod arguments;
 #[path = "tool_selection_probe.rs"]
 mod selection;
+#[path = "visible_text_probe.rs"]
+mod visible_text;
 
 pub fn run_disclosure_probe(cx: &mut HeadlessAppContext) {
     // This matrix checks settled presentation, source, focus and scroll. The
     // message_fold target owns timed disclosure phases on the executor clock.
     cx.update(|cx| cx.set_reduce_motion(true));
+    visible_text::run(cx);
+    if std::env::var_os("PILOT_NEXT_VISIBLE_TEXT_DIR").is_some() {
+        return;
+    }
     if std::env::var_os("PILOT_NEXT_TOOL_SELECTION_DIR").is_some() {
         selection::run(cx);
         return;

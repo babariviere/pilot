@@ -68,7 +68,6 @@ fn eligible(row: &Message) -> bool {
         && row.work_data().is_none()
         && row.artifact_data().is_none()
         && row.image_data().is_none()
-        && !row.work_note()
         && row.reader_key().is_some()
 }
 struct Entry {

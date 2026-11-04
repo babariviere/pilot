@@ -315,9 +315,8 @@ fn audit() -> Value {
         "summary":"jj git push","description":"pushed branch main","kind":"push","target":"main",
         "branch":"main","at":1,"exitCode":null,"afterEntryId":286}]})
 }
-/// Each row as text; a work group lists its steps once, by call ID or note.
+/// Each row as text; a work group lists its calls once, by ID.
 fn shape(rows: &[Message]) -> Vec<String> {
-    use crate::tool_presentation::Step;
     rows.iter()
         .map(|row| match row.work_data() {
             Some(work) => format!(
@@ -325,10 +324,7 @@ fn shape(rows: &[Message]) -> Vec<String> {
                 if work.active { "*" } else { "" },
                 work.steps
                     .iter()
-                    .map(|step| match step {
-                        Step::Tool(tool) => tool.id.clone(),
-                        Step::Note { text, .. } => text.to_string(),
-                    })
+                    .map(|tool| tool.id.clone())
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
@@ -343,7 +339,8 @@ fn assert_split(rows: &[Message]) {
             "Finished background jobs",
             "work[push]",
             "[Agent attempted to push main]",
-            "work*[Pushed and confirmed., complete, memory-1, memory-2]",
+            "Pushed and confirmed.",
+            "work*[complete, memory-1, memory-2]",
         ]
     );
     let ids: std::collections::BTreeSet<_> = rows.iter().map(Message::id).collect();
@@ -357,8 +354,12 @@ fn an_event_inside_a_grouped_run_splits_it_into_distinct_groups() {
     model.apply(&json!({"type":"snapshot","run":{},"entries":split_run()}));
     let whole = model.rows();
     assert_eq!(
-        shape(&whole)[1],
-        "work*[push, Pushed and confirmed., complete, memory-1, memory-2]"
+        shape(&whole)[1..],
+        [
+            "work[push]",
+            "Pushed and confirmed.",
+            "work*[complete, memory-1, memory-2]",
+        ]
     );
     let whole_id = whole[1].id();
     model.apply(&audit());
@@ -369,7 +370,7 @@ fn an_event_inside_a_grouped_run_splits_it_into_distinct_groups() {
         whole_id,
         "the first part keeps its disclosure"
     );
-    let lower = rows[3].id();
+    let lower = rows[4].id();
     assert_eq!(
         model.rows().iter().map(Message::id).collect::<Vec<_>>(),
         rows.iter().map(Message::id).collect::<Vec<_>>(),
@@ -378,11 +379,8 @@ fn an_event_inside_a_grouped_run_splits_it_into_distinct_groups() {
     // The run settles: same groups, same identities.
     model.apply(&json!({"type":"run_end"}));
     let settled = model.rows();
-    assert_eq!(
-        shape(&settled)[3],
-        "work[Pushed and confirmed., complete, memory-1, memory-2]"
-    );
-    assert_eq!((settled[1].id(), settled[3].id()), (whole_id, lower));
+    assert_eq!(shape(&settled)[4], "work[complete, memory-1, memory-2]");
+    assert_eq!((settled[1].id(), settled[4].id()), (whole_id, lower));
 
     // Live order: the audit lands mid-run, before the later calls.
     let mut live = LiveTranscript::default();
