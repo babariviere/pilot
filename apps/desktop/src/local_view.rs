@@ -1976,6 +1976,10 @@ impl LocalViewer {
         self.state.tracked_revision = state.tracked_revision;
         self.state.schedules = state.schedules.clone();
         self.state.schedules_revision = state.schedules_revision;
+        #[cfg(target_os = "macos")]
+        if let Some(status) = state.pi_reload.take() {
+            crate::daemon_menu::reload::pushed(status, cx);
+        }
         if let Some(report) = state.mcp.take()
             && let Some(page) = self.settings.read(cx).mcp.clone()
         {

@@ -2,6 +2,19 @@
 
 ## Daemon menu controls (macOS)
 
+**Reload** is a separate app-wide pi configuration action, not a service restart.
+It sends one `POST /api/pi/reload` through the Local courier's effect fence,
+with an echoed operation UUID and identity checks. `GET /api/pi/reload` and
+`pi.reload` control messages are passive observations. Fan-out is bounded to two
+workers, waits for committed idle/job/subagent boundaries, and preserves each
+worker, durable conversation and draft owner. Parked chats are not opened.
+The kernel fences input/model/subagent admissions around SDK shutdown/reload/start;
+a partial extension load blocks new work until a successful explicit reload.
+Host tools, Ask restrictions and Harness-only generation remain in force.
+Pending work is event-driven and not replayed after daemon shutdown. Lost HTTP
+acknowledgments remain unconfirmed, never an automatic retry. Menu progress is
+configuration-load status, not proof of successful MCP connections.
+
 **Pilot Next → Daemon** contains Start, Stop and Restart for an already
 Next-managed Local service. It is an ordinary app-menu submenu, not a tray icon.
 Each action asks for explicit confirmation; the submenu retains progress and

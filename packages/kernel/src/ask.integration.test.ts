@@ -177,7 +177,7 @@ test("Ask uses bundled web and never executes personal, project, explicit or inl
 	assert.deepEqual(adapter.session.getActiveToolNames(), ["read"]);
 	const read = adapter.session.agent.state.tools.find((tool) => tool.name === "read")!;
 	assert.match(JSON.stringify(await read.execute("read", { path: "hello.txt" }, undefined)), /source content/);
-	await adapter.session.reload();
+	await adapter.reload();
 	assert.equal(existsSync(marker), false, "reload cannot restore unsafe resources");
 	assert.ok(adapter.session.getAllTools().every((tool) => ASK_TOOL_NAMES.includes(tool.name)));
 	assert.ok(

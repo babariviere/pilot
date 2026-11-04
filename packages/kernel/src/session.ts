@@ -84,8 +84,8 @@ import {
 import { createHistoryRecallTool } from "./history-recall.ts";
 import { submitIdleInput } from "./idle-input.ts";
 import { InputOrigins, inputOrigin } from "./input-origin.ts";
-import { createInsightsHistoryTool } from "./insights-history-tool.ts";
 import { createInsightsBacklogTool, type InsightsBacklogCall } from "./insights-backlog-tool.ts";
+import { createInsightsHistoryTool } from "./insights-history-tool.ts";
 import { JobsMonitor } from "./jobs.ts";
 import { createKnowledgeTool } from "./knowledge-tools.ts";
 import { createLiveUpdateTools } from "./live-update-tool.ts";
@@ -1011,6 +1011,7 @@ export class KernelSession {
 			adapter.onExtensionInput = (input) => {
 				void session
 					.serializeInput(async () => {
+						session.adapter.assertReady();
 						const admission = await admitWithHeld(session.harness, conversation.id, input, context);
 						if (admission) {
 							await session.publishSystemMessageStates();
@@ -1364,9 +1365,14 @@ export class KernelSession {
 	}
 
 	/** Steer, queue for, or stop a subagent on the user's behalf. */
-	subagentCommand(command: SubagentCommand): Promise<void> {
-		if (this.#closing) return Promise.reject(new Error("Session is closing"));
-		return this.subagents.command(command);
+	async subagentCommand(command: SubagentCommand): Promise<void> {
+		if (this.#closing || this.#changingModel || this.#moving) throw new ConversationBusy(this.conversation.id);
+		this.#admissions++;
+		try {
+			await this.subagents.command(command);
+		} finally {
+			this.#admissions--;
+		}
 	}
 
 	/** Durable admission. Retrying the same requestId returns the existing submission. */
@@ -1520,6 +1526,31 @@ export class KernelSession {
 		)
 			throw new Error("Waiting system messages are read-only");
 		await removeQueuedMessage(this.harness, this.conversation.id, submissionId, context, guardToken);
+	}
+
+	/** Reload only a truly idle runtime. Never abort a run, a job or a child to apply configuration. */
+	async reloadPi(): Promise<void> {
+		if (this.#closing || this.#changingModel || this.#admissions || this.#moving)
+			throw new ConversationBusy(this.conversation.id);
+		this.#changingModel = true;
+		try {
+			await this.serializeInput(async () => {
+				await this.adapter.waitForExtensionSettlement();
+				await this.conversation.commit(async (tx) => {
+					const live = await tx.doc(LiveDoc, this.conversation.id);
+					const inbox = await tx.doc(InboxDoc, this.conversation.id);
+					if (live.run || live.compactions?.length || inbox.items.length)
+						throw new ConversationBusy(this.conversation.id);
+				}, context);
+				// Unlike parking/upgrades, reload keeps this worker alive. Do not mistake
+				// an MCP launcher's descendants for user jobs and wait forever on them.
+				if ((await this.jobs()).length || this.subagentList.some((child) => child.state === "working"))
+					throw new ConversationBusy(this.conversation.id);
+				await this.adapter.reload();
+			});
+		} finally {
+			this.#changingModel = false;
+		}
 	}
 
 	/** Prompt templates and skill commands that input admission expands. */

@@ -19,6 +19,8 @@ gpui_kit::actions!(
         StartDaemon,
         StopDaemon,
         RestartDaemon,
+        ReloadPi,
+        PiReloadDetails,
         InspectDaemon,
         DaemonDetails,
         CancelDaemonControl
@@ -71,6 +73,9 @@ pub(crate) fn on_started<T: 'static>(
 }
 
 pub(crate) fn init(cx: &mut App) {
+    reload::init(cx);
+    cx.on_action(|_: &ReloadPi, cx| reload::request(cx));
+    cx.on_action(|_: &PiReloadDetails, cx| reload_details(cx));
     cx.on_action(|_: &InspectDaemon, cx| request(None, cx));
     cx.on_action(|_: &StartDaemon, cx| confirm(Command::Start, cx));
     cx.on_action(|_: &StopDaemon, cx| confirm(Command::Stop, cx));
@@ -188,11 +193,17 @@ pub(crate) fn menu(cx: Option<&App>) -> MenuItem {
             MenuItem::action("Start…", StartDaemon).disabled(!enabled(Command::Start)),
             MenuItem::action("Stop…", StopDaemon).disabled(!enabled(Command::Stop)),
             MenuItem::action("Restart…", RestartDaemon).disabled(!enabled(Command::Restart)),
+            MenuItem::action("Reload", ReloadPi).disabled(cx.is_none_or(|cx| !reload::enabled(cx))),
             MenuItem::separator(),
             MenuItem::action("Check Status", InspectDaemon)
                 .disabled(owner.is_none_or(|o| (o.busy && o.command.is_some()) || o.confirming)),
             MenuItem::action("Cancel Request", CancelDaemonControl)
                 .disabled(owner.is_none_or(|o| !o.busy || o.command.is_none())),
+            MenuItem::action(
+                cx.and_then(reload::label)
+                    .unwrap_or("Reload pi extensions and MCP configuration".into()),
+                PiReloadDetails,
+            ),
         ]),
     )
 }
@@ -359,6 +370,22 @@ fn details(cx: &mut App) {
         }
     });
 }
+
+fn reload_details(cx: &mut App) {
+    let status = reload::label(cx).unwrap_or("Reload pi configuration across all chats.".into());
+    cx.defer(move |cx| {
+        if let Some(handle) = window(cx) {
+            let _ = handle.update(cx, |_, w, cx| {
+                let message = format!("{status}\n\nReload reads pi extensions and MCP configuration without restarting the daemon. Busy chats wait until their work, jobs and subagents finish. Sleeping chats load current configuration when opened. History and drafts stay intact.\n\nIf a chat fails to reload, fix its pi configuration and choose Reload again. Failed extension loads block new work rather than dropping permission hooks.");
+                let answer = w.prompt(gpui_kit::PromptLevel::Info, "Reload pi configuration", Some(&message), &["OK"], cx);
+                cx.spawn(async move |_| { let _ = answer.await; }).detach();
+            });
+        }
+    });
+}
+
+#[path = "pi_reload.rs"]
+pub(crate) mod reload;
 
 #[cfg(test)]
 #[path = "daemon_menu_tests.rs"]

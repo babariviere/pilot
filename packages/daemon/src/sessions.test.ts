@@ -55,7 +55,7 @@ import {
 import type { SubagentWatchUpdate } from "./subagent-watches.ts";
 import type { TerminalManager } from "./terminals.ts";
 
-type Command = Extract<KernelCommand, { type: "input" | "abort" | "pauseInputs" | "resumeInputs" }>;
+type Command = Extract<KernelCommand, { type: "input" | "abort" | "pauseInputs" | "resumeInputs" | "reloadPi" }>;
 type Spec = Extract<KernelCommand, { type: "start" }>["spec"];
 const diagnosticHost = { hostId: "local", daemonId: "daemon", lineageId: "lineage" } as const;
 const diagnosticTarget = (
@@ -587,6 +587,10 @@ class FakeWorker implements SessionWorker {
 		}
 		this.requests.push(command);
 		await this.admit(command);
+		if (command.type === "reloadPi") {
+			this.onPacket({ type: "piReloaded", requestId: command.requestId, commands: [] });
+			return;
+		}
 		this.state = command.type === "input" ? "working" : "idle";
 		this.onPacket({ type: "working", working: this.state === "working" });
 	}
@@ -619,6 +623,59 @@ class FakeWorker implements SessionWorker {
 		this.onExit(this, 1);
 	}
 }
+
+test("app-wide pi reload keeps busy workers pending and reloads the same workers after idle", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({ workspace: async (_source, path) => ({ path, base: "HEAD", jj: false }) });
+	const idle = await sessions.spawn({ cwd: f.source, message: "first" });
+	const busy = await sessions.spawn({ cwd: f.source, message: "second" });
+	await Promise.all([sessions["starting"].get(idle.id), sessions["starting"].get(busy.id)]);
+	const idleWorker = f.workers.find((w) => w.spec.sessionId === idle.id)!;
+	const busyWorker = f.workers.find((w) => w.spec.sessionId === busy.id)!;
+	idleWorker.finish();
+	const operationId = randomUUID();
+	const admitted = sessions.reloadPi(operationId);
+	assert.equal(admitted.pending, 1);
+	await until(() => sessions.piReload.status().reloaded === 1);
+	assert.equal(busyWorker.requests.filter((command) => command.type === "reloadPi").length, 0);
+	assert.equal(busyWorker.state, "working");
+	assert.equal(busyWorker.closed, false);
+	assert.throws(() => sessions.reloadPi(randomUUID()), Conflict);
+	sessions.reloadPi(operationId);
+	assert.equal(idleWorker.requests.filter((command) => command.type === "reloadPi").length, 1);
+	busyWorker.finish();
+	await until(() => sessions.piReload.status().reloaded === 2);
+	assert.equal(f.workers.length, 2, "no replacement workers or model calls are needed");
+	assert.equal(idleWorker.closed, false);
+	assert.equal(busyWorker.closed, false);
+});
+
+test("pi reload waits for startup barriers and background jobs, and refuses admission during update", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({
+		worker: f.workerFactory(false),
+		workspace: async (_source, path) => ({ path, base: "HEAD", jj: false }),
+	});
+	const chat = await sessions.spawn({ cwd: f.source, message: "first" });
+	await until(() => f.workers.length === 1);
+	const worker = f.workers[0]!;
+	sessions.reloadPi(randomUUID());
+	assert.equal(sessions.piReload.status().pending, 1);
+	worker.open();
+	await sessions["starting"].get(chat.id);
+	Object.assign(worker, {
+		runningJobs: [{ id: "job", name: "Job", state: "running", startedAt: 1, outputPath: "/tmp/job" }],
+	});
+	worker.finish();
+	await delay(10);
+	assert.equal(sessions.piReload.status().reloaded, 0);
+	Object.assign(worker, { runningJobs: [] });
+	worker.finish();
+	await until(() => sessions.piReload.status().reloaded === 1);
+	const release = sessions.freezeAdmissions();
+	assert.throws(() => sessions.reloadPi(randomUUID()), /update/);
+	release();
+});
 
 for (const phase of ["clone", "ready", "ack"] as const) {
 	test(`update refuses background ${phase} after spawn returns, then allows settled idle`, async (t) => {

@@ -145,7 +145,7 @@ pub(crate) fn run(cx: &mut App) {
         unsafe {dispatch(3);}
         completed.recv().await.unwrap();
         cx.update(|cx|assert_eq!(owner.read(cx).state,Some(State::Stopped)));
-        unsafe {assert!(enabled(2));assert!(!enabled(3));dispatch(6);}
+        unsafe {assert!(enabled(2));assert!(!enabled(3));dispatch(7);}
         completed.recv().await.unwrap();
         unsafe {dispatch(2);}
         completed.recv().await.unwrap();

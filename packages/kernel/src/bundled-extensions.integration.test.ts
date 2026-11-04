@@ -14,7 +14,14 @@ import {
 	InMemoryCredentialStore,
 	InMemoryModelsStore,
 } from "@earendil-works/pi-ai";
-import { getPackageDir, ModelRuntime, SettingsManager, wrapRegisteredTool } from "@earendil-works/pi-coding-agent";
+import {
+	createMcpExtension,
+	getPackageDir,
+	type McpTransportFactory,
+	ModelRuntime,
+	SettingsManager,
+	wrapRegisteredTool,
+} from "@earendil-works/pi-coding-agent";
 import type { JsonObject } from "@earendil-works/pi-durable";
 import type { UsageObservation } from "@pilot/protocol";
 import { ANTHROPIC_AUTH_PATH, CHILD_PROFILE_PATH, installBundledAnthropicAuth } from "./bundled-extensions.ts";
@@ -69,7 +76,9 @@ async function fixture(t: TestContext) {
 	});
 	const faux = fauxProvider({ provider: "pilot-bundled", models: [{ id: "offline" }] });
 	runtime.registerNativeProvider(faux.provider);
-	const open = async () => {
+	const open = async (
+		loaderOptions?: Partial<NonNullable<Parameters<typeof NativeAdapter.open>[0]["loaderOptions"]>>,
+	) => {
 		const adapter = await NativeAdapter.open({
 			cwd: root,
 			agentDir,
@@ -82,6 +91,7 @@ async function fixture(t: TestContext) {
 				),
 			],
 			projectTrusted: false,
+			loaderOptions: { cwd: root, agentDir, ...loaderOptions },
 			settingsManager: SettingsManager.inMemory({ defaultTools: ["+codemode"], codemode: { mode: "only" } }),
 			sessionOptions: { modelRuntime: runtime, model: faux.getModel() },
 		});
@@ -128,6 +138,107 @@ test("clean configuration has all bundled tools and required auth across reload"
 	])
 		assert.ok(adapter.session.getCallableToolNames().includes(name));
 	assert.equal(typeof f.runtime.getRegisteredProviderConfig("anthropic")?.streamSimple, "function");
+});
+
+test("host reload discovers edited extensions, preserves host policy and fails closed until repaired", async (t) => {
+	const f = await fixture(t);
+	const adapter = await f.open();
+	const native = adapter.session;
+	const directory = join(f.agentDir, "extensions");
+	await mkdir(directory);
+	const path = join(directory, "reload-fixture.ts");
+	await writeFile(path, `export default pi => pi.registerCommand('reload-first', {handler: async () => {}});`);
+	adapter.setToolActive("todo", false);
+	await adapter.reload();
+	assert.ok(native.extensionRunner.getRegisteredCommands().some((command) => command.name === "reload-first"));
+	assert.equal(native.getActiveToolNames().includes("todo"), false);
+	assert.ok(native.getActiveToolNames().includes("codemode"));
+	await assert.rejects(native.prompt("Must never generate"), /Only durable Harness/);
+	await writeFile(path, `export default () => { throw new Error('broken-reload-fixture'); };`);
+	await assert.rejects(adapter.reload(), /broken-reload-fixture/);
+	await assert.rejects(adapter.prepareInput("blocked"), /reload failed/);
+	await writeFile(path, `export default pi => pi.registerCommand('reload-repaired', {handler: async () => {}});`);
+	await adapter.reload();
+	assert.equal(adapter.session, native);
+	assert.ok(native.extensionRunner.getRegisteredCommands().some((command) => command.name === "reload-repaired"));
+	assert.ok(!native.extensionRunner.getRegisteredCommands().some((command) => command.name === "reload-first"));
+	assert.equal(await adapter.prepareInput("usable"), "usable");
+});
+
+test("reload rereads mcp.json and closes old transports before connecting the replacement roster", async (t) => {
+	const f = await fixture(t);
+	const connections: string[] = [];
+	const closes: string[] = [];
+	const createTransport: McpTransportFactory = (entry) => {
+		type Transport = ReturnType<McpTransportFactory>;
+		const messages = new Set<Parameters<Transport["onMessage"]>[0]>();
+		const closed = new Set<() => void>();
+		return {
+			start: async () => {
+				connections.push(entry.name);
+			},
+			send: async (message) => {
+				if (!("id" in message) || !("method" in message)) return;
+				const result =
+					message.method === "initialize"
+						? {
+								protocolVersion: "2025-11-25",
+								capabilities: { tools: {} },
+								serverInfo: { name: entry.name, version: "1" },
+							}
+						: message.method === "tools/list"
+							? { tools: [{ name: "ping", inputSchema: { type: "object" } }] }
+							: { content: [{ type: "text", text: entry.name }] };
+				queueMicrotask(() => {
+					for (const listener of messages) listener({ jsonrpc: "2.0", id: message.id!, result });
+				});
+			},
+			close: async () => {
+				closes.push(entry.name);
+				for (const listener of [...closed]) listener();
+			},
+			onMessage(listener) {
+				messages.add(listener);
+				return () => {
+					messages.delete(listener);
+				};
+			},
+			onClose(listener) {
+				closed.add(listener);
+				return () => {
+					closed.delete(listener);
+				};
+			},
+			onError() {
+				return () => {};
+			},
+		};
+	};
+	const config = (name: string) =>
+		writeFile(
+			join(f.agentDir, "mcp.json"),
+			JSON.stringify({ mcpServers: { [name]: { url: "https://offline.invalid/mcp" } } }),
+		);
+	await config("before");
+	const adapter = await f.open({ extensionFactories: [createMcpExtension({ createTransport })] });
+	const names = async () => {
+		const runner = adapter.session.extensionRunner;
+		await runner.emitToolCall({
+			type: "tool_call",
+			toolCallId: "mcp-list",
+			toolName: "codemode",
+			input: { code: "text(ALL_TOOLS);" },
+		});
+		return adapter.session.getCallableToolNames();
+	};
+	assert.ok((await names()).includes("mcp__before__ping"));
+	await config("after");
+	await adapter.reload();
+	assert.deepEqual(closes, ["before"]);
+	const tools = await names();
+	assert.ok(tools.includes("mcp__after__ping"));
+	assert.ok(!tools.includes("mcp__before__ping"));
+	assert.deepEqual(connections, ["before", "after"]);
 });
 
 test("personal profile and auth copies never evaluate, while unrelated extensions still load", async (t) => {

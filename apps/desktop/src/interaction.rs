@@ -90,6 +90,11 @@ impl DeliveryReport {
 }
 
 pub(crate) enum WriteCommand {
+    #[cfg(target_os = "macos")]
+    ReloadPi {
+        operation_id: String,
+        reply: async_channel::Sender<crate::daemon_menu::reload::Outcome>,
+    },
     RetireAnswer {
         key: String,
         revision: u64,
@@ -523,6 +528,33 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                 Ok(()) => {
                     status.error = None;
                     match command {
+                        #[cfg(target_os = "macos")]
+                        Some(WriteCommand::ReloadPi {
+                            operation_id,
+                            reply,
+                        }) => {
+                            use crate::daemon_menu::reload::{Outcome, submit};
+                            let outcome = if store.book.host != options.host() {
+                                Outcome::Refused(
+                                    "Local differs from private state. Reload was not sent.",
+                                )
+                            } else {
+                                DeliveryOwner {
+                                    store,
+                                    status: &mut status,
+                                    channels: Some(&channels),
+                                    autosave: &mut autosave,
+                                    closing: &mut closing,
+                                }
+                                .effect(async {
+                                    Ok(submit(&client, &options, &operation_id).await)
+                                })
+                                .await
+                                .unwrap_or(Outcome::Unknown)
+                            };
+                            let _ = reply.try_send(outcome);
+                            Ok("")
+                        }
                         Some(WriteCommand::Model {
                             session,
                             request,

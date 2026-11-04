@@ -132,6 +132,26 @@ pub(crate) fn daemon_control_available(cx: &App) -> bool {
         })
 }
 
+/// Reload uses the current main window's courier, never a new transport owner.
+#[cfg(target_os = "macos")]
+pub(crate) fn reload_writer(cx: &App) -> Option<Interaction> {
+    let owner = cx.try_global::<QuitOwner>()?;
+    if !cx
+        .windows()
+        .iter()
+        .any(|w| w.window_id() == owner.window.window_id())
+    {
+        return None;
+    }
+    let view = owner.view.upgrade()?;
+    let view = view.read(cx);
+    if view.restart_pending || view.daemon_upgrade_pending || view.editor.read(cx).close_requested()
+    {
+        return None;
+    }
+    view.writer.clone()
+}
+
 /// App-level Quit from the menu or an auxiliary window (Settings, Usage).
 /// Deferred because the dispatching window is borrowed during dispatch, and the
 /// main owner may need to ask the Settings window before anything quits.
@@ -668,6 +688,63 @@ mod tests {
             assert!(w.is_action_available(&GoHome, cx));
         })
         .unwrap();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui_kit::test]
+    fn daemon_reload_dispatches_once_without_touching_chat_or_service(cx: &mut TestAppContext) {
+        use crate::daemon_menu::{ReloadPi, reload};
+        let (writer, commands) = Interaction::recording();
+        let (h, view) = main_owner(cx, writer);
+        let status = |operation_id: serde_json::Value, pending: u32, done: u32| {
+            reload::Status::parse(&serde_json::json!({
+            "operationId": operation_id, "pending": pending, "reloading":0, "reloaded":done, "failed":0
+        })).unwrap()
+        };
+        assert!(!cx.read(reload::enabled), "old daemons do not offer reload");
+        cx.update(|cx| reload::pushed(status(serde_json::Value::Null, 0, 0), cx));
+        assert!(cx.read(reload::enabled));
+        cx.update(|cx| {
+            cx.dispatch_action(&ReloadPi);
+            cx.dispatch_action(&ReloadPi);
+        });
+        cx.run_until_parked();
+        assert!(!cx.read(reload::enabled));
+        let WriteCommand::ReloadPi {
+            operation_id,
+            reply,
+        } = commands.try_recv().unwrap()
+        else {
+            panic!("reload intent")
+        };
+        assert!(
+            commands.try_recv().is_err(),
+            "no duplicate, Submit, Stop or service command"
+        );
+        let complete = status(serde_json::json!(operation_id), 0, 1);
+        cx.update(|cx| reload::pushed(complete.clone(), cx));
+        reply
+            .try_send(reload::Outcome::Accepted(status(
+                serde_json::json!(operation_id),
+                1,
+                0,
+            )))
+            .unwrap_or_else(|_| panic!("reply"));
+        cx.run_until_parked();
+        assert!(
+            cx.read(reload::enabled),
+            "late POST admission cannot regress the pushed completion"
+        );
+        assert!(cx.read(|cx| reload::label(cx).unwrap().contains("reloaded in 1")));
+        view.read_with(cx, |v, cx| {
+            assert_eq!(v.editor.read(cx).navigation_key(), Some("chat:source"))
+        });
+        cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+        cx.run_until_parked();
+        assert!(
+            !cx.read(reload::enabled),
+            "no mutation after the main window closes"
+        );
     }
 
     #[gpui_kit::test]

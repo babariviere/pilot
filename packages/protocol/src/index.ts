@@ -26,6 +26,7 @@ export type * from "./live-update.ts";
 export type * from "./mcp-setup.ts";
 export type * from "./model-scope.ts";
 export type * from "./native-review.ts";
+export type * from "./pi-reload.ts";
 export type * from "./refresh-health.ts";
 
 /** Lifecycle as seen by the daemon. "parked" means no worker is running; the session resumes on demand. */
@@ -2039,6 +2040,7 @@ export type ServerMessage =
 	| { type: "shared-contexts.changed" }
 	| { type: "power"; power: import("./power.ts").PowerStatus }
 	| { type: "mcp"; mcp: import("./mcp.ts").McpStatus }
+	| { type: "pi.reload"; reload: import("./pi-reload.ts").PiReloadStatus }
 	| import("./schedules.ts").SchedulesMessage
 	/** Includes both active and archived sessions, so clients can switch views locally. */
 	| { type: "sessions"; sessions: SessionSummary[] }

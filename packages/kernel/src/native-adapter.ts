@@ -80,8 +80,8 @@ import { DIAGNOSTIC_LOG_TOOL } from "./diagnostic-log-tool.ts";
 import { DIAGNOSTICS_TOOL } from "./diagnostics-tool.ts";
 import { createExplorationTools } from "./exploration-tools.ts";
 import { diagnosticFetch, formatFailure, safeFailureText, toolFailureStep } from "./failure.ts";
-import { INSIGHTS_HISTORY_TOOL } from "./insights-history-tool.ts";
 import { INSIGHTS_BACKLOG_TOOL } from "./insights-backlog-tool.ts";
+import { INSIGHTS_HISTORY_TOOL } from "./insights-history-tool.ts";
 import { runningJobs } from "./jobs.ts";
 import { MEMORY_TOOL_NAMES } from "./memory-tools.ts";
 import { type PerformanceSink, type PreparationMark, RequestTiming } from "./performance.ts";
@@ -274,6 +274,9 @@ export class NativeAdapter {
 	#harness?: Harness;
 	#conversationId?: ConversationId;
 	#closed = false;
+	#reloadFailure?: Error;
+	#extensionErrors: string[] = [];
+	#afterReload?: () => void;
 	#requestBarrier?: Promise<void>;
 	#activity?: ActivityStream;
 	#renderPrompt?: () => string;
@@ -470,6 +473,7 @@ export class NativeAdapter {
 			: undefined;
 		const toolActivityFactories = toolActivity ? [toolActivityExtension(toolActivity)] : [];
 		const capture: ExtensionFactory = (pi) => {
+			renderPrompt = undefined;
 			registerHostTool = (tool) => {
 				hostTools.set(tool.name, tool);
 				pi.registerTool(tool);
@@ -623,6 +627,7 @@ export class NativeAdapter {
 			toolActivity,
 		);
 		adapter.#onToolsRunningChanged = options.onToolsRunningChanged;
+		adapter.#afterReload = () => options.subagents?.refresh();
 		// The SDK loop never runs here. Its default getter would report idle throughout
 		// Harness model/tool work, causing extensions (notably jobs) to notify too early.
 		// bindExtensions reads the committed activity source dynamically, including
@@ -665,12 +670,12 @@ export class NativeAdapter {
 			});
 		};
 		try {
-			const errors: string[] = [];
 			await session.bindExtensions({
 				mode: "print",
-				onError: (error) => errors.push(`${error.event}: ${error.error}`),
+				onError: (error) => adapter.#extensionErrors.push(`${error.event}: ${error.error}`),
 			});
-			if (errors.length) throw new Error(`Native extension startup failed: ${errors.join("; ")}`);
+			if (adapter.#extensionErrors.length)
+				throw new Error(`Native extension startup failed: ${adapter.#extensionErrors.join("; ")}`);
 			options.subagents?.refresh();
 			const modelName = options.model;
 			if (modelName) {
@@ -759,8 +764,15 @@ export class NativeAdapter {
 			// The cursor tracks notifications, not a separately mutable busy state.
 			if (this.#closed || !this.session.isIdle || notifiedVersion === activity.settledVersion) return;
 			notifiedVersion = activity.settledVersion;
-			await this.session.extensionRunner.emit({ type: "agent_settled", aborted: activity.settledAborted });
+			await this.session.extensionRunner.emit({
+				type: "agent_settled",
+				aborted: activity.settledAborted,
+			});
 		});
+	}
+	/** Idle notification hooks still own their runtime until their asynchronous work returns. */
+	waitForExtensionSettlement(): Promise<void> {
+		return this.#activity?.drain() ?? Promise.resolve();
 	}
 	get working(): boolean {
 		return !!this.#activity?.current?.run;
@@ -796,6 +808,38 @@ export class NativeAdapter {
 	}
 	private assertOpen(): void {
 		if (this.#closed) throw new Error("Native adapter is closed");
+	}
+
+	/** A partial reload must not admit work with missing permission hooks. Explicit reload may recover it. */
+	assertReady(): void {
+		this.assertOpen();
+		if (this.#reloadFailure) throw new Error("Pi configuration reload failed. Fix the configuration and Reload.");
+	}
+
+	/** Called only under the Harness idle/admission fence, never from an extension lifecycle hook. */
+	async reload(): Promise<void> {
+		this.assertOpen();
+		this.#extensionErrors = [];
+		try {
+			if (this.#harness) await this.sync(BACKGROUND_CONTEXT);
+			const before = new Set(this.session.sessionManager.getEntries().map((entry) => entry.id));
+			await this.session.reload({
+				beforeSessionStart: async () => {
+					const errors = this.session.resourceLoader.getExtensions().errors;
+					if (errors.length)
+						throw new Error(`Native extension loading failed: ${errors.map((e) => e.error).join("; ")}`);
+				},
+			});
+			if (this.#extensionErrors.length)
+				throw new Error(`Native extension reload failed: ${this.#extensionErrors.join("; ")}`);
+			if (this.#harness) await this.persistCustomEntries(before, BACKGROUND_CONTEXT);
+			this.#afterReload?.();
+			this.refreshTools();
+			this.#reloadFailure = undefined;
+		} catch (error) {
+			this.#reloadFailure = error instanceof Error ? error : new Error(String(error));
+			throw error;
+		}
 	}
 	private async sync(context: TaskContext): Promise<readonly Message[]> {
 		this.assertOpen();
@@ -853,6 +897,7 @@ export class NativeAdapter {
 			}, context);
 	}
 	private async preparePrompt(context: TaskContext): Promise<string> {
+		this.assertReady();
 		await this.#offlineGate.wait(context.abortSignal);
 		const messages = structuredClone([...(await this.sync(context))]);
 		const cached = (await this.#harness!.snapshot(NativeState, this.#conversationId!, context))?.prompt;
@@ -899,7 +944,7 @@ export class NativeAdapter {
 
 	/** Expansion only: steer queues without running, then clear that native queue immediately. */
 	async prepareInput(text: string): Promise<string> {
-		this.assertOpen();
+		this.assertReady();
 		try {
 			if ((await this.session.steer(text, undefined, { source: "extension" })) === "handled")
 				throw new Error("Native extension handled input; no durable input was produced");

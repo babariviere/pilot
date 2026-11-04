@@ -109,8 +109,8 @@ import {
 	nextFlowNode,
 	parseFlowResult,
 	validateFlowItems,
-	validateFlowState,
 	validateFlowStart,
+	validateFlowState,
 } from "./flows.ts";
 import { githubRepository, linkedPullRequest, type PullRequestProblems } from "./github.ts";
 import {
@@ -127,6 +127,7 @@ import { ModelCatalog } from "./models.ts";
 import { NativeDiagnosticsStore } from "./native-diagnostics.ts";
 import { NativeReviewReader, NoRetainedBinding } from "./native-review.ts";
 import { reasonLine, stuckPullRequestReason } from "./needs-you-reason.ts";
+import { PiReload } from "./pi-reload.ts";
 import {
 	AUTOMATION_FOLLOW_UP_ATTEMPT_LIMIT,
 	type AutomationFollowUps,
@@ -943,6 +944,9 @@ export class Worker implements SessionWorker {
 			} else if (packet.type === "modelChanged") {
 				this.usage = packet.usage;
 				this.settle(packet.requestId);
+			} else if (packet.type === "piReloaded") {
+				this.error = undefined;
+				this.settle(packet.requestId);
 			} else if (packet.type === "rewound") {
 				this.settle(packet.requestId);
 			} else if (packet.type === "children") {
@@ -1103,7 +1107,9 @@ export class Worker implements SessionWorker {
 				reject,
 				timer,
 				...(inspection ? { inspection: true } : {}),
-				...(command.type === "input" && command.onlyIfIdle ? { onlyIfIdle: true } : {}),
+				...(command.type === "reloadPi" || (command.type === "input" && command.onlyIfIdle)
+					? { onlyIfIdle: true }
+					: {}),
 			});
 			this.send(command);
 		});
@@ -1455,6 +1461,10 @@ export class SessionManager {
 	private readonly titleGenerating = new Set<string>();
 	private readonly shutdownSignal = new AbortController();
 	private readonly updateGate = new UpdateGate();
+	readonly piReload = new PiReload<SessionWorker>(
+		(id, worker) => this.piReloadReady(id, worker),
+		(id, worker) => this.reloadPiWorker(id, worker),
+	);
 	private readonly actionRunner: ActionRunner;
 	private readonly postRunTasks = new Map<
 		string,
@@ -6462,6 +6472,7 @@ ${run.excerpt}`,
 		return () => {
 			gate();
 			actions?.();
+			this.piReload.wakeAll();
 		};
 	}
 
@@ -6764,6 +6775,7 @@ ${run.excerpt}`,
 		this.updatePausing.clear();
 		this.updateGate.release();
 		this.actionRunner?.setUpdatePaused(false);
+		this.piReload.wakeAll();
 		this.pumpMainRefreshes();
 		this.resumeFlows();
 		if (this.sleepPause) return;
@@ -8094,6 +8106,59 @@ ${run.excerpt}`,
 		}
 	}
 
+	/** Explicit app-wide action. Parked chats stay asleep and read current configuration on their next open. */
+	reloadPi(operationId: string): import("@pilot/protocol").PiReloadStatus {
+		this.updateGate.assertOpen();
+		if (this.closing) throw new ServiceUnavailable("pilotd is shutting down");
+		return this.piReload.request(operationId, this.workers);
+	}
+
+	private piReloadReady(id: string, worker: SessionWorker): boolean {
+		if (this.closing || this.updateGate.paused) return false;
+		if (this.workers.get(id) !== worker) return true;
+		if (worker.state === "failed") return true;
+		const meta = this.metas.get(id);
+		return (
+			!!meta &&
+			worker.state === "idle" &&
+			worker.busy === false &&
+			!this.backgroundWorking(meta, worker) &&
+			!worker.compacting &&
+			!worker.toolsRunning &&
+			!meta.pending?.length &&
+			!meta.initializing &&
+			!meta.working &&
+			!this.starting.has(id) &&
+			!this.sending.has(id) &&
+			!this.changingModels.has(id) &&
+			!this.archiveTransitions.has(id) &&
+			!this.workspaceRefreshes.has(id)
+		);
+	}
+
+	private async reloadPiWorker(id: string, worker: SessionWorker): Promise<boolean> {
+		if (!this.piReloadReady(id, worker)) return false;
+		if (this.workers.get(id) !== worker) return true;
+		if (worker.state === "failed") throw new WorkerUnavailable("Worker cannot reload");
+		const end = this.updateGate.begin();
+		let release!: () => void;
+		const settled = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		this.changingModels.set(id, settled);
+		try {
+			await worker.request({ type: "reloadPi", requestId: `piReload:${randomUUID()}` });
+			return true;
+		} catch (error) {
+			if (error instanceof CommandRejected && error.code === "busy") return false;
+			throw error;
+		} finally {
+			if (this.changingModels.get(id) === settled) this.changingModels.delete(id);
+			release();
+			end();
+		}
+	}
+
 	/** Jobs are runtime-local. A parked or archived chat has none; listing never reopens it. */
 	async jobs(id: string): Promise<SessionJob[]> {
 		const meta = this.require(id);
@@ -9358,6 +9423,7 @@ ${run.excerpt}`,
 	}
 
 	async shutdown(): Promise<void> {
+		this.piReload.stop();
 		this.clearAppEvidence();
 		for (const controller of this.diagnosticContextReads.values()) controller.abort();
 		this.diagnosticContextReads.clear();
@@ -10085,6 +10151,7 @@ ${run.excerpt}`,
 					"error",
 					"usage",
 					"modelChanged",
+					"piReloaded",
 					"rewound",
 					"events",
 					"compacting",
@@ -10095,6 +10162,12 @@ ${run.excerpt}`,
 			)
 				return;
 		}
+		if (packet.type === "piReloaded") {
+			if (this.workers.get(meta.id) === worker) this.commandLists.set(meta.id, packet.commands);
+			return;
+		}
+		// Reload's own refusal is not a new idle notification (and must not create a retry loop).
+		if (packet.type === "error" && packet.requestId?.startsWith("piReload:")) return;
 		if (packet.type === "usage-history.epoch") {
 			if (this.workers.get(meta.id) !== worker) return;
 			void Promise.resolve()
@@ -12047,6 +12120,7 @@ ${run.excerpt}`,
 	}
 
 	private emit(meta: SessionMeta, worker?: SessionWorker): void {
+		this.piReload.wake(meta.id);
 		const activeWorker = this.workers.get(meta.id);
 		if (
 			meta.archivedAt !== undefined ||

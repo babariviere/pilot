@@ -229,6 +229,8 @@ export type KernelCommand =
 			guardToken?: string;
 	  }
 	| { type: "changeModel"; requestId: string; model: string; thinking?: string }
+	/** Idle-only extension/resource and MCP configuration reload. Busy is a refusal, never an abort. */
+	| { type: "reloadPi"; requestId: string }
 	/** Drain committed tool effects and quiesce children before relinquishing workspace ownership. */
 	| { type: "continuation.pause"; requestId: string }
 	| { type: "removeQueuedMessage"; requestId: string; submissionId: number; guardToken?: string }
@@ -324,6 +326,7 @@ export type KernelCommand =
 	| { type: "shutdown" };
 
 export type KernelPacket =
+	| { type: "piReloaded"; requestId: string; commands: SessionCommand[] }
 	/** Lifecycle admission, never mere queue placement. Acknowledged before publishing completion. */
 	| { type: "update.paused"; id: string; error?: string }
 	| { type: "systemMessageState"; event: import("./held-inputs.ts").SystemMessageStateEvent }

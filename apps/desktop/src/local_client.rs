@@ -373,6 +373,8 @@ pub(crate) struct Presentation {
     pub(crate) mission_titles: Option<Arc<std::collections::HashMap<String, String>>>,
     /// Latest control-stream MCP report, for an open Settings MCP page only.
     pub(crate) mcp: Option<crate::mcp_status_view::Pushed>,
+    #[cfg(target_os = "macos")]
+    pub(crate) pi_reload: Option<crate::daemon_menu::reload::Status>,
     /// Counts pilotd's `tracked.changed` and `sources` signals, so an open Inbox Slack tab
     /// rereads. Carries no item data.
     pub(crate) tracked_revision: u64,
@@ -1471,6 +1473,9 @@ async fn run(
                         view.mission_titles = Some(Arc::new(titles));
                     } else if value["type"] == "mcp" {
                         view.mcp = Some(Arc::new(crate::mcp_status::Snapshot::from_value(&value["mcp"])));
+                    } else if value["type"] == "pi.reload" {
+                        #[cfg(target_os = "macos")]
+                        { view.pi_reload = crate::daemon_menu::reload::Status::parse(&value["reload"]); }
                     } else if value["type"] == "tracked.changed" || value["type"] == "sources" {
                         view.tracked_revision += 1;
                     } else if value["type"] == "runtime-update.changed" {

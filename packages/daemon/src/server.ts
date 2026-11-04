@@ -973,6 +973,20 @@ export function createDaemonServer(
 				},
 			});
 		}
+		if (parts[1] === "pi" && parts[2] === "reload" && parts.length === 3) {
+			res.setHeader("cache-control", "no-store");
+			if (req.method === "GET") return json(res, 200, sessions.piReload.status());
+			if (req.method !== "POST") throw new HttpError(405, "Method not allowed");
+			const body = await readJson<{ operationId?: unknown }>(req);
+			if (
+				typeof body?.operationId !== "string" ||
+				!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(body.operationId)
+			)
+				throw new HttpError(400, "operationId must be a UUID v4");
+			const status = sessions.reloadPi(body.operationId);
+			mcp?.check();
+			return json(res, 200, status);
+		}
 		if (parts[1] === "machine" && parts.length === 2) {
 			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
 			res.setHeader("cache-control", "no-store");
@@ -2527,7 +2541,11 @@ export function createDaemonServer(
 	const stopPowerWatch = power?.onChange(() => broadcast({ type: "power", power: power.status() }));
 	server.on("close", () => stopPowerWatch?.());
 	const stopMcpWatch = mcp?.onChange((status) => broadcast({ type: "mcp", mcp: status }));
-	server.on("close", () => stopMcpWatch?.());
+	const stopPiReloadWatch = sessions.piReload.onChange((reload) => broadcast({ type: "pi.reload", reload }));
+	server.on("close", () => {
+		stopMcpWatch?.();
+		stopPiReloadWatch();
+	});
 	// Coalesce claim/finalize and CRUD bursts. No serialization when no clients are connected.
 	let schedulesTimer: NodeJS.Timeout | undefined;
 	let schedulesVersion = 0;
@@ -2683,6 +2701,7 @@ export function createDaemonServer(
 		if (control) send(ws, control);
 		if (power) send(ws, { type: "power", power: power.status() });
 		if (mcp) send(ws, { type: "mcp", mcp: mcp.status() });
+		send(ws, { type: "pi.reload", reload: sessions.piReload.status() });
 		send(ws, { type: "projects", projects: projects.list() });
 		if (schedules) {
 			const version = schedulesVersion;

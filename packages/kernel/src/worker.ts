@@ -297,6 +297,10 @@ export function runKernelWorker(): void {
 		await initialization;
 		if (!session) throw new Error("Kernel has not started");
 		switch (command.type) {
+			case "reloadPi":
+				await session.reloadPi();
+				await send({ type: "piReloaded", requestId: command.requestId, commands: session.commands });
+				break;
 			case "systemMessageState.ack":
 				await session.acknowledgeSystemMessageState(command.id);
 				break;

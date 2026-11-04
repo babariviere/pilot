@@ -30,6 +30,15 @@ settings. Remote reporting and product analytics default off.
 
 ## Updates and the daemon
 
+On macOS, choose **Pilot Next → Daemon → Reload** after changing pi extensions
+or MCP configuration. This applies across chats without restarting the daemon.
+Idle chats reload immediately; busy chats wait for their work, jobs and subagents
+to finish. Sleeping chats load the current configuration when next opened.
+History and unsent drafts stay intact. The menu shows pending reloads and failures.
+If extension loading fails, fix the configuration and choose **Reload** again;
+new work in that chat stays blocked until loading succeeds. Reloading configuration
+does not confirm that every MCP server connected; check **Settings → Connections**.
+
 Use **Settings → Updates** for the available app and daemon controls. On macOS,
 packaged managed connections also offer **Pilot Next → Daemon** actions.
 Registration, service replacement, and coordinated project-proposed updates require

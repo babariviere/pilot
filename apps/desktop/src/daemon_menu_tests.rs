@@ -158,7 +158,7 @@ fn held_control_progress_cancels_without_replay_and_quit_is_independent(cx: &mut
     cx.simulate_prompt_answer("Stop");
     cx.run_until_parked();
     assert!(!enabled(cx, 3));
-    assert!(enabled(cx, 7));
+    assert!(enabled(cx, 8));
     cx.update(|cx| cx.dispatch_action(&CancelDaemonControl));
     settle(cx, &owner);
     assert!(!cx.read(|cx| owner.read(cx).unknown));

@@ -40,6 +40,116 @@ import type { KernelUsage } from "./usage.ts";
 
 const context = BACKGROUND_CONTEXT;
 
+test("pi reload preserves history, model and host tools, and fences new input through lifecycle replacement", async (t) => {
+	const events: string[] = [];
+	let hold = false;
+	const entered = deferred<void>();
+	const release = deferred<void>();
+	const f = await fixture(t, [
+		(pi) => {
+			pi.on("session_start", async (event) => {
+				events.push(`start:${event.reason}`);
+				if (hold) {
+					entered.resolve();
+					await release.promise;
+				}
+			});
+			pi.on("session_shutdown", (event) => {
+				events.push(`shutdown:${event.reason}`);
+			});
+		},
+	]);
+	const session = await f.open();
+	f.a.setResponses([fauxAssistantMessage("Before reload")]);
+	await session.submit("before", "Keep this history", "followUp");
+	await session.conversation.waitForIdle(context);
+	const history = await session.conversation.context(context);
+	const model = session.model;
+	const native = f.adapters[0]!.session;
+	const hostTools = native.getCallableToolNames();
+	hold = true;
+	const reloading = session.reloadPi();
+	await entered.promise;
+	await assert.rejects(session.submit("during", "Must not race", "followUp"), ConversationBusy);
+	await assert.rejects(session.reloadPi(), ConversationBusy);
+	release.resolve();
+	await reloading;
+	assert.equal(f.adapters[0]!.session, native, "the native session and durable writer stay alive");
+	assert.equal(session.model, model);
+	assert.deepEqual((await session.conversation.context(context)).messages, history.messages);
+	for (const name of hostTools) assert.ok(native.getCallableToolNames().includes(name), name);
+	assert.deepEqual(events, ["start:startup", "shutdown:reload", "start:reload"]);
+	f.a.setResponses([fauxAssistantMessage("After reload")]);
+	await session.submit("after", "Continue normally", "followUp");
+	await session.conversation.waitForIdle(context);
+	assert.equal(f.a.state.callCount, 2);
+});
+
+test("pi reload waits for asynchronous idle hooks before replacing their runtime", async (t) => {
+	const entered = deferred<void>();
+	const release = deferred<void>();
+	let shutdowns = 0;
+	const f = await fixture(t, [
+		(pi) => {
+			pi.on("agent_settled", async () => {
+				entered.resolve();
+				await release.promise;
+			});
+			pi.on("session_shutdown", () => {
+				shutdowns++;
+			});
+		},
+	]);
+	t.after(() => release.resolve());
+	const session = await f.open();
+	f.a.setResponses([fauxAssistantMessage("done")]);
+	await session.submit("before", "Finish", "followUp");
+	await session.conversation.waitForIdle(context);
+	await entered.promise;
+	const reload = session.reloadPi();
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(shutdowns, 0);
+	release.resolve();
+	await reload;
+	assert.equal(shutdowns, 1);
+});
+
+test("pi reload refuses a live run or child without emitting shutdown", async (t) => {
+	let shutdowns = 0;
+	const f = await fixture(t, [
+		(pi) => {
+			pi.on("session_shutdown", () => {
+				shutdowns++;
+			});
+		},
+	]);
+	const session = await f.open();
+	const child = t.mock.method(session, "jobs", async () => [
+		{ id: "job", name: "Job", state: "running" as const, startedAt: 1, outputPath: "/tmp/job" },
+	]);
+	await assert.rejects(session.reloadPi(), ConversationBusy);
+	assert.equal(shutdowns, 0);
+	child.mock.mockImplementation(async () => []);
+	const started = deferred<void>();
+	const finish = deferred<void>();
+	t.after(() => finish.resolve());
+	f.a.setResponses([
+		async () => {
+			started.resolve();
+			await finish.promise;
+			return fauxAssistantMessage("done");
+		},
+	]);
+	await session.submit("busy", "Finish first", "followUp");
+	await started.promise;
+	await assert.rejects(session.reloadPi(), ConversationBusy);
+	assert.equal(shutdowns, 0);
+	finish.resolve();
+	await session.conversation.waitForIdle(context);
+	await session.reloadPi();
+	assert.equal(shutdowns, 1);
+});
+
 for (const existing of [false, true])
 	test(`summary-tree default is wired for ${existing ? "existing" : "new"} coordinators without switching main models`, async (t) => {
 		const f = await fixture(t);

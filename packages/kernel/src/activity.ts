@@ -1,6 +1,7 @@
 /** Small, commit-consistent run/inbox monitor. Never hydrates transcript history. */
-import { copyJson, type Context } from "@earendil-works/chord";
+
 import { execFile } from "node:child_process";
+import { type Context, copyJson } from "@earendil-works/chord";
 import type { McpTransportFactory } from "@earendil-works/pi-coding-agent";
 import {
 	type AgentEventStream,
@@ -21,6 +22,8 @@ export type ActivityStream = Pick<AgentEventStream, "snapshot" | "start"> & {
 	readonly settledVersion: number;
 	/** Cancellation outcome of the latest busy-to-idle boundary. */
 	readonly settledAborted: boolean;
+	/** Wait for already-scheduled notification handlers without detaching the committed reader. */
+	drain(): Promise<void>;
 	stop(): Promise<void>;
 };
 
@@ -243,6 +246,9 @@ export async function watchActivity(session: Session, id: ConversationId, contex
 			if (listener) throw new Error("Activity stream already started");
 			listener = next;
 			schedule();
+		},
+		async drain() {
+			while (delivering) await delivery;
 		},
 		async stop() {
 			detach();
