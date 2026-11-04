@@ -92,6 +92,9 @@ mod history_shortcut_tests;
 pub(crate) mod inbox_probe;
 #[path = "insights_navigation.rs"]
 mod insights_navigation;
+#[cfg(feature = "native-probes")]
+#[path = "insights_native_probe.rs"]
+pub(crate) mod insights_native_probe;
 #[path = "jump_navigation.rs"]
 mod jump_navigation;
 #[cfg(feature = "native-probes")]

@@ -354,6 +354,10 @@ impl Panel {
             .as_ref()
             .is_some_and(|r| &r.slot == slot && r.request == self.request && r.outcome.is_none())
     }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_waiting(&self) -> bool {
+        self.waiting()
+    }
     fn attempt(&self, slot: &str) -> Option<&model::Attempt> {
         self.book.as_ref()?.insights.get(slot)
     }
@@ -377,6 +381,10 @@ impl Panel {
     fn send(&mut self, action: model::Action, cx: &mut Context<Self>) {
         if !self.visible || self.waiting() {
             return;
+        }
+        // A confirmation is consumed by its one explicit send, whatever the outcome.
+        if let model::Action::Start(_) = &action {
+            self.confirm = None;
         }
         let slot = match &action {
             model::Action::Start(request) => request.slot(),
@@ -465,6 +473,18 @@ fn disclosure(model: &str) -> impl IntoElement {
         ))
 }
 
+/// A pinned confirmation names the finding without letting a long title fill the panel.
+fn brief(title: &str) -> String {
+    const MAX: usize = 140;
+    if title.chars().count() <= MAX {
+        return title.to_owned();
+    }
+    let mut short: String = title.chars().take(MAX - 1).collect();
+    short.truncate(short.trim_end().len());
+    short.push('…');
+    short
+}
+
 fn outcome_notice(outcome: &Outcome, accepted: &'static str) -> Option<Notice> {
     Some(match outcome {
         Outcome::Accepted(_) => Notice::new(accepted).tone(Tone::Success),
@@ -512,14 +532,15 @@ impl Panel {
         )
     }
 
-    fn render_setup(&mut self, cx: &mut Context<Self>) -> gpui_kit::Div {
+    /// The scrolling body and the pinned status/action area below it.
+    fn render_setup(&mut self, cx: &mut Context<Self>) -> (gpui_kit::Div, gpui_kit::Div) {
         let Scope::Setup {
             mission_title,
             mission,
             ..
         } = self.scope.clone()
         else {
-            return div();
+            return (div(), div());
         };
         let slot = format!("create:{mission}");
         let model_name = self
@@ -569,23 +590,24 @@ impl Panel {
             }
         };
         root = root.child(div().h_flex().child(picker));
-        root = root.children(self.check_row(&slot, cx));
+        let mut tail = div().v_flex().gap_3().w_full().min_w_0();
+        tail = tail.children(self.check_row(&slot, cx));
         if self.waiting() {
-            root = root.child(Notice::new("Setting up… Closing doesn't cancel it."));
+            tail = tail.child(Notice::new("Setting up… Closing doesn't cancel it."));
         } else if let Some(n) = self
             .latest()
             .and_then(|o| outcome_notice(o, "Insights chat created."))
         {
-            root = root.child(n);
+            tail = tail.child(n);
         }
         if let Some(e) = self.error {
-            root = root.child(Notice::new(e).tone(Tone::Error));
+            tail = tail.child(Notice::new(e).tone(Tone::Error));
         }
         let request = self.setup_request();
         let done = self
             .attempt(&slot)
             .is_some_and(|a| a.state == model::State::Accepted);
-        root.child(
+        let tail = tail.child(
             div()
                 .h_flex()
                 .justify_end()
@@ -617,7 +639,8 @@ impl Panel {
                             })),
                     )
                 }),
-        )
+        );
+        (root, tail)
     }
 
     fn finding_row(
@@ -702,9 +725,9 @@ impl Panel {
             .into_any_element()
     }
 
-    fn render_chat(&mut self, cx: &mut Context<Self>) -> gpui_kit::Div {
+    fn render_chat(&mut self, cx: &mut Context<Self>) -> (gpui_kit::Div, gpui_kit::Div) {
         let Scope::Chat { session } = self.scope.clone() else {
-            return div();
+            return (div(), div());
         };
         let model_name = self
             .model_label
@@ -713,14 +736,16 @@ impl Panel {
         let mut root = div().v_flex().gap_3();
         let status = match &self.status {
             Load::Loading => {
-                return root
-                    .child(ui::text(Text::Caption, "Reading access…"))
-                    .child(self.footer(None, cx));
+                return (
+                    root.child(ui::text(Text::Caption, "Reading access…")),
+                    self.footer(None, cx),
+                );
             }
             Load::Failed(e) => {
-                return root
-                    .child(Notice::new(e.clone()).tone(Tone::Error))
-                    .child(self.footer(None, cx));
+                return (
+                    root.child(Notice::new(e.clone()).tone(Tone::Error)),
+                    self.footer(None, cx),
+                );
             }
             Load::Ready(s) => s.clone(),
         };
@@ -806,16 +831,17 @@ impl Panel {
             }
             root = root.child(list);
         }
-        // Unconfirmed actions for this chat: revocation, then any decision.
+        // Pinned below the scrolling list: unconfirmed actions, confirmations, outcomes and footer.
+        let mut tail = div().v_flex().gap_3().w_full().min_w_0();
         let revoke_slot = format!("revoke:{session}");
-        root = root.children(self.check_row(&revoke_slot, cx));
+        tail = tail.children(self.check_row(&revoke_slot, cx));
         if let Some(slot) = self.book.as_ref().and_then(|b| {
             b.insights
                 .iter()
                 .find(|(s, a)| s.starts_with(&format!("lifecycle:{session}:")) && a.open())
                 .map(|(s, _)| s.clone())
         }) {
-            root = root.children(self.check_row(&slot, cx));
+            tail = tail.children(self.check_row(&slot, cx));
         }
         match self.confirm.clone() {
             Some(Confirm::Decide {
@@ -825,20 +851,19 @@ impl Panel {
                 to,
                 expected_revision,
             }) => {
-                root = root.child(
+                tail = tail.child(
                     div()
                         .id("insights-confirm-decision")
                         .test_support()
                         .v_flex()
                         .gap_2()
                         .child(
-                            Notice::new(format!("{}: “{title}”?", decision_label(to))).detail(
-                                format!(
+                            Notice::new(format!("{}: “{}”?", decision_label(to), brief(&title)))
+                                .detail(format!(
                                     "{} → {}. This records your decision only. No work starts.",
                                     from.label(),
                                     to.label()
-                                ),
-                            ),
+                                )),
                         )
                         .child(
                             div()
@@ -879,7 +904,7 @@ impl Panel {
             Some(Confirm::Revoke) => {
                 let session = session.clone();
                 let revision = status.revision;
-                root = root.child(
+                tail = tail.child(
                     div()
                         .id("insights-confirm-revoke")
                         .test_support()
@@ -921,14 +946,14 @@ impl Panel {
             None => {}
         }
         if self.waiting() {
-            root = root.child(Notice::new("Saving… Closing doesn't cancel it."));
+            tail = tail.child(Notice::new("Saving… Closing doesn't cancel it."));
         } else if let Some(n) = self.latest().and_then(|o| outcome_notice(o, "Done.")) {
-            root = root.child(n);
+            tail = tail.child(n);
         }
         if let Some(e) = self.error {
-            root = root.child(Notice::new(e).tone(Tone::Error));
+            tail = tail.child(Notice::new(e).tone(Tone::Error));
         }
-        root.child(self.footer(Some(status), cx))
+        (root, tail.child(self.footer(Some(status), cx)))
     }
 
     fn footer(&self, status: Option<Status>, cx: &mut Context<Self>) -> gpui_kit::Div {
@@ -974,8 +999,8 @@ impl Panel {
 }
 
 impl Render for Panel {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.render_panel(cx)
+    fn render(&mut self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.render_panel(w, cx)
     }
 }
 
@@ -1015,19 +1040,20 @@ impl Panel {
 }
 
 impl Panel {
-    fn render_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let body = match &self.scope {
+    fn render_panel(&mut self, w: &Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let (body, tail) = match &self.scope {
             Scope::Chat { .. } => self.render_chat(cx),
             Scope::Setup { .. } => self.render_setup(cx),
         };
+        // Only the content scrolls; confirmations, outcomes and actions stay in view.
+        let height = (f32::from(w.viewport_size().height) * 0.45).clamp(160., 480.);
         div()
             .id("insights-panel")
             .test_support()
             .v_flex()
+            .gap_3()
             .w_full()
             .min_w_0()
-            .max_h(px(560.))
-            .overflow_y_scroll()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|v, e: &gpui_kit::KeyDownEvent, _, cx| {
                 if e.keystroke.key == "escape" && v.visible {
@@ -1039,7 +1065,18 @@ impl Panel {
                     }
                 }
             }))
-            .child(body)
+            .child(
+                div()
+                    .id("insights-body")
+                    .test_support()
+                    .v_flex()
+                    .w_full()
+                    .min_w_0()
+                    .max_h(px(height))
+                    .overflow_y_scroll()
+                    .child(body),
+            )
+            .child(tail)
     }
 }
 
@@ -1051,5 +1088,14 @@ mod tests {
         assert!(!lifecycle_choices(Lifecycle::Approved).contains(&Lifecycle::Verified));
         assert!(lifecycle_choices(Lifecycle::Shipped).contains(&Lifecycle::Verified));
         assert!(!lifecycle_choices(Lifecycle::Shipped).contains(&Lifecycle::Shipped));
+    }
+    #[test]
+    fn confirmation_titles_are_bounded_on_characters() {
+        assert_eq!(brief("Short 日本語"), "Short 日本語");
+        let long = "語 ".repeat(200);
+        let short = brief(&long);
+        assert_eq!(short.chars().count(), 140);
+        assert!(short.ends_with('…'));
+        assert_eq!(brief(&"x".repeat(140)), "x".repeat(140));
     }
 }
