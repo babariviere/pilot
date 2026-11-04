@@ -234,9 +234,9 @@ fn confirm(command: Command, cx: &mut App) {
         let result = handle.update(cx, |_, w, cx| {
             w.prompt(gpui_kit::PromptLevel::Warning, &format!("{} Local daemon?",label(command)),
                 Some(match command {
-                    Command::Start => "Start the existing managed service with its current runtime. Login settings stay unchanged.",
-                    Command::Stop => "Stop the managed service for this login session. Active or uninspectable work prevents stopping. Pilot Next stays open.",
-                    Command::Restart => "Restart the managed service with the same runtime. Active or uninspectable work prevents restarting. This does not upgrade the daemon.",
+                    Command::Start => "Starts the managed service with its current runtime. Login settings are unchanged.",
+                    Command::Stop => "Stops the managed service for this login session. Refused while work is active or can't be checked. Pilot Next stays open.",
+                    Command::Restart => "Restarts the managed service on the same runtime; no upgrade. Refused while work is active or can't be checked.",
                 }), &[label(command), "Cancel"], cx)
         });
         match result {
@@ -350,7 +350,7 @@ fn request(command: Option<Command>, cx: &mut App) {
 fn details(cx: &mut App) {
     let message=owner(cx).map_or("Daemon controls require a packaged managed Local service.".into(),|o| {
         let o=o.read(cx);
-        format!("{}.\n{}",o.message, if o.unknown { "A service change may have happened. Inspect the retained .daemon-upgrade.json and service state. Do not retry or roll back." } else { "Only the existing managed Local service is controlled. Check Status refreshes availability. Quit never stops the daemon. Cancellation is effective only before service changes begin." })
+        format!("{}.\n{}",o.message, if o.unknown { "The service may have changed. Inspect .daemon-upgrade.json and the service state. Don't retry or roll back." } else { "Controls only the managed Local service. Quit never stops it. Cancel works only before the service changes." })
     });
     cx.defer(move |cx| {
         if let Some(handle) = window(cx) {
@@ -376,7 +376,7 @@ fn reload_details(cx: &mut App) {
     cx.defer(move |cx| {
         if let Some(handle) = window(cx) {
             let _ = handle.update(cx, |_, w, cx| {
-                let message = format!("{status}\n\nReload reads pi extensions and MCP configuration without restarting the daemon. Busy chats wait until their work, jobs and subagents finish. Sleeping chats load current configuration when opened. History and drafts stay intact.\n\nIf a chat fails to reload, fix its pi configuration and choose Reload again. Failed extension loads block new work rather than dropping permission hooks.");
+                let message = format!("{status}\n\nReloads pi extensions and MCP configuration without restarting the daemon. Busy chats reload once their work, jobs and subagents finish; sleeping chats when opened. History and drafts are kept.\n\nA chat that fails to reload accepts no new work until you fix its pi configuration and Reload again.");
                 let answer = w.prompt(gpui_kit::PromptLevel::Info, "Reload pi configuration", Some(&message), &["OK"], cx);
                 cx.spawn(async move |_| { let _ = answer.await; }).detach();
             });

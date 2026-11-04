@@ -116,16 +116,26 @@ impl Diagnostics {
             cx.prompt_for_new_path(&std::env::temp_dir(), Some("pilot-next-diagnostics.json"));
         self.busy = true;
         self.message = None;
-        self.task = Some(cx.spawn(async move |this,cx| {
+        self.task = Some(cx.spawn(async move |this, cx| {
             let result = match picker.await {
-                Ok(Ok(Some(path))) => cx.background_executor().spawn(async move { diagnostics::export(&path,&reviewed) }).await.map(|()| true),
+                Ok(Ok(Some(path))) => cx
+                    .background_executor()
+                    .spawn(async move { diagnostics::export(&path, &reviewed) })
+                    .await
+                    .map(|()| true),
                 Ok(Ok(None)) => Ok(false),
                 _ => Err("The export destination could not be selected. Your preview is retained."),
             };
-            let _ = this.update(cx,|this,cx| {
+            let _ = this.update(cx, |this, cx| {
                 this.busy = false;
                 this.failed = result.is_err();
-                this.message = match result { Ok(true)=>Some("Reviewed preview exported locally. Nothing was sent. Share only after inspecting the file."),Ok(false)=>None,Err(error)=>Some(error) };
+                this.message = match result {
+                    Ok(true) => {
+                        Some("Exported locally. Nothing was sent; inspect the file before sharing.")
+                    }
+                    Ok(false) => None,
+                    Err(error) => Some(error),
+                };
                 cx.notify();
             });
         }));
@@ -136,8 +146,8 @@ impl Render for Diagnostics {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div().v_flex().gap_4()
             .child(ui::header("settings-page-title","Diagnostics",Text::Title))
-            .child(ui::text(Text::Body,"Local desktop tracing only. No daemon logs or chat, draft, tool, path, token or HTTP-body content is captured."))
-            .child(ui::text(Text::Caption,"Review the JSON below. Remove records or redact values before export. Clearing removes this preview, not retained capture. No automatic sharing or agent actions."))
+            .child(ui::text(Text::Body,"Desktop tracing only. Excludes daemon logs and chat, draft, tool, path, token or HTTP-body content."))
+            .child(ui::text(Text::Caption,"Review and redact the JSON before export. Clear removes only this preview. Nothing is shared automatically."))
             .children(self.busy.then(||ui::text(Text::Caption,if self.ready {"Export in progress. Finish destination selection before closing."} else {"Preparing local preview…"})))
             .child(div().h_flex().gap_2()
                 .child(ui::action("diagnostics-review","Review capture",Action::Secondary).disabled(self.busy || self.ready).on_click(cx.listener(|v,_,w,cx|v.review(w,cx))))

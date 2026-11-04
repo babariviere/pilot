@@ -162,15 +162,12 @@ impl Render for Rename {
             )
         } else {
             match &self.outcome {
-                None => (
-                    "Up to 200 UTF-16 units. Whitespace is normalized by Local.",
-                    Tone::Quiet,
-                ),
+                None => ("Up to 200 UTF-16 units.", Tone::Quiet),
                 Some(Outcome::Acknowledged) => ("Rename confirmed by Local.", Tone::Success),
                 Some(Outcome::Rejected(e)) => (*e, Tone::Error),
                 Some(Outcome::CompactRefused(e)) => (e.as_str(), Tone::Error),
                 Some(Outcome::Unknown) => (
-                    "Rename unconfirmed. Do not repeat it. Later titles or reads are not a receipt. Check this exact chat in Swift.",
+                    "Rename unconfirmed. Don't repeat it; a later title doesn't confirm it.",
                     Tone::Warning,
                 ),
             }

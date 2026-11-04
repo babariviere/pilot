@@ -288,11 +288,20 @@ impl Usage {
                     self.records_reader = Some(reader);
                     self.records_updates = Some(cx.spawn_in(w, async move |view, cx| {
                         while let Ok(response) = output.recv().await {
-                            if view.update_in(cx, |v, w, cx| v.accept_records(response, w, cx)).is_err() { return; }
+                            if view
+                                .update_in(cx, |v, w, cx| v.accept_records(response, w, cx))
+                                .is_err()
+                            {
+                                return;
+                            }
                         }
                         let _ = view.update(cx, |v, cx| {
                             v.records_reader = None;
-                            if v.records.busy { v.records.busy = false; v.records.error = Some("Records reader stopped. Reopen records to retry; any page below is a previous observation."); }
+                            if v.records.busy {
+                                v.records.busy = false;
+                                v.records.error =
+                                    Some("Records reader stopped. Reopen records to retry.");
+                            }
                             cx.notify();
                         });
                     }));
@@ -377,21 +386,45 @@ impl Usage {
         if !self.records.open {
             return section;
         }
-        section = section.child(ui::text(Text::Caption, "25 records per page, oldest first. Pages replace, never add to totals. Independent observations, not a complete or frozen history. Checkpoints excluded."));
+        section = section.child(ui::text(
+            Text::Caption,
+            "25 per page, oldest first. Not added to totals; checkpoints excluded.",
+        ));
         if self.records.busy {
             section = section.child(
                 div().id("usage-records-loading").test_support().child(
-                    Notice::new("Reading records… Any page below is a previous observation.")
+                    Notice::new("Reading records… Any page below is from an earlier read.")
                         .tone(Tone::Quiet),
                 ),
             );
         }
         if let Some(error) = self.records.error {
-            section = section.child(div().id("usage-records-error").test_support().child(Notice::new(error).detail("Any retained page below is a previous observation. First page starts again; Next reads from the retained page’s cursor.").tone(Tone::Error)));
+            section = section.child(
+                div().id("usage-records-error").test_support().child(
+                    Notice::new(error)
+                        .detail("Any page below is from an earlier read.")
+                        .tone(Tone::Error),
+                ),
+            );
         }
         if let Some(page) = &self.records.page {
-            section = section.child(ui::text(Text::Caption, format!("{} rows displayed, not the matching total. Page received {} (client time).", page.rows.len(), model::stamp(page.received_at))))
-                .child(ui::text(Text::Caption, format!("Partial coverage. Capture floor {}. Retention floor {}.", model::stamp(page.status.capture_floor), model::stamp(page.status.retention_floor))));
+            section = section
+                .child(ui::text(
+                    Text::Caption,
+                    format!(
+                        "{} rows on this page · read {}",
+                        page.rows.len(),
+                        model::stamp(page.received_at)
+                    ),
+                ))
+                .child(ui::text(
+                    Text::Caption,
+                    format!(
+                        "Partial coverage. Capture floor {}. Retention floor {}.",
+                        model::stamp(page.status.capture_floor),
+                        model::stamp(page.status.retention_floor)
+                    ),
+                ));
             if page.rows.is_empty() {
                 section = section.child(
                     div().id("usage-records-empty").test_support().child(
@@ -460,15 +493,50 @@ impl Usage {
                     );
                 if expanded {
                     let json = row.json();
-                    item = item.child(div().id("usage-record-detail").test_support().v_flex().min_w_0().w_full().gap(px(Space::CONTROL))
-                        .child(ui::text(Text::Body, row.counts()))
-                        .child(ui::text(Text::Body, row.costs()))
-                        .child(ui::text(Text::Caption, "Exact recorded fields. Missing fields are unknown; IDs are plain text."))
-                        .child(ui::action("usage-record-copy", "Copy record JSON", Action::Quiet).self_start()
-                            .on_click(cx.listener(move |v, _, _, cx| {
-                                if v.records.serial == serial && v.records.expanded.as_ref() == Some(&id) { cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(json.clone())); }
-                            })))
-                        .child(div().id("usage-record-data").test_support().w_full().min_w_0().font_family(crate::appearance::CODE_FONT).text_size(px(Text::Caption.size())).child(gpui_kit::base::SelectableText::new(SharedString::from(format!("usage-record-json-{}", row.id())), SharedString::from(row.json())))));
+                    item = item.child(
+                        div()
+                            .id("usage-record-detail")
+                            .test_support()
+                            .v_flex()
+                            .min_w_0()
+                            .w_full()
+                            .gap(px(Space::CONTROL))
+                            .child(ui::text(Text::Body, row.counts()))
+                            .child(ui::text(Text::Body, row.costs()))
+                            .child(ui::text(
+                                Text::Caption,
+                                "Recorded fields. Missing fields are unknown.",
+                            ))
+                            .child(
+                                ui::action("usage-record-copy", "Copy record JSON", Action::Quiet)
+                                    .self_start()
+                                    .on_click(cx.listener(move |v, _, _, cx| {
+                                        if v.records.serial == serial
+                                            && v.records.expanded.as_ref() == Some(&id)
+                                        {
+                                            cx.write_to_clipboard(
+                                                gpui_kit::ClipboardItem::new_string(json.clone()),
+                                            );
+                                        }
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .id("usage-record-data")
+                                    .test_support()
+                                    .w_full()
+                                    .min_w_0()
+                                    .font_family(crate::appearance::CODE_FONT)
+                                    .text_size(px(Text::Caption.size()))
+                                    .child(gpui_kit::base::SelectableText::new(
+                                        SharedString::from(format!(
+                                            "usage-record-json-{}",
+                                            row.id()
+                                        )),
+                                        SharedString::from(row.json()),
+                                    )),
+                            ),
+                    );
                 }
                 section = section.child(item);
             }
@@ -600,7 +668,7 @@ impl Render for Usage {
             page = page.child(
                 div().id("usage-loading").test_support().child(
                     Notice::new(if self.state.snapshot.is_some() {
-                        "Refreshing. Previous observation retained below."
+                        "Refreshing… Showing the earlier read."
                     } else {
                         "Reading Local usage…"
                     })
@@ -609,21 +677,49 @@ impl Render for Usage {
             );
         }
         if let Some(error) = self.state.error {
-            page=page.child(div().id("usage-error").test_support().child(Notice::new(error).detail("Any retained values below are a previous observation, not current coverage.").tone(Tone::Error)));
+            page = page.child(
+                div().id("usage-error").test_support().child(
+                    Notice::new(error)
+                        .detail("Values below are from an earlier read.")
+                        .tone(Tone::Error),
+                ),
+            );
         }
         if let Some(snapshot) = &self.state.snapshot {
             let report = &snapshot.summary;
             let status = &report.status;
-            page=page.child(div().id("usage-coverage").test_support().v_flex().gap(px(Space::META))
-                .child(ui::text(Text::Headline,"Partial retained history"))
-                .child(ui::text(Text::Body,format!("Collected since {}. Local observation: {}.",model::date(status.coverage_started_at),model::stamp(report.queried_at))))
-                .child(ui::text(Text::Caption,format!("{} · {}",snapshot.filter.label(),snapshot.range.label())))
-                .child(ui::text(Text::Caption,"Known subtotals only. Gaps and missing metrics prevent complete-account claims.").text_color(cx.theme().muted_foreground)));
+            page = page.child(
+                div()
+                    .id("usage-coverage")
+                    .test_support()
+                    .v_flex()
+                    .gap(px(Space::META))
+                    .child(ui::text(Text::Headline, "Partial history"))
+                    .child(ui::text(
+                        Text::Body,
+                        format!(
+                            "Since {} · read {}",
+                            model::date(status.coverage_started_at),
+                            model::stamp(report.queried_at)
+                        ),
+                    ))
+                    .child(
+                        ui::text(
+                            Text::Caption,
+                            format!(
+                                "{} · {} · known subtotals only",
+                                snapshot.filter.label(),
+                                snapshot.range.label()
+                            ),
+                        )
+                        .text_color(cx.theme().muted_foreground),
+                    ),
+            );
             if report.total.records == 0 {
                 page = page.child(
                     div().id("usage-empty").test_support().child(
                         Notice::new("No dated requests observed in this range.")
-                            .detail("This does not mean no usage occurred. Unknown is not zero."),
+                            .detail("Unknown, not zero."),
                     ),
                 );
             }
@@ -685,7 +781,7 @@ impl Render for Usage {
                 Err(error) => {
                     trend = trend.child(
                         Notice::new(*error)
-                            .detail("Daily trend unavailable. Summary is a separate dated query.")
+                            .detail("Daily trend unavailable. The summary is unaffected.")
                             .tone(Tone::Quiet),
                     );
                 }
@@ -719,7 +815,7 @@ impl Render for Usage {
                     .child(ui::text(Text::Body,format!("{} dated request records. {} unpriced, {} partially priced. Catalog estimates are not billed charges.",report.total.records,report.total.unpriced,report.total.partial_priced)))
                     .child(ui::text(Text::Body,format!("Capture floor: {}. Retention floor: {}.",model::stamp(status.capture_floor),model::stamp(status.retention_floor))))
                     .child(ui::text(Text::Body,format!("Rejected: {}. Conflicts: {}. Expired: {}. Queue overflows: {}.",status.rejected,status.conflicts,status.expired,status.queue_overflows)))
-                    .child(ui::text(Text::Body,"Local only. No remote hosts queried. Checkpoints and historical context are not added to totals. Loopback identity pinning is not authentication."));
+                    .child(ui::text(Text::Body,"Local only. Checkpoints and earlier context aren't counted."));
                 if let Ok(buckets) = &snapshot.trend {
                     let days = buckets.days(snapshot.range);
                     let quiet = |kind: Day| days.iter().filter(|&&(_, d)| d == kind).count();

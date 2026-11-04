@@ -596,15 +596,7 @@ pub fn run_native_review_probe(cx: &mut HeadlessAppContext) {
             );
             click(cx, h, "review-refresh");
             idle(cx, h, &pane);
-            cx.update(|cx| {
-                assert!(
-                    pane.read(cx)
-                        .probe(cx)
-                        .4
-                        .unwrap()
-                        .contains("ownership binding")
-                )
-            });
+            cx.update(|cx| assert!(pane.read(cx).probe(cx).4.unwrap().contains("isn't set up")));
             cx.update_window(h, |_, w, _| {
                 assert!(w.try_find("review-comparison").is_none())
             })

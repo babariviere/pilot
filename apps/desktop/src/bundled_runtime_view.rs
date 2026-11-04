@@ -270,7 +270,7 @@ impl Render for BundledRuntimeView {
             );
         if self.existing_available() {
             content = content
-                .child(ui::text(Text::Body, "Connect without managing the daemon. Local chat actions, including Send and Stop, remain available as in --local. Daemon changes and app installation are unavailable."))
+                .child(ui::text(Text::Body, "Use the running daemon without managing it. Chats work normally; daemon changes and app installs are unavailable."))
                 .child(gpui_kit::div().h_flex().child(ui::action("runtime-connect-existing", "Connect to existing daemon", ui::Action::Primary)
                     .disabled(self.connecting)
                     .on_click(cx.listener(|view, _, window, cx| view.connect_existing(window, cx)))));
@@ -291,7 +291,7 @@ impl Render for BundledRuntimeView {
             );
         }
         if self.registration_confirming {
-            content = content.child(ui::text(Text::Body, "Enable the background daemon at login and start its selected runtime? Existing Swift services require Upgrade daemon in Settings instead. Closing Pilot Next will not stop the service."))
+            content = content.child(ui::text(Text::Body, "Run the daemon at login and start it now? Swift-installed services need Upgrade daemon in Settings instead. Closing Pilot Next won't stop it."))
                 .child(gpui_kit::div().h_flex().flex_wrap().gap_2()
                     .child(ui::action("runtime-register-cancel", "Cancel", ui::Action::Quiet).on_click(cx.listener(|v, _, _, cx| {v.registration_confirming = false; cx.notify();})))
                     .child(ui::action("runtime-register-confirm", "Enable and start", ui::Action::Primary).on_click(cx.listener(|v, _, w, cx| v.register_service(w,cx)))));

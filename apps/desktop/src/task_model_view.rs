@@ -276,15 +276,67 @@ impl Form {
 impl Render for Form {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let blocked = self.loaded.is_none() || self.state.blocked();
-        let mut root=div().id("task-model-form").test_support().v_flex().w_full().min_w_0().gap_3().track_focus(&self.focus)
-            .on_key_down(cx.listener(|v,e:&gpui_kit::KeyDownEvent,_,cx|{if e.keystroke.key=="escape" && v.visible {cx.stop_propagation();cx.emit(Close);}}))
-            .child(ui::text(Text::Body,SharedString::from(self.loaded.as_ref().map(|m|format!("#{} {}",self.target.number,m.title)).unwrap_or_else(||format!("Task #{}",self.target.number)))))
-            .child(ui::text(Text::Caption,"For future chats only. Assigned and running chats stay unchanged. Your choice is protected from coordinator overrides."))
-            .child(ui::text(Text::Label,"Model"))
-            .child(div().id("task-model-picker").test_support().h_7().w_full().min_w_0().child(Select::new(&self.model).accessibility_label("Preferred model for future task chats").menu_max_h(px(260.)).disabled(blocked)))
-            .child(ui::text(Text::Label,"Thinking"))
-            .child(div().id("task-model-thinking").test_support().h_7().w_full().min_w_0().child(Select::new(&self.thinking).accessibility_label("Preferred thinking for future task chats").menu_max_h(px(260.)).disabled(blocked || self.value.model.is_none())))
-            .child(ui::text(Text::Caption,"Default follows the model’s configuration when a future chat starts. Removing the task preference uses the project default."));
+        let mut root = div()
+            .id("task-model-form")
+            .test_support()
+            .v_flex()
+            .w_full()
+            .min_w_0()
+            .gap_3()
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(|v, e: &gpui_kit::KeyDownEvent, _, cx| {
+                if e.keystroke.key == "escape" && v.visible {
+                    cx.stop_propagation();
+                    cx.emit(Close);
+                }
+            }))
+            .child(ui::text(
+                Text::Body,
+                SharedString::from(
+                    self.loaded
+                        .as_ref()
+                        .map(|m| format!("#{} {}", self.target.number, m.title))
+                        .unwrap_or_else(|| format!("Task #{}", self.target.number)),
+                ),
+            ))
+            .child(ui::text(
+                Text::Caption,
+                "Future chats only; current chats are unchanged. Coordinators can't override it.",
+            ))
+            .child(ui::text(Text::Label, "Model"))
+            .child(
+                div()
+                    .id("task-model-picker")
+                    .test_support()
+                    .h_7()
+                    .w_full()
+                    .min_w_0()
+                    .child(
+                        Select::new(&self.model)
+                            .accessibility_label("Preferred model for future task chats")
+                            .menu_max_h(px(260.))
+                            .disabled(blocked),
+                    ),
+            )
+            .child(ui::text(Text::Label, "Thinking"))
+            .child(
+                div()
+                    .id("task-model-thinking")
+                    .test_support()
+                    .h_7()
+                    .w_full()
+                    .min_w_0()
+                    .child(
+                        Select::new(&self.thinking)
+                            .accessibility_label("Preferred thinking for future task chats")
+                            .menu_max_h(px(260.))
+                            .disabled(blocked || self.value.model.is_none()),
+                    ),
+            )
+            .child(ui::text(
+                Text::Caption,
+                "Removing the preference uses the project default.",
+            ));
         if self.loaded.is_none() {
             root = root.child(Notice::new(if self.read.is_some() {
                 "Loading task preferences…"
@@ -309,7 +361,10 @@ impl Render for Form {
                     .child(Notice::new(SharedString::from(text)).tone(tone)),
             );
         }
-        root=root.child(ui::text(Text::Caption,"No version check: another user edit can be overwritten. Draft and receipt are retained in this window, not across app restart."));
+        root = root.child(ui::text(
+            Text::Caption,
+            "No version check: another edit may be overwritten. Draft lasts until restart.",
+        ));
         let mut actions = div()
             .h_flex()
             .gap_2()

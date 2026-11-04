@@ -703,12 +703,18 @@ impl Render for DaemonUpgrade {
             Status::Requested => Some(("Starting the daemon upgrade…", None, Tone::Normal)),
             Status::Running => Some((
                 "Upgrading the daemon…",
-                Some("Running tools finish first, then the daemon restarts. Cancelling may not stop a shutdown that already started.".into()),
+                Some(
+                    "Running tools finish first. Cancel may not stop a shutdown already underway."
+                        .into(),
+                ),
                 Tone::Normal,
             )),
             Status::Cancelling => Some((
                 "Cancelling…",
-                Some("If the daemon was already stopping, the upgrade continues and its result appears here.".into()),
+                Some(
+                    "If shutdown already began, the upgrade continues; its result appears here."
+                        .into(),
+                ),
                 Tone::Normal,
             )),
             Status::Succeeded => Some(("Daemon is up to date.", None, Tone::Success)),
@@ -735,7 +741,7 @@ impl Render for DaemonUpgrade {
         if self.outcome == Some(Err(Failure::Busy)) {
             let ready = self.blocker_actions_ready();
             view = view.child(ui::text(Text::Caption,
-                "Stop only the work you choose. Jobs, terminals and child processes may need separate attention. An upgrade still verifies they have exited."));
+                "Stop only what you choose. Jobs, terminals and child processes may need separate attention."));
             if let Some(snapshot) = &self.blockers {
                 let mut rows = div()
                     .id("daemon-blockers")
@@ -803,7 +809,7 @@ impl Render for DaemonUpgrade {
             if let Some(error) = self.inspection_error {
                 view = view.child(
                     Notice::new(error)
-                        .detail("Previous observations may be stale. Refresh before stopping work.")
+                        .detail("This list may be stale. Refresh before stopping work.")
                         .tone(Tone::Warning),
                 );
             }
@@ -830,7 +836,7 @@ impl Render for DaemonUpgrade {
         if let Some(blocker) = self.stop_confirmation.clone() {
             view = view.child(div().v_flex().gap_2()
                 .child(Notice::new(format!("Stop work in {}?", blocker.title.unwrap_or_else(|| "this chat".into())))
-                    .detail("Interrupts this chat's current work. Withdrawn queued text is retained for recovery. Background jobs and terminals may remain. This does not upgrade the daemon.")
+                    .detail("Interrupts its current work; queued text is kept for recovery. Background jobs and terminals may keep running. Doesn't upgrade the daemon.")
                     .tone(Tone::Warning))
                 .child(div().h_flex().gap_2()
                     .child(ui::action("daemon-stop-cancel", "Cancel", Action::Quiet).on_click(cx.listener(|v, _, _, cx| {
@@ -911,7 +917,7 @@ impl Render for DaemonUpgrade {
                         }))
                         .child(
                             Notice::new("Upgrade the daemon now?")
-                                .detail("Running tools finish first. Active jobs, terminals or child work defer the upgrade. The existing service, profile and login settings stay in place. Cancel before shutdown begins.")
+                                .detail("Running tools finish first; active jobs, terminals or child work defer it. Service, profile and login settings stay. You can cancel until shutdown begins.")
                                 .tone(Tone::Warning),
                         )
                         .child(

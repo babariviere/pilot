@@ -302,7 +302,10 @@ impl Browser {
             header = header.child(ui::text(Text::Body, SharedString::from(d.title.clone())));
         }
         if !self.online || self.error.is_some() {
-            header = header.child(Notice::new("Retained mission links. Opening artifacts needs a connection and a successful mission read.").tone(Tone::Warning));
+            header = header.child(
+                Notice::new("Showing saved links. Connect and refresh to open artifacts.")
+                    .tone(Tone::Warning),
+            );
         }
         match self.artifact_links() {
             Err(e) => header = header.child(Notice::new(e).tone(Tone::Warning)),

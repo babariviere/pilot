@@ -131,10 +131,34 @@ impl Render for Pane {
                     "Source is no longer uniquely loaded. Refresh Links for the current window.",
                 )));
             }
-            content = content.child(div().p_3().v_flex().gap_2()
-                .child(ui::text(Text::Caption, SharedString::from(format!("{} {} · {} loaded message rows scanned", snapshot.links.len(), if snapshot.links.len() == 1 { "link" } else { "links" }, snapshot.scanned))))
-                .child(ui::text(Text::Caption, "Loaded message snapshot, not complete history. Excludes tools, reasoning, artifacts and uncommitted streaming. Refresh for newer text."))
-                .when(snapshot.limited, |d| d.child(ui::Notice::new("Scan limit reached. More loaded text or links may be omitted."))));
+            content = content.child(
+                div()
+                    .p_3()
+                    .v_flex()
+                    .gap_2()
+                    .child(ui::text(
+                        Text::Caption,
+                        SharedString::from(format!(
+                            "{} {} · {} loaded message rows scanned",
+                            snapshot.links.len(),
+                            if snapshot.links.len() == 1 {
+                                "link"
+                            } else {
+                                "links"
+                            },
+                            snapshot.scanned
+                        )),
+                    ))
+                    .child(ui::text(
+                        Text::Caption,
+                        "Loaded messages only; excludes tools, reasoning and artifacts.",
+                    ))
+                    .when(snapshot.limited, |d| {
+                        d.child(ui::Notice::new(
+                            "Scan limit reached. More loaded text or links may be omitted.",
+                        ))
+                    }),
+            );
             if snapshot.links.is_empty() {
                 content = content.child(
                     div()

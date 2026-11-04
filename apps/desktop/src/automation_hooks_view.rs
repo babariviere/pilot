@@ -743,7 +743,7 @@ impl Hooks {
         if off {
             group = group.child(notice(
                 "hooks-off",
-                "Automations are off on this host, so these hooks don't run. Turn them on in Settings → Chats.",
+                "Automations are off, so these hooks don't run. Turn them on in Settings → Chats.",
                 Tone::Quiet,
             ));
         }

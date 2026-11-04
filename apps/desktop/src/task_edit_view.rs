@@ -398,7 +398,7 @@ impl Render for Form {
                 .child(
                     ui::action("task-edit-submit", "Save", Action::Primary)
                         .disabled(blocked || unchanged || value.is_err())
-                        .tooltip("Save title and description (⌘↩). Replaces any newer edits.")
+                        .tooltip("Save (⌘↩). Overwrites newer edits.")
                         .on_click(cx.listener(|v, _, w, cx| v.submit(w, cx))),
                 ),
         )

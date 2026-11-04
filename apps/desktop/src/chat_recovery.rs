@@ -26,7 +26,11 @@ impl ChatEditor {
                             crate::ui::Action::Quiet,
                         )
                         .disabled(self.update_checkpoint.is_some())
-                        .tooltip(if key.starts_with("subagent:") {"Copy or discard the retained message. Uncertain child messages are never retried."} else {"Check, send again or discard this draft"}),
+                        .tooltip(if key.starts_with("subagent:") {
+                            "Copy or discard. Subagent messages are never retried."
+                        } else {
+                            "Check, send again or discard this draft"
+                        }),
                     )
                     .content(move |_, _, cx| {
                         editor
@@ -78,7 +82,7 @@ impl ChatEditor {
                     .min_w_0()
                     .child(crate::ui::text(
                         crate::ui::Text::Caption,
-                        "Restart keeps this unresolved. This message is never sent again automatically.",
+                        "Never resent automatically, even after restart.",
                     ));
                 #[cfg(any(test, feature = "native-probes"))]
                 let note = note.test_support();
@@ -226,35 +230,33 @@ impl ChatEditor {
                 div().v_flex().w_full().child(
                     Button::new("discard-draft")
                         .small()
-                                    .w_full()
+                        .w_full()
                         .ghost()
                         .label("Discard draft")
                         .disabled(
                             self.question_blocks_discard(cx)
                                 || (unsent && !self.draft_discard_ready(&key)),
                         )
-                        .tooltip("Discard applies to the ordinary message draft, not a separate question reply.")
+                        .tooltip("Discards the message draft, not a question reply.")
                         .icon(AppIcon::Close.asset())
                         .accessibility_label(if unsent {
                             "Discard unsent draft"
                         } else {
                             "Discard draft and copy its text to the clipboard"
                         })
-                        .on_click(
-                            cx.listener(move |view, _, window, cx| {
-                                // A stale popover whose classification changed does nothing.
-                                if view.selected.as_ref() != Some(&discard_key)
-                                    || view.unsent_draft(&discard_key) != unsent
-                                {
-                                    return;
-                                }
-                                if unsent {
-                                    view.request_draft_discard(discard_key.clone(), window, cx);
-                                } else {
-                                    view.discard_draft(window, cx);
-                                }
-                            }),
-                        ),
+                        .on_click(cx.listener(move |view, _, window, cx| {
+                            // A stale popover whose classification changed does nothing.
+                            if view.selected.as_ref() != Some(&discard_key)
+                                || view.unsent_draft(&discard_key) != unsent
+                            {
+                                return;
+                            }
+                            if unsent {
+                                view.request_draft_discard(discard_key.clone(), window, cx);
+                            } else {
+                                view.discard_draft(window, cx);
+                            }
+                        })),
                 ),
             );
         }

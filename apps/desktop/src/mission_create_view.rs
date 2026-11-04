@@ -255,19 +255,41 @@ impl Render for Form {
         .inset_0()
         .size_full();
         let blocked = self.state.blocked();
-        let mut form=div().id("mission-create").test_support().relative().w_full().min_w_0().v_flex().gap_2().track_focus(&self.focus).key_context("MissionCreate")
+        let mut form = div()
+            .id("mission-create")
+            .test_support()
+            .relative()
+            .w_full()
+            .min_w_0()
+            .v_flex()
+            .gap_2()
+            .track_focus(&self.focus)
+            .key_context("MissionCreate")
             // Kit resolves textarea Enter before raw key-down dispatch. Capture
             // that real action, not a competing outer key binding/subscription.
-            .capture_action(cx.listener(|v,event:&gpui_kit::base::input::Enter,w,cx| {
-                if event.secondary && !event.shift {cx.stop_propagation();v.submit(w,cx);}
+            .capture_action(
+                cx.listener(|v, event: &gpui_kit::base::input::Enter, w, cx| {
+                    if event.secondary && !event.shift {
+                        cx.stop_propagation();
+                        v.submit(w, cx);
+                    }
+                }),
+            )
+            .capture_action(cx.listener(|v, _: &gpui_kit::base::input::Escape, w, cx| {
+                cx.stop_propagation();
+                v.close(w, cx);
             }))
-            .capture_action(cx.listener(|v,_:&gpui_kit::base::input::Escape,w,cx| {
-                cx.stop_propagation();v.close(w,cx);
-            }))
-            .on_action(cx.listener(|v,_:&SubmitMission,w,cx|v.submit(w,cx)))
-            .on_action(cx.listener(|v,_:&CloseMission,w,cx|v.close(w,cx)))
-            .child(ui::heading("mission-create-heading","New mission",Text::Headline))
-            .child(ui::text(Text::Caption,"Draft retained through navigation, not app restart. This mission starts without an agent. No chats, brief or tasks are created."));
+            .on_action(cx.listener(|v, _: &SubmitMission, w, cx| v.submit(w, cx)))
+            .on_action(cx.listener(|v, _: &CloseMission, w, cx| v.close(w, cx)))
+            .child(ui::heading(
+                "mission-create-heading",
+                "New mission",
+                Text::Headline,
+            ))
+            .child(ui::text(
+                Text::Caption,
+                "Starts empty: no agent, chats, brief or tasks. Draft lasts until restart.",
+            ));
         form = form.child(ui::text(Text::Label, "Project"));
         form = form.child(
             div().h_7().w_full().min_w_0().child(
@@ -340,7 +362,7 @@ impl Render for Form {
                 .child(
                     ui::action("mission-create-submit", "Create mission", Action::Primary)
                         .disabled(blocked || self.project.is_none())
-                        .tooltip("Create an empty mission in the selected Local project (⌘Enter).")
+                        .tooltip("Create an empty mission (⌘Enter)")
                         .on_click(cx.listener(|v, _, w, cx| v.submit(w, cx))),
                 )
                 .child(

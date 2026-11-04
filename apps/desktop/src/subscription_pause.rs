@@ -133,11 +133,11 @@ impl Pause {
     pub(crate) fn help(&self, now: i64) -> String {
         let mut lines = vec![if self.forced {
             format!(
-                "Working past the {LIMIT_PERCENT}% usage limit. Pause at limit holds work again until usage resets."
+                "Working past the {LIMIT_PERCENT}% limit. Pause at limit holds work until reset."
             )
         } else {
             format!(
-                "Pilot holds new work at {LIMIT_PERCENT}% of a usage window and resumes on its own once it resets."
+                "New work pauses at {LIMIT_PERCENT}% of a usage window and resumes after reset."
             )
         }];
         for w in &self.windows {
@@ -200,15 +200,16 @@ impl Continuation {
     pub(crate) fn explanation(self, model: &str) -> String {
         match self {
             Self::SameChat => format!(
-                "Same provider and limit. This chat switches to {model} and keeps its history, but work waits for the reset unless you force work."
+                "Same provider and limit. Switches this chat to {model}, keeping history. Work waits for the reset unless you force it."
             ),
             Self::NewChat => format!(
-                "Different provider. Pilot starts a new chat with {model} from a plain-text summary of this one, including its branch, pull requests and tasks. Provider context isn't reused, and this chat becomes read-only. Usage limits still apply."
+                "Different provider. Starts a new chat with {model} from a text summary of this one (branch, pull requests, tasks). This chat becomes read-only. Usage limits still apply."
             ),
         }
     }
 }
-pub(crate) const PICKER_HELP: &str = "A model from the same provider stays in this chat and shares its limit. Another provider starts a new chat with a plain-text handoff.";
+pub(crate) const PICKER_HELP: &str =
+    "Same provider: stays in this chat, same limit. Other provider: new chat from a text handoff.";
 
 pub(crate) fn now() -> i64 {
     std::time::SystemTime::now()

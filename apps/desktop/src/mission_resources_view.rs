@@ -269,10 +269,13 @@ impl Browser {
         }
         header = header.child(ui::text(
             Text::Caption,
-            "Reported links, not verified PR binding, current external status or approval.",
+            "Reported links; not verified PR binding, status or approval.",
         ));
         if !self.resources_fresh() {
-            header = header.child(Notice::new("Retained mission links. Copy is available; refresh the mission after connecting to open links or tasks.").tone(Tone::Warning));
+            header = header.child(
+                Notice::new("Showing saved links. Connect and refresh to open links or tasks.")
+                    .tone(Tone::Warning),
+            );
         }
         let mut page = div()
             .id("mission-links-page")

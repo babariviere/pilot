@@ -346,7 +346,7 @@ impl Render for Form {
                 "Metadata unavailable. Close and reopen to read again."
             }));
         }
-        form=form.child(Notice::new("Saves have no version check. Concurrent edits may be overwritten. Brief and history are not changed."));
+        form=form.child(Notice::new("No version check: concurrent edits may be overwritten. Brief and history are unchanged."));
         form.child(
             div()
                 .h_flex()

@@ -487,10 +487,10 @@ impl Render for Connections {
         };
         let refresh_help = match self.state.read_at {
             Some(at) => format!(
-                "Refresh · re-reads Local’s report (last read {}). Nothing is checked.",
+                "Re-read the last report (read {}). Doesn't check servers.",
                 timestamp(at)
             ),
-            None => "Refresh · re-reads Local’s report. Nothing is checked.".to_owned(),
+            None => "Re-read the last report. Doesn't check servers.".to_owned(),
         };
         let header = div()
             .h_flex()
@@ -522,7 +522,7 @@ impl Render for Connections {
                     )
                     .child(
                         ui::action("mcp-check", "Check now", Action::Secondary)
-                            .tooltip("Asks Local to connect to every server again. Rows show the last reported check, not live chat connections.")
+                            .tooltip("Reconnect to every server. Rows show the last check, not live chat connections.")
                             .disabled(self.pending.is_some() || checking || self.state.snapshot.is_none())
                             .loading(check_pending)
                             .on_click(cx.listener(|v, _, _, cx| v.run(Act::Check { server: None }, cx))),
@@ -558,14 +558,14 @@ impl Render for Connections {
         if self.state.error.is_some() {
             page = page.child(notice(
                 "mcp-stale",
-                "Stale · showing the previous Local report, not current connection state.",
+                "Stale · showing the previous report.",
                 Tone::Quiet,
             ));
         }
         if snapshot.servers.is_empty() {
             page = page.child(notice(
                 "mcp-empty",
-                "No MCP servers reported. This does not prove that no servers are configured.",
+                "No MCP servers reported. Some may still be configured.",
                 Tone::Quiet,
             ));
         }

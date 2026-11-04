@@ -1301,9 +1301,7 @@ mod tests {
         assert_eq!(u.coordinated_ready_text(Some(&state)), None);
         assert_eq!(
             local_text(Some(&state)),
-            Some(
-                "New build ready. Reload UI saves drafts and selection first; the daemon and agents keep running."
-            )
+            Some("New build ready. Reload UI keeps drafts; the daemon and agents keep running.")
         );
         u.coordinated.update = Some(update("draining"));
         assert_eq!(

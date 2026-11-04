@@ -38,7 +38,7 @@ impl Render for Info {
             if view.state.status != "Connected · Local" || !view.state.list_loaded {
                 content = content.child(ui::text(
                     Text::Caption,
-                    "Local usage unavailable or reconnecting. Retained figures are not current.",
+                    "Reconnecting. Figures may be out of date.",
                 ));
             }
             for (ix, line) in usage.lines().into_iter().enumerate() {
@@ -60,7 +60,7 @@ impl Render for Info {
             content = content.child(
                 ui::text(
                     Text::Body,
-                    "Chat changed. Close this panel and open Context for the active chat.",
+                    "Chat changed. Reopen Context for the active chat.",
                 )
                 .id("context-usage-changed")
                 .test_support(),
@@ -97,14 +97,12 @@ impl Render for Entry {
                 .and_then(|id| v.state.chats.iter().find(|c| &c.id == id && !c.local_draft))
         });
         // Unknown usage is an empty gauge, never a different icon.
-        let meter =
-            chat.and_then(|c| crate::context_meter::Meter::reported(&c.context_usage))
-                .unwrap_or_else(|| crate::context_meter::Meter {
-                    ratio: 0.,
-                    description:
-                        "Context usage unknown until the agent reports it. Open Context details."
-                            .into(),
-                });
+        let meter = chat
+            .and_then(|c| crate::context_meter::Meter::reported(&c.context_usage))
+            .unwrap_or_else(|| crate::context_meter::Meter {
+                ratio: 0.,
+                description: "Context usage unknown until reported".into(),
+            });
         let description = meter.description.clone();
         let mut button = Button::new("context-usage")
             .ghost()

@@ -420,7 +420,7 @@ impl Render for MissionForm {
                     .description("This chat plans the mission and hands out its tasks."))
                 .child(FieldRow::new("mission-draft-row","Drafting",Checkbox::new("mission-draft").label("Ask this chat to draft the mission").checked(self.draft).disabled(!editable)
                     .on_change(cx.listener(|v,checked,w,cx|{if v.editable()&&!v.marked(w,cx){v.draft = *checked;cx.notify();}})))
-                    .description("Sends this chat a message asking it to write the goal and tasks. The agent may start working."))
+                    .description("Asks this chat to write the goal and tasks. The agent may start working."))
                 )
             .child(div().id("mission-status").test_support().child(notice))
             .child(ui::rule(window,cx))

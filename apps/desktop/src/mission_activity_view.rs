@@ -395,8 +395,8 @@ impl Render for Activity {
                     )),
                 ));
             }
-            content = content.child(ui::text(Text::Caption, "Up to 250 events per view, 50 per request, 2 MiB per response, 32 KiB per event text. Refresh replaces this window. No automatic updates."))
-            .child(ui::text(Text::Caption, "Source is recorded chat ID, not proof of authorship. Without a chat ID, the API cannot distinguish user from system. No conversation or reasoning is loaded."));
+            content = content.child(ui::text(Text::Caption, "Up to 250 events, 32 KiB each. No automatic updates; Refresh loads the newest."))
+            .child(ui::text(Text::Caption, "Source is the recorded chat ID, not proof of authorship. Without one, user and system look the same."));
         }
         if busy {
             content = content.child(Notice::new(if self.state.pending == Some(None) {

@@ -168,20 +168,62 @@ impl Render for Form {
         let blocked = self.state.blocked();
         self.bounds.set(None);
         let bounds = self.bounds.clone();
-        let mut form = div().id("mission-update-form").test_support().relative().w_full().min_w_0().v_flex().gap_2().track_focus(&self.focus).key_context("MissionUpdate")
+        let mut form = div()
+            .id("mission-update-form")
+            .test_support()
+            .relative()
+            .w_full()
+            .min_w_0()
+            .v_flex()
+            .gap_2()
+            .track_focus(&self.focus)
+            .key_context("MissionUpdate")
             .capture_action(cx.listener(|v, e: &gpui_kit::base::input::Enter, w, cx| {
-                if e.secondary && !e.shift { cx.stop_propagation(); v.submit(w, cx); }
+                if e.secondary && !e.shift {
+                    cx.stop_propagation();
+                    v.submit(w, cx);
+                }
             }))
-            .capture_action(cx.listener(|v, _: &gpui_kit::base::input::Escape, w, cx| { cx.stop_propagation(); v.close(w, cx); }))
+            .capture_action(cx.listener(|v, _: &gpui_kit::base::input::Escape, w, cx| {
+                cx.stop_propagation();
+                v.close(w, cx);
+            }))
             .on_action(cx.listener(|v, _: &SubmitUpdate, w, cx| v.submit(w, cx)))
             .on_action(cx.listener(|v, _: &CloseUpdate, w, cx| v.close(w, cx)))
-            .child(ui::heading("mission-update-heading", "Post an update", Text::Headline))
-            .child(ui::text(Text::Caption, SharedString::from(format!("Mission: {}", self.key.id))))
-            .child(ui::text(Text::Caption, "Posted as your update, without starting a chat. Text and delivery state stay here through navigation, not app restart."))
-            .child(ui::FieldRow::new("mission-update-field", "Update",
-                div().id("mission-update-text").test_support().relative().w_full().min_w_0()
-                    .child(Textarea::new(&self.text).aria_label("Mission update").disabled(blocked))
-                    .child(gpui_kit::canvas(|_, _, _| (), move |b, (), _, _| bounds.set(Some(b))).absolute().inset_0().size_full())));
+            .child(ui::heading(
+                "mission-update-heading",
+                "Post an update",
+                Text::Headline,
+            ))
+            .child(ui::text(
+                Text::Caption,
+                SharedString::from(format!("Mission: {}", self.key.id)),
+            ))
+            .child(ui::text(
+                Text::Caption,
+                "Posted as you; starts no chat. Draft lasts until restart.",
+            ))
+            .child(ui::FieldRow::new(
+                "mission-update-field",
+                "Update",
+                div()
+                    .id("mission-update-text")
+                    .test_support()
+                    .relative()
+                    .w_full()
+                    .min_w_0()
+                    .child(
+                        Textarea::new(&self.text)
+                            .aria_label("Mission update")
+                            .disabled(blocked),
+                    )
+                    .child(
+                        gpui_kit::canvas(|_, _, _| (), move |b, (), _, _| bounds.set(Some(b)))
+                            .absolute()
+                            .inset_0()
+                            .size_full(),
+                    ),
+            ));
         if let Some((_, outcome)) = &self.state.attempt {
             let (text, tone) = match outcome {
                 Outcome::Pending => (
@@ -191,9 +233,7 @@ impl Render for Form {
                 Outcome::NotSent(e) => (e.to_string(), Tone::Error),
                 Outcome::Unknown(e) => (format!("Delivery unknown. {e}"), Tone::Error),
                 Outcome::Acknowledged(id) => (
-                    format!(
-                        "Update acknowledged (event #{id}). Refresh activity separately. HTTP ACK received; no independent fsync receipt is exposed."
-                    ),
+                    format!("Update acknowledged (event #{id}). Refresh activity to see it."),
                     Tone::Normal,
                 ),
             };
@@ -207,23 +247,62 @@ impl Render for Form {
         if let Some(e) = self.error {
             form = form.child(Notice::new(e).tone(Tone::Error));
         }
-        form.child(div().h_flex().flex_wrap().gap_2()
-            .child(ui::action("mission-update-submit", "Submit", Action::Primary).disabled(blocked)
-                .tooltip("Post this user-authored update to the captured Local mission (⌘Enter).")
-                .on_click(cx.listener(|v, _, w, cx| v.submit(w, cx))))
-            .child(ui::action("mission-update-close", "Close", Action::Quiet).on_click(cx.listener(|v, _, w, cx| v.close(w, cx))))
-            .when(self.state.attempt.is_some(), |d| d.child(ui::action("mission-update-copy", "Copy text", Action::Quiet).on_click(cx.listener(|v, _, _, cx| {
-                cx.write_to_clipboard(ClipboardItem::new_string(v.text.read(cx).value().to_string()));
-            }))))
-            .when(matches!(self.state.attempt.as_ref(), Some((_, Outcome::Acknowledged(_)))), |d| d.child(
-                ui::action("mission-update-another", "New update", Action::Secondary).on_click(cx.listener(|v, _, w, cx| {
-                    if !v.visible || v.marked(w, cx) || !matches!(v.state.attempt.as_ref(), Some((_, Outcome::Acknowledged(_)))) { return; }
-                    v.state = State::default(); v.draft.clear(); v.error = None;
-                    v.text.update(cx, |i, cx| i.set_value("", w, cx));
-                    v.focus(w, cx); cx.notify();
-                }))
-            )))
-            .child(fence)
+        form.child(
+            div()
+                .h_flex()
+                .flex_wrap()
+                .gap_2()
+                .child(
+                    ui::action("mission-update-submit", "Submit", Action::Primary)
+                        .disabled(blocked)
+                        .tooltip("Post as your update (⌘Enter)")
+                        .on_click(cx.listener(|v, _, w, cx| v.submit(w, cx))),
+                )
+                .child(
+                    ui::action("mission-update-close", "Close", Action::Quiet)
+                        .on_click(cx.listener(|v, _, w, cx| v.close(w, cx))),
+                )
+                .when(self.state.attempt.is_some(), |d| {
+                    d.child(
+                        ui::action("mission-update-copy", "Copy text", Action::Quiet).on_click(
+                            cx.listener(|v, _, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                    v.text.read(cx).value().to_string(),
+                                ));
+                            }),
+                        ),
+                    )
+                })
+                .when(
+                    matches!(
+                        self.state.attempt.as_ref(),
+                        Some((_, Outcome::Acknowledged(_)))
+                    ),
+                    |d| {
+                        d.child(
+                            ui::action("mission-update-another", "New update", Action::Secondary)
+                                .on_click(cx.listener(|v, _, w, cx| {
+                                    if !v.visible
+                                        || v.marked(w, cx)
+                                        || !matches!(
+                                            v.state.attempt.as_ref(),
+                                            Some((_, Outcome::Acknowledged(_)))
+                                        )
+                                    {
+                                        return;
+                                    }
+                                    v.state = State::default();
+                                    v.draft.clear();
+                                    v.error = None;
+                                    v.text.update(cx, |i, cx| i.set_value("", w, cx));
+                                    v.focus(w, cx);
+                                    cx.notify();
+                                })),
+                        )
+                    },
+                ),
+        )
+        .child(fence)
     }
 }
 

@@ -73,7 +73,7 @@ fn notice_uses_the_deciding_window_and_forced_state() {
         "{notice}"
     );
     let help = paused.help(now);
-    assert!(help.starts_with("Pilot holds new work at 99%"));
+    assert!(help.starts_with("New work pauses at 99%"));
     assert!(help.contains("Claude 5-hour: 96% used, resets "));
     assert!(help.contains("Claude weekly: 100% used"));
     let mut forced = v.clone();
@@ -87,7 +87,7 @@ fn notice_uses_the_deciding_window_and_forced_state() {
     assert!(
         forced
             .help(now)
-            .starts_with("Working past the 99% usage limit. Pause at limit")
+            .starts_with("Working past the 99% limit. Pause at limit")
     );
     // A reset already in the past never claims a resume time.
     let past = Pause::read(&json!({"subscriptionPause": {"windows": [
@@ -144,7 +144,7 @@ fn continuation_kind_matches_configured_and_physical_provider() {
     assert!(
         Continuation::SameChat
             .explanation("Haiku")
-            .contains("keeps its history")
+            .contains("keeping history")
     );
     assert!(
         Continuation::NewChat

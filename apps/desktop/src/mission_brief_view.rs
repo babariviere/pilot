@@ -830,10 +830,7 @@ impl Render for Workspace {
             if let Some(rows) = &self.history {
                 page = page.child(ui::text(
                     Text::Caption,
-                    SharedString::from(format!(
-                        "{} immutable revisions received · no inferred pages",
-                        rows.len()
-                    )),
+                    SharedString::from(format!("{} revisions received", rows.len())),
                 ));
                 if rows.is_empty() {
                     page = page.child(ui::text(Text::Small, "No revisions received."));

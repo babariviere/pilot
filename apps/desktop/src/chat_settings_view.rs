@@ -13,8 +13,8 @@ use gpui_kit::{
 };
 
 pub(crate) const LABEL: &str = "Automatic handoff (experimental)";
-const DESCRIPTION: &str = "Long chats continue in a fresh model context, with full history kept. Applies across this host; mission coordinators are unchanged.";
-const TIMING: &str = "At 70% of the model window (earlier for very small windows), handoff waits for a tool-safe model-request boundary. An admitted handoff may finish after you turn this off.";
+const DESCRIPTION: &str = "Continues long chats in a fresh context at 70% of the model window. History is kept. Mission coordinators are excluded.";
+const TIMING: &str = "A handoff already started may finish after you turn this off.";
 
 pub(crate) struct ChatSettings {
     focus: FocusHandle,
@@ -106,7 +106,7 @@ fn note(note: Note) -> (&'static str, Tone) {
             Tone::Quiet,
         ),
         Note::Unsupported => (
-            "This Pilot daemon doesn't support automatic handoff. Update Pilot to change it.",
+            "Not supported by this daemon. Update Pilot to change it.",
             Tone::Normal,
         ),
         Note::LoadFailed => ("Couldn't load chat settings. Check again.", Tone::Error),
@@ -117,11 +117,11 @@ fn note(note: Note) -> (&'static str, Tone) {
         Note::Rejected => ("Pilot rejected the change. Nothing was saved.", Tone::Error),
         Note::NotSent => ("Couldn't reach Pilot. Nothing was changed.", Tone::Error),
         Note::Unknown(true) => (
-            "Couldn't confirm turning automatic handoff on. It may have saved. Check again before changing this setting.",
+            "Couldn't confirm turning this on. It may have saved; check again before changing it.",
             Tone::Warning,
         ),
         Note::Unknown(false) => (
-            "Couldn't confirm turning automatic handoff off. It may have saved. Check again before changing this setting.",
+            "Couldn't confirm turning this off. It may have saved; check again before changing it.",
             Tone::Warning,
         ),
     }
@@ -215,7 +215,7 @@ impl Render for ChatSettings {
             div().v_flex().gap_2().min_w_0()
                 .child(ui::heading("chat-automations-title", "Automations", Text::Headline))
                 .child(automations)
-                .child(ui::text(Text::Caption, "Runs configured project commands on this host. Turning off prevents new commands; admitted commands may finish.").text_color(muted))
+                .child(ui::text(Text::Caption, "Runs project commands on this host. Turning off stops new commands; running ones may finish.").text_color(muted))
         )
         .children(status.map(|status| {
             ui::text(Text::Caption, status)
@@ -226,8 +226,8 @@ impl Render for ChatSettings {
         .children(self.model.note().map(|n| {
             let (title, tone) = if self.model.saving_automations() {
                 match n {
-                    Note::Saved(_) => ("Saved. Applies to new automation commands immediately.", Tone::Quiet),
-                    Note::Unknown(_) => ("Couldn't confirm the automation setting. It may have saved. Check again before changing it.", Tone::Warning),
+                    Note::Saved(_) => ("Saved. Applies to new commands.", Tone::Quiet),
+                    Note::Unknown(_) => ("Couldn't confirm. It may have saved; check again before changing it.", Tone::Warning),
                     _ => note(n),
                 }
             } else { note(n) };

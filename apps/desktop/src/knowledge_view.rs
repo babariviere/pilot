@@ -402,10 +402,7 @@ impl Knowledge {
                             ui::text(
                                 Text::Caption,
                                 if applied {
-                                    SharedString::from(format!(
-                                        "Showing titles and summaries containing “{}”.",
-                                        self.query.q
-                                    ))
+                                    SharedString::from(format!("Matching “{}”", self.query.q))
                                 } else {
                                     "Press Return to filter titles and summaries.".into()
                                 },
@@ -439,7 +436,7 @@ impl Knowledge {
                 if filtered {
                     "No entries match these filters."
                 } else {
-                    "No knowledge yet. Research and component documentation registered for this project appears here."
+                    "No knowledge yet."
                 },
                 Tone::Quiet,
             ));
@@ -488,7 +485,7 @@ impl Knowledge {
         if retained && (self.busy || self.error.is_some()) {
             page = page.child(notice(
                 "knowledge-retained",
-                "Showing the previous observation, not a current read.",
+                "Showing the earlier read.",
                 Tone::Quiet,
             ));
         }

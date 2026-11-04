@@ -1179,7 +1179,7 @@ impl Updates {
     }
     pub(crate) fn prepare(&mut self, safety: Safety, cx: &mut Context<Self>) {
         if self.recovery_blocked() {
-            self.defer("Recheck the previous installation before restarting. Checking and downloading remain available.", cx);
+            self.defer("Recheck the previous install before restarting.", cx);
             return;
         }
         if self.location.is_none() && !self.external {
@@ -1262,12 +1262,8 @@ impl Updates {
             None => error_text(self.unavailable.unwrap_or(Error::Unconfigured)),
             Some(State::Idle) => "No update check has completed.",
             Some(State::Current) => "Pilot Next is up to date.",
-            Some(State::Available(_)) => {
-                "An authenticated update is available. Downloading does not install it."
-            }
-            Some(State::ReadyToRestart(_)) => {
-                "The complete update bundle is verified. Install requires acknowledged safe preparation."
-            }
+            Some(State::Available(_)) => "Update available. Downloading doesn't install it.",
+            Some(State::ReadyToRestart(_)) => "Update downloaded and verified. Ready to install.",
             Some(State::Working {
                 work: Work::Checking(_),
                 ..
@@ -1279,24 +1275,20 @@ impl Updates {
             Some(State::Working {
                 work: Work::PreparingExit,
                 ..
-            }) => "Preparing a safe restart. Input is fenced; no tool call is interrupted.",
+            }) => "Preparing to restart. Input is paused; running tools aren't interrupted.",
             Some(State::Working {
                 work: Work::CommittingExit,
                 ..
-            }) => "Confirming explicit installation. Keep this app open until acknowledged.",
-            Some(State::ExitPrepared) => {
-                "Safe preparation is ready. Rechecking current durability before COMMIT."
-            }
+            }) => "Confirming install. Keep Pilot Next open.",
+            Some(State::ExitPrepared) => "Ready. Checking saved state before installing…",
             Some(State::ExitAuthorized) => {
-                "Install intent was acknowledged. Waiting for clean app exit; startup is not yet confirmed."
+                "Install confirmed. Waiting for the app to quit; startup not yet confirmed."
             }
-            Some(State::Cancelling { .. }) => {
-                "Cancelling. Waiting for the worker to become quiescent…"
-            }
+            Some(State::Cancelling { .. }) => "Cancelling…",
             Some(State::Deferred { reason, .. })
             | Some(State::Failed(reason))
             | Some(State::RecoveryRequired(reason)) => error_text(*reason),
-            Some(State::Cancelled) => "Cancelled. No update is armed for ordinary Quit.",
+            Some(State::Cancelled) => "Cancelled. Quit won't install anything.",
             Some(State::Stopped) => "Update checks are stopped.",
         }
     }
@@ -1441,7 +1433,7 @@ fn local_text(state: Option<&State>) -> Option<&'static str> {
             ..
         } => "Verifying the local build…",
         State::ReadyToRestart(_) => {
-            "New build ready. Reload UI saves drafts and selection first; the daemon and agents keep running."
+            "New build ready. Reload UI keeps drafts; the daemon and agents keep running."
         }
         State::Failed(Error::Version) => {
             "This local build is not newer than the running app. Nothing was staged."
@@ -1454,9 +1446,7 @@ fn local_text(state: Option<&State>) -> Option<&'static str> {
 }
 fn error_text(error: Error) -> &'static str {
     match error {
-        Error::Unconfigured => {
-            "Updates are not configured in this development build. No feed or trust key is inferred."
-        }
+        Error::Unconfigured => "Updates aren't configured in this development build.",
         Error::Authentication => {
             "GitHub refused the update request, usually a rate limit. Retry later, or use an access token for this session."
         }
@@ -1465,29 +1455,27 @@ fn error_text(error: Error) -> &'static str {
         }
         Error::Preedit => "Finish composing marked text before installing.",
         Error::PersistenceFailed | Error::PersistencePending => {
-            "Draft, outbox or preferences durability is not confirmed. Preserve your text and resolve the save first."
+            "Drafts or settings aren't confirmed saved. Keep your text and resolve the save first."
         }
         Error::RuntimeUnverified | Error::Version => {
-            "The running daemon or retained runtime is not proven compatible. Installation is deferred; the daemon was left untouched."
+            "Daemon compatibility isn't confirmed. Install deferred; the daemon is untouched."
         }
         Error::CommitUncertain | Error::RecoveryRequired => {
-            "Update recovery is required. The install result is unconfirmed; retained bundles and transaction evidence were preserved."
+            "Recovery required. The install result is unconfirmed; update files were kept."
         }
         // Refused before staging. Nothing was installed, so this is not recovery-uncertain.
         Error::StagingCapacity => {
-            "The update was not staged. Retained update records fill the staging limit; nothing was installed. Inspect them before retrying."
+            "The update was not staged. Kept update records fill the staging limit; nothing was installed. Inspect them before retrying."
         }
         Error::StagingArchiveFailed => {
-            "The update was not staged. Completed update records could not be archived to make room; nothing was installed and they were kept. Retry later."
+            "The update was not staged. Old update records couldn't be archived to make room; nothing was installed or removed. Retry later."
         }
         Error::Signature | Error::Identity | Error::Archive | Error::RedirectDenied => {
-            "The update failed authenticity, identity or archive policy. It was not accepted for installation."
+            "The update failed verification (signature, identity or archive) and was rejected."
         }
         Error::Offline => "The update service could not be reached. Retry when connected.",
-        Error::Cancelled => "The update operation was cancelled. Ordinary Quit does not install.",
-        _ => {
-            "Update preparation failed. No successful installation is confirmed. Retained evidence was preserved."
-        }
+        Error::Cancelled => "Cancelled. Quit won't install anything.",
+        _ => "Preparation failed. Nothing was confirmed installed; update files were kept.",
     }
 }
 impl Render for Updates {
@@ -1582,17 +1570,17 @@ impl Render for Updates {
         view = self.coordinated_panel(view, cx);
         if self.external {
             view = view.child(
-                Notice::new("Connected to an existing daemon. Updates replace only this app; the daemon keeps running.")
+                Notice::new("Updates replace only this app; the existing daemon keeps running.")
                     .tone(Tone::Quiet),
             );
         }
         if self.startup_started {
             let status = match self.startup {
-                Some(Ok(())) => "App startup was acknowledged. The daemon kept running.",
+                Some(Ok(())) => "Startup confirmed. The daemon kept running.",
                 Some(Err(_)) => {
-                    "App startup acknowledgement failed. Recovery evidence and retained bundles were preserved; no rollback or cleanup was attempted."
+                    "Couldn't confirm startup. Update files were kept; nothing was rolled back."
                 }
-                None => "Confirming durable app startup and the unchanged retained runtime…",
+                None => "Confirming startup…",
             };
             view = view.child(
                 Notice::new(status).tone(if matches!(self.startup, Some(Err(_))) {
@@ -1612,10 +1600,10 @@ impl Render for Updates {
                     "The installed app could not be verified. Check or load an update, then recheck before installation."
                 }
                 Some(Err(_)) => {
-                    "Previous update files could not be inspected. Checking and downloading are available; installation waits for a successful recheck."
+                    "Couldn't inspect previous update files. Install waits for a successful recheck."
                 }
                 _ => {
-                    "A previous installation is unconfirmed. Check or load an update, or recheck the retained installation. Nothing is automatically reinstalled."
+                    "A previous install is unconfirmed. Recheck it, or check for an update. Nothing reinstalls automatically."
                 }
             };
             view = view.child(Notice::new(message).tone(Tone::Warning)).child(
@@ -1664,7 +1652,7 @@ impl Render for Updates {
         if let Some(input) = self.access_input.clone().filter(|_| wants_access) {
             if self.access.is_none() {
                 view=view.child(Input::new(&input).disabled(checking || self.fenced))
-                    .child(ui::text(Text::Caption,"Explicit access for the configured release repository only. Kept in memory for this app session, never saved or searched in Keychain, gh or provider accounts."));
+                    .child(ui::text(Text::Caption,"Used only for the release repository, in memory for this session. Never saved; no other credentials are read."));
                 let mut access = action_row().child(
                     ui::action(
                         "updates-authorize",
@@ -1722,7 +1710,7 @@ impl Render for Updates {
         }
         view.child(ui::text(
             Text::Caption,
-            "Automatic checks never authorize silent installation. Quit never installs an update.",
+            "Updates install only when you choose. Quit never installs.",
         ))
     }
 }

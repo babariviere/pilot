@@ -401,7 +401,7 @@ impl ProjectSettings {
             .child(
                 ui::text(
                     Text::Caption,
-                    "Pilot reads these channels through your pi Slack server and sorts new messages for triage. It never posts in Slack or starts work on its own.",
+                    "Sorts new messages from these channels for triage, through your pi Slack server. Never posts or starts work.",
                 )
                 .text_color(muted),
             );
@@ -480,13 +480,8 @@ impl ProjectSettings {
             .gap_3()
             .child(ui::text(Text::Label, "Channels"));
         if slack.channels.is_empty() {
-            channels = channels.child(
-                ui::text(
-                    Text::Caption,
-                    "No channels yet. Add the channels to follow; new messages are sorted into bugs, questions and requests.",
-                )
-                .text_color(muted),
-            );
+            channels =
+                channels.child(ui::text(Text::Caption, "No channels yet.").text_color(muted));
         }
         for (ix, channel) in slack.channels.iter().enumerate() {
             let status = channel_status(editor, page.slack.source.as_ref(), &channel.id);
@@ -552,7 +547,7 @@ impl ProjectSettings {
                             .child(
                                 ui::text(
                                     Text::Caption,
-                                    "A personal or group mention in a new message qualifies it. Mentions only in replies aren't found.",
+                                    "Keeps new messages that mention you or your groups. Mentions in replies aren't found.",
                                 )
                                 .text_color(muted),
                             ),
@@ -578,7 +573,7 @@ impl ProjectSettings {
                         .aria_label("My Slack group handles")
                         .disabled(disabled),
                 )
-                .description("Mention-only channels also keep messages that mention these groups. Slack can't list your groups, so add them here.")
+                .description("Used by mention-only channels. Slack can't list your groups, so add them here.")
                 .layout(layout)
                 .when_some(slack.groups_problem(), |r, p| r.validation(p, Tone::Error)),
             );
@@ -592,7 +587,7 @@ impl ProjectSettings {
             .child(
                 ui::text(
                     Text::Caption,
-                    "The classifier gives each message at most one label, using its description and your corrections in Slack triage.",
+                    "Each message gets at most one label, based on its description and your triage corrections.",
                 )
                 .text_color(muted),
             );
@@ -770,7 +765,7 @@ impl ProjectSettings {
         let note: Option<(SharedString, Tone)> = match current {
             None => Some(("Searching…".into(), Tone::Quiet)),
             Some(Lookup::SignIn) => Some((
-                "Slack needs sign-in before Pilot can search channels. You can still paste a channel ID.".into(),
+                "Sign in to Slack to search. You can still paste a channel ID.".into(),
                 Tone::Warning,
             )),
             Some(Lookup::Failed(reason)) => Some((reason.clone().into(), Tone::Error)),

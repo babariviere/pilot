@@ -382,7 +382,7 @@ impl Browser {
             .child(
                 ui::text(
                     Text::Caption,
-                    "Unadopted, untrusted suggestions. Current decisions remain binding.",
+                    "Untrusted suggestions. Current decisions stay binding.",
                 )
                 .text_color(cx.theme().muted_foreground),
             )

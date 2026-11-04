@@ -369,9 +369,7 @@ impl Pane {
         if self.workers.is_empty() {
             return Some((
                 "No current workers in this mission.",
-                Some(
-                    "Saved revisions come from worker checkpoints, separately from live code changes.",
-                ),
+                Some("Revisions are saved at worker checkpoints."),
             ));
         }
         if self.worker.is_none() {
@@ -380,9 +378,7 @@ impl Pane {
         if self.comparisons.is_empty() {
             return Some((
                 "No saved revisions yet.",
-                Some(
-                    "Eligible workers save committed layers at worker checkpoints, not when Review opens. This doesn't mean there are no code changes.",
-                ),
+                Some("Workers save revisions at checkpoints. Code may still have changed."),
             ));
         }
         Some(("Choose a saved revision to see its diff.", None))
@@ -548,9 +544,7 @@ impl Pane {
                 self.comparisons = v.comparisons;
                 self.next = v.next;
                 self.error = if v.unavailable.is_some() {
-                    Some(
-                        "No retained ownership binding. Reading does not enroll, capture or migrate existing work.",
-                    )
+                    Some("Review isn't set up here. Reading doesn't enroll or capture work.")
                 } else {
                     None
                 };

@@ -56,7 +56,7 @@ fn sections(cx: &App) -> Vec<Section> {
     };
     section(
         "Main window",
-        "Commands depend on the current view and available history. Open forms, palettes and text composition can keep their keys.",
+        "Some commands depend on the current view.",
         vec![
             ("Command Palette", Box::new(ToggleJump)),
             ("New chat", Box::new(NewChat)),
@@ -92,7 +92,7 @@ fn sections(cx: &App) -> Vec<Section> {
     );
     section(
         "Sidebar list",
-        "With the chat list focused, not its search field.",
+        "When the chat list has focus, not its search field.",
         vec![
             (
                 "Collapse project or mission thread",
@@ -103,7 +103,7 @@ fn sections(cx: &App) -> Vec<Section> {
     );
     section(
         "Settings window",
-        "Save applies only when edits can be saved. Close may ask about unsaved changes.",
+        "Close may ask about unsaved changes.",
         vec![
             ("Save changes", Box::new(crate::settings_view::SaveSettings)),
             (
@@ -114,7 +114,7 @@ fn sections(cx: &App) -> Vec<Section> {
     );
     section(
         "Open forms",
-        "Only inside the named form, when its current values can be submitted. Escape cancels that form; composition keeps its keys.",
+        "Inside the named form. Escape cancels it.",
         vec![
             (
                 "Add project",
@@ -132,7 +132,7 @@ fn sections(cx: &App) -> Vec<Section> {
     );
     section(
         "Text fields and selection",
-        "The focused text owner handles these keys. Cut, paste and undo require an editable field; copy requires a selection.",
+        "Act on the focused field or selection.",
         vec![
             ("Copy", Box::new(gpui_kit::base::input::Copy)),
             ("Select all", Box::new(gpui_kit::base::input::SelectAll)),
@@ -144,13 +144,13 @@ fn sections(cx: &App) -> Vec<Section> {
     );
     section(
         "This reference",
-        "Text can be selected and copied. Copy reference includes every section.",
+        "Copy reference includes every section.",
         vec![("Close reference", Box::new(CloseShortcuts))],
     );
     #[cfg(target_os = "macos")]
     section(
         "macOS windows",
-        "Window commands act on the key window. Hide commands apply to the app.",
+        "Act on the front window; Hide acts on the app.",
         vec![
             (
                 "Minimize",
@@ -196,12 +196,28 @@ impl Render for Shortcuts {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut page = ui::page().child(
             ui::header("shortcuts-title", "Keyboard shortcuts", Text::Title)
-                .child(ui::text(Text::Body, "Common shortcuts for this platform. Contextual keys work only in their named view."))
-                .child(div().h_flex().gap_2()
-                    .child(ui::action("shortcuts-copy", "Copy reference", Action::Quiet)
-                        .on_click(cx.listener(|v, _, _, cx| cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(v.copy_text())))))
-                    .child(ui::action("shortcuts-close", "Close", Action::Quiet)
-                        .on_click(|_, w, _| w.remove_window()))),
+                .child(ui::text(
+                    Text::Body,
+                    "Contextual keys work only in their named view.",
+                ))
+                .child(
+                    div()
+                        .h_flex()
+                        .gap_2()
+                        .child(
+                            ui::action("shortcuts-copy", "Copy reference", Action::Quiet).on_click(
+                                cx.listener(|v, _, _, cx| {
+                                    cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                                        v.copy_text(),
+                                    ))
+                                }),
+                            ),
+                        )
+                        .child(
+                            ui::action("shortcuts-close", "Close", Action::Quiet)
+                                .on_click(|_, w, _| w.remove_window()),
+                        ),
+                ),
         );
         for section in &self.sections {
             let mut group = div()
@@ -298,7 +314,7 @@ mod tests {
                     .find(|s| s.title == "Settings window")
                     .unwrap()
                     .note
-                    .contains("only when")
+                    .contains("unsaved changes")
             );
             #[cfg(target_os = "macos")]
             assert!(

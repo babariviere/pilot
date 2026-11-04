@@ -511,9 +511,16 @@ impl Render for Form {
         let bounds = self.bounds.clone();
         let mut notices = div().v_flex().gap_1().min_w_0();
         if d.row.token.is_none() {
-            notices = notices.child(Notice::new("This message has no safe-edit guard. Update Local before editing or removing it.").tone(Tone::Error));
+            notices = notices.child(
+                Notice::new(
+                    "This message can't be edited safely. Update Pilot to edit or remove it.",
+                )
+                .tone(Tone::Error),
+            );
         } else if d.row.text().is_none() {
-            notices = notices.child(Notice::new("Structured or attachment content is read-only here, so nothing is lost. You can still remove it."));
+            notices = notices.child(Notice::new(
+                "Attachments and structured content are read-only here. You can still remove it.",
+            ));
         }
         let acknowledged = matches!(d.outcome(), Some(Outcome::Acknowledged));
         if !available && acknowledged {
@@ -655,7 +662,7 @@ impl Render for Form {
                     .when(restorable, |row| {
                         row.child(
                             ui::action("queued-message-restore", "Move to composer", Action::Quiet)
-                                .tooltip("Put this text in the empty message box. Nothing is sent until you press Return (steer) or ⌥Return (after the current run).")
+                                .tooltip("Move the text to the empty composer. Nothing is sent.")
                                 .on_click(cx.listener(move |v, _, w, cx| {
                                     if !v.marked(w, cx) {
                                         cx.emit(Event::Restore(id));
@@ -663,21 +670,27 @@ impl Render for Form {
                                 })),
                         )
                     })
-                    .when(queued, |row| row.child(
-                        ui::action(
-                            "queued-message-remove",
-                            if d.confirm_remove { "Remove" } else { "Remove…" },
-                            // Only the confirming step is emphasized as destructive.
-                            if d.confirm_remove {
-                                Action::Danger
-                            } else {
-                                Action::Quiet
-                            },
+                    .when(queued, |row| {
+                        row.child(
+                            ui::action(
+                                "queued-message-remove",
+                                if d.confirm_remove {
+                                    "Remove"
+                                } else {
+                                    "Remove…"
+                                },
+                                // Only the confirming step is emphasized as destructive.
+                                if d.confirm_remove {
+                                    Action::Danger
+                                } else {
+                                    Action::Quiet
+                                },
+                            )
+                            .tooltip("Remove this queued message (asks first)")
+                            .disabled(blocked || !available || d.row.token.is_none())
+                            .on_click(cx.listener(|v, _, w, cx| v.submit(true, w, cx))),
                         )
-                        .tooltip("Remove this queued message. It asks once to confirm.")
-                        .disabled(blocked || !available || d.row.token.is_none())
-                        .on_click(cx.listener(|v, _, w, cx| v.submit(true, w, cx))),
-                    ))
+                    })
                     .child(
                         ui::icon_action(
                             "queued-message-copy",
@@ -696,13 +709,13 @@ impl Render for Form {
                     .when(discardable, |row| {
                         row.child(
                             ui::action("queued-message-discard", "Discard", Action::Quiet)
-                                .tooltip("Drop this retained edit. Nothing is sent or removed.")
+                                .tooltip("Drop this edit. The queued message is unchanged.")
                                 .on_click(cx.listener(|v, _, w, cx| v.discard_edit(w, cx))),
                         )
                     })
                     .child(
                         ui::action("queued-message-cancel", "Cancel", Action::Quiet)
-                            .tooltip("Cancel. Your edit stays until you save or discard it (Escape).")
+                            .tooltip("Close; your edit is kept (Escape)")
                             .on_click(cx.listener(|v, _, w, cx| v.dismiss(w, cx))),
                     )
                     .child(
@@ -1054,7 +1067,7 @@ impl LocalViewer {
             form.update(cx, |f, cx| {
                 f.refuse(
                     id,
-                    "Can't move this into the message box now. It needs an empty, ready message box. Your edit is kept here.",
+                    "Can't move this now: the composer must be empty and ready. Your edit is kept.",
                     cx,
                 )
             });

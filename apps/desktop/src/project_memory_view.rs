@@ -233,7 +233,7 @@ impl Render for Memory {
         if self.state.tree.is_some() && (self.state.busy || self.state.error.is_some()) {
             page = page.child(notice(
                 "memory-retained",
-                "Showing the previous observation for this range, not a current snapshot.",
+                "Showing the earlier read.",
                 Tone::Quiet,
             ));
         }
@@ -351,7 +351,7 @@ impl Render for Memory {
         }
         if self.details {
             let scope = format!(
-                "Project {}. Browse only; summaries may change between reads. Origin IDs are provenance, not links to a guessed chat.",
+                "Project {}. Read-only; summaries may change. Origin IDs are provenance, not chat links.",
                 self.project.id,
             );
             page = page.child(notice(

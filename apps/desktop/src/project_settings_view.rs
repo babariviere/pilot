@@ -251,7 +251,7 @@ impl ProjectSettings {
                 .when(editor.updated_elsewhere() && dirty, |d| {
                     d.child(
                         Notice::new("This project changed elsewhere.")
-                            .detail("Saving applies only the fields you changed. Revert to load the new values.")
+                            .detail("Save applies only your changed fields. Revert loads the new values.")
                             .tone(Tone::Warning),
                     )
                 })
@@ -449,7 +449,7 @@ impl Render for ProjectSettings {
                     .child(toggle(
                         "project-settings-isolated",
                         "Isolated workspace per chat",
-                        "Each chat works in its own copy, so it never touches your folder. When off, chats run in the folder itself.",
+                        "Each chat works in its own copy. When off, chats edit your folder directly.",
                         draft.isolated,
                         disabled,
                         {
@@ -461,7 +461,7 @@ impl Render for ProjectSettings {
                     .child(toggle(
                         "project-settings-pull-request",
                         "Require a pull request",
-                        "Agents publish changes through a pull request. Applies when a chat next starts working.",
+                        "Applies from each chat's next run.",
                         draft.require_pull_request,
                         disabled,
                         move |on, cx| {

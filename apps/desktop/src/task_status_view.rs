@@ -184,7 +184,7 @@ impl Render for Form {
         }
         root = root.child(choices);
         if model::backward(&self.target.current, &self.chosen) {
-            root=root.child(Notice::new("Moving work backward permanently disables automatic linked-PR status sync, even for future links.").tone(Tone::Warning));
+            root=root.child(Notice::new("Moving backward permanently turns off linked-PR status sync, including future links.").tone(Tone::Warning));
         }
         if let Some((_, o)) = &self.state.attempt {
             let (text, tone) = match o {

@@ -13,8 +13,8 @@ impl ChatEditor {
         if draft.diagnostics {
             let setup = div().id("diagnostic-chat-setup").v_flex().gap_2()
                 .child(ui::header("diagnostic-chat-heading", "Ask about Pilot", Text::Title))
-                .child(ui::text(Text::Body, "Investigate with bounded, sanitized Local diagnostics, logs and available chat history."))
-                .child(ui::text(Text::Caption, "Read-only specialist. No shell, arbitrary files or repairs. Uses the daemon’s default model. Nothing starts until you send."));
+                .child(ui::text(Text::Body, "Investigates with sanitized Local diagnostics, logs and chat history."))
+                .child(ui::text(Text::Caption, "Read-only: no shell, files or repairs. Default model. Nothing starts until you send."));
             #[cfg(any(test, feature = "native-probes"))]
             let setup = setup.test_support();
             return setup.into_any_element();

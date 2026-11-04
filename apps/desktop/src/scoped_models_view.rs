@@ -142,7 +142,7 @@ impl ScopedModels {
             shown: 30,
             folded_providers: Default::default(),
             problem: None,
-            status: "Open Scoped models to read the global pi baseline. Nothing is written on load.",
+            status: "Not loaded yet. Opening only reads.",
             confirm_revert: false,
             _subscriptions: vec![changed, searched],
             owner_window: window.window_handle(),
@@ -236,8 +236,9 @@ impl ScopedModels {
                                 v.unconfirmed = true;
                             }
                             v.busy = false;
-                            v.problem =
-                                Some("Local model worker stopped. Retained edits were not resent.");
+                            v.problem = Some(
+                                "Model reader stopped. Your edits are kept; nothing was resent.",
+                            );
                             cx.notify();
                         });
                     }));
@@ -254,15 +255,14 @@ impl ScopedModels {
             if let Some(save) = save {
                 self.pending_text = Some(self.patterns.read(cx).value().to_string());
                 self.pending = Some(save);
-                self.status = "Saving the global pi scope, then reading it back…";
+                self.status = "Saving…";
             } else {
-                self.status = "Checking current Local pi settings…";
+                self.status = "Checking…";
             }
             self.busy = true;
             self.problem = None;
         } else {
-            self.problem =
-                Some("Local model worker unavailable. Nothing was queued; edits are retained.");
+            self.problem = Some("Couldn't start. Nothing was sent; your edits are kept.");
         }
         cx.notify();
     }
@@ -342,18 +342,19 @@ impl ScopedModels {
                     self.pending_text = None;
                     self.unconfirmed = false;
                     self.edited = true;
-                    self.status = "Current pi scope verified. Newer unsaved edits are retained.";
+                    self.status = "Saved. Newer edits are kept unsaved.";
                 } else if matches || (self.baseline.is_none() && !self.edited) {
                     self.apply(snapshot, w, cx);
-                    self.status = "Current global pi scope verified.";
+                    self.status = if matches { "Saved." } else { "Up to date." };
                 } else if self.pending.is_some() {
                     self.unconfirmed = true;
-                    self.status = "Current pi scope differs from your submitted list. Review current values before another save.";
+                    self.status =
+                        "pi's current list differs from your save. Review it before saving again.";
                 } else if !self.edited {
                     self.apply(snapshot, w, cx);
-                    self.status = "Current global pi scope loaded.";
+                    self.status = "Up to date.";
                 } else {
-                    self.status = "Current pi values checked. Your unsaved list and original CAS baseline are retained.";
+                    self.status = "Checked. Your unsaved list is kept.";
                 }
             }
         }
@@ -372,7 +373,7 @@ impl ScopedModels {
             self.apply(snapshot, w, cx);
             self.problem = None;
             self.confirm_revert = false;
-            self.status = "Using the currently observed pi list. No write was sent.";
+            self.status = "Reverted to pi's current list. Nothing was written.";
         }
     }
     fn editable(&self) -> bool {
@@ -464,10 +465,9 @@ impl Render for ScopedModels {
         }
         div().id("scoped-models").test_support().v_flex().gap_3().min_w_0()
             .child(ui::header("scoped-models-title","Scoped models",Text::Title)
-                .child(ui::text(Text::Body,"Choose pi’s global models on this Mac. Changes apply only when you save.")))
+                .child(ui::text(Text::Body,"pi’s global models on this Mac. Project overrides, defaults, sign-ins and running chats are unaffected.")))
             .child(Checkbox::new("scope-all").label("All authenticated models").checked(self.all).disabled(!editable)
                 .on_change(cx.listener(|v,value,w,cx|{if v.editable()&&!v.marked(w,cx){v.all = *value;v.edited=true;cx.notify();}})))
-            .child(ui::text(Text::Caption,"Project overrides, default models, sign-ins and running chats remain unchanged."))
             .child(div().h_flex().gap_2().flex_wrap()
                 .child(ui::action("scope-save","Save changes",Action::Primary).disabled(!editable || !self.unsettled(cx) || error.is_some()).on_click(cx.listener(|v,_,w,cx|v.save(w,cx))))
                 .child(ui::action("scope-check","Check again",Action::Quiet).disabled(self.source.is_none()||self.busy).on_click(cx.listener(|v,_,w,cx|v.check(w,cx))))
@@ -475,7 +475,7 @@ impl Render for ScopedModels {
             .child(Notice::new(self.status).tone(if self.unconfirmed{Tone::Warning}else{Tone::Quiet}))
             .children(self.problem.map(|error|Notice::new(error).tone(Tone::Error)))
             .children((!self.all).then_some(error).flatten().map(|error|Notice::new(error).tone(Tone::Warning)))
-            .children(self.confirm_revert.then(||Notice::new("This discards the unsaved selection and adopts the last observed pi list without writing. It does not prove that an unconfirmed earlier save failed.").tone(Tone::Warning)))
+            .children(self.confirm_revert.then(||Notice::new("Discards your unsaved selection. Nothing is written; an unconfirmed earlier save may still have applied.").tone(Tone::Warning)))
             .when(!self.all,|this|this
                 .child(FieldRow::new("scope-search-row","Available models",Input::new(&self.search).aria_label("Find authenticated models").disabled(!editable)))
                 .children(groups.into_iter().map(|(provider, candidates)| {
@@ -489,7 +489,7 @@ impl Render for ScopedModels {
                         .child(Button::new(SharedString::from(format!("scope-provider-toggle-{provider}"))).ghost().small().justify_start().mx(rems(-0.5))
                             .accessibility_label(SharedString::from(format!("{} {label}, {selected} selected", if open { "Collapse" } else { "Expand" })))
                             .disabled(!query.is_empty())
-                            .tooltip(if query.is_empty() { "Expand or collapse provider" } else { "Search keeps matching providers expanded. Clear search to fold them." })
+                            .tooltip(if query.is_empty() { "Expand or collapse provider" } else { "Clear search to fold" })
                             .child(div().h_flex().items_center().gap_2().w_full().min_w_0()
                                 .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).small())
                                 .child(ui::text(Text::Label, SharedString::from(label)).id(SharedString::from(format!("scope-provider-title-{provider}"))).test_support().truncate().font_semibold().text_color(cx.theme().muted_foreground))
@@ -509,11 +509,11 @@ impl Render for ScopedModels {
                         .on_change(cx.listener(move|v,checked,w,cx|v.choose(&id,*checked,w,cx)))
                 }))))
                 }))
-                .child(ui::text(Text::Caption,SharedString::from(format!("{} of {matched} authenticated models loaded. Unavailable patterns are preserved.",matched.min(self.shown)))))
+                .child(ui::text(Text::Caption,SharedString::from(format!("{} of {matched} models shown. Unavailable patterns are kept.",matched.min(self.shown)))))
                 .when(matched>self.shown,|this|this.child(ui::action("scope-show-more","Show more models",Action::Quiet).on_click(cx.listener(|v,_,_,cx|{v.shown=(v.shown+30).min(2048);cx.notify();}))))
                 .child(ui::action("scope-advanced",if self.advanced{"Hide literal patterns"}else{"Advanced literal patterns…"},Action::Quiet).on_click(cx.listener(|v,_,w,cx|{if !v.marked(w,cx){v.advanced = !v.advanced;cx.notify();}})))
                 .when(self.advanced,|this|this.child(FieldRow::new("scope-patterns-row","Literal patterns, in order",Textarea::new(&self.patterns).aria_label("Global model patterns").readonly(!editable))
-                    .description("One per line. Order, duplicates, unavailable patterns, wildcards and thinking suffixes are kept literally. No automatic substitution."))))
-            .children(self.observed.as_ref().into_iter().flat_map(|s|s.resolution.iter()).filter_map(|r|r.unresolved.as_ref().map(|reason|ui::text(Text::Caption,SharedString::from(format!("Current pi pattern {}: {reason}. No automatic substitution.",r.pattern))))))
+                    .description("One per line, saved exactly as written."))))
+            .children(self.observed.as_ref().into_iter().flat_map(|s|s.resolution.iter()).filter_map(|r|r.unresolved.as_ref().map(|reason|ui::text(Text::Caption,SharedString::from(format!("Pattern {}: {reason}.",r.pattern))))))
     }
 }
