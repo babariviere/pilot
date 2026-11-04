@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.117.0](https://github.com/babariviere/pilot/compare/v1.116.1...v1.117.0) (2026-11-04)
+
+
+### Features
+
+* **desktop:** enable weekly Insights from one confirmation ([25c8376](https://github.com/babariviere/pilot/commit/25c8376ea049d98f9f5a81d5ba049b80f2a301e1))
+* **desktop:** start a chat from a Slack triage message ([4f0690d](https://github.com/babariviere/pilot/commit/4f0690dacbae8adfa4c0311ed4a1523fce39b3e0))
+* **insights:** enable weekly reports with durable setup ([6c1b9ee](https://github.com/babariviere/pilot/commit/6c1b9ee59cdc081380c89f5796d3871afcdcd04c))
+* **insights:** persist native-confirmed review settings ([7f8966e](https://github.com/babariviere/pilot/commit/7f8966ea450d98c91ca794e4eb275e83baabe9bc))
+* **review:** add passive project and chat read adapters ([788614c](https://github.com/babariviere/pilot/commit/788614c82c4ca054014f71ba051f4e33484cf24e))
+* **review:** compare exact retained callable bodies and edges ([d88f854](https://github.com/babariviere/pilot/commit/d88f85468b55b9bb66b8a4d6c0674e8b6d48ca43))
+* **review:** expose exact retained call changes ([c73d918](https://github.com/babariviere/pilot/commit/c73d918e28b2a2c0cae211ad9a3e631811348bd7))
+
+
+### Bug Fixes
+
+* **desktop:** label bounded Insights header counts honestly ([4e173c1](https://github.com/babariviere/pilot/commit/4e173c19c30ee90eed1c51b0c1392e82167cc29e))
+* **desktop:** pin known Insights report identity before enable ([1603dc6](https://github.com/babariviere/pilot/commit/1603dc6b3d2240f9abb5075f734bc1de39839128))
+* **desktop:** reconcile enabled weekly Insights with pending receipts ([4716397](https://github.com/babariviere/pilot/commit/4716397c4853ae6a938c441286dba6a8081aab23))
+* **desktop:** refresh pending Insights status and rank present state first ([0439154](https://github.com/babariviere/pilot/commit/043915494eaa3a6b631b4bcf9dc06830b1829b22))
+* **insights:** match native envelope by daemon lineage ([9ce4a15](https://github.com/babariviere/pilot/commit/9ce4a156aa672269743e58613a81109a28215a6b))
+* **insights:** refuse stale report identity substitutions ([25cbc60](https://github.com/babariviere/pilot/commit/25cbc608c3816809aaa90ac827ceb55954b25d37))
+* **missions:** allow coordinator closure without a commit ([2ae03ca](https://github.com/babariviere/pilot/commit/2ae03ca59fd4514e459d23044d263f6433e10b41))
+
 ## [1.116.1](https://github.com/babariviere/pilot/compare/v1.116.0...v1.116.1) (2026-11-04)
 
 
