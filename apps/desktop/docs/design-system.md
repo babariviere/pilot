@@ -474,19 +474,35 @@ not contact a daemon, change a profile or operate the installed app/service.
 
 ### Retained Review
 
-Mission detail's Review tab (`native_review_view`/`native_review_render`) composes the existing
-page/header, Kit Selects and Kit Diff. It adds no sidebar destination or Inbox attention.
-The summary has one bounded scroll owner, with exact IDs and optional reported evidence in
-disclosures; the virtualized diff fills the remaining viewport. Unified/Split, file choice,
-selection/copy and Before/After retained source share the immutable comparison. Escape/Back
-leaves source, then returns to Overview; Option-Up/Down moves between changes in Diff.
-No add-annotation callback, draft entity or submission/approval handler is installed.
-All data/cancellation/admission and exact selection belong to the pane/reader, never render.
-No live Changes/Open file capability is reused. Empty, partial, unsupported and refused inputs
-remain explicit. See [native Review](../../../docs/technical/mission-native-review.md) for scope and limits.
-The `native_review` hidden production-root target checks680/1100 light/dark, native controls,
-exact layer/stack identity, newer-revision pinning, source/back, resize, empty and denied reads.
-It is synthetic native interaction evidence, not OS IME/AX/performance qualification.
+Review is one global, change-centered page (D56). The sidebar's **Review** row opens every change
+with a review request; a chat header's **Review** icon opens the same page narrowed to that chat
+(`review_navigation`), with **All changes** to clear it. The page composes the existing page
+header, `ResourceLabel` rows, Kit Selects and Kit Diff in one pane
+(`native_review_view`/`native_review_render`). Missions and projects have no Review destination,
+and the chat is context, never the owner. Rows show the title, exact revision and request status;
+a chat's own saved revisions without a request say **No review request**. Opening a row targets
+that exact change; Back and Escape return through navigation history (source, then list, then the
+previous page). The summary has one bounded scroll owner, with exact IDs and optional reported
+evidence in Revision details; the virtualized diff fills the remaining viewport. Unified/Split,
+file jump, selection/copy and Before/After retained source share the immutable comparison;
+Option-Up/Down moves between changes in Diff. No add-annotation callback, draft entity or
+submission/approval handler is installed. Data, cancellation, admission and exact selection belong
+to the pane/reader, never render. Retained source never shows live bytes; **Open current file**
+leaves Review for the chat side panel's read-only file view after rechecking its custody.
+Empty, unavailable, partial, unsupported and refused inputs remain explicit. See
+[native Review](../../../docs/technical/mission-native-review.md) for scope and limits.
+The `native_review` hidden production-root target checks680/1100 light/dark, the global list,
+chat entry, saved revisions without a request, exact layer/stack identity, newer/unlisted pinning,
+source/back, the current-file handoff, resize, unavailable/empty/refused/moved reads and keyboard
+details. Its request list is a faux fixture of the approved #70 shape, not backend evidence, and it
+is synthetic native interaction evidence, not OS IME/AX/performance qualification.
+
+### Chat side-panel file view
+
+`session_file_panel` hosts the read-only live workspace file view (`session_file_view_native`) in
+the chat side-panel slot, replacing the removed Changes sidebar. It opens one exact relative path of
+a known chat workspace, from Review's **Open current file**; refresh is explicit and Escape returns
+mounted composer focus. See [file view](session-file-view.md).
 
 ### Sidebar presentation
 

@@ -109,8 +109,6 @@ mod session_clipboard;
 mod session_failure;
 mod session_file_view;
 mod session_file_view_reader;
-mod workspace_changes;
-mod workspace_changes_reader;
 mod workspace_setup;
 #[cfg(feature = "native-probes")]
 pub use local_view::automation_hooks_probe::run_automation_hooks_probe;
@@ -124,8 +122,6 @@ pub use local_view::diagnostic_repair_probe::run_diagnostic_repair_probe;
 pub use local_view::run_session_file_view_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::session_failure_probe::run_session_failure_probe;
-#[cfg(feature = "native-probes")]
-pub use local_view::workspace_changes_probe::run_workspace_changes_probe;
 mod chat_rename;
 mod chat_rename_view;
 mod project_settings;

@@ -1,10 +1,14 @@
-# Read-only file detail from Changes
+# Read-only current workspace file
 
-Expand a canonical Changes row, then choose **Open file** (Tab/Enter also works).
-The native detail reads the current workspace file, not the base or a historical
-Git revision. Refresh is explicit. Escape or Close returns to the retained Changes
-snapshot, restoring mounted composer/navigation focus before removing the detail.
-Deleted rows explain why Open file is unavailable. No path field or root browser,
+The Changes sidebar was removed (D56). The file view now sits in the chat side
+panel. Review's retained source view offers **Open current file** for a change's
+after path when its chat is loaded here: it rechecks the home, chat and current
+project, leaves Review for that chat and opens this panel. Back returns to the
+exact change. The native detail reads the current workspace file, not the base,
+the retained revision or a historical Git revision, and current bytes are never
+review evidence. Only an exact relative path of a known chat workspace opens; a
+missing file stays missing. Refresh is explicit. Escape or Close removes the panel,
+restoring mounted composer/navigation focus first. No path field or root browser,
 edits, saves, reverts, checkout, shell/Git/filesystem fallback or external opener.
 
 ## Audited authority
@@ -54,10 +58,9 @@ explicit; failed refresh retains the last snapshot under a stale warning.
 ## Verification
 
 Change → test rationale: bounded parsing/identity/cancellation maps to the nine
-`session_file_view` library tests; actual native detail and existing Changes
-composition map to the `session_file_view` and `workspace_changes` targets.
-`scripts/check-scoped.py --unit session_file_view --test session_file_view
---test workspace_changes --lint` uses shared admission and CPU2/4GiB/private mbx
+`session_file_view` library tests; actual native side-panel detail maps to the
+`session_file_view` target and the Review handoff to `native_review`.
+`scripts/check-scoped.py --unit session_file_view --test session_file_view --lint` uses shared admission and CPU2/4GiB/private mbx
 outputs, compiling production code plus those native targets. CI retains full
 suites and registers the new native target. Python CI/scoped orchestration tests
 cover the additive registration. No live data writes, daemon/app restart or install.

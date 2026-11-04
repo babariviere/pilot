@@ -22,7 +22,7 @@ fn sections(cx: &App) -> Vec<Section> {
     use super::{
         FocusChats, GoHome, NavigateBack, NavigateForward, NewChat, ShowAllChats, ShowAutomations,
         ShowMissions, SidebarCollapse, SidebarExpand, ToggleJump, conversation_links_view,
-        queued_message_view, workspace_changes_view,
+        queued_message_view,
     };
     let mut sections = Vec::new();
     let mut section = |title, note, commands: Vec<(&'static str, Box<dyn gpui_kit::Action>)>| {
@@ -71,10 +71,6 @@ fn sections(cx: &App) -> Vec<Section> {
             ("Automations", Box::new(ShowAutomations)),
             ("Back", Box::new(NavigateBack)),
             ("Forward", Box::new(NavigateForward)),
-            (
-                "Changes, when a chat is selected",
-                Box::new(workspace_changes_view::Toggle),
-            ),
             (
                 "Links, when a chat is selected",
                 Box::new(conversation_links_view::Toggle),

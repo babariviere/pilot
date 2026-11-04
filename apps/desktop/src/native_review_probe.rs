@@ -1,9 +1,10 @@
 //! Hidden production LocalViewer with an owned GET-only retained fixture.
+//! The global request list is the proposed shape, not backend evidence.
+use crate::mission_browser_fixture::{Reply, Server};
 use crate::{
-    LocalViewer,
-    mission_browser_fixture::{self as f, Reply, Server},
-    native_review_fixture as r,
+    LocalViewer, native_review_fixture as r,
     native_review_view::Pane,
+    navigation::{ReviewTarget, Target},
 };
 use gpui_kit::{
     AnyWindowHandle, App, AppContext, Bounds, Entity, HeadlessAppContext, WindowBounds,
@@ -52,6 +53,13 @@ fn choose(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &'static str, dow
 fn idle(cx: &mut HeadlessAppContext, h: AnyWindowHandle, p: &Entity<Pane>) {
     until(cx, h, |cx| !p.read(cx).probe(cx).0);
 }
+/// Opens one listed change from its row and waits for its exact revision.
+fn open_row(cx: &mut HeadlessAppContext, h: AnyWindowHandle, p: &Entity<Pane>, ix: usize) {
+    cx.update_window(h, |_, w, cx| w.click(("review-request", ix), cx))
+        .unwrap();
+    settle(cx, h);
+    idle(cx, h, p);
+}
 fn shot(cx: &mut HeadlessAppContext, h: AnyWindowHandle, dir: &Option<PathBuf>, name: String) {
     if let Some(d) = dir {
         cx.capture_screenshot(h)
@@ -67,32 +75,815 @@ fn view_file(cx: &mut HeadlessAppContext, h: AnyWindowHandle, pane: &Entity<Pane
         .unwrap();
     settle(cx, h);
 }
-/// Every visible control stays inside the pane, and choices never overlap.
-fn contained(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
+/// Every visible control stays inside the page.
+fn contained(cx: &mut HeadlessAppContext, h: AnyWindowHandle, ids: &[&'static str]) {
     cx.update_window(h, |_, w, _| {
-        let pane = w.find("native-review").bounds();
-        for id in [
-            "review-worker",
-            "review-comparison",
-            "review-actions",
-            "review-files-bar",
-        ] {
-            let b = w.find(id).bounds();
+        let page = w.find("review-page").bounds();
+        for id in ids {
+            let b = w.find(*id).bounds();
             assert!(
-                b.left() >= pane.left() - px(1.) && b.right() <= pane.right() + px(1.),
+                b.left() >= page.left() - px(1.) && b.right() <= page.right() + px(1.),
                 "{id} overflows"
             );
         }
-        let (a, b) = (
-            w.find("review-worker").bounds(),
-            w.find("review-comparison").bounds(),
-        );
+    })
+    .unwrap();
+}
+fn target(cx: &mut HeadlessAppContext, view: &Entity<LocalViewer>) -> Target {
+    cx.update(|cx| view.read(cx).review_fixture_target(cx))
+}
+fn review(chat: Option<&str>, request: Option<&str>) -> Target {
+    Target::Review(ReviewTarget {
+        chat: chat.map(Into::into),
+        request: request.map(Into::into),
+        snapshot: None,
+    })
+}
+fn fixture_chat(id: &str, title: &str, project: &str) -> crate::local_model::Chat {
+    crate::local_model::chat(&json!({"id":id,"title":title,"projectId":project,"state":"idle","cwd":format!("/synthetic/{id}")})).unwrap()
+}
+fn chats(b_project: &str) -> Vec<crate::local_model::Chat> {
+    vec![
+        fixture_chat("chat-B", r::PARSER, b_project),
+        fixture_chat("chat-C", "Lexer worker", "project-A"),
+        fixture_chat("chat-S", "Standalone notes chat", "project-A"),
+        fixture_chat("chat-N", "New standalone chat", "project-B"),
+    ]
+}
+fn set_chats(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    view: &Entity<LocalViewer>,
+    chats: Vec<crate::local_model::Chat>,
+) {
+    cx.update_window(h, |_, w, cx| {
+        view.update(cx, |v, cx| v.review_fixture_chats(chats, w, cx))
+    })
+    .unwrap();
+    settle(cx, h);
+}
+fn open_chat(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    view: &Entity<LocalViewer>,
+    id: &str,
+) {
+    let opened = cx
+        .update_window(h, |_, w, cx| {
+            view.update(cx, |v, cx| v.review_fixture_open(id, w, cx))
+        })
+        .unwrap();
+    assert!(opened);
+    settle(cx, h);
+}
+/// Review reads since `from` are GETs of the global list or exact chat routes, each chat
+/// read expecting the project its request listed: never mission, project or live reads.
+fn review_reads(s: &Server, from: usize) -> usize {
+    assert_eq!(s.write_count(), 0, "Review never writes");
+    let seen = &s.state.lock().unwrap().seen;
+    let reads: Vec<_> = seen[from..]
+        .iter()
+        .filter(|(_, p)| p.contains("/review"))
+        .collect();
+    for (method, path) in &reads {
+        assert_eq!(method, "GET", "{path}");
+        let chat = ["chat-B", "chat-C", "chat-N", "chat-S"]
+            .into_iter()
+            .find(|c| {
+                path.starts_with(&format!("{}/", r::chat(c)))
+                    || path.starts_with(&format!("{}?after=", r::chat(c)))
+            });
         assert!(
-            b.left() >= a.right() || b.top() >= a.bottom(),
-            "choices overlap"
+            path.starts_with("/api/review/requests?after=") || chat.is_some(),
+            "unexpected Review read {path}"
+        );
+        if let Some(c) = chat {
+            // After chat-B is known to have moved, only its saved list is read, under
+            // the project it is in now.
+            let moved = c == "chat-B"
+                && path.starts_with(&format!("{}?after=", r::chat(c)))
+                && path.ends_with("expectedProjectId=project-B");
+            assert!(
+                moved || path.ends_with(&format!("expectedProjectId={}", r::project_of(c))),
+                "chat Review read without its listed project: {path}"
+            );
+        }
+    }
+    assert!(
+        seen.iter().all(|(_, p)| !p.contains("/changes")
+            && !p.contains("/workspace")
+            && !p.contains("/files")),
+        "no live workspace reads"
+    );
+    reads.len()
+}
+/// The global list from the sidebar: every change with a request, each opening its exact
+/// revision; the list survives opening and going back.
+#[allow(clippy::too_many_arguments)]
+fn global(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    view: &Entity<LocalViewer>,
+    s: &Server,
+    retained: &serde_json::Value,
+    dir: &Option<PathBuf>,
+    width: f32,
+    theme: &str,
+) {
+    let w0 = width as u32;
+    click(cx, h, "nav-review");
+    assert_eq!(target(cx, view), review(None, None));
+    let pane = cx.update(|cx| view.read(cx).review_fixture_pane().unwrap());
+    idle(cx, h, &pane);
+    cx.update(|cx| {
+        assert_eq!(
+            pane.read(cx).probe_requests(),
+            ["req-1", "req-2", "req-3", "req-4"]
+        );
+        assert_eq!(pane.read(cx).probe_state(), None);
+    });
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("review-list").bounds().size.height > px(0.));
+        assert!(w.find(("review-request", 3usize)).bounds().size.height > px(0.));
+        assert!(w.try_find("review-page-all").is_none());
+        assert!(
+            w.try_find("review-diff").is_none(),
+            "the list never auto-opens a change"
         );
     })
     .unwrap();
+    contained(
+        cx,
+        h,
+        &["review-page-header", "review-actions", "review-list"],
+    );
+    shot(cx, h, dir, format!("review-{w0}-{theme}-list.png"));
+    // Loading shows where the diff goes.
+    let first = r::comparison(1, "layer");
+    let mut slow = Reply::json(200, r::snapshot(&first));
+    slow.delay_ms = 600;
+    r::reply(s, &format!("{}/{:064x}", r::ROOT, 1), slow);
+    cx.update_window(h, |_, w, cx| w.click(("review-request", 0usize), cx))
+        .unwrap();
+    settle(cx, h);
+    assert_eq!(target(cx, view), review(None, Some("req-1")));
+    cx.update(|cx| assert_eq!(pane.read(cx).probe_state(), Some("Loading diff…")));
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("review-state").bounds().size.height > px(0.));
+        assert!(w.try_find("review-list").is_none());
+    })
+    .unwrap();
+    idle(cx, h, &pane);
+    cx.update(|cx| {
+        let p = pane.read(cx).probe(cx);
+        assert_eq!(p.1, Some(format!("{:064x}", 1)));
+        assert_eq!(p.3, 1);
+        assert_eq!(p.4, None);
+        assert_eq!(pane.read(cx).probe_state(), None);
+    });
+    cx.update_window(h, |_, w, cx| {
+        let b = w.find("review-diff").bounds();
+        assert!(b.size.height > px(160.));
+        assert!(w.find("review-change-title").bounds().size.height > px(0.));
+        assert!(
+            w.find("review-details").bounds().bottom()
+                <= w.find("review-summary").bounds().bottom() + px(1.),
+            "Details must be visible without scrolling"
+        );
+        assert!(
+            w.try_find("review-records").is_none(),
+            "evidence stays in Revision details"
+        );
+        assert!(
+            w.try_find("review-identities").is_none(),
+            "no technical identity in the default view"
+        );
+        assert!(w.try_find("review-newer").is_none());
+        assert!(w.find("review-files-summary").bounds().size.height > px(0.));
+        assert!(w.try_find("review-jump").is_none(), "no jump for one file");
+        assert!(b.right() <= w.find("native-review").bounds().right() + px(1.));
+        w.click("review-diff", cx);
+        w.press("down", cx);
+        w.press("alt-down", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    // Revision details is reachable and operable from the keyboard alone.
+    for _ in 0..40 {
+        let focused = cx
+            .update_window(h, |_, w, cx| {
+                let on = w.find("review-details").focused() == Some(true);
+                if !on {
+                    w.press("tab", cx);
+                }
+                on
+            })
+            .unwrap();
+        settle(cx, h);
+        if focused {
+            break;
+        }
+    }
+    cx.update_window(h, |_, w, cx| {
+        assert_eq!(w.find("review-details").focused(), Some(true));
+        w.press("space", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("review-details-panel").bounds().size.height > px(0.));
+        assert!(w.find("review-identities").bounds().size.height > px(0.));
+    })
+    .unwrap();
+    shot(cx, h, dir, format!("review-{w0}-{theme}-details.png"));
+    cx.update_window(h, |_, w, cx| w.press("escape", cx))
+        .unwrap();
+    settle(cx, h);
+    cx.update_window(h, |_, w, _| {
+        assert!(w.try_find("review-details-panel").is_none())
+    })
+    .unwrap();
+    // Escape closed only the dialog: the exact change and its diff remain.
+    assert_eq!(target(cx, view), review(None, Some("req-1")));
+    cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).3, 1));
+    click(cx, h, "review-split");
+    click(cx, h, "review-unified");
+    // Back returns to the same list; another row opens its own exact revision.
+    click(cx, h, "review-page-back");
+    assert_eq!(target(cx, view), review(None, None));
+    idle(cx, h, &pane);
+    cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).1, None));
+    open_row(cx, h, &pane, 1);
+    cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).1, Some(format!("{:064x}", 2))));
+    // A new request for a later revision never changes the open exact layer/stack.
+    let mut partial = r::comparison(3, "layer");
+    partial["status"] = json!("partial");
+    let mut manifest = r::snapshot(&partial);
+    manifest["omissions"] = json!(["before: one blob omitted (limit)"]);
+    let mut listed = r::requests();
+    listed.push(r::request("req-5", 5, "chat-B", r::PARSER, &partial));
+    s.reply(r::REQUESTS, Reply::json(200, r::list(listed.clone())));
+    r::reply(
+        s,
+        &format!("{}/{:064x}", r::ROOT, 3),
+        Reply::json(200, manifest),
+    );
+    r::reply(
+        s,
+        &format!("{}/{:064x}/patch", r::ROOT, 3),
+        Reply::json(
+            200,
+            json!({"snapshotId":format!("{:064x}",3),"patch":r::PATCH}),
+        ),
+    );
+    click(cx, h, "review-refresh");
+    idle(cx, h, &pane);
+    cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).1, Some(format!("{:064x}", 2))));
+    // The other scope's later revision is not newer for the stack.
+    cx.update_window(h, |_, w, _| assert!(w.try_find("review-newer").is_none()))
+        .unwrap();
+    click(cx, h, "review-page-back");
+    idle(cx, h, &pane);
+    open_row(cx, h, &pane, 0);
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("review-newer").bounds().size.height > px(0.))
+    })
+    .unwrap();
+    cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).1, Some(format!("{:064x}", 1))));
+    click(cx, h, "review-page-back");
+    idle(cx, h, &pane);
+    open_row(cx, h, &pane, 4);
+    cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).1, Some(format!("{:064x}", 3))));
+    // The partial warning is visible without opening Details.
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("review-status").bounds().size.height > px(0.))
+    })
+    .unwrap();
+    // A change that leaves the list stays pinned and says so.
+    s.reply(r::REQUESTS, Reply::json(200, r::list(r::requests())));
+    click(cx, h, "review-refresh");
+    idle(cx, h, &pane);
+    cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).1, Some(format!("{:064x}", 3))));
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("review-unlisted").bounds().size.height > px(0.))
+    })
+    .unwrap();
+    click(cx, h, "review-page-back");
+    idle(cx, h, &pane);
+    open_row(cx, h, &pane, 1);
+    view_file(cx, h, &pane, 0);
+    idle(cx, h, &pane);
+    cx.update(|cx| {
+        assert!(
+            pane.read(cx)
+                .probe(cx)
+                .2
+                .unwrap()
+                .contains("retained lower")
+        )
+    });
+    cx.update_window(h, |_, w, cx| w.press("escape", cx))
+        .unwrap();
+    settle(cx, h);
+    cx.update(|cx| assert!(pane.read(cx).probe(cx).2.is_none()));
+    assert_eq!(target(cx, view), review(None, Some("req-2")));
+    // The same exact revision 2 now holds three files, shown as one continuous list.
+    let (manifest, patch) = r::multi(&r::comparison(2, "stack"));
+    r::reply(
+        s,
+        &format!("{}/{:064x}", r::ROOT, 2),
+        Reply::json(200, manifest),
+    );
+    r::reply(
+        s,
+        &format!("{}/{:064x}/patch", r::ROOT, 2),
+        Reply::json(
+            200,
+            json!({"snapshotId":format!("{:064x}",2),"patch":patch}),
+        ),
+    );
+    click(cx, h, "review-refresh");
+    idle(cx, h, &pane);
+    cx.update(|cx| {
+        let p = pane.read(cx).probe(cx);
+        assert_eq!(p.1, Some(format!("{:064x}", 2)));
+        assert_eq!(p.3, 3);
+    });
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("review-jump").bounds().size.height > px(0.));
+    })
+    .unwrap();
+    // Jumping scrolls the full list; it never narrows it to one file.
+    choose(cx, h, "review-jump", 3);
+    cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).3, 3));
+    // A deleted file opens its retained before side.
+    r::reply(
+        s,
+        &format!(
+            "{}/{:064x}/source?side=before&path=old.txt&sha256={}",
+            r::ROOT,
+            2,
+            crate::native_review::hash(b"gone\n")
+        ),
+        Reply::json(
+            200,
+            json!({"snapshotId":format!("{:064x}",2),"text":"gone\n"}),
+        ),
+    );
+    view_file(cx, h, &pane, 2);
+    idle(cx, h, &pane);
+    cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).2.as_deref(), Some("gone\n")));
+    // A deleted file has no after side: the switch is disabled, not a warning, and
+    // there is no current file to open.
+    click(cx, h, "review-after");
+    cx.update(|cx| {
+        let p = pane.read(cx).probe(cx);
+        assert_eq!(p.2.as_deref(), Some("gone\n"));
+        assert_eq!(p.4, None);
+        assert!(!p.0);
+    });
+    cx.update_window(h, |_, w, _| {
+        assert!(w.try_find("review-current-file").is_none())
+    })
+    .unwrap();
+    click(cx, h, "review-back");
+    cx.update(|cx| assert!(pane.read(cx).probe(cx).2.is_none()));
+    // Back during a slow Before read cancels it: the late reply never reopens source.
+    view_file(cx, h, &pane, 0);
+    idle(cx, h, &pane);
+    let mut slow = Reply::json(
+        200,
+        json!({"snapshotId":format!("{:064x}",2),"text":"before\n"}),
+    );
+    slow.delay_ms = 600;
+    r::reply(
+        s,
+        &format!(
+            "{}/{:064x}/source?side=before&path=a.rs&sha256={}",
+            r::ROOT,
+            2,
+            crate::native_review::hash(b"before\n")
+        ),
+        slow,
+    );
+    click(cx, h, "review-before");
+    cx.update(|cx| assert!(pane.read(cx).probe(cx).0, "before read pending"));
+    click(cx, h, "review-back");
+    let end = Instant::now() + Duration::from_millis(1200);
+    while Instant::now() < end {
+        settle(cx, h);
+        std::thread::yield_now();
+    }
+    cx.update(|cx| {
+        let p = pane.read(cx).probe(cx);
+        assert!(
+            p.2.is_none(),
+            "late source reply reopened source after Back"
+        );
+        assert_eq!(p.1, Some(format!("{:064x}", 2)));
+        assert_eq!(p.3, 3);
+        assert_eq!(p.4, None);
+        assert!(!p.0);
+    });
+    cx.update_window(h, |_, w, cx| {
+        assert!(pane.read(cx).owns_focus(w, cx), "focus stays in Review");
+    })
+    .unwrap();
+    let ids = [
+        "review-page-header",
+        "review-change",
+        "review-actions",
+        "review-files-bar",
+    ];
+    contained(cx, h, &ids);
+    let other = if width == 680. { 1100. } else { 680. };
+    cx.update_window(h, |_, w, cx| {
+        w.resize(size(px(other), px(700.)));
+        w.bounds_changed(cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    contained(cx, h, &ids);
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("review-diff").bounds().size.height > px(100.))
+    })
+    .unwrap();
+    shot(cx, h, dir, format!("review-{}-{theme}.png", other as u32));
+    cx.update(|cx| pane.update(cx, |p, cx| p.probe_stale(cx)));
+    // A refused target clears all prior authorized source/diff, not just its badge.
+    r::reply(
+        s,
+        &format!("{}/{:064x}", r::ROOT, 2),
+        Reply::json(403, json!({"error":"denied"})),
+    );
+    click(cx, h, "review-refresh");
+    idle(cx, h, &pane);
+    cx.update(|cx| {
+        let p = pane.read(cx).probe(cx);
+        assert_eq!(p.3, 0);
+        assert!(p.4.is_some());
+    });
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("review-error").bounds().size.height > px(0.))
+    })
+    .unwrap();
+    r::install(s);
+    click(cx, h, "review-refresh");
+    idle(cx, h, &pane);
+    cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).3, 1));
+    // Consume actual retained bytes, not the hand-authored demo manifest above.
+    for (path, response) in retained["routes"].as_object().unwrap() {
+        // The capture fixture names the mission-compatible path; reads use the chat route.
+        let path = path.replacen("/api/missions/mission-A/review/chat-B", r::ROOT, 1);
+        r::reply(s, &path, Reply::json(200, response.clone()));
+    }
+    let real = &retained["first"]["comparisons"][0];
+    let real_id = real["snapshotId"].as_str().unwrap();
+    let mut with_real = r::requests();
+    with_real.push(r::request("req-real", 10, "chat-B", r::PARSER, real));
+    s.reply(r::REQUESTS, Reply::json(200, r::list(with_real.clone())));
+    click(cx, h, "review-page-back");
+    idle(cx, h, &pane);
+    click(cx, h, "review-refresh");
+    idle(cx, h, &pane);
+    open_row(cx, h, &pane, 4);
+    cx.update(|cx| {
+        assert_eq!(pane.read(cx).probe(cx).1.as_deref(), Some(real_id));
+        assert_eq!(pane.read(cx).probe(cx).3, 1);
+    });
+    // A later real capture listed beside it never moves the open exact one; it is a
+    // different change, so it is not called a newer revision of this one.
+    let latest = retained["latest"]["comparisons"].as_array().unwrap();
+    let newest = latest.last().unwrap();
+    assert_ne!(newest["snapshotId"], real["snapshotId"]);
+    with_real.push(r::request("req-real-2", 11, "chat-B", r::PARSER, newest));
+    s.reply(r::REQUESTS, Reply::json(200, r::list(with_real)));
+    click(cx, h, "review-refresh");
+    idle(cx, h, &pane);
+    cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).1.as_deref(), Some(real_id)));
+    cx.update_window(h, |_, w, _| assert!(w.try_find("review-newer").is_none()))
+        .unwrap();
+    view_file(cx, h, &pane, 0);
+    idle(cx, h, &pane);
+    cx.update(|cx| {
+        assert!(
+            pane.read(cx)
+                .probe(cx)
+                .2
+                .as_deref()
+                .unwrap()
+                .contains("retained lower")
+        )
+    });
+    click(cx, h, "review-back");
+    click(cx, h, "review-page-back");
+    idle(cx, h, &pane);
+    // No request source is unavailable, distinct from an empty queue and from an error.
+    s.reply(
+        r::REQUESTS,
+        Reply::json(
+            200,
+            json!({"requests":[],"next":null,"unavailable":"not installed"}),
+        ),
+    );
+    click(cx, h, "review-refresh");
+    idle(cx, h, &pane);
+    cx.update(|cx| {
+        assert_eq!(pane.read(cx).probe(cx).4, None);
+        assert_eq!(
+            pane.read(cx).probe_state(),
+            Some("Review requests are unavailable.")
+        );
+    });
+    cx.update_window(h, |_, w, _| {
+        assert!(w.try_find("review-list").is_none());
+        assert!(w.find("review-state").bounds().size.height > px(0.));
+    })
+    .unwrap();
+    shot(
+        cx,
+        h,
+        dir,
+        format!("review-{}-{theme}-unavailable.png", other as u32),
+    );
+    s.reply(r::REQUESTS, Reply::json(200, r::list(vec![])));
+    click(cx, h, "review-refresh");
+    idle(cx, h, &pane);
+    cx.update(|cx| {
+        assert_eq!(
+            pane.read(cx).probe_state(),
+            Some("Nothing is waiting for review.")
+        )
+    });
+    shot(
+        cx,
+        h,
+        dir,
+        format!("review-{}-{theme}-empty.png", other as u32),
+    );
+    // Escape from the list leaves Review for where it was opened.
+    cx.update_window(h, |_, w, cx| {
+        pane.update(cx, |p, cx| p.focus(w, cx));
+        w.press("escape", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    assert!(!matches!(target(cx, view), Target::Review(_)));
+    r::install(s);
+}
+/// A chat's Review button opens the same global Review narrowed to that chat; its rows
+/// open the same exact targets. Standalone and mission chats get the same page.
+fn from_chat(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    view: &Entity<LocalViewer>,
+    s: &Server,
+    dir: &Option<PathBuf>,
+    name: &str,
+) {
+    r::install(s);
+    let start = s.state.lock().unwrap().seen.len();
+    set_chats(cx, h, view, chats("project-A"));
+    open_chat(cx, h, view, "chat-B");
+    click(cx, h, "chat-review");
+    assert_eq!(target(cx, view), review(Some("chat-B"), None));
+    let pane = cx.update(|cx| view.read(cx).review_fixture_pane().unwrap());
+    idle(cx, h, &pane);
+    cx.update(|cx| assert_eq!(pane.read(cx).probe_requests(), ["req-1", "req-2"]));
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("review-page-subtitle").bounds().size.height > px(0.));
+        assert!(w.find("review-page-all").bounds().size.height > px(0.));
+    })
+    .unwrap();
+    open_row(cx, h, &pane, 0);
+    assert_eq!(target(cx, view), review(Some("chat-B"), Some("req-1")));
+    cx.update(|cx| {
+        let p = pane.read(cx).probe(cx);
+        assert_eq!(p.1, Some(format!("{:064x}", 1)));
+        assert_eq!((p.3, p.4), (1, None));
+    });
+    shot(cx, h, dir, format!("review-{name}-chat.png"));
+    // A known move of this change's chat to another project closes it here, and
+    // Refresh never reads that chat again under the old project.
+    let chat_b_reads = |s: &Server| {
+        s.state
+            .lock()
+            .unwrap()
+            .seen
+            .iter()
+            .filter(|(_, p)| {
+                p.starts_with("/api/sessions/chat-B/")
+                    && !(p.contains("?after=") && p.ends_with("expectedProjectId=project-B"))
+            })
+            .count()
+    };
+    set_chats(cx, h, view, chats("project-B"));
+    let before = chat_b_reads(s);
+    cx.update(|cx| {
+        let p = pane.read(cx).probe(cx);
+        assert_eq!(p.3, 0, "moved chat content cleared");
+        assert!(p.4.unwrap().contains("another project"));
+    });
+    click(cx, h, "review-refresh");
+    idle(cx, h, &pane);
+    cx.update(|cx| {
+        let p = pane.read(cx).probe(cx);
+        assert_eq!(p.3, 0, "Refresh never reopens it");
+        assert!(p.4.unwrap().contains("another project"));
+    });
+    assert_eq!(
+        before,
+        chat_b_reads(s),
+        "no change read, and nothing under the old project, after a known move"
+    );
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("review-error").bounds().size.height > px(0.));
+    })
+    .unwrap();
+    set_chats(cx, h, view, chats("project-A"));
+    // Escape goes back through history: the chat's list, then the chat.
+    cx.update_window(h, |_, w, cx| {
+        pane.update(cx, |p, cx| p.focus(w, cx));
+        w.press("escape", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    assert_eq!(target(cx, view), review(Some("chat-B"), None));
+    idle(cx, h, &pane);
+    cx.update_window(h, |_, w, cx| {
+        pane.update(cx, |p, cx| p.focus(w, cx));
+        w.press("escape", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    assert_eq!(target(cx, view), Target::Chat("chat-B".into()));
+    // A stale target the host already has in another project is refused by the
+    // expected-project check; nothing is shown.
+    r::reply(
+        s,
+        &format!("{}/{:064x}", r::chat("chat-C"), 0xc001),
+        Reply::json(
+            403,
+            json!({"error":"Retained Review unavailable in this scope"}),
+        ),
+    );
+    open_chat(cx, h, view, "chat-C");
+    click(cx, h, "chat-review");
+    idle(cx, h, &pane);
+    open_row(cx, h, &pane, 0);
+    cx.update(|cx| {
+        let p = pane.read(cx).probe(cx);
+        assert_eq!(p.3, 0);
+        assert_eq!(p.4, Some(crate::native_review_reader::ACCESS_REFUSED));
+    });
+    r::install(s);
+    // The chat's saved revision without a request opens in the same view, as itself:
+    // never labelled pending and never a minted request.
+    click(cx, h, "review-page-back");
+    idle(cx, h, &pane);
+    cx.update(|cx| {
+        assert_eq!(pane.read(cx).probe_requests(), ["req-3"]);
+        assert_eq!(pane.read(cx).probe_saved(), [format!("{:064x}", 0xc002)]);
+    });
+    cx.update_window(h, |_, w, cx| w.click(("review-saved", 0usize), cx))
+        .unwrap();
+    settle(cx, h);
+    idle(cx, h, &pane);
+    assert_eq!(
+        target(cx, view),
+        Target::Review(ReviewTarget {
+            chat: Some("chat-C".into()),
+            request: None,
+            snapshot: Some(format!("{:064x}", 0xc002)),
+        })
+    );
+    cx.update(|cx| {
+        let p = pane.read(cx).probe(cx);
+        assert_eq!(p.1, Some(format!("{:064x}", 0xc002)));
+        assert_eq!((p.3, p.4), (1, None));
+        assert_eq!(pane.read(cx).probe_status(), Some("No review request"));
+    });
+    assert_eq!(s.write_count(), 0, "opening never requests review");
+    // A new standalone chat's project-owned capture in another project shows its exact
+    // revision; details name the project capture and no task scope.
+    open_chat(cx, h, view, "chat-N");
+    click(cx, h, "chat-review");
+    idle(cx, h, &pane);
+    cx.update(|cx| assert_eq!(pane.read(cx).probe_requests(), ["req-4"]));
+    open_row(cx, h, &pane, 0);
+    cx.update(|cx| {
+        let p = pane.read(cx).probe(cx);
+        assert_eq!(p.1, Some(format!("{:064x}", 0xc005)));
+        assert_eq!((p.3, p.4), (1, None));
+        assert_eq!(
+            pane.read(cx).probe_enrollment().as_deref(),
+            Some("project-owned chat capture · no task scope")
+        );
+    });
+    click(cx, h, "review-details");
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("review-identities").bounds().size.height > px(0.));
+    })
+    .unwrap();
+    shot(cx, h, dir, format!("review-{name}-standalone-captured.png"));
+    cx.update_window(h, |_, w, cx| w.press("escape", cx))
+        .unwrap();
+    settle(cx, h);
+    cx.update_window(h, |_, w, _| {
+        assert!(w.try_find("review-details-panel").is_none());
+    })
+    .unwrap();
+    // The current workspace file opens in its chat, outside Review.
+    view_file(cx, h, &pane, 0);
+    idle(cx, h, &pane);
+    click(cx, h, "review-current-file");
+    assert_eq!(target(cx, view), Target::Chat("chat-N".into()));
+    cx.update(|cx| assert!(view.read(cx).review_fixture_file_open()));
+    // Back from the chat returns to the exact change in global Review.
+    cx.update_window(h, |_, w, cx| {
+        view.update(cx, |v, cx| v.review_fixture_back(w, cx))
+    })
+    .unwrap();
+    settle(cx, h);
+    assert_eq!(target(cx, view), review(Some("chat-N"), Some("req-4")));
+    idle(cx, h, &pane);
+    cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).1, Some(format!("{:064x}", 0xc005))));
+    // A standalone chat without retained custody says so; no mission is needed.
+    open_chat(cx, h, view, "chat-S");
+    cx.update(|cx| assert!(!view.read(cx).review_fixture_file_open()));
+    click(cx, h, "chat-review");
+    assert_eq!(target(cx, view), review(Some("chat-S"), None));
+    idle(cx, h, &pane);
+    cx.update(|cx| {
+        let p = pane.read(cx).probe(cx);
+        assert_eq!(pane.read(cx).probe_state(), Some("Not captured"));
+        assert_eq!(pane.read(cx).probe_capture_notice(), None);
+        assert_eq!((p.1, p.3, p.4), (None, 0, None));
+    });
+    shot(cx, h, dir, format!("review-{name}-standalone.png"));
+    // Failed capture is distinct from an empty inventory; its limits live in details.
+    let saved_s = format!("{}?after=0", r::chat("chat-S"));
+    r::reply(
+        s,
+        &saved_s,
+        Reply::json(
+            200,
+            json!({"comparisons":[],"next":null,"capture":{"pending":0,"failed":1}}),
+        ),
+    );
+    click(cx, h, "review-refresh");
+    idle(cx, h, &pane);
+    cx.update(|cx| {
+        assert_eq!(pane.read(cx).probe_capture_notice(),Some("Saving some committed revisions couldn't be confirmed. They remain queued for exact recovery at the next worker checkpoint; existing saved revisions are unchanged."));
+        assert_eq!(
+            pane.read(cx).probe_state(),
+            Some("Nothing from this chat is waiting for review.")
+        );
+    });
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("review-capture-notice").bounds().size.height > px(0.))
+    })
+    .unwrap();
+    r::reply(
+        s,
+        &saved_s,
+        Reply::json(
+            200,
+            json!({"comparisons":[],"next":null,"capture":{"pending":0,"failed":0,"unsupported":["divergent","multiple-parents","root-base","missing","unknown-custody","unknown-discovery","conflicted"]}}),
+        ),
+    );
+    click(cx, h, "review-refresh");
+    idle(cx, h, &pane);
+    cx.update(|cx| {
+        assert!(
+            pane.read(cx)
+                .probe_capture_notice()
+                .unwrap()
+                .contains("Conflicted")
+        )
+    });
+    click(cx, h, "review-details");
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("review-capture-limitations").bounds().size.height > px(0.));
+    })
+    .unwrap();
+    cx.update_window(h, |_, w, cx| w.press("escape", cx))
+        .unwrap();
+    settle(cx, h);
+    r::install(s);
+    // All changes is the same global list.
+    click(cx, h, "review-page-all");
+    assert_eq!(target(cx, view), review(None, None));
+    idle(cx, h, &pane);
+    cx.update(|cx| assert_eq!(pane.read(cx).probe_requests().len(), 4));
+    click(cx, h, "review-page-back");
+    assert_eq!(target(cx, view), review(Some("chat-S"), None));
+    idle(cx, h, &pane);
+    assert!(s.all_gets());
+    // Each open, Back and Refresh reads once: no polling or repeated reads. A chat entry
+    // reads its request page and saved list; this journey makes 29 such reads.
+    let reads = review_reads(s, start);
+    assert!(reads <= 30, "bounded Review reads, saw {reads}");
 }
 pub fn run_native_review_probe(cx: &mut HeadlessAppContext) {
     cx.update(|cx| cx.set_reduce_motion(true));
@@ -175,480 +966,22 @@ pub fn run_native_review_probe(cx: &mut HeadlessAppContext) {
             until(cx, h, |cx| {
                 browser.read(cx).catalog.is_some() && !browser.read(cx).busy
             });
-            cx.update_window(h, |_, w, cx| {
-                w.click(format!("mission-row-{}", f::key("mission-A").tag()), cx)
-            })
-            .unwrap();
-            until(cx, h, |cx| {
-                browser.read(cx).detail.is_some() && !browser.read(cx).busy
-            });
-            click(cx, h, "mission-tab-review");
-            let pane = cx.update(|cx| browser.read(cx).review.clone().unwrap());
-            idle(cx, h, &pane);
-            cx.update(|cx| {
-                assert_eq!(
-                    pane.read(cx).probe_state(),
-                    Some("Choose a worker to see its saved revisions.")
-                )
-            });
-            choose(cx, h, "review-worker", 1);
-            idle(cx, h, &pane);
-            cx.update(|cx| {
-                assert_eq!(
-                    pane.read(cx).probe_state(),
-                    Some("Choose a saved revision to see its diff.")
-                )
-            });
-            // Loading shows where the diff goes; the selectors stay mounted and usable.
-            let first = r::comparison(1, "layer");
-            let mut slow = Reply::json(200, r::snapshot(&first));
-            slow.delay_ms = 600;
-            s.reply(&format!("{}/chat-B/{:064x}", r::ROOT, 1), slow);
-            choose(cx, h, "review-comparison", 1);
-            cx.update(|cx| assert_eq!(pane.read(cx).probe_state(), Some("Loading diff…")));
-            cx.update_window(h, |_, w, _| {
-                assert!(w.find("review-state").bounds().size.height > px(0.));
-                assert!(w.try_find("review-comparison").is_some());
-            })
-            .unwrap();
-            idle(cx, h, &pane);
-            cx.update(|cx| {
-                let p = pane.read(cx).probe(cx);
-                assert_eq!(p.1, Some(format!("{:064x}", 1)));
-                assert_eq!(p.3, 1);
-                assert_eq!(p.4, None);
-                assert_eq!(pane.read(cx).probe_state(), None);
-            });
-            cx.update_window(h, |_, w, cx| {
-                let b = w.find("review-diff").bounds();
-                assert!(b.size.height > px(160.));
-                assert!(
-                    w.find("review-details").bounds().bottom()
-                        <= w.find("review-summary").bounds().bottom() + px(1.),
-                    "Details must be visible without scrolling"
-                );
-                assert!(
-                    w.try_find("review-records").is_none(),
-                    "evidence stays in Revision details"
-                );
-                assert!(
-                    w.try_find("review-identities").is_none(),
-                    "no technical identity in the default view"
-                );
-                assert!(w.find("review-files-summary").bounds().size.height > px(0.));
-                assert!(w.try_find("review-jump").is_none(), "no jump for one file");
-                assert!(b.right() <= w.find("native-review").bounds().right() + px(1.));
-                w.click("review-diff", cx);
-                w.press("down", cx);
-                w.press("alt-down", cx);
-            })
-            .unwrap();
-            settle(cx, h);
-            // Revision details is reachable and operable from the keyboard alone.
-            for _ in 0..40 {
-                let focused = cx
-                    .update_window(h, |_, w, cx| {
-                        let on = w.find("review-details").focused() == Some(true);
-                        if !on {
-                            w.press("tab", cx);
-                        }
-                        on
-                    })
-                    .unwrap();
-                settle(cx, h);
-                if focused {
-                    break;
-                }
-            }
-            cx.update_window(h, |_, w, cx| {
-                assert_eq!(w.find("review-details").focused(), Some(true));
-                w.press("space", cx);
-            })
-            .unwrap();
-            settle(cx, h);
-            cx.update_window(h, |_, w, _| {
-                assert!(w.find("review-details-panel").bounds().size.height > px(0.));
-                assert!(w.find("review-identities").bounds().size.height > px(0.));
-            })
-            .unwrap();
+            set_chats(cx, h, &view, chats("project-A"));
             let theme = if dark { "dark" } else { "light" };
-            shot(
-                cx,
-                h,
-                &dir,
-                format!("review-{}-{theme}-details.png", width as u32),
-            );
-            cx.update_window(h, |_, w, cx| {
-                w.press("escape", cx);
-            })
-            .unwrap();
-            settle(cx, h);
-            cx.update_window(h, |_, w, _| {
-                assert!(w.try_find("review-details-panel").is_none())
-            })
-            .unwrap();
-            // Escape closed only the dialog: Review and its exact diff remain.
-            cx.update(|cx| {
-                assert_eq!(
-                    browser.read(cx).tab,
-                    crate::mission_browser_view::Tab::Review
-                );
-                assert_eq!(pane.read(cx).probe(cx).3, 1);
-            });
-            click(cx, h, "review-split");
-            click(cx, h, "review-unified");
-            choose(cx, h, "review-comparison", 1);
-            idle(cx, h, &pane);
-            cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).1, Some(format!("{:064x}", 2))));
-            // A new retained revision never changes the exact chosen layer/stack.
-            let mut partial = r::comparison(3, "layer");
-            partial["status"] = json!("partial");
-            let mut manifest = r::snapshot(&partial);
-            manifest["omissions"] = json!(["before: one blob omitted (limit)"]);
-            s.reply(&format!("{}/chat-B?after=0",r::ROOT),Reply::json(200,json!({"comparisons":[r::comparison(1,"layer"),r::comparison(2,"stack"),partial],"next":null})));
-            s.reply(
-                &format!("{}/chat-B/{:064x}", r::ROOT, 3),
-                Reply::json(200, manifest),
-            );
-            s.reply(
-                &format!("{}/chat-B/{:064x}/patch", r::ROOT, 3),
-                Reply::json(
-                    200,
-                    json!({"snapshotId":format!("{:064x}",3),"patch":r::PATCH}),
-                ),
-            );
-            click(cx, h, "review-refresh");
-            idle(cx, h, &pane);
-            cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).1, Some(format!("{:064x}", 2))));
-            choose(cx, h, "review-comparison", 1);
-            idle(cx, h, &pane);
-            cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).1, Some(format!("{:064x}", 3))));
-            // The partial warning is visible without opening Details.
-            cx.update_window(h, |_, w, _| {
-                assert!(w.find("review-status").bounds().size.height > px(0.))
-            })
-            .unwrap();
-            // Select the previous retained comparison again, not live HEAD.
-            click(cx, h, "review-comparison");
-            cx.update_window(h, |_, w, cx| {
-                w.press("up", cx);
-                w.press("enter", cx);
-            })
-            .unwrap();
-            idle(cx, h, &pane);
-            view_file(cx, h, &pane, 0);
-            idle(cx, h, &pane);
-            cx.update(|cx| {
-                assert!(
-                    pane.read(cx)
-                        .probe(cx)
-                        .2
-                        .unwrap()
-                        .contains("retained lower")
-                )
-            });
-            cx.update_window(h, |_, w, cx| {
-                w.press("escape", cx);
-            })
-            .unwrap();
-            settle(cx, h);
-            cx.update(|cx| assert!(pane.read(cx).probe(cx).2.is_none()));
-            // A long worker title truncates inside its own control at both widths.
-            s.reply(r::ROOT, Reply::json(200, json!({"missionId":"mission-A","projectId":"project-A","workers":[{"id":"chat-B","title":format!("Parser worker 日本語 👩‍💻 {}", "with a very long descriptive title ".repeat(8))}],"more":false})));
-            // The same exact revision 2 now holds three files, shown as one continuous list.
-            let (manifest, patch) = r::multi(&r::comparison(2, "stack"));
-            s.reply(
-                &format!("{}/chat-B/{:064x}", r::ROOT, 2),
-                Reply::json(200, manifest),
-            );
-            s.reply(
-                &format!("{}/chat-B/{:064x}/patch", r::ROOT, 2),
-                Reply::json(
-                    200,
-                    json!({"snapshotId":format!("{:064x}",2),"patch":patch}),
-                ),
-            );
-            click(cx, h, "review-refresh");
-            idle(cx, h, &pane);
-            cx.update(|cx| {
-                let p = pane.read(cx).probe(cx);
-                assert_eq!(p.1, Some(format!("{:064x}", 2)));
-                assert_eq!(p.3, 3);
-            });
-            cx.update_window(h, |_, w, _| {
-                assert!(w.find("review-jump").bounds().size.height > px(0.));
-            })
-            .unwrap();
-            // Jumping scrolls the full list; it never narrows it to one file.
-            choose(cx, h, "review-jump", 3);
-            cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).3, 3));
-            // A deleted file opens its retained before side.
-            s.reply(
-                &format!(
-                    "{}/chat-B/{:064x}/source?side=before&path=old.txt&sha256={}",
-                    r::ROOT,
-                    2,
-                    crate::native_review::hash(b"gone\n")
-                ),
-                Reply::json(
-                    200,
-                    json!({"snapshotId":format!("{:064x}",2),"text":"gone\n"}),
-                ),
-            );
-            view_file(cx, h, &pane, 2);
-            idle(cx, h, &pane);
-            cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).2.as_deref(), Some("gone\n")));
-            // A deleted file has no after side: the switch is disabled, not a warning.
-            click(cx, h, "review-after");
-            cx.update(|cx| {
-                let p = pane.read(cx).probe(cx);
-                assert_eq!(p.2.as_deref(), Some("gone\n"));
-                assert_eq!(p.4, None);
-                assert!(!p.0);
-            });
-            click(cx, h, "review-back");
-            cx.update(|cx| assert!(pane.read(cx).probe(cx).2.is_none()));
-            // Back during a slow Before read cancels it: the late reply never reopens source.
-            view_file(cx, h, &pane, 0);
-            idle(cx, h, &pane);
-            let mut slow = Reply::json(
-                200,
-                json!({"snapshotId":format!("{:064x}",2),"text":"before\n"}),
-            );
-            slow.delay_ms = 600;
-            s.reply(
-                &format!(
-                    "{}/chat-B/{:064x}/source?side=before&path=a.rs&sha256={}",
-                    r::ROOT,
-                    2,
-                    crate::native_review::hash(b"before\n")
-                ),
-                slow,
-            );
-            click(cx, h, "review-before");
-            cx.update(|cx| assert!(pane.read(cx).probe(cx).0, "before read pending"));
-            click(cx, h, "review-back");
-            let end = Instant::now() + Duration::from_millis(1200);
-            while Instant::now() < end {
-                settle(cx, h);
-                std::thread::yield_now();
-            }
-            cx.update(|cx| {
-                let p = pane.read(cx).probe(cx);
-                assert!(
-                    p.2.is_none(),
-                    "late source reply reopened source after Back"
-                );
-                assert_eq!(p.1, Some(format!("{:064x}", 2)));
-                assert_eq!(p.3, 3);
-                assert_eq!(p.4, None);
-                assert!(!p.0);
-            });
-            cx.update_window(h, |_, w, cx| {
-                assert!(pane.read(cx).owns_focus(w, cx), "focus stays in Review");
-            })
-            .unwrap();
-            contained(cx, h);
-            cx.update_window(h, |_, w, cx| {
-                w.resize(size(px(if width == 680. { 1100. } else { 680. }), px(700.)));
-                w.bounds_changed(cx);
-            })
-            .unwrap();
-            settle(cx, h);
-            contained(cx, h);
-            cx.update_window(h, |_, w, _| {
-                assert!(w.find("review-diff").bounds().size.height > px(100.))
-            })
-            .unwrap();
-            if let Some(d) = &dir {
-                cx.capture_screenshot(h)
-                    .unwrap()
-                    .save(d.join(format!(
-                        "review-{}-{}.png",
-                        // Named for the width shown after the resize above.
-                        if width == 680. { 1100 } else { 680 },
-                        if dark { "dark" } else { "light" }
-                    )))
-                    .unwrap();
-            }
-            cx.update(|cx| pane.update(cx, |p, cx| p.probe_stale(cx)));
-            // A refused target clears all prior authorized source/diff, not just its badge.
-            s.reply(
-                &format!("{}/chat-B/{:064x}", r::ROOT, 2),
-                Reply::json(403, json!({"error":"denied"})),
-            );
-            click(cx, h, "review-refresh");
-            idle(cx, h, &pane);
-            cx.update(|cx| {
-                let p = pane.read(cx).probe(cx);
-                assert_eq!(p.3, 0);
-                assert!(p.4.is_some());
-            });
-            cx.update_window(h, |_, w, _| {
-                assert!(w.find("review-error").bounds().size.height > px(0.))
-            })
-            .unwrap();
-            r::install(&s);
-            click(cx, h, "review-refresh");
-            idle(cx, h, &pane);
-            cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).3, 1));
-            // Consume actual retained bytes, not the hand-authored demo manifest above.
-            for (path, response) in retained["routes"].as_object().unwrap() {
-                s.reply(path, Reply::json(200, response.clone()));
-            }
-            s.reply(
-                &format!("{}/chat-B?after=0", r::ROOT),
-                Reply::json(200, retained["first"].clone()),
-            );
-            click(cx, h, "review-refresh");
-            idle(cx, h, &pane);
-            // Clear the earlier pinned fixture by returning through a different worker scope.
-            let moved=crate::local_model::chat(&json!({"id":"chat-B","title":"Moved worker","projectId":"other","missionId":"other","state":"idle"})).unwrap();
-            cx.update(|cx| pane.update(cx, |p, cx| p.observe_scope(&[moved], cx)));
-            click(cx, h, "review-refresh");
-            idle(cx, h, &pane);
-            choose(cx, h, "review-worker", 1);
-            idle(cx, h, &pane);
-            choose(cx, h, "review-comparison", 1);
-            idle(cx, h, &pane);
-            let real_id = retained["first"]["comparisons"][0]["snapshotId"]
-                .as_str()
-                .unwrap();
-            cx.update(|cx| {
-                assert_eq!(pane.read(cx).probe(cx).1.as_deref(), Some(real_id));
-                assert_eq!(pane.read(cx).probe(cx).3, 1);
-            });
-            s.reply(
-                &format!("{}/chat-B?after=0", r::ROOT),
-                Reply::json(200, retained["latest"].clone()),
-            );
-            click(cx, h, "review-refresh");
-            idle(cx, h, &pane);
-            cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).1.as_deref(), Some(real_id)));
-            view_file(cx, h, &pane, 0);
-            idle(cx, h, &pane);
-            cx.update(|cx| {
-                assert!(
-                    pane.read(cx)
-                        .probe(cx)
-                        .2
-                        .as_deref()
-                        .unwrap()
-                        .contains("retained lower")
-                )
-            });
-            click(cx, h, "review-back");
-            // Failed capture is distinct from an empty inventory; selector is absent when unusable.
-            let moved=crate::local_model::chat(&json!({"id":"chat-B","title":"Moved worker","projectId":"other","missionId":"other","state":"idle"})).unwrap();
-            cx.update(|cx| pane.update(cx, |p, cx| p.observe_scope(&[moved], cx)));
-            s.reply(
-                &format!("{}/chat-B?after=0", r::ROOT),
-                Reply::json(
-                    200,
-                    json!({"comparisons":[],"next":null,"capture":{"pending":0,"failed":1}}),
-                ),
-            );
-            click(cx, h, "review-refresh");
-            idle(cx, h, &pane);
-            choose(cx, h, "review-worker", 1);
-            idle(cx, h, &pane);
-            cx.update_window(h, |_, w, _| {
-                assert!(w.try_find("review-comparison").is_none())
-            })
-            .unwrap();
-            cx.update(|cx| {
-                assert_eq!(pane.read(cx).probe_state(), Some("No saved revisions yet."))
-            });
-            cx.update(|cx| assert_eq!(pane.read(cx).probe_capture_notice(),Some("Saving some committed revisions couldn't be confirmed. They remain queued for exact recovery at the next worker checkpoint; existing saved revisions are unchanged.")));
-            cx.update_window(h, |_, w, _| {
-                assert!(w.find("review-capture-notice").bounds().size.height > px(0.))
-            })
-            .unwrap();
-            s.reply(&format!("{}/chat-B?after=0",r::ROOT),Reply::json(200,json!({"comparisons":[],"next":null,"capture":{"pending":0,"failed":1,"unsupported":["conflicted"]}})));
-            click(cx, h, "review-refresh");
-            idle(cx, h, &pane);
-            cx.update(|cx| {
-                assert!(
-                    pane.read(cx)
-                        .probe_capture_notice()
-                        .unwrap()
-                        .contains("Conflicted")
-                )
-            });
-            s.reply(&format!("{}/chat-B?after=0",r::ROOT),Reply::json(200,json!({"comparisons":[],"next":null,"capture":{"pending":0,"failed":0,"unsupported":["divergent","multiple-parents","root-base","missing","unknown-custody","unknown-discovery"]}})));
-            click(cx, h, "review-refresh");
-            idle(cx, h, &pane);
-            click(cx, h, "review-details");
-            cx.update_window(h, |_, w, _| {
-                assert!(w.try_find("review-comparison").is_none());
-                assert!(w.find("review-capture-limitations").bounds().size.height > px(0.));
-            })
-            .unwrap();
-            cx.update_window(h, |_, w, cx| w.press("escape", cx))
-                .unwrap();
-            settle(cx, h);
-            s.reply(
-                &format!("{}/chat-B?after=0", r::ROOT),
-                Reply::json(
-                    200,
-                    json!({"comparisons":[],"next":null,"unavailable":"missing custody"}),
-                ),
-            );
-            click(cx, h, "review-refresh");
-            idle(cx, h, &pane);
-            cx.update(|cx| assert!(pane.read(cx).probe(cx).4.unwrap().contains("isn't set up")));
-            cx.update_window(h, |_, w, _| {
-                assert!(w.try_find("review-comparison").is_none())
-            })
-            .unwrap();
-            let moved=crate::local_model::chat(&json!({"id":"chat-B","title":"Moved worker","projectId":"other","missionId":"other","state":"idle"})).unwrap();
-            cx.update(|cx| pane.update(cx, |p, cx| p.observe_scope(&[moved], cx)));
-            cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).3, 0));
-            s.reply(r::ROOT,Reply::json(200,json!({"missionId":"mission-A","projectId":"project-A","workers":[],"more":false})));
-            click(cx, h, "review-refresh");
-            idle(cx, h, &pane);
-            cx.update(|cx| assert_eq!(pane.read(cx).probe(cx).3, 0));
-            cx.update(|cx| {
-                assert_eq!(
-                    pane.read(cx).probe_state(),
-                    Some("No current workers in this mission.")
-                )
-            });
-            shot(
-                cx,
-                h,
-                &dir,
-                format!("review-{}-{theme}-empty.png", width as u32),
-            );
-            cx.update_window(h, |_, w, cx| {
-                pane.update(cx, |p, cx| p.focus(w, cx));
-                w.press("escape", cx);
-            })
-            .unwrap();
-            settle(cx, h);
-            cx.update(|cx| {
-                assert_eq!(
-                    browser.read(cx).tab,
-                    crate::mission_browser_view::Tab::Overview
-                )
-            });
+            let start = s.state.lock().unwrap().seen.len();
+            global(cx, h, &view, &s, &retained, &dir, width, theme);
             assert!(s.all_gets());
-            assert!(
-                s.state
-                    .lock()
-                    .unwrap()
-                    .seen
-                    .iter()
-                    .all(|(_, p)| !p.contains("/changes") && !p.contains("/workspace"))
-            );
+            review_reads(&s, start);
+            // Named for the width shown after the global journey's resize.
+            let shown = if width == 680. { 1100 } else { 680 };
+            from_chat(cx, h, &view, &s, &dir, &format!("{shown}-{theme}"));
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
-            drop(pane);
             drop(browser);
             drop(view);
             cx.run_until_parked();
         }
     }
     println!(
-        "native Review: four hidden production-root mission entry, exact layer/stack, newer pin, partial, source/back, resize, empty/refusal and keyboard journeys; GET-only synthetic data, not OS IME/AX/performance acceptance"
+        "native Review: four hidden production-root global list, chat entry, standalone v2, exact layer/stack, newer pin, unlisted pin, partial, source/back, current file handoff, resize, unavailable/empty/refusal/moved and keyboard journeys; GET-only synthetic request list, not backend, OS IME/AX or performance acceptance"
     );
 }

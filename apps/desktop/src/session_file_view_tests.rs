@@ -92,3 +92,8 @@ fn paths_and_stale_generations_fail_closed_retaining_previous_content() {
     s.cancel();
     assert!(!s.accept(two, Ok(parse("late", false))));
 }
+#[test]
+fn display_escapes_controls_and_bidi_and_preview_is_bounded() {
+    assert_eq!(display("a\n\u{202e}b"), "a\\u{a}\\u{202e}b");
+    assert_eq!(preview(&"長".repeat(180)).chars().count(), 161);
+}

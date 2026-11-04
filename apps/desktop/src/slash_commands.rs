@@ -10,7 +10,6 @@ pub(crate) enum Action {
     Jobs,
     Compact,
     Model,
-    Changes,
     Artifacts,
     Help,
 }
@@ -85,11 +84,6 @@ pub(crate) fn available(scope: Scope, session: &[Command]) -> Vec<Command> {
             if has_model {
                 app.push(model());
             }
-            app.push(Command::native(
-                "changes",
-                Kind::App(Action::Changes),
-                "Open Changes",
-            ));
             app.push(Command::native(
                 "artifacts",
                 Kind::App(Action::Artifacts),

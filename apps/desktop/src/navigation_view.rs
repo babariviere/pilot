@@ -18,6 +18,7 @@ impl LocalViewer {
             Page::Mission(key) => Target::Mission(key.clone()),
             Page::Inbox(filter) => Target::Inbox(filter.clone()),
             Page::Project(id) => Target::Project(id.clone()),
+            Page::Review(t) => Target::Review(t.clone()),
             Page::Chat => {
                 if let Some(id) = &self.selected {
                     Target::Chat(id.clone())
@@ -81,7 +82,7 @@ impl LocalViewer {
         }
         if self.restoring_navigation {
             self.close_conversation_links(window, cx);
-            self.close_workspace_changes(window, cx);
+            self.close_session_file(window, cx);
             return true;
         }
         let query = self.chats.read(cx).query_input();
@@ -93,7 +94,7 @@ impl LocalViewer {
             return false;
         }
         self.close_conversation_links(window, cx);
-        self.close_workspace_changes(window, cx);
+        self.close_session_file(window, cx);
         if self.subagent.take().is_some()
             && let Some(chat) = self
                 .state
@@ -250,6 +251,7 @@ impl LocalViewer {
                 location.scope.as_ref() == Some(id)
                     && self.state.projects.iter().any(|p| &p.id == id)
             }
+            Target::Review(t) => self.review_target_known(t),
             Target::Chat(id) => self.state.chats.iter().any(|c| {
                 &c.id == id
                     && location
@@ -287,6 +289,7 @@ impl LocalViewer {
                 self.show_project(id.clone(), window, cx);
                 true
             }
+            Target::Review(t) => self.show_review(t.clone(), window, cx),
             Target::Chat(id) => {
                 let chat = self.state.chats.iter().find(|c| &c.id == id).cloned();
                 chat.is_some_and(|chat| self.open(chat, window, cx))

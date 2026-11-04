@@ -160,6 +160,8 @@ pub(crate) mod project_settings_probe;
 pub(crate) mod provider_usage_delivery_probe;
 #[path = "queued_message_view.rs"]
 pub(crate) mod queued_message_view;
+#[path = "review_navigation.rs"]
+mod review_navigation;
 #[cfg(feature = "native-probes")]
 #[path = "scoped_models_probe.rs"]
 pub(crate) mod scoped_models_probe;
@@ -173,6 +175,8 @@ pub(crate) mod session_failure_probe;
 mod session_failure_retry;
 #[path = "session_failure_view.rs"]
 mod session_failure_view;
+#[path = "session_file_panel.rs"]
+mod session_file_panel;
 #[path = "session_jobs_log_view.rs"]
 mod session_jobs_log_view;
 #[cfg(feature = "native-probes")]
@@ -244,11 +248,6 @@ mod workflow_confirmation_navigation;
 #[cfg(feature = "native-probes")]
 #[path = "workflow_confirmation_probe.rs"]
 pub(crate) mod workflow_confirmation_probe;
-#[cfg(feature = "native-probes")]
-#[path = "workspace_changes_probe.rs"]
-pub(crate) mod workspace_changes_probe;
-#[path = "workspace_changes_view.rs"]
-mod workspace_changes_view;
 use crate::{
     LocalOptions, TranscriptView,
     app_icon::AppIcon,
@@ -275,9 +274,9 @@ use gpui_kit::{
     prelude::FluentBuilder,
     px,
 };
-use std::{sync::Arc, time::Duration};
 #[cfg(feature = "native-probes")]
-pub use workspace_changes_view::session_file_view_probe::run_session_file_view_probe;
+pub use session_file_panel::session_file_view_probe::run_session_file_view_probe;
+use std::{sync::Arc, time::Duration};
 #[path = "sidebar_list.rs"]
 mod sidebar_list;
 use sidebar_list::ChatList;
@@ -316,7 +315,8 @@ pub struct LocalViewer {
     setup_rerun: Option<session_failure_view::SetupRerun>,
     queue_forms: Vec<(Entity<queued_message_view::Form>, Subscription)>,
     conversation_links: Option<Entity<conversation_links_view::Pane>>,
-    workspace_changes: Option<Entity<workspace_changes_view::Pane>>,
+    /// The chat's read-only workspace file, in the side panel.
+    session_file: Option<Entity<session_file_panel::FilePane>>,
     chat_actions: Entity<crate::chat_actions_view::Actions>,
     settings: Entity<crate::settings_view::SettingsPreferences>,
     settings_window: Option<gpui_kit::AnyWindowHandle>,
@@ -377,6 +377,8 @@ pub struct LocalViewer {
     archive: Entity<crate::archive_view::Archive>,
     automations: Entity<crate::automations_view::Automations>,
     missions: Entity<crate::mission_browser_view::Browser>,
+    /// Global Review page pane, created on first visit.
+    review: Option<Entity<crate::native_review_view::Pane>>,
     mission_context: Entity<crate::mission_inspector_view::Pane>,
     nav_projects: Arc<Vec<crate::local_model::Project>>,
     pending_transcript: Option<(Vec<Message>, bool)>,
@@ -519,12 +521,7 @@ impl LocalViewer {
                 conversation_links_view::Close,
                 Some("ConversationLinks"),
             ),
-            KeyBinding::new(
-                "escape",
-                workspace_changes_view::Close,
-                Some("WorkspaceChanges"),
-            ),
-            crate::ui::shortcut("secondary-alt-d", workspace_changes_view::Toggle, None, cx),
+            KeyBinding::new("escape", session_file_panel::Close, Some("SessionFile")),
             crate::ui::shortcut("secondary-alt-l", conversation_links_view::Toggle, None, cx),
             KeyBinding::new(
                 "escape",
@@ -1812,10 +1809,11 @@ impl LocalViewer {
             archive,
             automations,
             missions,
+            review: None,
             mission_context,
             queue_forms: Vec::new(),
             conversation_links: None,
-            workspace_changes: None,
+            session_file: None,
             session_failure_fence: Default::default(),
             session_failure_focus: cx.focus_handle().tab_stop(true),
             setup_rerun: None,
@@ -2570,6 +2568,7 @@ impl LocalViewer {
         }
         self.sync_visible_draft(window, cx);
         self.sync_missions(window, cx);
+        self.sync_review(window, cx);
         self.sync_mission_context(cx);
         // Limits are shared with Usage, even while Home is not mounted.
         if !Arc::ptr_eq(&self.nav_chats, &self.state.chats)
@@ -2954,6 +2953,7 @@ impl Render for LocalViewer {
             Page::Missions | Page::Mission(_) => "missions".to_owned(),
             Page::Inbox(_) => "inbox".to_owned(),
             Page::Project(id) => format!("project:{id}"),
+            Page::Review(t) => format!("review:{:?}:{:?}:{:?}", t.chat, t.request, t.snapshot),
             Page::Chat => format!("chat:{:?}", self.selected),
         };
         if page_key != self.page_key {
@@ -3019,7 +3019,6 @@ impl Render for LocalViewer {
                 .on_action(cx.listener(|view,_:&ShowAllChats,window,cx|view.show_chats(window,cx)))
                 .on_action(cx.listener(|view,_:&ShowMissions,window,cx|{view.show_missions(window,cx);} ))
                 .on_action(cx.listener(|view,_:&ShowAutomations,window,cx|{view.show_automations(window,cx);} )))
-            .on_action(cx.listener(|v,_:&workspace_changes_view::Toggle,w,cx|{v.toggle_workspace_changes(w,cx);cx.stop_propagation();}))
             .on_action(cx.listener(|v,_:&conversation_links_view::Toggle,w,cx|{v.toggle_conversation_links(w,cx);cx.stop_propagation();}))
             .on_action(cx.listener(|v,_:&crate::mission_inspector_view::Toggle,w,cx|{v.mission_context_toggle(w,cx);cx.stop_propagation();}))
             .when(menu_back, |el| el.on_action(cx.listener(|view,_:&NavigateBack,window,cx|view.move_navigation(false,window,cx))))
@@ -3058,6 +3057,9 @@ impl Render for LocalViewer {
                 } else if matches!(self.page,Page::Inbox(_)) {
                     div().id("inbox").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()
                         .child(self.inbox.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())).into_any_element()
+                } else if let Page::Review(target) = &self.page {
+                    let target = target.clone();
+                    self.review_page(&target, cx)
                 } else if self.page!=Page::Chat {
                     div().id("overview").test_support().v_flex().flex_1().min_w_0().min_h_0().h_full()
                         .child(self.overview.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())).into_any_element()

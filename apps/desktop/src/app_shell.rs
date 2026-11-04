@@ -23,6 +23,7 @@ pub(crate) enum Page {
     Mission(crate::mission_browser::Key),
     Inbox(Option<String>),
     Project(String),
+    Review(crate::navigation::ReviewTarget),
     Chat,
 }
 pub(crate) enum ShellEvent {

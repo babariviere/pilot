@@ -1,4 +1,4 @@
-//! Real mounted Changes composition, private faux HTTP, offscreen native renderer.
+//! Real mounted chat side-panel file view, private faux HTTP, offscreen native renderer.
 use super::*;
 use crate::mission_browser_fixture::{Reply, Server};
 use gpui_kit::{
@@ -13,22 +13,33 @@ fn settle(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
         cx.update_window(h, |_, w, cx| w.render_frame(cx)).unwrap();
     }
 }
-fn pane(cx: &mut HeadlessAppContext, v: &Entity<LocalViewer>) -> Entity<Pane> {
-    cx.update(|cx| v.read(cx).workspace_changes.clone().unwrap())
+fn pane(cx: &mut HeadlessAppContext, v: &Entity<LocalViewer>) -> Entity<FilePane> {
+    cx.update(|cx| v.read(cx).session_file.clone().unwrap())
 }
-fn wait(cx: &mut HeadlessAppContext, h: AnyWindowHandle, v: &Entity<LocalViewer>, file: bool) {
+fn open(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    v: &Entity<LocalViewer>,
+    chat: &str,
+    path: &str,
+) -> bool {
+    let opened = cx
+        .update_window(h, |_, w, cx| {
+            v.update(cx, |v, cx| v.open_session_file(chat, path.into(), w, cx))
+        })
+        .unwrap();
+    settle(cx, h);
+    opened
+}
+fn wait(cx: &mut HeadlessAppContext, h: AnyWindowHandle, v: &Entity<LocalViewer>) {
     let end = std::time::Instant::now() + Duration::from_secs(5);
     loop {
         settle(cx, h);
         if cx.update(|cx| {
-            v.read(cx).workspace_changes.as_ref().is_some_and(|p| {
-                let p = p.read(cx);
-                if file {
-                    p.file.as_ref().is_some_and(|f| !f.read(cx).state.busy)
-                } else {
-                    !p.state.busy
-                }
-            })
+            v.read(cx)
+                .session_file
+                .as_ref()
+                .is_some_and(|f| !f.read(cx).state.busy)
         }) {
             return;
         }
@@ -57,7 +68,6 @@ pub fn run_session_file_view_probe(cx: &mut HeadlessAppContext) {
                 )
             });
             let s = Server::start();
-            s.reply("/api/sessions/synthetic/changes",Reply::json(200,json!({"base":"HEAD","files":[{"path":"src/日本語.rs","status":"modified","additions":1,"deletions":1},{"path":"gone.rs","status":"deleted","additions":0,"deletions":1}],"diff":"","truncated":false})));
             s.reply(
                 "/api/sessions/synthetic",
                 Reply::json(200, json!({"id":"synthetic","cwd":"/synthetic/workspace"})),
@@ -107,15 +117,7 @@ pub fn run_session_file_view_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
-            cx.update_window(h, |_, w, cx| w.click("workspace-changes-toggle", cx))
-                .unwrap();
-            wait(cx, h, &v, false);
-            cx.update_window(h, |_, w, cx| w.click(("workspace-change-file", 0usize), cx))
-                .unwrap();
-            settle(cx, h);
-            let p = pane(cx, &v);
-            let serial = cx.update(|cx| p.read(cx).state.serial);
-            // Opening is guarded by composer preedit, including pointer down.
+            // Opening is guarded by composer preedit.
             cx.update_window(h, |_, w, cx| {
                 input.update(cx, |i, cx| {
                     i.focus(w, cx);
@@ -124,10 +126,8 @@ pub fn run_session_file_view_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
-            cx.update_window(h, |_, w, cx| w.click(("workspace-open-file", 0usize), cx))
-                .unwrap();
-            settle(cx, h);
-            assert!(cx.update(|cx| p.read(cx).file.is_none()));
+            assert!(!open(cx, h, &v, "synthetic", "src/日本語.rs"));
+            assert!(cx.update(|cx| v.read(cx).session_file.is_none()));
             cx.update_window(h, |_, w, cx| {
                 input.update(cx, |i, cx| {
                     let r = i.marked_text_range(w, cx).unwrap();
@@ -139,33 +139,38 @@ pub fn run_session_file_view_probe(cx: &mut HeadlessAppContext) {
             let draft = cx.update(|cx| input.read(cx).value().to_string());
             let transcript = cx.update(|cx| v.read(cx).transcript.clone());
             let mark = cx.update(|cx| transcript.read(cx).reading_mark(cx));
-            cx.update_window(h, |_, w, cx| {
-                p.read(cx).focus.clone().focus(w, cx);
-                for _ in 0..5 {
-                    w.press("tab", cx);
-                }
-                assert_eq!(
-                    w.find(("workspace-open-file", 0usize)).focused(),
-                    Some(true)
-                );
-                w.press("enter", cx);
-            })
-            .unwrap();
-            settle(cx, h);
+            // Only an exact relative path of a known chat workspace opens; nothing is guessed.
+            for (chat, path) in [
+                ("synthetic", "../escape.rs"),
+                ("synthetic", "/abs/path.rs"),
+                ("missing-chat", "src/日本語.rs"),
+            ] {
+                assert!(!open(cx, h, &v, chat, path), "{chat} {path}");
+            }
+            assert!(
+                !s.state
+                    .lock()
+                    .unwrap()
+                    .seen
+                    .iter()
+                    .any(|(_, p)| p.contains("/files")),
+                "refused paths never read"
+            );
+            assert!(open(cx, h, &v, "synthetic", "src/日本語.rs"));
             cx.update_window(h, |_, w, _| {
                 assert!(w.find("session-file-loading").visible())
             })
             .unwrap();
-            wait(cx, h, &v, true);
+            wait(cx, h, &v);
             cx.update_window(h, |_, w, cx| {
                 w.press("tab", cx);
                 assert_eq!(w.find("session-file-refresh").focused(), Some(true));
                 w.press("enter", cx);
             })
             .unwrap();
-            wait(cx, h, &v, true);
+            wait(cx, h, &v);
             cx.update_window(h, |_, w, cx| {
-                let region = w.find("workspace-changes-region").bounds();
+                let region = w.find("session-file-region").bounds();
                 let text = w.find("session-file-text").bounds();
                 let refresh = w.find("session-file-refresh").bounds();
                 let close = w.find("session-file-close").bounds();
@@ -203,7 +208,8 @@ pub fn run_session_file_view_probe(cx: &mut HeadlessAppContext) {
                     .save(dir.join(format!("file-{width}-{dark}.png")))
                     .unwrap();
             }
-            let before = cx.update(|cx| p.read(cx).file.as_ref().unwrap().read(cx).state.serial);
+            let p = pane(cx, &v);
+            let before = cx.update(|cx| p.read(cx).state.serial);
             let requests = s.state.lock().unwrap().seen.len();
             // Streaming publication must not refresh, close or replace this snapshot.
             cx.update_window(h, |_, w, cx| {
@@ -220,15 +226,12 @@ pub fn run_session_file_view_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
-            assert_eq!(
-                cx.update(|cx| p.read(cx).file.as_ref().unwrap().read(cx).state.serial),
-                before
-            );
+            assert_eq!(cx.update(|cx| p.read(cx).state.serial), before);
             assert_eq!(s.state.lock().unwrap().seen.len(), requests);
             s.reply(file_path, Reply::json(409, json!({})));
             cx.update_window(h, |_, w, cx| w.click("session-file-refresh", cx))
                 .unwrap();
-            wait(cx, h, &v, true);
+            wait(cx, h, &v);
             cx.update_window(h, |_, w, cx| {
                 assert!(w.find("session-file-error").visible());
                 w.click("session-file-copy", cx);
@@ -240,7 +243,7 @@ pub fn run_session_file_view_probe(cx: &mut HeadlessAppContext) {
             s.reply(file_path, Reply::json(200, response(&large, false)));
             cx.update_window(h, |_, w, cx| w.click("session-file-refresh", cx))
                 .unwrap();
-            wait(cx, h, &v, true);
+            wait(cx, h, &v);
             cx.update_window(h, |_, w, cx| {
                 w.click("session-file-copy", cx);
                 let shown = cx.read_from_clipboard().unwrap().text().unwrap();
@@ -259,24 +262,23 @@ pub fn run_session_file_view_probe(cx: &mut HeadlessAppContext) {
                 s.reply(file_path, Reply::json(200, r));
                 cx.update_window(h, |_, w, cx| w.click("session-file-refresh", cx))
                     .unwrap();
-                wait(cx, h, &v, true);
+                wait(cx, h, &v);
                 cx.update_window(h, |_, w, _| {
                     assert!(w.try_find("session-file-text").is_none());
                     assert!(w.try_find("session-file-copy").is_none());
                 })
                 .unwrap();
             }
-            // Escape closes only file detail and restores mounted composer focus.
+            // Escape closes the file panel and restores mounted composer focus.
             cx.update_window(h, |_, w, cx| w.press("escape", cx))
                 .unwrap();
             settle(cx, h);
             cx.update_window(h, |_, w, cx| {
                 assert!(w.try_find("session-file-pane").is_none());
-                assert!(w.find("workspace-changes-pane").visible());
                 assert!(input.focus_handle(cx).is_focused(w));
             })
             .unwrap();
-            assert_eq!(cx.update(|cx| p.read(cx).state.serial), serial);
+            assert!(cx.update(|cx| v.read(cx).session_file.is_none()));
             assert_eq!(cx.update(|cx| input.read(cx).value().to_string()), draft);
             let after = cx.update(|cx| transcript.read(cx).reading_mark(cx));
             assert_eq!(
@@ -284,44 +286,11 @@ pub fn run_session_file_view_probe(cx: &mut HeadlessAppContext) {
                 after.as_ref().map(|m| (&m.message, m.following))
             );
             // In-flight source switch cancels and fences late content, even with a retained entity.
-            cx.update_window(h, |_, w, cx| {
-                w.scroll(
-                    "workspace-changes-region",
-                    gpui_kit::ScrollDelta::Pixels(point(px(0.), px(-100000.))),
-                    cx,
-                );
-            })
-            .unwrap();
-            settle(cx, h);
-            cx.update_window(h, |_, w, cx| w.click(("workspace-change-file", 1usize), cx))
-                .unwrap();
-            settle(cx, h);
-            cx.update_window(h, |_, w, _| {
-                assert_eq!(
-                    w.find(("workspace-open-file", 1usize)).disabled(),
-                    Some(true)
-                )
-            })
-            .unwrap();
-            cx.update_window(h, |_, w, cx| {
-                w.scroll(
-                    "workspace-changes-region",
-                    gpui_kit::ScrollDelta::Pixels(point(px(0.), px(100000.))),
-                    cx,
-                );
-            })
-            .unwrap();
-            settle(cx, h);
-            cx.update_window(h, |_, w, cx| w.click(("workspace-change-file", 0usize), cx))
-                .unwrap();
-            settle(cx, h);
             let mut slow = Reply::json(200, response("late foreign source", false));
             slow.delay_ms = 400;
             s.reply(file_path, slow);
-            cx.update_window(h, |_, w, cx| w.click(("workspace-open-file", 0usize), cx))
-                .unwrap();
-            settle(cx, h);
-            let f = cx.update(|cx| p.read(cx).file.clone().unwrap());
+            assert!(open(cx, h, &v, "synthetic", "src/日本語.rs"));
+            let f = pane(cx, &v);
             let other = Server::start();
             cx.update(|cx| {
                 v.update(cx, |v, cx| {
@@ -344,7 +313,7 @@ pub fn run_session_file_view_probe(cx: &mut HeadlessAppContext) {
             cx.update(|cx| {
                 assert!(!f.read(cx).state.busy);
                 assert!(f.read(cx).state.content.is_none());
-                assert!(v.read(cx).workspace_changes.is_none());
+                assert!(v.read(cx).session_file.is_none());
                 assert_eq!(input.read(cx).value().to_string(), draft);
             });
             assert!(writes.try_recv().is_err());
@@ -354,6 +323,6 @@ pub fn run_session_file_view_probe(cx: &mut HeadlessAppContext) {
         }
     }
     println!(
-        "session_file_view: mounted narrow/wide light/dark, bounded exact Unicode copy/selection, IME, error retention, binary/truncation, streaming, close/focus and source cancellation passed"
+        "session_file_view: side-panel narrow/wide light/dark, exact relative path admission, bounded exact Unicode copy/selection, IME, error retention, binary/truncation, streaming, close/focus and source cancellation passed"
     );
 }

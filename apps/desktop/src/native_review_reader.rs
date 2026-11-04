@@ -1,4 +1,6 @@
 //! One bounded cancellable Local read lane; optional records follow, never precede raw diff.
+//! Review is global: one list of explicit review requests across projects. Each request's
+//! exact saved revision is read through the chat that holds its custody.
 use crate::{
     LocalOptions,
     mission_browser::{Home, Key},
@@ -13,27 +15,47 @@ pub(crate) const ACCESS_REFUSED: &str =
 pub(crate) const RECORDS_UNAVAILABLE: &str =
     "Related records are unavailable: malformed, partial or unsupported exact assessment scope.";
 
+/// One change's exact reads, through its custody chat, with the project the request
+/// listed for it. The host refuses the read unless the chat is currently in that project;
+/// the expectation is a precondition only, never authority.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Chat {
+    pub(crate) key: Key,
+    pub(crate) project: String,
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Route {
-    Workers(Key),
-    Comparisons(Key, String, u64),
-    Snapshot(Key, String, Box<model::Comparison>),
-    Records(Key, String, String),
-    Source(Key, String, String, String, String, String),
+    /// Review requests after a cursor, optionally only those from one chat.
+    Requests(Home, u64, Option<String>),
+    /// One chat's saved revisions, with or without a review request.
+    Comparisons(Chat, u64),
+    Snapshot(Chat, Box<model::Comparison>),
+    Records(Chat, String),
+    /// Chat, snapshot, side, path, SHA-256.
+    Source(Chat, String, String, String, String),
 }
 impl Route {
-    fn key(&self) -> &Key {
+    fn home(&self) -> &Home {
         match self {
-            Self::Workers(k)
-            | Self::Comparisons(k, ..)
-            | Self::Snapshot(k, ..)
-            | Self::Records(k, ..)
-            | Self::Source(k, ..) => k,
+            Self::Requests(h, ..) => h,
+            Self::Comparisons(c, ..)
+            | Self::Snapshot(c, ..)
+            | Self::Records(c, ..)
+            | Self::Source(c, ..) => &c.key.home,
+        }
+    }
+    fn chat(&self) -> Option<&Chat> {
+        match self {
+            Self::Requests(..) => None,
+            Self::Comparisons(c, ..)
+            | Self::Snapshot(c, ..)
+            | Self::Records(c, ..)
+            | Self::Source(c, ..) => Some(c),
         }
     }
 }
 pub(crate) enum Data {
-    Workers(model::Workers),
+    Requests(model::Requests),
     Comparisons(model::Comparisons),
     Snapshot(Arc<model::Snapshot>, Result<Vec<DiffFile>, &'static str>),
     Records(Vec<String>),
@@ -155,39 +177,73 @@ pub(crate) async fn fetch(
     options: &LocalOptions,
     route: &Route,
 ) -> Result<Data, &'static str> {
-    let key = route.key();
-    if !key.valid() || key.home != Home::local(&options.host()) {
+    if *route.home() != Home::local(&options.host()) {
         return Err("Review home changed. No host fallback.");
     }
+    if route
+        .chat()
+        .is_some_and(|c| !c.key.valid() || !crate::local_model::valid_id(&c.project))
+    {
+        return Err(model::INVALID);
+    }
+    if let Route::Requests(_, _, Some(chat)) = route
+        && !crate::local_model::valid_id(chat)
+    {
+        return Err(model::INVALID);
+    }
     crate::local_client::gate(client, options).await?;
-    let root = format!("{}/api/missions/{}/review", options.loopback(), key.id);
-    let url = |s: &str| reqwest::Url::parse(&format!("{root}{s}")).map_err(|_| model::INVALID);
-    let valid_worker = |s: &str| {
-        if crate::local_model::valid_id(s) {
-            Ok(())
-        } else {
-            Err(model::INVALID)
+    let base = options.loopback();
+    // Keys are validated IDs, so they are safe single path segments. Every chat read
+    // ends with the request's listed project, so a chat now in another project is refused.
+    let chat = |s: &str, pairs: &[(&str, &str)]| {
+        let c = route.chat().ok_or(model::INVALID)?;
+        let mut url = reqwest::Url::parse(&format!("{base}/api/sessions/{}/review{s}", c.key.id))
+            .map_err(|_| model::INVALID)?;
+        let mut query = url.query_pairs_mut();
+        for (k, v) in pairs {
+            query.append_pair(k, v);
         }
+        query.append_pair("expectedProjectId", &c.project);
+        drop(query);
+        Ok::<_, &'static str>(url)
     };
     let data = match route {
-        Route::Workers(_) => {
-            let v: model::Workers = get(client, url("")?).await?;
-            if v.mission_id != key.id
-                || !crate::local_model::valid_id(&v.project_id)
-                || v.workers.len() > 100
-                || v.workers
-                    .iter()
-                    .any(|w| !crate::local_model::valid_id(&w.id) || w.title.len() > 8192)
+        Route::Requests(_, after, filter) => {
+            let mut url = reqwest::Url::parse(&format!("{base}/api/review/requests"))
+                .map_err(|_| model::INVALID)?;
+            url.query_pairs_mut()
+                .append_pair("after", &after.to_string());
+            if let Some(chat) = filter {
+                url.query_pairs_mut().append_pair("sessionId", chat);
+            }
+            let v: model::Requests = get(client, url).await?;
+            let mut seen = std::collections::BTreeSet::new();
+            // A chat filter narrows the list; it never admits another chat's request.
+            if v.requests.len() > 20
+                || v.unavailable
+                    .as_ref()
+                    .is_some_and(|u| u.len() > 8192 || !v.requests.is_empty() || v.next.is_some())
+                || v.requests.iter().any(|r| {
+                    !r.valid()
+                        || r.sequence <= *after
+                        || !seen.insert(r.request_id.as_str())
+                        || filter.as_ref().is_some_and(|c| &r.session_id != c)
+                })
+                || v.requests
+                    .windows(2)
+                    .any(|r| r[0].sequence >= r[1].sequence)
+                || v.next
+                    .is_some_and(|n| v.requests.last().is_none_or(|r| r.sequence != n))
             {
                 return Err(model::INVALID);
             }
-            Data::Workers(v)
+            Data::Requests(v)
         }
-        Route::Comparisons(_, worker, after) => {
-            valid_worker(worker)?;
+        Route::Comparisons(_, after) => {
             let v: model::Comparisons =
-                get(client, url(&format!("/{worker}?after={after}"))?).await?;
+                get(client, chat("", &[("after", &after.to_string())])?).await?;
             if v.comparisons.len() > 20
+                || v.unavailable.as_ref().is_some_and(|u| u.len() > 8192)
                 || v.capture.as_ref().is_some_and(|c| !c.valid())
                 || v.comparisons
                     .iter()
@@ -202,21 +258,18 @@ pub(crate) async fn fetch(
             }
             Data::Comparisons(v)
         }
-        Route::Snapshot(_, worker, selected) => {
-            valid_worker(worker)?;
+        Route::Snapshot(_, selected) => {
             if !selected.valid() {
                 return Err(model::INVALID);
             }
             let v: model::Snapshot =
-                get(client, url(&format!("/{worker}/{}", selected.snapshot_id))?).await?;
-            v.validate(worker, selected)?;
+                get(client, chat(&format!("/{}", selected.snapshot_id), &[])?).await?;
+            // The retained creator must be this exact custody chat.
+            let c = route.chat().ok_or(model::INVALID)?;
+            v.validate(&c.key.id, &c.project, selected)?;
             let files = if v.diff.is_some() {
-                match get::<Patch>(
-                    client,
-                    url(&format!("/{worker}/{}/patch", selected.snapshot_id))?,
-                )
-                .await
-                {
+                let url = chat(&format!("/{}/patch", selected.snapshot_id), &[])?;
+                match get::<Patch>(client, url).await {
                     Ok(p) if p.snapshot_id == selected.snapshot_id => v.parse_patch(&p.patch),
                     Ok(_) => Err(model::INVALID),
                     Err(ACCESS_REFUSED) => return Err(ACCESS_REFUSED),
@@ -227,27 +280,24 @@ pub(crate) async fn fetch(
             };
             Data::Snapshot(Arc::new(v), files)
         }
-        Route::Records(_, worker, snapshot) => {
-            valid_worker(worker)?;
+        Route::Records(_, snapshot) => {
             if !model::hex(snapshot, 64) {
                 return Err(model::INVALID);
             }
-            let v: Records = get(client, url(&format!("/{worker}/{snapshot}/records"))?).await?;
+            let v: Records = get(client, chat(&format!("/{snapshot}/records"), &[])?).await?;
             Data::Records(v.lines()?)
         }
-        Route::Source(_, worker, snapshot, side, path, sha) => {
-            valid_worker(worker)?;
+        Route::Source(_, snapshot, side, path, sha) => {
             if !model::hex(snapshot, 64)
                 || !model::hex(sha, 64)
                 || !matches!(side.as_str(), "before" | "after")
             {
                 return Err(model::INVALID);
             }
-            let mut u = url(&format!("/{worker}/{snapshot}/source"))?;
-            u.query_pairs_mut()
-                .append_pair("side", side)
-                .append_pair("path", path)
-                .append_pair("sha256", sha);
+            let u = chat(
+                &format!("/{snapshot}/source"),
+                &[("side", side), ("path", path), ("sha256", sha)],
+            )?;
             let v: SourceText = get(client, u).await?;
             if &v.snapshot_id != snapshot
                 || v.text.len() > 2 * 1024 * 1024

@@ -10,11 +10,6 @@ harness = false
 test = false
 required-features = ["native-probes"]
 
-[[test]]
-name = "workspace_changes"
-harness = false
-required-features = ["native-probes"]
-
 [features]
 native-probes = ["gpui-kit/test-support", "pilot-desktop-updater/fixture"]
 

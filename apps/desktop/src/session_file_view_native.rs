@@ -1,19 +1,18 @@
-//! Retained file detail nested in Changes. No editor or write capability.
+//! One chat workspace file, read-only, in the chat side panel. No editor or write capability.
 use super::*;
 use crate::{
-    session_file_view::{Content, State as FileState},
+    session_file_view::{self as model, Content, State as FileState},
     session_file_view_reader::{Reader as FileReader, Request as FileRequest, Target},
 };
 
-pub(super) struct FilePane {
-    parent: gpui_kit::WeakEntity<Pane>,
+pub(crate) struct FilePane {
     owner: gpui_kit::WeakEntity<LocalViewer>,
     _watch: Subscription,
     generation: u64,
     target: Target,
     options: Option<LocalOptions>,
     focus: FocusHandle,
-    pub(super) state: FileState,
+    pub(crate) state: FileState,
     reader: Option<FileReader>,
     updates: Option<Task<()>>,
     scroll: gpui_kit::ScrollHandle,
@@ -21,22 +20,28 @@ pub(super) struct FilePane {
     available: bool,
     details: bool,
 }
+/// The file's chat is the shown, loaded chat of the same source and generation.
+fn shown(
+    v: &LocalViewer,
+    options: Option<&LocalOptions>,
+    generation: u64,
+    target: &Target,
+) -> bool {
+    v.page == Page::Chat
+        && crate::session_file_view_reader::same_source(options, v.usage_options.as_ref())
+        && !v.artifacts_open
+        && v.selected.as_ref() == Some(&target.chat)
+        && v.generation == generation
+        && v.state.generation == generation
+        && v.state.loaded
+        && v.state
+            .chats
+            .iter()
+            .any(|c| c.id == target.chat && c.cwd == target.cwd && !c.local_draft)
+}
 impl FilePane {
     fn current(&self, v: &LocalViewer) -> bool {
-        v.page == Page::Chat
-            && crate::session_file_view_reader::same_source(
-                self.options.as_ref(),
-                v.usage_options.as_ref(),
-            )
-            && !v.artifacts_open
-            && v.selected.as_ref() == Some(&self.target.chat)
-            && v.generation == self.generation
-            && v.state.generation == self.generation
-            && v.state.loaded
-            && v.state
-                .chats
-                .iter()
-                .any(|c| c.id == self.target.chat && c.cwd == self.target.cwd && !c.local_draft)
+        shown(v, self.options.as_ref(), self.generation, &self.target)
     }
     fn ready(&self, w: &mut Window, cx: &mut Context<Self>) -> bool {
         self.owner
@@ -120,9 +125,9 @@ impl FilePane {
         cx.notify();
     }
     fn close(&self, w: &mut Window, cx: &mut Context<Self>) {
-        let parent = self.parent.clone();
+        let owner = self.owner.clone();
         w.defer(cx, move |w, cx| {
-            let _ = parent.update(cx, |p, cx| p.close_file(w, cx));
+            let _ = owner.update(cx, |v, cx| v.close_session_file(w, cx));
         });
     }
 }
@@ -135,7 +140,7 @@ impl Render for FilePane {
         let mut body = div().v_flex().min_w_0().gap_2();
         if !current {
             body = body.child(ui::Notice::new(
-                "The chat changed. This file may be out of date; reopen Changes.",
+                "The chat changed. This file may be out of date; open it again.",
             ));
         }
         if self.state.busy {
@@ -221,6 +226,7 @@ impl Render for FilePane {
             .id("session-file-pane")
             .test_support()
             .track_focus(&self.focus)
+            .key_context("SessionFile")
             .on_mouse_down(
                 gpui_kit::MouseButton::Left,
                 cx.listener(|p, _, w, cx| {
@@ -266,7 +272,7 @@ impl Render for FilePane {
                     .child(
                         ui::icon_action(
                             "session-file-close",
-                            "Back to Changes (Escape)",
+                            "Close file (Escape)",
                             AppIcon::Close,
                             Action::Quiet,
                         )
@@ -313,74 +319,125 @@ impl Render for FilePane {
             )
     }
 }
-impl Pane {
-    pub(super) fn open_file(&mut self, ix: usize, w: &mut Window, cx: &mut Context<Self>) {
-        if !self.ready(w, cx) || self.state.busy || self.state.error.is_some() {
-            return;
+impl LocalViewer {
+    /// Opens one exact relative path of `chat`'s workspace in the side panel. It reads
+    /// once that chat is shown and loaded; until then it waits without reading.
+    pub(in crate::local_view) fn open_session_file(
+        &mut self,
+        chat: &str,
+        path: String,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.project_choices_ready(w, cx) {
+            return false;
         }
-        let Some(file) = self.state.snapshot.as_ref().and_then(|s| s.files.get(ix)) else {
-            return;
+        let Some(cwd) = self
+            .state
+            .chats
+            .iter()
+            .find(|c| c.id == chat && !c.local_draft && !c.cwd.is_empty())
+            .map(|c| c.cwd.clone())
+        else {
+            return false;
         };
-        if !crate::session_file_view::valid_path(&file.path) || file.status == "deleted" {
-            return;
+        if !crate::session_file_view::valid_path(&path) {
+            return false;
         }
-        if self.cwd.is_empty() {
-            return;
+        self.close_conversation_links(w, cx);
+        if self.mission_context.read(cx).visible {
+            self.mission_context_toggle(w, cx);
         }
         let target = Target {
-            chat: self.chat.clone(),
-            cwd: self.cwd.clone(),
-            path: file.path.clone(),
+            chat: chat.to_owned(),
+            cwd,
+            path,
         };
-        let parent = cx.entity().downgrade();
-        let owner = self.owner.clone();
-        let options = self.options.clone();
+        let viewer = cx.entity();
+        let options = self.usage_options.clone();
         let generation = self.generation;
-        let v = self.owner.upgrade().unwrap();
-        let pane = cx.new(|cx| FilePane {
-            parent,
-            owner,
-            options,
-            generation,
-            target,
-            _watch: cx.observe(&v, |p: &mut FilePane, v, cx| {
-                let available = p.current(v.read(cx));
-                if available != p.available {
-                    p.available = available;
-                    if !available {
-                        p.cancel();
+        let available = shown(self, options.as_ref(), generation, &target);
+        let pane = cx.new(|cx| {
+            FilePane {
+                owner: viewer.downgrade(),
+                options,
+                generation,
+                target,
+                _watch: cx.observe_in(&viewer, w, |p: &mut FilePane, v, w, cx| {
+                    let available = p.current(v.read(cx));
+                    if available != p.available {
+                        p.available = available;
+                        if !available {
+                            p.cancel();
+                        } else if p.state.content.is_none() && p.state.error.is_none() {
+                            // Opened before its chat finished loading: read once it is shown.
+                            cx.defer_in(w, |p, w, cx| p.refresh(w, cx));
+                        }
+                        cx.notify();
                     }
-                    cx.notify();
-                }
-            }),
-            focus: cx.focus_handle().tab_stop(false),
-            state: FileState::default(),
-            reader: None,
-            updates: None,
-            scroll: Default::default(),
-            text: SharedString::default(),
-            available: true,
-            details: false,
+                }),
+                focus: cx.focus_handle().tab_stop(false),
+                state: FileState::default(),
+                reader: None,
+                updates: None,
+                scroll: Default::default(),
+                text: SharedString::default(),
+                available,
+                details: false,
+            }
         });
-        self.file = Some(pane.clone());
+        self.session_file = Some(pane.clone());
+        // refresh checks the owner. Do not re-enter this borrowed LocalViewer.
         w.defer(cx, move |w, cx| pane.update(cx, |p, cx| p.refresh(w, cx)));
         cx.notify();
+        true
     }
-    fn close_file(&mut self, w: &mut Window, cx: &mut Context<Self>) {
-        // Focus a still-mounted destination before the file subtree disappears.
-        if self
-            .owner
-            .update(cx, |v, cx| {
-                if v.editor.update(cx, |e, cx| e.marked(w, cx)) {
-                    return false;
-                }
-                v.focus_mission_chat_destination(w, cx);
-                true
-            })
-            .unwrap_or(false)
-        {
-            self.file = None;
-            cx.notify();
+    pub(in crate::local_view) fn close_session_file(
+        &mut self,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(p) = &self.session_file else {
+            return;
+        };
+        if self.editor.update(cx, |e, cx| e.marked(w, cx)) {
+            return;
         }
+        // Focus a still-mounted destination before the file subtree disappears.
+        if p.read(cx).focus.contains_focused(w, cx) {
+            self.focus_mission_chat_destination(w, cx);
+        }
+        self.session_file = None;
+        cx.notify();
+    }
+    pub(in crate::local_view) fn session_file_panel(
+        &self,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<super::super::side_panel::SidePanel> {
+        let p = self.session_file.as_ref()?;
+        let side = f32::from(w.viewport_size().width) >= 1100.;
+        Some(super::super::side_panel::SidePanel {
+            key: "session-file",
+            side,
+            extent: if side { 360. } else { 300. },
+            region: div()
+                .id("session-file-region")
+                .test_support()
+                .flex_none()
+                .min_w_0()
+                .min_h_0()
+                .overflow_hidden()
+                .capture_any_mouse_down(cx.listener(|v, _, w, cx| {
+                    if !v.project_choices_ready(w, cx) {
+                        cx.stop_propagation();
+                    }
+                }))
+                .when(side, |d| d.w(px(360.)).h_full().border_l_1())
+                .when(!side, |d| d.w_full().h(px(300.)).border_t_1())
+                .border_color(cx.theme().border)
+                .child(p.clone())
+                .into_any_element(),
+        })
     }
 }

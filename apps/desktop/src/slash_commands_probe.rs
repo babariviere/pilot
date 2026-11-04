@@ -102,7 +102,6 @@ pub fn run_slash_commands_probe(cx: &mut HeadlessAppContext) {
                 [
                     "jobs",
                     "compact",
-                    "changes",
                     "artifacts",
                     "review",
                     "help",
@@ -143,24 +142,25 @@ pub fn run_slash_commands_probe(cx: &mut HeadlessAppContext) {
                 .unwrap();
             assert_eq!(value(cx), "/");
             // Pointer: a native command opens its control and keeps the rest of the draft.
-            set(cx, "/ch keep 👩‍💻 e\u{301}");
+            set(cx, "/jo keep 👩‍💻 e\u{301}");
             cx.update_window(h, |_, _, cx| {
                 input.update(cx, |i, cx| i.set_selected_range(3..3, cx))
             })
             .unwrap();
             settle(cx, h);
-            assert_eq!(names(cx).unwrap(), ["changes"]);
-            cx.update_window(h, |_, w, cx| w.click("slash-command-changes", cx))
+            assert_eq!(names(cx).unwrap(), ["jobs"]);
+            cx.update_window(h, |_, w, cx| w.click("slash-command-jobs", cx))
                 .unwrap();
-            until(cx, h, "Changes did not open", |_, cx| {
-                view.read(cx).workspace_changes.is_some()
+            until(cx, h, "jobs did not open from the pointer", |w, _| {
+                w.try_find("session-jobs-list").is_some()
             });
             assert_eq!(value(cx), "keep 👩‍💻 e\u{301}");
+            cx.update_window(h, |_, w, cx| w.click("session-jobs-toggle", cx))
+                .unwrap();
+            settle(cx, h);
             cx.update_window(h, |_, w, cx| {
-                view.update(cx, |v, cx| {
-                    v.toggle_workspace_changes(w, cx);
-                    v.editor.update(cx, |e, cx| e.focus(w, cx));
-                })
+                assert!(w.try_find("session-jobs-list").is_none());
+                view.update(cx, |v, cx| v.editor.update(cx, |e, cx| e.focus(w, cx)));
             })
             .unwrap();
             settle(cx, h);

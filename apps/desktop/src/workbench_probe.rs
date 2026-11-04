@@ -107,7 +107,7 @@ pub fn run_workbench_probe(cx: &mut HeadlessAppContext) {
                 }
                 if !baseline {
                     sidebar_alignment(w, width);
-                    let changes = w.find("workspace-changes-toggle").bounds();
+                    let changes = w.find("chat-review").bounds();
                     let more = w.find("history-menu").bounds();
                     assert!(
                         (more.left() - changes.right() - w.rem_size() * 0.125).abs() < px(0.5),

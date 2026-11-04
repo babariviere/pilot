@@ -352,7 +352,7 @@ impl LocalViewer {
         {
             return;
         }
-        self.close_workspace_changes(w, cx);
+        self.close_session_file(w, cx);
         if self.mission_context.read(cx).visible {
             self.mission_context_toggle(w, cx);
         }

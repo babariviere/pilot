@@ -110,7 +110,7 @@ pub fn run_side_panel_probe(cx: &mut HeadlessAppContext) {
                 )
             });
             let side = width >= 1100.;
-            let (links_extent, changes_extent) = if side { (320., 360.) } else { (280., 300.) };
+            let (links_extent, file_extent) = if side { (320., 360.) } else { (280., 300.) };
             let (writer, writes) = Interaction::recording();
             let (client, _commands) = LocalClient::synthetic_commands();
             let (h, view) = cx
@@ -130,6 +130,11 @@ pub fn run_side_panel_probe(cx: &mut HeadlessAppContext) {
                             cx.new(|cx| {
                                 let mut v = LocalViewer::preview(PreviewState::Conversation, w, cx);
                                 v.client = Some(client);
+                                std::sync::Arc::make_mut(&mut v.state.chats)
+                                    .iter_mut()
+                                    .find(|c| c.id == "synthetic")
+                                    .unwrap()
+                                    .cwd = "/synthetic/workspace".into();
                                 v.editor.update(cx, |e, cx| e.shell_probe_setup(writer, w, cx));
                                 let rows = (1..=40)
                                     .map(|id| {
@@ -285,13 +290,17 @@ pub fn run_side_panel_probe(cx: &mut HeadlessAppContext) {
             let settled = idle_renders(cx, h, &view);
 
             // Switching panels eases between their extents with the new content.
-            cx.update_window(h, |_, w, cx| w.press("secondary-alt-d", cx))
-                .unwrap();
+            cx.update_window(h, |_, w, cx| {
+                view.update(cx, |v, cx| {
+                    assert!(v.open_session_file("synthetic", "src/a.rs".into(), w, cx))
+                })
+            })
+            .unwrap();
             frame(cx, h, &view, 0);
-            let mut switching = vec![shot(cx, h, side, "workspace-changes-region")];
+            let mut switching = vec![shot(cx, h, side, "session-file-region")];
             for _ in 0..15 {
                 frame(cx, h, &view, 16);
-                switching.push(shot(cx, h, side, "workspace-changes-region"));
+                switching.push(shot(cx, h, side, "session-file-region"));
             }
             assert!(
                 (switching[0].slot - links_extent).abs() < 0.5,
@@ -300,18 +309,20 @@ pub fn run_side_panel_probe(cx: &mut HeadlessAppContext) {
             assert!(
                 switching
                     .iter()
-                    .any(|s| s.slot > links_extent + 1. && s.slot < changes_extent - 1.)
+                    .any(|s| s.slot > links_extent + 1. && s.slot < file_extent - 1.)
             );
             assert!(
                 switching
                     .iter()
-                    .all(|s| s.region == Some(changes_extent) && s.edge_aligned)
+                    .all(|s| s.region == Some(file_extent) && s.edge_aligned)
             );
-            assert_eq!(switching.last().unwrap().slot, changes_extent);
-            cx.update_window(h, |_, w, cx| w.press("secondary-alt-d", cx))
-                .unwrap();
+            assert_eq!(switching.last().unwrap().slot, file_extent);
+            cx.update_window(h, |_, w, cx| {
+                view.update(cx, |v, cx| v.close_session_file(w, cx))
+            })
+            .unwrap();
             settle(cx, h);
-            assert_eq!(shot(cx, h, side, "workspace-changes-region").slot, 0.);
+            assert_eq!(shot(cx, h, side, "session-file-region").slot, 0.);
             cx.update_window(h, |_, w, cx| w.press("secondary-alt-l", cx))
                 .unwrap();
             settle(cx, h);

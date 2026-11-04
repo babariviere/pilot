@@ -73,19 +73,53 @@ impl Comparison {
             && status(&self.status)
     }
 }
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct Worker {
-    pub id: String,
-    pub title: String,
-}
-#[derive(Deserialize)]
+/// One explicit request to review an exact saved revision. The chat and project are
+/// custody for exact reads and context for people, never the owner of the review.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct Workers {
-    pub mission_id: String,
+pub(crate) struct ReviewRequest {
+    pub request_id: String,
+    /// The request's own sequence, for the list cursor; not the revision's.
+    pub sequence: u64,
+    pub state: String,
+    /// Whether required checks and agent reviews allow human approval yet.
+    pub actionability: String,
     pub project_id: String,
-    pub workers: Vec<Worker>,
-    pub more: bool,
+    pub session_id: String,
+    pub title: String,
+    pub comparison: Comparison,
+}
+impl ReviewRequest {
+    pub fn valid(&self) -> bool {
+        crate::local_model::valid_id(&self.request_id)
+            && self.sequence > 0
+            && !self.state.is_empty()
+            && self.state.len() <= 64
+            && matches!(self.actionability.as_str(), "waiting" | "ready" | "unknown")
+            && crate::local_model::valid_id(&self.project_id)
+            && crate::local_model::valid_id(&self.session_id)
+            && self.title.len() <= 8192
+            && self.comparison.valid()
+    }
+    /// An explicit pending request, and whether approval is actionable yet. Pending never
+    /// implies ready; any other state is unknown, never hidden or read as reviewed.
+    pub fn status(&self) -> &'static str {
+        match (self.state.as_str(), self.actionability.as_str()) {
+            ("pending", "ready") => "Ready for review",
+            ("pending", "waiting") => "Waiting on checks and agent review",
+            ("pending", _) => "Pending · readiness unknown",
+            _ => "Status unknown",
+        }
+    }
+}
+impl Comparison {
+    /// `other` is a later saved revision of the same change and scope.
+    pub fn superseded_by(&self, other: &Self) -> bool {
+        self.request.repository_id == other.request.repository_id
+            && self.request.change_id == other.request.change_id
+            && self.request.scope == other.request.scope
+            && other.sequence > self.sequence
+    }
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -176,6 +210,14 @@ impl CaptureStatus {
         }).collect()
     }
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Requests {
+    pub requests: Vec<ReviewRequest>,
+    pub next: Option<u64>,
+    /// No authoritative request source: unavailable, never an empty queue.
+    pub unavailable: Option<String>,
+}
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(crate) struct Source {
@@ -253,6 +295,9 @@ pub(crate) struct Snapshot {
     pub status: String,
     pub captured_at: u64,
     pub enrollment_task_ids: Vec<String>,
+    /// Set only by project-owned (v2) captures, which have no task scope.
+    #[serde(default)]
+    pub enrollment_project_id: Option<String>,
     pub creation: Creation,
     pub omissions: Vec<String>,
     pub before: Vec<Source>,
@@ -261,7 +306,23 @@ pub(crate) struct Snapshot {
     pub diff: Option<Patch>,
 }
 impl Snapshot {
-    pub fn validate(&self, worker: &str, selected: &Comparison) -> Result<(), &'static str> {
+    /// `project` is the current project of the reviewed change's chat. A project-owned
+    /// capture must name exactly that project and carry no task scope; a mission capture
+    /// keeps a nonempty task scope and no project marker. Anything else is refused.
+    pub fn validate(
+        &self,
+        worker: &str,
+        project: &str,
+        selected: &Comparison,
+    ) -> Result<(), &'static str> {
+        let enrollment = match &self.enrollment_project_id {
+            Some(p) => {
+                crate::local_model::valid_id(p)
+                    && p == project
+                    && self.enrollment_task_ids.is_empty()
+            }
+            None => !self.enrollment_task_ids.is_empty(),
+        };
         if self.snapshot_id != selected.snapshot_id
             || self.worker_id != worker
             || self.request != selected.request
@@ -269,7 +330,7 @@ impl Snapshot {
             || self.status != selected.status
             || !self.request.valid()
             || !status(&self.status)
-            || self.enrollment_task_ids.is_empty()
+            || !enrollment
             || self.enrollment_task_ids.len() > 100
             || self
                 .enrollment_task_ids
@@ -345,6 +406,18 @@ impl Snapshot {
             return Err(INVALID);
         }
         Ok(())
+    }
+    /// Who the capture was enrolled for, for Revision details. Task scope is assignment
+    /// scope only; a project-owned capture has none and none is inferred.
+    pub fn enrollment(&self) -> String {
+        if self.enrollment_project_id.is_some() {
+            "project-owned chat capture · no task scope".into()
+        } else {
+            format!(
+                "enrollment task scope {} (not task-purpose proof)",
+                self.enrollment_task_ids.join(", ")
+            )
+        }
     }
     pub fn parse_patch(&self, patch: &str) -> Result<Vec<DiffFile>, &'static str> {
         let p = self.diff.as_ref().ok_or("Retained patch unavailable.")?;

@@ -215,7 +215,21 @@ impl LocalViewer {
                     .flex_none()
                     .children(self.conversation_links_action(cx))
                     .children(self.insights_action(cx))
-                    .children(self.workspace_changes_action(cx))
+                    .when(
+                        self.selected_review_target().is_some() && !self.artifacts_open,
+                        |this| {
+                            this.child(
+                                crate::ui::icon_action(
+                                    "chat-review",
+                                    "Review",
+                                    AppIcon::Changes,
+                                    crate::ui::Action::Quiet,
+                                )
+                                .tooltip("Review this chat's changes")
+                                .on_click(cx.listener(|v, _, w, cx| v.review_selected_chat(w, cx))),
+                            )
+                        },
+                    )
                     .when(
                         !self.state.artifacts.is_empty() || self.artifacts_open,
                         |this| {

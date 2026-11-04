@@ -458,6 +458,8 @@ impl LocalViewer {
                         .on_click(cx.listener(|v,_,w,cx|v.new_chat(w,cx)))))
                 .child(sidebar_row("nav-inbox","Inbox",AppIcon::Inbox).selected(matches!(self.page,Page::Inbox(_)))
                     .on_click(cx.listener(|v,_,w,cx|v.show_inbox(v.project_scope.clone(),w,cx))))
+                .child(sidebar_row("nav-review","Review",AppIcon::Changes).selected(matches!(self.page,Page::Review(_)))
+                    .on_click(cx.listener(|v,_,w,cx|{v.show_review(crate::navigation::ReviewTarget::default(),w,cx);})))
                 .child(sidebar_row("nav-missions","Missions",AppIcon::Mission).accessibility_label("Missions (Command-3)")
                     .selected(matches!(self.page,Page::Missions|Page::Mission(_)))
                     .on_click(cx.listener(|v,_,w,cx|{v.show_missions(w,cx);})))

@@ -536,6 +536,8 @@ impl LocalViewer {
             Target::Missions | Target::Mission(_) => json!({"target": "missions"}),
             Target::Inbox(filter) => json!({"target": "inbox", "id": filter}),
             Target::Project(id) => json!({"target": "project", "id": id}),
+            // Review is a passive reader: a reload reopens its list, not an exact revision.
+            Target::Review(t) => json!({"target": "review", "id": t.chat}),
             Target::Chat(id) => json!({"target": "chat", "id": id}),
             Target::Draft(key) => json!({"target": "draft", "id": key}),
             Target::Empty => serde_json::Value::Null,
@@ -648,6 +650,10 @@ fn update_location(value: &serde_json::Value) -> Option<crate::navigation::Locat
         "archive" => Target::Archive,
         "automations" => Target::Automations,
         "missions" => Target::Missions,
+        "review" => Target::Review(crate::navigation::ReviewTarget {
+            chat: id(&token["id"])?,
+            ..Default::default()
+        }),
         "inbox" => Target::Inbox(id(&token["id"])?),
         "project" => Target::Project(id(&token["id"])??),
         "chat" => Target::Chat(id(&token["id"])??),

@@ -42,7 +42,6 @@ fn builtins_are_reserved_and_session_commands_win_app_names() {
             "jobs",
             "compact",
             "model",
-            "changes",
             "artifacts",
             "review",
             "help",
@@ -58,10 +57,7 @@ fn builtins_are_reserved_and_session_commands_win_app_names() {
     );
     // Model is offered only where the composer has a model picker.
     let without = available(Scope::Chat { model: false }, &[]);
-    assert_eq!(
-        names(&without),
-        ["jobs", "compact", "changes", "artifacts", "help"]
-    );
+    assert_eq!(names(&without), ["jobs", "compact", "artifacts", "help"]);
 }
 
 #[test]
@@ -98,10 +94,7 @@ fn matching_prefers_prefix_then_substring_and_bare_skill_names() {
     let all = available(Scope::Chat { model: true }, &session());
     assert_eq!(matches("", &all, 50).len(), all.len());
     assert_eq!(names(&matches("co", &all, 50)), ["compact", "skill:commit"]);
-    assert_eq!(
-        names(&matches("E", &all, 50)),
-        ["model", "changes", "review", "help"]
-    );
+    assert_eq!(names(&matches("E", &all, 50)), ["model", "review", "help"]);
     assert_eq!(names(&matches("a", &all, 2)), ["artifacts", "compact"]);
     assert!(matches("zzz", &all, 50).is_empty());
 }
@@ -132,5 +125,11 @@ fn invocations_are_whole_native_messages_only() {
         invocation("/help", &app).unwrap().0.action(),
         Some(Action::Help)
     );
-    assert!(invocation("/changes", &available(Scope::NewChat { model: true }, &[])).is_none());
+    assert!(
+        invocation(
+            "/artifacts",
+            &available(Scope::NewChat { model: true }, &[])
+        )
+        .is_none()
+    );
 }

@@ -1,9 +1,10 @@
-//! Mission-scoped native retained Review. All reads share one exact comparison fence.
+//! Global, change-centered native retained Review. Explicit review requests across projects
+//! form one list; each opens its exact saved revision. All reads share one exact fence.
 #[path = "native_review_render.rs"]
 mod render;
 use crate::{
     LocalOptions,
-    mission_browser::Key,
+    mission_browser::{Home, Key},
     native_review as model,
     native_review_reader::{self as wire, Data, Reader, Route},
     ui::{self, Action, Notice, Text, Tone},
@@ -23,7 +24,52 @@ use gpui_kit::{
 };
 use std::sync::Arc;
 gpui_kit::actions!(native_review, [Back, NextChange, PreviousChange]);
-pub(crate) struct Close;
+#[derive(Clone)]
+pub(crate) enum Event {
+    /// Leave Review, or go back from one change to the list.
+    Close,
+    /// Open one listed change as the page target.
+    Open(Target),
+    /// Show the current workspace file of a change's chat, outside Review. The target
+    /// is rechecked against current metadata before anything opens.
+    CurrentFile {
+        home: Home,
+        chat: String,
+        project: String,
+        path: String,
+    },
+}
+/// What the list reads: this host's requests, optionally only those from one chat.
+/// The chat narrows the list; it never owns the review.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Scope {
+    pub(crate) home: Home,
+    pub(crate) chat: Option<String>,
+}
+/// One exact change a page opens: a queue item, or one of a chat's saved revisions
+/// opened without a request (never labelled pending).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Target {
+    Request(String),
+    Saved(String),
+}
+/// The exact revision on screen and the custody it is read through.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Opened {
+    target: Target,
+    session: String,
+    project: String,
+    title: String,
+    status: &'static str,
+    comparison: model::Comparison,
+}
+impl Scope {
+    fn valid(&self) -> bool {
+        self.chat
+            .as_deref()
+            .is_none_or(crate::local_model::valid_id)
+    }
+}
 #[derive(Clone)]
 struct Item {
     id: String,
@@ -42,25 +88,42 @@ impl SelectItem for Item {
     }
 }
 type Picker = SelectState<SearchableVec<Item>>;
+const MOVED: &str =
+    "This change's chat is now in another project. Its Review here was closed and cleared.";
 pub(crate) struct Pane {
-    key: Option<Key>,
+    scope: Option<Scope>,
+    /// The change this page targets, if one is open.
+    target: Option<Target>,
     options: Option<LocalOptions>,
     visible: bool,
     generation: u64,
     route: Option<Route>,
     reader: Option<Reader>,
     updates: Option<Task<()>>,
-    workers: Vec<model::Worker>,
-    worker: Option<String>,
-    project: Option<String>,
-    comparisons: Vec<model::Comparison>,
+    requests: Vec<model::ReviewRequest>,
+    /// A list page has been read for this scope.
+    listed: bool,
+    unavailable: bool,
     next: Option<u64>,
     after: u64,
-    selected: Option<model::Comparison>,
+    /// A chat-narrowed Review also lists that chat's saved revisions, read under the
+    /// project it is in here.
+    saved: Vec<model::Comparison>,
+    saved_project: Option<String>,
+    saved_more: bool,
+    not_captured: bool,
+    capture_notice: Option<&'static str>,
+    capture_limits: Vec<&'static str>,
+    /// Chats known here: a known move closes an open change, and a saved list needs
+    /// the chat's current project.
+    chats: Arc<Vec<crate::local_model::Chat>>,
+    /// The open change, pinned to its exact revision even if the list changes.
+    selected: Option<Opened>,
+    /// The open change's chat is known to have left its listed project: its reads stay
+    /// closed, including Refresh, until another change is opened.
+    moved: bool,
     snapshot: Option<Arc<model::Snapshot>>,
     diff: Entity<DiffState>,
-    worker_picker: Entity<Picker>,
-    comparison_picker: Entity<Picker>,
     file_picker: Entity<Picker>,
     file: Option<String>,
     source: Option<(String, SharedString)>,
@@ -70,23 +133,37 @@ pub(crate) struct Pane {
     busy: bool,
     error: Option<&'static str>,
     patch_error: Option<&'static str>,
-    more_workers: bool,
-    capture_notice: Option<&'static str>,
-    capture_limits: Vec<&'static str>,
     focus: FocusHandle,
     summary_scroll: gpui_kit::ScrollHandle,
     source_scroll: gpui_kit::ScrollHandle,
+    list_scroll: gpui_kit::ScrollHandle,
     _subscriptions: Vec<Subscription>,
 }
-impl EventEmitter<Close> for Pane {}
+impl EventEmitter<Event> for Pane {}
 impl Pane {
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_enrollment(&self) -> Option<String> {
+        self.snapshot.as_ref().map(|s| s.enrollment())
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_state(&self) -> Option<&'static str> {
+        self.state_message().map(|(title, _)| title)
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_requests(&self) -> Vec<String> {
+        self.requests.iter().map(|r| r.request_id.clone()).collect()
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_saved(&self) -> Vec<String> {
+        self.saved_rows().map(|c| c.snapshot_id.clone()).collect()
+    }
     #[cfg(feature = "native-probes")]
     pub(crate) fn probe_capture_notice(&self) -> Option<&'static str> {
         self.capture_notice
     }
     #[cfg(feature = "native-probes")]
-    pub(crate) fn probe_state(&self) -> Option<&'static str> {
-        self.state_message().map(|(title, _)| title)
+    pub(crate) fn probe_status(&self) -> Option<&'static str> {
+        self.selected.as_ref().map(|s| s.status)
     }
     #[cfg(feature = "native-probes")]
     pub(crate) fn probe_files(&self, cx: &App) -> Vec<String> {
@@ -110,7 +187,9 @@ impl Pane {
     ) {
         (
             self.busy,
-            self.selected.as_ref().map(|s| s.snapshot_id.clone()),
+            self.selected
+                .as_ref()
+                .map(|s| s.comparison.snapshot_id.clone()),
             self.source.as_ref().map(|s| s.1.to_string()),
             self.diff.read(cx).files().len(),
             self.error,
@@ -120,11 +199,9 @@ impl Pane {
     pub(crate) fn probe_stale(&mut self, cx: &mut Context<Self>) {
         let before = self.snapshot.as_ref().map(|s| s.snapshot_id.clone());
         if let Some(route) = self
-            .key
-            .clone()
-            .zip(self.worker.clone())
+            .chat_key()
             .zip(self.selected.clone())
-            .map(|((k, w), c)| Route::Snapshot(k, w, Box::new(c)))
+            .map(|(k, c)| Route::Snapshot(k, Box::new(c.comparison)))
         {
             let previous = self.route.replace(route.clone());
             self.accept(
@@ -148,70 +225,59 @@ impl Pane {
             gpui_kit::KeyBinding::new("alt-down", NextChange, Some("NativeReview")),
             gpui_kit::KeyBinding::new("alt-up", PreviousChange, Some("NativeReview")),
         ]);
-        let worker_picker =
-            cx.new(|cx| Picker::new(SearchableVec::<Item>::new(vec![]), None, w, cx));
-        let comparison_picker =
-            cx.new(|cx| Picker::new(SearchableVec::<Item>::new(vec![]), None, w, cx));
         let file_picker = cx.new(|cx| Picker::new(SearchableVec::<Item>::new(vec![]), None, w, cx));
-        let mut subscriptions = vec![];
-        for (kind, picker) in [
-            (0, worker_picker.clone()),
-            (1, comparison_picker.clone()),
-            (2, file_picker.clone()),
-        ] {
-            subscriptions.push(cx.subscribe_in(
-                &picker,
-                w,
-                move |v, p, event: &SelectEvent<SearchableVec<Item>>, w, cx| {
-                    let SelectEvent::Confirm(Some(id)) = event else {
-                        return;
-                    };
-                    if !v.visible || p.read(cx).selected_value() != Some(id) {
-                        return;
-                    }
-                    match kind {
-                        0 => v.choose_worker(id, w, cx),
-                        1 => v.choose_comparison(id, w, cx),
-                        _ => {
-                            if v.diff
-                                .read(cx)
-                                .files()
-                                .iter()
-                                .any(|f| f.path().as_ref() == id)
-                            {
-                                v.file = Some(id.clone());
-                                v.diff.update(cx, |d, cx| d.scroll_to_file(id, cx));
-                                // Jump is navigation, not a selection: return to its placeholder.
-                                let picker = p.clone();
-                                cx.defer_in(w, move |_, w, cx| {
-                                    picker.update(cx, |p, cx| p.set_selected_index(None, w, cx))
-                                });
-                                cx.notify();
-                            }
-                        }
-                    }
-                },
-            ));
-        }
+        let subscriptions = vec![cx.subscribe_in(
+            &file_picker,
+            w,
+            move |v, p, event: &SelectEvent<SearchableVec<Item>>, w, cx| {
+                let SelectEvent::Confirm(Some(id)) = event else {
+                    return;
+                };
+                if !v.visible || p.read(cx).selected_value() != Some(id) {
+                    return;
+                }
+                if v.diff
+                    .read(cx)
+                    .files()
+                    .iter()
+                    .any(|f| f.path().as_ref() == id)
+                {
+                    v.file = Some(id.clone());
+                    v.diff.update(cx, |d, cx| d.scroll_to_file(id, cx));
+                    // Jump is navigation, not a selection: return to its placeholder.
+                    let picker = p.clone();
+                    cx.defer_in(w, move |_, w, cx| {
+                        picker.update(cx, |p, cx| p.set_selected_index(None, w, cx))
+                    });
+                    cx.notify();
+                }
+            },
+        )];
         Self {
-            key: None,
+            scope: None,
+            target: None,
             options: None,
             visible: false,
             generation: 0,
             route: None,
             reader: None,
             updates: None,
-            workers: vec![],
-            worker: None,
-            project: None,
-            comparisons: vec![],
+            requests: vec![],
+            saved: vec![],
+            saved_project: None,
+            saved_more: false,
+            not_captured: false,
+            capture_notice: None,
+            capture_limits: vec![],
+            chats: Arc::new(vec![]),
+            listed: false,
+            unavailable: false,
             next: None,
             after: 0,
             selected: None,
+            moved: false,
             snapshot: None,
             diff: cx.new(|cx| DiffState::new(vec![], cx)),
-            worker_picker,
-            comparison_picker,
             file_picker,
             file: None,
             source: None,
@@ -221,46 +287,49 @@ impl Pane {
             busy: false,
             error: None,
             patch_error: None,
-            more_workers: false,
-            capture_notice: None,
-            capture_limits: vec![],
             focus: cx.focus_handle().tab_stop(true),
             summary_scroll: Default::default(),
             source_scroll: Default::default(),
+            list_scroll: Default::default(),
             _subscriptions: subscriptions,
         }
     }
     pub(crate) fn sync(
         &mut self,
-        key: Option<Key>,
+        scope: Option<Scope>,
+        target: Option<Target>,
         options: Option<LocalOptions>,
         visible: bool,
         w: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let changed = self.key != key
+        let scope = scope.filter(Scope::valid);
+        let changed = self.scope != scope
             || !crate::session_file_view_reader::same_source(
                 self.options.as_ref(),
                 options.as_ref(),
             );
         if changed {
             self.cancel();
-            self.clear_comparison(cx);
-            self.workers.clear();
-            self.worker = None;
-            self.project = None;
-            self.comparisons.clear();
-            self.selected = None;
-            self.key = key;
+            self.close_change(cx);
+            self.requests.clear();
+            self.clear_saved();
+            self.listed = false;
+            self.unavailable = false;
+            self.scope = scope;
             self.options = options;
             self.error = None;
             self.next = None;
-            self.capture_notice = None;
-            self.capture_limits.clear();
             self.after = 0;
-            Self::items(&self.worker_picker, vec![], None, w, cx);
-            Self::items(&self.comparison_picker, vec![], None, w, cx);
         }
+        let retarget = changed || self.target != target;
+        if retarget && !changed {
+            // Another change, or back to the list: the list stays, the change does not.
+            self.cancel();
+            self.close_change(cx);
+            self.error = None;
+        }
+        self.target = target;
         let opening = visible && !self.visible;
         if !visible {
             self.cancel();
@@ -270,10 +339,12 @@ impl Pane {
             }
         }
         self.visible = visible;
-        if visible && (changed || opening) {
+        if visible && (changed || !self.listed) {
             self.refresh(w, cx);
+        } else if visible && (retarget || opening) {
+            self.open_target(w, cx);
         }
-        if changed || opening {
+        if changed || retarget || opening {
             cx.notify();
         }
     }
@@ -284,32 +355,137 @@ impl Pane {
         self.updates = None;
         self.busy = false;
     }
-    /// Known host-summary changes revoke the display immediately; missing rows are not proof.
-    pub(crate) fn observe_scope(
-        &mut self,
-        chats: &[crate::local_model::Chat],
-        cx: &mut Context<Self>,
-    ) {
-        let Some(worker) = &self.worker else {
+    fn clear_saved(&mut self) {
+        self.saved.clear();
+        self.saved_project = None;
+        self.saved_more = false;
+        self.not_captured = false;
+        self.capture_notice = None;
+        self.capture_limits.clear();
+    }
+    /// The targeted change, as currently listed. Never guesses another.
+    fn listed_target(&self) -> Option<Opened> {
+        match self.target.as_ref()? {
+            Target::Request(id) => {
+                self.requests
+                    .iter()
+                    .find(|r| &r.request_id == id)
+                    .map(|r| Opened {
+                        target: Target::Request(r.request_id.clone()),
+                        session: r.session_id.clone(),
+                        project: r.project_id.clone(),
+                        title: r.title.clone(),
+                        status: r.status(),
+                        comparison: r.comparison.clone(),
+                    })
+            }
+            Target::Saved(id) => {
+                let chat = self.scope.as_ref()?.chat.clone()?;
+                let c = self.saved.iter().find(|c| &c.snapshot_id == id)?;
+                Some(Opened {
+                    target: Target::Saved(id.clone()),
+                    session: chat,
+                    project: self.saved_project.clone()?,
+                    title: c.label(),
+                    status: "No review request",
+                    comparison: c.clone(),
+                })
+            }
+        }
+    }
+    /// Opens the targeted change once it is listed, unless its chat is known to be in
+    /// another project now.
+    fn open_target(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        let Some(target) = self.target.clone() else {
             return;
         };
-        let revoked=chats.iter().find(|c|&c.id==worker).is_some_and(|c|{
-            self.project.as_ref().is_some_and(|p|c.project_id.as_ref()!=Some(p))
-                || !matches!((&c.mission,&self.key),(crate::local_model::MissionAssociation::Linked(id),Some(k)) if id==&k.id)
-        });
-        if revoked {
-            self.cancel();
+        let open = match self.selected.clone() {
+            Some(s) if s.target == target => s,
+            Some(_) => return,
+            None => match self.listed_target() {
+                Some(o) => o,
+                None => return,
+            },
+        };
+        self.selected = Some(open.clone());
+        if self.moved || self.revoke_moved(cx) {
+            // Refresh keeps saying why the latched change stays closed.
+            self.error = Some(MOVED);
+            return;
+        }
+        if let Some(k) = self.chat_key() {
             self.clear_comparison(cx);
-            self.worker = None;
-            self.selected = None;
-            self.comparisons.clear();
-            self.capture_notice = None;
-            self.capture_limits.clear();
-            self.error = Some(
-                "Worker mission/project scope changed. Previous retained content was cleared.",
-            );
+            self.request(Route::Snapshot(k, Box::new(open.comparison)), w, cx);
+        }
+    }
+    /// The chats known here, for moves and the current-file handoff.
+    pub(crate) fn observe_chats(
+        &mut self,
+        chats: Arc<Vec<crate::local_model::Chat>>,
+        cx: &mut Context<Self>,
+    ) {
+        if Arc::ptr_eq(&self.chats, &chats) {
+            return;
+        }
+        self.chats = chats;
+        // A saved list read under the chat's old project never stays on screen.
+        if let (Some(chat), Some(project)) = (
+            self.scope.as_ref().and_then(|s| s.chat.as_ref()),
+            self.saved_project.as_ref(),
+        ) && self
+            .chats
+            .iter()
+            .find(|c| &c.id == chat)
+            .is_some_and(|c| c.project_id.as_ref() != Some(project))
+        {
+            self.clear_saved();
             cx.notify();
         }
+        self.revoke_moved(cx);
+        cx.notify();
+    }
+    /// A known move of the open change's chat to another project revokes its display at
+    /// once and latches until another change opens. Missing rows are not proof.
+    fn revoke_moved(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(open) = self.selected.as_ref() else {
+            return false;
+        };
+        let moved = self
+            .chats
+            .iter()
+            .find(|c| c.id == open.session)
+            .is_some_and(|c| c.project_id.as_ref() != Some(&open.project));
+        if moved && !self.moved {
+            self.cancel();
+            self.clear_comparison(cx);
+            self.moved = true;
+            self.error = Some(MOVED);
+            cx.notify();
+        }
+        moved
+    }
+    /// The exact custody chat every snapshot, records and source read goes through, with
+    /// the request's listed project as the host-checked expectation. None once it moved.
+    fn chat_key(&self) -> Option<wire::Chat> {
+        if self.moved {
+            return None;
+        }
+        let open = self.selected.as_ref()?;
+        self.chat_ref(&open.session, &open.project)
+    }
+    fn chat_ref(&self, chat: &str, project: &str) -> Option<wire::Chat> {
+        Some(wire::Chat {
+            key: Key {
+                home: self.scope.as_ref()?.home.clone(),
+                id: chat.to_owned(),
+            },
+            project: project.to_owned(),
+        })
+    }
+    fn close_change(&mut self, cx: &mut Context<Self>) {
+        self.selected = None;
+        self.moved = false;
+        self.clear_comparison(cx);
     }
     fn clear_comparison(&mut self, cx: &mut Context<Self>) {
         self.snapshot = None;
@@ -320,20 +496,10 @@ impl Pane {
         self.file = None;
         self.diff.update(cx, |d, cx| d.set_files(vec![], cx));
     }
-    fn items(
-        p: &Entity<Picker>,
-        items: Vec<Item>,
-        selected: Option<String>,
-        w: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn items(p: &Entity<Picker>, items: Vec<Item>, w: &mut Window, cx: &mut Context<Self>) {
         p.update(cx, |p, cx| {
             p.set_items(SearchableVec::new(items), w, cx);
-            if let Some(selected) = &selected {
-                p.set_selected_value(selected, w, cx);
-            } else {
-                p.set_selected_index(None, w, cx);
-            }
+            p.set_selected_index(None, w, cx);
         });
     }
     pub(crate) fn focus(&self, w: &mut Window, cx: &mut App) {
@@ -345,7 +511,7 @@ impl Pane {
     }
     fn loading_label(&self) -> &'static str {
         match self.route {
-            Some(Route::Workers(..)) => "Loading workers…",
+            Some(Route::Requests(..)) => "Loading Review…",
             Some(Route::Comparisons(..)) => "Loading saved revisions…",
             Some(Route::Snapshot(..)) => "Loading diff…",
             Some(Route::Records(..)) => "Loading evidence…",
@@ -353,46 +519,91 @@ impl Pane {
             None => "Loading…",
         }
     }
-    /// What fills the diff area when there is no diff: loading is not empty,
-    /// and no saved revision is not "no code changes". Never auto-selects.
+    /// A chat's saved revisions that no listed request already covers.
+    fn saved_rows(&self) -> impl Iterator<Item = &model::Comparison> {
+        self.saved.iter().filter(|c| {
+            !self
+                .requests
+                .iter()
+                .any(|r| r.comparison.snapshot_id == c.snapshot_id)
+        })
+    }
+    fn has_rows(&self) -> bool {
+        !self.requests.is_empty() || self.saved_rows().next().is_some()
+    }
+    /// What fills the page when there is no list or diff: loading is not empty, and
+    /// no request source is not "nothing to review". Never auto-selects.
     fn state_message(&self) -> Option<(&'static str, Option<&'static str>)> {
         if self.has_content() {
             return None;
         }
-        if self.busy {
+        if self.busy && (!self.has_rows() || self.target.is_some()) {
             return Some((self.loading_label(), None));
+        }
+        if self.busy {
+            // Refreshing keeps the current list on screen.
+            return None;
         }
         if self.error.is_some() || self.selected.is_some() {
             // The visible warning explains it; nothing else is guessed.
             return None;
         }
-        if self.workers.is_empty() {
+        if self.scope.is_none() {
+            return Some(("Review is unavailable.", None));
+        }
+        if !self.listed {
+            return None;
+        }
+        if self.target.is_some() {
             return Some((
-                "No current workers in this mission.",
-                Some("Revisions are saved at worker checkpoints."),
+                "This change isn't in the loaded list.",
+                Some("It may be on another page or no longer listed. Go back to the list."),
             ));
         }
-        if self.worker.is_none() {
-            return Some(("Choose a worker to see its saved revisions.", None));
+        if self.has_rows() {
+            return None;
         }
-        if self.comparisons.is_empty() {
+        if self.unavailable {
             return Some((
-                "No saved revisions yet.",
-                Some("Workers save revisions at checkpoints. Code may still have changed."),
+                "Review requests are unavailable.",
+                Some("Saved revisions aren't shown as waiting without a review request."),
             ));
         }
-        Some(("Choose a saved revision to see its diff.", None))
+        let from_chat = self.scope.as_ref().is_some_and(|s| s.chat.is_some());
+        if from_chat && self.not_captured {
+            return Some((
+                "Not captured",
+                Some("This chat has no saved revisions. Opening Review doesn't capture anything."),
+            ));
+        }
+        Some((
+            if from_chat {
+                "Nothing from this chat is waiting for review."
+            } else {
+                "Nothing is waiting for review."
+            },
+            None,
+        ))
     }
-    /// A later capture of the same change and scope is listed; the pin stays.
+    /// A later saved revision of the open change is also listed; the open one stays.
     fn newer_listed(&self) -> bool {
         self.selected.as_ref().is_some_and(|p| {
-            self.comparisons.iter().any(|c| {
-                c.request.change_id == p.request.change_id
-                    && c.request.scope == p.request.scope
-                    && c.sequence > p.sequence
-            })
+            self.requests
+                .iter()
+                .map(|r| &r.comparison)
+                .chain(self.saved.iter())
+                .any(|c| p.comparison.superseded_by(c))
         })
     }
+    /// The open change is no longer in the refreshed list; it stays pinned and shown.
+    fn unlisted(&self) -> bool {
+        self.listed
+            && self.selected.as_ref().is_some_and(|p| match &p.target {
+                Target::Request(id) => !self.requests.iter().any(|r| &r.request_id == id),
+                Target::Saved(id) => !self.saved.iter().any(|c| &c.snapshot_id == id),
+            })
+    }
+    #[cfg(feature = "native-probes")]
     pub(crate) fn owns_focus(&self, w: &Window, cx: &App) -> bool {
         self.focus.contains_focused(w, cx)
     }
@@ -456,49 +667,16 @@ impl Pane {
         }
         cx.notify();
     }
+    /// Rereads the list page (and a chat's saved revisions), then the open change.
     fn refresh(&mut self, w: &mut Window, cx: &mut Context<Self>) {
-        if let Some(k) = self.key.clone() {
-            self.request(Route::Workers(k), w, cx);
-        }
-    }
-    fn choose_worker(&mut self, id: &str, w: &mut Window, cx: &mut Context<Self>) {
-        if self.worker.as_deref() == Some(id) || !self.workers.iter().any(|v| v.id == id) {
-            return;
-        }
-        self.clear_comparison(cx);
-        self.selected = None;
-        self.worker = Some(id.into());
-        self.comparisons.clear();
-        self.after = 0;
-        self.capture_notice = None;
-        self.capture_limits.clear();
-        self.next = None;
-        Self::items(&self.comparison_picker, vec![], None, w, cx);
-        if let Some(k) = self.key.clone() {
-            self.request(Route::Comparisons(k, id.into(), 0), w, cx);
-        }
-    }
-    fn choose_comparison(&mut self, id: &str, w: &mut Window, cx: &mut Context<Self>) {
-        let Some(c) = self
-            .comparisons
-            .iter()
-            .find(|c| c.snapshot_id == id)
-            .cloned()
-        else {
+        let Some(scope) = self.scope.clone() else {
             return;
         };
-        if self.selected.as_ref().is_some_and(|s| s.snapshot_id == id) && self.snapshot.is_some() {
-            return;
-        }
-        self.open_comparison(c, w, cx);
+        self.request(Route::Requests(scope.home, self.after, scope.chat), w, cx);
     }
-    fn open_comparison(&mut self, c: model::Comparison, w: &mut Window, cx: &mut Context<Self>) {
-        let (Some(k), Some(worker)) = (self.key.clone(), self.worker.clone()) else {
-            return;
-        };
-        self.clear_comparison(cx);
-        self.selected = Some(c.clone());
-        self.request(Route::Snapshot(k, worker, Box::new(c)), w, cx);
+    fn page(&mut self, after: u64, w: &mut Window, cx: &mut Context<Self>) {
+        self.after = after;
+        self.refresh(w, cx);
     }
     pub(crate) fn accept(&mut self, r: wire::Response, cx: &mut Context<Self>) {
         if !self.visible || r.generation != self.generation || self.route.as_ref() != Some(&r.route)
@@ -512,42 +690,40 @@ impl Pane {
                 if !matches!(r.route, Route::Records(..)) || e != wire::RECORDS_UNAVAILABLE {
                     self.clear_comparison(cx);
                 }
+                if matches!(r.route, Route::Requests(..)) {
+                    // An unreadable list never leaves an older one looking current.
+                    self.requests.clear();
+                    self.next = None;
+                }
+                if matches!(r.route, Route::Requests(..) | Route::Comparisons(..)) {
+                    self.clear_saved();
+                }
             }
-            Ok(Data::Workers(v)) => {
-                if self.project.as_ref().is_some_and(|p| p != &v.project_id) {
-                    self.worker = None;
-                    self.selected = None;
-                    self.comparisons.clear();
-                    self.clear_comparison(cx);
-                }
-                self.project = Some(v.project_id);
-                self.more_workers = v.more;
-                self.workers = v.workers;
-                if self
-                    .worker
-                    .as_ref()
-                    .is_some_and(|id| !self.workers.iter().any(|w| &w.id == id))
-                {
-                    self.worker = None;
-                    self.selected = None;
-                    self.comparisons.clear();
-                    self.clear_comparison(cx);
-                }
+            Ok(Data::Requests(v)) => {
+                // The reader already checked the filter; nothing else is inferred.
+                self.listed = true;
+                self.unavailable = v.unavailable.is_some();
+                self.requests = v.requests;
+                self.next = v.next;
+                self.error = None;
             }
             Ok(Data::Comparisons(v)) => {
+                let Route::Comparisons(chat, _) = &r.route else {
+                    return;
+                };
                 self.capture_notice = v.capture.as_ref().and_then(model::CaptureStatus::notice);
                 self.capture_limits = v
                     .capture
                     .as_ref()
                     .map(model::CaptureStatus::limitations)
                     .unwrap_or_default();
-                self.comparisons = v.comparisons;
-                self.next = v.next;
-                self.error = if v.unavailable.is_some() {
-                    Some("Review isn't set up here. Reading doesn't enroll or capture work.")
-                } else {
-                    None
-                };
+                self.saved = v.comparisons;
+                self.saved_more = v.next.is_some();
+                self.saved_project = Some(chat.project.clone());
+                // On the chat route every `unavailable` reason means no current retained
+                // custody: an honest Not captured state, never an error or a mission
+                // requirement. The host's reason text is not a stable token, so it is not matched.
+                self.not_captured = v.unavailable.is_some();
             }
             Ok(Data::Snapshot(s, files)) => {
                 self.snapshot = Some(s);
@@ -564,7 +740,7 @@ impl Pane {
                 self.records_open = true;
             }
             Ok(Data::Source(text)) => {
-                let Route::Source(_, _, _, side, path, _) = r.route else {
+                let Route::Source(_, _, side, path, _) = r.route else {
                     return;
                 };
                 let mut end = text.len().min(65536);
@@ -594,55 +770,28 @@ impl Pane {
             return;
         }
         match route {
-            Some(Route::Workers(k)) => {
-                Self::items(
-                    &self.worker_picker,
-                    self.workers
-                        .iter()
-                        .map(|v| Item {
-                            id: v.id.clone(),
-                            label: v.title.clone().into(),
-                        })
-                        .collect(),
-                    self.worker.clone(),
-                    w,
-                    cx,
-                );
-                if let Some(worker) = self.worker.clone() {
-                    self.request(Route::Comparisons(k, worker, self.after), w, cx);
-                }
-            }
-            Some(Route::Comparisons(k, worker, _)) => {
-                let mut items: Vec<_> = self
-                    .comparisons
-                    .iter()
-                    .map(|c| Item {
-                        id: c.snapshot_id.clone(),
-                        label: c.label().into(),
-                    })
-                    .collect();
-                if let Some(s) = self.selected.as_ref().filter(|s| {
-                    !self
-                        .comparisons
-                        .iter()
-                        .any(|c| c.snapshot_id == s.snapshot_id)
-                }) {
-                    items.push(Item {
-                        id: s.snapshot_id.clone(),
-                        label: format!("Pinned · {}", s.label()).into(),
+            Some(Route::Requests(..)) => {
+                // A chat-narrowed Review also lists that chat's saved revisions, under the
+                // project the chat is in here. Without a known project, none are read.
+                let saved = self
+                    .scope
+                    .as_ref()
+                    .and_then(|s| s.chat.clone())
+                    .and_then(|id| {
+                        let project = self
+                            .chats
+                            .iter()
+                            .find(|c| c.id == id && !c.local_draft)?
+                            .project_id
+                            .clone()?;
+                        self.chat_ref(&id, &project)
                     });
-                }
-                Self::items(
-                    &self.comparison_picker,
-                    items,
-                    self.selected.as_ref().map(|s| s.snapshot_id.clone()),
-                    w,
-                    cx,
-                );
-                if let Some(c) = self.selected.clone() {
-                    self.request(Route::Snapshot(k, worker, Box::new(c)), w, cx);
+                match saved {
+                    Some(k) => self.request(Route::Comparisons(k, 0), w, cx),
+                    None => self.open_target(w, cx),
                 }
             }
+            Some(Route::Comparisons(..)) => self.open_target(w, cx),
             Some(Route::Snapshot(..)) => {
                 let items = self
                     .diff
@@ -655,7 +804,7 @@ impl Pane {
                     })
                     .collect();
                 // Jumping is navigation only; the full file list stays in the diff.
-                Self::items(&self.file_picker, items, None, w, cx);
+                Self::items(&self.file_picker, items, w, cx);
             }
             _ => {}
         }
@@ -670,7 +819,7 @@ impl Pane {
             self.diff.read(cx).focus_handle(cx).focus(w, cx);
         } else {
             self.cancel();
-            cx.emit(Close);
+            cx.emit(Event::Close);
         }
         cx.notify();
     }
@@ -690,11 +839,10 @@ impl Pane {
         self.file = Some(path);
         self.read_source(side, w, cx);
     }
-    /// The retained text entry for one side of the current file, if that side exists as text.
-    fn source_entry(&self, side: &str, cx: &App) -> Option<model::Source> {
-        let (s, file) = (self.snapshot.as_ref()?, self.file.as_ref()?);
-        let path = self
-            .diff
+    /// The retained path of one side of the current file, if that side exists.
+    fn side_path(&self, side: &str, cx: &App) -> Option<String> {
+        let file = self.file.as_ref()?;
+        self.diff
             .read(cx)
             .files()
             .iter()
@@ -706,7 +854,12 @@ impl Pane {
                     f.modified_path()
                 }
             })
-            .map(|p| p.to_string())?;
+            .map(|p| p.to_string())
+    }
+    /// The retained text entry for one side of the current file, if that side exists as text.
+    fn source_entry(&self, side: &str, cx: &App) -> Option<model::Source> {
+        let s = self.snapshot.as_ref()?;
+        let path = self.side_path(side, cx)?;
         let entries = if side == "before" {
             &s.before
         } else {
@@ -720,10 +873,31 @@ impl Pane {
     pub(super) fn side_available(&self, side: &str, cx: &App) -> bool {
         self.source_entry(side, cx).is_some()
     }
+    /// The open change's custody and the file's after path, when its current workspace
+    /// file can be shown in that chat. Review itself never shows live content.
+    fn current_file_target(&self, cx: &App) -> Option<Event> {
+        let open = self.selected.as_ref().filter(|_| !self.moved)?;
+        // The change's chat is loaded here, in the project its change was listed under.
+        let loaded = self.chats.iter().any(|c| {
+            c.id == open.session
+                && !c.local_draft
+                && !c.cwd.is_empty()
+                && c.project_id.as_ref() == Some(&open.project)
+        });
+        if !loaded {
+            return None;
+        }
+        let path = self.side_path("after", cx)?;
+        let home = self.scope.as_ref()?.home.clone();
+        crate::session_file_view::valid_path(&path).then(|| Event::CurrentFile {
+            home,
+            chat: open.session.clone(),
+            project: open.project.clone(),
+            path,
+        })
+    }
     fn read_source(&mut self, side: &str, w: &mut Window, cx: &mut Context<Self>) {
-        let (Some(k), Some(worker), Some(s)) =
-            (self.key.clone(), self.worker.clone(), self.snapshot.clone())
-        else {
+        let (Some(k), Some(s)) = (self.chat_key(), self.snapshot.clone()) else {
             return;
         };
         let Some(e) = self.source_entry(side, cx) else {
@@ -736,7 +910,6 @@ impl Pane {
             self.request(
                 Route::Source(
                     k,
-                    worker,
                     s.snapshot_id.clone(),
                     side.into(),
                     e.path.clone(),

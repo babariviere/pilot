@@ -4,6 +4,26 @@ pub(crate) const WIRE_CAP: usize = 4 * 1024 * 1024;
 pub(crate) const TEXT_CAP: usize = 32 * 1024;
 pub(crate) const LINE_CAP: usize = 300;
 pub(crate) const LINE_BYTES: usize = 1024;
+/// Visible spelling preserves unusual filenames without allowing terminal/bidi controls.
+pub(crate) fn display(s: &str) -> String {
+    s.chars()
+        .flat_map(|c| {
+            if c.is_control() || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}') {
+                c.escape_unicode().collect::<Vec<_>>()
+            } else {
+                vec![c]
+            }
+        })
+        .collect()
+}
+pub(crate) fn preview(s: &str) -> String {
+    let shown: String = s.chars().take(160).collect();
+    let mut shown = display(&shown);
+    if s.chars().nth(160).is_some() {
+        shown.push('…');
+    }
+    shown
+}
 pub(crate) fn valid_path(path: &str) -> bool {
     !path.is_empty()
         && path.encode_utf16().count() <= 4096

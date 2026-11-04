@@ -1,5 +1,5 @@
 //! Chat side-panel shell: the conversation plus at most one panel (mission
-//! context, links or changes) in a slot that eases open and closed.
+//! context, links or a workspace file) in a slot that eases open and closed.
 //!
 //! The panel keeps its full extent inside the clipped slot, so its content
 //! slides with the slot's edge instead of reflowing each frame. Closing removes
@@ -26,7 +26,7 @@ impl LocalViewer {
         let panel = self
             .mission_panel(w, cx)
             .or_else(|| self.conversation_links_panel(w, cx))
-            .or_else(|| self.workspace_changes_panel(w, cx));
+            .or_else(|| self.session_file_panel(w, cx));
         if let Some(p) = &panel {
             self.side_panel_beside = p.side;
         }

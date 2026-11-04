@@ -28,16 +28,6 @@ impl LocalViewer {
                     .map(|_| ())
                     .ok_or("Keyboard shortcuts can't open right now.")
             }
-            Action::Changes => {
-                chat.ok_or("Changes open from an existing chat.")?;
-                if self.workspace_changes.is_none() {
-                    self.toggle_workspace_changes(w, cx);
-                }
-                self.workspace_changes
-                    .as_ref()
-                    .map(|_| ())
-                    .ok_or("Changes can't open right now.")
-            }
             Action::Artifacts => {
                 chat.ok_or("Artifacts open from an existing chat.")?;
                 if self.state.artifacts.is_empty() {

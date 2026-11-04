@@ -11,9 +11,20 @@ pub(crate) enum Target {
     Mission(crate::mission_browser::Key),
     Inbox(Option<String>),
     Project(String),
+    /// Global Review, optionally narrowed to one chat or open on one exact request.
+    Review(ReviewTarget),
     Chat(String),
     Draft(String),
     Empty,
+}
+/// Global Review: changes with review requests, optionally only those from one chat,
+/// optionally open on one exact change: a request, or (from a chat) one of its saved
+/// revisions without a request. The chat is context, never the owner.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ReviewTarget {
+    pub(crate) chat: Option<String>,
+    pub(crate) request: Option<String>,
+    pub(crate) snapshot: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Location {

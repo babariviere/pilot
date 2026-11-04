@@ -1,6 +1,6 @@
-//! Files-changed Review: choose a worker and one exact saved revision, then read
-//! every file of that retained comparison in one continuous Kit Diff. Identity,
-//! provenance and evidence stay in the Revision details dialog, off the page.
+//! Files-changed Review: one list of changes with review requests, then every file of
+//! one exact saved revision in one continuous Kit Diff. Identity, provenance and
+//! evidence stay in the Revision details dialog, off the page.
 use super::*;
 use gpui_kit::{
     AnyElement, Div, ElementId, WeakEntity,
@@ -11,10 +11,6 @@ use gpui_kit::{
     px,
 };
 
-/// Selector basis: two fit side by side in a wide pane and wrap in a narrow one,
-/// so long worker titles truncate inside their own control instead of overflowing.
-const CHOICE_BASIS: f32 = 16.;
-
 fn caption(text: impl Into<SharedString>, cx: &App) -> Div {
     ui::text(Text::Caption, text).text_color(cx.theme().muted_foreground)
 }
@@ -24,16 +20,6 @@ fn section(label: &'static str, cx: &App) -> Div {
         .min_w_0()
         .gap(px(ui::Space::META))
         .child(ui::text(Text::Label, label).text_color(cx.theme().muted_foreground))
-}
-fn choice(id: &'static str, control: impl IntoElement) -> impl IntoElement {
-    div()
-        .id(id)
-        .test_support()
-        .flex_grow(1.)
-        .flex_shrink(1.)
-        .flex_basis(rems(CHOICE_BASIS))
-        .min_w_0()
-        .child(control)
 }
 fn segmented<const N: usize>(
     id: &'static str,
@@ -87,15 +73,6 @@ impl Render for RevisionDetails {
                 cx,
             ));
         }
-        if let Some(s) = shown.as_ref().filter(|s| !s.omissions.is_empty()) {
-            panel = panel.child(
-                section("Not retained", cx).children(
-                    s.omissions
-                        .iter()
-                        .map(|o| Notice::new(SharedString::from(o.clone())).tone(Tone::Warning)),
-                ),
-            );
-        }
         if !p.capture_limits.is_empty() {
             panel = panel.child(
                 section("Capture limits", cx).child(
@@ -105,6 +82,15 @@ impl Render for RevisionDetails {
                         .v_flex()
                         .gap(px(ui::Space::META))
                         .children(p.capture_limits.iter().map(|reason| Notice::new(*reason))),
+                ),
+            );
+        }
+        if let Some(s) = shown.as_ref().filter(|s| !s.omissions.is_empty()) {
+            panel = panel.child(
+                section("Not retained", cx).children(
+                    s.omissions
+                        .iter()
+                        .map(|o| Notice::new(SharedString::from(o.clone())).tone(Tone::Warning)),
                 ),
             );
         }
@@ -141,7 +127,7 @@ impl Render for RevisionDetails {
         panel
             .child(section("Provenance", cx).child(ui::text(
                 Text::Body,
-                SharedString::from(format!("Proven worker creation · {}", s.notes())),
+                SharedString::from(format!("Proven chat creation · {}", s.notes())),
             )))
             .child(evidence)
             .child(section("Not available here", cx).child(caption(
@@ -149,7 +135,7 @@ impl Render for RevisionDetails {
                 cx,
             )))
             .child(section("Keyboard", cx).child(caption(
-                "Option-Up and Option-Down move between changes. Escape closes source, then Review.",
+                "Option-Up and Option-Down move between edits. Escape closes source, then this change.",
                 cx,
             )))
             .child(
@@ -162,7 +148,7 @@ impl Render for RevisionDetails {
                         .child(SelectableText::new(
                             "review-identities-text",
                             SharedString::from(format!(
-                                "Snapshot {}\nRepository {}\nChange {}\n{} vs base {} ({})\nHead {} ({})\nCapture operation {}\nCreation {} at {}\nCaptured at {} · enrollment task scope {} (not task-purpose proof)",
+                                "Snapshot {}\nRepository {}\nChange {}\n{} vs base {} ({})\nHead {} ({})\nCapture operation {}\nCreation {} at {}\nCaptured at {} · {}",
                                 s.snapshot_id,
                                 s.request.repository_id,
                                 s.request.change_id,
@@ -175,7 +161,7 @@ impl Render for RevisionDetails {
                                 s.creation.commit_id,
                                 s.creation.operation_id,
                                 s.captured_at,
-                                s.enrollment_task_ids.join(", ")
+                                s.enrollment()
                             )),
                         )),
                 ),
@@ -188,10 +174,8 @@ impl Pane {
         if self.records_open {
             self.records_open = false;
             cx.notify();
-        } else if let (Some(k), Some(worker), Some(s)) =
-            (self.key.clone(), self.worker.clone(), self.snapshot.clone())
-        {
-            self.request(Route::Records(k, worker, s.snapshot_id.clone()), w, cx);
+        } else if let (Some(k), Some(s)) = (self.chat_key(), self.snapshot.clone()) {
+            self.request(Route::Records(k, s.snapshot_id.clone()), w, cx);
         }
     }
     fn open_details(&mut self, w: &mut Window, cx: &mut Context<Self>) {
@@ -220,6 +204,7 @@ impl Pane {
         });
     }
 
+    /// The open change's title and status, or the list's count, with paging and refresh.
     fn toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let mut row = div()
             .id("review-toolbar")
@@ -229,29 +214,43 @@ impl Pane {
             .items_center()
             .gap_2()
             .min_w_0();
-        if !self.workers.is_empty() {
-            row = row.child(choice(
-                "review-worker",
-                Select::new(&self.worker_picker)
-                    .placeholder("Choose worker")
-                    .accessibility_label("Worker")
-                    .menu_max_h(rems(18.))
-                    .w_full(),
-            ));
-        }
-        if self.worker.is_some() && (!self.comparisons.is_empty() || self.selected.is_some()) {
-            // Optional evidence failures leave the exact comparison usable; other
-            // failures keep choices closed until Refresh rereads the scope.
-            let blocked = self.error.is_some_and(|e| e != wire::RECORDS_UNAVAILABLE);
-            row = row.child(choice(
-                "review-comparison",
-                Select::new(&self.comparison_picker)
-                    .placeholder("Choose saved revision")
-                    .disabled(blocked)
-                    .accessibility_label("Saved revision, this change or stack")
-                    .menu_max_h(rems(18.))
-                    .w_full(),
-            ));
+        if let Some(open) = &self.selected {
+            row = row.child(
+                div()
+                    .id("review-change")
+                    .test_support()
+                    .v_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        ui::text(Text::Label, SharedString::from(open.title.clone()))
+                            .id("review-change-title")
+                            .test_support()
+                            .truncate(),
+                    )
+                    .child(caption(
+                        format!("{} · {}", open.comparison.label(), open.status),
+                        cx,
+                    )),
+            );
+        } else if self.listed && self.has_rows() {
+            let n = self.requests.len() + self.saved_rows().count();
+            row = row.child(
+                caption(
+                    format!(
+                        "{n} {}{}",
+                        if n == 1 { "change" } else { "changes" },
+                        if self.next.is_some() || self.after > 0 {
+                            " on this page"
+                        } else {
+                            ""
+                        }
+                    ),
+                    cx,
+                )
+                .id("review-count")
+                .test_support(),
+            );
         }
         let mut actions = div()
             .id("review-actions")
@@ -261,36 +260,28 @@ impl Pane {
             .items_center()
             .gap_1()
             .ml_auto();
-        if self.busy && self.has_content() {
+        if self.busy && (self.has_content() || self.has_rows()) {
             actions = actions.child(caption(self.loading_label(), cx).mr_1());
         }
-        if self.after > 0 {
-            actions = actions.child(
-                ui::action("review-first", "First page", Action::Quiet)
-                    .accessibility_label("First page of saved revisions")
-                    .disabled(self.busy)
-                    .on_click(cx.listener(|p, _, w, cx| {
-                        if let (Some(k), Some(worker)) = (p.key.clone(), p.worker.clone()) {
-                            p.after = 0;
-                            p.request(Route::Comparisons(k, worker, 0), w, cx);
-                        }
-                    })),
-            );
+        if self.selected.is_none() && self.target.is_none() {
+            if self.after > 0 {
+                actions = actions.child(
+                    ui::action("review-first", "First page", Action::Quiet)
+                        .accessibility_label("First page of changes")
+                        .disabled(self.busy)
+                        .on_click(cx.listener(|p, _, w, cx| p.page(0, w, cx))),
+                );
+            }
+            if let Some(next) = self.next {
+                actions = actions.child(
+                    ui::action("review-more", "Next page", Action::Quiet)
+                        .accessibility_label("Next page of changes")
+                        .disabled(self.busy)
+                        .on_click(cx.listener(move |p, _, w, cx| p.page(next, w, cx))),
+                );
+            }
         }
-        if let Some(next) = self.next {
-            actions = actions.child(
-                ui::action("review-more", "Next page", Action::Quiet)
-                    .accessibility_label("Next page of saved revisions")
-                    .disabled(self.busy)
-                    .on_click(cx.listener(move |p, _, w, cx| {
-                        if let (Some(k), Some(worker)) = (p.key.clone(), p.worker.clone()) {
-                            p.after = next;
-                            p.request(Route::Comparisons(k, worker, next), w, cx);
-                        }
-                    })),
-            );
-        }
-        if self.snapshot.is_some() || !self.capture_limits.is_empty() {
+        if self.snapshot.is_some() || (self.selected.is_none() && !self.capture_limits.is_empty()) {
             actions = actions.child(
                 ui::icon_action(
                     "review-details",
@@ -304,14 +295,83 @@ impl Pane {
         actions = actions.child(
             ui::icon_action(
                 "review-refresh",
-                "Refresh saved revisions",
+                "Refresh Review",
                 crate::app_icon::AppIcon::Retry,
                 Action::Quiet,
             )
-            .disabled(self.busy || self.key.is_none())
+            .disabled(self.busy || self.scope.is_none())
             .on_click(cx.listener(|p, _, w, cx| p.refresh(w, cx))),
         );
         row.child(actions)
+    }
+
+    /// Every listed change as one row: its title, then its exact revision and request
+    /// status. A chat-narrowed list adds that chat's saved revisions without a request,
+    /// never labelled pending. Opening a row targets that exact change.
+    fn list(&self, cx: &mut Context<Self>) -> AnyElement {
+        let saved = self.saved_rows().enumerate().map(|(ix, c)| {
+            let id = c.snapshot_id.clone();
+            ui::action(("review-saved", ix), "", Action::Quiet)
+                .accessibility_label(SharedString::from(format!(
+                    "{} · No review request",
+                    c.label()
+                )))
+                .w_full()
+                .h_auto()
+                .py_2()
+                .child(
+                    ui::ResourceLabel::new(SharedString::from(c.label()))
+                        .detail("No review request")
+                        .icon(crate::app_icon::AppIcon::Changes),
+                )
+                .on_click(
+                    cx.listener(move |_, _, _, cx| cx.emit(Event::Open(Target::Saved(id.clone())))),
+                )
+                .into_any_element()
+        });
+        let saved: Vec<_> = saved.collect();
+        // The scrollbar wrapper replaces its child's ID, so the stable ID sits outside.
+        div()
+            .id("review-list")
+            .test_support()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .child(
+                div()
+                    .id("review-list-scroll")
+                    .size_full()
+                    .track_scroll(&self.list_scroll)
+                    .overflow_y_scrollbar()
+                    .child(
+                        div()
+                            .v_flex()
+                            .min_w_0()
+                            .children(self.requests.iter().enumerate().map(|(ix, r)| {
+                                let id = r.request_id.clone();
+                                let detail = format!("{} · {}", r.comparison.label(), r.status());
+                                ui::action(("review-request", ix), "", Action::Quiet)
+                                    .accessibility_label(SharedString::from(format!(
+                                        "{} · {detail}",
+                                        r.title
+                                    )))
+                                    .w_full()
+                                    .h_auto()
+                                    .py_2()
+                                    .child(
+                                        ui::ResourceLabel::new(SharedString::from(r.title.clone()))
+                                            .detail(detail)
+                                            .icon(crate::app_icon::AppIcon::Changes),
+                                    )
+                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                        cx.emit(Event::Open(Target::Request(id.clone())))
+                                    }))
+                                    .into_any_element()
+                            }))
+                            .children(saved),
+                    ),
+            )
+            .into_any_element()
     }
 
     /// Only real warnings sit above the diff; their explanations live in details.
@@ -323,13 +383,25 @@ impl Pane {
         if let Some(e) = self.error {
             push("review-error", Notice::new(e).tone(Tone::Warning));
         }
-        if let Some(n) = self.capture_notice {
+        if self.unavailable && self.selected.is_none() && self.has_rows() {
+            push(
+                "review-unavailable",
+                Notice::new("Review requests are unavailable. Only saved revisions are shown."),
+            );
+        }
+        if let Some(n) = self.capture_notice.filter(|_| self.selected.is_none()) {
             push("review-capture-notice", Notice::new(n).tone(Tone::Warning));
         }
-        if self.more_workers {
+        if self.saved_more && self.selected.is_none() {
             push(
-                "review-more-workers",
-                Notice::new("Only the first 100 current members are shown."),
+                "review-saved-more",
+                Notice::new("Only this chat's first 20 saved revisions are shown."),
+            );
+        }
+        if self.unlisted() {
+            push(
+                "review-unlisted",
+                Notice::new("This change is no longer in the list. This revision stays shown."),
             );
         }
         if let Some(s) = &self.snapshot {
@@ -348,7 +420,7 @@ impl Pane {
             if self.newer_listed() {
                 push(
                     "review-newer",
-                    Notice::new("A newer saved revision exists. This one stays selected."),
+                    Notice::new("A newer saved revision is also listed. This one stays shown."),
                 );
             }
         }
@@ -498,6 +570,17 @@ impl Pane {
                         .min_w_0()
                         .truncate(),
                 )
+                .children(self.current_file_target(cx).map(|event| {
+                    let Event::CurrentFile { path, .. } = &event else {
+                        unreachable!()
+                    };
+                    let label = format!(
+                        "Open the current {path} in its chat. It may differ from this saved revision."
+                    );
+                    ui::action("review-current-file", "Open current file", Action::Quiet)
+                        .accessibility_label(SharedString::from(label))
+                        .on_click(cx.listener(move |_, _, _, cx| cx.emit(event.clone())))
+                }))
                 .child(segmented(
                     "review-side",
                     [
@@ -546,8 +629,8 @@ impl Pane {
         ]
     }
 
-    /// Fills the diff area when there is no diff: loading is not empty, and no
-    /// saved revision is not "no code changes".
+    /// Fills the page when there is no list or diff: loading is not empty, and no
+    /// request source is not "nothing to review".
     fn state_view(&self) -> Option<AnyElement> {
         let (title, detail) = self.state_message()?;
         let mut notice = Notice::new(title);
@@ -622,6 +705,8 @@ impl Render for Pane {
             root = root.child(self.files_bar(cx)).child(self.diff_view(cx));
         } else if let Some(state) = self.state_view() {
             root = root.child(state);
+        } else if self.target.is_none() && self.has_rows() {
+            root = root.child(self.list(cx));
         }
         root
     }

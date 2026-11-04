@@ -77,20 +77,28 @@ request production, reviewer execution, learning, attention and gate activation 
 
 ## Implemented read-only slice
 
-This section describes the pinned historical implementation below, not the selected product scope.
-D56 supersedes D48's project-owned/chat-first destination and the old mission placement. The
-following mission UI/transport description is historical shipped behavior to replace, not the
-selected destination. Necessary per-project/chat access checks remain internal to global Review.
+D56 replaces D48's chat-first presentation: Review is **one global, change-centered view**. #88
+implements the native read-only correction against the approved #70 request list; until #70's
+production source lands, only strict faux fixtures exercise that list, which is not delivery proof.
+Necessary per-project/chat access checks remain internal to global Review.
 
-Mission detail has **Overview / Tasks / Review**. Review is mission-scoped browsing, not a required
-queue or an Inbox attention source. Choose a current worker, then one exact retained comparison.
-Choices use readable worker titles and saved-revision/layer/stack labels; full jj subjects and immutable head/base revisions live in Details;
-Exact revision details exposes repository, snapshot, operation and creation IDs. A refresh keeps the
-chosen comparison, including when a newer comparison is listed. Switching worker, mission or host
-clears previously admitted content and fences/cancels obsolete reads. Escape returns from
-retained source to the diff, then to Overview. Source's Back control returns to the diff; existing
-navigation history is unchanged. Native Selects retain their keyboard and query focus;
-Kit Diff owns selection/copy/navigation, with Option-Up/Down for previous/next change.
+The sidebar's **Review** opens every change with a review request across this host's projects, one
+row per request: its title, exact saved revision and status. Status comes from the request's own
+state and readiness: **Ready for review**, **Waiting on checks and agent review**, **Pending ·
+readiness unknown**, or **Status unknown** for any other state. Pending never implies ready. Opening a
+row targets that exact request and revision; Back returns to the list. A chat's header **Review**
+opens the same view narrowed to that chat (**All changes** removes the filter). That narrowed list
+also shows the chat's saved revisions that no listed request covers, labelled **No review request**:
+opening one never creates a request or marks it pending. A chat without retained custody says **Not
+captured**. Missions are never a Review destination; the mission Review tab and project Review
+action were removed. The chat and project are custody for exact reads and context for people, never
+the owner of a review. Review is not an Inbox attention source and has no approval or submit control.
+Full IDs live in Details. A refresh keeps the open revision, says when it is no longer listed, and
+notes a newer listed revision of the same change and scope. Switching filter or host clears admitted
+content and cancels obsolete reads; a chat known to have moved to another project closes its open
+change and latches it closed. Escape returns from retained source to the diff, then to the list, then
+leaves Review through navigation history. Kit Diff owns selection/copy/navigation, with
+Option-Up/Down for previous/next change.
 
 The summary distinguishes proven worker creation, enrollment task scope and historical task purpose
 (Unknown). Optional agent dimensions and reported evidence load only on explicit disclosure, after
@@ -107,18 +115,24 @@ Changed paths explicitly remains Unavailable until retained-input analysis exist
 
 ### Layout (Files changed)
 
-Review reads like a pull request's Files changed page. One toolbar holds Worker, Saved revision,
-a Revision details (info) button and Refresh; narrow panes give the worker its own row. Below it
-sit only real warnings (errors, capture, partial, newer revision). Then "N files changed +A −D",
+Review reads like a pull request's Files changed page. An open change's toolbar holds its title,
+revision and status, a Revision details (info) button and Refresh. Below it sit only real warnings
+(errors, capture, partial, newer or unlisted revision). Then "N files changed +A −D",
 an optional Jump to file (two or more files; it scrolls, then returns to its placeholder),
 Unified/Split, and every file of the exact retained comparison in one continuous Kit Diff. Each
 file header has View file, which opens that file's retained source (after side, or before for a
 deletion) with Back and a Before/After switch; an absent side is disabled, and Back cancels a pending
 side read. Revision details is a dialog bound to the revision
 shown when it opened: missing content, capture limits, provenance, evidence, analysis limits,
-keyboard keys and the exact IDs. When there is no diff, the diff area says why: loading, no
-workers, choose a worker, no saved revisions yet, or choose a saved revision. Nothing is selected
-automatically, and a newer capture never replaces the revision being read.
+keyboard keys and the exact IDs. When there is no list or diff, the page says why: loading, request
+source unavailable, nothing waiting, not captured, or a target that isn't listed. Nothing is
+selected automatically, and a newer capture never replaces the revision being read.
+
+The source view also offers **Open current file** for the after path when the change's chat is
+loaded here. It rechecks the home, the chat and its current project against current metadata, then
+leaves Review for that chat's read-only file panel; Back returns to the exact change. That panel
+shows live workspace bytes outside Review, with its own relative-path and workspace guards; a missing
+file stays missing. Review's View file and Before/After stay strictly retained.
 
 Before: a full-width file dropdown sat above the diff, so it read as one file at a time; Details
 pushed IDs and caveats above the diff; Refresh could slide under a scrollbar; an optional evidence
@@ -164,6 +178,20 @@ complete impact coverage.
 This is source-inferred review navigation, not runtime/impact proof, a UI implementation, a public
 agent tool or approval/write authority. There is no mission-level analysis endpoint. See
 [retained comparison limits](code-exploration.md#internal-retained-tsjs-comparison).
+
+The desktop consumer reads the approved #70 list, `GET /api/review/requests?after=<request
+sequence>[&sessionId=]` → `{requests:[{requestId,sequence,state,actionability,projectId,sessionId,
+title,comparison}],next,unavailable?}` (at most 20 rows, strictly increasing request sequence, an
+exact cursor, no duplicates, `actionability` one of `waiting`/`ready`/`unknown`; a filtered page
+naming another chat is rejected, and an unavailable source is never an empty queue). It never reads
+project or mission routes. Exact reads use only the session routes above, sending the request's
+listed project (or, for a chat's own saved revisions, the chat's current project here) as
+`expectedProjectId`; a refusal clears content. It shows any chat-route `unavailable` reason as **Not
+captured** (the reason text is not matched).
+A project-owned capture (`enrollmentProjectId` with an empty `enrollmentTaskIds`) renders only
+when that project equals the change's expected project; Revision details then says it has no task
+scope. An empty task scope without that marker, a marker with task scope, or a malformed or
+other-project marker is refused.
 
 `GET /api/missions/:missionId/review` lists up to100 current same-project non-coordinator members.
 `.../review/:workerId?after=<sequence>` returns a keyset page of up to20 retained comparisons and
@@ -245,7 +273,7 @@ absence of reads/Kit Diff noted here; proposed write/request contracts below rem
 | `on_add_annotation` | Shows an add button on the hovered line and at the end of a selection; passes `DiffLineRange` (may end on the other side in patch order) | The handler opens an app-owned draft editor; it creates nothing durable itself |
 | Kit Diff key bindings (`Diff` context) | Arrows, PageUp/Down, Home/End, Shift-Up/Down extend selection, Cmd/Ctrl-C copy, Cmd/Ctrl-A select all. No Return, next-change or add-comment binding | App binds review commands in its own context (proposal below); verify keyboard line placement in a probe |
 | `DiffFile` | `parse`/`parse_with`, `status` (incl. Renamed, Copied, Unchanged, Conflicted), `is_binary`, `is_truncated`, additions/deletions; never reconstructs missing context | Missing context or bytes stay visibly unavailable; never filled from live files |
-| `src/workspace_changes_view.rs` | Historical live `GET /api/sessions/:id/changes` inspector. Literal patch, not Kit Diff; "Open file" reads the live workspace | Remove the Changes sidebar, not unrelated Files/artifacts. Retained View file stays snapshot-only. A separate Open current file may leave Review for the existing live-chat FilePane under current guards; never substitute live bytes for retained evidence |
+| Former `src/workspace_changes_view.rs` | Live `GET /api/sessions/:id/changes` sidebar, removed by D56. Its "Open file" panel (`session_file_view_native.rs`) now lives in the chat side panel | Review never shows live bytes: View file and Before/After stay retained-only. **Open current file** leaves Review for that chat's live file panel after rechecking custody; current bytes are never review evidence |
 | `src/inbox.rs`, `src/attention.rs` | Read-only loaded-summary Inbox with Needs you and Ready to merge, project filter, exact-ID chat activation. Opening does not mark reviewed | Add Needs review as a data-backed source; keep "opening is not acknowledgement" |
 | #13, #20, #18, #17, #22 | Dormant host-only Store/Service APIs. No HTTP/IPC/tool transport | Every Review read and write below needs new admitted transport |
 
