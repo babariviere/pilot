@@ -53,6 +53,11 @@ async function fixture(t: TestContext, options: { now?: string; recurrence?: Sch
 		projects: { require: (projectId: string) => ({ id: projectId, name: "P", path: dir, createdAt: 0 }) },
 		triggers: { online: true, refreshOnline: async () => online, subscribe: () => () => {} },
 		sessions: {
+			insightsScheduleBounds: (
+				_id: string,
+				_revision?: number,
+				_recurrence?: ScheduleRecurrence,
+			): InsightsReviewDispatch["bounds"] => ({ ...INSIGHTS_INITIAL_DEFAULTS.bounds }),
 			get: () => ({ projectId: "p", working }),
 			spawn: async () => {
 				throw new Error("No spawn");
@@ -205,6 +210,45 @@ test("weekly fixed-chat dispatch reserves exact identity durably and never uses 
 	assert.equal(f.service.require(f.row.id).runs?.[0].insightsReview?.state, "partial");
 	await f.restart();
 	assert.equal(f.calls.length, 1);
+	assert.equal(f.messages, 0);
+});
+
+test("a stale settings/cadence occurrence is consumed without review dispatch or replay", async (t) => {
+	const f = await fixture(t);
+	t.mock.method(f.deps.sessions, "insightsScheduleBounds", () => {
+		throw new Error("Settings require activation");
+	});
+	await f.due();
+	assert.equal(f.calls.length, 0);
+	assert.equal(f.messages, 0);
+	const row = f.store.require(f.row.id);
+	assert.equal(row.handledThrough, ms("2026-11-02T09:00Z"));
+	assert.equal(row.runs?.length, 1);
+	assert.equal(row.runs?.[0].outcome, "failed");
+	await f.restart();
+	await f.settle();
+	assert.equal(f.calls.length, 0, "settings restoration cannot replay a consumed occurrence");
+	assert.equal(f.store.require(f.row.id).runs?.length, 1);
+});
+
+test("a confirmed rule pins custom settings bounds and revision in its durable occurrence", async (t) => {
+	const f = await fixture(t);
+	const bounds = { inventoryPages: 2, historyPages: 5, entriesPerPage: 7 };
+	t.mock.method(
+		f.deps.sessions,
+		"insightsScheduleBounds",
+		(id: string, revision?: number, recurrence?: ScheduleRecurrence) => {
+			assert.equal(id, f.id);
+			assert.equal(revision, 3);
+			assert.deepEqual(recurrence, f.row.recurrence);
+			return bounds;
+		},
+	);
+	await f.store.replace(f.row, { ...f.row, insightsSettingsRevision: 3 });
+	await f.due();
+	assert.equal(f.calls.length, 1);
+	assert.equal(f.calls[0].settingsRevision, 3);
+	assert.deepEqual(f.calls[0].bounds, bounds);
 	assert.equal(f.messages, 0);
 });
 

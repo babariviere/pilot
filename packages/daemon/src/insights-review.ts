@@ -13,6 +13,7 @@ import { Conflict } from "./errors.ts";
 import type { InsightsAdmission } from "./insights-admission.ts";
 import type { InsightsDb } from "./insights-backlog.ts";
 import { insightsReviewBudget } from "./insights-defaults.ts";
+import { InsightsSettings } from "./insights-settings.ts";
 
 export const INSIGHTS_REVIEW_SCHEMA = `
 CREATE TABLE IF NOT EXISTS insights_runs (
@@ -64,7 +65,12 @@ const active = (s: string) => ["preparing", "ready", "sent"].includes(s);
 function validate(request: InsightsReviewDispatch): void {
 	if (
 		!request ||
-		Object.keys(request).sort().join(",") !== "bounds,runId,windowEnd,windowStart" ||
+		Object.keys(request).sort().join(",") !==
+			(request.settingsRevision === undefined
+				? "bounds,runId,windowEnd,windowStart"
+				: "bounds,runId,settingsRevision,windowEnd,windowStart") ||
+		(request.settingsRevision !== undefined &&
+			(!Number.isSafeInteger(request.settingsRevision) || request.settingsRevision < 1)) ||
 		!uuid(request.runId) ||
 		![request.windowStart, request.windowEnd].every(
 			(s) => typeof s === "string" && /^\d{4}-\d\d-\d\dT/u.test(s) && Number.isFinite(Date.parse(s)),
@@ -144,6 +150,16 @@ export class InsightsReviews {
 					throw new Conflict("Review run identity changed");
 				return false;
 			}
+			const settings = new InsightsSettings(this.db).assertDispatch(admission, request.settingsRevision);
+			if (
+				settings &&
+				Object.keys(request.bounds).some(
+					(key) =>
+						request.bounds[key as keyof typeof request.bounds] !==
+						settings.settings.bounds[key as keyof typeof request.bounds],
+				)
+			)
+				throw new Conflict("Review bounds differ from confirmed settings");
 			if (
 				this.db.one(
 					"SELECT 1 FROM insights_runs WHERE session_id=? AND state IN ('preparing','ready','sent')",
@@ -251,7 +267,12 @@ export class InsightsReviews {
 		this.changed();
 	}
 	/** Prefetch a bounded packet without waking source workers. Positions commit only with the report. */
-	async prepare(admission: InsightsAdmission, request: InsightsReviewDispatch, read: Read): Promise<void> {
+	async prepare(
+		admission: InsightsAdmission,
+		request: InsightsReviewDispatch,
+		read: Read,
+		allowed: (id: string) => boolean = () => true,
+	): Promise<void> {
 		this.assertActive(admission, request.runId);
 		const scope = this.scope(admission);
 		const packet: Packet = {
@@ -269,6 +290,10 @@ export class InsightsReviews {
 			(this.db.one("SELECT after_id FROM insights_inventory WHERE scope=?", scope)?.after_id as string | null) ??
 			null;
 		const discovered: Source[] = [];
+		const entriesPerPage =
+			request.settingsRevision === undefined
+				? Math.min(4, request.bounds.entriesPerPage)
+				: request.bounds.entriesPerPage;
 		for (let n = 0; n < request.bounds.inventoryPages; n++) {
 			this.assertActive(admission, request.runId);
 			const response = await read({ action: "chats", ...(after ? { after } : {}), limit: 4 });
@@ -288,7 +313,7 @@ export class InsightsReviews {
 				throw new Conflict("Invalid inventory reader receipt");
 			}
 			for (const c of data.chats)
-				if (c.id !== admission.binding.reportSessionId)
+				if (c.id !== admission.binding.reportSessionId && allowed(c.id))
 					discovered.push({
 						sessionId: c.id,
 						projectId: typeof c.projectId === "string" ? c.projectId : null,
@@ -314,14 +339,18 @@ export class InsightsReviews {
 					JSON.stringify(s.position),
 				);
 		});
-		const sources = this.db.all(
-			"SELECT session_id,project_id,position FROM insights_sources WHERE scope=? ORDER BY reviewed,seq LIMIT ?",
-			scope,
-			request.bounds.historyPages,
-		);
+		const sources = this.db
+			.all(
+				"SELECT session_id,project_id,position FROM insights_sources WHERE scope=? ORDER BY reviewed,seq LIMIT ?",
+				scope,
+				request.settingsRevision === undefined ? request.bounds.historyPages : 200,
+			)
+			.filter((row) => allowed(String(row.session_id)))
+			.slice(0, request.bounds.historyPages);
 		let remaining = request.bounds.historyPages;
 		for (const row of sources) {
 			if (!remaining) break;
+			if (!allowed(String(row.session_id))) continue;
 			this.assertActive(admission, request.runId);
 			const source: Source = {
 				sessionId: String(row.session_id),
@@ -336,7 +365,7 @@ export class InsightsReviews {
 				action: "history",
 				sessionId: source.sessionId,
 				...(before === undefined ? {} : { before }),
-				limit: probe ? 1 : Math.min(4, request.bounds.entriesPerPage),
+				limit: probe ? 1 : entriesPerPage,
 			});
 			remaining--;
 			this.assertActive(admission, request.runId);
@@ -366,7 +395,7 @@ export class InsightsReviews {
 						action: "history",
 						sessionId: source.sessionId,
 						before,
-						limit: Math.min(4, request.bounds.entriesPerPage),
+						limit: entriesPerPage,
 					});
 					remaining--;
 					this.assertActive(admission, request.runId);
@@ -507,7 +536,7 @@ export class InsightsReviews {
 			this.db.run("INSERT OR IGNORE INTO insights_review_reads(run_seq,cursor) VALUES (?,?)", row.seq!, cursor);
 		return {
 			run: this.public(row),
-			budget: insightsReviewBudget(),
+			budget: insightsReviewBudget(new InsightsSettings(this.db).current(admission)?.settings.budget),
 			evidence: parts[cursor] ?? null,
 			nextCursor: cursor + 1 < parts.length ? cursor + 1 : null,
 			readerPages: packet.pages.length,

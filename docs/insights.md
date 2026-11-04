@@ -73,7 +73,10 @@ Terra is suggested only when one configured, available model in the selected pro
 the display name **Terra 6.1**. Missing or ambiguous matches stay unresolved, with no guessed ID or
 Sol fallback. Explicit model choices and existing schedules are unchanged.
 
-Editable settings are a follow-up. Opening the confirmation, reading status or restarting the
+The backend can persist validated desired settings; the native editor is still a follow-up.
+Saving settings does not activate them or change an existing model, access grant or automation.
+See the [settings contract](technical/insights-settings.md) for native integration and limitations.
+Opening the confirmation, reading status or restarting the
 app grants no access and starts no review or schedule. **Enable** authorizes weekly setup, not an
 immediate review. A daemon restart can reconcile an already confirmed setup without new consent.
 

@@ -34,6 +34,61 @@ export interface InsightsSetupDefaults {
 	model: InsightsInitialModelResolution;
 }
 
+/** Desired settings only. Saving never changes a grant, chat model or recurring rule. */
+export interface InsightsReviewSettings {
+	recurrence: ScheduleRecurrence;
+	requestedModel: { kind: "id" | "name"; value: string };
+	scope: {
+		host: "local";
+		projects: "admitted" | string[];
+		includeArchived: boolean;
+		excludeProjects: string[];
+		excludeSessions: string[];
+		sourceAccess: "read_only";
+		coverage: "partial";
+	};
+	bounds: InsightsReviewDispatch["bounds"];
+	budget: {
+		usd: number;
+		period: "report" | "month";
+		enforcement: "advisory";
+		basis: "initial_assumption" | "user_choice";
+	};
+}
+
+/** GET /api/insights/sessions/:id/settings. Revision zero is an unpersisted suggestion. */
+export interface InsightsSettingsSnapshot {
+	projectId: string;
+	missionId: string;
+	expectedHome: import("./operations.ts").OperationHost;
+	context: string;
+	chat: InsightsEnableChat;
+	revision: number;
+	settings: InsightsReviewSettings;
+	model: InsightsInitialModelResolution;
+	nextAt: number;
+	cost: { pricing: "unknown"; spendUsd: null };
+	activationRequired: true;
+}
+
+/** Native-confirmed insights-settings operation, targetId is the exact report session. */
+export interface InsightsSettingsPayload {
+	projectId: string;
+	missionId: string;
+	expectedHome: import("./operations.ts").OperationHost;
+	context: string;
+	chat: InsightsEnableChat;
+	expectedRevision: number;
+	settings: InsightsReviewSettings;
+}
+
+export interface InsightsSettingsRecord {
+	revision: number;
+	settings: InsightsReviewSettings;
+	/** Exact resolved available model, retained without re-resolution or substitution. */
+	model: string;
+}
+
 /** Exact admitted identity, not a title, membership hint or permission to change settings. */
 export interface InsightsEnableChat {
 	sessionId: string;
@@ -54,12 +109,14 @@ export interface InsightsEnablePayload {
 	model: string;
 	thinking?: string;
 	recurrence: ScheduleRecurrence;
-	scope: InsightsInitialDefaults["scope"];
+	scope: InsightsInitialDefaults["scope"] | InsightsReviewSettings["scope"];
 	bounds: InsightsInitialDefaults["bounds"];
-	budget: InsightsInitialDefaults["budget"];
+	budget: InsightsInitialDefaults["budget"] | InsightsReviewSettings["budget"];
 	disclosure: "insights-weekly-v1";
 	chat: InsightsEnableChat | null;
 	schedule: { id: string; revision: number } | null;
+	/** Omitted for the original fixed contract. Never add during retained-command replay. */
+	settingsRevision?: number;
 }
 
 /** Passive GET /api/insights/enable/preflight?projectId=…&missionId=… */
@@ -228,6 +285,7 @@ export interface InsightsReviewDispatch {
 	windowStart: string;
 	windowEnd: string;
 	bounds: { inventoryPages: number; historyPages: number; entriesPerPage: number };
+	settingsRevision?: number;
 }
 
 export interface InsightsReviewRun {

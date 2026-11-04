@@ -119,6 +119,7 @@ import {
 	parseInsightsHistory,
 	validateInsightsGrant,
 } from "./insights-admission.ts";
+import { insightsSourceAllowed } from "./insights-settings.ts";
 import { LifecycleDiagnostics } from "./lifecycle-diagnostics.ts";
 import { LongJobTimers, longJobAttention } from "./long-jobs.ts";
 import { forkMainViewWorker, MainViewStore } from "./main-view.ts";
@@ -4111,18 +4112,40 @@ ${run.excerpt}`,
 			const reviews = this.insightsBacklog?.reviews;
 			if (!reviews) throw new Conflict("Insights backlog unavailable");
 			const request = structuredClone(input);
+			const configured = this.insightsBacklog!.settings.assertDispatch(admission, request.settingsRevision);
+			if (configured && this.insightsEnableChat(id).model !== configured.model)
+				throw new Conflict("Configured Insights model requires explicit confirmation");
+			const allowed = (sourceId: string) => {
+				if (!configured) return true;
+				const source = this.metas.get(sourceId);
+				if (!source || sourceId === id) return false;
+				if (source.projectId) {
+					try {
+						this.projects.require(source.projectId);
+					} catch {
+						return false;
+					}
+				}
+				return insightsSourceAllowed(configured.settings, source);
+			};
 			if (!(await reviews.reserve(admission, request))) return (await reviews.status(admission, request.runId))!;
 			let placementAttempted = false;
 			try {
-				await reviews.prepare(admission, request, async (selector) => {
-					admission.revalidate();
-					const result = await this.readDiagnosticContext(
-						{ ...selector, host: admission.binding.host },
-						this.shutdownSignal.signal,
-					);
-					admission.revalidate();
-					return result;
-				});
+				await reviews.prepare(
+					admission,
+					request,
+					async (selector) => {
+						admission.revalidate();
+						const result = await this.readDiagnosticContext(
+							{ ...selector, host: admission.binding.host },
+							this.shutdownSignal.signal,
+							configured ? allowed : undefined,
+						);
+						admission.revalidate();
+						return result;
+					},
+					allowed,
+				);
 				reviews.assertActive(admission, request.runId);
 				const requestId = `insights-review:${request.runId}`;
 				if (!this.canSendNotice(id, requestId)) throw new Conflict("Report chat is not idle; review not sent");
@@ -4165,6 +4188,25 @@ ${run.excerpt}`,
 		} finally {
 			end();
 		}
+	}
+
+	/** Scheduler selection is passive; a stale revision is refused again at dispatch. */
+	insightsScheduleBounds(
+		id: string,
+		revision?: number,
+		recurrence?: import("@pilot/protocol").ScheduleRecurrence,
+	): import("@pilot/protocol").InsightsReviewDispatch["bounds"] {
+		const admission = this.insightsHostAdmission(id);
+		const configured = this.insightsBacklog?.settings.assertDispatch(admission, revision);
+		if (
+			configured &&
+			recurrence &&
+			(["every", "weekday", "time", "timeZone"] as const).some(
+				(key) => configured.settings.recurrence[key] !== recurrence[key],
+			)
+		)
+			throw new Conflict("Insights recurrence differs from confirmed settings");
+		return configured?.settings.bounds ?? { inventoryPages: 1, historyPages: 2, entriesPerPage: 4 };
 	}
 
 	/** Trusted revocation closes admission synchronously, then durably acknowledges. Never re-enables. */
@@ -4210,6 +4252,8 @@ ${run.excerpt}`,
 
 	private async insightsHistory(callerId: string, worker: SessionWorker, input: unknown, signal?: AbortSignal) {
 		const admission = this.insightsAdmission(callerId, worker);
+		if (this.insightsBacklog?.settings.current(admission))
+			throw new Conflict("Configured Insights uses only bounded host-prepared review_context evidence");
 		if (this.require(callerId).insightsReviewRun || this.insightsBacklog?.reviews.hasActive(admission))
 			throw new Conflict(
 				"Dispatched reviews use only bounded review_context evidence; direct source reads are closed for this turn",
@@ -4308,7 +4352,11 @@ ${run.excerpt}`,
 	}
 
 	/** Local role-checked dispatch or protected native endpoint only. No wake, subscription or external fetch. */
-	async readDiagnosticContext(input: unknown, signal?: AbortSignal): Promise<DiagnosticContextResponse> {
+	async readDiagnosticContext(
+		input: unknown,
+		signal?: AbortSignal,
+		sourceAllowed?: (id: string) => boolean,
+	): Promise<DiagnosticContextResponse> {
 		const request = parseDiagnosticContext(input);
 		const host = request.host ?? this.diagnosticHost;
 		if (
@@ -4335,6 +4383,8 @@ ${run.excerpt}`,
 		}
 		if (request.sessionId && !this.metas.has(request.sessionId))
 			return { ...diagnosticContextResponse(host, null), status: "missing", reason: "deleted" };
+		if (request.sessionId && sourceAllowed && !sourceAllowed(request.sessionId))
+			throw new Conflict("Source excluded from Insights scope");
 		const summary = (meta: SessionMeta) => {
 			const s = this.summary(meta, this.workers.get(meta.id));
 			return {
@@ -4369,6 +4419,7 @@ ${run.excerpt}`,
 				}
 				scanned++;
 				after = meta.id;
+				if (sourceAllowed && !sourceAllowed(meta.id)) continue;
 				if (request.query) {
 					const title = diagnosticContextResponse(host, this.summary(meta, this.workers.get(meta.id)).title).data;
 					if (typeof title !== "string" || !title.toLowerCase().includes(request.query.toLowerCase())) continue;
@@ -4421,6 +4472,7 @@ ${run.excerpt}`,
 		}
 		if (!id) throw new Conflict("A chat reference is required");
 		const page = await this.readDiagnosticHistory(id, request.before, limit, host);
+		if (sourceAllowed && !sourceAllowed(id)) throw new Conflict("Insights source scope changed during read");
 		if (signal?.aborted) throw new Conflict("Diagnostic read cancelled");
 		const entries = request.query
 			? page.entries.filter((v) => v.excerpt.toLowerCase().includes(request.query!.toLowerCase()))

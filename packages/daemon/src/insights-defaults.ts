@@ -1,6 +1,7 @@
 import type {
 	InsightsInitialDefaults,
 	InsightsInitialModelResolution,
+	InsightsReviewSettings,
 	InsightsSetupDefaults,
 	ModelOption,
 } from "@pilot/protocol";
@@ -51,11 +52,14 @@ export async function insightsSetupDefaults(
 }
 
 /** Informational only. This seam does not measure pricing/spend or enforce an allowance. */
-export function insightsReviewBudget() {
+export function insightsReviewBudget(budget: InsightsReviewSettings["budget"] = INSIGHTS_INITIAL_DEFAULTS.budget) {
 	return {
-		...INSIGHTS_INITIAL_DEFAULTS.budget,
+		...budget,
 		pricing: "unknown" as const,
 		spendUsd: null,
-		note: "Approximately $5 per report is an initial assumption, not a hard cap or approved spend. Budget period and scope still need activation confirmation. Pricing and spend are unknown here; do not infer zero cost or change models, budgets or limits automatically.",
+		note:
+			budget === INSIGHTS_INITIAL_DEFAULTS.budget
+				? "Approximately $5 per report is an initial assumption, not a hard cap or approved spend. Budget period and scope still need activation confirmation. Pricing and spend are unknown here; do not infer zero cost or change models, budgets or limits automatically."
+				: `Approximately $${budget.usd} per ${budget.period}, advisory only, not a hard cap, spending guarantee or approved spend. Changes need activation confirmation. Pricing and spend are unknown; do not infer zero cost or automatically change models, budgets or limits.`,
 	};
 }

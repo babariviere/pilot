@@ -7,6 +7,7 @@ import type {
 	ScheduledItem,
 	ScheduleHome,
 	SchedulePatch,
+	ScheduleRecurrence,
 	ScheduleRequest,
 	ScheduleRun,
 	ScheduleTarget,
@@ -57,6 +58,11 @@ export interface ScheduleDispatch {
 	dispatchInsightsReview?(id: string, request: InsightsReviewDispatch): Promise<InsightsReviewRun>;
 	insightsReviewStatus?(id: string, runId: string): Promise<InsightsReviewRun | null>;
 	onInsightsReviewChange?(listener: () => void): () => void;
+	insightsScheduleBounds?(
+		id: string,
+		revision?: number,
+		recurrence?: ScheduleRecurrence,
+	): InsightsReviewDispatch["bounds"];
 }
 export interface ScheduleServiceDeps {
 	sessions: ScheduleDispatch;
@@ -297,6 +303,20 @@ export class ScheduleService {
 						missionId: insights.missionId,
 					}
 				: undefined);
+		let bounds: InsightsReviewDispatch["bounds"] = { ...INSIGHTS_INITIAL_DEFAULTS.bounds };
+		let settingsReady = true;
+		if (destination) {
+			try {
+				bounds =
+					this.deps.sessions.insightsScheduleBounds?.(
+						destination.sessionId,
+						item.insightsSettingsRevision,
+						item.recurrence,
+					) ?? bounds;
+			} catch {
+				settingsReady = false;
+			}
+		}
 		const review =
 			destination && item.target.kind === "message"
 				? {
@@ -305,7 +325,10 @@ export class ScheduleService {
 							runId: randomUUID(),
 							windowStart: new Date(calendar.latest(due - 1)).toISOString(),
 							windowEnd: new Date(due).toISOString(),
-							bounds: { ...INSIGHTS_INITIAL_DEFAULTS.bounds },
+							bounds,
+							...(item.insightsSettingsRevision === undefined
+								? {}
+								: { settingsRevision: item.insightsSettingsRevision }),
 						},
 					}
 				: undefined;
@@ -380,6 +403,7 @@ export class ScheduleService {
 						const { sessionId, request } = claimed.insightsReview;
 						run.insightsReview = { runId: request.runId, state: "unresolved" };
 						if (
+							!settingsReady ||
 							!insights?.available ||
 							insights.projectId !== claimed.projectId ||
 							insights.projectId !== destination?.projectId ||
@@ -538,6 +562,7 @@ export class ScheduleService {
 		id: string,
 		operationId: string,
 		revalidate: () => void,
+		settingsRevision?: number,
 	): Promise<ScheduledItem> {
 		return this.runtime.run("create", async () => {
 			this.assertOpen();
@@ -557,6 +582,7 @@ export class ScheduleService {
 				createdAt: now,
 				updatedAt: now,
 				insightsEnableOperationId: operationId,
+				...(settingsRevision === undefined ? {} : { insightsSettingsRevision: settingsRevision }),
 			});
 		});
 	}
@@ -709,6 +735,7 @@ export class ScheduleService {
 			"insightsReview",
 			"insightsDestination",
 			"insightsEnableOperationId",
+			"insightsSettingsRevision",
 			"firedAt",
 			"state",
 			"sessionId",

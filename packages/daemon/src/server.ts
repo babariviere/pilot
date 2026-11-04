@@ -669,6 +669,10 @@ export function createDaemonServer(
 		}
 		if (!payload || typeof payload !== "object" || Array.isArray(payload))
 			throw new OperationRejected("Expected operation object");
+		if (op.kind === "insights-settings") {
+			if (!insightsEnable) throw new OperationRejected("Insights settings are unavailable");
+			return insightsEnable.saveSettings(op, payload as import("@pilot/protocol").InsightsSettingsPayload);
+		}
 		if (op.kind === "insights-enable") {
 			if (!insightsEnable) throw new OperationRejected("Weekly Insights is unavailable");
 			return insightsEnable.enable(op, payload as import("@pilot/protocol").InsightsEnablePayload);
@@ -1012,12 +1016,16 @@ export function createDaemonServer(
 		if (parts[1] === "insights" && parts[2] === "sessions") {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
-			if (parts.length !== 4 && !(parts.length === 5 && parts[4] === "findings"))
+			if (parts.length !== 4 && !(parts.length === 5 && ["findings", "settings"].includes(parts[4]!)))
 				throw new HttpError(404, "Not found");
 			const id = parts[3]!;
 			const status = sessions.insightsStatus(id);
 			if (!status) return json(res, 404, { error: "not_insights" });
 			if (parts.length === 4) return json(res, 200, status);
+			if (parts[4] === "settings") {
+				if (!insightsEnable) throw new ServiceUnavailable("Insights settings are unavailable");
+				return json(res, 200, await insightsEnable.settings(id));
+			}
 			const rawCursor = url.searchParams.get("cursor") ?? "0";
 			const cursor = Number(rawCursor);
 			if (!/^\d+$/u.test(rawCursor) || !Number.isSafeInteger(cursor))
@@ -1072,6 +1080,7 @@ export function createDaemonServer(
 					durableInputGeneration: 1,
 					insights: missions && githubSetup && hello.lineageId ? 1 : undefined,
 					insightsEnable: insightsEnable && githubSetup ? 1 : undefined,
+					insightsSettings: insightsEnable && githubSetup ? 1 : undefined,
 					automations: chatSettings?.automationsEnabled() ? 1 : undefined,
 					guardedMissionConversion: missions ? true : undefined,
 					passiveMissionLifecycle: missions ? true : undefined,

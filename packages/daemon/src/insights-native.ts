@@ -18,7 +18,9 @@ export const INSIGHTS_SETUP_MESSAGE =
 	"This chat is set up for Pilot Insights. Briefly confirm your role and limits. Do not read chat history or start a review until a review is requested.";
 
 export function isInsightsOperation(kind: string): boolean {
-	return ["insights-create", "insights-enable", "insights-revoke", "insights-lifecycle"].includes(kind);
+	return ["insights-create", "insights-enable", "insights-settings", "insights-revoke", "insights-lifecycle"].includes(
+		kind,
+	);
 }
 
 function exact(payload: Record<string, unknown>, keys: string[], optional: string[] = []): void {

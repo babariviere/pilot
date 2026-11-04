@@ -81,6 +81,8 @@ export interface ScheduledItem {
 	insightsDestination?: { sessionId: string; projectId: string; missionId: string };
 	/** Host-only setup provenance. Not history authority or review-completion evidence. */
 	insightsEnableOperationId?: string;
+	/** Native-confirmed desired settings revision. Absent means the original fixed contract. */
+	insightsSettingsRevision?: number;
 	/** Daemon-owned occurrence claim, retained across uncertain delivery and restart. */
 	insightsReview?: { sessionId: string; request: InsightsReviewDispatch };
 	firedAt?: number;

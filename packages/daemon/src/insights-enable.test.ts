@@ -11,6 +11,8 @@ import type {
 	DurableOperation,
 	InsightsEnablePayload,
 	InsightsEnableProgress,
+	InsightsSettingsPayload,
+	InsightsSettingsSnapshot,
 	ModelOption,
 	OperationReceipt,
 } from "@pilot/protocol";
@@ -35,6 +37,11 @@ const model: ModelOption = {
 	name: "Terra 6.1",
 	thinkingLevels: ["off", "low", "high"],
 };
+
+function settingsPayload(snapshot: InsightsSettingsSnapshot): InsightsSettingsPayload {
+	const { projectId, missionId, expectedHome, context, chat, revision, settings } = snapshot;
+	return { projectId, missionId, expectedHome, context, chat, expectedRevision: revision, settings };
+}
 
 async function fixture(t: TestContext) {
 	const root = await mkdtemp(join(tmpdir(), "insights-enable-"));
@@ -108,7 +115,7 @@ async function fixture(t: TestContext) {
 		await rm(root, { recursive: true, force: true, maxRetries: 5 });
 	});
 	let sequence = 0;
-	const operation = (payload: InsightsEnablePayload, targetId: string): DurableOperation => {
+	const operation = (payload: InsightsEnablePayload | InsightsSettingsPayload, targetId: string): DurableOperation => {
 		const bytes = JSON.stringify(payload);
 		return {
 			schemaVersion: 1,
@@ -900,6 +907,20 @@ test("native HTTP contract gates only enable, passive reads/status never provisi
 		await fetch(`${root}/insights/enable/preflight?projectId=${f.project.id}&missionId=${f.mission.id}`)
 	).json();
 	const stale = f.operation(existing.payload, existing.targetId);
+	const settingsResponse = await fetch(`${root}/insights/sessions/${op.targetId}/settings`);
+	assert.equal(settingsResponse.headers.get("cache-control"), "no-store");
+	const snapshot = (await settingsResponse.json()) as InsightsSettingsSnapshot;
+	assert.equal(snapshot.revision, 0);
+	assert.equal((await (await fetch(`${root}/hello`)).json()).capabilities.insightsSettings, 1);
+	const save = { ...f.operation(settingsPayload(snapshot), op.targetId), kind: "insights-settings" };
+	assert.notEqual((await post("operations", false, save)).status, 200);
+	assert.equal((await (await post("operations/receipt", false, save)).json()).state, "unknown");
+	const saved = (await (await post("operations", true, save)).json()) as OperationReceipt;
+	assert.equal(saved.state, "accepted");
+	assert.equal((saved.result as { revision: number }).revision, 1);
+	assert.deepEqual(await (await post("operations/receipt", false, save)).json(), saved);
+	assert.deepEqual(await (await post("operations", true, save)).json(), saved);
+	assert.equal(f.missions.insights.settings.current(f.sessions.insightsHostAdmission(op.targetId))?.revision, 1);
 	f.sessions["metas"].get(op.targetId)!.insightsGrant!.host.hostId = "different";
 	assert.equal(((await (await post("operations", true, stale)).json()) as OperationReceipt).state, "rejected");
 	const blocked = await (await post("insights/enable/status")).json();
@@ -911,4 +932,255 @@ test("native HTTP contract gates only enable, passive reads/status never provisi
 	assert.equal(f.schedules.list().length, 1);
 	assert.equal(f.workerStarts, 0);
 	assert.equal(await stat(join(f.home, "sessions", op.targetId, "history.sqlite")).catch(() => null), null);
+});
+
+test("native desired settings save persists choices without activating or mutating chat/grant/rule", async (t) => {
+	const f = await fixture(t),
+		enabled = await f.intent();
+	assert.equal((await f.run(enabled)).state, "accepted");
+	const before = { chat: f.sessions.insightsEnableChat(enabled.targetId), rules: f.schedules.list() };
+	const snapshot = await f.enable.settings(enabled.targetId);
+	assert.equal(snapshot.revision, 0);
+	const payload = settingsPayload(snapshot);
+	payload.settings.recurrence = { every: "week", weekday: 2, time: "09:15", timeZone: "Europe/Paris" };
+	payload.settings.scope = { ...payload.settings.scope, projects: [f.project.id], includeArchived: false };
+	payload.settings.bounds = { inventoryPages: 2, historyPages: 4, entriesPerPage: 8 };
+	payload.settings.budget = { usd: 20, period: "month", enforcement: "advisory", basis: "user_choice" };
+	const op = { ...f.operation(payload, enabled.targetId), kind: "insights-settings" };
+	const saved = await f.journal.execute(op, (intent) => f.enable.saveSettings(intent, JSON.parse(intent.payload)));
+	assert.equal(saved.state, "accepted");
+	assert.deepEqual(f.sessions.insightsEnableChat(enabled.targetId), before.chat);
+	assert.deepEqual(f.schedules.list(), before.rules);
+	assert.equal((await f.preflight()).reason, "settings_activation_required");
+	await assert.rejects(
+		f.sessions.dispatchInsightsReview(enabled.targetId, {
+			runId: randomUUID(),
+			windowStart: "2026-01-01T00:00:00Z",
+			windowEnd: "2026-01-08T00:00:00Z",
+			bounds: { inventoryPages: 1, historyPages: 2, entriesPerPage: 4 },
+		}),
+		/explicit activation/,
+	);
+	await f.reopen();
+	const restored = await f.enable.settings(enabled.targetId);
+	assert.deepEqual(restored.settings, payload.settings);
+	assert.equal(restored.revision, 1);
+	assert.deepEqual(restored.cost, { pricing: "unknown", spendUsd: null });
+	assert.deepEqual(await f.journal.lookup(op), saved);
+	assert.deepEqual(f.schedules.list(), before.rules);
+	assert.equal(f.workerStarts, 0);
+});
+
+test("lost settings ACK recovers its exact database receipt without replay or model substitution", async (t) => {
+	const f = await fixture(t),
+		enabled = await f.intent();
+	await f.run(enabled);
+	const payload = settingsPayload(await f.enable.settings(enabled.targetId));
+	const op = { ...f.operation(payload, enabled.targetId), kind: "insights-settings" };
+	const store = f.missions.insights.settings,
+		save = store.save.bind(store);
+	const injected = t.mock.method(store, "save", async (...args: Parameters<typeof save>) => {
+		await save(...args);
+		throw new Error("Synthetic disconnect after settings commit");
+	});
+	const run = () => f.journal.execute(op, (intent) => f.enable.saveSettings(intent, JSON.parse(intent.payload)));
+	assert.equal((await run()).state, "pending");
+	assert.equal(store.current(f.sessions.insightsHostAdmission(op.targetId))?.revision, 1);
+	injected.mock.restore();
+	f.setModels([]);
+	await f.reopen();
+	const replay = t.mock.method(store, "save");
+	const before = f.schedules.list();
+	assert.equal((await f.journal.lookup(op))?.state, "pending", "passive Check does not retry");
+	await f.journal.recover((intent) => f.enable.saveSettings(intent, JSON.parse(intent.payload)));
+	assert.equal((await f.journal.lookup(op))?.state, "accepted");
+	assert.equal(replay.mock.callCount(), 0, "committed settings are lookup-only even with a missing model");
+	assert.equal((await f.enable.settings(op.targetId)).model.state, "unavailable");
+	assert.equal(store.current(f.sessions.insightsHostAdmission(op.targetId))?.revision, 1);
+	assert.deepEqual(f.schedules.list(), before);
+	assert.equal(f.workerStarts, 0);
+});
+
+test("settings exact identity/CAS and missing or ambiguous models refuse without effects", async (t) => {
+	const f = await fixture(t),
+		enabled = await f.intent();
+	await f.run(enabled);
+	const payload = settingsPayload(await f.enable.settings(enabled.targetId));
+	const run = async (value: InsightsSettingsPayload, targetId = enabled.targetId) => {
+		const op = { ...f.operation(value, targetId), kind: "insights-settings" };
+		return f.journal.execute(op, (intent) => f.enable.saveSettings(intent, JSON.parse(intent.payload)));
+	};
+	for (const patch of [
+		{ context: "0".repeat(64) },
+		{ missionId: randomUUID() },
+		{ projectId: "wrong" },
+		{ expectedHome: { ...host, hostId: "local" } },
+		{ chat: { ...payload.chat, inputGeneration: 9 } },
+		{ expectedRevision: 1 },
+		{ ignored: true },
+	])
+		assert.equal((await run({ ...payload, ...patch })).state, "rejected");
+	assert.equal((await run(payload, randomUUID())).state, "rejected");
+	f.setModels([]);
+	assert.equal((await run(payload)).state, "rejected");
+	f.setModels([model, { ...model, id: "synthetic/ambiguous" }]);
+	const named = structuredClone(payload);
+	named.settings.requestedModel = { kind: "name", value: "Terra 6.1" };
+	assert.equal((await run(named)).state, "rejected");
+	assert.equal((await run(payload)).state, "accepted", "explicit ID resolves ambiguous names");
+	assert.equal((await run(payload)).state, "rejected", "stale revision does not overwrite choices");
+	assert.equal(f.workerStarts, 0);
+});
+
+test("settings save fences Stop/project changes during model validation", async (t) => {
+	const f = await fixture(t),
+		enabled = await f.intent();
+	await f.run(enabled);
+	const payload = settingsPayload(await f.enable.settings(enabled.targetId));
+	t.mock.method(f.models, "list", async () => {
+		await f.sessions.stop(enabled.targetId);
+		return { models: [model] };
+	});
+	const op = { ...f.operation(payload, enabled.targetId), kind: "insights-settings" };
+	assert.equal(
+		(await f.journal.execute(op, (intent) => f.enable.saveSettings(intent, JSON.parse(intent.payload)))).state,
+		"rejected",
+	);
+	assert.equal(f.missions.insights.settings.current(f.sessions.insightsHostAdmission(enabled.targetId)), null);
+	assert.equal(f.workerStarts, 0);
+});
+
+test("explicit fresh enable pins saved settings, while stale rules and occurrences never adopt them", async (t) => {
+	const f = await fixture(t),
+		enabled = await f.intent();
+	await f.run(enabled);
+	const payload = settingsPayload(await f.enable.settings(enabled.targetId));
+	payload.settings.bounds = { inventoryPages: 2, historyPages: 3, entriesPerPage: 6 };
+	payload.settings.recurrence = { every: "week", weekday: 2, time: "09:15", timeZone: "Europe/Paris" };
+	const op = { ...f.operation(payload, enabled.targetId), kind: "insights-settings" };
+	assert.equal(
+		(await f.journal.execute(op, (intent) => f.enable.saveSettings(intent, JSON.parse(intent.payload)))).state,
+		"accepted",
+	);
+	const oldRule = f.schedules.list()[0]!;
+	assert.throws(() => f.sessions.insightsScheduleBounds(enabled.targetId), /explicit activation/);
+	assert.throws(
+		() => f.sessions.insightsScheduleBounds(enabled.targetId, 1, oldRule.recurrence),
+		/recurrence differs/,
+	);
+	await f.schedules.remove(oldRule.id, oldRule.revision);
+	const fresh = await f.intent();
+	const selected = JSON.parse(fresh.payload) as InsightsEnablePayload;
+	assert.equal(selected.settingsRevision, 1);
+	assert.deepEqual(selected.bounds, payload.settings.bounds);
+	assert.deepEqual(selected.recurrence, payload.settings.recurrence);
+	assert.equal((await f.run(fresh)).state, "accepted");
+	const rule = f.schedules.list().find((s) => s.state === "pending")!;
+	assert.notEqual(rule.id, oldRule.id);
+	assert.equal(rule.insightsSettingsRevision, 1);
+	assert.deepEqual(f.sessions.insightsScheduleBounds(enabled.targetId, 1, rule.recurrence), payload.settings.bounds);
+	assert.equal((await f.enable.status(fresh)).state, "enabled");
+	assert.equal((await f.enable.status(enabled)).state, "blocked");
+	f.setModels([{ ...model, id: "synthetic/replacement" }]);
+	assert.equal(
+		(await f.preflight()).reason,
+		"saved_model_unavailable_or_changed",
+		"saved exact ID never follows a renamed catalog choice",
+	);
+	assert.equal(f.workerStarts, 0);
+});
+
+test("uncertain settings save plus revoked admission stays pending, never becomes rejection or replay", async (t) => {
+	const f = await fixture(t),
+		enabled = await f.intent();
+	await f.run(enabled);
+	const payload = settingsPayload(await f.enable.settings(enabled.targetId));
+	const op = { ...f.operation(payload, enabled.targetId), kind: "insights-settings" };
+	const save = t.mock.method(f.missions.insights.settings, "save", async () => {
+		throw new Error("Synthetic interrupted save");
+	});
+	assert.equal(
+		(await f.journal.execute(op, (intent) => f.enable.saveSettings(intent, JSON.parse(intent.payload)))).state,
+		"pending",
+	);
+	const pending = await f.journal.lookup(op);
+	await f.sessions.revokeInsights(enabled.targetId, 1);
+	await f.journal.recover((intent) => f.enable.saveSettings(intent, JSON.parse(intent.payload)));
+	assert.deepEqual(await f.journal.lookup(op), pending);
+	assert.equal(save.mock.callCount(), 1);
+	assert.equal(f.workerStarts, 0);
+});
+
+test("configured source exclusions and bounds are enforced before history reads, including queued sources", async (t) => {
+	const f = await fixture(t),
+		enabled = await f.intent();
+	await f.run(enabled);
+	const metas = f.sessions["metas"],
+		template = metas.get(enabled.targetId)!;
+	const allowed = randomUUID(),
+		excluded = randomUUID(),
+		archived = randomUUID(),
+		foreign = randomUUID();
+	for (const [id, patch] of [
+		[allowed, {}],
+		[excluded, {}],
+		[archived, { archivedAt: Date.now() }],
+		[foreign, { projectId: "not-admitted" }],
+	] as const) {
+		const source = { ...structuredClone(template), id, role: undefined, ...patch };
+		delete source.insightsGrant;
+		metas.set(id, source);
+	}
+	const snapshot = await f.enable.settings(enabled.targetId),
+		payload = settingsPayload(snapshot);
+	payload.settings.scope.includeArchived = false;
+	payload.settings.scope.excludeSessions = [excluded];
+	payload.settings.scope.excludeProjects = ["not-admitted"];
+	payload.settings.bounds = { inventoryPages: 1, historyPages: 2, entriesPerPage: 1 };
+	const save = async (value: InsightsSettingsPayload) => {
+		const op = { ...f.operation(value, enabled.targetId), kind: "insights-settings" };
+		assert.equal(
+			(await f.journal.execute(op, (intent) => f.enable.saveSettings(intent, JSON.parse(intent.payload)))).state,
+			"accepted",
+		);
+	};
+	await save(payload);
+	const reads: Array<{ id: string; limit: number }> = [];
+	const history = f.sessions["readDiagnosticHistory"].bind(f.sessions);
+	f.sessions["readDiagnosticHistory"] = async (...args) => {
+		reads.push({ id: args[0], limit: args[2] ?? 8 });
+		return history(...args);
+	};
+	const reviews = f.missions.insights.reviews,
+		prepare = reviews.prepare.bind(reviews);
+	t.mock.method(reviews, "prepare", async (...args: Parameters<typeof prepare>) => {
+		await prepare(...args);
+		throw new Error("Synthetic stop after evidence preparation, before any worker/provider");
+	});
+	const request = {
+		runId: randomUUID(),
+		windowStart: "2026-01-01T00:00:00Z",
+		windowEnd: "2026-01-08T00:00:00Z",
+		bounds: payload.settings.bounds,
+		settingsRevision: 1,
+	};
+	assert.equal((await f.sessions.dispatchInsightsReview(enabled.targetId, request)).state, "interrupted");
+	assert.deepEqual(reads, [{ id: allowed, limit: 1 }]);
+	reads.length = 0;
+	const second = settingsPayload(await f.enable.settings(enabled.targetId));
+	second.settings.scope.excludeSessions.push(allowed);
+	await save(second);
+	assert.equal(
+		(
+			await f.sessions.dispatchInsightsReview(enabled.targetId, {
+				...request,
+				runId: randomUUID(),
+				settingsRevision: 2,
+			})
+		).state,
+		"interrupted",
+	);
+	assert.deepEqual(reads, [], "previously queued sources are reauthorized, never read after exclusion");
+	await assert.rejects(f.sessions.dispatchInsightsReview(enabled.targetId, request), /explicit activation/);
+	assert.equal(f.workerStarts, 0);
 });

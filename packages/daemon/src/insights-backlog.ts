@@ -11,9 +11,10 @@ import type {
 import { Conflict, NotFound } from "./errors.ts";
 import type { InsightsAdmission } from "./insights-admission.ts";
 import { INSIGHTS_REVIEW_SCHEMA, InsightsReviews } from "./insights-review.ts";
+import { INSIGHTS_SETTINGS_SCHEMA, InsightsSettings } from "./insights-settings.ts";
 import type { KnowledgeDb } from "./project-knowledge-store.ts";
 
-export const INSIGHTS_SCHEMA = `${INSIGHTS_REVIEW_SCHEMA}
+export const INSIGHTS_SCHEMA = `${INSIGHTS_REVIEW_SCHEMA}${INSIGHTS_SETTINGS_SCHEMA}
 CREATE TABLE IF NOT EXISTS insights_items (
  seq INTEGER PRIMARY KEY AUTOINCREMENT,
  mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
@@ -232,9 +233,11 @@ export interface InsightsDb extends KnowledgeDb {
 export class InsightsBacklog {
 	private readonly db: InsightsDb;
 	readonly reviews: InsightsReviews;
+	readonly settings: InsightsSettings;
 	constructor(db: InsightsDb) {
 		this.db = db;
 		this.reviews = new InsightsReviews(db);
+		this.settings = new InsightsSettings(db);
 	}
 	/** Finding tracking tasks must not be edited, claimed or executed through generic task APIs. */
 	assertOrdinaryTask(taskId: string): void {
