@@ -110,6 +110,36 @@ test("unaccepted non-code delivery survives reopen and exact retries without com
 	}
 });
 
+test("coordinator closes tasks without commits durably, without worker delivery or retirement", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-coordinator-closure-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const path = join(home, "missions.sqlite");
+	const { store, id } = setup(new MissionStore(path));
+	const done = store.updateTask(id, "1", { status: "done" }, { sessionId: "lead" });
+	const dropped = store.updateTask(id, "2", { status: "dropped" }, { sessionId: "lead" });
+	assert.ok(done.completedAt);
+	assert.equal(done.sessionId, "member");
+	assert.equal(dropped.completedAt, undefined);
+	for (const task of [done, dropped]) assert.equal(store.completion(id, task.id), undefined);
+	assert.equal(store.retiredMember("member"), false);
+	await store.durable();
+	store.close();
+	const reopened = new MissionStore(path);
+	t.after(() => reopened.close());
+	assert.deepEqual(reopened.task(id, done.id), done);
+	assert.deepEqual(reopened.task(id, dropped.id), dropped);
+	for (const task of [done, dropped]) assert.equal(reopened.completion(id, task.id), undefined);
+});
+
+test("commit-free closure authority follows the current coordinator", (t) => {
+	const { store, id } = setup();
+	t.after(() => store.close());
+	store.update(id, { coordinatorSessionId: "member" });
+	assert.throws(() => store.updateTask(id, "1", { status: "done" }, { sessionId: "lead" }), /Use complete/);
+	assert.equal(store.resolveTask(id, "1").status, "in_progress");
+	assert.equal(store.updateTask(id, "1", { status: "done" }, { sessionId: "member" }).status, "done");
+});
+
 test("completion is immutable, bounded, referenced once and retires admission durably", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-completion-"));
 	t.after(() => rm(home, { recursive: true, force: true }));

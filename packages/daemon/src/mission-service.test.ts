@@ -1394,6 +1394,28 @@ test("reviewer is additive metadata and omitted roles preserve builder and legac
 	assert.equal(member.missionRole, undefined);
 });
 
+test("legacy coordinator tool closes tasks without a commit while workers still need delivery", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Commit-free closure",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	for (const status of ["done", "dropped"] as const) {
+		const task = f.store.addTask(mission.id, { title: status, sessionId: member.id });
+		if (status === "done")
+			await assert.rejects(f.service.call(member.id, "task", { id: task.id, status }), /Use complete/);
+		await f.service.call(lead.id, "task", { id: task.id, status });
+		assert.equal(f.store.task(mission.id, task.id).status, status);
+		assert.equal(f.store.completion(mission.id, task.id), undefined);
+	}
+	assert.equal(f.store.retiredMember(member.id), false);
+});
+
 test("planning v1 binds worker IPC identity and keeps coordinator/user no-PR completion usable", async (t) => {
 	const f = await fixture(t);
 	const lead = await f.spawn();

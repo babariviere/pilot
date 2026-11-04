@@ -4530,6 +4530,7 @@ export class MissionStore {
 			status === "done" &&
 			before.status !== "done" &&
 			actor.sessionId &&
+			actor.sessionId !== this.require(id).coordinatorSessionId &&
 			this.require(id).planningVersion === undefined &&
 			!this.completion(id, before.id)
 		)

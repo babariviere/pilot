@@ -50,6 +50,10 @@ withdrawals or delegation are inferred.
 
 ## Finish or archive
 
+Coordinators can mark tasks done or dropped without an associated commit, preserving
+their history. This records task closure, not PR review or merge approval. Worker
+code delivery still requires a commit and checks through `complete`.
+
 **Mark done** is available when all remaining tasks are done, excluding dropped tasks,
 and at least one task is done. It does not merge PRs or finish tasks for you.
 
