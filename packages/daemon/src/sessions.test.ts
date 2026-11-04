@@ -18,6 +18,7 @@ import type {
 	AgentEvent,
 	DiagnosticContextRequest,
 	DiagnosticHistoryPage,
+	DurableOperation,
 	InsightsReviewDispatch,
 	McpStatus,
 	SessionCompletion,
@@ -33,8 +34,11 @@ import { DATABASE_CONFIG_FILE, DatabaseService } from "./databases.ts";
 import { diagnosticContextResponse } from "./diagnostic-context.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { DaemonOperations, EventLoopWatchdog, operations } from "./event-loop-watchdog.ts";
+import { admitInsightsOperation, INSIGHTS_DISCLOSURE, INSIGHTS_SETUP_MESSAGE } from "./insights-native.ts";
+import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import type { ModelCatalog } from "./models.ts";
+import { payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
 import {
@@ -6658,4 +6662,336 @@ test("slack_status: only chats attached to a Slack triage message declare it, an
 	await until(() => linked(worker).length === 2);
 	assert.deepEqual(linked(worker), [true, false]);
 	assert.deepEqual(linked(otherWorker), []);
+});
+
+test("native Insights status and host leases stay passive and fail closed", async (t) => {
+	const f = await insightsFixture(t);
+	const { sessions, id } = f;
+	const meta = sessions["metas"].get(id)!;
+	const before = JSON.stringify(meta);
+	const saves = t.mock.method(sessions as unknown as { save(): Promise<void> }, "save", async () => {
+		throw new Error("Passive read saved");
+	});
+	const workers = f.workers.length;
+	const status = sessions.insightsStatus(id)!;
+	assert.deepEqual(status, {
+		sessionId: id,
+		enabled: true,
+		revision: 1,
+		projectId: f.project.id,
+		missionId: f.missionId,
+		setupPending: false,
+		archived: false,
+		available: true,
+		disclosure: INSIGHTS_DISCLOSURE,
+	});
+	assert.doesNotMatch(JSON.stringify(status), /home|projectPath|setupDigest|grantId/);
+	assert.equal(sessions.insightsStatus(randomUUID()), undefined);
+	const admission = sessions.insightsHostAdmission(id);
+	assert.doesNotMatch(JSON.stringify(admission.binding), /home|projectPath|setupDigest/);
+	assert.equal(JSON.stringify(meta), before);
+	assert.equal(saves.mock.callCount(), 0);
+	assert.equal(f.workers.length, workers);
+	// A host lease does not depend on a live worker.
+	sessions["workers"].delete(id);
+	admission.revalidate();
+	assert.equal(sessions.insightsHostAdmission(id).binding.reportSessionId, id);
+	sessions["workers"].set(id, f.worker);
+	sessions["metas"].set(id, { ...meta });
+	assert.throws(() => admission.revalidate(), Conflict);
+	sessions["metas"].set(id, meta);
+	meta.insightsGrant!.revision++;
+	assert.throws(() => admission.revalidate(), Conflict);
+	meta.insightsGrant!.revision--;
+	for (const invalidate of [
+		() => {
+			meta.insightsSetupPending = true;
+		},
+		() => {
+			delete meta.insightsSetupPending;
+			meta.archivedAt = Date.now();
+		},
+		() => {
+			delete meta.archivedAt;
+			f.members.delete(id);
+		},
+	]) {
+		invalidate();
+		assert.equal(sessions.insightsStatus(id)!.available, false);
+		assert.throws(() => sessions.insightsHostAdmission(id));
+		assert.throws(() => admission.revalidate());
+	}
+	f.members.set(id, f.missionId);
+	const shutdownAdmission = sessions.insightsHostAdmission(id);
+	sessions["closing"] = true;
+	assert.throws(() => shutdownAdmission.revalidate(), Conflict);
+	sessions["closing"] = false;
+	saves.mock.restore();
+});
+
+test("native Insights durable operations and passive HTTP pages use explicit authority", async (t) => {
+	const store = new MissionStore(":memory:");
+	const f = await insightsFixture(t, {}, store);
+	// After hooks run in registration order: shut sessions down before closing their store.
+	t.after(() => store.close());
+	const service = new MissionService(store, f.sessions, f.projects);
+	f.sessions.setMissionBridge(f.bridge);
+	const args: Parameters<typeof createDaemonServer> = [
+		{ home: f.home, host: "127.0.0.1", port: 0 },
+		f.sessions,
+		f.projects,
+		{} as ModelCatalog,
+		{} as TerminalManager,
+		{ store, service },
+	];
+	args[12] = {
+		daemonId: "daemon",
+		lineageId: "lineage",
+		daemonVersion: "test",
+		protocolVersion: 1,
+		minimumClientProtocolVersion: 1,
+		platform: "darwin",
+		arch: "arm64",
+		capabilities: {
+			powerManagement: false,
+			systemSleepEvents: false,
+			swiftUIArtifacts: true,
+			coordinatorIsolation: true,
+			independentExecution: true,
+		},
+	};
+	args[17] = {
+		authenticate: async (token: unknown) => {
+			if (token !== "synthetic-native") throw new Conflict("Native only");
+		},
+	} as NonNullable<(typeof args)[17]>;
+	const server = createDaemonServer(...args);
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	t.after(async () => {
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	const root = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
+	let sequence = 0;
+	const producerId = randomUUID();
+	const operation = (kind: string, body: object, targetId: string = f.id): DurableOperation => {
+		const payload = JSON.stringify(body);
+		return {
+			schemaVersion: 1,
+			operationId: randomUUID(),
+			producerId,
+			sequence: ++sequence,
+			origin: diagnosticHost,
+			destination: diagnosticHost,
+			kind,
+			targetId,
+			payload,
+			payloadHash: payloadHash(payload),
+		};
+	};
+	const post = (op: DurableOperation, native = true, receipt = false) =>
+		fetch(`${root}/operations${receipt ? "/receipt" : ""}`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				...(native ? { "x-pilot-github-capability": "synthetic-native" } : {}),
+			},
+			body: JSON.stringify(op),
+		});
+	const createPayload = {
+		projectId: f.project.id,
+		missionId: f.missionId,
+		model: "test/offline",
+		disclosure: INSIGHTS_DISCLOSURE,
+	};
+	const create = operation("insights-create", createPayload, randomUUID());
+	for (const op of [
+		create,
+		operation("insights-revoke", { expectedRevision: 1 }),
+		operation("insights-lifecycle", { key: randomUUID(), expectedRevision: 1, lifecycle: "approved" }),
+	]) {
+		assert.notEqual((await post(op, false)).status, 200);
+		assert.deepEqual(
+			await (await post(op, false, true)).json(),
+			{ state: "unknown" },
+			"refusal happens before journal reservation",
+		);
+	}
+	const spawns = t.mock.method(f.sessions, "spawnInsightsDurable");
+	const created = await (await post(create)).json();
+	assert.equal(created.state, "accepted");
+	assert.deepEqual(created.result, { sessionId: create.targetId });
+	assert.deepEqual(await (await post(create)).json(), created);
+	assert.deepEqual(await (await post(create, false, true)).json(), created);
+	await f.sessions["starting"].get(create.targetId);
+	assert.equal(spawns.mock.callCount(), 1);
+	assert.deepEqual(spawns.mock.calls[0]!.arguments, [
+		{
+			projectId: f.project.id,
+			missionId: f.missionId,
+			model: "test/offline",
+			thinking: undefined,
+			message: INSIGHTS_SETUP_MESSAGE,
+		},
+		create.targetId,
+		create.operationId,
+	]);
+	const changedPayload = JSON.stringify({ ...createPayload, model: "test/changed" });
+	assert.equal(
+		(await post({ ...create, payload: changedPayload, payloadHash: payloadHash(changedPayload) })).status,
+		400,
+	);
+	for (const payload of [
+		{ ...createPayload, message: "Injected" },
+		{ ...createPayload, disclosure: "other" },
+		{ ...createPayload, missionId: "absent" },
+	]) {
+		assert.equal((await (await post(operation("insights-create", payload, randomUUID()))).json()).state, "rejected");
+	}
+	const admission = f.sessions.insightsHostAdmission(f.id);
+	const draft = {
+		title: "Synthetic finding",
+		priority: "high",
+		observation: "Observed repetition",
+		uncertainty: "Unknown baseline",
+		proposedChange: "Propose a check",
+		expectedBenefit: "Less repetition",
+		targets: [{ projectId: f.project.id, label: "Local project" }],
+		implementationLinks: [],
+		cost: {
+			baseline: "unknown",
+			assumptions: "Synthetic only",
+			estimate: "Unmeasured",
+			qualityRisks: "Keep safety",
+			laterResult: "unknown",
+		},
+	};
+	const key = randomUUID();
+	await store.insights.call(admission, {
+		action: "propose",
+		key,
+		operationId: randomUUID(),
+		expectedRevision: 0,
+		draft,
+		evidence: [],
+	});
+	const lifecycle = operation("insights-lifecycle", { key, expectedRevision: 1, lifecycle: "approved" });
+	const workersBeforeConfirmation = f.workers.length;
+	const inputsBeforeConfirmation = f.worker.sent.filter((command) => command.type === "input").length;
+	const confirmed = await (await post(lifecycle)).json();
+	assert.equal(confirmed.state, "accepted");
+	assert.deepEqual(confirmed.result, {
+		sessionId: f.id,
+		operationId: lifecycle.operationId,
+		kind: "finding",
+		key,
+		revision: 2,
+		taskId: store.tasks(f.missionId)[0]!.id,
+	});
+	assert.deepEqual(await (await post(lifecycle)).json(), confirmed);
+	assert.equal(f.workers.length, workersBeforeConfirmation);
+	assert.equal(f.worker.sent.filter((command) => command.type === "input").length, inputsBeforeConfirmation);
+	// Simulate journal recovery after the backlog committed but before receipt acknowledgement.
+	assert.deepEqual(
+		await admitInsightsOperation(f.sessions, store.insights, lifecycle, JSON.parse(lifecycle.payload)),
+		confirmed.result,
+	);
+	for (const body of [
+		{ key, expectedRevision: 1, lifecycle: "approved" },
+		{ key, expectedRevision: 2, lifecycle: "verified" },
+		{ key: key.toUpperCase(), expectedRevision: 2, lifecycle: "shipped" },
+		{ key, expectedRevision: 2, lifecycle: "shipped", extra: true },
+	]) {
+		assert.equal((await (await post(operation("insights-lifecycle", body))).json()).state, "rejected");
+	}
+	for (const [expectedRevision, lifecycle] of [
+		[2, "shipped"],
+		[3, "verified"],
+	] as const) {
+		assert.equal(
+			(await (await post(operation("insights-lifecycle", { key, expectedRevision, lifecycle }))).json()).state,
+			"accepted",
+		);
+	}
+	assert.equal(
+		(await (await post(operation("insights-lifecycle", { key, expectedRevision: 4, lifecycle: "verified" }))).json())
+			.state,
+		"rejected",
+	);
+	for (let n = 0; n < 20; n++)
+		await store.insights.call(admission, {
+			action: "propose",
+			key: randomUUID(),
+			operationId: randomUUID(),
+			expectedRevision: 0,
+			draft: { ...draft, targets: [], cost: undefined },
+			evidence: [],
+		});
+	const workers = f.workers.length;
+	const save = t.mock.method(f.sessions as unknown as { save(): Promise<void> }, "save", async () => {
+		throw new Error("Passive read saved");
+	});
+	assert.equal((await (await fetch(`${root}/hello`)).json()).capabilities.insights, 1);
+	const status = await fetch(`${root}/insights/sessions/${f.id}`);
+	assert.equal(status.status, 200);
+	assert.equal(status.headers.get("cache-control"), "no-store");
+	assert.equal((await status.json()).available, true);
+	const pageResponse = await fetch(`${root}/insights/sessions/${f.id}/findings?cursor=0`);
+	assert.equal(pageResponse.headers.get("cache-control"), "no-store");
+	const page = await pageResponse.json();
+	assert.equal(page.items.length, 20);
+	assert.equal(page.items[0].key, key);
+	assert.equal(page.items[0].lifecycle, "verified");
+	assert.deepEqual(page.items[0].cost, draft.cost);
+	assert.deepEqual(page.items[0].targets, draft.targets);
+	assert.equal(page.items[1].cost, null);
+	const rest = await (await fetch(`${root}/insights/sessions/${f.id}/findings?cursor=${page.nextCursor}`)).json();
+	assert.equal(rest.items.length, 1);
+	assert.equal(rest.nextCursor, null);
+	assert.equal((await fetch(`${root}/insights/sessions/${f.id}/findings?cursor=-1`)).status, 400);
+	assert.equal(f.workers.length, workers);
+	assert.equal(save.mock.callCount(), 0);
+	f.sessions["metas"].get(f.id)!.archivedAt = Date.now();
+	assert.equal((await (await fetch(`${root}/insights/sessions/${f.id}`)).json()).archived, true);
+	assert.equal((await fetch(`${root}/insights/sessions/${f.id}/findings`)).status, 409);
+	delete f.sessions["metas"].get(f.id)!.archivedAt;
+	save.mock.restore();
+	const ordinary = await f.sessions.spawn({
+		projectId: f.project.id,
+		mode: "ask",
+		model: "test/offline",
+		message: "Ordinary",
+	});
+	for (const id of [ordinary.id, randomUUID()])
+		for (const suffix of ["", "/findings"]) {
+			const response = await fetch(`${root}/insights/sessions/${id}${suffix}`);
+			assert.equal(response.status, 404);
+			assert.deepEqual(await response.json(), { error: "not_insights" });
+		}
+	assert.equal(
+		(await (await post(operation("insights-revoke", { expectedRevision: 1 }, ordinary.id))).json()).state,
+		"rejected",
+	);
+	const revoke = operation("insights-revoke", { expectedRevision: 1 });
+	const revoked = await (await post(revoke)).json();
+	assert.equal(revoked.state, "accepted");
+	assert.deepEqual(revoked.result, { sessionId: f.id, revision: 2 });
+	assert.deepEqual(await (await post(revoke)).json(), revoked);
+	const writes = t.mock.method(f.sessions, "revokeInsights", async () => {
+		throw new Error("Replay wrote");
+	});
+	assert.deepEqual(
+		await admitInsightsOperation(f.sessions, store.insights, revoke, { expectedRevision: 1 }),
+		revoked.result,
+	);
+	assert.equal(writes.mock.callCount(), 0);
+	writes.mock.restore();
+	assert.equal((await (await post(operation("insights-revoke", { expectedRevision: 3 }))).json()).state, "rejected");
+	const unavailable = await fetch(`${root}/insights/sessions/${f.id}/findings`);
+	assert.equal(unavailable.status, 409);
+	assert.deepEqual(await unavailable.json(), { error: "insights_unavailable" });
+	const revokedStatus = await (await fetch(`${root}/insights/sessions/${f.id}`)).json();
+	assert.equal(revokedStatus.enabled, false);
+	assert.equal(revokedStatus.available, false);
+	assert.equal(revokedStatus.revision, 2);
 });

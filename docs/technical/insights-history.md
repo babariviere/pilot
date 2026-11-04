@@ -2,12 +2,55 @@
 
 ## Status and scope
 
-Internal Insights profile and own-backlog persistence foundation only. No public HTTP/native setup
-route, live grant, private-history review or recurring rule is enabled by this change. The closed
-model tools are `insights_history` and `insights_backlog`. A trusted bounded review seam is described
-in [review orchestration](insights-review.md). Native lifecycle confirmation, activation and scheduling
-remain separate integrations. This document does not certify
+The internal Insights profile, own-backlog persistence, a trusted bounded review seam
+([review orchestration](insights-review.md)) and explicit native routes exist. These routes do not
+automatically create a grant, review or schedule. The closed model tools are `insights_history` and
+`insights_backlog`. Scheduling remains a separate integration. This document does not certify
 end-to-end availability.
+
+## Native routes
+
+The GPUI app uses these routes from two existing surfaces. An active mission's overview **More** menu
+offers setup: it discloses the scope and the selected model before the one create operation. An
+Insights chat's header opens **Insights access**: passive status, the linked mission via ordinary
+mission navigation, revocation and finding decisions. Each action is saved by the app's single
+private writer before it is sent; an unconfirmed one shows Check, which looks the receipt up and
+resends the same bytes only if Local never saw it. Reads and decisions never start the report chat's
+worker. The report chat accepts ordinary messages; pilotd rechecks its grant at admission.
+
+`GET /api/hello` advertises `capabilities.insights: 1` only with missions, native capability
+authentication and lineage identity. All Insights reads are passive, GET-only and `Cache-Control:
+no-store`; they never start workers or save metadata:
+
+- `GET /api/insights/sessions/:id` returns `{sessionId, enabled, revision, projectId, missionId,
+  setupPending, archived, available, disclosure:"insights-history-v1"}`. Ordinary/unknown chats return
+  404 `{error:"not_insights"}`. No private paths, home or setup digest are disclosed.
+- `GET /api/insights/sessions/:id/findings?cursor=N` returns `{items, nextCursor}` with at most 20
+  summaries `{key, revision, taskId, lifecycle, title, priority, targets:[{projectId,label}], cost}`.
+  Cost is null or `{baseline, assumptions, estimate, qualityRisks, laterResult}`. The cursor defaults
+  to zero; `nextCursor` is a number or null. Unavailable grants return 409
+  `{error:"insights_unavailable"}`; ordinary/unknown chats return the same 404 as status.
+
+Explicit user actions use `POST /api/operations` with the existing immutable operation envelope and
+durable journal receipt. Execution requires `x-pilot-github-capability`; receipt lookup at
+`POST /api/operations/receipt` does not. Payloads reject unknown keys:
+
+- `insights-create`: target is a new chat UUID, payload `{projectId, missionId, model, thinking?,
+  disclosure:"insights-history-v1"}`, result `{sessionId}`. Setup uses the daemon-owned neutral
+  introduction, never caller-supplied instructions. Only explicit setup creates the restricted grant;
+  it does not request a history review or schedule one.
+- `insights-revoke`: target is the report chat, payload `{expectedRevision}` (integer >= 1), result
+  `{sessionId, revision}`. Recovery accepts an already-disabled revision exactly one newer without
+  writing again; other stale revisions are rejected.
+- `insights-lifecycle`: target is the report chat, payload `{key, expectedRevision, lifecycle}`.
+  The finding key is a lowercase UUID and expectedRevision is an integer >= 1. Result is
+  `{sessionId, operationId, kind:"finding", key, revision, taskId}`. Explicit confirmation starts no
+  work. CAS failures are stable rejected receipts, and Verified requires the current state Shipped.
+
+Exact operation replay returns the same receipt. Changed immutable payloads conflict. Host admission
+revalidates the current grant inside backlog transactions and before disclosure, without a worker.
+Mission tracking tasks show affected projects and clearly distinguish cost estimates from measured
+results. Findings never grant access to a target project.
 
 ## Admission and recovery
 
@@ -93,8 +136,8 @@ not independently certified. Cost findings require baseline, assumptions, estima
 laterResult; unknown baselines and unverified claims must remain explicit.
 
 Finding lifecycle is separate from mission task execution status. The model can propose/amend but
-cannot set lifecycle. `InsightsBacklog.confirmLifecycle` is a host-only explicit-user seam, not an IPC,
-HTTP or native action in this delivery. Its caller must supply actual user confirmation and its own
+cannot set lifecycle. `InsightsBacklog.confirmLifecycle` is a host-only explicit-user seam, exposed by
+the native durable lifecycle operation, never model IPC. Its caller must supply actual user confirmation and its own
 durable operation ID, never derive approval from model prose. It starts no work. Confirmed scope is
 frozen except additional evidence, implementation links and later-result claims. Verified requires
 the current finding to be Shipped and explicit user confirmation; model claims never advance it.
@@ -112,7 +155,8 @@ admission before draining. Stop invalidates already-captured admissions, includi
 ACKs waiting on durability. Dispatched review runs add a durable cancellation/interruption fence and
 exact-ID lookup without input replay. The scheduler must consume those terminal outcomes rather than
 retrying their input; this foundation does not wire or activate a schedule.
-Look up receipt with the original operationId through a currently admitted worker; absence is Unknown,
+Look up a model backlog receipt with the original operationId through a currently admitted worker;
+native operations use the journal receipt route above. Absence is Unknown,
 not proof of rejection and never permission for blind effect replay. Exact same-operation retries
 cannot create another task/revision; a changed payload or binding conflicts. Report/checkpoint receipts
 prove persistence only. Scheduler sent/started or a model-authored completed status is not report
@@ -143,5 +187,5 @@ the role enum; no local Swift build or native UI activation is claimed.
 The session suite has a separately reproduced failure on the parent implementation:
 `a new execution drain is busy even during a reentrant idle worker factory notification`.
 Its assertion is retained unchanged; the failure is not evidence that the new profile passes that
-unrelated admission scenario. No live native setup, selected-provider disclosure, scheduler dispatch,
+unrelated admission scenario. No real-account native setup, selected-provider disclosure, scheduler dispatch,
 end-to-end report delivery or benefit verification is established by these synthetic checks.

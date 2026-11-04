@@ -3578,8 +3578,8 @@ ${run.excerpt}`,
 		return { binding: admission.binding, revalidate };
 	}
 
-	/** Host-only dispatch may start its own report worker, never a source worker. */
-	private insightsHostAdmission(callerId: string): InsightsAdmission {
+	/** Host-only dispatch and explicit native user actions. Admission itself never starts a worker. */
+	insightsHostAdmission(callerId: string): InsightsAdmission {
 		const meta = this.require(callerId);
 		this.validateMode(meta);
 		const grant = structuredClone(this.assertInsightsCurrent(meta));
@@ -3689,6 +3689,30 @@ ${run.excerpt}`,
 			throw new Conflict("Insights grant revision changed");
 		meta.insightsGrant = { ...meta.insightsGrant, enabled: false, revision: expectedRevision + 1 };
 		await this.persistInsightsRevocation(meta);
+	}
+
+	/** Passive public state. Never starts workers or repairs an unavailable grant. */
+	insightsStatus(id: string): import("@pilot/protocol").InsightsStatus | undefined {
+		const meta = this.metas.get(id);
+		if (meta?.role !== "insights") return undefined;
+		let available = false;
+		try {
+			this.assertInsightsCurrent(meta);
+			available = true;
+		} catch {
+			// Unavailable bindings remain visible without disclosing private grant fields.
+		}
+		return {
+			sessionId: id,
+			enabled: meta.insightsGrant?.enabled === true,
+			revision: meta.insightsGrant?.revision ?? 0,
+			projectId: meta.projectId ?? "",
+			missionId: meta.insightsGrant?.missionId ?? "",
+			setupPending: meta.insightsSetupPending === true,
+			archived: meta.archivedAt !== undefined,
+			available,
+			disclosure: "insights-history-v1",
+		};
 	}
 
 	private async persistInsightsRevocation(meta: SessionMeta): Promise<void> {

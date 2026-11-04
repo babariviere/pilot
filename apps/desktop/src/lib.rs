@@ -165,6 +165,8 @@ mod model_wait_fixture;
 pub use chat_editor::project_creation_probe::run_project_creation_probe;
 mod delivery_store;
 mod diagnostic_repair;
+mod insights;
+mod insights_view;
 mod interaction;
 mod jump;
 mod jump_view;

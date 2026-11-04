@@ -33,6 +33,7 @@ pub(crate) struct WriteState {
     pub(crate) mission: Option<crate::mission_conversion::Reply>,
     pub(crate) project: Option<crate::project_registration::Reply>,
     pub(crate) repair: Option<crate::diagnostic_repair::Reply>,
+    pub(crate) insights: Option<crate::insights::Reply>,
     pub(crate) project_receipt: Option<(String, String)>,
     pub(crate) model: Option<crate::chat_models::Reply>,
     /// The latest explicit database-access decision. Volatile: never resent.
@@ -125,6 +126,10 @@ pub(crate) enum WriteCommand {
         specialist: String,
         request: u64,
         action: crate::diagnostic_repair::Action,
+    },
+    Insights {
+        request: u64,
+        action: crate::insights::Action,
     },
     Submit {
         key: String,
@@ -709,6 +714,40 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                             if store.is_faulted() {
                                 status.error = Some(
                                     "Private repair receipt could not be saved. Keep unsaved text before restarting.",
+                                );
+                            }
+                            Ok("")
+                        }
+                        Some(WriteCommand::Insights { request, action }) => {
+                            use crate::insights::{Action, Outcome, Reply};
+                            let slot = match &action {
+                                Action::Start(request) => request.slot(),
+                                Action::Check { slot } => slot.clone(),
+                            };
+                            status.insights = Some(Reply {
+                                slot: slot.clone(),
+                                request,
+                                outcome: None,
+                            });
+                            publish(updates, replace, status.clone());
+                            let result = DeliveryOwner {
+                                store,
+                                status: &mut status,
+                                channels: Some(&channels),
+                                autosave: &mut autosave,
+                                closing: &mut closing,
+                            }
+                            .insights(&client, &options, action)
+                            .await;
+                            status.insights = Some(Reply {
+                                slot, request,
+                                outcome: Some(result.unwrap_or(Outcome::Unknown(
+                                    "Closing. Any saved Insights action stays unconfirmed and is never resent automatically.",
+                                ))),
+                            });
+                            if store.is_faulted() {
+                                status.error = Some(
+                                    "Private Insights receipt could not be saved. Keep unsaved text before restarting.",
                                 );
                             }
                             Ok("")

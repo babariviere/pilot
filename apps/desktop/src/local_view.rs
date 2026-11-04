@@ -90,6 +90,8 @@ mod history_shortcut_tests;
 #[cfg(feature = "native-probes")]
 #[path = "inbox_probe.rs"]
 pub(crate) mod inbox_probe;
+#[path = "insights_navigation.rs"]
+mod insights_navigation;
 #[path = "jump_navigation.rs"]
 mod jump_navigation;
 #[cfg(feature = "native-probes")]
@@ -389,6 +391,12 @@ pub struct LocalViewer {
     artifacts: Entity<crate::artifact_view::ArtifactPane>,
     artifacts_open: bool,
     repair: diagnostic_repair_view::RepairPanel,
+    /// The open Insights access/setup panel and its event subscription.
+    insights: Option<(Entity<crate::insights_view::Panel>, Subscription)>,
+    insights_return: Option<gpui_kit::FocusHandle>,
+    /// Writer-retained Insights attempts and its latest reply, for a panel opened later.
+    insights_book: Option<Arc<crate::delivery_store::Book>>,
+    insights_reply: Option<crate::insights::Reply>,
     #[cfg(feature = "native-probes")]
     render_count: u64,
 }
@@ -685,6 +693,12 @@ impl LocalViewer {
                         if view.repair.accept(&state) {
                             cx.notify();
                         }
+                        view.insights_book = state.book.clone();
+                        view.insights_reply = state.insights.clone();
+                        if let Some((panel, _)) = &view.insights {
+                            let (book, reply) = (state.book.as_ref(), state.insights.as_ref());
+                            panel.update(cx, |p, cx| p.accept(book, reply, cx));
+                        }
                         view.add_project
                             .update(cx, |form, cx| form.accept(&state, cx));
                         if let Some(reply) = &state.project
@@ -780,6 +794,7 @@ impl LocalViewer {
                 subagents: Default::default(),
                 running_jobs: Default::default(),
                 diagnostic: None,
+                insights: false,
                 cwd: String::new(),
                 project_id: None,
                 model_configuration: None,
@@ -809,6 +824,7 @@ impl LocalViewer {
                 subagents: Default::default(),
                 running_jobs: Default::default(),
                 diagnostic: None,
+                insights: false,
                 cwd: String::new(),
                 project_id: None,
                 model_configuration: None,
@@ -838,6 +854,7 @@ impl LocalViewer {
                 subagents: Default::default(),
                 running_jobs: Default::default(),
                 diagnostic: None,
+                insights: false,
                 cwd: String::new(),
                 project_id: None,
                 model_configuration: None,
@@ -1044,6 +1061,7 @@ impl LocalViewer {
             subagents: Default::default(),
             running_jobs: Default::default(),
             diagnostic: None,
+            insights: false,
             cwd: String::new(),
             project_id: None,
             model_configuration: None,
@@ -1331,6 +1349,22 @@ impl LocalViewer {
                     {
                         view.open_knowledge(project, entry.clone(), window, cx);
                     }
+                    Event::SetUpInsights {
+                        key,
+                        title,
+                        project,
+                        generation,
+                    } if view.page == Page::Mission(key.clone())
+                        && view.missions.read(cx).current(*generation) =>
+                    {
+                        view.open_insights_setup(
+                            key.id.clone(),
+                            title.clone(),
+                            project.clone(),
+                            window,
+                            cx,
+                        );
+                    }
                     Event::Chat {
                         key,
                         id,
@@ -1487,6 +1521,7 @@ impl LocalViewer {
                             subagents: Default::default(),
                             running_jobs: Default::default(),
                             diagnostic: None,
+                            insights: false,
                             cwd: String::new(),
                             project_id: None,
                             model_configuration: None,
@@ -1754,6 +1789,10 @@ impl LocalViewer {
             artifacts: cx.new(|_| crate::artifact_view::ArtifactPane::new()),
             artifacts_open: false,
             repair: Default::default(),
+            insights: None,
+            insights_return: None,
+            insights_book: None,
+            insights_reply: None,
             #[cfg(feature = "native-probes")]
             render_count: 0,
         }
@@ -2498,6 +2537,7 @@ impl LocalViewer {
                     subagents: Default::default(),
                     running_jobs: Default::default(),
                     diagnostic: None,
+                    insights: false,
                     cwd: String::new(),
                     project_id: None,
                     attention: None,
@@ -3381,6 +3421,7 @@ mod refresh_tests {
                         subagents: Default::default(),
                         running_jobs: Default::default(),
                         diagnostic: None,
+                        insights: false,
                         cwd: String::new(),
                         project_id: None,
                         attention: None,

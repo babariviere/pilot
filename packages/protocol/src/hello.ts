@@ -18,6 +18,8 @@ export interface DaemonHello {
 
 /** Availability on this host, not permissions granted by a client or lifecycle control for another host. */
 export interface DaemonCapabilities {
+	/** Explicit native Insights setup, passive reads and lifecycle confirmations. */
+	insights?: 1;
 	/** Bounded active-session cwd path candidates; no home/project-root fallback. */
 	sessionPathCandidates?: 1;
 	/** Failure-fenced passive next-attempt model preferences. */

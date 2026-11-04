@@ -658,6 +658,16 @@ export class MissionStore {
 							: "todo";
 			const body = [
 				`Finding: ${lifecycle}. Priority: ${draft.priority}.`,
+				`Affects: ${draft.targets.length ? draft.targets.map((target) => `${target.label} (${target.projectId})`).join(", ") : "unspecified"}`,
+				...(draft.cost
+					? [
+							`Cost estimate (not measured): ${draft.cost.estimate}`,
+							`Baseline: ${draft.cost.baseline}`,
+							`Assumptions: ${draft.cost.assumptions}`,
+							`Quality risks: ${draft.cost.qualityRisks}`,
+							`Later measured result: ${draft.cost.laterResult || "not yet measured"}`,
+						]
+					: []),
 				"Tracking only. Implementation requires separate approval and work.",
 				draft.observation,
 				`Proposal: ${draft.proposedChange}`,

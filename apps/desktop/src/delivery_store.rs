@@ -199,6 +199,8 @@ pub(crate) struct Book {
     /// One retained diagnostic repair start per diagnostics chat. Open ones are never replaced.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) repairs: BTreeMap<String, crate::diagnostic_repair::Attempt>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) insights: BTreeMap<String, crate::insights::Attempt>,
     /// Operation ids the user explicitly abandoned. They are never retried or executed again.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) abandoned: Vec<String>,
@@ -345,6 +347,7 @@ impl Book {
             project_registrations: BTreeMap::new(),
             model_changes: BTreeMap::new(),
             repairs: BTreeMap::new(),
+            insights: BTreeMap::new(),
             abandoned: Vec::new(),
         }
     }
@@ -368,6 +371,7 @@ impl Book {
             || self.project_registrations.len() > 32
             || self.model_changes.len() > 32
             || self.repairs.len() > 32
+            || self.insights.len() > 64
             || self.abandoned.len() > ABANDONED_CAP
         {
             return Err(
@@ -398,6 +402,22 @@ impl Book {
                 || hash(&op.payload) != op.payload_hash
             {
                 return Err("Stored repair start is corrupt.");
+            }
+        }
+        for (slot, attempt) in &self.insights {
+            attempt.validate(slot)?;
+            let op = &attempt.operation;
+            if op.schema_version != 1
+                || !token(&op.operation_id)
+                || !token(&op.target_id)
+                || op.producer_id != self.producer_id
+                || op.sequence == 0
+                || op.sequence >= self.next_sequence
+                || op.origin != self.host
+                || op.destination != self.host
+                || hash(&op.payload) != op.payload_hash
+            {
+                return Err("Stored Insights action is corrupt.");
             }
         }
         for (index, id) in self.abandoned.iter().enumerate() {
@@ -1026,6 +1046,74 @@ impl Store {
             }
             attempt.state = state;
             attempt.reason = reason.map(|r| r.chars().take(512).collect());
+            Ok(())
+        })
+    }
+
+    /// Persist exact Insights bytes before any POST. Open slots cannot be replaced.
+    pub(crate) fn prepare_insights(
+        &mut self,
+        request: &crate::insights::Request,
+    ) -> Result<Operation, Failure> {
+        use crate::insights::{Attempt, State};
+        request.validate()?;
+        let slot = request.slot();
+        self.change(|book| {
+            if book.insights.get(&slot).is_some_and(Attempt::open) {
+                return Err("An Insights action is still unconfirmed. Check it; nothing new was sent.");
+            }
+            if !book.insights.contains_key(&slot) && book.insights.len() >= 64 {
+                let retired = book.insights.iter().find(|(_, a)| !a.open()).map(|(slot, _)| slot.clone());
+                let Some(retired) = retired else {
+                    return Err("Unconfirmed Insights action storage is full. Nothing was discarded or sent.");
+                };
+                book.insights.remove(&retired);
+            }
+            let sequence = book.next_sequence;
+            book.next_sequence += 1;
+            let payload = request.payload();
+            let operation = Operation {
+                schema_version: 1,
+                operation_id: Uuid::new_v4().to_string(),
+                producer_id: book.producer_id.clone(),
+                sequence,
+                origin: book.host.clone(),
+                destination: book.host.clone(),
+                kind: request.kind().into(),
+                target_id: request.target().unwrap_or_else(|| Uuid::new_v4().to_string()),
+                payload_hash: hash(&payload),
+                payload,
+            };
+            book.insights.insert(slot.clone(), Attempt {
+                slot, operation: operation.clone(), state: State::Unknown, reason: None, result: None,
+            });
+            Ok(operation)
+        })
+    }
+
+    pub(crate) fn finish_insights(
+        &mut self,
+        slot: &str,
+        operation_id: &str,
+        state: crate::insights::State,
+        reason: Option<String>,
+        result: Option<serde_json::Value>,
+    ) -> Result<(), Failure> {
+        self.change(|book| {
+            let attempt = book
+                .insights
+                .get_mut(slot)
+                .filter(|a| a.operation.operation_id == operation_id)
+                .ok_or("The Insights action changed. Its original record was kept.")?;
+            let reason = reason.map(|r| r.chars().take(512).collect());
+            if !attempt.open()
+                && (attempt.state != state || attempt.reason != reason || attempt.result != result)
+            {
+                return Err("A settled Insights receipt cannot be replaced.");
+            }
+            attempt.state = state;
+            attempt.reason = reason;
+            attempt.result = result;
             Ok(())
         })
     }

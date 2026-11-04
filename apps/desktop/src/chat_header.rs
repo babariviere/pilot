@@ -197,6 +197,7 @@ impl LocalViewer {
                     .gap_0p5()
                     .flex_none()
                     .children(self.conversation_links_action(cx))
+                    .children(self.insights_action(cx))
                     .children(self.workspace_changes_action(cx))
                     .when(
                         !self.state.artifacts.is_empty() || self.artifacts_open,

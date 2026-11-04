@@ -78,6 +78,7 @@ import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import type { GitHubImportService } from "./github-import.ts";
 import type { GitHubSetupService } from "./github-setup.ts";
+import { admitInsightsOperation, insightsFindingsPage, isInsightsOperation } from "./insights-native.ts";
 import type { LiveUpdate, LiveUpdateIdentity, LiveUpdateService, LiveUpdateTarget } from "./live-update.ts";
 import { MachineInformationReader } from "./machine.ts";
 import { McpSetupError, McpSetupStore } from "./mcp-setup.ts";
@@ -618,6 +619,10 @@ export function createDaemonServer(
 		}
 		if (!payload || typeof payload !== "object" || Array.isArray(payload))
 			throw new OperationRejected("Expected operation object");
+		if (isInsightsOperation(op.kind)) {
+			if (!missions) throw new OperationRejected("Insights is unavailable");
+			return admitInsightsOperation(sessions, missions.store.insights, op, payload as Record<string, unknown>);
+		}
 		const attached = op.kind === "chat-create-attached" || op.kind === "chat-send-attached";
 		if (attached) {
 			const body = payload as AttachmentChatPayload<SpawnRequest | SendRequest>;
@@ -898,6 +903,28 @@ export function createDaemonServer(
 			if (!session) throw new NotFound("Unknown session");
 			return json(res, 200, await repositories.file(session.cwd, url.searchParams.get("path") ?? ""));
 		}
+		if (parts[1] === "insights" && parts[2] === "sessions") {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
+			if (parts.length !== 4 && !(parts.length === 5 && parts[4] === "findings"))
+				throw new HttpError(404, "Not found");
+			const id = parts[3]!;
+			const status = sessions.insightsStatus(id);
+			if (!status) return json(res, 404, { error: "not_insights" });
+			if (parts.length === 4) return json(res, 200, status);
+			const rawCursor = url.searchParams.get("cursor") ?? "0";
+			const cursor = Number(rawCursor);
+			if (!/^\d+$/u.test(rawCursor) || !Number.isSafeInteger(cursor))
+				throw new HttpError(400, "Invalid findings cursor");
+			if (!missions) return json(res, 409, { error: "insights_unavailable" });
+			try {
+				return json(res, 200, await insightsFindingsPage(sessions, missions.store.insights, id, cursor));
+			} catch (error) {
+				if (error instanceof Conflict || error instanceof NotFound)
+					return json(res, 409, { error: "insights_unavailable" });
+				throw error;
+			}
+		}
 		if (parts[1] === "operations" && req.method === "POST" && parts.length <= 3) {
 			if (!journal) throw new ServiceUnavailable("Durable operation domain unavailable");
 			if (parts[2] === "release-attachments") {
@@ -913,7 +940,7 @@ export function createDaemonServer(
 			const operation = await readJson<DurableOperation>(req);
 			if (parts[2] !== "receipt" && typeof operation?.kind === "string" && isRetiredDevboxOperation(operation.kind))
 				throw new HttpError(410, "Remote devbox operations are retired; stored receipts are retained");
-			if (operation?.kind === "repair-create" && parts[2] !== "receipt") {
+			if ((operation?.kind === "repair-create" || isInsightsOperation(operation?.kind)) && parts[2] !== "receipt") {
 				if (!githubSetup) throw new ServiceUnavailable("Native repair confirmation is unavailable");
 				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
 			}
@@ -935,6 +962,7 @@ export function createDaemonServer(
 				...hello,
 				capabilities: {
 					...hello.capabilities,
+					insights: missions && githubSetup && hello.lineageId ? 1 : undefined,
 					automations: chatSettings?.automationsEnabled() ? 1 : undefined,
 					guardedMissionConversion: missions ? true : undefined,
 					passiveMissionLifecycle: missions ? true : undefined,

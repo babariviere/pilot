@@ -8,6 +8,54 @@ export type InsightsLifecycle =
 	| "deferred"
 	| "dismissed";
 
+/** Disclosure version acknowledged by explicit native setup. */
+export type InsightsDisclosure = "insights-history-v1";
+
+export interface InsightsStatus {
+	sessionId: string;
+	enabled: boolean;
+	revision: number;
+	projectId: string;
+	missionId: string;
+	setupPending: boolean;
+	archived: boolean;
+	available: boolean;
+	disclosure: InsightsDisclosure;
+}
+
+export interface InsightsFindingSummary {
+	key: string;
+	revision: number;
+	taskId: string;
+	lifecycle: InsightsLifecycle;
+	title: string;
+	priority: InsightsFindingDraft["priority"];
+	targets: InsightsFindingDraft["targets"];
+	cost: NonNullable<InsightsFindingDraft["cost"]> | null;
+}
+
+export interface InsightsFindingsPage {
+	items: InsightsFindingSummary[];
+	nextCursor: number | null;
+}
+
+export interface InsightsCreatePayload {
+	projectId: string;
+	missionId: string;
+	model: string;
+	thinking?: string;
+	disclosure: InsightsDisclosure;
+}
+
+export interface InsightsRevokePayload {
+	expectedRevision: number;
+}
+
+export interface InsightsLifecyclePayload extends InsightsRevokePayload {
+	key: string;
+	lifecycle: InsightsLifecycle;
+}
+
 export interface InsightsFindingDraft {
 	title: string;
 	priority: "low" | "medium" | "high";

@@ -219,6 +219,59 @@ impl DeliveryOwner<'_> {
         Ok(outcome)
     }
 
+    /// Insights uses the same durable single-send and explicit Check boundary as repair.
+    pub(super) async fn insights(
+        &mut self,
+        client: &reqwest::Client,
+        options: &LocalOptions,
+        action: crate::insights::Action,
+    ) -> Result<crate::insights::Outcome, Failure> {
+        use crate::insights::{self, Action, Outcome};
+        if self.store.book.host != options.host() {
+            return Ok(Outcome::Refused(
+                "Local source differs from private state. Nothing was sent.",
+            ));
+        }
+        let (slot, operation, outcome) = match action {
+            Action::Start(request) => {
+                let operation = match self.store.prepare_insights(&request) {
+                    Ok(operation) => operation,
+                    Err(error) => return Ok(Outcome::Refused(error)),
+                };
+                self.prepared(self.status.notice);
+                let outcome = self
+                    .effect(async { Ok(insights::execute(client, options, &operation).await) })
+                    .await?;
+                (request.slot(), operation, outcome)
+            }
+            Action::Check { slot } => {
+                let Some(attempt) = self.store.book.insights.get(&slot).cloned() else {
+                    return Ok(Outcome::Refused("There is no Insights action to check."));
+                };
+                if !attempt.open() {
+                    return Ok(insights::outcome(&attempt));
+                }
+                let outcome = self
+                    .effect(async {
+                        Ok(insights::check(client, options, &attempt.operation).await)
+                    })
+                    .await?;
+                (slot, attempt.operation, outcome)
+            }
+        };
+        if let Some((state, reason)) = outcome.state() {
+            let result = match &outcome {
+                Outcome::Accepted(result) => Some(result.clone()),
+                _ => None,
+            };
+            // A storage fault cannot undo a receipt; report the known outcome in memory.
+            let _ =
+                self.store
+                    .finish_insights(&slot, &operation.operation_id, state, reason, result);
+        }
+        Ok(outcome)
+    }
+
     /// Model selection uses the same FIFO writer and edit mailbox as delivery.
     pub(super) async fn model(
         &mut self,

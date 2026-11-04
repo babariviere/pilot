@@ -71,6 +71,13 @@ pub(crate) enum Event {
         id: String,
         generation: u64,
     },
+    /// Explicit setup of an Insights report chat for this active mission.
+    SetUpInsights {
+        key: Key,
+        title: String,
+        project: String,
+        generation: u64,
+    },
     /// Open project knowledge: the list, or an exact linked entry and its pin.
     Knowledge {
         key: Key,
@@ -989,6 +996,7 @@ impl Browser {
         let enabled = self.online && self.current(generation);
         let status = d.status.clone();
         let key = d.key.clone();
+        let (title, project) = (d.title.clone(), d.project.clone());
         let goal = (!d.goal.is_empty()).then(|| d.goal.clone());
         Some(
             ui::icon_action(
@@ -1017,6 +1025,26 @@ impl Browser {
                         });
                     },
                 ));
+                if status == "active" {
+                    let insights = weak.clone();
+                    let (key, title, project) = (key.clone(), title.clone(), project.clone());
+                    menu = menu.item(
+                        PopupMenuItem::new("Set up Insights chat…")
+                            .disabled(!enabled)
+                            .on_click(move |_, _, cx| {
+                                let _ = insights.update(cx, |v, cx| {
+                                    if v.generation == generation {
+                                        cx.emit(Event::SetUpInsights {
+                                            key: key.clone(),
+                                            title: title.clone(),
+                                            project: project.clone(),
+                                            generation,
+                                        });
+                                    }
+                                });
+                            }),
+                    );
+                }
                 for (action, label) in [
                     (
                         crate::mission_lifecycle::Action::Archive,

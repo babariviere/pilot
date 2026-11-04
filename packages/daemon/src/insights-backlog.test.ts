@@ -131,6 +131,13 @@ test("stable finding keys deduplicate atomically, append evidence, CAS and prese
 	assert.equal(f.store.task(f.mission.id, f.ordinary.id).title, "Ordinary coordination task");
 	assert.equal(f.store.task(f.mission.id, first.taskId).status, "todo");
 	assert.match(f.store.task(f.mission.id, first.taskId).body!, /Tracking only/);
+	const body = f.store.task(f.mission.id, first.taskId).body!;
+	assert.match(body, /Affects: Project workflow \(foreign-project\)/);
+	assert.match(body, /Cost estimate \(not measured\): Unknown monetary saving\./);
+	assert.match(body, /Baseline: unknown/);
+	assert.match(body, /Assumptions: Synthetic repeated search count only/);
+	assert.match(body, /Quality risks: Keep safety and completion quality unchanged/);
+	assert.match(body, /Later measured result: unknown/);
 	assert.ok(f.validations() >= 3);
 	await assert.rejects(
 		f.store.insights.call(f.admission, { ...amend, operationId: request.operationId }),
@@ -141,6 +148,20 @@ test("stable finding keys deduplicate atomically, append evidence, CAS and prese
 	assert.deepEqual(await f.store.insights.call(f.admission, { action: "receipt", operationId: "lost-unknown" }), {
 		state: "unknown",
 	});
+});
+
+test("finding task projection keeps unspecified targets and missing estimates explicit", async (t) => {
+	const f = fixture();
+	t.after(() => f.store.close());
+	const request = propose();
+	const { cost: _cost, ...withoutCost } = request.draft;
+	const result = (await f.store.insights.call(f.admission, {
+		...request,
+		draft: { ...withoutCost, targets: [] },
+	})) as { taskId: string };
+	const body = f.store.task(f.mission.id, result.taskId).body!;
+	assert.match(body, /Affects: unspecified/);
+	assert.doesNotMatch(body, /Cost estimate|Baseline:|Later measured result/);
 });
 
 test("evidence keys are immutable and failed appends roll back all evidence and revisions", async (t) => {

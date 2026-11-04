@@ -246,6 +246,8 @@ pub(crate) struct Chat {
     pub(crate) running_jobs: std::sync::Arc<[crate::session_jobs::Job]>,
     /// Persisted diagnostics role and its structured repair proposal, if any.
     pub(crate) diagnostic: Option<std::sync::Arc<crate::diagnostic_repair::Specialist>>,
+    /// Persisted Insights report role. Its authority is daemon-enforced, never derived here.
+    pub(crate) insights: bool,
 }
 impl Chat {
     /// Row reason: attention, else live signal, else a non-routine raw state.
@@ -297,7 +299,17 @@ pub(crate) fn diagnostic_local(value: &Value) -> bool {
 }
 
 pub(crate) fn messageable_local(value: &Value) -> bool {
-    interactive_local(value) || diagnostic_local(value)
+    interactive_local(value) || diagnostic_local(value) || insights_local(value)
+}
+
+/// A restricted Insights report chat accepts discussion. Sending never converts it to
+/// Build or widens access; pilotd rechecks its grant at input admission.
+pub(crate) fn insights_local(value: &Value) -> bool {
+    value["role"] == "insights"
+        && value["mode"] == "ask"
+        && value["control"] != true
+        && value["archivedAt"].is_null()
+        && value["continuedTo"].is_null()
 }
 
 pub(crate) fn chat(value: &Value) -> Option<Chat> {
@@ -340,6 +352,7 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
         subagents: crate::session_subagents::read(value),
         running_jobs: crate::session_jobs::read(value),
         diagnostic: crate::diagnostic_repair::specialist(value).map(std::sync::Arc::new),
+        insights: value["role"] == "insights",
     })
 }
 
