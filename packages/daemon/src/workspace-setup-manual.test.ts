@@ -84,7 +84,7 @@ test("manual setup refuses disabled, ineligible and busy chats without changing 
 		{ automation: { runs: [], setup: { state: "pending" } } },
 	]) {
 		f.sessions["metas"].set(chat.id, { ...original, ...extra } as typeof original);
-		await assert.rejects(f.sessions.rerunWorkspaceSetup(chat.id), undefined, JSON.stringify(extra));
+		await assert.rejects(f.sessions.rerunWorkspaceSetup(chat.id), JSON.stringify(extra));
 	}
 	f.sessions["metas"].set(chat.id, original);
 	const thaw = f.sessions.freezeAdmissions();

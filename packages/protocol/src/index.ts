@@ -1042,7 +1042,7 @@ export interface MissionBriefWrite {
 	expectedRevision: number;
 }
 
-/** Binding statement. Agents may add decisions; only the user edits or removes them. */
+/** Active decisions are binding. Text edits/removals remain user-only. */
 export type MissionDecisionAudience = "all" | "coordinator" | "reference";
 
 export interface MissionDecision {
@@ -1050,12 +1050,14 @@ export interface MissionDecision {
 	number: number;
 	audience: MissionDecisionAudience;
 	text: string;
+	/** Explicitly retired guidance. Target identity survives a later user removal; text is read separately. */
+	replacement?: { id: string; number: number; at: number };
 	authorSessionId?: string;
 	createdAt: number;
 	updatedAt: number;
 }
 
-/** Coordinator suggestion. The recorded decision stays binding until the user accepts. */
+/** Coordinator suggestion. Only user acceptance edits or removes the recorded text. */
 export interface MissionDecisionProposal {
 	id: string;
 	decisionId: string;

@@ -21,6 +21,14 @@ planning changes. Evidence alone is not acceptance or permission to expand scope
 Coordinators can answer ordinary member questions within the approved mission scope.
 Replies are attributed to the coordinator. Database-access approvals remain yours.
 
+Coordinators can record an already-authorized decision replacement with
+`mission({action: "supersede", decisionId: "D7", replacementDecisionId: "D9"})`.
+Both decisions must belong to this mission. The old text, history and task pins stay
+traceable, but the old decision is no longer binding. Replacement text keeps its own
+audience; pins are not redirected. This does not approve policy or change the user-only
+decision edit/removal and proposal-approval rules. Exact retries are safe; relinking
+and cycles are rejected. Existing decisions stay active until explicitly replaced.
+
 ## Finish or archive
 
 **Mark done** is available when all remaining tasks are done, excluding dropped tasks,

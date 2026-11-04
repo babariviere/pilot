@@ -84,6 +84,8 @@ export interface MissionContext {
 	/** Tasks this chat owns. */
 	tasks: Array<{ number: number; title: string; status: string; assignmentRevision?: number }>;
 	decisions: string[];
+	/** Relevant historical links only, never replacement text or implicit repinning. */
+	replacedDecisions?: Array<{ number: number; replacementNumber: number }>;
 	/** Selected prompt content, used to avoid duplicate decision reads. */
 	decisionEntries?: Array<{ id: string; text: string }>;
 	remainingDecisions?: number;
@@ -92,7 +94,9 @@ export interface MissionContext {
 	/** All decision content/audiences and task pins, for live notices only. */
 	decisionVersion?: string;
 	/** Latest decision state for specific live notices, separate from the frozen prompt selection. */
-	decisionState?: Array<Pick<MissionDecision, "id" | "number" | "text" | "audience"> & { selected: boolean }>;
+	decisionState?: Array<
+		Pick<MissionDecision, "id" | "number" | "text" | "audience" | "replacement"> & { selected: boolean }
+	>;
 }
 
 /** Ask reads either the original checkout or a pinned tree in a daemon-owned bare object store. */
@@ -208,6 +212,10 @@ export function missionPrompt(
 			`- Decisions (binding, they override the brief): ${mission.decisions.map((d) => d.replace(/\s+/g, " ")).join(" | ")}`,
 		);
 	if (mission.remainingDecisions) lines.push(`- ${mission.remainingDecisions} more decisions: mission decisions.`);
+	if (mission.replacedDecisions?.length)
+		lines.push(
+			`- Replaced decisions (not binding; historical pins unchanged): ${mission.replacedDecisions.map((d) => `D${d.number} replaced by D${d.replacementNumber}`).join(" | ")}. Read mission decisions for replacement text.`,
+		);
 	if (mission.tickets?.length) {
 		lines.push(
 			"- Before creating/editing a PR for a linked ticket, read mission prGuidance with taskId. Earlier contributors use Related to, not closing directives; only the final contributor uses Closes after every other contributor is Done and live safeguards allow. Recheck after task/link changes. Avoid ticket IDs in earlier branch names and commit messages, which can trigger independent Linear automations. Flag unsafe PRs for correction, never silently edit them.",

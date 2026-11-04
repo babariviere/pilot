@@ -375,7 +375,8 @@ test("Pilot diagram guidance is conditional on artifact availability", () => {
 	assert.match(enabled, /short explanation/);
 	assert.match(enabled, /Skip it for simple answers/);
 	assert.match(enabled, /text only/);
-	assert.match(enabled, /Artifact preview is optional\. If it is unavailable or fails, publish without it/);
+	assert.match(enabled, /Mermaid diagram in a visual artifact \(ui\.mermaid\)/);
+	assert.doesNotMatch(enabled, /Artifact preview|artifact_preview/);
 	for (const prompt of [pilotPrompt({}), pilotPrompt({}, false)])
 		assert.doesNotMatch(prompt, /artifact|diagram|Mermaid|preview/);
 });

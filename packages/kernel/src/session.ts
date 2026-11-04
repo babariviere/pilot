@@ -92,7 +92,7 @@ import { createLiveUpdateTools } from "./live-update-tool.ts";
 import { createManualCompaction, queueDuringCompaction } from "./manual-compaction.ts";
 import { mcpActivity } from "./mcp-activity.ts";
 import { createMemoryTools, type MemoryCall } from "./memory-tools.ts";
-import { decisionNotice } from "./mission-decisions.ts";
+import { type AcknowledgedDecision, decisionNotice } from "./mission-decisions.ts";
 import { createMissionTool, MISSION_TOOL, type MissionCall } from "./mission-tools.ts";
 import { continueModelInPlace } from "./model-continuation.ts";
 import { rebuildContext } from "./model-rebuild.ts";
@@ -231,7 +231,7 @@ export class KernelSession {
 	#latestMission?: MissionContext;
 	#decisionWrites = 0;
 	#deferredMissions: Array<MissionContext | undefined> = [];
-	#ownDecisionAdditions = new Map<string, { number: number; text: string; audience: string }>();
+	#ownDecisionAdditions = new Map<string, AcknowledgedDecision>();
 	/** Last UI-published run state. Current work is read from the adapter's activity source. */
 	#reportedWorking = false;
 	/** Live compaction tasks, which can summarize an idle conversation without a run. */
@@ -396,7 +396,11 @@ export class KernelSession {
 			? async (action, args) => {
 					const owner = openedSession;
 					const missionId = mission.current?.id;
-					const track = action === "decide" && mission.current?.coordinator === "self" && owner && missionId;
+					const track =
+						(action === "decide" || action === "supersede") &&
+						mission.current?.coordinator === "self" &&
+						owner &&
+						missionId;
 					if (track) owner.#decisionWrites++;
 					try {
 						const result = await hooks.callMission!(
@@ -412,14 +416,21 @@ export class KernelSession {
 							typeof result === "object" &&
 							!Array.isArray(result)
 						) {
-							const { id, number, text, audience } = result;
+							const { id, number, text, audience, replacement } = result;
 							if (
 								typeof id === "string" &&
 								typeof number === "number" &&
 								typeof text === "string" &&
 								typeof audience === "string"
 							)
-								owner.#ownDecisionAdditions.set(id, { number, text, audience });
+								owner.#ownDecisionAdditions.set(id, {
+									number,
+									text,
+									audience: audience as AcknowledgedDecision["audience"],
+									...(replacement && typeof replacement === "object"
+										? { replacement: replacement as AcknowledgedDecision["replacement"] }
+										: {}),
+								});
 						}
 						return result;
 					} finally {
@@ -1338,10 +1349,15 @@ export class KernelSession {
 					await this.conversation.submit({ type: "write", requestId, entry }, BACKGROUND_CONTEXT);
 				}).catch((error: unknown) => console.warn("pilot: could not place decision notice", error));
 			}
+			// Keep the stable prompt, except explicitly retired guidance must stop being binding.
+			const replaced = new Map(
+				(context.decisionState ?? []).filter((d) => d.replacement).map((d) => [d.id, d.number]),
+			);
+			const replacedLabels = new Set([...replaced.values()].map((number) => `D${number}`));
 			this.#mission.current = {
 				...context,
-				decisions: previous.decisions,
-				decisionEntries: previous.decisionEntries,
+				decisions: previous.decisions.filter((d) => !replacedLabels.has(d.split(":", 1)[0]!)),
+				decisionEntries: previous.decisionEntries?.filter((d) => !replaced.has(d.id)),
 				remainingDecisions: previous.remainingDecisions,
 			};
 		} else {

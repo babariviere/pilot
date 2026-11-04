@@ -826,12 +826,13 @@ export class MissionService {
 				.filter((task) => task.sessionId === sessionId && isOpen(task))
 				.flatMap((task) => task.decisionIds ?? []),
 		);
-		const selected = detail.decisions.filter(
+		const relevant = detail.decisions.filter(
 			(decision) =>
 				decision.audience === "all" ||
 				(decision.audience === "coordinator" && mission.coordinatorSessionId === sessionId) ||
 				pins.has(decision.id),
 		);
+		const selected = relevant.filter((decision) => !decision.replacement);
 		const owned = new Map(
 			detail.tasks
 				.filter((task) => task.sessionId === sessionId && isOpen(task))
@@ -862,12 +863,20 @@ export class MissionService {
 					...(task.assignment ? { assignmentRevision: task.assignment.revision } : {}),
 				})),
 			decisions: selected.map((decision) => `D${decision.number}: ${decision.text}`),
+			...(relevant.some((d) => d.replacement)
+				? {
+						replacedDecisions: relevant
+							.filter((d) => d.replacement)
+							.map((d) => ({ number: d.number, replacementNumber: d.replacement!.number })),
+					}
+				: {}),
 			decisionEntries: selected.map(({ id, text }) => ({ id, text })),
-			decisionState: detail.decisions.map(({ id, number, text, audience }) => ({
+			decisionState: detail.decisions.map(({ id, number, text, audience, replacement }) => ({
 				id,
 				number,
 				text,
 				audience,
+				...(replacement ? { replacement } : {}),
 				selected: selectedIds.has(id),
 			})),
 			remainingDecisions: detail.decisions.length - selected.length,
@@ -887,8 +896,11 @@ export class MissionService {
 					...(ref.taskId ? { task: owned.get(ref.taskId) } : {}),
 				})),
 			decisionVersion:
-				JSON.stringify(detail.decisions.map(({ id, text, audience }) => [id, text, audience])) +
-				JSON.stringify([...pins]),
+				JSON.stringify(
+					detail.decisions.map(({ id, text, audience, replacement }) =>
+						replacement ? [id, text, audience, replacement] : [id, text, audience],
+					),
+				) + JSON.stringify([...pins]),
 		};
 	}
 
@@ -1295,6 +1307,7 @@ export class MissionService {
 		if (
 			([
 				"propose",
+				"supersede",
 				"delete",
 				"group",
 				"phase",
@@ -1676,9 +1689,17 @@ export class MissionService {
 					retired: prompt.filter((entry) => !detail.decisions.some((decision) => decision.id === entry.id)),
 					decisions: detail.decisions
 						.filter(
-							(decision) => !prompt.some((entry) => entry.id === decision.id && entry.text === decision.text),
+							(decision) =>
+								decision.replacement ||
+								!prompt.some((entry) => entry.id === decision.id && entry.text === decision.text),
 						)
-						.map(({ id, number, text, audience }) => ({ id, number, text, audience })),
+						.map(({ id, number, text, audience, replacement }) => ({
+							id,
+							number,
+							text,
+							audience,
+							...(replacement ? { replacement } : {}),
+						})),
 				};
 			}
 			case "activity": {
@@ -1817,6 +1838,11 @@ export class MissionService {
 					args.reason,
 					actor,
 				);
+			case "supersede":
+				this.assertSameProject(sessionId, missionId);
+				if (!str("decisionId") || !str("replacementDecisionId"))
+					throw new Error("supersede requires decisionId and replacementDecisionId");
+				return this.store.supersedeDecision(missionId, str("decisionId")!, str("replacementDecisionId")!, actor);
 			case "decide":
 				return this.store.addDecision(missionId, args.text, actor, args.audience);
 			case "comment":
@@ -2057,7 +2083,13 @@ class MissionAgentView {
 				? {
 						decisions: this.detail.decisions
 							.filter((d) => task.decisionIds?.includes(d.id))
-							.map(({ id, number, text, audience }) => ({ id, number, text, audience })),
+							.map(({ id, number, text, audience, replacement }) => ({
+								id,
+								number,
+								text,
+								audience,
+								...(replacement ? { replacement } : {}),
+							})),
 					}
 				: {}),
 			resources: this.detail.resources.filter((ref) => ref.taskId === task.id).map((ref) => this.link(ref)),

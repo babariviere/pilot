@@ -426,6 +426,145 @@ test("coordinator decision acknowledgements suppress only exact own additions", 
 	assert.ok(entries.some((entry) => JSON.stringify(entry.data).includes("D3 added")));
 });
 
+for (const origin of ["own", "external", "lost acknowledgement"] as const) {
+	test(`replacement ${origin} removes binding prompt text, preserves scoped text and passive notices`, async (t) => {
+		const f = await fixture(t);
+		const open = NativeAdapter.open;
+		t.mock.method(NativeAdapter, "open", (options: NativeAdapterOptions) =>
+			open.call(NativeAdapter, {
+				...options,
+				...f.options,
+				sessionOptions: { ...options.sessionOptions, ...f.options.sessionOptions },
+			}),
+		);
+		const old = { id: "old", number: 1, text: "Original binding rule", audience: "all" as const, selected: true };
+		const target = {
+			id: "target",
+			number: 2,
+			text: "Scoped replacement text",
+			audience: "reference" as const,
+			selected: false,
+		};
+		const mission: MissionContext = {
+			id: "m",
+			title: "Choices",
+			goal: "Choose",
+			status: "active",
+			coordinator: "self",
+			tasks: [],
+			decisions: ["D1: Original binding rule"],
+			decisionEntries: [{ id: old.id, text: old.text }],
+			decisionState: [old, target],
+			decisionVersion: "before",
+		};
+		let resolve!: (value: never) => void;
+		let reject!: (error: Error) => void;
+		let reached!: () => void;
+		const called = new Promise<void>((yes) => {
+			reached = yes;
+		});
+		const session = await KernelSession.open(
+			{ sessionId: "lead", cwd: f.root, storageDir: join(f.root, "durable"), mission },
+			{
+				onWorking: () => {},
+				callMission: async () =>
+					new Promise((yes, no) => {
+						resolve = yes;
+						reject = no;
+						reached();
+					}),
+			},
+		);
+		f.cleanup.push(() => session.close());
+		const prompts: string[] = [];
+		f.faux.setResponses(
+			[0, 1].map(() => async (context) => {
+				prompts.push(getCurrentSystemPrompt(context.messages));
+				return fauxAssistantMessage("Checked");
+			}),
+		);
+		await session.submit("before", "Begin", "followUp");
+		await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+		const replaced = { ...old, selected: false, replacement: { id: target.id, number: target.number, at: 42 } };
+		const changed: MissionContext = {
+			...mission,
+			decisions: [],
+			decisionEntries: [],
+			replacedDecisions: [{ number: 1, replacementNumber: 2 }],
+			decisionState: [replaced, target],
+			decisionVersion: "after",
+		};
+		if (origin === "external") await session.setMission(changed);
+		else {
+			const pending = (
+				session as unknown as {
+					callMission: (
+						action: "supersede",
+						args: { decisionId: string; replacementDecisionId: string },
+					) => Promise<unknown>;
+				}
+			).callMission("supersede", { decisionId: "D1", replacementDecisionId: "D2" });
+			await called;
+			session.setMission(changed);
+			if (origin === "own") {
+				resolve(replaced as never);
+				assert.deepEqual(await pending, replaced);
+			} else {
+				reject(new Error("Unknown outcome"));
+				await assert.rejects(pending, /Unknown outcome/);
+			}
+		}
+		assert.equal(prompts.length, 1, "a replacement notice never starts generation");
+		await session.setMission(changed);
+		await session.submit("after", "Continue", "followUp");
+		await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+		assert.match(prompts[0]!, /Decisions \(binding.*D1: Original binding rule/);
+		assert.doesNotMatch(prompts[1]!, /Original binding rule|Scoped replacement text/);
+		assert.match(prompts[1]!, /Replaced decisions \(not binding; historical pins unchanged\): D1 replaced by D2/);
+		let notices = (await session.conversation.entries({}, 100, undefined, BACKGROUND_CONTEXT)).items.filter(
+			(e) => e.kind === "pilot.activity",
+		);
+		assert.equal(notices.length, origin === "own" ? 0 : 1);
+		if (origin !== "own") {
+			assert.match(JSON.stringify(notices[0]!.data), /no longer binding/);
+			assert.doesNotMatch(JSON.stringify(notices[0]!.data), /Scoped replacement text/);
+		}
+		await session.setMission({
+			...changed,
+			decisionVersion: "external-edit",
+			decisionState: [{ ...replaced, text: "Later user edit" }, target],
+		});
+		notices = (await session.conversation.entries({}, 100, undefined, BACKGROUND_CONTEXT)).items.filter(
+			(e) => e.kind === "pilot.activity",
+		);
+		assert.equal(
+			notices.length,
+			origin === "own" ? 1 : 2,
+			"later external changes are never suppressed by coordinator role",
+		);
+		assert.ok(notices.some((notice) => /Later user edit/.test(JSON.stringify(notice.data))));
+	});
+}
+
+test("only coordinators expose the replacement action and forward D-number references", async () => {
+	const calls: unknown[] = [];
+	const coordinator = createMissionTool(async (action, args) => {
+		calls.push([action, args]);
+		return {};
+	}, true);
+	const member = createMissionTool(async () => ({}));
+	const params = { action: "supersede", decisionId: "D7", replacementDecisionId: "D9" };
+	validateToolArguments(coordinator, { type: "toolCall", id: "replace", name: "mission", arguments: params });
+	assert.throws(() =>
+		validateToolArguments(member, { type: "toolCall", id: "replace", name: "mission", arguments: params }),
+	);
+	assert.ok(!("replacementDecisionId" in (member.parameters as { properties: object }).properties));
+	assert.match(coordinator.description, /already-authorized replacement/);
+	assert.match(coordinator.description, /Does not approve policy or edit\/remove text/);
+	await coordinator.execute("replace", params as never, undefined, undefined, {} as never);
+	assert.deepEqual(calls, [["supersede", { decisionId: "D7", replacementDecisionId: "D9" }]]);
+});
+
 test("the mission tool forwards actions with only the supplied arguments", async () => {
 	const calls: unknown[] = [];
 	const tool = createMissionTool(async (action, args) => {

@@ -10,7 +10,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { KernelCommand, KernelPacket, KernelSpec } from "@pilot/kernel";
 import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
-import type { MissionDetail, ServerMessage, SessionState, SessionSummary } from "@pilot/protocol";
+import type { MissionDecision, MissionDetail, ServerMessage, SessionState, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.test.ts";
 
@@ -2246,6 +2246,194 @@ test("startup repairs legacy planning titles durably and idempotently", async (t
 	await f.sessions.load();
 	assert.equal(f.sessions.get(lead.id)?.title, mission.title);
 	assert.equal(title.mock.callCount(), 0);
+});
+
+test("coordinator replacement retires guidance, preserves historical pins and respects replacement audience", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Choices",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.store.join(worker.id, mission.id);
+	const old = f.store.addDecision(mission.id, "Old rule", {}, "reference");
+	const next = f.store.addDecision(mission.id, "Coordinator replacement text", {}, "coordinator");
+	const task = f.store.addTask(mission.id, { title: "Work", sessionId: worker.id, decisionIds: [old.id] });
+	const before = f.service.context(worker.id)!;
+	assert.deepEqual(before.decisions, ["D1: Old rule"]);
+	await assert.rejects(
+		f.service.call(worker.id, "supersede", { decisionId: "D1", replacementDecisionId: "D2" }),
+		/Only the mission coordinator/,
+	);
+	await assert.rejects(f.service.call(lead.id, "supersede", { decisionId: "D1" }), /requires/);
+	const foreign = f.store.create({ projectId: f.project.id, title: "Other" });
+	const foreignDecision = f.store.addDecision(foreign.id, "Foreign text");
+	await assert.rejects(
+		f.service.call(lead.id, "supersede", { decisionId: old.id, replacementDecisionId: foreignDecision.id }),
+		/Unknown decision/,
+	);
+	const definition = f.store.sharedDefinitionRevision(task.id);
+	const saved = (await f.service.call(lead.id, "supersede", {
+		decisionId: "D1",
+		replacementDecisionId: "D2",
+	})) as MissionDecision;
+	assert.equal(saved.replacement?.id, next.id);
+	assert.equal(saved.text, old.text);
+	assert.deepEqual(f.store.task(mission.id, task.id).decisionIds, [old.id]);
+	assert.equal(f.store.sharedDefinitionRevision(task.id), definition);
+	const after = f.service.context(worker.id)!;
+	assert.notEqual(after.decisionVersion, before.decisionVersion);
+	assert.deepEqual(after.decisions, [], "old pin does not select the replacement's text");
+	assert.deepEqual(after.decisionEntries, []);
+	assert.deepEqual(after.replacedDecisions, [{ number: 1, replacementNumber: 2 }]);
+	assert.deepEqual(after.decisionState?.find((d) => d.id === old.id)?.replacement, saved.replacement);
+	assert.equal(after.decisionState?.find((d) => d.id === next.id)?.selected, false);
+	assert.deepEqual(f.service.context(lead.id)?.decisions, ["D2: Coordinator replacement text"]);
+	const pinned = (await f.service.call(worker.id, "get", { id: task.id })) as { decisions: MissionDecision[] };
+	assert.deepEqual(pinned.decisions, [
+		{ id: old.id, number: old.number, text: old.text, audience: old.audience, replacement: saved.replacement },
+	]);
+	const read = (await f.service.call(worker.id, "decisions", { _promptDecisions: before.decisionEntries })) as {
+		decisions: MissionDecision[];
+	};
+	assert.deepEqual(
+		read.decisions.find((d) => d.id === old.id)?.replacement,
+		saved.replacement,
+		"same text cannot hide a replacement from a frozen prompt read",
+	);
+	for (const id of [lead.id, worker.id]) {
+		const command = await until(() =>
+			f.workers
+				.get(id)!
+				.sent.findLast(
+					(command) =>
+						command.type === "mission.context" &&
+						command.context?.decisionState?.some((d) => d.id === old.id && d.replacement),
+				),
+		);
+		assert.equal(command.type, "mission.context");
+	}
+	assert.deepEqual(
+		await f.service.call(lead.id, "supersede", { decisionId: old.id, replacementDecisionId: next.id }),
+		saved,
+	);
+	await f.service.call(lead.id, "task", { id: task.id, decisionIds: [old.id, next.id] });
+	assert.deepEqual(
+		f.service.context(worker.id)?.decisions,
+		["D2: Coordinator replacement text"],
+		"only an explicit replacement pin selects reference/coordinator text",
+	);
+	f.store.join(lead.id, foreign.id);
+	f.store.update(foreign.id, { coordinatorSessionId: lead.id });
+	await assert.rejects(
+		f.service.call(lead.id, "supersede", { decisionId: old.id, replacementDecisionId: next.id }),
+		/Unknown decision/,
+	);
+});
+
+test("replacement IPC acknowledgement waits for durability and rejects inconsistent project membership", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Choices",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.store.addDecision(mission.id, "Old", {}, "all");
+	f.store.addDecision(mission.id, "New", {}, "all");
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	t.after(() => release());
+	let waiting = false;
+	t.mock.method(f.store, "whenDurable", () => {
+		waiting = true;
+		return gate;
+	});
+	const worker = f.workers.get(lead.id)!;
+	worker.onPacket({
+		type: "mission.call",
+		callId: "supersede",
+		action: "supersede",
+		args: { decisionId: "D1", replacementDecisionId: "D2" },
+	});
+	await until(() => waiting);
+	assert.ok(f.store.detail(mission.id).decisions[0]!.replacement);
+	assert.equal(
+		worker.sent.some((c) => c.type === "mission.result" && c.callId === "supersede"),
+		false,
+	);
+	release();
+	const reply = await until(() => worker.sent.find((c) => c.type === "mission.result" && c.callId === "supersede"));
+	assert.equal(reply.type, "mission.result");
+	if (reply.type === "mission.result") assert.equal(reply.error, undefined);
+	const wrongProject = await f.spawn(f.other.id);
+	f.store.join(wrongProject.id, mission.id);
+	f.store.update(mission.id, { coordinatorSessionId: wrongProject.id });
+	await assert.rejects(
+		f.service.call(wrongProject.id, "supersede", { decisionId: "D1", replacementDecisionId: "D2" }),
+		/own project/,
+	);
+});
+
+test("local user replacement route preserves text and rejects bad links and inputs", async (t) => {
+	const f = await fixture(t);
+	const mission = f.store.create({ projectId: f.project.id, title: "Choices" });
+	const old = f.store.addDecision(mission.id, "Old");
+	const next = f.store.addDecision(mission.id, "New");
+	const terminals = new TerminalManager();
+	const server = createDaemonServer(
+		{ home: f.home, host: "127.0.0.1", port: 0 },
+		f.sessions,
+		f.projects,
+		new ModelCatalog(f.home),
+		terminals,
+		{ service: f.service, store: f.store },
+	);
+	t.after(async () => {
+		terminals.shutdown();
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/missions/${mission.id}`;
+	const post = (decision: string, body: unknown) =>
+		fetch(`${base}/decisions/${decision}/supersede`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(body),
+		});
+	for (const body of [
+		{},
+		{ replacementDecisionId: null },
+		{ replacementDecisionId: 7 },
+		{ replacementDecisionId: "" },
+	]) {
+		const response = await post("D1", body);
+		assert.equal(response.status, 400);
+		await response.arrayBuffer();
+	}
+	const response = await post("D1", { replacementDecisionId: "D2" });
+	assert.equal(response.status, 200);
+	const saved = (await response.json()) as MissionDecision;
+	assert.equal(saved.text, old.text);
+	assert.equal(saved.replacement?.id, next.id);
+	const retry = await post(old.id, { replacementDecisionId: next.id });
+	assert.equal(retry.status, 200);
+	assert.deepEqual(await retry.json(), saved);
+	const cycle = await post("D2", { replacementDecisionId: "D1" });
+	assert.equal(cycle.status, 409);
+	await cycle.arrayBuffer();
+	const detail = await fetch(base);
+	assert.equal(detail.status, 200);
+	assert.deepEqual(((await detail.json()) as MissionDetail).decisions[0], saved);
 });
 
 test("decision audiences and task pins select prompts and avoid duplicate detail reads", async (t) => {

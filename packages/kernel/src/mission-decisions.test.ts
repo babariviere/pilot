@@ -56,6 +56,45 @@ test("only an exact acknowledged addition is suppressed, not later external edit
 	);
 });
 
+test("replacement notices retire old guidance without copying replacement text or redirecting pins", () => {
+	const target = {
+		...decision,
+		id: "two",
+		number: 2,
+		text: "Scoped replacement",
+		audience: "coordinator" as const,
+		selected: false,
+	};
+	const replaced = { ...decision, selected: false, replacement: { id: target.id, number: target.number, at: 42 } };
+	const before = context([decision, target]);
+	const after = context([replaced, target]);
+	const notice = decisionNotice(before, after)!;
+	assert.match(notice.summary, /D1 replaced by D2 \(no longer binding\)/);
+	assert.match(notice.detail, /D1 is no longer binding/);
+	assert.match(notice.detail, /Historical task pins are unchanged/);
+	assert.doesNotMatch(notice.detail, /Scoped replacement/);
+	assert.equal(decisionNotice(after, after), undefined);
+	assert.match(decisionNotice(context([]), context([replaced]))!.detail, /no longer binding/);
+	const own = new Map([[decision.id, replaced]]);
+	const ownAddition = new Map([[decision.id, decision]]);
+	assert.match(decisionNotice(context([]), context([replaced]), ownAddition)!.detail, /no longer binding/);
+	assert.equal(decisionNotice(before, after, own), undefined);
+	const mixed = decisionNotice(before, context([replaced, { ...target, text: "Separate user update" }]), own)!;
+	assert.match(mixed.detail, /Separate user update/);
+	assert.doesNotMatch(mixed.detail, /D1 updated|D1 is no longer binding/);
+	assert.match(
+		decisionNotice(before, context([{ ...replaced, text: "User edited" }, target]), own)!.detail,
+		/User edited/,
+	);
+	assert.match(
+		decisionNotice(before, context([{ ...replaced, audience: "reference" }, target]), own)!.detail,
+		/Audience/,
+	);
+	assert.ok(
+		decisionNotice(before, context([{ ...replaced, replacement: { ...replaced.replacement, at: 43 } }, target]), own),
+	);
+});
+
 test("summary is bounded while disclosure keeps the full decision", () => {
 	const text = "Long rule ".repeat(1000);
 	const notice = decisionNotice(context([]), context([{ ...decision, text }]))!;

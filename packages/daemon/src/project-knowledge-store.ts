@@ -750,14 +750,16 @@ export class ProjectKnowledgeStore {
 		if (this.db.one("SELECT project_id FROM missions WHERE id = ?", source.missionId)?.project_id !== projectId)
 			throw new NotFound("Mission source is unavailable in this project");
 		const records: unknown[] = [];
-		if (source.decisionId)
-			records.push(
-				this.db.one(
-					"SELECT id, text, audience FROM decisions WHERE mission_id = ? AND id = ?",
-					source.missionId,
-					source.decisionId,
-				),
+		if (source.decisionId) {
+			const decision = this.db.one(
+				"SELECT id, text, audience, replacement FROM decisions WHERE mission_id = ? AND id = ?",
+				source.missionId,
+				source.decisionId,
 			);
+			// Preserve pre-link observation tokens for unchanged legacy decisions.
+			if (decision && !decision.replacement) delete decision.replacement;
+			records.push(decision);
+		}
 		if (source.taskId)
 			records.push(
 				this.db.one(

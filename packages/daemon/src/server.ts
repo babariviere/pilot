@@ -1349,7 +1349,7 @@ export function createDaemonServer(
 				}
 				if (section === "records") {
 					const snapshot = await reader.get(snapshotId);
-					let records;
+					let records: ReturnType<typeof missions.store.nativeReviewRecords>;
 					try {
 						records = missions.store.nativeReviewRecords(missionId, workerId, snapshotId, snapshot);
 					} catch {
@@ -3069,6 +3069,13 @@ async function missionRoute(
 		return false;
 	}
 	if (section === "decisions") {
+		if (parts.length === 6 && parts[5] === "supersede" && method === "POST") {
+			const write = await readJson<{ replacementDecisionId: string }>(req);
+			if (typeof write?.replacementDecisionId !== "string" || !write.replacementDecisionId)
+				throw new HttpError(400, "replacementDecisionId is required");
+			json(res, 200, store.supersedeDecision(id, item!, write.replacementDecisionId));
+			return true;
+		}
 		if (parts.length === 4 && method === "POST") {
 			const write = await readJson<MissionDecisionWrite>(req);
 			return json(res, 201, store.addDecision(id, write?.text, undefined, write?.audience)), true;

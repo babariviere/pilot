@@ -33,6 +33,7 @@ const MEMBER_ACTIONS = [
 export const MISSION_ACTIONS = [
 	...MEMBER_ACTIONS,
 	"propose",
+	"supersede",
 	"delete",
 	"group",
 	"phase",
@@ -71,7 +72,7 @@ When get reports planningVersion 1, only the coordinator/user plans or assigns w
 - complete: finish your task with id and completion {commit, checks, issues}. commit must be a full 40-character lowercase hex hash; the daemon validates its format only, not existence or landing. Supply a genuinely landed commit. checks lists checks and one-line rationale (max 2000 characters), issues lists unresolved issues or "" (max 1000). Saves one immutable task-owned handoff and retires this member from new assignments. Exact retries reuse it. Do not duplicate it in comments, log, files or ACK replies. Finish already assigned tasks, then stop. New features need new chats.
 - claim: take id or ids (IDs, numbers or ranges such as ["1-5","#8"]). Returns claimed tasks and skipped tasks with reasons; never takes another chat's task. Members may self-claim at most two additional tasks per chat lifetime, excluding starting assignments; completing/releasing does not reset this. Delivered members may claim only follow-ups they created. After the allowance, ask the coordinator to start a fresh chat.
 - release: clear claims using the same selectors. Members release their own, coordinator any. Resets active/blocked to todo, preserves other states and links.
-- decide: record a new agreed choice, audience all, coordinator or reference (default). Decisions override the brief; only the user changes them later.
+- decide: record a new agreed choice, audience all, coordinator or reference (default). Active decisions override the brief; text edits/removals remain user-only.
 - comment: only for a question, blocker or feedback that needs another participant's answer or action (text, optional anchor quote and targetSessionId). Keep it to a few sentences, one per topic. notification action (default) batches routine requests; urgent is for blockers, needs-you or failure; informational and ack are recorded without waking. Never comment status, progress, plans, evidence, publication receipts or acknowledgements: update the task status and body, or log. resolve: once addressed, save any lasting outcome in the task, decision or spec, then resolve by id; unanswered questions stay open.
 - attach: link one of this chat's artifacts (artifactId, optional artifactRevision to pin, optional taskId).
 - link: add url, optional title/taskId. Linear links default linearRole reference (context only); coordinator may explicitly set managed (mission scope) or contribution (task scope, requires managed ticket). Existing roles require updateLink, never implicit upgrades. Task PRs default to relationship "ownership" (drives status); "reference" is related work. Neither binds a chat.
@@ -82,7 +83,8 @@ When get reports planningVersion 1, only the coordinator/user plans or assigns w
 			coordinator
 				? `
 Coordinator planning: on interview, research, delivery, review, notices or resume, read current get/brief/decisions and relevant tasks before changing the plan. Use filtered tasks and targeted get/activity for evidence; include done/dropped work when checking overlap or recovery. For an uncovered agreed requirement, necessary in-scope finding, missing prerequisite or real review follow-up, create a bounded task or update its existing match without extra user confirmation. Define intent, scope and acceptance in body (planningVersion 1: use assignment with its current expectedRevision), link source evidence with link/attach or event/comment references, and set dependsOn for prerequisites. Keep affected tasks blocked with the reason and missing decision/dependency explicit until resolved. Already-covered work or duplicate notices need no new task or unchanged rewrite; re-read after uncertain writes, never blindly replay task creation. Do not create tasks for trivial bookkeeping or speculative frameworks. Preserve actual questions/uncertainty; ask when needed. Out-of-scope suggestions and proposal-only findings stay proposals in comment/log pending a decision, not approved work. Task creation/updates grant no worker starts, provider spend, approval or restricted activation; existing start/permission rules still apply.
-- propose (coordinator only): suggest an edit (decisionId, text, reason) or removal (decisionId, remove: true, reason). IDs accept D7. Decisions stay binding until the user accepts; get includes pending and recent outcomes.
+- propose (coordinator only): suggest an edit (decisionId, text, reason) or removal (decisionId, remove: true, reason). IDs accept D7. Proposals do not change guidance; only the user accepts. get includes pending and recent outcomes.
+- supersede (coordinator only): record an already-authorized replacement with decisionId and replacementDecisionId (IDs or D7, same mission). Keeps old text/history/pins, but retires its guidance. Does not approve policy or edit/remove text. Exact retries are harmless; relinking is rejected.
 - updateLink (coordinator only): explicitly change an existing Linear link using resourceId and linearRole. References never count toward delivery.
 - split (coordinator only): resourceId of a managed ticket, tasks [{title, body?}] (max 20). Atomically create local contributing tasks; exact retries reuse them. Read existing tasks first, clarify ambiguous matches, or link existing tasks instead. No Linear sub-issues.
 - delete (coordinator only): permanently remove a task by id or number. Removes dependency references and keeps its links at mission level. Prefer status "dropped" when history should remain.
@@ -236,6 +238,7 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 						operation: Type.Optional(StringEnum(["create", "rename", "reorder", "delete"] as const)),
 						name: Type.Optional(Type.String({ maxLength: 200 })),
 						decisionId: Type.Optional(Type.String({ maxLength: 128 })),
+						replacementDecisionId: Type.Optional(Type.String({ maxLength: 128 })),
 						remove: Type.Optional(Type.Literal(true)),
 						reason: Type.Optional(Type.String({ maxLength: 8000 })),
 						mode: Type.Optional(

@@ -766,6 +766,8 @@ export class MissionStore {
 		);
 		if (!this.all("PRAGMA table_info(decisions)").some((row) => row.name === "audience"))
 			this.db.exec("ALTER TABLE decisions ADD COLUMN audience TEXT NOT NULL DEFAULT 'reference'");
+		if (!this.all("PRAGMA table_info(decisions)").some((row) => row.name === "replacement"))
+			this.db.exec("ALTER TABLE decisions ADD COLUMN replacement TEXT");
 		this.transaction(() => {
 			const migrateNumbers = !this.all("PRAGMA table_info(decisions)").some((row) => row.name === "number");
 			const migrateSequence = !this.all("PRAGMA table_info(missions)").some(
@@ -4997,6 +4999,59 @@ export class MissionStore {
 		return decision;
 	}
 
+	/** Records an already-authorized replacement, not a policy approval or an edit. */
+	supersedeDecision(
+		id: string,
+		decisionId: string,
+		replacementDecisionId: string,
+		actor: MissionActor = USER,
+	): MissionDecision {
+		const mission = this.require(id);
+		if (actor.sessionId) {
+			this.assertMember(id, actor.sessionId);
+			if (mission.coordinatorSessionId !== actor.sessionId)
+				throw new Conflict("Only the mission coordinator or user can supersede decisions");
+		}
+		this.assertPlanner(id, actor);
+		const before = this.decision(id, decisionId);
+		if (before.replacement) {
+			if (
+				before.replacement.id === replacementDecisionId ||
+				`D${before.replacement.number}`.toLowerCase() === replacementDecisionId.toLowerCase()
+			)
+				return before;
+			throw new Conflict("Decision already has a different replacement");
+		}
+		const replacement = this.decision(id, replacementDecisionId);
+		const visited = new Set([before.id]);
+		let next: MissionDecision | undefined = replacement;
+		while (next) {
+			if (visited.has(next.id)) throw new Conflict("Decision replacement cannot be self-referential or cyclic");
+			visited.add(next.id);
+			const row: Row | undefined = next.replacement
+				? this.one("SELECT * FROM decisions WHERE mission_id = ? AND id = ?", id, next.replacement.id)
+				: undefined;
+			next = row ? decisionFrom(row) : undefined;
+		}
+		const at = Date.now();
+		this.transaction(() => {
+			this.run(
+				"UPDATE decisions SET replacement = ?, updated_at = ? WHERE id = ?",
+				JSON.stringify({ id: replacement.id, number: replacement.number, at }),
+				at,
+				before.id,
+			);
+			this.knowledge.invalidateMission(id, "decisionId", before.id);
+			this.event(id, "decision", `Decision D${before.number} replaced by D${replacement.number}`, actor, {
+				at,
+				wake: true,
+			});
+		});
+		this.changed(id, this.members(id));
+		this.knowledgeChanged(id);
+		return this.decision(id, before.id);
+	}
+
 	/** Only the user edits or removes decisions. */
 	updateDecision(
 		id: string,
@@ -6430,6 +6485,7 @@ function decisionFrom(row: Row): MissionDecision {
 		number: num(row.number!),
 		text: str(row.text!),
 		audience: decisionAudience(row.audience),
+		...(row.replacement ? { replacement: JSON.parse(str(row.replacement)) as MissionDecision["replacement"] } : {}),
 		...optionalAuthor(row.author_session_id),
 		createdAt: num(row.created_at!),
 		updatedAt: num(row.updated_at!),
