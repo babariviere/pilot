@@ -66,12 +66,25 @@ pub(crate) struct Model {
     #[serde(default)]
     pub(crate) thinking_levels: Vec<String>,
     pub(crate) thinking: Option<String>,
+    /// pilotd's effective level for a fresh Build chat on this explicit model with
+    /// thinking omitted (`defaultThinking`). Optional: older daemons omit it.
+    #[serde(default, rename = "defaultThinking")]
+    pub(crate) fresh_thinking: Option<String>,
+    /// The same for an existing chat's model change (`modelChangeThinking`). Absent
+    /// when the change keeps the chat's current level.
+    #[serde(default, rename = "modelChangeThinking")]
+    pub(crate) switch_thinking: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Catalog {
     pub(crate) models: Vec<Model>,
+    /// Raw configured pi default, not validated against the scope or credentials.
     pub(crate) default_model: Option<String>,
+    /// pilotd's fresh Build pick with no request or project model. Optional: older
+    /// daemons omit it, and it is omitted when unavailable or outside the scope.
+    #[serde(default)]
+    pub(crate) resolved_default_model: Option<String>,
 }
 impl Catalog {
     pub(crate) fn validate(&self) -> Result<(), Failure> {
@@ -115,6 +128,119 @@ impl Catalog {
                         .as_ref()
                         .is_none_or(|l| m.thinking_levels.contains(l))
             })
+    }
+    /// The model pilotd starts a fresh Build chat on without an explicit choice: the
+    /// Pilot project's model, else pi's resolved pick for this directory. An older daemon
+    /// reports only the configured default, which pi uses when it is in the scope.
+    /// Presentation only; nothing is saved.
+    pub(crate) fn inherited<'a>(&'a self, project_model: Option<&'a str>) -> Inherited<'a> {
+        let (origin, id) = match project_model {
+            Some(id) => (Origin::Project, Some(id)),
+            None => (
+                Origin::Pi,
+                self.resolved_default_model
+                    .as_deref()
+                    .or(self.default_model.as_deref()),
+            ),
+        };
+        Inherited {
+            origin,
+            id,
+            model: id.and_then(|id| self.models.iter().find(|m| m.id == id)),
+        }
+    }
+    /// Optional resolution hints only apply to listed models and their own levels.
+    pub(crate) fn keep_supported_hints(&mut self) {
+        for m in &mut self.models {
+            m.keep_supported_hints();
+        }
+        let listed = |id: &String| self.models.iter().any(|m| m.id == *id);
+        self.resolved_default_model = self.resolved_default_model.take().filter(listed);
+    }
+}
+/// Where an inherited model comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Origin {
+    Project,
+    Pi,
+}
+impl Origin {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Project => "Project default",
+            Self::Pi => "Pi default",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Inherited<'a> {
+    pub(crate) origin: Origin,
+    /// The configured model ID, if any.
+    pub(crate) id: Option<&'a str>,
+    /// Its scoped catalog entry. None when the catalog doesn't list it (or nothing is
+    /// configured): Local then resolves the model only at start, and Pilot doesn't guess.
+    pub(crate) model: Option<&'a Model>,
+}
+/// The core operation an omitted model or thinking choice goes through. pilotd's
+/// resolved metadata describes only these; it doesn't predict Ask, restored chats,
+/// extension hooks or a later prepared workspace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Start {
+    /// A new Build chat.
+    Fresh,
+    /// An existing chat's model change, such as a failed chat's next attempt.
+    Switch,
+    /// Anything else: the chat reports its own value once started.
+    Other,
+}
+impl Model {
+    /// The thinking level Local applies when none is chosen, where it is known: a model's
+    /// only level, pilotd's reported level for this operation, or (older daemons) the scope
+    /// pin, which a model change applies first. Otherwise None, never a guess.
+    pub(crate) fn default_thinking(&self, start: Start) -> Option<&str> {
+        let reported = match start {
+            Start::Fresh => self.fresh_thinking.as_deref(),
+            Start::Switch => self.switch_thinking.as_deref().or(self.thinking.as_deref()),
+            Start::Other => None,
+        };
+        match self.thinking_levels.as_slice() {
+            [only] => Some(only),
+            _ => reported,
+        }
+    }
+    /// Reported hints must name one of the model's own levels; others are dropped.
+    fn keep_supported_hints(&mut self) {
+        let levels = &self.thinking_levels;
+        for hint in [&mut self.fresh_thinking, &mut self.switch_thinking] {
+            *hint = hint.take().filter(|l| levels.contains(l));
+        }
+    }
+}
+/// Presentation only: catalog IDs remain unchanged for selection and saving.
+pub(crate) fn thinking_title(level: &str) -> String {
+    let mut chars = level.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+/// The thinking level a model uses without an explicit level, then where it comes from.
+/// Without catalog proof the level stays `Default`, never a guess.
+pub(crate) fn inherited_thinking(m: Option<&Model>, start: Start) -> (String, String) {
+    let known = m.and_then(|m| Some((m.default_thinking(start)?, m)));
+    let detail = match known {
+        Some((_, m)) if m.thinking_levels.len() == 1 => "The model's only level",
+        Some((l, m)) if start == Start::Switch && m.thinking.as_deref() == Some(l) => {
+            "Scope default"
+        }
+        Some(_) => "Pi default",
+        None if start == Start::Switch => "Keeps the chat's current level",
+        None if start == Start::Fresh => "Pi's setting for this model",
+        None => "Shown once the chat starts",
+    };
+    match known {
+        Some((level, _)) => (thinking_title(level), detail.into()),
+        None => ("Default".into(), detail.into()),
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -482,6 +608,7 @@ pub(crate) async fn catalog(
     let mut c: Catalog =
         serde_json::from_value(body(r).await?).map_err(|_| "Scoped model catalog is malformed.")?;
     c.validate()?;
+    c.keep_supported_hints();
     for m in &mut c.models {
         m.search_key = format!("{} {}", m.name, m.id).to_lowercase();
     }
@@ -760,6 +887,7 @@ mod tests {
         let mut count = Catalog {
             models: vec![],
             default_model: None,
+            resolved_default_model: None,
         };
         for i in 0..2049 {
             count.models.push(Model {
@@ -769,11 +897,89 @@ mod tests {
                 name: "Model".into(),
                 thinking_levels: vec![],
                 thinking: None,
+                fresh_thinking: None,
+                switch_thinking: None,
             });
         }
         assert!(count.validate().is_err());
         count.models.clear();
         assert!(count.validate().is_ok());
+    }
+    #[test]
+    fn inherited_model_follows_project_then_pi_default_without_guessing() {
+        let mut c = legacy();
+        // An older daemon: pi's configured default, used when it is in the scope.
+        let pi = c.inherited(None);
+        assert_eq!((pi.origin, pi.id), (Origin::Pi, Some("p/a")));
+        assert_eq!(pi.model.map(|m| m.name.as_str()), Some("Atlas 日本語"));
+        // A Pilot project model wins over pi's default.
+        let project = c.inherited(Some("p/b"));
+        assert_eq!((project.origin, project.id), (Origin::Project, Some("p/b")));
+        assert_eq!(project.model.map(|m| m.id.as_str()), Some("p/b"));
+        // Outside the scoped catalog, the configured ID stays unresolved, never substituted.
+        let outside = c.inherited(Some("p/gone"));
+        assert_eq!((outside.id, outside.model), (Some("p/gone"), None));
+        c.default_model = None;
+        let none = c.inherited(None);
+        assert_eq!((none.origin, none.id, none.model), (Origin::Pi, None, None));
+        c.default_model = Some("p/missing".into());
+        assert!(c.inherited(None).model.is_none(), "not the first model");
+        // pilotd's resolved pick wins over the raw configured default, and a project model
+        // still wins over both.
+        c.resolved_default_model = Some("q/c".into());
+        assert_eq!(c.inherited(None).model.map(|m| m.id.as_str()), Some("q/c"));
+        assert_eq!(c.inherited(Some("p/b")).id, Some("p/b"));
+    }
+    /// The fixture without the optional resolution metadata, as an older daemon reports it.
+    fn legacy() -> Catalog {
+        let mut c: Catalog = serde_json::from_value(crate::chat_models_fixture::catalog()).unwrap();
+        c.resolved_default_model = None;
+        for m in &mut c.models {
+            (m.fresh_thinking, m.switch_thinking) = (None, None);
+        }
+        c
+    }
+    #[test]
+    fn default_thinking_follows_the_operation_and_never_guesses() {
+        let c: Catalog = serde_json::from_value(crate::chat_models_fixture::catalog()).unwrap();
+        let by = |id: &str| c.models.iter().find(|m| m.id == id).unwrap();
+        // pilotd reports each operation's own level.
+        assert_eq!(by("p/a").default_thinking(Start::Fresh), Some("low"));
+        assert_eq!(by("p/b").default_thinking(Start::Fresh), Some("high"));
+        assert_eq!(by("p/b").default_thinking(Start::Switch), Some("low"));
+        // A switch without a reported level keeps the chat's own: unknown here.
+        assert_eq!(by("p/a").default_thinking(Start::Switch), None);
+        // Resolution doesn't describe other chats, except a model's only level.
+        assert_eq!(by("p/a").default_thinking(Start::Other), None);
+        assert_eq!(by("q/c").default_thinking(Start::Other), Some("off"));
+        assert_eq!(
+            by("q/d").default_thinking(Start::Fresh),
+            None,
+            "levels not reported"
+        );
+        // Older daemons: only a scope pin (a switch applies it first) or the only level.
+        let old = legacy();
+        let by = |id: &str| old.models.iter().find(|m| m.id == id).unwrap();
+        assert_eq!(by("p/a").default_thinking(Start::Fresh), None);
+        assert_eq!(
+            by("p/b").default_thinking(Start::Fresh),
+            None,
+            "no pin for new chats"
+        );
+        assert_eq!(by("p/b").default_thinking(Start::Switch), Some("low"));
+        assert_eq!(by("q/c").default_thinking(Start::Fresh), Some("off"));
+    }
+    #[test]
+    fn resolution_hints_outside_the_catalog_are_dropped() {
+        let mut c: Catalog = serde_json::from_value(json!({"defaultModel":"p/a","resolvedDefaultModel":"p/gone","models":[
+            {"id":"p/a","provider":"p","name":"A","thinkingLevels":["off","low"],"defaultThinking":"max","modelChangeThinking":"low"}]})).unwrap();
+        c.validate().unwrap();
+        c.keep_supported_hints();
+        assert_eq!(c.resolved_default_model, None);
+        assert_eq!(c.models[0].fresh_thinking, None);
+        assert_eq!(c.models[0].switch_thinking.as_deref(), Some("low"));
+        // The raw configured default still resolves an in-scope model.
+        assert_eq!(c.inherited(None).model.map(|m| m.id.as_str()), Some("p/a"));
     }
     #[test]
     fn retained_failed_paused_and_nonidle_sessions_cannot_change() {

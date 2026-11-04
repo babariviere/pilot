@@ -19,6 +19,8 @@ pub(crate) struct Project {
     pub(crate) name: String,
     pub(crate) path: String,
     pub(crate) policy: ProjectPolicy,
+    /// Pilot's model for new chats in this project. None means pi's default applies.
+    pub(crate) model: Option<String>,
 }
 /// Workspace and publication policy as the daemon applies it: `workspace` other than
 /// "direct" means private clones, and only an explicit `requirePullRequest: false`
@@ -69,6 +71,12 @@ pub(crate) fn projects(value: &Value) -> Result<Vec<Project>, &'static str> {
                 isolated: value["workspace"] != "direct",
                 require_pull_request: value["requirePullRequest"] != false,
             },
+            model: value["model"]
+                .as_str()
+                .filter(|m| {
+                    m.len() <= 1024 && !m.trim().is_empty() && !m.chars().any(char::is_control)
+                })
+                .map(|m| m.trim().to_owned()),
         });
     }
     out.sort_by(|a, b| {
@@ -121,6 +129,18 @@ mod project_tests {
         assert!(p[0].policy.isolated && p[0].policy.require_pull_request);
         assert!(!p[1].policy.isolated && !p[1].policy.require_pull_request);
         assert_eq!(p[2].policy, ProjectPolicy::default());
+    }
+    #[test]
+    fn project_model_is_the_daemon_new_chat_default() {
+        let p = projects(&json!([
+            {"id":"a","path":"/a"},
+            {"id":"b","path":"/b","model":" p/b "},
+            {"id":"c","path":"/c","model":""},
+            {"id":"d","path":"/d","model":"p/\u{7}"}
+        ]))
+        .unwrap();
+        let models: Vec<_> = p.iter().map(|p| p.model.as_deref()).collect();
+        assert_eq!(models, [None, Some("p/b"), None, None]);
     }
     #[test]
     fn projects_are_explicit_not_inferred_from_checkout_paths() {

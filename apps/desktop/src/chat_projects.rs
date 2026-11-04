@@ -41,6 +41,12 @@ pub(super) struct Rows {
     chosen: Option<String>,
     enabled: bool,
 }
+impl Catalog {
+    /// The listed project's model for new chats, as last read. None means pi's default.
+    pub(super) fn model(&self, id: &str) -> Option<&str> {
+        self.rows.iter().find(|p| p.id == id)?.model.as_deref()
+    }
+}
 impl Rows {
     fn set(&mut self, all: Vec<Choice>, chosen: Option<String>) {
         self.all = all;

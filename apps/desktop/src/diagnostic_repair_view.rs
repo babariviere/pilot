@@ -52,26 +52,27 @@ fn menu(items: Vec<Item>, selected: &str, w: &mut Window, cx: &mut Context<Local
         state
     })
 }
-fn thinking_items(catalog: &Catalog, choice: &ModelChoice) -> Vec<Item> {
+/// The default row leads with the effective level when the catalog proves it.
+fn thinking_items(
+    catalog: &Catalog,
+    project_model: Option<&str>,
+    choice: &ModelChoice,
+) -> Vec<Item> {
+    let model = choice.resolve(catalog, project_model);
     let mut items = vec![Item {
         id: String::new(),
-        label: "Default thinking".into(),
+        // The repair chat is a fresh Build chat.
+        label: crate::chat_models::inherited_thinking(model, crate::chat_models::Start::Fresh)
+            .0
+            .into(),
     }];
     items.extend(
-        choice
-            .resolve(catalog)
+        model
             .into_iter()
             .flat_map(|m| &m.thinking_levels)
-            .map(|level| {
-                let mut chars = level.chars();
-                let label: String = chars
-                    .next()
-                    .map(|c| c.to_uppercase().chain(chars).collect())
-                    .unwrap_or_default();
-                Item {
-                    id: level.clone(),
-                    label: label.into(),
-                }
+            .map(|level| Item {
+                id: level.clone(),
+                label: crate::chat_models::thinking_title(level).into(),
             }),
     );
     items
@@ -110,6 +111,8 @@ impl Edit {
 /// Model and thinking menus over the repair project's scoped catalog.
 struct Pick {
     catalog: Arc<Catalog>,
+    /// The repair project's Pilot model, which pilotd applies before pi's default.
+    project_model: Option<String>,
     model: Menu,
     thinking: Menu,
     _subscriptions: Vec<Subscription>,
@@ -458,6 +461,22 @@ impl LocalViewer {
         Some((id, specialist))
     }
 
+    /// The reviewed repair project's Pilot model for new chats, as last listed.
+    fn repair_project_model(&self) -> Option<String> {
+        let (_, Some(review)) = self.repair.review.as_ref()? else {
+            return None;
+        };
+        let ProjectState::Available(b) = &review.project.as_ref().ok()?.state else {
+            return None;
+        };
+        self.state
+            .projects
+            .iter()
+            .find(|p| p.id == b.project_id)?
+            .model
+            .clone()
+    }
+
     /// The text a start would send: the user's edit, or the proposal as published.
     fn repair_draft(&self, proposal: &Proposal, cx: &App) -> Draft {
         self.repair
@@ -540,7 +559,8 @@ impl LocalViewer {
         self.repair.review = Some((proposal_id, Some(review)));
         self.repair.setup_error = error;
         self.repair.reading = None;
-        self.sync_repair_pick(catalog, w, cx);
+        let project_model = self.repair_project_model();
+        self.sync_repair_pick(catalog, project_model, w, cx);
         if std::mem::take(&mut self.repair.start_after) {
             self.start_repair(true, w, cx);
         }
@@ -581,6 +601,7 @@ impl LocalViewer {
     fn sync_repair_pick(
         &mut self,
         catalog: Option<Arc<Catalog>>,
+        project_model: Option<String>,
         w: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -593,19 +614,24 @@ impl LocalViewer {
             .repair
             .pick
             .as_ref()
-            .is_some_and(|p| *p.catalog == *catalog)
+            .is_some_and(|p| *p.catalog == *catalog && p.project_model == project_model)
         {
             return;
         }
-        if self.repair.choice.problem(Some(&catalog)).is_some() {
+        if self
+            .repair
+            .choice
+            .problem(Some(&catalog), project_model.as_deref())
+            .is_some()
+        {
             self.repair.choice = ModelChoice::default();
         }
-        let default = catalog
-            .default_model
-            .as_deref()
-            .and_then(|id| catalog.models.iter().find(|m| m.id == id))
-            .map_or("Project default".to_owned(), |m| {
-                format!("Project default · {}", m.name)
+        // The effective model leads; where it comes from follows.
+        let inherited = catalog.inherited(project_model.as_deref());
+        let default = inherited
+            .model
+            .map_or(inherited.origin.label().to_owned(), |m| {
+                format!("{} · {}", m.name, inherited.origin.label())
             });
         let mut models = vec![Item {
             id: String::new(),
@@ -618,7 +644,7 @@ impl LocalViewer {
         let choice = self.repair.choice.clone();
         let model = menu(models, choice.model.as_deref().unwrap_or(""), w, cx);
         let thinking = menu(
-            thinking_items(&catalog, &choice),
+            thinking_items(&catalog, project_model.as_deref(), &choice),
             choice.thinking.as_deref().unwrap_or(""),
             w,
             cx,
@@ -641,7 +667,11 @@ impl LocalViewer {
                     };
                     v.repair.error = None;
                     if let Some(pick) = &v.repair.pick {
-                        let items = thinking_items(&pick.catalog, &v.repair.choice);
+                        let items = thinking_items(
+                            &pick.catalog,
+                            pick.project_model.as_deref(),
+                            &v.repair.choice,
+                        );
                         pick.thinking.update(cx, |s, cx| {
                             s.set_items(SearchableVec::new(items), w, cx);
                             s.set_selected_value(&String::new(), w, cx);
@@ -664,6 +694,7 @@ impl LocalViewer {
         ];
         self.repair.pick = Some(Pick {
             catalog,
+            project_model,
             model,
             thinking,
             _subscriptions: subscriptions,
@@ -893,9 +924,14 @@ impl LocalViewer {
             },
         };
         let catalog = self.repair.pick.as_ref().map(|p| p.catalog.clone());
+        let project_model = self
+            .repair
+            .pick
+            .as_ref()
+            .and_then(|p| p.project_model.as_deref());
         let levels = catalog
             .as_ref()
-            .and_then(|c| self.repair.choice.resolve(c))
+            .and_then(|c| self.repair.choice.resolve(c, project_model))
             .map_or(0, |m| m.thinking_levels.len());
         let model = binding.as_ref().map(|_| {
             match (
@@ -951,9 +987,11 @@ impl LocalViewer {
             )),
             _ => None,
         };
-        let problem = draft
-            .problem()
-            .or_else(|| self.repair.choice.problem(catalog.as_deref()));
+        let problem = draft.problem().or_else(|| {
+            self.repair
+                .choice
+                .problem(catalog.as_deref(), project_model)
+        });
         let ready = !locked
             && self.repair_connected().is_some()
             && binding.is_some()
@@ -1293,10 +1331,16 @@ impl LocalViewer {
         }
         let draft = self.repair_draft(&proposal, cx);
         let catalog = self.repair.pick.as_ref().map(|p| p.catalog.clone());
-        if let Some(problem) = draft
-            .problem()
-            .or_else(|| self.repair.choice.problem(catalog.as_deref()))
-        {
+        let project_model = self
+            .repair
+            .pick
+            .as_ref()
+            .and_then(|p| p.project_model.clone());
+        if let Some(problem) = draft.problem().or_else(|| {
+            self.repair
+                .choice
+                .problem(catalog.as_deref(), project_model.as_deref())
+        }) {
             return fail(self, problem, cx);
         }
         let Some(review) = self

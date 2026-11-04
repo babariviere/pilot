@@ -912,7 +912,18 @@ pub fn run_chat_model_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, cx| w.click("new-project-project-a", cx))
                 .unwrap();
             until(cx, h, &editor, |e| e.model_probe_state().0);
+            // The inherited choice leads with pilotd's resolved pick and startup level.
+            cx.update_window(h, |_, w, _| {
+                assert_eq!(w.find("chat-model").value(), Some("Atlas 日本語"));
+                assert_eq!(w.find("chat-thinking").value(), Some("Low"));
+            })
+            .unwrap();
             select_model(cx, h, "p/b", true);
+            // A new chat's explicit model reports its own level, not the switch's scope pin.
+            cx.update_window(h, |_, w, _| {
+                assert_eq!(w.find("chat-thinking").value(), Some("High"));
+            })
+            .unwrap();
             cx.update_window(h, |_, w, cx| w.click("chat-thinking", cx))
                 .unwrap();
             settle(cx, h);

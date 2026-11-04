@@ -8,6 +8,7 @@ fn project(id: &str, name: &str) -> Project {
         name: name.into(),
         path: format!("/synthetic/{id}"),
         policy: ProjectPolicy::default(),
+        model: None,
     }
 }
 

@@ -2,7 +2,10 @@
 use super::*;
 use crate::{
     chat_model_reader::{Reader, Request, Scope, Update},
-    chat_models::{self, Catalog, Choice as ModelChoice, DraftChoice, SessionModel, Target},
+    chat_models::{
+        self, Catalog, Choice as ModelChoice, DraftChoice, SessionModel, Start, Target,
+        inherited_thinking, thinking_title,
+    },
     ui::{self, Action, Notice, Tone},
 };
 use gpui_kit::{
@@ -21,14 +24,6 @@ mod subscription;
 mod tests;
 /// Disabled menu row that explains a busy chat's locked model/thinking to keyboard users.
 const BUSY_ITEM: &str = ":busy";
-/// Presentation only: catalog IDs remain unchanged for selection and saving.
-fn thinking_title(level: &str) -> String {
-    let mut chars = level.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().chain(chars).collect(),
-        None => String::new(),
-    }
-}
 fn busy_item() -> Item {
     Item {
         id: BUSY_ITEM.into(),
@@ -36,6 +31,79 @@ fn busy_item() -> Item {
         detail: "After its work and queued messages finish".into(),
         disabled: true,
         search: SharedString::default(),
+    }
+}
+/// The model a chat uses without an explicit choice: its effective name, then where it
+/// comes from. `inherit` is the Pilot project model of a fresh Build draft; None means
+/// resolution doesn't describe this chat.
+fn inherited_model(c: &Catalog, inherit: Option<Option<&str>>) -> (String, String) {
+    let Some(project_model) = inherit else {
+        return ("Default model".into(), "Chosen when the chat starts".into());
+    };
+    let i = c.inherited(project_model);
+    match (i.model, i.id) {
+        (Some(m), _) => (m.name.clone(), format!("{} · {}", i.origin.label(), m.id)),
+        (None, Some(id)) => (
+            "Default model".into(),
+            format!("{} {id}, not in scope", i.origin.label()),
+        ),
+        (None, None) => ("Default model".into(), "Chosen when the chat starts".into()),
+    }
+}
+/// Closed-selector text and its secondary provenance, from the current choice and catalog.
+struct Shown {
+    model: String,
+    model_help: Option<String>,
+    thinking: String,
+    thinking_help: Option<String>,
+}
+fn shown(
+    catalog: Option<&Catalog>,
+    loading: bool,
+    choice: Option<&ModelChoice>,
+    inherit: Option<Option<&str>>,
+    start: Start,
+) -> Shown {
+    let Some(c) = catalog else {
+        return Shown {
+            model: match (loading, choice) {
+                (true, _) => "Loading models…".into(),
+                (false, Some(choice)) => choice.model.clone(),
+                (false, None) => "Models unavailable".into(),
+            },
+            model_help: None,
+            thinking: choice
+                .and_then(|c| c.thinking.as_deref())
+                .map_or("Thinking".into(), thinking_title),
+            thinking_help: None,
+        };
+    };
+    let Some(choice) = choice else {
+        let (model, model_help) = inherited_model(c, inherit);
+        let model_entry = inherit.and_then(|p| c.inherited(p).model);
+        let (thinking, thinking_help) = inherited_thinking(model_entry, start);
+        return Shown {
+            model,
+            model_help: Some(model_help),
+            thinking,
+            thinking_help: Some(thinking_help),
+        };
+    };
+    let option = c.models.iter().find(|m| m.id == choice.model);
+    let (thinking, thinking_help) = match (&choice.thinking, option) {
+        (Some(l), Some(m)) if m.thinking_levels.contains(l) => (thinking_title(l), None),
+        (Some(l), _) => (format!("{} (not in catalog)", thinking_title(l)), None),
+        (None, Some(m)) if m.thinking_levels.is_empty() => ("Thinking not reported".into(), None),
+        (None, m) => {
+            let (label, help) = inherited_thinking(m, start);
+            (label, Some(help))
+        }
+    };
+    Shown {
+        model: choice.model.clone(),
+        model_help: None,
+        thinking,
+        thinking_help,
     }
 }
 #[derive(Clone)]
@@ -88,10 +156,20 @@ pub(super) struct Picker {
     loading: bool,
     models: Entity<SelectState<SearchableVec<Item>>>,
     thinking: Entity<SelectState<SearchableVec<Item>>>,
-    /// Choice, new draft, editable, failed, continuable, waiting for work: the inputs items were built from.
-    synced: Option<(Option<ModelChoice>, bool, bool, bool, bool, bool)>,
+    /// Choice, new draft, editable, failed, continuable, waiting for work and project model:
+    /// the inputs items were built from.
+    synced: Option<Synced>,
     _subscriptions: Vec<Subscription>,
 }
+type Synced = (
+    Option<ModelChoice>,
+    bool,
+    bool,
+    bool,
+    bool,
+    bool,
+    Option<Option<String>>,
+);
 pub(super) struct Models {
     options: crate::LocalOptions,
     reader: Option<Reader>,
@@ -208,7 +286,7 @@ impl ChatEditor {
                     .picker
                     .as_ref()
                     .and_then(|p| p.synced.as_ref())
-                    .is_some_and(|(_, _, old_editable, _, _, _)| *old_editable == editable)
+                    .is_some_and(|(_, _, old_editable, ..)| *old_editable == editable)
             {
                 return;
             }
@@ -283,6 +361,33 @@ impl ChatEditor {
                 thinking: s.thinking.clone(),
             })
         }
+    }
+    /// How an omitted choice resolves here. A fresh Build draft inherits its Pilot project
+    /// model (Some(None) when it has none, so pi's pick applies). Other chats report their
+    /// own values; a failed chat's next attempt goes through a model change.
+    fn model_inheritance(&self) -> (Option<Option<String>>, Start) {
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|k| k.starts_with("new:"))
+        {
+            return match self.draft().filter(|d| d.mode == "build") {
+                Some(d) => (
+                    Some(
+                        d.project_id
+                            .as_deref()
+                            .and_then(|id| self.project_catalog.model(id))
+                            .map(str::to_owned),
+                    ),
+                    Start::Fresh,
+                ),
+                None => (None, Start::Other),
+            };
+        }
+        let failed = self
+            .model_target()
+            .is_some_and(|t| t.failed_source.is_some());
+        (None, if failed { Start::Switch } else { Start::Other })
     }
     pub(super) fn model_query_marked(&self, w: &mut Window, cx: &mut Context<Self>) -> bool {
         let picker = self.models.as_ref().and_then(|m| m.picker.as_ref());
@@ -544,6 +649,7 @@ impl ChatEditor {
             .selected
             .as_ref()
             .is_some_and(|s| s.starts_with("new:"));
+        let (inherit, start) = self.model_inheritance();
         let Some(p) = self.models.as_mut().and_then(|m| m.picker.as_mut()) else {
             return;
         };
@@ -557,6 +663,7 @@ impl ChatEditor {
             failed,
             continuable,
             waiting,
+            inherit.clone(),
         );
         if p.synced.as_ref() == Some(&inputs) {
             return;
@@ -585,14 +692,15 @@ impl ChatEditor {
             search: "refresh scoped models".into(),
         });
         if is_new {
+            let (title, detail) = inherited_model(c, inherit.as_ref().map(Option::as_deref));
             items.insert(
                 0,
                 Item {
                     id: String::new(),
-                    title: "Project/pi default".into(),
-                    detail: "Resolved by Local when you create the chat".into(),
+                    search: format!("default {title} {detail}").to_lowercase().into(),
+                    title: title.into(),
+                    detail: detail.into(),
                     disabled: !editable,
-                    search: "project pi default".into(),
                 },
             );
         }
@@ -611,13 +719,14 @@ impl ChatEditor {
             .as_ref()
             .and_then(|s| c.models.iter().find(|m| m.id == s.model));
         let mut levels = Vec::new();
-        if (is_new || failed) && option.is_some_and(|m| m.thinking_levels.len() >= 2) {
+        if let Some(m) = option.filter(|m| (is_new || failed) && m.thinking_levels.len() >= 2) {
+            let (title, detail) = inherited_thinking(Some(m), start);
             levels.push(Item {
                 id: String::new(),
-                title: "Scoped default".into(),
-                detail: "No thinking override".into(),
+                search: format!("default {title}").to_lowercase().into(),
+                title: title.into(),
+                detail: detail.into(),
                 disabled: !editable,
-                search: "scoped default".into(),
             });
         }
         if let Some(option) = option {
@@ -1000,7 +1109,7 @@ impl ChatEditor {
     }
     pub(super) fn new_model_problem(&self, d: &Draft) -> Option<&'static str> {
         d.model_choice.as_ref().and_then(|c|{
-            if d.project_id.as_ref()!=Some(&c.project_id)||d.cwd!=c.cwd{return Some("Model choice belongs to the previous project. Choose a scoped model or Project/pi default explicitly.");}
+            if d.project_id.as_ref()!=Some(&c.project_id)||d.cwd!=c.cwd{return Some("Model choice belongs to the previous project. Choose a scoped model or the default explicitly.");}
             match self.models.as_ref().and_then(|m|m.picker.as_ref()){
                 Some(p) if !p.loading&&p.error.is_none()&&p.catalog.as_ref().is_some_and(|catalog|catalog.admits(&c.choice))=>None,
                 _=>Some("Verify the explicit model/thinking choice in this project's scoped catalog before creating."),
@@ -1028,17 +1137,31 @@ impl ChatEditor {
             .unwrap_or(0);
         let actual = self.model_choice();
         let loading = p.is_some_and(|p| p.loading && p.catalog.is_none());
-        // Hover help; the keyboard path is the open menu's disabled first row.
+        let (inherit, start) = self.model_inheritance();
+        let shown = shown(
+            p.and_then(|p| p.catalog.as_deref()),
+            loading,
+            actual.as_ref(),
+            inherit.as_ref().map(Option::as_deref),
+            start,
+        );
+        // Hover help; the keyboard path is the open menu's disabled first row. Otherwise
+        // the tooltip names where an inherited value comes from (also the menu row detail).
         let waiting = self.model_waits_for_work();
-        let field = move |id: &'static str| {
+        let field = move |id: &'static str, help: Option<String>| {
             let field = div().id(id);
             #[cfg(any(test, feature = "native-probes"))]
             let field = field.test_support();
-            field.min_w_0().when(waiting, |d| {
-                d.tooltip(|w, cx| {
-                    gpui_kit::component::tooltip::Tooltip::element(|_, _| {
-                        let help = ui::text(ui::Text::Caption, chat_models::BUSY)
-                            .id("chat-model-busy-help");
+            let help: Option<(SharedString, &'static str)> = if waiting {
+                Some((chat_models::BUSY.into(), "chat-model-busy-help"))
+            } else {
+                help.map(|h| (h.into(), "chat-model-default-help"))
+            };
+            field.min_w_0().when_some(help, |d, (text, help_id)| {
+                d.tooltip(move |w, cx| {
+                    let text = text.clone();
+                    gpui_kit::component::tooltip::Tooltip::element(move |_, _| {
+                        let help = ui::text(ui::Text::Caption, text.clone()).id(help_id);
                         #[cfg(any(test, feature = "native-probes"))]
                         let help = help.test_support();
                         help
@@ -1047,29 +1170,9 @@ impl ChatEditor {
                 })
             })
         };
-        let model_label: SharedString = if loading {
-            "Loading models…".into()
-        } else {
-            actual
-                .as_ref()
-                .map(|c| c.model.clone())
-                .unwrap_or_else(|| "Project/pi default".into())
-                .into()
-        };
-        let thinking_label: SharedString = actual
-            .as_ref()
-            .and_then(|c| c.thinking.as_ref())
-            .map(|l| format!("{} (not in catalog)", thinking_title(l)))
-            .unwrap_or_else(|| {
-                if actual.is_none() {
-                    "Default thinking".into()
-                } else if levels == 0 {
-                    "Thinking not reported".into()
-                } else {
-                    "Scoped default".into()
-                }
-            })
-            .into();
+        let model_label: SharedString = shown.model.into();
+        let thinking_label: SharedString = shown.thinking.into();
+        let (model_help, thinking_help) = (shown.model_help, shown.thinking_help);
         div()
             .h_flex()
             .flex_1()
@@ -1081,33 +1184,37 @@ impl ChatEditor {
                 }
             }))
             .children(p.map(|p| {
-                field("chat-model-field").max_w_40().child(
-                    Select::new(&p.models)
-                        .id("chat-model")
-                        .small()
-                        .appearance(false)
-                        .focus_ring(false)
-                        .disabled(p.catalog.is_none())
-                        .menu_width(px(320.))
-                        .menu_max_h(px(260.))
-                        .placeholder(model_label.clone())
-                        .search_placeholder("Find a scoped model…")
-                        .accessibility_label("Model for this new chat"),
-                )
+                field("chat-model-field", model_help.clone())
+                    .max_w_40()
+                    .child(
+                        Select::new(&p.models)
+                            .id("chat-model")
+                            .small()
+                            .appearance(false)
+                            .focus_ring(false)
+                            .disabled(p.catalog.is_none())
+                            .menu_width(px(320.))
+                            .menu_max_h(px(260.))
+                            .placeholder(model_label.clone())
+                            .search_placeholder("Find a scoped model…")
+                            .accessibility_label("Model for this new chat"),
+                    )
             }))
             .children(p.map(|p| {
-                field("chat-thinking-field").max_w_32().child(
-                    Select::new(&p.thinking)
-                        .id("chat-thinking")
-                        .small()
-                        .appearance(false)
-                        .focus_ring(false)
-                        .disabled(p.catalog.is_none() || levels < 2)
-                        .menu_width(px(180.))
-                        .menu_max_h(px(230.))
-                        .placeholder(thinking_label.clone())
-                        .accessibility_label("Supported thinking level"),
-                )
+                field("chat-thinking-field", thinking_help.clone())
+                    .max_w_32()
+                    .child(
+                        Select::new(&p.thinking)
+                            .id("chat-thinking")
+                            .small()
+                            .appearance(false)
+                            .focus_ring(false)
+                            .disabled(p.catalog.is_none() || levels < 2)
+                            .menu_width(px(180.))
+                            .menu_max_h(px(230.))
+                            .placeholder(thinking_label.clone())
+                            .accessibility_label("Supported thinking level"),
+                    )
             }))
     }
     fn visible_model_restriction(&self) -> Option<&'static str> {

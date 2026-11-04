@@ -62,9 +62,10 @@ pub(crate) struct Server {
     thread: Option<std::thread::JoinHandle<()>>,
 }
 pub(crate) fn catalog() -> Value {
-    json!({"defaultModel":"p/a","models":[
-    {"id":"p/a","provider":"p","name":"Atlas 日本語","thinkingLevels":["off","low","high"]},
-    {"id":"p/b","provider":"p","name":"Boreal 日本語","thinkingLevels":["off","low","high"],"thinking":"low"},
+    // Resolved defaults as pilotd reports them; the legacy fields stay alongside.
+    json!({"defaultModel":"p/a","resolvedDefaultModel":"p/a","models":[
+    {"id":"p/a","provider":"p","name":"Atlas 日本語","thinkingLevels":["off","low","high"],"defaultThinking":"low"},
+    {"id":"p/b","provider":"p","name":"Boreal 日本語","thinkingLevels":["off","low","high"],"thinking":"low","defaultThinking":"high","modelChangeThinking":"low"},
     {"id":"q/c","provider":"q","name":"Boreal 日本語","thinkingLevels":["off"]},
     {"id":"q/d","provider":"q","name":"Legacy levels not reported"}]})
 }

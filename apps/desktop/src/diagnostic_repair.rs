@@ -134,16 +134,24 @@ pub(crate) struct ModelChoice {
     pub(crate) thinking: Option<String>,
 }
 impl ModelChoice {
-    /// The catalog entry this choice runs on: the explicit model or the project default.
+    /// The catalog entry this choice runs on: the explicit model, else the repair project's
+    /// Pilot model, else pi's default, as pilotd applies them.
     pub(crate) fn resolve<'a>(
         &self,
         catalog: &'a crate::chat_models::Catalog,
+        project_model: Option<&'a str>,
     ) -> Option<&'a crate::chat_models::Model> {
-        let id = self.model.as_deref().or(catalog.default_model.as_deref())?;
-        catalog.models.iter().find(|m| m.id == id)
+        match &self.model {
+            Some(id) => catalog.models.iter().find(|m| m.id == *id),
+            None => catalog.inherited(project_model).model,
+        }
     }
     /// An explicit choice must be in the repair project's scoped catalog.
-    pub(crate) fn problem(&self, catalog: Option<&crate::chat_models::Catalog>) -> Option<Failure> {
+    pub(crate) fn problem(
+        &self,
+        catalog: Option<&crate::chat_models::Catalog>,
+        project_model: Option<&str>,
+    ) -> Option<Failure> {
         if self.model.is_none() && self.thinking.is_none() {
             return None;
         }
@@ -152,7 +160,7 @@ impl ModelChoice {
                 "Models for the repair project aren't loaded. Use the default or try again.",
             );
         };
-        let model = self.resolve(catalog);
+        let model = self.resolve(catalog, project_model);
         if self.model.is_some() && model.is_none() {
             return Some("That model isn't available for the repair project. Choose another.");
         }

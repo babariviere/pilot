@@ -17,6 +17,129 @@ fn thinking_titles_do_not_change_catalog_values() {
         assert_eq!(thinking_title(value), title);
     }
 }
+#[test]
+fn selectors_lead_with_resolved_values_and_never_guess() {
+    let c: Catalog = serde_json::from_value(crate::chat_models_fixture::catalog()).unwrap();
+    let choice = |model: &str, thinking: Option<&str>| ModelChoice {
+        model: model.into(),
+        thinking: thinking.map(Into::into),
+    };
+    let text = |s: Shown| (s.model, s.model_help, s.thinking, s.thinking_help);
+    let fresh = |choice: Option<&ModelChoice>, project: Option<&str>| {
+        text(shown(Some(&c), false, choice, Some(project), Start::Fresh))
+    };
+    // A fresh Build draft: pilotd's resolved pick and its startup level.
+    assert_eq!(
+        fresh(None, None),
+        (
+            "Atlas 日本語".into(),
+            Some("Pi default · p/a".into()),
+            "Low".into(),
+            Some("Pi default".into())
+        )
+    );
+    // The Pilot project model overrides pi's pick; a non-thinking model's level is known.
+    assert_eq!(
+        fresh(None, Some("q/c")),
+        (
+            "Boreal 日本語".into(),
+            Some("Project default · q/c".into()),
+            "Off".into(),
+            Some("The model's only level".into())
+        )
+    );
+    // Explicit model, inherited thinking: each operation's own reported level.
+    let b = choice("p/b", None);
+    assert_eq!(fresh(Some(&b), None).2, "High");
+    assert_eq!(
+        text(shown(Some(&c), false, Some(&b), None, Start::Switch)),
+        (
+            "p/b".into(),
+            None,
+            "Low".into(),
+            Some("Scope default".into())
+        )
+    );
+    assert_eq!(
+        text(shown(
+            Some(&c),
+            false,
+            Some(&choice("p/a", None)),
+            None,
+            Start::Switch
+        ))
+        .3,
+        Some("Keeps the chat's current level".into())
+    );
+    // Explicit thinking is shown as chosen, without provenance.
+    assert_eq!(
+        fresh(Some(&choice("p/a", Some("high"))), None),
+        ("p/a".into(), None, "High".into(), None)
+    );
+    assert_eq!(
+        fresh(Some(&choice("p/a", Some("max"))), None).2,
+        "Max (not in catalog)"
+    );
+    assert_eq!(
+        fresh(Some(&choice("q/d", None)), None).2,
+        "Thinking not reported"
+    );
+    // An unlisted or missing default stays unresolved, never the first model or a level.
+    let outside = fresh(None, Some("z/gone"));
+    assert_eq!(outside.0, "Default model");
+    assert!(outside.1.unwrap().contains("z/gone"));
+    assert_eq!(outside.2, "Default");
+    let mut bare = c.clone();
+    (bare.default_model, bare.resolved_default_model) = (None, None);
+    assert_eq!(
+        text(shown(Some(&bare), false, None, Some(None), Start::Fresh))
+            .1
+            .as_deref(),
+        Some("Chosen when the chat starts")
+    );
+    // Resolution doesn't describe other chats (Ask drafts, restored chats).
+    let other = text(shown(Some(&c), false, None, None, Start::Other));
+    assert_eq!(
+        (other.0.as_str(), other.1.as_deref(), other.2.as_str()),
+        (
+            "Default model",
+            Some("Chosen when the chat starts"),
+            "Default"
+        )
+    );
+    // An older daemon: the configured default in scope, but no reported level.
+    let mut old = c.clone();
+    old.resolved_default_model = None;
+    for m in &mut old.models {
+        (m.fresh_thinking, m.switch_thinking) = (None, None);
+    }
+    assert_eq!(
+        text(shown(Some(&old), false, None, Some(None), Start::Fresh)),
+        (
+            "Atlas 日本語".into(),
+            Some("Pi default · p/a".into()),
+            "Default".into(),
+            Some("Pi's setting for this model".into())
+        )
+    );
+    // Loading and unavailable are said as such, not resolved.
+    assert_eq!(
+        text(shown(None, true, None, Some(Some("p/a")), Start::Fresh)).0,
+        "Loading models…"
+    );
+    assert_eq!(
+        text(shown(None, false, None, Some(None), Start::Fresh)).0,
+        "Models unavailable"
+    );
+    let retained = text(shown(
+        None,
+        false,
+        Some(&choice("p/a", Some("high"))),
+        None,
+        Start::Other,
+    ));
+    assert_eq!((retained.0.as_str(), retained.2.as_str()), ("p/a", "High"));
+}
 fn setup(
     cx: &mut TestAppContext,
 ) -> (
@@ -119,6 +242,134 @@ fn scope_change_revalidates_retained_reader_and_preserves_draft(cx: &mut TestApp
         });
     })
     .unwrap();
+}
+fn shown_values(cx: &mut TestAppContext, h: AnyWindowHandle) -> (String, String) {
+    cx.run_until_parked();
+    cx.update_window(h, |_, w, _| {
+        let model = w.find("chat-model").value().unwrap_or_default().to_owned();
+        let thinking = w
+            .find("chat-thinking")
+            .value()
+            .unwrap_or_default()
+            .to_owned();
+        (model, thinking)
+    })
+    .unwrap()
+}
+#[gpui_kit::test]
+fn new_draft_shows_resolved_default_and_follows_project_model_without_saving(
+    cx: &mut TestAppContext,
+) {
+    let (_s, h, e, commands) = setup(cx);
+    let project = |model: Option<&str>| {
+        Arc::new(vec![crate::local_model::Project {
+            id: "project-a".into(),
+            name: "A".into(),
+            path: "/synthetic/project".into(),
+            model: model.map(Into::into),
+            ..Default::default()
+        }])
+    };
+    cx.update_window(h, |_, w, cx| {
+        e.update(cx, |e, cx| {
+            e.projects(project(Some("q/c")), true, None, w, cx);
+            e.cache.insert(
+                "new:resolved".into(),
+                Draft {
+                    project_id: Some("project-a".into()),
+                    cwd: "/synthetic/project".into(),
+                    text: "Keep 日本語".into(),
+                    mode: "build".into(),
+                    ..Default::default()
+                },
+            );
+            e.select("new:resolved".into(), true, false, w, cx);
+            // Loading is said as such until this scope's catalog arrives.
+            assert!(e.models.as_ref().unwrap().picker.as_ref().unwrap().loading);
+        })
+    })
+    .unwrap();
+    assert_eq!(shown_values(cx, h).0, "Loading models…");
+    cx.update_window(h, |_, w, cx| {
+        e.update(cx, |e, cx| {
+            let (scope, _) = source(e);
+            let c: Catalog = serde_json::from_value(crate::chat_models_fixture::catalog()).unwrap();
+            e.accept_models(
+                Update {
+                    id: e.models.as_ref().unwrap().request,
+                    scope,
+                    result: Ok((c, None)),
+                },
+                w,
+                cx,
+            );
+        })
+    })
+    .unwrap();
+    // The project's non-thinking model, and its only level, lead.
+    assert_eq!(shown_values(cx, h), ("Boreal 日本語".into(), "Off".into()));
+    // A project model change follows without a write; pi's default then applies.
+    cx.update_window(h, |_, w, cx| {
+        e.update(cx, |e, cx| e.projects(project(None), true, None, w, cx))
+    })
+    .unwrap();
+    // pilotd's resolved pick and its reported startup level.
+    assert_eq!(shown_values(cx, h), ("Atlas 日本語".into(), "Low".into()));
+    cx.update_window(h, |_, w, cx| {
+        e.update(cx, |e, cx| {
+            assert!(
+                e.draft().unwrap().model_choice.is_none(),
+                "inheritance kept"
+            );
+            // An explicit model, then the default again: the choice returns to null.
+            let (scope, epoch) = source(e);
+            e.choose_model(&scope, &epoch, "p/b", None, w, cx);
+            assert_eq!(e.model_choice().unwrap().model, "p/b");
+            let (scope, epoch) = source(e);
+            e.choose_model(&scope, &epoch, "", None, w, cx);
+            assert!(e.draft().unwrap().model_choice.is_none());
+            assert_eq!(e.text.read(cx).value().as_ref(), "Keep 日本語");
+        })
+    })
+    .unwrap();
+    assert_eq!(shown_values(cx, h).0, "Atlas 日本語");
+    assert!(commands.is_empty(), "displaying a default never writes");
+}
+#[gpui_kit::test]
+fn unstarted_chat_is_not_resolved_and_shows_its_reported_model_after(cx: &mut TestAppContext) {
+    let (server, h, e, commands) = setup(cx);
+    let reported = SessionModel::read(&server.seen.lock().unwrap().session());
+    let unstarted = SessionModel {
+        model: None,
+        thinking: None,
+        ..reported.clone()
+    };
+    cx.update_window(h, |_, w, cx| {
+        e.update(cx, |e, cx| {
+            e.model_context("source", "/synthetic/project", unstarted, w, cx)
+        })
+    })
+    .unwrap();
+    // Resolution describes fresh Build drafts, not existing chats.
+    assert_eq!(
+        shown_values(cx, h),
+        ("Default model".into(), "Default".into())
+    );
+    // The chat's reported model and effective level replace the default.
+    let started = SessionModel {
+        model: Some("p/b".into()),
+        thinking: Some("high".into()),
+        updated_at: reported.updated_at + 1,
+        ..reported
+    };
+    cx.update_window(h, |_, w, cx| {
+        e.update(cx, |e, cx| {
+            e.model_context("source", "/synthetic/project", started, w, cx)
+        })
+    })
+    .unwrap();
+    assert_eq!(shown_values(cx, h), ("Boreal 日本語".into(), "High".into()));
+    assert!(commands.is_empty());
 }
 
 #[gpui_kit::test]
@@ -573,6 +824,7 @@ fn empty_scoped_catalog_is_visible_without_substitution_or_actions(cx: &mut Test
                         Catalog {
                             models: vec![],
                             default_model: None,
+                            resolved_default_model: None,
                         },
                         None,
                     )),

@@ -404,28 +404,41 @@ fn edited_text_and_model_choice_are_sent_exactly() {
         thinking: thinking.map(Into::into),
     };
     assert_eq!(
-        ModelChoice::default().problem(None),
+        ModelChoice::default().problem(None, None),
         None,
         "default needs no catalog"
     );
-    assert!(choose(Some("p/b"), None).problem(None).is_some());
+    assert!(choose(Some("p/b"), None).problem(None, None).is_some());
     assert_eq!(
-        choose(Some("p/b"), Some("high")).problem(Some(&catalog)),
+        choose(Some("p/b"), Some("high")).problem(Some(&catalog), None),
         None
     );
     assert_eq!(
-        choose(None, Some("low")).problem(Some(&catalog)),
+        choose(None, Some("low")).problem(Some(&catalog), None),
         None,
         "default model's levels"
     );
+    // The repair project's Pilot model replaces pi's default, as pilotd applies it.
+    assert!(
+        choose(None, Some("low"))
+            .problem(Some(&catalog), Some("q/c"))
+            .is_some(),
+        "the project model's levels, not pi's default"
+    );
+    assert_eq!(
+        choose(None, None)
+            .resolve(&catalog, Some("q/c"))
+            .map(|m| m.id.as_str()),
+        Some("q/c")
+    );
     assert!(
         choose(Some("z/missing"), None)
-            .problem(Some(&catalog))
+            .problem(Some(&catalog), None)
             .is_some()
     );
     assert!(
         choose(Some("q/c"), Some("high"))
-            .problem(Some(&catalog))
+            .problem(Some(&catalog), None)
             .is_some()
     );
 

@@ -7,6 +7,7 @@ fn project(id: &str, name: &str) -> Project {
         name: name.into(),
         path: "/synthetic/shared".into(),
         policy: ProjectPolicy::default(),
+        model: None,
     }
 }
 fn with(p: &Project, f: impl FnOnce(&mut Project)) -> Project {

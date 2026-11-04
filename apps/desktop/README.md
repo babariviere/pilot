@@ -209,7 +209,8 @@ Existing-chat changes are explicit and idle-only, with no queued work, pending d
 retained/read-only history, failed state, subscription pause or native composition. They
 use only the existing model-change API, never continuation/new-chat/send/Stop as a side
 effect. New-chat choices remain private per-draft, bound to the exact canonical project
-and directory; **Project/pi default** leaves resolution to Local. Changing project does
+and directory; the default row leaves resolution to Local and names the model it resolves
+to (see [chat models](docs/chat-models.md)). Changing project does
 not silently retarget an explicit model choice. Existing pending delivery envelopes,
 operation IDs, payloads and hashes remain immutable.
 

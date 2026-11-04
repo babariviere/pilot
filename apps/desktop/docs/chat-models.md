@@ -17,12 +17,35 @@ the already-checked model does nothing. A different model omits `thinking`, so t
 server selects that new model's scoped/per-model default. Explicit thinking choices
 must be reported for the same current model and require at least two supported levels.
 
-For new drafts, Project/pi default omits both overrides. Explicit model/thinking choices
+For new drafts, the default row omits both overrides. Explicit model/thinking choices
 are saved privately with the exact project ID and canonical path. A changed project/path
 retains the old choice as unavailable until the user explicitly chooses for the new
 scope, not a guessed path or silent default. A scoped-catalog failure/removal disables
 Create for an explicit choice; recovery is derived from current data, not a latched input
 error. Scope refresh never changes the native message, permission, draft source or reader.
+
+### Resolved defaults
+
+Inherited values are shown by their effective name, with where they come from as the
+menu row detail and tooltip (for example *Atlas*, detail *Pi default · p/a*). Display only:
+nothing is saved, and the default row keeps storing no override. Values come from the
+optional metadata in [model defaults](../../../docs/technical/model-defaults.md), which
+describes core fresh Build chats and model changes only:
+
+- Model, for a new Build draft: the Pilot project's `model` (`GET /api/projects`), else
+  `resolvedDefaultModel`. An older daemon reports only `defaultModel`, shown when the
+  scoped catalog lists it. An unlisted ID stays **Default model** with the ID in its detail;
+  the client never guesses a first or provider default.
+- Thinking: an explicit level, else a model's only level (*Off* for a non-thinking model),
+  else the operation's reported level: `defaultThinking` for a new Build draft,
+  `modelChangeThinking` (or, from an older daemon, the scope pin) for a failed chat's
+  next attempt. Otherwise **Default**.
+- Ask drafts and existing chats aren't resolved: they show their reported values, or
+  **Default model**/**Default** until the chat reports them. The metadata reads the project
+  directory, so a private checkout's own settings or extension hooks can still differ.
+
+While models load or are unavailable the selector says so, rather than resolving.
+The diagnostic repair chat's menus use the same fresh Build resolution.
 
 ## Audited contracts and authority
 

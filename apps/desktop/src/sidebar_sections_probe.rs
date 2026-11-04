@@ -75,6 +75,7 @@ fn projects() -> Vec<Project> {
         name: name.into(),
         path: format!("/synthetic/{id}"),
         policy: Default::default(),
+        model: None,
     })
     .collect()
 }

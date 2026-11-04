@@ -4,7 +4,9 @@ The existing native model/thinking menus can save a preference for a failed
 Local chat. The caption says **Next attempt only**. This is not a retry:
 the failure, reason/version, current effective model, attempts, history,
 queued input, composer draft and reader remain intact. Thinking can be an
-explicit supported level or **Scoped default**, which stores no override.
+explicit supported level or the default row, which stores no override. That row
+names the level a model change applies (pilotd's `modelChangeThinking`, or the
+scope pin from an older daemon), else **Default**, which keeps the current level.
 Unavailable models are retained, not replaced by the first catalog entry.
 
 ## Passive contract
