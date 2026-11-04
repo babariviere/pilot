@@ -1314,6 +1314,8 @@ export class MissionService {
 				"start",
 				"send",
 				"answer",
+				"archiveWorker",
+				"restoreWorker",
 				"status",
 				"bindPr",
 				"unbindPr",
@@ -1332,6 +1334,56 @@ export class MissionService {
 		const who = (id: string | undefined) => (id === undefined ? "user" : id === sessionId ? "you" : id);
 		const str = (key: string) => (typeof args[key] === "string" ? (args[key] as string) : undefined);
 		switch (action) {
+			case "archiveWorker":
+			case "restoreWorker": {
+				const target = str("targetSessionId");
+				if (!target?.trim()) throw new Error(`${action} requires targetSessionId`);
+				const project = this.projects.require(mission.projectId);
+				const fence = () => {
+					const context = this.store.allocationContextFence(missionId);
+					return JSON.stringify([
+						context.memberEventId,
+						context.coordinatorEventId,
+						this.store.activity(missionId, { kind: "task", limit: 1 })[0]?.id,
+						this.store.activity(missionId, { kind: "comment", limit: 1 })[0]?.id,
+					]);
+				};
+				const admitted = fence();
+				const authorize = (taskIds: readonly string[]) => {
+					if (fence() !== admitted)
+						throw new Conflict("Worker scope or assignments changed; inspect current status before retrying");
+					const current = this.store.require(missionId);
+					if (
+						this.store.missionOf(sessionId) !== missionId ||
+						current.coordinatorSessionId !== sessionId ||
+						current.projectId !== project.id ||
+						this.projects.require(project.id).path !== project.path ||
+						this.session(sessionId).projectId !== project.id ||
+						this.session(target).projectId !== project.id ||
+						this.store.missionOf(target) !== missionId ||
+						target === sessionId ||
+						this.store.membership(target)?.coordinator ||
+						this.sharing?.membership(target)
+					)
+						throw new Conflict("Only a current worker in the coordinator's mission/project can be organized");
+					const detail = this.store.detail(missionId, false);
+					const assigned = detail.tasks.filter((task) => task.sessionId === target || taskIds.includes(task.id));
+					if (!assigned.length || assigned.some((task) => task.status !== "done" && task.status !== "dropped"))
+						throw new Conflict(
+							"Resolve the worker's assigned work before organizing its chat; idle is not completion",
+						);
+					if (
+						detail.comments.some(
+							(comment) => comment.targetSessionId === target || comment.authorSessionId === target,
+						)
+					)
+						throw new Conflict("Resolve outstanding worker assistance before organizing its chat");
+				};
+				// Task resolution must be durable, not merely visible in SQLite's live connection.
+				await this.store.durable();
+				const result = await this.sessions.organizeMissionWorker(target, action === "archiveWorker", authorize);
+				return { sessionId: target, archivedAt: result.archivedAt ?? null };
+			}
 			case "prGuidance": {
 				if (args.taskId === undefined) throw new Error("prGuidance requires taskId");
 				const task = this.store.resolveTask(missionId, args.taskId);
@@ -1474,16 +1526,21 @@ export class MissionService {
 				return { sessionId: args.targetSessionId, sent: result.delivery !== "rejected", ...result };
 			}
 			case "status": {
+				this.projects.require(mission.projectId);
+				this.assertSameProject(sessionId, missionId);
 				const target = args.targetSessionId;
 				if (target !== undefined && (typeof target !== "string" || !target.trim()))
 					throw new Error("status requires a non-empty targetSessionId");
 				if (typeof target === "string" && this.store.missionOf(target) !== missionId)
 					throw new Conflict("That chat is not in this mission");
+				if (typeof target === "string") this.assertSameProject(target, missionId);
 				const tasks = this.store.tasks(missionId);
 				const selected =
 					typeof target === "string"
 						? [this.sessions.get(target)].filter((member): member is SessionSummary => member !== undefined)
-						: this.sessions.list({ missionId, archived: "all" });
+						: this.sessions
+								.list({ missionId, archived: "all" })
+								.filter((member) => member.projectId === mission.projectId);
 				const members = selected.map((member) => {
 					const claimed = tasks.filter((task) => task.sessionId === member.id);
 					const prs = member.pullRequests ?? (member.pullRequest ? [member.pullRequest] : []);
@@ -1535,6 +1592,9 @@ export class MissionService {
 					if (!member) throw new NotFound("Member chat not found");
 					const question = await this.sessions.pendingQuestion(target);
 					const lastAssistantReply = await this.sessions.lastAssistantReply(target, 1500);
+					this.projects.require(mission.projectId);
+					this.assertSameProject(sessionId, missionId);
+					this.assertSameProject(target, missionId);
 					if (
 						this.store.missionOf(sessionId) !== missionId ||
 						this.store.require(missionId).coordinatorSessionId !== sessionId ||

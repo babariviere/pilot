@@ -7,6 +7,10 @@ existing missions require D22's adoption preview and explicit opt-in. Unknown cu
 No retention delay is proposed: after the gates and safety checks hold, archive then start deletion
 immediately. A safety block is not a timer.
 
+Implemented [coordinator worker organization](mission-worker-organization.md) is separate:
+it permits scoped, reversible chat archive/restore and explicitly excludes automatic workspace
+pruning/reclamation. It does not activate any retirement gate or deletion proposed below.
+
 ## Starting point and prerequisites
 
 * [jj ownership](jj-ownership.md) (#13) binds a proven creator to repository instance and full

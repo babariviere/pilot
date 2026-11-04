@@ -4,9 +4,53 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
+import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.test.ts";
 import { Conflict } from "./errors.ts";
 
 import { assertHistory, DAY, fixture, seedHistory } from "./testing/session-workspace.ts";
+
+test("coordinator organization retains actual workspace outputs, history and artifacts across sweeps and restart", async (t) => {
+	const f = await fixture(t);
+	const created = await f.spawn();
+	const directory = join(f.home, "sessions", created.id);
+	await seedHistory(directory);
+	const store = new LegacyArtifactFixture(directory, { sessionId: created.id, projectId: f.project.id });
+	const artifact = await store.create({ title: "Retained", kind: "html", source: "historical content" });
+	await mkdir(join(created.cwd, "node_modules"));
+	await writeFile(join(created.cwd, "node_modules", "retain"), "not disposable by coordinator authority");
+	await writeFile(join(created.cwd, "ignored-secret"), "retained ignored input");
+	const authorize = () => {}; // Scope/assignment authorization is exercised by MissionService fixtures.
+	await f.sessions.organizeMissionWorker(created.id, true, authorize);
+	const before = f.workers.length;
+	assert.equal((await f.stored(created.id)).coordinatorArchivePreservesWorkspace, true);
+	await f.sessions["reclaimArchivedWorkspaces"](); // Even immediate output pruning is forbidden.
+	await f.sessions["pruneWorkspace"](created.id); // A queued/stale prune must recheck the marker too.
+	assert.equal(
+		await readFile(join(created.cwd, "node_modules", "retain"), "utf8"),
+		"not disposable by coordinator authority",
+	);
+	const history = await f.sessions.history(created.id, Number.MAX_SAFE_INTEGER, 100);
+	assert.deepEqual(history.entries[0]?.data, { text: "retained conversation" });
+	assert.equal((await f.sessions.artifact(created.id, artifact.id)).source, "historical content");
+	assert.equal(f.workers.length, before);
+	await f.sessions.shutdown();
+	const restarted = await f.manager();
+	const now = Date.now() + 31 * DAY;
+	t.mock.method(Date, "now", () => now);
+	await restarted["reclaimArchivedWorkspaces"]();
+	await restarted.reclaimWorkspace(created.id, now); // Stale automatic admission cannot bypass preservation.
+	assert.ok(existsSync(created.cwd));
+	assert.equal(await readFile(join(created.cwd, "ignored-secret"), "utf8"), "retained ignored input");
+	assert.equal((await restarted.artifacts(created.id))[0]!.id, artifact.id);
+	await restarted.organizeMissionWorker(created.id, false, authorize);
+	assert.equal(restarted.get(created.id)!.archivedAt, undefined);
+	assert.equal(f.workers.length, before, "passive restore never starts a worker");
+	await restarted.archive(created.id); // Existing user archive remains available, without dropping preservation.
+	await restarted["reclaimArchivedWorkspaces"]();
+	assert.ok(existsSync(join(created.cwd, "node_modules", "retain")));
+	await restarted.reclaimWorkspace(created.id); // Separate explicit user cleanup retains its authority.
+	assert.equal(existsSync(created.cwd), false);
+});
 
 test("failed automatic cleanup backs off, caps retries, and leaves explicit cleanup available", async (t) => {
 	const f = await fixture(t);

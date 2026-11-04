@@ -38,5 +38,15 @@ Completing or archiving a mission archives its coordinator after current work fi
 Archiving a coordinator also archives its mission. Other member chats and their
 history remain intact. Archive and reopen are separate from deleting a workspace.
 
+Coordinators can use `archiveWorker` and `restoreWorker` with `targetSessionId`
+for finished workers in their current mission and project, without per-chat confirmation.
+Assigned tasks must be done or explicitly dropped, with no outstanding work, queued input
+or assistance. Idle alone is not finished. `status` includes archived workers.
+
+Coordinator organization preserves history, artifacts and the workspace from automatic
+cleanup. Restore does not send messages or restart work; a follow-up needs a separate,
+authorized send or start. Your archive, restore and explicit workspace-cleanup controls
+remain available. This does not enable automatic retirement or workspace deletion.
+
 See [Linear](linear.md) for managed ticket contributions and [knowledge](knowledge.md)
 for project documentation linked to a mission.

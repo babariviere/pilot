@@ -537,6 +537,8 @@ interface SessionMeta extends OutcomeMeta {
 	/** User-submission time, separate from worker lifecycle and metadata changes. */
 	lastUserMessageAt?: number;
 	archivedAt?: number;
+	/** Coordinator organization excludes automatic cleanup, including after restore/rearchive. User reclaim is separate. */
+	coordinatorArchivePreservesWorkspace?: boolean;
 	/** User pin, independent of activity and manual archival. */
 	pinned?: boolean;
 	/** Restoring gives an inactive chat a new week without changing its activity ordering. */
@@ -1511,6 +1513,7 @@ export class SessionManager {
 			autoArchivedPullRequest?: string;
 			staleBefore?: number;
 			coordinatorMissionId?: string;
+			organization?: (taskIds: readonly string[]) => void;
 			promise: Promise<SessionSummary>;
 		}
 	>();
@@ -3403,6 +3406,7 @@ ${run.excerpt}`,
 			if (
 				meta.continuedTo ||
 				meta.coordinatorView ||
+				meta.coordinatorArchivePreservesWorkspace ||
 				!meta.workspace ||
 				meta.archivedAt === undefined ||
 				hasActivePullRequest(meta)
@@ -3538,6 +3542,7 @@ ${run.excerpt}`,
 				.then(async () => {
 					const meta = this.require(id);
 					if (this.closing) throw new Conflict("pilotd is shutting down");
+					if (staleBefore !== undefined && meta.coordinatorArchivePreservesWorkspace) return this.summary(meta);
 					if (staleBefore !== undefined && (meta.archivedAt === undefined || meta.archivedAt > staleBefore))
 						return this.summary(meta);
 					if (meta.archivedAt === undefined)
@@ -3621,6 +3626,7 @@ ${run.excerpt}`,
 					if (this.closing) throw new Conflict("pilotd is shutting down");
 					if (
 						meta.archivedAt === undefined ||
+						meta.coordinatorArchivePreservesWorkspace ||
 						(meta.workspacePrunedAt !== undefined && meta.workspacePrunedAt > Date.now() - DAY_MS) ||
 						meta.workspaceRecovery ||
 						!meta.workspace ||
@@ -5342,6 +5348,118 @@ ${run.excerpt}`,
 		}
 	}
 
+	/** Scoped organization uses archive serialization, never setup, replay or scratch removal. */
+	async organizeMissionWorker(
+		id: string,
+		archived: boolean,
+		authorize: (taskIds: readonly string[]) => void,
+	): Promise<SessionSummary> {
+		const end = this.updateGate.begin();
+		try {
+			return await this.setArchived(id, archived, undefined, undefined, undefined, authorize);
+		} finally {
+			end();
+		}
+	}
+
+	private assertWorkerOrganizationReady(meta: SessionMeta): void {
+		const id = meta.id;
+		const worker = this.workers.get(id);
+		this.assertNotContinued(meta);
+		if (
+			this.closing ||
+			this.sleepPause ||
+			this.subscriptionPaused(id) ||
+			meta.coordinatorView ||
+			meta.working ||
+			meta.initializing ||
+			meta.preparing ||
+			meta.kernelRestartPending ||
+			meta.pending?.length ||
+			meta.sleepPaused ||
+			meta.updatePaused ||
+			meta.continuationPending ||
+			meta.workspaceRecovery ||
+			this.scheduledMessages.has(id) ||
+			this.runFinishing.has(id) ||
+			this.postRunTasks.has(id) ||
+			meta.automation?.postRun?.state === "pending" ||
+			meta.automation?.setup?.state === "pending" ||
+			(this.flowRoot(meta)?.flow && flowActive(this.flowRoot(meta)!.flow!)) ||
+			this.starting.has(id) ||
+			this.sending.has(id) ||
+			this.delivering.has(id) ||
+			this.parking.has(id) ||
+			this.changingModels.has(id) ||
+			this.roleTransitions.has(id) ||
+			this.workspaceRefreshes.has(id) ||
+			this.workspaceMaintenance.has(id) ||
+			this.rebasingWorkspaces.has(id) ||
+			this.hasWorkspaceProcess(id) ||
+			this.backgroundWorking(meta, worker) ||
+			meta.subagents?.some((child) => child.state === "working") ||
+			worker?.state === "working" ||
+			worker?.state === "starting" ||
+			(worker && worker.busy !== false) ||
+			worker?.toolsRunning ||
+			worker?.compacting ||
+			worker?.awaitedQuestion ||
+			this.summary(meta).attentionReason?.kind === "asks"
+		)
+			throw new Conflict("Worker has active or pending work; resolve it before organizing the chat");
+	}
+
+	private async setWorkerArchived(
+		meta: SessionMeta,
+		archived: boolean,
+		authorize: (taskIds: readonly string[]) => void,
+	): Promise<SessionSummary> {
+		const worker = this.workers.get(meta.id);
+		const guard = () => {
+			authorize(meta.taskIds ?? []);
+			this.assertWorkerOrganizationReady(meta);
+			if (this.workers.get(meta.id) !== worker) throw new Conflict("Worker changed while organizing the chat");
+		};
+		guard();
+		if (worker && ((await worker.hasChildren?.()) ?? true))
+			throw new Conflict("Worker subprocesses must finish before organizing the chat");
+		const view = await this.recentColdSnapshot(meta);
+		if (
+			view.events.some((event) =>
+				event.type === "queue_update"
+					? event.items.length || event.automatic?.length
+					: event.type === "snapshot" &&
+						(event.history?.question ||
+							event.inbox.length ||
+							event.run ||
+							event.tools.length ||
+							event.nestedTools?.length),
+			)
+		)
+			throw new Conflict("Resolve the worker's queued inputs, question or pending effects first");
+		guard();
+		await this.save(
+			meta,
+			{
+				timestamp: archived ? (meta.archivedAt ?? Date.now()) : undefined,
+				...(!archived ? { restoredAt: meta.archivedAt !== undefined ? Date.now() : meta.restoredAt } : {}),
+				preserveWorkspace: true,
+			},
+			undefined,
+			true,
+			guard,
+		);
+		this.emit(meta, undefined, true);
+		try {
+			guard();
+		} catch (error) {
+			throw new Conflict(
+				`Chat organization committed (archivedAt=${meta.archivedAt ?? "null"}), but ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+		return this.summary(meta);
+	}
+
 	/** A closed mission waits for its coordinator's whole turn, including children and job follow-ups. */
 	private coordinatorArchiveReady(meta: SessionMeta): boolean {
 		const worker = this.workers.get(meta.id);
@@ -5389,6 +5507,7 @@ ${run.excerpt}`,
 		autoArchivedPullRequest?: string,
 		staleBefore?: number,
 		coordinatorMissionId?: string,
+		organization?: (taskIds: readonly string[]) => void,
 	): Promise<SessionSummary> {
 		this.assertHistoryWritable(this.require(id));
 
@@ -5396,6 +5515,8 @@ ${run.excerpt}`,
 		this.require(id);
 		const previous = this.archiveTransitions.get(id);
 		if (
+			!organization &&
+			!previous?.organization &&
 			previous?.archived === archived &&
 			previous.autoArchivedPullRequest === autoArchivedPullRequest &&
 			previous.staleBefore === staleBefore &&
@@ -5406,6 +5527,7 @@ ${run.excerpt}`,
 			.catch(() => undefined)
 			.then(async () => {
 				const meta = this.require(id);
+				if (organization) return this.setWorkerArchived(meta, archived, organization);
 				if (coordinatorMissionId !== undefined) {
 					await this.missions?.whenDurable?.();
 					// Restoration, reassignment or new work while the commit drained cancels this attempt.
@@ -5522,6 +5644,7 @@ ${run.excerpt}`,
 			autoArchivedPullRequest,
 			staleBefore,
 			coordinatorMissionId,
+			organization,
 			promise,
 		});
 		const clear = () => {
@@ -5904,6 +6027,8 @@ ${run.excerpt}`,
 			throw new Conflict("Insights cannot transfer its restricted profile through continuation");
 		if (source.continuedTo && source.continuedTo !== target.id)
 			throw new Conflict("Chat already continued elsewhere");
+		// The workspace moves, so its coordinator cleanup exclusion moves with it, including journal recovery.
+		if (source.coordinatorArchivePreservesWorkspace) target.coordinatorArchivePreservesWorkspace = true;
 		source.continuedTo = target.id;
 		delete source.working;
 		delete source.initializing;
@@ -12159,7 +12284,7 @@ ${run.excerpt}`,
 			.finally(release);
 	}
 
-	private emit(meta: SessionMeta, worker?: SessionWorker): void {
+	private emit(meta: SessionMeta, worker?: SessionWorker, passive = false): void {
 		this.piReload.wake(meta.id);
 		const activeWorker = this.workers.get(meta.id);
 		if (
@@ -12171,9 +12296,11 @@ ${run.excerpt}`,
 		const summary = this.summary(meta, worker ?? this.workers.get(meta.id));
 		if (!this.closing) {
 			this.observeLifecycle(meta, summary);
-			this.observeRunFinished(meta, summary);
-			this.startPostRun(meta);
-			this.startFlowAdvance(meta);
+			if (!passive) {
+				this.observeRunFinished(meta, summary);
+				this.startPostRun(meta);
+				this.startFlowAdvance(meta);
+			}
 		}
 		if (!this.closing)
 			this.longJobTimers.update(meta.id, meta.archivedAt === undefined ? (summary.runningJobs ?? []) : [], () => {
@@ -12408,9 +12535,15 @@ ${run.excerpt}`,
 
 	private save(
 		meta: SessionMeta,
-		archive?: { timestamp?: number; restoredAt?: number; autoArchivedPullRequest?: string },
+		archive?: {
+			timestamp?: number;
+			restoredAt?: number;
+			autoArchivedPullRequest?: string;
+			preserveWorkspace?: boolean;
+		},
 		pin?: { value: boolean },
 		durable = false,
+		beforeCommit?: () => void,
 	): Promise<void> {
 		this.metas.set(meta.id, meta);
 		// Capture before joining the queue. The live meta can change while an earlier write awaits I/O.
@@ -12473,6 +12606,10 @@ ${run.excerpt}`,
 			const archivedAt = archive ? archive.timestamp : meta.archivedAt;
 			if (archivedAt === undefined) delete persisted.archivedAt;
 			else persisted.archivedAt = archivedAt;
+			// Old lifecycle snapshots cannot erase a committed coordinator preservation marker.
+			if (archive?.preserveWorkspace ?? meta.coordinatorArchivePreservesWorkspace)
+				persisted.coordinatorArchivePreservesWorkspace = true;
+			else delete persisted.coordinatorArchivePreservesWorkspace;
 			const restoredAt = archive?.restoredAt ?? meta.restoredAt;
 			if (restoredAt !== undefined) persisted.restoredAt = restoredAt;
 			// Like archivedAt, the merge marker must not be lost to queued lifecycle snapshots.
@@ -12490,7 +12627,20 @@ ${run.excerpt}`,
 				() => `${JSON.stringify(persisted, null, "\t")}\n`,
 			);
 			await writeFile(temp, contents, { mode: 0o600, flush: durable });
+			try {
+				beforeCommit?.();
+			} catch (error) {
+				await rm(temp, { force: true });
+				throw error;
+			}
 			await rename(temp, file);
+			// Rename is the visible commit, even if subsequent directory sync reports an uncertain durability error.
+			if (beforeCommit && archive) {
+				if (archive.timestamp === undefined) delete meta.archivedAt;
+				else meta.archivedAt = archive.timestamp;
+				meta.coordinatorArchivePreservesWorkspace = true;
+				if (archive.restoredAt !== undefined) meta.restoredAt = archive.restoredAt;
+			}
 			if (durable) {
 				for (const path of [this.dir(meta.id), this.sessionsDir, this.home]) {
 					const directory = await open(path, "r");
@@ -12507,6 +12657,7 @@ ${run.excerpt}`,
 			}
 			// Commit in memory before the next queued save can read the metadata.
 			if (archive) {
+				if (archive.preserveWorkspace) meta.coordinatorArchivePreservesWorkspace = true;
 				if (archive.timestamp === undefined) delete meta.archivedAt;
 				else meta.archivedAt = archive.timestamp;
 				if (archive.restoredAt !== undefined) meta.restoredAt = archive.restoredAt;

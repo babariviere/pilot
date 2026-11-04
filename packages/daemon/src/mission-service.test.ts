@@ -2815,6 +2815,297 @@ test("delivered members stay unarchived, retain handoff, and new tasks start fre
 	assert.equal(f.store.resolveTask(id, "2").sessionId, next.id);
 });
 
+async function organizationFixture(t: TestContext) {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Organization",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.store.join(member.id, mission.id);
+	const task = f.store.addTask(mission.id, { title: "Delivered", sessionId: member.id });
+	await f.service.call(member.id, "complete", {
+		id: task.id,
+		completion: { commit: "a".repeat(40), checks: "Fixture delivery", issues: "" },
+	});
+	const worker = f.workers.get(member.id)!;
+	Object.assign(worker, { hasChildren: async () => false });
+	const passiveReader = f.sessions as unknown as { recentColdSnapshot(): Promise<{ events: unknown[] }> };
+	t.mock.method(passiveReader, "recentColdSnapshot", async () => ({ events: [] }));
+	const organize = (
+		action: "archiveWorker" | "restoreWorker" = "archiveWorker",
+		targetSessionId = member.id,
+		sender = lead.id,
+	) => f.service.call(sender, action, { targetSessionId });
+	return { ...f, lead, member, mission, task, worker, organize, passiveReader };
+}
+
+test("worker organization archives delivered work, repeats, lists and passively restores before explicit follow-up", async (t) => {
+	const f = await organizationFixture(t);
+	const tasks = f.store.tasks(f.mission.id);
+	const completion = f.store.completion(f.mission.id, f.task.id);
+	const requests = f.worker.requests.length;
+	const automation = f.sessions as unknown as {
+		startWorkspaceSetup(): Promise<void>;
+		startPostRun(): void;
+		startFlowAdvance(): void;
+	};
+	const setup = t.mock.method(automation, "startWorkspaceSetup", async () => assert.fail("no automatic setup"));
+	const postRun = t.mock.method(automation, "startPostRun", () => assert.fail("no automatic work"));
+	const flow = t.mock.method(automation, "startFlowAdvance", () => assert.fail("no automatic flow"));
+	const a = await f.organize();
+	assert.ok(f.sessions.get(f.member.id)!.archivedAt);
+	assert.deepEqual(await f.organize(), a);
+	const status = (await f.service.call(f.lead.id, "status", {})) as {
+		members: Array<{ id: string; archivedAt?: number }>;
+	};
+	assert.ok(status.members.find((m) => m.id === f.member.id)?.archivedAt);
+	const rejected = (await f.service.call(f.lead.id, "send", { targetSessionId: f.member.id, message: "Not yet" })) as {
+		delivery: string;
+	};
+	assert.equal(rejected.delivery, "rejected");
+	const restored = { sessionId: f.member.id, archivedAt: null };
+	assert.deepEqual(await f.organize("restoreWorker"), restored);
+	assert.deepEqual(await f.organize("restoreWorker"), restored);
+	assert.equal(f.worker.requests.length, requests, "archive/restore never delivers or replays input");
+	assert.deepEqual(f.store.tasks(f.mission.id), tasks);
+	assert.deepEqual(f.store.completion(f.mission.id, f.task.id), completion);
+	assert.equal(f.store.require(f.mission.id).status, "active");
+	// Sending is a distinct authorized operation after the passive restore.
+	setup.mock.restore();
+	postRun.mock.restore();
+	flow.mock.restore();
+	await f.service.call(f.lead.id, "send", { targetSessionId: f.member.id, message: "Authorized follow-up" });
+	assert.equal(f.worker.requests.length, requests + 1);
+	assert.equal(f.worker.requests.at(-1)!.type, "input");
+});
+
+test("worker organization refuses unrelated, self, non-coordinator, moved-project and unfinished targets", async (t) => {
+	const f = await organizationFixture(t);
+	const outsider = await f.spawn();
+	for (const action of ["archiveWorker", "restoreWorker"] as const) {
+		await assert.rejects(f.organize(action, f.member.id, f.member.id), /coordinator/);
+		await assert.rejects(f.organize(action, f.lead.id), /current worker/);
+		await assert.rejects(f.organize(action, outsider.id), /current worker/);
+	}
+	for (const status of ["todo", "in_progress", "blocked", "in_review", "delegated"] as const) {
+		f.store.updateTask(f.mission.id, f.task.id, { status });
+		await assert.rejects(f.organize(), /assigned work/);
+		assert.equal(f.sessions.get(f.member.id)!.archivedAt, undefined);
+	}
+	f.store.updateTask(f.mission.id, f.task.id, { status: "dropped" });
+	// biome-ignore lint/complexity/useLiteralKeys: Model a project move independent of cached membership.
+	const meta = f.sessions["require"](f.member.id);
+	meta.projectId = f.other.id;
+	await assert.rejects(f.organize(), /mission\/project/);
+	await assert.rejects(f.service.call(f.lead.id, "status", { targetSessionId: f.member.id }), /own project/);
+	meta.projectId = f.project.id;
+	const other = f.store.create({ title: "Other", projectId: f.project.id });
+	f.store.join(f.member.id, other.id);
+	await assert.rejects(f.organize(), /mission\/project/);
+});
+
+test("worker organization refuses busy tools, jobs, children, queued outbox and unresolved assistance", async (t) => {
+	const f = await organizationFixture(t);
+	// biome-ignore lint/complexity/useLiteralKeys: Exercise daemon state, not a forged tool payload.
+	const meta = f.sessions["require"](f.member.id);
+	for (const state of ["working", "starting"] as const) {
+		f.worker.state = state;
+		await assert.rejects(f.organize(), /active or pending/);
+	}
+	f.worker.state = "idle";
+	for (const key of ["busy", "toolsRunning", "compacting", "awaitingJobFollowUp"] as const) {
+		Object.assign(f.worker, { [key]: true });
+		await assert.rejects(f.organize(), /active or pending/);
+		Object.assign(f.worker, { [key]: false });
+	}
+	Object.assign(f.worker, { runningJobs: [{ id: "job" }] });
+	await assert.rejects(f.organize(), /active or pending/);
+	Object.assign(f.worker, { runningJobs: [], hasChildren: async () => true });
+	await assert.rejects(f.organize(), /subprocesses/);
+	Object.assign(f.worker, { hasChildren: async () => false });
+	meta.pending = [{ type: "input", requestId: "pending", content: "Unfinished", mode: "followUp" }];
+	meta.failure = "Stopped startup does not resolve queued input";
+	await assert.rejects(f.organize(), /active or pending/);
+	delete meta.pending;
+	delete meta.failure;
+	const comment = f.store.addComment(f.mission.id, { text: "Need help" }, { sessionId: f.member.id });
+	await assert.rejects(f.organize(), /assistance/);
+	f.store.resolveComment(f.mission.id, comment.id, {});
+	await f.organize();
+});
+
+for (const race of ["member", "member-aba", "coordinator", "assignment", "project", "busy"] as const) {
+	test(`worker organization rechecks ${race} across asynchronous child inspection`, async (t) => {
+		const f = await organizationFixture(t);
+		Object.assign(f.worker, {
+			hasChildren: async () => {
+				if (race === "member" || race === "member-aba") f.store.leave(f.member.id);
+				if (race === "member-aba") f.store.join(f.member.id, f.mission.id);
+				if (race === "coordinator") f.store.update(f.mission.id, { coordinatorSessionId: null });
+				if (race === "assignment") f.store.updateTask(f.mission.id, f.task.id, { status: "todo" });
+				// biome-ignore lint/complexity/useLiteralKeys: Model a metadata move at the awaited boundary.
+				if (race === "project") f.sessions["require"](f.member.id).projectId = f.other.id;
+				if (race === "busy") f.worker.busy = true;
+				return false;
+			},
+		});
+		await assert.rejects(f.organize(), /changed|mission\/project|active or pending/);
+		assert.equal(f.sessions.get(f.member.id)!.archivedAt, undefined);
+	});
+}
+
+test("worker organization refuses durable queue, question and unfinished tool snapshots without replay", async (t) => {
+	const f = await organizationFixture(t);
+	const base = { type: "snapshot", entries: [], inbox: [], tools: [], nestedTools: [], agent: {}, usage: {} };
+	for (const events of [
+		[{ type: "queue_update", items: [{ id: 1 }] }],
+		[{ type: "queue_update", items: [], automatic: [{ id: 2, held: true }] }],
+		[{ ...base, history: { question: { id: 3 } } }],
+		[{ ...base, run: { inputs: [] } }],
+		[{ ...base, tools: [{ id: "unfinished-effect" }] }],
+	]) {
+		t.mock.method(f.passiveReader, "recentColdSnapshot", async () => ({ events }));
+		await assert.rejects(f.organize(), /queued inputs, question or pending effects/);
+		assert.equal(f.sessions.get(f.member.id)!.archivedAt, undefined);
+	}
+});
+
+test("worker organization waits for task durability and refuses failed writes without claiming success", async (t) => {
+	const f = await organizationFixture(t);
+	const durable = t.mock.method(f.store, "durable", async () => {
+		throw new Error("durability failure");
+	});
+	await assert.rejects(f.organize(), /durability failure/);
+	assert.equal(f.sessions.get(f.member.id)!.archivedAt, undefined);
+	durable.mock.restore();
+	await Promise.all(f.sessions["saving"].values());
+	const directory = join(f.home, "data", "sessions", f.member.id);
+	const original = await readFile(join(directory, "meta.json"), "utf8");
+	await rm(join(directory, "meta.json"));
+	await mkdir(join(directory, "meta.json")); // Force archive's atomic rename to fail.
+	await assert.rejects(f.organize(), /EISDIR|ENOTEMPTY/);
+	assert.equal(f.sessions.get(f.member.id)!.archivedAt, undefined);
+	await rm(join(directory, "meta.json"), { recursive: true });
+	await writeFile(join(directory, "meta.json"), original);
+	await f.organize();
+	const stored = JSON.parse(await readFile(join(directory, "meta.json"), "utf8"));
+	assert.equal(stored.archivedAt, f.sessions.get(f.member.id)!.archivedAt);
+	assert.equal(stored.coordinatorArchivePreservesWorkspace, true);
+});
+
+test("worker organization rechecks scope inside the metadata FIFO before rename", async (t) => {
+	const f = await organizationFixture(t);
+	await Promise.all(f.sessions["saving"].values());
+	let resolve!: () => void;
+	const held = {
+		promise: new Promise<void>((done) => {
+			resolve = done;
+		}),
+		resolve: () => resolve(),
+	};
+	f.sessions["saving"].set(f.member.id, held.promise);
+	const organize = f.organize();
+	const failure = assert.rejects(organize, /changed/);
+	await until(() => f.sessions["saving"].get(f.member.id) !== held.promise);
+	f.store.updateTask(f.mission.id, f.task.id, { status: "todo" });
+	held.resolve();
+	await failure;
+	assert.equal(f.sessions.get(f.member.id)!.archivedAt, undefined);
+	const stored = JSON.parse(await readFile(join(f.home, "data", "sessions", f.member.id, "meta.json"), "utf8"));
+	assert.equal(stored.archivedAt, undefined);
+	assert.equal(stored.coordinatorArchivePreservesWorkspace, undefined);
+});
+
+test("worker organization reports the visible archive after post-rename durability failure and retries safely", async (t) => {
+	const f = await organizationFixture(t);
+	// biome-ignore lint/complexity/useLiteralKeys: Fail the final directory fsync after the actual rename.
+	const home = f.sessions["home"];
+	// biome-ignore lint/complexity/useLiteralKeys: Inject only after the real temporary metadata write, at the final guard.
+	const save = f.sessions["save"].bind(f.sessions);
+	const writer = f.sessions as unknown as { save: typeof save };
+	const failing = t.mock.method(writer, "save", (...args: Parameters<typeof save>) => {
+		const guard = args[4];
+		if (guard)
+			args[4] = () => {
+				guard();
+				Object.assign(f.sessions, { home: join(f.home, "missing-directory") });
+			};
+		return save(...args);
+	});
+	await assert.rejects(f.organize(), /ENOENT/);
+	const committed = f.sessions.get(f.member.id)!.archivedAt;
+	assert.ok(committed);
+	const stored = JSON.parse(await readFile(join(f.home, "data", "sessions", f.member.id, "meta.json"), "utf8"));
+	assert.equal(stored.archivedAt, committed);
+	assert.equal(stored.coordinatorArchivePreservesWorkspace, true);
+	Object.assign(f.sessions, { home });
+	failing.mock.restore();
+	assert.deepEqual(await f.organize(), { sessionId: f.member.id, archivedAt: committed });
+});
+
+test("worker organization serializes opposite requests and rejects sends admitted behind archive", async (t) => {
+	const f = await organizationFixture(t);
+	const results = (await Promise.all([
+		f.organize(),
+		f.organize("restoreWorker"),
+		f.organize("restoreWorker"),
+	])) as Array<{ archivedAt: number | null }>;
+	assert.ok(results[0]!.archivedAt);
+	assert.equal(results[1]!.archivedAt, null);
+	assert.equal(results[2]!.archivedAt, null);
+	let release!: () => void;
+	let inspecting = false;
+	const held = new Promise<void>((done) => {
+		release = done;
+	});
+	Object.assign(f.worker, {
+		hasChildren: async () => {
+			inspecting = true;
+			await held;
+			return false;
+		},
+	});
+	const archive = f.organize();
+	await until(() => inspecting);
+	const requests = f.worker.requests.length;
+	const send = f.service.call(f.lead.id, "send", { targetSessionId: f.member.id, message: "Racing input" });
+	release();
+	await archive;
+	assert.equal(((await send) as { delivery: string }).delivery, "rejected");
+	assert.equal(f.worker.requests.length, requests);
+});
+
+test("worker organization rechecks restore after cold reads and retains archived state on failure", async (t) => {
+	const f = await organizationFixture(t);
+	const archived = await f.organize();
+	t.mock.method(f.passiveReader, "recentColdSnapshot", async () => {
+		f.worker.busy = true;
+		return { events: [] };
+	});
+	await assert.rejects(f.organize("restoreWorker"), /active or pending/);
+	assert.deepEqual(archived, { sessionId: f.member.id, archivedAt: f.sessions.get(f.member.id)!.archivedAt });
+});
+
+test("worker organization reports committed state when scope changes after rename during durability", async (t) => {
+	const f = await organizationFixture(t);
+	// biome-ignore lint/complexity/useLiteralKeys: Model scope loss while the real writer finishes its durable ACK.
+	const save = f.sessions["save"].bind(f.sessions);
+	const writer = f.sessions as unknown as { save: typeof save };
+	t.mock.method(writer, "save", async (...args: Parameters<typeof save>) => {
+		await save(...args);
+		if (args[4]) f.store.leave(f.member.id);
+	});
+	await assert.rejects(f.organize(), /organization committed \(archivedAt=\d+\).*changed/);
+	assert.ok(f.sessions.get(f.member.id)!.archivedAt);
+	const stored = JSON.parse(await readFile(join(f.home, "data", "sessions", f.member.id, "meta.json"), "utf8"));
+	assert.equal(stored.archivedAt, f.sessions.get(f.member.id)!.archivedAt);
+	assert.equal(stored.coordinatorArchivePreservesWorkspace, true);
+});
+
 class FakeWorker implements SessionWorker {
 	ready = Promise.resolve();
 	state: SessionState = "idle";

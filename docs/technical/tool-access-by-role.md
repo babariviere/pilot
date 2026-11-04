@@ -96,7 +96,12 @@ Ordinary members, including an Ask member, get these actions. Restricted special
 The coordinator additionally gets:
 
 `propose`, `delete`, `group`, `phase`, `start`, `send`, `status`, `bindPr`,
-`unbindPr`, `split`, `updateLink`.
+`unbindPr`, `split`, `updateLink`, `archiveWorker`, `restoreWorker`.
+
+`archiveWorker` and `restoreWorker` organize only current same-project mission workers
+whose assignments are done/dropped and whose work/assistance is settled. They preserve
+history/artifacts and exclude automatic workspace cleanup; restore never starts work.
+See [worker organization](mission-worker-organization.md). Explicit user cleanup is separate.
 
 Task ordering and task model/thinking changes also require the coordinator, although they use
 `task`. Membership, ownership, dependency and coordinator checks are repeated in the daemon.

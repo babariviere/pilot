@@ -280,6 +280,7 @@ test("cross-provider continuation creates only a fresh handoff and fences all ol
 	meta.unboundPullRequests = ["https://github.com/octo/repo/pull/2"];
 	meta.subscriptionPolicy = { version: 1, windows: [], force: ["openai"] };
 	meta.executionPermission = { authorizationId: "grant", level: "implement" };
+	meta.coordinatorArchivePreservesWorkspace = true;
 	await f.sessions["save"](meta);
 	const source = (await f.sessions["ensureWorker"](f.id)) as FakeWorker;
 	meta.subagents = [
@@ -304,6 +305,7 @@ test("cross-provider continuation creates only a fresh handoff and fences all ol
 	const target = f.workers.at(-1)!;
 	assert.deepEqual(target.spec.pilot?.executionPermission, meta.executionPermission);
 	assert.deepEqual(f.sessions["metas"].get(changed.id)?.executionPermission, meta.executionPermission);
+	assert.equal(f.sessions["metas"].get(changed.id)?.coordinatorArchivePreservesWorkspace, true);
 	assert.notEqual(target.spec.storageDir, source.spec.storageDir);
 	assert.equal(target.spec.continuationModel, undefined);
 	const input = target.commands.find((command) => command.type === "input");
@@ -339,6 +341,7 @@ test("cross-provider continuation creates only a fresh handoff and fences all ol
 	const before = f.workers.length;
 	const reopened = await f.manager();
 	assert.equal(reopened.get(f.id)?.continuedTo, changed.id);
+	assert.equal(reopened["metas"].get(changed.id)?.coordinatorArchivePreservesWorkspace, true);
 	assert.equal(reopened.pullRequestOwner(pr), changed.id);
 	assert.ok(f.workers.slice(before).every((worker) => worker.spec.sessionId !== f.id));
 	await assert.rejects(reopened.send(f.id, "still no"), Conflict);

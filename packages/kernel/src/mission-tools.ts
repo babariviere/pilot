@@ -45,6 +45,8 @@ export const MISSION_ACTIONS = [
 	"split",
 	"updateLink",
 	"answer",
+	"archiveWorker",
+	"restoreWorker",
 ] as const;
 export type MissionAction = (typeof MISSION_ACTIONS)[number];
 
@@ -95,6 +97,7 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 - start (coordinator only): start one chat for id or ids (IDs/numbers/ranges, like claim), optional message/model/thinking/artifacts/links. In planningVersion 1, role explorer|builder|reviewer (default builder) is fixed at admission. Explorer uses Ask read/search/web and session-local artifacts, never bash/write/edit or planning ownership; coordinator-authorized research may precede brief approval. Reviewer is metadata only, with existing permissions, not a review engine. Roles do not isolate hostile shells/loopback REST. All tasks must be unclaimed and unfinished; admission is all-or-none. Runs in dependency order, then given order; outside dependencies must be done. One PR per code task, stacked in that order. Supplied references attach to every task; artifacts must be linked or member-owned. The whole opening prompt (bodies, guidance, references) must fit 4000 characters or start rejects with its size. Durable context belongs in the brief, decisions or task links. Model defaults to the task's preferred model, then the project's (a user-set preference cannot be overridden); validation errors list allowed model IDs, prices and supported thinking levels. Pick cheaper models for small tasks, strongest allowed model for hard ones. Start only when asked.
 - send (coordinator only): send message to member targetSessionId; wakes idle/paused chats, optional mode steer for corrections that change current work, followUp (default) for anything that can wait. Steer joins a running turn at its next step; either mode starts an idle chat. Returns delivery delivered/queued/rejected, mode and reason; restore archived chats first.
 - answer (coordinator only): answer a member's pending ordinary question using targetSessionId, questionId from status and message. Use approved mission scope and decisions; ask the user for missing decisions, scope changes or approvals. Never grants database access or other user-only permissions. Ordinary send/steer does not answer questions. After uncertain delivery, inspect status; never blindly replay.
+- archiveWorker / restoreWorker (coordinator only): targetSessionId in this mission/project. First establish that assigned work is delivered or explicitly resolved (tasks done/dropped); idle is not completion. Refuses unfinished assignments, assistance, queued inputs and live work. Archive preserves the workspace from automatic pruning/reclamation, history and artifacts; it does not approve completion or authorize deletion. Restore is passive; send/start a separately authorized follow-up explicitly. Repeats are harmless; returns committed archivedAt (null when restored). status includes archived workers. User archive/cleanup controls remain separate.
 - status (coordinator only): summarize members: state, outcome, branch, compact PR states, tasks and finishedWithoutPR (idle claimed work lacking open/draft/merged PR). targetSessionId returns one member plus lastAssistantReply (1500 chars) and pendingQuestion (questionId, question, context/options, or null). Never starts workers. Status/start return chatUrl (pilot://chat/<id>); use [chat name](chatUrl) when referencing a chat to the user. They also include cached read-only subscriptionUsage per provider (window percent/reset; stale or unknown labelled).
 - bindPr (coordinator only): bind url to targetSessionId, optional taskId to disambiguate. Transfers sole PR-head ownership and unfinished ownership links. Returns {changed, previousOwner, taskLinkRemoved}; references never grant ownership.
 - unbindPr (coordinator only): detach url from targetSessionId, stopping tracking/pushes/follow-ups and removing unfinished ownership links. References/branches stay. Returns {changed, previousOwner, taskLinkRemoved}.`
@@ -167,7 +170,7 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 				Type.String({
 					maxLength: 128,
 					description: coordinator
-						? "Member chat for comment, send, answer, status, bindPr or unbindPr."
+						? "Member chat for comment, send, answer, status, archiveWorker, restoreWorker, bindPr or unbindPr."
 						: "Member chat for comment.",
 				}),
 			),

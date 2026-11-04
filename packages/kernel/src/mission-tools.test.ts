@@ -654,7 +654,7 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 	const schema = tool.parameters as {
 		properties: { action: { enum: string[] }; message: unknown; model: unknown; thinking: unknown };
 	};
-	assert.deepEqual(schema.properties.action.enum.slice(-8), [
+	assert.deepEqual(schema.properties.action.enum.slice(-10), [
 		"start",
 		"send",
 		"status",
@@ -663,6 +663,8 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 		"split",
 		"updateLink",
 		"answer",
+		"archiveWorker",
+		"restoreWorker",
 	]);
 	assert.ok(schema.properties.message);
 	assert.equal(tool.annotations?.destructiveHint, true);
@@ -682,6 +684,8 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 		{ action: "start", id: "#3", message: "Focus on tests", model: "test/model", thinking: "high" },
 		{ action: "send", targetSessionId: "member", message: "Please clarify" },
 		{ action: "answer", targetSessionId: "member", questionId: 42, message: "Use SQLite" },
+		{ action: "archiveWorker", targetSessionId: "member" },
+		{ action: "restoreWorker", targetSessionId: "member" },
 		{ action: "status" },
 		{ action: "status", targetSessionId: "member" },
 	])
@@ -695,6 +699,8 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 		["start", { id: "#3", message: "Focus on tests", model: "test/model", thinking: "high" }],
 		["send", { targetSessionId: "member", message: "Please clarify" }],
 		["answer", { targetSessionId: "member", questionId: 42, message: "Use SQLite" }],
+		["archiveWorker", { targetSessionId: "member" }],
+		["restoreWorker", { targetSessionId: "member" }],
 		["status", {}],
 		["status", { targetSessionId: "member" }],
 	]);
@@ -711,7 +717,19 @@ test("ordinary member declarations omit privileged actions and their guidance", 
 	const schema = tool.parameters as {
 		properties: { action: { enum: string[] }; message?: unknown; model?: unknown; thinking?: unknown };
 	};
-	for (const action of ["delete", "group", "phase", "start", "send", "answer", "status", "bindPr", "unbindPr"]) {
+	for (const action of [
+		"delete",
+		"group",
+		"phase",
+		"start",
+		"send",
+		"answer",
+		"status",
+		"bindPr",
+		"unbindPr",
+		"archiveWorker",
+		"restoreWorker",
+	]) {
 		assert.ok(!schema.properties.action.enum.includes(action));
 		assert.ok(!tool.description.includes(`- ${action} (`));
 	}

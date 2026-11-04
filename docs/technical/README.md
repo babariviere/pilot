@@ -54,6 +54,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Proposed review preference memory](mission-review-preference-memory.md)
 - [Versioned review profiles and results (internal)](mission-review-records.md)
 - [Mission roles and explorer admission](mission-roles.md)
+- [Coordinator worker archive and restore](mission-worker-organization.md)
 - [Proposed durable worker retirement contract](mission-worker-retirement.md)
 - [Non-code policy and explain-only evaluation](non-code-acceptance-policy.md)
 - [Explicit non-code acceptance prerequisites](non-code-acceptance-prerequisites.md)
