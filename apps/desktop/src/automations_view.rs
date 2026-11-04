@@ -62,6 +62,8 @@ pub(crate) struct Automations {
     expanded: Option<(Section, String)>,
     /// A write in flight, by record ID.
     pub(crate) pending: Option<String>,
+    /// The rule whose Delete is waiting for its confirming second press.
+    confirm_delete: Option<String>,
     action: Option<Task<()>>,
     note: Option<Note>,
     /// The page is showing. Action results only land while open.
@@ -89,6 +91,7 @@ impl Automations {
             focus: cx.focus_handle(),
             expanded: None,
             pending: None,
+            confirm_delete: None,
             action: None,
             note: None,
             open: false,
@@ -153,6 +156,7 @@ impl Automations {
         self.reader = None;
         self.updates = None;
         self.pending = None;
+        self.confirm_delete = None;
         self.action = None;
         self.note = None;
         self.state.generation += 1;
@@ -291,6 +295,7 @@ impl Automations {
         }
         self.pending = None;
         self.action = None;
+        self.confirm_delete = None;
         self.note = match outcome {
             Outcome::Done => Some(Note {
                 id: None,
@@ -372,6 +377,7 @@ impl Automations {
             .map(|p| p.name.clone())
     }
     fn toggle(&mut self, row: (Section, String), cx: &mut Context<Self>) {
+        self.confirm_delete = None;
         self.expanded = if self.expanded.as_ref() == Some(&row) {
             None
         } else {
@@ -430,6 +436,7 @@ impl Automations {
             clock,
             day,
             status,
+            status_action,
             label,
             dim,
         } = row;
@@ -471,6 +478,9 @@ impl Automations {
                         .font_medium()
                         .text_color(color),
                 );
+            }
+            if let Some(action) = status_action {
+                under = under.child(action);
             }
             meta = meta.child(under);
         }
@@ -737,6 +747,7 @@ impl Automations {
                 clock,
                 day,
                 status,
+                status_action: None,
                 label: line_text,
                 dim: false,
             },
@@ -821,6 +832,7 @@ impl Automations {
                 clock: Some(clock),
                 day: Some(day),
                 status: Some((outcome.into(), tone)),
+                status_action: None,
                 label,
                 dim: false,
             },
@@ -976,22 +988,89 @@ impl Automations {
                 more = more.child(runs);
             }
             let edit = item.id.clone();
-            more.child(
-                div()
-                    .h_flex()
-                    .gap_2()
+            let confirming = self.confirm_delete.as_ref() == Some(&item.id);
+            let mut actions = div().h_flex().items_center().gap_2().child(
+                ui::action(id("edit"), "Edit", Action::Secondary)
+                    .small()
+                    .disabled(self.pending.is_some() || !self.open || item.state != "pending")
+                    .on_click(cx.listener(move |v, _, w, cx| v.edit(Some(edit.clone()), w, cx))),
+            );
+            if confirming {
+                // Keep takes the slot Delete… had, so a double press keeps the rule. Nothing is
+                // sent until Delete rule.
+                let keep = item.id.clone();
+                let target = item.id.clone();
+                actions = actions
                     .child(
-                        ui::action(id("edit"), "Edit", Action::Secondary)
+                        ui::action(id("keep"), "Keep", Action::Quiet)
                             .small()
-                            .disabled(
-                                self.pending.is_some() || !self.open || item.state != "pending",
-                            )
-                            .on_click(
-                                cx.listener(move |v, _, w, cx| v.edit(Some(edit.clone()), w, cx)),
-                            ),
+                            .on_click(cx.listener(move |v, _, _, cx| {
+                                if v.confirm_delete.as_ref() == Some(&keep) {
+                                    v.confirm_delete = None;
+                                    cx.notify();
+                                }
+                            })),
                     )
-                    .child(self.row_action(id("delete"), item, RowAction::Delete, &label, cx)),
+                    .child(
+                        ui::action(id("delete-rule"), "Delete rule", Action::Danger)
+                            .small()
+                            .accessibility_label(SharedString::from(format!(
+                                "Delete rule: {label}"
+                            )))
+                            .disabled(self.pending.is_some() || !self.open)
+                            .loading(self.pending.as_ref() == Some(&item.id))
+                            .on_click(cx.listener(move |v, _, _, cx| {
+                                v.run(target.clone(), RowAction::Delete, cx)
+                            })),
+                    );
+                more = more.child(
+                    ui::text(
+                        Text::Caption,
+                        "Delete stops this rule for good. Chats it already started stay.",
+                    )
+                    .id(id("delete-confirm"))
+                    .test_support()
+                    .text_color(muted),
+                );
+            } else {
+                let ask = item.id.clone();
+                actions = actions.child(
+                    ui::action(id("delete"), "Delete…", Action::Quiet)
+                        .small()
+                        .tooltip("Asks before deleting this rule")
+                        .accessibility_label(SharedString::from(format!("Delete…: {label}")))
+                        .disabled(self.pending.is_some() || !self.open)
+                        .on_click(cx.listener(move |v, _, _, cx| {
+                            v.confirm_delete = Some(ask.clone());
+                            cx.notify();
+                        })),
+                );
+            }
+            more.child(actions)
+        });
+        // A late success can be cleared from the list too, beside its hint.
+        let late = item
+            .notice
+            .as_ref()
+            .is_some_and(|n| n.late && !n.needs_attention());
+        let status_action = late.then(|| {
+            let target = item.id.clone();
+            ui::icon_action(
+                id("dismiss-late"),
+                SharedString::from(format!("Dismiss: {label}")),
+                IconRole::Close,
+                Action::Quiet,
             )
+            .xsmall()
+            .tooltip("Clears this notice. The rule keeps running")
+            .disabled(self.pending.is_some() || !self.open)
+            .loading(self.pending.as_ref() == Some(&item.id))
+            .on_click(cx.listener(move |v, _, _, cx| {
+                // The row text toggles details; this press only dismisses.
+                cx.stop_propagation();
+                v.run(target.clone(), RowAction::DismissNotice, cx);
+            }))
+            .into_any_element()
         });
         self.shell(
             Row {
@@ -1011,6 +1090,7 @@ impl Automations {
                     .as_ref()
                     .filter(|n| n.late && !n.needs_attention())
                     .map(|_| ("Ran late".to_owned(), muted)),
+                status_action,
                 label,
                 dim: item.paused,
             },
@@ -1109,6 +1189,8 @@ struct Row {
     clock: Option<String>,
     day: Option<String>,
     status: Option<(String, Hsla)>,
+    /// A small control after the status, such as clearing a late-run hint.
+    status_action: Option<AnyElement>,
     /// The row's accessible summary, for its controls.
     label: String,
     dim: bool,

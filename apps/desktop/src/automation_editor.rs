@@ -3,6 +3,7 @@
 //! keeps the form but blocks Save, so a rule that may exist isn't created twice.
 use crate::{
     LocalOptions,
+    chat_model_reader::{Reader as Models, Request as ModelRequest, Scope, Update as ModelUpdate},
     local_model::{Chat, Project},
     recurring_schedules as words,
     scheduled_messages::{Item, Recurrence, Target},
@@ -19,7 +20,7 @@ use gpui_kit::{
         button::ButtonGroup,
         date_picker::{DatePicker, DatePickerState, DateTime},
         input::{Textarea, TextareaState},
-        select::{SearchableVec, Select, SelectItem, SelectState},
+        select::{SearchableVec, Select, SelectEvent, SelectItem, SelectState},
         time_field::{TimeField, TimeFieldState},
     },
     div, px,
@@ -67,6 +68,8 @@ pub(crate) struct Draft {
     pub(crate) at: Option<u64>,
     pub(crate) act: Act,
     pub(crate) project: Option<String>,
+    /// New automation only: the new chat's model, or None for the project default.
+    pub(crate) model: Option<String>,
     pub(crate) chat: Option<String>,
     pub(crate) name: String,
     pub(crate) text: String,
@@ -105,14 +108,17 @@ impl Draft {
                 // Always name the zone here; the list shows it only when it differs.
                 let mut text = format!("{}.", words::schedule(&r, ""));
                 if let Some(next) = words::preview_next(&r, now) {
-                    text.push_str(&format!(
-                        " Next: {}.",
-                        crate::scheduled_messages::words(
-                            next,
-                            now,
-                            crate::subscription_pause::local_offset
-                        )
-                    ));
+                    let when = crate::scheduled_messages::words(
+                        next,
+                        now,
+                        crate::subscription_pause::local_offset,
+                    );
+                    // Another zone's rule is previewed in this computer's time, and says so.
+                    if r.time_zone == words::local_zone() {
+                        text.push_str(&format!(" Next: {when}."));
+                    } else {
+                        text.push_str(&format!(" Next: {when}, your time."));
+                    }
                 }
                 Some(text)
             }
@@ -158,6 +164,9 @@ impl Draft {
                 };
                 spawn["message"] = json!(text);
                 spawn["projectId"] = json!(project);
+                if let Some(model) = &self.model {
+                    spawn["model"] = json!(model);
+                }
                 json!({"kind": "chat", "spawn": spawn})
             }
             Act::Message => {
@@ -259,6 +268,15 @@ impl SelectItem for Choice {
     }
 }
 type Picker = Entity<SelectState<SearchableVec<Choice>>>;
+/// The model list's first row: no `model` in the spawn, so Local uses the project default.
+fn default_model() -> Choice {
+    Choice {
+        id: String::new(),
+        title: "Project default".into(),
+    }
+}
+/// Models listed for one project; Local's catalog is bounded at 2048.
+const MODELS_SHOWN: usize = 500;
 
 pub(crate) struct Editor {
     options: LocalOptions,
@@ -277,6 +295,15 @@ pub(crate) struct Editor {
     pub(crate) when: Entity<DatePickerState>,
     month_day: Picker,
     pub(crate) project: Picker,
+    pub(crate) model: Picker,
+    /// Scoped catalog reads, New automation only. Edits keep the saved model.
+    models: Option<Models>,
+    /// The project the model list was asked for, and that request.
+    models_for: Option<String>,
+    model_request: u64,
+    models_note: Option<&'static str>,
+    /// Project ID and directory, for scoped catalog reads.
+    paths: Vec<(String, String)>,
     pub(crate) chat: Picker,
     pub(crate) saving: bool,
     /// A save Local didn't confirm. Save stays off; the list shows what Local has.
@@ -284,6 +311,7 @@ pub(crate) struct Editor {
     pub(crate) error: Option<String>,
     focus: FocusHandle,
     save: Option<Task<()>>,
+    _models: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
 impl EventEmitter<EditorEvent> for Editor {}
@@ -480,7 +508,12 @@ impl Editor {
             .collect();
         subscriptions.push(cx.observe(&when, |_, _, cx| cx.notify()));
         subscriptions.push(cx.observe(&time, |_, _, cx| cx.notify()));
-        Self {
+        let model = picker(vec![default_model()], Some(""), w, cx);
+        let paths = projects
+            .iter()
+            .map(|p| (p.id.clone(), p.path.clone()))
+            .collect();
+        let mut editor = Self {
             options,
             kind: Kind::Recurring,
             every,
@@ -496,14 +529,117 @@ impl Editor {
             when,
             month_day,
             project,
+            model,
+            models: None,
+            models_for: None,
+            model_request: 0,
+            models_note: None,
+            paths,
             chat,
             saving: false,
             unconfirmed: false,
             error: None,
             focus: cx.focus_handle(),
             save: None,
+            _models: None,
             _subscriptions: subscriptions,
+        };
+        if editor.source.is_none() {
+            editor.start_models(w, cx);
         }
+        editor
+    }
+    /// One catalog reader for this sheet; a project change asks again.
+    fn start_models(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        let Ok((reader, updates)) = Models::start(self.options.clone()) else {
+            self.models_note =
+                Some("Models are unavailable. The new chat uses the project default.");
+            return;
+        };
+        self.models = Some(reader);
+        self._subscriptions.push(cx.subscribe_in(
+            &self.project,
+            w,
+            |e, _, event: &SelectEvent<SearchableVec<Choice>>, w, cx| {
+                if let SelectEvent::Confirm(Some(_)) = event {
+                    e.load_models(w, cx);
+                }
+            },
+        ));
+        self._models = Some(cx.spawn_in(w, async move |editor, cx| {
+            while let Ok(update) = updates.recv().await {
+                if editor
+                    .update_in(cx, |e, w, cx| e.accept_models(update, w, cx))
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        }));
+        self.load_models(w, cx);
+    }
+    fn load_models(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        let project = self.project.read(cx).selected_value().cloned();
+        if project == self.models_for {
+            return;
+        }
+        // Another project's models don't apply: back to the default until this list arrives.
+        self.models_for = project.clone();
+        self.models_note = None;
+        self.model.update(cx, |p, cx| {
+            p.set_items(SearchableVec::new(vec![default_model()]), w, cx);
+            p.set_selected_value(&String::new(), w, cx);
+        });
+        let Some((id, path)) =
+            project.and_then(|id| self.paths.iter().find(|(p, _)| *p == id).cloned())
+        else {
+            cx.notify();
+            return;
+        };
+        self.model_request += 1;
+        let request = ModelRequest {
+            id: self.model_request,
+            catalog_generation: 0,
+            scope: Scope {
+                key: format!("automation:{id}"),
+                project: Some(id),
+                cwd: path,
+            },
+            target: None,
+            refresh: false,
+        };
+        if !self.models.as_ref().is_some_and(|r| r.request(request)) {
+            self.models_note =
+                Some("Models are unavailable. The new chat uses the project default.");
+        }
+        cx.notify();
+    }
+    fn accept_models(&mut self, update: ModelUpdate, w: &mut Window, cx: &mut Context<Self>) {
+        if update.id != self.model_request || update.scope.project != self.models_for {
+            return;
+        }
+        match update.result {
+            Ok((catalog, _)) => {
+                let mut items = vec![default_model()];
+                items.extend(catalog.models.iter().take(MODELS_SHOWN).map(|m| Choice {
+                    id: m.id.clone(),
+                    title: m.name.clone().into(),
+                }));
+                // A choice made meanwhile stays when the list still has it.
+                self.model.update(cx, |p, cx| {
+                    p.set_items(SearchableVec::new(items), w, cx);
+                    if p.selected_value().is_none() {
+                        p.set_selected_value(&String::new(), w, cx);
+                    }
+                });
+            }
+            Err(_) => {
+                self.models_note = Some(
+                    "Couldn’t read this project’s models. The new chat uses the project default.",
+                );
+            }
+        }
+        cx.notify();
     }
     /// Typed text or a save in flight holds an app update.
     pub(crate) fn update_hold(&self, cx: &App) -> Option<crate::update_hold::Hold> {
@@ -573,6 +709,8 @@ impl Editor {
             at,
             act: self.act,
             project: value(&self.project),
+            model: value(&self.model)
+                .filter(|m| self.source.is_none() && !m.is_empty() && self.act == Act::NewChat),
             chat: value(&self.chat),
             name: self.name.read(cx).value().to_string(),
             text: self.text.read(cx).value().to_string(),
@@ -859,6 +997,27 @@ impl Render for Editor {
                 .disabled(busy)
                 .accessibility_label(label),
         ));
+        if !editing && act == Act::NewChat {
+            form = form.child(field(
+                "Model",
+                Select::new(&self.model)
+                    .id("automation-model")
+                    .small()
+                    .w_full()
+                    .focus_ring(false)
+                    .menu_max_h(px(260.))
+                    .disabled(busy)
+                    .accessibility_label("Model"),
+            ));
+            if let Some(note) = self.models_note {
+                form = form.child(
+                    ui::text(Text::Caption, note)
+                        .id("automation-model-note")
+                        .test_support()
+                        .text_color(cx.theme().muted_foreground),
+                );
+            }
+        }
         let label = match act {
             Act::NewChat => "Prompt",
             Act::Message => "Message",
@@ -942,6 +1101,7 @@ mod tests {
             at: None,
             act: Act::NewChat,
             project: Some("project-a".into()),
+            model: None,
             chat: None,
             name: "Weekly DB performance analysis".into(),
             text: "Analyse slow queries 日本語".into(),
@@ -981,6 +1141,13 @@ mod tests {
         );
         d.weekdays = [false; 7];
         assert!(d.body(&chats(), None, 0).is_err());
+        let mut d = draft();
+        d.model = Some("anthropic/claude".into());
+        assert_eq!(
+            d.body(&chats(), None, 0).unwrap().unwrap()["target"]["spawn"],
+            json!({"message":"Analyse slow queries 日本語","projectId":"project-a","model":"anthropic/claude"}),
+            "a chosen model goes into the new chat's spawn"
+        );
         let mut d = draft();
         d.every = Every::Month;
         d.day_of_month = 31;

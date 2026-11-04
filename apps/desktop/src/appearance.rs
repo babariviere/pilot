@@ -247,6 +247,14 @@ fn config(dark: bool, fonts: bool) -> Rc<ThemeConfig> {
             colors.secondary = s(muted);
             colors.secondary_hover = s(selected);
             colors.secondary_foreground = s(ink);
+            // Kit's off track falls back to the translucent secondary, which nearly vanishes on
+            // the tray. An opaque track (and in dark a light thumb) keeps an off switch readable.
+            if dark {
+                colors.switch = s("#737b88");
+                colors.switch_thumb = s("#e9edf3");
+            } else {
+                colors.switch = s("#c3cad5");
+            }
             colors.button = s(page);
             colors.button_foreground = s(ink);
             colors.button_hover = s(muted);

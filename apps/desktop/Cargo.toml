@@ -168,6 +168,8 @@ unicode-segmentation = "=1.13.3"
 libc = "=0.2.191"
 # Kit's date and time fields speak chrono's calendar types; same version Kit resolves.
 chrono = { version = "=0.4.45", default-features = false }
+# Rule zones other than this computer's: the editor's next-run preview reads the system tzdb.
+jiff = { version = "=0.2.38", default-features = false, features = ["std", "tzdb-zoneinfo"] }
 base64 = "=0.23.1"
 image = { version = "=0.25.10", default-features = false, features = ["png", "jpeg", "gif", "tiff"] }
 reqwest = { version = "=0.13.5", default-features = false, features = ["query"] }

@@ -341,6 +341,10 @@ fn recurring(cx: &mut HeadlessAppContext, width: f32, mode: ThemeMode) {
     cx.update(|cx| Theme::change(mode, None, cx));
     settle(cx, h);
     cx.update(|cx| assert_eq!(cx.theme().is_dark(), mode == ThemeMode::Dark));
+    if mode == ThemeMode::Dark {
+        // An off switch keeps an opaque track on the dark tray.
+        cx.update(|cx| assert_eq!(cx.theme().switch.a, 1.));
+    }
     // Inbox: skipped and failed runs need you; the late run is shown after them.
     cx.update_window(h, |_, w, cx| w.click("nav-inbox", cx))
         .unwrap();
@@ -459,6 +463,46 @@ fn recurring(cx: &mut HeadlessAppContext, width: f32, mode: ThemeMode) {
     assert_eq!(sent[0].3["dismissNotice"], json!(true));
     assert!(!exists(cx, h, "automation-notice-row-daily"));
     assert!(exists(cx, h, "automation-rule-row-daily"));
+    // A late run clears from the list too, without opening the rule.
+    let mut cleared = dismissed.clone();
+    cleared[0].as_object_mut().unwrap().remove("notice");
+    cleared[0]["revision"] = json!(6);
+    s.reply(
+        "PATCH /api/schedules/weekly",
+        Reply::json(200, cleared[0].clone()),
+    );
+    s.reply("GET /api/schedules", Reply::json(200, cleared.clone()));
+    cx.update_window(h, |_, w, cx| {
+        w.click("automation-rule-dismiss-late-weekly", cx)
+    })
+    .unwrap();
+    settle(cx, h);
+    until(cx, h, &v, idle);
+    let sent = writes(&s);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(
+        (sent[0].0.as_str(), sent[0].1.as_str()),
+        ("PATCH", "/api/schedules/weekly")
+    );
+    assert_eq!(sent[0].3["dismissNotice"], json!(true));
+    assert_eq!(sent[0].3["expectedRevision"], json!(5));
+    assert!(!exists(cx, h, "automation-rule-dismiss-late-weekly"));
+    assert!(
+        !exists(cx, h, "automation-rule-runs-weekly"),
+        "the dismiss press doesn't toggle details"
+    );
+    // Delete asks first; Keep, in the slot Delete… had, backs out without a write.
+    cx.update_window(h, |_, w, cx| w.click("automation-rule-delete-monthly", cx))
+        .unwrap();
+    settle(cx, h);
+    assert!(exists(cx, h, "automation-rule-delete-confirm-monthly"));
+    assert!(exists(cx, h, "automation-rule-delete-rule-monthly"));
+    capture(cx, h, format!("{width}-{mode:?}-delete-confirm"));
+    cx.update_window(h, |_, w, cx| w.click("automation-rule-keep-monthly", cx))
+        .unwrap();
+    settle(cx, h);
+    assert!(!exists(cx, h, "automation-rule-delete-confirm-monthly"));
+    assert!(writes(&s).is_empty(), "asking and keeping send nothing");
     // Edit opens the sheet with the rule; Save sends only what changed.
     cx.update_window(h, |_, w, cx| w.click("automation-rule-edit-monthly", cx))
         .unwrap();
@@ -480,7 +524,7 @@ fn recurring(cx: &mut HeadlessAppContext, width: f32, mode: ThemeMode) {
         });
     })
     .unwrap();
-    let mut edited = dismissed.clone();
+    let mut edited = cleared.clone();
     edited[2]["revision"] = json!(8);
     s.reply(
         "PATCH /api/schedules/monthly",
@@ -498,11 +542,73 @@ fn recurring(cx: &mut HeadlessAppContext, width: f32, mode: ThemeMode) {
     assert_eq!(sent[0].3["expectedRevision"], json!(7));
     assert!(sent[0].3.get("target").is_none() && sent[0].3.get("title").is_none());
     assert!(!exists(cx, h, "automation-editor"));
+    // A rule in another zone previews its next run in this computer's time.
+    cx.update_window(h, |_, w, cx| w.click("automation-rule-text-daily", cx))
+        .unwrap();
+    settle(cx, h);
+    cx.update_window(h, |_, w, cx| w.click("automation-rule-edit-daily", cx))
+        .unwrap();
+    settle(cx, h);
+    let editor = cx
+        .update(|cx| v.read(cx).automations.read(cx).editor.clone())
+        .unwrap();
+    let summary = cx.update(|cx| editor.read(cx).draft(cx).summary(&[], now).unwrap());
+    assert!(summary.contains(", your time."), "{summary}");
+    capture(cx, h, format!("{width}-{mode:?}-edit-zone"));
+    cx.update_window(h, |_, w, cx| w.click("automation-cancel", cx))
+        .unwrap();
+    settle(cx, h);
+    until(cx, h, &v, |a| idle(a) && a.editor.is_none());
     // New automation: a one-time message to a chat.
+    for project in ["a", "b"] {
+        s.reply(
+            &format!("GET /api/models?cwd=%2Fsynthetic%2F{project}"),
+            Reply::json(
+                200,
+                json!({"models":[{"id":"p/atlas","provider":"p","name":"Atlas 日本語","thinkingLevels":["off","high"]}],"defaultModel":null}),
+            ),
+        );
+    }
     cx.update_window(h, |_, w, cx| w.click("automations-new", cx))
         .unwrap();
     settle(cx, h);
     assert!(exists(cx, h, "automation-kind-recurring"));
+    // A new chat can pick its model from the project's catalog; the default leaves it out.
+    assert!(exists(cx, h, "automation-model"));
+    let editor = cx
+        .update(|cx| v.read(cx).automations.read(cx).editor.clone())
+        .unwrap();
+    let model = |cx: &mut HeadlessAppContext| {
+        cx.update(|cx| editor.read(cx).model.read(cx).selected_value().cloned())
+    };
+    assert_eq!(model(cx), Some(String::new()), "the project default first");
+    // Choosing works once the scoped catalog has arrived; an unknown value is dropped.
+    let end = Instant::now() + Duration::from_secs(8);
+    loop {
+        cx.update_window(h, |_, w, cx| {
+            editor.update(cx, |e, cx| {
+                e.model.update(cx, |p, cx| {
+                    p.set_selected_value(&"p/atlas".to_owned(), w, cx)
+                })
+            });
+        })
+        .unwrap();
+        if model(cx).as_deref() == Some("p/atlas") {
+            break;
+        }
+        assert!(
+            Instant::now() < end,
+            "bounded faux model read: {:?}",
+            s.state.lock().unwrap().seen
+        );
+        settle(cx, h);
+        std::thread::yield_now();
+    }
+    settle(cx, h);
+    assert_eq!(
+        cx.update(|cx| editor.read(cx).draft(cx).model),
+        Some("p/atlas".to_owned())
+    );
     capture(cx, h, format!("{width}-{mode:?}-new"));
     cx.update_window(h, |_, w, cx| w.click("automation-kind-once", cx))
         .unwrap();

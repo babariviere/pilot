@@ -235,16 +235,42 @@ fn days_in_month(year: i32, month: u32) -> u32 {
         _ => 31,
     }
 }
-/// The next occurrence after `now`, only when the rule uses this computer's zone.
-/// Local computes the real one; this is the editor's preview.
+/// The next occurrence after `now`, computed in the rule's zone. A zone this computer's
+/// tzdb doesn't know has no preview. Local computes the real one; this is the editor's preview.
 pub(crate) fn preview_next(r: &Recurrence, now: u64) -> Option<u64> {
-    if r.time_zone != local_zone() {
-        return None;
-    }
     let (h, m) = r.time.split_once(':')?;
     let (h, m): (u32, u32) = (h.parse().ok()?, m.parse().ok()?);
+    if h > 23 || m > 59 {
+        return None;
+    }
     let secs = (now / 1000) as i64;
-    let today = (secs + crate::subscription_pause::local_offset(secs)).div_euclid(DAY);
+    // Today's date in the rule's zone, and a wall time there as an instant.
+    let zone = if r.time_zone == local_zone() {
+        None
+    } else {
+        Some(jiff::tz::TimeZone::get(&r.time_zone).ok()?)
+    };
+    let offset = match &zone {
+        None => crate::subscription_pause::local_offset(secs),
+        Some(zone) => {
+            let at = jiff::Timestamp::from_second(secs).ok()?;
+            i64::from(zone.to_offset(at).seconds())
+        }
+    };
+    let instant = |year: i32, month: u32, date: u32| match &zone {
+        None => local_instant(year, month, date, h, m),
+        Some(zone) => {
+            let date = jiff::civil::Date::new(
+                i16::try_from(year).ok()?,
+                i8::try_from(month).ok()?,
+                i8::try_from(date).ok()?,
+            )
+            .ok()?;
+            let at = zone.to_timestamp(date.at(h as i8, m as i8, 0, 0)).ok()?;
+            u64::try_from(at.as_millisecond()).ok()
+        }
+    };
+    let today = (secs + offset).div_euclid(DAY);
     for ahead in 0..=62 {
         let day = today + ahead;
         let weekday = ((day + 3).rem_euclid(7) + 1) as u8;
@@ -258,7 +284,7 @@ pub(crate) fn preview_next(r: &Recurrence, now: u64) -> Option<u64> {
             _ => r.weekdays.as_ref().is_none_or(|w| w.contains(&weekday)),
         };
         if matches
-            && let Some(at) = local_instant(year, month as u32, date as u32, h, m)
+            && let Some(at) = instant(year, month as u32, date as u32)
             && at > now
         {
             return Some(at);
@@ -414,12 +440,27 @@ mod tests {
         let secs = (next / 1000) as i64;
         let day = (secs + crate::subscription_pause::local_offset(secs)).div_euclid(DAY);
         assert_eq!(civil(day), (11, 30));
-        r.time_zone = if local_zone() == "UTC" {
-            "Asia/Tokyo"
+        // Another zone: Monday 09:00 there, as an instant (Tokyo has no DST).
+        let (zone, offset) = if local_zone() == "UTC" {
+            ("Asia/Tokyo", 9 * 3_600)
         } else {
-            "UTC"
-        }
-        .into();
-        assert_eq!(preview_next(&r, now), None);
+            ("UTC", 0)
+        };
+        r.time_zone = zone.into();
+        let next = preview_next(&r, now).unwrap();
+        assert!(next > now && next - now <= 7 * 86_400_000);
+        let there = (next / 1000) as i64 + offset;
+        assert_eq!(
+            ((there.div_euclid(DAY) + 3).rem_euclid(7)) + 1,
+            1,
+            "a Monday"
+        );
+        assert_eq!(there.rem_euclid(DAY), 9 * 3_600, "09:00 there");
+        r.time_zone = "Mars/Olympus_Mons".into();
+        assert_eq!(
+            preview_next(&r, now),
+            None,
+            "an unknown zone has no preview"
+        );
     }
 }

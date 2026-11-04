@@ -84,13 +84,17 @@ optional name, then:
   the month; short months use their last day), a time and a time zone (the
   computer's by default).
 - Once: a date and time on this computer.
-- The action: **Start a new chat** (project, prompt) or **Send to a chat** (chat,
-  message). Repeating messages need a chat in a project. An edit that keeps the
+- The action: **Start a new chat** (project, model, prompt) or **Send to a chat**
+  (chat, message). Repeating messages need a chat in a project. New automation
+  lists the project's models from the scoped `GET /api/models?cwd=` catalog;
+  **Project default** (the first row, and the fallback while the list loads or
+  when it can't be read) leaves `model` out of the spawn. An edit that keeps the
   project keeps the saved chat settings (model, thinking, mode).
 
 A caption says when it runs: "Mondays at 09:00 (Europe/Paris). Next: Mon at
-09:00." (Next only when the zone is this computer's; Local computes the real
-one.) Values are read at Save. An edit sends only changed fields, so an
+09:00." A rule in another zone is previewed in this computer's time ("Next:
+Tomorrow at 00:30, your time."), from the system tzdb; an unknown zone has no
+preview. Local computes the real time. Values are read at Save. An edit sends only changed fields, so an
 unchanged schedule keeps its handled cursor; nothing changed closes the sheet.
 Cancel is disabled while a save is in flight, so its outcome is never lost.
 
@@ -128,6 +132,11 @@ Every write is sent once and never retried; the list is re-read passively after.
   400 can follow a committed row, so it is said as unconfirmed. Any other answer
   or a changed hello afterwards is unconfirmed; the editor then keeps the form
   but disables Save so a rule that may exist isn't created twice.
+
+A rule's Delete asks first: **Delete…** shows a note with **Keep** in its place
+and **Delete rule** beside it, so a double press keeps the rule. A late
+success's "Ran late" hint has a small dismiss control in the list, besides
+Dismiss in the rule's details.
 
 **Cancel** (pending one-time), **Dismiss** (failed one-time) and **Delete** (a
 recurring rule's details) use `DELETE /api/schedules/:id?expectedRevision=N`,
