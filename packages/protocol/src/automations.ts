@@ -5,6 +5,8 @@ export interface ProjectAutomations {
 	revision: number;
 	/** Ordered, at most 32. Empty when a saved definition is invalid. */
 	items: Automation[];
+	/** Optional for compatibility with hook-only clients. */
+	flows?: AgentFlow[];
 	/** Invalid saved definitions are retained on disk but never executable. */
 	error?: string;
 }
@@ -45,6 +47,46 @@ export interface ProjectAutomationsUpdateRequest {
 	/** 0 when no definitions have been saved. */
 	expectedRevision: number;
 	items: Automation[];
+	/** Omission preserves saved flows. */
+	flows?: AgentFlow[];
+}
+
+export type FlowOutcome = "done" | "approved" | "changes_requested" | "failed";
+
+export interface FlowNode {
+	id: string;
+	mode: "build" | "ask";
+	prompt: string;
+	model?: string;
+	thinking?: string;
+	edges: Partial<Record<Exclude<FlowOutcome, "failed">, string>>;
+}
+
+export interface AgentFlow {
+	id: string;
+	name: string;
+	enabled: boolean;
+	nodes: FlowNode[];
+	loop?: { from: string; to: string; maxRounds: number };
+}
+
+export interface FlowStartRequest {
+	requestId: string;
+	expectedRevision: number;
+	flowId: string;
+	message: string;
+}
+
+export interface FlowProgress {
+	rootSessionId: string;
+	flowId: string;
+	name: string;
+	nodeId: string;
+	sessionId: string;
+	round: number;
+	maxRounds: number;
+	state: "running" | "waiting" | "completed" | "failed" | "cancelled";
+	reason?: string;
 }
 
 export interface AutomationRunRecord {

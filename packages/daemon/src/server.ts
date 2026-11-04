@@ -1603,7 +1603,9 @@ export function createDaemonServer(
 					}
 				}
 				try {
-					return json(res, 200, await chatSettings.update(input));
+					const result = await chatSettings.update(input);
+					sessions.resumeFlows?.();
+					return json(res, 200, result);
 				} catch (error) {
 					if (error instanceof InvalidChatSettings) throw new HttpError(400, error.message);
 					throw error;
@@ -1732,6 +1734,22 @@ export function createDaemonServer(
 					return json(res, 409, { error: "automations_conflict", current: error.current });
 				throw error;
 			}
+		}
+		if (
+			parts[1] === "projects" &&
+			parts.length === 5 &&
+			parts[3] === "flows" &&
+			parts[4] === "start" &&
+			req.method === "POST"
+		) {
+			if (!chatSettings?.automationsEnabled()) return json(res, 404, { error: "automations_unavailable" });
+			if (!githubSetup) return json(res, 503, { error: "automations_unavailable" });
+			try {
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			} catch {
+				return json(res, 403, { error: "native_action_required" });
+			}
+			return json(res, 202, await sessions.startFlow(parts[2]!, await readJson(req, 64 * 1024)));
 		}
 		if (parts[1] === "projects" && parts[3] === "environment") {
 			// Off unless this host advertises DaemonCapabilities.environmentSetup.
@@ -2553,6 +2571,7 @@ export function createDaemonServer(
 		clearTimeout(sourceTimer);
 	});
 	projects.onChange((list) => {
+		sessions.resumeFlows?.();
 		invalidateMissionCatalog();
 		broadcast({ type: "projects", projects: list });
 	});

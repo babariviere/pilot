@@ -284,7 +284,8 @@ export class ProjectStore {
 		const current = project.automations ?? { revision: 0, items: [] };
 		if (request.expectedRevision !== current.revision)
 			throw new AutomationsRevisionConflict(structuredClone(current));
-		const next = { revision: current.revision + 1, items: request.items };
+		const flows = request.flows ?? current.flows;
+		const next = { revision: current.revision + 1, items: request.items, ...(flows !== undefined ? { flows } : {}) };
 		this.invalid.automations.delete(id);
 		this.projects = this.projects.map((existing) =>
 			existing.id === id ? { ...existing, automations: next } : existing,

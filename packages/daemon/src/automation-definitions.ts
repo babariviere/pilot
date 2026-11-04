@@ -1,5 +1,12 @@
 import { posix } from "node:path";
-import type { Automation, AutomationConditions, AutomationTrigger, ProjectAutomations } from "@pilot/protocol";
+import type {
+	AgentFlow,
+	Automation,
+	AutomationConditions,
+	AutomationTrigger,
+	ProjectAutomations,
+} from "@pilot/protocol";
+import { validateFlowItems } from "./flows.ts";
 
 export const AUTOMATION_FOLLOW_UP_ATTEMPT_LIMIT = 3;
 const triggers = new Set(["workspace.created", "workspace.restored", "run.finished"]);
@@ -173,15 +180,23 @@ export function validateAutomationItems(value: unknown): Automation[] {
 }
 
 export function validateProjectAutomations(value: unknown): ProjectAutomations {
-	const config = record(value, "automations", ["revision", "items"]);
+	const config = record(value, "automations", ["revision", "items", "flows"]);
 	const revision = automationRevision(config);
 	if (revision < 1 || revision >= Number.MAX_SAFE_INTEGER)
 		throw new Error("automations.revision must be a positive safe integer below MAX_SAFE_INTEGER");
-	return { revision, items: validateAutomationItems(config.items) };
+	return {
+		revision,
+		items: validateAutomationItems(config.items),
+		...(config.flows !== undefined ? { flows: validateFlowItems(config.flows) } : {}),
+	};
 }
 
-export function validateAutomationsUpdate(value: unknown): { expectedRevision: number; items: Automation[] } {
-	const request = record(value, "automations", ["expectedRevision", "items"]);
+export function validateAutomationsUpdate(value: unknown): {
+	expectedRevision: number;
+	items: Automation[];
+	flows?: AgentFlow[];
+} {
+	const request = record(value, "automations", ["expectedRevision", "items", "flows"]);
 	if (
 		typeof request.expectedRevision !== "number" ||
 		!Number.isSafeInteger(request.expectedRevision) ||
@@ -189,5 +204,9 @@ export function validateAutomationsUpdate(value: unknown): { expectedRevision: n
 		request.expectedRevision >= Number.MAX_SAFE_INTEGER - 1
 	)
 		throw new Error("expectedRevision must be a non-negative safe integer below MAX_SAFE_INTEGER - 1");
-	return { expectedRevision: request.expectedRevision, items: validateAutomationItems(request.items) };
+	return {
+		expectedRevision: request.expectedRevision,
+		items: validateAutomationItems(request.items),
+		...(request.flows !== undefined ? { flows: validateFlowItems(request.flows) } : {}),
+	};
 }

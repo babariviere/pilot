@@ -102,6 +102,16 @@ import { redactDiagnosticText } from "./diagnostic-redaction.ts";
 import { DiagnosticRepairProjectStore, diagnosticRepairTitle, repairHost } from "./diagnostic-repair-project.ts";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
+import {
+	type FlowState,
+	flowActive,
+	flowPrompt,
+	nextFlowNode,
+	parseFlowResult,
+	validateFlowItems,
+	validateFlowState,
+	validateFlowStart,
+} from "./flows.ts";
 import { githubRepository, linkedPullRequest, type PullRequestProblems } from "./github.ts";
 import {
 	type InsightsAdmission,
@@ -516,6 +526,11 @@ interface SessionMeta extends OutcomeMeta {
 		stopped?: boolean;
 		attention?: { automationId: string; detail: string; at: number };
 	};
+	/** Host-owned flow attribution, never accepted from generic SpawnRequest. */
+	flow?: FlowState;
+	/** Preserve malformed historical state without allowing it to execute. */
+	invalidFlow?: unknown;
+	flowRootId?: string;
 	createdAt: number;
 	updatedAt: number;
 	/** User-submission time, separate from worker lifecycle and metadata changes. */
@@ -1411,6 +1426,7 @@ export class SessionManager {
 		if (this.internetOnline === online) return;
 		this.internetOnline = online;
 		this.internetObservedAt = Date.now();
+		if (online) this.resumeFlows();
 		for (const meta of this.metas.values()) {
 			const worker = this.workers.get(meta.id);
 			// Quiet history is unaffected. Do not rebuild/broadcast thousands of idle summaries on each edge.
@@ -1446,6 +1462,10 @@ export class SessionManager {
 	>();
 	private readonly runFinishing = new Map<string, Promise<void>>();
 	private readonly runFinishedListeners = new Set<(id: string, event: RunFinished) => void>();
+	private readonly flowTasks = new Map<string, Promise<void>>();
+	private readonly flowDirty = new Set<string>();
+	private readonly flowFaults = new Set<string>();
+	private readonly flowStarting = new Set<string>();
 	private readonly automationsEnabled: () => boolean;
 	private readonly workspaceSetup?: SessionManagerOptions["workspaceSetup"];
 	private readonly workspaceSetupHoldMs: number;
@@ -1640,7 +1660,10 @@ export class SessionManager {
 		this.workerOptions = { startupTimeoutMs: options.startupTimeoutMs, commandTimeoutMs: options.commandTimeoutMs };
 		this.automationsEnabled = options.automationsEnabled ?? (() => false);
 		this.workspaceSetup = options.workspaceSetup;
-		this.onRunFinished((id) => this.startPostRun(this.require(id)));
+		this.onRunFinished((id) => {
+			this.startPostRun(this.require(id));
+			this.startFlowAdvance(this.require(id));
+		});
 		this.workspaceSetupHoldMs = Math.min(
 			WORKSPACE_SETUP_HOLD_MS,
 			Math.max(0, options.workspaceSetupHoldMs ?? WORKSPACE_SETUP_HOLD_MS),
@@ -1803,6 +1826,341 @@ export class SessionManager {
 		return () => this.runFinishedListeners.delete(listener);
 	}
 
+	/** Native route only. The reserved UUID and complete flow snapshot commit before any worker starts. */
+	async startFlow(projectId: string, value: unknown): Promise<SessionSummary> {
+		if (!this.automationsEnabled()) throw new ServiceUnavailable("Automations are disabled");
+		this.updateGate.assertOpen();
+		if (this.closing || this.sleepPause || this.internetOnline === false) throw new Conflict("Flow start is paused");
+		const request = validateFlowStart(value);
+		const existing = this.metas.get(request.requestId);
+		if (existing) {
+			if (existing.projectId !== projectId || JSON.stringify(existing.flow?.request) !== JSON.stringify(request))
+				throw new Conflict("Flow request ID belongs to another request");
+			await this.saving.get(existing.id);
+			const stored = JSON.parse(await readFile(join(this.dir(existing.id), "meta.json"), "utf8")) as SessionMeta;
+			if (JSON.stringify(stored.flow?.request) !== JSON.stringify(request))
+				throw new Conflict("Flow admission is not committed");
+			return this.summary(existing);
+		}
+		if (this.flowStarting.has(request.requestId))
+			throw new Conflict("Flow start is already pending; inspect the original request");
+		if (this.flowStarting.size + [...this.metas.values()].filter((m) => m.flow && flowActive(m.flow)).length >= 8)
+			throw new Conflict("At most eight flows may be active");
+		const config = this.projects.require(projectId).automations;
+		if (!config || config.error || config.revision !== request.expectedRevision)
+			throw new Conflict("Flow definitions changed");
+		const definition = validateFlowItems(config.flows ?? []).find((f) => f.id === request.flowId && f.enabled);
+		if (!definition) throw new Conflict("Flow is missing or disabled");
+		const inputId = `automation:flow:${request.requestId}:1:0`;
+		this.sharing?.assertCreate(request.requestId, inputId);
+		const flow: FlowState = {
+			definition,
+			definitionRevision: config.revision,
+			request,
+			progress: {
+				rootSessionId: request.requestId,
+				flowId: definition.id,
+				name: definition.name,
+				nodeId: definition.nodes[0]!.id,
+				sessionId: request.requestId,
+				round: 1,
+				maxRounds: definition.loop?.maxRounds ?? 1,
+				state: "running",
+			},
+			visits: [{ node: 0, round: 1, sessionId: request.requestId, inputId, after: -1, admitted: true }],
+		};
+		this.flowStarting.add(request.requestId);
+		const end = this.updateGate.begin();
+		try {
+			const node = definition.nodes[0]!;
+			return await this.spawnAdmitted(
+				{
+					projectId,
+					workspace: "clone",
+					message: flowPrompt(flow),
+					title: definition.name,
+					model: node.model,
+					thinking: node.thinking,
+				},
+				false,
+				undefined,
+				{ targetId: request.requestId, operationId: inputId },
+				undefined,
+				undefined,
+				{ rootId: request.requestId, flow },
+			);
+		} finally {
+			end();
+			this.flowStarting.delete(request.requestId);
+		}
+	}
+
+	/** Event-driven wake-up after Settings, project definitions and host admission change. */
+	resumeFlows(): void {
+		for (const meta of this.metas.values())
+			if (meta.flow) {
+				const current = this.metas.get(meta.flow.progress.sessionId);
+				if (current) {
+					this.observeRunFinished(current, this.summary(current));
+					this.startPostRun(current);
+				}
+				this.startFlowAdvance(meta);
+				const input = current?.pending?.find(
+					(c) => c.type === "input" && c.requestId.startsWith("automation:flow:"),
+				);
+				if (current && input && this.flowInputAllowed(current, input.requestId)) void this.start(current.id);
+			}
+	}
+
+	private flowRoot(meta: SessionMeta): SessionMeta | undefined {
+		return meta.flow ? meta : meta.flowRootId ? this.metas.get(meta.flowRootId) : undefined;
+	}
+
+	private async endFlow(root: SessionMeta, state: "failed" | "cancelled", reason: string): Promise<void> {
+		const flow = root.flow;
+		if (!flow || !flowActive(flow)) return;
+		flow.progress.state = state;
+		flow.progress.reason = reason;
+		root.automation ??= { runs: [] };
+		root.automation.attention = { automationId: `flow:${flow.definition.id}`, detail: reason, at: Date.now() };
+		try {
+			await this.save(root, undefined, undefined, true);
+		} catch (error) {
+			this.flowFaults.add(root.id);
+			throw error;
+		}
+		this.emit(root);
+	}
+
+	private startFlowAdvance(meta: SessionMeta): void {
+		const root = this.flowRoot(meta);
+		if (!root?.flow || !flowActive(root.flow) || this.closing || this.flowFaults.has(root.id)) return;
+		if (this.flowTasks.has(root.id)) {
+			this.flowDirty.add(root.id);
+			return;
+		}
+		const task = Promise.resolve()
+			.then(() => this.advanceFlow(root))
+			.catch(async (error: unknown) => {
+				// Fail closed on persistence/transport ambiguity. Never spin on an error or replay an effect.
+				this.flowFaults.add(root.id);
+				if (root.flow && flowActive(root.flow))
+					await this.endFlow(root, "failed", "Flow advancement failed; inspect the existing chats").catch(
+						() => undefined,
+					);
+				console.warn(`pilotd: flow advancement failed: ${error}`);
+			})
+			.finally(() => {
+				this.flowTasks.delete(root.id);
+				if (this.flowDirty.delete(root.id)) this.startFlowAdvance(root);
+			});
+		this.flowTasks.set(root.id, task);
+	}
+
+	private flowAdmissionOpen(root: SessionMeta, current?: SessionMeta): boolean {
+		return (
+			!!root.flow &&
+			flowActive(root.flow) &&
+			!this.flowFaults.has(root.id) &&
+			this.automationsEnabled() &&
+			!this.runFinishedPaused(root) &&
+			(!current || !this.runFinishedPaused(current))
+		);
+	}
+
+	private flowInputAllowed(meta: SessionMeta, inputId: string): boolean {
+		const root = this.flowRoot(meta);
+		const flow = root?.flow;
+		const visit = flow?.visits.at(-1);
+		const config = root?.projectId ? this.projects.get(root.projectId)?.automations : undefined;
+		return (
+			!!root &&
+			!!flow &&
+			!!visit &&
+			this.flowAdmissionOpen(root, meta) &&
+			visit.inputId === inputId &&
+			visit.sessionId === meta.id &&
+			root.archivedAt === undefined &&
+			meta.archivedAt === undefined &&
+			!root.continuedTo &&
+			!meta.continuedTo &&
+			!config?.error &&
+			!!config?.flows?.some((f) => f.id === flow.definition.id && f.enabled)
+		);
+	}
+
+	private async advanceFlow(root: SessionMeta): Promise<void> {
+		const flow = root.flow!;
+		let visit = flow.visits.at(-1)!;
+		const current = this.metas.get(visit.sessionId);
+		if (!this.flowAdmissionOpen(root, current)) return;
+		if (
+			root.archivedAt !== undefined ||
+			root.continuedTo ||
+			current?.archivedAt !== undefined ||
+			current?.continuedTo ||
+			current?.failure
+		)
+			return this.endFlow(root, "failed", "Flow chat archived, replaced or failed to start");
+		const live = root.projectId ? this.projects.get(root.projectId)?.automations : undefined;
+		if (live?.error || !live?.flows?.some((f) => f.id === flow.definition.id && f.enabled))
+			return this.endFlow(root, "failed", "Flow definition is missing, invalid or disabled");
+		if (!visit.admitted) {
+			if (visit.node === 0) {
+				if (this.summary(root).working || root.pending?.length || root.initializing) return;
+				// Input and admitted marker share one durable metadata snapshot. The outbox owns exact IPC replay.
+				visit.admitted = true;
+				root.pending ??= [];
+				root.pending.push({
+					type: "input",
+					requestId: visit.inputId,
+					content: `<automation>\n${flowPrompt(flow).replace(/<\/automation/gi, "<\\/automation")}\n</automation>`,
+					mode: "followUp",
+					onlyIfIdle: true,
+				});
+				await this.save(root, undefined, undefined, true);
+				if (this.flowAdmissionOpen(root)) void this.start(root.id);
+			} else {
+				const node = flow.definition.nodes[visit.node]!;
+				const end = this.updateGate.begin();
+				try {
+					// Exact reserved session/input IDs make a create ACK lost before the root save recoverable.
+					const existing = this.metas.get(visit.sessionId);
+					if (existing) {
+						if (existing.createOperationId !== visit.inputId || existing.flowRootId !== root.id)
+							throw new Conflict("Flow reviewer identity changed");
+						await this.saving.get(existing.id);
+					} else {
+						await this.spawnAdmitted(
+							{
+								projectId: root.projectId,
+								cwd: root.cwd,
+								mode: "ask",
+								message: flowPrompt(flow),
+								title: `${flow.definition.name}: ${node.id} (${visit.round})`,
+								model: node.model,
+								thinking: node.thinking,
+							},
+							false,
+							undefined,
+							{ targetId: visit.sessionId, operationId: visit.inputId },
+							undefined,
+							undefined,
+							{ rootId: root.id },
+						);
+					}
+					visit.admitted = true;
+					await this.save(root, undefined, undefined, true);
+				} finally {
+					end();
+				}
+			}
+			this.emit(root);
+			return;
+		}
+		if (!current) return this.endFlow(root, "failed", "Flow node chat is unavailable");
+		const summary = this.summary(current);
+		if (summary.outcome === "stopped" || current.automation?.stopped)
+			return this.endFlow(root, "cancelled", "Flow stopped");
+		if (summary.outcome === "failed") return this.endFlow(root, "failed", "Flow node failed");
+		const waiting = summary.outcome === "question" || summary.attentionReason?.kind === "asks";
+		if (waiting) {
+			if (flow.progress.state !== "waiting") {
+				flow.progress.state = "waiting";
+				flow.progress.reason = "Waiting for an answer in the current chat";
+				await this.save(root, undefined, undefined, true);
+				this.emit(root);
+			}
+			return;
+		}
+		if (flow.progress.state === "waiting") {
+			flow.progress.state = "running";
+			delete flow.progress.reason;
+			await this.save(root, undefined, undefined, true);
+		}
+		if (
+			summary.working ||
+			current.pending?.length ||
+			current.initializing ||
+			this.postRunTasks.has(current.id) ||
+			this.runFinishing.has(current.id)
+		)
+			return;
+		if (summary.outcome !== "done" || (summary.outcomeAt ?? -1) <= visit.after) return;
+		if (visit.node === 0) {
+			const event = current.automation?.boundary?.finished;
+			if (!event || event.triggerId !== `run.finished:${summary.outcomeAt}`) return;
+			const hooks = live.items.some((h) => h.enabled && h.on.includes("run.finished"));
+			if (hooks && current.automation?.postRun?.triggerId !== event.triggerId) return;
+			if (
+				current.automation?.postRun?.triggerId === event.triggerId &&
+				current.automation.postRun.state === "pending"
+			)
+				return;
+			if (current.automation?.attention || current.automation?.postRun?.state === "cancelled")
+				return this.endFlow(root, "failed", current.automation.attention?.detail ?? "Flow checks were cancelled");
+		}
+		let result: ReturnType<typeof parseFlowResult>;
+		let next: number | "end";
+		try {
+			result = parseFlowResult(await this.flowResult(current.id));
+			next = nextFlowNode(flow, result.outcome);
+		} catch (error) {
+			return this.endFlow(root, "failed", error instanceof Error ? error.message : "Invalid flow result");
+		}
+		// A question, Stop, new input or host pause may have raced the passive history read.
+		if (
+			!this.flowAdmissionOpen(root, current) ||
+			this.summary(current).working ||
+			this.postRunTasks.has(current.id) ||
+			this.runFinishing.has(current.id) ||
+			current.pending?.length ||
+			current.outcomeAt !== summary.outcomeAt
+		)
+			return;
+		visit.outcome = result.outcome;
+		visit.summary = actionOutput(result.summary) || "No safe summary text";
+		if (next === "end") {
+			flow.progress.state = "completed";
+			flow.progress.reason = "Flow completed; no merge or publication authorized";
+			await this.save(root, undefined, undefined, true);
+			this.emit(root);
+			return;
+		}
+		const round = visit.round + (next === 0 ? 1 : 0);
+		const sessionId = next === 0 ? root.id : randomUUID();
+		visit = {
+			node: next,
+			round,
+			sessionId,
+			inputId: `automation:flow:${root.id}:${round}:${next}`,
+			after: next === 0 ? (root.outcomeAt ?? -1) : -1,
+			admitted: false,
+		};
+		flow.visits.push(visit);
+		Object.assign(flow.progress, { nodeId: flow.definition.nodes[next]!.id, sessionId, round, state: "running" });
+		delete flow.progress.reason;
+		await this.save(root, undefined, undefined, true);
+		// Same serialized task, after the cursor is durable. No queue/timer/polling to lose at restart.
+		await this.advanceFlow(root);
+	}
+
+	/** Bounded, current-turn-only final assistant text. Never scan back past an input for an old approval. */
+	private async flowResult(id: string): Promise<string | undefined> {
+		const page = await this.history(id, Number.MAX_SAFE_INTEGER, 32);
+		for (const entry of page.entries.toReversed()) {
+			if (entry.kind === "pi.user") return undefined;
+			if (entry.kind !== "pi.assistant") continue;
+			const message = entry.model?.findLast((m) => m.role === "assistant");
+			if (!message || message.content.some((p) => p.type === "toolCall")) return undefined;
+			return message.content
+				.filter((p) => p.type === "text")
+				.map((p) => p.text)
+				.join("\n");
+		}
+		return undefined;
+	}
+
 	private async captureRunBoundary(meta: SessionMeta, requestId: string): Promise<void> {
 		if (!this.automationsEnabled() || !this.setupEligible(meta)) return;
 		meta.automation ??= { runs: [] };
@@ -1818,6 +2176,7 @@ export class SessionManager {
 	}
 
 	private runFinishedPaused(meta: SessionMeta): boolean {
+		const subscription = this.subscriptionPause(meta);
 		return !!(
 			this.closing ||
 			this.sleepPause ||
@@ -1825,7 +2184,7 @@ export class SessionManager {
 			meta.updatePaused ||
 			this.updateGate.paused ||
 			this.updateGate.frozen ||
-			this.subscriptionPaused(meta.id) ||
+			(subscription && !subscription.forced) ||
 			this.internetOnline === false ||
 			meta.kernelRestartPending
 		);
@@ -1894,6 +2253,7 @@ export class SessionManager {
 			.catch((error: unknown) => console.warn(`pilotd: run-finished observation failed: ${error}`))
 			.finally(() => {
 				this.runFinishing.delete(meta.id);
+				this.startFlowAdvance(meta);
 				if (meta.automation?.boundary !== boundary || meta.outcomeAt !== outcomeAt)
 					this.observeRunFinished(meta, this.summary(meta));
 			});
@@ -1959,6 +2319,7 @@ export class SessionManager {
 				if (!this.closing) {
 					const summary = this.summary(meta);
 					for (const listener of this.changeListeners) listener(summary);
+					this.startFlowAdvance(meta);
 					if (
 						!this.runFinishedPaused(meta) &&
 						(meta.pending?.length || (meta.prActivities?.length && this.workers.has(meta.id)))
@@ -2696,6 +3057,21 @@ ${run.excerpt}`,
 				const interruptedActions = meta.automation?.runs.some(
 					(run) => run.state === "running" || run.state === "waiting",
 				);
+				if (meta.flow) {
+					try {
+						validateFlowState(meta.flow, meta.id);
+					} catch {
+						meta.invalidFlow = meta.flow;
+						delete meta.flow;
+						meta.automation ??= { runs: [] };
+						meta.automation.attention = {
+							automationId: "flow",
+							detail: "Saved flow state is invalid; automatic execution disabled",
+							at: Date.now(),
+						};
+						await this.save(meta, undefined, undefined, true);
+					}
+				}
 				for (const run of meta.automation?.runs ?? [])
 					if (run.state === "running" || run.state === "waiting") run.state = "interrupted";
 				if (legacyRefresh || childWork || migratedPermission || interruptedActions)
@@ -2781,6 +3157,7 @@ ${run.excerpt}`,
 			void this.startWorkspaceSetup(meta);
 			this.startPostRun(meta);
 		}
+		this.resumeFlows();
 		this.pullRequests.start();
 		this.scheduleArchiveSweep();
 		// Resume dissociation interrupted by a restart.
@@ -4930,6 +5307,8 @@ ${run.excerpt}`,
 	async archive(id: string): Promise<SessionSummary> {
 		const end = this.updateGate.begin();
 		try {
+			const root = this.flowRoot(this.require(id));
+			if (root) await this.endFlow(root, "cancelled", "Flow chat archived");
 			this.mcpAttention?.clear(id);
 			return await this.setArchived(id, true);
 		} finally {
@@ -6386,6 +6765,7 @@ ${run.excerpt}`,
 		this.updateGate.release();
 		this.actionRunner?.setUpdatePaused(false);
 		this.pumpMainRefreshes();
+		this.resumeFlows();
 		if (this.sleepPause) return;
 		for (const meta of this.metas.values()) {
 			void this.startWorkspaceSetup(meta);
@@ -6559,6 +6939,7 @@ ${run.excerpt}`,
 		admission?: { targetId: string; operationId: string },
 		missionAdmission?: MissionSpawnAdmission,
 		insightsGrant?: InsightsGrant,
+		flowAdmission?: { rootId: string; flow?: FlowState },
 	): Promise<SessionSummary> {
 		if (missionAdmission?.role === "explorer" && (request.mode !== "ask" || coordinator))
 			throw new Conflict("Explorer admission requires a non-coordinator Ask session");
@@ -6731,6 +7112,9 @@ ${run.excerpt}`,
 			cwd = join(this.dir(id), "workspace");
 		}
 		const meta: SessionMeta = {
+			...(flowAdmission
+				? { flowRootId: flowAdmission.rootId, ...(flowAdmission.flow ? { flow: flowAdmission.flow } : {}) }
+				: {}),
 			id,
 			...(request.role ? { role: request.role } : {}),
 			...(insightsGrant ? { insightsGrant, insightsSetupPending: true as const } : {}),
@@ -6774,6 +7158,8 @@ ${run.excerpt}`,
 			if (request.diagnosticRepair) await this.repairProject.validateCurrent(request.diagnosticRepair.binding);
 			this.assertDiagnosticRepairAdmission(request);
 			if (insightsGrant) this.assertInsightsBinding(insightsGrant);
+			if (flowAdmission && !this.flowInputAllowed(meta, admission!.operationId))
+				throw new Conflict("Flow admission changed");
 			await this.save(meta, undefined, undefined, Boolean(admission));
 			if (request.diagnosticRepair) await this.repairProject.validateCurrent(request.diagnosticRepair.binding);
 			this.assertDiagnosticRepairAdmission(request);
@@ -7145,6 +7531,16 @@ ${run.excerpt}`,
 		if (answerQuestionId !== undefined) {
 			this.assertQuestionAnswerActor(id, requestId);
 		}
+		const flowRoot = this.flowRoot(meta);
+		if (
+			flowRoot?.flow &&
+			flowActive(flowRoot.flow) &&
+			!inputOrigin(requestId) &&
+			answerQuestionId === undefined &&
+			this.summary(meta).outcome !== "question" &&
+			this.summary(meta).attentionReason?.kind !== "asks"
+		)
+			await this.endFlow(flowRoot, "cancelled", "Manual input cancelled automatic flow advancement");
 		this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
 		// Diagnostics must never decide whether an input is admitted or acknowledged.
 		const observe = <T>(action: () => T): T | undefined => {
@@ -7356,11 +7752,14 @@ ${run.excerpt}`,
 			interrupted = this.insightsBacklog?.reviews.interrupt(id, "cancelled", "Stopped; never replay this run");
 			void interrupted?.catch(() => undefined);
 		}
+		const flowRoot = this.flowRoot(meta);
+		const flowInterrupted = flowRoot ? this.endFlow(flowRoot, "cancelled", "Flow stopped") : undefined;
+		void flowInterrupted?.catch(() => undefined);
 		try {
 			return await this.stopAdmitted(meta);
 		} finally {
 			// Reach the kernel before waiting for review durability, but do not ACK a volatile cancellation.
-			await interrupted;
+			await Promise.all([interrupted, flowInterrupted]);
 		}
 	}
 
@@ -7573,8 +7972,14 @@ ${run.excerpt}`,
 			await this.captureRunBoundary(this.require(id), command.requestId);
 			if (this.closing || this.sleepPause) throw new WorkerUnavailable("Input admission paused");
 			if (
+				command.requestId.startsWith("automation:flow:") &&
+				!this.flowInputAllowed(this.require(id), command.requestId)
+			)
+				throw new WorkerUnavailable("Flow input admission paused or cancelled");
+			if (
 				command.onlyIfIdle &&
 				command.requestId.startsWith("automation:") &&
+				!command.requestId.startsWith("automation:flow:") &&
 				(!this.automationsEnabled() ||
 					this.require(id).automation?.stopped ||
 					this.require(id).automation?.followUps?.requestId !== command.requestId)
@@ -8893,6 +9298,7 @@ ${run.excerpt}`,
 			}
 			this.sleepPause = undefined;
 			this.actionRunner?.resumeAfterSleep();
+			this.resumeFlows();
 			for (const meta of this.metas.values()) {
 				void this.startWorkspaceSetup(meta);
 				this.startPostRun(meta);
@@ -8976,6 +9382,7 @@ ${run.excerpt}`,
 		await this.pullRequestMerger.settled();
 		const drainPullRequests = this.pullRequests.stop();
 		this.shutdownSignal.abort();
+		await Promise.allSettled(this.flowTasks.values());
 		for (const task of this.postRunTasks.values()) task.controller.abort();
 		for (const setup of this.workspaceSetups.values()) setup.controller.abort();
 		for (const waiters of this.workspaceSetupWaiters.values()) for (const wake of waiters) wake();
@@ -9187,12 +9594,24 @@ ${run.excerpt}`,
 							command.onlyIfIdle &&
 							((command.requestId.startsWith("mission-notice:")
 								? !this.missions?.noticeAllowed?.(id, command.requestId) || meta.archivedAt !== undefined
-								: command.requestId.startsWith("automation:")
-									? !this.automationsEnabled() || meta.automation?.followUps?.requestId !== command.requestId
-									: !command.requestId.startsWith("insights-review:") &&
-										meta.prFollowUp?.requestId !== command.requestId) ||
+								: command.requestId.startsWith("automation:flow:")
+									? false
+									: command.requestId.startsWith("automation:")
+										? !this.automationsEnabled() ||
+											meta.automation?.followUps?.requestId !== command.requestId
+										: !command.requestId.startsWith("insights-review:") &&
+											meta.prFollowUp?.requestId !== command.requestId) ||
 								meta.pending.some((pending) => pending !== command))
 						) {
+							if (command.requestId.startsWith("automation:flow:")) {
+								const root = this.flowRoot(meta);
+								if (root)
+									await this.endFlow(
+										root,
+										"failed",
+										"Flow input superseded by other work; no automatic replay",
+									);
+							}
 							rejected.set(
 								command.requestId,
 								new CommandRejected("Automatic input is no longer eligible", "busy"),
@@ -9240,6 +9659,15 @@ ${run.excerpt}`,
 								error.code === "busy"
 							) {
 								// An idle-guard rejection is not an agent failure or a consumed attempt.
+								if (command.requestId.startsWith("automation:flow:")) {
+									const root = this.flowRoot(meta);
+									if (root)
+										await this.endFlow(
+											root,
+											"failed",
+											"Flow input was rejected as busy; no automatic replay",
+										);
+								}
 								if (command.type === "input") this.refundAutomation(meta, command.requestId);
 								if (meta.prFollowUp?.requestId === command.requestId) {
 									meta.prFollowUp.attempts = Math.max(0, meta.prFollowUp.attempts - 1);
@@ -10570,6 +10998,19 @@ ${run.excerpt}`,
 	}
 
 	private summary(meta: SessionMeta, worker = this.workers.get(meta.id)): SessionSummary {
+		const flowRoot = this.flowRoot(meta);
+		const flow = flowRoot?.flow ? structuredClone(flowRoot.flow.progress) : undefined;
+		if (
+			flow &&
+			flowRoot?.flow &&
+			flowActive(flowRoot.flow) &&
+			(!this.automationsEnabled() ||
+				this.runFinishedPaused(flowRoot) ||
+				(this.metas.has(flow.sessionId) && this.runFinishedPaused(this.require(flow.sessionId))))
+		) {
+			flow.state = "waiting";
+			flow.reason = this.automationsEnabled() ? "Flow paused by host admission" : "Automations are disabled";
+		}
 		const actionState = this.actionRunner?.state(meta.id);
 		const actionRecord = actionState
 			? meta.automation?.runs.find((run) => `${meta.id}/${run.id}` === actionState.actionId)
@@ -10734,6 +11175,17 @@ ${run.excerpt}`,
 				? { workspaceSetup: { state: meta.automation.setup.state, detail: meta.automation.setup.detail } }
 				: {}),
 			...(meta.automation?.runs.length ? { automationRuns: structuredClone(meta.automation.runs) } : {}),
+			...(flow ? { flow } : {}),
+			...(flow && flowRoot?.flow && flowActive(flowRoot.flow)
+				? {
+						automation: {
+							state: flow.state === "waiting" ? ("waiting" as const) : ("running" as const),
+							name: `${flow.name}: ${flow.nodeId} (${flow.round}/${flow.maxRounds})`,
+							trigger: "manual",
+							startedAt: flowRoot.createdAt,
+						},
+					}
+				: {}),
 			...(actionState
 				? {
 						automation: {
@@ -11607,6 +12059,7 @@ ${run.excerpt}`,
 			this.observeLifecycle(meta, summary);
 			this.observeRunFinished(meta, summary);
 			this.startPostRun(meta);
+			this.startFlowAdvance(meta);
 		}
 		if (!this.closing)
 			this.longJobTimers.update(meta.id, meta.archivedAt === undefined ? (summary.runningJobs ?? []) : [], () => {

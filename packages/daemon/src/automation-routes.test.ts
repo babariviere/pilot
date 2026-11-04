@@ -78,6 +78,26 @@ test("hook writes require enabled feature and native authority, reject stale and
 			headers: { "content-type": "application/json", "x-pilot-github-capability": capability },
 			body: JSON.stringify(body),
 		});
+	const start = (body: unknown, capability = token) =>
+		fetch(`${base}/${project.id}/flows/start`, {
+			method: "POST",
+			headers: { "content-type": "application/json", "x-pilot-github-capability": capability },
+			body: JSON.stringify(body),
+		});
+	const flowRequest = {
+		requestId: "12345678-1234-1234-1234-123456789abc",
+		expectedRevision: 1,
+		flowId: "fix-review",
+		message: "Fix bug",
+	};
+	let starts = 0;
+	t.mock.method(sessions, "startFlow", async (id: string, body: unknown) => {
+		assert.equal(id, project.id);
+		assert.deepEqual(body, flowRequest);
+		starts++;
+		return { id: "flow-root" } as Awaited<ReturnType<typeof sessions.startFlow>>;
+	});
+	assert.equal((await start(flowRequest)).status, 404);
 	assert.equal((await put({ expectedRevision: 0, items: [] })).status, 404);
 	const root = base.replace("/api/projects", "");
 	const capability = async () => (await (await fetch(`${root}/api/hello`)).json()).capabilities.automations;
@@ -92,6 +112,12 @@ test("hook writes require enabled feature and native authority, reject stale and
 	assert.equal(settings.automationsEnabled(), false);
 	assert.equal((await toggle(true)).status, 200);
 	assert.equal(await capability(), 1);
+	assert.equal((await start(flowRequest, "wrong")).status, 403);
+	assert.equal(starts, 0, "no engine admission without native authority");
+	const flowResponse = await start(flowRequest);
+	assert.equal(flowResponse.status, 202);
+	assert.deepEqual(await flowResponse.json(), { id: "flow-root" });
+	assert.equal(starts, 1);
 	assert.equal((await put({ expectedRevision: 0, items: [] }, "wrong")).status, 403);
 	const hook = {
 		id: "setup",
@@ -124,6 +150,8 @@ test("hook writes require enabled feature and native authority, reject stale and
 	}
 	assert.equal((await (await fetch(base)).json())[0].automations.revision, 1);
 	assert.equal((await toggle(false)).status, 200);
+	assert.equal((await start(flowRequest)).status, 404);
+	assert.equal(starts, 1);
 	assert.equal(await capability(), undefined);
 	assert.equal((await put({ expectedRevision: 1, items: [] })).status, 404);
 	assert.equal(sessions.list().length, 0, "settings never start chats");
