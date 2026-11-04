@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.116.0](https://github.com/babariviere/pilot/compare/v1.115.0...v1.116.0) (2026-11-04)
+
+
+### Features
+
+* **desktop:** cut verbose UI copy across settings, chat, missions and dialogs ([e4228d2](https://github.com/babariviere/pilot/commit/e4228d20476ea10252287a664d5c758f30f421b5))
+* **desktop:** open and add Slack messages from the Command Palette, surface hidden triage filters ([bd55cb8](https://github.com/babariviere/pilot/commit/bd55cb8ab088c6fc269697a66bc36d28f3660ace))
+* **desktop:** show resolved default model and thinking in selectors ([08dfd6c](https://github.com/babariviere/pilot/commit/08dfd6cc2ce6e52cbf67812af878774f76e39e48))
+
+
+### Bug Fixes
+
+* **daemon:** checkpoint work for one-shot lifecycle controls ([6dd3f00](https://github.com/babariviere/pilot/commit/6dd3f00d03ab49f01b3fd9690627d5b31ccd2071))
+* **desktop:** keep decision responses across mission navigation ([bb21ec5](https://github.com/babariviere/pilot/commit/bb21ec501f06c044762d68cff8dedc15f46034b1))
+* **desktop:** recover captured message delivery automatically ([cad8ecd](https://github.com/babariviere/pilot/commit/cad8ecd5b32fabbaeb21a11be8e94120015e93dd))
+
 ## [1.115.0](https://github.com/babariviere/pilot/compare/v1.114.0...v1.115.0) (2026-11-04)
 
 
