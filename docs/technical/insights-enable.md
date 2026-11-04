@@ -136,8 +136,10 @@ JSON value (no added, dropped or rewritten keys; `expectedHome` checked by daemo
 hello). `insights_enable_view.rs` is the one confirmation inside the existing Insights panel, opened from
 **Automations → Weekly Insights…** or the report chat's settings. The backlog comes only from report chats'
 exact project/mission binding; with zero or several, the confirmation offers active local missions from the
-passive catalog. When exactly one report chat is bound to the backlog, preflight pins it with
-`reportSessionId`. A newer choice or a sent confirmation discards late preflight replies. The command is the
+passive catalog. Preflight pins `reportSessionId` whenever one report identity is known for the exact
+backlog: a bound report chat, or this app's retained non-rejected enable / accepted setup command. Several
+known identities block without a read, and an offer whose `targetId` differs from the pin is refused as a
+substitute. A newer choice or a sent confirmation discards late preflight replies. The command is the
 existing writer's `insights` slot `enable:<missionId>`, persisted before the single POST. **Check** posts
 the retained envelope to the status route and resends the same bytes only when the receipt is `unknown`;
 pending/accepted/rejected receipts are never resent. "On" requires passive status `enabled`. Automations

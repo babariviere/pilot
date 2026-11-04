@@ -32,6 +32,8 @@ pub(crate) struct Flow {
     models_for: Option<String>,
     /// Report chats' exact bindings: (project, mission, report chat).
     reports: Vec<(String, String, String)>,
+    /// The known report identities the latest preflight was pinned with.
+    known: Vec<String>,
 }
 impl Flow {
     pub(super) fn new(reports: Vec<(String, String, String)>) -> Self {
@@ -66,22 +68,11 @@ impl Flow {
             projects: Arc::new(Vec::new()),
             models_for: None,
             reports,
+            known: Vec::new(),
         };
-        flow.binding = binding.map(|b| flow.pinned(b));
+        flow.binding = binding;
         flow.chosen = flow.binding.clone();
         flow
-    }
-    /// The backlog with its one bound report chat pinned, if exactly one exists.
-    fn pinned(&self, mut backlog: Backlog) -> Backlog {
-        let mut bound = self
-            .reports
-            .iter()
-            .filter(|(p, m, _)| *p == backlog.project_id && *m == backlog.mission_id);
-        backlog.report = match (bound.next(), bound.next()) {
-            (Some((_, _, session)), None) => Some(session.clone()),
-            _ => None,
-        };
-        backlog
     }
     pub(super) fn freeze(&mut self) {
         self.generation += 1;
@@ -228,19 +219,58 @@ impl Panel {
         self.enable_sync(cx);
     }
 
+    /// Every report identity already known for this exact backlog: report chats bound to
+    /// it, and this app's non-rejected enable or accepted setup commands for it.
+    fn known_reports(&self, b: &Backlog) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .enable
+            .iter()
+            .flat_map(|f| f.reports.iter())
+            .filter(|(p, m, _)| *p == b.project_id && *m == b.mission_id)
+            .map(|(_, _, session)| session.clone())
+            .collect();
+        for a in self.book.iter().flat_map(|book| book.insights.values()) {
+            let retained = match a.operation.kind.as_str() {
+                weekly::KIND => a.state != model::State::Rejected,
+                "insights-create" => a.state == model::State::Accepted,
+                _ => false,
+            };
+            if retained && attempt_backlog(a).is_some_and(|ab| ab.same(b)) {
+                ids.push(a.operation.target_id.clone());
+            }
+        }
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
     fn enable_preflight(&mut self, cx: &mut Context<Self>) {
         if self.waiting() {
             return;
         }
         let options = self.options.clone();
-        let Some(flow) = self.enable.as_mut() else {
+        let Some(mut backlog) = self.enable.as_ref().and_then(|f| f.chosen.clone()) else {
             return;
         };
-        let Some(backlog) = flow.chosen.clone() else {
+        let known = self.known_reports(&backlog);
+        let Some(flow) = self.enable.as_mut() else {
             return;
         };
         flow.generation += 1;
         let generation = flow.generation;
+        flow.checking = None;
+        // A known report is pinned; several known reports are never resolved by a guess.
+        if known.len() > 1 {
+            flow.known = known;
+            flow.gate = Some(Load::Failed(
+                "More than one report chat is known for this backlog. Nothing new was set up."
+                    .into(),
+            ));
+            cx.notify();
+            return;
+        }
+        flow.known = known.clone();
+        backlog.report = known.into_iter().next();
         flow.gate = Some(Load::Loading);
         let Some(rx) = weekly::read_preflight(options, backlog, flow.explicit.clone()) else {
             flow.gate = Some(Load::Failed("Couldn't check Insights setup.".into()));
@@ -294,6 +324,19 @@ impl Panel {
 
     /// Passive status for the retained command, once per saved state.
     pub(super) fn enable_sync(&mut self, cx: &mut Context<Self>) {
+        // Retained identities can arrive with the writer's book after the first read.
+        if let Some(chosen) = self
+            .enable
+            .as_ref()
+            .filter(|f| f.gate.is_some())
+            .and_then(|f| f.chosen.clone())
+            && self
+                .enable
+                .as_ref()
+                .is_some_and(|f| f.known != self.known_reports(&chosen))
+        {
+            self.enable_preflight(cx);
+        }
         let Some(attempt) = self.enable_attempt().cloned() else {
             return;
         };
@@ -370,7 +413,7 @@ impl Panel {
         if flow.binding.is_some() || flow.chosen.as_ref().is_some_and(|c| c.same(&backlog)) {
             return;
         }
-        flow.chosen = Some(flow.pinned(backlog));
+        flow.chosen = Some(backlog);
         flow.explicit = None;
         flow.status = None;
         self.error = None;

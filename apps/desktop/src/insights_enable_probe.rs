@@ -565,9 +565,87 @@ fn reuse_and_recovery(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     assert!(sent_operations(&posts(&s)).is_empty());
     drop(p);
     let root = unmount(cx, m);
+
+    // Restart with the report chat missing from the list: the retained command's report
+    // is still known, so a fresh check pins it and refuses any substitute.
+    let m = mount(cx, &s, width, ThemeMode::Light, false, Some(root));
+    let (h, view) = (m.h, m.view.clone());
+    s.reply(
+        STATUS,
+        Reply::json(
+            200,
+            fx::status(
+                &op,
+                "accepted",
+                fx::enabled(&op),
+                "blocked",
+                Some("report_identity_unavailable"),
+            ),
+        ),
+    );
+    from_automations(cx, h, &view);
+    let p = panel(cx, &view);
+    assert_eq!(
+        progress(cx, &view),
+        (
+            "settled",
+            Some(crate::insights_enable::reason_text("report_identity_unavailable").into())
+        )
+    );
+    let mut missing = fx::blocked(
+        "project-A",
+        "mission-A",
+        json!({"state":"unavailable","reason":"catalog_unavailable"}),
+        "report_identity_unavailable",
+    );
+    missing["targetId"] = json!(REPORT);
+    s.reply(PREFLIGHT_A_PINNED, Reply::json(200, missing));
+    click(cx, h, "insights-enable-again");
+    until(cx, h, |_, cx| {
+        p.read(cx).probe_ready() && p.read(cx).probe_gate() == Some("checked")
+    });
+    cx.update_window(h, |_, w, cx| {
+        let pf = p.read(cx).probe_preflight().unwrap();
+        assert_eq!(pf.reason.as_deref(), Some("report_identity_unavailable"));
+        assert!(pf.request().is_none());
+        assert_eq!(p.read(cx).probe_backlog().unwrap().mission_id, "mission-A");
+        assert!(w.try_find("insights-enable-blocked").is_some());
+        assert_eq!(w.find("insights-enable-confirm").disabled(), Some(true));
+    })
+    .unwrap();
+    // Local offering another target for the pinned report is refused, never confirmable.
+    s.reply(
+        PREFLIGHT_A_PINNED,
+        Reply::json(200, fx::ready("project-A", "mission-A", fx::TERRA)),
+    );
+    click(cx, h, "insights-enable-retry");
+    until(cx, h, |_, cx| {
+        p.read(cx).probe_ready() && p.read(cx).probe_gate() == Some("failed")
+    });
+    cx.update_window(h, |_, w, _| {
+        assert_eq!(w.find("insights-enable-confirm").disabled(), Some(true))
+    })
+    .unwrap();
+    assert!(
+        !s.state
+            .lock()
+            .unwrap()
+            .seen
+            .iter()
+            .any(|(_, path)| path == PREFLIGHT_A),
+        "a known report is always pinned"
+    );
+    assert!(
+        sent_operations(&posts(&s)).is_empty(),
+        "refusals send nothing"
+    );
+    shot(cx, h, dir, "pinned-refused");
+    escape(cx, h);
+    drop(p);
+    let root = unmount(cx, m);
     let _ = std::fs::remove_dir_all(root);
     println!(
-        "insights enable reuse 1100 Light: passive open, exact payload, lost ACK, reopen/restart without replay, Check resend of same bytes, partial, enabled, report navigation, chat settings passed"
+        "insights enable reuse 1100 Light: passive open, exact payload, lost ACK, reopen/restart without replay, Check resend of same bytes, partial, enabled, report navigation, chat settings, retained report pinning and substitute refusal passed"
     );
 }
 

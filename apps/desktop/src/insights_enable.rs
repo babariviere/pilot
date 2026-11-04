@@ -16,6 +16,7 @@ pub(crate) const KIND: &str = "insights-enable";
 /// Frozen payload bytes. The host's own limit is larger; a real payload is about 1 KB.
 pub(crate) const PAYLOAD_CAP: usize = 8 * 1024;
 const INVALID: Failure = "Local returned malformed Insights setup data.";
+const SUBSTITUTE: Failure = "Local offered a different report chat. Nothing was set up.";
 const MAX_NUMBER: u64 = 9_007_199_254_740_990;
 
 /// Pinned hello: the enable interface exists. Not a grant or a scheduler switch.
@@ -313,6 +314,10 @@ pub(crate) fn preflight(
         return Err(INVALID);
     }
     let target_id = id(&value["targetId"])?;
+    // The pinned report is the only acceptable target; never a substitute.
+    if backlog.report.as_ref().is_some_and(|r| r != &target_id) {
+        return Err(SUBSTITUTE);
+    }
     let readiness = match value["state"].as_str() {
         Some("ready") => Readiness::Ready,
         Some("existing") => Readiness::Existing,

@@ -239,3 +239,39 @@ fn reasons_stay_short_and_unknown_codes_stay_generic() {
     assert!(!supported(&json!({"capabilities":{"insights":1}})));
     assert!(!automations_on(&json!({"capabilities":{}})));
 }
+
+#[test]
+fn a_pinned_report_refuses_any_substitute() {
+    let pinned = Backlog {
+        report: Some("report-1".into()),
+        ..backlog()
+    };
+    // A fresh target instead of the known report is refused, not confirmable.
+    let fresh = f::ready("project-A", "mission-A", f::TERRA);
+    assert_eq!(preflight(&fresh, &pinned, &host(), None), Err(SUBSTITUTE));
+    let reuse = f::offer(
+        "project-A",
+        "mission-A",
+        f::TERRA,
+        "report-1",
+        f::chat("report-1", f::TERRA),
+        Value::Null,
+    );
+    assert!(
+        preflight(&reuse, &pinned, &host(), None)
+            .unwrap()
+            .request()
+            .is_some()
+    );
+    let blocked = f::blocked(
+        "project-A",
+        "mission-A",
+        json!({"state":"unavailable","reason":"not_found"}),
+        "report_identity_unavailable",
+    );
+    let mut blocked = blocked;
+    blocked["targetId"] = json!("report-1");
+    let pf = preflight(&blocked, &pinned, &host(), None).unwrap();
+    assert!(pf.request().is_none());
+    assert!(reason_text("report_identity_unavailable").contains("Nothing new"));
+}
