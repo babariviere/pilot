@@ -108,6 +108,37 @@ export const localConfigs = [
 	".mise/config.local.toml",
 ];
 
+/** Persist trust for workspace-local configs so terminals and setup hooks inherit it too. */
+export async function trustWorkspaceMise(cwd: string, runner: Runner = run): Promise<void> {
+	const root = await realpath(cwd);
+	const configs = [
+		"mise.toml",
+		".mise.toml",
+		"mise/config.toml",
+		".mise/config.toml",
+		".config/mise.toml",
+		".config/mise/config.toml",
+		...localConfigs,
+	];
+	for (const config of configs) {
+		const path = join(root, config);
+		const stat = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+			if (error.code === "ENOENT" || error.code === "ENOTDIR") return undefined;
+			throw error;
+		});
+		if (!stat?.isFile()) continue;
+		// Never grant trust through a checked-out directory symlink.
+		if ((await realpath(dirname(path))) !== dirname(path)) continue;
+		try {
+			await runner("mise", ["trust", path], root, 30_000);
+		} catch (error) {
+			// Projects can carry mise config on hosts that do not use mise.
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+			throw error;
+		}
+	}
+}
+
 async function statIfExists(path: string) {
 	return lstat(path).catch((error: NodeJS.ErrnoException) => {
 		if (error.code !== "ENOENT") throw error;
@@ -379,6 +410,7 @@ export async function createWorkspace(
 		destination,
 	);
 	await copyLocalConfigs(source, destination, runner);
+	await trustWorkspaceMise(destination, runner);
 
 	let jj = false;
 	if (

@@ -6,6 +6,10 @@ Build normally uses an isolated workspace. jj projects have separate working cop
 but **share history and bookmarks**. Git-only projects use private clones.
 Direct-checkout mode edits your own checkout instead; choose it deliberately.
 
+When mise is installed, new isolated workspaces automatically trust their local
+mise configs, including copied ignored configs, before setup commands run.
+Pilot does not grant trust to configs outside the workspace.
+
 Project settings choose the default workspace policy. A new chat can override it.
 Build chats can use a workspace terminal; close live terminals before operations
 that need a safe workspace or daemon handoff.

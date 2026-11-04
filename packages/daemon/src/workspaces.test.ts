@@ -6,6 +6,7 @@ import {
 	mkdtempSync,
 	readFileSync,
 	readlinkSync,
+	realpathSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync,
@@ -16,14 +17,63 @@ import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { collectChanges } from "./changes.ts";
 import {
-	createWorkspace,
+	createWorkspace as createWorkspaceReal,
 	dissociateWorkspace,
 	listRemoteBranches,
 	pruneRegenerable,
+	type Runner,
+	run,
+	trustWorkspaceMise,
 	workspaceBorrowsObjects,
 	workspaceBranch,
 	workspaceLeftovers,
 } from "./workspaces.ts";
+
+// Tests must never write to the host's mise trust database.
+const testRunner: Runner = (file, ...args) => (file === "mise" ? Promise.resolve("") : run(file, ...args));
+const createWorkspace: typeof createWorkspaceReal = (source, destination, runner = testRunner, ...args) =>
+	createWorkspaceReal(source, destination, runner, ...args);
+
+test("trusts only regular workspace mise configs, including local copies", async () => {
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "pilot-mise-")));
+	try {
+		const cwd = join(root, "workspace");
+		mkdirSync(cwd);
+		const calls: string[][] = [];
+		const runner: Runner = async (file, args, directory) => {
+			assert.equal(file, "mise");
+			assert.equal(directory, cwd);
+			calls.push(args);
+			return "";
+		};
+		await trustWorkspaceMise(cwd, runner);
+		assert.deepEqual(calls, []);
+		writeFileSync(join(cwd, "mise.toml"), "[tools]\n");
+		writeFileSync(join(cwd, "mise.local.toml"), "[env]\n");
+		writeFileSync(join(root, "outside.toml"), "[env]\n");
+		symlinkSync(join(root, "outside.toml"), join(cwd, ".mise.toml"));
+		mkdirSync(join(root, "outside"));
+		writeFileSync(join(root, "outside/config.toml"), "[env]\n");
+		symlinkSync(join(root, "outside"), join(cwd, ".mise"));
+		writeFileSync(join(cwd, "mise"), "not a directory");
+		await trustWorkspaceMise(cwd, runner);
+		assert.deepEqual(calls, [
+			["trust", join(cwd, "mise.toml")],
+			["trust", join(cwd, "mise.local.toml")],
+		]);
+		await trustWorkspaceMise(cwd, async () => {
+			throw Object.assign(new Error("missing"), { code: "ENOENT" });
+		});
+		await assert.rejects(
+			trustWorkspaceMise(cwd, async () => {
+				throw new Error("trust failed");
+			}),
+			/trust failed/,
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
 
 const git = (cwd: string, ...args: string[]) =>
 	execFileSync("git", args, {
@@ -373,7 +423,15 @@ for (const ignoreLocation of ["repository", "local", "global"]) {
 			writeFileSync(join(source, "untracked.txt"), "untracked\n");
 			writeFileSync(join(source, "README.md"), "dirty\n");
 
-			await createWorkspace(source, destination);
+			const trusted: string[] = [];
+			await createWorkspace(source, destination, async (file, args, ...rest) => {
+				if (file !== "mise") return run(file, args, ...rest);
+				assert.equal(args[0], "trust");
+				assert.ok(existsSync(args[1]!), "local config is copied before trust");
+				trusted.push(args[1]!);
+				return "";
+			});
+			assert.deepEqual(trusted.sort(), configs.map((path) => join(realpathSync(destination), path)).sort());
 			for (const path of configs) {
 				assert.equal(readFileSync(join(destination, path), "utf8"), readFileSync(join(source, path), "utf8"));
 				assert.equal(git(destination, "check-ignore", "--", path), path);

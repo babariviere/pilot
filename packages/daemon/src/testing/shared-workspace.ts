@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SharedWorkspaceStore } from "../shared-workspaces.ts";
-import type { Runner } from "../workspaces.ts";
+import { type Runner, run } from "../workspaces.ts";
 import { copyGitSeed } from "./git-seed.ts";
 
 const command = (file: string, cwd: string, args: string[]) =>
@@ -34,7 +34,9 @@ export function fixture(runner?: Runner) {
 	return {
 		root,
 		source,
-		store: new SharedWorkspaceStore(join(root, "home"), runner),
+		store: new SharedWorkspaceStore(join(root, "home"), (file, ...args) =>
+			file === "mise" ? Promise.resolve("") : (runner ?? run)(file, ...args),
+		),
 		path: (id = "session-a") => join(root, "sessions", id, "workspace"),
 		recovery: join(root, "recovery"),
 		close: () => rmSync(root, { recursive: true, force: true }),

@@ -31,6 +31,7 @@ import {
 	localConfigs,
 	type Runner,
 	run,
+	trustWorkspaceMise,
 	validateBaseBranch,
 	type Workspace,
 } from "./workspaces.ts";
@@ -905,6 +906,7 @@ export class SharedWorkspaceStore {
 			await atomicJson(this.bindingPath(shared), binding);
 			// Only the bounded local inputs come from the source, never its dirty tracked files.
 			await copyLocalConfigs(source, destination, runner);
+			await trustWorkspaceMise(destination, runner);
 			await this.inspect(destination, true, false);
 			binding.state = "ready";
 			await atomicJson(this.bindingPath(shared), binding);
