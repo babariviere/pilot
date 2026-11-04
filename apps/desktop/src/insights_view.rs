@@ -93,6 +93,8 @@ pub(crate) struct Panel {
     error: Option<&'static str>,
     /// An accepted create opens its chat once.
     opened: bool,
+    /// The report chat's scope, disclosed on request (setup always shows it).
+    scope_open: bool,
 }
 impl EventEmitter<Event> for Panel {}
 
@@ -142,6 +144,7 @@ impl Panel {
             slot: None,
             error: None,
             opened: false,
+            scope_open: false,
         };
         panel.refresh(cx);
         panel
@@ -448,22 +451,17 @@ fn disclosure(model: &str) -> impl IntoElement {
         .test_support()
         .v_flex()
         .gap_1()
-        .child(ui::text(Text::Label, "What Insights can do"))
         .child(line(
             "insights-scope-read",
-            "Read bounded, sanitized excerpts of chats in every project on this Mac, including archived chats. Those chats stay unchanged.".into(),
+            "Reads sanitized excerpts of chats in all projects on this Mac, including archived ones. Never changes them.".into(),
         ))
         .child(line(
             "insights-scope-model",
-            format!("Send those excerpts to {model} for analysis. Redaction removes known secrets, but it isn't a privacy guarantee: project and business details can remain."),
+            format!("Sends them to {model}. Redaction isn't a privacy guarantee."),
         ))
         .child(line(
             "insights-scope-write",
-            "Write only its own reports and findings in the linked mission.".into(),
-        ))
-        .child(line(
-            "insights-scope-limits",
-            "It can propose improvements, not approve or start them. It can't change models, budgets or limits, or edit other projects.".into(),
+            "Writes only its reports and findings. It can't approve or start work.".into(),
         ))
 }
 
@@ -533,7 +531,7 @@ impl Panel {
             .child(ui::text(
                 Text::Body,
                 SharedString::from(format!(
-                    "Creates a dedicated report chat linked to “{mission_title}”. Reviews run only when you ask, or on a schedule you set up later."
+                    "Creates a report chat for “{mission_title}”. Reviews run only when you ask."
                 )),
             ))
             .child(disclosure(&model_name));
@@ -629,23 +627,21 @@ impl Panel {
         enabled: bool,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
-        let affects = if f.targets.is_empty() {
-            "Affects: not specified".to_owned()
-        } else {
-            format!(
-                "Affects: {}",
+        let mut priority = f.priority.clone();
+        if let Some(first) = priority.get_mut(..1) {
+            first.make_ascii_uppercase();
+        }
+        let mut meta = vec![f.lifecycle.label().to_owned(), priority];
+        if !f.targets.is_empty() {
+            meta.push(
                 f.targets
                     .iter()
                     .map(|t| t.label.as_str())
                     .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        };
-        let meta = format!(
-            "{} · {} priority · {affects}",
-            f.lifecycle.label(),
-            f.priority
-        );
+                    .join(", "),
+            );
+        }
+        let meta = meta.join(" · ");
         let weak = cx.weak_entity();
         let finding = f.clone();
         let mut text = div()
@@ -658,29 +654,15 @@ impl Panel {
                 ui::text(Text::Caption, SharedString::from(meta)).text_color(Tone::Quiet.color(cx)),
             );
         if let Some(cost) = &f.cost {
-            let later = if cost.later_result.trim().is_empty() {
-                "not yet measured".to_owned()
+            // One line, always naming the estimate as unmeasured.
+            let line = if cost.later_result.trim().is_empty() {
+                format!("Est. {} (not measured)", cost.estimate)
             } else {
-                cost.later_result.clone()
+                format!("Est. {} · Measured: {}", cost.estimate, cost.later_result)
             };
-            text = text
-                .child(
-                    ui::text(
-                        Text::Caption,
-                        SharedString::from(format!(
-                            "Cost estimate (not measured): {}",
-                            cost.estimate
-                        )),
-                    )
-                    .text_color(Tone::Quiet.color(cx)),
-                )
-                .child(
-                    ui::text(
-                        Text::Caption,
-                        SharedString::from(format!("Measured result: {later}")),
-                    )
-                    .text_color(Tone::Quiet.color(cx)),
-                );
+            text = text.child(
+                ui::text(Text::Caption, SharedString::from(line)).text_color(Tone::Quiet.color(cx)),
+            );
         }
         div()
             .id(("insights-finding", ix))
@@ -757,16 +739,41 @@ impl Panel {
                 Tone::Warning,
             )
         } else {
-            ("Access on.", Tone::Normal)
+            ("Access on", Tone::Normal)
+        };
+        let state = if state == "Access on" {
+            format!("Access on · {model_name}")
+        } else {
+            state.to_owned()
         };
         root = root
             .child(
                 div()
                     .id("insights-state")
                     .test_support()
-                    .child(ui::text(Text::Body, state).text_color(tone.color(cx))),
+                    .h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().flex_1().min_w_0().child(
+                        ui::text(Text::Body, SharedString::from(state)).text_color(tone.color(cx)),
+                    ))
+                    .child(
+                        ui::action(
+                            "insights-scope-toggle",
+                            if self.scope_open {
+                                "Hide scope"
+                            } else {
+                                "What can it read?"
+                            },
+                            Action::Quiet,
+                        )
+                        .on_click(cx.listener(|v, _, _, cx| {
+                            v.scope_open = !v.scope_open;
+                            cx.notify();
+                        })),
+                    ),
             )
-            .child(disclosure(&model_name));
+            .when(self.scope_open, |d| d.child(disclosure(&model_name)));
         let live = status.enabled && status.available && !status.archived && !status.setup_pending;
         if live {
             let mut list = div()
@@ -774,14 +781,7 @@ impl Panel {
                 .test_support()
                 .v_flex()
                 .gap_1()
-                .child(ui::text(Text::Label, "Findings"))
-                .child(
-                    ui::text(
-                        Text::Caption,
-                        "A decision records your choice. It doesn't start any work; fixes run in separate chats you start.",
-                    )
-                    .text_color(Tone::Quiet.color(cx)),
-                );
+                .child(ui::text(Text::Label, "Findings"));
             match &self.findings {
                 Load::Loading => list = list.child(ui::text(Text::Caption, "Loading findings…")),
                 Load::Failed(e) => list = list.child(Notice::new(e.clone()).tone(Tone::Error)),
@@ -939,7 +939,7 @@ impl Panel {
         div()
             .h_flex()
             .gap_2()
-            .child(div().flex_1().when(revocable, |d| {
+            .child(div().flex_1().h_flex().when(revocable, |d| {
                 d.child(
                     ui::action("insights-revoke", "Revoke access…", Action::Quiet)
                         .disabled(self.waiting() || self.confirm.is_some())
@@ -975,6 +975,47 @@ impl Panel {
 
 impl Render for Panel {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.render_panel(cx)
+    }
+}
+
+/// Hidden probes drive the same state a click would; never compiled into production.
+#[cfg(feature = "native-probes")]
+impl Panel {
+    pub(crate) fn probe_ready(&self) -> bool {
+        match &self.scope {
+            Scope::Chat { .. } => {
+                !matches!(self.status, Load::Loading) && !matches!(self.findings, Load::Loading)
+            }
+            Scope::Setup { .. } => !matches!(self.catalog, Load::Loading),
+        }
+    }
+    pub(crate) fn probe_decide(&mut self, ix: usize, to: Lifecycle, cx: &mut Context<Self>) {
+        if let Load::Ready(items) = &self.findings
+            && let Some(f) = items.get(ix)
+        {
+            self.confirm = Some(Confirm::Decide {
+                key: f.key.clone(),
+                title: f.title.clone(),
+                from: f.lifecycle,
+                to,
+                expected_revision: f.revision,
+            });
+            cx.notify();
+        }
+    }
+    pub(crate) fn probe_revoke(&mut self, cx: &mut Context<Self>) {
+        self.confirm = Some(Confirm::Revoke);
+        cx.notify();
+    }
+    pub(crate) fn probe_scope(&mut self, cx: &mut Context<Self>) {
+        self.scope_open = true;
+        cx.notify();
+    }
+}
+
+impl Panel {
+    fn render_panel(&mut self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let body = match &self.scope {
             Scope::Chat { .. } => self.render_chat(cx),
             Scope::Setup { .. } => self.render_setup(cx),

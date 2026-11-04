@@ -428,6 +428,12 @@ test = false
 required-features = ["native-probes"]
 
 [[test]]
+name = "insights"
+harness = false
+test = false
+required-features = ["native-probes"]
+
+[[test]]
 name = "composer_controls"
 harness = false
 test = false

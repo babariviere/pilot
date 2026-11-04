@@ -356,51 +356,58 @@ impl Faux {
                     }
                     Err(error) => panic!("fake accept: {error}"),
                 };
-                stream
-                    .set_read_timeout(Some(std::time::Duration::from_secs(3)))
-                    .unwrap();
-                let mut reader = std::io::BufReader::new(&mut stream);
-                let mut line = String::new();
-                if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                    continue;
-                }
-                let path = line.split_whitespace().nth(1).unwrap().to_owned();
-                let (mut length, mut authorized) = (0, false);
-                loop {
-                    line.clear();
-                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
-                        break;
+                // One thread per connection: an idle or dropped socket never stalls the next request.
+                let (respond, record) = (respond.clone(), record.clone());
+                std::thread::spawn(move || {
+                    // Accepted sockets inherit the listener's non-blocking mode on macOS:
+                    // an early read would see WouldBlock and drop a request that is still arriving.
+                    stream.set_nonblocking(false).unwrap();
+                    stream
+                        .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                        .unwrap();
+                    let mut reader = std::io::BufReader::new(&mut stream);
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        return;
                     }
-                    let lower = line.to_ascii_lowercase();
-                    if let Some(value) = lower.strip_prefix("content-length:") {
-                        length = value.trim().parse().unwrap();
+                    let path = line.split_whitespace().nth(1).unwrap().to_owned();
+                    let (mut length, mut authorized) = (0, false);
+                    loop {
+                        line.clear();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                            break;
+                        }
+                        let lower = line.to_ascii_lowercase();
+                        if let Some(value) = lower.strip_prefix("content-length:") {
+                            length = value.trim().parse().unwrap();
+                        }
+                        authorized |= lower.trim() == format!("x-pilot-github-capability: {TOKEN}");
                     }
-                    authorized |= lower.trim() == format!("x-pilot-github-capability: {TOKEN}");
-                }
-                assert!(length <= 64 * 1024);
-                let mut bytes = vec![0; length];
-                reader.read_exact(&mut bytes).unwrap();
-                let value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-                record
-                    .lock()
-                    .unwrap()
-                    .push((path.clone(), authorized, bytes));
-                let reply = if path == "/api/hello" {
-                    Some((
-                        200,
-                        json!({"daemonId":"test-daemon","lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true,"insights":1}}),
-                    ))
-                } else {
-                    (respond.lock().unwrap())(&path, &value)
-                };
-                if let Some((status, value)) = reply {
-                    let body = value.to_string();
-                    let _ = write!(
-                        stream,
-                        "HTTP/1.1 {status} x\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                        body.len()
-                    );
-                }
+                    assert!(length <= 64 * 1024);
+                    let mut bytes = vec![0; length];
+                    reader.read_exact(&mut bytes).unwrap();
+                    let value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+                    record
+                        .lock()
+                        .unwrap()
+                        .push((path.clone(), authorized, bytes));
+                    let reply = if path == "/api/hello" {
+                        Some((
+                            200,
+                            json!({"daemonId":"test-daemon","lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true,"insights":1}}),
+                        ))
+                    } else {
+                        (respond.lock().unwrap())(&path, &value)
+                    };
+                    if let Some((status, value)) = reply {
+                        let body = value.to_string();
+                        let _ = write!(
+                            stream,
+                            "HTTP/1.1 {status} x\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                    }
+                });
             }
         });
         Self {

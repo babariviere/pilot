@@ -166,7 +166,11 @@ pub use chat_editor::project_creation_probe::run_project_creation_probe;
 mod delivery_store;
 mod diagnostic_repair;
 mod insights;
+#[cfg(feature = "native-probes")]
+mod insights_probe;
 mod insights_view;
+#[cfg(feature = "native-probes")]
+pub use insights_probe::run_insights_probe;
 mod interaction;
 mod jump;
 mod jump_view;
