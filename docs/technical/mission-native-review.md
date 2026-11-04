@@ -82,6 +82,19 @@ match the host-derived current chat project at admission and every existing rech
 invalid or duplicate values refuse. It never selects custody or changes response bodies. Omission
 retains legacy behavior; `projectId`/`missionId` query assertions still grant no scope.
 
+The session-only `/:snapshotId/call-changes` subresource runs the existing bounded retained TS/JS
+comparison over that exact saved pair. Optional `path`, `limit`, `offset` and `expectedRevision` forward
+only the existing retained query fields; `expectedProjectId` is still equality-only. Duplicate/unknown
+keys refuse. Positive offsets require a matching revision and an in-range retained row. Results retain
+the original pair identity, original-byte spans, unknown/partial coverage, resource omissions and
+bounded pagination. Missing, unavailable, corrupt or revoked retained inputs fail explicitly without live
+fallback. Unsupported syntax and partial scan coverage can return HTTP 200 with unsupported/omitted
+counts and partial reasons. Neither input errors nor partial results imply a clean empty success or
+complete impact coverage.
+This is source-inferred review navigation, not runtime/impact proof, a UI implementation, a public
+agent tool or approval/write authority. There is no mission-level analysis endpoint. See
+[retained comparison limits](code-exploration.md#internal-retained-tsjs-comparison).
+
 `GET /api/missions/:missionId/review` lists up to100 current same-project non-coordinator members.
 `.../review/:workerId?after=<sequence>` returns a keyset page of up to20 retained comparisons and
 an explicit continuation. The scope is derived from the mission's current project, current durable
@@ -94,6 +107,9 @@ Legacy missions may browse already retained records with valid custody; reading 
 `.../:workerId/:snapshotId` returns the validated, path-sanitized manifest projection. Its `patch`,
 `source?side=&path=&sha256=` and `records` subresources are read-only. Snapshot/subject/repository/
 worker/manifest identities must agree; source keys and hashes must occur on that exact retained side.
+Valid UTF-8 source responses preserve the original BOM, CRLF and Unicode, so hashing their UTF-8 text
+matches the retained blob hash and exact source spans. Malformed UTF-8 and binary content fail explicitly;
+the server never substitutes replacement characters, normalized text or a fabricated digest.
 Admission is repeated after asynchronous reads. Errors contain no retained content or host paths.
 Raw source/patch storage and SHA-256 checks run in the existing snapshot worker. Before hydration,
 SQLite checks manifest length (8 MiB), exact blob length (2 MiB source,4 MiB patch); desktop limits

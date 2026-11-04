@@ -164,12 +164,15 @@ observed receipt. This invalidates stale/cross-source pages without caching or m
 
 ## Internal retained TS/JS comparison
 
-`NativeReviewReader.compareCalls(snapshotId, query?, signal?)` is a host-internal operation, not an
-HTTP route, agent tool, UI feature or acceptance record. It implements the retained-input prerequisite
+`NativeReviewReader.compareCalls(snapshotId, query?, signal?)` implements the retained-input prerequisite
 and narrow callable projection in [the relationships evaluation](code-relationships-evaluation.md).
+Native Review reads it through the session-only `GET /api/sessions/:sessionId/review/:snapshotId/call-changes`
+bridge. It is not an agent tool, UI implementation or acceptance record.
 It selects one existing validated manifest, never captures or enrolls work, and rechecks current scope
-and custody at each side, around original-byte reads and before returning. `readExact` retains the BOM;
-the existing `source` display decoder does not. No `AskContext`, filesystem scan, live HEAD fallback,
+and custody at each side, around original-byte reads and before returning. `readExact` preserves original
+bytes; `source` uses fatal UTF-8 decoding with the original BOM retained, so valid UTF-8 source still
+matches its blob hash and retained spans. Malformed UTF-8 and binary source fail explicitly.
+No `AskContext`, filesystem scan, live HEAD fallback,
 second resolver, new language, persistent index, provider call or review authority is introduced.
 
 Both sides feed the same `callSyntax`, lexical/relative-ESM resolver and SCC implementation as live
@@ -178,6 +181,15 @@ scan scope). The opaque revision binds canonical store identity, snapshot, full 
 head/scope, inventories, scan path, engine and observed omissions. Results retain that pair explicitly.
 `offset`/`limit` select pages after a fresh pair analysis; pass `expectedRevision` on continuation.
 Revisions are navigation receipts, not permission or persistent callable identities.
+The HTTP bridge accepts only optional `path`, `limit` (1..50), `offset` (0..1000),
+`expectedRevision` and the existing `expectedProjectId` equality precondition. Duplicate/unknown query
+keys and invalid values refuse; positive offsets require an exact revision and an in-range retained row.
+It returns the existing result unchanged, including pair, original-byte spans, unknown/partial coverage,
+omissions and pagination. Missing, unavailable, corrupt or revoked retained inputs return an explicit
+unavailable error. Unsupported syntax and partial scan coverage can return HTTP 200 with explicit
+unsupported/omitted counts and partial reasons. Neither input errors nor partial results imply a clean
+empty success or complete impact coverage. No mission-level analysis route or caller-selected
+filesystem/commit exists.
 
 Correspondence is only unique same-path/full-name/kind top-level function declarations and `const`
 arrow/function bindings. Declaration/header/body spans carry original blob SHA-256, zero-based UTF-16
@@ -205,6 +217,9 @@ survive each file. Aggregate ceilings across both sides are 10,000 inventory vis
 at most 50 rows/48 KiB; oversized edge lists are explicitly omitted with unknown relationship change.
 Unrepresentable metadata/rows, deadline, cancellation, corrupt bytes or failed byte providers are
 errors, not empty successful analyses. The independently retained raw diff remains available.
+Client disconnect aborts running/queued analysis; the HTTP transfer remains admitted until the worker
+and entered finite snapshot reads drain. Disconnect during initial snapshot/identity reads cannot start
+a later analysis. Reads retain the existing snapshot-store RPC bound.
 
 `retained-call.test.ts`, `native-review.test.ts` and the retained-store integration fixture cover exact
 bytes/spans, independent deltas, ambiguity/lost resolution, scope/store/pair fences, custody revocation,

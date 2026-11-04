@@ -109,7 +109,7 @@ export class NativeReviewReader {
 		await this.check(binding);
 		return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 	}
-	/** Original retained bytes, not the display decoder's BOM-normalized text. */
+	/** Original retained bytes for hashing and source-inferred analysis. */
 	async readExact(snapshotId: string, ref: ReviewSourceRef) {
 		const { binding, snapshot } = await this.snapshot(snapshotId);
 		if (ref.snapshotId !== snapshotId || !["before", "after"].includes(ref.side))
@@ -125,14 +125,16 @@ export class NativeReviewReader {
 		return bytes;
 	}
 	async source(snapshotId: string, ref: ReviewSourceRef) {
-		return new TextDecoder("utf-8", { fatal: true }).decode(await this.readExact(snapshotId, ref));
+		return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(await this.readExact(snapshotId, ref));
 	}
-	/** Internal host operation only. No HTTP route, agent tool, capture or acceptance authority. */
+	/** Host-selected retained pair. No agent tool, capture or acceptance authority. */
 	async compareCalls(snapshotId: string, query: RetainedCallQuery = {}, signal?: AbortSignal) {
 		signal?.throwIfAborted();
 		const { binding, snapshot } = await this.snapshot(snapshotId);
+		signal?.throwIfAborted();
 		if (!this.snapshots.identity) throw new Error("Retained analysis store identity unavailable");
 		const storeId = await this.snapshots.identity();
+		signal?.throwIfAborted();
 		return compareRetainedCalls(
 			{
 				input: {

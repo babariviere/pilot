@@ -1,11 +1,21 @@
 import assert from "node:assert/strict";
+import { createHash, randomUUID } from "node:crypto";
 import { realpathSync, rmSync, writeFileSync } from "node:fs";
+import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { test } from "node:test";
+import type { RetainedCallResult } from "@pilot/kernel/retained-calls";
 import { jjRepositoryIdentity } from "./jj-ownership.ts";
+import { MissionService } from "./mission-service.ts";
+import { MissionStore } from "./missions.ts";
+import { ModelCatalog } from "./models.ts";
 import { NativeReviewReader } from "./native-review.ts";
+import { ProjectStore } from "./projects.ts";
 import type { ReviewCaptureRequest } from "./review-snapshot-contract.ts";
 import { ReviewSnapshotStore } from "./review-snapshots.ts";
+import { createDaemonServer } from "./server.ts";
+import { SessionManager } from "./sessions.ts";
+import { TerminalManager } from "./terminals.ts";
 import { fixture, jj } from "./testing/shared-workspace.ts";
 
 test("native retained reads are exact, scoped, paged, revocable and survive workspace loss", async () => {
@@ -145,4 +155,146 @@ test("native retained reads are exact, scoped, paged, revocable and survive work
 		await f.store.close();
 		f.close();
 	}
+});
+
+test("production call-changes route reads a real retained pair and original BOM source after workspace loss", async (t) => {
+	const f = fixture();
+	const home = join(realpathSync(f.root), "home");
+	const projects = new ProjectStore(home);
+	await projects.load();
+	const project = await projects.create({ path: realpathSync(f.source) });
+	const sessions = new SessionManager(home, projects);
+	const store = new MissionStore(":memory:");
+	const service = new MissionService(store, sessions, projects);
+	const terminals = new TerminalManager();
+	const mission = store.create({ title: "Retained calls", projectId: project.id });
+	const sessionId = randomUUID();
+	store.join(sessionId, mission.id);
+	const scope = { version: 1 as const, sessionId, missionId: mission.id, taskIds: ["task"] };
+	const server = createDaemonServer(
+		{ home, host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog("/unused"),
+		terminals,
+		{ store, service },
+	);
+	t.after(async () => {
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await service.notices.stop();
+		terminals.shutdown();
+		await sessions.shutdown();
+		await store.durable();
+		store.close();
+		await f.store.close();
+		f.close();
+	});
+	const w = await f.store.create(
+		f.source,
+		join(home, "sessions", sessionId, "workspace"),
+		undefined,
+		undefined,
+		scope,
+	);
+	// biome-ignore lint/complexity/useLiteralKeys: Inject only persisted metadata, not a reader or worker.
+	sessions["metas"].set(sessionId, {
+		id: sessionId,
+		title: "Retained calls",
+		cwd: w.path,
+		projectId: project.id,
+		createdAt: 1,
+		updatedAt: 1,
+		workspace: { source: project.path, base: w.base, jj: true, shared: w.shared! },
+	});
+	const before = '\uFEFFexport function leaf() { return "é😀"; }\r\nexport function caller() { return leaf(); }';
+	const after = before.replace('"é😀"', '"changed😀"');
+	writeFileSync(join(w.path, "code.ts"), before);
+	jj(w.path, "commit", "-m", "base code");
+	writeFileSync(join(w.path, "code.ts"), after);
+	jj(w.path, "commit", "-m", "changed code");
+	await f.store.observeOwnership(w.path, w.shared!);
+	const revision = (rev: string) => {
+		const [changeId, commitId] = jj(
+			w.path,
+			"--ignore-working-copy",
+			"--at-op=@",
+			"log",
+			"--no-graph",
+			"-r",
+			rev,
+			"-T",
+			'change_id ++ "\\t" ++ commit_id',
+		).split("\t");
+		return { changeId: changeId!, commitId: commitId! };
+	};
+	const head = revision("@-"),
+		base = revision("@--");
+	const request: ReviewCaptureRequest = {
+		requestId: "http-pair",
+		repositoryId: await jjRepositoryIdentity(w.shared!.repository),
+		changeId: head.changeId,
+		operationId: jj(
+			w.path,
+			"--ignore-working-copy",
+			"--at-op=@",
+			"op",
+			"log",
+			"--no-graph",
+			"--limit",
+			"1",
+			"-T",
+			"self.id()",
+		),
+		base,
+		head,
+		scope: { kind: "layer" },
+		source: "committed",
+	};
+	// biome-ignore lint/complexity/useLiteralKeys: Fixture capture only. Production GET cannot capture.
+	const retained = await sessions["reviewSnapshots"].capture(request);
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const api = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
+	const root = `${api}/sessions/${sessionId}/review/${retained.snapshotId}`;
+	const readCalls = async () => {
+		const response = await fetch(`${root}/call-changes?expectedProjectId=${project.id}`);
+		assert.equal(response.status, 200);
+		return (await response.json()) as RetainedCallResult;
+	};
+	const first = await readCalls();
+	assert.deepEqual(first.pair.request, request);
+	assert.equal(first.pair.snapshotId, retained.snapshotId);
+	assert.equal(first.results.find((r) => r.before[0]?.name === "leaf")!.bodyChanged, true);
+	const caller = first.results.find((r) => r.before[0]?.name === "caller")!;
+	assert.equal(caller.bodyChanged, false);
+	assert.equal(caller.outgoingRelationshipChanged, false, "changed callee does not modify caller");
+	// Rewrite HEAD and live bytes, then delete both original source trees. Reads still use this exact retained pair.
+	jj(w.path, "edit", request.changeId);
+	writeFileSync(join(w.path, "code.ts"), "function wrongLiveSource() {}\n");
+	jj(w.path, "describe", "-m", "rewritten live source");
+	rmSync(w.path, { recursive: true, force: true });
+	rmSync(w.shared!.repository, { recursive: true, force: true });
+	assert.deepEqual(await readCalls(), first);
+	for (const side of ["before", "after"] as const) {
+		const original = side === "before" ? before : after;
+		const entry = retained.manifest[side].find((e) => e.path === "code.ts")!;
+		const response = await fetch(
+			`${root}/source?side=${side}&path=code.ts&sha256=${entry.sha256}&expectedProjectId=${project.id}`,
+		);
+		assert.equal(response.status, 200);
+		const { text } = (await response.json()) as { text: string };
+		assert.equal(text, original);
+		assert.equal(createHash("sha256").update(text).digest("hex"), entry.sha256);
+		const declaration = first.results.find((r) => r[side][0]?.name === "leaf")![side][0]!.declaration;
+		assert.equal(declaration.utf8.start, 10);
+		assert.equal(declaration.sha256, entry.sha256);
+		assert.equal(
+			createHash("sha256")
+				.update(Buffer.from(text).subarray(declaration.utf8.start, declaration.utf8.end))
+				.digest("hex"),
+			declaration.sha256OfSpan,
+		);
+	}
+	assert.equal((await fetch(`${root}/call-changes?expectedProjectId=stale`)).status, 403);
+	store.leave(sessionId);
+	assert.equal((await fetch(`${root}/call-changes`)).status, 403);
 });

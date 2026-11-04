@@ -1,6 +1,7 @@
 /** HTTP API and WebSocket event streams. */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join } from "node:path";
+import type { RetainedCallQuery } from "@pilot/kernel/retained-calls";
 import type {
 	AttachmentChatPayload,
 	AttachmentUpload,
@@ -1521,6 +1522,35 @@ export function createDaemonServer(
 					return json(res, 200, await reader.list(Number(after)));
 				}
 				if (!section) return json(res, 200, await reader.get(snapshotId));
+				if (chatRoute && section === "call-changes") {
+					const query: RetainedCallQuery = {};
+					for (const [key, value] of url.searchParams) {
+						if (url.searchParams.getAll(key).length !== 1) throw new Error("Ambiguous retained query");
+						if (key === "expectedProjectId") continue;
+						if (key === "path") query.path = value;
+						else if (key === "expectedRevision" && /^[a-f0-9]{64}$/.test(value)) query.expectedRevision = value;
+						else if ((key === "limit" || key === "offset") && /^(0|[1-9]\d{0,3})$/.test(value)) {
+							const number = Number(value);
+							if (key === "limit" ? number < 1 || number > 50 : number > 1000)
+								throw new Error("Invalid retained page");
+							query[key] = number;
+						} else throw new Error("Unsupported retained query");
+					}
+					if (query.offset && !query.expectedRevision) throw new Error("Unpinned retained continuation");
+					const controller = new AbortController();
+					const cancel = () => controller.abort(new Error("Retained Review client disconnected"));
+					res.once("close", cancel);
+					if (res.destroyed) cancel();
+					try {
+						const result = await reader.compareCalls(snapshotId, query, controller.signal);
+						controller.signal.throwIfAborted();
+						if (query.offset && query.offset >= result.page.retained)
+							throw new Error("Invalid retained continuation");
+						return json(res, 200, result);
+					} finally {
+						res.off("close", cancel);
+					}
+				}
 				if (section === "patch") return json(res, 200, { snapshotId, patch: await reader.diff(snapshotId) });
 				if (section === "source") {
 					const source = await reader.source(snapshotId, {
@@ -2535,7 +2565,7 @@ export function createDaemonServer(
 				release = mutations.begin({ kind: "request", id: path.slice(0, 180) });
 			else if (
 				(req.method === "GET" || req.method === "HEAD") &&
-				/\/(artifacts|artifact-libraries|files)(\/|$)/.test(path)
+				/\/(artifacts|artifact-libraries|files|call-changes)(\/|$)/.test(path)
 			)
 				release = transfers.begin({ kind: "download", id: path.slice(0, 180) });
 			let routeDone = false;

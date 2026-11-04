@@ -141,17 +141,15 @@ test("internal retained analysis preserves BOM bytes and rechecks current custod
 		}),
 		bytes,
 	);
-	assert.ok(
-		!(
-			await reader.source(retained.snapshotId, {
-				snapshotId: retained.snapshotId,
-				side: "before",
-				path: "a.ts",
-				sha256,
-			})
-		).startsWith("\uFEFF"),
-		"display decoder is intentionally not byte-exact",
-	);
+	const source = await reader.source(retained.snapshotId, {
+		snapshotId: retained.snapshotId,
+		side: "before",
+		path: "a.ts",
+		sha256,
+	});
+	assert.ok(source.startsWith("\uFEFF"));
+	assert.equal(createHash("sha256").update(source).digest("hex"), sha256, "native source verifies the blob hash");
+	assert.deepEqual(Buffer.from(source), bytes, "BOM, CRLF and non-BMP text remain original");
 	const result = await reader.compareCalls(retained.snapshotId);
 	assert.equal(result.results[0]!.bodyChanged, false);
 	assert.equal(result.results[0]!.before[0]!.declaration.sha256, sha256);
@@ -210,6 +208,77 @@ test("required retained manifest fields, custody and reference identities fail c
 		const m = structuredClone(valid.manifest);
 		mutate(m);
 		assert.throws(() => snapshotManifest(m));
+	}
+});
+
+test("source never replaces malformed UTF-8 or decodes retained binary content", async () => {
+	const retained = snapshot();
+	const own = retained.manifest.provenance.ledger.ownership;
+	assert.equal(own.status, "owned");
+	if (own.status !== "owned") return;
+	const bytes = Buffer.from([0xef, 0xbb, 0xbf, 0xff]);
+	const sha256 = createHash("sha256").update(bytes).digest("hex");
+	const entry = {
+		path: "bad.ts",
+		mode: "100644",
+		gitOid: "a".repeat(40),
+		state: "text" as const,
+		bytes: bytes.length,
+		sha256,
+	};
+	retained.manifest.after = [entry];
+	let reads = 0;
+	const reader = new NativeReviewReader(
+		{
+			get: async () => retained,
+			list: async () => ({ comparisons: [], next: null }),
+			diff: async () => new Uint8Array(),
+			read: async () => {
+				reads++;
+				return bytes;
+			},
+		},
+		{ get: async () => retained.manifest.provenance.ledger },
+		async () => own.binding,
+	);
+	const ref = { snapshotId: retained.snapshotId, side: "after" as const, path: entry.path, sha256 };
+	await assert.rejects(reader.source(retained.snapshotId, ref), /encoded data.*not valid/);
+	retained.manifest.after = [{ ...entry, state: "binary" }];
+	await assert.rejects(reader.source(retained.snapshotId, ref), /unavailable, binary or unsupported/);
+	assert.equal(reads, 1, "binary source is refused before reading bytes");
+});
+
+test("cancel during initial retained snapshot or store identity cannot start later byte analysis", async () => {
+	for (const stage of ["snapshot", "identity"] as const) {
+		const retained = snapshot();
+		const own = retained.manifest.provenance.ledger.ownership;
+		assert.equal(own.status, "owned");
+		if (own.status !== "owned") return;
+		const controller = new AbortController();
+		let identities = 0;
+		const reader = new NativeReviewReader(
+			{
+				get: async () => {
+					if (stage === "snapshot") controller.abort(new Error("Disconnected before analysis"));
+					return retained;
+				},
+				identity: async () => {
+					identities++;
+					controller.abort(new Error("Disconnected before analysis"));
+					return "a".repeat(64);
+				},
+				list: async () => ({ comparisons: [], next: null }),
+				diff: async () => new Uint8Array(),
+				read: async () => assert.fail("Cancelled initial reads must not start source analysis"),
+			},
+			{ get: async () => retained.manifest.provenance.ledger },
+			async () => own.binding,
+		);
+		await assert.rejects(
+			reader.compareCalls(retained.snapshotId, {}, controller.signal),
+			/Disconnected before analysis/,
+		);
+		assert.equal(identities, stage === "identity" ? 1 : 0);
 	}
 });
 
@@ -333,12 +402,27 @@ test("project/chat Review adapters preserve bodies, narrow current scope and per
 	if (ownership.status !== "owned") return;
 	ownership.binding.missionId = mission.id;
 	const digest = createHash("sha256").update("source").digest("hex");
+	const code = "export function a() {} export function b() {} export function c() {}";
+	const codeBytes = Buffer.from(code);
+	const codeDigest = createHash("sha256").update(codeBytes).digest("hex");
 	retained.manifest.after = [
 		{ path: "a.txt", mode: "100644", gitOid: "c".repeat(40), state: "text", sha256: digest, bytes: 6 },
+		{
+			path: "b.ts",
+			mode: "100644",
+			gitOid: "c".repeat(40),
+			state: "text",
+			sha256: codeDigest,
+			bytes: codeBytes.length,
+		},
 	];
 	let mutate: (() => void) | undefined;
 	let mutationStage: "get" | "list" | "diff" | "read" = "get";
 	let broken = false;
+	let analysisRead: (() => Promise<Uint8Array>) | undefined;
+	let analysesSettled = 0;
+	let analysisSettled: (() => void) | undefined;
+	let analysisCancelled: (() => void) | undefined;
 	const invokeMutation = (stage: typeof mutationStage) => {
 		if (stage !== mutationStage) return;
 		const call = mutate;
@@ -348,7 +432,7 @@ test("project/chat Review adapters preserve bodies, narrow current scope and per
 	t.mock.method(sessions, "nativeReviewReader", (id: string, m: string, p: string, authorize: () => void) => {
 		assert.equal(m, mission.id);
 		assert.equal(p, project.id);
-		return new NativeReviewReader(
+		const reader = new NativeReviewReader(
 			{
 				get: async (snapshotId) => {
 					invokeMutation("get");
@@ -359,12 +443,14 @@ test("project/chat Review adapters preserve bodies, narrow current scope and per
 					invokeMutation("list");
 					return { comparisons: [], next: null };
 				},
+				identity: async () => "a".repeat(64),
 				diff: async () => {
 					invokeMutation("diff");
 					return Buffer.from("patch");
 				},
-				read: async () => {
+				read: async (_snapshotId, ref) => {
 					invokeMutation("read");
+					if (ref.path === "b.ts") return analysisRead ? analysisRead() : codeBytes;
 					return Buffer.from("source");
 				},
 			},
@@ -375,6 +461,15 @@ test("project/chat Review adapters preserve bodies, narrow current scope and per
 				return structuredClone(ownership.binding);
 			},
 		);
+		const compare = reader.compareCalls.bind(reader);
+		reader.compareCalls = (...args) => {
+			args[2]?.addEventListener("abort", () => analysisCancelled?.(), { once: true });
+			return compare(...args).finally(() => {
+				analysesSettled++;
+				analysisSettled?.();
+			});
+		};
+		return reader;
 	});
 	const terminals = new TerminalManager();
 	const server = createDaemonServer(
@@ -456,7 +551,158 @@ test("project/chat Review adapters preserve bodies, narrow current scope and per
 		patch: "patch",
 	});
 	const source = `${root}/${retained.snapshotId}/source?side=after&path=a.txt&sha256=${digest}`;
+	const calls = `${root}/${retained.snapshotId}/call-changes`;
 	assert.deepEqual(await (await fetch(source)).json(), { snapshotId: retained.snapshotId, text: "source" });
+	await t.test("session-only retained calls preserve pair, coverage and revision-bound pages", async () => {
+		const response = await fetch(`${calls}?limit=1&expectedProjectId=${project.id}`);
+		assert.equal(response.status, 200);
+		assert.equal(response.headers.get("cache-control"), "no-store");
+		const first = (await response.json()) as any;
+		assert.equal(first.mode, "source-inferred-not-runtime");
+		assert.equal(first.exhaustive, false);
+		assert.deepEqual(first.pair, {
+			storeId: "a".repeat(64),
+			snapshotId: retained.snapshotId,
+			request: retained.manifest.request,
+		});
+		assert.equal(first.coverage.after.unsupported, 1);
+		assert.equal(first.coverage.after.parsed, 1);
+		assert.equal(first.page.nextOffset, 1);
+		assert.equal(first.results[0].status, "added");
+		assert.equal(first.results[0].after[0].declaration.sha256, codeDigest);
+		const second = await fetch(`${calls}?limit=1&offset=1&expectedRevision=${first.revision}`);
+		assert.equal(second.status, 200);
+		const next = (await second.json()) as any;
+		assert.equal(next.revision, first.revision);
+		assert.deepEqual(next.pair, first.pair);
+		assert.notEqual(next.results[0].key, first.results[0].key);
+		assert.equal((await fetch(`${calls}?path=b.ts&expectedRevision=${first.revision}`)).status, 403);
+		assert.equal((await fetch(`${calls}?offset=3&expectedRevision=${first.revision}`)).status, 403);
+		assert.equal((await fetch(`${calls}?offset=4&expectedRevision=${first.revision}`)).status, 403);
+		assert.equal((await fetch(calls, { method: "POST" })).status, 405);
+		assert.equal(
+			(await fetch(`${api}/missions/${mission.id}/review/worker/${retained.snapshotId}/call-changes`)).status,
+			403,
+		);
+		for (const query of [
+			"limit=0",
+			"limit=51",
+			"limit=1.5",
+			"limit=",
+			"limit=1&limit=2",
+			"offset=-1",
+			"offset=1001",
+			"offset=1",
+			"offset=01",
+			"expectedRevision=",
+			`expectedRevision=${"f".repeat(64)}`,
+			"path=../private",
+			"path=/absolute",
+			"path=b.ts&path=a.txt",
+			"root=/host/repository",
+			"commit=HEAD",
+			"side=after",
+			"after=1",
+			"projectId=other",
+			"missionId=other",
+		])
+			assert.equal((await fetch(`${calls}?${query}`)).status, 403, query);
+		for (const id of ["standalone", "lead", "unbound"])
+			assert.equal((await fetch(`${api}/sessions/${id}/review/${retained.snapshotId}/call-changes`)).status, 403);
+		retained.manifest.status = "unavailable";
+		assert.equal((await fetch(calls)).status, 403);
+		retained.manifest.status = "partial";
+		const partial = (await (await fetch(calls)).json()) as any;
+		assert.equal(partial.partial, true);
+		assert.ok(partial.partialReasons.includes("retained-inventory-partial: absence-not-proven"));
+		assert.ok(partial.results.every((row: any) => row.status === "unknown"));
+		retained.manifest.status = "complete";
+		analysisRead = async () => Buffer.from(code.replace("function a", "function z"));
+		assert.equal((await fetch(calls)).status, 403, "same-length corrupt bytes are not an empty analysis");
+		analysisRead = undefined;
+	});
+	await t.test("HTTP forwards resource omissions without inventing complete relationship results", async () => {
+		const entry = retained.manifest.after[1]!;
+		const large = Buffer.from(`function t() {} function f() {${"t();".repeat(1200)}}`);
+		retained.manifest.after[1] = {
+			...entry,
+			bytes: large.length,
+			sha256: createHash("sha256").update(large).digest("hex"),
+		};
+		analysisRead = async () => large;
+		try {
+			const response = await fetch(calls);
+			assert.equal(response.status, 200);
+			const result = (await response.json()) as any;
+			assert.equal(result.partial, true);
+			assert.ok(result.partialReasons.includes("comparison-edge-limit"));
+			assert.equal(result.budget.edges, 1000);
+			assert.ok(result.results.every((row: any) => row.outgoingRelationshipChanged === null));
+			assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 48 * 1024);
+		} finally {
+			retained.manifest.after[1] = entry;
+			analysisRead = undefined;
+		}
+	});
+	await t.test(
+		"disconnect cancels active/queued analyses and drains entered reads before release",
+		{ timeout: 20_000 },
+		async () => {
+			let release!: () => void, entered!: () => void, cancelled!: () => void, drained!: () => void;
+			const held = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const reading = new Promise<void>((resolve) => {
+				entered = resolve;
+			});
+			const aborted = new Promise<void>((resolve) => {
+				cancelled = resolve;
+			});
+			const allDrained = new Promise<void>((resolve) => {
+				drained = resolve;
+			});
+			let reads = 0,
+				cancellations = 0;
+			const baseline = analysesSettled;
+			analysisSettled = () => {
+				if (analysesSettled === baseline + 11) drained();
+			};
+			analysisCancelled = () => {
+				if (++cancellations === 10) cancelled();
+			};
+			analysisRead = async () => {
+				if (++reads === 2) entered();
+				await held;
+				return codeBytes;
+			};
+			const controllers = Array.from({ length: 11 }, () => new AbortController());
+			const requests = controllers.map((controller) =>
+				fetch(calls, { signal: controller.signal }).catch(() => null),
+			);
+			try {
+				await reading;
+				const busy = await Promise.race(requests);
+				assert.equal(busy?.status, 403, "two active plus eight queued refuse excess work explicitly");
+				assert.match(await busy!.text(), /unavailable/);
+				for (const controller of controllers) controller.abort();
+				await aborted;
+				await new Promise((resolve) => setImmediate(resolve));
+				assert.ok(analysesSettled < baseline + 11, "closed sockets do not detach entered reads");
+				release();
+				await allDrained;
+				await Promise.all(requests);
+				assert.equal(reads, 2, "cancelled queue entries never start source reads");
+			} finally {
+				for (const controller of controllers) controller.abort();
+				release();
+				await Promise.all(requests);
+				analysisRead = undefined;
+				analysisCancelled = undefined;
+				analysisSettled = undefined;
+			}
+			assert.equal((await fetch(calls)).status, 200, "admission remains usable after all workers/readers drain");
+		},
+	);
 	assert.equal((await fetch(source.replace("side=after", "side=wrong"))).status, 403);
 	assert.equal((await fetch(source.replace(digest, "e".repeat(64)))).status, 403);
 	assert.equal((await fetch(`${root}/${"e".repeat(64)}`)).status, 403);
@@ -464,6 +710,7 @@ test("project/chat Review adapters preserve bodies, narrow current scope and per
 	response = await fetch(`${root}/${retained.snapshotId}`);
 	assert.equal(response.status, 403);
 	assert.doesNotMatch(await response.text(), /private|\/host\//);
+	assert.equal((await fetch(calls)).status, 403);
 	broken = false;
 	response = await fetch(`${root}/${retained.snapshotId}/records`);
 	assert.equal(response.status, 200);
@@ -481,6 +728,7 @@ test("project/chat Review adapters preserve bodies, narrow current scope and per
 			`${root}/${retained.snapshotId}/patch`,
 			source,
 			`${root}/${retained.snapshotId}/records`,
+			calls,
 		]) {
 			const expected = new URL(url);
 			expected.searchParams.set("expectedProjectId", project.id);
@@ -501,7 +749,8 @@ test("project/chat Review adapters preserve bodies, narrow current scope and per
 			assert.equal((await fetch(expected)).status, 403, "ambiguous preconditions refuse");
 			expected.searchParams.delete("expectedProjectId");
 			expected.searchParams.set("expectedProjectId", project.id);
-			mutationStage = url === root ? "list" : url === source ? "read" : url.endsWith("/patch") ? "diff" : "get";
+			mutationStage =
+				url === root ? "list" : url === source || url === calls ? "read" : url.endsWith("/patch") ? "diff" : "get";
 			mutate = () => {
 				chats.get("worker")!.projectId = other.id;
 			};
@@ -519,8 +768,10 @@ test("project/chat Review adapters preserve bodies, narrow current scope and per
 		`${root}/${retained.snapshotId}/patch`,
 		source,
 		`${root}/${retained.snapshotId}/records`,
+		calls,
 	]) {
-		mutationStage = url === root ? "list" : url === source ? "read" : url.endsWith("/patch") ? "diff" : "get";
+		mutationStage =
+			url === root ? "list" : url === source || url === calls ? "read" : url.endsWith("/patch") ? "diff" : "get";
 		mutate = () => {
 			chats.get("worker")!.projectId = other.id;
 		};
@@ -535,6 +786,7 @@ test("project/chat Review adapters preserve bodies, narrow current scope and per
 		assert.equal((await fetch(url)).status, 403, "membership moved during I/O");
 		store.join("worker", mission.id);
 	}
+	mutationStage = "get";
 	mutate = () => store.leave("worker");
 	assert.equal((await fetch(`${root}/${retained.snapshotId}`)).status, 403, "removed membership during I/O");
 	assert.equal((await fetch(`${root}/${retained.snapshotId}/patch`)).status, 403);
