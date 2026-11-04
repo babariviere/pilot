@@ -14,6 +14,7 @@ export function createInsightsBacklogTool(call: InsightsBacklogCall): ToolDefini
 		parameters: Type.Object({
 			action: StringEnum([
 				"list",
+				"review_context",
 				"get",
 				"history",
 				"evidence",
@@ -29,6 +30,7 @@ export function createInsightsBacklogTool(call: InsightsBacklogCall): ToolDefini
 			limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
 			expectedRevision: Type.Optional(Type.Integer({ minimum: 0 })),
 			operationId: Type.Optional(Type.String({ maxLength: 128 })),
+			patternKey: Type.Optional(Type.String({ maxLength: 200 })),
 			draft: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
 			evidence: Type.Optional(Type.Array(Type.Record(Type.String(), Type.Unknown()), { maxItems: 20 })),
 			record: Type.Optional(Type.Record(Type.String(), Type.Unknown())),

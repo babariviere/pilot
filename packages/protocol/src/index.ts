@@ -779,6 +779,8 @@ export interface DiagnosticHistoryPage {
 	source: {
 		availability: "available" | "missing" | "unavailable";
 		freshness: "fresh" | "unavailable";
+		/** Active conversation identity, not a storage-incarnation or complete-coverage proof. */
+		streamId?: string;
 		reason?: "storage_missing" | "read_failed";
 	};
 	/** Oldest first within this page. */

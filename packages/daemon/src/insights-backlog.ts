@@ -10,9 +10,10 @@ import type {
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
 import type { InsightsAdmission } from "./insights-admission.ts";
+import { INSIGHTS_REVIEW_SCHEMA, InsightsReviews } from "./insights-review.ts";
 import type { KnowledgeDb } from "./project-knowledge-store.ts";
 
-export const INSIGHTS_SCHEMA = `
+export const INSIGHTS_SCHEMA = `${INSIGHTS_REVIEW_SCHEMA}
 CREATE TABLE IF NOT EXISTS insights_items (
  seq INTEGER PRIMARY KEY AUTOINCREMENT,
  mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
@@ -176,20 +177,23 @@ export function parseInsightsBacklog(input: unknown): InsightsBacklogRequest {
 		"draft",
 		"evidence",
 		"record",
+		"patternKey",
 	]).action;
 	const fields: Record<string, string[]> = {
+		review_context: ["cursor"],
 		list: ["kind", "cursor", "limit"],
 		get: ["kind", "key"],
 		history: ["kind", "key", "cursor", "limit"],
 		evidence: ["key", "cursor", "limit"],
 		receipt: ["operationId"],
-		propose: ["key", "expectedRevision", "operationId", "draft", "evidence"],
-		amend: ["key", "expectedRevision", "operationId", "draft", "evidence"],
+		propose: ["key", "expectedRevision", "operationId", "draft", "evidence", "patternKey"],
+		amend: ["key", "expectedRevision", "operationId", "draft", "evidence", "patternKey"],
 		save_report: ["key", "expectedRevision", "operationId", "record"],
 		save_checkpoint: ["key", "expectedRevision", "operationId", "record"],
 	};
 	if (typeof action !== "string" || !Object.hasOwn(fields, action)) throw new Conflict("Unknown Insights action");
 	const x = object(input, ["action", ...fields[action]!]);
+	if (action === "review_context") return { action, ...(x.cursor === undefined ? {} : { cursor: integer(x.cursor) }) };
 	if (action === "receipt") return { action, operationId: operation(x.operationId) };
 	if (action === "list" || action === "history" || action === "evidence") {
 		const page = {
@@ -206,7 +210,15 @@ export function parseInsightsBacklog(input: unknown): InsightsBacklogRequest {
 	if (action === "get") return { action, key, kind: choice(x.kind, ["finding", "report", "checkpoint"]) };
 	const common = { key, expectedRevision: integer(x.expectedRevision), operationId: operation(x.operationId) };
 	if (action === "propose" || action === "amend")
-		return { action, ...common, draft: draft(x.draft), evidence: array(x.evidence, 20, evidence) };
+		return {
+			action,
+			...common,
+			draft: draft(x.draft),
+			evidence: array(x.evidence, 20, evidence),
+			...(x.patternKey === undefined
+				? {}
+				: { patternKey: string(x.patternKey, 200).trim().toLowerCase().replace(/\s+/gu, " ") }),
+		};
 	return { action: action as "save_report" | "save_checkpoint", ...common, record: record(x.record) };
 }
 
@@ -219,8 +231,10 @@ export interface InsightsDb extends KnowledgeDb {
 
 export class InsightsBacklog {
 	private readonly db: InsightsDb;
+	readonly reviews: InsightsReviews;
 	constructor(db: InsightsDb) {
 		this.db = db;
+		this.reviews = new InsightsReviews(db);
 	}
 	/** Finding tracking tasks must not be edited, claimed or executed through generic task APIs. */
 	assertOrdinaryTask(taskId: string): void {
@@ -241,6 +255,7 @@ export class InsightsBacklog {
 			const mission = this.validate(admission);
 			const session = admission.binding.reportSessionId;
 			const x = request;
+			if (x.action === "review_context") return this.reviews.context(admission, x.cursor ?? 0);
 			if (x.action === "receipt") {
 				const row = this.db.one(
 					"SELECT result FROM insights_operations WHERE mission_id=? AND session_id=? AND operation_id=?",
@@ -315,6 +330,7 @@ export class InsightsBacklog {
 			const lifecycle = finding ? ((previous?.lifecycle as InsightsLifecycle | undefined) ?? "proposed") : null;
 			let taskId = previous?.task_id as string | undefined;
 			if (finding) {
+				this.reviews.pattern(admission, x.key, x.patternKey);
 				if (previous) {
 					const oldDraft = JSON.parse(previous.payload as string) as InsightsFindingDraft;
 					if (oldDraft.implementationLinks.some((link) => !x.draft.implementationLinks.includes(link)))
@@ -377,7 +393,13 @@ export class InsightsBacklog {
 				}
 			}
 			const payload = JSON.stringify(
-				finding ? x.draft : { ...x.record, authority: "review_claim_only", host: admission.binding.host },
+				finding
+					? x.draft
+					: {
+							...(x.action === "save_report" ? this.reviews.finish(admission, x.key, x.record) : x.record),
+							authority: "review_claim_only",
+							host: admission.binding.host,
+						},
 			);
 			this.save(mission, kind, x.key, revision, taskId, payload, lifecycle);
 			const receipt = { operationId: x.operationId, kind, key: x.key, revision, taskId: taskId ?? null };
@@ -419,8 +441,13 @@ export class InsightsBacklog {
 			key,
 		);
 		if (!row) throw new NotFound("Unknown own-backlog record");
+		const pattern =
+			kind === "finding"
+				? this.db.one("SELECT pattern FROM insights_patterns WHERE mission_id=? AND finding_key=?", mission, key)
+				: undefined;
 		return {
 			key: String(row.key),
+			...(pattern ? { patternKey: String(pattern.pattern) } : {}),
 			revision: Number(row.revision),
 			taskId: row.taskId === null ? null : String(row.taskId),
 			lifecycle: row.lifecycle as InsightsLifecycle | null,

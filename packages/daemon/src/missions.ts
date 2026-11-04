@@ -700,6 +700,8 @@ export class MissionStore {
 		this.db.exec(SCHEMA);
 		this.db.exec(KNOWLEDGE_SCHEMA);
 		this.db.exec(INSIGHTS_SCHEMA);
+		// Startup only, on disk before the in-memory replica opens. Never replay a saved placement.
+		this.insights.reviews.recover();
 		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "created_by_session_id"))
 			this.db.exec("ALTER TABLE tasks ADD COLUMN created_by_session_id TEXT");
 		// Existing assignments are grandfathered, not retroactively charged.

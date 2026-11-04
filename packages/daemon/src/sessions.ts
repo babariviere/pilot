@@ -426,6 +426,8 @@ interface SessionMeta extends OutcomeMeta {
 	insightsGrant?: InsightsGrant;
 	/** Private setup fence. A crash before the final durable save cannot reopen authority. */
 	insightsSetupPending?: true;
+	/** Persisted source-read fence for a bounded turn, including daemon/worker restart. */
+	insightsReviewRun?: string;
 	/** App/host diagnostics without an attached chat. Mutually exclusive with diagnosticTarget. */
 	diagnosticScope?: "app";
 	/** Exact host-local chat admitted for this specialist. */
@@ -1562,7 +1564,9 @@ export class SessionManager {
 	private insightsBacklog?: import("./insights-backlog.ts").InsightsBacklog;
 	private insightsBacklogCalls = 0;
 	private readonly insightsBacklogPending = new Map<string, Set<Promise<void>>>();
-	private readonly insightsStopEpochs = new WeakMap<SessionWorker, number>();
+	private readonly insightsStopEpochs = new Map<string, number>();
+	private readonly insightsReviewPending = new Set<Promise<unknown>>();
+	private insightsReviewClosing?: Promise<void>;
 
 	setInsightsBacklog(backlog: import("./insights-backlog.ts").InsightsBacklog): void {
 		this.insightsBacklog = backlog;
@@ -3565,15 +3569,25 @@ ${run.excerpt}`,
 
 	/** Derive identity from the supervised worker. Revalidate inside writes and before returning data. */
 	insightsAdmission(callerId: string, worker: SessionWorker): InsightsAdmission {
+		const admission = this.insightsHostAdmission(callerId);
+		const revalidate = () => {
+			admission.revalidate();
+			if (this.workers.get(callerId) !== worker) throw new Conflict("Insights worker changed");
+		};
+		revalidate();
+		return { binding: admission.binding, revalidate };
+	}
+
+	/** Host-only dispatch may start its own report worker, never a source worker. */
+	private insightsHostAdmission(callerId: string): InsightsAdmission {
 		const meta = this.require(callerId);
 		this.validateMode(meta);
 		const grant = structuredClone(this.assertInsightsCurrent(meta));
-		const stopEpoch = this.insightsStopEpochs.get(worker);
+		const stopEpoch = this.insightsStopEpochs.get(callerId);
 		const revalidate = () => {
 			if (
 				this.closing ||
-				this.insightsStopEpochs.get(worker) !== stopEpoch ||
-				this.workers.get(callerId) !== worker ||
+				this.insightsStopEpochs.get(callerId) !== stopEpoch ||
 				this.require(callerId) !== meta ||
 				JSON.stringify(this.assertInsightsCurrent(meta)) !== JSON.stringify(grant)
 			)
@@ -3583,6 +3597,88 @@ ${run.excerpt}`,
 		const { home: _home, projectPath: _path, setupDigest: _digest, ...binding } = grant;
 		Object.freeze(binding.host);
 		return { binding: Object.freeze(binding), revalidate };
+	}
+
+	/** Trusted orchestration seam. Existing IDs are status lookup only, never input replay. */
+	dispatchInsightsReview(
+		id: string,
+		request: import("@pilot/protocol").InsightsReviewDispatch,
+	): Promise<import("@pilot/protocol").InsightsReviewRun> {
+		const work = this.dispatchInsightsReviewAdmitted(id, request);
+		this.insightsReviewPending.add(work);
+		void work.finally(() => this.insightsReviewPending.delete(work)).catch(() => undefined);
+		return work;
+	}
+
+	async insightsReviewStatus(id: string, runId: string) {
+		if (!this.insightsBacklog) throw new Conflict("Insights backlog unavailable");
+		return this.insightsBacklog.reviews.status(this.insightsHostAdmission(id), runId);
+	}
+
+	private async dispatchInsightsReviewAdmitted(
+		id: string,
+		input: import("@pilot/protocol").InsightsReviewDispatch,
+	): Promise<import("@pilot/protocol").InsightsReviewRun> {
+		const end = this.updateGate.begin();
+		try {
+			const admission = this.insightsHostAdmission(id);
+			const reviews = this.insightsBacklog?.reviews;
+			if (!reviews) throw new Conflict("Insights backlog unavailable");
+			const request = structuredClone(input);
+			if (!(await reviews.reserve(admission, request))) return (await reviews.status(admission, request.runId))!;
+			let placementAttempted = false;
+			try {
+				await reviews.prepare(admission, request, async (selector) => {
+					admission.revalidate();
+					const result = await this.readDiagnosticContext(
+						{ ...selector, host: admission.binding.host },
+						this.shutdownSignal.signal,
+					);
+					admission.revalidate();
+					return result;
+				});
+				reviews.assertActive(admission, request.runId);
+				const requestId = `insights-review:${request.runId}`;
+				if (!this.canSendNotice(id, requestId)) throw new Conflict("Report chat is not idle; review not sent");
+				const meta = this.require(id);
+				this.sending.set(id, 1);
+				try {
+					meta.insightsReviewRun = request.runId;
+					meta.pending ??= [];
+					meta.pending.push({
+						type: "input",
+						requestId,
+						mode: "followUp",
+						onlyIfIdle: true,
+						content: `Review the bounded host-prepared evidence for ${request.windowStart} through ${request.windowEnd}. Run/report key: ${request.runId}. Read every insights_backlog review_context page, then revisit prior findings with list/get before proposing. Save one partial report with this exact run key and expectedRevision=0. Requested dates are context, not certified coverage. Do not infer completion from input placement.`,
+					});
+					placementAttempted = true;
+					await this.save(meta, undefined, undefined, true);
+					reviews.assertActive(admission, request.runId);
+					const rejected = await this.start(id, true);
+					if (rejected.has(requestId)) throw rejected.get(requestId);
+					if (meta.pending?.some((c) => c.requestId === requestId))
+						throw new WorkerUnavailable("Review input placement unknown");
+					await reviews.sent(admission, request.runId);
+				} finally {
+					const count = (this.sending.get(id) ?? 1) - 1;
+					if (count) this.sending.set(id, count);
+					else this.sending.delete(id);
+				}
+			} catch {
+				await reviews.interrupt(
+					id,
+					placementAttempted ? "unknown" : "interrupted",
+					placementAttempted
+						? "Input outcome unknown; never replay this run"
+						: "Preparation interrupted; unfinished sources retained",
+					request.runId,
+				);
+			}
+			return (await reviews.status(admission, request.runId))!;
+		} finally {
+			end();
+		}
 	}
 
 	/** Trusted revocation closes admission synchronously, then durably acknowledges. Never re-enables. */
@@ -3596,6 +3692,7 @@ ${run.excerpt}`,
 	}
 
 	private async persistInsightsRevocation(meta: SessionMeta): Promise<void> {
+		await this.insightsBacklog?.reviews.interrupt(meta.id, "cancelled", "Grant revoked; never replay this run");
 		await Promise.allSettled(this.insightsBacklogPending.get(meta.id) ?? []);
 		await Promise.all(this.insightsAccounting.get(meta.id) ?? []);
 		await this.save(meta, undefined, undefined, true);
@@ -3603,6 +3700,10 @@ ${run.excerpt}`,
 
 	private async insightsHistory(callerId: string, worker: SessionWorker, input: unknown, signal?: AbortSignal) {
 		const admission = this.insightsAdmission(callerId, worker);
+		if (this.require(callerId).insightsReviewRun || this.insightsBacklog?.reviews.hasActive(admission))
+			throw new Conflict(
+				"Dispatched reviews use only bounded review_context evidence; direct source reads are closed for this turn",
+			);
 		const request = parseInsightsHistory(input);
 		const result = await awaitDiagnosticRead(
 			this.readDiagnosticContext({ ...request, host: admission.binding.host }, signal),
@@ -7213,9 +7314,22 @@ ${run.excerpt}`,
 		this.assertNotContinued(meta, true);
 		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 		if (this.closing) throw new Error("pilotd is shutting down");
-		const insightsWorker = meta.role === "insights" ? this.workers.get(id) : undefined;
-		if (insightsWorker)
-			this.insightsStopEpochs.set(insightsWorker, (this.insightsStopEpochs.get(insightsWorker) ?? 0) + 1);
+		let interrupted: Promise<void> | undefined;
+		if (meta.role === "insights") {
+			this.insightsStopEpochs.set(id, (this.insightsStopEpochs.get(id) ?? 0) + 1);
+			interrupted = this.insightsBacklog?.reviews.interrupt(id, "cancelled", "Stopped; never replay this run");
+			void interrupted?.catch(() => undefined);
+		}
+		try {
+			return await this.stopAdmitted(meta);
+		} finally {
+			// Reach the kernel before waiting for review durability, but do not ACK a volatile cancellation.
+			await interrupted;
+		}
+	}
+
+	private async stopAdmitted(meta: SessionMeta): Promise<StopResponse> {
+		const id = meta.id;
 		this.cancelPostRun(meta);
 		if (meta.automation) {
 			meta.automation.stopped = true;
@@ -7274,6 +7388,7 @@ ${run.excerpt}`,
 				(command) =>
 					command.type === "input" &&
 					command.requestId !== delivering &&
+					!command.requestId.startsWith("insights-review:") &&
 					inputOrigin(command.requestId) !== undefined,
 			)
 			.map((command) => ({ ...command, onlyIfIdle: false }));
@@ -7351,7 +7466,12 @@ ${run.excerpt}`,
 					: [],
 			);
 			const automatic = (meta.pending ?? [])
-				.filter((command) => command.type === "input" && inputOrigin(command.requestId))
+				.filter(
+					(command) =>
+						command.type === "input" &&
+						!command.requestId.startsWith("insights-review:") &&
+						inputOrigin(command.requestId),
+				)
 				.map((command) => ({ ...command, onlyIfIdle: false }));
 			meta.pending = [
 				{ type: "abort", requestId: randomUUID() },
@@ -7395,6 +7515,19 @@ ${run.excerpt}`,
 	 */
 	private async deliver(id: string, worker: SessionWorker, command: PendingCommand): Promise<void> {
 		if (command.type !== "input") return worker.request(command);
+		const reviewRun = command.requestId.startsWith("insights-review:")
+			? command.requestId.slice("insights-review:".length)
+			: undefined;
+		const assertReview = () => {
+			if (!reviewRun) return;
+			try {
+				if (!this.insightsBacklog) throw new Conflict("Insights backlog unavailable");
+				this.insightsBacklog.reviews.assertActive(this.insightsAdmission(id, worker), reviewRun);
+			} catch {
+				throw new CommandRejected("Review terminal or unavailable; never replay", "stopped");
+			}
+		};
+		assertReview();
 		const insights = this.require(id).role === "insights" ? this.insightsAdmission(id, worker) : undefined;
 		this.delivering.set(id, command.requestId);
 		const traceKey = this.inputTraceKey(id, command.requestId);
@@ -7418,6 +7551,19 @@ ${run.excerpt}`,
 			)
 				throw new CommandRejected("Input withdrawn before admission", "busy");
 			insights?.revalidate();
+			assertReview();
+			const meta = this.require(id);
+			if (
+				insights &&
+				meta.insightsReviewRun !== reviewRun &&
+				(reviewRun || (!inputOrigin(command.requestId) && !command.requestId.startsWith("schedule:")))
+			) {
+				if (reviewRun) meta.insightsReviewRun = reviewRun;
+				else delete meta.insightsReviewRun;
+				await this.save(meta, undefined, undefined, true);
+				insights.revalidate();
+				assertReview();
+			}
 			await worker.request(trace ? { ...command, trace } : command);
 			settled = true;
 		} catch (error) {
@@ -8775,6 +8921,8 @@ ${run.excerpt}`,
 		this.diagnosticContextReads.clear();
 		this.diagnosticReadBroker.close();
 		this.closing = true;
+		this.insightsReviewClosing ??= this.insightsBacklog?.reviews.interruptAll();
+		const drainInsightsReviews = this.insightsReviewClosing;
 		const drainActions = this.actionRunner?.close();
 		const drainRepairProjects = this.repairProject.close();
 		this.workerStarts.close();
@@ -8801,6 +8949,8 @@ ${run.excerpt}`,
 		await Promise.allSettled(this.coordinatorUnbindings.values());
 		await Promise.allSettled(this.roleTransitions.values());
 		await Promise.allSettled([...this.insightsBacklogPending.values()].flatMap((pending) => [...pending]));
+		await Promise.allSettled([...this.insightsReviewPending]);
+		await drainInsightsReviews;
 		await Promise.all([...this.workers.values()].map((worker) => worker.close()));
 		await Promise.allSettled([...this.parking.values()]);
 		await this.coldReader.close();
@@ -9003,7 +9153,8 @@ ${run.excerpt}`,
 								? !this.missions?.noticeAllowed?.(id, command.requestId) || meta.archivedAt !== undefined
 								: command.requestId.startsWith("automation:")
 									? !this.automationsEnabled() || meta.automation?.followUps?.requestId !== command.requestId
-									: meta.prFollowUp?.requestId !== command.requestId) ||
+									: !command.requestId.startsWith("insights-review:") &&
+										meta.prFollowUp?.requestId !== command.requestId) ||
 								meta.pending.some((pending) => pending !== command))
 						) {
 							rejected.set(

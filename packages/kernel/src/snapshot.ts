@@ -453,7 +453,7 @@ export async function readDiagnosticHistoryPage(
 			schemaVersion: 1,
 			target,
 			collectedAt: new Date().toISOString(),
-			source: { availability: "available", freshness: "fresh" },
+			source: { availability: "available", freshness: "fresh", streamId: `conversation:${conversationId}` },
 			entries,
 			pagination: {
 				...(before === undefined ? {} : { before }),

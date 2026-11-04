@@ -53,6 +53,7 @@ export interface InsightsReviewRecord {
 }
 
 export type InsightsBacklogRequest =
+	| { action: "review_context"; cursor?: number }
 	| { action: "list"; kind: "finding" | "report" | "checkpoint"; cursor?: number; limit?: number }
 	| { action: "get"; kind: "finding" | "report" | "checkpoint"; key: string }
 	| { action: "history"; kind: "finding" | "report" | "checkpoint"; key: string; cursor?: number; limit?: number }
@@ -65,6 +66,8 @@ export type InsightsBacklogRequest =
 			operationId: string;
 			draft: InsightsFindingDraft;
 			evidence: InsightsEvidence[];
+			/** Stable target + failure-mechanism label. Not an authorization or coverage claim. */
+			patternKey?: string;
 	  }
 	| {
 			action: "save_report" | "save_checkpoint";
@@ -73,3 +76,21 @@ export type InsightsBacklogRequest =
 			operationId: string;
 			record: InsightsReviewRecord;
 	  };
+
+/** Trusted host dispatch, never a model-selected grant or scheduler completion receipt. */
+export interface InsightsReviewDispatch {
+	runId: string;
+	windowStart: string;
+	windowEnd: string;
+	bounds: { inventoryPages: number; historyPages: number; entriesPerPage: number };
+}
+
+export interface InsightsReviewRun {
+	runId: string;
+	state: "preparing" | "ready" | "sent" | "partial" | "cancelled" | "interrupted" | "unknown";
+	windowStart: string;
+	windowEnd: string;
+	reportKey: string | null;
+	/** Persistence and placement only. Never proof of comprehensive review or benefit. */
+	detail: string;
+}

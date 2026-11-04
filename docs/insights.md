@@ -1,6 +1,6 @@
 # Insights
 
-**Status: internal history and backlog foundation, not an available weekly review feature.**
+**Status: internal review foundation, not an available weekly review feature.**
 There is no native setup action or active weekly schedule in this delivery.
 
 Insights is intended to review chat evidence across projects and propose useful improvements.
@@ -21,8 +21,11 @@ The lifecycle distinguishes Proposed, Approved, In progress, Shipped and Verifie
 and Dismissed alternatives. Shipped means delivered, not proven useful. Model-written results cannot
 approve a finding or verify its benefit. Native lifecycle confirmation is not yet connected.
 
-Saved reports and checkpoints survive restart, but a save proves persistence, not complete coverage
-or a successful weekly run. Automated report generation, native setup and weekly activation remain separate work.
+Bounded review context, reports and unfinished source positions survive restart. Reports disclose
+partial coverage and uninspected content, and revisit previous findings. Cost proposals distinguish
+known spend from estimates or unknown baselines, with safety trade-offs and a later benefit check.
+A save proves persistence, not complete coverage or a successful weekly run. Stopped or uncertain
+review inputs never automatically replay. Native setup and weekly activation remain separate work.
 Weekly settings and the first real review still require confirmation.
 
 See the [permission and verification contract](technical/insights-history.md) for implementation limits.

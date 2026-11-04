@@ -138,6 +138,21 @@ export default () => { writeFileSync(${JSON.stringify(marker)}, "loaded"); };`;
 		pilotPrompt({ role: "insights", ask: { source } }),
 		/repair_proposal|Use codemode|Build permission/,
 	);
+	const prompt = pilotPrompt({ role: "insights", ask: { source } });
+	for (const requirement of [
+		"review_context",
+		"patternKey",
+		"user corrections",
+		"UI/artifact/workflow",
+		"observation/inference/proposal",
+		"affected project",
+		"measured/estimated/unknown",
+		"quality/safety",
+		"shipped distinct from verified",
+		"uninspected artifacts",
+		"Never automatically edit AGENTS.md",
+	])
+		assert.ok(prompt.includes(requirement), requirement);
 });
 
 test("Insights rejects malformed start envelopes before opening storage", async () => {

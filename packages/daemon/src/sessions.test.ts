@@ -16,7 +16,9 @@ import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import type { KernelCommand, KernelPacket, KernelSubagent, KernelUsage } from "@pilot/kernel";
 import type {
 	AgentEvent,
+	DiagnosticContextRequest,
 	DiagnosticHistoryPage,
+	InsightsReviewDispatch,
 	McpStatus,
 	SessionCompletion,
 	SessionDiagnostics,
@@ -31,8 +33,8 @@ import { DATABASE_CONFIG_FILE, DatabaseService } from "./databases.ts";
 import { diagnosticContextResponse } from "./diagnostic-context.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { DaemonOperations, EventLoopWatchdog, operations } from "./event-loop-watchdog.ts";
-import type { ModelCatalog } from "./models.ts";
 import { MissionStore } from "./missions.ts";
+import type { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
 import {
@@ -1345,10 +1347,220 @@ async function insightsFixture(t: TestContext, factories: SessionFactories = {},
 	};
 }
 
+const reviewDispatch = (): InsightsReviewDispatch => ({
+	runId: randomUUID(),
+	windowStart: "2026-01-01T00:00:00.000Z",
+	windowEnd: "2026-01-08T00:00:00.000Z",
+	bounds: { inventoryPages: 1, historyPages: 2, entriesPerPage: 2 },
+});
+
+async function reviewSessionFixture(t: TestContext) {
+	const store = new MissionStore(":memory:");
+	const f = await insightsFixture(t, {}, store);
+	t.after(() => store.close());
+	f.worker.finish();
+	const sourceId = randomUUID();
+	let reads = 0;
+	t.mock.method(f.sessions, "readDiagnosticContext", async (request: DiagnosticContextRequest) => {
+		reads++;
+		assert.deepEqual(request.host, diagnosticHost);
+		if (request.action === "chats")
+			return diagnosticContextResponse(diagnosticHost, { chats: [{ id: sourceId, projectId: "foreign" }] });
+		assert.equal(request.action, "history");
+		assert.equal(request.sessionId, sourceId);
+		const page: DiagnosticHistoryPage = {
+			schemaVersion: 1,
+			target: diagnosticTarget(sourceId),
+			collectedAt: "2026-01-08T00:00:00.000Z",
+			source: { availability: "available", freshness: "fresh", streamId: "synthetic-stream" },
+			entries: [
+				{
+					entryId: 1,
+					ref: `diagnostic-history:v1:${sourceId}:1`,
+					kind: "pi.user",
+					excerpt: "Synthetic correction",
+					originalBytes: 20,
+					truncated: false,
+				},
+			],
+			pagination: {
+				...(request.before === undefined ? {} : { before: request.before }),
+				more: false,
+				returned: 1,
+				limit: 2,
+				scannedEntries: 1,
+				maxScannedEntries: 200,
+				encodedBytes: 100,
+				maxBytes: 65536,
+				perEntryMaxBytes: 8192,
+				truncatedEntries: 0,
+			},
+		};
+		return diagnosticContextResponse(diagnosticHost, page);
+	});
+	return { ...f, store, sourceId, reads: () => reads };
+}
+
+test("Insights review dispatch places one bounded input, persists a partial report and never replays", async (t) => {
+	const f = await reviewSessionFixture(t);
+	const request = reviewDispatch();
+	const result = await f.sessions.dispatchInsightsReview(f.id, request);
+	assert.equal(result.state, "sent");
+	assert.equal(result.reportKey, null, "placement is not report completion");
+	assert.equal(f.reads(), 2);
+	const inputs = () =>
+		f.worker.requests.filter((c) => c.type === "input" && c.requestId.startsWith("insights-review:"));
+	assert.equal(inputs().length, 1);
+	assert.equal(inputs()[0]!.requestId, `insights-review:${request.runId}`);
+	const input = inputs()[0]!;
+	assert.ok(input.type === "input" && input.onlyIfIdle);
+	await assert.rejects(f.sessions["insightsHistory"](f.id, f.worker, { action: "chats" }), /bounded review_context/);
+	f.sessions["onPacket"](f.sessions["metas"].get(f.id)!, f.worker, {
+		type: "insights.backlog.call",
+		callId: "context",
+		request: { action: "review_context" },
+	});
+	await until(() => f.worker.sent.some((p) => p.type === "insights.backlog.result" && p.callId === "context"));
+	const context = f.worker.sent.find((p) => p.type === "insights.backlog.result" && p.callId === "context")!;
+	assert.ok("result" in context);
+	assert.match(JSON.stringify(context), /Synthetic correction/);
+	await f.store.insights.call(f.sessions.insightsAdmission(f.id, f.worker), {
+		action: "save_report",
+		key: request.runId,
+		expectedRevision: 0,
+		operationId: randomUUID(),
+		record: {
+			status: "completed",
+			windowStart: request.windowStart,
+			windowEnd: request.windowEnd,
+			markdown:
+				"Observed correction. Inferred friction. Proposed check, not approval. Baseline unknown; verify later.",
+			findingKeys: [],
+			checkpoints: [],
+			gaps: [],
+		},
+	});
+	assert.equal((await f.sessions.insightsReviewStatus(f.id, request.runId))?.state, "partial");
+	assert.equal((await f.sessions.dispatchInsightsReview(f.id, request)).state, "partial");
+	assert.equal(inputs().length, 1);
+	assert.equal(f.reads(), 2);
+	f.worker.finish();
+	await assert.rejects(f.sessions["insightsHistory"](f.id, f.worker, { action: "chats" }), /bounded review_context/);
+	await f.sessions.send(f.id, "Automatic reminder", "followUp", `schedule:${randomUUID()}`);
+	await assert.rejects(f.sessions["insightsHistory"](f.id, f.worker, { action: "chats" }), /bounded review_context/);
+	f.worker.finish();
+	await f.sessions.send(f.id, "Discuss the report");
+	await f.sessions["insightsHistory"](f.id, f.worker, { action: "chats" });
+	assert.equal(f.reads(), 3, "a new explicit input ends the bounded turn");
+	assert.equal(f.workers.length, 1, "source workers never start");
+});
+
+test("Insights review rejects overlap and busy placement without silently retrying", async (t) => {
+	const f = await reviewSessionFixture(t);
+	f.worker.state = "working";
+	const request = reviewDispatch();
+	assert.equal((await f.sessions.dispatchInsightsReview(f.id, request)).state, "interrupted");
+	assert.equal(f.worker.requests.filter((c) => c.requestId.startsWith("insights-review:")).length, 0);
+	f.worker.finish();
+	const next = reviewDispatch();
+	assert.equal((await f.sessions.dispatchInsightsReview(f.id, next)).state, "sent");
+	await assert.rejects(f.sessions.dispatchInsightsReview(f.id, reviewDispatch()), /already active/);
+	assert.equal((await f.sessions.dispatchInsightsReview(f.id, request)).state, "interrupted");
+});
+
+for (const boundary of ["Stop", "revocation"] as const) {
+	test(`Insights review ${boundary} fences held preparation before input placement`, async (t) => {
+		const f = await reviewSessionFixture(t);
+		const entered = deferred(),
+			release = deferred();
+		const read = f.sessions.readDiagnosticContext.bind(f.sessions);
+		t.mock.method(
+			f.sessions,
+			"readDiagnosticContext",
+			async (...args: Parameters<SessionManager["readDiagnosticContext"]>) => {
+				entered.resolve();
+				await release.promise;
+				return read(...args);
+			},
+		);
+		t.after(() => release.resolve());
+		const request = reviewDispatch();
+		const pending = f.sessions.dispatchInsightsReview(f.id, request);
+		const rejection = assert.rejects(pending, /changed|revoked/);
+		await entered.promise;
+		if (boundary === "Stop") await f.sessions.stop(f.id);
+		else await f.sessions.revokeInsights(f.id, 1);
+		release.resolve();
+		await rejection;
+		assert.equal(f.worker.requests.filter((c) => c.requestId.startsWith("insights-review:")).length, 0);
+		if (boundary === "Stop") {
+			assert.equal((await f.sessions.insightsReviewStatus(f.id, request.runId))?.state, "cancelled");
+			assert.equal((await f.sessions.dispatchInsightsReview(f.id, request)).state, "cancelled");
+		}
+	});
+}
+
+test("Insights review Stop reaches the kernel while terminal durability is held", async (t) => {
+	const f = await reviewSessionFixture(t);
+	const request = reviewDispatch();
+	await f.sessions.dispatchInsightsReview(f.id, request);
+	const gate = deferred();
+	t.after(() => gate.resolve());
+	const durable = f.store.durable.bind(f.store);
+	t.mock.method(f.store, "durable", async () => {
+		await gate.promise;
+		await durable();
+	});
+	let stopped = false;
+	const stop = f.sessions.stop(f.id).then(() => {
+		stopped = true;
+	});
+	await until(() => f.worker.requests.some((c) => c.type === "abort"));
+	assert.equal(stopped, false, "Stop ACK must wait for terminal persistence");
+	gate.resolve();
+	await stop;
+	assert.equal((await f.sessions.insightsReviewStatus(f.id, request.runId))?.state, "cancelled");
+});
+
+test("Insights review lost placement ACK stays unknown and queued input cannot replay", async (t) => {
+	const f = await reviewSessionFixture(t);
+	const request = reviewDispatch();
+	const workerRequest = f.worker.request.bind(f.worker);
+	t.mock.method(f.worker, "request", async (command: Command) => {
+		await workerRequest(command);
+		if (command.requestId.startsWith("insights-review:")) throw new WorkerUnavailable("Lost synthetic ACK");
+	});
+	assert.equal((await f.sessions.dispatchInsightsReview(f.id, request)).state, "unknown");
+	assert.equal((await f.sessions.dispatchInsightsReview(f.id, request)).state, "unknown");
+	const command = {
+		type: "input" as const,
+		requestId: `insights-review:${request.runId}`,
+		content: "Must not replay",
+		mode: "followUp" as const,
+		onlyIfIdle: true,
+	};
+	await assert.rejects(f.sessions["deliver"](f.id, f.worker, command), /terminal/);
+	assert.equal(f.worker.requests.filter((c) => c.requestId === command.requestId).length, 1);
+	assert.equal(f.reads(), 2);
+});
+
+test("Insights review restart preserves terminal placement and the bounded source-read fence", async (t) => {
+	const f = await reviewSessionFixture(t);
+	const request = reviewDispatch();
+	await f.sessions.dispatchInsightsReview(f.id, request);
+	f.worker.finish();
+	await f.sessions.shutdown();
+	const reloaded = await f.manager();
+	const worker = (await reloaded["ensureWorker"](f.id)) as FakeWorker;
+	assert.equal((await reloaded.dispatchInsightsReview(f.id, request)).state, "interrupted");
+	await assert.rejects(reloaded["insightsHistory"](f.id, worker, { action: "chats" }), /bounded review_context/);
+	assert.equal(worker.requests.filter((c) => c.requestId.startsWith("insights-review:")).length, 0);
+});
+
 test("Insights backlog IPC derives scope and rejects ordinary workers and forged fields", async (t) => {
 	const store = new MissionStore(":memory:");
-	t.after(() => store.close());
 	const f = await insightsFixture(t, {}, store);
+	t.after(() => store.close());
 	const ordinary = await f.sessions.spawn({ projectId: f.project.id, mode: "ask", message: "Ordinary" });
 	await f.sessions["starting"].get(ordinary.id);
 	const ordinaryWorker = f.sessions["workers"].get(ordinary.id)! as FakeWorker;
@@ -1386,8 +1598,8 @@ test("Insights backlog IPC derives scope and rejects ordinary workers and forged
 for (const invalidation of ["replacement", "revocation", "Stop"] as const) {
 	test(`Insights backlog withholds committed ACK after ${invalidation} during durability`, async (t) => {
 		const store = new MissionStore(":memory:");
-		t.after(() => store.close());
 		const f = await insightsFixture(t, {}, store);
+		t.after(() => store.close());
 		const gate = deferred();
 		const entered = deferred();
 		const durable = store.durable.bind(store);
@@ -1422,7 +1634,7 @@ for (const invalidation of ["replacement", "revocation", "Stop"] as const) {
 		let drain: Promise<void> | undefined;
 		let drained = false;
 		if (invalidation === "revocation") drain = f.sessions.revokeInsights(f.id, 1);
-		else if (invalidation === "Stop") await f.sessions.stop(f.id);
+		else if (invalidation === "Stop") drain = f.sessions.stop(f.id).then(() => undefined);
 		else {
 			f.worker.finish();
 			drain = f.sessions.shutdown();
@@ -1470,8 +1682,8 @@ for (const invalidation of ["replacement", "revocation", "Stop"] as const) {
 
 test("Stop fences a queued Insights backlog call before its transaction", async (t) => {
 	const store = new MissionStore(":memory:");
-	t.after(() => store.close());
 	const f = await insightsFixture(t, {}, store);
+	t.after(() => store.close());
 	f.sessions["onPacket"](f.sessions["metas"].get(f.id)!, f.worker, {
 		type: "insights.backlog.call",
 		callId: "queued-before-stop",

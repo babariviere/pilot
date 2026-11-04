@@ -512,7 +512,11 @@ test("diagnostic history cold-reads active and compacted entries with explicit b
 		}, context);
 
 		const newest = await readDiagnosticHistoryPage(durable, target, undefined, 2);
-		assert.deepEqual(newest.source, { availability: "available", freshness: "fresh" });
+		assert.deepEqual(newest.source, {
+			availability: "available",
+			freshness: "fresh",
+			streamId: `conversation:${root.id}`,
+		});
 		assert.deepEqual(
 			newest.entries.map((entry) => entry.entryId),
 			ids.slice(1),

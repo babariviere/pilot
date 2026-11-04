@@ -4,8 +4,9 @@
 
 Internal Insights profile and own-backlog persistence foundation only. No public HTTP/native setup
 route, live grant, private-history review or recurring rule is enabled by this change. The closed
-model tools are `insights_history` and `insights_backlog`. Report generation, native lifecycle
-confirmation, activation and scheduling remain separate integrations. This document does not certify
+model tools are `insights_history` and `insights_backlog`. A trusted bounded review seam is described
+in [review orchestration](insights-review.md). Native lifecycle confirmation, activation and scheduling
+remain separate integrations. This document does not certify
 end-to-end availability.
 
 ## Admission and recovery
@@ -81,7 +82,8 @@ Canonical findings are unassigned mission tracking tasks with typed metadata in 
 Generic task editing, claiming, starting, completion, removal and ownership-resource attachment reject
 these tasks. Implementation requires separate approved work. A target-project reference never grants
 access or changes that project's backlog. Stable lowercase UUID finding keys deduplicate exactly
-within the admitted mission; semantic pattern deduplication remains the report author's responsibility.
+within the admitted mission. Dispatched reviews also enforce normalized target/mechanism pattern labels;
+semantic equivalence across different labels remains the report author's responsibility.
 
 Each write supplies expectedRevision (zero for creation) and an operationId. A transaction checks CAS,
 appends immutable revisions/evidence, projects the task and saves its receipt together. Evidence UUIDs
@@ -100,16 +102,16 @@ the current finding to be Shipped and explicit user confirmation; model claims n
 Reports and checkpoints retain bounded claims, finding references, stream identity, paging positions
 and explicit gaps. Missing/changed streams require partial/unavailable coverage and a gap; same-stream
 position regression requires a gap. These checks do not prove continuity, source receipt validity,
-complete discovery or coverage. The report integration must validate reader receipts and preserve
-unvisited sources/unfinished inventory rather than treating a timestamp or save as a coverage proof.
+complete discovery or coverage. The bounded review integration validates reader receipts and preserves
+unvisited sources/unfinished inventory; see its [continuation limits](insights-review.md).
 
 All reads and write acknowledgements wait for MissionStore.durable(), then recheck admission before
 disclosure. Revocation/replacement during durability may leave a committed write without its ACK.
 Revocation and daemon shutdown drain admitted backlog calls before returning; shutdown also closes
 admission before draining. Stop invalidates already-captured admissions, including queued calls and
-ACKs waiting on durability. This in-memory fence does not establish persistent review-run cancellation
-or prevent a scheduler from retrying the same run after restart; the report/schedule integration must
-provide that durable fence.
+ACKs waiting on durability. Dispatched review runs add a durable cancellation/interruption fence and
+exact-ID lookup without input replay. The scheduler must consume those terminal outcomes rather than
+retrying their input; this foundation does not wire or activate a schedule.
 Look up receipt with the original operationId through a currently admitted worker; absence is Unknown,
 not proof of rejection and never permission for blind effect replay. Exact same-operation retries
 cannot create another task/revision; a changed payload or binding conflicts. Report/checkpoint receipts
