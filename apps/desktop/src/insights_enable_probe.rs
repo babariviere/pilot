@@ -2,8 +2,9 @@
 //! only: the Automations entry, one confirmation, enabled report navigation, existing
 //! report chat reuse, the exact frozen payload, late preflight replies, a missing or
 //! ambiguous model, refused and lost acknowledgements, Check/status/partial progress
-//! across close and restart, and the Automations-off block. No real grant, history,
-//! provider turn, schedule or visible window.
+//! across close and restart, the host's lost schedule ACK (pending receipt, enabled
+//! status) and the Automations-off block. No real grant, history, provider turn,
+//! schedule or visible window.
 use super::*;
 use crate::{
     app_shell::Page,
@@ -346,6 +347,7 @@ pub fn run_insights_enable_probe(cx: &mut HeadlessAppContext) {
         std::fs::create_dir_all(d).unwrap();
     }
     reuse_and_recovery(cx, &dir);
+    lost_schedule_ack(cx, &dir);
     choice_and_refusals(cx, &dir);
     for (width, mode) in [
         (680., ThemeMode::Light),
@@ -355,7 +357,9 @@ pub fn run_insights_enable_probe(cx: &mut HeadlessAppContext) {
         render_only(cx, &dir, width, mode);
     }
     cx.update(|cx| cx.set_reduce_motion(reduced));
-    println!("insights enable: reuse/recovery, choice/refusals and 3 render-only layouts passed");
+    println!(
+        "insights enable: reuse/recovery, lost schedule ACK, choice/refusals and 3 render-only layouts passed"
+    );
 }
 
 /// Existing report chat: Automations → confirmation → lost ACK → close/restart → Check
@@ -476,7 +480,7 @@ fn reuse_and_recovery(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     let pending = fx::status(
         &op,
         "pending",
-        json!({"phase":"chat_ready"}),
+        fx::progress(&op, "chat_ready"),
         "partial",
         Some("schedule_unresolved"),
     );
@@ -646,6 +650,184 @@ fn reuse_and_recovery(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     let _ = std::fs::remove_dir_all(root);
     println!(
         "insights enable reuse 1100 Light: passive open, exact payload, lost ACK, reopen/restart without replay, Check resend of same bytes, partial, enabled, report navigation, chat settings, retained report pinning and substitute refusal passed"
+    );
+}
+
+/// Status reads only, each carrying exactly the retained envelope; never an operation.
+#[track_caller]
+fn status_reads_only(s: &Server, envelope: &Value) {
+    let all = posts(s);
+    assert!(sent_operations(&all).is_empty(), "nothing is resent");
+    assert!(
+        all.iter()
+            .all(|(p, _, b)| p == STATUS_PATH && b == envelope),
+        "only passive status reads of the same envelope"
+    );
+}
+/// The retained attempt is the same envelope and still unaccepted, with no result.
+#[track_caller]
+fn retained(
+    cx: &mut HeadlessAppContext,
+    view: &Entity<LocalViewer>,
+    envelope: &Value,
+    state: State,
+) {
+    let a = attempt(cx, view, "enable:mission-A").expect("the attempt is retained");
+    assert_eq!(serde_json::to_value(&a.operation).unwrap(), *envelope);
+    assert_eq!(a.state, state);
+    if state != State::Accepted {
+        assert!(a.result.is_none(), "no acceptance is invented");
+    }
+}
+
+/// The host placed the weekly rule but its schedule ACK was lost: the receipt stays pending
+/// at `schedule_pending` while present status is enabled (insights-enable.test.ts). The
+/// app's own ACK is lost too. Check is a read here, the attempt stays pending across close
+/// and restart, a later acceptance settles it and a later block names no cause.
+fn lost_schedule_ack(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
+    let width = 680.;
+    let s = server();
+    s.reply(
+        PREFLIGHT_A_PINNED,
+        Reply::json(
+            200,
+            fx::offer(
+                "project-A",
+                "mission-A",
+                fx::TERRA,
+                REPORT,
+                fx::chat(REPORT, fx::TERRA),
+                Value::Null,
+            ),
+        ),
+    );
+    let m = mount(cx, &s, width, ThemeMode::Light, true, None);
+    let (h, view) = (m.h, m.view.clone());
+    from_automations(cx, h, &view);
+    s.reply(OPERATIONS, Reply::json(0, Value::Null));
+    s.reply(STATUS, Reply::json(503, json!({"error":"synthetic"})));
+    click(cx, h, "insights-enable-confirm");
+    until(cx, h, |w, cx| {
+        w.try_find("insights-unconfirmed").is_some() && ready(&view, cx)
+    });
+    let first = sent_operations(&posts(&s));
+    assert_eq!(first.len(), 1);
+    let envelope = first[0].clone();
+    let op = serde_json::from_value::<crate::delivery_store::Operation>(envelope.clone()).unwrap();
+    retained(cx, &view, &envelope, State::Unknown);
+    let lost = fx::status(
+        &op,
+        "pending",
+        fx::progress(&op, "schedule_pending"),
+        "enabled",
+        None,
+    );
+
+    // Check: Local holds a pending receipt, so the status read is the whole Check.
+    s.reply(STATUS, Reply::json(200, lost.clone()));
+    click(cx, h, "insights-check");
+    until(cx, h, |w, cx| {
+        w.try_find("insights-unconfirmed").is_some()
+            && ready(&view, cx)
+            && view
+                .read(cx)
+                .insights_book
+                .as_ref()
+                .and_then(|b| b.insights.get("enable:mission-A"))
+                .is_some_and(|a| a.state == State::Pending)
+    });
+    status_reads_only(&s, &envelope);
+    retained(cx, &view, &envelope, State::Pending);
+    assert_eq!(progress(cx, &view), ("progress", Some("On".into())));
+    cx.update_window(h, |_, w, _| {
+        assert!(
+            w.try_find("insights-unconfirmed").is_some(),
+            "a pending receipt keeps Check"
+        );
+        assert!(w.try_find("insights-enable-confirm").is_none());
+        assert!(w.try_find("insights-enable-open").is_none());
+        assert!(w.try_find("insights-when-note").is_some(), "next run shown");
+        contained(w, width);
+    })
+    .unwrap();
+    shot(cx, h, dir, "lost-schedule-ack");
+
+    // Check again: still pending, still a read.
+    click(cx, h, "insights-check");
+    until(cx, h, |w, cx| {
+        s.write_count() > 0 && w.try_find("insights-unconfirmed").is_some() && ready(&view, cx)
+    });
+    status_reads_only(&s, &envelope);
+    retained(cx, &view, &envelope, State::Pending);
+
+    // Close and reopen, then restart: the pending attempt stays, nothing is resent.
+    escape(cx, h);
+    from_automations(cx, h, &view);
+    assert_eq!(progress(cx, &view), ("progress", Some("On".into())));
+    escape(cx, h);
+    let root = unmount(cx, m);
+    let m = mount(cx, &s, width, ThemeMode::Light, true, Some(root));
+    let (h, view) = (m.h, m.view.clone());
+    from_automations(cx, h, &view);
+    assert_eq!(progress(cx, &view), ("progress", Some("On".into())));
+    retained(cx, &view, &envelope, State::Pending);
+    status_reads_only(&s, &envelope);
+
+    // Later: host recovery accepted it. Check adopts that receipt; nothing is resent.
+    s.reply(
+        STATUS,
+        Reply::json(
+            200,
+            fx::status(&op, "accepted", fx::enabled(&op), "enabled", None),
+        ),
+    );
+    click(cx, h, "insights-check");
+    until(cx, h, |_, cx| {
+        ready(&view, cx)
+            && view
+                .read(cx)
+                .insights
+                .as_ref()
+                .is_some_and(|(p, _)| p.read(cx).probe_enable() == ("settled", Some("On".into())))
+    });
+    retained(cx, &view, &envelope, State::Accepted);
+    status_reads_only(&s, &envelope);
+    escape(cx, h);
+    let root = unmount(cx, m);
+
+    // Later still: the report chat became unusable. The words name no cause.
+    let m = mount(cx, &s, width, ThemeMode::Light, true, Some(root));
+    let (h, view) = (m.h, m.view.clone());
+    s.reply(
+        STATUS,
+        Reply::json(
+            200,
+            fx::status(
+                &op,
+                "accepted",
+                fx::enabled(&op),
+                "blocked",
+                Some("report_chat_unavailable"),
+            ),
+        ),
+    );
+    from_automations(cx, h, &view);
+    let words = crate::insights_enable::reason_text("report_chat_unavailable");
+    assert_eq!(progress(cx, &view), ("settled", Some(words.into())));
+    assert!(!words.contains("archived") && !words.contains("revoked"));
+    cx.update_window(h, |_, w, _| {
+        assert!(w.try_find("insights-enable-again").is_some());
+        contained(w, width);
+    })
+    .unwrap();
+    retained(cx, &view, &envelope, State::Accepted);
+    status_reads_only(&s, &envelope);
+    shot(cx, h, dir, "lost-schedule-blocked");
+    escape(cx, h);
+    let root = unmount(cx, m);
+    let _ = std::fs::remove_dir_all(root);
+    println!(
+        "insights enable lost schedule ACK 680 Light: pending+enabled On with Check kept, read-only Check twice, reopen/restart without replay, later accepted, later blocked with cause-neutral words passed"
     );
 }
 

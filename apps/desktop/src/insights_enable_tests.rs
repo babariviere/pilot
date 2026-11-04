@@ -180,13 +180,25 @@ fn status_belongs_to_the_exact_envelope() {
     let pending = f::status(
         &op,
         "pending",
-        json!({"phase":"chat_ready"}),
+        f::progress(&op, "chat_ready"),
         "partial",
         Some("schedule_unresolved"),
     );
     let s = status(&pending, &op).unwrap();
     assert_eq!(s.receipt, Receipt::Pending(Some(Phase::ChatReady)));
     assert_eq!(s.current, Current::Partial);
+    // An entered fresh-chat step has no committed chat yet.
+    let entered = f::status(
+        &op,
+        "pending",
+        f::progress(&op, "chat_pending"),
+        "unknown",
+        None,
+    );
+    assert_eq!(
+        status(&entered, &op).unwrap().receipt,
+        Receipt::Pending(Some(Phase::ChatPending))
+    );
     let enabled = status(
         &f::status(&op, "accepted", f::enabled(&op), "enabled", None),
         &op,
@@ -212,6 +224,107 @@ fn status_belongs_to_the_exact_envelope() {
     assert!(status(&elsewhere, &op).is_err());
 }
 
+/// The host's lost schedule ACK (insights-enable.test.ts): the rule was placed, the receipt
+/// stays pending at its `schedule_pending` marker and the present status is enabled.
+#[test]
+fn lost_schedule_ack_is_enabled_while_its_receipt_stays_pending() {
+    let pf = parse(&f::ready("project-A", "mission-A", f::TERRA)).unwrap();
+    let op = operation(pf.frozen.unwrap().text);
+    let lost = f::status(
+        &op,
+        "pending",
+        f::progress(&op, "schedule_pending"),
+        "enabled",
+        None,
+    );
+    let s = status(&lost, &op).unwrap();
+    assert_eq!(s.receipt, Receipt::Pending(Some(Phase::SchedulePending)));
+    assert_eq!(
+        (s.current, s.schedule_id.as_deref(), s.next_at),
+        (Current::Enabled, Some(f::SCHEDULE), Some(f::NEXT))
+    );
+    // Check adopts the receipt as it is: still pending, never an invented acceptance.
+    assert_eq!(
+        crate::insights::adopt(&op, &lost["receipt"]),
+        Outcome::Pending
+    );
+    // Reused chat and rule: an earlier entered marker can also see both resources.
+    let reused = f::status(
+        &op,
+        "pending",
+        f::progress(&op, "chat_ready"),
+        "enabled",
+        None,
+    );
+    assert_eq!(status(&reused, &op).unwrap().current, Current::Enabled);
+    // Later: recovery accepts it; later still, a revoke or edit blocks the same receipt.
+    let accepted = status(
+        &f::status(&op, "accepted", f::enabled(&op), "enabled", None),
+        &op,
+    )
+    .unwrap();
+    assert_eq!(
+        (accepted.receipt, accepted.current),
+        (Receipt::Accepted, Current::Enabled)
+    );
+    for receipt in ["pending", "accepted"] {
+        let result = if receipt == "pending" {
+            f::progress(&op, "schedule_pending")
+        } else {
+            f::enabled(&op)
+        };
+        let blocked = status(
+            &f::status(
+                &op,
+                receipt,
+                result,
+                "blocked",
+                Some("report_chat_unavailable"),
+            ),
+            &op,
+        )
+        .unwrap();
+        assert_eq!(
+            (blocked.current, blocked.reason.as_deref()),
+            (Current::Blocked, Some("report_chat_unavailable"))
+        );
+    }
+    // Contradictions and other identities stay refused.
+    type Mutation = Box<dyn Fn(&mut Value)>;
+    let other = "9a8b7c6d-5e4f-5a3b-8c2d-1e0f9a8b7c6d";
+    let mutations: Vec<Mutation> = vec![
+        Box::new(|v| v["receipt"]["result"] = Value::Null),
+        Box::new(|v| {
+            v["receipt"].as_object_mut().unwrap().remove("result");
+        }),
+        Box::new(|v| v["receipt"]["result"] = json!({"phase":"schedule_pending"})),
+        Box::new(|v| v["receipt"]["result"]["phase"] = json!("enabled")),
+        Box::new(|v| v["receipt"]["result"]["phase"] = json!("scheduled")),
+        Box::new(|v| v["receipt"]["result"]["sessionId"] = json!("another")),
+        Box::new(move |v| v["receipt"]["result"]["scheduleId"] = json!(other)),
+        Box::new(move |v| v["scheduleId"] = json!(other)),
+        Box::new(|v| v["scheduleId"] = Value::Null),
+        Box::new(|v| v["receipt"]["result"]["chat"] = Value::Null),
+        Box::new(|v| v["receipt"]["result"]["chat"]["sessionId"] = json!("another")),
+        Box::new(|v| v["receipt"]["result"]["chat"]["model"] = json!("anthropic/sol")),
+        Box::new(|v| v["receipt"]["payloadHash"] = json!("0".repeat(64))),
+        Box::new(move |v| v["receipt"]["operationId"] = json!(other)),
+        Box::new(|v| v["receipt"]["destination"]["lineageId"] = json!("other-lineage")),
+        Box::new(|v| v["receipt"]["targetId"] = json!("another")),
+        Box::new(|v| v["receipt"] = json!({"state":"unknown"})),
+        Box::new(|v| {
+            v["receipt"]["state"] = json!("rejected");
+            v["receipt"]["reason"] = json!("refused");
+        }),
+        Box::new(|v| v["sessionId"] = json!("another")),
+    ];
+    for (ix, mutate) in mutations.iter().enumerate() {
+        let mut v = lost.clone();
+        mutate(&mut v);
+        assert!(status(&v, &op).is_err(), "mutation {ix} must be refused");
+    }
+}
+
 #[test]
 fn backlog_choices_are_active_local_definitions_only() {
     let catalog =
@@ -231,6 +344,15 @@ fn backlog_choices_are_active_local_definitions_only() {
 #[test]
 fn reasons_stay_short_and_unknown_codes_stay_generic() {
     assert!(reason_text("model_unavailable").contains("Terra 6.1"));
+    // Several admission failures share this code: the words name no cause.
+    let unavailable = reason_text("report_chat_unavailable");
+    assert!(
+        ["archiv", "revok", "delet", "access"]
+            .iter()
+            .all(|cause| !unavailable.to_lowercase().contains(cause)),
+        "{unavailable}"
+    );
+    assert_ne!(unavailable, reason_text("setup_unavailable"));
     assert_eq!(
         reason_text("something_new"),
         reason_text("setup_unavailable")

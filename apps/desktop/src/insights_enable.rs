@@ -406,9 +406,29 @@ pub(crate) struct Status {
     pub(crate) next_at: Option<u64>,
     pub(crate) reason: Option<String>,
 }
+/// A pending receipt's step marker for exactly this command, as the host persists it:
+/// `{phase, sessionId, scheduleId, chat}`. Entered, not completed. Returns the phase and the
+/// rule identity the host reserved, which a present status must name unchanged.
+fn marker(result: &Value, op: &Operation) -> Result<(Phase, String), Failure> {
+    let phase = Phase::parse(&result["phase"])
+        .filter(|p| *p != Phase::Enabled)
+        .ok_or(INVALID)?;
+    let payload: Value = serde_json::from_str(&op.payload).map_err(|_| INVALID)?;
+    // A committed chat is required once the chat step is past; it is always this target.
+    let chat_ok = match &result["chat"] {
+        Value::Null => phase == Phase::ChatPending && result.get("chat").is_some(),
+        c => c["sessionId"] == op.target_id.as_str() && c["model"] == payload["model"],
+    };
+    if result["sessionId"] != op.target_id.as_str() || !chat_ok {
+        return Err(INVALID);
+    }
+    Ok((phase, id(&result["scheduleId"])?))
+}
 /// The status of exactly this operation; a receipt for any other bytes is malformed.
 pub(crate) fn status(value: &Value, op: &Operation) -> Result<Status, Failure> {
     let receipt = &value["receipt"];
+    // The rule identity this receipt's own result names, when it carries one.
+    let mut reserved = None;
     let receipt = match receipt["state"].as_str() {
         Some("unknown") if receipt.as_object().is_some_and(|o| o.len() == 1) => Receipt::Unknown,
         state => {
@@ -421,10 +441,18 @@ pub(crate) fn status(value: &Value, op: &Operation) -> Result<Status, Failure> {
                 return Err(INVALID);
             }
             match state {
-                Some("pending") => Receipt::Pending(Phase::parse(&receipt["result"]["phase"])),
+                Some("pending") => match receipt.get("result") {
+                    None | Some(Value::Null) => Receipt::Pending(None),
+                    Some(result) => {
+                        let (phase, schedule) = marker(result, op)?;
+                        reserved = Some(schedule);
+                        Receipt::Pending(Some(phase))
+                    }
+                },
                 Some("accepted")
                     if crate::insights::valid_enable_result(op, &receipt["result"]) =>
                 {
+                    reserved = receipt["result"]["scheduleId"].as_str().map(str::to_owned);
                     Receipt::Accepted
                 }
                 Some("rejected") => Receipt::Rejected(
@@ -442,16 +470,20 @@ pub(crate) fn status(value: &Value, op: &Operation) -> Result<Status, Failure> {
         Some("blocked") => Current::Blocked,
         _ => return Err(INVALID),
     };
-    if value["sessionId"] != op.target_id.as_str()
-        || (current == Current::NotFound) != (receipt == Receipt::Unknown)
-        || (current == Current::Enabled && receipt != Receipt::Accepted)
-    {
-        return Err(INVALID);
-    }
     let schedule_id = match value.get("scheduleId").ok_or(INVALID)? {
         Value::Null => None,
         s => Some(id(s)?),
     };
+    // Enabled is a present recheck of both resources. It needs a receipt whose own result
+    // names this rule: accepted, or pending with a host step marker after a lost schedule
+    // ACK. That pending receipt stays pending; nothing here accepts or finishes it.
+    if value["sessionId"] != op.target_id.as_str()
+        || (current == Current::NotFound) != (receipt == Receipt::Unknown)
+        || (current == Current::Enabled && reserved.is_none())
+        || (reserved.is_some() && schedule_id != reserved)
+    {
+        return Err(INVALID);
+    }
     Ok(Status {
         receipt,
         current,
@@ -472,7 +504,8 @@ pub(crate) fn reason_text(code: &str) -> &'static str {
         "model_ambiguous" => "More than one model is named Terra 6.1. Choose one.",
         "thinking_unavailable" => "The report chat's thinking level isn't available.",
         "existing_model_choice_differs" => "The report chat already uses another model.",
-        "report_chat_unavailable" => "The report chat is archived or its access was revoked.",
+        // Several admission checks lead here; the cause isn't known, so none is named.
+        "report_chat_unavailable" => "The report chat can't be used right now.",
         "multiple_report_chats" => "More than one report chat uses this backlog.",
         "multiple_recurring_rules" => "The report chat has more than one repeating automation.",
         "existing_rule_not_ready" => {
@@ -699,6 +732,8 @@ mod tests;
 pub(crate) mod fixture {
     use serde_json::{Value, json};
     pub(crate) const TARGET: &str = "5b0c3f3e-7d1a-5c2b-a1d4-0e9f8a7b6c5d";
+    /// The weekly rule identity the host reserves for this target.
+    pub(crate) const SCHEDULE: &str = "7c1d2e3f-4a5b-5c6d-a7e8-f90a1b2c3d4e";
     pub(crate) const TERRA: &str = "terra/terra-6.1";
     /// Friday 6 November 2026, 18:00 in Paris.
     pub(crate) const NEXT: u64 = 1_793_984_400_000;
@@ -773,15 +808,23 @@ pub(crate) mod fixture {
             r
         };
         json!({"receipt":receipt,"state":state,"sessionId":op.target_id,
-            "scheduleId": if state == "not_found" { Value::Null } else { json!("7c1d2e3f-4a5b-5c6d-a7e8-f90a1b2c3d4e") },
+            "scheduleId": if state == "not_found" { Value::Null } else { json!(SCHEDULE) },
             "nextAt": if state == "enabled" { json!(NEXT) } else { Value::Null },
             "reason": reason})
     }
     pub(crate) fn enabled(op: &crate::delivery_store::Operation) -> Value {
-        let model: Value = serde_json::from_str::<Value>(&op.payload)
-            .map(|p| p["model"].clone())
-            .unwrap_or_default();
-        json!({"phase":"enabled","sessionId":op.target_id,"scheduleId":"7c1d2e3f-4a5b-5c6d-a7e8-f90a1b2c3d4e",
-            "chat":chat(&op.target_id, model.as_str().unwrap_or(TERRA))})
+        progress(op, "enabled")
+    }
+    /// The host's persisted step progress for this envelope, exactly as its journal
+    /// stores it: `{phase, sessionId, scheduleId, chat}`. Before the chat step commits, the
+    /// chat is the payload's own (null for a fresh chat).
+    pub(crate) fn progress(op: &crate::delivery_store::Operation, phase: &str) -> Value {
+        let payload = serde_json::from_str::<Value>(&op.payload).unwrap_or_default();
+        let chat = match (&payload["chat"], phase) {
+            (Value::Null, "chat_pending") => Value::Null,
+            (Value::Null, _) => chat(&op.target_id, payload["model"].as_str().unwrap_or(TERRA)),
+            (c, _) => c.clone(),
+        };
+        json!({"phase":phase,"sessionId":op.target_id,"scheduleId":SCHEDULE,"chat":chat})
     }
 }

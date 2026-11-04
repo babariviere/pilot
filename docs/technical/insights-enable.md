@@ -143,8 +143,13 @@ substitute. A newer choice or a sent confirmation discards late preflight replie
 existing writer's `insights` slot `enable:<missionId>`, persisted before the single POST. **Check** posts
 the retained envelope to the status route and resends the same bytes only when the receipt is `unknown`;
 pending/accepted/rejected receipts are never resent. "On" requires passive status `enabled`. Automations
-off links to Settings → Chats and switches nothing. Mounted probe: `cargo test --features native-probes
---test insights_enable` (synthetic Local only).
+off links to Settings → Chats and switches nothing. After a lost schedule ACK the host reports a pending
+receipt at its `schedule_pending` marker with status `enabled`. Native shows On but keeps the attempt
+pending with Check; it never treats that as accepted or as a completed report. `enabled` pairs only with an
+accepted result or a full host marker naming this target, its model and the status's exact `scheduleId`;
+a marker-less pending, unknown or rejected receipt beside `enabled` is malformed. `report_chat_unavailable`
+covers several admission failures, so its words name no cause. Mounted probe: `cargo test --features
+native-probes --test insights_enable` (synthetic Local only).
 
 ## Source and verification
 
