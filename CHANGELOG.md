@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.116.1](https://github.com/babariviere/pilot/compare/v1.116.0...v1.116.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* **desktop:** defer reload menu refresh past viewer updates ([182bd50](https://github.com/babariviere/pilot/commit/182bd503e1a725db1145603b9268d76824999cd5))
+
 ## [1.116.0](https://github.com/babariviere/pilot/compare/v1.115.0...v1.116.0) (2026-11-04)
 
 
