@@ -11,13 +11,30 @@ end-to-end availability.
 
 ## Native routes
 
-The GPUI app uses these routes from two existing surfaces. An active mission's overview **More** menu
-offers setup: it discloses the scope and the selected model before the one create operation. An
-Insights chat's header opens **Insights access**: passive status, the linked mission via ordinary
-mission navigation, revocation and finding decisions. Each action is saved by the app's single
-private writer before it is sent; an unconfirmed one shows Check, which looks the receipt up and
-resends the same bytes only if Local never saw it. Reads and decisions never start the report chat's
-worker. The report chat accepts ordinary messages; pilotd rechecks its grant at admission.
+The GPUI app reuses existing mission/chat surfaces:
+
+- An active mission's overview **More → Set up Insights chat…** opens compact setup with an explicit
+  model choice and read disclosure before the create operation. Setup is not a history review.
+- The report header's **Insights backlog** button navigates directly to the linked mission's
+  **Tasks** tab. Finding rows show lifecycle chips and use their row menus to open explicit decision
+  confirmation. Approval starts no implementation.
+- The report chat's **… → Insights settings…** opens compact status/model/access settings, expandable
+  **Reads**, revocation confirmation and an **Open backlog** fallback. Findings are not listed in
+  this sheet.
+
+Each action is saved by the app's single private writer before it is sent. An unconfirmed action
+shows **Check**, which looks up the exact operation receipt and resends identical bytes only if
+Local reports the operation unseen. Pending/Unknown, close/reopen and ordinary GET status are not
+proof of rejection or permission to repeat an effect. Reads and decisions never start the report
+chat's worker. The report chat accepts ordinary messages; pilotd rechecks its grant at admission.
+
+Native finding decoration/decisions require a cached, non-draft, unarchived report chat linked to
+that exact mission; otherwise rows remain ordinary tasks. The Tasks findings map and the separate
+header-count read each fetch at most ten pages of twenty summaries (200 total per read), not the
+entire backlog. The header count is cached, refreshed after local decisions/settings, and counts
+Proposed findings only; its badge displays at most 99. Neither counts nor absent chips certify a
+complete/current backlog. The unqualified count presentation has been flagged for native follow-up.
+See [native verification](insights-review.md#native-surface-verification-2026-11-04) for actual probe limits.
 
 `GET /api/hello` advertises `capabilities.insights: 1` only with missions, native capability
 authentication and lineage identity. All Insights reads are passive, GET-only and `Cache-Control:

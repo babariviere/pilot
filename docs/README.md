@@ -20,7 +20,7 @@ Short guides for the desktop app. Start with [installation and setup](getting-st
 | Sleep, offline work, and closed-lid mode        | [Energy and connectivity](energy.md)          |
 | Failures, diagnostics, and updates              | [Troubleshooting](troubleshooting.md)         |
 
-[Insights](insights.md) covers the report chat's setup, access and finding decisions; weekly runs aren't active yet.
+[Insights](insights.md) covers report-chat setup, Tasks-tab decisions and access settings; weekly activation is pending.
 
 Pilot runs work locally. Remote devbox execution is retired; retained history and
 drafts are not migrated or submitted elsewhere.

@@ -4,7 +4,8 @@
 
 Trusted host seam, recurring fixed-chat dispatch and synthetic verification only. No real grant,
 weekly schedule, private-history read, selected-provider review or fix is activated by this code.
-Native setup/lifecycle confirmation is described separately. Read the
+Native setup/lifecycle confirmation uses the delivered Tasks-tab and compact settings surfaces;
+see [native verification](#native-surface-verification-2026-11-04). Read the
 [history and backlog boundary](insights-history.md) first.
 
 ## Dispatch contract
@@ -80,14 +81,11 @@ partial report persistence, exact mission binding, Stop and daemon reload withou
 Kernel role tests separately verify the closed tool list. None is live weekly activation or semantic
 review-quality/benefit verification.
 
-The schedule regression selection also exposes two pre-existing creation-contract failures at
-`schedules-create-contract.test.ts:206,235`: cached rows contain `recurrence: undefined`, whereas HTTP
-JSON omits it. Both reproduce when loading the exact parent `schedules.ts` from `4a95d13c`; those
-unrelated assertions and the known session idle-drain/typecheck failures below remain unchanged.
-The reconciled 16-file scheduler/review/kernel Node selection passed 297/300, with only those three
-baseline failures. All new scheduler and admitted-review cases passed. Scoped Biome and whitespace
-checks passed; typecheck still reports only `workspace-setup-manual.test.ts:87`. No native UI change,
-production performance measurement, private-history access or live recurring activation is claimed.
+An earlier 16-file scheduler/review/kernel selection passed 297/300. Its failures were the session
+idle-drain assertion and two creation-contract recurrence assertions: cached rows retain
+`recurrence: undefined`, whereas HTTP JSON omits it. The latter reproduced with exact parent
+`schedules.ts` from `4a95d13c`. Current HTTP fixtures fail earlier, so those recurrence assertions
+were **not exercised** in the final selection; see [current checks](#synthetic-checks-and-limits).
 
 ## Durable source context
 
@@ -146,8 +144,8 @@ chats/AGENTS.md/checks or changes models, budgets, grants or schedules.
 
 ### Integrated daemon/security review (2026-11-04)
 
-These are isolated synthetic checks, not activation. The native layout is being revised separately;
-the earlier access-dialog probe is evidence for that earlier surface, not final Tasks-tab acceptance.
+These are isolated synthetic checks, not activation. The final reconciliation consumes the landed
+Tasks-tab native delivery and reruns the explicit selections below against the integrated tree.
 No real grant, private-history access, provider turn or recurring activation was used.
 
 | Boundary | Evidence and result |
@@ -170,19 +168,51 @@ variables. The relevant selections are:
 - `diagnostic-context.test.ts` + `operation-journal.test.ts` in `packages/daemon/src`.
 - `node --test --test-force-exit --test-name-pattern='Insights|insights' packages/daemon/src/sessions.test.ts`.
 
-These five selections passed 97/97 tests (17 store/review, 34 scheduler, 3 kernel-role,
-12 reader/journal, 31 Insights session/API cases). Scoped Biome and whitespace checks pass.
-Native Tasks-tab acceptance and final user-facing guidance remain pending separately.
+These five selections passed 97/97 tests again on the final integrated tree (17 store/review,
+34 scheduler, 3 kernel-role, 12 reader/journal, 31 Insights session/API cases). The native change
+alters no daemon/protocol contract. Concurrent changes to shared session/server/mission code are
+covered by these reruns, not assumed harmless from a native-only diff. User guidance now describes
+Tasks row decisions, header backlog navigation and
+compact settings rather than the superseded findings-in-access-dialog layout. Whitespace and local
+documentation links/anchors pass. The session/API fixture emits a MaxListenersExceededWarning;
+its passing assertions do not establish listener-leak absence. An initial rerun could not resolve
+workspace packages before dependency bootstrap; all five selections then ran successfully.
 
-Current-main baseline checks remain separate from feature-only passes. Typecheck fails at
-`workspace-setup-manual.test.ts:87` (undefined assertion predicate); the session reentrant idle-drain
-assertion still fails. Schedule HTTP/passive/creation-contract fixtures currently fail earlier at
-`server.ts:2544`: their old SessionManager fakes omit `piReload.onChange`. This reproduces before
-these verification edits and masks the previously reproduced cached `recurrence: undefined` versus
-HTTP omission failures. The assertions and unrelated fixtures are unchanged. Desktop registration
-also fails for `insights` plus six unrelated targets; the Insights portion is routed to native UI
-ownership. Scoped Biome reports the existing schema-version notice. These are not green full-suite
-or runtime-security claims.
+Current-main baseline checks remain separate from feature-only passes. `pnpm typecheck` now passes:
+the earlier `workspace-setup-manual.test.ts:87` predicate error was repaired upstream. The explicit
+session reentrant idle-drain assertion still fails. Schedule HTTP/passive/creation-contract fixtures
+still fail earlier at `server.ts:2551`: their old SessionManager fakes omit `piReload.onChange`.
+This masks the previously reproduced cached `recurrence: undefined` versus HTTP omission failures.
+The assertions and unrelated fixtures are unchanged here. Desktop registration now includes both
+Insights targets; its focused Python check still fails for six unrelated targets: `application_quit`,
+`archive`, `automation_hooks`, `chat_update`, `database_access`, `lost_ack`. These are not green
+full-suite or runtime-security claims.
+
+### Native surface verification (2026-11-04)
+
+Reused the native owner's immutable delivery evidence for the final Tasks-tab tree, rather than
+rerunning unaffected native builds for documentation changes. The focused wrapper was
+`check-scoped.py --unit insights --test insights --test insights_native --lint`: ten unit tests,
+both hidden probes and clippy with warnings denied passed. The owner inspected screenshots against
+the approved mockup. The earlier nine-test/access-dialog probe is historical evidence only.
+
+- `insights_native` mounts the real LocalViewer with synthetic HTTP. Its full interaction flow is
+  **1100 light only**: report header count/backlog, settings from the chat's More menu, mission Tasks
+  finding chips and row decisions, lost-ACK Unknown/no-replay/Check with identical operation bytes,
+  revocation Unknown/Pending/Accepted, explicit-model setup and retained composer draft.
+- 680 light/dark and 1100 dark are **render-only**, not repeated full interaction flows. Earlier
+  native checks exercised focus/Escape, long/CJK/emoji content and passive opening; these do not
+  certify all those interactions on the redesigned surface at every size/theme.
+- The standalone `insights` probe checks panel pixels; it is not the integrated navigation flow.
+  The integrated probe opens the report chat through `v.open`, not a sidebar click.
+- Finding controls require the report chat in the cached list, linked to the exact mission and
+  unarchived. Tasks findings and the separate passive header-count read are each capped at 200
+  summaries; the badge clamps at 99. They are not complete backlog counts. Unqualified count copy
+  is flagged to native ownership, not changed by daemon/documentation verification.
+
+Hidden TestPlatform evidence is not OS input, IME, VoiceOver, live Local, Linux, real model/report
+quality or realized-benefit acceptance. Confirm real timing, time zone, model and coverage/cost
+settings separately before the first authorized review or weekly activation.
 
 Coverage remains bounded: scheduled dispatch uses one inventory page, two history pages and four
 entries per page. Inventory is mutable; boundary/stream receipts are not storage-incarnation proof;
