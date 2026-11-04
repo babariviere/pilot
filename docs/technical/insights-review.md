@@ -87,6 +87,44 @@ idle-drain assertion and two creation-contract recurrence assertions: cached row
 `schedules.ts` from `4a95d13c`. Current HTTP fixtures fail earlier, so those recurrence assertions
 were **not exercised** in the final selection; see [current checks](#synthetic-checks-and-limits).
 
+## Fixed preset and native seam
+
+`packages/daemon/src/insights-defaults.ts` centralizes the typed initial preset. Scheduled review
+dispatch copies its unchanged conservative bounds; no existing recurrence or model is rewritten.
+The existing calendar computes Friday 18:00 Europe/Paris occurrences and previous-occurrence windows,
+including 167-hour spring and 169-hour autumn weeks. `review_context.budget` carries the advisory
+$5/report initial assumption, `pricing:"unknown"`, `spendUsd:null` and a no-cap/no-spend-approval note.
+This seam does not measure costs; known costs from other evidence must be qualified separately.
+It does not add a budget gate, authorize spending or change models/limits.
+
+`GET /api/insights/defaults?projectId=…` returns `InsightsSetupDefaults` from the protocol:
+`{projectId, defaults:{recurrence, requestedModel, scope, bounds, budget, activationRequired:true}, model}`.
+It requires an existing project (missing parameter: 400, unknown project: 404), accepts only GET
+(otherwise 405), and sends `Cache-Control: no-store`. It reads only the existing scoped model catalog,
+not history, grants, workers or schedules. Catalog failures return a sanitized unavailable state.
+
+`model` is `{state:"available",id}` for a unique configured display-name match to `Terra 6.1`
+(case/whitespace normalized), `{state:"ambiguous",ids}` for distinct matching IDs, or
+`{state:"unavailable",reason:"not_found"|"catalog_unavailable"}`. IDs come verbatim from the
+authenticated project-scoped catalog. There is no fuzzy ID inference, provider preference, price
+selection, Pi/project-default substitution or Sol fallback. This metadata is not model admission;
+normal create admission still validates the submitted choice.
+
+Remaining native work: `apps/desktop/src/insights_view.rs`, `Panel::read_catalog`, currently preselects
+the Pi catalog default for setup. Fetch this passive preset for `Scope::Setup`'s project, suggest its
+resolved ID only before a user choice, and keep missing/ambiguous state visible instead of falling
+back. `Panel::setup_request` must continue freezing an explicit exact `model` into the native-confirmed
+`insights-create` payload; resolving an omitted model during journal replay would break immutable
+intent. The recurrence suggestion belongs in the existing Automation editor's explicit creation flow,
+not startup or an automatic schedule. Existing choices, grants and schedules must not migrate.
+No Rust/UI changes, editable settings, real provider resolution or real activation are included here.
+
+Synthetic coverage is in `insights-defaults.test.ts`, `insights-review.test.ts` and
+`schedules-insights.test.ts`: passive metadata reads and sanitized failures, exact/unavailable/ambiguous
+model matching, explicit-choice preservation, advisory unknown costs, capped archived cross-project
+sampling and both Paris DST windows. These checks do not certify real-provider availability or
+semantic review quality.
+
 ## Durable source context
 
 `missions.sqlite` retains run reservations, prepared sanitized packets, inventory continuation,

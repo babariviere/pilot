@@ -13,6 +13,7 @@ import type {
 	SpawnRequest,
 } from "@pilot/protocol";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
+import { INSIGHTS_INITIAL_DEFAULTS } from "./insights-defaults.ts";
 import type { MissionStore } from "./missions.ts";
 import type { ProjectStore } from "./projects.ts";
 import { RuntimeBackground } from "./runtime-background.ts";
@@ -304,7 +305,7 @@ export class ScheduleService {
 							runId: randomUUID(),
 							windowStart: new Date(calendar.latest(due - 1)).toISOString(),
 							windowEnd: new Date(due).toISOString(),
-							bounds: { inventoryPages: 1, historyPages: 2, entriesPerPage: 4 },
+							bounds: { ...INSIGHTS_INITIAL_DEFAULTS.bounds },
 						},
 					}
 				: undefined;

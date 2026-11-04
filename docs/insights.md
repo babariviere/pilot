@@ -48,5 +48,25 @@ access, not the saved message as review instructions. Existing pause/resume cont
 Stopped, interrupted or uncertain reviews appear as schedule failures and are never resent after
 restart. A later weekly occurrence is a distinct review, not proof that an older gap was resolved.
 
+## Fixed initial defaults
+
+The backend now offers a fixed preset: Friday **18:00 Europe/Paris**, **Terra 6.1**, and a bounded
+weekly sample across locally admitted projects, including archived chats. Source chats stay read-only.
+Sampling keeps one inventory page, two history pages and four entries per page. This is partial
+coverage, not a scan of every chat; the dates label review context, not a history date filter.
+
+**Approximately $5 per report** is an initial assumption, not a hard cap or approved spend. The user
+confirmed approximate budgeting, but its period and source scope still need activation confirmation.
+Unknown pricing or spend stays unknown, never zero. Nothing switches models or budgets automatically.
+
+Terra is suggested only when one configured, available model in the selected project's scope has
+the display name **Terra 6.1**. Missing or ambiguous matches stay unresolved, with no guessed ID or
+Sol fallback. Explicit model choices and existing schedules are unchanged.
+
+The passive backend preset is shipped; native preset wiring and editable settings are follow-ups.
+The current setup still uses its existing model picker, and Automations still needs explicit entry.
+Reading defaults, opening status or restarting the daemon grants no access and starts no review or
+schedule. Native grant confirmation and real-review/schedule activation remain separate approvals.
+
 See the [permission contract](technical/insights-history.md) and
 [verification and limits](technical/insights-review.md#synthetic-checks-and-limits) for technical detail.

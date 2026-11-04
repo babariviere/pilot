@@ -12,6 +12,7 @@ import type {
 import { Conflict } from "./errors.ts";
 import type { InsightsAdmission } from "./insights-admission.ts";
 import type { InsightsDb } from "./insights-backlog.ts";
+import { insightsReviewBudget } from "./insights-defaults.ts";
 
 export const INSIGHTS_REVIEW_SCHEMA = `
 CREATE TABLE IF NOT EXISTS insights_runs (
@@ -506,6 +507,7 @@ export class InsightsReviews {
 			this.db.run("INSERT OR IGNORE INTO insights_review_reads(run_seq,cursor) VALUES (?,?)", row.seq!, cursor);
 		return {
 			run: this.public(row),
+			budget: insightsReviewBudget(),
 			evidence: parts[cursor] ?? null,
 			nextCursor: cursor + 1 < parts.length ? cursor + 1 : null,
 			readerPages: packet.pages.length,

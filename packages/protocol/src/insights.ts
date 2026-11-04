@@ -1,3 +1,39 @@
+import type { ScheduleRecurrence } from "./schedules.ts";
+
+/** Fixed initial suggestions, never a grant, approved spend or enabled schedule. */
+export interface InsightsInitialDefaults {
+	recurrence: Readonly<ScheduleRecurrence>;
+	requestedModel: string;
+	scope: {
+		host: "local";
+		projects: "admitted";
+		includeArchived: true;
+		sourceAccess: "read_only";
+		coverage: "partial";
+	};
+	bounds: Readonly<InsightsReviewDispatch["bounds"]>;
+	budget: {
+		usd: number;
+		period: "report";
+		enforcement: "advisory";
+		basis: "initial_assumption";
+	};
+	activationRequired: true;
+}
+
+/** Match configured display names only; never infer a provider/model ID or substitute a default. */
+export type InsightsInitialModelResolution =
+	| { state: "available"; id: string }
+	| { state: "unavailable"; reason: "not_found" | "catalog_unavailable" }
+	| { state: "ambiguous"; ids: string[] };
+
+/** GET /api/insights/defaults?projectId=…; passive suggestions for explicit native setup. */
+export interface InsightsSetupDefaults {
+	projectId: string;
+	defaults: InsightsInitialDefaults;
+	model: InsightsInitialModelResolution;
+}
+
 /** Finding state is not task execution status or permission to execute. */
 export type InsightsLifecycle =
 	| "proposed"

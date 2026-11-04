@@ -77,6 +77,7 @@ import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import type { GitHubImportService } from "./github-import.ts";
 import type { GitHubSetupService } from "./github-setup.ts";
+import { insightsSetupDefaults } from "./insights-defaults.ts";
 import { admitInsightsOperation, insightsFindingsPage, isInsightsOperation } from "./insights-native.ts";
 import type { LiveUpdate, LiveUpdateIdentity, LiveUpdateService, LiveUpdateTarget } from "./live-update.ts";
 import { MachineInformationReader } from "./machine.ts";
@@ -901,6 +902,14 @@ export function createDaemonServer(
 			const session = sessions.get(parts[2]!);
 			if (!session) throw new NotFound("Unknown session");
 			return json(res, 200, await repositories.file(session.cwd, url.searchParams.get("path") ?? ""));
+		}
+		if (parts[1] === "insights" && parts[2] === "defaults" && parts.length === 3) {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
+			const projectId = url.searchParams.get("projectId");
+			if (!projectId) throw new HttpError(400, "projectId is required");
+			const project = projects.require(projectId);
+			return json(res, 200, await insightsSetupDefaults(project.id, project.path, models));
 		}
 		if (parts[1] === "insights" && parts[2] === "sessions") {
 			res.setHeader("cache-control", "no-store");

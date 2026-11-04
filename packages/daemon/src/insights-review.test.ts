@@ -13,6 +13,7 @@ import type {
 } from "@pilot/protocol";
 import { diagnosticContextResponse } from "./diagnostic-context.ts";
 import type { InsightsAdmission } from "./insights-admission.ts";
+import { INSIGHTS_INITIAL_DEFAULTS } from "./insights-defaults.ts";
 import { MissionStore } from "./missions.ts";
 
 const host = { hostId: "local", daemonId: "synthetic", lineageId: "synthetic" };
@@ -165,6 +166,43 @@ async function finish(f: ReturnType<typeof fixture>, request: InsightsReviewDisp
 	);
 	return input;
 }
+
+test("initial weekly sample bounds cross-project archives and exposes advisory unknown costs", async (t) => {
+	const f = fixture(t),
+		calls: InsightsHistoryRequest[] = [];
+	const ids = Array.from({ length: 9 }, () => randomUUID());
+	const request = { ...dispatch(), bounds: { ...INSIGHTS_INITIAL_DEFAULTS.bounds } };
+	assert.deepEqual(calls, [], "import/construction does not discover or read sources");
+	assert.equal(await f.reviews.status(f.admission, request.runId), null);
+	assert.deepEqual(calls, [], "status never prepares a review");
+	await f.reviews.reserve(f.admission, request);
+	assert.deepEqual(calls, [], "reservation alone reads no source");
+	await f.reviews.prepare(
+		f.admission,
+		request,
+		reader(ids, calls, (id, before) => history(id, [1, 2, 3, 4], before)),
+	);
+	assert.deepEqual(calls, [
+		{ action: "chats", limit: 4 },
+		{ action: "history", sessionId: ids[0], limit: 4 },
+		{ action: "history", sessionId: ids[1], limit: 4 },
+	]);
+	const context = (await f.store.insights.call(f.admission, { action: "review_context" })) as {
+		budget: { usd: number; period: string; enforcement: string; spendUsd: null; pricing: string; note: string };
+		evidence: { projectId: string };
+		gaps: string[];
+	};
+	assert.equal(context.evidence.projectId, "foreign");
+	assert.equal(context.budget.usd, 5);
+	assert.equal(context.budget.period, "report");
+	assert.equal(context.budget.enforcement, "advisory");
+	assert.equal(context.budget.pricing, "unknown");
+	assert.equal(context.budget.spendUsd, null);
+	assert.match(context.budget.note, /not a hard cap or approved spend/);
+	assert.match(context.gaps.join(" "), /not comprehensive coverage/);
+	assert.match(context.gaps.join(" "), /Inventory has further pages/);
+	await finish(f, request);
+});
 
 test("weekly sources carry exclusive cursors through boundary probes and store reopen", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "insights-reviews-"));

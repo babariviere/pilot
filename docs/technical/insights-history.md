@@ -40,6 +40,9 @@ See [native verification](insights-review.md#native-surface-verification-2026-11
 authentication and lineage identity. All Insights reads are passive, GET-only and `Cache-Control:
 no-store`; they never start workers or save metadata:
 
+- `GET /api/insights/defaults?projectId=…` returns a passive fixed setup preset and unique exact
+  configured-model name resolution, or unavailable/ambiguous state. It reads scoped model metadata
+  only, never source history or grants. See the [preset/native seam](insights-review.md#fixed-preset-and-native-seam).
 - `GET /api/insights/sessions/:id` returns `{sessionId, enabled, revision, projectId, missionId,
   setupPending, archived, available, disclosure:"insights-history-v1"}`. Ordinary/unknown chats return
   404 `{error:"not_insights"}`. No private paths, home or setup digest are disclosed.

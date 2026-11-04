@@ -4,17 +4,24 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
-import type { InsightsReviewDispatch, InsightsReviewRun, InsightsStatus, ScheduleRequest } from "@pilot/protocol";
+import type {
+	InsightsReviewDispatch,
+	InsightsReviewRun,
+	InsightsStatus,
+	ScheduleRecurrence,
+	ScheduleRequest,
+} from "@pilot/protocol";
+import { INSIGHTS_INITIAL_DEFAULTS } from "./insights-defaults.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
 
 const ms = Date.parse;
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, options: { now?: string; recurrence?: ScheduleRecurrence } = {}) {
 	const dir = await mkdtemp(join(tmpdir(), "schedule-insights-"));
 	const file = join(dir, "schedules.sqlite");
 	const id = randomUUID();
 	const home = { daemonId: "d", lineageId: "l" };
-	let now = ms("2026-11-02T08:00Z"),
+	let now = ms(options.now ?? "2026-11-02T08:00Z"),
 		working = false,
 		enabled = true,
 		paused = false,
@@ -88,7 +95,7 @@ async function fixture(t: TestContext) {
 		title: "Weekly review",
 		trigger: "recurring",
 		expectedHome: home,
-		recurrence: { every: "week", weekday: 1, time: "09:00", timeZone: "UTC" },
+		recurrence: options.recurrence ?? { every: "week", weekday: 1, time: "09:00", timeZone: "UTC" },
 		target: { kind: "message", sessionId: id, message: "Review the week" },
 	};
 	const row = await service.create(request);
@@ -164,6 +171,24 @@ async function fixture(t: TestContext) {
 			await settle();
 		},
 	};
+}
+
+for (const [start, end, hours] of [
+	["2026-03-27T17:00:00.000Z", "2026-04-03T16:00:00.000Z", 167],
+	["2026-10-23T16:00:00.000Z", "2026-10-30T17:00:00.000Z", 169],
+] as const) {
+	test(`initial Paris recurrence keeps Friday 18:00 and ${hours}-hour DST window`, async (t) => {
+		const f = await fixture(t, { now: start, recurrence: { ...INSIGHTS_INITIAL_DEFAULTS.recurrence } });
+		assert.equal(f.calls.length, 0, "load/start/status never invent a review occurrence");
+		assert.equal(f.messages, 0);
+		await f.due(end);
+		assert.equal(f.calls.length, 1);
+		assert.equal(f.calls[0].windowStart, start);
+		assert.equal(f.calls[0].windowEnd, end);
+		assert.equal((ms(end) - ms(start)) / 3_600_000, hours);
+		assert.deepEqual(f.calls[0].bounds, INSIGHTS_INITIAL_DEFAULTS.bounds);
+		assert.deepEqual(f.store.require(f.row.id).recurrence, INSIGHTS_INITIAL_DEFAULTS.recurrence);
+	});
 }
 
 test("weekly fixed-chat dispatch reserves exact identity durably and never uses generic send", async (t) => {
