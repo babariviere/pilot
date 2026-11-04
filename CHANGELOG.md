@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.115.0](https://github.com/babariviere/pilot/compare/v1.114.0...v1.115.0) (2026-11-04)
+
+
+### Features
+
+* **desktop:** review decision withdrawals and show retired decisions ([0760bda](https://github.com/babariviere/pilot/commit/0760bda4f4f988f1147c95db44299b328a0d1a51))
+* **insights:** add fixed initial review defaults ([fe2209b](https://github.com/babariviere/pilot/commit/fe2209bd63aaef4bf98589fe97528d33097ee353))
+
 ## [1.114.0](https://github.com/babariviere/pilot/compare/v1.113.1...v1.114.0) (2026-11-04)
 
 
