@@ -293,3 +293,49 @@ async fn link_reply_is_confirmed_only_by_the_linked_item() {
 async fn link_once(client: &reqwest::Client, s: &Server, tracked: &Tracked) -> Linked {
     link(client, &s.options, "chat-1", tracked).await
 }
+
+#[tokio::test]
+async fn a_lost_creation_recovers_automatically_then_links_once() {
+    let s = server();
+    s.reply("POST", "/api/operations", Reply::status(None, Value::Null));
+    let temp = Temp::new();
+    let (client, updates) = start(&s, &temp).await;
+    create(&client, draft(Some(tracked())));
+    let creates = || {
+        s.state
+            .lock()
+            .unwrap()
+            .writes()
+            .into_iter()
+            .filter(|(_, p, _)| p == "/api/operations")
+            .map(|(_, _, b)| b)
+            .collect::<Vec<_>>()
+    };
+    wait(|| creates().len() == 1).await;
+    assert!(
+        patches(&s).is_empty(),
+        "no link while the creation is unconfirmed"
+    );
+    // The courier retries the same captured operation by itself; no Check, no new intent.
+    s.clear("POST", "/api/operations");
+    let state = until(&updates, "linked", |s| s.linked.contains_key("m1")).await;
+    let sent = creates();
+    assert!(sent.len() >= 2);
+    assert!(
+        sent.iter().all(|b| b == &sent[0]),
+        "the same envelope every time"
+    );
+    let chat = state.book.as_ref().unwrap().drafts["new:slot"]
+        .created
+        .clone()
+        .unwrap();
+    assert_eq!(chat, sent[0]["targetId"].as_str().unwrap());
+    assert_eq!(
+        patches(&s),
+        [(
+            "/api/tracked-items/m1".to_owned(),
+            json!({"sessionId":chat,"start":true})
+        )]
+    );
+    close(client, updates).await;
+}

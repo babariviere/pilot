@@ -152,8 +152,10 @@ at most 500 messages).
   the message, no duplicate while it sends, Open chat and Start another chat for a linked
   message, Don't link to Slack, and refusal for a removed project.
 - `interaction::links::tests`: link only after accepted creation, never in the create
-  request; lost reply kept, resent after restart only to the same daemon; gone item
-  dropped; Close not held by a slow link. `delivery_store::tests`: the link is saved
+  request; a lost creation reply recovers through the courier's automatic retry of the
+  same envelope, then links once; a lost link reply is kept and resent after restart, only
+  to the same daemon; gone item dropped; Close not held by a slow link.
+  `delivery_store::tests`: the link is saved
   with the acceptance, survives reopen and retirement, is fixed while sending, and is
   refused for another project.
 
