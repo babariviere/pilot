@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.113.0](https://github.com/babariviere/pilot/compare/v1.112.0...v1.113.0) (2026-11-04)
+
+
+### Features
+
+* **pilot:** reload pi configuration from the daemon menu ([574098a](https://github.com/babariviere/pilot/commit/574098ae7fae77d17db7df9894e072535cda5a59))
+
+
+### Bug Fixes
+
+* **release:** avoid stdin-only flags in runtime smoke workers ([d42b060](https://github.com/babariviere/pilot/commit/d42b06075546cd98cb4344937d6b8c190f8fb3fb))
+
 ## [1.112.0](https://github.com/babariviere/pilot/compare/v1.111.0...v1.112.0) (2026-11-04)
 
 
