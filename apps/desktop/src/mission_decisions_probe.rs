@@ -365,5 +365,258 @@ pub fn run_mission_decisions_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
         }
     }
+    run_withdrawal(cx);
     crate::local_view::mission_decisions_root_probe::run(cx);
+}
+
+/// Retired decisions and withdrawal review: narrow/wide, keyboard, long reasons,
+/// one exact POST per response, lost ACK and stale fences. Hidden synthetic window.
+fn run_withdrawal(cx: &mut HeadlessAppContext) {
+    let reason = "Practice changed; this no longer applies. 私 👩‍💻 ".repeat(24);
+    for width in [520., 1100.] {
+        let server = Server::start();
+        let mut detail = f::detail("mission-A");
+        detail["decisions"] = json!([
+            {"id":"d1","number":1,"audience":"all","text":"Current successor wording."},
+            {"id":"d2","number":2,"audience":"all","text":"Original withdrawn wording stays readable.","withdrawn":{"at":5,"reason":reason,"proposalId":"p0"}},
+            {"id":"d3","number":3,"audience":"reference","text":"Replaced wording.","replacement":{"id":"d1","number":1,"at":6}},
+            {"id":"d4","number":4,"audience":"reference","text":"Replaced by a decision outside this view.","replacement":{"id":"hidden","number":40,"at":7}},
+            {"id":"d5","number":5,"audience":"all","text":"Active target of a withdrawal."},
+            {"id":"d6","number":6,"audience":"all","text":"Second target."},
+            {"id":"d7","number":7,"audience":"all","text":"Third target."}
+        ]);
+        detail["decisionProposals"] = json!([
+            {"id":"p3","decisionId":"d5","kind":"withdraw","operationId":"op-3","reason":reason,"status":"pending"},
+            {"id":"p4","decisionId":"d6","kind":"withdraw","reason":"Legacy proposal without an operation ID","status":"pending"},
+            {"id":"p5","decisionId":"d7","kind":"withdraw","reason":"Stays pending","status":"pending"},
+            {"id":"p6","decisionId":"d7","kind":"withdraw","reason":"Rejected","status":"rejected"}
+        ]);
+        server.reply("/api/missions/mission-A", Reply::json(200, detail.clone()));
+        server.reply(
+            "POST /api/missions/mission-A/decision-proposals/p3/accept",
+            Reply::json(200, json!({"id":"p3","decisionId":"d5","kind":"withdraw","status":"accepted","reason":reason})),
+        );
+        // p4's response is lost after the daemon receives it.
+        server.reply(
+            "POST /api/missions/mission-A/decision-proposals/p4/reject",
+            Reply::json(0, json!({})),
+        );
+        let (h, view) = cx
+            .update(|cx| {
+                gpui_kit::open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                            Default::default(),
+                            size(px(width), px(1000.)),
+                        ))),
+                        show: false,
+                        focus: false,
+                        ..Default::default()
+                    },
+                    cx,
+                    |w, cx| {
+                        let view = cx.new(Browser::new);
+                        view.update(cx, |v, cx| {
+                            v.options(server.options.clone());
+                            v.catalog = Some(Arc::new(
+                                crate::mission_browser::catalog(&f::catalog()).unwrap(),
+                            ));
+                            v.catalog_current = true;
+                            v.sync(
+                                Input {
+                                    route: Some(Route::Detail(f::key("mission-A"))),
+                                    filter: None,
+                                    projects: Arc::new(vec![]),
+                                    chats: Arc::new(vec![]),
+                                    online: true,
+                                    loaded: true,
+                                },
+                                w,
+                                cx,
+                            );
+                        });
+                        view
+                    },
+                )
+            })
+            .unwrap();
+        until(cx, h, &view, |v| v.detail.is_some() && !v.busy);
+        click(cx, h, "mission-decisions-open");
+        cx.update_window(h, |_, w, _| {
+            // Retired rows leave current guidance; their labels wait behind a disclosure.
+            for id in ["d1", "d5", "d6", "d7"] {
+                assert!(w.try_find(format!("decisions-row-{id}")).is_some());
+            }
+            for id in ["d2", "d3", "d4"] {
+                assert!(w.try_find(format!("decisions-row-{id}")).is_none());
+            }
+        })
+        .unwrap();
+        click(cx, h, "decisions-retired");
+        cx.update_window(h, |_, w, _| {
+            for id in ["d2", "d3", "d4"] {
+                assert!(w.find(format!("decisions-status-{id}")).bounds().right() <= px(width));
+            }
+            assert!(
+                w.find("decisions-row-d2").bounds().top()
+                    > w.find("decisions-row-d7").bounds().top()
+            );
+            assert!(
+                w.try_find("decisions-reason-d2").is_none(),
+                "reason on demand"
+            );
+            assert!(w.try_find("decisions-successor-d3").is_some());
+            assert!(
+                w.try_find("decisions-successor-d4").is_none(),
+                "a missing successor has no link or invented body"
+            );
+        })
+        .unwrap();
+        click(cx, h, "decisions-toggle-current-d2");
+        cx.update_window(h, |_, w, _| {
+            let b = w.find("decisions-reason-d2").bounds();
+            assert!(
+                b.right() <= px(width) && b.size.height > px(40.),
+                "long reason wraps"
+            );
+            assert!(w.try_find("decisions-text-d2").is_some());
+        })
+        .unwrap();
+        capture(cx, h, format!("retired-{width}.png"));
+        click(cx, h, "decisions-successor-d3");
+        cx.update_window(h, |_, w, _| {
+            assert!(w.try_find("decisions-text-d1").is_some(), "successor opens");
+        })
+        .unwrap();
+        // Accept p3 by keyboard only.
+        click(cx, h, "decisions-toggle-proposal-p3");
+        reveal(cx, h, "proposal-withdraw-p3");
+        cx.update_window(h, |_, w, cx| {
+            assert!(w.find("proposal-reason-p3").bounds().right() <= px(width));
+            assert!(w.find("proposal-keep-p3").bounds().right() <= px(width));
+            let focus = view.read(cx).focus.clone();
+            focus.focus(w, cx);
+            let mut reached = false;
+            for _ in 0..80 {
+                w.press("tab", cx);
+                if w.find("proposal-withdraw-p3").focused() == Some(true) {
+                    reached = true;
+                    break;
+                }
+            }
+            assert!(reached, "keyboard reaches Withdraw");
+            w.press("enter", cx);
+        })
+        .unwrap();
+        capture(cx, h, format!("withdraw-{width}.png"));
+        until(cx, h, &view, |v| {
+            v.decisions.attempts.sending().is_none()
+                && v.decisions
+                    .attempts
+                    .get(&v.brief_source().unwrap(), "p3")
+                    .is_some()
+        });
+        cx.update(|cx| {
+            let v = view.read(cx);
+            let (_, outcome) = v
+                .decisions
+                .attempts
+                .get(&v.brief_source().unwrap(), "p3")
+                .unwrap();
+            assert_eq!(*outcome, Outcome::Ack);
+            // Only the confirmed POST reports; the retained snapshot is unchanged until Refresh.
+            let s = v.detail.as_ref().unwrap().decisions.as_ref().unwrap();
+            assert!(s.decisions.rows.as_ref().unwrap()[4].active());
+        });
+        let writes = server.writes();
+        assert_eq!(writes.len(), 1);
+        assert_eq!(
+            writes[0].1,
+            "/api/missions/mission-A/decision-proposals/p3/accept"
+        );
+        assert_eq!(writes[0].3, json!({}));
+        cx.update_window(h, |_, w, _| {
+            assert!(w.try_find("proposal-result-p3").is_some());
+            assert!(
+                w.try_find("proposal-withdraw-p3").is_none(),
+                "no repeat after Ack"
+            );
+        })
+        .unwrap();
+        // Lost ACK: Unknown, retained, and never resent.
+        click(cx, h, "decisions-toggle-proposal-p4");
+        click(cx, h, "proposal-keep-p4");
+        until(cx, h, &view, |v| v.decisions.attempts.sending().is_none());
+        cx.update(|cx| {
+            let v = view.read(cx);
+            let (_, outcome) = v
+                .decisions
+                .attempts
+                .get(&v.brief_source().unwrap(), "p4")
+                .unwrap();
+            assert!(matches!(outcome, Outcome::Unknown(_)));
+        });
+        cx.update_window(h, |_, w, _| {
+            assert!(w.try_find("proposal-result-p4").is_some());
+            assert!(w.try_find("proposal-keep-p4").is_none());
+            assert!(w.try_find("proposal-withdraw-p4").is_none());
+        })
+        .unwrap();
+        assert_eq!(server.writes().len(), 1, "one POST for the lost ACK");
+        capture(cx, h, format!("unknown-{width}.png"));
+        // Stale and offline snapshots refuse responses without any request.
+        click(cx, h, "decisions-toggle-proposal-p5");
+        server.reply("/api/missions/mission-A", Reply::json(503, json!({})));
+        cx.update_window(h, |_, w, cx| view.update(cx, |v, cx| v.read(w, cx)))
+            .unwrap();
+        until(cx, h, &view, |v| v.error.is_some() && !v.busy);
+        reveal(cx, h, "proposal-keep-p5");
+        cx.update_window(h, |_, w, cx| {
+            assert!(w.try_find("decisions-stale").is_some());
+            w.click("proposal-keep-p5", cx);
+            view.update(cx, |v, cx| {
+                v.sync(
+                    Input {
+                        route: Some(Route::Detail(f::key("mission-A"))),
+                        filter: None,
+                        projects: Arc::new(vec![]),
+                        chats: Arc::new(vec![]),
+                        online: false,
+                        loaded: true,
+                    },
+                    w,
+                    cx,
+                )
+            });
+        })
+        .unwrap();
+        settle(cx, h);
+        if w_has(cx, h, "proposal-keep-p5") {
+            cx.update_window(h, |_, w, cx| w.click("proposal-keep-p5", cx))
+                .unwrap();
+        }
+        settle(cx, h);
+        assert!(server.writes().is_empty(), "stale/offline: nothing sent");
+        assert!(cx.update(|cx| {
+            view.read(cx)
+                .decisions
+                .attempts
+                .get(&source(), "p5")
+                .is_none()
+        }));
+        println!(
+            "PASS decision lifecycle {width}: retired labels/on-demand reason/successor, keyboard Withdraw one POST, lost ACK Unknown no replay, stale/offline refused"
+        );
+        cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
+    }
+}
+fn w_has(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: &str) -> bool {
+    cx.update_window(h, |_, w, _| w.try_find(id.to_owned()).is_some())
+        .unwrap()
+}
+fn source() -> crate::mission_brief::Source {
+    crate::mission_brief::Source {
+        key: f::key("mission-A"),
+        project: "project-A".into(),
+    }
 }

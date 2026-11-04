@@ -207,6 +207,10 @@ impl Browser {
             let f = f.read(cx);
             f.update_hold().map(|h| mission(&f.source.key, h))
         });
+        let decisions = || {
+            let key = self.decisions.sending()?;
+            Some(mission(key, crate::update_hold::Hold::Sending))
+        };
         let metadata = || {
             self.metadata.iter().find_map(|f| {
                 let f = f.read(cx);
@@ -223,6 +227,7 @@ impl Browser {
             Some(mission(&key, hold))
         };
         lifecycle
+            .or_else(decisions)
             .or_else(metadata)
             .or_else(brief)
             .or_else(update)

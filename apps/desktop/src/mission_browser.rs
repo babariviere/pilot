@@ -227,6 +227,7 @@ pub(crate) struct Proposal {
     pub(crate) id: String,
     pub(crate) number: u64,
     pub(crate) reason: String,
+    pub(crate) withdraw: bool,
 }
 #[derive(Clone, Debug)]
 pub(crate) struct Ticket {
@@ -322,6 +323,7 @@ fn attention(
                 id: p.id.clone(),
                 number,
                 reason: p.reason.value.clone(),
+                withdraw: p.kind == crate::mission_decisions::Kind::Withdraw,
             })
         })
         .collect();

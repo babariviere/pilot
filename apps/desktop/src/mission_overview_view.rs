@@ -597,7 +597,11 @@ impl Browser {
     fn proposal_row(&self, p: &Proposal, cx: &Context<Self>) -> AnyElement {
         let generation = self.generation;
         let id = p.id.clone();
-        let title = format!("Decision D{}: proposed change", p.number);
+        let title = if p.withdraw {
+            format!("Decision D{}: withdrawal proposed", p.number)
+        } else {
+            format!("Decision D{}: proposed change", p.number)
+        };
         let reason = first_line(&p.reason);
         ui::action(
             SharedString::from(format!("mission-needs-proposal-{}", p.id)),

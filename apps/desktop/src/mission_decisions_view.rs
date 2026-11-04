@@ -1,6 +1,11 @@
 //! Decisions share Browser's already-bounded reader, scroll and mounted focus owner.
 use super::*;
-use crate::mission_decisions::{Section, Text as BoundedText};
+use crate::{
+    mission_decision_resolve::{self as resolve, Attempts, Choice, Outcome},
+    mission_decisions::{
+        Decision, Kind, Proposal as Suggestion, Retired, Section, Text as BoundedText,
+    },
+};
 use gpui_kit::component::ActiveTheme;
 use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
@@ -11,8 +16,20 @@ pub(crate) struct Disclosure {
     expanded: HashSet<String>,
     decisions: usize,
     proposals: usize,
+    /// Retired (withdrawn or replaced) rows, behind their own disclosure.
+    retired: bool,
+    retired_rows: usize,
     /// Element a Needs you row asked to bring to the top, until it paints.
     reveal: Rc<RefCell<Option<String>>>,
+    /// User responses to withdrawal proposals. Kept across refresh; never replayed.
+    attempts: Attempts,
+    sending: Option<Task<()>>,
+}
+#[derive(Clone, Copy)]
+enum More {
+    Current,
+    Retired,
+    Proposals,
 }
 impl Disclosure {
     pub(super) fn reconcile(&mut self, d: &Detail) {
@@ -33,6 +50,10 @@ impl Disclosure {
                 .collect();
             self.expanded.retain(|id| ids.contains(id));
         }
+    }
+    /// The mission whose withdrawal response is still unanswered.
+    pub(super) fn sending(&self) -> Option<&Key> {
+        self.attempts.sending().map(|s| &s.source.key)
     }
 }
 impl Browser {
@@ -291,6 +312,8 @@ impl Browser {
                 );
             }
         };
+        let all = snapshot.decisions.rows.as_deref().unwrap_or_default();
+        let retired: Vec<&Decision> = all.iter().filter(|r| !r.active()).collect();
         section = section
             .child(
                 ui::text(Text::Label, "Current decisions")
@@ -298,75 +321,50 @@ impl Browser {
                     .id("decisions-current-heading")
                     .test_support(),
             )
-            .child(coverage(&snapshot.decisions, "decisions", cx));
-        if let Some(rows) = &snapshot.decisions.rows {
-            for item in rows.iter().take(self.decisions.decisions.max(8)) {
-                let id = format!("current-{}", item.id);
-                let expanded = self.decisions.expanded.contains(&id);
-                let mut row = div()
-                    .id(SharedString::from(format!("decisions-row-{}", item.id)))
-                    .test_support()
-                    .v_flex()
-                    .min_w_0()
-                    .gap(px(Space::CONTROL))
-                    .py(px(Space::SIDEBAR))
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(
-                        div()
-                            .h_flex()
-                            .items_center()
-                            .gap(px(Space::CONTROL))
-                            .child(
-                                ui::text(
-                                    Text::Body,
-                                    SharedString::from(format!("D{}", item.number)),
-                                )
-                                .font_semibold(),
-                            )
-                            .child(
-                                ui::text(Text::Caption, item.audience)
-                                    .text_color(cx.theme().muted_foreground),
-                            ),
-                    );
-                if expanded {
-                    row = row.child(
-                        self.decision_text(format!("decisions-text-{}", item.id), &item.text),
-                    );
-                } else {
-                    row = row.child(ui::text(
-                        Text::Body,
-                        SharedString::from(preview(&item.text)),
-                    ));
+            .child(coverage(
+                &snapshot.decisions,
+                "decisions",
+                retired.len(),
+                cx,
+            ));
+        let current: Vec<&Decision> = all.iter().filter(|r| r.active()).collect();
+        let limit = self.decisions.decisions.max(8);
+        for item in current.iter().take(limit) {
+            section = section.child(self.decision_row(item, all, d, cx));
+        }
+        if current.len() > limit {
+            section = section.child(self.decision_more(More::Current, d, cx));
+        }
+        if !retired.is_empty() {
+            let source = d.clone();
+            section = section.child(
+                ui::action(
+                    "decisions-retired",
+                    if self.decisions.retired {
+                        "Hide retired".to_owned()
+                    } else {
+                        format!("Show retired ({})", retired.len())
+                    },
+                    Action::Quiet,
+                )
+                .self_start()
+                .on_click(cx.listener(move |v, _, w, cx| {
+                    if !v.decision_matches(&source, generation) || v.brief_marked(w, cx) {
+                        return;
+                    }
+                    v.focus.focus(w, cx);
+                    v.decisions.retired = !v.decisions.retired;
+                    cx.notify();
+                })),
+            );
+            if self.decisions.retired {
+                let limit = self.decisions.retired_rows.max(8);
+                for item in retired.iter().take(limit) {
+                    section = section.child(self.decision_row(item, all, d, cx));
                 }
-                row = row.child(
-                    div()
-                        .h_flex()
-                        .gap(px(Space::CONTROL))
-                        .child(self.decision_toggle(
-                            id,
-                            if expanded {
-                                "Show less".into()
-                            } else {
-                                "Read full text".into()
-                            },
-                            d,
-                            cx,
-                        ))
-                        .children(expanded.then(|| {
-                            self.decision_copy(
-                                format!("decisions-copy-{}", item.id),
-                                item.text.value.clone(),
-                                "Copy text",
-                                d,
-                                cx,
-                            )
-                        })),
-                );
-                section = section.child(row);
-            }
-            if rows.len() > self.decisions.decisions.max(8) {
-                section = section.child(self.decision_more(false, d, cx));
+                if retired.len() > limit {
+                    section = section.child(self.decision_more(More::Retired, d, cx));
+                }
             }
         }
         section = section
@@ -388,16 +386,13 @@ impl Browser {
                 )
                 .text_color(cx.theme().muted_foreground),
             )
-            .child(coverage(&snapshot.proposals, "pending proposals", cx));
+            .child(coverage(&snapshot.proposals, "pending proposals", 0, cx));
         if let Some(rows) = &snapshot.proposals.rows {
             for proposal in rows.iter().take(self.decisions.proposals.max(8)) {
                 let id = format!("proposal-{}", proposal.id);
                 let expanded = self.decisions.expanded.contains(&id);
-                let target = snapshot
-                    .decisions
-                    .rows
-                    .as_ref()
-                    .and_then(|rows| rows.iter().find(|d| d.id == proposal.target))
+                let target_row = all.iter().find(|d| d.id == proposal.target);
+                let target = target_row
                     .map(|d| format!("D{}", d.number))
                     .unwrap_or_else(|| "Unknown (missing, removed or outside this window)".into());
                 let mut row = div()
@@ -418,10 +413,10 @@ impl Browser {
                     .child(
                         ui::text(
                             Text::Body,
-                            if proposal.kind == "Edit" {
-                                "Proposed edit"
-                            } else {
-                                "Proposed removal"
+                            match proposal.kind {
+                                Kind::Edit => "Proposed edit",
+                                Kind::Remove => "Proposed removal",
+                                Kind::Withdraw => "Proposed withdrawal",
                             },
                         )
                         .font_semibold(),
@@ -454,8 +449,18 @@ impl Browser {
                             format!("proposal-reason-{}", proposal.id),
                             &proposal.reason,
                         ));
-                    if proposal.kind == "Remove" {
-                        row = row.child(ui::text(Text::Body, "Suggests removing this decision."));
+                    match proposal.kind {
+                        Kind::Remove => {
+                            row =
+                                row.child(ui::text(Text::Body, "Suggests removing this decision."))
+                        }
+                        Kind::Withdraw => {
+                            row = row.child(ui::text(
+                                Text::Body,
+                                "Retires this decision. Its text and history stay.",
+                            ))
+                        }
+                        Kind::Edit => {}
                     }
                     if let Some(text) = &proposal.text {
                         row = row
@@ -476,16 +481,24 @@ impl Browser {
                             .child(
                                 self.decision_text(format!("proposal-text-{}", proposal.id), text),
                             );
-                    } else if proposal.kind == "Edit" {
+                    } else if proposal.kind == Kind::Edit {
                         row = row.child(Notice::new("No proposed text supplied."));
+                    }
+                    if proposal.kind == Kind::Withdraw {
+                        row = row.child(self.withdrawal_actions(proposal, target_row, d, cx));
                     }
                     row = row.child(
                         ui::text(
                             Text::Caption,
-                            SharedString::from(format!(
-                                "Proposal {} · target {}",
-                                proposal.id, proposal.target
-                            )),
+                            SharedString::from(match &proposal.operation {
+                                Some(op) => format!(
+                                    "Proposal {} · target {} · operation {op}",
+                                    proposal.id, proposal.target
+                                ),
+                                None => {
+                                    format!("Proposal {} · target {}", proposal.id, proposal.target)
+                                }
+                            }),
                         )
                         .text_color(cx.theme().muted_foreground),
                     );
@@ -508,24 +521,330 @@ impl Browser {
                 section = section.child(row);
             }
             if rows.len() > self.decisions.proposals.max(8) {
-                section = section.child(self.decision_more(true, d, cx));
+                section = section.child(self.decision_more(More::Proposals, d, cx));
             }
         }
         section
     }
-    fn decision_more(
+    /// One decision. Retired rows keep their original text; the reason and the
+    /// successor link are explicit, never inferred or copied from another row.
+    fn decision_row(
         &self,
-        proposals: bool,
+        item: &Decision,
+        all: &[Decision],
         d: &Arc<Detail>,
         cx: &Context<Self>,
-    ) -> impl IntoElement {
+    ) -> gpui_kit::AnyElement {
+        let id = format!("current-{}", item.id);
+        let expanded = self.decisions.expanded.contains(&id);
+        let muted = cx.theme().muted_foreground;
+        let status = match &item.retired {
+            None => None,
+            Some(Retired::Withdrawn { .. }) => Some("Withdrawn".to_owned()),
+            Some(Retired::Replaced { number, .. }) => Some(format!("Replaced by D{number}")),
+        };
+        let mut row = div()
+            .id(SharedString::from(format!("decisions-row-{}", item.id)))
+            .test_support()
+            .relative()
+            .v_flex()
+            .min_w_0()
+            .gap(px(Space::CONTROL))
+            .py(px(Space::SIDEBAR))
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .children(self.reveal_anchor(id.clone()))
+            .child(
+                div()
+                    .h_flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(Space::CONTROL))
+                    .child(
+                        ui::text(Text::Body, SharedString::from(format!("D{}", item.number)))
+                            .font_semibold(),
+                    )
+                    .child(ui::text(Text::Caption, item.audience).text_color(muted))
+                    .children(status.map(|s| {
+                        ui::text(Text::Caption, SharedString::from(s))
+                            .font_semibold()
+                            .id(SharedString::from(format!("decisions-status-{}", item.id)))
+                            .test_support()
+                    })),
+            );
+        if expanded {
+            row = row.child(self.decision_text(format!("decisions-text-{}", item.id), &item.text));
+            if let Some(Retired::Withdrawn { reason, proposal }) = &item.retired {
+                row = row
+                    .child(
+                        div()
+                            .h_flex()
+                            .items_center()
+                            .justify_between()
+                            .child(ui::text(Text::Label, "Reason").font_semibold())
+                            .child(self.decision_copy(
+                                format!("decisions-copy-reason-{}", item.id),
+                                reason.value.clone(),
+                                "Copy reason",
+                                d,
+                                cx,
+                            )),
+                    )
+                    .child(self.decision_text(format!("decisions-reason-{}", item.id), reason))
+                    .child(
+                        ui::text(
+                            Text::Caption,
+                            SharedString::from(format!("Accepted proposal {proposal}")),
+                        )
+                        .text_color(muted),
+                    );
+            }
+        } else {
+            let text = ui::text(Text::Body, SharedString::from(preview(&item.text)));
+            row = row.child(if item.active() {
+                text
+            } else {
+                text.text_color(muted)
+            });
+        }
+        let successor = match &item.retired {
+            Some(Retired::Replaced { id, number }) => Some((id, *number)),
+            _ => None,
+        };
+        row.child(
+            div()
+                .h_flex()
+                .flex_wrap()
+                .items_center()
+                .gap(px(Space::CONTROL))
+                .child(self.decision_toggle(
+                    id,
+                    if expanded {
+                        "Show less".into()
+                    } else {
+                        "Read full text".into()
+                    },
+                    d,
+                    cx,
+                ))
+                .children(expanded.then(|| {
+                    self.decision_copy(
+                        format!("decisions-copy-{}", item.id),
+                        item.text.value.clone(),
+                        "Copy text",
+                        d,
+                        cx,
+                    )
+                }))
+                .children(successor.map(|(next, number)| {
+                    if all.iter().any(|r| &r.id == next) {
+                        let (source, next, generation) = (d.clone(), next.clone(), self.generation);
+                        ui::action(
+                            SharedString::from(format!("decisions-successor-{}", item.id)),
+                            SharedString::from(format!("Go to D{number}")),
+                            Action::Quiet,
+                        )
+                        .on_click(cx.listener(move |v, _, w, cx| {
+                            v.go_to_decision(&source, generation, &next, w, cx)
+                        }))
+                        .into_any_element()
+                    } else {
+                        ui::text(
+                            Text::Caption,
+                            SharedString::from(format!("D{number} isn't in this view.")),
+                        )
+                        .text_color(muted)
+                        .into_any_element()
+                    }
+                })),
+        )
+        .into_any_element()
+    }
+    /// Expands and scrolls to a decision listed in this exact snapshot.
+    fn go_to_decision(
+        &mut self,
+        d: &Arc<Detail>,
+        generation: u64,
+        id: &str,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.decision_matches(d, generation) || self.brief_marked(w, cx) {
+            return;
+        }
+        let Ok(s) = &d.decisions else {
+            return;
+        };
+        let all = s.decisions.rows.as_deref().unwrap_or_default();
+        let Some(target) = all.iter().find(|r| r.id == id) else {
+            return;
+        };
+        let index = all
+            .iter()
+            .filter(|r| r.active() == target.active())
+            .position(|r| r.id == id)
+            .unwrap_or_default();
+        if target.active() {
+            self.decisions.decisions = self.decisions.decisions.max(index + 1);
+        } else {
+            self.decisions.retired = true;
+            self.decisions.retired_rows = self.decisions.retired_rows.max(index + 1);
+        }
+        let key = format!("current-{id}");
+        self.decisions.expanded.insert(key.clone());
+        *self.decisions.reveal.borrow_mut() = Some(key);
+        self.focus.focus(w, cx);
+        cx.notify();
+    }
+    fn can_resolve(&self, d: &Arc<Detail>, generation: u64) -> bool {
+        self.decision_matches(d, generation)
+            && self.online
+            && !self.busy
+            && self.error.is_none()
+            && self.catalog_current
+            && self.decisions.attempts.sending().is_none()
+    }
+    /// Explicit user response to one exact pending withdrawal. Only a confirmed
+    /// POST reports success; a refresh shows the durable state.
+    fn withdrawal_actions(
+        &self,
+        p: &Suggestion,
+        target: Option<&Decision>,
+        d: &Arc<Detail>,
+        cx: &Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        let generation = self.generation;
+        let attempt = self
+            .brief_source()
+            .and_then(|s| self.decisions.attempts.get(&s, &p.id));
+        let open = attempt.is_none_or(|(_, o)| matches!(o, Outcome::NotSent(_)));
+        let ready = open && self.can_resolve(d, generation);
+        let mut block = div().v_flex().min_w_0().gap(px(Space::CONTROL));
+        if let Some((send, outcome)) = attempt {
+            let (text, tone) = match outcome {
+                Outcome::Pending => ("Sending…".to_owned(), Tone::Normal),
+                Outcome::Ack if send.choice == Choice::Accept => {
+                    ("Withdrawn. Refresh to update.".to_owned(), Tone::Success)
+                }
+                Outcome::Ack => ("Kept. Refresh to update.".to_owned(), Tone::Success),
+                Outcome::NotSent(e) => ((*e).to_owned(), Tone::Error),
+                Outcome::Unknown(e) => (
+                    format!("Outcome unknown. {e} Refresh to check; don't repeat it."),
+                    Tone::Warning,
+                ),
+            };
+            block = block.child(
+                div()
+                    .id(SharedString::from(format!("proposal-result-{}", p.id)))
+                    .test_support()
+                    .child(Notice::new(SharedString::from(text)).tone(tone)),
+            );
+        }
+        if !open {
+            return block.into_any_element();
+        }
+        let number = target.map(|t| t.number);
+        let action = |choice: Choice| {
+            let (d, id) = (d.clone(), p.id.clone());
+            cx.listener(move |v: &mut Self, _: &gpui_kit::ClickEvent, w, cx| {
+                v.resolve_withdrawal(&d, generation, &id, choice, w, cx)
+            })
+        };
+        block
+            .child(
+                div()
+                    .h_flex()
+                    .flex_wrap()
+                    .gap(px(Space::CONTROL))
+                    .child(
+                        ui::action(
+                            SharedString::from(format!("proposal-withdraw-{}", p.id)),
+                            SharedString::from(
+                                number.map_or("Withdraw".into(), |n| format!("Withdraw D{n}")),
+                            ),
+                            Action::Secondary,
+                        )
+                        .disabled(!ready || !target.is_some_and(Decision::active))
+                        .tooltip("Accept this withdrawal")
+                        .on_click(action(Choice::Accept)),
+                    )
+                    .child(
+                        ui::action(
+                            SharedString::from(format!("proposal-keep-{}", p.id)),
+                            SharedString::from(
+                                number.map_or("Keep".into(), |n| format!("Keep D{n}")),
+                            ),
+                            Action::Quiet,
+                        )
+                        .disabled(!ready)
+                        .tooltip("Reject this withdrawal")
+                        .on_click(action(Choice::Reject)),
+                    ),
+            )
+            .into_any_element()
+    }
+    fn resolve_withdrawal(
+        &mut self,
+        d: &Arc<Detail>,
+        generation: u64,
+        id: &str,
+        choice: Choice,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.can_resolve(d, generation) || self.brief_marked(w, cx) {
+            return;
+        }
+        let (Some(options), Some(source)) = (self.options.clone(), self.brief_source()) else {
+            return;
+        };
+        if !self.catalog.as_ref().is_some_and(|c| source.canonical(c)) {
+            return;
+        }
+        let Ok(s) = &d.decisions else {
+            return;
+        };
+        let Some(p) = s.proposals.rows.iter().flatten().find(|p| p.id == id) else {
+            return;
+        };
+        let active = s
+            .decisions
+            .rows
+            .iter()
+            .flatten()
+            .find(|r| r.id == p.target)
+            .is_some_and(Decision::active);
+        let Ok(send) = self.decisions.attempts.begin(&source, p, active, choice) else {
+            return;
+        };
+        // The pressed control leaves with its row's actions; the page keeps focus.
+        self.focus.focus(w, cx);
+        match resolve::start(options, send.clone()) {
+            Err(e) => {
+                self.decisions.attempts.finish(&send, Outcome::NotSent(e));
+            }
+            Ok(output) => {
+                self.decisions.sending = Some(cx.spawn(async move |view, cx| {
+                    let outcome = output.recv().await.unwrap_or(Outcome::Unknown(
+                        "Couldn't confirm the response. It may have applied.",
+                    ));
+                    let _ = view.update(cx, |v, cx| {
+                        v.decisions.attempts.finish(&send, outcome);
+                        cx.notify();
+                    });
+                }));
+            }
+        }
+        cx.notify();
+    }
+    fn decision_more(&self, which: More, d: &Arc<Detail>, cx: &Context<Self>) -> impl IntoElement {
         let d = d.clone();
         let generation = self.generation;
         ui::action(
-            if proposals {
-                "decisions-more-proposals"
-            } else {
-                "decisions-more-current"
+            match which {
+                More::Current => "decisions-more-current",
+                More::Retired => "decisions-more-retired",
+                More::Proposals => "decisions-more-proposals",
             },
             "Show 8 more",
             Action::Quiet,
@@ -535,10 +854,10 @@ impl Browser {
             if !v.decision_matches(&d, generation) || v.brief_marked(w, cx) {
                 return;
             }
-            let count = if proposals {
-                &mut v.decisions.proposals
-            } else {
-                &mut v.decisions.decisions
+            let count = match which {
+                More::Current => &mut v.decisions.decisions,
+                More::Retired => &mut v.decisions.retired_rows,
+                More::Proposals => &mut v.decisions.proposals,
             };
             *count = (*count)
                 .max(8)
@@ -560,7 +879,7 @@ fn preview(text: &BoundedText) -> String {
     }
     preview
 }
-fn coverage<T>(section: &Section<T>, noun: &str, cx: &App) -> impl IntoElement {
+fn coverage<T>(section: &Section<T>, noun: &str, retired: usize, cx: &App) -> impl IntoElement {
     let text = match &section.rows {
         None => format!("{noun} not supplied. Coverage is unknown, not empty."),
         Some(rows) if section.capped => format!(
@@ -568,6 +887,9 @@ fn coverage<T>(section: &Section<T>, noun: &str, cx: &App) -> impl IntoElement {
             rows.len(),
             section.received
         ),
+        Some(rows) if noun == "decisions" && retired > 0 => {
+            format!("{} current · {retired} retired", rows.len() - retired)
+        }
         Some(rows) if noun == "decisions" => format!("{} decisions", rows.len()),
         Some(rows) => format!(
             "{} pending · {} records checked",
@@ -577,7 +899,6 @@ fn coverage<T>(section: &Section<T>, noun: &str, cx: &App) -> impl IntoElement {
     };
     ui::text(Text::Caption, SharedString::from(text)).text_color(cx.theme().muted_foreground)
 }
-
 #[cfg(feature = "native-probes")]
 #[path = "mission_decisions_probe.rs"]
 pub(crate) mod probe;

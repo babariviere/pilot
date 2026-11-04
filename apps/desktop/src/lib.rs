@@ -223,6 +223,7 @@ pub use mission_browser_view::mission_artifacts_view::probe::run_mission_artifac
 pub use mission_browser_view::mission_resources_view::probe::run_mission_resources_probe;
 mod mission_browser;
 mod mission_comments;
+mod mission_decision_resolve;
 mod mission_decisions;
 #[cfg(feature = "native-probes")]
 pub use mission_browser_view::mission_comments_view::probe::run_mission_comments_probe;

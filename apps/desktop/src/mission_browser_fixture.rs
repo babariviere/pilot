@@ -223,6 +223,10 @@ async fn serve(mut socket: TcpStream, state: Arc<Mutex<State>>) -> std::io::Resu
     if reply.delay_ms > 0 {
         tokio::time::sleep(std::time::Duration::from_millis(reply.delay_ms)).await;
     }
+    // Status 0: the request arrived but no response does (a lost ACK).
+    if reply.status == 0 {
+        return Ok(());
+    }
     let framing = if reply.chunked {
         "Transfer-Encoding: chunked".to_owned()
     } else {

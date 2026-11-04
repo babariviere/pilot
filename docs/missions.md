@@ -40,11 +40,12 @@ Do not automatically replay an unknown result.
 User edits/removals reject pending withdrawal proposals while preserving their history.
 Resolve an existing pending proposal before suggesting a different change.
 
-This is a backend/tool capability requiring user confirmation, not autonomous coordinator
-withdrawal. Existing records do not establish delegated withdrawal authority, including
-coordinator-authored records. Native Withdraw presentation/acceptance is not yet supported;
-older native proposal readers reject the distinct `withdraw` kind rather than treating it
-as hard Remove. Hard deletion and other user-only approvals are unchanged. No historical
+This requires user confirmation, not autonomous coordinator withdrawal. Existing records
+do not establish delegated withdrawal authority, including coordinator-authored records.
+In the desktop app, open the proposal under **Read decisions** and choose **Withdraw D…**
+or **Keep D…**. Withdrawn and replaced decisions move behind **Show retired**. Older
+native readers reject the distinct `withdraw` kind rather than treating it as hard
+Remove. Hard deletion and other user-only approvals are unchanged. No historical
 withdrawals or delegation are inferred.
 
 ## Finish or archive
