@@ -25,6 +25,10 @@ pub(crate) struct Flow {
     /// Status of the retained command, keyed by its operation ID and saved state.
     status: Option<(String, model::State, Load<weekly::Status>)>,
     status_read: Option<Task<()>>,
+    /// Bumped by every status read; only the newest read's reply lands.
+    status_seq: u64,
+    /// The panel request whose settled reply last forced a fresh status read.
+    refreshed: u64,
     /// The user chose to set up again over a settled, no longer enabled command.
     fresh: bool,
     details: bool,
@@ -63,6 +67,8 @@ impl Flow {
             checking: None,
             status: None,
             status_read: None,
+            status_seq: 0,
+            refreshed: 0,
             fresh: false,
             details: false,
             projects: Arc::new(Vec::new()),
@@ -322,7 +328,8 @@ impl Panel {
         self.read_catalog(cx);
     }
 
-    /// Passive status for the retained command, once per saved state.
+    /// Passive status for the retained command: once per saved state, and again after each
+    /// settled Check or send, since a pending receipt can stay pending while the resources change.
     pub(super) fn enable_sync(&mut self, cx: &mut Context<Self>) {
         // Retained identities can arrive with the writer's book after the first read.
         if let Some(chosen) = self
@@ -340,21 +347,34 @@ impl Panel {
         let Some(attempt) = self.enable_attempt().cloned() else {
             return;
         };
+        // This panel's latest command for this slot has a reply: re-read once for it.
+        let settled =
+            if self.latest().is_some() && self.slot.as_deref() == Some(attempt.slot.as_str()) {
+                self.request
+            } else {
+                0
+            };
         let Some(flow) = self.enable.as_mut() else {
             return;
         };
         let key = (attempt.operation.operation_id.clone(), attempt.state);
-        if flow
+        let cached = flow
             .status
             .as_ref()
-            .is_some_and(|(id, state, _)| (id, *state) == (&key.0, key.1))
-        {
+            .is_some_and(|(id, state, _)| (id, *state) == (&key.0, key.1));
+        let force = settled > flow.refreshed;
+        if force {
+            flow.refreshed = settled;
+        }
+        if cached && !force {
             return;
         }
         if attempt.state == model::State::Rejected {
             // Final. A fresh confirmation needs a fresh offer; this read sends nothing.
-            flow.status = Some((key.0, key.1, Load::Failed("Not applied.".into())));
-            self.enable_preflight(cx);
+            if !cached {
+                flow.status = Some((key.0, key.1, Load::Failed("Not applied.".into())));
+                self.enable_preflight(cx);
+            }
             return;
         }
         self.enable_status(attempt, cx);
@@ -365,6 +385,8 @@ impl Panel {
             return;
         };
         let (id, state) = (attempt.operation.operation_id.clone(), attempt.state);
+        flow.status_seq += 1;
+        let seq = flow.status_seq;
         flow.status = Some((id.clone(), state, Load::Loading));
         let Some(rx) = weekly::read_status(options, attempt.operation) else {
             flow.status = Some((id, state, Load::Failed("Couldn't read status.".into())));
@@ -376,10 +398,12 @@ impl Panel {
                 let Some(flow) = v.enable.as_mut() else {
                     return;
                 };
-                if flow
-                    .status
-                    .as_ref()
-                    .is_none_or(|(i, s, _)| (i, *s) != (&id, state))
+                // Late: a newer read, or another command or saved state, owns the view.
+                if flow.status_seq != seq
+                    || flow
+                        .status
+                        .as_ref()
+                        .is_none_or(|(i, s, _)| (i, *s) != (&id, state))
                 {
                     return;
                 }
@@ -898,6 +922,8 @@ impl Panel {
         let (text, tone): (String, Tone) = match &status {
             None | Some(Load::Loading) => ("Checking…".into(), Tone::Quiet),
             Some(Load::Failed(e)) => (e.to_string(), Tone::Error),
+            // What Local sees now outranks the receipt's last step marker, which only
+            // says a step was entered.
             Some(Load::Ready(s)) => match (s.current, &s.receipt) {
                 (Current::Enabled, _) => {
                     on = true;
@@ -905,11 +931,12 @@ impl Panel {
                     ("On".into(), Tone::Success)
                 }
                 (Current::NotFound, _) => ("Local has no record of it yet.".into(), Tone::Warning),
-                (_, Receipt::Pending(Some(Phase::ChatPending))) => {
-                    ("Creating the report chat…".into(), Tone::Quiet)
-                }
-                (_, Receipt::Pending(Some(Phase::ChatReady | Phase::SchedulePending))) => {
-                    ("Report chat ready. Scheduling…".into(), Tone::Quiet)
+                (Current::Blocked, _) => {
+                    again = accepted;
+                    (
+                        weekly::reason_text(s.reason.as_deref().unwrap_or_default()).into(),
+                        Tone::Warning,
+                    )
                 }
                 (Current::Partial, _) => {
                     again = accepted;
@@ -918,12 +945,11 @@ impl Panel {
                         Tone::Warning,
                     )
                 }
-                (Current::Blocked, _) => {
-                    again = accepted;
-                    (
-                        weekly::reason_text(s.reason.as_deref().unwrap_or_default()).into(),
-                        Tone::Warning,
-                    )
+                (_, Receipt::Pending(Some(Phase::ChatPending))) => {
+                    ("Creating the report chat…".into(), Tone::Quiet)
+                }
+                (_, Receipt::Pending(Some(Phase::ChatReady | Phase::SchedulePending))) => {
+                    ("Report chat ready. Scheduling…".into(), Tone::Quiet)
                 }
                 (_, Receipt::Pending(_)) => ("Still applying.".into(), Tone::Quiet),
                 _ => ("Not confirmed.".into(), Tone::Warning),
@@ -1078,6 +1104,10 @@ impl Panel {
             }
             _ => ("confirm", None),
         }
+    }
+    /// The next run the status field shows for the retained command.
+    pub(crate) fn probe_enable_next(&self) -> Option<u64> {
+        self.progress(self.enable_attempt()?).next
     }
     pub(crate) fn probe_preflight(&self) -> Option<weekly::Preflight> {
         match self.enable.as_ref()?.gate.as_ref()? {

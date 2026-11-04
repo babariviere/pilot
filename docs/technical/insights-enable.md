@@ -150,6 +150,8 @@ accepted result or a full host marker naming this target, its model and the stat
 a marker-less pending, unknown or rejected receipt beside `enabled` is malformed. `report_chat_unavailable`
 covers several admission failures, so its words name no cause. Mounted probe: `cargo test --features
 native-probes --test insights_enable` (synthetic Local only).
+Each settled Check or send re-reads status, even when the receipt stays pending at the same step, and only
+the newest read lands. Present state (enabled, blocked, partial) outranks the receipt's step words.
 
 ## Source and verification
 

@@ -305,6 +305,13 @@ fn progress(
     let p = panel(cx, view);
     cx.update(|cx| p.read(cx).probe_enable())
 }
+/// The next run the status field shows, if any.
+fn next_at(view: &Entity<LocalViewer>, cx: &App) -> Option<u64> {
+    view.read(cx)
+        .insights
+        .as_ref()
+        .and_then(|(p, _)| p.read(cx).probe_enable_next())
+}
 /// The Automations page's entry point, as a pointer user reaches it.
 fn from_automations(cx: &mut HeadlessAppContext, h: AnyWindowHandle, view: &Entity<LocalViewer>) {
     if cx.update(|cx| view.read(cx).page != Page::Automations) {
@@ -514,7 +521,11 @@ fn reuse_and_recovery(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     until(cx, h, |_, cx| p.read(cx).probe_ready());
     assert_eq!(
         progress(cx, &view),
-        ("progress", Some("Report chat ready. Scheduling…".into()))
+        (
+            "progress",
+            Some(crate::insights_enable::reason_text("schedule_unresolved").into())
+        ),
+        "what Local sees now outranks the entered step"
     );
     cx.update_window(h, |_, w, _| {
         assert!(w.try_find("insights-unconfirmed").is_some())
@@ -752,24 +763,87 @@ fn lost_schedule_ack(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     .unwrap();
     shot(cx, h, dir, "lost-schedule-ack");
 
-    // Check again: still pending, still a read.
+    // Check again with the receipt still pending at the same step: the view re-reads
+    // status even though the saved state is unchanged, so a moved next run shows.
+    let week = 7 * 24 * 3_600_000;
+    let mut moved = lost.clone();
+    moved["nextAt"] = json!(fx::NEXT + week);
+    s.reply(STATUS, Reply::json(200, moved));
     click(cx, h, "insights-check");
-    until(cx, h, |w, cx| {
-        s.write_count() > 0 && w.try_find("insights-unconfirmed").is_some() && ready(&view, cx)
+    until(cx, h, |_, cx| {
+        ready(&view, cx) && next_at(&view, cx) == Some(fx::NEXT + week)
     });
+    assert_eq!(progress(cx, &view), ("progress", Some("On".into())));
     status_reads_only(&s, &envelope);
     retained(cx, &view, &envelope, State::Pending);
+
+    // A slow read is overtaken: Local now reports the report chat unusable, same pending
+    // step. The newer status wins; the older reply never brings On back.
+    let slow = Reply {
+        delay_ms: 2_000,
+        ..Reply::json(200, lost.clone())
+    };
+    s.reply(STATUS, slow);
+    click(cx, h, "insights-check");
+    // Check's own read, then the view's re-read, both slow; Check has replied.
+    until(cx, h, |w, _| {
+        s.write_count() >= 2 && w.try_find("insights-unconfirmed").is_some()
+    });
+    let stale_sent = Instant::now();
+    let mut blocked = fx::status(
+        &op,
+        "pending",
+        fx::progress(&op, "schedule_pending"),
+        "blocked",
+        Some("report_chat_unavailable"),
+    );
+    assert_eq!(
+        blocked["receipt"], lost["receipt"],
+        "same receipt, same step"
+    );
+    blocked["nextAt"] = Value::Null;
+    s.reply(STATUS, Reply::json(200, blocked.clone()));
+    click(cx, h, "insights-check");
+    let words = crate::insights_enable::reason_text("report_chat_unavailable");
+    until(cx, h, |_, cx| {
+        ready(&view, cx)
+            && view
+                .read(cx)
+                .insights
+                .as_ref()
+                .is_some_and(|(p, _)| p.read(cx).probe_enable() == ("progress", Some(words.into())))
+    });
+    std::thread::sleep(Duration::from_millis(2_300).saturating_sub(stale_sent.elapsed()));
+    settle(cx, h);
+    assert_eq!(
+        progress(cx, &view),
+        ("progress", Some(words.into())),
+        "the overtaken reply is fenced"
+    );
+    assert_eq!(cx.update(|cx| next_at(&view, cx)), None);
+    cx.update_window(h, |_, w, _| {
+        assert!(w.try_find("insights-unconfirmed").is_some());
+        assert!(w.try_find("insights-when-note").is_none(), "no next run");
+        assert!(
+            w.try_find("insights-enable-again").is_none(),
+            "a pending command can't be set up again"
+        );
+    })
+    .unwrap();
+    status_reads_only(&s, &envelope);
+    retained(cx, &view, &envelope, State::Pending);
+    shot(cx, h, dir, "pending-blocked");
 
     // Close and reopen, then restart: the pending attempt stays, nothing is resent.
     escape(cx, h);
     from_automations(cx, h, &view);
-    assert_eq!(progress(cx, &view), ("progress", Some("On".into())));
+    assert_eq!(progress(cx, &view), ("progress", Some(words.into())));
     escape(cx, h);
     let root = unmount(cx, m);
     let m = mount(cx, &s, width, ThemeMode::Light, true, Some(root));
     let (h, view) = (m.h, m.view.clone());
     from_automations(cx, h, &view);
-    assert_eq!(progress(cx, &view), ("progress", Some("On".into())));
+    assert_eq!(progress(cx, &view), ("progress", Some(words.into())));
     retained(cx, &view, &envelope, State::Pending);
     status_reads_only(&s, &envelope);
 
@@ -812,7 +886,6 @@ fn lost_schedule_ack(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
         ),
     );
     from_automations(cx, h, &view);
-    let words = crate::insights_enable::reason_text("report_chat_unavailable");
     assert_eq!(progress(cx, &view), ("settled", Some(words.into())));
     assert!(!words.contains("archived") && !words.contains("revoked"));
     cx.update_window(h, |_, w, _| {
@@ -827,7 +900,7 @@ fn lost_schedule_ack(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     let root = unmount(cx, m);
     let _ = std::fs::remove_dir_all(root);
     println!(
-        "insights enable lost schedule ACK 680 Light: pending+enabled On with Check kept, read-only Check twice, reopen/restart without replay, later accepted, later blocked with cause-neutral words passed"
+        "insights enable lost schedule ACK 680 Light: pending+enabled On with Check kept, same-step re-read of moved next run, pending+blocked overtaking a fenced slow read, reopen/restart without replay, later accepted, later blocked with cause-neutral words passed"
     );
 }
 
