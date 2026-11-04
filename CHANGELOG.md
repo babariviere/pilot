@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.112.0](https://github.com/babariviere/pilot/compare/v1.111.0...v1.112.0) (2026-11-04)
+
+
+### Features
+
+* **artifacts:** retire legacy authoring and preview ([cd7a025](https://github.com/babariviere/pilot/commit/cd7a02521ee44e4a73ce5f8ddfc764c9ff90ad58))
+* **daemon:** allow manual workspace setup reruns ([18f11df](https://github.com/babariviere/pilot/commit/18f11df94f16808b1df5de8921923a6313d39505))
+* **desktop:** polish recurring rules and their editor ([dafacef](https://github.com/babariviere/pilot/commit/dafacefb72d8a03c1f2bf0ddb0b9bda7ddf352af))
+* **desktop:** run workspace setup again from a chat ([123c3b1](https://github.com/babariviere/pilot/commit/123c3b1de638941ad31d02795fd6f7b1a041c866))
+* **desktop:** show assistant text as messages, not notes in tool work ([0781944](https://github.com/babariviere/pilot/commit/0781944a723f29dd449a131c140ee79e0cf3b5a3))
+* **desktop:** show hook progress in the chat working line ([39751c8](https://github.com/babariviere/pilot/commit/39751c8f319181d5e8056a193ac06f035b8a0bd8))
+* **history:** add bounded recurring review orchestration ([1b2a297](https://github.com/babariviere/pilot/commit/1b2a297ecb8d64edb46980c0fa760d216ab6fd63))
+* **history:** add restricted cross-project review profile ([607c2cc](https://github.com/babariviere/pilot/commit/607c2cc76eec7da663c0ab7a6bbeb1e210021e8e))
+* **history:** persist scoped findings and review receipts ([b36cc01](https://github.com/babariviere/pilot/commit/b36cc011bd7e3a22c59fc8a9320b7484e1273026))
+* **insights:** native setup, access panel and finding decisions ([4a95d13](https://github.com/babariviere/pilot/commit/4a95d13ca87758e4143d43ff5567aca23a6412cf))
+* **schedules:** dispatch bounded reviews in fixed chats ([5490b37](https://github.com/babariviere/pilot/commit/5490b379f2e5031d101fea685f54f8226b8f3cf2))
+* **visuals:** native UI mockup layout, styling and vector paths ([cc06b7a](https://github.com/babariviere/pilot/commit/cc06b7aef0656d7a99c6220d72d3adee71c68b79))
+
+
+### Bug Fixes
+
+* **desktop:** quieter Insights access panel ([ce3d1f0](https://github.com/babariviere/pilot/commit/ce3d1f009611ea37444941395bd6f5b2a1b7d903))
+* **workspaces:** trust mise configs before setup ([175656d](https://github.com/babariviere/pilot/commit/175656dd99f90dfa35a668df5d811e7c8a722955))
+
 ## [1.111.0](https://github.com/babariviere/pilot/compare/v1.110.0...v1.111.0) (2026-11-03)
 
 
