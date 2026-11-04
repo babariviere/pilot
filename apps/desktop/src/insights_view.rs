@@ -22,6 +22,9 @@ use gpui_kit::{
 };
 use std::sync::Arc;
 
+#[path = "insights_enable_view.rs"]
+mod enable;
+
 pub(crate) enum Event {
     Close,
     /// Send this explicit user action through the durable writer.
@@ -35,6 +38,10 @@ pub(crate) enum Event {
     OpenChat(String),
     /// A finding decision was accepted; its Tasks rows may re-read.
     Decided,
+    /// Show the existing global Automations switch. Nothing is switched here.
+    OpenAutomationSettings,
+    /// Open the weekly enable confirmation for this report chat.
+    EnableWeekly(String),
 }
 
 /// What the panel is about. Identity is captured when it opens and never changes.
@@ -58,6 +65,11 @@ pub(crate) enum Scope {
         from: Lifecycle,
         to: Lifecycle,
         expected_revision: u64,
+    },
+    /// Weekly enable over report chats' exact bindings (project, mission, report chat).
+    /// One backlog among them is used as is; otherwise the user chooses.
+    Enable {
+        reports: Vec<(String, String, String)>,
     },
 }
 
@@ -93,6 +105,8 @@ pub(crate) struct Panel {
     opened: bool,
     /// The report chat's scope, disclosed on request (setup always shows it).
     scope_open: bool,
+    /// Weekly enable state; only for `Scope::Enable`.
+    enable: Option<enable::Flow>,
 }
 impl EventEmitter<Event> for Panel {}
 
@@ -127,7 +141,11 @@ impl Panel {
         let catalog_path = match &scope {
             Scope::Setup { path, .. } => Some(path.clone()),
             Scope::Chat { .. } => catalog_path,
-            Scope::Decide { .. } => None,
+            Scope::Decide { .. } | Scope::Enable { .. } => None,
+        };
+        let enable = match &scope {
+            Scope::Enable { reports } => Some(enable::Flow::new(reports.clone())),
+            _ => None,
         };
         let mut panel = Self {
             scope,
@@ -148,6 +166,7 @@ impl Panel {
             error: None,
             opened: false,
             scope_open: false,
+            enable,
         };
         panel.refresh(cx);
         panel
@@ -170,6 +189,7 @@ impl Panel {
             Scope::Decide { number, to, .. } => {
                 format!("{} #{number}?", decision_label(*to)).into()
             }
+            Scope::Enable { .. } => "Weekly Insights".into(),
         }
     }
     /// Show the panel as a dialog; Close and Escape go through the owner.
@@ -197,6 +217,10 @@ impl Panel {
 
     /// Re-read passive state. Never sends a write.
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
+        if matches!(self.scope, Scope::Enable { .. }) {
+            self.enable_refresh(cx);
+            return;
+        }
         if let Scope::Chat { session } = self.scope.clone() {
             self.status = Load::Loading;
             let Some(rx) = model::read(self.options.clone(), model::Read::Status { session })
@@ -302,6 +326,9 @@ impl Panel {
         if let Some(Outcome::Accepted(result)) = self.latest().cloned() {
             self.settled(&result, cx);
         }
+        if matches!(self.scope, Scope::Enable { .. }) {
+            self.enable_sync(cx);
+        }
         cx.notify();
     }
     /// The writer's reply to this panel's latest command.
@@ -348,11 +375,17 @@ impl Panel {
                     cx.emit(Event::Decided);
                 }
             }
+            // Success is the passive status of both resources, read on the book change.
+            Scope::Enable { .. } => {}
         }
     }
     fn send(&mut self, action: model::Action, cx: &mut Context<Self>) {
         if !self.visible || self.waiting() {
             return;
+        }
+        // A late preflight never replaces the confirmation that was just sent.
+        if let (model::Action::Start(_), Some(flow)) = (&action, self.enable.as_mut()) {
+            flow.freeze();
         }
         // A confirmation is consumed by its one explicit send, whatever the outcome.
         if let model::Action::Start(_) = &action {
@@ -442,6 +475,7 @@ impl Panel {
             Scope::Chat { session } => Some(format!("revoke:{session}")),
             Scope::Setup { mission, .. } => Some(format!("create:{mission}")),
             Scope::Decide { session, key, .. } => Some(format!("lifecycle:{session}:{key}")),
+            Scope::Enable { .. } => self.enable_attempt().map(|a| a.slot.clone()),
         }
     }
 }
@@ -812,6 +846,8 @@ impl Panel {
                     .when(self.scope_open, |d| d.child(disclosure(&model_name))),
                 cx,
             ));
+        let weekly = self.weekly_field(&session, cx);
+        let body = body.child(field("insights-field-weekly", "Weekly", weekly, cx));
         let mut tail = div().v_flex().gap_3().w_full().min_w_0();
         tail = tail.children(self.check_row(cx));
         if self.confirm_revoke {
@@ -907,6 +943,7 @@ impl Panel {
             Scope::Chat { .. } => !matches!(self.status, Load::Loading) && catalog,
             Scope::Setup { .. } => catalog,
             Scope::Decide { .. } => true,
+            Scope::Enable { .. } => self.enable_probe_ready(),
         }
     }
     pub(crate) fn probe_revoke(&mut self, cx: &mut Context<Self>) {
@@ -928,6 +965,7 @@ impl Panel {
             Scope::Chat { .. } => self.render_chat(cx),
             Scope::Setup { .. } => self.render_setup(cx),
             Scope::Decide { .. } => self.render_decide(cx),
+            Scope::Enable { .. } => self.render_enable(cx),
         };
         // Only the content scrolls; confirmations, outcomes and actions stay in view.
         let height = (f32::from(w.viewport_size().height) * 0.45).clamp(160., 480.);

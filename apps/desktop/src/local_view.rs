@@ -91,6 +91,9 @@ mod history_shortcut_tests;
 #[path = "inbox_probe.rs"]
 pub(crate) mod inbox_probe;
 #[cfg(feature = "native-probes")]
+#[path = "insights_enable_probe.rs"]
+pub(crate) mod insights_enable_probe;
+#[cfg(feature = "native-probes")]
 #[path = "insights_native_probe.rs"]
 pub(crate) mod insights_native_probe;
 #[path = "insights_navigation.rs"]
@@ -1212,6 +1215,9 @@ impl LocalViewer {
                         if let Some(chat) = v.state.chats.iter().find(|c| &c.id == id).cloned() {
                             v.open(chat, w, cx);
                         }
+                    }
+                    crate::automations_view::AutomationsEvent::EnableInsights => {
+                        v.open_insights_enable(None, w, cx);
                     }
                 }
             },

@@ -642,3 +642,8 @@ required-features = ["native-probes"]
 name = "insights_native"
 harness = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "insights_enable"
+harness = false
+required-features = ["native-probes"]

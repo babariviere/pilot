@@ -50,6 +50,8 @@ struct Note {
 }
 pub(crate) enum AutomationsEvent {
     OpenChat(String),
+    /// The weekly Insights confirmation. Opening it is passive; it enables nothing.
+    EnableInsights,
 }
 
 pub(crate) struct Automations {
@@ -1274,6 +1276,20 @@ impl Render for Automations {
                         .loading(self.state.busy)
                         .disabled(self.state.busy || self.options.is_none())
                         .on_click(cx.listener(|v, _, _, cx| v.load(cx))),
+                    )
+                    .child(
+                        ui::action(
+                            "automations-insights",
+                            "Weekly Insights…",
+                            Action::Secondary,
+                        )
+                        .small()
+                        .accessibility_label("Enable weekly Insights")
+                        .tooltip("Enable weekly Insights or see its status")
+                        .disabled(self.options.is_none())
+                        .on_click(
+                            cx.listener(|_, _, _, cx| cx.emit(AutomationsEvent::EnableInsights)),
+                        ),
                     )
                     .child(
                         ui::action("automations-new", "New automation", Action::Primary)

@@ -1,10 +1,19 @@
 # Insights
 
-**Status: setup and backlog review are available. Weekly activation is still pending.**
+**Status: weekly Insights can be enabled from Automations. Settings are fixed for now.**
 
-To set up the report chat, open the backlog mission and choose **More → Set up Insights chat…**.
-Choose the model and confirm the disclosed read scope. Setup creates the report chat, not a
-history review or weekly schedule.
+To turn it on, open **Automations → Weekly Insights…**. One confirmation shows the findings
+backlog, the schedule (Fridays 18:00, Europe/Paris), the exact model, what it reads and the
+approximate budget. **Enable** creates or reuses the report chat and its weekly automation.
+The first report runs at the next scheduled time, not right away. If no report chat already names a backlog,
+choose an active mission in the same confirmation; Pilot never creates one or guesses by title.
+The global Automations switch in **Settings → Chats** must be on. Weekly Insights never turns it on.
+If Terra 6.1 is missing, nothing else is used instead; if several models share that name, choose one.
+
+If enabling is interrupted, the confirmation shows **Check**. Check reads its status and only
+resends the exact same request when Local has no record of it. Closing, reopening or restarting
+never repeats it. The result is On only when both the report chat and its weekly automation exist.
+**More → Set up Insights chat…** on a mission still creates just the report chat.
 
 In the report chat, the **Insights backlog** header button opens the mission's **Tasks** tab.
 Findings have lifecycle chips; use each row's menu to choose a decision, then confirm it.
@@ -12,7 +21,7 @@ Finding controls need the linked report chat to be available in the chat list an
 Counts are bounded hints, not complete totals.
 
 Use the report chat's **… → Insights settings…** for compact status, model, expandable **Reads**
-details and **Revoke…**. Revoking keeps history and reports. Delivering one improvement never
+details, the **Weekly** state and **Revoke…**. Revoking keeps history and reports. Delivering one improvement never
 retires the report chat. If an action is **Unknown**, use **Check** to look up its durable outcome;
 closing and reopening is not permission to repeat it.
 
@@ -39,12 +48,10 @@ Bounded review context, reports and unfinished source positions survive restart.
 partial, disclose coverage gaps and uninspected content, and revisit previous findings. Cost proposals
 distinguish known spend from estimates or unknown baselines, with safety trade-offs and a later benefit check.
 A save proves persistence, not complete coverage or a successful weekly run. Stopped or uncertain
-review inputs never automatically replay. Weekly activation remains separate work, and weekly
-settings still require confirmation.
+review inputs never automatically replay.
 
-Once those settings are agreed, use **Automations → New automation → Repeats → Send to a chat**
-with the Insights chat as the destination. This runs a bounded review using the chat's existing
-access, not the saved message as review instructions. Existing pause/resume controls apply.
+Each weekly run is a bounded review using the chat's existing access, not the saved message as
+review instructions. Existing pause/resume controls on the Automations page apply.
 Stopped, interrupted or uncertain reviews appear as schedule failures and are never resent after
 restart. A later weekly occurrence is a distinct review, not proof that an older gap was resolved.
 
@@ -63,10 +70,8 @@ Terra is suggested only when one configured, available model in the selected pro
 the display name **Terra 6.1**. Missing or ambiguous matches stay unresolved, with no guessed ID or
 Sol fallback. Explicit model choices and existing schedules are unchanged.
 
-The passive backend preset is shipped; native preset wiring and editable settings are follow-ups.
-The current setup still uses its existing model picker, and Automations still needs explicit entry.
-Reading defaults, opening status or restarting the daemon grants no access and starts no review or
-schedule. Native grant confirmation and real-review/schedule activation remain separate approvals.
+Editable settings are a follow-up. Opening the confirmation, reading status or restarting the
+daemon grants no access and starts no review or schedule; only **Enable** does.
 
 See the [permission contract](technical/insights-history.md) and
 [verification and limits](technical/insights-review.md#synthetic-checks-and-limits) for technical detail.

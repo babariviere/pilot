@@ -129,6 +129,21 @@ Only the next strictly future occurrence is scheduled, with the existing Paris/D
 Existing Stop, revoke, admission, home/lineage, no-overlap, pause, offline, missed/late run and
 review-completion semantics remain in force. See [review orchestration](insights-review.md).
 
+## Native confirmation (desktop)
+
+`apps/desktop/src/insights_enable.rs` parses preflight/status strictly and freezes `payload` as the exact
+JSON value (no added, dropped or rewritten keys; `expectedHome` checked by daemon/lineage against the pinned
+hello). `insights_enable_view.rs` is the one confirmation inside the existing Insights panel, opened from
+**Automations → Weekly Insights…** or the report chat's settings. The backlog comes only from report chats'
+exact project/mission binding; with zero or several, the confirmation offers active local missions from the
+passive catalog. When exactly one report chat is bound to the backlog, preflight pins it with
+`reportSessionId`. A newer choice or a sent confirmation discards late preflight replies. The command is the
+existing writer's `insights` slot `enable:<missionId>`, persisted before the single POST. **Check** posts
+the retained envelope to the status route and resends the same bytes only when the receipt is `unknown`;
+pending/accepted/rejected receipts are never resent. "On" requires passive status `enabled`. Automations
+off links to Settings → Chats and switches nothing. Mounted probe: `cargo test --features native-probes
+--test insights_enable` (synthetic Local only).
+
 ## Source and verification
 
 - `packages/daemon/src/insights-enable.ts`: preflight, frozen intent, steps and passive reconciliation.

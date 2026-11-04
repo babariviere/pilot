@@ -253,6 +253,8 @@ impl LocalViewer {
                 panel
             }
         };
+        let projects = self.state.projects.clone();
+        panel.update(cx, |p, cx| p.enable_projects(projects, cx));
         let (book, reply) = (self.insights_book.clone(), self.insights_reply.clone());
         panel.update(cx, |p, cx| p.accept(book.as_ref(), reply.as_ref(), cx));
         self.insights_return = w.focused(cx);
@@ -307,6 +309,7 @@ impl LocalViewer {
             InsightsEvent::OpenChat(id) => {
                 let mission = match &panel.read(cx).scope {
                     Scope::Setup { mission, .. } => Some(mission.clone()),
+                    Scope::Enable { .. } => panel.read(cx).enable_mission(),
                     _ => None,
                 };
                 self.close_insights(w, cx);
@@ -323,7 +326,66 @@ impl LocalViewer {
                     self.show_chat_mission(&mission, w, cx);
                 }
             }
+            InsightsEvent::OpenAutomationSettings => {
+                self.close_insights(w, cx);
+                self.open_chat_settings(w, cx);
+            }
+            InsightsEvent::EnableWeekly(session) => {
+                let session = session.clone();
+                self.close_insights(w, cx);
+                self.open_insights_enable(Some(session), w, cx);
+            }
         }
+    }
+
+    /// The trusted backlog of a report chat: its exact project, linked mission and itself.
+    fn insights_binding(chat: &Chat) -> Option<(String, String, String)> {
+        match (&chat.mission, &chat.project_id) {
+            (crate::local_model::MissionAssociation::Linked(m), Some(p))
+                if chat.insights && !chat.local_draft =>
+            {
+                Some((p.clone(), m.clone(), chat.id.clone()))
+            }
+            _ => None,
+        }
+    }
+    /// Weekly enable, from Automations (`from` None) or a report chat's settings.
+    /// A binding comes only from report chats, never a title; ambiguity means a choice.
+    pub(super) fn open_insights_enable(
+        &mut self,
+        from: Option<String>,
+        w: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.editor.update(cx, |e, cx| e.marked(w, cx)) {
+            return;
+        }
+        let mut reports: Vec<_> = self
+            .state
+            .chats
+            .iter()
+            .filter(|c| from.as_ref().is_none_or(|id| &c.id == id))
+            .filter_map(Self::insights_binding)
+            .collect();
+        reports.sort();
+        self.open_insights(Scope::Enable { reports }, w, cx);
+    }
+    /// Settings → Chats, where the existing Automations switch lives. Nothing is switched.
+    pub(super) fn open_chat_settings(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        if !self.project_choices_ready(w, cx) {
+            return;
+        }
+        let open = self.settings_window.is_some();
+        self.settings.update(cx, |owner, cx| {
+            if !owner.restart_locked {
+                owner.category = crate::settings_view::Category::Chats;
+                cx.notify();
+            }
+        });
+        if open && let Some(chats) = self.settings.read(cx).chats.clone() {
+            chats.update(cx, |c, cx| c.open(cx));
+        }
+        self.open_settings(w, cx);
     }
     /// Re-read the Tasks rows and the header count after a decision closes.
     pub(super) fn insights_decided(&mut self, session: String, cx: &mut Context<Self>) {

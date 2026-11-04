@@ -312,6 +312,13 @@ pub(crate) enum Request {
         expected_revision: u64,
         lifecycle: Lifecycle,
     },
+    /// Weekly enable: the host's preflight payload, frozen verbatim at native confirmation.
+    Enable {
+        project_id: String,
+        mission_id: String,
+        target_id: String,
+        payload: String,
+    },
 }
 impl Request {
     pub(crate) fn slot(&self) -> String {
@@ -321,6 +328,7 @@ impl Request {
             Self::Lifecycle {
                 session_id, key, ..
             } => format!("lifecycle:{session_id}:{key}"),
+            Self::Enable { mission_id, .. } => crate::insights_enable::slot(mission_id),
         }
     }
     pub(crate) fn kind(&self) -> &'static str {
@@ -328,6 +336,7 @@ impl Request {
             Self::Create { .. } => "insights-create",
             Self::Revoke { .. } => "insights-revoke",
             Self::Lifecycle { .. } => "insights-lifecycle",
+            Self::Enable { .. } => crate::insights_enable::KIND,
         }
     }
     pub(crate) fn target(&self) -> Option<String> {
@@ -336,6 +345,7 @@ impl Request {
             Self::Revoke { session_id, .. } | Self::Lifecycle { session_id, .. } => {
                 Some(session_id.clone())
             }
+            Self::Enable { target_id, .. } => Some(target_id.clone()),
         }
     }
     pub(crate) fn payload(&self) -> String {
@@ -379,6 +389,8 @@ impl Request {
                 ("expectedRevision", json!(expected_revision)),
                 ("lifecycle", json!(lifecycle.wire())),
             ]),
+            // Exactly the bytes the confirmation showed; never rebuilt.
+            Self::Enable { payload, .. } => payload.clone(),
         }
     }
     pub(crate) fn validate(&self) -> Result<(), Failure> {
@@ -411,6 +423,25 @@ impl Request {
                 ..
             } => {
                 if !crate::local_model::valid_id(session_id) || *expected_revision > MAX_REVISION {
+                    return Err(INVALID);
+                }
+            }
+            Self::Enable {
+                project_id,
+                mission_id,
+                target_id,
+                payload,
+            } => {
+                let p: Value = serde_json::from_str(payload).map_err(|_| INVALID)?;
+                if payload.len() > crate::insights_enable::PAYLOAD_CAP
+                    || !crate::local_model::valid_id(project_id)
+                    || !crate::local_model::valid_id(mission_id)
+                    || !crate::local_model::valid_id(target_id)
+                    || p["projectId"] != project_id.as_str()
+                    || p["missionId"] != mission_id.as_str()
+                    || p["disclosure"] != crate::insights_enable::DISCLOSURE
+                    || p["model"].as_str().is_none_or(|m| m.trim().is_empty())
+                {
                     return Err(INVALID);
                 }
             }
@@ -461,7 +492,12 @@ impl Attempt {
     }
     pub(crate) fn validate(&self, slot: &str) -> Result<(), Failure> {
         let op = &self.operation;
-        if op.payload.len() > 4096 {
+        let cap = if op.kind == crate::insights_enable::KIND {
+            crate::insights_enable::PAYLOAD_CAP
+        } else {
+            4096
+        };
+        if op.payload.len() > cap {
             return Err(CORRUPT);
         }
         let p: Value = serde_json::from_str(&op.payload).map_err(|_| CORRUPT)?;
@@ -487,6 +523,12 @@ impl Attempt {
                 expected_revision: number(&p["expectedRevision"])?,
                 lifecycle: Lifecycle::parse(p["lifecycle"].as_str().ok_or(CORRUPT)?)
                     .ok_or(CORRUPT)?,
+            },
+            crate::insights_enable::KIND => Request::Enable {
+                project_id: id(&p["projectId"])?,
+                mission_id: id(&p["missionId"])?,
+                target_id: op.target_id.clone(),
+                payload: op.payload.clone(),
             },
             _ => return Err(CORRUPT),
         };
@@ -556,6 +598,7 @@ fn valid_result(op: &Operation, result: &Value) -> bool {
     match op.kind.as_str() {
         "insights-create" => true,
         "insights-revoke" => number(&result["revision"]).is_ok(),
+        crate::insights_enable::KIND => valid_enable_result(op, result),
         "insights-lifecycle" => {
             let Ok(payload) = serde_json::from_str::<Value>(&op.payload) else {
                 return false;
@@ -568,6 +611,14 @@ fn valid_result(op: &Operation, result: &Value) -> bool {
         }
         _ => false,
     }
+}
+/// An accepted enable reports both resources: the report chat and its weekly rule.
+pub(crate) fn valid_enable_result(op: &Operation, result: &Value) -> bool {
+    result.to_string().len() <= RESULT_CAP
+        && result["sessionId"] == op.target_id.as_str()
+        && result["phase"] == "enabled"
+        && id(&result["scheduleId"]).is_ok()
+        && result["chat"]["sessionId"] == op.target_id.as_str()
 }
 pub(crate) fn adopt(op: &Operation, receipt: &Value) -> Outcome {
     const MISMATCH: Failure =
@@ -600,7 +651,7 @@ pub(crate) fn adopt(op: &Operation, receipt: &Value) -> Outcome {
         _ => Outcome::Unknown(MISMATCH),
     }
 }
-async fn body(mut response: reqwest::Response) -> Result<Value, Failure> {
+pub(crate) async fn body(mut response: reqwest::Response) -> Result<Value, Failure> {
     if response
         .content_length()
         .is_some_and(|n| n > BODY_CAP as u64)
@@ -675,6 +726,9 @@ pub(crate) async fn check(
     options: &LocalOptions,
     op: &Operation,
 ) -> Outcome {
+    if op.kind == crate::insights_enable::KIND {
+        return crate::insights_enable::check(client, options, op).await;
+    }
     if crate::local_client::gate(client, options).await.is_err() {
         return Outcome::Unknown("Couldn't reach Local. Check again when Pilot is running.");
     }

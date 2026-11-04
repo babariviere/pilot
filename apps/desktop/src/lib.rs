@@ -138,6 +138,8 @@ mod project_slack_reader;
 #[cfg(feature = "native-probes")]
 pub use local_view::chat_rename_probe::run_chat_rename_probe;
 #[cfg(feature = "native-probes")]
+pub use local_view::insights_enable_probe::run_insights_enable_probe;
+#[cfg(feature = "native-probes")]
 pub use local_view::insights_native_probe::run_insights_native_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::project_settings_probe::run_project_settings_probe;
@@ -171,6 +173,7 @@ pub use chat_editor::project_creation_probe::run_project_creation_probe;
 mod delivery_store;
 mod diagnostic_repair;
 mod insights;
+mod insights_enable;
 #[cfg(feature = "native-probes")]
 mod insights_probe;
 mod insights_view;

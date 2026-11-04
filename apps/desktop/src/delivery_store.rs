@@ -1159,6 +1159,17 @@ impl Store {
         use crate::insights::{Attempt, State};
         request.validate()?;
         let slot = request.slot();
+        if let crate::insights::Request::Enable { payload, .. } = request {
+            // The confirmed home must still be this writer's Local; nothing is retargeted.
+            let home = serde_json::from_str::<serde_json::Value>(payload)
+                .map(|p| p["expectedHome"].clone())
+                .unwrap_or_default();
+            if home["daemonId"] != self.book.host.daemon_id.as_str()
+                || home["lineageId"] != self.book.host.lineage_id.as_str()
+            {
+                return Err("Local changed since this confirmation. Nothing was sent.");
+            }
+        }
         self.change(|book| {
             if book.insights.get(&slot).is_some_and(Attempt::open) {
                 return Err("An Insights action is still unconfirmed. Check it; nothing new was sent.");
