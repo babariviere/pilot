@@ -17,6 +17,7 @@ fn chat_actions_old_completion_and_inspection_cannot_release_newer_operation() {
         latest: None,
         error: None,
         next: 2,
+        compact_check: None,
         renames: Default::default(),
         latest_rename: None,
         rename_observers: Default::default(),
@@ -94,6 +95,7 @@ fn chat_actions_inspection_started_before_ack_cannot_release_its_editor_fence() 
         latest: None,
         error: None,
         next: 1,
+        compact_check: None,
     };
     // The read was admitted before the mutation's ACK. Its completion is delayed
     // in the UI queue until after that ACK arrives.

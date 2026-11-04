@@ -5,6 +5,9 @@ use crate::{
 };
 use serde_json::json;
 
+#[path = "compact_tests.rs"]
+mod compact;
+
 fn target(options: &LocalOptions, value: &Value) -> Target {
     Target::new(options, crate::local_model::chat(value).unwrap())
 }

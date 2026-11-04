@@ -305,6 +305,19 @@ impl ChatEditor {
             && !self.closing
             && self.update_checkpoint.is_none()
     }
+    /// Manual compaction shares delivery/model fences, but never consumes a draft.
+    pub(crate) fn compact_ready(&mut self, w: &mut Window, cx: &mut Context<Self>) -> bool {
+        self.ready()
+            && self.writable
+            && !self.busy
+            && !self.compacting
+            && self.questions.current.is_none()
+            && !self.waiting()
+            && self.error.is_none()
+            && self.draft().is_some_and(Draft::editable)
+            && !self.models_block_send()
+            && !self.marked(w, cx)
+    }
     #[cfg(feature = "native-probes")]
     pub(crate) fn update_fixture_draft(
         &mut self,

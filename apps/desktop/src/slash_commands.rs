@@ -4,10 +4,11 @@
 use serde_json::Value;
 use std::ops::Range;
 
-/// A native control a command opens. It is never sent, queued or scheduled as a message.
+/// A native action. It is never sent, queued or scheduled as a chat message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Action {
     Jobs,
+    Compact,
     Model,
     Changes,
     Artifacts,
@@ -72,11 +73,14 @@ fn help() -> Command {
 pub(crate) fn available(scope: Scope, session: &[Command]) -> Vec<Command> {
     let (builtins, app, session) = match scope {
         Scope::Chat { model: has_model } => {
-            let builtins = vec![Command::native(
-                "jobs",
-                Kind::Builtin(Action::Jobs),
-                "Running background jobs",
-            )];
+            let builtins = vec![
+                Command::native(
+                    "jobs",
+                    Kind::Builtin(Action::Jobs),
+                    "Running background jobs",
+                ),
+                Command::native("compact", Kind::Builtin(Action::Compact), "Compact context"),
+            ];
             let mut app = Vec::new();
             if has_model {
                 app.push(model());

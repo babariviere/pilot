@@ -8,6 +8,7 @@ fn actions() -> Actions {
         latest: None,
         error: None,
         next: 0,
+        compact_check: None,
         renames: Default::default(),
         latest_rename: None,
         rename_observers: Default::default(),
@@ -35,6 +36,56 @@ fn report(actions: &mut Actions, id: u64, evidence: Evidence, outcome: Option<Ou
             outcome,
             observed_current: false,
         },
+    );
+}
+
+#[test]
+fn compact_pending_unknown_and_stale_results_share_action_fences() {
+    let mut a = actions();
+    a.compact_check = Some("source".into());
+    assert!(a.blocked("source"));
+    assert!(a.blocked("other"));
+    a.compact_check = None;
+    let e = evidence(false);
+    report(&mut a, 7, e.clone(), None);
+    a.reports.get_mut("source").unwrap().action = Action::Compact;
+    assert!(a.blocked("source"));
+    assert!(a.read_only("source"));
+    assert!(
+        !a.reports
+            .get_mut("source")
+            .unwrap()
+            .finish(6, &e, Outcome::Acknowledged)
+    );
+    let mut stale = e.clone();
+    stale.target.home.daemon = "other".into();
+    assert!(
+        !a.reports
+            .get_mut("source")
+            .unwrap()
+            .finish(7, &stale, Outcome::Acknowledged)
+    );
+    assert!(
+        a.reports
+            .get_mut("source")
+            .unwrap()
+            .finish(7, &e, Outcome::Unknown)
+    );
+    a.inspected(&e, Some(7));
+    a.observe(&[e.target.chat.clone()]);
+    assert!(
+        a.blocked("source"),
+        "GET/list cannot prove compaction admission"
+    );
+    assert!(
+        !a.read_only("source"),
+        "draft editing resumes after Unknown"
+    );
+    assert!(
+        !a.reports
+            .get_mut("source")
+            .unwrap()
+            .finish(7, &e, Outcome::Acknowledged)
     );
 }
 

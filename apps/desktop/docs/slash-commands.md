@@ -7,6 +7,7 @@ narrows it (name prefix, then substring; `skill:` names also match without the p
 | Command | Where | Opens |
 | --- | --- | --- |
 | `/jobs` (built-in) | existing chat | the running-jobs strip, expanded; refuses when no job runs |
+| `/compact` (built-in) | healthy idle chat | explicitly requests manual context compaction |
 | `/model` | composer with a model picker | the composer's model menu, with its own busy/pending rows |
 | `/changes` | existing chat | the Changes panel, through its header toggle |
 | `/artifacts` | existing chat | the artifact gallery; refuses when the chat has none |
@@ -42,10 +43,25 @@ New chats have no session, so they offer only `/model` and `/help`.
 
 ## Not offered
 
-- `/compact`: pilotd has `POST /api/sessions/:id/compact`, but Pilot Next has no
-  compaction handler, so the name is not reserved and no disabled stub is shown.
 - `/mode` (Ask/Build choice) and `/terminal` (deferred) are not implemented.
 - `/model name` filtering: the Kit menu has no query setter; `/model` takes no arguments.
 
 Checks: `slash_commands::tests`, `chat_editor::slash::tests` and the hidden
 `slash_commands` native probe (680/1100 × light/dark).
+
+## Manual compaction
+
+`/compact` takes no arguments. Choosing it keeps attachments, remaining draft and
+focus. Busy/read-only/failed/paused chats, queued input and pending or uncertain
+delivery refuse the action. The existing chat-action owner checks current Local
+hello and session eligibility before one `POST /api/sessions/:id/compact` with `{}`.
+It never sends a chat message, retries a failed turn or triggers handoff.
+
+Only `202 {"ok":true}` acknowledges admission, not completion of the summary.
+400/404/409 are refusals; other statuses, lost replies and malformed ACKs stay
+Unconfirmed and block repeating the action in this window. Reads are never proof
+of acceptance. There is no automatic retry or saved request replay. The endpoint
+has no client operation ID or incarnation/CAS precondition; hello/session reads
+are preflight checks, not atomic admission fences. Existing daemon guards remain
+authoritative, including races after preflight. Native tests use synthetic servers
+only, never live compaction or provider calls.

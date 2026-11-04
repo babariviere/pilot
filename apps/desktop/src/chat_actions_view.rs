@@ -89,6 +89,7 @@ pub(crate) struct Actions {
     latest: Option<String>,
     error: Option<Failure>,
     next: u64,
+    pub(crate) compact_check: Option<String>,
     pub(crate) rename_observers: BTreeMap<String, gpui_kit::Subscription>,
     pub(crate) latest_rename: Option<String>,
     pub(crate) renames: BTreeMap<String, gpui_kit::Entity<crate::chat_rename_view::Rename>>,
@@ -123,6 +124,7 @@ impl Actions {
             .values()
             .any(|r| r.outcome.is_none())
             .then_some(Blocker::ChatAction)
+            .or(self.compact_check.as_ref().map(|_| Blocker::ChatAction))
     }
     pub(crate) fn new(_: &mut Context<Self>) -> Self {
         Self {
@@ -132,6 +134,7 @@ impl Actions {
             latest: None,
             error: None,
             next: 0,
+            compact_check: None,
             renames: BTreeMap::new(),
             latest_rename: None,
             rename_observers: BTreeMap::new(),
@@ -169,7 +172,8 @@ impl Actions {
             .is_some_and(|r| r.outcome == Some(Outcome::Unknown) && r.action != Action::Retry)
         {
             Some("Earlier action unconfirmed. Do not repeat it.")
-        } else if self.reports.values().any(|r| r.outcome.is_none()) {
+        } else if self.compact_check.is_some() || self.reports.values().any(|r| r.outcome.is_none())
+        {
             Some("A chat action is still pending.")
         } else {
             None
@@ -184,6 +188,9 @@ impl Actions {
     }
     pub(crate) fn read_only(&self, id: &str) -> bool {
         self.reports.get(id).is_some_and(|r| {
+            if r.action == Action::Compact {
+                return r.outcome.is_none();
+            }
             if r.action == Action::RerunSetup {
                 // Setup runs beside the conversation; the composer stays as it is.
                 return false;
@@ -248,6 +255,8 @@ impl Actions {
             evidence.can_retry_turn
         } else if action == Action::RetryHandoff {
             evidence.can_retry_handoff
+        } else if action == Action::Compact {
+            evidence.can_compact
         } else if action == Action::RerunSetup {
             evidence.can_rerun_setup
         } else {
@@ -496,6 +505,7 @@ impl Render for Actions {
                     Action::Retry => "Retry startup",
                     Action::RetryTurn(_) | Action::RetryHandoff => "Retry",
                     Action::RerunSetup => "Run setup again",
+                    Action::Compact => "Compact",
                     _ if r.evidence.archive => "Archive",
                     _ => "Restore",
                 };
@@ -503,17 +513,22 @@ impl Render for Actions {
                     Action::Retry => STARTUP_UNKNOWN,
                     Action::RetryTurn(_) | Action::RetryHandoff => RETRY_UNKNOWN,
                     Action::RerunSetup => SETUP_UNKNOWN,
+                    Action::Compact => "Compaction unconfirmed. Do not repeat it.",
                     _ => "No valid acknowledgment. Do not repeat this action. Check this exact chat in Swift; later visibility is not a receipt.",
                 };
-                let (status, detail, tone) = match r.outcome {
+                let (status, detail, tone) = match &r.outcome {
+                    None if r.action == Action::Compact => ("Pending", "Waiting for Local.", Tone::Quiet),
                     None => ("Pending", "Waiting for Local. This request will not be retried automatically.", Tone::Quiet),
                     // Keep the exact ACK/report for fences and inspection, not routine success chrome.
                     Some(Outcome::Acknowledged) => return None,
-                    Some(Outcome::Rejected(error)) => ("Not submitted", error, Tone::Error),
+                    Some(Outcome::Rejected(error)) => ("Not submitted", *error, Tone::Error),
+                    Some(Outcome::CompactRefused(error)) => ("Not submitted", error.as_str(), Tone::Error),
                     Some(Outcome::Unknown) => ("Unconfirmed", unknown, Tone::Warning),
                 };
+                let detail = if r.action == Action::Compact { format!("{}\n{detail}", r.evidence.target.chat.title) }
+                    else { format!("{} ({})\n{detail}", r.evidence.target.chat.title, r.evidence.target.chat.id) };
                 Some(div().p_2().child(Notice::new(SharedString::from(format!("{verb} · {status}")))
-                    .detail(SharedString::from(format!("{} ({})\n{detail}", r.evidence.target.chat.title, r.evidence.target.chat.id))).tone(tone)))
+                    .detail(SharedString::from(detail)).tone(tone)))
             }))
             .children(self.latest_rename.as_ref().and_then(|id| self.renames.get(id)).and_then(|form| form.read(cx).status()).map(|(text,tone)|div().p_2().child(Notice::new(text).tone(tone))))
             .children(self.error.map(|e| div().p_2().child(Notice::new(e).tone(Tone::Error))))

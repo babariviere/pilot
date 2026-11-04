@@ -87,6 +87,18 @@ impl Daemon {
                                         assert!(s.source["missionId"].is_null()); s.source["missionId"]=json!("mission-exact");
                                         (201,json!({"mission":{"id":"mission-exact","projectId":"project"}}),matches!(s.behavior,Behavior::Slow))
                                     }
+                                    ("POST", "/api/sessions/source/compact") => {
+                                        assert_eq!(payload, json!({}));
+                                        assert!(!capability);
+                                        match s.behavior {
+                                            Behavior::Lost => return,
+                                            Behavior::ErrorAfter => (500,json!({"error":"synthetic post-admission failure"}),false),
+                                            Behavior::WrongId => (202,json!({"id":"other"}),false),
+                                            Behavior::Slow => (202,json!({"ok":true}),true),
+                                            Behavior::Accept => (202,json!({"ok":true}),false),
+                                            Behavior::Refuse(code) => (code,json!({"error":"synthetic refusal"}),false),
+                                        }
+                                    }
                                     ("POST", "/api/sessions/source/retry-startup") => {
                                         assert!(payload.is_null());
                                         s.source["state"]=json!("idle");

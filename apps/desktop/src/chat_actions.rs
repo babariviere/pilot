@@ -53,6 +53,8 @@ pub(crate) struct Evidence {
     /// Setup can be queued again: an idle, unarchived chat with no setup running.
     /// pilotd also requires Automations on and an isolated Build workspace.
     pub(crate) can_rerun_setup: bool,
+    /// Explicit manual compaction only. No turn retry or new message.
+    pub(crate) can_compact: bool,
 }
 impl Evidence {
     pub(crate) fn read(target: &Target, raw: &Value, guarded: bool) -> Result<Self, Failure> {
@@ -187,6 +189,21 @@ impl Evidence {
                 && idle
                 && raw["control"] != true
                 && raw["workspaceSetup"]["state"] != "pending",
+            can_compact: idle
+                && crate::local_model::interactive_local(raw)
+                && raw["working"] != true
+                && raw["failure"].is_null()
+                && raw["outcome"] != "failed"
+                && raw["pending"].as_array().is_none_or(Vec::is_empty)
+                && raw["subscriptionPause"].is_null()
+                && [
+                    "preparing",
+                    "initializing",
+                    "kernelRestartPending",
+                    "continuationPending",
+                ]
+                .iter()
+                .all(|key| raw[*key] != true),
         })
     }
 }
@@ -207,6 +224,8 @@ pub(crate) enum Action {
     /// Queue the workspace setup hooks again (`POST /api/sessions/:id/setup`).
     /// No model turn; never repeated after an unconfirmed answer.
     RerunSetup,
+    /// Admit manual compaction; never sends or replays a chat message.
+    Compact,
 }
 impl Action {
     pub(crate) fn retry(self) -> bool {
@@ -217,6 +236,8 @@ impl Action {
 pub(crate) enum Outcome {
     Acknowledged,
     Rejected(Failure),
+    /// A bounded real refusal from the manual-compaction endpoint.
+    CompactRefused(String),
     Unknown,
 }
 

@@ -147,6 +147,49 @@ pub(crate) async fn set(
         }
         Err(error) => return Outcome::Rejected(error),
     };
+    if action == Action::Compact {
+        if !current.can_compact {
+            return Outcome::Rejected("Compaction requires a healthy idle chat.");
+        }
+        if let Err(reason) = crate::local_client::hello(client, options).await {
+            return Outcome::Rejected(reason);
+        }
+        // The existing endpoint returns only 202 {ok:true}: admission, not a
+        // completed summary or an idempotent receipt. Never replay or infer ACK
+        // from history. 409 is a pre-admission guard/ConversationBusy refusal.
+        let response = client
+            .post(format!(
+                "{}/api/sessions/{}/compact",
+                options.loopback(),
+                current.target.chat.id
+            ))
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .body("{}")
+            .timeout(RETRY_DEADLINE)
+            .send()
+            .await;
+        let Ok(response) = response else {
+            return Outcome::Unknown;
+        };
+        return match response.status() {
+            reqwest::StatusCode::ACCEPTED => match body(response).await {
+                Ok(value) if value == serde_json::json!({"ok":true}) => Outcome::Acknowledged,
+                _ => Outcome::Unknown,
+            },
+            reqwest::StatusCode::CONFLICT
+            | reqwest::StatusCode::BAD_REQUEST
+            | reqwest::StatusCode::NOT_FOUND => {
+                let reason = body(response)
+                    .await
+                    .ok()
+                    .and_then(|v| v["error"].as_str().map(str::to_owned))
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| "Compaction refused. Check this chat's state.".into());
+                Outcome::CompactRefused(reason)
+            }
+            _ => Outcome::Unknown,
+        };
+    }
     if let Action::RetryTurn(entry) = action {
         // pilotd forks a new attempt and sends the failed turn's user message
         // itself. Nothing is reposted by this client, and an unconfirmed POST

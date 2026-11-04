@@ -101,6 +101,7 @@ pub fn run_slash_commands_probe(cx: &mut HeadlessAppContext) {
                 names(cx).unwrap(),
                 [
                     "jobs",
+                    "compact",
                     "changes",
                     "artifacts",
                     "review",
@@ -198,6 +199,114 @@ pub fn run_slash_commands_probe(cx: &mut HeadlessAppContext) {
             assert_eq!(value(cx), "/");
             assert!(names(cx).is_some(), "committed slash opens the menu");
             assert!(server.all_gets());
+            // Manual compaction uses the existing action owner, not message delivery.
+            let raw = json!({"id":"source","title":"Slash commands","cwd":"/synthetic/project","state":"idle","mode":"build"});
+            server.reply("/api/sessions/source", Reply::json(200, raw.clone()));
+            let mut ack = Reply::json(202, json!({"ok":true}));
+            ack.delay_ms = 160;
+            server.reply("/api/sessions/source/compact", ack);
+            cx.update_window(h, |_, _, cx| {
+                view.update(cx, |v, cx| {
+                    v.chat_actions
+                        .update(cx, |a, cx| a.connect(server.options.clone(), cx));
+                    v.state.status = "Synthetic Local fixture".into();
+                    v.state.list_loaded = true;
+                    v.state.chats = Arc::new(vec![crate::local_model::chat(&raw).unwrap()]);
+                })
+            })
+            .unwrap();
+            // A pending message delivery blocks the native action, not just Send.
+            cx.update_window(h, |_, w, cx| {
+                view.update(cx, |v, cx| {
+                    v.editor.update(cx, |e, _| e.model_probe_pending(true));
+                    assert!(
+                        v.run_slash_action(
+                            crate::slash_commands::Action::Compact,
+                            "chat:source",
+                            w,
+                            cx
+                        )
+                        .is_err()
+                    );
+                    v.editor.update(cx, |e, _| e.model_probe_pending(false));
+                })
+            })
+            .unwrap();
+            assert!(server.writes().is_empty());
+            // A late eligibility read from an earlier connection must not POST.
+            let mut delayed = Reply::json(200, raw.clone());
+            delayed.delay_ms = 100;
+            server.reply("/api/sessions/source", delayed);
+            set(cx, "/compact");
+            press(cx, "enter");
+            cx.update_window(h, |_, _, cx| view.update(cx, |v, _| v.generation += 1))
+                .unwrap();
+            until(cx, h, "stale compact read did not settle", |_, cx| {
+                view.read(cx).chat_actions.read(cx).compact_check.is_none()
+            });
+            assert!(server.writes().is_empty());
+            server.reply("/api/sessions/source", Reply::json(200, raw.clone()));
+            cx.update_window(h, |_, _, cx| {
+                view.update(cx, |v, _| v.state.generation = v.generation)
+            })
+            .unwrap();
+            set(cx, "/co keep 👩‍💻 e\u{301}");
+            cx.update_window(h, |_, _, cx| {
+                input.update(cx, |i, cx| i.set_selected_range(3..3, cx))
+            })
+            .unwrap();
+            settle(cx, h);
+            cx.update_window(h, |_, w, cx| w.click("slash-command-compact", cx))
+                .unwrap();
+            until(cx, h, "compact POST not dispatched", |_, _| {
+                !server.state.lock().unwrap().writes.is_empty()
+            });
+            assert_eq!(value(cx), "keep 👩‍💻 e\u{301}");
+            cx.update_window(h, |_, w, cx| {
+                view.update(cx, |v, cx| {
+                    assert!(
+                        v.run_slash_action(
+                            crate::slash_commands::Action::Compact,
+                            "chat:source",
+                            w,
+                            cx
+                        )
+                        .is_err()
+                    );
+                })
+            })
+            .unwrap();
+            until(cx, h, "compact ACK not retained", |_, cx| {
+                view.read(cx).chat_actions.read(cx).outcome("source")
+                    == Some(&crate::chat_actions::Outcome::Acknowledged)
+            });
+            let posts = server.state.lock().unwrap().writes.clone();
+            assert_eq!(posts.len(), 1);
+            assert_eq!(posts[0].1, "/api/sessions/source/compact");
+            assert_eq!(posts[0].3, json!({}));
+            cx.update_window(h, |_, w, cx| {
+                assert!(input.read(cx).focus_handle(cx).is_focused(w))
+            })
+            .unwrap();
+            // A malformed ACK remains Unknown even after a successful GET inspection.
+            server.reply(
+                "/api/sessions/source/compact",
+                Reply::json(202, json!({"ok":false})),
+            );
+            set(cx, "/compact");
+            press(cx, "enter");
+            until(cx, h, "compact Unknown not retained", |_, cx| {
+                view.read(cx).chat_actions.read(cx).outcome("source")
+                    == Some(&crate::chat_actions::Outcome::Unknown)
+            });
+            set(cx, "/compact");
+            press(cx, "enter");
+            assert_eq!(value(cx), "/compact");
+            assert_eq!(
+                server.state.lock().unwrap().writes.len(),
+                2,
+                "Unknown never replays"
+            );
             assert!(
                 writes.try_recv().is_err(),
                 "slash commands never send, queue, create or stop"

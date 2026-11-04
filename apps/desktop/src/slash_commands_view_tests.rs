@@ -67,16 +67,21 @@ fn leading_slash_opens_native_commands_and_typing_refines(cx: &mut TestAppContex
     type_text(cx, h, &view, "/");
     assert_eq!(
         menu(cx, &view).unwrap(),
-        ["jobs", "changes", "artifacts", "help"]
+        ["jobs", "compact", "changes", "artifacts", "help"]
     );
     act(cx, h, |w, cx| {
         w.render_frame(cx);
         assert!(w.try_find("slash-commands").is_some());
     });
     type_text(cx, h, &view, "a");
-    assert_eq!(menu(cx, &view).unwrap(), ["artifacts", "changes"]);
+    assert_eq!(
+        menu(cx, &view).unwrap(),
+        ["artifacts", "compact", "changes"]
+    );
     press(cx, h, "down");
     assert_eq!(cx.read(|cx| view.read(cx).slash_probe().unwrap().1), 1);
+    press(cx, h, "down");
+    assert_eq!(cx.read(|cx| view.read(cx).slash_probe().unwrap().1), 2);
     press(cx, h, "down");
     assert_eq!(
         cx.read(|cx| view.read(cx).slash_probe().unwrap().1),
@@ -174,6 +179,59 @@ fn native_commands_never_send_and_report_why_nothing_opened(cx: &mut TestAppCont
 }
 
 #[gpui_kit::test]
+fn compact_arguments_are_refused_without_sending(cx: &mut TestAppContext) {
+    let (h, view, commands) = setup(cx);
+    set_text(cx, h, &view, "/compact keep important details");
+    press(cx, h, "enter");
+    assert_eq!(value(cx, &view), "/compact keep important details");
+    assert_eq!(
+        note(cx, &view).as_deref(),
+        Some("Use /compact without arguments.")
+    );
+    no_submit(&commands);
+}
+
+#[gpui_kit::test]
+fn compact_guard_keeps_draft_attachments_focus_and_preedit(cx: &mut TestAppContext) {
+    let (h, view, commands) = setup(cx);
+    set_text(cx, h, &view, "keep 👩‍💻 e\u{301}");
+    act(cx, h, |w, cx| {
+        view.update(cx, |e, cx| {
+            e.busy = false;
+            let attachment = crate::image_attachments::Attachment {
+                id: "synthetic".into(),
+                path: "/synthetic/image.png".into(),
+                hash: "a".repeat(64),
+            };
+            e.cache
+                .get_mut("chat:a")
+                .unwrap()
+                .attachments
+                .push(attachment.clone());
+            assert!(e.compact_ready(w, cx));
+            let before = e.cache["chat:a"].clone();
+            e.pending.insert("chat:a".into(), 9);
+            assert!(!e.compact_ready(w, cx));
+            e.pending.clear();
+            e.cache.get_mut("chat:a").unwrap().pending = Some("unknown".into());
+            assert!(!e.compact_ready(w, cx));
+            e.cache.insert("chat:a".into(), before.clone());
+            assert_eq!(e.cache["chat:a"].attachments, [attachment]);
+            assert_eq!(e.cache["chat:a"].text, before.text);
+            assert!(e.text.read(cx).focus_handle(cx).is_focused(w));
+            e.text.update(cx, |i, cx| {
+                i.replace_and_mark_text_in_range(None, "未", Some(1..1), w, cx)
+            });
+            let marked = e.text.read(cx).value().to_string();
+            assert!(!e.compact_ready(w, cx));
+            assert_eq!(e.text.read(cx).value().as_ref(), marked);
+            assert!(e.marked(w, cx));
+        })
+    });
+    no_submit(&commands);
+}
+
+#[gpui_kit::test]
 fn unknown_and_session_slash_text_sends_as_typed(cx: &mut TestAppContext) {
     for text in ["/unknown thing", "/review 12", "/helpme"] {
         let (h, view, commands) = setup(cx);
@@ -257,13 +315,13 @@ fn session_commands_apply_only_to_their_exact_source(cx: &mut TestAppContext) {
         };
         assert_eq!(
             names(Some(&source("a", 3))),
-            ["jobs", "changes", "artifacts", "review", "help"]
+            ["jobs", "compact", "changes", "artifacts", "review", "help"]
         );
         // Another chat, a reconnect or no source never uses this list.
         for other in [Some(source("b", 3)), Some(source("a", 4)), None] {
             assert_eq!(
                 names(other.as_ref()),
-                ["jobs", "changes", "artifacts", "help"]
+                ["jobs", "compact", "changes", "artifacts", "help"]
             );
         }
         assert!(e.slash_available("subagent:a:x", None).is_none());

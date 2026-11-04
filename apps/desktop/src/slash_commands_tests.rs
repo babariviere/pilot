@@ -33,11 +33,14 @@ fn parse_skips_malformed_and_normalizes_display_text() {
 
 #[test]
 fn builtins_are_reserved_and_session_commands_win_app_names() {
-    let all = available(Scope::Chat { model: true }, &session());
+    let mut session = session();
+    session.push(Command::native("compact", Kind::Prompt, "Cannot shadow"));
+    let all = available(Scope::Chat { model: true }, &session);
     assert_eq!(
         names(&all),
         [
             "jobs",
+            "compact",
             "model",
             "changes",
             "artifacts",
@@ -47,6 +50,7 @@ fn builtins_are_reserved_and_session_commands_win_app_names() {
         ]
     );
     assert_eq!(all[0].kind, Kind::Builtin(Action::Jobs));
+    assert_eq!(all[1].kind, Kind::Builtin(Action::Compact));
     // The session's /help is a prompt; the app control stays in its menu and shortcut.
     assert_eq!(
         all.iter().find(|c| c.name == "help").unwrap().kind,
@@ -54,7 +58,10 @@ fn builtins_are_reserved_and_session_commands_win_app_names() {
     );
     // Model is offered only where the composer has a model picker.
     let without = available(Scope::Chat { model: false }, &[]);
-    assert_eq!(names(&without), ["jobs", "changes", "artifacts", "help"]);
+    assert_eq!(
+        names(&without),
+        ["jobs", "compact", "changes", "artifacts", "help"]
+    );
 }
 
 #[test]
@@ -90,12 +97,12 @@ fn token_requires_leading_slash_and_caret_at_token_end() {
 fn matching_prefers_prefix_then_substring_and_bare_skill_names() {
     let all = available(Scope::Chat { model: true }, &session());
     assert_eq!(matches("", &all, 50).len(), all.len());
-    assert_eq!(names(&matches("co", &all, 50)), ["skill:commit"]);
+    assert_eq!(names(&matches("co", &all, 50)), ["compact", "skill:commit"]);
     assert_eq!(
         names(&matches("E", &all, 50)),
         ["model", "changes", "review", "help"]
     );
-    assert_eq!(names(&matches("a", &all, 2)), ["artifacts", "changes"]);
+    assert_eq!(names(&matches("a", &all, 2)), ["artifacts", "compact"]);
     assert!(matches("zzz", &all, 50).is_empty());
 }
 
