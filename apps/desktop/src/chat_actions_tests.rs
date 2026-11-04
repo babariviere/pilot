@@ -232,6 +232,121 @@ async fn post_dispatch_failures_are_unknown_and_readback_never_replays_or_settle
         );
     }
 }
+fn failed_handoff() -> Value {
+    let mut raw = failed_turn();
+    raw["outcomeReason"] = json!("Compaction failed: The handoff writer's model request failed.");
+    raw["canRetryHandoff"] = json!(true);
+    raw
+}
+#[test]
+fn handoff_retry_needs_pilotd_evidence_and_an_idle_failed_chat() {
+    let o = LocalOptions::synthetic(1);
+    let raw = failed_handoff();
+    let e = Evidence::read(&target(&o, &raw), &raw, true).unwrap();
+    assert!(e.can_retry_handoff && !e.can_retry_startup);
+    assert_eq!(e.stamp["canRetryHandoff"], true);
+    let mut other = failed_turn();
+    other["canRetryHandoff"] = json!(false);
+    assert!(
+        !Evidence::read(&target(&o, &other), &other, true)
+            .unwrap()
+            .can_retry_handoff
+    );
+    for (field, value) in [
+        ("working", json!(true)),
+        ("state", json!("working")),
+        ("archivedAt", json!(5)),
+        ("outcome", json!("done")),
+    ] {
+        let mut raw = failed_handoff();
+        raw[field] = value;
+        let e = Evidence::read(&target(&o, &raw), &raw, true).unwrap();
+        assert!(!e.can_retry_handoff, "{field}");
+    }
+    let mut bad = failed_handoff();
+    bad["canRetryHandoff"] = json!("yes");
+    assert!(Evidence::read(&target(&o, &bad), &bad, true).is_err());
+}
+#[tokio::test]
+async fn a_failed_handoff_retries_once_and_never_reposts() {
+    let d = Daemon::start(Behavior::Accept).await;
+    let c = transport::client().unwrap();
+    d.seen.lock().unwrap().source = failed_handoff();
+    let raw = failed_handoff();
+    let e = transport::inspect(&c, &d.options, &target(&d.options, &raw))
+        .await
+        .unwrap();
+    assert!(
+        transport::set(&c, &d.options, &e, Action::RetryHandoff).await == Outcome::Acknowledged
+    );
+    let seen = d.seen.lock().unwrap();
+    let posts: Vec<_> = seen.requests.iter().filter(|r| r.0 == "POST").collect();
+    assert_eq!(posts.len(), 1);
+    assert_eq!(posts[0].1, "/api/sessions/source/retry-handoff");
+    assert!(
+        !seen
+            .requests
+            .iter()
+            .any(|r| r.1.ends_with("/messages") || r.1.ends_with("/rewind"))
+    );
+}
+#[tokio::test]
+async fn handoff_retry_refuses_stale_evidence_and_keeps_unconfirmed_answers_unknown() {
+    // Stale or ineligible evidence never posts.
+    let d = Daemon::start(Behavior::Accept).await;
+    let c = transport::client().unwrap();
+    d.seen.lock().unwrap().source = failed_handoff();
+    let raw = failed_handoff();
+    let e = transport::inspect(&c, &d.options, &target(&d.options, &raw))
+        .await
+        .unwrap();
+    d.seen.lock().unwrap().source["outcomeAt"] = json!(43);
+    assert!(matches!(
+        transport::set(&c, &d.options, &e, Action::RetryHandoff).await,
+        Outcome::Rejected(_)
+    ));
+    assert!(d.seen.lock().unwrap().requests.iter().all(|r| r.0 == "GET"));
+    let turn = failed_turn();
+    d.seen.lock().unwrap().source = turn.clone();
+    let e = transport::inspect(&c, &d.options, &target(&d.options, &turn))
+        .await
+        .unwrap();
+    assert!(matches!(
+        transport::set(&c, &d.options, &e, Action::RetryHandoff).await,
+        Outcome::Rejected(_)
+    ));
+    assert!(d.seen.lock().unwrap().requests.iter().all(|r| r.0 == "GET"));
+    for (behavior, unknown) in [
+        (Behavior::Lost, true),
+        (Behavior::ErrorAfter, true),
+        (Behavior::WrongId, true),
+        (Behavior::Refuse(400), true),
+        (Behavior::Refuse(500), true),
+        (Behavior::Refuse(409), false),
+        (Behavior::Refuse(404), false),
+    ] {
+        let d = Daemon::start(behavior).await;
+        d.seen.lock().unwrap().source = failed_handoff();
+        let e = transport::inspect(&c, &d.options, &target(&d.options, &raw))
+            .await
+            .unwrap();
+        let outcome = transport::set(&c, &d.options, &e, Action::RetryHandoff).await;
+        if unknown {
+            assert!(outcome == Outcome::Unknown);
+        } else {
+            assert!(matches!(outcome, Outcome::Rejected(_)));
+        }
+        let posts = d
+            .seen
+            .lock()
+            .unwrap()
+            .requests
+            .iter()
+            .filter(|r| r.0 == "POST")
+            .count();
+        assert_eq!(posts, 1);
+    }
+}
 #[tokio::test]
 async fn late_ack_stays_original_and_only_explicit_set_submits() {
     let d = Daemon::start(Behavior::Slow).await;

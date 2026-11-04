@@ -120,6 +120,25 @@ impl Daemon {
                                             }
                                         }
                                     }
+                                    ("POST", "/api/sessions/source/retry-handoff") => {
+                                        assert!(!capability);
+                                        assert!(payload["operationId"].as_str().is_some_and(|id| !id.is_empty() && id.len() <= 128));
+                                        assert_eq!(payload.as_object().unwrap().len(), 1);
+                                        if let Behavior::Refuse(code) = s.behavior {
+                                            (code,json!({"error":"synthetic refusal"}),false)
+                                        } else {
+                                            // The admitted input starts a fresh run.
+                                            for key in ["outcome","outcomeAt","outcomeReason","canRetryHandoff"] { s.source.as_object_mut().unwrap().remove(key); }
+                                            s.source["state"]=json!("working"); s.source["working"]=json!(true);
+                                            match s.behavior {
+                                                Behavior::Lost => return,
+                                                Behavior::ErrorAfter => (500,json!({"error":"synthetic post-admission failure"}),false),
+                                                Behavior::WrongId => (200,json!({"id":"other"}),false),
+                                                Behavior::Slow => (200,s.source.clone(),true),
+                                                _ => (200,s.source.clone(),false),
+                                            }
+                                        }
+                                    }
                                     ("POST", path) if ["archive", "restore"].iter().any(|verb| path == format!("/api/sessions/{}/{verb}", s.source["id"].as_str().unwrap())) => {
                                         assert!(payload.is_null());
                                         if path.ends_with("/archive") {s.source["archivedAt"]=json!(1234);} else {s.source.as_object_mut().unwrap().remove("archivedAt");}

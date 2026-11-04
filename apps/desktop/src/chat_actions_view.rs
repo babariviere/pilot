@@ -246,6 +246,8 @@ impl Actions {
             evidence.can_retry_startup
         } else if let Action::RetryTurn(_) = action {
             evidence.can_retry_turn
+        } else if action == Action::RetryHandoff {
+            evidence.can_retry_handoff
         } else if action == Action::RerunSetup {
             evidence.can_rerun_setup
         } else {
@@ -357,7 +359,7 @@ impl Actions {
             };
             match (&r.outcome, r.action) {
                 (None, _) => return RetryView::Busy,
-                (Some(Outcome::Unknown), Action::RetryTurn(_)) => {
+                (Some(Outcome::Unknown), Action::RetryTurn(_) | Action::RetryHandoff) => {
                     return RetryView::Blocked(RETRY_UNKNOWN);
                 }
                 (Some(Outcome::Unknown), _) if same => return RetryView::Failed(STARTUP_UNKNOWN),
@@ -492,14 +494,14 @@ impl Render for Actions {
             .children(report.and_then(|r| {
                 let verb = match r.action {
                     Action::Retry => "Retry startup",
-                    Action::RetryTurn(_) => "Retry",
+                    Action::RetryTurn(_) | Action::RetryHandoff => "Retry",
                     Action::RerunSetup => "Run setup again",
                     _ if r.evidence.archive => "Archive",
                     _ => "Restore",
                 };
                 let unknown = match r.action {
                     Action::Retry => STARTUP_UNKNOWN,
-                    Action::RetryTurn(_) => RETRY_UNKNOWN,
+                    Action::RetryTurn(_) | Action::RetryHandoff => RETRY_UNKNOWN,
                     Action::RerunSetup => SETUP_UNKNOWN,
                     _ => "No valid acknowledgment. Do not repeat this action. Check this exact chat in Swift; later visibility is not a receipt.",
                 };

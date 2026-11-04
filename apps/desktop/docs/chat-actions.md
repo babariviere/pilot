@@ -196,9 +196,9 @@ not part of this feature. No browser/terminal/updater/backend/permission expansi
 
 The row menu's **Retry startup** and the failure banner's **Retry** share this
 owner and its reports, labelled by action (`Report::action`). The banner and
-its two contracts are described in [session-failure.md](session-failure.md#retry).
+its contracts are described in [session-failure.md](session-failure.md#retry).
 A retry in flight waits input like a pending archive; an unconfirmed failed-turn
-retry blocks this chat's actions (it may have resent the message), while an
+or handoff retry blocks this chat's actions (it may have started a run), while an
 unconfirmed startup retry may be requested again because it only reloads the
 same outbox. The selected failure shows its own retry status, so the sidebar
 status omits it (`Actions::show_retry_inline`).

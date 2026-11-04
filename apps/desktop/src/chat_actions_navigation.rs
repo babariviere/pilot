@@ -354,6 +354,13 @@ impl LocalViewer {
                 });
                 self.sync_chat_action_permission(cx);
             }
+            Action::RetryHandoff if evidence.can_retry_handoff => {
+                // pilotd admits one new input that starts a fresh run. Nothing
+                // earlier is resent; the draft and queue are kept.
+                self.chat_actions
+                    .update(cx, |a, cx| a.submit(evidence, Action::RetryHandoff, w, cx));
+                self.sync_chat_action_permission(cx);
+            }
             Action::Convert if evidence.can_convert => {
                 self.open_row_mission(evidence.target, w, cx)
             }

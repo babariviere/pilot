@@ -1,6 +1,7 @@
 //! The failed chat's Retry: one eligibility read, then the shared non-replayable
 //! chat action. A startup failure reloads its worker (`retry-startup`); a failed
-//! turn uses Swift's failed-turn Retry (`rewind` with `retry`). Never automatic.
+//! automatic handoff starts one fresh run (`retry-handoff`); a failed turn uses
+//! Swift's failed-turn Retry (`rewind` with `retry`). Never automatic.
 use super::*;
 use crate::{
     chat_actions::{Action, Evidence, Failure as Refusal},
@@ -37,7 +38,8 @@ impl LocalViewer {
             Some("Reconnect to Local to retry.")
         } else if self.editor.read(cx).waiting_for(&format!("chat:{id}")) {
             Some("Wait until your last message is confirmed.")
-        } else if failure.startup {
+        } else if failure.startup || failure.handoff {
+            // Both are explicit recoveries, so pilotd applies a saved model too.
             None
         } else if failure.next_model {
             // pilotd applies a saved choice only to a startup retry or a new message.
@@ -68,7 +70,7 @@ impl LocalViewer {
         ) {
             return;
         }
-        let entry = if failure.startup {
+        let entry = if failure.startup || failure.handoff {
             None
         } else {
             self.state.retry_entry
@@ -175,7 +177,7 @@ impl LocalViewer {
         // The exact failure, attempt and failed turn the user saw, still current.
         let current = self.selected_failure() == Some(failure)
             && !self.session_failure_fence.historical(failure)
-            && (failure.startup || self.state.retry_entry == entry)
+            && (failure.startup || failure.handoff || self.state.retry_entry == entry)
             && matches!(
                 self.failure_retry(failure, cx),
                 Some(RetryOffer::View(RetryView::Ready | RetryView::Failed(_)))
@@ -184,7 +186,8 @@ impl LocalViewer {
             return self.retry_refused(id, CHANGED, cx);
         }
         let action = match entry {
-            None if evidence.can_retry_startup => Action::Retry,
+            None if failure.startup && evidence.can_retry_startup => Action::Retry,
+            None if failure.handoff && evidence.can_retry_handoff => Action::RetryHandoff,
             Some(entry) if evidence.can_retry_turn => Action::RetryTurn(entry),
             _ => return self.retry_refused(id, INELIGIBLE, cx),
         };

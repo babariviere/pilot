@@ -20,6 +20,16 @@ fn failed_startup() -> serde_json::Value {
     raw["error"] = json!("Session startup: synthetic extension load failed");
     raw
 }
+/// pilotd's `canRetryHandoff` failure. A saved model still applies to this retry.
+fn failed_handoff() -> serde_json::Value {
+    let mut raw = failed_turn();
+    raw["outcomeReason"] = json!(
+        "Compaction failed: The handoff writer's model request failed. Original context was preserved."
+    );
+    raw["canRetryHandoff"] = json!(true);
+    raw["nextAttemptModel"] = json!({"model":"provider/next"});
+    raw
+}
 fn setup_failed() -> serde_json::Value {
     let mut raw = f::source();
     raw["workspaceSetup"] =
@@ -458,6 +468,28 @@ fn edges(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     }
     j.close(cx);
 
+    // Failed automatic handoff: no failed turn to rewind; one fresh run, once.
+    let j = Journey::open(cx, 1100., Behavior::Accept, failed_handoff());
+    j.publish(cx, |s| s.retry_entry = None);
+    assert_eq!(j.retry(cx), ("Retry".into(), false));
+    assert_eq!(j.note(cx), None, "a saved model never blocks this retry");
+    j.click(cx);
+    until(cx, j.h, |_, cx| {
+        j.view.read(cx).chat_actions.read(cx).outcome("source")
+            == Some(&crate::chat_actions::Outcome::Acknowledged)
+    });
+    {
+        let seen = j.server.seen.lock().unwrap();
+        let posts: Vec<_> = seen.requests.iter().filter(|r| r.0 == "POST").collect();
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].1, "/api/sessions/source/retry-handoff");
+        assert!(posts[0].2["operationId"].is_string());
+    }
+    j.click(cx);
+    settle(cx, j.h);
+    assert_eq!(j.server.posts(), 1, "never repeated");
+    j.close(cx);
+
     // Lost ACK: Unknown is explained in place and never repeated.
     let j = Journey::open(cx, 1100., Behavior::Lost, failed_turn());
     j.click(cx);
@@ -518,7 +550,7 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
     edges(cx, &dir);
     println!(
         "{}",
-        json!({"failed_turn_retry":true,"setup_rerun":true,"startup_retry":true,"pointer_and_keyboard":true,"layouts":"680/1100 light/dark","preedit_guard":true,"pending_repeat_single_post":true,"unknown_never_repeated":true,"stale_disconnected_unavailable_refused":true,"draft_retained":true})
+        json!({"failed_turn_retry":true,"handoff_retry":true,"setup_rerun":true,"startup_retry":true,"pointer_and_keyboard":true,"layouts":"680/1100 light/dark","preedit_guard":true,"pending_repeat_single_post":true,"unknown_never_repeated":true,"stale_disconnected_unavailable_refused":true,"draft_retained":true})
     );
 }
 /// Run setup again from the setup failure banner: one capability-carrying POST,

@@ -631,6 +631,10 @@ const emptySnapshot: AgentEvent = {
 };
 
 const ID_PATTERN = /^[0-9a-f-]{36}$/i;
+/** A run the kernel failed in automatic handoff ("Compaction failed: <handoff error>"). */
+const HANDOFF_FAILURE = /^Compaction failed: .*handoff/is;
+const HANDOFF_RETRY_TEXT =
+	"The automatic context handoff failed, and the user asked to retry it. Continue the task from where you left off.";
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
 /**
@@ -7499,7 +7503,12 @@ ${run.excerpt}`,
 		message: string,
 		mode: DeliveryMode,
 		operationId: string,
-		options: { resumeHeld?: boolean; explicitModelRecovery?: boolean; trace?: TraceCarrier } = {},
+		options: {
+			resumeHeld?: boolean;
+			explicitModelRecovery?: boolean;
+			trace?: TraceCarrier;
+			event?: import("@pilot/protocol").ChatEventSummary;
+		} = {},
 	): Promise<void> {
 		const end = this.updateGate.begin();
 		try {
@@ -7513,6 +7522,8 @@ ${run.excerpt}`,
 				options.trace,
 				options.resumeHeld,
 				options.explicitModelRecovery,
+				undefined,
+				options.event,
 			);
 		} finally {
 			end();
@@ -7530,6 +7541,7 @@ ${run.excerpt}`,
 		resumeHeld = false,
 		explicitModelRecovery = false,
 		answerQuestionId?: number,
+		event?: import("@pilot/protocol").ChatEventSummary,
 	): Promise<void> {
 		const meta = this.require(id);
 		this.assertHistoryWritable(meta);
@@ -7616,6 +7628,7 @@ ${run.excerpt}`,
 					...(report ? { reportDelivery: true } : {}),
 					...(resumeHeld ? { resumeHeld: true } : {}),
 					...(answerQuestionId !== undefined ? { answerQuestionId } : {}),
+					...(event ? { event } : {}),
 				});
 			}
 			meta.updatedAt = Date.now();
@@ -7751,6 +7764,32 @@ ${run.excerpt}`,
 				!meta.workspaceRecovery &&
 				meta.archivedAt === undefined,
 		);
+	}
+
+	/** The idle chat's last run failed in automatic handoff, and nothing else blocks an explicit user retry. */
+	private canRetryHandoff(meta: SessionMeta): boolean {
+		return (
+			!meta.failure &&
+			HANDOFF_FAILURE.test(meta.outcomeReason ?? "") &&
+			!this.changingModels.has(meta.id) &&
+			this.failedModelSource(meta) !== undefined
+		);
+	}
+
+	/**
+	 * Explicit user retry of a run that failed in automatic handoff: one new input starts a fresh run, which makes a new
+	 * handoff attempt. Nothing earlier is resent. A saved next-attempt model applies, as for any explicit recovery.
+	 * Conflict means nothing was admitted; the same operation ID is admitted once.
+	 */
+	async retryHandoff(id: string, operationId: string): Promise<SessionSummary> {
+		const meta = this.require(id);
+		this.assertNotContinued(meta);
+		if (!this.canRetryHandoff(meta)) throw new Conflict("This chat has no failed automatic handoff to retry");
+		await this.sendDurable(id, HANDOFF_RETRY_TEXT, "followUp", `handoff-retry:${operationId}`, {
+			explicitModelRecovery: true,
+			event: { kind: "handoff_retry", text: "Retried the automatic handoff" },
+		});
+		return this.summary(meta);
 	}
 
 	async stop(id: string): Promise<StopResponse> {
@@ -11330,6 +11369,7 @@ ${run.excerpt}`,
 			...(!coordinator && meta.pullRequestError ? { pullRequestError: meta.pullRequestError } : {}),
 			...(meta.attempts?.length ? { attempts: meta.attempts } : {}),
 			...(this.canRetryStartup(meta) ? { canRetryStartup: true } : {}),
+			...(this.canRetryHandoff(meta) ? { canRetryHandoff: true } : {}),
 			...(meta.unpublishedWork ? { unpublishedWork: true } : {}),
 			...(meta.failure || meta.inputError || worker?.error || this.kernelErrors.has(meta.id)
 				? {

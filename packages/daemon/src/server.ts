@@ -39,6 +39,7 @@ import type {
 	RenameSessionRequest,
 	RepositorySelection,
 	ReviewRequest,
+	RetryHandoffRequest,
 	RewindRequest,
 	SchedulePatch,
 	ScheduleRequest,
@@ -2177,6 +2178,12 @@ export function createDaemonServer(
 				return json(res, 202, await sessions.stop(id));
 			}
 			if (parts[3] === "retry-startup") return json(res, 200, await sessions.retryStartup(id));
+			if (parts[3] === "retry-handoff") {
+				const body = await readJson<RetryHandoffRequest | null>(req);
+				if (!body || typeof body.operationId !== "string" || !/^[\w-]{1,128}$/.test(body.operationId))
+					throw new HttpError(400, "operationId must be 1-128 letters, digits, dashes or underscores");
+				return json(res, 200, await sessions.retryHandoff(id, body.operationId));
+			}
 			if (parts[3] === "compact") {
 				const body = (await readJson<CompactRequest | null>(req)) ?? {};
 				if (body.instructions !== undefined && typeof body.instructions !== "string")

@@ -6,7 +6,7 @@ use crate::{
 use serde_json::Value;
 use std::time::Duration;
 
-/// Both retries wait for pilotd to start a worker before answering.
+/// Retries wait for pilotd to start a worker before answering.
 const RETRY_DEADLINE: Duration = Duration::from_secs(60);
 
 enum Request {
@@ -216,6 +216,9 @@ pub(crate) async fn set(
     if action == Action::RerunSetup {
         return rerun_setup(client, options, &current).await;
     }
+    if action == Action::RetryHandoff {
+        return retry_handoff(client, options, &current).await;
+    }
     if !current.can_archive {
         return Outcome::Rejected(crate::chat_actions::INELIGIBLE);
     }
@@ -259,6 +262,44 @@ pub(crate) async fn set(
         return Outcome::Unknown;
     }
     Outcome::Acknowledged
+}
+/// One fresh run after a failed automatic handoff. pilotd admits a single input
+/// named by a new operation ID; nothing earlier is resent. Only its eligibility
+/// refusal (409) and an unknown chat (404) precede any change, so every other
+/// answer stays Unknown and is never repeated.
+async fn retry_handoff(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    current: &Evidence,
+) -> Outcome {
+    if !current.can_retry_handoff {
+        return Outcome::Rejected("This failure can no longer be retried here. Nothing was sent.");
+    }
+    let operation = uuid::Uuid::new_v4().to_string();
+    let response = client
+        .post(format!(
+            "{}/api/sessions/{}/retry-handoff",
+            options.loopback(),
+            current.target.chat.id
+        ))
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .body(serde_json::json!({ "operationId": operation }).to_string())
+        .timeout(RETRY_DEADLINE)
+        .send()
+        .await;
+    let Ok(response) = response else {
+        return Outcome::Unknown;
+    };
+    match response.status() {
+        reqwest::StatusCode::OK => match body(response).await {
+            Ok(value) if value["id"] == current.target.chat.id => Outcome::Acknowledged,
+            _ => Outcome::Unknown,
+        },
+        reqwest::StatusCode::CONFLICT | reqwest::StatusCode::NOT_FOUND => {
+            Outcome::Rejected("Local refused this retry. Nothing was sent.")
+        }
+        _ => Outcome::Unknown,
+    }
 }
 /// Queue setup again with native authority. pilotd checks idleness, Automations and
 /// the workspace before queueing; refusals (403/404/409/503) changed nothing.

@@ -2,6 +2,21 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn only_pilotd_marks_a_failed_handoff_retryable() {
+    let mut v = json!({"state":"idle","outcome":"failed","outcomeAt":42,
+        "outcomeReason":"Compaction failed: Automatic handoff could not be prepared."});
+    // The reason text alone never decides; pilotd's flag does.
+    assert!(!read(&v).unwrap().handoff);
+    v["canRetryHandoff"] = json!(true);
+    assert!(read(&v).unwrap().handoff);
+    v["canRetryStartup"] = json!(true);
+    assert!(
+        !read(&v).unwrap().handoff,
+        "a startup failure keeps its own retry"
+    );
+}
+
+#[test]
 fn public_projection_uses_failure_evidence_and_truthful_precedence() {
     let completion = json!({"id":"a", "state":"parked", "outcome":"failed", "outcomeAt":42,
         "outcomeReason":"Tool build: primary cause\nCaused by: réseau 日本語 👩🏽‍💻\nSecond cause",

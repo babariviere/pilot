@@ -45,6 +45,9 @@ pub(crate) struct Evidence {
     /// The chat's last run failed and nothing visible blocks pilotd's turn
     /// retry. pilotd remains authoritative for its own guards.
     pub(crate) can_retry_turn: bool,
+    /// pilotd reports that the last run failed in automatic handoff
+    /// (`canRetryHandoff`) and the chat is idle.
+    pub(crate) can_retry_handoff: bool,
     /// The chat's workspace has a recorded setup (created or restored with setup hooks).
     pub(crate) has_setup: bool,
     /// Setup can be queued again: an idle, unarchived chat with no setup running.
@@ -65,6 +68,7 @@ impl Evidence {
                 "sleepPaused",
                 "offlinePaused",
                 "canRetryStartup",
+                "canRetryHandoff",
             ]
             .iter()
             .any(|key| !raw[*key].is_null() && !raw[*key].is_boolean())
@@ -120,6 +124,7 @@ impl Evidence {
             "workspaceRecovery",
             "kernelRestartPending",
             "canRetryStartup",
+            "canRetryHandoff",
             "outcome",
             "outcomeAt",
         ] {
@@ -173,6 +178,10 @@ impl Evidence {
                 && raw["nextAttemptModel"].is_null()
                 && idle
                 && crate::local_model::messageable_local(raw),
+            can_retry_handoff: raw["canRetryHandoff"] == true
+                && raw["outcome"] == "failed"
+                && idle
+                && crate::local_model::messageable_local(raw),
             has_setup,
             can_rerun_setup: has_setup
                 && idle
@@ -192,13 +201,16 @@ pub(crate) enum Action {
     /// user message that began this failed assistant entry and sends that
     /// message again. The failed attempt stays in history.
     RetryTurn(u64),
+    /// Retry a run that failed in automatic handoff: pilotd admits one new
+    /// input that starts a fresh run. Nothing earlier is resent.
+    RetryHandoff,
     /// Queue the workspace setup hooks again (`POST /api/sessions/:id/setup`).
     /// No model turn; never repeated after an unconfirmed answer.
     RerunSetup,
 }
 impl Action {
     pub(crate) fn retry(self) -> bool {
-        matches!(self, Self::Retry | Self::RetryTurn(_))
+        matches!(self, Self::Retry | Self::RetryTurn(_) | Self::RetryHandoff)
     }
 }
 #[derive(Clone, PartialEq, Eq)]

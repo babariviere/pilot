@@ -16,6 +16,9 @@ pub(crate) struct Failure {
     /// A next-attempt model/thinking choice is saved. pilotd applies it only
     /// to a startup retry or the user's next message, never to a turn retry.
     pub(crate) next_model: bool,
+    /// pilotd reports that the run failed in automatic handoff
+    /// (`canRetryHandoff`). Its Retry starts one fresh run.
+    pub(crate) handoff: bool,
 }
 fn time(value: &Value) -> Option<u64> {
     value
@@ -132,6 +135,7 @@ pub(crate) fn read(value: &Value) -> Option<Failure> {
             || older_attempt,
         truncated,
         next_model: value["nextAttemptModel"].is_object(),
+        handoff: !startup && failed && value["canRetryHandoff"] == true,
     })
 }
 

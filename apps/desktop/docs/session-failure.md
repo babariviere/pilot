@@ -28,6 +28,15 @@ eligibility read of the exact chat (`session_failure_retry.rs`):
   message. Only 400/404 are refusals; every other answer, a lost response or a
   mismatched session is **Unconfirmed** and that chat is never retried again
   from this window (a conflict can follow the attempt switch).
+- **Failed automatic handoff** (`canRetryHandoff`): the run failed while
+  preparing its handoff, so there is no failed turn to rewind (rewinding would
+  redo the turn's tool work). `POST /api/sessions/:id/retry-handoff`
+  `{"operationId"}` makes pilotd admit one explicit input, shown as the quiet
+  *Retried the automatic handoff* line (`handoff_retry` event), that starts a
+  fresh run and so a new handoff attempt. Nothing earlier is resent. A saved
+  next-attempt model applies, as for any explicit recovery. Only 409/404 are
+  refusals; anything else is **Unconfirmed** and never repeated. With automatic
+  handoff turned off first, the new run compacts as usual instead.
 
 Retry is shown disabled with a visible reason when it can't run safely: not
 connected, the last message's delivery is unconfirmed, the conversation is
@@ -35,8 +44,9 @@ loading, the failed turn isn't the newest loaded entry (for example an
 interrupted run without an error entry), or a next-attempt model is saved.
 pilotd applies a saved model only to a startup retry or the user's next
 message; its turn retry would refuse after switching the attempt, so this UI
-does not offer it (a contract gap, not worked around). Earlier, archived and
-read-only failures offer no Retry.
+does not offer it (a contract gap, not worked around). The startup and handoff
+retries are not affected. Earlier, archived and read-only failures offer no
+Retry.
 
 Pending shows *Retrying…* with input waiting; repeats submit nothing. An ACK
 shows *Retry sent* until Local reports the new run. The draft, composition

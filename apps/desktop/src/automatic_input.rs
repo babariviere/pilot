@@ -98,6 +98,9 @@ impl Automatic {
                     Origin::Activity
                 }
             }
+            // The user's explicit Retry after a failed automatic handoff: a
+            // kernel-written event on their own input, shown as one quiet line.
+            None if entry["kind"] == "pi.user" && event == "handoff_retry" => Origin::Activity,
             None => return None,
         };
         let text = |value: &Value| {
@@ -297,6 +300,24 @@ mod tests {
         );
         // Other kernel kinds without origin are not automatic input.
         assert_eq!(Automatic::read(&json!({"kind": "pilot.question"})), None);
+    }
+
+    #[test]
+    fn handoff_retry_input_reads_as_a_quiet_event() {
+        let retry = Automatic::read(&json!({
+            "kind": "pi.user",
+            "data": {"event": {"kind": "handoff_retry", "text": "Retried the automatic handoff"}},
+            "model": [{"role": "user", "content": "The automatic context handoff failed…"}]
+        }))
+        .unwrap();
+        assert_eq!(retry.origin, Origin::Activity);
+        assert_eq!(retry.sentence(), "Retried the automatic handoff");
+        assert_eq!(retry.preview("anything"), None);
+        // Only that structured event, never other user entries.
+        assert_eq!(
+            Automatic::read(&json!({"kind": "pi.user", "data": {"event": {"kind": "other"}}})),
+            None
+        );
     }
 
     #[test]

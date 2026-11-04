@@ -264,7 +264,9 @@ export interface ChatEventSummary {
 		| "mission_member_finished"
 		| "watch_notice"
 		| "automation_finished"
-		| "automation_failed";
+		| "automation_failed"
+		/** The user retried a run that failed in automatic handoff (POST /api/sessions/:id/retry-handoff). */
+		| "handoff_retry";
 	text: string;
 }
 export interface GitHubActionsUpdateEvent {
@@ -412,6 +414,8 @@ export interface SessionSummary {
 	working?: boolean;
 	/** Worker startup failed. POST /api/sessions/:id/retry-startup reloads it with the existing outbox. */
 	canRetryStartup?: boolean;
+	/** The last run failed in automatic handoff. POST /api/sessions/:id/retry-handoff starts one fresh run. */
+	canRetryHandoff?: boolean;
 	outcome?: SessionOutcome;
 	outcomeAt?: number;
 	outcomeReason?: string;
@@ -1968,6 +1972,16 @@ export interface RewindResponse {
 	session: SessionSummary;
 	/** Text of the edited message, for the composer. */
 	draft?: string;
+}
+
+/**
+ * POST /api/sessions/:id/retry-handoff. Only for a chat whose summary has `canRetryHandoff`. Admits one explicit user
+ * input, shown as a `handoff_retry` event, that starts a fresh run; that run makes a new handoff attempt. Earlier
+ * messages and tool calls are not resent. `operationId` names the input, so a repeated request admits it once.
+ * 409 means nothing was admitted. Returns the session summary.
+ */
+export interface RetryHandoffRequest {
+	operationId: string;
 }
 
 /**
