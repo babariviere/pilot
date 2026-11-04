@@ -24,7 +24,7 @@ REQUIRED = [
     "packages/daemon/src/main.ts", "packages/daemon/src/runtime-launch.ts",
     "packages/daemon/src/runtime-owner.ts", "packages/kernel/src/worker-entry.ts",
     "packages/protocol/src/hello.ts", "packages/kernel/skills/pilot-artifacts/SKILL.md",
-    "packages/daemon/src/usage-history-worker.mjs", "packages/artifacts/dist/libraries/manifest.json",
+    "packages/daemon/src/usage-history-worker.mjs",
     "node_modules/@earendil-works/pi-coding-agent/package.json",
     "node_modules/@earendil-works/pi-durable/package.json",
     "node_modules/node-pty/package.json", "node_modules/ws/package.json",

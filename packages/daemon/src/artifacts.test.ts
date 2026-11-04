@@ -9,9 +9,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { ArtifactNotFound, ArtifactStore, getLibrary } from "@pilot/artifacts";
+import { ArtifactNotFound, ArtifactStore } from "@pilot/artifacts";
 import type { ArtifactRevision, ArtifactSummary, MissionDetail, ServerMessage } from "@pilot/protocol";
 import { WebSocket } from "ws";
+import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.test.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import type { ModelCatalog } from "./models.ts";
@@ -45,7 +46,9 @@ async function registry(t: TestContext) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-artifacts-"));
 	const managers: SessionManager[] = [];
 	const cleanups: (() => void | Promise<void>)[] = [];
+	const finalCleanups: (() => void | Promise<void>)[] = [];
 	const addCleanup = (cleanup: () => void | Promise<void>) => cleanups.push(cleanup);
+	const addFinalCleanup = (cleanup: () => void | Promise<void>) => finalCleanups.push(cleanup);
 	t.after(async () => {
 		try {
 			for (const cleanup of cleanups.reverse()) await cleanup();
@@ -55,6 +58,7 @@ async function registry(t: TestContext) {
 				await Promise.allSettled([...sessions["artifactNotifications"].values()]);
 				await Promise.allSettled([...sessions["saving"].values()]);
 			}
+			for (const cleanup of finalCleanups.reverse()) await cleanup();
 		} finally {
 			await rm(home, { recursive: true, force: true });
 		}
@@ -100,7 +104,7 @@ async function registry(t: TestContext) {
 		return sessions;
 	};
 	const sessions = await manager();
-	return { home, sessions, projects, project, otherId, manager, launch, runner, addCleanup };
+	return { home, sessions, projects, project, otherId, manager, launch, runner, addCleanup, addFinalCleanup };
 }
 
 test("artifact reads use committed storage and leave sessions parked", async (t) => {
@@ -269,7 +273,7 @@ async function api(t: TestContext, mockReads = true, withMissions = false) {
 	const terminals = new TerminalManager();
 	const missions = withMissions ? new MissionStore(":memory:") : undefined;
 	if (missions)
-		addCleanup(async () => {
+		fixture.addFinalCleanup(async () => {
 			await missions.durable();
 			missions.close();
 		});
@@ -303,7 +307,7 @@ test("mission detail keeps independent exact pins readable without latest infere
 	const mission = missions.create({ projectId: project.id, title: "Pinned sources", tasks: [{ title: "Older pin" }] });
 	missions.join(sessionId, mission.id);
 	const directory = join(home, "sessions", sessionId);
-	const store = new ArtifactStore(directory, { sessionId });
+	const store = new LegacyArtifactFixture(directory, { sessionId });
 	const old = await store.create({ title: "Task body", kind: "html", source: "<p>Exact older task source</p>" });
 	missions.linkArtifact(mission.id, {
 		artifactId: old.id,
@@ -375,15 +379,15 @@ test("HTTP reads persisted artifact revisions and aggregates only the project's 
 		}),
 	);
 	await sessions.load();
-	const store = new ArtifactStore(join(home, "sessions", sessionId), { sessionId, projectId: project.id });
+	const store = new LegacyArtifactFixture(join(home, "sessions", sessionId), { sessionId, projectId: project.id });
 	const initial = await store.create({ title: "First", kind: "html", source: "<p>First</p>" });
 	const latest = await store.update(initial.id, { title: "Updated", kind: "html", source: "<p>Updated</p>" });
-	const second = await new ArtifactStore(secondDir, { sessionId: secondId, projectId: project.id }).create({
+	const second = await new LegacyArtifactFixture(secondDir, { sessionId: secondId, projectId: project.id }).create({
 		title: "Second",
 		kind: "html",
 		source: "<p>Second</p>",
 	});
-	await new ArtifactStore(join(home, "sessions", otherId), { sessionId: otherId }).create({
+	await new LegacyArtifactFixture(join(home, "sessions", otherId), { sessionId: otherId }).create({
 		title: "Unassigned",
 		kind: "html",
 		source: "<p>Unassigned</p>",
@@ -403,7 +407,7 @@ test("HTTP reads persisted artifact revisions and aggregates only the project's 
 test("latest artifact metadata is not a readable revision catalogue", async (t) => {
 	const { home, base, sessions, launch, runner } = await api(t, false);
 	const directory = join(home, "sessions", sessionId);
-	const store = new ArtifactStore(directory, { sessionId });
+	const store = new LegacyArtifactFixture(directory, { sessionId });
 	const first = await store.create({ title: "First", kind: "html", source: "<p>Stored legacy source</p>" });
 	const image = await store.update(first.id, {
 		title: "Pixel",
@@ -456,14 +460,14 @@ test("artifact revision catalogue route is unavailable and does not read bodies"
 
 test("archived owners retain project-visible artifacts and pinned revisions across restart without waking or restoring", async (t) => {
 	const { home, base, sessions, project, otherId, manager, launch, runner } = await api(t, false);
-	const store = new ArtifactStore(join(home, "sessions", sessionId), { sessionId, projectId: project.id });
+	const store = new LegacyArtifactFixture(join(home, "sessions", sessionId), { sessionId, projectId: project.id });
 	const initial = await store.create({ title: "Archived first revision", kind: "html", source: "<p>First</p>" });
 	const latest = await store.update(initial.id, {
 		title: "Archived latest revision",
 		kind: "html",
 		source: "<p>Latest</p>",
 	});
-	await new ArtifactStore(join(home, "sessions", otherId), { sessionId: otherId }).create({
+	await new LegacyArtifactFixture(join(home, "sessions", otherId), { sessionId: otherId }).create({
 		title: "Unassigned artifact",
 		kind: "html",
 		source: "<p>Unassigned</p>",
@@ -542,7 +546,7 @@ test("HTTP artifact routes return lists, latest and pinned revisions, and 404s",
 
 test("artifact ID lookup returns only committed metadata and never reads bodies or wakes owners", async (t) => {
 	const { base, home, sessions, launch } = await api(t, false);
-	const store = new ArtifactStore(join(home, "sessions", sessionId), { sessionId });
+	const store = new LegacyArtifactFixture(join(home, "sessions", sessionId), { sessionId });
 	const created = await store.create({ title: "Linked preview", kind: "html", source: "<p>Preview</p>" });
 	const expected = (await store.list())[0];
 	const bodies = t.mock.method(ArtifactStore.prototype, "get", async () => {
@@ -559,23 +563,13 @@ test("artifact ID lookup returns only committed metadata and never reads bodies 
 	assert.equal(sessions["workers"].size, 0);
 });
 
-test("library assets are JavaScript for native requests only", async (t) => {
-	const { base } = await api(t);
-	const path = `${base}/api/artifact-libraries/react`;
-	const response = await fetch(path);
-	assert.equal(response.status, 200);
-	assert.equal(response.headers.get("content-type"), "text/javascript");
-	assert.equal(await response.text(), await getLibrary("react"));
-	const etag = response.headers.get("etag");
-	assert.ok(etag);
-	assert.equal(response.headers.get("cache-control"), "no-cache");
-	const revalidated = await fetch(path, { headers: { "if-none-match": etag } });
-	assert.equal(revalidated.status, 304);
-	assert.equal(await revalidated.text(), "");
-	assert.equal((await fetch(`${base}/api/artifact-libraries/unknown`)).status, 404);
-	for (const origin of ["null", "https://example.org", base]) {
-		assert.equal((await fetch(path, { headers: { origin } })).status, 403);
-		assert.equal((await fetch(`${base}/api/sessions/${sessionId}/artifacts`, { headers: { origin } })).status, 403);
+test("retired browser libraries cannot be bundled or executed through HTTP", async (t) => {
+	const { server } = await api(t);
+	const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+	for (const name of ["react", "mermaid", "unknown"]) {
+		const response = await fetch(`${base}/api/artifact-libraries/${name}`);
+		assert.equal(response.status, 410);
+		assert.match(await response.text(), /no longer supported/);
 	}
 });
 

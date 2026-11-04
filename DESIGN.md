@@ -329,7 +329,7 @@ zero counts omitted); compact rows keep the bar plus "9 of 18".
 
 ## UI review checklist
 
-- Looks calm and polished, checked by eye (attach a SwiftUI artifact for new layouts).
+- Looks calm and polished, checked by eye (attach a native visual mockup for new layouts).
 - Long content, and loading, empty, error and disabled states.
 - Narrow and wide windows.
 - Light and dark appearances.

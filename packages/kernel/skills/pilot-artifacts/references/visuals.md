@@ -3,9 +3,8 @@
 `kind: "visual"` is the **first choice** for charts, stats, tables, small dashboards, controls (tabs, toggles,
 sliders, buttons), UI mockups and design alternatives, Mermaid diagrams (`ui.mermaid`) and 2D drawings or animations
 (`ui.canvas`). Pilot draws visuals natively in the chat: light and dark, the chat's fonts, selectable text and no web
-page. Use HTML or React only for what visuals can't express: rich documents, wide content and web libraries such as d3
-force graphs or three.js. For GLSL effects inside a visual, use `ui.shader`; a standalone shader artifact suits a
-shader on its own.
+page. HTML, React and SwiftUI authoring and preview are removed; existing sources remain read-only.
+Shader rendering is deferred in Pilot Next, including `ui.shader`. Use layout, typography and vectors for mockups.
 
 The API is in [visual.d.ts](visual.d.ts). A visual is a **plain JavaScript function** defined in your codemode script
 and published as its text with `String(visual)` (tool arguments are JSON, so a function passed directly arrives
@@ -167,7 +166,7 @@ takes a literal color.
 
 ## Canvas
 
-`ui.canvas` draws with a pen when Swift Charts can't express the picture: gauges, timelines, diagrams of a few
+`ui.canvas` draws with a pen when charts can't express the picture: gauges, timelines, diagrams of a few
 hundred shapes, small animations. Colors are tokens here too.
 
 ```js
@@ -216,6 +215,9 @@ Previously stored sources remain inspectable; this does not certify their syntax
 
 ## Shader
 
+This existing API is retained for compatibility. Shader rendering is unavailable in Pilot Next;
+do not use it for Next mockups. This reference does not enable a shader or browser fallback.
+
 `ui.shader` draws a Shadertoy-style `mainImage` with Metal, as wide as the column. The GLSL is the same as a shader
 artifact's ([shaders.md](shaders.md)): GLSL ES 3.00 without `#version`, `iResolution`, `iTime`, `iTimeDelta`,
 `iFrame` and `iMouse` declared (`iMouse.xy` is the pointer while it is over the shader). Each `inputs` entry adds a
@@ -262,4 +264,4 @@ so catch the error, fix the function or the data and publish again in the same s
 
 `get` returns `source` and `data`. To revise, define the function again in the script and `update` with
 `source: String(visual)`, `data` and `expectedRevision`; the same function can be republished with new data.
-`preview` does not render visuals: `create` and `update` run the check instead.
+There is no screenshot preview host: `create` and `update` run the check instead.

@@ -5,12 +5,10 @@ import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil
 import {
 	ArtifactNotFound,
 	type ArtifactStore,
+	assertArtifactWriteKind,
 	imageSize,
-	isArtifactPreviewAvailable,
-	isBrowserPreviewAvailable,
 	loadArtifactImage,
 	MAX_IMAGE_SOURCE_BYTES,
-	previewArtifact,
 } from "@pilot/artifacts";
 import type {
 	ArtifactData,
@@ -25,19 +23,17 @@ import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 const MAX_SOURCE_BYTES = 512 * 1024;
 const library = StringEnum(["react", "react-dom", "mermaid", "echarts", "motion", "d3", "three"] as const);
 const kind = StringEnum(["html", "react", "image", "swiftui", "shader", "visual"] as const);
-const writeKind = StringEnum(["html", "react", "image", "swiftui", "shader"] as const);
-const visualWriteKind = kind;
+const writeKind = StringEnum(["image", "shader"] as const);
+const visualWriteKind = StringEnum(["image", "shader", "visual"] as const);
 const writeProperties = {
 	title: Type.String({ minLength: 1, maxLength: 160, description: "Short human-readable artifact title." }),
-	kind,
+	kind: visualWriteKind,
 	source: Type.String({
 		maxLength: MAX_IMAGE_SOURCE_BYTES,
 		description:
-			"HTML, JSX/TSX, GLSL mainImage or standalone SwiftUI (512 KiB UTF-8 max), or for image: a local file path or base64 image data URL (16 MiB decoded max).",
+			"Native visual source or GLSL mainImage (512 KiB UTF-8 max), or for image: a local file path or base64 image data URL (16 MiB decoded max).",
 	}),
-	libraries: Type.Optional(
-		Type.Array(library, { description: "Offline libraries to include, especially for HTML script globals." }),
-	),
+	libraries: Type.Optional(Type.Array(Type.String(), { maxItems: 0, description: "Deprecated; must be empty." })),
 };
 const summaryProperties = {
 	id: Type.String(),
@@ -70,11 +66,6 @@ const referenceSchema = Type.Object({
 	),
 });
 const revisionNumber = Type.Integer({ minimum: 1 });
-const diagnosticsProperties = {
-	consoleMessages: Type.Array(Type.Object({ level: Type.String(), text: Type.String() })),
-	contentHeight: Type.Number(),
-};
-
 export interface ArtifactToolOptions {
 	store: Pick<ArtifactStore, "create" | "update" | "get" | "list">;
 	/** Read-only daemon lookup for references linked to the caller's current mission. */
@@ -83,30 +74,11 @@ export interface ArtifactToolOptions {
 	 * pass their header size so apps can reserve layout before reading the source. */
 	onArtifactPublished?: (artifact: ArtifactReference, image?: ArtifactImageSize) => Promise<void>;
 	onArtifactsChanged?: () => void;
-	/** Override the renderer for tests, or disable preview. By default, require an installed renderer. */
-	preview?: typeof previewArtifact | false;
-	/** Ask permits session-local artifacts and sandboxed previews, but never arbitrary image-path reads. */
+	/** Ask permits session-local artifacts, but never arbitrary image-path reads. */
 	ask?: boolean;
-	/** After publishing HTML/React/shaders, render once to report runtime errors as non-blocking warnings.
-	 * Defaults to the installed browser renderer; tests inject or disable it. */
-	diagnose?: ArtifactDiagnose | false;
 	/** Offer kind "visual" (native visuals), which the app renders. On by default; PILOT_VISUAL_ARTIFACTS=0 hides it. */
 	visuals?: boolean;
 }
-
-export type ArtifactDiagnose = (write: ArtifactWrite, signal?: AbortSignal) => Promise<string[]>;
-
-const DIAGNOSE_TIMEOUT_MS = 10_000;
-const MAX_WARNINGS = 10;
-
-/** Smoke render with the shared warm browser. Diagnostics never fail or block a publication. */
-export const diagnoseArtifact: ArtifactDiagnose = async (write, signal) => {
-	const result = await previewArtifact(write, { signal, timeoutMs: DIAGNOSE_TIMEOUT_MS });
-	return result.consoleMessages
-		.filter((message) => message.level === "error")
-		.slice(0, MAX_WARNINGS)
-		.map((message) => `Runtime error: ${message.text.slice(0, 500)}`);
-};
 
 function checkSource(write: ArtifactWrite): void {
 	if (write.kind !== "image" && Buffer.byteLength(write.source, "utf8") > MAX_SOURCE_BYTES)
@@ -134,18 +106,7 @@ function dataResult<T extends JsonValue>(data: T): AgentToolResult<T> {
 export function createArtifactTools(options: ArtifactToolOptions): ToolDefinition[] {
 	const { store } = options;
 	const visuals = options.visuals ?? process.env.PILOT_VISUAL_ARTIFACTS !== "0";
-	const preview =
-		options.preview === false
-			? undefined
-			: (options.preview ?? (isArtifactPreviewAvailable() ? previewArtifact : undefined));
-	const diagnose =
-		options.diagnose === false
-			? undefined
-			: (options.diagnose ?? (isBrowserPreviewAvailable() ? diagnoseArtifact : undefined));
-	const actions = ["create", "update", "get", "list", ...(preview ? ["preview" as const] : [])] as const;
-	const previewDescription = preview
-		? "- preview: optionally render a draft without saving; returns screenshot and diagnostics. Preview is not required before publishing. If it fails, publish without preview.\n"
-		: "";
+	const actions = ["create", "update", "get", "list"] as const;
 	const published = async (value: ArtifactRevision, warnings: string[] = []) => {
 		const artifact = {
 			id: value.id,
@@ -178,40 +139,28 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 			: undefined;
 		return dataResult({ artifact, ...(warnings.length ? { warnings } : {}), ...(check ? { check } : {}) });
 	};
-	const runtimeWarnings = async (write: ArtifactWrite, signal?: AbortSignal): Promise<string[]> => {
-		if (!diagnose || write.kind === "image" || write.kind === "swiftui" || write.kind === "visual") return [];
-		try {
-			const warnings = await diagnose(write, signal);
-			return warnings.length
-				? [...warnings, "The artifact was published. Fix these errors with update if they affect the result."]
-				: [];
-		} catch {
-			// A missing, slow or crashed renderer says nothing about the artifact itself.
-			return [];
-		}
-	};
 	return [
 		defineTool({
 			name: "artifact",
 			label: "Artifact",
 			namespace: {
 				name: "artifacts",
-				description: `Publish and inspect ${visuals ? "native visuals, " : ""}HTML, React, shaders, images and SwiftUI with tools.artifact. Read the pilot-artifacts skill before authoring.`,
+				description: `Publish and inspect ${visuals ? "native visuals, " : ""}images and shaders with tools.artifact. Read the pilot-artifacts skill before authoring.`,
 				instructions: `Read the bundled pilot-artifacts skill at ${ARTIFACT_SKILL_PATH} before authoring.`,
 			},
 			description: `Publish and inspect session-local offline artifacts. Read the pilot-artifacts skill before authoring.
-- create: publish title, kind, source and optional libraries; returns a compact pinned reference.
+- create: publish title, kind and source; returns a compact pinned reference.
 - update: replace the complete document by id, not a patch; expectedRevision rejects stale updates.
 - get: read source and metadata by id, optionally at a historical revision. Local artifacts read latest when revision is omitted. Linked mission/task references are read-only: omission uses the pinned revision, or latest for unpinned links; conflicting pins require an explicit linked revision.
 - list: list current session summaries without source.
-${previewDescription}Source must be self-contained and offline. Text source: 512 KiB UTF-8 max; images: 16 MiB decoded max.
+Source must be self-contained and offline. Text source: 512 KiB UTF-8 max; images: 16 MiB decoded max.
 ${options.ask ? "Ask images accept only inline base64 data:image/... URLs, never file paths." : "Images accept local PNG, JPEG, GIF or WebP paths, or inline data URLs; never remote URLs."}
-SwiftUI requires the macOS Swift toolchain and renders a static screenshot, not project views. Publication does not require the Pilot app to be running.
+HTML, React and SwiftUI are read-only historical kinds, not supported for publication or preview.
 Shaders are Shadertoy-style GLSL (mainImage); publication fails with line-numbered compile errors.
 ${visuals ? "Visuals (kind visual) come first for charts, stats, tables, controls, Mermaid diagrams, canvas and shaders: source String(fn) of ({ ui, state, data }) => view, data any JSON (1 MiB). Publication fails with line-numbered errors; fix and republish.\n" : ""}Get the current source before updating, and pass its revision as expectedRevision.`,
 			promptSnippet: visuals
-				? "Publish native visuals (charts, stats, tables, controls, diagrams, 2D canvas, shaders) or offline HTML, React, shader, image and SwiftUI artifacts"
-				: "Publish and inspect offline HTML, React, shader, image or native SwiftUI artifacts",
+				? "Publish native visuals or images; inspect historical artifact sources"
+				: "Publish images or shaders; inspect historical artifact sources",
 			executionMode: "sequential",
 			annotations: { openWorldHint: false, destructiveHint: false },
 			parameters: Type.Object({
@@ -224,7 +173,7 @@ ${visuals ? "Visuals (kind visual) come first for charts, stats, tables, control
 						? Type.String({
 								maxLength: MAX_IMAGE_SOURCE_BYTES,
 								description:
-									"HTML, JSX/TSX, GLSL mainImage or standalone SwiftUI (512 KiB UTF-8 max), or inline base64 image data URL (16 MiB decoded max). Image file paths are not allowed in Ask.",
+									"Native visual source or GLSL mainImage (512 KiB UTF-8 max), or inline base64 image data URL (16 MiB decoded max). Image file paths are not allowed in Ask.",
 							})
 						: writeProperties.source,
 				),
@@ -238,24 +187,6 @@ ${visuals ? "Visuals (kind visual) come first for charts, stats, tables, control
 					: {}),
 				expectedRevision: Type.Optional(revisionNumber),
 				revision: Type.Optional(revisionNumber),
-				...(preview
-					? {
-							width: Type.Optional(
-								Type.Integer({
-									minimum: 240,
-									maximum: 1600,
-									description: "Preview width in logical pixels, default 800 (SwiftUI layout ceiling: 760).",
-								}),
-							),
-							height: Type.Optional(
-								Type.Integer({
-									minimum: 200,
-									maximum: 1600,
-									description: "Preview height in logical pixels, default 600 (SwiftUI layout ceiling: 1600).",
-								}),
-							),
-						}
-					: {}),
 			}),
 			outputSchema: Type.Union([
 				referenceSchema,
@@ -270,24 +201,14 @@ ${visuals ? "Visuals (kind visual) come first for charts, stats, tables, control
 					}),
 				}),
 				Type.Object({ artifacts: Type.Array(Type.Object(summaryProperties)) }),
-				...(preview
-					? [
-							Type.Object({
-								screenshot: Type.Object({
-									mimeType: Type.Literal("image/png"),
-									data: Type.String(),
-									width: Type.Number(),
-									height: Type.Number(),
-								}),
-								...diagnosticsProperties,
-							}),
-						]
-					: []),
 			]),
 			async execute(_callId, params, signal, _onUpdate, ctx): Promise<AgentToolResult<JsonValue>> {
 				signal?.throwIfAborted();
 				const { action, id } = params;
-				if (action === "preview" && !preview)
+				// Check forged/old calls before touching storage or any image file loader.
+				if (["create", "update", "preview"].includes(action) && params.kind !== undefined)
+					assertArtifactWriteKind(params.kind);
+				if ((action as string) === "preview")
 					throw new Error("Artifact preview is unavailable; publish without preview");
 				if ((action === "get" || action === "update") && id === undefined)
 					throw new Error(`Artifact ${action} requires id`);
@@ -316,8 +237,7 @@ ${visuals ? "Visuals (kind visual) come first for charts, stats, tables, control
 					case "list":
 						return dataResult({ artifacts: (await store.list()).map(summary) });
 					case "create":
-					case "update":
-					case "preview": {
+					case "update": {
 						const { title, kind, source, libraries } = params;
 						if (kind === "visual" && !visuals) throw new Error("Visual artifacts are not available yet");
 						if (kind === "visual" && source === undefined)
@@ -326,15 +246,12 @@ ${visuals ? "Visuals (kind visual) come first for charts, stats, tables, control
 							);
 						if (title === undefined || kind === undefined || source === undefined)
 							throw new Error(`Artifact ${action} requires title, kind and source`);
-						if (kind === "visual" && action === "preview")
-							throw new Error(
-								"Preview does not render visuals. Publish with create: it runs the visual and reports errors with lines",
-							);
+						if (libraries?.length) throw new Error("New artifacts do not use libraries");
 						const write: ArtifactWrite = {
 							title,
 							kind,
 							source,
-							...(libraries === undefined ? {} : { libraries }),
+							...(libraries === undefined ? {} : { libraries: [] }),
 							...("data" in params && params.data !== undefined ? { data: params.data as ArtifactData } : {}),
 						};
 						if (write.kind === "image") {
@@ -346,39 +263,18 @@ ${visuals ? "Visuals (kind visual) come first for charts, stats, tables, control
 							signal?.throwIfAborted();
 						}
 						checkSource(write);
-						if (write.kind === "swiftui" && write.libraries?.length)
-							throw new Error("SwiftUI artifacts do not use libraries");
+
 						if (action === "create") {
 							const value = await store.create(write, signal);
-							return published(value, await runtimeWarnings(write, signal));
+							return published(value);
 						}
-						if (action === "update") {
-							const value = await store.update(id!, write, params.expectedRevision, signal);
-							const warnings = await runtimeWarnings(write, signal);
-							if (params.expectedRevision === undefined)
-								warnings.unshift(
-									`Updated without expectedRevision, so a concurrent change could have been replaced. Pass expectedRevision (${value.revision}) next time.`,
-								);
-							return published(value, warnings);
-						}
-						const result = await preview!(write, {
-							width: typeof params.width === "number" ? params.width : undefined,
-							height: typeof params.height === "number" ? params.height : undefined,
-							signal,
-						});
-						const diagnostics = { consoleMessages: result.consoleMessages, contentHeight: result.contentHeight };
-						return {
-							content: [
-								{ type: "image", mimeType: result.screenshot.mimeType, data: result.screenshot.data },
-								{ type: "text", text: JSON.stringify(diagnostics) },
-							],
-							details: diagnostics,
-							structuredContent: {
-								screenshot: { ...result.screenshot },
-								consoleMessages: result.consoleMessages.map((message) => ({ ...message })),
-								contentHeight: result.contentHeight,
-							},
-						};
+						const value = await store.update(id!, write, params.expectedRevision, signal);
+						const warnings: string[] = [];
+						if (params.expectedRevision === undefined)
+							warnings.unshift(
+								`Updated without expectedRevision, so a concurrent change could have been replaced. Pass expectedRevision (${value.revision}) next time.`,
+							);
+						return published(value, warnings);
 					}
 					default:
 						throw new Error(`Unknown artifact action: ${action}`);

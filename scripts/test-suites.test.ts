@@ -61,12 +61,10 @@ test("CI lanes cover every discovered test and default new tests to Linux", asyn
 	}
 	assert.equal(testInLane("packages/daemon/src/new-feature.test.ts", "portable"), true);
 	assert.equal(testInLane("packages/daemon/src/new-feature.test.ts", "macos"), false);
-	assert.equal(testInLane("packages/kernel/src/ask.integration.test.ts", "portable"), false);
+	assert.equal(testInLane("packages/kernel/src/ask.integration.test.ts", "portable"), true);
 	assert.equal(testInLane("packages/kernel/src/ask.integration.test.ts", "macos"), true);
 	const macos = files.filter((path) => testInLane(path, "macos")).sort();
 	assert.deepEqual(macos, [
-		"packages/artifacts/src/preview.test.ts",
-		"packages/artifacts/src/swiftui.test.ts",
 		"packages/daemon/src/coordinator-role.test.ts",
 		"packages/daemon/src/main-view.test.ts",
 		"packages/daemon/src/platform.test.ts",

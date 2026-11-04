@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, open, readdir, readFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import type { ArtifactRevision, ArtifactSummary, ArtifactWrite } from "@pilot/protocol";
-import { libraryVersions, prepareArtifact, validateArtifact } from "./render.ts";
+import { assertArtifactWriteKind, prepareArtifact, validateArtifact } from "./render.ts";
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -135,7 +135,10 @@ export class ArtifactStore {
 		signal?: AbortSignal,
 	): Promise<ArtifactRevision> {
 		return this.serialize(async () => {
+			assertArtifactWriteKind(write.kind);
 			const previous = await this.get(id);
+			// Legacy identities stay read-only, even if an old caller changes the requested kind.
+			assertArtifactWriteKind(previous.kind);
 			if (expectedRevision !== undefined && previous.revision !== expectedRevision)
 				throw new Error(`Artifact revision conflict: expected ${expectedRevision}, latest is ${previous.revision}`);
 			return this.publish(id, write, previous, signal);
@@ -168,7 +171,7 @@ export class ArtifactStore {
 			updatedAt: now,
 			source: write.source,
 			...prepared,
-			libraryVersions: libraryVersions(prepared.libraries),
+			libraryVersions: {},
 			...(visual ? { data: write.data ?? null, visual } : {}),
 		};
 		const directory = join(this.directory, id);

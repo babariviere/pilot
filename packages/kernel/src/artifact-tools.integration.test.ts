@@ -3,7 +3,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, type TestContext, test } from "node:test";
+import { type TestContext, test } from "node:test";
 import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
@@ -18,15 +18,15 @@ import {
 } from "@earendil-works/pi-ai";
 import { createCodemodeExtension, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { SubmissionDraft } from "@earendil-works/pi-durable";
-import { ArtifactStore, closePreviewBrowser } from "@pilot/artifacts";
+import { ArtifactStore } from "@pilot/artifacts";
 import type { ArtifactRevision, SessionCompletion } from "@pilot/protocol";
+import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.test.ts";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { createArtifactTools } from "./artifact-tools.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { KernelSession } from "./session.ts";
 
 // Previews keep a browser warm for a minute. Close it so the test process exits promptly.
-after(() => closePreviewBrowser());
 
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==";
 
@@ -120,11 +120,11 @@ for (const mode of ["on", "only"] as const) {
 			id: "artifact-1",
 			sessionId: "session-1",
 			title: "Demo",
-			kind: "html",
+			kind: "image",
 			revision: 1,
 			createdAt: 100,
 			updatedAt: 100,
-			source: "<h1>Demo</h1>",
+			source: `data:image/png;base64,${png}`,
 			libraries: [],
 			html: "COMPILED_HTML_HIDDEN",
 		};
@@ -144,11 +144,6 @@ for (const mode of ["on", "only"] as const) {
 				},
 			},
 			onArtifactsChanged: () => publications++,
-			preview: async () => ({
-				screenshot: { mimeType: "image/png", data: png, width: 800, height: 600 },
-				consoleMessages: [{ level: "log", text: "Rendered offline" }],
-				contentHeight: 600,
-			}),
 		});
 		const adapter = await NativeAdapter.open({
 			...f.options,
@@ -197,14 +192,12 @@ for (const mode of ["on", "only"] as const) {
 const registered = ALL_TOOLS.filter(t => t.name === "artifact").map(t => t.name).sort();
 const skill = await tools.read({path:${JSON.stringify(ARTIFACT_SKILL_PATH)}});
 text({loadedSkill:skill.includes("name: pilot-artifacts")});
-const created = await tools.artifact({action:"create",title:"Demo",kind:"html",source:"<h1>Demo</h1>"});
+const created = await tools.artifact({action:"create",title:"Demo",kind:"image",source:"data:image/png;base64,${png}"});
 const got = await tools.artifact({action:"get",id:created.artifact.id});
 const listed = await tools.artifact({action:"list"});
-const updated = await tools.artifact({action:"update",id:created.artifact.id,title:"Demo",kind:"html",source:"<h1>Next</h1>",expectedRevision:1});
+const updated = await tools.artifact({action:"update",id:created.artifact.id,title:"Demo",kind:"image",source:"data:image/png;base64,${png}",expectedRevision:1});
 text({registered,created,source:got.artifact.source,count:listed.artifacts.length,revision:updated.artifact.revision});
-const preview = await tools.artifact({action:"preview",title:"Demo",kind:"html",source:"<h1>Demo</h1>"});
-image({type:"image",...preview.screenshot});
-text({consoleMessages:preview.consoleMessages,contentHeight:preview.contentHeight});
+image({type:"image",mimeType:"image/png",data:got.artifact.source.split(",")[1]});
 `,
 			},
 			undefined,
@@ -216,9 +209,8 @@ text({consoleMessages:preview.consoleMessages,contentHeight:preview.contentHeigh
 			.join("\n");
 		assert.ok(text.includes('"registered":["artifact"]'), text);
 		assert.ok(text.includes('"loadedSkill":true'), text);
-		assert.ok(text.includes('"source":"<h1>Demo</h1>"'), text);
+		assert.ok(text.includes(`"source":"data:image/png;base64,${png}"`), text);
 		assert.ok(text.includes('"revision":2'), text);
-		assert.ok(text.includes("Rendered offline"), text);
 		assert.ok(!text.includes("COMPILED_HTML"), text);
 		assert.ok(result.content.some((block) => block.type === "image" && block.data === png));
 		assert.equal(publications, 2);
@@ -231,7 +223,6 @@ test("bundled authoring skill extends configured skills and survives resource re
 	const userSkill = join(f.root, "user-skill.md");
 	await writeFile(userSkill, "---\nname: user-skill\ndescription: A configured user skill\n---\nUser-only body.");
 	const tools = createArtifactTools({
-		preview: false,
 		store: {
 			list: async () => [],
 			get: async () => assert.fail("only checking registration"),
@@ -303,7 +294,7 @@ test("KernelSession registers tools with the session directory and project ident
 	assert.ok(create);
 	const result = await create.execute(
 		"publish",
-		{ action: "create", title: "Demo", kind: "html", source: "<h1>Demo</h1>" },
+		{ action: "create", title: "Demo", kind: "image", source: `data:image/png;base64,${png}` },
 		undefined,
 	);
 	assert.equal(notifications, 1);
@@ -524,7 +515,7 @@ for (const mode of ["on", "only"] as const) {
 			assert.ok(prompt);
 			if (available) {
 				assert.match(prompt, /publish one with the artifact tool without being asked/);
-				assert.match(prompt, /Artifact preview is optional\./);
+				assert.doesNotMatch(prompt, /Artifact preview is optional/);
 			} else {
 				assert.doesNotMatch(prompt, /publish one with the artifact tool|Artifact preview is optional/);
 			}
@@ -578,7 +569,7 @@ for (const skillWasAdvertised of [true, false]) {
 		f.faux.setResponses([
 			fauxAssistantMessage(
 				fauxToolCall("codemode", {
-					code: 'text(await tools.artifact({action:"create",title:"Before restart",kind:"html",source:"<h1>Before</h1>"}));',
+					code: `text(await tools.artifact({action:"create",title:"Before restart",kind:"image",source:"data:image/png;base64,${png}"}));`,
 				}),
 				{ stopReason: "toolUse" },
 			),
@@ -664,15 +655,15 @@ text(await tools.read({path:${JSON.stringify(ARTIFACT_SKILL_PATH)}}));
 					"namespace instructions locate the skill even with an older cached prompt",
 				);
 				// The skill root routes to per-kind references instead of inlining every kind's details.
-				assert.match(description, /references\/swiftui\.md/);
-				assert.match(description, /references\/web\.md/);
+				assert.match(description, /references\/mockup-mobile\.js/);
+				assert.match(description, /references\/visuals\.md/);
 				assert.match(description, /expectedRevision/);
 				return fauxAssistantMessage(
 					fauxToolCall("codemode", {
 						code: `
 const existing = await tools.artifact({action:"get",id:${JSON.stringify(before.id)}});
-text(await tools.artifact({action:"update",id:existing.artifact.id,expectedRevision:existing.artifact.revision,title:"After restart",kind:"html",source:"<h1>After</h1>"}));
-text(await tools.artifact({action:"create",title:"New after restart",kind:"html",source:"<h1>New</h1>"}));
+text(await tools.artifact({action:"update",id:existing.artifact.id,expectedRevision:existing.artifact.revision,title:"After restart",kind:"image",source:"data:image/png;base64,${png}"}));
+text(await tools.artifact({action:"create",title:"New after restart",kind:"image",source:"data:image/png;base64,${png}"}));
 `,
 					}),
 					{ stopReason: "toolUse" },
@@ -687,7 +678,7 @@ text(await tools.artifact({action:"create",title:"New after restart",kind:"html"
 		const artifacts = await store.list();
 		assert.equal(artifacts.length, 2);
 		assert.equal(artifacts.find((artifact) => artifact.id === before.id)?.revision, 2);
-		assert.equal((await store.get(before.id)).source, "<h1>After</h1>");
+		assert.equal((await store.get(before.id)).source, `data:image/png;base64,${png}`);
 		const view = await restored.conversation.context(BACKGROUND_CONTEXT);
 		const results = view.messages.filter((m) => m.role === "toolResult");
 		assert.equal(results.length, 3);
@@ -704,7 +695,7 @@ test("KernelSession codemode reads linked sources without publishing, copying or
 	timeout: 15_000,
 }, async (t) => {
 	const f = await fixture(t, "only");
-	const foreign = new ArtifactStore(join(f.root, "author"), { sessionId: "author", projectId: "project-1" });
+	const foreign = new LegacyArtifactFixture(join(f.root, "author"), { sessionId: "author", projectId: "project-1" });
 	const linked = await foreign.create({ title: "Reference", kind: "html", source: "LINKED SOURCE" });
 	const open = NativeAdapter.open;
 	const refreshUsage = NativeAdapter.prototype.refreshUsage;
@@ -756,7 +747,7 @@ test("KernelSession codemode reads linked sources without publishing, copying or
 			fauxToolCall("codemode", {
 				code: `
 text(await tools.artifact({action:"get",id:${JSON.stringify(linked.id)}}));
-try { await tools.artifact({action:"update",id:${JSON.stringify(linked.id)},title:"Forbidden",kind:"html",source:"OVERWRITE"}); }
+try { await tools.artifact({action:"update",id:${JSON.stringify(linked.id)},title:"Forbidden",kind:"image",source:"data:image/png;base64,${png}"}); }
 catch { text("foreign update denied"); }
 text(await tools.artifact({action:"list"}));
 `,
@@ -868,7 +859,7 @@ test("busy codemode publications and automatic completion survive native tool re
 		fauxAssistantMessage(
 			fauxToolCall("codemode", {
 				code: `
-const created = await tools.artifact({action:"create",title:"Graph",kind:"html",source:"<h1>Graph</h1>"});
+const created = await tools.artifact({action:"create",title:"Graph",kind:"visual",source:"function visual({ui}) { return () => ui.text('Graph'); }"});
 await tools.artifact({action:"update",id:created.artifact.id,expectedRevision:1,title:"Graph updated",kind:"image",source:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAMAAAACCAIAAAASFvFNAAAAEElEQVR4nGP4z8AAQQxwFgBB0gX7h/C5SAAAAABJRU5ErkJggg=="});
 text("Published two revisions");
 `,

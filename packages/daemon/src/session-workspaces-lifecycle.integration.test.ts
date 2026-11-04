@@ -6,8 +6,8 @@ import { readFile, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
-import { ArtifactStore } from "@pilot/artifacts";
 import type { SessionSummary } from "@pilot/protocol";
+import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.test.ts";
 import { Conflict } from "./errors.ts";
 import { ModelCatalog } from "./models.ts";
 import { createDaemonServer } from "./server.ts";
@@ -47,7 +47,7 @@ test("manual reclaim is immediate, retains history/artifacts, and restart restor
 	const workspaceMeta = structuredClone((await f.stored(created.id)).workspace);
 	const directory = join(f.home, "sessions", created.id);
 	await seedHistory(directory);
-	const store = new ArtifactStore(directory, { sessionId: created.id, projectId: f.project.id });
+	const store = new LegacyArtifactFixture(directory, { sessionId: created.id, projectId: f.project.id });
 	const artifact = await store.create({ title: "Retained", kind: "html", source: "<p>revision one</p>" });
 	await store.update(artifact.id, { title: "Retained", kind: "html", source: "<p>revision two</p>" }, 1);
 	const archived = await f.sessions.archive(created.id);

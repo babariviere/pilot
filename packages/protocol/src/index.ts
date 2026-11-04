@@ -810,7 +810,7 @@ export interface RemoteBranchList {
 	defaultBranch?: string;
 }
 
-/** Offline libraries available inside the artifact sandbox. */
+/** Historical browser-library provenance. Not available for new publications. */
 export type ArtifactLibrary = "react" | "react-dom" | "mermaid" | "echarts" | "motion" | "d3" | "three";
 export type ArtifactKind = "html" | "react" | "image" | "swiftui" | "shader" | "visual";
 
@@ -876,10 +876,14 @@ export interface ArtifactVisualShader {
 	entry: string;
 }
 
+/** Authoring deliberately excludes legacy kinds retained by ArtifactKind for reads. */
+export type ArtifactWriteKind = "image" | "shader" | "visual";
+
 export interface ArtifactWrite {
 	title: string;
-	kind: ArtifactKind;
+	kind: ArtifactWriteKind;
 	source: string;
+	/** Deprecated compatibility field. New publications accept only an empty array. */
 	libraries?: ArtifactLibrary[];
 	/** Visuals only: any JSON value up to 1 MiB, passed to the function as `data`. */
 	data?: ArtifactData;

@@ -947,13 +947,12 @@ workspace, but does not rebind those PRs automatically.
 
 Native visual artifacts use the chat's fonts and appearance, grow to their full content height and scroll
 with the conversation, without a nested scroll area. Charts, canvases and shaders retain their explicit heights.
-Other artifacts open in an isolated, offline WebKit viewer. HTML and React previews can use bundled libraries
-such as Mermaid, ECharts and Motion, with D3 and Three.js available on request. Published revisions are
-retained: a chat card opens the revision sent there, while the sidebar opens the latest version.
+New artifacts use images or native visuals. HTML, React and SwiftUI authoring and screenshot preview
+are removed. Historical sources, kinds, revisions and library provenance remain readable as inert data.
+Published revisions are retained: a chat card opens the revision sent there, while the sidebar opens the latest version.
 Inline `artifact://<id>` links open the latest revision directly in the artifact popup, with an artifact
 icon beside the label. They work across chats, including archived artifact owners.
-SwiftUI artifacts are static renders, not live app views.
-Shader artifacts are Shadertoy-style GLSL, checked when published and animated only while visible.
+The existing standalone shader publication contract remains, but shader rendering is deferred in Pilot Next.
 
 Pilot bundles a pinned subset of [pi-extensions](https://github.com/babariviere/pi-extensions): sandbox,
 patch editing, web, browser, subscription usage, background jobs and persistent subagents.

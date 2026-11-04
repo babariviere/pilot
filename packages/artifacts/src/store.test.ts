@@ -3,10 +3,44 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { artifactLibraries } from "./render.ts";
+import { LegacyArtifactFixture } from "../test/legacy-fixture.test.ts";
 import { ArtifactNotFound, ArtifactStore } from "./store.ts";
 
-const document = { title: "Graph", kind: "html" as const, source: "<h1>Hello</h1>" };
+const document = {
+	title: "Graph",
+	kind: "visual" as const,
+	source: 'function visual({ ui }) { return () => ui.text("Hello"); }',
+};
+
+for (const kind of ["html", "react", "swiftui"] as const) {
+	test(`${kind} history stays exact and inert; rejected writes leave bytes untouched`, async (t) => {
+		const dir = await mkdtemp(join(tmpdir(), "artifact-legacy-"));
+		t.after(() => rm(dir, { recursive: true, force: true }));
+		const fixture = new LegacyArtifactFixture(dir, { sessionId: "legacy", projectId: "project" });
+		const first = await fixture.create({ title: "Legacy", kind, source: "exact old source", libraries: ["react"] });
+		const latest = await fixture.update(
+			first.id,
+			{ title: "Legacy", kind, source: "exact latest source", libraries: ["react"] },
+			1,
+		);
+		const paths = ["1.json", "2.json", "latest.json"].map((name) => join(dir, "artifacts", first.id, name));
+		const before = await Promise.all(paths.map((path) => readFile(path, "utf8")));
+		const store = new ArtifactStore(dir, { sessionId: "legacy" });
+		assert.deepEqual(await store.get(first.id, 1), first);
+		assert.deepEqual(await store.get(first.id), latest);
+		assert.equal((await store.list())[0]?.kind, kind);
+		await assert.rejects(store.update(first.id, document, 2), /Supported kinds/);
+		for (const action of ["create", "update"] as const) {
+			const write = { title: "Rejected", kind: kind as never, source: "while(true){}" };
+			await assert.rejects(
+				action === "create" ? store.create(write) : store.update(first.id, write, 2),
+				/Supported kinds/,
+			);
+		}
+		assert.deepEqual(await Promise.all(paths.map((path) => readFile(path, "utf8"))), before);
+		assert.equal((await store.list()).length, 1);
+	});
+}
 
 test("artifacts persist project/session ownership and immutable revisions", async () => {
 	const dir = await mkdtemp(join(tmpdir(), "pilot-artifacts-"));
@@ -17,7 +51,11 @@ test("artifacts persist project/session ownership and immutable revisions", asyn
 		assert.equal(first.revision, 1);
 		assert.equal(first.projectId, "project");
 		assert.match(first.html, /Content-Security-Policy/);
-		const second = await store.update(first.id, { ...document, source: "<h1>Updated</h1>" }, 1);
+		const second = await store.update(
+			first.id,
+			{ ...document, source: document.source.replace("Hello", "Updated") },
+			1,
+		);
 		assert.equal(second.revision, 2);
 		assert.equal(second.createdAt, first.createdAt);
 		const reopened = new ArtifactStore(dir, { sessionId: "session", projectId: "project" });
@@ -40,7 +78,7 @@ test("failed updates leave latest intact and serialize concurrent revisions", as
 	try {
 		const store = new ArtifactStore(dir, { sessionId: "session" });
 		const first = await store.create(document);
-		await assert.rejects(store.update(first.id, { ...document, kind: "react", source: "broken jsx <>" }));
+		await assert.rejects(store.update(first.id, { ...document, kind: "react" as never, source: "broken jsx" }));
 		assert.equal((await store.get(first.id)).revision, 1);
 		const results = await Promise.all([store.update(first.id, document), store.update(first.id, document)]);
 		assert.deepEqual(
@@ -65,10 +103,7 @@ test("path traversal and uncommitted revisions are not readable", async () => {
 		assert.deepEqual(await store.list(), []);
 		await assert.rejects(store.get(id, 1), ArtifactNotFound);
 		await assert.rejects(store.summary(id), ArtifactNotFound);
-		await assert.rejects(
-			store.create({ ...document, libraries: ["constructor" as never] }),
-			/Unknown artifact library/,
-		);
+		await assert.rejects(store.create({ ...document, libraries: ["constructor" as never] }), /do not use libraries/);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
@@ -104,18 +139,6 @@ test("image bytes are stored once and the image document is rebuilt on read", as
 		assert.equal(raw.html, "");
 		assert.equal((await store.get(created.id)).html, created.html);
 		assert.ok(created.html.includes(source));
-	} finally {
-		await rm(dir, { recursive: true, force: true });
-	}
-});
-
-test("revisions record the library versions they were prepared with", async () => {
-	const dir = await mkdtemp(join(tmpdir(), "pilot-artifacts-"));
-	try {
-		const store = new ArtifactStore(dir, { sessionId: "session" });
-		const created = await store.create({ ...document, libraries: ["mermaid"] });
-		assert.deepEqual((await store.get(created.id)).libraryVersions, { mermaid: artifactLibraries.mermaid.version });
-		assert.ok(!("libraryVersions" in (await store.list())[0]!));
 	} finally {
 		await rm(dir, { recursive: true, force: true });
 	}
@@ -160,7 +183,15 @@ test("failing visuals, data on other kinds and libraries on visuals save nothing
 			}),
 			/Nothing was published\. line 2: text: color "red" is not a color token/,
 		);
-		await assert.rejects(store.create({ ...document, data: { a: 1 } }), /Only visual artifacts take data/);
+		await assert.rejects(
+			store.create({
+				title: "Shader",
+				kind: "shader",
+				source: "void mainImage(out vec4 c, in vec2 p) { c = vec4(1.0); }",
+				data: { a: 1 },
+			}),
+			/Only visual artifacts take data/,
+		);
 		await assert.rejects(
 			store.create({ title: "Lib", kind: "visual", source: "() => () => null", libraries: ["d3"] }),
 			/Visual artifacts do not use libraries/,

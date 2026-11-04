@@ -7,7 +7,7 @@ their workflow fixtures have been removed. See [retained devbox data](../../docs
 ## Package
 
 `Pilot-linux-x64.tar.gz` contains one `runtime/` directory with private Node 24.21.0, jj 0.46.0,
-production dependencies, built artifact libraries and `bin/pilot-runtime`. Native dependencies
+production dependencies and `bin/pilot-runtime`. Native dependencies
 build against bundled Node headers in a pinned older-libc toolchain. CI audits every ELF's
 architecture, GLIBC/GLIBCXX requirements and library resolution, then runs the extracted tree's
 `check-runtime.mjs` with its bundled Node. The separate Linux headless/isolation lane remains.

@@ -164,7 +164,7 @@ apps/macos/.build/debug/Pilot --artifact-render-test /tmp/pilot-artifact-test
                              # optional PILOT_ARTIFACT_TEST_MERMAID=/absolute/path/to/bundled-mermaid.js
                              # optional PILOT_ARTIFACT_TEST_REACT=/absolute/path/to/prepared-react.html
                              # React fixtures also need PILOT_ARTIFACT_TEST_LIBRARIES (default
-                             # packages/artifacts/dist/libraries, from pnpm artifacts:libraries)
+                             # retired browser-library fixture, no longer generated)
                              # React fixture: "Native React 7", button increments to "Native React 8";
                              # Motion #native-react-counter reaches opacity 1 after 300ms, or optionally
                              # sets window.nativeMotionDone=false then true on animation completion
@@ -199,22 +199,11 @@ bundles include Node and pilotd in `Contents/Resources/runtime` and do not requi
 a minimal PATH, so the installer asks your login shell (nushell, fish, zsh or bash) for its PATH and falls
 back to mise shims and Homebrew. pilotd logs to `~/Library/Logs/Pilot/pilotd.log`.
 
-### Optional artifact screenshot browser
+### Artifact publication
 
-Native artifact previews use WebKit and need no browser installation. The agent's optional
-`artifact({action: "preview", ...})` screenshot tool uses Playwright Chromium for HTML, React and images.
-SwiftUI screenshots use the installed Swift Command Line Tools instead, with no browser installation.
-Pilot never downloads that browser
-automatically. If you want screenshots, explicitly run this in Terminal (it downloads Chromium
-into your user cache; adjust the app path if needed):
-
-```sh
-runtime="/Applications/Pilot.app/Contents/Resources/runtime"
-"$runtime/node/bin/node" "$runtime/node_modules/playwright/cli.js" install chromium
-```
-
-Release runtimes include Node and Playwright but not npm, so use this bundled CLI rather than
-`npm` or `npx`. Artifact rendering remains isolated and screenshot browser installation is opt-in.
+Agents publish images and native visuals. HTML, React and SwiftUI publication and
+screenshot preview are removed. Historical sources and revisions remain readable;
+there is no browser installation or generated-native-code preview fallback.
 
 ## Automatic builds and private updates
 

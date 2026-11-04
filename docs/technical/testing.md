@@ -25,17 +25,17 @@ New tests default to integration unless explicitly admitted to the fast list in 
 can be forwarded, for example `pnpm test:integration -- --test-name-pattern='restore'`.
 
 CI runs the portable lane and typechecking on Ubuntu x86-64. A smaller macOS arm64 lane retains
-the real coordinator sandbox, native Ask artifact publication/preview, wake sampling, PTYs, runtime
+the real coordinator sandbox, Ask native visual/image publication, wake sampling, PTYs, runtime
 environment and bundled-extension coverage, plus packaging and relocated production-runtime checks.
 These jobs live in `tests.yaml`, which `pr.yaml` and `main.yaml` share. PRs also build and validate the
 Linux production package. Tests are informational: `release.yaml` never waits for them.
 
-Lane selection is explicit in `scripts/test-suites.ts`: new files default to the portable lane; only
-`kernel/ask.integration.test.ts` is currently native-only because it publishes and previews SwiftUI.
+Lane selection is explicit in `scripts/test-suites.ts`: new files default to the portable lane; no
+artifact integration requires a native compiler or browser preview host. Ask coverage runs in both lanes.
 OS-sensitive files intentionally run in both lanes. `--lane` intersects `--suite`, supports `--list`,
 and never changes plain `pnpm test` into a host-dependent subset. Running the macOS lane on another OS
-fails instead of silently losing native coverage (listing it is allowed). Renderer-dependent tests
-keep their existing optional-browser and `PILOT_SWIFTUI_TESTS=1` guards.
+fails instead of silently losing native coverage (listing it is allowed). Artifact preview retirement tests
+run portably without browser or Swift toolchain probes.
 
 The default is two test files concurrently. The Linux `node` CI job uses four, matching its runner's
 cores; the macOS lane keeps the default. `PILOT_TEST_CONCURRENCY=4 pnpm test`

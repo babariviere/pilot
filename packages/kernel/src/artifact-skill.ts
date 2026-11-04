@@ -9,8 +9,6 @@ export const ARTIFACT_SKILL_REFERENCES = [
 	"visual.d.ts",
 	"mockup-mobile.js",
 	"mockup-desktop.js",
-	"web.md",
-	"swiftui.md",
 	"images.md",
 	"shaders.md",
 ].map((name) => fileURLToPath(new URL(`../skills/pilot-artifacts/references/${name}`, import.meta.url)));

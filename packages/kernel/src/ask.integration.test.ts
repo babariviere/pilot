@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, type TestContext, test } from "node:test";
+import { type TestContext, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
 	fauxAssistantMessage,
@@ -16,7 +16,7 @@ import {
 	Type,
 } from "@earendil-works/pi-ai";
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { ArtifactStore, closePreviewBrowser } from "@pilot/artifacts";
+import { ArtifactStore } from "@pilot/artifacts";
 import type { AgentEvent, SessionCompletion } from "@pilot/protocol";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { ASK_TOOL_NAMES } from "./ask-tools.ts";
@@ -24,7 +24,6 @@ import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { KernelSession } from "./session.ts";
 
 // Previews keep a browser warm for a minute. Close it so the test process exits promptly.
-after(() => closePreviewBrowser());
 
 async function fixture(t: TestContext) {
 	const root = await mkdtemp(join(tmpdir(), "pilot-ask-native-"));
@@ -224,12 +223,11 @@ test("Ask exposes only codemode and publishes nested artifacts while direct tool
 	const artifactStore = new ArtifactStore(f.root, { sessionId: "ask-integration" });
 	const seeded = await artifactStore.create({
 		title: "Existing artifact",
-		kind: "html",
-		source: "<h1>Host-seeded existing artifact</h1>",
+		kind: "visual",
+		source: 'function visual({ui}) { return () => ui.text("Host-seeded existing artifact"); }',
 	});
 	const create = t.mock.method(ArtifactStore.prototype, "create");
 	const update = t.mock.method(ArtifactStore.prototype, "update");
-	const previewed: string[] = [];
 	const open = NativeAdapter.open;
 	let native: NativeAdapter | undefined;
 	t.mock.method(NativeAdapter, "open", async (options: NativeAdapterOptions) => {
@@ -237,17 +235,6 @@ test("Ask exposes only codemode and publishes nested artifacts while direct tool
 			...options,
 			...f.options,
 			sessionOptions: f.options.sessionOptions,
-			askArtifacts: options.askArtifacts && {
-				...options.askArtifacts,
-				preview: async (document) => {
-					previewed.push(document.source);
-					return {
-						screenshot: { mimeType: "image/png", data: "cG5n", width: 800, height: 600 },
-						consoleMessages: [],
-						contentHeight: 600,
-					};
-				},
-			},
 		});
 		return native;
 	});
@@ -316,8 +303,8 @@ test("Ask exposes only codemode and publishes nested artifacts while direct tool
 					}),
 					fauxToolCall("codemode", {
 						code: `
-for (const action of ['create', 'update', 'preview']) {
-  text(await tools.artifact({action, id:${JSON.stringify(seeded.id)}, title:'Script diagram', kind:'html', source:'<h1>Script explanatory diagram</h1>'}));
+for (const action of ['create', 'update']) {
+  text(await tools.artifact({action, id:${JSON.stringify(seeded.id)}, title:'Script diagram', kind:'visual', source:"function visual({ui}) { return () => ui.text('Script explanatory diagram'); }"}));
 }
 try { await tools.artifact({action:'create', title:'Escape', kind:'image', source:${JSON.stringify(join(f.root, "secret.txt"))}}); }
 catch { text('denied:artifact-image-create'); }
@@ -341,10 +328,14 @@ for (const path of ['../secret.txt','escape']) {
 }
 text(await tools.read({path:'hello.txt'}));
 text(await tools.read({path:${JSON.stringify(ARTIFACT_SKILL_PATH)}}));
-text(await tools['arti'+'fact']({action:'cre'+'ate',title:'Nested diagram',kind:'react',source:'export default function Card(){return <h1>Nested explanatory diagram</h1>;}' }));
-text(await tools['arti'+'fact']({action:'up'+'date',id:${JSON.stringify(seeded.id)},expectedRevision:2,title:'Nested update',kind:'html',source:'<h1>Nested session update</h1>'}));
-const draft = await tools['arti'+'fact']({action:'pre'+'view',title:'Nested draft',kind:'swiftui',source:'struct ArtifactView: View { var body: some View { Text("Sandboxed draft") } }'});
-text({previewWidth:draft.screenshot.width});
+text(await tools['arti'+'fact']({action:'cre'+'ate',title:'Nested diagram',kind:'visual',source:"function visual({ui}) { return () => ui.text('Nested explanatory diagram'); }"}));
+text(await tools['arti'+'fact']({action:'up'+'date',id:${JSON.stringify(seeded.id)},expectedRevision:2,title:'Nested update',kind:'visual',source:"function visual({ui}) { return () => ui.text('Nested session update'); }"}));
+for (const kind of ['html','react','swiftui']) {
+  for (const action of ['create','update','preview']) {
+    try { await tools['arti'+'fact']({action,id:${JSON.stringify(seeded.id)},title:'Retired',kind,source:'while(true){}'}); text('UNSAFE:legacy'); }
+    catch { text('retired:'+kind+':'+action); }
+  }
+}
 for (const action of ['cre'+'ate','up'+'date','pre'+'view']) {
   try { await tools['arti'+'fact']({action,id:${JSON.stringify(seeded.id)},title:'Escape',kind:'image',source:'../secret.txt'}); text('UNSAFE:artifact-image-'+action); }
   catch { text('denied:artifact-image-'+action); }
@@ -396,18 +387,17 @@ text(await tools.artifact({action:'list'}));
 	for (const action of ["create", "update", "preview"])
 		assert.ok(output.includes(`denied:artifact-image-${action}`), output);
 	assert.match(output, /Nested session update/);
-	assert.match(output, /previewWidth.*800/);
+	for (const kind of ["html", "react", "swiftui"])
+		for (const action of ["create", "update", "preview"]) assert.ok(output.includes(`retired:${kind}:${action}`));
 	assert.doesNotMatch(output, /UNSAFE|ESCAPED|BROWSER STARTED/);
 	assert.ok(!results.some((m) => m.toolName === "pilot_report_status"));
 	assert.equal(existsSync(join(f.source, "denied")), false);
 	assert.equal(create.mock.callCount(), 2);
 	assert.equal(update.mock.callCount(), 2);
-	assert.equal(previewed.length, 2);
-	assert.match(previewed[1]!, /struct ArtifactView: View/);
 	const artifacts = await artifactStore.list();
 	assert.equal(artifacts.length, 3);
 	assert.equal((await artifactStore.get(seeded.id))?.revision, 3);
-	assert.equal((await artifactStore.get(seeded.id))?.source, "<h1>Nested session update</h1>");
+	assert.match((await artifactStore.get(seeded.id))?.source, /Nested session update/);
 	const publications = view.entries.filter((entry) => entry.kind === "pilot.artifact");
 	assert.equal(publications.length, 4, "script publications each admit a durable pinned reference");
 	for (const publication of publications) {

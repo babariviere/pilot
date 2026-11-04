@@ -1,9 +1,7 @@
 /** HTTP API and WebSocket event streams. */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { join } from "node:path";
-import { getLibraryAsset, isArtifactLibrary } from "@pilot/artifacts";
 import type {
-	ArtifactLibrary,
 	AttachmentChatPayload,
 	AttachmentUpload,
 	BindPullRequestRequest,
@@ -1644,17 +1642,7 @@ export function createDaemonServer(
 		if (parts[1] === "artifacts" && parts.length === 3 && req.method === "GET")
 			return json(res, 200, await sessions.resolveArtifact(parts[2]!));
 		if (parts[1] === "artifact-libraries" && parts.length === 3 && req.method === "GET") {
-			const name = parts[2]!;
-			if (!isArtifactLibrary(name)) throw new HttpError(404, "Unknown artifact library");
-			const { source, etag } = await getLibraryAsset(name as ArtifactLibrary);
-			// Clients keep the bundle and revalidate it cheaply; a daemon upgrade changes the validator.
-			const headers = { etag, "cache-control": "no-cache", "x-content-type-options": "nosniff" };
-			if (req.headers["if-none-match"] === etag) {
-				res.writeHead(304, headers);
-				return res.end();
-			}
-			res.writeHead(200, { ...headers, "content-type": "text/javascript" });
-			return res.end(source);
+			throw new HttpError(410, "Browser artifact libraries are no longer supported; retained sources are read-only");
 		}
 		if (parts[1] === "model-scope" && parts.length === 2) {
 			res.setHeader("cache-control", "no-store");

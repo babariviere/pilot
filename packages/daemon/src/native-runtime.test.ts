@@ -6,22 +6,18 @@ import { createRequire } from "node:module";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { promisify } from "node:util";
-import { getLibrary, prepareArtifact } from "@pilot/artifacts";
+import { prepareArtifact } from "@pilot/artifacts";
 
-test("artifact compiler emits the smoke component in its encoded script payload", async () => {
+test("native artifact runtime checks a visual without a browser or JSX compiler", async () => {
 	const artifact = await prepareArtifact({
 		title: "Native compiler smoke",
-		kind: "react",
-		source: "export default function Artifact() { return <p>native-esbuild-ok</p>; }",
+		kind: "visual",
+		source: 'function visual({ ui }) { return () => ui.text("runtime-ok"); }',
 	});
-	assert.match(artifact.html, /artifact-root/);
-	const payload = /atob\("([A-Za-z0-9+/=]+)"\)/.exec(artifact.html)?.[1];
-	assert.ok(payload, "Compiled script payload is missing");
-	assert.match(Buffer.from(payload, "base64").toString("utf8"), /native-esbuild-ok/);
-	assert.ok((await getLibrary("react")).length > 0);
+	assert.equal(artifact.visual?.check.nodes, 1);
 });
 
-test("Linux x64 runtime loads SQLite, PTY and artifact compiler with compatible native ABIs", {
+test("Linux x64 runtime loads SQLite, PTY and native visuals with compatible native ABIs", {
 	skip: process.platform !== "linux",
 	timeout: 30_000,
 }, async (t) => {
@@ -61,10 +57,10 @@ test("Linux x64 runtime loads SQLite, PTY and artifact compiler with compatible 
 	await assert.rejects(
 		prepareArtifact({
 			title: "Unsupported native artifact",
-			kind: "swiftui",
+			kind: "swiftui" as never,
 			source: 'struct ArtifactView: View { var body: some View { Text("No Linux renderer") } }',
 		}),
-		/require macOS/,
+		/Supported kinds: image, visual, shader/,
 	);
 	const report = process.report.getReport() as { sharedObjects: string[]; header: { glibcVersionRuntime?: string } };
 	t.diagnostic(JSON.stringify({ glibc: report.header.glibcVersionRuntime ?? "not reported" }));

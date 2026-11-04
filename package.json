@@ -14,8 +14,6 @@
 		"dev:daemon": "pnpm --filter @pilot/daemon dev",
 		"start": "pnpm --filter @pilot/daemon start",
 		"app:macos": "apps/macos/scripts/bundle.sh",
-		"artifacts:browser": "pnpm --filter @pilot/artifacts exec playwright install chromium",
-		"artifacts:libraries": "node packages/artifacts/scripts/build-libraries.ts",
 		"typecheck": "tsgo -p tsconfig.json",
 		"test": "node scripts/test.ts",
 		"bench:workspace": "node scripts/bench/workspace.ts",

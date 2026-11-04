@@ -106,14 +106,13 @@ try {
 	assert.equal(impact.mode, "source-inferred-not-runtime");
 	assert.equal(impact.roots[0].name, "RuntimeFixture");
 	assert.equal(impact.capabilities.completeImpact, "not-proven");
-	const { prepareArtifact, getLibrary } = await import("@pilot/artifacts");
+	const { prepareArtifact } = await import("@pilot/artifacts");
 	const artifact = await prepareArtifact({
 		title: "Linux production smoke",
-		kind: "react",
-		source: "export default function Artifact() { return <p>production-ok</p>; }",
+		kind: "visual",
+		source: 'function visual({ ui }) { return () => ui.text("runtime-ok"); }',
 	});
-	assert.match(artifact.html, /artifact-root/);
-	assert.ok((await getLibrary("mermaid")).length > 0);
+	assert.equal(artifact.visual.check.nodes, 1);
 	const pty = createRequire(import.meta.url)("node-pty");
 	const terminal = pty.spawn("/bin/sh", ["-c", "printf production-pty-ok"], {
 		cwd: isolated,

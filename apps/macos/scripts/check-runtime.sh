@@ -79,16 +79,13 @@ try {
   else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
   await rm(isolated, { recursive: true, force: true });
 }
-const { prepareArtifact, getLibrary } = await import('@pilot/artifacts');
+const { prepareArtifact } = await import('@pilot/artifacts');
 const artifact = await prepareArtifact({
   title: 'Runtime smoke test',
-  kind: 'react',
-  source: 'export default function Artifact() { return <p>pilot-artifact-runtime-ok</p>; }',
+  kind: 'visual',
+  source: 'function visual({ ui }) { return () => ui.text("runtime-ok"); }',
 });
-assert.match(artifact.html, /artifact-root/);
-assert.ok((await getLibrary('mermaid')).length > 0);
-const { existsSync } = await import('node:fs');
-assert.ok(existsSync('packages/artifacts/dist/libraries/manifest.json'), 'Prebuilt artifact libraries are missing');
+assert.equal(artifact.visual.check.nodes, 1);
 await import('ws');
 const pty = createRequire(import.meta.url)('node-pty');
 const terminal = pty.spawn('/bin/echo', ['pilot-runtime-ok'], { cwd: process.cwd(), env: process.env });

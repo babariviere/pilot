@@ -30,13 +30,12 @@ export async function discoverTests(root: string): Promise<string[]> {
 export type Suite = "fast" | "integration" | "stress";
 export type TestLane = "all" | "portable" | "macos";
 
-// This integration exercises native SwiftUI publication and preview, not just validation.
-const macosOnly = new Set(["packages/kernel/src/ask.integration.test.ts"]);
+// Ask no longer needs a native compiler or screenshot host; retain Darwin smoke coverage.
+const macosOnly = new Set<string>();
 
 // Repeat OS-sensitive paths on Darwin while the broad suite runs on Linux.
 const macosCoverage = new Set([
-	"packages/artifacts/src/preview.test.ts",
-	"packages/artifacts/src/swiftui.test.ts",
+	"packages/kernel/src/ask.integration.test.ts",
 	"packages/daemon/src/coordinator-role.test.ts",
 	"packages/daemon/src/main-view.test.ts",
 	"packages/daemon/src/platform.test.ts",

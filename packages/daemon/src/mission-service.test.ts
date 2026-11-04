@@ -12,6 +12,8 @@ import type { KernelCommand, KernelPacket, KernelSpec } from "@pilot/kernel";
 import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import type { MissionDetail, ServerMessage, SessionState, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
+import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.test.ts";
+
 import { Conflict } from "./errors.ts";
 import type { NonCodePolicyWrite } from "./mission-non-code-acceptance.ts";
 import type { ReviewProducer, ReviewResultWrite } from "./mission-review-contract.ts";
@@ -29,6 +31,13 @@ import { SUBSCRIPTION_USAGE_MAX_AGE_MS, type SubscriptionUsageSource } from "./s
 import { TerminalManager } from "./terminals.ts";
 import { legacyGitHub } from "./testing/legacy-github.ts";
 import { requiredAuthRegistration } from "./testing/required-auth.ts";
+
+function legacyArtifacts(f: { home: string; project: { id: string } }, sessionId: string) {
+	return new LegacyArtifactFixture(join(f.home, "data", "sessions", sessionId), {
+		sessionId,
+		projectId: f.project.id,
+	});
+}
 
 test("ownership scope is creation-only trusted builder assignment metadata, never legacy adoption", async (t) => {
 	const f = await fixture(t);
@@ -178,7 +187,7 @@ test("non-code delivery resolves pinned artifacts and cannot accept or retire wo
 	f.service.join(other.id, { missionId: mission.id });
 	const task = f.store.addTask(mission.id, { title: "Research", sessionId: member.id });
 	f.store.writeBrief(mission.id, "Research scope", 0, { sessionId: lead.id });
-	const artifact = await f.sessions["artifactStore"](member.id).create({
+	const artifact = await legacyArtifacts(f, member.id).create({
 		title: "Report",
 		kind: "html",
 		source: "<p>Findings</p>",
@@ -265,7 +274,7 @@ test("revision-bound service submissions resolve exact artifacts, not latest, se
 			criteria: ["Trace findings"],
 		},
 	});
-	const artifacts = f.sessions["artifactStore"](worker.id);
+	const artifacts = legacyArtifacts(f, worker.id);
 	const artifact = await artifacts.create({ kind: "html", title: "Report", source: "<p>Original sources</p>" });
 	const request = {
 		version: 1,
@@ -497,7 +506,7 @@ test("review artifact/context reads recheck pin ABA and trusted actor project af
 		expectedRevision: 0,
 		definition: optionalReviewSeeds().correctness,
 	});
-	const artifact = await f.sessions["artifactStore"](worker.id).create({
+	const artifact = await legacyArtifacts(f, worker.id).create({
 		kind: "html",
 		title: "Report",
 		source: "<p>Retained evidence</p>",
@@ -540,7 +549,7 @@ test("review artifact/context reads recheck pin ABA and trusted actor project af
 	request.expectedContextFence = f.store.reviewContextFence(mission.id);
 	const saved = await f.service.recordReviewResult(worker.id, task.id, request);
 	assert.equal((await f.service.evaluateReviewResult(lead.id, saved.id)).applicability, "current");
-	await f.sessions["artifactStore"](worker.id).update(
+	await legacyArtifacts(f, worker.id).update(
 		artifact.id,
 		{ kind: "html", title: "Report", source: "<p>New unpinned revision</p>" },
 		1,
@@ -599,7 +608,7 @@ test("delivery evidence rechecks earlier artifact pins after later asynchronous 
 	});
 	const refs: Array<{ kind: "artifact"; artifactId: string; revision: number }> = [];
 	for (const title of ["Static capture fixture", "Interaction report fixture"]) {
-		const artifact = await f.sessions["artifactStore"](worker.id).create({
+		const artifact = await legacyArtifacts(f, worker.id).create({
 			kind: "html",
 			title,
 			source: `<p>${title}. Not a native render or input test.</p>`,
@@ -993,7 +1002,7 @@ test("dormant allocation uses exact pinned non-code revisions and current projec
 		sessionId: worker.id,
 		assignment: { version: 1, expectedRevision: 0, intent: "Report", scope: "Bounded", criteria: ["Sources"] },
 	});
-	const artifact = await f.sessions["artifactStore"](worker.id).create({
+	const artifact = await legacyArtifacts(f, worker.id).create({
 		kind: "html",
 		title: "Report",
 		source: "<p>Exact report v1</p>",
@@ -1035,7 +1044,7 @@ test("dormant allocation uses exact pinned non-code revisions and current projec
 		/fields/,
 	);
 	const saved = await f.service.recordContributionAllocation(lead.id, task.id, request);
-	await f.sessions["artifactStore"](worker.id).update(
+	await legacyArtifacts(f, worker.id).update(
 		artifact.id,
 		{ kind: "html", title: "Report", source: "<p>Unselected v2</p>" },
 		1,
@@ -1099,7 +1108,7 @@ for (const race of ["pin-aba", "actor-project", "custodian-project", "coordinato
 		});
 		const refs: Array<{ kind: "artifact"; artifactId: string; revision: number }> = [];
 		for (const title of ["Report", "Source"]) {
-			const artifact = await f.sessions["artifactStore"](worker.id).create({
+			const artifact = await legacyArtifacts(f, worker.id).create({
 				kind: "html",
 				title,
 				source: `<p>${title}</p>`,
@@ -1206,7 +1215,7 @@ test("coordinator admits explorer research before a brief, preserving reports, p
 		targetSessionId: lead.id,
 	})) as { authorSessionId: string };
 	assert.equal(comment.authorSessionId, explorer.id);
-	const artifact = await f.sessions["artifactStore"](explorer.id).create({
+	const artifact = await legacyArtifacts(f, explorer.id).create({
 		title: "Findings proposal",
 		kind: "html",
 		source: "<p>Sources and limitations</p>",
@@ -1249,7 +1258,7 @@ test("knowledge IPC derives identity from the supervised chat and keeps explorer
 			worker.sent.find((command) => command.type === "knowledge.result" && command.callId === callId),
 		)) as Extract<KernelCommand, { type: "knowledge.result" }>;
 	};
-	const report = await f.sessions["artifactStore"](explorer.id).create({
+	const report = await legacyArtifacts(f, explorer.id).create({
 		title: "Findings",
 		kind: "html",
 		source: "<p>Sources and limitations</p>",
@@ -4640,12 +4649,12 @@ test("start saves member and already-linked artifacts and parsed links before sp
 		tasks: [{ title: "Auth" }],
 	});
 	f.service.join(author.id, { missionId: mission.id });
-	const first = await f.sessions["artifactStore"](lead.id).create({
+	const first = await legacyArtifacts(f, lead.id).create({
 		title: "Design",
 		kind: "html",
 		source: "<p>PRIVATE DESIGN CONTENT</p>",
 	});
-	const second = await f.sessions["artifactStore"](author.id).create({
+	const second = await legacyArtifacts(f, author.id).create({
 		title: "Diagram",
 		kind: "html",
 		source: "<p>PRIVATE DIAGRAM CONTENT</p>",
@@ -4722,7 +4731,7 @@ test("artifact reference IPC reads pinned and latest sources for later members w
 		tasks: [{ title: "A" }, { title: "B" }],
 	});
 	f.service.join(reader.id, { missionId: mission.id });
-	const store = f.sessions["artifactStore"](author.id);
+	const store = legacyArtifacts(f, author.id);
 	const first = await store.create({ title: "Pinned", kind: "html", source: "PINNED SOURCE" });
 	const latest = await store.create({ title: "Latest", kind: "html", source: "OLD SOURCE" });
 	await f.service.linkArtifact(mission.id, { sessionId: author.id, artifactId: first.id, revision: 1, taskId: "1" });
@@ -4797,8 +4806,7 @@ test("artifact reference reads reject foreign sources, forged links and revoked 
 		fromSessionId: other.id,
 		draft: false,
 	});
-	const make = (id: string) =>
-		f.sessions["artifactStore"](id).create({ title: "Private", kind: "html", source: "PRIVATE" });
+	const make = (id: string) => legacyArtifacts(f, id).create({ title: "Private", kind: "html", source: "PRIVATE" });
 	const own = await make(member.id);
 	const foreign = await make(outsider.id);
 	const crossProject = await make(other.id);
@@ -4854,13 +4862,13 @@ test("start rejects foreign artifacts, invalid revisions and malformed links wit
 		draft: false,
 		tasks: [{ title: "A" }],
 	});
-	const valid = await f.sessions["artifactStore"](lead.id).create({ title: "Valid", kind: "html", source: "ok" });
-	const foreign = await f.sessions["artifactStore"](outsider.id).create({
+	const valid = await legacyArtifacts(f, lead.id).create({ title: "Valid", kind: "html", source: "ok" });
+	const foreign = await legacyArtifacts(f, outsider.id).create({
 		title: "Foreign",
 		kind: "html",
 		source: "no",
 	});
-	const otherArtifact = await f.sessions["artifactStore"](other.id).create({
+	const otherArtifact = await legacyArtifacts(f, other.id).create({
 		title: "Other",
 		kind: "html",
 		source: "no",
@@ -5239,7 +5247,7 @@ test("multi-start orders a single chat's tasks and attaches supplied references 
 	});
 	const [a, b, c] = f.store.tasks(mission.id);
 	f.store.updateTask(mission.id, b!.id, { dependsOn: [a!.id] });
-	const artifact = await f.sessions["artifactStore"](lead.id).create({ title: "Spec", kind: "html", source: "ok" });
+	const artifact = await legacyArtifacts(f, lead.id).create({ title: "Spec", kind: "html", source: "ok" });
 	const session = (await f.service.call(lead.id, "start", {
 		ids: [b!.id, "1-3", "#1"],
 		message: "Ship carefully",
@@ -7406,7 +7414,7 @@ async function nonCodePolicyFixture(t: TestContext) {
 			},
 		},
 	});
-	const artifacts = f.sessions["artifactStore"](worker.id);
+	const artifacts = legacyArtifacts(f, worker.id);
 	const artifact = await artifacts.create({ kind: "html", title: "Report", source: "<p>PRIVATE RETAINED SOURCE</p>" });
 	await f.service.linkArtifact(mission.id, {
 		sessionId: worker.id,

@@ -35,8 +35,8 @@ Docs to use when the task touches them:
   shares with children, because `@State` re-evaluates its initial value on every view init.
 - Build Swift through `apps/macos/scripts/{build,test,bundle}.sh`. With Command Line Tools only, the macOS 27
   SDK's `@State` macro has no plugin, so `scripts/swift-env.sh` falls back to an older installed SDK.
-- Show user-visible UI changes with a SwiftUI artifact built from mock data (the `pilot-artifacts` skill has
-  the details). It is a static screenshot, not the real views: say so, and say when no visual check was possible.
+- Show user-visible UI changes with a native visual artifact built from mock data (the `pilot-artifacts` skill has
+  the details). It is a mockup, not the real views: say so, and say when no visual check was possible.
 
 ## Performance
 

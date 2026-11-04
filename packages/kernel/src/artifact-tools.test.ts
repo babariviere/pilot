@@ -6,12 +6,16 @@ import { test } from "node:test";
 import type { JsonValue } from "@earendil-works/chord";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { ArtifactNotFound, ArtifactStore, isArtifactPreviewAvailable } from "@pilot/artifacts";
+import { ArtifactNotFound, ArtifactStore } from "@pilot/artifacts";
 import type { ArtifactRevision, ArtifactWrite } from "@pilot/protocol";
-import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
+import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
 
-const write: ArtifactWrite = { title: "Chart", kind: "html", source: "<h1>Editable</h1>", libraries: ["echarts"] };
+const write: ArtifactWrite = {
+	title: "Chart",
+	kind: "visual",
+	source: 'function visual({ ui }) { return () => ui.text("Editable"); }',
+};
 const revision: ArtifactRevision = {
 	...write,
 	id: "artifact-1",
@@ -20,7 +24,7 @@ const revision: ArtifactRevision = {
 	revision: 3,
 	createdAt: 100,
 	updatedAt: 200,
-	libraries: ["echarts"],
+	libraries: [],
 	html: "COMPILED_HTML_MUST_NOT_REACH_MODEL".repeat(1000),
 };
 
@@ -48,7 +52,6 @@ function fixture(overrides: Partial<ArtifactToolOptions> = {}) {
 	const tools = createArtifactTools({
 		store,
 		onArtifactsChanged: () => notifications++,
-		diagnose: false,
 		...overrides,
 	});
 	return {
@@ -69,6 +72,37 @@ function fixture(overrides: Partial<ArtifactToolOptions> = {}) {
 function execute(tool: ToolDefinition, args: unknown, signal?: AbortSignal) {
 	return tool.execute("call-1", args, signal, undefined, { cwd: process.cwd() } as ExtensionToolContext);
 }
+
+test("retired kinds are absent from authoring schemas and forged writes fail before callbacks", async () => {
+	const f = fixture();
+	const tool = f.tools[0]!;
+	const schema = tool.parameters as { properties: { kind: { enum: string[] }; action: { enum: string[] } } };
+	assert.deepEqual(schema.properties.kind.enum, ["image", "shader", "visual"]);
+	assert.deepEqual(schema.properties.action.enum, ["create", "update", "get", "list"]);
+	for (const kind of ["html", "react", "swiftui"]) {
+		for (const action of ["create", "update", "preview"]) {
+			const args = { action, id: revision.id, title: "Legacy", kind, source: "while(true){}" };
+			assert.throws(
+				() => validateToolArguments(tool, { type: "toolCall", id: "old", name: "artifact", arguments: args }),
+				/Validation failed/,
+			);
+			await assert.rejects(execute(tool, args), /Supported kinds: image, visual, shader/);
+		}
+		const stored = {
+			...revision,
+			kind: kind as ArtifactRevision["kind"],
+			source: `Exact ${kind} source`,
+			libraries: ["react" as const],
+			libraryVersions: { react: "old" },
+		};
+		f.store.get = async () => stored;
+		const result = await f.call("get", { id: revision.id, revision: 1 });
+		const { html: _html, ...read } = stored;
+		assert.deepEqual(result.structuredContent, { artifact: read });
+	}
+	assert.deepEqual(f.calls, []);
+	assert.equal(f.notifications, 0);
+});
 
 for (const ask of [false, true]) {
 	test(`get falls back to read-only references, never update or list (ask=${ask})`, async () => {
@@ -146,69 +180,8 @@ test("artifact tools declare structured output, sequential execution and a compa
 	}
 });
 
-test("Ask artifact tools publish all session-local kinds and forward sandboxed previews", async () => {
-	const previews: ArtifactWrite[] = [];
-	const published: unknown[] = [];
-	const f = fixture({
-		ask: true,
-		onArtifactPublished: async (reference) => {
-			published.push(reference);
-		},
-		preview: async (document) => {
-			previews.push(document);
-			return {
-				screenshot: { mimeType: "image/png", data: "cG5n", width: 800, height: 600 },
-				consoleMessages: [],
-				contentHeight: 600,
-			};
-		},
-	});
-	const tool = f.tools[0]!;
-	assert.match(tool.description, /Publish and inspect session-local/);
-	assert.match(tool.description, /only inline base64/);
-	assert.doesNotMatch(tool.description, /source is a local|\/tmp\/generated\.png/);
-	assert.notEqual(tool.annotations?.readOnlyHint, true);
-	assert.equal(tool.annotations?.destructiveHint, false);
-	const schema = tool.parameters as { properties: { action: { enum: string[] } } };
-	assert.deepEqual(schema.properties.action.enum, ["create", "update", "get", "list", "preview"]);
-	for (const kind of ["html", "react", "swiftui", "image"] as const) {
-		const document = {
-			title: kind,
-			kind,
-			source:
-				kind === "image"
-					? "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR4AQEFAPr/AP8AAP8FAAH/+lyI0QAAAABJRU5ErkJggg=="
-					: "self-contained source",
-		};
-		for (const action of ["create", "update", "preview"]) {
-			const args = { action, id: revision.id, ...document, ...(action === "update" ? { expectedRevision: 3 } : {}) };
-			assert.ok(validateToolArguments(tool, { type: "toolCall", id: "allowed", name: "artifact", arguments: args }));
-			const result = await execute(tool, args);
-			assert.ok(result.structuredContent);
-			if (action !== "preview")
-				assert.deepEqual(result.structuredContent, {
-					artifact: {
-						id: revision.id,
-						sessionId: revision.sessionId,
-						title: revision.title,
-						revision: revision.revision,
-					},
-				});
-		}
-	}
-	assert.equal(previews.length, 4);
-	assert.equal(published.length, 8);
-	assert.equal(f.notifications, 8);
-	const got = await f.call("get", { id: revision.id, revision: 2 });
-	assert.ok(JSON.stringify(got).includes("Editable"));
-	assert.ok(!JSON.stringify(got).includes("COMPILED_HTML"));
-	const listed = await f.call("list", {});
-	assert.ok(JSON.stringify(listed).includes(revision.id));
-	assert.equal(f.calls.length, 10);
-});
-
 test("Ask denies every image file path before store or renderer callbacks, including forged calls", async () => {
-	const f = fixture({ ask: true, preview: async () => assert.fail("Rejected image input must not render") });
+	const f = fixture({ ask: true });
 	for (const source of [
 		"/etc/passwd",
 		"../secret.png",
@@ -217,7 +190,7 @@ test("Ask denies every image file path before store or renderer callbacks, inclu
 		"https://example.test/image.png",
 		"/tmp/generated.png",
 	]) {
-		for (const action of ["create", "update", "preview"])
+		for (const action of ["create", "update"])
 			await assert.rejects(
 				f.call(action, { id: revision.id, title: "Escaped", kind: "image", source }),
 				/require inline data URLs/,
@@ -234,7 +207,7 @@ test("Ask inspects stored SwiftUI source without entering rendering or publicati
 		source: 'struct ArtifactView: View { var body: some View { Text("Stored") } }',
 		libraries: [],
 	};
-	const f = fixture({ ask: true, preview: async () => assert.fail("SwiftUI inspection must not render") });
+	const f = fixture({ ask: true });
 	f.store.get = async () => stored;
 	f.store.list = async () => [stored];
 	f.store.create = async () => assert.fail("SwiftUI inspection must not publish");
@@ -312,13 +285,11 @@ test("get returns editable metadata and historical revision, list returns summar
 });
 
 test("actions reject missing required fields and unknown actions before side effects", async () => {
-	const f = fixture({
-		preview: async () => assert.fail("invalid calls must not render"),
-	});
+	const f = fixture();
 	for (const action of ["get", "update"])
 		await assert.rejects(f.call(action, write), new RegExp(`Artifact ${action} requires id`));
-	for (const action of ["create", "update", "preview"]) {
-		for (const field of ["title", "kind", "source"] as const) {
+	for (const action of ["create", "update"]) {
+		for (const field of ["title", "kind"] as const) {
 			const incomplete: Partial<ArtifactWrite> = { ...write };
 			delete incomplete[field];
 			await assert.rejects(
@@ -333,7 +304,7 @@ test("actions reject missing required fields and unknown actions before side eff
 });
 
 test("artifact schema requires a valid action and retains field constraints", () => {
-	const [tool] = fixture({ preview: async () => assert.fail("schema validation must not render") }).tools;
+	const [tool] = fixture().tools;
 	assert.ok(tool);
 	const invalidArguments: Record<string, JsonValue>[] = [
 		{},
@@ -360,10 +331,10 @@ test("create forwards only document fields, without action or unrelated controls
 });
 
 test("unavailable preview is neither advertised nor callable, while publishing still works", async () => {
-	const f = fixture({ preview: false });
+	const f = fixture();
 	const [tool] = f.tools;
 	assert.ok(tool);
-	assert.doesNotMatch(tool.description, /preview|Chromium|install chromium/);
+	assert.doesNotMatch(tool.description, /- preview:|Chromium|install chromium/);
 	assert.doesNotMatch(tool.promptSnippet!, /preview/);
 	assert.doesNotMatch(JSON.stringify(tool.parameters), /preview|width|height/);
 	assert.doesNotMatch(JSON.stringify(tool.outputSchema), /screenshot|consoleMessages|contentHeight/);
@@ -384,43 +355,11 @@ test("unavailable preview is neither advertised nor callable, while publishing s
 	assert.equal(f.notifications, 2);
 });
 
-test("default preview advertisement follows the installed renderer probe", () => {
-	const [tool] = fixture().tools;
-	assert.equal(tool!.description.includes("- preview:"), isArtifactPreviewAvailable());
-});
-
-test("available preview is explicitly optional and never suggests installing a browser", () => {
-	const [tool] = fixture({ preview: async () => assert.fail("description must not render") }).tools;
-	assert.match(tool!.description, /Preview is not required before publishing/);
-	assert.match(tool!.description, /If it fails, publish without preview/);
-	assert.doesNotMatch(
-		tool!.description,
-		/Use artifact\(\{action:"preview".*before publishing|npm run artifacts:browser|npx playwright install/,
-	);
-	validateToolArguments(tool!, {
-		type: "toolCall",
-		id: "available",
-		name: "artifact",
-		arguments: { action: "preview", ...write },
-	});
-});
-
 test("image actions forward embedded sources and do not expose image bytes in publication results", async () => {
 	const source =
 		"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==";
 	const imageWrite: ArtifactWrite = { title: "Image", kind: "image", source };
-	let previews = 0;
-	const f = fixture({
-		preview: async (write) => {
-			assert.deepEqual(write, imageWrite);
-			previews++;
-			return {
-				screenshot: { mimeType: "image/png", data: "cG5n", width: 800, height: 600 },
-				consoleMessages: [],
-				contentHeight: 600,
-			};
-		},
-	});
+	const f = fixture();
 	for (const action of ["create", "update"]) {
 		const result = await f.call(action, { ...imageWrite, id: "artifact-1", expectedRevision: 3 });
 		assert.ok(!JSON.stringify(result).includes(source));
@@ -429,83 +368,15 @@ test("image actions forward embedded sources and do not expose image bytes in pu
 		{ method: "create", args: [imageWrite, undefined] },
 		{ method: "update", args: ["artifact-1", imageWrite, 3, undefined] },
 	]);
-	await f.call("preview", imageWrite);
-	assert.equal(previews, 1);
 	assert.equal(f.notifications, 2);
 	await assert.rejects(f.call("create", { ...imageWrite, libraries: ["react"] }), /do not use libraries/);
 	await assert.rejects(f.call("create", { ...imageWrite, source: "https://example.com/image.png" }), /local path/);
 	assert.equal(f.notifications, 2);
 });
 
-test("SwiftUI actions accept native source, forward cancellation and reject browser libraries", async () => {
-	const native: ArtifactWrite = {
-		title: "Native card",
-		kind: "swiftui",
-		source: 'struct ArtifactView: View { var body: some View { Text("Preview") } }',
-	};
-	const signal = new AbortController().signal;
-	const f = fixture({
-		preview: async (received, options) => {
-			assert.deepEqual(received, native);
-			assert.equal(options?.signal, signal);
-			return {
-				screenshot: { mimeType: "image/png", data: "cG5n", width: 800, height: 600 },
-				consoleMessages: [],
-				contentHeight: 600,
-			};
-		},
-	});
-	const [tool] = f.tools;
-	assert.ok(tool);
-	const parameters = { action: "create", ...native };
-	assert.deepEqual(
-		validateToolArguments(tool, { type: "toolCall", id: "native", name: "artifact", arguments: parameters }),
-		parameters,
-	);
-	for (const action of ["create", "update", "preview"]) {
-		await f.call(action, { ...native, id: "artifact-1", expectedRevision: 3 }, signal);
-		await assert.rejects(
-			f.call(action, { ...native, id: "artifact-1", libraries: ["react"] }),
-			/SwiftUI artifacts do not use libraries/,
-		);
-	}
-	assert.deepEqual(f.calls, [
-		{ method: "create", args: [native, signal] },
-		{ method: "update", args: ["artifact-1", native, 3, signal] },
-	]);
-	assert.match(tool.description, /SwiftUI requires the macOS Swift toolchain/);
-	assert.match(tool.description, /static screenshot, not project views/);
-});
-
-test("preview forwards viewport and abort signal, returns image content and structured screenshot", async () => {
-	const signal = new AbortController().signal;
-	const screenshot = { mimeType: "image/png" as const, data: "cG5n", width: 640, height: 480 };
-	const diagnostics = { consoleMessages: [{ level: "error", text: "Render warning" }], contentHeight: 900 };
-	const f = fixture({
-		preview: async (received, options) => {
-			assert.deepEqual(received, write);
-			assert.deepEqual(options, { width: 640, height: 480, signal });
-			return { screenshot, ...diagnostics };
-		},
-	});
-	const result = await f.call("preview", { ...write, width: 640, height: 480 }, signal);
-	assert.deepEqual(result.content, [
-		{ type: "image", mimeType: "image/png", data: "cG5n" },
-		{ type: "text", text: JSON.stringify(diagnostics) },
-	]);
-	assert.deepEqual(result.details, diagnostics);
-	assert.deepEqual(result.structuredContent, { screenshot, ...diagnostics });
-	assert.deepEqual(f.calls, []);
-	assert.equal(f.notifications, 0);
-});
-
 test("write and preview reject source above the UTF-8 byte limit before side effects", async () => {
-	const f = fixture({
-		preview: async () => {
-			assert.fail("oversized source must not render");
-		},
-	});
-	for (const name of ["create", "update", "preview"]) {
+	const f = fixture();
+	for (const name of ["create", "update"]) {
 		await assert.rejects(f.call(name, { id: "artifact-1", ...write, source: "😀".repeat(131_073) }), /512 KiB UTF-8/);
 	}
 	assert.deepEqual(f.calls, []);
@@ -515,34 +386,12 @@ test("write and preview reject source above the UTF-8 byte limit before side eff
 });
 
 test("all artifact tools reject already-aborted calls without store or preview work", async () => {
-	const f = fixture({
-		preview: async () => {
-			assert.fail("aborted preview must not render");
-		},
-	});
+	const f = fixture();
 	const controller = new AbortController();
 	controller.abort(new Error("Stopped"));
 	for (const action of ["create", "update", "get", "list", "preview"])
 		await assert.rejects(f.call(action, { id: "artifact-1", ...write }, controller.signal), /Stopped/);
 	assert.deepEqual(f.calls, []);
-	assert.equal(f.notifications, 0);
-});
-
-test("store and missing-browser errors propagate without change notifications", async () => {
-	const f = fixture({
-		preview: async () => {
-			throw new Error("Install Chromium: npx playwright install chromium");
-		},
-	});
-	f.store.get = async () => {
-		throw new Error("Artifact not found");
-	};
-	f.store.create = async () => {
-		throw new Error("Unsupported import");
-	};
-	await assert.rejects(f.call("get", { id: "missing" }), /Artifact not found/);
-	await assert.rejects(f.call("create", write), /Unsupported import/);
-	await assert.rejects(f.call("preview", write), /npx playwright install chromium/);
 	assert.equal(f.notifications, 0);
 });
 
@@ -606,36 +455,6 @@ test("committed publication keeps its metadata fallback when display admission f
 	assert.equal(warnings.mock.callCount(), 1);
 });
 
-test("publication reports runtime errors as non-blocking warnings, only for browser kinds", async () => {
-	const diagnosed: ArtifactWrite[] = [];
-	const f = fixture({
-		diagnose: async (document) => {
-			diagnosed.push(document);
-			return ["Runtime error: boom"];
-		},
-	});
-	const created = await f.call("create", write);
-	assert.deepEqual((created.structuredContent as { warnings: string[] }).warnings, [
-		"Runtime error: boom",
-		"The artifact was published. Fix these errors with update if they affect the result.",
-	]);
-	assert.equal((created.structuredContent as { artifact: { id: string } }).artifact.id, "artifact-1");
-	assert.equal(f.notifications, 1);
-	const failing = fixture({
-		diagnose: async () => {
-			throw new Error("browser crashed");
-		},
-	});
-	const quiet = await failing.call("create", write);
-	assert.ok(!("warnings" in (quiet.structuredContent as object)), "renderer failures are not artifact errors");
-	await f.call("create", {
-		title: "Native",
-		kind: "swiftui",
-		source: 'struct ArtifactView: View { var body: some View { Text("x") } }',
-	});
-	assert.equal(diagnosed.length, 1);
-});
-
 test("shader publication returns compile errors with source lines and saves nothing", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pilot-shader-artifact-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
@@ -681,7 +500,7 @@ test("visual publication returns the check, get returns source and data, errors 
 	const root = await mkdtemp(join(tmpdir(), "pilot-visual-artifact-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	const store = new ArtifactStore(root, { sessionId: "visual-session" });
-	const f = fixture({ store, visuals: true, preview: async () => assert.fail("visuals are not previewed") });
+	const f = fixture({ store, visuals: true });
 	const [tool] = f.tools;
 	assert.match(tool!.description, /Visuals \(kind visual\) come first for charts.*source String\(fn\)/);
 	const source =
@@ -691,7 +510,7 @@ test("visual publication returns the check, get returns source and data, errors 
 		{ name: "Failures", value: 3 },
 	];
 	await assert.rejects(f.call("create", { title: "Stats", kind: "visual" }), /source: String\(visual\)/);
-	await assert.rejects(f.call("preview", { title: "Stats", kind: "visual", source, data }), /Publish with create/);
+	await assert.rejects(f.call("preview", { title: "Stats", kind: "visual", source, data }), /preview is unavailable/);
 	await assert.rejects(
 		f.call("create", { title: "Stats", kind: "visual", source: source.replace("row.name", "row.missing") }),
 		/Nothing was published\. line 2: TypeError/,

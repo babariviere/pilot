@@ -4,7 +4,7 @@ Agents can publish visuals alongside their replies. Open a chat's artifact card 
 inspect it, expand it, or copy supported content. A published card keeps its revision;
 the artifact list can open the latest version.
 
-Native visuals include charts, tables, diagrams, and interactive controls. Rendering
+Native visuals include charts, tables, diagrams, UI mockups, and interactive controls. Rendering
 support is bounded: unsupported Mermaid syntax shows its source and a reason rather
 than pretending a partial graph is complete.
 
@@ -12,9 +12,10 @@ In ordinary Local Build chats, paste clipboard images or drop supported image fi
 into the composer. Review the attachment previews before sending. Conversation images
 and raster artifacts offer **Copy image** separately from copying source text.
 
-Legacy artifacts remain in history. Some older formats have limited readers, so a
-retained source is not a promise that every preview or interaction is supported.
-SwiftUI artifacts, where present, are static renders, not live application views.
+New artifacts use images or native visuals. HTML, React and SwiftUI authoring and
+preview are no longer available. Their existing sources, revisions and provenance
+remain in history for read-only inspection and copying, not execution. Shader
+rendering remains unavailable in Pilot Next.
 
 Artifacts are outputs to review, not proof that code was applied, tests passed,
 or an external action succeeded.

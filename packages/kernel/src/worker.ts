@@ -4,7 +4,6 @@ import { randomUUID } from "node:crypto";
 import { serialize } from "node:v8";
 import type { JsonValue } from "@earendil-works/chord";
 import { ConversationBusy } from "@earendil-works/pi-durable";
-import { closePreviewBrowser } from "@pilot/artifacts";
 import { configureNodeTelemetry, nodeTelemetry } from "@pilot/telemetry";
 import release from "../../../package.json" with { type: "json" };
 import type { DatabaseCall } from "./database-tool.ts";
@@ -280,8 +279,6 @@ export function runKernelWorker(): void {
 			await commands;
 			await Promise.allSettled(subagentCommands);
 			await session?.close();
-			// The warm artifact preview browser would otherwise outlive a graceful exit until Playwright's exit hook.
-			await closePreviewBrowser();
 			await nodeTelemetry().shutdown();
 		} catch (error) {
 			await send({ type: "error", message: `Shutdown failed: ${errorText(error)}` }).catch(() => undefined);
