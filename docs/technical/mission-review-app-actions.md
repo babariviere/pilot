@@ -320,6 +320,14 @@ automatic feedback learning, external audit export, a retention timer or hidden 
 
 ## Decision packet and required qualification
 
+The current cross-document decision menu is in
+[remaining policy choices](mission-authority-review-policy.md#remaining-decision-menu-46-and-47).
+Its practical native-action alternative would explicitly narrow this document's stronger threat
+model; it is not selected, demonstrated or sufficient under the stronger model described here.
+Assurance, delegation and consent recommendations all remain proposed pending actual user choices.
+Neither an answer attributed through coordination nor cancellation/generic finish intent grants them.
+Any documentation push requires review of the actual candidate and a separate coordinator turn.
+
 Coordinator review should separate these decisions rather than accept the document as a grant:
 
 1. **Assurance:** retain unavailable, or authorize a bounded qualification of a concrete protected

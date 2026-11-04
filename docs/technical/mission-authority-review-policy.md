@@ -21,14 +21,14 @@ Ask roles, live missions, migration, cleanup, release or restart behavior.
   Effort, difficulty and risk/uncertainty are separate; effort or diff size never grants authority.
 - New missions first; existing missions require adoption preview and explicit opt-in (D22).
   This proposal does not retroactively approve work, infer ownership or retire workers.
-- UI implementation for this mission still requires Opus (D24). This task draws no screens or
-  prototypes. The mission's D27 permission for scoped verified direct pushes is a present delivery
+- UI targets apps/desktop, not Swift (D2); later scoped starts supersede D24's original model pause.
+  This document draws no screens or prototypes. D27's checked publication permission is a present delivery
   instruction, not implementation or adoption of this future automatic-delivery policy.
 
 Dependencies: task #2's [interview/approval proposal](mission-interview-approval.md), #3's non-code
 record foundations, #4's classification/model advice, #17's [review records](mission-review-records.md)
-and #18's [delivery evidence](delivery-evidence.md). Task #22's contribution/task-at-operation choice
-is still undecided. Numbered tasks here are design context, not grants of authority.
+and #18's [delivery evidence](delivery-evidence.md). D31 selected later contribution allocation as
+assessment scope, not historical task-purpose proof. Numbered tasks are context, not authority.
 
 ## Authority matrix
 
@@ -102,10 +102,10 @@ order, score, majority vote or whichever reviewer finished first.
    repository and full change identities, exact retained base/head commit/content/comparison scope,
    or exact non-code references; include all delivered layers/PRs and relevant context/preferences.
    Distinguish worker-creation provenance, operation-time declared context, semantic task purpose
-   and later contribution acceptance. Task #22 has not chosen between explicit coordinator
-   allocation of retained contributions and an additional historical-context requirement. That
-   prerequisite is **unavailable**, not satisfied by this proposal, #17, a task link, a singleton
-   assignment or a research label. No new allocation record or inferred backfill is specified.
+   and later contribution acceptance. D31 permits exact retained allocation as later assessment
+   scope; historical task purpose remains Unknown when unproven. Allocation is not acceptance,
+   complete inventory or a gate, and no task link, singleton assignment or research label supplies
+   missing evidence. No inferred backfill is permitted.
 3. **Currentness and coverage.** Compare retained identities with an authoritative observation of
    the current proposed delivery, target/comparison, task fences and policy/context. Require exact
    criterion and contribution coverage. Retained snapshots alone cannot observe today's source.
@@ -166,7 +166,7 @@ but unresolved edges and syntactic limits are not runtime or complete-impact pro
 | Architecture/maintainability | Coupling, ownership, illegal states, layering, duplication and concrete maintenance/failure cost | Maintainability/Slop guidance with legitimate adapters/shared rules as counterevidence; no size heuristics or automatic rewrite |
 | Security | Trust boundaries, authorization, adversarial paths, exposure, data handling and documented limitations | Relevant specialist expertise; a correctness Pass does not imply security Pass |
 | Research/non-PR | Exact report/source versions, claim-to-source support, alternatives, uncertainty and reproducibility | Domain/source criticism; research intent proves neither truth nor absence of code contributions |
-| Visual/interaction | Actual native renderer captures plus input/focus/IME/accessibility/state/performance evidence as applicable | Visual/interaction expertise, not a screenshot-only approval; UI implementation here remains Opus-only |
+| Visual/interaction | Actual native renderer captures plus input/focus/IME/accessibility/state/performance evidence as applicable | Visual/interaction expertise, not a screenshot-only approval; follow the current scoped UI authorization |
 
 Three independent concepts must stay separate:
 
@@ -273,8 +273,8 @@ matching destination alone need not identify which uncertain operation executed.
 
 ## Worked decisions
 
-The eligible examples below assume future authoritative observers/admission and the still-unavailable
-contribution contract have been implemented and adopted. **Today these examples cannot be made
+The eligible examples below assume future authoritative observers/admission and all required
+contribution evidence have been implemented and adopted. **Today these examples cannot be made
 eligible merely by recording #17 Pass or #18 approval.**
 
 | Case | Inputs and explanation | Proposed result |
@@ -288,7 +288,7 @@ eligible merely by recording #17 Pass or #18 approval.**
 | Pending human review | T3 specialist review/checks pass; human request is pending, or an agent recorded “user agreed” | Block human gate. Low attention/confidence scores do not replace explicit trusted approval |
 | Lost integration ACK | All gates passed at admission, integration request sent, response lost | Integration Unknown; reconcile that exact operation, do not retry as a new operation or mark task done; recheck gates before new actions |
 | Owner/classification ABA | Owner A submits, task is released/reclaimed by A or classification raised then restored | Old evidence/acceptance remain historical; definition/assignment fences changed, so no revived eligibility |
-| Non-PR research | Pinned report maps findings to criteria and coordinator approves; contribution coverage/code-free claim is unproved | #22 prerequisite and other missing verification remain unavailable; no fabricated hash or “no PR means done” shortcut |
+| Non-PR research | Pinned report maps findings to criteria and coordinator approves; contribution coverage/code-free claim is unproved | Allocation alone cannot supply missing verification; no fabricated hash or “no PR means done” shortcut |
 
 ## Existing reuse versus capability gaps
 
@@ -299,7 +299,7 @@ Inspection anchors are the current daemon implementations, not claims of active 
 | #2 proposal, protocol brief revisions/decisions and coordinator-owned planning | Exact planning content/CAS and existing role boundaries | Selected trusted approval transport, adopted envelope/currentness/amendment/admission/revocation mechanics |
 | #3 non-code record/reference support | Explicit versioned non-code references, not invented code receipts | Active non-code acceptance/completion; legacy commit format/free text do not verify landing/checks |
 | #4 `mission-classification.ts` / `mission-model-recommendation.ts` | Versioned classification, task fences and advisory allowed-model/suitability/availability diagnostics | Active tier authority/routing; classification/advice is not a grant, execution or availability guarantee |
-| #13 [jj ownership](jj-ownership.md), #20 [retained snapshots](review-snapshots.md) | Worker-creation metadata and immutable bounded layer/stack bytes | Exact task-at-operation proof, current unsaved/live source and complete contribution reconciliation; #22 choice remains open |
+| #13 [jj ownership](jj-ownership.md), #20 [retained snapshots](review-snapshots.md) | Worker-creation metadata and immutable bounded layer/stack bytes | Current unsaved/live source and complete contribution reconciliation; D31 allocation is later assessment scope, not historical task-purpose proof |
 | #18 `mission-delivery-evidence.ts`, Store/Service entry points | Durable exact submissions, criterion evidence indexes, coordinator judgement and record-freshness fences | Trusted execution/checks, active acceptance eligibility, contribution contract, live source and integration observations |
 | #17 `mission-review-contract.ts`, seeds and Store/Service entry points | Versioned optional profiles/results, retained citations/context fences, execution/outcome distinction, optional host-observed agent producer | Reviewer execution, independence and human-authorship proof, live freshness, checks, acceptance/authority/eligibility or merge consumer |
 
@@ -311,25 +311,124 @@ Service actor/project checks are reusable boundaries, not hostile-shell/unauthen
 **A current pinned-record Pass is not live freshness, an independent review, a passing check,
 coordinator acceptance or merge authority. Task #17 did not establish those capabilities.**
 
-## Remaining decisions, not silently settled here
+## Remaining decision menu (#46 and #47)
 
-Approved Balanced, force OFF/checks mandatory, coordinator ownership and rollout defaults above
-are not reopened. The following require later bounded decisions/contracts:
+**All recommendations below remain proposed.** The coordinator will present the material choices
+to the user and record actual choices and exceptions. A suggested answer, stopping/cancellation,
+generic request to finish, design review or document publication is not approval, delegation,
+consent or an execution grant. Keep both tasks unfinished until their decision criteria are met.
+Balanced, mandatory passing checks, force OFF, coordinator ownership and new-missions-first stay
+fixed. D48 settles project/chat Review; D51 protects uncertain withdrawal authority.
 
-- #2's trusted explicit approval action/transport, package representation/currentness, amendment
-  lineage, adoption previews and handling of in-flight revocation. No generic authorization framework
-  or new transport is chosen here.
-- #22's authoritative contribution-acceptance versus historical task-context choice, including
-  multiple tasks, transfers and non-code work. This remains an unavailable prerequisite, not an
-  allocation mechanism approved by this policy.
-- Precise independence/expertise criteria and trusted executor/human provenance, check/source/target
-  observers, active gate admission and exact integration/permission/result reconciliation.
-- Detailed mission/tier override presentation and applicability, classification escalation/materiality
-  rules, finding-dismissal delegation, conservative versus selective invalidation and permissible
-  evidence reuse. These must not silently lower approved or user-required gates.
-- Named future review-waiver eligibility, approver, scope, duration and audit/revocation rules.
-  **No waiver is selected. Force stays OFF; checks and repository protections are never waived.**
-- Intent-specific rubric adoption, model-suitability assessment and calibration of human corrections,
-  misses and false positives; #12 preference lifecycle and any explicit authority-promotion proposals.
-- Delivery modes and non-code destinations, completion/retirement safeguards and activation sequencing.
-  No automatic merge, scheduling, GitHub mutation, migration or cleanup follows from this document.
+### 1. Which approval assurance and delegation should be supported?
+
+The [app-action proposal](mission-review-app-actions.md#options-and-recommendation) currently
+requires stronger same-user protection and reports the necessary human-origin source unavailable.
+Two honest choices are a practical, explicitly narrower native-action assurance policy, or retaining
+that stronger requirement and keeping dependent human gates unavailable pending qualification.
+
+**Recommendation, not selected:** explicit native confirmation of the exact immutable package,
+run consent or disposition; purpose-specific admission unavailable to ordinary tools/REST. Count
+it as user-submitted intent only under an explicitly approved threat model that excludes hostile
+same-user process inspection/tampering and UI automation. Do not call it OS isolation, verified
+human presence, proof every byte was read, or an already supported mechanism. Until the user
+chooses assurance and its actual implementation is qualified, human-required gates remain blocked.
+
+Proposed bounded delegation accompanies that choice:
+
+- Bind named actions/destinations and the exact current coordinator; expire on mission end,
+  revocation or coordinator replacement. No implicit successor transfer or subdelegation.
+- Allow routine decomposition/reassignment within approved outcomes/constraints. Expanded scope,
+  weakened criteria, higher risk/spend, new destinations or uncertain boundaries need fresh user
+  approval. Preserve exact amendments and reasons; no silent authority growth.
+- For direct decision withdrawal, require BOTH a current scoped delegation and a user-controlled
+  permission on that exact decision revision. All records start protected/unknown until explicitly
+  marked by the user, regardless of author. Legacy/unknown records retain user-accepted proposals;
+  no automatic backfill. User-only constraints cannot be marked delegable while still user-only.
+  Edits invalidate the permission; revocation disables its use. Preserve text/history/pins/reason.
+  Hard deletion and removal of user-only protection remain user actions.
+- Revocation closes new affected admissions/sends, requests cancellation of active reviewers and
+  pauses affected work. Await owned work before reusing execution capacity; do not promise rollback,
+  immediate child exit, provider erasure or recovery of already incurred spend.
+
+**Consumers:** #52 action assurance and grant/use/revocation; #58/#61 package admission and
+amendments; #67/#73 scoped guidance/oversight; any direct-withdrawal follow-up needs its own scope.
+#94's existing proposal/accept path remains unchanged until separately authorized implementation.
+
+### 2. What initial reviewer consent, coverage and non-code delivery scope?
+
+Compare per-exact-run consent with a bounded mission-level consent. The latter needs explicit
+future-data categories, account/terms, total allowance, expiry and renewal rules; workflow approval
+alone cannot grant it. Neither alternative is selected or authorizes a provider call now.
+
+**Recommended initial package, not selected:**
+
+- One consent per exact run, displaying selected data/omissions, provider/model/account, billing,
+  terms, local retention and total money/input/generated-token/time allowance. Thinking, repeated
+  input and follow-ups share that total. No automatic replacement run, model/account switch or paid
+  fallback. Unknown terms/account/bounds block transmission; no provider/account is chosen here.
+- Retained non-code accounting uses host/project/mission/task, not a fabricated session/PR or a
+  fresh target per recheck. Propose a cumulative $4 task allowance across revisions/rechecks, with
+  lower per-run consent allowed and uncertain usage charged conservatively. Risk tier is not effort.
+  Keep session/PR ceilings and shared $20/24h/token ceilings unchanged; one active run/task, two/host.
+  Transfers/replacement tasks cannot refill the allowance: automatic remapping is unsupported until
+  explicitly approved. No new mission budget or allowance renewal is inferred.
+- Fresh host-owned evidence-only execution, not author/child/collaborator history. Unknown author
+  lineage blocks required independence. Same-model review is permitted; provider/model diversity
+  is optional, never a substitute for separation. This adds no OS-isolation claim.
+- Adopt the intent-sensitive table above: targeted covers criteria/net effect/affected paths; full
+  covers all delivered layers/interactions; specialist adds evidenced domain competence and a
+  qualified rubric, not a role label. Every required criterion needs coverage; limitations/omissions
+  cannot become Pass. Keep security, correctness, maintainability and attention distinct.
+- Coordinator may dismiss findings with exact counterevidence/reason within delegated scope, never
+  waive checks, required review or protected constraints. Broader risk acceptance returns to the
+  user. Human-thread disposition is separate, in question 3.
+- Initial non-code domain: research/plans at exact local brief/artifact revisions. Require retained
+  original bytes, kind, source support and criterion coverage. Unsupported kinds or missing historic
+  bytes block that destination; reference metadata or latest display cannot substitute. External
+  publication and executable/side-effectful deliveries are excluded. Code/mixed delivery stays in
+  its own lane; this does not silently select a repository integration mode.
+- Disclose existing critical-review retention (raw evidence 30 days, other records 90 days after use, with
+  active/pinned exceptions) and existing explicit erasure behavior; add no cleanup timer. This does
+  not set annotation/draft retention or promise erasure of provider-held data.
+
+**Consumers:** #49 original capture; #59 total accounting/run linkage; #64 restricted reviewer;
+#35/#36 checks, coverage and current destination observations; #53/#54 evidence consumers;
+#19/#72 eventual acceptance. Unsupported provider terms, specialist qualification, data kinds,
+task remapping and external destinations stay named blockers, not automatic policy exceptions.
+
+### 3. How should human review requests and dispositions work?
+
+See the [single request/disposition recommendation](mission-native-review.md)
+for agent-first versus parallel ordering, exact coverage, request permissions, filters and a
+multi-change standalone example. D48 entry points are decided, not another choice.
+
+## Smallest implementation sequence after actual choices
+
+1. #52, then #58/#61: implement only the selected native actions, exact receipts, bounded grants,
+   amendment/revocation and decision protection. Reuse stores; do not build a generic authority service.
+2. #49/#59/#64 with #35/#36: one exact retained non-code review path, chosen consent/accounting,
+   observed coverage/checks and current local destination. Keep execution off until separately admitted.
+3. #60/#65, then #70/#79: private drafts and explicit dispositions, native submission, one durable
+   request linked to the same chat Review, then Inbox routing. #88 read-only entry is independent.
+4. #19/#72 and later delivery consumers only after required evidence and explicit activation.
+   Migration, automatic attention, merge/cleanup/release/restart do not follow from this design.
+
+These are consumer scopes, not new scaffolding milestones or implementation grants. Ordinary bounds,
+CAS, durability, access and exact-operation recovery belong inside each slice. Reanchor details and
+keyboard audit belong to #60/#65; finer evidence reuse/learning and visual polish remain deferred.
+No force waiver is proposed. Any publication candidate needs actual-candidate source review and a
+separate coordinator publication turn before push; source-baseline review alone is insufficient.
+
+## Source check for this consolidation
+
+Inspected committed baseline: `2ae03ca59fd4514e459d23044d263f6433e10b41`. Earlier sections' historical
+capability notes are not claims that their proposed pipeline is installed.
+
+| Pinned source | Observed boundary |
+| --- | --- |
+| `packages/protocol/src/index.ts:1060-1073`; `packages/daemon/src/missions.ts:5217-5355` | No protection/delegation metadata; coordinator proposes withdrawal, user resolves. Author is not authority. |
+| `packages/protocol/src/critical-review.ts:23-36`; `packages/daemon/src/critical-review-accounting.ts:15-20,151-215,263-305` | Session/PR targets and existing ceilings only; no retained-task mapping or consent writer. |
+| `packages/daemon/src/critical-review-retention.ts:1-10,88-99` | Existing local availability limits and active/pinned exceptions, not provider erasure. |
+| `packages/daemon/src/retained-review-linkage-contract.ts:706-710`; `packages/daemon/src/mission-review-contract.ts:91-125` | Dispatch disabled; independence/human authorship unavailable. |
+| `packages/daemon/src/mission-non-code-acceptance.ts:18-49,176-181,451` | Inert brief/artifact configuration; `eligible:false`, not publication observation. |

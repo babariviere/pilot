@@ -134,6 +134,11 @@ separate work, not authorized here.
 
 ## Budget identity is separate from immutable target identity
 
+The consolidated [reviewer/consent decision](mission-authority-review-policy.md#2-what-initial-reviewer-consent-coverage-and-non-code-delivery-scope)
+compares a per-run initial lane with delegated mission consent. Its cumulative task allowance and
+logical-task mapping remain recommendations, not selected policy or a spending grant. Existing
+ceilings remain unchanged and retained dispatch remains disabled.
+
 The ledger currently enforces effort ceilings low $1, medium $4, high $10 and session $4, plus
 tokens/duration, a shared $20/24h and token ceilings, two active runs, one active target, final
 reserve and a bounded classifier. It requires matching structured approval, provider/model/billing,
