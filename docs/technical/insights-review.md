@@ -245,8 +245,11 @@ the approved mockup. The earlier nine-test/access-dialog probe is historical evi
   The integrated probe opens the report chat through `v.open`, not a sidebar click.
 - Finding controls require the report chat in the cached list, linked to the exact mission and
   unarchived. Tasks findings and the separate passive header-count read are each capped at 200
-  summaries; the badge clamps at 99. They are not complete backlog counts. Unqualified count copy
-  is flagged to native ownership, not changed by daemon/documentation verification.
+  summaries. The header count is exact only when pagination ran out; a read that stops at the cap
+  with a continuation shows a lower bound (`200+`), a capped read with no Proposed findings says
+  "count incomplete", and a failed first read says "count unavailable" with no badge. The badge
+  shows `99+` above 99. The integrated probe's `counts` pass checks these labels, the badge and
+  the ten-page read budget.
 
 Hidden TestPlatform evidence is not OS input, IME, VoiceOver, live Local, Linux, real model/report
 quality or realized-benefit acceptance. Confirm real timing, time zone, model and coverage/cost

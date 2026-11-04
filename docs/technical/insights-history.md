@@ -32,8 +32,9 @@ Native finding decoration/decisions require a cached, non-draft, unarchived repo
 that exact mission; otherwise rows remain ordinary tasks. The Tasks findings map and the separate
 header-count read each fetch at most ten pages of twenty summaries (200 total per read), not the
 entire backlog. The header count is cached, refreshed after local decisions/settings, and counts
-Proposed findings only; its badge displays at most 99. Neither counts nor absent chips certify a
-complete/current backlog. The unqualified count presentation has been flagged for native follow-up.
+Proposed findings only. It is exact only when pagination ran out; otherwise its label is a lower
+bound (`N+ to decide`), "count incomplete" or "count unavailable", and the badge shows `99+` above
+99. Neither counts nor absent chips certify a current backlog.
 See [native verification](insights-review.md#native-surface-verification-2026-11-04) for actual probe limits.
 
 `GET /api/hello` advertises `capabilities.insights: 1` only with missions, native capability

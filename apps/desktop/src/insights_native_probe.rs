@@ -2,6 +2,7 @@
 //! only: the report chat's backlog button and settings, finding decisions from the
 //! mission's Tasks rows, revocation and setup. The standalone pixel probe is
 //! `insights_probe`. No real grant, private history, provider turn, schedule or visible window.
+use super::insights_navigation::PendingCount;
 use super::*;
 use crate::{
     app_shell::Page,
@@ -76,6 +77,20 @@ fn page(range: std::ops::Range<usize>, next: Option<u64>, first: &str) -> Value 
         })
         .collect();
     json!({"items":items,"nextCursor":next})
+}
+/// Findings page `ix` of the bounded header count: twenty findings, all `life`.
+fn count_page(ix: usize, life: &str, next: Option<u64>) -> Value {
+    let items: Vec<Value> = (ix * 20..ix * 20 + 20)
+        .map(|i| finding(i, life, 1))
+        .collect();
+    json!({"items":items,"nextCursor":next})
+}
+fn count_path(ix: usize) -> String {
+    if ix == 0 {
+        FINDINGS.into()
+    } else {
+        format!("{FINDINGS}?cursor={}", ix * 20)
+    }
 }
 fn status(enabled: bool, revision: u64) -> Value {
     json!({"sessionId":REPORT,"enabled":enabled,"revision":revision,"projectId":"project-A","missionId":"mission-A","setupPending":false,"archived":false,"available":true,"disclosure":DISCLOSURE})
@@ -454,6 +469,7 @@ pub fn run_insights_native_probe(cx: &mut HeadlessAppContext) {
         std::fs::create_dir_all(d).unwrap();
     }
     full(cx, &dir);
+    counts(cx, &dir);
     for (width, mode) in [
         (680., ThemeMode::Light),
         (680., ThemeMode::Dark),
@@ -462,7 +478,127 @@ pub fn run_insights_native_probe(cx: &mut HeadlessAppContext) {
         render_only(cx, &dir, width, mode);
     }
     cx.update(|cx| cx.set_reduce_motion(reduced_motion));
-    println!("insights: full flow and 3 render-only layouts passed");
+    println!("insights: full flow, bounded counts and 3 render-only layouts passed");
+}
+
+/// The header's rendered label and badge width once the count settles to `want`.
+fn settled_count(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    view: &Entity<LocalViewer>,
+    want: PendingCount,
+) -> (String, Option<f32>) {
+    until(cx, h, |_, cx| {
+        view.read(cx).insights_counts.get(REPORT) == Some(&want)
+    });
+    cx.update_window(h, |_, w, _| {
+        let label = w.find("insights-access").label().unwrap_or("").to_owned();
+        let badge = w
+            .try_find("insights-access-count")
+            .map(|b| f32::from(b.bounds().size.width));
+        (label, badge)
+    })
+    .unwrap()
+}
+/// Forget the header count and read it again, passively.
+fn recount(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    view: &Entity<LocalViewer>,
+    s: &Server,
+) {
+    s.state.lock().unwrap().seen.clear();
+    cx.update(|cx| {
+        view.update(cx, |v, cx| {
+            v.insights_counts.remove(REPORT);
+            v.sync_insights_count(cx);
+        })
+    });
+    settle(cx, h);
+}
+fn findings_reads(s: &Server) -> Vec<String> {
+    s.state
+        .lock()
+        .unwrap()
+        .seen
+        .iter()
+        .filter(|(_, p)| p.starts_with(FINDINGS))
+        .map(|(_, p)| p.clone())
+        .collect()
+}
+
+/// The header count tells a complete total from a capped, incomplete or failed read.
+fn counts(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
+    let s = server();
+    let m = mount(cx, &s, 1100., ThemeMode::Light);
+    let (h, view) = (m.h, m.view.clone());
+
+    // Exhausted pagination: an exact total.
+    let (label, badge) = settled_count(cx, h, &view, PendingCount::Exact(4));
+    assert_eq!(label, "Insights backlog, 4 to decide");
+    let small = badge.expect("a known count shows its badge");
+
+    // Ten full pages that still continue: a lower bound, never the 11th page.
+    for ix in 0..10 {
+        s.reply(
+            &count_path(ix),
+            Reply::json(200, count_page(ix, "proposed", Some((ix as u64 + 1) * 20))),
+        );
+    }
+    s.reply(
+        &count_path(10),
+        Reply::json(200, count_page(10, "proposed", None)),
+    );
+    recount(cx, h, &view, &s);
+    let (label, badge) = settled_count(cx, h, &view, PendingCount::AtLeast(200));
+    assert_eq!(label, "Insights backlog, 200+ to decide");
+    let wide = badge.expect("a lower bound shows its badge");
+    assert!(wide > small, "99+ overflows explicitly: {wide} vs {small}");
+    let reads = findings_reads(&s);
+    assert_eq!(reads.len(), 10, "200-record budget: {reads:?}");
+    assert!(!reads.contains(&count_path(10)));
+    shot(cx, h, dir, "count-capped");
+
+    // The same pages ending at the budget: complete, still 99+.
+    s.reply(
+        &count_path(9),
+        Reply::json(200, count_page(9, "proposed", None)),
+    );
+    recount(cx, h, &view, &s);
+    let (label, badge) = settled_count(cx, h, &view, PendingCount::Exact(200));
+    assert_eq!(label, "Insights backlog, 200 to decide");
+    assert_eq!(badge, Some(wide));
+
+    // Nothing proposed in the budget, more pages: incomplete, not zero.
+    for ix in 0..10 {
+        s.reply(
+            &count_path(ix),
+            Reply::json(200, count_page(ix, "approved", Some((ix as u64 + 1) * 20))),
+        );
+    }
+    recount(cx, h, &view, &s);
+    let (label, badge) = settled_count(cx, h, &view, PendingCount::AtLeast(0));
+    assert_eq!(label, "Insights backlog, count incomplete");
+    assert_eq!(badge, None);
+    shot(cx, h, dir, "count-incomplete");
+
+    // A failed read: unavailable, not zero.
+    s.reply(
+        FINDINGS,
+        Reply::json(500, json!({"error":"synthetic read fault"})),
+    );
+    recount(cx, h, &view, &s);
+    let (label, badge) = settled_count(cx, h, &view, PendingCount::Unavailable);
+    assert_eq!(label, "Insights backlog, count unavailable");
+    assert_eq!(badge, None);
+    assert_eq!(findings_reads(&s).len(), 1, "a failure stops the count");
+    shot(cx, h, dir, "count-unavailable");
+
+    assert!(s.writes().is_empty(), "counting only reads");
+    unmount(cx, m, &s, None);
+    println!(
+        "insights counts 1100 Light: exact, capped 200+, exact overflow, incomplete zero and unavailable passed"
+    );
 }
 
 /// Every entry and surface at another size/theme: render, Escape, nothing sent.
@@ -514,7 +650,12 @@ fn full(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
 
     // The header hint counts Proposed findings with passive reads only.
     until(cx, h, |w, _| w.try_find("insights-access-count").is_some());
-    cx.update(|cx| assert_eq!(view.read(cx).insights_counts.get(REPORT), Some(&4)));
+    cx.update(|cx| {
+        assert_eq!(
+            view.read(cx).insights_counts.get(REPORT),
+            Some(&PendingCount::Exact(4))
+        )
+    });
     cx.update_window(h, |_, w, cx| {
         view.update(cx, |v, cx| {
             v.selected = Some("plain".into());
@@ -678,7 +819,7 @@ fn full(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     // The rows and the header hint re-read passively.
     until(cx, h, |_, cx| {
         lifecycle_of(&view, "task-0", cx) == Some(Lifecycle::Approved)
-            && view.read(cx).insights_counts.get(REPORT) == Some(&3)
+            && view.read(cx).insights_counts.get(REPORT) == Some(&PendingCount::Exact(3))
     });
     shot(cx, h, dir, "full-tasks-decided");
 
@@ -769,7 +910,7 @@ fn full(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     to_tasks(cx, h, &view);
     assert!(closed(cx, h));
     assert!(s.writes().is_empty());
-    // Revoked access: rows and the header hint re-read and offer nothing to decide.
+    // Revoked access: rows and the header hint re-read; the count is unavailable, not zero.
     s.reply(
         FINDINGS,
         Reply::json(409, json!({"error":"insights_unavailable"})),
@@ -782,7 +923,7 @@ fn full(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
         view.update(cx, |v, cx| v.insights_decided(REPORT.into(), cx));
     });
     until(cx, h, |_, cx| {
-        view.read(cx).insights_counts.get(REPORT) == Some(&0)
+        view.read(cx).insights_counts.get(REPORT) == Some(&PendingCount::Unavailable)
             && lifecycle_of(&view, "task-0", cx).is_none()
     });
     assert!(s.writes().is_empty());

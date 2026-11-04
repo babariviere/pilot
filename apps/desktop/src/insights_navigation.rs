@@ -8,6 +8,67 @@ use gpui_kit::component::WindowExt as _;
 /// At most this many findings pages (20 each) behind the header count.
 const COUNT_PAGES: usize = 10;
 
+/// Findings awaiting a decision, as far as the bounded passive read could tell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PendingCount {
+    /// Pagination ran out: the complete total.
+    Exact(usize),
+    /// The page budget ran out, or a later page failed: a lower bound only.
+    AtLeast(usize),
+    /// The first read failed or was unsupported: nothing is known.
+    Unavailable,
+}
+impl PendingCount {
+    /// The header button's accessible name and tooltip.
+    pub(super) fn label(self) -> SharedString {
+        match self {
+            Self::Exact(0) => "Insights backlog".into(),
+            Self::Exact(n) => format!("Insights backlog, {n} to decide").into(),
+            Self::AtLeast(0) => "Insights backlog, count incomplete".into(),
+            Self::AtLeast(n) => format!("Insights backlog, {n}+ to decide").into(),
+            Self::Unavailable => "Insights backlog, count unavailable".into(),
+        }
+    }
+    /// The badge, only when findings are known to await a decision.
+    pub(super) fn badge(self) -> Option<SharedString> {
+        match self {
+            Self::Exact(0) | Self::AtLeast(0) | Self::Unavailable => None,
+            Self::Exact(n) if n <= 99 => Some(n.to_string().into()),
+            Self::Exact(_) => Some("99+".into()),
+            Self::AtLeast(n) => Some(format!("{}+", n.min(99)).into()),
+        }
+    }
+}
+
+/// Folds findings pages into a count, stopping at the page budget.
+#[derive(Default)]
+struct CountPages {
+    count: usize,
+    read: usize,
+}
+impl CountPages {
+    /// One page's Proposed findings; `Some` once the count is settled.
+    fn page(&mut self, proposed: usize, more: bool) -> Option<PendingCount> {
+        self.count += proposed;
+        self.read += 1;
+        if !more {
+            Some(PendingCount::Exact(self.count))
+        } else if self.read >= COUNT_PAGES {
+            Some(PendingCount::AtLeast(self.count))
+        } else {
+            None
+        }
+    }
+    /// Unavailable, unsupported or failed: keep what was seen, never a guess.
+    fn failed(&self) -> PendingCount {
+        if self.read == 0 {
+            PendingCount::Unavailable
+        } else {
+            PendingCount::AtLeast(self.count)
+        }
+    }
+}
+
 impl LocalViewer {
     fn selected_insights_chat(&self) -> Option<&Chat> {
         self.selected
@@ -23,12 +84,14 @@ impl LocalViewer {
             crate::local_model::MissionAssociation::Linked(m) => Some(m.clone()),
             _ => None,
         };
-        let count = self.insights_counts.get(&id).copied().unwrap_or(0);
-        let label: SharedString = if count > 0 {
-            format!("Insights backlog, {count} to decide").into()
-        } else {
-            "Insights backlog".into()
-        };
+        // Not read yet: no hint, the same as a complete zero.
+        let count = self
+            .insights_counts
+            .get(&id)
+            .copied()
+            .unwrap_or(PendingCount::Exact(0));
+        let label = count.label();
+        let badge = count.badge();
         Some(
             div()
                 .relative()
@@ -56,7 +119,7 @@ impl LocalViewer {
                         }
                     })),
                 )
-                .when(count > 0, |d| {
+                .when_some(badge, |d, badge| {
                     d.child(
                         div()
                             .id("insights-access-count")
@@ -75,7 +138,7 @@ impl LocalViewer {
                             .text_color(cx.theme().primary_foreground)
                             .text_size(px(9.))
                             .font_semibold()
-                            .child(SharedString::from(count.min(99).to_string())),
+                            .child(badge),
                     )
                 })
                 .into_any_element(),
@@ -312,9 +375,10 @@ impl LocalViewer {
         let reading = session.clone();
         let task = cx.spawn(async move |view, cx| {
             use crate::insights::{Lifecycle, Read, ReadReply};
-            let mut count = 0;
+            let mut pages = CountPages::default();
             let mut cursor = None;
-            for _ in 0..COUNT_PAGES {
+            // Bounded: `page` settles at COUNT_PAGES.
+            let count = loop {
                 let Some(rx) = crate::insights::read(
                     options.clone(),
                     Read::Findings {
@@ -322,27 +386,23 @@ impl LocalViewer {
                         cursor,
                     },
                 ) else {
-                    break;
+                    break pages.failed();
                 };
                 match rx.recv().await {
                     Ok(ReadReply::Findings(Ok(page))) => {
-                        count += page
+                        let proposed = page
                             .items
                             .iter()
                             .filter(|f| f.lifecycle == Lifecycle::Proposed)
                             .count();
-                        match page.next_cursor {
-                            Some(n) => cursor = Some(n),
-                            None => break,
+                        if let Some(count) = pages.page(proposed, page.next_cursor.is_some()) {
+                            break count;
                         }
+                        cursor = page.next_cursor;
                     }
-                    // Unavailable, unsupported or failed: no hint, never a guess.
-                    _ => {
-                        count = 0;
-                        break;
-                    }
+                    _ => break pages.failed(),
                 }
-            }
+            };
             let _ = view.update(cx, |v, cx| {
                 if v.insights_count_read
                     .as_ref()
@@ -355,5 +415,89 @@ impl LocalViewer {
             });
         });
         self.insights_count_read = Some((reading, task));
+    }
+}
+
+#[cfg(test)]
+mod count_tests {
+    use super::{COUNT_PAGES, CountPages, PendingCount};
+
+    fn run(pages: &[(usize, bool)], failure: bool) -> PendingCount {
+        let mut tally = CountPages::default();
+        for &(proposed, more) in pages {
+            if let Some(count) = tally.page(proposed, more) {
+                assert!(!failure, "settled before the failing page");
+                return count;
+            }
+        }
+        assert!(failure, "an unsettled count needs another page");
+        tally.failed()
+    }
+
+    #[test]
+    fn exhausted_pagination_is_exact() {
+        assert_eq!(run(&[(3, true), (1, false)], false), PendingCount::Exact(4));
+        assert_eq!(run(&[(0, false)], false), PendingCount::Exact(0));
+        let four = PendingCount::Exact(4);
+        assert_eq!(four.label(), "Insights backlog, 4 to decide");
+        assert_eq!(four.badge().as_deref(), Some("4"));
+        assert_eq!(PendingCount::Exact(0).label(), "Insights backlog");
+        assert_eq!(PendingCount::Exact(0).badge(), None);
+    }
+
+    #[test]
+    fn page_budget_with_continuation_is_a_lower_bound() {
+        let mut tally = CountPages::default();
+        for _ in 1..COUNT_PAGES {
+            assert_eq!(tally.page(2, true), None);
+        }
+        let capped = tally.page(2, true);
+        assert_eq!(capped, Some(PendingCount::AtLeast(2 * COUNT_PAGES)));
+        // The last budgeted page without a continuation is still complete.
+        let mut tally = CountPages::default();
+        for _ in 1..COUNT_PAGES {
+            tally.page(2, true);
+        }
+        assert_eq!(
+            tally.page(2, false),
+            Some(PendingCount::Exact(2 * COUNT_PAGES))
+        );
+        let at_least = PendingCount::AtLeast(20);
+        assert_eq!(at_least.label(), "Insights backlog, 20+ to decide");
+        assert_eq!(at_least.badge().as_deref(), Some("20+"));
+    }
+
+    #[test]
+    fn overflow_is_explicit() {
+        let exact = PendingCount::Exact(150);
+        assert_eq!(exact.badge().as_deref(), Some("99+"));
+        assert_eq!(exact.label(), "Insights backlog, 150 to decide");
+        assert_eq!(PendingCount::Exact(99).badge().as_deref(), Some("99"));
+        assert_eq!(PendingCount::Exact(100).badge().as_deref(), Some("99+"));
+        let capped = PendingCount::AtLeast(200);
+        assert_eq!(capped.badge().as_deref(), Some("99+"));
+        assert_eq!(capped.label(), "Insights backlog, 200+ to decide");
+    }
+
+    #[test]
+    fn incomplete_zero_never_claims_none() {
+        let pages = vec![(0, true); COUNT_PAGES];
+        let zero = run(&pages, false);
+        assert_eq!(zero, PendingCount::AtLeast(0));
+        assert_ne!(zero, PendingCount::Exact(0));
+        assert_eq!(zero.badge(), None);
+        assert_eq!(zero.label(), "Insights backlog, count incomplete");
+        // A later page failing after nothing was found is incomplete, too.
+        assert_eq!(run(&[(0, true)], true), PendingCount::AtLeast(0));
+    }
+
+    #[test]
+    fn read_failure_is_unavailable_not_zero() {
+        let failed = run(&[], true);
+        assert_eq!(failed, PendingCount::Unavailable);
+        assert_eq!(failed.badge(), None);
+        assert_eq!(failed.label(), "Insights backlog, count unavailable");
+        // Findings already seen stay a known lower bound.
+        assert_eq!(run(&[(5, true)], true), PendingCount::AtLeast(5));
     }
 }

@@ -406,7 +406,7 @@ pub struct LocalViewer {
     insights: Option<(Entity<crate::insights_view::Panel>, Subscription)>,
     insights_return: Option<gpui_kit::FocusHandle>,
     /// Report chats' findings awaiting a decision (header hint), and the one read.
-    insights_counts: std::collections::HashMap<String, usize>,
+    insights_counts: std::collections::HashMap<String, insights_navigation::PendingCount>,
     insights_count_read: Option<(String, Task<()>)>,
     /// Writer-retained Insights attempts and its latest reply, for a panel opened later.
     insights_book: Option<Arc<crate::delivery_store::Book>>,
