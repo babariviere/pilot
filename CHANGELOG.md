@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.114.0](https://github.com/babariviere/pilot/compare/v1.113.1...v1.114.0) (2026-11-04)
+
+
+### Features
+
+* **desktop:** add guarded manual compact command ([109a8ed](https://github.com/babariviere/pilot/commit/109a8ed5b4d753ad20316d8f12a0daa42a03c9bf))
+* **desktop:** add slash-command completion to the composer ([d581a94](https://github.com/babariviere/pilot/commit/d581a946eaa8e26bbea812a99197537d87f1066a))
+* **desktop:** decide Insights findings on their task rows ([53ddd1c](https://github.com/babariviere/pilot/commit/53ddd1c4fa49eb6a3a953a262ed30f07e84489a8))
+* **desktop:** share disclosure chevron across subagent, todo and job strips ([1c0ddc2](https://github.com/babariviere/pilot/commit/1c0ddc28a95a0ef8a87ad7b13dfaaabc933364f8))
+* **missions:** add user-approved decision withdrawal ([d8fdb68](https://github.com/babariviere/pilot/commit/d8fdb68995842cd1d735d491c9ee5ea87af26d4a))
+* **missions:** organize finished worker chats without cleanup ([0634d64](https://github.com/babariviere/pilot/commit/0634d642be112cf831db69bd8f967a263a84b1e4))
+* **missions:** record explicit decision replacements ([540573e](https://github.com/babariviere/pilot/commit/540573ea0faf23d900cb35e1ba1e26f67bd4cbc5))
+* **models:** expose passive effective defaults ([de3f765](https://github.com/babariviere/pilot/commit/de3f765e4e464419abe8a6195c624997163a505d))
+* retry a failed automatic handoff from the failure banner ([2ae1826](https://github.com/babariviere/pilot/commit/2ae1826ecc3836d07974ca9a4280bfd9e9035589))
+
+
+### Bug Fixes
+
+* **desktop:** attribute pinned knowledge row checks to the current revision ([5ce55a4](https://github.com/babariviere/pilot/commit/5ce55a4573998f73709ab66f2d0e16f96ff8a7df))
+
 ## [1.113.1](https://github.com/babariviere/pilot/compare/v1.113.0...v1.113.1) (2026-11-04)
 
 
