@@ -18,6 +18,9 @@ never create a mission or infer one from its title. Missing/invalid project/back
    `targetId` from preflight, stable operation ID/producer/sequence, pinned origin/destination and
    SHA-256 of the actual UTF-8 payload string. Persist locally before sending. Send once through
    `POST /api/operations`, with the existing `x-pilot-github-capability` native confirmation token.
+   Envelope host labels may differ: native uses `hostId:"local"`, preflight uses `hostId:"daemon"`.
+   Destination matching uses the journal's daemonId + lineageId identity. Do not rewrite the frozen
+   payload's `expectedHome`; it still must match the daemon's preflight home exactly, including hostId.
 5. On lost/malformed/pending ACK, retain the **same bytes and operation ID**. Passive
    `POST /api/insights/enable/status` takes that complete envelope. It does not execute/resume steps.
    Generic `/api/operations/receipt` remains available for the durable receipt alone.

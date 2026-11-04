@@ -16,7 +16,7 @@ export function canonicalJSON(value: unknown): string {
 	);
 }
 const streamKey = (op: DurableOperation): string => payloadHash(canonicalJSON([op.origin, op.producerId]));
-const sameHost = (a: OperationHost, b: OperationHost): boolean =>
+export const sameHost = (a: OperationHost, b: OperationHost): boolean =>
 	a.daemonId === b.daemonId && a.lineageId === b.lineageId;
 export class OperationConflict extends Error {}
 export class OperationExpired extends Error {}

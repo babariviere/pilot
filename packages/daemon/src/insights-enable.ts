@@ -13,7 +13,7 @@ import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { INSIGHTS_INITIAL_DEFAULTS, resolveInsightsInitialModel } from "./insights-defaults.ts";
 import type { MissionStore } from "./missions.ts";
 import type { ModelCatalog } from "./models.ts";
-import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash } from "./operation-journal.ts";
+import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash, sameHost } from "./operation-journal.ts";
 import type { ProjectStore } from "./projects.ts";
 import { RecurrenceCalendar } from "./schedule-recurrence.ts";
 import type { ScheduleService } from "./schedules.ts";
@@ -258,7 +258,7 @@ export class InsightsEnable {
 					!preflight.payload ||
 					preflight.targetId !== op.targetId ||
 					!equal(preflight.payload, payload) ||
-					!equal(op.destination, payload.expectedHome)
+					!sameHost(op.destination, payload.expectedHome)
 				)
 					throw new OperationRejected("Insights confirmation changed; refresh preflight");
 				progress = {
