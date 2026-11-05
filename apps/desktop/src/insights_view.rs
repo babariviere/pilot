@@ -24,6 +24,8 @@ use std::sync::Arc;
 
 #[path = "insights_enable_view.rs"]
 mod enable;
+#[path = "insights_replace_view.rs"]
+mod replace;
 #[path = "insights_settings_view.rs"]
 mod review;
 
@@ -113,6 +115,8 @@ pub(crate) struct Panel {
     scope_open: bool,
     /// Weekly enable state; only for `Scope::Enable`.
     enable: Option<enable::Flow>,
+    /// Replacement of an unavailable report chat; only for `Scope::Enable`.
+    replace: Option<replace::Swap>,
     /// Review settings state; only for `Scope::Review`.
     review: Option<review::Editor>,
 }
@@ -155,6 +159,7 @@ impl Panel {
             Scope::Enable { reports } => Some(enable::Flow::new(reports.clone())),
             _ => None,
         };
+        let replace = enable.as_ref().map(|_| replace::Swap::default());
         let review = match &scope {
             Scope::Review { session } => Some(review::Editor::new(session.clone())),
             _ => None,
@@ -179,6 +184,7 @@ impl Panel {
             opened: false,
             scope_open: false,
             enable,
+            replace,
             review,
         };
         panel.refresh(cx);
@@ -350,6 +356,7 @@ impl Panel {
         }
         if matches!(self.scope, Scope::Enable { .. }) {
             self.enable_sync(cx);
+            self.replace_sync(cx);
         }
         cx.notify();
     }
@@ -498,7 +505,11 @@ impl Panel {
             Scope::Chat { session } => Some(format!("revoke:{session}")),
             Scope::Setup { mission, .. } => Some(format!("create:{mission}")),
             Scope::Decide { session, key, .. } => Some(format!("lifecycle:{session}:{key}")),
-            Scope::Enable { .. } => self.enable_attempt().map(|a| a.slot.clone()),
+            Scope::Enable { .. } => match self.shown() {
+                enable::Shown::Enable(a) | enable::Shown::Replace(a) => Some(a.slot.clone()),
+                enable::Shown::Step => None,
+                enable::Shown::Confirm(_) => self.enable_attempt().map(|a| a.slot.clone()),
+            },
             // An open Apply first: it fences Save as well.
             Scope::Review { session } => {
                 let apply = crate::insights_settings::apply_slot(session);
@@ -641,7 +652,18 @@ impl Panel {
                 .slot
                 .as_deref()
                 .is_some_and(|s| s.starts_with("settings:"));
-            outcome_notice(o, if saving { "Not saved" } else { "Not applied" })
+            // A refused replacement names its host reason in words.
+            let replacing = self
+                .slot
+                .as_deref()
+                .is_some_and(|s| s.starts_with("replace:"));
+            let o = match o {
+                Outcome::Rejected(r) if replacing => {
+                    Outcome::Rejected(crate::insights_replace::refusal_words(r))
+                }
+                o => o.clone(),
+            };
+            outcome_notice(&o, if saving { "Not saved" } else { "Not applied" })
         }) {
             tail = tail.child(div().id("insights-outcome").test_support().child(n));
         }
@@ -1052,6 +1074,8 @@ impl Panel {
                     cx.stop_propagation();
                     if std::mem::take(&mut v.confirm_revoke) {
                         cx.notify();
+                    } else if v.replace_back(cx) {
+                        // The replacement step closes first; nothing was sent.
                     } else {
                         cx.emit(Event::Close);
                     }

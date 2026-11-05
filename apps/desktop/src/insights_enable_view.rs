@@ -9,13 +9,23 @@ use crate::{
 };
 use gpui_kit::component::Sizable as _;
 
+/// What the Weekly Insights panel shows now.
+pub(super) enum Shown<'a> {
+    Enable(&'a model::Attempt),
+    Replace(&'a model::Attempt),
+    /// The replacement step opened over the unavailable-report blocker.
+    Step,
+    /// The enable confirmation, with the last rejected attempt if any.
+    Confirm(Option<&'a model::Attempt>),
+}
+
 pub(crate) struct Flow {
     /// The trusted report chat's backlog. Fixed: no selector is offered over it.
     binding: Option<Backlog>,
     /// Active missions on this Local, for titles and the choice without a binding.
     choices: Load<Arc<Vec<Backlog>>>,
     choices_read: Option<Task<()>>,
-    chosen: Option<Backlog>,
+    pub(super) chosen: Option<Backlog>,
     /// The user's exact model choice when the host found several Terra 6.1 IDs.
     explicit: Option<String>,
     /// Only the newest preflight lands; a send bumps it so nothing late replaces it.
@@ -30,7 +40,7 @@ pub(crate) struct Flow {
     /// The panel request whose settled reply last forced a fresh status read.
     refreshed: u64,
     /// The user chose to set up again over a settled, no longer enabled command.
-    fresh: bool,
+    pub(super) fresh: bool,
     details: bool,
     projects: Arc<Vec<Project>>,
     models_for: Option<String>,
@@ -84,7 +94,7 @@ impl Flow {
         self.generation += 1;
         self.checking = None;
     }
-    fn title(&self, b: &Backlog) -> String {
+    pub(super) fn title(&self, b: &Backlog) -> String {
         match &self.choices {
             Load::Ready(all) => all.iter().find(|c| c.same(b)).and_then(|c| c.title.clone()),
             _ => None,
@@ -98,7 +108,7 @@ impl Flow {
 }
 
 /// The retained command's backlog, from its own frozen bytes.
-fn attempt_backlog(a: &model::Attempt) -> Option<Backlog> {
+pub(super) fn attempt_backlog(a: &model::Attempt) -> Option<Backlog> {
     let p: serde_json::Value = serde_json::from_str(&a.operation.payload).ok()?;
     Some(Backlog {
         project_id: p["projectId"].as_str()?.to_owned(),
@@ -116,7 +126,7 @@ fn attempt_frozen(
         serde_json::from_value(p["recurrence"].clone()).ok(),
     ))
 }
-fn next_words(at: u64) -> String {
+pub(super) fn next_words(at: u64) -> String {
     crate::scheduled_messages::words(
         at,
         crate::usage_overview::now(),
@@ -130,7 +140,7 @@ fn budget_words(usd: f64) -> String {
         format!("About ${usd:.2} per report")
     }
 }
-fn caption<T: Into<SharedString>>(
+pub(super) fn caption<T: Into<SharedString>>(
     id: &'static str,
     text: T,
     cx: &App,
@@ -140,7 +150,7 @@ fn caption<T: Into<SharedString>>(
         .test_support()
         .child(ui::text(Text::Caption, text.into()).text_color(cx.theme().muted_foreground))
 }
-fn value(
+pub(super) fn value(
     text: impl Into<SharedString>,
     note: Option<(&'static str, String)>,
     cx: &App,
@@ -166,10 +176,48 @@ impl Panel {
     }
     /// The mission whose backlog this panel shows, for navigation after success.
     pub(crate) fn enable_mission(&self) -> Option<String> {
-        self.enable_attempt()
-            .and_then(attempt_backlog)
+        let shown = match self.shown() {
+            Shown::Enable(a) => attempt_backlog(a),
+            Shown::Replace(a) => {
+                crate::insights_replace::identities(&a.operation).map(|i| Backlog {
+                    project_id: i.project_id,
+                    mission_id: i.mission_id,
+                    title: None,
+                    report: None,
+                })
+            }
+            Shown::Step | Shown::Confirm(_) => None,
+        };
+        shown
+            .or_else(|| self.enable_attempt().and_then(attempt_backlog))
             .or_else(|| self.enable.as_ref()?.chosen.clone())
             .map(|b| b.mission_id)
+    }
+    /// Which retained command or step the panel shows: the newest unconfirmed command, then
+    /// the replacement step the user opened, then a settled command, else the confirmation.
+    pub(super) fn shown(&self) -> Shown<'_> {
+        let enable = self.enable_attempt();
+        let replace = self.replace_attempt();
+        let fresh = self.enable.as_ref().is_some_and(|f| f.fresh);
+        let newer =
+            |r: &model::Attempt| enable.is_none_or(|a| a.operation.sequence < r.operation.sequence);
+        match (enable, replace) {
+            (_, Some(r)) if r.open() && (newer(r) || enable.is_some_and(|a| !a.open())) => {
+                return Shown::Replace(r);
+            }
+            (Some(a), _) if a.open() => return Shown::Enable(a),
+            _ => {}
+        }
+        if self.replace_stepping() {
+            return Shown::Step;
+        }
+        match (enable, replace) {
+            (_, Some(r)) if r.state == model::State::Accepted && !fresh && newer(r) => {
+                Shown::Replace(r)
+            }
+            (Some(a), _) if a.state == model::State::Accepted && !fresh => Shown::Enable(a),
+            (a, _) => Shown::Confirm(a.filter(|a| a.state == model::State::Rejected)),
+        }
     }
     /// The retained command this panel follows: an unconfirmed one first, else the
     /// latest for the chosen backlog, else the latest settled one.
@@ -224,11 +272,12 @@ impl Panel {
             self.enable_preflight(cx);
         }
         self.enable_sync(cx);
+        self.replace_refresh(cx);
     }
 
     /// Every report identity already known for this exact backlog: report chats bound to
     /// it, and this app's non-rejected enable or accepted setup commands for it.
-    fn known_reports(&self, b: &Backlog) -> Vec<String> {
+    pub(super) fn known_reports(&self, b: &Backlog) -> Vec<String> {
         let mut ids: Vec<String> = self
             .enable
             .iter()
@@ -244,6 +293,21 @@ impl Panel {
             };
             if retained && attempt_backlog(a).is_some_and(|ab| ab.same(b)) {
                 ids.push(a.operation.target_id.clone());
+            }
+        }
+        // A report replaced by exact receipt or adopted completion is pinned by its successor.
+        let links = self.supersessions(b);
+        for _ in 0..=links.len() {
+            let mut moved = false;
+            for (old, successor) in &links {
+                if let Some(i) = ids.iter().position(|id| id == old) {
+                    ids.remove(i);
+                    ids.push(successor.clone());
+                    moved = true;
+                }
+            }
+            if !moved {
+                break;
             }
         }
         ids.sort();
@@ -307,23 +371,38 @@ impl Panel {
     }
     /// Display names for the offered model, from its project's scoped catalog.
     fn enable_models(&mut self, cx: &mut Context<Self>) {
-        let Some(flow) = self.enable.as_mut() else {
+        let Some(flow) = self.enable.as_ref() else {
             return;
         };
         let Some(Load::Ready(Gate::Checked(pf))) = &flow.gate else {
             return;
         };
-        if let Some(f) = &pf.frozen {
-            self.model = Some(f.model.clone());
+        let (project, model) = (
+            pf.project_id.clone(),
+            pf.frozen.as_ref().map(|f| f.model.clone()),
+        );
+        self.display_models(&project, model, cx);
+    }
+    /// The display name of a confirmed model ID, from its project's scoped catalog.
+    pub(super) fn display_models(
+        &mut self,
+        project: &str,
+        model: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(m) = model {
+            self.model = Some(m);
         }
-        let project = pf.project_id.clone();
-        let Some(path) = flow.project(&project).map(|p| p.path.clone()) else {
+        let Some(flow) = self.enable.as_mut() else {
             return;
         };
-        if flow.models_for.as_deref() == Some(project.as_str()) {
+        let Some(path) = flow.project(project).map(|p| p.path.clone()) else {
+            return;
+        };
+        if flow.models_for.as_deref() == Some(project) {
             return;
         }
-        flow.models_for = Some(project);
+        flow.models_for = Some(project.to_owned());
         self.catalog_path = Some(path);
         self.catalog = Load::Loading;
         self.read_catalog(cx);
@@ -446,14 +525,28 @@ impl Panel {
         self.enable_sync(cx);
     }
     fn choose_model(&mut self, id: String, cx: &mut Context<Self>) {
+        if self.replace_stepping() {
+            self.replace_choose_model(id, cx);
+            return;
+        }
         let Some(flow) = self.enable.as_mut() else {
             return;
         };
         flow.explicit = Some(id);
         self.enable_preflight(cx);
     }
-    fn set_up_again(&mut self, cx: &mut Context<Self>) {
-        let backlog = self.enable_attempt().and_then(attempt_backlog);
+    pub(super) fn set_up_again(&mut self, cx: &mut Context<Self>) {
+        let backlog = match self.shown() {
+            Shown::Replace(a) => {
+                crate::insights_replace::identities(&a.operation).map(|i| Backlog {
+                    project_id: i.project_id,
+                    mission_id: i.mission_id,
+                    title: None,
+                    report: None,
+                })
+            }
+            _ => self.enable_attempt().and_then(attempt_backlog),
+        };
         let Some(flow) = self.enable.as_mut() else {
             return;
         };
@@ -477,6 +570,7 @@ impl Panel {
             && !matches!(flow.gate, Some(Load::Loading))
             && status
             && models
+            && self.replace_probe_ready()
     }
 
     /// The report chat's settings row: its weekly state from this app's retained command.
@@ -488,7 +582,12 @@ impl Panel {
         let attempt = self.book.as_ref().and_then(|b| {
             b.insights
                 .values()
-                .filter(|a| a.operation.kind == weekly::KIND && a.operation.target_id == session)
+                .filter(|a| {
+                    matches!(
+                        a.operation.kind.as_str(),
+                        weekly::KIND | crate::insights_replace::KIND
+                    ) && a.operation.target_id == session
+                })
                 .max_by_key(|a| a.operation.sequence)
         });
         let (state, label) = match attempt.map(|a| a.state) {
@@ -526,12 +625,20 @@ impl Panel {
         &mut self,
         cx: &mut Context<Self>,
     ) -> (gpui_kit::Div, gpui_kit::Div) {
-        let attempt = self.enable_attempt().cloned();
-        let fresh = self.enable.as_ref().is_some_and(|f| f.fresh);
-        match attempt {
-            Some(a) if a.open() => self.render_progress(&a, cx),
-            Some(a) if a.state == model::State::Accepted && !fresh => self.render_progress(&a, cx),
-            other => self.render_confirm(other.filter(|a| a.state == model::State::Rejected), cx),
+        match self.shown() {
+            Shown::Enable(a) => {
+                let a = a.clone();
+                self.render_progress(&a, cx)
+            }
+            Shown::Replace(a) => {
+                let a = a.clone();
+                self.render_replace_progress(&a, cx)
+            }
+            Shown::Step => self.render_replace(cx),
+            Shown::Confirm(rejected) => {
+                let rejected = rejected.cloned();
+                self.render_confirm(rejected, cx)
+            }
         }
     }
 
@@ -655,6 +762,8 @@ impl Panel {
         let gate = self.enable.as_ref().and_then(|f| f.gate.clone());
         let mut confirm: Option<model::Request> = None;
         let mut retry = false;
+        // The exact backlog and its one pinned report, when Local refused it as unavailable.
+        let mut replace: Option<Backlog> = None;
         match gate {
             None => {}
             Some(Load::Loading) => {
@@ -711,13 +820,32 @@ impl Panel {
             }
             Some(Load::Ready(Gate::Checked(pf))) => {
                 if let (Some(f), true) = (&pf.frozen, pf.readiness != Readiness::Blocked) {
-                    body = self.confirm_fields(&pf, f, body, cx);
+                    let when_note = if f.reuses_schedule {
+                        Some((
+                            "insights-when-note",
+                            "Keeps its existing weekly automation.".to_owned(),
+                        ))
+                    } else {
+                        pf.next_at.map(|at| {
+                            (
+                                "insights-when-note",
+                                format!("First report {}", next_words(at)),
+                            )
+                        })
+                    };
+                    let model_note = f
+                        .chat
+                        .as_ref()
+                        .map(|_| ("insights-model-note", "The report chat's model.".to_owned()));
+                    body = self.confirm_fields(when_note, model_note, Vec::new(), f, body, cx);
                     confirm = pf.request();
                 } else {
                     if let Model::Ambiguous(ids) = &pf.model {
-                        body = body.child(self.model_choice(ids, cx));
+                        let chosen = self.enable.as_ref().and_then(|f| f.explicit.clone());
+                        body = body.child(self.model_choice(ids, chosen, cx));
                     }
                     let code = pf.reason.clone().unwrap_or_default();
+                    replace = self.replaceable(&pf);
                     if !(matches!(pf.model, Model::Ambiguous(_)) && code == "model_ambiguous") {
                         retry = true;
                         tail =
@@ -747,8 +875,21 @@ impl Panel {
                         .on_click(cx.listener(|v, _, _, cx| v.enable_preflight(cx))),
                 )
             }))
-            .child(self.close_button("Cancel", Action::Quiet, cx))
-            .child(
+            .child(self.close_button("Cancel", Action::Quiet, cx));
+        // Replacement is the one way forward from an unavailable report; Enable stays inert.
+        let actions = match replace {
+            Some(backlog) => actions.child(
+                ui::action(
+                    "insights-replace-open",
+                    "Replace report chat…",
+                    Action::Primary,
+                )
+                .disabled(self.waiting())
+                .on_click(cx.listener(move |v, _, _, cx| {
+                    v.replace_open(backlog.clone(), cx);
+                })),
+            ),
+            None => actions.child(
                 ui::action("insights-enable-confirm", "Enable", Action::Primary)
                     .disabled(!enabled)
                     .on_click(cx.listener(move |v, _, _, cx| {
@@ -756,14 +897,43 @@ impl Panel {
                             v.send(model::Action::Start(r), cx);
                         }
                     })),
-            );
+            ),
+        };
         (body, tail.child(actions))
     }
 
-    fn model_choice(&self, ids: &[String], cx: &mut Context<Self>) -> gpui_kit::AnyElement {
+    /// The unavailable or superseded pinned report this Local can replace: exactly one known
+    /// identity for this backlog, in the host's report form. Never a guess or a substitute.
+    fn replaceable(&self, pf: &weekly::Preflight) -> Option<Backlog> {
+        let flow = self.enable.as_ref()?;
+        let chosen = flow.chosen.as_ref()?;
+        let [old] = flow.known.as_slice() else {
+            return None;
+        };
+        let code = pf.reason.as_deref()?;
+        (pf.replaceable
+            && matches!(
+                code,
+                "report_identity_unavailable" | "report_superseded_use_replacement_status"
+            )
+            && chosen.project_id == pf.project_id
+            && chosen.mission_id == pf.mission_id
+            && pf.target_id == *old
+            && crate::insights_replace::uuid(old))
+        .then(|| Backlog {
+            report: Some(old.clone()),
+            ..chosen.clone()
+        })
+    }
+
+    pub(super) fn model_choice(
+        &self,
+        ids: &[String],
+        chosen: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
         let weak = cx.weak_entity();
         let ids: Vec<String> = ids.to_vec();
-        let chosen = self.enable.as_ref().and_then(|f| f.explicit.clone());
         let label = chosen.clone().unwrap_or_else(|| "Choose Terra 6.1".into());
         field(
             "insights-field-model",
@@ -810,32 +980,18 @@ impl Panel {
         .into_any_element()
     }
 
-    fn confirm_fields(
+    /// When, Model, Reads and Budget of a frozen weekly command; `extra` adds detail lines.
+    pub(super) fn confirm_fields(
         &mut self,
-        pf: &weekly::Preflight,
+        when_note: Option<(&'static str, String)>,
+        model_note: Option<(&'static str, String)>,
+        extra: Vec<(&'static str, String)>,
         f: &weekly::Frozen,
         body: gpui_kit::Div,
         cx: &mut Context<Self>,
     ) -> gpui_kit::Div {
         let model_name = self.model_name().unwrap_or_else(|| f.model.clone());
         let details = self.enable.as_ref().is_some_and(|fl| fl.details);
-        let when_note = if f.reuses_schedule {
-            Some((
-                "insights-when-note",
-                "Keeps its existing weekly automation.".to_owned(),
-            ))
-        } else {
-            pf.next_at.map(|at| {
-                (
-                    "insights-when-note",
-                    format!("First report {}", next_words(at)),
-                )
-            })
-        };
-        let model_note = f
-            .chat
-            .as_ref()
-            .map(|_| ("insights-model-note", "The report chat's model.".to_owned()));
         let reads_toggle = div()
             .id("insights-enable-details")
             .test_support()
@@ -875,6 +1031,7 @@ impl Panel {
                         cx,
                     ))
                     .child(caption("insights-enable-model-id", format!("Model ID: {}", f.model), cx))
+                    .children(extra.into_iter().map(|(id, line)| caption(id, line, cx)))
             });
         body.child(field(
             "insights-field-when",

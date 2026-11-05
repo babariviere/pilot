@@ -18,6 +18,21 @@ never resends the command. Daemon recovery may finish a setup step not yet enter
 The result is On only when both the report chat and its weekly automation are confirmed.
 **More → Set up Insights chat…** on a mission still creates just the report chat.
 
+## Replace a missing report chat
+
+If Weekly Insights says the linked report chat isn't available, **Replace report chat…** may appear
+in the same panel. It reads Local's exact plan first and writes nothing. One confirmation names the
+old chat (kept as a record, never reused), the automations it stops, the new empty report chat and
+its fresh fixed settings: schedule and first report, model and thinking, what it reads, the partial
+sample and the approximate budget. It does not restore the old chat's history or copy its access.
+Nothing runs before the first report, and the Automations switch is never changed.
+
+**Replace report chat** sends that plan once. If it is interrupted, **Check** reads its status and
+resends the same request only when Local has no record of it. Closing or restarting never resends it.
+Local can refuse: for example when it can't confirm where the old chat lived, earlier work may still
+be running, an automation can't be stopped safely or the plan changed. These stay blocked; there is
+no reset. **Back** or Escape leaves the confirmation without sending anything.
+
 In the report chat, the **Insights backlog** header button opens the mission's **Tasks** tab.
 Findings have lifecycle chips; use each row's menu to choose a decision, then confirm it.
 Finding controls need the linked report chat to be available in the chat list and unarchived.

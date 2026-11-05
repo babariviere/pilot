@@ -55,7 +55,7 @@ fn server() -> Server {
     s
 }
 /// Non-GET requests by path, drained.
-fn posts(s: &Server) -> Vec<(String, bool, Value)> {
+pub(super) fn posts(s: &Server) -> Vec<(String, bool, Value)> {
     s.writes()
         .into_iter()
         .map(|(_, path, cap, body)| (path, cap, body))
@@ -71,7 +71,7 @@ fn sent_operations(all: &[(String, bool, Value)]) -> Vec<Value> {
         .collect()
 }
 
-fn settle(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
+pub(super) fn settle(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
     for _ in 0..3 {
         cx.run_until_parked();
         cx.advance_clock(Duration::from_millis(16));
@@ -79,7 +79,7 @@ fn settle(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
     }
 }
 #[track_caller]
-fn until(
+pub(super) fn until(
     cx: &mut HeadlessAppContext,
     h: AnyWindowHandle,
     check: impl Fn(&mut Window, &mut App) -> bool,
@@ -96,7 +96,7 @@ fn until(
     }
     settle(cx, h);
 }
-fn click(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: impl Into<ElementId>) {
+pub(super) fn click(cx: &mut HeadlessAppContext, h: AnyWindowHandle, id: impl Into<ElementId>) {
     let id: ElementId = id.into();
     cx.update_window(h, |_, w, cx| w.click(id, cx)).unwrap();
     settle(cx, h);
@@ -124,7 +124,7 @@ fn shot(cx: &mut HeadlessAppContext, h: AnyWindowHandle, dir: &Option<PathBuf>, 
             .unwrap();
     }
 }
-fn open(w: &mut Window) -> bool {
+pub(super) fn open(w: &mut Window) -> bool {
     w.try_find("insights-panel").is_some()
 }
 fn escape(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
@@ -133,7 +133,7 @@ fn escape(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
     settle(cx, h);
     assert!(!cx.update_window(h, |_, w, _| open(w)).unwrap());
 }
-fn contained(w: &mut Window, width: f32) {
+pub(super) fn contained(w: &mut Window, width: f32) {
     let p = w.find("insights-panel").bounds();
     assert!(
         p.left() >= px(0.) && p.right() <= px(width),
@@ -146,9 +146,9 @@ fn contained(w: &mut Window, width: f32) {
     }
 }
 
-struct Mounted {
-    h: AnyWindowHandle,
-    view: Entity<LocalViewer>,
+pub(super) struct Mounted {
+    pub(super) h: AnyWindowHandle,
+    pub(super) view: Entity<LocalViewer>,
     writer: Interaction,
     drain: async_channel::Receiver<crate::interaction::WriteState>,
     root: PathBuf,
@@ -161,6 +161,17 @@ fn mount(
     width: f32,
     mode: ThemeMode,
     report: bool,
+    root: Option<PathBuf>,
+) -> Mounted {
+    mount_with(cx, s, width, mode, report.then_some(REPORT), root)
+}
+/// `report` names a report chat bound to mission A; the draft lives on chat "plain".
+pub(super) fn mount_with(
+    cx: &mut HeadlessAppContext,
+    s: &Server,
+    width: f32,
+    mode: ThemeMode,
+    report: Option<&str>,
     root: Option<PathBuf>,
 ) -> Mounted {
     cx.update(|cx| {
@@ -202,8 +213,8 @@ fn mount(
                     v.state.generation = 1;
                     v.generation = 1;
                     let mut chats = vec![crate::local_model::chat(&json!({"id":"plain","title":"Ordinary chat","projectId":"project-A","cwd":"/synthetic/A","mode":"build","state":"idle"})).unwrap()];
-                    if report {
-                        chats.push(crate::local_model::chat(&json!({"id":REPORT,"title":"Weekly Insights 日本語","projectId":"project-A","missionId":"mission-A","cwd":"/synthetic/A","mode":"build","state":"idle","role":"insights","model":fx::TERRA})).unwrap());
+                    if let Some(report) = report {
+                        chats.push(crate::local_model::chat(&json!({"id":report,"title":"Weekly Insights 日本語","projectId":"project-A","missionId":"mission-A","cwd":"/synthetic/A","mode":"build","state":"idle","role":"insights","model":fx::TERRA})).unwrap());
                     }
                     v.state.chats = Arc::new(chats);
                     v.state.projects = Arc::new(
@@ -243,7 +254,7 @@ fn mount(
     }
 }
 /// Close the window and writer; returns the private root for a restart.
-fn unmount(cx: &mut HeadlessAppContext, m: Mounted) -> PathBuf {
+pub(super) fn unmount(cx: &mut HeadlessAppContext, m: Mounted) -> PathBuf {
     let Mounted {
         h,
         view,
@@ -274,19 +285,19 @@ fn unmount(cx: &mut HeadlessAppContext, m: Mounted) -> PathBuf {
     drop(writer);
     root
 }
-fn panel(
+pub(super) fn panel(
     cx: &mut HeadlessAppContext,
     view: &Entity<LocalViewer>,
 ) -> Entity<crate::insights_view::Panel> {
     cx.update(|cx| view.read(cx).insights.as_ref().unwrap().0.clone())
 }
-fn ready(view: &Entity<LocalViewer>, cx: &App) -> bool {
+pub(super) fn ready(view: &Entity<LocalViewer>, cx: &App) -> bool {
     view.read(cx)
         .insights
         .as_ref()
         .is_some_and(|(p, _)| p.read(cx).visible && p.read(cx).probe_ready())
 }
-fn attempt(
+pub(super) fn attempt(
     cx: &mut HeadlessAppContext,
     view: &Entity<LocalViewer>,
     slot: &str,
@@ -313,7 +324,11 @@ fn next_at(view: &Entity<LocalViewer>, cx: &App) -> Option<u64> {
         .and_then(|(p, _)| p.read(cx).probe_enable_next())
 }
 /// The Automations page's entry point, as a pointer user reaches it.
-fn from_automations(cx: &mut HeadlessAppContext, h: AnyWindowHandle, view: &Entity<LocalViewer>) {
+pub(super) fn from_automations(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    view: &Entity<LocalViewer>,
+) {
     if cx.update(|cx| view.read(cx).page != Page::Automations) {
         click(cx, h, "nav-automations");
         until(cx, h, |w, _| w.try_find("automations-insights").is_some());
@@ -321,7 +336,11 @@ fn from_automations(cx: &mut HeadlessAppContext, h: AnyWindowHandle, view: &Enti
     click(cx, h, "automations-insights");
     until(cx, h, |w, cx| open(w) && ready(view, cx));
 }
-fn type_draft(cx: &mut HeadlessAppContext, h: AnyWindowHandle, view: &Entity<LocalViewer>) {
+pub(super) fn type_draft(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    view: &Entity<LocalViewer>,
+) {
     let input = cx.update(|cx| view.read(cx).editor.read(cx).shell_probe().0);
     cx.update_window(h, |_, w, cx| {
         input.update(cx, |i, cx| i.focus(w, cx));
@@ -330,7 +349,7 @@ fn type_draft(cx: &mut HeadlessAppContext, h: AnyWindowHandle, view: &Entity<Loc
     .unwrap();
     settle(cx, h);
 }
-fn draft(cx: &mut HeadlessAppContext, view: &Entity<LocalViewer>) -> String {
+pub(super) fn draft(cx: &mut HeadlessAppContext, view: &Entity<LocalViewer>) -> String {
     cx.update(|cx| {
         view.read(cx)
             .editor

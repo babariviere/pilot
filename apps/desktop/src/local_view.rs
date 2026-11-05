@@ -99,6 +99,9 @@ pub(crate) mod insights_native_probe;
 #[path = "insights_navigation.rs"]
 mod insights_navigation;
 #[cfg(feature = "native-probes")]
+#[path = "insights_replace_probe.rs"]
+pub(crate) mod insights_replace_probe;
+#[cfg(feature = "native-probes")]
 #[path = "insights_settings_probe.rs"]
 pub(crate) mod insights_settings_probe;
 #[path = "jump_navigation.rs"]

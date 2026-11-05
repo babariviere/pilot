@@ -93,6 +93,8 @@ pub(crate) struct Preflight {
     pub(crate) model: Model,
     pub(crate) frozen: Option<Frozen>,
     pub(crate) next_at: Option<u64>,
+    /// The pinned hello also offers confirmed replacement of an unavailable report chat.
+    pub(crate) replaceable: bool,
 }
 impl Preflight {
     /// The native command for this exact confirmation, or None when nothing is confirmable.
@@ -203,7 +205,7 @@ const PAYLOAD_KEYS: [&str; 13] = [
 
 /// Parse the host's payload without changing it. Unknown keys or values outside the
 /// fixed weekly scope are malformed: confirmation must show what is actually sent.
-fn frozen(
+pub(crate) fn frozen(
     p: &Value,
     project: &str,
     mission: &str,
@@ -359,6 +361,7 @@ pub(crate) fn preflight(
         model,
         frozen,
         next_at,
+        replaceable: false,
     })
 }
 
@@ -538,7 +541,7 @@ pub(crate) enum Gate {
     Checked(Box<Preflight>),
 }
 
-fn spawn<T: Send + 'static>(
+pub(crate) fn spawn<T: Send + 'static>(
     name: &str,
     failed: T,
     work: impl FnOnce(reqwest::Client, tokio::runtime::Runtime) -> T + Send + 'static,
@@ -580,6 +583,7 @@ pub(crate) fn read_preflight(
                 if !automations_on(&hello) {
                     return Ok(Gate::AutomationsOff);
                 }
+                let replaceable = crate::insights_replace::supported(&hello);
                 let mut query = vec![
                     ("projectId", backlog.project_id.as_str()),
                     ("missionId", backlog.mission_id.as_str()),
@@ -603,7 +607,7 @@ pub(crate) fn read_preflight(
                 let value = crate::insights::body(response).await;
                 match code {
                     200 => preflight(&value?, &backlog, &options.host(), explicit.as_deref())
-                        .map(|p| Gate::Checked(Box::new(p))),
+                        .map(|p| Gate::Checked(Box::new(Preflight { replaceable, ..p }))),
                     404 | 409 => Err("This backlog isn't an active mission on this Local."),
                     405 | 501 => Ok(Gate::Unsupported),
                     503 => Err("Weekly Insights is unavailable on this Local."),

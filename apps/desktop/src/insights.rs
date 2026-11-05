@@ -333,6 +333,15 @@ pub(crate) enum Request {
         target_id: String,
         payload: String,
     },
+    /// Replace an unavailable report chat: the host's preview payload, frozen verbatim at
+    /// confirmation. The target is the new report chat; the old identity is kept.
+    Replace {
+        project_id: String,
+        mission_id: String,
+        old_id: String,
+        target_id: String,
+        payload: String,
+    },
 }
 impl Request {
     pub(crate) fn slot(&self) -> String {
@@ -345,6 +354,7 @@ impl Request {
             Self::Enable { mission_id, .. } => crate::insights_enable::slot(mission_id),
             Self::Settings { target_id, .. } => crate::insights_settings::settings_slot(target_id),
             Self::Apply { target_id, .. } => crate::insights_settings::apply_slot(target_id),
+            Self::Replace { old_id, .. } => crate::insights_replace::slot(old_id),
         }
     }
     pub(crate) fn kind(&self) -> &'static str {
@@ -355,6 +365,7 @@ impl Request {
             Self::Enable { .. } => crate::insights_enable::KIND,
             Self::Settings { .. } => crate::insights_settings::SETTINGS_KIND,
             Self::Apply { .. } => crate::insights_settings::APPLY_KIND,
+            Self::Replace { .. } => crate::insights_replace::KIND,
         }
     }
     pub(crate) fn target(&self) -> Option<String> {
@@ -365,7 +376,8 @@ impl Request {
             }
             Self::Enable { target_id, .. }
             | Self::Settings { target_id, .. }
-            | Self::Apply { target_id, .. } => Some(target_id.clone()),
+            | Self::Apply { target_id, .. }
+            | Self::Replace { target_id, .. } => Some(target_id.clone()),
         }
     }
     pub(crate) fn payload(&self) -> String {
@@ -412,7 +424,8 @@ impl Request {
             // Exactly the bytes the confirmation showed; never rebuilt.
             Self::Enable { payload, .. }
             | Self::Settings { payload, .. }
-            | Self::Apply { payload, .. } => payload.clone(),
+            | Self::Apply { payload, .. }
+            | Self::Replace { payload, .. } => payload.clone(),
         }
     }
     pub(crate) fn validate(&self) -> Result<(), Failure> {
@@ -491,6 +504,19 @@ impl Request {
                     return Err(INVALID);
                 }
             }
+            Self::Replace {
+                project_id,
+                mission_id,
+                old_id,
+                target_id,
+                payload,
+            } => {
+                if !crate::insights_replace::payload_ok(
+                    payload, project_id, mission_id, old_id, target_id,
+                ) {
+                    return Err(INVALID);
+                }
+            }
         }
         if let Self::Lifecycle { key, .. } = self
             && !uuid(key)
@@ -543,6 +569,7 @@ impl Attempt {
             crate::insights_settings::SETTINGS_KIND | crate::insights_settings::APPLY_KIND => {
                 crate::insights_settings::PAYLOAD_CAP
             }
+            crate::insights_replace::KIND => crate::insights_replace::PAYLOAD_CAP,
             _ => 4096,
         };
         if op.payload.len() > cap {
@@ -587,6 +614,13 @@ impl Attempt {
             crate::insights_settings::APPLY_KIND => Request::Apply {
                 project_id: id(&p["projectId"])?,
                 mission_id: id(&p["missionId"])?,
+                target_id: op.target_id.clone(),
+                payload: op.payload.clone(),
+            },
+            crate::insights_replace::KIND => Request::Replace {
+                project_id: id(&p["projectId"])?,
+                mission_id: id(&p["missionId"])?,
+                old_id: id(&p["oldSessionId"])?,
                 target_id: op.target_id.clone(),
                 payload: op.payload.clone(),
             },
@@ -662,6 +696,7 @@ fn valid_result(op: &Operation, result: &Value) -> bool {
             return result.to_string().len() <= crate::insights_settings::PAYLOAD_CAP
                 && crate::insights_settings::valid_apply_result(op, result);
         }
+        crate::insights_replace::KIND => return crate::insights_replace::valid_result(op, result),
         _ => {}
     }
     if result.to_string().len() > RESULT_CAP || result["sessionId"] != op.target_id {
@@ -693,6 +728,7 @@ fn valid_pending(op: &Operation, result: Option<&Value>) -> bool {
         crate::insights_settings::APPLY_KIND => {
             crate::insights_settings::valid_apply_pending(op, result)
         }
+        crate::insights_replace::KIND => crate::insights_replace::valid_pending(op, result),
         _ => true,
     }
 }
@@ -812,6 +848,9 @@ pub(crate) async fn check(
 ) -> Outcome {
     if op.kind == crate::insights_enable::KIND {
         return crate::insights_enable::check(client, options, op).await;
+    }
+    if op.kind == crate::insights_replace::KIND {
+        return crate::insights_replace::check(client, options, op).await;
     }
     if crate::local_client::gate(client, options).await.is_err() {
         return Outcome::Unknown("Couldn't reach Local. Check again when Pilot is running.");

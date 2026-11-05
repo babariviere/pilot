@@ -142,6 +142,8 @@ pub use local_view::insights_enable_probe::run_insights_enable_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::insights_native_probe::run_insights_native_probe;
 #[cfg(feature = "native-probes")]
+pub use local_view::insights_replace_probe::run_insights_replace_probe;
+#[cfg(feature = "native-probes")]
 pub use local_view::insights_settings_probe::run_insights_settings_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::project_settings_probe::run_project_settings_probe;
@@ -176,6 +178,7 @@ mod delivery_store;
 mod diagnostic_repair;
 mod insights;
 mod insights_enable;
+mod insights_replace;
 #[cfg(feature = "native-probes")]
 mod insights_probe;
 mod insights_settings;

@@ -1,7 +1,8 @@
 # Confirmed deleted-report replacement
 
-Backend/protocol only; native UI is separate. This does not diagnose a real deletion or activate
-real resources. User-reported deletion and missing metadata are not proof that old authority,
+This does not diagnose a real deletion or activate real resources. The desktop confirmation is
+described under [Native confirmation](#native-confirmation-desktop). User-reported deletion and
+missing metadata are not proof that old authority,
 admitted work or entered effects are gone. Existing [enable](insights-enable.md),
 [settings/Apply](insights-settings.md), [history](insights-history.md) and [review](insights-review.md)
 contracts still apply. Existing frozen payloads and receipts stay unchanged.
@@ -120,7 +121,46 @@ Changed/disappeared cancellation ACK rows block later steps. Stop on the success
 scheduling, also after restart. Post-entry failures keep partial resources pending, with no rollback,
 unpause, regrant, clearing or provider input. Recovery cannot replay entered effects.
 
-## Synthetic checks
+## Native confirmation (desktop)
+
+`apps/desktop/src/insights_replace.rs` parses preview and status strictly: exact keys, the selected
+project/backlog and old ID, the pinned daemon/lineage home, and a payload equal to the observation it
+summarizes. The nested `enable` must be fresh (chat and schedule null, no `settingsRevision`); no
+`blocked` rule may be confirmed. `insights_replace_view.rs` is a step inside the existing Weekly
+Insights panel. **Replace report chat…** takes Enable's place at the enable blocker only when the pinned
+preflight refused exactly one known report as `report_identity_unavailable` or
+`report_superseded_use_replacement_status`, the pinned hello has `insightsReplacement:1`, and the ID
+has the host's UUID form. An older Local keeps the unchanged, disabled Enable.
+
+- Opening reads the preflight for that exact project/backlog/old ID. Ready shows the old chat, cancelled
+  rules (kept ones are counted as history), the new empty chat, the effective schedule and first report
+  (at the earliest), model and thinking, provider processing, read scope, partial sample and advisory
+  budget. Details show both full IDs. Blocked, overflow and unavailable show the reason with **Check
+  again**; blocking rules are named; an ambiguous model offers an exact choice. **Back** or Escape leaves.
+- **Replace report chat** freezes the payload verbatim in the private writer, slot `replace:<old>`, kind
+  `insights-replace`, persisted before one native-gated POST. A late preview never replaces it.
+- **Check** reads status first; only an `unknown` receipt resends the same envelope. Pending markers are
+  status-only. **Replaced** beside a pending receipt keeps Check and is not acceptance. Receipts and
+  results must name the exact operation, hash, destination and target, both frozen IDs, this target's
+  committed chat and only planned cancellation ACKs. A rejection returns to the step with a fresh preview.
+- Pins: the backlog's known report identities move old → successor only from an accepted receipt with
+  phase `replaced`, or a revision-2 link adopted after the successor's settings snapshot names the same
+  successor, project, backlog and context on the pinned home (kept in the open panel only). Fenced links,
+  pending receipts, status values and a changed preflight target never move a pin. The old enable
+  attempt and every replacement attempt stay in the private book.
+
+Verification: `insights_replace_tests.rs` (8 tests: exact freeze, malformed/stale/foreign previews,
+fence versus completion, attempt round trip, exact progress and status, adoption re-read, reasons) and
+the hidden mounted `insights_replace` probe (`cargo test --features native-probes --test
+insights_replace`, synthetic Local only). Its interactions run at 1100 light: blocker, passive
+preview, Escape back with focus kept, stale and overtaken previews, exact payload, lost ACK, close and
+restart without replay, same-envelope Check, status-only pending steps, completion beside a pending
+receipt, acceptance and pin transition, navigation, an unqualified old home, an untrusted rule, a
+malformed copied grant, a fence-only link, mismatched and exact successor adoption, an older Local and
+rejection. 680 light/dark and 1100 dark are render-only. Limits: headless macOS TestPlatform evidence,
+not OS IME/accessibility, Linux/Wayland, live Local, a real deletion, rules or models.
+
+## Synthetic host checks
 
 `insights-replacement.test.ts` uses temporary homes, real metadata/SQLite, faux catalog and a worker
 factory that throws on every start. Coverage includes deletion versus missing index/storage, exact

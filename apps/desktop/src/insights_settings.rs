@@ -394,6 +394,10 @@ pub(crate) fn snapshot(value: &Value, session: &str, host: &Host) -> Result<Snap
     })
 }
 impl Snapshot {
+    /// The host's hash of storage home, project path and exact backlog.
+    pub(crate) fn context(&self) -> &str {
+        &self.context
+    }
     /// The Save command for this exact snapshot: identity verbatim, CAS on its revision.
     pub(crate) fn request(&self, settings: &Settings) -> Result<Request, Failure> {
         settings.validate()?;
