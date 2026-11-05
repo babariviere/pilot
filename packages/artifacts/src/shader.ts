@@ -4,7 +4,8 @@ import { Worker } from "node:worker_threads";
 
 /** Lines numbered from here belong to Pilot's wrapper, not the agent's source. */
 const WRAPPER_LINE = 100_000;
-const CHECK_TIMEOUT_MS = 10_000;
+export const SHADER_CHECK_TIMEOUT_MS = 10_000;
+export const SHADER_CHECK_WORKER_RESOURCES = Object.freeze({ maxOldGenerationSizeMb: 64 });
 const MAX_ERRORS = 10;
 
 /**
@@ -111,12 +112,21 @@ export function formatShaderErrors(errors: ShaderDiagnostic[], source: string): 
 /** Compile in a worker, so a pathological shader can be stopped without blocking the event loop. */
 export async function checkShader(
 	source: string,
-	options: { signal?: AbortSignal; timeoutMs?: number; inputs?: readonly string[] } = {},
+	options: {
+		signal?: AbortSignal;
+		timeoutMs?: number;
+		inputs?: readonly string[];
+		observe?: (provenance: unknown) => void;
+		joined?: () => void;
+	} = {},
 ): Promise<ShaderDiagnostic[]> {
-	options.signal?.throwIfAborted();
+	if (options.signal?.aborted) {
+		options.joined?.(); // No worker was admitted.
+		options.signal.throwIfAborted();
+	}
 	const worker = new Worker(new URL("./shader-check-worker.ts", import.meta.url), {
 		workerData: { vertex: SHADER_VERTEX_SOURCE, fragment: shaderFragmentSource(source, options.inputs) },
-		resourceLimits: { maxOldGenerationSizeMb: 64 },
+		resourceLimits: SHADER_CHECK_WORKER_RESOURCES,
 		stdout: true,
 		stderr: true,
 	});
@@ -124,23 +134,29 @@ export async function checkShader(
 	let abort: (() => void) | undefined;
 	try {
 		const diagnostics = await new Promise<GlslangDiagnostic[]>((resolve, reject) => {
-			worker.on("message", (message: { diagnostics?: GlslangDiagnostic[]; error?: string }) => {
-				if (isWatchNotice(message)) return;
-				message.diagnostics
-					? resolve(message.diagnostics)
-					: reject(new Error(message.error ?? "Shader check failed"));
-			});
+			worker.on(
+				"message",
+				(message: { diagnostics?: GlslangDiagnostic[]; error?: string; provenance?: unknown }) => {
+					if (isWatchNotice(message)) return;
+					options.observe?.(message.provenance);
+					message.diagnostics
+						? resolve(message.diagnostics)
+						: reject(new Error(message.error ?? "Shader check failed"));
+				},
+			);
 			worker.once("error", reject);
 			worker.once("exit", (code) => reject(new Error(`Shader check stopped (exit ${code})`)));
-			timer = setTimeout(() => reject(new ShaderCheckTimeout()), options.timeoutMs ?? CHECK_TIMEOUT_MS);
+			timer = setTimeout(() => reject(new ShaderCheckTimeout()), options.timeoutMs ?? SHADER_CHECK_TIMEOUT_MS);
 			abort = () => reject(options.signal?.reason ?? new Error("Shader check aborted"));
 			options.signal?.addEventListener("abort", abort, { once: true });
+			if (options.signal?.aborted) abort();
 		});
 		return shaderErrors(diagnostics);
 	} finally {
 		if (timer) clearTimeout(timer);
 		if (abort) options.signal?.removeEventListener("abort", abort);
 		await worker.terminate();
+		options.joined?.();
 	}
 }
 

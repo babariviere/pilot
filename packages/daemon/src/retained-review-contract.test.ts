@@ -1015,7 +1015,7 @@ test("count ceilings accept valid exact boundaries and reject one more, never si
 	assert.throws(() => parse(p, r));
 });
 
-test("only host acquisition consumes inputs; no execution/transport or policy/lifecycle effects", async (t) => {
+test("only host acquisition and isolated validator consume inputs; no installed transport or policy effects", async (t) => {
 	const root = new URL("./", import.meta.url);
 	const contract = await readFile(new URL("retained-review-contract.ts", root), "utf8");
 	assert.doesNotMatch(
@@ -1026,12 +1026,23 @@ test("only host acquisition consumes inputs; no execution/transport or policy/li
 		for (const path of await readdir(src, { recursive: true })) {
 			if (!path.endsWith(".ts") || path.endsWith(".test.ts") || path === "retained-review-contract.ts") continue;
 			const source = await readFile(new URL(path, src), "utf8");
+			if (path !== "retained-visual-precheck.ts")
+				assert.doesNotMatch(
+					source,
+					/from ["'][^"']*retained-visual-precheck|\bprepareRetainedVisualPrecheck\s*\(/,
+					path,
+				);
 			if (src === root && ["retained-review-run-disk.ts", "retained-review-runs.ts"].includes(path)) {
 				assert.doesNotMatch(source, /completeSimple|streamSimple|fetch\s*\(/, path);
 				continue;
 			}
 			// The authorized acquisition path may prepare bytes, never execute/interpret a reviewer.
-			if (src === root && ["retained-brief.ts", "retained-artifact.ts", "mission-service.ts"].includes(path)) {
+			if (
+				src === root &&
+				["retained-brief.ts", "retained-artifact.ts", "retained-visual-precheck.ts", "mission-service.ts"].includes(
+					path,
+				)
+			) {
 				assert.doesNotMatch(source, /parseRetainedReviewReport|completeSimple|streamSimple/, path);
 				continue;
 			}

@@ -8,6 +8,7 @@ try {
 	try {
 		const result = validator.checkPass({ vertex, fragment });
 		parentPort?.postMessage({
+			provenance: Reflect.get(globalThis, "__retainedVisualProvenance")?.(),
 			diagnostics: result.diagnostics.map(({ severity, stage, message, line }) => ({
 				severity,
 				stage,
@@ -19,5 +20,8 @@ try {
 		validator.dispose();
 	}
 } catch (error) {
-	parentPort?.postMessage({ error: error instanceof Error ? error.message : String(error) });
+	parentPort?.postMessage({
+		error: error instanceof Error ? error.message : String(error),
+		provenance: Reflect.get(globalThis, "__retainedVisualProvenance")?.(),
+	});
 }

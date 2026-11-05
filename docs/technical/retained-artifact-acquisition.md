@@ -30,7 +30,8 @@ serialization. It does not change writes or history.
 - The existing retained-brief host identity, run, profile, context and review-runtime configuration.
 - `validator`: build/runtime/config SHA-256 pins, API, engine and explicit `{ now, timeoutMs }`.
   `now` is a proposed validation time, never inferred historical execution time. The timeout is
-  positive and at most 30 seconds, matching the visual check's default execution deadline.
+  positive and at most 30 seconds, matching the initial checker worker's default timer.
+  It is not an end-to-end validation deadline.
 
 Only the current coordinator can acquire one exact artifact allocated to the current research
 task. The source owner must be a current same-project member. A current task link must pin the
@@ -67,8 +68,11 @@ after restart, but cannot revoke copies already returned to a host.
 
 ## Execution remains separate
 
+The [retained visual precheck](retained-visual-precheck.md) now provides a host-only isolated adapter.
+It is not installed in a production dispatcher or used for live validation or acceptance.
+
 Acquisition binds intended validator pins, not an observation that the validator ran or that the
-claimed runtime is installed. A future validation producer must verify its actual executable,
+claimed runtime is installed. A validation producer must verify its actual executable,
 runtime and configuration, use the bound arguments/options, and record attributable execution.
 Stored publish-time API/engine/check metadata is history, not a fresh validation result. No
 historic `checkVisual` time is inferred from `createdAt` or `updatedAt`.

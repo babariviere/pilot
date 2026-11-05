@@ -65,6 +65,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Internal jj attribution ledger](jj-ownership.md)
 - [Retained review run linkage](retained-review-run-linkage.md)
 - [Exact stored visual acquisition (host-only)](retained-artifact-acquisition.md)
+- [Retained visual precheck (host-only, not installed)](retained-visual-precheck.md)
 - [Retained comparison snapshots (internal)](review-snapshots.md)
 
 ## Features and integrations

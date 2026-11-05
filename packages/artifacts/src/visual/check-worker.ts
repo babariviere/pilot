@@ -13,16 +13,35 @@ try {
 	const result = await runVisualCheck(workerData as VisualCheckInput);
 	const translations: VisualShaderTranslation[] = [];
 	if (result.ok)
-		for (const shader of result.shaders) {
+		for (const [index, shader] of result.shaders.entries()) {
+			const stage = (state: string) => {
+				if (workerData.trace) parentPort?.postMessage({ visualStage: "metal", state, index });
+			};
+			stage("started");
 			try {
 				const { msl, entry } = translateVisualShader(shader.glsl, shader.inputs);
 				translations.push({ msl, entry });
+				stage("passed");
 			} catch (error) {
-				if (!(error instanceof VisualShaderError)) throw error;
+				if (!(error instanceof VisualShaderError)) {
+					stage("unavailable");
+					throw error;
+				}
 				translations.push({ error: error.message, ...(error.line ? { line: error.line } : {}) });
+				stage("failed");
 			}
 		}
-	parentPort?.postMessage({ ...result, ...(result.ok ? { translations } : {}) });
+	parentPort?.postMessage({
+		...result,
+		...(result.ok ? { translations } : {}),
+		provenance: Reflect.get(globalThis, "__retainedVisualProvenance")?.(),
+	});
 } catch (error) {
-	parentPort?.postMessage({ ok: false, error: error instanceof Error ? error.message : String(error), logs: [] });
+	parentPort?.postMessage({
+		ok: false,
+		provenance: Reflect.get(globalThis, "__retainedVisualProvenance")?.(),
+		error: error instanceof Error ? error.message : String(error),
+		logs: [],
+		unavailable: true,
+	});
 }

@@ -17,6 +17,15 @@ const CHECK_DRAW_SLOWDOWN = 3;
 /** Widths the check draws at: the reading column and a narrow window. */
 const CHECK_DRAW_WIDTHS = [760, 360];
 
+/** Sample policy, not coverage of all views, states, pixels or native UI behavior. */
+export const VISUAL_CHECK_SAMPLING = Object.freeze({
+	limits: VISUAL_LIMITS,
+	drawSlowdown: CHECK_DRAW_SLOWDOWN,
+	drawWidths: CHECK_DRAW_WIDTHS,
+	animatedTimes: [0, 1.5],
+	pointers: ["none", "center"],
+});
+
 export interface VisualCheckInput extends VisualSessionOptions {
 	source: string;
 	/** `data` as JSON. */
@@ -48,7 +57,7 @@ export interface VisualShaderSpec {
 
 export type VisualCheckResult =
 	| { ok: true; engine: string; report: VisualCheckReport; shaders: VisualShaderSpec[] }
-	| { ok: false; error: string; logs: string[] };
+	| { ok: false; error: string; logs: string[]; unavailable?: boolean };
 
 /** Controls, and layout nodes made pressable with onClick. */
 type Control =
@@ -81,7 +90,7 @@ export async function runVisualCheck(input: VisualCheckInput): Promise<VisualChe
 	try {
 		session = await VisualSession.open(input);
 	} catch (error) {
-		return { ok: false, error: `Could not start the visual engine: ${String(error)}`, logs: [] };
+		return { ok: false, error: `Could not start the visual engine: ${String(error)}`, logs: [], unavailable: true };
 	}
 	try {
 		const fresh = () => {

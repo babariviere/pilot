@@ -15,7 +15,7 @@ export interface RetainedArtifactReference {
 	kind: "visual";
 	sourceOwnerSessionId: string;
 }
-/** Host-provided future validation pins. `now` is explicit, never inferred from stored timestamps.
+/** Host-provided intended validation pins. `now` is explicit, never inferred from stored timestamps.
  * Acquisition cannot prove these pins describe an installed validator. The executor must do that. */
 export interface RetainedVisualValidator {
 	buildSha256: string;
