@@ -130,7 +130,7 @@ pub fn run_shortcuts_probe(cx: &mut HeadlessAppContext) {
                 w.press("enter", cx);
                 let text = cx.read_from_clipboard().unwrap().text().unwrap();
                 assert!(text.contains("Command Palette: ⌘K"));
-                assert!(text.contains("Sidebar list\nWith the chat list focused"));
+                assert!(text.contains("Sidebar list\nWhen the chat list has focus"));
                 assert!(text.contains("outside text fields"));
                 assert!(!text.contains("Stop:") && !text.contains("Terminal:"));
             })
