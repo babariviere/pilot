@@ -23,6 +23,7 @@ import { optionalReviewSeeds } from "./mission-review-seeds.ts";
 import { draftMessage, MissionService, type RetainedBriefConfiguration } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
+import { NativeReviewReader } from "./native-review.ts";
 import { KnowledgeService } from "./project-knowledge.ts";
 import { ProjectStore } from "./projects.ts";
 import type { PullRequestOptions } from "./pull-requests.ts";
@@ -858,6 +859,76 @@ test("frozen comparison identities are host-resolved, scoped to worker custody a
 	assert.equal((await f.service.evaluateContributionAllocation(lead.id, allocation.id)).eligibility, "unavailable");
 	assert.equal((await f.service.evaluateReviewResult(lead.id, reviewed.id)).applicability, "current");
 	assert.equal((await f.service.evaluateReviewResult(lead.id, reviewed.id)).liveSourceFreshness, "unavailable");
+	// The production host entry reuses native retained custody, not the optional legacy evidence resolver.
+	const own = snapshot!.manifest.provenance.ledger.ownership;
+	assert.equal(own.status, "owned");
+	if (own.status !== "owned") throw new Error("fixture");
+	let passiveOperation = manifest.request.operationId;
+	const native = t.mock.method(
+		f.sessions,
+		"nativeReviewReader",
+		(_worker: string, _mission: string | undefined, _project: string, authorize: () => void) =>
+			new NativeReviewReader(
+				{
+					get: async () => structuredClone(snapshot!),
+					list: async () => ({ comparisons: [], next: null }),
+					read: async () => new Uint8Array(),
+					diff: async () => new Uint8Array(),
+				},
+				{
+					get: async () => structuredClone(snapshot!.manifest.provenance.ledger),
+					list: async () =>
+						structuredClone([
+							{
+								...snapshot!.manifest.provenance.ledger,
+								current: {
+									...snapshot!.manifest.provenance.ledger.current,
+									operationId: passiveOperation,
+								},
+							},
+						]),
+					binding: async () => ({
+						binding: structuredClone(own.binding),
+						cursor: passiveOperation,
+						coverage: "complete",
+						problem: null,
+						deliveryEnabled: true,
+					}),
+					head: async () => passiveOperation,
+				},
+				async () => {
+					authorize();
+					return structuredClone(own.binding);
+				},
+			),
+	);
+	const observed = await f.service.observeCodeDelivery(lead.id, task.id);
+	assert.equal(observed.status, "observed");
+	if (observed.status !== "observed") throw new Error("fixture");
+	assert.equal(observed.binding.status, "observed");
+	assert.equal(observed.binding.submissionId, saved.id);
+	assert.equal(observed.binding.allocationId, allocation.id);
+	assert.equal(observed.contributions.selected[0]?.status, "observed");
+	assert.equal(observed.contributions.inventory.status, "unknown");
+	assert.equal(observed.configuredChecks.status, "unknown");
+	assert.equal(observed.ownedPullRequests.discovery, "unknown");
+	assert.equal(observed.integration.status, "unknown");
+	const workerMeta = f.sessions["require"](worker.id);
+	const previousUrls = workerMeta.boundPullRequests;
+	workerMeta.boundPullRequests = ["https://github.com/o/r/pull/1"];
+	const changedSource = t.mock.method(f.sessions, "observeCodePullRequest", async (_id: string, url: string) => {
+		passiveOperation = "f".repeat(128);
+		return { url, status: "unknown", reason: "fixture" };
+	});
+	assert.equal(
+		(await f.service.observeCodeDelivery(lead.id, task.id)).status,
+		"stale",
+		"source is rechecked after GitHub I/O",
+	);
+	changedSource.mock.restore();
+	workerMeta.boundPullRequests = previousUrls;
+	passiveOperation = manifest.request.operationId;
+	native.mock.restore();
 	// Same reference with altered retained bytes is not silently accepted as a fresh version.
 	snapshot!.manifest.omissions.push("corrupt manifest");
 	assert.equal((await f.service.evaluateContributionAllocation(lead.id, allocation.id)).applicability, "unavailable");
@@ -3347,6 +3418,129 @@ async function until<T>(check: () => T | undefined | false): Promise<T> {
 		await delay(2);
 	}
 }
+
+async function codeObserverFixture(t: TestContext) {
+	const f = await fixture(t),
+		lead = await f.spawn(),
+		worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Code observation",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	const task = f.store.addTask(mission.id, {
+		title: "Code",
+		sessionId: worker.id,
+		assignment: { version: 1, expectedRevision: 0, intent: "Code", scope: "Exact scope", criteria: ["Checks"] },
+	});
+	return { ...f, lead, worker, mission, task };
+}
+
+test("passive code delivery keeps unavailable producers and unqualified zero-PR inventory Unknown", async (t) => {
+	const f = await codeObserverFixture(t);
+	const result = await f.service.observeCodeDelivery(f.lead.id, f.task.id);
+	assert.equal(result.status, "observed");
+	if (result.status !== "observed") throw new Error("fixture");
+	assert.equal(result.binding.status, "unknown");
+	assert.equal(result.contributions.ledger.status, "unknown");
+	assert.equal(result.contributions.inventory.status, "unknown");
+	assert.equal(result.configuredChecks.status, "unknown");
+	assert.equal(result.ownedPullRequests.discovery, "unknown");
+	assert.deepEqual(result.ownedPullRequests.observations, []);
+	assert.equal(result.integration.status, "unknown");
+	assert.equal(f.store.currentDeliveryEvidence(f.mission.id, f.task.id).length, 0);
+	assert.equal(f.store.completion(f.mission.id, f.task.id), undefined);
+	assert.equal(f.store.task(f.mission.id, f.task.id).status, "todo");
+});
+
+test("passive owned URL inventory preserves uncached URLs, exclusions and transfers", async (t) => {
+	const f = await codeObserverFixture(t),
+		meta = f.sessions["require"](f.worker.id);
+	const urls = [1, 2, 3, 4].map((n) => `https://github.com/o/r/pull/${n}`);
+	meta.agentPullRequests = [urls[0]!, urls[1]!];
+	meta.boundPullRequests = [urls[1]!, urls[2]!, urls[3]!];
+	meta.unboundPullRequests = [urls[2]!];
+	f.sessions["boundPullRequestOwners"].set(urls[3]!, f.lead.id);
+	assert.deepEqual(f.sessions.ownedPullRequests(f.worker.id), [], "cached-object API cannot prove no owned URLs");
+	assert.deepEqual(f.sessions.ownedPullRequestUrls(f.worker.id), urls.slice(0, 2));
+	const called: string[] = [];
+	t.mock.method(f.sessions, "observeCodePullRequest", async (_id: string, url: string, authorize: () => void) => {
+		authorize();
+		called.push(url);
+		return { url, status: "unknown", reason: "fixture permission/lost response" };
+	});
+	const result = await f.service.observeCodeDelivery(f.lead.id, f.task.id);
+	assert.equal(result.status, "observed");
+	if (result.status !== "observed") throw new Error("fixture");
+	assert.deepEqual(called, urls.slice(0, 2));
+	assert.equal(result.ownedPullRequests.status, "unknown");
+	assert.equal(result.ownedPullRequests.observations.length, 2);
+	assert.equal(f.sessions.ownedPullRequestUrls("missing"), undefined);
+	assert.equal(f.sessions.ownedPullRequestUrls(f.lead.id), undefined);
+});
+
+test("code observation caps PR fanout without inventing complete coverage", async (t) => {
+	const f = await codeObserverFixture(t),
+		meta = f.sessions["require"](f.worker.id);
+	meta.boundPullRequests = Array.from({ length: 21 }, (_, i) => `https://github.com/o/r/pull/${i + 1}`);
+	let calls = 0;
+	t.mock.method(f.sessions, "observeCodePullRequest", async (_id: string, url: string) => {
+		calls++;
+		return { url, status: "unknown", reason: "fixture" };
+	});
+	const result = await f.service.observeCodeDelivery(f.lead.id, f.task.id);
+	assert.equal(result.status, "observed");
+	if (result.status !== "observed") throw new Error("fixture");
+	assert.equal(calls, 20);
+	assert.equal(result.ownedPullRequests.status, "unknown");
+	assert.equal(result.ownedPullRequests.unobservedUrls.length, 1);
+	assert.ok(meta.boundPullRequests.includes(result.ownedPullRequests.unobservedUrls[0]!));
+	assert.match(result.ownedPullRequests.reason, /limit/);
+});
+
+test("code observation freezes definition/context/configuration/source/URL fences across asynchronous reads", async (t) => {
+	for (const kind of [
+		"definition",
+		"owner-aba",
+		"context",
+		"configuration",
+		"source",
+		"urls",
+		"leave",
+		"project",
+		"caller-project",
+	] as const)
+		await t.test(kind, async (t) => {
+			const f = await codeObserverFixture(t),
+				meta = f.sessions["require"](f.worker.id);
+			meta.boundPullRequests = ["https://github.com/o/r/pull/1"];
+			let mutated = false;
+			t.mock.method(f.sessions, "observeCodePullRequest", async (_id: string, url: string) => {
+				if (kind === "definition") f.store.updateTask(f.mission.id, f.task.id, { title: "Changed" });
+				if (kind === "owner-aba") {
+					f.store.releaseTask(f.mission.id, f.task.id);
+					f.store.claimTask(f.mission.id, f.task.id, f.worker.id, {});
+				}
+				if (kind === "context")
+					f.store.writeBrief(f.mission.id, "Changed context", f.store.require(f.mission.id).briefRevision);
+				if (kind === "configuration") await f.projects.update(f.project.id, { model: "fixture/changed" });
+				if (kind === "source") meta.cwd += "/replacement";
+				if (kind === "urls") meta.boundPullRequests!.push("https://github.com/o/r/pull/2");
+				if (kind === "leave") f.store.leave(f.worker.id);
+				if (kind === "project") meta.projectId = f.other.id;
+				if (kind === "caller-project") f.sessions["require"](f.lead.id).projectId = f.other.id;
+				mutated = true;
+				return { url, status: "unknown", reason: "lost observation" };
+			});
+			if (["leave", "project", "caller-project"].includes(kind))
+				await assert.rejects(f.service.observeCodeDelivery(f.lead.id, f.task.id), /membership|project/i);
+			else assert.equal((await f.service.observeCodeDelivery(f.lead.id, f.task.id)).status, "stale", kind);
+			assert.equal(mutated, true, "the intended race actually occurred");
+		});
+});
 
 async function fixture(
 	t: TestContext,

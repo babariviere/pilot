@@ -23,6 +23,9 @@ import { CoordinatorCompaction } from "./coordinator-compaction.ts";
 import type { CriticalReviewVault } from "./critical-review-vault.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
+import { githubRepository } from "./github.ts";
+import type { CodePullRequestObservation } from "./github-delivery.ts";
+import { observeCodeContributions, observeCodeIntegration } from "./mission-code-delivery.ts";
 import { evaluateContributionAllocation } from "./mission-contribution-allocation.ts";
 import {
 	type DeliveryObservation,
@@ -504,6 +507,161 @@ export class MissionService {
 			observations,
 			this.store.sharedDefinitionRevision(taskId),
 		);
+	}
+
+	/** Host-only on-demand observation. No persistence, transport, scheduler or acceptance gate. */
+	async observeCodeDelivery(sessionId: string, taskRef: string) {
+		const { missionId, taskId } = this.deliveryAccess(sessionId, taskRef);
+		await this.store.durable();
+		const authorize = () => {
+			const access = this.deliveryAccess(sessionId, taskId);
+			if (access.missionId !== missionId) throw new Conflict("Code observation membership changed");
+			const mission = this.store.require(missionId),
+				task = this.store.task(missionId, taskId);
+			this.projects.require(mission.projectId);
+			if (!task.sessionId || this.store.missionOf(task.sessionId) !== missionId)
+				throw new Conflict("Code observation worker membership unavailable");
+			this.assertSameProject(task.sessionId, missionId);
+			if (task.sessionId !== sessionId && mission.coordinatorSessionId !== sessionId)
+				throw new Conflict("Only the current owner or coordinator may observe code delivery");
+			return { mission, task, owner: task.sessionId };
+		};
+		const freeze = () => {
+			const { mission, task, owner } = authorize();
+			return structuredClone({
+				missionId,
+				taskId,
+				projectId: mission.projectId,
+				missionStatus: mission.status,
+				coordinatorSessionId: mission.coordinatorSessionId ?? null,
+				owner,
+				task,
+				definitionRevision: this.store.sharedDefinitionRevision(taskId),
+				contextFence: this.store.allocationContextFence(missionId),
+				submission: latestSubmission(this.store.currentDeliveryEvidence(missionId, taskId)) ?? null,
+				allocation: this.store.latestContributionAllocation(missionId, taskId) ?? null,
+				policy: this.store.latestNonCodeAcceptancePolicy(missionId, taskId) ?? null,
+				projectConfiguration: this.projects.require(mission.projectId),
+				custody: this.sessions.codeDeliveryCustody(owner),
+				ownedUrls: this.sessions.ownedPullRequestUrls(owner) ?? null,
+			});
+		};
+		const frozen = freeze(),
+			fenceSha256 = deliveryDigest(frozen);
+		const reader = this.sessions.nativeReviewReader(frozen.owner, missionId, frozen.projectId, () => {
+			authorize();
+		});
+		const allocation = frozen.allocation;
+		const sources = allocation?.request.action === "allocate" ? allocation.request.sources : [];
+		const ids = sources.flatMap((s) => (s.reference.kind === "snapshot" ? [s.reference.snapshotId] : []));
+		const contributions = await observeCodeContributions(reader, ids);
+		const observations: DeliveryObservation[] = contributions.selected.flatMap((s) =>
+			s.status === "observed"
+				? [
+						{
+							reference: { kind: "snapshot" as const, snapshotId: s.snapshotId },
+							sourceOwnerSessionId: frozen.owner,
+							sha256: s.snapshotId,
+							availability: "retained" as const,
+						},
+					]
+				: [],
+		);
+		const bindingCurrent =
+			frozen.missionStatus === "active" &&
+			frozen.submission?.request.kind === "code" &&
+			allocation &&
+			evaluateContributionAllocation(allocation, {
+				task: frozen.task,
+				definitionRevision: frozen.definitionRevision,
+				coordinatorSessionId: frozen.coordinatorSessionId ?? undefined,
+				contextFence: frozen.contextFence,
+				latestAllocationId: allocation.id,
+				submission: frozen.submission ?? undefined,
+				observations,
+			}).applicability === "current";
+		const prs: CodePullRequestObservation[] = [];
+		const urls = frozen.ownedUrls ?? [];
+		const deadline = Date.now() + 60_000;
+		// Bounded serial host reads. A cap never truncates to a supposedly complete/empty inventory.
+		for (const url of urls.slice(0, 20)) {
+			if (Date.now() >= deadline) {
+				prs.push({ url, status: "unknown", reason: "Host observation deadline" });
+				continue;
+			}
+			try {
+				prs.push(
+					await this.sessions.observeCodePullRequest(frozen.owner, url, () => {
+						authorize();
+					}),
+				);
+			} catch {
+				prs.push({ url, status: "unknown", reason: "Owned PR observation unavailable or custody changed" });
+			}
+		}
+		// Recheck current ledger/source after all asynchronous network reads as well as inside each reader.
+		const afterContributions = await observeCodeContributions(reader, ids);
+		authorize(); // Do not hide revoked access behind an Unknown observation.
+		if (
+			fenceSha256 !== deliveryDigest(freeze()) ||
+			deliveryDigest(contributions) !== deliveryDigest(afterContributions)
+		)
+			return {
+				status: "stale" as const,
+				reason: "Submission, allocation, configuration, custody or source changed during observation",
+				fenceSha256,
+			};
+		let repository: string | null = null;
+		try {
+			if (frozen.custody.workspace?.upstream)
+				repository = githubRepository(frozen.custody.workspace.upstream).identity;
+		} catch {
+			/* No inferred repository from cwd, branch name or PR prose. */
+		}
+		return {
+			status: "observed" as const,
+			fenceSha256,
+			observedAt: Date.now(),
+			binding: {
+				status: bindingCurrent ? ("observed" as const) : ("unknown" as const),
+				submissionId: frozen.submission?.id ?? null,
+				allocationId: allocation?.id ?? null,
+				definitionRevision: frozen.definitionRevision,
+				configurationSha256: deliveryDigest({
+					project: frozen.projectConfiguration,
+					policy: frozen.policy,
+					assignment: frozen.task.assignment ?? null,
+				}),
+				reason: "Current exact selected code allocation only; historical task purpose remains unknown",
+			},
+			contributions,
+			configuredChecks: {
+				status: "unknown" as const,
+				reason:
+					"Qualified local tested-source/configuration/target binding and complete applicable required-CI policy are unavailable",
+			},
+			ownedPullRequests: {
+				status:
+					frozen.ownedUrls !== null && urls.length <= 20 && prs.every((p) => p.status === "observed")
+						? ("observed" as const)
+						: ("unknown" as const),
+				scope: "recorded-owned-urls-only" as const,
+				discovery: "unknown" as const,
+				reason:
+					urls.length > 20
+						? "Owned PR observation limit"
+						: "All recorded ownership URLs, not proof of complete PR discovery or zero PRs",
+				observations: prs,
+				unobservedUrls: urls.slice(20),
+			},
+			integration: {
+				status: "unknown" as const,
+				scope: "selected-pairs-only" as const,
+				selected: bindingCurrent ? observeCodeIntegration(contributions.selected, prs, repository) : [],
+				reason:
+					"No complete contribution/direct-delivery integration proof; selected pair observations do not establish acceptance",
+			},
+		};
 	}
 
 	private deliveryAccess(sessionId: string, ref: string) {

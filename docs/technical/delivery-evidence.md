@@ -71,6 +71,61 @@ explicit definition/status/owner writes do. The assignment revision is checked
 separately, including changes that do not increment that older definition fence.
 These are freshness fences, not a new allocation model or task-at-operation proof.
 
+## Passive code observations
+
+`MissionService.observeCodeDelivery(sessionId, taskRef)` is a host-only on-demand
+read for the current task owner or coordinator. It has no HTTP/tool route, timer,
+new persistence or gate. It freezes submission, selected allocation, assignment,
+definition/context, project configuration, policy, worker custody and recorded PR
+URLs. It rechecks these after asynchronous reads and repeats the passive source
+read after the network work. Changed fences discard the observations as stale;
+revoked membership/project access refuses the read even if every producer failed.
+
+The result keeps four observations separate:
+
+- `contributions` uses the native retained reader and passive ownership ledger.
+  Keyset reads stop at 1,000 claims, with Unknown on truncation, a missed interval,
+  a lagging operation cursor or a lost read. It never invokes ownership `observe()`.
+  Exact retained base/head, layer/stack and changed paths describe only each
+  selected comparison. `ledgerRevision` compares its head to the ledger at the
+  observed operation; it does not prove the absence of unsnapshotted edits.
+  The full dirty/ignored/unmanaged/unproven inventory remains Unknown.
+- `configuredChecks` stays Unknown. The GitHub adapter can read exact head-OID
+  contexts (including pending, failed and skipped results) with complete bounded
+  pagination and a branch-protection fingerprint. Green contexts are not a pass
+  for the complete applicable configuration: rulesets and a qualified local
+  tested-source/configuration/integration-target producer are not available.
+- `ownedPullRequests` keeps recorded bound/agent-owned URLs even when no cached
+  PR object exists. Explicit exclusions and current ownership transfers apply.
+  Up to 20 URLs are read serially through the existing shared GitHub runner and
+  rate budget, including closed/merged and stacked PRs. Each PR gets exact head,
+  base, merge and default-target OIDs, then an identity/configuration recheck.
+  At most ten 100-context pages are read per PR. A 60-second admission budget per
+  observation/PR stops further commands, though an entered command can finish
+  within its existing 20-second deadline. Missing permissions, partial GraphQL,
+  lost replies, pagination limits and identity churn never become passing/empty.
+  Complete discovery remains Unknown, so recorded zero URLs is not proven zero PRs.
+- `integration` can report only selected-pair observations: exact authorized
+  source repository, PR head **and base** must match the selected pair, and its
+  observed merge commit must be contained in the exact observed default-branch
+  target. A stack merged only to an intermediate branch is not final landing.
+  Missing containment is Unknown; a returned negative comparison is not integrated.
+  Squash/rebase lineage is not guessed. Direct/non-PR and complete delivery
+  integration remain Unknown. No free-text commit/check/landing claim is a producer.
+
+These are point-in-time observations, not atomic repository exclusion or continued
+freshness. They do not change submission evaluation, eligibility, authority,
+acceptance, merge or retirement. Required unknown/partial/stale gates remain blocked.
+The original full qualification still needs complete contribution/PR discovery,
+local-check binding, complete required-CI policy and direct-delivery integration.
+The adapters are tested with offline fixtures only, not live GitHub credentials.
+
+Knowledge consumers may use qualified exact `selected` changed paths only with
+the matching current binding and explicit selected-pair scope. They must not map
+an old completion receipt, commit claim or local HEAD to historical documentation
+ownership, nor treat this subset as the full delivery. Partial/unavailable scope
+stays Unknown; no receipt backfill or historical ownership inference is performed.
+
 ## Proportional examples
 
 | Intent | Worker claim and exact evidence | What remains unproved |

@@ -25,6 +25,7 @@ import {
 	run,
 	toSessionPullRequest,
 } from "./github.ts";
+import { observeCodePullRequest } from "./github-delivery.ts";
 import { discoverPullRequestHealth } from "./pull-request-health.ts";
 import {
 	checksState,
@@ -171,6 +172,11 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 		this.runner = options.runner ?? run;
 		this.base = Math.max(1, options.intervalMs ?? MINUTE);
 		this.concurrency = Math.max(1, options.concurrency ?? 3);
+	}
+
+	/** Host-only one-shot read, sharing transport and budget without entering the polling scheduler. */
+	observeCodeDelivery(url: string, cwd: string) {
+		return observeCodePullRequest(url, cwd, this.runner, this.limits);
 	}
 
 	/** Check every known session and linked PR once, then keep them on their cadence. */

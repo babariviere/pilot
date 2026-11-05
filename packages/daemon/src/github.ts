@@ -267,7 +267,8 @@ export class RateLimits {
 	}
 }
 
-async function graphql(
+/** Shared bounded read transport, including host-only delivery observations. */
+export async function graphql(
 	repo: Repository,
 	query: string,
 	variables: [flag: "-f" | "-F", name: string, value: string][],

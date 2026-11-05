@@ -74,6 +74,139 @@ function snapshot(): ReviewSnapshot {
 		},
 	};
 }
+function passiveFixture() {
+	const retained = snapshot(),
+		row = retained.manifest.provenance.ledger,
+		owner = row.ownership;
+	assert.equal(owner.status, "owned");
+	if (owner.status !== "owned") throw new Error("fixture");
+	const b = owner.binding;
+	row.current = {
+		status: "observed",
+		operationId: retained.manifest.request.operationId,
+		revisions: [
+			{
+				changeId: row.changeId,
+				commitId: retained.manifest.request.head.commitId,
+				parents: [retained.manifest.request.base.commitId],
+			},
+		],
+	};
+	const checkpoint = {
+		binding: b,
+		cursor: retained.manifest.request.operationId,
+		coverage: "complete" as "complete" | "unknown",
+		problem: null as string | null,
+		deliveryEnabled: true,
+	};
+	const calls: string[] = [];
+	const ledger = {
+		get: async () => structuredClone(row),
+		binding: async () => {
+			calls.push("binding");
+			return structuredClone(checkpoint);
+		},
+		head: async () => {
+			calls.push("head");
+			return retained.manifest.request.operationId;
+		},
+		list: async (_repositoryId: string, _workspace: string, _after?: string, _limit?: number) => {
+			calls.push("list");
+			return [structuredClone(row)];
+		},
+		observe: async () => {
+			throw new Error("Read must never observe/enroll/capture");
+		},
+	};
+	const reader = new NativeReviewReader(
+		{
+			get: async () => structuredClone(retained),
+			list: async () => ({ comparisons: [], next: null }),
+			diff: async () => new Uint8Array(),
+			read: async () => new Uint8Array(),
+		},
+		ledger,
+		async () => structuredClone(b),
+	);
+	return { reader, ledger, checkpoint, retained, row, calls, b };
+}
+
+test("host contribution reads census the exact passive operation, never observe or capture", async () => {
+	const f = passiveFixture(),
+		result = await f.reader.contributions();
+	assert.equal(result.status, "observed");
+	assert.equal(result.changes.length, 1);
+	assert.equal(result.operationId, f.checkpoint.cursor);
+	assert.deepEqual(f.calls, ["binding", "head", "list", "binding", "head"]);
+	assert.match(result.reason, /not a dirty\/unmanaged/);
+});
+
+test("passive census uses full bounded keyset pagination and underclaims truncated inventories", async (t) => {
+	const id = (n: number) => {
+		let value = n,
+			result = "";
+		for (let i = 0; i < 32; i++) {
+			result = String.fromCharCode(107 + (value % 16)) + result;
+			value = Math.floor(value / 16);
+		}
+		return result;
+	};
+	for (const count of [101, 1000])
+		await t.test(String(count), async () => {
+			const f = passiveFixture(),
+				rows = Array.from({ length: count }, (_, i) => ({ ...structuredClone(f.row), changeId: id(i + 1) }));
+			let reads = 0;
+			f.ledger.list = async (repository, workspace, after = "", limit = 100) => {
+				assert.equal(repository, f.b.repositoryId);
+				assert.equal(workspace, f.b.workspace);
+				assert.equal(limit, 100);
+				reads++;
+				return rows.filter((r) => r.changeId > after).slice(0, limit);
+			};
+			const result = await f.reader.contributions();
+			assert.equal(result.changes.length, count);
+			assert.equal(reads, count === 101 ? 2 : 10);
+			assert.equal(result.status, count === 101 ? "observed" : "unknown");
+			if (count === 1000) assert.match(result.reason, /pagination limit/);
+		});
+});
+
+test("unobserved operation intervals and lost ledger observations stay Unknown", async (t) => {
+	for (const kind of ["stale", "interval", "problem", "lost", "cursor"])
+		await t.test(kind, async () => {
+			const f = passiveFixture();
+			if (kind === "stale") f.checkpoint.cursor = "c".repeat(128);
+			if (kind === "interval") f.checkpoint.coverage = "unknown";
+			if (kind === "problem") f.checkpoint.problem = "Unprovable interval";
+			if (kind === "lost")
+				f.ledger.list = async () => {
+					throw new Error("lost reply");
+				};
+			if (kind === "cursor") f.ledger.list = async () => Array.from({ length: 100 }, () => structuredClone(f.row));
+			if (kind === "lost" || kind === "cursor") await assert.rejects(f.reader.contributions());
+			else assert.equal((await f.reader.contributions()).status, "unknown");
+		});
+});
+
+test("census rechecks operation/checkpoint and custody after async reads", async (t) => {
+	for (const kind of ["operation", "checkpoint", "custody"])
+		await t.test(kind, async () => {
+			const f = passiveFixture();
+			let reads = 0;
+			if (kind === "operation") f.ledger.head = async () => (++reads === 1 ? "b" : "c").repeat(128);
+			if (kind === "checkpoint") {
+				const original = f.ledger.binding;
+				f.ledger.binding = async () => ({ ...(await original()), cursor: (++reads === 1 ? "b" : "c").repeat(128) });
+			}
+			if (kind === "custody")
+				f.ledger.list = async () => {
+					f.b.sessionId = "replacement";
+					return [structuredClone(f.row)];
+				};
+			await assert.rejects(f.reader.contributions(), /changed|unavailable/i);
+		});
+});
+
 test("legacy/direct workers explain missing retained custody without opening a content store", async () => {
 	let touched = false;
 	const reader = new NativeReviewReader(

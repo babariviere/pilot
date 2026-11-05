@@ -14,12 +14,14 @@ export class NoRetainedBinding extends Error {}
 export class NativeReviewReader {
 	private readonly snapshots: Pick<ReviewSnapshotStore, "get" | "list" | "diff" | "read"> &
 		Partial<Pick<ReviewSnapshotStore, "identity">>;
-	private readonly ledger: Pick<JjOwnershipStore, "get"> & Partial<Pick<JjOwnershipStore, "deliveryStatus">>;
+	private readonly ledger: Pick<JjOwnershipStore, "get"> &
+		Partial<Pick<JjOwnershipStore, "deliveryStatus" | "list" | "binding" | "head">>;
 	private readonly admit: () => Promise<JjOwnershipBinding>;
 	constructor(
 		snapshots: Pick<ReviewSnapshotStore, "get" | "list" | "diff" | "read"> &
 			Partial<Pick<ReviewSnapshotStore, "identity">>,
-		ledger: Pick<JjOwnershipStore, "get"> & Partial<Pick<JjOwnershipStore, "deliveryStatus">>,
+		ledger: Pick<JjOwnershipStore, "get"> &
+			Partial<Pick<JjOwnershipStore, "deliveryStatus" | "list" | "binding" | "head">>,
 		admit: () => Promise<JjOwnershipBinding>,
 	) {
 		this.snapshots = snapshots;
@@ -65,6 +67,55 @@ export class NativeReviewReader {
 		const owned = await this.ledger.get(repositoryId, changeId);
 		if (owned.ownership.status !== "owned" || deliveryDigest(owned.ownership.binding) !== deliveryDigest(binding))
 			throw new Error("Unknown or changed retained custody");
+	}
+	/** Passive ledger census only, never observe(), capture, enrollment or a filesystem inventory. */
+	async contributions() {
+		const binding = await this.scope(),
+			ledger = this.ledger;
+		if (!ledger.list || !ledger.binding || !ledger.head) throw new Error("Passive ownership reader unavailable");
+		const checkpoint = await ledger.binding(binding.repositoryId, binding.workspace);
+		const operationId = await ledger.head(binding.path);
+		if (!checkpoint || deliveryDigest(checkpoint.binding) !== deliveryDigest(binding))
+			throw new Error("Ownership checkpoint unavailable");
+		const changes = [];
+		let after = "",
+			complete = false;
+		for (let page = 0; page < 10; page++) {
+			const rows = await ledger.list(binding.repositoryId, binding.workspace, after, 100);
+			if (rows.length > 100) throw new Error("Invalid ownership page");
+			for (const row of rows) {
+				if (row.repositoryId !== binding.repositoryId || row.changeId <= after)
+					throw new Error("Invalid ownership cursor");
+				after = row.changeId;
+				changes.push(row);
+			}
+			if (rows.length < 100) {
+				complete = true;
+				break;
+			}
+		}
+		await this.check(binding);
+		const current = await ledger.binding(binding.repositoryId, binding.workspace);
+		const currentOperation = await ledger.head(binding.path);
+		await this.check(binding);
+		if (deliveryDigest(checkpoint) !== deliveryDigest(current ?? null) || operationId !== currentOperation)
+			throw new Error("Ownership/source changed during census");
+		return {
+			operationId,
+			changes,
+			status:
+				complete && checkpoint.coverage === "complete" && !checkpoint.problem && checkpoint.cursor === operationId
+					? ("observed" as const)
+					: ("unknown" as const),
+			reason: !complete
+				? "Ownership pagination limit"
+				: checkpoint.cursor !== operationId
+					? "Ledger has not observed the current operation"
+					: (checkpoint.problem ??
+						(checkpoint.coverage !== "complete"
+							? "Unobserved ownership interval"
+							: "Passive ledger at exact operation, not a dirty/unmanaged filesystem inventory")),
+		};
 	}
 	private async snapshot(snapshotId: string) {
 		identifier(snapshotId, repositoryIdPattern);

@@ -5845,6 +5845,47 @@ ${run.excerpt}`,
 	}
 
 	/** Bound/agent-owned PRs only. A discovered reference is not attached work. */
+	ownedPullRequestUrls(id: string): string[] | undefined {
+		const meta = this.metas.get(id);
+		if (!meta || this.isMissionCoordinator(id)) return undefined;
+		const excluded = new Set((meta.unboundPullRequests ?? []).map((url) => url.toLowerCase()));
+		return [
+			...new Set(
+				[...(meta.agentPullRequests ?? []), ...(meta.boundPullRequests ?? [])].map((url) => url.toLowerCase()),
+			),
+		]
+			.filter((url) => !excluded.has(url) && (this.boundPullRequestOwners.get(url) ?? id) === id)
+			.sort();
+	}
+
+	/** Host-owned source/custody fence, never a claimed repository or path from a request. */
+	codeDeliveryCustody(id: string) {
+		const meta = this.require(id);
+		return structuredClone({
+			projectId: meta.projectId,
+			cwd: meta.cwd,
+			workspace: meta.workspace ?? null,
+			continuedTo: meta.continuedTo ?? null,
+			continuationPending: meta.continuationPending ?? null,
+		});
+	}
+
+	/** Host-only, on-demand. Reuses the shared GitHub runner/budget; never starts the scheduler. */
+	async observeCodePullRequest(id: string, url: string, authorize: () => void) {
+		const scope = () => {
+			authorize();
+			const meta = this.require(id);
+			if (this.closing || !this.ownedPullRequestUrls(id)?.includes(url.toLowerCase()))
+				throw new Conflict("PR ownership unavailable");
+			return { cwd: meta.cwd, workspace: meta.workspace, projectId: meta.projectId };
+		};
+		const before = JSON.stringify(scope());
+		const result = await this.pullRequests.observeCodeDelivery(url, this.require(id).cwd);
+		if (JSON.stringify(scope()) !== before) throw new Conflict("PR source custody changed");
+		return result;
+	}
+
+	/** Cached PR objects only; unresolved ownership URLs are available separately above. */
 	ownedPullRequests(id: string): SessionPullRequest[] {
 		const meta = this.metas.get(id);
 		if (!meta || this.isMissionCoordinator(id)) return [];
