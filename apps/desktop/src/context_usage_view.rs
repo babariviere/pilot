@@ -10,10 +10,157 @@ struct Info {
     viewer: gpui_kit::WeakEntity<LocalViewer>,
     chat: String,
     generation: u64,
+    /// Token accounting disclosure, folded by default.
+    details: bool,
     _subscription: Subscription,
 }
+impl Info {
+    fn summary(
+        &self,
+        usage: &crate::context_usage::Usage,
+        stale: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::Div {
+        let muted = cx.theme().muted_foreground;
+        let mut track = muted;
+        track.a *= 0.2;
+        let figures = gpui_kit::FontFeatures(Arc::new(vec![("tnum".into(), 1)]));
+        let mut summary = div().v_flex().gap_2().min_w_0().child(
+            div()
+                .h_flex()
+                .items_end()
+                .justify_between()
+                .gap_3()
+                .min_w_0()
+                .child(
+                    ui::text(
+                        Text::Title,
+                        SharedString::from(usage.percent().unwrap_or_else(|| "Unknown".into())),
+                    )
+                    .id("context-usage-percent")
+                    .test_support()
+                    .flex_none()
+                    .font_features(figures.clone()),
+                )
+                .child(
+                    ui::text(Text::Body, SharedString::from(usage.amount()))
+                        .id("context-usage-amount")
+                        .test_support()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(muted)
+                        .font_features(figures),
+                ),
+        );
+        if let Some((used, limit)) = usage.context_pair() {
+            // Overage fills the bar; the percentage keeps the raw share.
+            let filled = (u128::from(used) * 1000 / u128::from(limit)).min(1000) as usize;
+            summary = summary.child(
+                div()
+                    .id("context-usage-meter")
+                    .test_support()
+                    .child(ui::progress_bar(&[(filled, muted)], 1000, track)),
+            );
+        }
+        let status = if stale {
+            Some("Reconnecting · may be out of date")
+        } else if usage.has_context() {
+            Some("Last report, not a live count")
+        } else {
+            None
+        };
+        summary.children(status.map(|status| {
+            ui::text(Text::Caption, status)
+                .id("context-usage-status")
+                .test_support()
+                .text_color(muted)
+        }))
+    }
+
+    fn accounting(
+        &self,
+        usage: &crate::context_usage::Usage,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> gpui_kit::AnyElement {
+        let muted = cx.theme().muted_foreground;
+        let figures = gpui_kit::FontFeatures(Arc::new(vec![("tnum".into(), 1)]));
+        // Labels truncate; numbers keep their full width and share one right edge.
+        let row = |id: (&'static str, usize), label: SharedString, values: Vec<SharedString>| {
+            div()
+                .id(id)
+                .test_support()
+                .h_flex()
+                .gap_3()
+                .min_w_0()
+                .child(
+                    ui::text(Text::Label, label)
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(muted),
+                )
+                .children(values.into_iter().enumerate().map(|(col, value)| {
+                    ui::text(Text::Label, value)
+                        .id(("context-usage-cell", id.1 * 2 + col))
+                        .test_support()
+                        .flex_none()
+                        .min_w(px(72.))
+                        .text_right()
+                        .whitespace_nowrap()
+                        .font_features(figures.clone())
+                }))
+        };
+        let mut table = div()
+            .id("context-usage-accounting")
+            .test_support()
+            .v_flex()
+            .gap_1()
+            .min_w_0()
+            .child(row(
+                ("context-usage-row", 0),
+                "In context".into(),
+                vec![SharedString::from(usage.exact())],
+            ))
+            .child(div().py_1().child(ui::rule(window, cx)));
+        match usage.accounting() {
+            Some((rows, child)) => {
+                let mut header = vec![SharedString::from("Direct")];
+                if child {
+                    header.push("Child".into());
+                }
+                table = table.child(row(("context-usage-row", 1), "Cumulative".into(), header));
+                for (ix, r) in rows.into_iter().enumerate() {
+                    let mut values = vec![SharedString::from(r.direct)];
+                    if child {
+                        values.push(r.child.into());
+                    }
+                    table = table.child(row(("context-usage-row", ix + 2), r.label.into(), values));
+                }
+                table.child(
+                    ui::text(
+                        Text::Caption,
+                        "Totals span reported turns and restarts and may be partial. Output includes reasoning.",
+                    )
+                    .id("context-usage-note")
+                    .test_support()
+                    .pt_1()
+                    .text_color(muted),
+                )
+                .into_any_element()
+            }
+            None => table
+                .child(row(
+                    ("context-usage-row", 1),
+                    "Cumulative".into(),
+                    vec!["Not reported".into()],
+                ))
+                .into_any_element(),
+        }
+    }
+}
 impl Render for Info {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let viewer = self.viewer.upgrade();
         let active = viewer.as_ref().map(|v| v.read(cx)).filter(|v| {
             v.page == Page::Chat
@@ -24,9 +171,9 @@ impl Render for Info {
             .id("context-usage-info")
             .test_support()
             .v_flex()
-            .gap_3()
+            .gap_4()
             .min_w_0();
-        if let Some(view) = active {
+        let found = active.map(|view| {
             let usage = view
                 .state
                 .chats
@@ -34,28 +181,48 @@ impl Render for Info {
                 .find(|c| c.id == self.chat && !c.local_draft)
                 .map(|c| c.context_usage.clone())
                 .unwrap_or_default();
-            content = content.child(ui::text(Text::Body, SharedString::from(view.title.clone())));
-            if view.state.status != "Connected · Local" || !view.state.list_loaded {
-                content = content.child(ui::text(
-                    Text::Caption,
-                    "Reconnecting. Figures may be out of date.",
-                ));
-            }
-            for (ix, line) in usage.lines().into_iter().enumerate() {
-                content = content.child(
-                    ui::text(
-                        if ix == 0 { Text::Body } else { Text::Caption },
-                        SharedString::from(line),
+            (
+                usage,
+                view.state.status != "Connected · Local" || !view.state.list_loaded,
+            )
+        });
+        if let Some((usage, stale)) = found {
+            let details = self.details;
+            let table = details.then(|| self.accounting(&usage, window, cx));
+            content = content.child(self.summary(&usage, stale, cx)).child(
+                div()
+                    .v_flex()
+                    .gap_2()
+                    .min_w_0()
+                    .child(
+                        // Outdent by the Kit button inset, so "Details" shares the text edge.
+                        div().h_flex().ml(px(-8.)).child(
+                            ui::action("context-usage-details", "", Action::Quiet)
+                                .accessibility_label(if details {
+                                    "Hide token details"
+                                } else {
+                                    "Show token details"
+                                })
+                                .child(
+                                    div()
+                                        .h_flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(ui::text(Text::Label, "Details"))
+                                        .child(ui::disclosure_chevron(
+                                            "context-usage-details",
+                                            details,
+                                        )),
+                                )
+                                .on_click(cx.listener(|info, _, _, cx| {
+                                    info.details = !info.details;
+                                    cx.notify();
+                                })),
+                        ),
                     )
-                    .id(("context-usage-line", ix))
-                    .test_support()
-                    .text_color(if ix == 0 {
-                        cx.theme().foreground
-                    } else {
-                        cx.theme().muted_foreground
-                    }),
-                );
-            }
+                    .children(table),
+            );
         } else {
             content = content.child(
                 ui::text(
@@ -144,12 +311,13 @@ impl LocalViewer {
             viewer: viewer.downgrade(),
             chat,
             generation: self.generation,
+            details: false,
             _subscription: cx.observe(&viewer, |_, _, cx| cx.notify()),
         });
         window.open_dialog(cx, move |dialog, _, cx| {
             crate::ui::dialog(dialog, cx)
                 .title("Context usage")
-                .w(px(440.))
+                .w(px(380.))
                 .child(info.clone())
                 .footer(
                     ui::action("context-usage-done", "Done", Action::Secondary)

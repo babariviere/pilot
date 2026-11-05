@@ -20,6 +20,14 @@ fn settle(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
     }
 }
 pub fn run_context_usage_probe(cx: &mut HeadlessAppContext) {
+    // Longest exact count, plus children that reported only zeros.
+    fn fixture() -> crate::context_usage::Usage {
+        crate::context_usage::Usage::read(
+            &json!({"context":{"tokens":42600,"contextWindow":200000},"ai":{
+            "direct":{"tokens":{"input":9_007_199_254_740_991u64,"output":1200,"cacheRead":9_733_376,"cacheWrite":0}},
+            "child":{"tokens":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}}}),
+        )
+    }
     let captures = std::env::var_os("PILOT_NEXT_CONTEXT_USAGE_DIR").map(std::path::PathBuf::from);
     if let Some(p) = &captures {
         std::fs::create_dir_all(p).unwrap();
@@ -47,11 +55,21 @@ pub fn run_context_usage_probe(cx: &mut HeadlessAppContext) {
                 v.editor.update(cx, |e, cx| e.shell_probe_setup(writer, w, cx));
                 v.state.status = "Connected · Local".into();
                 v.state.list_loaded = true;
-                Arc::make_mut(&mut v.state.chats)[0].context_usage = crate::context_usage::Usage::read(&json!({"context":{"tokens":42600,"contextWindow":200000},"ai":{"direct":{"tokens":{"input":120000,"output":1200,"cacheRead":80000,"cacheWrite":0}}}}));
+                Arc::make_mut(&mut v.state.chats)[0].context_usage = fixture();
+                // The popup omits the chat title, so a long one cannot crowd it.
+                v.title = "Make app updates save drafts and settle pending saves automatically, with a very long Unicode title: 日本語のタイトル".repeat(3);
                 v
             }))).unwrap();
             settle(cx, h);
             meter::states(cx, h, &view, captures.as_deref(), width, dark);
+            cx.update_window(h, |_, _, cx| {
+                view.update(cx, |v, cx| {
+                    Arc::make_mut(&mut v.state.chats)[0].context_usage = fixture();
+                    cx.notify();
+                })
+            })
+            .unwrap();
+            settle(cx, h);
             // The disclosure must not steal or commit active composer preedit.
             let input = cx.update(|cx| view.read(cx).editor.read(cx).shell_probe().0);
             cx.update_window(h, |_, w, cx| {
@@ -97,16 +115,95 @@ pub fn run_context_usage_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(h, |_, w, _| {
                 let pane = w.find("context-usage-info").bounds();
                 assert!(pane.size.width > px(200.));
-                assert!(w.find(("context-usage-line", 0usize)).visible());
+                for id in [
+                    "context-usage-percent",
+                    "context-usage-amount",
+                    "context-usage-meter",
+                    "context-usage-status",
+                ] {
+                    let b = w.find(id).bounds();
+                    assert!(w.find(id).visible(), "{id}");
+                    assert!(
+                        b.left() >= pane.left() && b.right() <= pane.right(),
+                        "{id} fits"
+                    );
+                }
                 assert!(
-                    w.find(("context-usage-line", 4usize)).bounds().bottom()
-                        < w.viewport_size().height
+                    pane.size.height < px(160.),
+                    "Folded summary stays compact: {:?}",
+                    pane.size
+                );
+                assert!(
+                    w.try_find("context-usage-accounting").is_none(),
+                    "Details start folded"
+                );
+                assert!(
+                    w.find("context-usage-details")
+                        .label()
+                        .unwrap()
+                        .contains("Show")
                 );
                 assert_eq!(
                     w.find("conversation-editor").bounds(),
                     before,
                     "Disclosure must not resize composer or transcript"
                 );
+            })
+            .unwrap();
+            crate::icon_probe::assert_disclosure_chevron(cx, h, "context-usage-details", false);
+            // Keyboard: reach Details, open it, and close the popup with Escape.
+            let mut reached = false;
+            for _ in 0..12 {
+                reached = cx
+                    .update_window(h, |_, w, cx| {
+                        if w.find("context-usage-details").focused() == Some(true) {
+                            return true;
+                        }
+                        w.focus_next(cx);
+                        w.render_frame(cx);
+                        w.find("context-usage-details").focused() == Some(true)
+                    })
+                    .unwrap();
+                if reached {
+                    break;
+                }
+            }
+            assert!(reached, "Details is keyboard reachable");
+            // Enter is the dialog's own Confirm binding; Space activates the focused button.
+            cx.update_window(h, |_, w, cx| w.press("space", cx))
+                .unwrap();
+            settle(cx, h);
+            if let Some(p) = &captures {
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(p.join(format!(
+                        "context-details-{width}-{}.png",
+                        if dark { "dark" } else { "light" }
+                    )))
+                    .unwrap();
+            }
+            crate::icon_probe::assert_disclosure_chevron(cx, h, "context-usage-details", true);
+            cx.update_window(h, |_, w, _| {
+                let pane = w.find("context-usage-info").bounds();
+                let table = w.find("context-usage-accounting").bounds();
+                assert!(table.bottom() < w.viewport_size().height);
+                assert!(table.left() >= pane.left() && table.right() <= pane.right());
+                assert!(
+                    w.find("context-usage-details")
+                        .label()
+                        .unwrap()
+                        .contains("Hide")
+                );
+                // Numbers share one right edge, including the longest exact count.
+                let edge = w.find(("context-usage-cell", 0usize)).bounds().right();
+                for row in 1..6usize {
+                    let cell = w.find(("context-usage-cell", row * 2)).bounds();
+                    assert_eq!(cell.right(), edge, "row {row} aligned");
+                    assert!(cell.left() >= pane.left(), "row {row} fits");
+                }
+                // All-zero children are hidden, not shown as a column of zeros.
+                assert!(w.try_find(("context-usage-cell", 3usize)).is_none());
+                assert!(w.find("context-usage-note").visible());
             })
             .unwrap();
             if let Some(p) = &captures {
@@ -155,8 +252,8 @@ pub fn run_context_usage_probe(cx: &mut HeadlessAppContext) {
                             .find(|c| c.id == "synthetic-two")
                             .unwrap()
                             .context_usage
-                            .lines()[0]
-                            .contains("Unknown / Unknown")
+                            .exact()
+                            == "Unknown / Unknown"
                     );
                     v.selected = Some("synthetic".into());
                     cx.notify();
@@ -166,7 +263,7 @@ pub fn run_context_usage_probe(cx: &mut HeadlessAppContext) {
             settle(cx, h);
             cx.update_window(h, |_, w, cx| {
                 assert!(w.find("context-usage-changed").visible());
-                assert!(w.try_find(("context-usage-line", 0usize)).is_none());
+                assert!(w.try_find("context-usage-percent").is_none());
                 w.click("context-usage-done", cx);
             })
             .unwrap();

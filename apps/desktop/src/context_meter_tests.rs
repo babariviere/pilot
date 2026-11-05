@@ -21,20 +21,19 @@ fn comparable_report_only_never_history_efficiency_or_wire_percent() {
     ))
     .unwrap();
     assert_eq!(m.ratio, 0.42);
-    assert!(m.description.contains("42 / 100 tokens (42.0%)"));
-    assert!(m.description.contains("Freshness unknown"));
+    assert_eq!(m.description, "Context 42% · 42 / 100 tokens (last report)");
 }
 
 #[test]
 fn zero_is_reported_and_overage_keeps_raw_counts_and_percent() {
-    for (used, ratio, percent) in [(0, 0., "0.0%"), (150, 1., "150.0%")] {
+    for (used, ratio, percent) in [(0, 0., "0%"), (150, 1., "150%")] {
         let m = Meter::reported(&Usage::read(
             &json!({"context":{"tokens":used,"contextWindow":100}}),
         ))
         .unwrap();
         assert_eq!(m.ratio, ratio);
         assert!(m.description.contains(percent));
-        assert_eq!(m.description.contains("gauge capped"), used > 100);
+        assert!(m.description.contains(&format!("{used} / 100 tokens")));
     }
     // No merge of one report's used value with another report's window.
     assert!(Meter::reported(&Usage::read(&json!({"context":{"tokens":10}}))).is_none());

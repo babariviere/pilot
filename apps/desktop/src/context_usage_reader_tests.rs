@@ -5,13 +5,18 @@ async fn context_usage_follows_only_canonical_summary_and_clears_missing_worker_
     let mock = Mock::start(Scenario::ContextUsage).await;
     let (client, rx) = LocalClient::start(mock.options.clone());
     let first = until(&rx, |v| v.list_loaded).await;
-    assert!(first.chats[0].context_usage.lines()[0].contains("Unknown / Unknown"));
+    assert!(
+        first.chats[0]
+            .context_usage
+            .exact()
+            .contains("Unknown / Unknown")
+    );
     for expected in ["42 / 100", "80 / 100", "Unknown / Unknown"] {
         mock.step.send(()).await.unwrap();
         let next = until(&rx, |v| {
             v.chats
                 .iter()
-                .any(|c| c.id == "a" && c.context_usage.lines()[0].contains(expected))
+                .any(|c| c.id == "a" && c.context_usage.exact().contains(expected))
         })
         .await;
         assert!(
@@ -20,7 +25,7 @@ async fn context_usage_follows_only_canonical_summary_and_clears_missing_worker_
                 .find(|c| c.id == "b")
                 .unwrap()
                 .context_usage
-                .lines()[0]
+                .exact()
                 .contains("Unknown / Unknown")
         );
     }

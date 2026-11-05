@@ -14,7 +14,7 @@ pub(super) fn states(
         (
             "reported",
             json!({"context":{"tokens":42600,"contextWindow":200000}}),
-            Some("21.3%"),
+            Some("21%"),
         ),
         ("unknown", json!({}), None),
         (
@@ -26,12 +26,12 @@ pub(super) fn states(
         (
             "zero",
             json!({"context":{"tokens":0,"contextWindow":200000}}),
-            Some("0.0%"),
+            Some("0%"),
         ),
         (
             "overlimit",
             json!({"context":{"tokens":240000,"contextWindow":200000}}),
-            Some("120.0%"),
+            Some("120%"),
         ),
     ] {
         cx.update_window(h, |_, _, cx| {
@@ -88,7 +88,7 @@ pub(super) fn states(
                 "known and unknown usage share one gauge"
             );
             if let Some(percent) = expected {
-                assert!(control.label().unwrap().contains("Freshness unknown"));
+                assert!(control.label().unwrap().contains("last report"));
                 assert!(control.label().unwrap().contains(percent));
                 let ring = w.find("context-meter-ring").bounds();
                 assert_eq!(ring.size, size(px(14.), px(14.)));
@@ -104,8 +104,23 @@ pub(super) fn states(
         })
         .unwrap();
         settle(cx, h);
-        cx.update_window(h, |_, w, _| assert!(w.find("context-usage-info").visible()))
-            .unwrap();
+        cx.update_window(h, |_, w, _| {
+            assert!(w.find("context-usage-info").visible());
+            assert!(w.find("context-usage-percent").visible());
+            // Only a comparable report draws a meter; unknown never reads as empty.
+            assert_eq!(
+                w.try_find("context-usage-meter").is_some(),
+                expected.is_some(),
+                "{name}"
+            );
+            // Partial reports keep their known side and a status line.
+            assert_eq!(
+                w.try_find("context-usage-status").is_some(),
+                name != "unknown",
+                "{name}"
+            );
+        })
+        .unwrap();
         if let Some(p) = captures {
             cx.capture_screenshot(h)
                 .unwrap()
@@ -161,7 +176,7 @@ pub(super) fn states(
     settle(cx, h);
     cx.update_window(h, |_, w, cx| {
         assert!(w.find("context-usage-changed").visible());
-        assert!(w.try_find(("context-usage-line", 0usize)).is_none());
+        assert!(w.try_find("context-usage-percent").is_none());
         w.press("escape", cx);
         view.update(cx, |v, cx| {
             v.generation -= 1;

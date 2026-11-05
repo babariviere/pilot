@@ -18,17 +18,11 @@ impl Meter {
     pub(crate) fn reported(usage: &Usage) -> Option<Self> {
         let (used, limit) = usage.context_pair()?;
         let ratio = used as f64 / limit as f64;
+        let percent = usage.percent()?;
         Some(Self {
             ratio: ratio.clamp(0., 1.) as f32,
-            description: format!(
-                "{}. Freshness unknown.{} Open Context details.",
-                usage.context_line(),
-                if used > limit {
-                    " Report exceeds the reported window; gauge capped at 100%."
-                } else {
-                    ""
-                }
-            ),
+            // Short tooltip and accessible name; the popup holds exact counts.
+            description: format!("Context {percent} · {} (last report)", usage.amount()),
         })
     }
     /// Fixed native geometry, neutral semantic ink, no clock or transition.
