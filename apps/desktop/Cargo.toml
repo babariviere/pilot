@@ -143,12 +143,12 @@ harness = false
 required-features = ["native-probes"]
 
 [patch.crates-io]
-gpui-pre = { path = ".patched/gpui-pre-0.3.10" }
-gpui-pre-macos = { path = ".patched/gpui-pre-macos-0.3.10" }
-gpui-pre-apple = { path = ".patched/gpui-pre-apple-0.3.10" }
-gpui-pre-linux = { path = ".patched/gpui-pre-linux-0.3.10" }
-gpui-base = { path = ".patched/gpui-base-0.8.1" }
-gpui-component = { path = ".patched/gpui-component-0.8.1" }
+gpui-pre = { path = ".patched/gpui-pre-0.3.11" }
+gpui-pre-macos = { path = ".patched/gpui-pre-macos-0.3.11" }
+gpui-pre-apple = { path = ".patched/gpui-pre-apple-0.3.11" }
+gpui-pre-linux = { path = ".patched/gpui-pre-linux-0.3.11" }
+gpui-base = { path = ".patched/gpui-base-0.9.0" }
+gpui-component = { path = ".patched/gpui-component-0.9.0" }
 
 [[test]]
 name = "native_review"
@@ -159,7 +159,7 @@ required-features = ["native-probes"]
 [dependencies]
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["registry", "std"] }
-gpui-kit = "=0.8.1"
+gpui-kit = "=0.9.0"
 lyon_tessellation = "=1.0.23"
 async-channel = "=2.5.0"
 futures-util = "=0.3.34"
@@ -185,7 +185,7 @@ tokio-tungstenite = { version = "=0.30.0", default-features = false, features = 
 sha2 = "=0.11.1"
 
 [dev-dependencies]
-gpui-kit = { version = "=0.8.1", features = ["test-support"] }
+gpui-kit = { version = "=0.9.0", features = ["test-support"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 pilot-desktop-updater = { path = "updater", features = ["native-linux"] }

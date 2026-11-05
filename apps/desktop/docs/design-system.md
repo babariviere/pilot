@@ -475,7 +475,7 @@ not contact a daemon, change a profile or operate the installed app/service.
 ### Retained Review
 
 Mission detail's Review tab (`native_review_view`/`native_review_render`) composes the existing
-page/header, Kit Selects and Kit0.8.1 Diff. It adds no sidebar destination or Inbox attention.
+page/header, Kit Selects and Kit Diff. It adds no sidebar destination or Inbox attention.
 The summary has one bounded scroll owner, with exact IDs and optional reported evidence in
 disclosures; the virtualized diff fills the remaining viewport. Unified/Split, file choice,
 selection/copy and Before/After retained source share the immutable comparison. Escape/Back

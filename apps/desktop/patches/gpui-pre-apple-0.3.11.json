@@ -1,8 +1,8 @@
 {
   "crate": "gpui-pre-apple",
-  "version": "0.3.10",
-  "archiveSha256": "e97cd068d8134b4e073321b946491760aa1e4511e486084a92e73b9174bff78a",
-  "upstream": "https://crates.io/crates/gpui-pre-apple/0.3.10",
+  "version": "0.3.11",
+  "archiveSha256": "8c0bea8ffa563d3a1ada533e148bb55be7fb873c178979e889a3d1204f8e1b91",
+  "upstream": "https://crates.io/crates/gpui-pre-apple/0.3.11",
   "purpose": "Opt-in main-run-loop foreground dispatch for the macOS deferred termination hook. AppKit's nested terminate loop cannot service a main-dispatch callback that is already on the stack. Background dispatch and apps without the hook retain upstream behavior.",
   "edits": [
     {

@@ -1,8 +1,8 @@
 {
   "crate": "gpui-component",
-  "version": "0.8.1",
-  "archiveSha256": "46ce53430332e30f303364eaabfa10ed2aa23dfaf2a147e04370e0e9c423578b",
-  "upstream": "https://crates.io/crates/gpui-component/0.8.1",
+  "version": "0.9.0",
+  "archiveSha256": "45bbfdba0efa392190f2fd446ec311325302eb047d5ce45dc1bcf189cb18f5eb",
+  "upstream": "https://crates.io/crates/gpui-component/0.9.0",
   "purpose": "Reader anchor hold, event-derived list/bounce/scrollbar notification and opt-in suppression of row hover fill; defaults unchanged. Select search-input access for app-owned preedit fencing; no default input behavior change. Optional per-scroller visibility mode; defaults unchanged. Optional delegate-provided list row/header heights for mixed-height rows; defaults unchanged.",
   "edits": [
     {

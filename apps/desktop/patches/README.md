@@ -15,9 +15,17 @@ See [large tool source measurements](../docs/tool-source-performance.md).
 
 These are isolated desktop-prototype edits to published, pinned sources, not registry/cache
 edits, an upstream fork or a framework upgrade. The application still imports
-GPUI exclusively through Kit 0.8.1 re-exports, with baseline GPUI 0.3.10.
+GPUI exclusively through Kit 0.9.0 re-exports, with baseline GPUI 0.3.11.
 
-Native glass uses three narrow `gpui-pre{,-macos,-linux}-0.3.10.json` patches:
+The 0.9.0 migration keeps the scoped behavior below. Upstream now avoids resolving
+window selection during selectable-text paint, so the five old local edits for
+that workaround are removed. GPUI 0.3.11 also supplies surface-local Wayland
+regions and resize updates. The migrated Linux patch retains explicit live blur
+capability/hotplug checks and request lifetimes, using upstream rounded regions;
+it does not enable unqualified Linux support. See the dated
+[dependency audit addendum](../docs/rust-dependency-audit.md#gpui-kit-090-update-2026-11-05).
+
+Native glass uses three narrow `gpui-pre{,-macos,-linux}-0.3.11.json` patches:
 a default-false window capability, public macOS Reduce Transparency observation,
 and explicit KDE/ext Wayland blur regions with live capability/lifetime handling.
 No X11 path or compositor-policy changes. See
@@ -30,7 +38,7 @@ platform patch. `applicationWillTerminate:` remains observation, not a veto.
 The application subclass coalesces reentrant `terminate:` calls before AppKit
 can bypass its delegate while another request is pending.
 
-`gpui-pre-apple-0.3.10.json` enables common-run-loop foreground wakes only when
+`gpui-pre-apple-0.3.11.json` enables common-run-loop foreground wakes only when
 that hook is installed. An actual hidden native fixture demonstrated why:
 AppKit's deferred termination runs a nested loop, and a `terminate:` already on
 the main dispatch queue prevents that queue from delivering the courier drain.
@@ -44,9 +52,9 @@ it makes no performance, native-input or broad modal-UI qualification claim.
 See [`application-quit.md`](../docs/application-quit.md) for the actual native
 request/reply corpus, original red test and remaining limits.
 
-`gpui-base-0.8.1.json` records exact preimages/replacements and the original
+`gpui-base-0.9.0.json` records exact preimages/replacements and the original
 crates.io archive SHA-256. `scripts/prepare-patches.py` verifies that archive,
-extracts it into ignored `.patched/gpui-base-0.8.1`, checks every edit count,
+extracts it into ignored `.patched/gpui-base-0.9.0`, checks every edit count,
 and fingerprints generated inputs. It refuses to overwrite changed generated
 files. Never edit `.patched` by hand, Cargo's registry or the shared cache.
 Change the tracked edit specification instead. The extracted crate retains
@@ -138,7 +146,7 @@ Four additional exact edits to Base state add the opt-out
 `TextViewState::images_enabled(false)`. It replaces the document image source
 with one inert missing embedded asset, for both layout measurement and paint.
 Remote, file and data URLs therefore never reach the default resolver. The
-Component wrapper has no image-policy forwarding method in 0.8.1; owning the
+Component wrapper has no image-policy forwarding method in 0.9.0; owning the
 policy in retained Base state keeps Component styling and built-in fade intact.
 The default remains enabled for other callers. A fake HTTP-client regression
 checks zero image requests while rendering a remote Markdown image in live mode.
@@ -149,7 +157,7 @@ historical checksum is not the current image-policy specification checksum.
 
 ## Reader-controlled work disclosures
 
-`gpui-component-0.8.1.json` pins the original Component archive separately and
+`gpui-component-0.9.0.json` pins the original Component archive separately and
 contains seventeen exact edits across two files: thirteen to its message scroller
 and four for an opt-in `ListItem::hover_fill(false)`. The original
 `pause_following_tail(cx)` forwarding method remains available. A separate
@@ -198,7 +206,7 @@ Native history checks compare active/idle pixels and exercise real wheel/drag.
 
 ## Retained-layout cleanup
 
-Base 0.8.1 now owns a destruction epoch and a coalesced UI cleanup task, including
+Base owns a destruction epoch and a coalesced UI cleanup task, including
 states dropped on a parser thread. The migrated patch uses those upstream
 mechanisms instead of the previous local zero-sized lifetime marker. Each UI
 thread remembers its last completed sweep epoch and skips redundant walks when

@@ -1,8 +1,8 @@
 {
   "crate": "gpui-pre",
-  "version": "0.3.10",
-  "archiveSha256": "df4b5f8d0c278308df2f11e0bfe0212dd77d7848ce1bdc4b9d513334414396f6",
-  "upstream": "https://crates.io/crates/gpui-pre/0.3.10",
+  "version": "0.3.11",
+  "archiveSha256": "9303c771abf2acff2a96d706f69d9a82088c4770173a07cce88f0002431d887d",
+  "upstream": "https://crates.io/crates/gpui-pre/0.3.11",
   "purpose": "Expose native background blur capability. Unsupported and headless platforms default to opaque. Add an opt-in asynchronous macOS should-terminate owner, separate from shutdown observers.",
   "edits": [
     {

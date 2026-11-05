@@ -1,8 +1,8 @@
 {
   "crate": "gpui-pre-macos",
-  "version": "0.3.10",
-  "archiveSha256": "7e07a5e5c84f0b2160c194a1c852cc89d1942db66867938ceabcd7f763cb4386",
-  "upstream": "https://crates.io/crates/gpui-pre-macos/0.3.10",
+  "version": "0.3.11",
+  "archiveSha256": "d7410cfdaa1fa55a414346cc492d18ce340e3a8b6d0ac3213b984ed690c82b92",
+  "upstream": "https://crates.io/crates/gpui-pre-macos/0.3.11",
   "purpose": "Keep the existing native NSVisualEffectView material, with live Reduce Transparency capability/appearance notifications and observer teardown. Add the deferred AppKit should-terminate request/reply boundary, coalescing duplicate requests and retaining will-terminate as observation.",
   "edits": [
     {

@@ -209,83 +209,82 @@ fn config(dark: bool, fonts: bool) -> Rc<ThemeConfig> {
     let error = if dark { "#f87171" } else { "#dc2626" };
     let s = |value: &'static str| Some(SharedString::from(value));
     let accent = accent(dark);
-    Rc::new(ThemeConfig {
-        name: if dark {
-            "Desktop dark".into()
+    let mut config = ThemeConfig::default();
+    config.name = if dark {
+        "Desktop dark".into()
+    } else {
+        "Desktop light".into()
+    };
+    config.mode = if dark {
+        ThemeMode::Dark
+    } else {
+        ThemeMode::Light
+    };
+    config.font_size = Some(14.);
+    config.mono_font_size = Some(13.);
+    config.font_family = fonts.then(|| UI_FONT.into());
+    config.mono_font_family = fonts.then(|| CODE_FONT.into());
+    config.radius = Some(Radius::CONTROL as usize);
+    config.radius_lg = Some(Radius::CARD as usize);
+    config.shadow = Some(false);
+    config.colors = {
+        let mut colors = ThemeConfigColors::default();
+        colors.background = s(page);
+        colors.foreground = s(ink);
+        colors.sidebar = s(sidebar);
+        colors.sidebar_foreground = s(ink);
+        colors.sidebar_border = s(border);
+        colors.muted = s(muted);
+        colors.muted_foreground = s(meta);
+        colors.border = s(border);
+        colors.input = s(border);
+        colors.ring = s("#00000000");
+        colors.primary = s(accent.fill);
+        colors.primary_hover = s(accent.hover);
+        colors.primary_active = s(accent.pressed);
+        colors.primary_foreground = s(accent.on_fill);
+        colors.caret = s(accent.fill);
+        colors.secondary = s(muted);
+        colors.secondary_hover = s(selected);
+        colors.secondary_foreground = s(ink);
+        // Kit's off track falls back to the translucent secondary, which nearly vanishes on
+        // the tray. An opaque track (and in dark a light thumb) keeps an off switch readable.
+        if dark {
+            colors.switch = s("#737b88");
+            colors.switch_thumb = s("#e9edf3");
         } else {
-            "Desktop light".into()
-        },
-        mode: if dark {
-            ThemeMode::Dark
-        } else {
-            ThemeMode::Light
-        },
-        font_size: Some(14.),
-        mono_font_size: Some(13.),
-        font_family: fonts.then(|| UI_FONT.into()),
-        mono_font_family: fonts.then(|| CODE_FONT.into()),
-        radius: Some(Radius::CONTROL as usize),
-        radius_lg: Some(Radius::CARD as usize),
-        shadow: Some(false),
-        colors: {
-            let mut colors = ThemeConfigColors::default();
-            colors.background = s(page);
-            colors.foreground = s(ink);
-            colors.sidebar = s(sidebar);
-            colors.sidebar_foreground = s(ink);
-            colors.sidebar_border = s(border);
-            colors.muted = s(muted);
-            colors.muted_foreground = s(meta);
-            colors.border = s(border);
-            colors.input = s(border);
-            colors.ring = s("#00000000");
-            colors.primary = s(accent.fill);
-            colors.primary_hover = s(accent.hover);
-            colors.primary_active = s(accent.pressed);
-            colors.primary_foreground = s(accent.on_fill);
-            colors.caret = s(accent.fill);
-            colors.secondary = s(muted);
-            colors.secondary_hover = s(selected);
-            colors.secondary_foreground = s(ink);
-            // Kit's off track falls back to the translucent secondary, which nearly vanishes on
-            // the tray. An opaque track (and in dark a light thumb) keeps an off switch readable.
-            if dark {
-                colors.switch = s("#737b88");
-                colors.switch_thumb = s("#e9edf3");
-            } else {
-                colors.switch = s("#c3cad5");
-            }
-            colors.button = s(page);
-            colors.button_foreground = s(ink);
-            colors.button_hover = s(muted);
-            colors.button_active = s(selected);
-            colors.list = s(sidebar);
-            colors.list_active = s(muted);
-            colors.list_active_border = s("#00000000");
-            colors.list_hover = s(muted);
-            // Scrollbar tracks stay see-through over every surface; only the thumb paints.
-            colors.scrollbar = s("#00000000");
-            colors.accent = s(muted);
-            colors.accent_foreground = s(ink);
-            colors.selection = s(accent.selection);
-            colors.danger = s(error);
-            colors.danger_foreground = s(page);
-            colors.popover = s(card);
-            colors.popover_foreground = s(ink);
-            colors.link = s(accent.fill);
-            colors.link_active = s(accent.pressed);
-            colors.chart_1 = s(if dark { "#60A5FA" } else { "#2563EB" });
-            colors.success = s(if dark { "#34D399" } else { "#047857" });
-            colors.warning = s(if dark { "#FBBF24" } else { "#B45309" });
-            colors.chart_2 = s(if dark { "#FBBF24" } else { "#D97706" });
-            colors.chart_3 = s(if dark { "#34D399" } else { "#059669" });
-            colors.chart_4 = s(if dark { "#A78BFA" } else { "#7C3AED" });
-            colors.chart_5 = s(if dark { "#FB7185" } else { "#E11D48" });
-            colors.link_hover = s(accent.hover);
-            colors
-        },
-        ..Default::default()
-    })
+            colors.switch = s("#c3cad5");
+        }
+        colors.button = s(page);
+        colors.button_foreground = s(ink);
+        colors.button_hover = s(muted);
+        colors.button_active = s(selected);
+        colors.list = s(sidebar);
+        colors.list_active = s(muted);
+        colors.list_active_border = s("#00000000");
+        colors.list_hover = s(muted);
+        // Scrollbar tracks stay see-through over every surface; only the thumb paints.
+        colors.scrollbar = s("#00000000");
+        colors.accent = s(muted);
+        colors.accent_foreground = s(ink);
+        colors.selection = s(accent.selection);
+        colors.danger = s(error);
+        colors.danger_foreground = s(page);
+        colors.popover = s(card);
+        colors.popover_foreground = s(ink);
+        colors.link = s(accent.fill);
+        colors.link_active = s(accent.pressed);
+        colors.chart_1 = s(if dark { "#60A5FA" } else { "#2563EB" });
+        colors.success = s(if dark { "#34D399" } else { "#047857" });
+        colors.warning = s(if dark { "#FBBF24" } else { "#B45309" });
+        colors.chart_2 = s(if dark { "#FBBF24" } else { "#D97706" });
+        colors.chart_3 = s(if dark { "#34D399" } else { "#059669" });
+        colors.chart_4 = s(if dark { "#A78BFA" } else { "#7C3AED" });
+        colors.chart_5 = s(if dark { "#FB7185" } else { "#E11D48" });
+        colors.link_hover = s(accent.hover);
+        colors
+    };
+    Rc::new(config)
 }
 pub fn init_appearance(cx: &mut App) {
     cx.set_global(CommittedAppearance::default());

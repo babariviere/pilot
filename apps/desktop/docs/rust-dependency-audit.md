@@ -167,3 +167,71 @@ Linux/aarch64 normal desktop/worker all-target compilation passes. Independent
 native-Linux updater and Power all-target Clippy pass; ten ZIP admission tests
 and the Power synthetic suite pass. No real session bus, compositor, service,
 sleep policy, installation or release was changed.
+
+## GPUI-Kit 0.9.0 update (2026-11-05)
+
+The authoritative [crates.io sparse index](https://index.crates.io/gp/ui/gpui-kit)
+reports **0.9.0**, published 2026-11-02, as the newest non-yanked stable release.
+The [upstream release and migration notes](https://github.com/longbridge/gpui-kit/releases/tag/v0.9.0)
+agree. Desktop normal/dev and GPUI comparison pins are now `=0.9.0`, with both
+lockfiles updated by targeted `cargo update -p gpui-kit --precise 0.9.0`.
+The earlier audit and measurements above remain historical evidence.
+
+Required GPUI-pre moves from 0.3.10 to **0.3.11**. All six existing checksummed
+patch specifications are migrated, without editing Cargo's registry. Base and
+Component are 0.9.0. Theme structs are now non-exhaustive: the app initializes
+`ThemeConfig::default()` and assigns its existing fields, preserving the palette,
+fonts, sizing and controls. Window text systems are now UI-thread-local `Rc`;
+the app already keeps those calls on that thread. Its font enumeration still
+uses the separate thread-safe application text system. App transitions already
+use the executor clock, as GPUI animations now do.
+
+The comparison now also shares the Apple dispatcher patch: its already-patched
+macOS platform calls `enable_termination_run_loop`, so mixing that platform with
+an unpatched dispatcher does not compile. The hook remains opt-in; this does
+not install a termination handler or change the comparison's run-loop policy.
+
+Upstream includes the selectable-text paint fix, so five old local workaround
+edits are removed. Grapheme/IME, retained selection/source maps, image policy,
+scroll anchoring and cleanup optimizations remain. Wayland now includes native
+ext-background-effect support and surface-local resize/rounded regions. The
+migrated patch keeps explicit live blur capability checks, hotplug notification
+and owned request cleanup rather than replacing them with unconditional binding.
+No X11 fallback, platform qualification or feature activation is added.
+
+Only Kit/GPUI family versions change. Newly required graph entries include ICU
+segmentation/data and macOS uniform-type identifiers; the old `metal` crate drops
+out. Desktop also locks GPUI's optional benchmark/criterion graph. Optional
+GPUI-fast becomes 0.1.13, but is not enabled. Existing unrelated locked versions,
+toolchain pins, macOS 15 minimum, native-only/Wayland guards, worker isolation and
+updater trust policy are unchanged.
+
+Fresh cargo-audit 0.22.2 against RustSec
+`26fd2d43f7280a1fb925a3743ec463017afe7119` (1,409 advisories) reports **zero
+vulnerabilities** in both migrated lockfiles. The same eight maintenance
+advisories listed above remain. Both old and new lockfiles also report the
+already-locked `async-executor 1.14.0` as yanked; this focused migration does not
+silently refresh unrelated dependencies. No advisory ignores or yanked-check
+exclusions were used. This is not a clean-maintenance or security-fix claim.
+
+Verification on macOS 27.2 arm64, pinned Rust 1.98.1, private CPU2/4GiB mbx:
+
+- Plain locked desktop and comparison builds pass; scoped desktop and comparison
+  all-target Clippy pass. Changed-file rustfmt and diff whitespace checks pass.
+- Five composer tests cover graphemes, real rope chunks, IME cancel/commit/undo,
+  UTF-16 and focus. Six appearance tests preserve themes and opaque surfaces;
+  retained-layout cleanup covers threshold liveness and cross-thread drops.
+- Hidden native catalog (680/1100, light/dark), disclosure, full history
+  (680/1100/1600), Find, Review/Diff, AppKit termination and native glass probes
+  pass. Catalog captures are synthetic real GPUI, not installed-app evidence.
+- All six patch archives and exact generated files validate. The 70 native
+  registry tests and 24 scoped-wrapper tests pass.
+
+Two cold compile attempts reached the existing check deadline before succeeding
+with warmed outputs. One contextual-scrollbar pixel assertion failed once; its
+unchanged isolated case and subsequent complete history matrix pass. No probe
+assertion, timing policy or runtime behavior was weakened to obtain that result.
+The plain desktop build retains an inherited unused `enable_probe_ready` warning;
+the large library-test link reports its compact-unwind size warning. Neither is
+claimed fixed here. Native Linux, real OS IME interaction, visible smoothness and
+production update/install qualification remain outside these isolated checks.
