@@ -345,7 +345,8 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
         self.assertEqual(len(calls), 1 + len(compiled) // 2)
         for target in ["project_memory", "session_todos", "context_usage", "task_model", "task_edit", "conversation_links", "mission_lifecycle",
                        "usage_overview", "provider_usage", "workspace_changes", "conversation_images", "queued_message", "chat_links",
-                       "question_entry", "github_events", "native_glass", "archive", "lost_ack"]:
+                       "question_entry", "github_events", "native_glass", "archive", "lost_ack",
+                       "application_quit", "chat_update", "database_access", "automation_hooks"]:
             with self.subTest(target=target):
                 self.assertIn(["test", "--locked", "--features", "native-probes", "--test", target], calls)
         self.assertIn(["test", "--locked", "--features", "native-probes", "--test", "project_creation"], calls)
@@ -485,8 +486,11 @@ class WorkflowTests(unittest.TestCase):
         native = {name for name, target in declared.items()
                   if target.get("harness") is False and name not in optional_workloads}
         source = SCRIPT.read_text()
-        registered = set(shlex.split(re.search(r'^    tests=\(([^\n]+)\)$', source, flags=re.M)[1]))
-        self.assertEqual(registered, native)
+        native_phase = source.split("  native)\n", 1)[1].split("    ;;", 1)[0]
+        assignments = re.findall(r'^    tests\+?=\(([^\n]+)\)$', native_phase, flags=re.M)
+        registered = [name for assignment in assignments for name in shlex.split(assignment)]
+        self.assertEqual(len(registered), len(set(registered)), "Duplicate native CI targets")
+        self.assertEqual(set(registered), native)
         for name, target in declared.items():
             self.assertTrue((desktop / target.get("path", f"tests/{name}.rs")).is_file(), name)
         # Cargo's auto-discovered test files need not have a [[test]] entry.

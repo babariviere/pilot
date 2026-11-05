@@ -284,6 +284,7 @@ PY
     tests=(rendering chrome visuals disclosure style scrollbar_track icons motion controls history shell navigation inbox jump workbench glass native_glass catalog settings chat_settings dogfooding_diagnostics mission project_creation subscription_limits missions native_review project_add scoped_models artifact_images artifact_gallery inline_visual delivery_diagnostics mission_inspector chat_actions questions mission_tasks composer_controls mission_activity mission_brief mission_task_create mission_update fonts mission_create chat_rename task_status mission_metadata session_failure diagnostic_repair context_usage task_model task_edit conversation_links mission_lifecycle usage_overview provider_usage workspace_changes session_file_view conversation_images queued_message mission_decisions transcript_find session_todos session_jobs session_subagents tool_diff_preview message_fold question_entry github_events compaction_events message_footer new_chat_view path_completion slash_commands native_mermaid visual_mockups chart_keyboard mission_comments mission_artifacts mission_resources side_panel native_menus daemon_upgrade chat_links project_settings project_memory knowledge mcp_status markdown_fidelity shortcuts visual_links automations slack_triage insights insights_native insights_enable)
     tests+=(archive)
     tests+=(lost_ack)
+    tests+=(application_quit chat_update database_access automation_hooks)
     args=()
     for test in "${tests[@]}"; do args+=(--test "$test"); done
     cargo test --locked --features native-probes --no-run "${args[@]}"
