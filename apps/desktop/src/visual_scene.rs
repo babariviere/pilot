@@ -504,9 +504,7 @@ impl Check {
                 }
                 let points = x.len() * v["series"].as_array().unwrap().len();
                 let plan = if points <= 2048 && self.chart_points + points > 4096 {
-                    Err(
-                        "Scene exceeds the native 4096-point chart-plan budget. Data/source retained.",
-                    )
+                    Err("Scene too large to display (4,096 points). Source is kept.")
                 } else {
                     crate::visual_chart::Chart::parse(v).map(Arc::new)
                 };
@@ -714,7 +712,7 @@ mod tests {
             scene.charts["0.4"]
                 .as_ref()
                 .unwrap_err()
-                .contains("4096-point")
+                .contains("4,096 points")
         );
         assert_eq!(
             scene.root["children"][4]["x"].as_array().unwrap().len(),

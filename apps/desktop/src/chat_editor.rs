@@ -474,7 +474,7 @@ impl ChatEditor {
             return;
         }
         if self.cache.len() >= DRAFT_CAP {
-            self.error = Some("Draft capacity reached. Existing drafts are retained.");
+            self.error = Some("Too many drafts. Existing drafts are kept.");
             cx.notify();
             return;
         }
@@ -777,9 +777,8 @@ impl ChatEditor {
             })
         });
         if !queued {
-            self.error = Some(
-                "The draft could not be discarded now. It stays retained; copy its text before retrying.",
-            );
+            self.error =
+                Some("Couldn't discard the draft. It's kept; copy its text before retrying.");
             cx.notify();
             return;
         }
@@ -956,7 +955,7 @@ impl ChatEditor {
         .tooltip(if self.waiting() {
             "Waiting for the last action to finish. Stop is unavailable until then."
         } else {
-            "Stop current work. Withdrawn queued text is kept for recovery."
+            "Stop current work. Queued text is kept for recovery."
         })
         .disabled(!self.ready() || !self.stoppable() || self.waiting() || self.error.is_some())
         .on_click(cx.listener(move |view, _, window, cx| {
@@ -1306,7 +1305,7 @@ impl ChatEditor {
             );
         }
         if self.attachments.choosing.is_some() {
-            return Some("Finish choosing images before installing. Your draft is retained.");
+            return Some("Finish choosing images before installing. Your draft is kept.");
         }
         if self.attachments.error.is_some() {
             return Some(
@@ -1924,7 +1923,7 @@ impl Render for ChatEditor {
                             .when(label != "Send", |b| b.label(label))
                             .accessibility_label(label)
                             .tooltip(if self.busy {
-                                "Steer current work (Enter). Queue a follow-up with Option-Enter. Never stops the current run."
+                                "Steer current work (Enter). Option-Enter queues a follow-up."
                             } else {
                                 "Send (Enter). Option-Enter sends as a follow-up; Shift-Enter inserts a new line."
                             })

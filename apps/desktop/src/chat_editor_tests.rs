@@ -611,7 +611,7 @@ fn update_checkpoint_retains_only_saved_unknown_and_still_needs_fresh_ack(cx: &m
                 !e.begin_update_checkpoint(11, w, cx),
                 "daemon upgrade remains strict"
             );
-            e.state.error = Some("Private state durability is unconfirmed.");
+            e.state.error = Some("Draft saves aren't confirmed.");
             assert!(!e.begin_gui_update_checkpoint(11, w, cx));
             e.state.error = None;
             let mut report = crate::interaction::DeliveryReport {

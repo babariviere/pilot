@@ -252,9 +252,7 @@ impl Chart {
             || series.len() > 12
             || x.len().checked_mul(series.len()).is_none_or(|n| n > 2048)
         {
-            return Err(
-                "Chart exceeds the native 2048-point display budget. Data/source retained.",
-            );
+            return Err("Chart too large to display (2,048 points). Source is kept.");
         }
         let scatter = kind == "scatter";
         // Each entry's category: labels in first-seen order, like Swift's
@@ -313,7 +311,7 @@ impl Chart {
                 let base = if accumulate { *stack } else { 0. };
                 let end = base + n;
                 if !end.is_finite() {
-                    return Err("Stacked chart sum exceeds finite geometry. Data/source retained.");
+                    return Err("Stacked chart values are too large to draw. Source is kept.");
                 }
                 if accumulate {
                     *stack = end;

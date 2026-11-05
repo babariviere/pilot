@@ -1146,8 +1146,7 @@ impl LocalViewer {
                 rows.clear();
             }
             PreviewState::Unavailable => {
-                view.state.status =
-                    "Local connection unavailable. Last loaded data is retained.".into();
+                view.state.status = "Can't reach Local. Showing last loaded data.".into();
                 view.state.chat_status = "Disconnected".into();
             }
             PreviewState::Conversation => {}
@@ -1182,7 +1181,7 @@ impl LocalViewer {
                 cx,
             )
         });
-        view.state.status = "Read-only captured snapshot · no live controls".into();
+        view.state.status = "Read-only snapshot".into();
         view
     }
     fn build(
@@ -1635,7 +1634,7 @@ impl LocalViewer {
                     return;
                 }
                 if view.selected.as_deref() != Some(&event.0.session) {
-                    view.state.chat_status = "Artifact owner mismatch; no lookup performed.".into();
+                    view.state.chat_status = "This artifact belongs to another chat.".into();
                     cx.notify();
                     return;
                 }
@@ -1980,7 +1979,7 @@ impl LocalViewer {
             self.nav_error = Some(if self.client.is_some() {
                 "Chat could not be opened. Try again."
             } else {
-                "This captured view cannot open another chat."
+                "This snapshot can't open other chats."
             });
             cx.notify();
             return false;
@@ -3057,7 +3056,7 @@ impl Render for LocalViewer {
                         .when(self.selected.is_some()&&!self.state.loaded,|this|this.child(div().w_full().max_w(px(crate::ui::CONVERSATION_MAX_WIDTH)).mx_auto().p_3().text_sm().text_color(cx.theme().muted_foreground).child("Loading history…")))
                         .when(self.selected.is_none(),|this|this.child(div().v_flex().flex_1().w_full().max_w(px(crate::ui::CONVERSATION_MAX_WIDTH)).mx_auto().justify_center().p_6().gap_2()
                             .child(div().font_semibold().child("Choose a chat"))
-                            .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Open a Local conversation from the sidebar, or start a new chat."))))
+                            .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Open a chat from the sidebar, or start a new one."))))
                         .when(self.selected.is_some()&&!self.artifacts_open,|this|this.child(self.transcript.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0())))
                         .when(self.artifacts_open,|this|this.child(self.artifacts.clone().cached(gpui_kit::StyleRefinement::default().size_full().min_h_0().min_w_0()))))
                     .when_some(self.chat_update_card(cx), |view, card| view.child(card))

@@ -23,7 +23,7 @@ impl DeliveryOwner<'_> {
         let Some(channels) = self.channels else {
             return if self.store.is_faulted() {
                 Err(
-                    "Private writer is fenced after an I/O failure. Keep/copy unsaved text before restart.",
+                    "Draft saving stopped after a write error. Copy unsaved text before restarting.",
                 )
             } else {
                 Ok(())
@@ -84,9 +84,7 @@ impl DeliveryOwner<'_> {
     ) -> Result<crate::project_registration::Outcome, Failure> {
         use crate::project_registration::{self, Outcome};
         if self.store.book.host != options.host() {
-            return Err(
-                "Local registration source differs from private state; no request was sent.",
-            );
+            return Err("Local changed. Nothing was sent.");
         }
         let payload = self
             .effect(project_registration::preflight(client, options, path))
@@ -164,9 +162,7 @@ impl DeliveryOwner<'_> {
     ) -> Result<crate::diagnostic_repair::Outcome, Failure> {
         use crate::diagnostic_repair::{self as repair, Action, Outcome};
         if self.store.book.host != options.host() {
-            return Ok(Outcome::Refused(
-                "Local source differs from private state. Nothing was sent.",
-            ));
+            return Ok(Outcome::Refused("Local changed. Nothing was sent."));
         }
         let operation = match action {
             Action::Start {
@@ -228,9 +224,7 @@ impl DeliveryOwner<'_> {
     ) -> Result<crate::insights::Outcome, Failure> {
         use crate::insights::{self, Action, Outcome};
         if self.store.book.host != options.host() {
-            return Ok(Outcome::Refused(
-                "Local source differs from private state. Nothing was sent.",
-            ));
+            return Ok(Outcome::Refused("Local changed. Nothing was sent."));
         }
         let (slot, operation, outcome) = match action {
             Action::Start(request) => {
@@ -398,7 +392,7 @@ impl DeliveryOwner<'_> {
         let automatic =
             !request.stop && crate::session_subagents::Target::from_key(request.key).is_none();
         if model_pending && !request.stop {
-            return Err("A model switch is unconfirmed. Draft retained.");
+            return Err("A model change is unconfirmed. Your draft is kept.");
         }
         if !automatic {
             self.effect(send_preflight(
@@ -663,7 +657,7 @@ impl DeliveryOwner<'_> {
             return Err("Choose an answer or write a reply");
         }
         if self.store.book.model_changes.contains_key(target) {
-            return Err("A model switch is unconfirmed. Question reply retained");
+            return Err("A model change is unconfirmed. Your reply is kept.");
         }
         let hello = self
             .effect(read_json(

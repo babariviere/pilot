@@ -355,8 +355,7 @@ fn retain_report(status: &mut WriteState, store: &mut Store, report: Option<Deli
         .retain(|_, r| r.retained(&store.book));
     debug_assert!(status.delivery_reports.len() <= crate::delivery_store::DRAFT_CAP + 32);
     if store.is_faulted() {
-        status.error =
-            Some("Private state write failed. Keep/copy unsaved text before restarting.");
+        status.error = Some("Couldn't save drafts. Copy unsaved text before restarting.");
     }
 }
 
@@ -379,13 +378,13 @@ fn checkpoint(
     generation: u64,
 ) -> Result<&'static str, Failure> {
     if store.is_faulted() {
-        return Err("Private state durability is unconfirmed.");
+        return Err("Draft saves aren't confirmed.");
     }
     for report in status.delivery_reports.values_mut().filter(|r| !r.saved) {
         if let Err(error) = store.record_diagnostic(&report.key, &report.delivery) {
             report.save_error = Some(private_category(store, error));
             return Err(
-                "A delivery receipt could not be saved. Free storage or resolve the draft storage error before installing.",
+                "Couldn't save a delivery record. Free storage or fix the draft save error before installing.",
             );
         }
         report.saved = true;
@@ -398,7 +397,7 @@ fn checkpoint(
 fn flush(store: &mut Store, pending: &Mutex<BTreeMap<String, Draft>>) -> Result<(), Failure> {
     if store.is_faulted() {
         return Err(
-            "Private writer is fenced after an I/O failure. Keep/copy unsaved text before restart.",
+            "Draft saving stopped after a write error. Copy unsaved text before restarting.",
         );
     }
     let batch = std::mem::take(
@@ -614,9 +613,7 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                         }) => {
                             use crate::daemon_menu::reload::{Outcome, submit};
                             let outcome = if store.book.host != options.host() {
-                                Outcome::Refused(
-                                    "Local differs from private state. Reload was not sent.",
-                                )
+                                Outcome::Refused("Local changed. Reload was not sent.")
                             } else {
                                 DeliveryOwner {
                                     store,
@@ -664,13 +661,13 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                     });
                                     if store.is_faulted() {
                                         status.error = Some(
-                                            "Private model-switch receipt could not be saved. Keep unsaved text before restarting.",
+                                            "Couldn't record the model change. Copy unsaved text before restarting.",
                                         );
                                     }
                                     Ok("")
                                 }
                                 Err(_) => Ok(
-                                    "Closing. Any admitted model switch remains unconfirmed and is never resent.",
+                                    "Closing. A model change in progress stays unconfirmed and isn't resent.",
                                 ),
                             }
                         }
@@ -683,9 +680,7 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                             });
                             publish(updates, replace, status.clone());
                             let outcome = if store.book.host != options.host() {
-                                Outcome::Refused(
-                                    "Local source differs from private state. Nothing was sent.",
-                                )
+                                Outcome::Refused("Local changed. Nothing was sent.")
                             } else {
                                 DeliveryOwner {
                                     store,
@@ -736,9 +731,9 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                     });
                                     Ok("")
                                 }
-                                Err(_) => {
-                                    Ok("Closing. Interrupted project registration is not retried.")
-                                }
+                                Err(_) => Ok(
+                                    "Closing. Adding the project was interrupted and won't be retried.",
+                                ),
                             }
                         }
                         Some(WriteCommand::Project {
@@ -764,7 +759,7 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                 owner.status.project_receipt = Some((id.clone(), created.clone()));
                             }
                             let catalog = if *owner.closing {
-                                Err("Closing. Project registration was interrupted.")
+                                Err("Closing. Adding the project was interrupted.")
                             } else {
                                 owner
                                     .effect(async {
@@ -782,14 +777,14 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                     });
                                     if store.is_faulted() {
                                         status.error = Some(
-                                            "Private state write failed; keep/copy unsaved text before restart.",
+                                            "Couldn't save drafts. Copy unsaved text before restarting.",
                                         );
                                     }
                                     Ok("")
                                 }
-                                Err(_) => {
-                                    Ok("Closing. Interrupted project registration is not retried.")
-                                }
+                                Err(_) => Ok(
+                                    "Closing. Adding the project was interrupted and won't be retried.",
+                                ),
                             }
                         }
                         Some(WriteCommand::Repair {
@@ -818,13 +813,13 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                 request,
                                 outcome: Some(result.unwrap_or(
                                     crate::diagnostic_repair::Outcome::Unknown(
-                                        "Closing. Any saved repair start stays unconfirmed and is never resent automatically.",
+                                        "Closing. A repair start in progress stays unconfirmed and isn't resent.",
                                     ),
                                 )),
                             });
                             if store.is_faulted() {
                                 status.error = Some(
-                                    "Private repair receipt could not be saved. Keep unsaved text before restarting.",
+                                    "Couldn't record the repair start. Copy unsaved text before restarting.",
                                 );
                             }
                             Ok("")
@@ -853,12 +848,12 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                             status.insights = Some(Reply {
                                 slot, request,
                                 outcome: Some(result.unwrap_or(Outcome::Unknown(
-                                    "Closing. Any saved Insights action stays unconfirmed and is never resent automatically.",
+                                    "Closing. An Insights action in progress stays unconfirmed and isn't resent.",
                                 ))),
                             });
                             if store.is_faulted() {
                                 status.error = Some(
-                                    "Private Insights receipt could not be saved. Keep unsaved text before restarting.",
+                                    "Couldn't record the Insights action. Copy unsaved text before restarting.",
                                 );
                             }
                             Ok("")
@@ -910,7 +905,7 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                             });
                             if store.is_faulted() {
                                 status.error = Some(
-                                    "Private state write failed; preserve unsaved input before restarting.",
+                                    "Couldn't save drafts. Copy unsaved text before restarting.",
                                 );
                             }
                             Ok("")
@@ -922,14 +917,14 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                             request,
                         }) => {
                             if status.handled.get(&key).is_some_and(|old| *old >= request) {
-                                Ok("This UI request was already handled.")
+                                Ok("Already handled.")
                             } else if store
                                 .book
                                 .drafts
                                 .get(&key)
                                 .is_some_and(|d| d.pending.is_some())
                             {
-                                Ok("Delivery is already pending. Check its receipt.")
+                                Ok("Already pending. Check it before sending again.")
                             } else {
                                 DeliveryOwner {
                                     store,
@@ -959,14 +954,14 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                             request,
                         }) => {
                             if status.handled.get(&key).is_some_and(|old| *old >= request) {
-                                Ok("This UI request was already handled.")
+                                Ok("Already handled.")
                             } else if store
                                 .book
                                 .drafts
                                 .get(&key)
                                 .is_some_and(|d| d.pending.is_some())
                             {
-                                Ok("Delivery is already pending. Check its receipt.")
+                                Ok("Already pending. Check it before sending again.")
                             } else {
                                 DeliveryOwner {
                                     store,
@@ -1030,9 +1025,11 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                                 .get(&id)
                                 .is_some_and(|i| i.operation.is_none())
                             {
-                                store.finish(&id,"unknown",None).map(|_|"Stop uncertainty acknowledged locally; no Stop retry was sent.")
+                                store
+                                    .finish(&id, "unknown", None)
+                                    .map(|_| "Dismissed. Stop was not sent again.")
                             } else {
-                                Err("Only an uncertain Stop can be acknowledged here")
+                                Err("Only an unconfirmed Stop can be dismissed here")
                             }
                         }
                         Some(WriteCommand::RetireCreated {
@@ -1042,13 +1039,13 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                         }) => store.retire_created(&key, revision, &target).map(|_| ""),
                         Some(WriteCommand::ClearRecovery { key, revision }) => store
                             .clear_recovery(&key, revision)
-                            .map(|_| "Recovered text removed locally."),
+                            .map(|_| "Recovered text removed."),
                         Some(WriteCommand::Discard { key, revision }) => {
                             store.discard_draft(&key, revision).map(|_| {
                                 if key.starts_with("subagent:") {
-                                    "Draft discarded locally. The earlier message may have arrived."
+                                    "Draft discarded. The earlier message may have arrived."
                                 } else {
-                                    "Draft discarded locally. Delivery may already have arrived."
+                                    "Draft discarded. The message may already have arrived."
                                 }
                             })
                         }
@@ -1179,15 +1176,11 @@ struct HttpFailure {
 impl HttpFailure {
     fn message(&self) -> Failure {
         match self.category {
-            Category::Refused => "Local request refused or unavailable; delivery is not confirmed",
-            Category::ResponseInterrupted => {
-                "Local response interrupted; delivery is not confirmed"
-            }
-            Category::TooLarge => {
-                "Local response exceeds the 4 MiB bound; delivery is not confirmed"
-            }
-            Category::Malformed => "Invalid Local reply; delivery is not confirmed",
-            _ => "Local request interrupted; delivery is not confirmed",
+            Category::Refused => "Local refused the request or is unavailable. Not confirmed sent.",
+            Category::ResponseInterrupted => "Local's reply was interrupted. Not confirmed sent.",
+            Category::TooLarge => "Local's reply exceeds 4 MiB. Not confirmed sent.",
+            Category::Malformed => "Local sent an invalid reply. Not confirmed sent.",
+            _ => "The request to Local was interrupted. Not confirmed sent.",
         }
     }
 }
@@ -1255,7 +1248,7 @@ async fn writable(
 }
 fn writable_summary(value: &Value, target: &str) -> Result<(), Failure> {
     if value["id"] != target || !crate::local_model::messageable_local(value) {
-        return Err("This Local conversation is retained, archived, continued or not writable");
+        return Err("This chat is read-only, archived or continued");
     }
     Ok(())
 }
@@ -1271,7 +1264,7 @@ async fn stoppable(
     let value =
         read_json(client.get(format!("{}/api/sessions/{target}", options.loopback()))).await?;
     if value["id"] != target || !crate::local_model::stoppable_local(&value) {
-        return Err("This Local conversation is retained, archived, continued or not writable");
+        return Err("This chat is read-only, archived or continued");
     }
     Ok(value)
 }
@@ -1285,9 +1278,7 @@ fn question_turn_ready(summary: &Value, awaited: bool) -> Result<(), Failure> {
         _ => false,
     };
     if !ready {
-        return Err(
-            "The agent turn changed or is unavailable. Question reply retained; nothing sent",
-        );
+        return Err("The agent's turn changed or ended. Your reply was kept; nothing was sent");
     }
     Ok(())
 }
@@ -1318,7 +1309,7 @@ async fn send_preflight(
     if let Some(target) = key.strip_prefix("chat:") {
         if !stop && model_pending {
             return Err(
-                "A model switch is unconfirmed. Inspect and acknowledge it before sending; the draft is retained.",
+                "A model change is unconfirmed. Review it before sending; your draft is kept.",
             );
         }
         let summary = if stop {
@@ -1340,9 +1331,7 @@ async fn send_preflight(
             && summary["missionCoordinator"] != true
             && summary["mode"] != "build"
         {
-            return Err(
-                "Image attachments require a Build chat. Ask cannot read this attachment store; the draft was not sent.",
-            );
+            return Err("Images need a Build chat. This draft was not sent.");
         }
     }
     if key.starts_with("new:") && !draft.diagnostics && !delivery_pending {
@@ -1362,16 +1351,14 @@ async fn send_preflight(
     if let Some(target) = &child_target {
         let summary = writable(client, options, &target.parent).await?;
         if !draft.attachments.is_empty() && summary["missionCoordinator"] == true {
-            return Err(
-                "Image attachments require an ordinary Build parent chat. This draft was not sent.",
-            );
+            return Err("Images need a Build parent chat. This draft was not sent.");
         }
         if !draft.attachments.is_empty() && summary["mode"] != "build" {
-            return Err("Image attachments require a Build parent chat. This draft was not sent.");
+            return Err("Images need a Build parent chat. This draft was not sent.");
         }
         let chat = crate::local_model::chat(&summary).ok_or("Subagent parent is unavailable")?;
         if target.child(&chat).is_none_or(|child| child.retired) {
-            return Err("Subagent identity changed or retired. Nothing was sent.");
+            return Err("This subagent changed or ended. Nothing was sent.");
         }
         gate(client, options).await?;
     }
@@ -1598,7 +1585,7 @@ fn ensure_owned(store: &Store, options: &LocalOptions, intent: &Intent) -> Resul
             .and_then(|d| d.pending.as_deref())
             != Some(intent.id.as_str())
     {
-        return Err("Delivery ownership changed. Original operation is retained.");
+        return Err("Delivery changed elsewhere. The original message was kept.");
     }
     Ok(())
 }
@@ -1628,7 +1615,7 @@ fn adopt_receipt(
             != serde_json::to_value(&op.destination).map_err(|_| "Invalid receipt destination")?
     {
         diagnostic.category = Category::ReceiptMismatch;
-        return Err("Receipt identity differs. Original draft and operation are retained.");
+        return Err("Delivery record doesn't match. The original draft and message were kept.");
     }
     match receipt["state"].as_str() {
         Some("pending") => {
@@ -1643,13 +1630,13 @@ fn adopt_receipt(
             Ok(if intent.automatic.is_some() {
                 "Sending…"
             } else {
-                "Pending: daemon owns this delivery. Check later; it was not posted again."
+                "Pending. The daemon has it; it wasn't sent again."
             })
         }
         Some("accepted") => {
             if receipt["result"]["sessionId"] != op.target_id {
                 diagnostic.category = Category::ReceiptMismatch;
-                return Err("Accepted receipt target differs. Draft is retained.");
+                return Err("Accepted for a different chat. Your draft was kept.");
             }
             diagnostic.category = Category::Accepted;
             diagnostic.acknowledgment = Acknowledgment::Accepted;
@@ -1659,7 +1646,7 @@ fn adopt_receipt(
                 adoption_failure(diagnostic, store, error);
                 return Err(error);
             }
-            Ok("Accepted by Local. A reply may still be streaming or queued.")
+            Ok("Accepted. A reply may still be streaming or queued.")
         }
         Some("rejected") => {
             diagnostic.category = Category::Rejected;
@@ -1670,11 +1657,11 @@ fn adopt_receipt(
                 adoption_failure(diagnostic, store, error);
                 return Err(error);
             }
-            Ok("Rejected by Local. The owning draft is retained.")
+            Ok("Rejected. Your draft was kept.")
         }
         _ => {
             diagnostic.category = Category::Malformed;
-            Err("Unknown receipt state. Original draft and operation are retained.")
+            Err("Unknown delivery state. The original draft and message were kept.")
         }
     }
 }
@@ -1690,7 +1677,7 @@ fn adoption_failure(diagnostic: &mut Diagnostic, store: &Store, error: Failure) 
 fn private_category(store: &Store, error: Failure) -> Category {
     if store.is_faulted() {
         Category::PrivateWrite
-    } else if error == "Private state is full. Nothing was discarded." {
+    } else if error == "Draft storage is full. Nothing was discarded." {
         Category::PrivateCapacity
     } else {
         Category::PrivateState

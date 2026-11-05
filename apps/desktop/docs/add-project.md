@@ -99,7 +99,7 @@ The existing atomic-write-fault case remains covered. No cap/schema/eviction or 
 change is needed; no live service/account actions were used.
 
 Negative control `c9a59bd8-6809-4ce3-bbc1-6aa40f42e4a8` failed exactly at
-`Err("Private state is full. Nothing was discarded.")` versus acknowledged `Created`,
+`Err("Draft storage is full. Nothing was discarded.")` versus acknowledged `Created`,
 on frozen `786a192c29f9bc7178635954e15da33abaadb3dc`; the earlier missing test-helper
 borrow compile failure is a separate retained receipt, not reproduction evidence.
 `e2efac33-c41d-4523-93cc-3a90db8fa023` passed matching lib Clippy and all six registration

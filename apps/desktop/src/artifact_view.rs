@@ -785,7 +785,7 @@ impl ArtifactPane {
         {
             self.snapshot.error = Some(crate::visual_runtime::Fault {
                 kind: "unavailable",
-                message: "The isolated reader ended. Retry or reopen for a fresh preview.".into(),
+                message: "Preview stopped. Retry or reopen it.".into(),
                 line: None,
                 limit: None,
             });
@@ -829,7 +829,7 @@ impl ArtifactPane {
             self.snapshot.live = false;
             self.snapshot.error = Some(crate::visual_runtime::Fault {
                 kind: "unavailable",
-                message: "Isolated preview is unavailable. Reopen it to continue.".into(),
+                message: "Preview unavailable. Reopen it to continue.".into(),
                 line: None,
                 limit: None,
             });
@@ -1202,7 +1202,7 @@ impl ArtifactPane {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if *budget < 8 {
-            return Self::note("Native display budget reached. Source is retained.");
+            return Self::note("Display limit reached. Source is kept.");
         }
         *budget -= 8;
         let kind = value["type"].as_str().unwrap_or("");
@@ -1280,9 +1280,7 @@ impl ArtifactPane {
         let text_cost = bytes.div_ceil(4);
         if text_cost > *budget {
             *budget = budget.saturating_sub(64);
-            return Self::note(
-                "Text exceeds the aggregate native display budget. Source retained.",
-            );
+            return Self::note("Text too large to display. Source is kept.");
         }
         *budget -= text_cost;
         let id = value["id"].as_str().unwrap_or(path).to_owned();
@@ -1327,7 +1325,7 @@ impl ArtifactPane {
                     .enumerate()
                 {
                     if *budget < 8 {
-                        box_ = box_.child(Self::note("Native display budget reached."));
+                        box_ = box_.child(Self::note("Display limit reached."));
                         break;
                     }
                     box_ = box_.child(self.node(child, &format!("{path}.{i}"), budget, cx));
@@ -1371,9 +1369,7 @@ impl ArtifactPane {
             "text" => {
                 let (text, highlights, families) = text_runs(value, cx);
                 if text.len() > 8192 {
-                    return Self::note(
-                        "Text exceeds the current native display limit. Copy Source retains it.",
-                    );
+                    return Self::note("Text too long to display. Copy source includes it.");
                 }
                 let size = match &value["size"] {
                     Value::Number(n) => n.as_f64().unwrap_or(15.) as f32,
@@ -1385,7 +1381,9 @@ impl ArtifactPane {
                         _ => 15.,
                     },
                 };
-                let ratio = value["lineHeight"].as_f64().map_or(LINE_HEIGHT, |n| n as f32);
+                let ratio = value["lineHeight"]
+                    .as_f64()
+                    .map_or(LINE_HEIGHT, |n| n as f32);
                 let line = (size * ratio).round();
                 let family = font_family(&value["font"], value["mono"] == true, cx);
                 div()
@@ -1433,33 +1431,67 @@ impl ArtifactPane {
                         div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child(self.text(format!("{path}-label"), value["label"].as_str().unwrap_or("").into())),
+                            .child(self.text(
+                                format!("{path}-label"),
+                                value["label"].as_str().unwrap_or("").into(),
+                            )),
                     )
                     .child(
                         div()
                             .h_flex()
                             .items_baseline()
                             .gap_1()
-                            .child(div().min_w_0().text_2xl().font_semibold()
-                                .font_features(figures.clone())
-                                .text_color(cx.theme().foreground)
-                                .child(self.text(path.into(), value["value"].as_str().unwrap_or("").into())))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .text_2xl()
+                                    .font_semibold()
+                                    .font_features(figures.clone())
+                                    .text_color(cx.theme().foreground)
+                                    .child(self.text(
+                                        path.into(),
+                                        value["value"].as_str().unwrap_or("").into(),
+                                    )),
+                            )
                             .children(value["unit"].as_str().map(|unit| {
-                                div().min_w_0().text_sm().text_color(cx.theme().muted_foreground)
+                                div()
+                                    .min_w_0()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
                                     .child(self.text(format!("{path}-unit"), unit.into()))
                             })),
                     )
-                    .when(value["delta"].is_string() || value["caption"].is_string(), |d| {
-                        d.child(div().h_flex().items_baseline().flex_wrap().gap_1p5().text_xs()
-                            .children(value["delta"].as_str().map(|delta| {
-                                div().min_w_0().font_features(figures).text_color(tone.color(cx))
-                                    .child(self.text(format!("{path}-delta"), delta.into()))
-                            }))
-                            .children(value["caption"].as_str().map(|caption| {
-                                div().min_w_0().text_color(cx.theme().muted_foreground)
-                                    .child(self.text(format!("{path}-caption"), caption.into()))
-                            })))
-                    })
+                    .when(
+                        value["delta"].is_string() || value["caption"].is_string(),
+                        |d| {
+                            d.child(
+                                div()
+                                    .h_flex()
+                                    .items_baseline()
+                                    .flex_wrap()
+                                    .gap_1p5()
+                                    .text_xs()
+                                    .children(value["delta"].as_str().map(|delta| {
+                                        div()
+                                            .min_w_0()
+                                            .font_features(figures)
+                                            .text_color(tone.color(cx))
+                                            .child(self.text(format!("{path}-delta"), delta.into()))
+                                    }))
+                                    .children(value["caption"].as_str().map(|caption| {
+                                        div()
+                                            .min_w_0()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(
+                                                self.text(
+                                                    format!("{path}-caption"),
+                                                    caption.into(),
+                                                ),
+                                            )
+                                    })),
+                            )
+                        },
+                    )
                     .into_any_element()
             }
             "rule" => div()
@@ -1619,9 +1651,7 @@ impl ArtifactPane {
                 let rows = value["rows"].as_array().unwrap();
                 let columns = value["columns"].as_array().unwrap();
                 if rows.len() * columns.len() > 1024 || rows.len() * columns.len() > *budget {
-                    return Self::note(
-                        "Table exceeds the current native display budget. Source retained.",
-                    );
+                    return Self::note("Table too large to display. Source is kept.");
                 }
                 *budget -= rows.len() * columns.len();
                 let aligns = column_aligns(columns, rows);
@@ -1682,15 +1712,30 @@ impl ArtifactPane {
                 }
                 table.into_any_element()
             }
-            "shader" => Self::note(
-                "Shader rendering is deferred. Stored shader source/translation remains intact; other nodes remain usable.",
-            ),
-            "mermaid" => self.snapshot.scene.as_ref().and_then(|scene| scene.mermaids.get(path)).map(|prepared| {
-                let cost = prepared.diagram.as_ref().map_or(128, |p| p.nodes.len()*8+p.routes.iter().map(|r|r.points.len()*2).sum::<usize>());
-                if cost > *budget { return Self::note("Diagram exceeds aggregate native display budget. Exact source is retained."); }
-                *budget -= cost;
-                crate::native_mermaid_view::Element::new(format!("mermaid-{}-{path}", cx.entity_id()), prepared.clone()).scope(self.generation).scale(scale).into_any_element()
-            }).unwrap_or_else(|| Self::note("Native diagram display limit reached (8). Exact source remains in the artifact source; no browser fallback.")),
+            "shader" => Self::note("Shaders aren't shown yet. Source is kept."),
+            "mermaid" => self
+                .snapshot
+                .scene
+                .as_ref()
+                .and_then(|scene| scene.mermaids.get(path))
+                .map(|prepared| {
+                    let cost = prepared.diagram.as_ref().map_or(128, |p| {
+                        p.nodes.len() * 8
+                            + p.routes.iter().map(|r| r.points.len() * 2).sum::<usize>()
+                    });
+                    if cost > *budget {
+                        return Self::note("Diagram too large to display. Source is kept.");
+                    }
+                    *budget -= cost;
+                    crate::native_mermaid_view::Element::new(
+                        format!("mermaid-{}-{path}", cx.entity_id()),
+                        prepared.clone(),
+                    )
+                    .scope(self.generation)
+                    .scale(scale)
+                    .into_any_element()
+                })
+                .unwrap_or_else(|| Self::note("Only 8 diagrams can be shown. Source is kept.")),
             "canvas" => {
                 let frame = self
                     .snapshot
@@ -1743,7 +1788,7 @@ impl ArtifactPane {
                         })
                         .child(icon)
                         .into_any_element(),
-                    None => Self::note("Unknown icon. Source retained."),
+                    None => Self::note("Unknown icon. Source is kept."),
                 }
             }
             "vector" => match self
@@ -1754,7 +1799,7 @@ impl ArtifactPane {
             {
                 Some(Ok(plan)) => vector(plan.clone(), cx),
                 Some(Err(message)) => Self::note(message),
-                None => Self::note("Vector plan is unavailable; source retained."),
+                None => Self::note("Drawing unavailable. Source is kept."),
             },
             "chart" => match self
                 .snapshot
@@ -1765,9 +1810,7 @@ impl ArtifactPane {
                 Some(Ok(chart)) => {
                     let points = chart.series.iter().map(|s| s.points.len()).sum::<usize>();
                     if points > *budget {
-                        Self::note(
-                            "Chart exceeds aggregate native display budget. Source retained.",
-                        )
+                        Self::note("Chart too large to display. Source is kept.")
                     } else {
                         *budget -= points;
                         let weak = cx.weak_entity();
@@ -1787,9 +1830,9 @@ impl ArtifactPane {
                     }
                 }
                 Some(Err(message)) => Self::note(message),
-                None => Self::note("Chart plan is unavailable; source retained."),
+                None => Self::note("Chart unavailable. Source is kept."),
             },
-            _ => Self::note("Unsupported native node. Source remains intact."),
+            _ => Self::note("Unsupported element. Source is kept."),
         }
     }
 }
@@ -1860,17 +1903,17 @@ impl Render for ArtifactPane {
             .is_some_and(|r| !r.visual_supported && r.reference.kind != "image");
         // One toolbar: back · title · revision, then source, copy and zoom actions.
         let provenance: SharedString = if self.mission_pin {
-            "Local · pinned mission artifact · exact stored revision".into()
+            "Pinned mission revision".into()
         } else if revision
             .as_ref()
             .is_some_and(|r| r.reference.kind == "image")
             || reference.kind == "image"
         {
-            "Local · stored raster · static preview only".into()
+            "Image · static preview".into()
         } else if unsupported {
-            "Local · current chat · stored source only".into()
+            "Source only · no preview".into()
         } else {
-            "Local · current chat · visual controls have no file/network/tool bridge".into()
+            "Offline visual · no file, network or tool access".into()
         };
         let mut header = div()
             .id("artifact-toolbar")
@@ -2129,7 +2172,7 @@ impl Render for ArtifactPane {
                             self.snapshot.scene.as_ref().map_or(0, |s| s.nodes)
                         ))));
                 if revision.reference.kind == "image" {
-                    content=content.child(self.text("artifact-source-text".into(),format!("Stored embedded image source ({} bytes). Copy source explicitly to obtain the exact data URL.\nOwner: {}\nArtifact: {}\nRevision: {}",revision.source.len(),revision.reference.session,revision.reference.id,revision.reference.revision)));
+                    content=content.child(self.text("artifact-source-text".into(),format!("Embedded image ({} bytes). Copy source for the exact data URL.\nOwner: {}\nArtifact: {}\nRevision: {}",revision.source.len(),revision.reference.session,revision.reference.id,revision.reference.revision)));
                     if let Some(raster) = &self.snapshot.raster {
                         content = content.child(self.text(
                             "artifact-source-hash".into(),
@@ -2138,7 +2181,9 @@ impl Render for ArtifactPane {
                     }
                 } else {
                     if self.mission_pin && revision.source.chars().nth(8192).is_some() {
-                        content = content.child(Self::note("Source preview shows the first 8192 characters. Copy source includes the complete stored source."));
+                        content = content.child(Self::note(
+                            "Showing the first 8,192 characters. Copy source includes all of it.",
+                        ));
                     }
                     content = content.child(self.text(
                         "artifact-source-text".into(),

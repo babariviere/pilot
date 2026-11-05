@@ -471,7 +471,7 @@ fn child(mode: String, root: PathBuf) {
                     })
                     .unwrap();
                     native_quit();
-                    wait_for(cx, &editor, &changed, |s| s.notice == "Private writer is fenced after an I/O failure. Keep/copy unsaved text before restart.").await;
+                    wait_for(cx, &editor, &changed, |s| s.notice == "Draft saving stopped after a write error. Copy unsaved text before restarting.").await;
                     native_terminate();
                     assert_eq!(decisions.recv().await.unwrap(), (2, false));
                     h.update(cx, |_, _, cx| {

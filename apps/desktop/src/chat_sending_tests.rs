@@ -296,7 +296,7 @@ fn refusal_before_reservation_restores_the_draft(cx: &mut TestAppContext) {
     let mut state = WriteState {
         book: cx.update(|cx| view.read(cx).state.book.clone()),
         error: None,
-        notice: "A model switch is unconfirmed.",
+        notice: "A model change is unconfirmed.",
         ..Default::default()
     };
     state.handled.insert("chat:a".into(), request);

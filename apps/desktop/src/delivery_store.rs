@@ -349,7 +349,7 @@ fn validate_draft(key: &str, draft: &Draft) -> Result<(), Failure> {
     if let Some(tracked) = &draft.tracked
         && (!key.starts_with("new:") || draft.diagnostics || !tracked.valid())
     {
-        return Err("Draft exceeds private state limits or is invalid");
+        return Err("Draft is too large or invalid");
     }
     if !valid_key(key)
         || draft.revision > 9_007_199_254_740_990
@@ -366,7 +366,7 @@ fn validate_draft(key: &str, draft: &Draft) -> Result<(), Failure> {
             .is_some_and(|revision| revision > draft.revision)
         || draft.created.as_deref().is_some_and(|s| !token(s))
     {
-        return Err("Draft exceeds private state limits or is invalid");
+        return Err("Draft is too large or invalid");
     }
     Ok(())
 }
@@ -426,7 +426,7 @@ impl Book {
                 .any(|(session, tracked)| !token(session) || !tracked.valid())
         {
             return Err(
-                "Private state identity/version/limits differ. Writes are disabled; original state is preserved.",
+                "Saved drafts don't match this app or Local. Saving is off; the original file is kept.",
             );
         }
         for (source, attempt) in &self.missions {
@@ -639,7 +639,7 @@ impl Store {
 
     pub(crate) fn open(root: PathBuf, host: Host) -> Result<Self, Failure> {
         if !root.exists() {
-            fs::create_dir_all(&root).map_err(|_| "Cannot create private Pilot Next state")?;
+            fs::create_dir_all(&root).map_err(|_| "Couldn't create the draft folder")?;
             fs::set_permissions(&root, fs::Permissions::from_mode(0o700))
                 .map_err(|_| "Cannot protect private state")?;
         }
@@ -649,28 +649,26 @@ impl Store {
             || metadata.mode() & 0o077 != 0
             || metadata.uid() != unsafe { libc::geteuid() }
         {
-            return Err("Private state directory must be owned, private and not a symlink");
+            return Err("The draft folder must be yours, private and not a symlink");
         }
         let mut files = 0;
         let mut bytes = 0u64;
-        for entry in fs::read_dir(&root).map_err(|_| "Cannot inspect private directory budget")? {
+        for entry in fs::read_dir(&root).map_err(|_| "Couldn't inspect the draft folder")? {
             files += 1;
             if files > 64 {
                 return Err(
-                    "Private directory contains too many files; preserve and inspect it before retrying",
+                    "The draft folder has too many files. Keep and inspect it before retrying",
                 );
             }
             bytes = bytes.saturating_add(
                 entry
-                    .map_err(|_| "Cannot inspect private directory entry")?
+                    .map_err(|_| "Couldn't inspect a draft folder entry")?
                     .metadata()
-                    .map_err(|_| "Cannot inspect private directory size")?
+                    .map_err(|_| "Couldn't inspect the draft folder size")?
                     .len(),
             );
             if bytes > 4 * STATE_CAP as u64 {
-                return Err(
-                    "Private directory exceeds 64 MiB; preserve and inspect it before retrying",
-                );
+                return Err("The draft folder exceeds 64 MiB. Keep and inspect it before retrying");
             }
         }
         let mut lock = OpenOptions::new()
@@ -688,7 +686,7 @@ impl Store {
             || lock_meta.uid() != unsafe { libc::geteuid() }
             || lock_meta.mode() & 0o077 != 0
         {
-            return Err("Private state lock is unsafe");
+            return Err("The draft lock file is unsafe");
         }
         // Never unlink this inode: a second process must not acquire a different lock.
         if unsafe {
@@ -698,9 +696,7 @@ impl Store {
             )
         } != 0
         {
-            return Err(
-                "Another Pilot Next instance owns draft state. This instance stays readonly.",
-            );
+            return Err("Another Pilot Next is using the drafts. This one is read-only.");
         }
         let mut initialized = String::new();
         (&mut lock)
@@ -724,7 +720,7 @@ impl Store {
                 }
                 Book::fresh(host.clone())
             }
-            Err(_) => return Err("Cannot load private state; no empty overwrite is allowed"),
+            Err(_) => return Err("Couldn't load saved drafts. Nothing was overwritten"),
             Ok(file) => {
                 let meta = file
                     .metadata()
@@ -734,22 +730,23 @@ impl Store {
                     || meta.mode() & 0o077 != 0
                     || meta.uid() != unsafe { libc::geteuid() }
                 {
-                    return Err("Private state snapshot is unsafe or too large");
+                    return Err("The draft file is unsafe or too large");
                 }
                 let mut bytes = Vec::new();
                 file.take(STATE_CAP as u64 + 1)
                     .read_to_end(&mut bytes)
                     .map_err(|_| "Cannot read private state")?;
                 if bytes.len() > STATE_CAP {
-                    return Err("Private state snapshot exceeds limit");
+                    return Err("The draft file is too large");
                 }
-                serde_json::from_slice(&bytes).map_err(|_|"Private state is corrupt. Original bytes are preserved; writes are disabled.")?
+                serde_json::from_slice(&bytes)
+                    .map_err(|_| "The draft file is damaged. It was kept as is; saving is off.")?
             }
         };
         book.validate(&host)?;
         if initialized.is_empty() {
-            let bytes = serde_json::to_vec(&book).map_err(|_| "Cannot initialize private state")?;
-            atomic_write(&root, &bytes).map_err(|_| "Cannot durably initialize private state")?;
+            let bytes = serde_json::to_vec(&book).map_err(|_| "Couldn't set up draft storage")?;
+            atomic_write(&root, &bytes).map_err(|_| "Couldn't save new draft storage")?;
             lock.seek(SeekFrom::Start(0))
                 .and_then(|_| lock.write_all(b"v1\n"))
                 .and_then(|_| lock.sync_all())
@@ -770,7 +767,7 @@ impl Store {
         apply: impl FnOnce(&mut Book) -> Result<R, Failure>,
     ) -> Result<R, Failure> {
         if self.fault {
-            return Err("Private state needs recovery after a write failure");
+            return Err("Draft saving stopped after a write error");
         }
         let mut next = self.book.clone();
         let result = apply(&mut next)?;
@@ -783,7 +780,7 @@ impl Store {
         }
         let bytes = serde_json::to_vec(&next).map_err(|_| "Cannot encode private state")?;
         if bytes.len() > STATE_CAP {
-            return Err("Private state is full. Nothing was discarded.");
+            return Err("Draft storage is full. Nothing was discarded.");
         }
         #[cfg(test)]
         if self.fail_write {
@@ -904,16 +901,16 @@ impl Store {
             return Err("Subagent Stop is not supported here");
         }
         self.change(|book| {
-            if stop&&serde_json::to_vec(book).map_err(|_|"Cannot budget Stop recovery")?.len()>STATE_CAP-RECOVER_CAP-1024*1024 {return Err("Private state has no room to retain withdrawn Stop text. Copy/review existing recovery first.");}
+            if stop&&serde_json::to_vec(book).map_err(|_|"Cannot budget Stop recovery")?.len()>STATE_CAP-RECOVER_CAP-1024*1024 {return Err("No room to keep withdrawn text for Stop. Copy or remove recovered text first.");}
             let existing=book.drafts.get(key).cloned().unwrap_or_else(||captured.clone());
             if stop&&existing.recovered.len()>=8{return Err("Recovered text storage is full. Copy and remove recovered text before Stop.");}
             if let Some(id)=&existing.pending {
                 let intent=book.pending.get(id).cloned().ok_or("Missing pending intent")?;
-                if answer.as_ref().map(|(a,_)|a)!=intent.answer.as_ref() {return Err("Another delivery is unconfirmed; original intent retained");}
+                if answer.as_ref().map(|(a,_)|a)!=intent.answer.as_ref() {return Err("Another message is unconfirmed; the original was kept");}
                 return Ok(intent);
             }
             if let Some((identity,_))=&answer {
-                if existing.revision>captured.revision {return Err("Question reply capture is stale; input retained");}
+                if existing.revision>captured.revision {return Err("The question reply changed; your input was kept");}
                 if let Some(last)=&existing.last && let Some(previous)=&last.answer
                     && previous.question==identity.question && (last.state=="accepted" || previous.revision>=identity.revision) {
                     return Err("This question reply already settled; wait for the transcript or edit a rejected reply");
@@ -968,7 +965,7 @@ impl Store {
     ) -> Result<(), Failure> {
         attempt.validate(&attempt.target.session)?;
         self.change(|book|{
-            if book.model_changes.len()>=32||book.model_changes.contains_key(&attempt.target.session){return Err("A model switch is already unconfirmed, or recovery storage is full. Nothing was resent.");}
+            if book.model_changes.len()>=32||book.model_changes.contains_key(&attempt.target.session){return Err("A model change is already unconfirmed, or recovery storage is full. Nothing was sent again.");}
             if book.pending.values().any(|i|i.target==attempt.target.session){return Err("Chat delivery is pending. Model selection was not admitted.");}
             book.model_changes.insert(attempt.target.session.clone(),attempt);Ok(())
         })
@@ -976,7 +973,7 @@ impl Store {
     pub(crate) fn finish_model_change(&mut self, session: &str, id: &str) -> Result<(), Failure> {
         self.change(|book| {
             if !book.model_changes.get(session).is_some_and(|a| a.id == id) {
-                return Err("Model switch receipt no longer matches the retained attempt.");
+                return Err("The model change record no longer matches.");
             }
             book.model_changes.remove(session);
             Ok(())
@@ -992,7 +989,7 @@ impl Store {
         attempt.validate(id)?;
         self.change(|book| {
             if book.project_registrations.contains_key(id) || book.project_registrations.values().any(|a| a.path == path) {
-                return Err("This folder already has a retained registration attempt. Check projects; it will not be resent.");
+                return Err("This folder is already being added. Check projects; it won't be sent again.");
             }
             if book.project_registrations.len() >= 32 {
                 // Only acknowledged receipts may retire; Unknown never does.
@@ -1298,7 +1295,7 @@ impl Store {
                 {
                     if draft.recovered.len() >= 8 {
                         return Err(
-                            "Recovered input storage is full; original operation is retained",
+                            "Recovered text storage is full; the original message was kept",
                         );
                     }
                     Arc::make_mut(&mut draft.recovered).push(original.into());
@@ -1307,7 +1304,7 @@ impl Store {
             }
             if let Some(text) = withdrawn.filter(|s| !s.is_empty()) {
                 if draft.recovered.len() >= 8 || text.len() > RECOVER_CAP {
-                    return Err("Recovered Stop text exceeds private state limits");
+                    return Err("Recovered Stop text is too large");
                 }
                 Arc::make_mut(&mut draft.recovered).push(text);
                 draft.recovery_revision += 1;
@@ -1449,7 +1446,7 @@ impl Store {
                     .as_ref()
                     .is_none_or(|a| a.identity != *identity)
             {
-                return Err("Question reply changed; original input retained");
+                return Err("The question reply changed; your input was kept");
             }
             let accepted = reply_accepted(draft, identity);
             if !recover && !accepted {

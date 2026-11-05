@@ -271,9 +271,8 @@ pub fn run_delivery_probe(cx: &mut HeadlessAppContext) {
                             save_error: Some(Category::PrivateWrite),
                         },
                     );
-                    state.error = Some(
-                        "Private state write failed. Keep/copy unsaved text before restarting.",
-                    );
+                    state.error =
+                        Some("Couldn't save drafts. Copy unsaved text before restarting.");
                     state.notice = "Unrelated draft saved.";
                     state.notice_key = Some("chat:other".into());
                     e.accept(state, w, cx);

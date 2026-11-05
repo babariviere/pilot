@@ -1045,8 +1045,7 @@ impl Updates {
                 }
             }
             Err(_) => {
-                self.notice =
-                    Some("The update worker is busy. Recheck when its current step finishes.")
+                self.notice = Some("Updates are busy. Recheck when the current step finishes.")
             }
         }
         cx.notify();
@@ -1473,10 +1472,10 @@ fn error_text(error: Error) -> &'static str {
         }
         // Refused before staging. Nothing was installed, so this is not recovery-uncertain.
         Error::StagingCapacity => {
-            "The update was not staged. Kept update records fill the staging limit; nothing was installed. Inspect them before retrying."
+            "The update was not staged. Too many old update files; nothing was installed. Inspect them, then retry."
         }
         Error::StagingArchiveFailed => {
-            "The update was not staged. Old update records couldn't be archived to make room; nothing was installed or removed. Retry later."
+            "The update was not staged. Old update files couldn't be archived; nothing was installed or removed. Retry later."
         }
         Error::Signature | Error::Identity | Error::Archive | Error::RedirectDenied => {
             "The update failed verification (signature, identity or archive) and was rejected."
@@ -1599,13 +1598,12 @@ impl Render for Updates {
             );
         }
         if self.controller.is_some() && !self.inspected {
-            view =
-                view.child(Notice::new("Inspecting previous update receipts…").tone(Tone::Quiet));
+            view = view.child(Notice::new("Checking previous updates…").tone(Tone::Quiet));
         }
         if self.recovery_blocked() {
             let message = match &self.recovery {
                 Some(Err(Error::Signature | Error::Identity | Error::Version)) => {
-                    "The installed app could not be verified. Check or load an update, then recheck before installation."
+                    "Couldn't verify the installed app. Check for an update, then recheck before installing."
                 }
                 Some(Err(_)) => {
                     "Couldn't inspect previous update files. Install waits for a successful recheck."
@@ -1648,7 +1646,7 @@ impl Render for Updates {
                         view=view.child(ui::text(Text::Caption,format!("{phase:?}. {}",path.display())))
                             .child(action_row().child(ui::action(format!("updates-recovery-copy-{ix}"),"Copy recovery path",Action::Quiet).on_click(move|_,_,cx|cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(path.to_string_lossy().into_owned())))));
                     },
-                    Some(Err(error))=>view=view.child(ui::text(Text::Caption,format!("Inspection failed: {error:?}. Recheck after the current installer finishes or file access is restored. Retained files are unchanged."))),
+                    Some(Err(error))=>view=view.child(ui::text(Text::Caption,format!("Inspection failed: {error:?}. Recheck when the installer finishes or file access returns. Files are unchanged."))),
                     _=>{},
                 }
             }

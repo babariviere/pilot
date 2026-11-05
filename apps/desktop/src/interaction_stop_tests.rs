@@ -204,7 +204,7 @@ async fn stop_never_replaces_original_pending_or_unknown_send_or_answer() {
             let (client, updates) = ready(&daemon, &temp).await;
             stop(&client, &captured, 17);
             let refused = until(&updates, |s| s.handled.get("chat:a") == Some(&17)).await;
-            assert!(refused.notice.starts_with("Delivery is already pending"));
+            assert!(refused.notice.starts_with("Already pending"));
             edit_while_held(&client, &updates, &temp, &captured, true).await;
             assert!(disk(&temp).pending[&original.id] == original);
             assert!(daemon.seen.lock().unwrap().requests.is_empty());

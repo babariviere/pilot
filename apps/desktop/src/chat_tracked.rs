@@ -51,7 +51,7 @@ impl ChatEditor {
             return false;
         }
         if self.cache.len() >= DRAFT_CAP {
-            self.error = Some("Draft capacity reached. Existing drafts are retained.");
+            self.error = Some("Too many drafts. Existing drafts are kept.");
             cx.notify();
             return false;
         }

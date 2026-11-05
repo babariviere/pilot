@@ -168,9 +168,17 @@ impl Render for Pane {
                 .when(self.details,|d|d
                     .child(ui::text(Text::Caption,format!("Base: {}",model::display(&s.base))))
                     .child(ui::text(Text::Caption,format!("Branch: {}",s.branch.as_deref().map(model::display).unwrap_or_else(||"Not reported".into()))))
-                    .child(ui::text(Text::Caption,format!("Canonical workspace for chat {}. Snapshot, not live. Base and branch reported by Local; branch may be the chat’s recorded branch. Up to 128 files, 512 KiB parsed patch, 32 KiB / 200 lines per file, 1024 bytes per line. One diff open at a time.",model::display(&self.chat))))));
+                    .child(ui::text(Text::Caption,format!("Snapshot of chat {}, not live. Branch may be the chat’s recorded branch. Limits: 128 files, 512 KiB patch, 200 lines or 32 KiB per file, 1,024 bytes per line.",model::display(&self.chat))))));
             if s.limited {
-                content=content.child(div().id("workspace-changes-limited").test_support().p_3().child(ui::Notice::new("Partial changes. Files or patch content omitted; not a clean workspace.")));
+                content = content.child(
+                    div()
+                        .id("workspace-changes-limited")
+                        .test_support()
+                        .p_3()
+                        .child(ui::Notice::new(
+                            "Partial changes. Some files or diffs are left out.",
+                        )),
+                );
             }
             if s.files.is_empty() {
                 content = content.child(
@@ -262,7 +270,7 @@ impl Render for Pane {
                             .font_family(cx.theme().mono_font_family.clone()).text_sm()
                             .child(gpui_kit::base::SelectableText::new(
                                 SharedString::from(format!("workspace-patch-{ix}")),
-                                SharedString::from(f.patch.as_deref().map(model::display_patch).unwrap_or_else(||"Diff unavailable (binary, metadata-only, unsupported path or too large). This doesn't mean the file is unchanged.".into())))));
+                                SharedString::from(f.patch.as_deref().map(model::display_patch).unwrap_or_else(||"No diff shown (binary, metadata-only, unsupported path or too large). The file may still have changed.".into())))));
                 }
                 content = content.child(row);
             }

@@ -158,7 +158,7 @@ async fn register(
     prepared: impl FnOnce(&crate::delivery_store::Store),
 ) -> Result<Outcome, Failure> {
     if store.book.host != options.host() {
-        return Err("Local registration source differs from private state; no request was sent.");
+        return Err("Local changed. Nothing was sent.");
     }
     let payload = preflight(client, options, path).await?;
     store.prepare_project(id, path)?;

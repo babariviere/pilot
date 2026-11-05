@@ -367,7 +367,7 @@ pub fn run_subscription_limit_probe(cx: &mut HeadlessAppContext) {
                 // proving the replacement reached navigation without a silent switch.
                 assert_eq!(
                     v.read(cx).nav_error,
-                    Some("This captured view cannot open another chat.")
+                    Some("This snapshot can't open other chats.")
                 );
                 assert!(selection.end > selection.start);
                 assert_eq!(text.read(cx).value().as_ref(), draft);

@@ -157,7 +157,7 @@ impl Render for FilePane {
         }
         if self.details {
             body = body.child(ui::text(Text::Caption, format!(
-                "Path: {}\nWorkspace: {}\nChat: {}\nSnapshot, not live. Up to 32 KiB, 300 lines, 1024 bytes per line. Reads are bracketed by Local identity/workspace checks, not an atomic filesystem revision.",
+                "Path: {}\nWorkspace: {}\nChat: {}\nSnapshot, not live; the file may change while it's read. Limits: 32 KiB, 300 lines, 1,024 bytes per line.",
                 model::display(&self.target.path), model::display(&self.target.cwd), self.target.chat
             )));
         }
