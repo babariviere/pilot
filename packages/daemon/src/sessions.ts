@@ -5465,6 +5465,11 @@ ${run.excerpt}`,
 		}
 	}
 
+	/** Passive host-only exact acquisition; never creates a worker or executes visual source. */
+	async readStoredArtifactRevision(id: string, artifactId: string, revision: number, signal?: AbortSignal) {
+		return this.artifactStore(id).readStoredRevision(artifactId, revision, signal);
+	}
+
 	/** Resolve an artifact:// ID across parked and archived owners, only when a link is opened.
 	 * Probe one small latest pointer per owner, with bounded I/O and no transcript/body reads. */
 	async resolveArtifact(artifactId: string): Promise<ArtifactSummary> {

@@ -51,12 +51,19 @@ import { splitTicket } from "./mission-ticket-work.ts";
 import { type MissionActivityQuery, type MissionActor, type MissionStore, normalizeResourceWrite } from "./missions.ts";
 import type { ProjectStore } from "./projects.ts";
 import {
+	captureRetainedArtifact,
+	type RetainedArtifactHost,
+	type RetainedArtifactReference,
+	type RetainedVisualValidator,
+	reopenRetainedArtifact,
+} from "./retained-artifact.ts";
+import {
 	captureRetainedBrief,
 	type RetainedBriefHeader,
 	type RetainedBriefHost,
 	reopenRetainedBrief,
 } from "./retained-brief.ts";
-import { RETAINED_REVIEW_LIMITS } from "./retained-review-contract.ts";
+import { RETAINED_REVIEW_LIMITS, retainedReviewSnapshot } from "./retained-review-contract.ts";
 import type { ReviewSnapshotStore } from "./review-snapshots.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { SourceMcpClient } from "./source-mcp.ts";
@@ -136,6 +143,8 @@ export type RetainedBriefConfiguration = Pick<
 	RetainedBriefHeader,
 	"hostId" | "daemonLineageId" | "runId" | "contextPackageSha256" | "runtime"
 > & { vault: CriticalReviewVault; knownSecrets: string[]; profileId: string };
+
+export type RetainedArtifactConfiguration = RetainedBriefConfiguration & { validator: RetainedVisualValidator };
 
 /**
  * An explicit start choice wins, else the tasks' preferred model (a user-set one first), else the project's
@@ -777,7 +786,83 @@ export class MissionService {
 	) {
 		return reopenRetainedBrief(this.store, this.retainedBriefHost(sessionId, taskRef, host), descriptor, signal);
 	}
-	private retainedBriefHost(sessionId: string, taskRef: string, host: RetainedBriefConfiguration): RetainedBriefHost {
+	/** Acquisition only. No REST/tool route, validator invocation or reviewer dispatch. */
+	async captureRetainedArtifact(
+		sessionId: string,
+		taskRef: string,
+		reference: RetainedArtifactReference,
+		host: RetainedArtifactConfiguration,
+		signal?: AbortSignal,
+	) {
+		const pinned = structuredClone(reference);
+		return captureRetainedArtifact(
+			this.store,
+			this.retainedArtifactHost(sessionId, taskRef, pinned, host),
+			pinned,
+			signal,
+		);
+	}
+	async reopenRetainedArtifact(
+		sessionId: string,
+		taskRef: string,
+		descriptor: unknown,
+		host: RetainedArtifactConfiguration,
+		signal?: AbortSignal,
+	) {
+		const pinned = retainedReviewSnapshot(descriptor, RETAINED_REVIEW_LIMITS.descriptorBytes) as {
+			reference: RetainedArtifactReference;
+		};
+		return reopenRetainedArtifact(
+			this.store,
+			this.retainedArtifactHost(sessionId, taskRef, pinned.reference, host),
+			pinned,
+			signal,
+		);
+	}
+	private retainedArtifactHost(
+		sessionId: string,
+		taskRef: string,
+		ref: RetainedArtifactReference,
+		host: RetainedArtifactConfiguration,
+	): RetainedArtifactHost {
+		const missionId = this.allocationAccess(sessionId);
+		const taskId = this.store.resolveTask(missionId, taskRef).id;
+		const observation = () => {
+			this.allocationAccess(sessionId, missionId);
+			const allocation = this.store.latestContributionAllocation(missionId, taskId);
+			const sources = allocation?.request.action === "allocate" ? allocation.request.sources : [];
+			const source = sources[0];
+			const refs = this.store.artifactReferences(missionId, ref.artifactId);
+			if (
+				sources.length !== 1 ||
+				!source ||
+				source.reference.kind !== "artifact" ||
+				source.reference.artifactId !== ref.artifactId ||
+				source.reference.revision !== ref.revision ||
+				source.sourceOwnerSessionId !== ref.sourceOwnerSessionId ||
+				source.availability !== "retained" ||
+				refs.some((link) => link.sessionId !== ref.sourceOwnerSessionId) ||
+				!refs.some((link) => link.taskId === taskId && link.revision === ref.revision && link.kind === ref.kind)
+			)
+				throw new Conflict("Exact artifact task link or allocation is unavailable");
+			this.assertAllocationSourceActors(missionId, taskId, [source]);
+			return source;
+		};
+		const base = this.retainedBriefHost(sessionId, taskRef, host, observation);
+		return {
+			vault: host.vault,
+			knownSecrets: host.knownSecrets,
+			observe: () => ({ header: base.observe(), observation: observation(), validator: host.validator }),
+			read: (signal) =>
+				this.sessions.readStoredArtifactRevision(ref.sourceOwnerSessionId, ref.artifactId, ref.revision, signal),
+		};
+	}
+	private retainedBriefHost(
+		sessionId: string,
+		taskRef: string,
+		host: RetainedBriefConfiguration,
+		sourceObservation?: () => DeliveryObservation,
+	): RetainedBriefHost {
 		const missionId = this.allocationAccess(sessionId);
 		const taskId = this.store.resolveTask(missionId, taskRef).id;
 		return {
@@ -798,27 +883,29 @@ export class MissionService {
 				const policy = this.store.latestNonCodeAcceptancePolicy(missionId, taskId);
 				const profile = this.store.reviewProfile(missionId, host.profileId);
 				const contextFence = this.store.allocationContextFence(missionId);
-				const { bytes, ...briefMetadata } = this.store.briefExact(
-					missionId,
-					contextFence.briefRevision,
-					RETAINED_REVIEW_LIMITS.blobBytes,
-				);
-				const brief = {
-					...briefMetadata,
-					markdown: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes),
+				const briefObservation = (): DeliveryObservation => {
+					const { bytes, ...briefMetadata } = this.store.briefExact(
+						missionId,
+						contextFence.briefRevision,
+						RETAINED_REVIEW_LIMITS.blobBytes,
+					);
+					const brief = {
+						...briefMetadata,
+						markdown: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes),
+					};
+					return {
+						reference: { kind: "brief", revision: contextFence.briefRevision },
+						sourceOwnerSessionId: null,
+						sha256: deliveryDigest(brief),
+						availability: "retained",
+					};
 				};
-				const observation: DeliveryObservation = {
-					reference: { kind: "brief", revision: contextFence.briefRevision },
-					sourceOwnerSessionId: null,
-					sha256: deliveryDigest(brief),
-					availability: "retained",
-				};
+				const observation = sourceObservation ? sourceObservation() : briefObservation();
 				if (
 					!allocation ||
 					!submission ||
 					!policy ||
 					!profile ||
-					!brief ||
 					!task.assignment ||
 					task.assignment.classification?.deliveryKind !== "research" ||
 					deliveryDigest(allocation.request.action === "allocate" ? allocation.request.sources : []) !==

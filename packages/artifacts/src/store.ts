@@ -4,6 +4,7 @@ import { mkdir, open, readdir, readFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import type { ArtifactRevision, ArtifactSummary, ArtifactWrite } from "@pilot/protocol";
 import { assertArtifactWriteKind, prepareArtifact, validateArtifact } from "./render.ts";
+import { parseStoredVisualRevision, readStoredFile, STORED_REVISION_LIMITS } from "./stored-revision.ts";
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -120,6 +121,41 @@ export class ArtifactStore {
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT")
 				throw new ArtifactNotFound("Unknown artifact or revision");
+			throw error;
+		}
+	}
+
+	/** Host-only exact visual acquisition. An explicit revision must be below the committed ceiling.
+	 * No rendering, latest fallback, worker wake, or changes to the revision write path. */
+	async readStoredRevision(id: string, revision: number, signal?: AbortSignal) {
+		if (!ID.test(id) || !Number.isSafeInteger(revision) || revision < 1)
+			throw new Error("Invalid explicit artifact revision");
+		try {
+			const directory = join(this.directory, id);
+			const latest = JSON.parse(
+				new TextDecoder("utf-8", { fatal: true }).decode(
+					await readStoredFile(join(directory, "latest.json"), STORED_REVISION_LIMITS.pointerBytes, signal),
+				),
+			) as ArtifactSummary;
+			if (
+				latest.id !== id ||
+				latest.sessionId !== this.identity.sessionId ||
+				latest.projectId !== this.identity.projectId ||
+				!Number.isSafeInteger(latest.revision) ||
+				revision > latest.revision
+			)
+				throw new ArtifactNotFound("Unknown committed artifact revision");
+			const bytes = await readStoredFile(
+				join(directory, `${revision}.json`),
+				STORED_REVISION_LIMITS.containerBytes,
+				signal,
+			);
+			signal?.throwIfAborted();
+			return parseStoredVisualRevision(bytes, { ...this.identity, id, revision });
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT")
+				throw new ArtifactNotFound("Unknown artifact revision");
+			if (error instanceof SyntaxError) throw new SyntaxError("Invalid stored artifact JSON or UTF-8");
 			throw error;
 		}
 	}

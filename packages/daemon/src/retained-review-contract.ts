@@ -154,7 +154,7 @@ function freeze<T>(v: T): ReadonlyData<T> {
 
 /** Bounded JSON-data snapshot BEFORE shared parsers/hashes. Reject accessors, cycles, sparse arrays,
  * symbols, exotic objects and excessive nesting; do not invoke caller toJSON/getters. */
-function snapshot(value: unknown, maxBytes: number): unknown {
+export function retainedReviewSnapshot(value: unknown, maxBytes: number): unknown {
 	let bytes = 0,
 		nodes = 0;
 	const visit = (v: unknown, depth: number): unknown => {
@@ -303,7 +303,7 @@ function manifest(value: unknown): CriticalReviewEvidence {
 
 /** Bounded structural claims only. Does not authorize a read or prove sealing/custody. */
 export function retainedReviewDescriptor(descriptor: unknown): InputDescriptor {
-	const v = snapshot(descriptor, RETAINED_REVIEW_LIMITS.descriptorBytes);
+	const v = retainedReviewSnapshot(descriptor, RETAINED_REVIEW_LIMITS.descriptorBytes);
 	fields(v, [
 		"version",
 		"hostId",
@@ -546,7 +546,7 @@ export function parseRetainedReviewReport(
 		invalid();
 	}
 	rejectDuplicateKeys(json);
-	const v = snapshot(parsed, RETAINED_REVIEW_LIMITS.reportBytes);
+	const v = retainedReviewSnapshot(parsed, RETAINED_REVIEW_LIMITS.reportBytes);
 	fields(v, [
 		"version",
 		"runId",
