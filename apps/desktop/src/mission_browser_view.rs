@@ -91,6 +91,13 @@ pub(crate) enum Event {
         entry: Option<(String, Option<u64>)>,
         generation: u64,
     },
+    /// One explicit workflow confirmation for this coordinator-planned Local mission.
+    ConfirmWorkflow {
+        key: Key,
+        target: crate::workflow_confirmation_view::Target,
+        purpose: crate::workflow_confirmation::Purpose,
+        generation: u64,
+    },
 }
 /// The displayed mission's own coordinator chat, by its detail's exact
 /// coordinatorSessionId; never a title or a chat's role flag.
@@ -1075,6 +1082,14 @@ impl Browser {
         let key = d.key.clone();
         let (title, project) = (d.title.clone(), d.project.clone());
         let goal = (!d.goal.is_empty()).then(|| d.goal.clone());
+        let workflow =
+            (d.planning && d.status == "active" && self.local_home().as_ref() == Some(&d.key.home))
+                .then(|| crate::workflow_confirmation_view::Target {
+                    mission: d.key.id.clone(),
+                    project: d.project.clone(),
+                    title: d.title.clone(),
+                    coordinator: d.coordinator.clone().map(|id| (id.clone(), id)),
+                });
         Some(
             ui::icon_action(
                 "mission-more",
@@ -1121,6 +1136,28 @@ impl Browser {
                                 });
                             }),
                     );
+                }
+                // Coordinator-planned Local missions only; legacy missions are never adopted here.
+                if let Some(target) = workflow.clone() {
+                    for purpose in crate::workflow_confirmation::Purpose::ALL {
+                        let (weak, key, target) = (weak.clone(), key.clone(), target.clone());
+                        menu = menu.item(
+                            PopupMenuItem::new(purpose.menu())
+                                .disabled(!enabled)
+                                .on_click(move |_, _, cx| {
+                                    let _ = weak.update(cx, |v, cx| {
+                                        if v.generation == generation {
+                                            cx.emit(Event::ConfirmWorkflow {
+                                                key: key.clone(),
+                                                target: target.clone(),
+                                                purpose,
+                                                generation,
+                                            });
+                                        }
+                                    });
+                                }),
+                        );
+                    }
                 }
                 for (action, label) in [
                     (

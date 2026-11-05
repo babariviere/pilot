@@ -657,3 +657,8 @@ required-features = ["native-probes"]
 name = "insights_replace"
 harness = false
 required-features = ["native-probes"]
+
+[[test]]
+name = "workflow_confirmation"
+harness = false
+required-features = ["native-probes"]

@@ -36,6 +36,7 @@ pub(crate) struct WriteState {
     pub(crate) project: Option<crate::project_registration::Reply>,
     pub(crate) repair: Option<crate::diagnostic_repair::Reply>,
     pub(crate) insights: Option<crate::insights::Reply>,
+    pub(crate) workflow: Option<crate::workflow_confirmation::Reply>,
     pub(crate) project_receipt: Option<(String, String)>,
     pub(crate) model: Option<crate::chat_models::Reply>,
     /// The latest explicit database-access decision. Volatile: never resent.
@@ -140,6 +141,11 @@ pub(crate) enum WriteCommand {
     Insights {
         request: u64,
         action: crate::insights::Action,
+    },
+    /// Explicit workflow confirmation or its passive Check. Never issued without a user click.
+    Workflow {
+        request: u64,
+        action: crate::workflow_confirmation::Action,
     },
     Submit {
         key: String,
@@ -854,6 +860,40 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                             if store.is_faulted() {
                                 status.error = Some(
                                     "Couldn't record the Insights action. Copy unsaved text before restarting.",
+                                );
+                            }
+                            Ok("")
+                        }
+                        Some(WriteCommand::Workflow { request, action }) => {
+                            use crate::workflow_confirmation::{Action, Outcome, Reply};
+                            let slot = match &action {
+                                Action::Start(request) => request.slot(),
+                                Action::Check { slot } => slot.clone(),
+                            };
+                            status.workflow = Some(Reply {
+                                slot: slot.clone(),
+                                request,
+                                outcome: None,
+                            });
+                            publish(updates, replace, status.clone());
+                            let result = DeliveryOwner {
+                                store,
+                                status: &mut status,
+                                channels: Some(&channels),
+                                autosave: &mut autosave,
+                                closing: &mut closing,
+                            }
+                            .workflow(&client, &options, action)
+                            .await;
+                            status.workflow = Some(Reply {
+                                slot, request,
+                                outcome: Some(result.unwrap_or(Outcome::Unknown(
+                                    "Closing. A saved confirmation stays unconfirmed and is never resent.",
+                                ))),
+                            });
+                            if store.is_faulted() {
+                                status.error = Some(
+                                    "Private confirmation receipt could not be saved. Keep unsaved text before restarting.",
                                 );
                             }
                             Ok("")

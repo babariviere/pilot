@@ -33,6 +33,7 @@ PURE_NATIVE = {"automations", "shortcuts", "mcp_status", "project_memory", "daem
 
 PURE_MODULES.add("archive")
 PURE_MODULES.add("daemon_menu")
+PURE_MODULES.add("workflow_confirmation")
 PURE_NATIVE.add("archive")
 PURE_NATIVE.add("lost_ack")
 PURE_NATIVE.add("application_quit")

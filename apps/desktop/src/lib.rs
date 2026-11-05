@@ -149,6 +149,8 @@ pub use local_view::insights_settings_probe::run_insights_settings_probe;
 pub use local_view::project_settings_probe::run_project_settings_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::project_settings_probe::run_project_slack_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::workflow_confirmation_probe::run_workflow_confirmation_probe;
 #[cfg(any(test, feature = "native-probes"))]
 mod chat_actions_fixture;
 #[cfg(any(test, feature = "native-probes"))]
@@ -202,6 +204,8 @@ mod mission_update_probe;
 mod mission_update_transport;
 mod mission_update_view;
 mod transition;
+mod workflow_confirmation;
+mod workflow_confirmation_view;
 #[cfg(feature = "native-probes")]
 pub use mission_browser_view::mission_activity_probe::run_mission_activity_probe;
 #[cfg(feature = "native-probes")]

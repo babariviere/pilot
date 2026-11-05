@@ -232,6 +232,9 @@ pub(crate) struct Book {
     pub(crate) repairs: BTreeMap<String, crate::diagnostic_repair::Attempt>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) insights: BTreeMap<String, crate::insights::Attempt>,
+    /// Native workflow confirmations by purpose and mission. Open ones are only ever Checked.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) workflow: BTreeMap<String, crate::workflow_confirmation::Attempt>,
     /// Operation ids the user explicitly abandoned. They are never retried or executed again.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) abandoned: Vec<String>,
@@ -393,6 +396,7 @@ impl Book {
             model_changes: BTreeMap::new(),
             repairs: BTreeMap::new(),
             insights: BTreeMap::new(),
+            workflow: BTreeMap::new(),
             abandoned: Vec::new(),
             links: BTreeMap::new(),
         }
@@ -418,6 +422,7 @@ impl Book {
             || self.model_changes.len() > 32
             || self.repairs.len() > 32
             || self.insights.len() > 64
+            || self.workflow.len() > 32
             || self.abandoned.len() > ABANDONED_CAP
             || self.links.len() > DRAFT_CAP
             || self
@@ -469,6 +474,21 @@ impl Book {
                 || hash(&op.payload) != op.payload_hash
             {
                 return Err("Stored Insights action is corrupt.");
+            }
+        }
+        for (slot, attempt) in &self.workflow {
+            attempt.validate(slot)?;
+            let op = &attempt.operation;
+            if op.schema_version != 1
+                || !token(&op.operation_id)
+                || op.producer_id != self.producer_id
+                || op.sequence == 0
+                || op.sequence >= self.next_sequence
+                || op.origin != self.host
+                || op.destination != self.host
+                || hash(&op.payload) != op.payload_hash
+            {
+                return Err("Stored workflow confirmation is corrupt.");
             }
         }
         for (index, id) in self.abandoned.iter().enumerate() {
@@ -1226,6 +1246,84 @@ impl Store {
             attempt.state = state;
             attempt.reason = reason;
             attempt.result = result;
+            Ok(())
+        })
+    }
+
+    /// Persist the exact confirmed workflow envelope before its one POST. An open slot is
+    /// never replaced, and the target is the package's own mission, never a later selection.
+    pub(crate) fn prepare_workflow(
+        &mut self,
+        request: &crate::workflow_confirmation::Request,
+    ) -> Result<Operation, Failure> {
+        use crate::workflow_confirmation::{Attempt, State};
+        request.validate()?;
+        let slot = request.slot();
+        self.change(|book| {
+            if book.workflow.get(&slot).is_some_and(Attempt::open) {
+                return Err(
+                    "This confirmation is still unconfirmed. Check it; nothing new was sent.",
+                );
+            }
+            if !book.workflow.contains_key(&slot) && book.workflow.len() >= 32 {
+                let retired = book
+                    .workflow
+                    .iter()
+                    .find(|(_, a)| !a.open())
+                    .map(|(s, _)| s.clone());
+                let Some(retired) = retired else {
+                    return Err(
+                        "Unconfirmed confirmation storage is full. Nothing was discarded or sent.",
+                    );
+                };
+                book.workflow.remove(&retired);
+            }
+            let sequence = book.next_sequence;
+            book.next_sequence += 1;
+            let operation = Operation {
+                schema_version: 1,
+                operation_id: Uuid::new_v4().to_string(),
+                producer_id: book.producer_id.clone(),
+                sequence,
+                origin: book.host.clone(),
+                destination: book.host.clone(),
+                kind: request.purpose.kind().into(),
+                target_id: request.mission_id.clone(),
+                payload_hash: hash(&request.payload),
+                payload: request.payload.clone(),
+            };
+            book.workflow.insert(
+                slot.clone(),
+                Attempt {
+                    slot,
+                    operation: operation.clone(),
+                    state: State::Unknown,
+                    reason: None,
+                },
+            );
+            Ok(operation)
+        })
+    }
+    /// Records an exact receipt. A settled receipt is never replaced by another state.
+    pub(crate) fn finish_workflow(
+        &mut self,
+        slot: &str,
+        operation_id: &str,
+        state: crate::workflow_confirmation::State,
+        reason: Option<String>,
+    ) -> Result<(), Failure> {
+        self.change(|book| {
+            let attempt = book
+                .workflow
+                .get_mut(slot)
+                .filter(|a| a.operation.operation_id == operation_id)
+                .ok_or("The confirmation changed. Its original record was kept.")?;
+            let reason = reason.map(|r| r.chars().take(512).collect());
+            if !attempt.open() && (attempt.state != state || attempt.reason != reason) {
+                return Err("A settled confirmation receipt cannot be replaced.");
+            }
+            attempt.state = state;
+            attempt.reason = reason;
             Ok(())
         })
     }

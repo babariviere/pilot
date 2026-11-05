@@ -48,6 +48,15 @@ native readers reject the distinct `withdraw` kind rather than treating it as ha
 Remove. Hard deletion and other user-only approvals are unchanged. No historical
 withdrawals or delegation are inferred.
 
+## Approve a coordinator-planned mission
+
+For a mission created with coordinator planning, Overview's **More** menu has
+**Approve plan…**, **Reviewer consent…** and their revocations. Each sheet shows the exact
+brief revision, decisions, coordinator powers, limits and, for consent, the reviewer
+disclosure, then confirms that package once. If the reply is lost, **Check** looks up the
+saved confirmation and never sends it again. Approval starts no work. Reviewer consent
+stays unavailable until Local has a reviewer configuration.
+
 ## Finish or archive
 
 Coordinators can mark tasks done or dropped without an associated commit, preserving

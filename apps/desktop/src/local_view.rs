@@ -239,6 +239,11 @@ mod update_lifecycle;
 pub(crate) mod workbench_probe;
 #[path = "workbench_view.rs"]
 mod workbench_view;
+#[path = "workflow_confirmation_navigation.rs"]
+mod workflow_confirmation_navigation;
+#[cfg(feature = "native-probes")]
+#[path = "workflow_confirmation_probe.rs"]
+pub(crate) mod workflow_confirmation_probe;
 #[cfg(feature = "native-probes")]
 #[path = "workspace_changes_probe.rs"]
 pub(crate) mod workspace_changes_probe;
@@ -426,6 +431,13 @@ pub struct LocalViewer {
     /// Writer-retained Insights attempts and its latest reply, for a panel opened later.
     insights_book: Option<Arc<crate::delivery_store::Book>>,
     insights_reply: Option<crate::insights::Reply>,
+    /// The open workflow confirmation sheet, where focus returns, and the writer's reply.
+    workflow: Option<(
+        Entity<crate::workflow_confirmation_view::Sheet>,
+        Subscription,
+    )>,
+    workflow_return: Option<gpui_kit::FocusHandle>,
+    workflow_reply: Option<crate::workflow_confirmation::Reply>,
     #[cfg(feature = "native-probes")]
     render_count: u64,
 }
@@ -743,6 +755,11 @@ impl LocalViewer {
                         }
                         view.insights_book = state.book.clone();
                         view.insights_reply = state.insights.clone();
+                        view.workflow_reply = state.workflow.clone();
+                        if let Some((sheet, _)) = &view.workflow {
+                            let (book, reply) = (state.book.as_ref(), state.workflow.as_ref());
+                            sheet.update(cx, |s, cx| s.accept(book, reply, cx));
+                        }
                         if let Some((panel, _)) = &view.insights {
                             let (book, reply) = (state.book.as_ref(), state.insights.as_ref());
                             panel.update(cx, |p, cx| p.accept(book, reply, cx));
@@ -1439,6 +1456,16 @@ impl LocalViewer {
                     {
                         view.open_insights(decision.clone(), window, cx);
                     }
+                    Event::ConfirmWorkflow {
+                        key,
+                        target,
+                        purpose,
+                        generation,
+                    } if view.page == Page::Mission(key.clone())
+                        && view.missions.read(cx).current(*generation) =>
+                    {
+                        view.open_workflow(target.clone(), *purpose, window, cx);
+                    }
                     Event::Chat {
                         key,
                         id,
@@ -1873,6 +1900,9 @@ impl LocalViewer {
             insights_count_read: None,
             insights_book: None,
             insights_reply: None,
+            workflow: None,
+            workflow_return: None,
+            workflow_reply: None,
             #[cfg(feature = "native-probes")]
             render_count: 0,
         }

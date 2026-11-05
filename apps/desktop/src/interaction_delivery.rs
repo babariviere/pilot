@@ -266,6 +266,61 @@ impl DeliveryOwner<'_> {
         Ok(outcome)
     }
 
+    /// Workflow confirmations save the exact envelope, send it once, and Check passively.
+    pub(super) async fn workflow(
+        &mut self,
+        client: &reqwest::Client,
+        options: &LocalOptions,
+        action: crate::workflow_confirmation::Action,
+    ) -> Result<crate::workflow_confirmation::Outcome, Failure> {
+        use crate::workflow_confirmation::{self as workflow, Action, Outcome};
+        if self.store.book.host != options.host() {
+            return Ok(Outcome::Refused(
+                "Local source differs from private state. Nothing was sent.",
+            ));
+        }
+        let (slot, operation, outcome) = match action {
+            Action::Start(request) => {
+                // Without the native capability nothing is saved or sent.
+                if options.model_scope_capability().is_err() {
+                    return Ok(Outcome::Refused(
+                        "Native confirmation is unavailable on this Local. Nothing was sent.",
+                    ));
+                }
+                let operation = match self.store.prepare_workflow(&request) {
+                    Ok(operation) => operation,
+                    Err(error) => return Ok(Outcome::Refused(error)),
+                };
+                self.prepared(self.status.notice);
+                let outcome = self
+                    .effect(async { Ok(workflow::execute(client, options, &operation).await) })
+                    .await?;
+                (request.slot(), operation, outcome)
+            }
+            Action::Check { slot } => {
+                let Some(attempt) = self.store.book.workflow.get(&slot).cloned() else {
+                    return Ok(Outcome::Refused("There is no confirmation to check."));
+                };
+                if !attempt.open() {
+                    return Ok(workflow::outcome(&attempt));
+                }
+                let outcome = self
+                    .effect(async {
+                        Ok(workflow::check(client, options, &attempt.operation).await)
+                    })
+                    .await?;
+                (slot, attempt.operation, outcome)
+            }
+        };
+        if let Some((state, reason)) = outcome.state() {
+            // A storage fault cannot undo a receipt; report the known outcome in memory.
+            let _ = self
+                .store
+                .finish_workflow(&slot, &operation.operation_id, state, reason);
+        }
+        Ok(outcome)
+    }
+
     /// Model selection uses the same FIFO writer and edit mailbox as delivery.
     pub(super) async fn model(
         &mut self,

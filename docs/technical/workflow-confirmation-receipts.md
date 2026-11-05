@@ -99,4 +99,12 @@ The feedback producer has the same exact-lookup obligation. Its uncertain writes
 Focused tests cover capability/purpose spoofing, payload mutation, held packages, project/coordinator/
 membership ABA, prior CAS, conflicts, lost ACK, restart on both sides of the effect, missing/unreadable
 rows, failed durability and unavailable feedback/check producers. Tests use temporary databases and
-faux host configuration only. Native confirmation/recovery qualification remains separate.
+faux host configuration only.
+
+## Native confirmation
+
+The desktop sheets for the four workflow purposes are described in
+[apps/desktop/docs/workflow-confirmations.md](../../apps/desktop/docs/workflow-confirmations.md).
+They send the prepared package verbatim, save the envelope before one POST, and use only the
+passive receipt lookup for Check. `packages/daemon/src/testing/workflow-host.ts` runs these routes
+for the native journeys in a temporary home. Review dispositions have no native producer here.

@@ -372,6 +372,8 @@ pub(crate) struct Detail {
     /// The Overview's phase rows: phases with tasks that count, in order, and
     /// "No phase" last. Empty for a mission without phases.
     pub(crate) phases: Vec<crate::mission_phases::Group>,
+    /// Created with coordinator planning (planningVersion 1). Never adopted later.
+    pub(crate) planning: bool,
 }
 pub(crate) fn detail(key: &Key, v: &Value) -> Result<Detail, &'static str> {
     let m = &v["mission"];
@@ -482,6 +484,7 @@ pub(crate) fn detail(key: &Key, v: &Value) -> Result<Detail, &'static str> {
         summary,
         finished: crate::mission_lifecycle::finished(v),
         phases,
+        planning: m["planningVersion"] == 1,
     })
 }
 #[derive(Clone, Debug)]
