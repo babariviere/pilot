@@ -460,18 +460,6 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
                 "selection keeps its row"
             );
             assert_eq!(scroll_y(cx, &view), scroll, "a move never scrolls");
-            if let Some(dir) = std::env::var_os("PILOT_NEXT_STYLE_DIR") {
-                let dir = std::path::PathBuf::from(dir);
-                std::fs::create_dir_all(&dir).unwrap();
-                send(cx, &view, "nix");
-                frame(cx, h, 0);
-                frame(cx, h, 80);
-                cx.capture_screenshot(h)
-                    .unwrap()
-                    .save(dir.join(format!("{width}-{}-reorder-partial.png", mode.name())))
-                    .unwrap();
-                frame(cx, h, 240);
-            }
 
             // The raised run and the sliding rows.
             send(cx, &view, "sweep");
@@ -495,6 +483,16 @@ pub(super) fn run(cx: &mut HeadlessAppContext) {
             // Reversal mid-move starts from the shown positions.
             frame(cx, h, 64);
             let midway = snapshot(cx, h, &view);
+            // Capture the move already under test, without a capture-only send
+            // changing the ordering history used by the motion assertions.
+            if let Some(dir) = std::env::var_os("PILOT_NEXT_STYLE_DIR") {
+                let dir = std::path::PathBuf::from(dir);
+                std::fs::create_dir_all(&dir).unwrap();
+                cx.capture_screenshot(h)
+                    .unwrap()
+                    .save(dir.join(format!("{width}-{}-reorder-partial.png", mode.name())))
+                    .unwrap();
+            }
             send(cx, &view, "etl");
             frame(cx, h, 0);
             let reversed = snapshot(cx, h, &view);
