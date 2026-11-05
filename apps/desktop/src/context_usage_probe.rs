@@ -8,6 +8,11 @@ use serde_json::json;
 #[path = "context_meter_probe.rs"]
 mod meter;
 fn settle(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
+    // Closing dialogs remain mounted during Kit's default SlideDown exit.
+    // Start that transition, then finish it before inspecting the next interaction.
+    cx.run_until_parked();
+    cx.update_window(h, |_, w, cx| w.render_frame(cx)).unwrap();
+    cx.advance_clock(*gpui_kit::component::dialog::ANIMATION_DURATION);
     for _ in 0..4 {
         cx.run_until_parked();
         cx.advance_clock(Duration::from_millis(16));
@@ -50,6 +55,10 @@ pub fn run_context_usage_probe(cx: &mut HeadlessAppContext) {
             // The disclosure must not steal or commit active composer preedit.
             let input = cx.update(|cx| view.read(cx).editor.read(cx).shell_probe().0);
             cx.update_window(h, |_, w, cx| {
+                assert!(
+                    w.try_find("context-usage-info").is_none(),
+                    "previous disclosure finished closing"
+                );
                 input.update(cx, |i, cx| {
                     i.focus(w, cx);
                     i.replace_and_mark_text_in_range(None, "にほん", Some(3..3), w, cx)
@@ -57,8 +66,16 @@ pub fn run_context_usage_probe(cx: &mut HeadlessAppContext) {
             })
             .unwrap();
             settle(cx, h);
-            cx.update_window(h, |_, w, cx| w.click("context-usage", cx))
-                .unwrap();
+            cx.update_window(h, |_, w, cx| {
+                assert!(
+                    input
+                        .update(cx, |i, cx| i.marked_text_range(w, cx))
+                        .is_some(),
+                    "preedit exists before click"
+                );
+                w.click("context-usage", cx)
+            })
+            .unwrap();
             settle(cx, h);
             cx.update_window(h, |_, w, cx| {
                 assert!(w.try_find("context-usage-info").is_none());
