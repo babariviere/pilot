@@ -102,7 +102,6 @@ impl TranscriptView {
         let wrapper = div()
             .track_focus(&focus)
             .h_flex()
-            .gap_2()
             .items_center()
             .capture_any_mouse_down(move |_, w, cx| {
                 let allowed = owner
@@ -125,7 +124,7 @@ impl TranscriptView {
     pub(super) fn fold_controls(
         &self,
         row: &Message,
-        cx: &App,
+        _cx: &App,
         owner: gpui_kit::WeakEntity<Self>,
     ) -> Option<impl IntoElement + use<>> {
         if row.automatic().is_some() {
@@ -134,39 +133,27 @@ impl TranscriptView {
         let collapsed = self.folds.collapsed(row);
         let (wrapper, toggle) = self.fold_scope_div(row, owner)?;
         Some(
-            wrapper
-                .child(
-                    ui::action(
-                        ("message-fold", row.id()),
-                        if collapsed { "Show more" } else { "Show less" },
-                        Action::Quiet,
-                    )
-                    .icon(
-                        if collapsed {
-                            crate::app_icon::AppIcon::Expand
-                        } else {
-                            crate::app_icon::AppIcon::Collapse
-                        }
-                        .asset(),
-                    )
-                    .accessibility_label(if collapsed {
-                        "Expand message"
-                    } else {
-                        "Collapse message"
-                    })
-                    .on_click(move |_, w, cx| toggle(w, cx)),
+            wrapper.child(
+                ui::action(
+                    ("message-fold", row.id()),
+                    if collapsed { "Show more" } else { "Show less" },
+                    Action::Quiet,
                 )
-                .when(collapsed, |d| {
-                    d.child(
-                        ui::text(
-                            ui::Text::Caption,
-                            SharedString::from(
-                                "Source preview. Selection copies only this prefix.",
-                            ),
-                        )
-                        .text_color(cx.theme().muted_foreground),
-                    )
-                }),
+                .icon(
+                    if collapsed {
+                        crate::app_icon::AppIcon::Expand
+                    } else {
+                        crate::app_icon::AppIcon::Collapse
+                    }
+                    .asset(),
+                )
+                .accessibility_label(if collapsed {
+                    "Expand message"
+                } else {
+                    "Collapse message"
+                })
+                .on_click(move |_, w, cx| toggle(w, cx)),
+            ),
         )
     }
     /// Automatic input as one disclosure line, like a work row: what it is and

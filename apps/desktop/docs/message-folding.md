@@ -11,7 +11,7 @@ bytes, discarding the final potentially incomplete grapheme. A giant combining
 cluster can therefore produce an empty preview, never a broken cluster.
 
 The collapsed parser receives only escaped plain-prefix HTML, not full Markdown
-under a clipping mask. Selection copies only the labeled source preview.
+under a clipping mask. Selection copies only the source preview.
 **Copy full source** copies the exact loaded source, including whitespace and
 line endings. This does not recover source already omitted by the existing
 1MiB per-message and8MiB aggregate reader admission limits. Those refusal placeholders
