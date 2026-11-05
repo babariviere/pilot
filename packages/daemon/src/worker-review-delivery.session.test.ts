@@ -82,6 +82,7 @@ test("real session host custody admits a committed checkpoint and rejects projec
 		const snapshotResponse = await fetch(`${root}/${selected.snapshotId}`);
 		assert.equal(snapshotResponse.status, 200);
 		const snapshot = (await snapshotResponse.json()) as { after: { path: string; sha256: string }[] };
+		assert.equal("enrollmentProjectId" in snapshot, false, "legacy v1 snapshot body has no project marker");
 		assert.equal((await fetch(`${root}/${selected.snapshotId}/patch`)).status, 200);
 		const entry = snapshot.after.find((e) => e.path === "a.txt")!;
 		const source = await fetch(`${root}/${selected.snapshotId}/source?side=after&path=a.txt&sha256=${entry.sha256}`);

@@ -4,23 +4,29 @@
 The eligible-worker lifecycle checkpoint below starts bounded committed-layer captures.
 HTTP, IPC and agent tools expose no capture write API; opening Review never captures.
 The [native Review read slice](mission-native-review.md) exposes only admitted, bounded reads,
-with current mission/project/worker custody, strict required manifests and exact retained references.
+with current project/chat custody (and original mission custody for v1), strict required manifests
+and exact retained references.
 The host must authorize the exact comparison **before** calling `capture`. Ownership
 is evidence about the creator, not authorization from an agent's payload. A future
 transport needs its own authorization and read-access checks.
 
 ## Eligible-worker checkpoint
 
-Only newly created, managed `planningVersion: 1` builder bindings are capture-enabled.
-The creation transaction records activation; observing, reopening or re-registering an older
-binding cannot activate it. Legacy missions, existing unenrolled workers, direct checkouts,
-Ask/explorer/reviewer/coordinator work and continued custody are not adopted. Existing legacy
-mission work remains unavailable without proven enrollment; no legacy custody bridge or backfill
-is installed.
+New ordinary standalone Build chats with managed jj project clones are automatically enrolled.
+Their host-only creation marker persists `{version:2,sessionId,projectId}` before preparation.
+Only that marked initial recipe may create a v2 binding; restarting preparation can resume it,
+but load, GET, mode changes and continuation never mint the marker. Existing chats, Ask,
+direct checkouts, cwd overrides and Git-only clones remain explicitly not captured.
+
+New managed `planningVersion: 1` builders retain the original v1 mission/task binding and
+authorization. Neither version is converted or backfilled. Both extend their scope with the
+existing exact repository/workspace/path/start-operation fields. The creation transaction
+records activation; observing, reopening or re-registering an older binding cannot activate it.
 
 On current-worker ready or a quiescent turn end (no background work), the host checks current
-durable mission membership/role, mission project, session metadata, the project source and
-the exact managed workspace binding. It observes ownership without snapshotting files. At
+project, session metadata, project source and exact managed workspace binding. V1 also requires
+current durable mission membership/role. V2 remains project/chat-owned after later same-project
+membership, with no invented assignment or conversion. It observes ownership without snapshotting files. At
 that pinned observation operation, a proven owned change with one visible revision and one
 non-root parent, other than the bound workspace's checkout, defines a **committed layer**.
 Merge/divergent/absent/unproven subjects are not reduced to guessed comparisons. A closed
@@ -51,6 +57,13 @@ classes, never source or raw paths. Scoped status also identifies divergent, mul
 absent, unknown-custody/discovery and conflicted cases, with explanations in native Details.
 Existing saved comparisons remain independently readable.
 No task purpose, task completion, allocation, review, acceptance or integration record is created.
+
+Session/project GETs admit v2 through a separate exact project/chat ledger lookup and recheck
+custody around I/O. Legacy mission routes/lookups stay v1-only, without a project fallback.
+V2 snapshot responses add `enrollmentProjectId` from the trusted binding and use
+`enrollmentTaskIds: []`. V1 snapshot bodies are unchanged. Related mission records for v2
+return 422, even after the chat joins a mission. Both versions share the same retention budget,
+pending/failure projection and committed-only producer; no new eviction is installed.
 
 ## Capture contract
 

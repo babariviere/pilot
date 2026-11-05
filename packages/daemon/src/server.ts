@@ -1461,26 +1461,31 @@ export function createDaemonServer(
 			const admissions: (() => void)[] = [];
 			for (const chat of sessions.list({ projectId, archived: "all" })) {
 				const member = missions?.store.membership(chat.id);
-				if (!member || member.coordinator || (missionId !== null && member.missionId !== missionId)) continue;
+				if (member?.coordinator || (missionId !== null && member?.missionId !== missionId)) continue;
 				const authorize = () => {
 					authorizeProject();
-					const current = missions!.store.membership(chat.id);
+					const current = missions?.store.membership(chat.id);
 					if (
-						current?.missionId !== member.missionId ||
-						current.coordinator ||
-						missions!.store.require(member.missionId).projectId !== projectId ||
+						current?.missionId !== member?.missionId ||
+						current?.coordinator !== member?.coordinator ||
+						(member && missions!.store.require(member.missionId).projectId !== projectId) ||
 						sessions.get(chat.id)?.projectId !== projectId
 					)
 						throw new HttpError(403, "Retained Review unavailable in this scope");
 				};
 				try {
-					if (!(await sessions.hasNativeReviewBinding(chat.id, member.missionId, projectId, authorize))) continue;
+					if (!(await sessions.hasNativeReviewBinding(chat.id, member?.missionId, projectId, authorize, true)))
+						continue;
 				} catch (error) {
 					if (error instanceof HttpError) throw error;
 					throw new HttpError(403, "Retained Review unavailable in this scope");
 				}
 				admissions.push(authorize);
-				chats.push({ id: chat.id, title: sessions.get(chat.id)!.title, missionId: member.missionId });
+				chats.push({
+					id: chat.id,
+					title: sessions.get(chat.id)!.title,
+					...(member ? { missionId: member.missionId } : {}),
+				});
 				if (chats.length > 100) break;
 			}
 			for (const authorize of admissions) authorize();
@@ -1543,7 +1548,7 @@ export function createDaemonServer(
 			try {
 				const after = url.searchParams.get("after") ?? "0";
 				if (!snapshotId && !/^\d{1,15}$/.test(after)) throw new Error("Invalid cursor");
-				if (chatRoute && (!mission || initialMember?.coordinator)) {
+				if (chatRoute && (!initialSession!.projectId || initialMember?.coordinator)) {
 					if (snapshotId) throw new HttpError(403, "Retained Review unavailable in this scope");
 					return json(res, 200, {
 						comparisons: [],
@@ -1552,7 +1557,13 @@ export function createDaemonServer(
 							"Not captured. No retained managed ownership binding for this chat. Reading does not enroll, capture or migrate existing work.",
 					});
 				}
-				const reader = sessions.nativeReviewReader(workerId, missionId!, mission!.projectId, authorize);
+				const reader = sessions.nativeReviewReader(
+					workerId,
+					missionId,
+					mission?.projectId ?? initialSession!.projectId!,
+					authorize,
+					chatRoute,
+				);
 				if (!snapshotId) {
 					return json(res, 200, await reader.list(Number(after)));
 				}
@@ -1598,6 +1609,10 @@ export function createDaemonServer(
 				}
 				if (section === "records") {
 					const snapshot = await reader.get(snapshotId);
+					if (snapshot.enrollmentProjectId !== undefined || !missionId)
+						return json(res, 422, {
+							error: "Related records unavailable: project/chat capture has no mission assessment scope.",
+						});
 					let records: ReturnType<MissionStore["nativeReviewRecords"]>;
 					try {
 						records = missions!.store.nativeReviewRecords(missionId!, workerId, snapshotId, snapshot);

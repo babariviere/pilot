@@ -17,7 +17,7 @@ import {
 import type { ReviewCaptureRequest } from "./review-snapshot-contract.ts";
 import { type Runner, run } from "./workspaces.ts";
 
-export type { JjOwnedChange, JjOwnershipBinding, JjWorkerScope } from "./jj-ownership-contract.ts";
+export type { JjCaptureScope, JjOwnedChange, JjOwnershipBinding, JjWorkerScope } from "./jj-ownership-contract.ts";
 
 /** Physical repository instance, not a remote URL (forks/copies must not share claims). */
 export async function jjRepositoryIdentity(repository: string): Promise<string> {
@@ -123,6 +123,16 @@ export class JjOwnershipStore {
 		return this.rpc<import("./jj-ownership-contract.ts").JjOwnershipBinding | undefined>("sessionBinding", {
 			sessionId,
 			missionId,
+			repositoryPath,
+			workspace,
+		});
+	}
+	/** Separate v2 lookup. Mission authorization can never fall back to project custody. */
+	async projectSessionBinding(sessionId: string, projectId: string, repositoryPath: string, workspace: string) {
+		if (!(await this.available())) return undefined;
+		return this.rpc<JjOwnershipBinding | undefined>("projectSessionBinding", {
+			sessionId,
+			projectId,
 			repositoryPath,
 			workspace,
 		});

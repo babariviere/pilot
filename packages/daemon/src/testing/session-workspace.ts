@@ -1,7 +1,7 @@
 // biome-ignore-all lint/complexity/useLiteralKeys: Exercise private lifecycle, persistence and store seams.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestContext } from "node:test";
@@ -88,7 +88,7 @@ class FakeWorker implements SessionWorker {
 }
 
 export async function fixture(t: TestContext, options: SessionManagerOptions = {}) {
-	const root = await mkdtemp(join(tmpdir(), "pilot-session-workspaces-"));
+	const root = await realpath(await mkdtemp(join(tmpdir(), "pilot-session-workspaces-")));
 	const home = join(root, "home");
 	const source = join(root, "source");
 	const managers: SessionManager[] = [];

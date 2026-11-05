@@ -120,6 +120,7 @@ import {
 	validateInsightsGrant,
 } from "./insights-admission.ts";
 import { insightsSourceAllowed } from "./insights-settings.ts";
+import { type JjProjectScope, workerScope } from "./jj-ownership-contract.ts";
 import { LifecycleDiagnostics } from "./lifecycle-diagnostics.ts";
 import { LongJobTimers, longJobAttention } from "./long-jobs.ts";
 import { forkMainViewWorker, MainViewStore } from "./main-view.ts";
@@ -127,8 +128,8 @@ import { McpChatAttention, type McpStatusSource } from "./mcp-attention.ts";
 import { ModelCatalog } from "./models.ts";
 import { NativeDiagnosticsStore } from "./native-diagnostics.ts";
 import { NativeReviewReader, NoRetainedBinding } from "./native-review.ts";
-import { canonicalJSON } from "./operation-journal.ts";
 import { reasonLine, stuckPullRequestReason } from "./needs-you-reason.ts";
+import { canonicalJSON } from "./operation-journal.ts";
 import { PiReload } from "./pi-reload.ts";
 import {
 	AUTOMATION_FOLLOW_UP_ATTEMPT_LIMIT,
@@ -465,6 +466,8 @@ interface SessionMeta extends OutcomeMeta {
 	/** Stable create reservation. Never reuse this session ID for another operation. */
 	createOperationId?: string;
 	createMissionId?: string;
+	/** Host-only creation admission. Never synthesized on load, role change or continuation. */
+	retainedScope?: JjProjectScope;
 	/** Durable known limits and window-scoped user exemptions, shared with child admission gates. */
 	subscriptionPolicy?: SubscriptionPolicy;
 	continuationOf?: string;
@@ -5863,22 +5866,40 @@ ${run.excerpt}`,
 	}
 
 	/** Native retained reads derive custody only from durable host metadata, never a request path. */
-	nativeReviewReader(id: string, missionId: string, projectId: string, authorize: () => void) {
+	nativeReviewReader(
+		id: string,
+		missionId: string | undefined,
+		projectId: string,
+		authorize: () => void,
+		projectBinding = missionId === undefined,
+	) {
 		return new NativeReviewReader(this.reviewSnapshots, this.sharedWorkspaces.ownership, () =>
-			this.retainedWorkerBinding(id, missionId, projectId, authorize),
+			this.retainedWorkerBinding(id, missionId, projectId, authorize, projectBinding),
 		);
 	}
 	/** Discovery reads custody only, without opening snapshots or enrolling a workspace. */
-	async hasNativeReviewBinding(id: string, missionId: string, projectId: string, authorize: () => void) {
+	async hasNativeReviewBinding(
+		id: string,
+		missionId: string | undefined,
+		projectId: string,
+		authorize: () => void,
+		projectBinding = missionId === undefined,
+	) {
 		try {
-			await this.retainedWorkerBinding(id, missionId, projectId, authorize);
+			await this.retainedWorkerBinding(id, missionId, projectId, authorize, projectBinding);
 			return true;
 		} catch (error) {
 			if (error instanceof NoRetainedBinding) return false;
 			throw error;
 		}
 	}
-	private async retainedWorkerBinding(id: string, missionId: string, projectId: string, authorize: () => void) {
+	private async retainedWorkerBinding(
+		id: string,
+		missionId: string | undefined,
+		projectId: string,
+		authorize: () => void,
+		projectBinding = false,
+	) {
 		const scope = () => {
 			authorize();
 			const meta = this.metas.get(id);
@@ -5889,19 +5910,41 @@ ${run.excerpt}`,
 			if (this.projects.require(projectId).path !== meta.workspace.source)
 				throw new Error("Retained repository is outside the current project source");
 			this.assertOwnedWorkspace(meta);
-			return { ...meta.workspace.shared, path: meta.cwd };
+			const enrollment = projectBinding ? meta.retainedScope : undefined;
+			if (enrollment) {
+				workerScope(enrollment);
+				if (enrollment.version !== 2 || enrollment.sessionId !== id || enrollment.projectId !== projectId)
+					throw new Error("Retained project custody changed");
+			}
+			return { ...meta.workspace.shared, path: meta.cwd, ...(enrollment ? { enrollment: { ...enrollment } } : {}) };
 		};
 		const before = scope();
-		const binding = await this.sharedWorkspaces.ownership.sessionBinding(
-			id,
-			missionId,
-			before.repository,
-			before.name,
-		);
+		const binding = before.enrollment
+			? await this.sharedWorkspaces.ownership.projectSessionBinding(id, projectId, before.repository, before.name)
+			: missionId
+				? await this.sharedWorkspaces.ownership.sessionBinding(id, missionId, before.repository, before.name)
+				: undefined;
 		if (JSON.stringify(scope()) !== JSON.stringify(before)) throw new Error("Retained workspace custody changed");
 		if (!binding) throw new NoRetainedBinding("No retained worker enrollment");
 		if (binding.path !== before.path) throw new Error("Retained workspace custody unavailable or changed");
 		return binding;
+	}
+	/** Only a marked new creation recipe may mint project/chat custody. */
+	private creationOwnershipScope(meta: SessionMeta) {
+		if (!meta.retainedScope) return this.missions?.ownershipScope?.(meta.id);
+		workerScope(meta.retainedScope);
+		if (
+			meta.retainedScope.version !== 2 ||
+			meta.retainedScope.sessionId !== meta.id ||
+			meta.retainedScope.projectId !== meta.projectId ||
+			meta.mode !== "build" ||
+			meta.role ||
+			meta.continuationOf ||
+			meta.workspaceOriginId ||
+			this.projects.require(meta.retainedScope.projectId).path !== meta.preparing?.source
+		)
+			throw new Error("Retained project creation custody unavailable");
+		return meta.retainedScope;
 	}
 	private checkpointWorkerReview(meta: SessionMeta): Promise<void> {
 		const shared = meta.workspace?.shared;
@@ -5911,6 +5954,25 @@ ${run.excerpt}`,
 		return this.workerReviewDelivery.checkpoint(
 			meta.id,
 			async () => {
+				if (meta.retainedScope) {
+					return this.retainedWorkerBinding(
+						meta.id,
+						undefined,
+						meta.retainedScope.projectId,
+						() => {
+							if (
+								this.metas.get(meta.id) !== meta ||
+								meta.cwd !== cwd ||
+								JSON.stringify(meta.workspace?.shared) !== workspace ||
+								meta.mode !== "build" ||
+								meta.role ||
+								meta.continuedTo
+							)
+								throw new Error("Retained project custody changed");
+						},
+						true,
+					);
+				}
 				const scope = await this.missions?.reviewCaptureScope?.(meta.id);
 				if (!scope) return undefined;
 				try {
@@ -7579,6 +7641,9 @@ ${run.excerpt}`,
 			cwd,
 			...(project ? { projectId: project.id } : {}),
 			...(preparing ? { preparing } : {}),
+			...(preparing && mode === "build" && project && !request.missionId && !request.role && !coordinator
+				? { retainedScope: { version: 2 as const, sessionId: id, projectId: project.id } }
+				: {}),
 			...(deferInsightsInput ? {} : { initializing: true as const }),
 			pending: deferInsightsInput
 				? []
@@ -10085,7 +10150,7 @@ ${run.excerpt}`,
 										meta.cwd,
 										this.shutdownSignal.signal,
 										plan.baseBranch,
-										this.missions?.ownershipScope?.(id),
+										this.creationOwnershipScope(meta),
 									)
 								: createWorkspace(
 										plan.source,

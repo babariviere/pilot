@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { SessionPullRequest } from "@pilot/protocol";
-import { JjOwnershipStore, type JjWorkerScope, jjRepositoryIdentity } from "./jj-ownership.ts";
+import { type JjCaptureScope, JjOwnershipStore, jjRepositoryIdentity } from "./jj-ownership.ts";
 import { workerScope } from "./jj-ownership-contract.ts";
 import { mergedPullRequestHead } from "./pr-auto-rebase.ts";
 import { workspaceBookmarks, workspaceChangeIds } from "./pull-requests.ts";
@@ -834,7 +834,7 @@ export class SharedWorkspaceStore {
 		destination: string,
 		signal?: AbortSignal,
 		baseBranch?: string,
-		scope?: JjWorkerScope,
+		scope?: JjCaptureScope,
 	): Promise<Workspace> {
 		if (scope !== undefined) workerScope(scope);
 		source = await canonical(source);

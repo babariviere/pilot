@@ -105,6 +105,7 @@ test("native retained reads are exact, scoped, paged, revocable and survive work
 		await assert.rejects(reader.source(s.snapshotId, { ...ref, snapshotId: stack.snapshotId }), /Cross-comparison/);
 		await assert.rejects(reader.source(s.snapshotId, { ...ref, path: "../private" }), /Unsafe/);
 		await assert.rejects(reader.source(s.snapshotId, { ...ref, sha256: "a".repeat(64) }), /unavailable/);
+		if (binding.version !== 1) throw new Error("Expected legacy mission custody");
 		const other = new NativeReviewReader(snapshots, f.store.ownership, async () => ({
 			...binding,
 			missionId: "other",

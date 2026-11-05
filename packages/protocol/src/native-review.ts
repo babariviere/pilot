@@ -50,6 +50,8 @@ export interface NativeReviewSnapshot {
 	capturedAt: number;
 	/** Enrollment scope is not historical task purpose. */
 	enrollmentTaskIds: string[];
+	/** Present only for project/chat v2 custody, whose task enrollment is empty. */
+	enrollmentProjectId?: string;
 	creation: { changeId: string; commitId: string; operationId: string; kind: string };
 	omissions: string[];
 	before: NativeReviewSource[];

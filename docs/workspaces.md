@@ -23,6 +23,11 @@ repository permissions, and branch protection still apply.
 Review changes in the chat. Attach an existing PR from **Changes** with its GitHub
 URL or number. A PR elsewhere on the same branch is not automatically owned by the chat.
 
+New standalone Build chats in isolated jj workspaces automatically retain committed changes
+for Review, including later revisions. Unsaved edits are not captured. Existing chats, Ask,
+direct checkouts and Git-only clones are not enrolled. Capture shares the existing retention
+limit; pending or failed captures stay explicit, without deleting older comparisons.
+
 Pilot monitors eligible agent-owned PRs for CI failures, review feedback, and conflicts.
 Follow-ups are bounded; unresolved problems return to you. Agents do not merge PRs.
 Any supported app merge action requires your confirmation.

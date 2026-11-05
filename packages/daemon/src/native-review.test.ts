@@ -394,7 +394,7 @@ test("project/chat Review adapters preserve bodies, narrow current scope and per
 	);
 	t.mock.method(sessions, "hasNativeReviewBinding", async (id: string, _m: string, _p: string, auth: () => void) => {
 		auth();
-		return id !== "unbound";
+		return id !== "unbound" && id !== "standalone";
 	});
 	const retained = snapshot();
 	const ownership = retained.manifest.provenance.ledger.ownership;
@@ -429,48 +429,53 @@ test("project/chat Review adapters preserve bodies, narrow current scope and per
 		mutate = undefined;
 		call?.();
 	};
-	t.mock.method(sessions, "nativeReviewReader", (id: string, m: string, p: string, authorize: () => void) => {
-		assert.equal(m, mission.id);
-		assert.equal(p, project.id);
-		const reader = new NativeReviewReader(
-			{
-				get: async (snapshotId) => {
-					invokeMutation("get");
-					if (broken || snapshotId !== retained.snapshotId) throw new Error("private corrupt manifest /host/path");
-					return retained;
+	t.mock.method(
+		sessions,
+		"nativeReviewReader",
+		(id: string, m: string | undefined, p: string, authorize: () => void) => {
+			if (m !== undefined) assert.equal(m, mission.id);
+			assert.equal(p, project.id);
+			const reader = new NativeReviewReader(
+				{
+					get: async (snapshotId) => {
+						invokeMutation("get");
+						if (broken || snapshotId !== retained.snapshotId)
+							throw new Error("private corrupt manifest /host/path");
+						return retained;
+					},
+					list: async () => {
+						invokeMutation("list");
+						return { comparisons: [], next: null };
+					},
+					identity: async () => "a".repeat(64),
+					diff: async () => {
+						invokeMutation("diff");
+						return Buffer.from("patch");
+					},
+					read: async (_snapshotId, ref) => {
+						invokeMutation("read");
+						if (ref.path === "b.ts") return analysisRead ? analysisRead() : codeBytes;
+						return Buffer.from("source");
+					},
 				},
-				list: async () => {
-					invokeMutation("list");
-					return { comparisons: [], next: null };
+				{ get: async () => retained.manifest.provenance.ledger },
+				async () => {
+					authorize();
+					if (id === "unbound" || !m) throw new NoRetainedBinding();
+					return structuredClone(ownership.binding);
 				},
-				identity: async () => "a".repeat(64),
-				diff: async () => {
-					invokeMutation("diff");
-					return Buffer.from("patch");
-				},
-				read: async (_snapshotId, ref) => {
-					invokeMutation("read");
-					if (ref.path === "b.ts") return analysisRead ? analysisRead() : codeBytes;
-					return Buffer.from("source");
-				},
-			},
-			{ get: async () => retained.manifest.provenance.ledger },
-			async () => {
-				authorize();
-				if (id === "unbound") throw new NoRetainedBinding();
-				return structuredClone(ownership.binding);
-			},
-		);
-		const compare = reader.compareCalls.bind(reader);
-		reader.compareCalls = (...args) => {
-			args[2]?.addEventListener("abort", () => analysisCancelled?.(), { once: true });
-			return compare(...args).finally(() => {
-				analysesSettled++;
-				analysisSettled?.();
-			});
-		};
-		return reader;
-	});
+			);
+			const compare = reader.compareCalls.bind(reader);
+			reader.compareCalls = (...args) => {
+				args[2]?.addEventListener("abort", () => analysisCancelled?.(), { once: true });
+				return compare(...args).finally(() => {
+					analysesSettled++;
+					analysisSettled?.();
+				});
+			};
+			return reader;
+		},
+	);
 	const terminals = new TerminalManager();
 	const server = createDaemonServer(
 		{ home, host: "127.0.0.1", port: 0 },

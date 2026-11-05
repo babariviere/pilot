@@ -124,3 +124,69 @@ test("cursor compare-and-swap is atomic and incomplete observations never acknow
 		rmSync(home, { recursive: true, force: true });
 	}
 });
+
+test("v2 project/chat custody is strict, durable and separate from unchanged v1 mission bindings", async () => {
+	const home = mkdtempSync(join(tmpdir(), "project-ownership-"));
+	const file = join(home, "ownership.sqlite");
+	let store = new JjOwnershipStore(file);
+	const { missionId: _mission, taskIds: _tasks, ...common } = scope;
+	const project: JjOwnershipBinding = { ...common, version: 2, projectId: "project" };
+	const projectProof = { ...creation, changeId: "p".repeat(32) };
+	try {
+		await store.register(scope, creation);
+		for (const invalid of [
+			{ ...project, missionId: "fake" },
+			{ ...project, taskIds: [] },
+			{ ...project, projectId: "" },
+			{ ...project, version: 3 },
+			{ ...project, extra: true },
+		])
+			await assert.rejects(store.register(invalid as never, projectProof));
+		// A project scope cannot replace an existing mission binding or vice versa.
+		await assert.rejects(store.register(project, projectProof), /cannot transfer/);
+		project.workspace = `pilot-project-${"d".repeat(16)}`;
+		await store.register(project, projectProof);
+		assert.deepEqual(
+			await store.sessionBinding(scope.sessionId, scope.missionId!, scope.repositoryPath, scope.workspace),
+			scope,
+		);
+		assert.equal(
+			await store.sessionBinding(project.sessionId, "project", project.repositoryPath, project.workspace),
+			undefined,
+		);
+		assert.equal(
+			await store.projectSessionBinding(scope.sessionId, "project", scope.repositoryPath, scope.workspace),
+			undefined,
+		);
+		assert.equal(
+			await store.projectSessionBinding(project.sessionId, "wrong", project.repositoryPath, project.workspace),
+			undefined,
+		);
+		assert.deepEqual(
+			await store.projectSessionBinding(project.sessionId, "project", project.repositoryPath, project.workspace),
+			project,
+		);
+		await store.close();
+		store = new JjOwnershipStore(file);
+		assert.deepEqual(
+			await store.projectSessionBinding(project.sessionId, "project", project.repositoryPath, project.workspace),
+			project,
+		);
+		const owner = (await store.get(repositoryId, projectProof.changeId)).ownership;
+		assert.equal(owner.status, "owned");
+		if (owner.status === "owned") {
+			assert.deepEqual(owner.binding, project);
+			assert.equal(owner.taskAttribution, "unknown");
+			assert.equal("taskIds" in owner.binding, false);
+			assert.equal("missionId" in owner.binding, false);
+		}
+		await store.register({ ...project, workspace: `pilot-collision-${"e".repeat(16)}` }, projectProof);
+		assert.deepEqual((await store.get(repositoryId, projectProof.changeId)).ownership, {
+			status: "unknown",
+			reason: "collision",
+		});
+	} finally {
+		await store.close();
+		rmSync(home, { recursive: true, force: true });
+	}
+});

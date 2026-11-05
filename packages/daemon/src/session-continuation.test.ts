@@ -281,6 +281,7 @@ test("cross-provider continuation creates only a fresh handoff and fences all ol
 	meta.subscriptionPolicy = { version: 1, windows: [], force: ["openai"] };
 	meta.executionPermission = { authorizationId: "grant", level: "implement" };
 	meta.coordinatorArchivePreservesWorkspace = true;
+	meta.retainedScope = { version: 2, sessionId: f.id, projectId: "project" };
 	await f.sessions["save"](meta);
 	const source = (await f.sessions["ensureWorker"](f.id)) as FakeWorker;
 	meta.subagents = [
@@ -306,6 +307,11 @@ test("cross-provider continuation creates only a fresh handoff and fences all ol
 	assert.deepEqual(target.spec.pilot?.executionPermission, meta.executionPermission);
 	assert.deepEqual(f.sessions["metas"].get(changed.id)?.executionPermission, meta.executionPermission);
 	assert.equal(f.sessions["metas"].get(changed.id)?.coordinatorArchivePreservesWorkspace, true);
+	assert.equal(
+		f.sessions["metas"].get(changed.id)?.retainedScope,
+		undefined,
+		"continuation cannot inherit new-creation enrollment",
+	);
 	assert.notEqual(target.spec.storageDir, source.spec.storageDir);
 	assert.equal(target.spec.continuationModel, undefined);
 	const input = target.commands.find((command) => command.type === "input");

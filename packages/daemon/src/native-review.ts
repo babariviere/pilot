@@ -50,7 +50,7 @@ export class NativeReviewReader {
 				comparisons: [],
 				next: null,
 				unavailable:
-					"No retained managed ownership binding for this worker. Reading does not enroll, capture or migrate existing work.",
+					"Not captured. No retained managed ownership binding for this worker. Reading does not enroll, capture or migrate existing work.",
 			};
 		}
 		const page = await this.snapshots.list(binding, after);
@@ -92,7 +92,8 @@ export class NativeReviewReader {
 			status: m.status,
 			workerId: o.binding.sessionId,
 			capturedAt: m.provenance.capturedAt,
-			enrollmentTaskIds: o.binding.taskIds,
+			enrollmentTaskIds: o.binding.version === 1 ? o.binding.taskIds : [],
+			...(o.binding.version === 2 ? { enrollmentProjectId: o.binding.projectId } : {}),
 			creation: o.creation,
 			omissions: m.omissions,
 			before: m.before,

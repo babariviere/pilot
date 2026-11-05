@@ -105,12 +105,14 @@ async function dispatch(id: number, method: string, args: Record<string, unknown
 		bindingRecord(args.binding);
 		if (!Number.isSafeInteger(args.after) || Number(args.after) < 0) throw new Error("Invalid comparison cursor");
 		const b = args.binding;
+		const subject = b.version === 1 ? "missionId" : "projectId";
 		const rows = db
 			.prepare(`SELECT rowid,id FROM snapshots WHERE rowid>?
 		 AND json_extract(manifest,'$.request.repositoryId')=?
 		 AND json_extract(manifest,'$.provenance.ledger.ownership.binding.sessionId')=?
-		 AND json_extract(manifest,'$.provenance.ledger.ownership.binding.missionId')=? ORDER BY rowid LIMIT 21`)
-			.all(Number(args.after), b.repositoryId, b.sessionId, b.missionId);
+		 AND json_extract(manifest,'$.provenance.ledger.ownership.binding.version')=?
+		 AND json_extract(manifest,'$.provenance.ledger.ownership.binding.${subject}')=? ORDER BY rowid LIMIT 21`)
+			.all(Number(args.after), b.repositoryId, b.sessionId, b.version, b.version === 1 ? b.missionId : b.projectId);
 		const comparisons = rows.slice(0, 20).map((row) => {
 			const s = get(row.id),
 				m = s.manifest;

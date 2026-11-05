@@ -270,9 +270,22 @@ function dispatch(method: string, input: unknown): unknown {
 		if (typeof input.repositoryPath !== "string") throw new Error("Invalid repository binding");
 		const rows = db
 			.prepare(`SELECT repository,workspace FROM bindings
-		 WHERE workspace=? AND json_extract(binding,'$.sessionId')=? AND json_extract(binding,'$.missionId')=?
+		 WHERE json_extract(binding,'$.version')=1 AND workspace=? AND json_extract(binding,'$.sessionId')=? AND json_extract(binding,'$.missionId')=?
 		 AND json_extract(binding,'$.repositoryPath')=? LIMIT 2`)
 			.all(input.workspace, input.sessionId as string, input.missionId as string, input.repositoryPath);
+		if (rows.length > 1) throw new Error("Ambiguous retained repository custody");
+		return rows[0] ? binding(rows[0].repository, rows[0].workspace)?.binding : undefined;
+	}
+	if (method === "projectSessionBinding") {
+		exact(input, ["sessionId", "projectId", "repositoryPath", "workspace"]);
+		for (const id of [input.sessionId, input.projectId]) identifier(id, /^[a-zA-Z0-9_-]{1,128}$/);
+		identifier(input.workspace, /^pilot-[a-zA-Z0-9_-]+-[a-f0-9]{16}$/);
+		if (typeof input.repositoryPath !== "string") throw new Error("Invalid repository binding");
+		const rows = db
+			.prepare(`SELECT repository,workspace FROM bindings
+		 WHERE json_extract(binding,'$.version')=2 AND workspace=? AND json_extract(binding,'$.sessionId')=?
+		 AND json_extract(binding,'$.projectId')=? AND json_extract(binding,'$.repositoryPath')=? LIMIT 2`)
+			.all(input.workspace, input.sessionId as string, input.projectId as string, input.repositoryPath);
 		if (rows.length > 1) throw new Error("Ambiguous retained repository custody");
 		return rows[0] ? binding(rows[0].repository, rows[0].workspace)?.binding : undefined;
 	}

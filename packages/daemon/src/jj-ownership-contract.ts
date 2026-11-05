@@ -3,17 +3,29 @@ export interface JjWorkerScope {
 	version: 1;
 	sessionId: string;
 	missionId: string;
+	projectId?: never;
 	/** Enrollment assignment scope, never proof of exact per-change task attribution. */
 	taskIds: string[];
 }
 
-export interface JjOwnershipBinding extends JjWorkerScope {
+/** Creation-only project/chat custody. It carries no mission or assignment claim. */
+export interface JjProjectScope {
+	version: 2;
+	sessionId: string;
+	projectId: string;
+	missionId?: never;
+	taskIds?: never;
+}
+
+export type JjCaptureScope = JjWorkerScope | JjProjectScope;
+
+export type JjOwnershipBinding = JjCaptureScope & {
 	repositoryId: string;
 	repositoryPath: string;
 	workspace: string;
 	path: string;
 	startOperation: string;
-}
+};
 
 export interface JjRevision {
 	changeId: string;
@@ -75,8 +87,13 @@ export function identifier(value: unknown, pattern: RegExp): asserts value is st
 	if (typeof value !== "string" || !pattern.test(value)) throw new Error("Invalid ownership identifier");
 }
 
-export function workerScope(value: unknown): asserts value is JjWorkerScope {
-	exact(value, ["version", "sessionId", "missionId", "taskIds"]);
+export function workerScope(value: unknown): asserts value is JjCaptureScope {
+	const project = !!value && typeof value === "object" && "version" in value && value.version === 2;
+	exact(value, project ? ["version", "sessionId", "projectId"] : ["version", "sessionId", "missionId", "taskIds"]);
+	if (project) {
+		for (const id of [value.sessionId, value.projectId]) identifier(id, /^[a-zA-Z0-9_-]{1,128}$/);
+		return;
+	}
 	if (value.version !== 1) throw new Error("Unsupported ownership version");
 	for (const id of [value.sessionId, value.missionId]) identifier(id, /^[a-zA-Z0-9_-]{1,128}$/);
 	if (!Array.isArray(value.taskIds) || value.taskIds.length < 1 || value.taskIds.length > 100)
@@ -86,11 +103,11 @@ export function workerScope(value: unknown): asserts value is JjWorkerScope {
 }
 
 export function bindingRecord(value: unknown): asserts value is JjOwnershipBinding {
+	const project = !!value && typeof value === "object" && "version" in value && value.version === 2;
 	exact(value, [
 		"version",
 		"sessionId",
-		"missionId",
-		"taskIds",
+		...(project ? ["projectId"] : ["missionId", "taskIds"]),
 		"repositoryId",
 		"repositoryPath",
 		"workspace",
@@ -100,8 +117,7 @@ export function bindingRecord(value: unknown): asserts value is JjOwnershipBindi
 	workerScope({
 		version: value.version,
 		sessionId: value.sessionId,
-		missionId: value.missionId,
-		taskIds: value.taskIds,
+		...(project ? { projectId: value.projectId } : { missionId: value.missionId, taskIds: value.taskIds }),
 	});
 	identifier(value.repositoryId, repositoryIdPattern);
 	identifier(value.startOperation, operationIdPattern);
