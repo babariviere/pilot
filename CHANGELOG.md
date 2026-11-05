@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.118.0](https://github.com/babariviere/pilot/compare/v1.117.0...v1.118.0) (2026-11-05)
+
+
+### Features
+
+* **insights:** apply saved review settings safely ([cc51bb4](https://github.com/babariviere/pilot/commit/cc51bb4af2ddc094618a9e8fb3514891705f76d9))
+* **review:** retain new standalone Build changes ([64af9c6](https://github.com/babariviere/pilot/commit/64af9c68898b1427bef431b55c565dd07d3d83aa))
+
+
+### Bug Fixes
+
+* **ci:** preserve complete native test registry coverage ([e766f4d](https://github.com/babariviere/pilot/commit/e766f4d0c22025c9ee086decf0717716fad1922b))
+* **desktop:** follow project model edits in repair model menus ([b92ca07](https://github.com/babariviere/pilot/commit/b92ca0714f18288cae34c527206bf74da53613b6))
+* **desktop:** remove source preview caption ([559827a](https://github.com/babariviere/pilot/commit/559827ada84b8e6f1d8eaf7aa621f40b2a1df4e6))
+
 ## [1.117.0](https://github.com/babariviere/pilot/compare/v1.116.1...v1.117.0) (2026-11-04)
 
 
