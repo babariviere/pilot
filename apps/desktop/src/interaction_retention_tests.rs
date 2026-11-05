@@ -1,5 +1,85 @@
 //! Restart qualification using only the existing temporary store and faux daemon.
+use super::send_waits::{arrived, disconnected, disk, stalled};
 use super::*;
+
+#[tokio::test]
+async fn update_checkpoint_joins_delayed_send_and_newer_draft_without_replay() {
+    for behavior in [Behavior::Accept, Behavior::LostAccepted, Behavior::Pending] {
+        let (daemon, reached, release) = stalled(behavior, "/api/operations").await;
+        let temp = Temp::new();
+        let (client, updates) = ready(&daemon, &temp).await;
+        submit(&client, "chat:a", 1, "Original 日本語", 1, false);
+        arrived(&reached).await;
+        let original = disk(&temp).pending.values().next().unwrap().clone();
+        assert!(client.edit("chat:a".into(), draft(8, "Unsent 👩‍💻 e\u{301}\n  ")));
+        assert!(client.command(WriteCommand::Checkpoint(71)));
+        let saved = until(&updates, |s| {
+            s.book
+                .as_ref()
+                .is_some_and(|b| b.drafts["chat:a"].revision == 8)
+        })
+        .await;
+        assert_eq!(saved.checkpoint, None, "the receipt cannot overtake HTTP");
+        release.send(()).await.unwrap();
+        let saved = until(&updates, |s| s.checkpoint == Some(71)).await;
+        let book = saved.book.unwrap();
+        assert!(book.gui_restart_safe());
+        assert_eq!(book.drafts["chat:a"].text, "Unsent 👩‍💻 e\u{301}\n  ");
+        if behavior != Behavior::Accept {
+            assert!(book.pending[&original.id].operation == original.operation);
+        }
+        assert!(client.command(WriteCommand::Close));
+        until(&updates, |s| s.flushed).await;
+        disconnected(client, updates).await;
+        let reopened = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
+        assert!(reopened.book == *book);
+        assert_eq!(
+            daemon.seen.lock().unwrap().envelopes.len(),
+            1,
+            "checkpoint/Close never sends"
+        );
+    }
+}
+
+#[test]
+fn update_checkpoint_saves_exact_volatile_acceptance_without_checking() {
+    for fail in [false, true] {
+        let temp = Temp::new();
+        let options = LocalOptions::synthetic(1);
+        let mut store = Store::open(temp.0.clone(), options.host()).unwrap();
+        let intent = store
+            .prepare("chat:a", &draft(1, "Retain original"), false, false)
+            .unwrap();
+        let mut report = DeliveryReport::new(&intent, None);
+        report.delivery.diagnostic = Some(Diagnostic {
+            stage: Stage::Adoption,
+            category: Category::PrivateCapacity,
+            status: Some(200),
+            acknowledgment: Acknowledgment::Accepted,
+        });
+        report.save_error = Some(Category::PrivateCapacity);
+        let mut state = WriteState::default();
+        state
+            .delivery_reports
+            .insert(intent.id.clone(), report.clone());
+        store.fail_write = fail;
+        let result = checkpoint(&mut store, &mut state, 72);
+        assert_eq!(result.is_err(), fail);
+        assert_eq!(state.checkpoint, (!fail).then_some(72));
+        assert_eq!(state.delivery_reports[&intent.id].saved, !fail);
+        assert_eq!(
+            state.delivery_reports[&intent.id].delivery.diagnostic,
+            report.delivery.diagnostic
+        );
+        drop(store);
+        let reopened = Store::open(temp.0.clone(), options.host()).unwrap();
+        assert!(reopened.book.pending[&intent.id].operation == intent.operation);
+        assert_eq!(
+            reopened.book.pending[&intent.id].diagnostic,
+            (!fail).then_some(report.delivery.diagnostic.unwrap())
+        );
+    }
+}
 
 #[tokio::test]
 async fn update_checkpoint_retains_unknown_across_cold_start_without_any_network() {

@@ -84,8 +84,17 @@ impl LocalViewer {
     }
     /// The first preference or secondary form state an update restart would lose or leave
     /// unconfirmed. The composer, its drafts and deliveries are checked by the checkpoint itself.
+    #[cfg(feature = "native-probes")]
     pub(super) fn update_blocker(
         &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Blocker> {
+        self.restart_blocker(false, window, cx)
+    }
+    fn restart_blocker(
+        &self,
+        install: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Blocker> {
@@ -97,6 +106,11 @@ impl LocalViewer {
             } else {
                 Blocker::PreferencesLoading
             })
+        } else if install
+            && (s.error().is_none()
+                || s.error() == Some(crate::settings_state::SettingsError::DurabilityUnknown))
+        {
+            None
         } else if s.saving() {
             Some(Blocker::Preferences(Hold::Sending))
         } else if s.unconfirmed() {
@@ -106,27 +120,31 @@ impl LocalViewer {
         } else if s.error().is_some() {
             Some(Blocker::PreferencesFailed)
         } else {
-            owner
-                .models
-                .as_ref()
-                .and_then(|m| m.read(cx).update_hold(cx))
-                .map(Blocker::ScopedModels)
-                .or_else(|| {
-                    owner
-                        .chats
-                        .as_ref()
-                        .and_then(|c| c.read(cx).update_hold())
-                        .map(|_| Blocker::ChatSettings)
-                })
-                .or_else(|| {
-                    owner
-                        .projects
-                        .as_ref()
-                        .and_then(|p| p.read(cx).update_hold())
-                        .map(Blocker::ProjectSettings)
-                })
+            None
         };
-        preferences.or_else(|| self.secondary_blocker(window, cx))
+        preferences
+            .or_else(|| {
+                owner
+                    .models
+                    .as_ref()
+                    .and_then(|m| m.read(cx).update_hold(cx))
+                    .map(Blocker::ScopedModels)
+                    .or_else(|| {
+                        owner
+                            .chats
+                            .as_ref()
+                            .and_then(|c| c.read(cx).update_hold())
+                            .map(|_| Blocker::ChatSettings)
+                    })
+                    .or_else(|| {
+                        owner
+                            .projects
+                            .as_ref()
+                            .and_then(|p| p.read(cx).update_hold())
+                            .map(Blocker::ProjectSettings)
+                    })
+            })
+            .or_else(|| self.secondary_blocker(window, cx))
     }
     pub(super) fn secondary_blocker(
         &self,
@@ -187,7 +205,8 @@ impl LocalViewer {
             return Some(blocker);
         }
         // What remains is preedit in the composer, a queue editor or the Inbox picker.
-        (!self.project_choices_ready(window, cx)).then_some(Blocker::Composition)
+        (!self.restart_pending && !self.project_choices_ready(window, cx))
+            .then_some(Blocker::Composition)
     }
     /// Takes the user to the place named by the last refusal. Navigation goes through the
     /// ordinary guarded routes; nothing is saved, discarded or opened for editing.
@@ -281,7 +300,14 @@ impl LocalViewer {
             });
             return;
         }
-        if let Some(blocker) = self.update_blocker(window, cx) {
+        // Preserve the text Kit already holds, ending only its composition transaction.
+        self.editor.update(cx, |e, cx| {
+            e.end_composition(window, cx);
+            e.finish_question_composition(window, cx);
+        });
+        if let Some(blocker) = self.restart_blocker(true, window, cx)
+            && !blocker.settling()
+        {
             updater.update(cx, |u, cx| u.block(blocker, cx));
             return;
         }
@@ -300,7 +326,9 @@ impl LocalViewer {
             e.begin_gui_update_checkpoint(generation, window, cx)
         }) {
             crate::visual_runtime::release_restart_fence();
-            updater.update(cx,|u,cx|u.defer("Finish preedit and resolve pending or unsaved drafts before installing. All text is retained.",cx));
+            let problem = self.editor.read(cx).update_checkpoint_problem().unwrap_or(
+                "The composer is still composing text. Finish that composition before installing; all text is retained.");
+            updater.update(cx, |u, cx| u.defer(problem, cx));
             return;
         }
         #[cfg(target_os = "macos")]
@@ -318,15 +346,25 @@ impl LocalViewer {
         updater.update(cx, |u, cx| {
             u.fenced = true;
             u.blocker = None;
-            u.notice = Some("Saving an exact draft/outbox/preferences checkpoint…");
+            u.notice = Some("Saving drafts before restarting…");
             cx.notify();
         });
         self.restart_timeout=Some(cx.spawn_in(window,async move |view,cx|{
-            cx.background_executor().timer(Duration::from_secs(15)).await;
+            // Only this explicit request waits. A deadline refuses; it never substitutes for ACK.
+            for _ in 0..300 {
+                cx.background_executor().timer(Duration::from_millis(50)).await;
+                let waiting = view.update_in(cx,|view,window,cx|{
+                    if !view.restart_pending || view.restart_generation != generation { return false; }
+                    view.advance_update_restart(window,cx);
+                    view.updater(cx).is_some_and(|u|matches!(u.read(cx).state(),Some(State::ReadyToRestart(_))))
+                }).unwrap_or(false);
+                if !waiting { return; }
+            }
             let _=view.update_in(cx,|view,_,cx|{
-                if view.restart_pending && view.restart_generation==generation
-                    && view.updater(cx).is_some_and(|u|matches!(u.read(cx).state(),Some(State::ReadyToRestart(_)|State::Deferred{..}))) {
-                    view.end_update_restart("Checkpoint durability was not acknowledged. Installation is deferred; drafts remain retained.",cx);
+                if view.restart_pending && view.restart_generation==generation {
+                    let message = view.editor.read(cx).update_checkpoint_problem().unwrap_or(
+                        "Saving drafts or settings did not finish. Keep this window open and check the storage error before retrying.");
+                    view.end_update_restart(message,cx);
                 }
             });
         }));
@@ -415,6 +453,28 @@ impl LocalViewer {
         let Some(updater) = self.updater(cx) else {
             return;
         };
+        self.editor
+            .update(cx, |e, cx| e.advance_update_checkpoint(cx));
+        if let Some(error) = self.settings.read(cx).state.error() {
+            self.end_update_restart(error.message(), cx);
+            return;
+        }
+        if let Some(problem) = self.editor.read(cx).update_checkpoint_problem() {
+            self.end_update_restart(problem, cx);
+            return;
+        }
+        if let Some(blocker) = self.restart_blocker(true, window, cx) {
+            if !blocker.settling() {
+                self.end_update_restart(blocker.message(), cx);
+                updater.update(cx, |u, cx| u.block(blocker, cx));
+            }
+            return;
+        }
+        self.settings.update(cx, |owner, cx| {
+            if !owner.state.persisted() {
+                owner.persist_update_checkpoint(cx);
+            }
+        });
         let state = updater.read(cx).state().cloned();
         match state {
             Some(State::ExitAuthorized) => {
@@ -684,11 +744,10 @@ pub(crate) fn probe_update_blockers(cx: &mut gpui_kit::HeadlessAppContext) {
                 v.update_blocker(w, cx),
                 Some(Blocker::Preferences(Hold::Unsaved))
             );
-            v.begin_update_restart(w, cx);
-            assert!(!v.restart_pending);
             assert_eq!(
-                notice(cx),
-                Some(Blocker::Preferences(Hold::Unsaved).message())
+                v.restart_blocker(true, w, cx),
+                None,
+                "install saves preferences automatically"
             );
             assert_eq!(
                 v.settings.read(cx).state.current().appearance,
@@ -852,11 +911,24 @@ pub(crate) fn probe_update_blockers(cx: &mut gpui_kit::HeadlessAppContext) {
             };
             assert_eq!(v.update_blocker(w, cx), Some(held.clone()));
             v.begin_update_restart(w, cx);
-            assert_eq!(notice(cx), Some(held.message()));
+            assert!(
+                v.restart_pending,
+                "an admitted secondary save settles automatically"
+            );
+            assert_eq!(notice(cx), Some("Saving drafts before restarting…"));
             assert_eq!(v.location(cx), Location::home());
+            rename.update(cx, |r, _| r.pending = false);
+            v.advance_update_restart(w, cx);
+            assert!(
+                v.restart_pending,
+                "the same request still waits for the writer ACK"
+            );
+            assert_eq!(v.restart_blocker(true, w, cx), None);
+            v.end_update_restart("Probe cancelled before preparation.", cx);
+            // A named refusal still offers its ordinary guarded Show route.
+            updater.update(cx, |u, cx| u.block(held, cx));
             v.show_update_blocker(w, cx);
             assert_eq!(v.location(cx).target, Target::Chat("synthetic".into()));
-            rename.update(cx, |r, _| r.pending = false);
             // A closed rename's text is replaced on reopen; only the open dialog holds it.
             assert_eq!(rename.read(cx).update_hold(true, cx), Some(Hold::Unsaved));
             assert_eq!(v.update_blocker(w, cx), None);

@@ -159,6 +159,7 @@ pub(crate) struct ChatEditor {
     closing: bool,
     /// Generation and whether this GUI-only restart may retain durable Unknown messages.
     update_checkpoint: Option<(u64, bool)>,
+    checkpoint_queued: bool,
     /// The editor's current placeholder, so render updates it only on change.
     placeholder: &'static str,
     _subscriptions: Vec<Subscription>,
@@ -260,6 +261,7 @@ impl ChatEditor {
             error: None,
             closing: false,
             update_checkpoint: None,
+            checkpoint_queued: false,
             placeholder: "Reply to Pilot…",
             _subscriptions: vec![text_events, cwd_events, question_events, path_watch],
         }
@@ -1196,6 +1198,9 @@ impl ChatEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        // Kit commits the undo transaction and removes only the IME marker, not text.
+        self.end_composition(window, cx);
+        self.finish_question_composition(window, cx);
         self.begin_checkpoint(generation, true, window, cx)
     }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -1207,40 +1212,111 @@ impl ChatEditor {
         cx: &mut Context<Self>,
     ) -> bool {
         if !self.ready()
-            || self.discarding.is_some()
-            || self.attachments.importing.is_some()
+            || (!retain_unknown && self.discarding.is_some())
             || self.marked(window, cx)
-            || !self.unsaved_local.is_empty()
-            || !self.pending.is_empty()
-            || self
-                .state
-                .delivery_reports
-                .values()
-                .any(|report| !report.saved)
-            || self.state.book.as_ref().is_none_or(|b| {
-                if retain_unknown {
-                    !b.gui_restart_safe()
-                } else {
-                    !b.restart_settled()
-                }
-            })
+            || self.attachments.choosing.is_some()
+            || (retain_unknown && self.attachments.error.is_some())
+            || (!retain_unknown
+                && (self.attachments.importing.is_some()
+                    || !self.unsaved_local.is_empty()
+                    || !self.pending.is_empty()
+                    || self
+                        .state
+                        .delivery_reports
+                        .values()
+                        .any(|report| !report.saved)
+                    || self
+                        .state
+                        .book
+                        .as_ref()
+                        .is_none_or(|b| !b.restart_settled())))
+            || (retain_unknown
+                && self.pending.is_empty()
+                && self.state.delivery_reports.values().all(|r| r.saved)
+                && self
+                    .state
+                    .book
+                    .as_ref()
+                    .is_none_or(|b| !b.gui_restart_safe()))
         {
             return false;
         }
         self.close_paths(cx);
         self.record_edit(true, cx);
         self.record_question_edit(true, cx);
+        if !self.unsaved_local.is_empty() {
+            return false;
+        }
         self.update_checkpoint = Some((generation, retain_unknown));
-        if !self
-            .client
-            .as_ref()
-            .is_some_and(|client| client.command(WriteCommand::Checkpoint(generation)))
-        {
+        self.checkpoint_queued = false;
+        self.advance_update_checkpoint(cx);
+        if !retain_unknown && !self.checkpoint_queued {
             self.update_checkpoint = None;
             return false;
         }
         cx.notify();
         true
+    }
+    /// Import completion joins the same input fence before its final FIFO checkpoint.
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(crate) fn advance_update_checkpoint(&mut self, cx: &mut Context<Self>) {
+        let Some((generation, _)) = self.update_checkpoint else {
+            return;
+        };
+        if !self.checkpoint_queued && self.attachments.importing.is_none() {
+            self.checkpoint_queued = self
+                .client
+                .as_ref()
+                .is_some_and(|client| client.command(WriteCommand::Checkpoint(generation)));
+            if self.checkpoint_queued {
+                cx.notify();
+            }
+        }
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(crate) fn update_checkpoint_problem(&self) -> Option<&'static str> {
+        if let Some(error) = self.state.error {
+            return Some(error);
+        }
+        if !self.unsaved_local.is_empty() {
+            return Some(
+                self.error
+                    .unwrap_or("A draft cannot be saved. Copy or reduce it before installing."),
+            );
+        }
+        if self.attachments.choosing.is_some() {
+            return Some("Finish choosing images before installing. Your draft is retained.");
+        }
+        if self.attachments.error.is_some() {
+            return Some(
+                "An image could not be imported. Reattach or remove it before installing.",
+            );
+        }
+        if self.state.book.is_none() || self.client.is_none() {
+            return Some("Draft storage is not ready. Keep this window open and check its error.");
+        }
+        if self.pending.is_empty()
+            && self.state.delivery_reports.values().all(|r| r.saved)
+            && self
+                .state
+                .book
+                .as_ref()
+                .is_some_and(|b| !b.gui_restart_safe())
+        {
+            let book = self.state.book.as_ref()?;
+            return Some(if !book.model_changes.is_empty() {
+                "A model change is unconfirmed. Open the chat's model recovery controls before installing."
+            } else if book
+                .missions
+                .values()
+                .any(|a| matches!(a.outcome, crate::mission_conversion::Outcome::Unknown))
+            {
+                "A chat-to-mission change is unconfirmed. Open its recovery controls before installing."
+            } else {
+                "A legacy delivery is unconfirmed. Open its chat's delivery controls before installing."
+            });
+        }
+        None
     }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) fn update_receipt(
@@ -1273,6 +1349,9 @@ impl ChatEditor {
     ) -> Option<u64> {
         let (generation, retain_unknown) = self.update_checkpoint?;
         if !acknowledged
+            || !self.checkpoint_queued
+            || self.discarding.is_some()
+            || self.attachments.importing.is_some()
             || self.state.error.is_some()
             || !self.unsaved_local.is_empty()
             || !self.pending.is_empty()
@@ -1333,6 +1412,7 @@ impl ChatEditor {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) fn end_update_checkpoint(&mut self, cx: &mut Context<Self>) {
         self.update_checkpoint = None;
+        self.checkpoint_queued = false;
         cx.notify();
     }
 

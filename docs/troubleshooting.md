@@ -51,6 +51,12 @@ does not confirm that every MCP server connected; check **Settings → Connectio
 
 Use **Settings → Updates** for the available app and daemon controls. On macOS,
 packaged managed connections also offer **Pilot Next → Daemon** actions.
+**Install and restart** saves current chat drafts, question replies, attachments
+and app preferences, waits for pending saves, then continues automatically.
+It does not send drafts or require a delivery Check. Retained pending messages
+keep their original identity across restart; independent daemon jobs keep running.
+An actual storage failure or an unsaved secondary form names what needs attention.
+Secrets in session-only access fields are never saved to disk.
 **Stop**, **Restart**, and **Upgrade** run their stages automatically. Stop leaves
 the service stopped. Restart keeps its current runtime; Upgrade selects this app's
 verified runtime. Explicit lifecycle actions interrupt work after saving recovery

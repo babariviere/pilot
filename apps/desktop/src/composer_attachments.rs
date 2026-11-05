@@ -13,7 +13,7 @@ pub(super) struct Previews {
     pub(super) task: Option<Task<()>>,
     pub(super) importing: Option<(String, Task<()>)>,
     pub(super) close_after_import: bool,
-    error: Option<(String, &'static str)>,
+    pub(super) error: Option<(String, &'static str)>,
 }
 impl ChatEditor {
     pub(crate) fn attachment_coordinator(&mut self, coordinator: bool, cx: &mut Context<Self>) {
@@ -139,6 +139,15 @@ impl ChatEditor {
                     Err(error) => v.attachments.error = Some((capture, error)),
                 }
                 v.sync_attachment_previews(cx);
+                #[cfg(any(target_os = "macos", target_os = "linux"))]
+                if v.update_checkpoint.is_some() {
+                    if !saved_ok {
+                        v.error =
+                            Some("An image could not be imported. Reattach it before installing.");
+                    }
+                    v.advance_update_checkpoint(cx);
+                    cx.emit(EditorEvent::UpdateCheckpoint);
+                }
                 if closing && saved_ok {
                     v.request_close(cx);
                 }
@@ -295,12 +304,14 @@ impl ChatEditor {
                             .accessibility_label("Remove attached image")
                             .tooltip("Remove attached image")
                             .disabled(
-                                !self.writable
+                                !self.ready()
+                                    || !self.writable
                                     || self.waiting()
                                     || !self.draft().is_some_and(Draft::editable),
                             )
                             .on_click(cx.listener(move |v, _, w, cx| {
                                 if v.selected.as_ref() != Some(&remove_key)
+                                    || !v.ready()
                                     || v.marked(w, cx)
                                     || !v.writable
                                     || v.waiting()

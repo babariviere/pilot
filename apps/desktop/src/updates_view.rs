@@ -1195,6 +1195,14 @@ impl Updates {
         if let Some(controller) = &mut self.controller {
             let _ = controller.prepare_retained(safety, self.epoch.elapsed());
         }
+        #[cfg(feature = "native-probes")]
+        if self.controller.is_none() && self.probe_state.is_some() {
+            // The synthetic handoff stops here, before any installer/helper exists.
+            self.probe_state = Some(State::Working {
+                operation: 0,
+                work: Work::PreparingExit,
+            });
+        }
         self.schedule(cx);
         cx.emit(Event::Changed);
         cx.notify();

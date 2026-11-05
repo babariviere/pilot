@@ -216,10 +216,15 @@ impl SettingsPreferences {
     }
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     pub(crate) fn persist_update_checkpoint(&mut self, cx: &mut Context<Self>) {
-        if !self.writable() {
+        // This explicit install request also finishes a save admitted before input locked.
+        if self.source.is_none() || !self.state.loaded() || self.state.saving() {
             return;
         }
-        if let Some(request) = self.state.begin_durability_checkpoint() {
+        if let Some(request) = self
+            .state
+            .begin_save()
+            .or_else(|| self.state.begin_durability_checkpoint())
+        {
             self.dispatch_save(request, cx);
         }
     }

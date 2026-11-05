@@ -5,7 +5,7 @@ use crate::{
     interaction::WriteState,
     lost_ack_fixture::{self as faux, Server},
 };
-use gpui_kit::{AsyncApp, WindowOptions, test::TestWindowExt};
+use gpui_kit::{AsyncApp, EntityInputHandler, WindowOptions, test::TestWindowExt};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::{cell::Cell, ffi::c_void, path::PathBuf, rc::Rc, sync::Mutex};
 
@@ -67,6 +67,7 @@ pub fn run_application_quit_probe() {
         "update-exit",
         "unknown-update-exit",
         "answer-update-exit",
+        "save-update-exit",
         "external-terminate",
         "held-external-terminate",
         "unknown-external-terminate",
@@ -211,10 +212,15 @@ fn child(mode: String, root: PathBuf) {
                             let updater = cx.new(|_| crate::updates_view::Updates::probe_ready_local());
                             v.settings = cx.new(|_| crate::settings_view::SettingsPreferences::new(Some(Ok(root.join("preferences")))));
                             v.settings.update(cx, |s, cx| {
-                                s.updater = Some(updater);
+                                s.updater = Some(updater.clone());
                                 s.load(cx);
                             });
                             v.connect_updates(w, cx);
+                            v.update_events.push(cx.subscribe_in(&updater, w, |v, _, event, w, cx| match event {
+                                crate::updates_view::Event::Restart => v.probe_begin_update_exit(w, cx),
+                                crate::updates_view::Event::Changed => v.advance_update_restart(w, cx),
+                                _ => {}
+                            }));
                         }
                         v.listen_writes(writes, w, cx);
                         v.register_close(w, cx);
@@ -434,10 +440,9 @@ fn child(mode: String, root: PathBuf) {
                     *original.lock().unwrap() = Some(intent);
                     h.update(cx, |_, w, cx| {
                         editor.update(cx, |e, cx| {
-                            assert!(
-                                !e.begin_gui_update_checkpoint(92, w, cx),
-                                "in-flight delivery vetoes restart checkpoint"
-                            );
+                            assert!(e.begin_gui_update_checkpoint(92, w, cx), "in-flight delivery may settle behind the capture");
+                            assert_eq!(e.update_receipt(w, cx), None);
+                            e.end_update_checkpoint(cx);
                         })
                     })
                     .unwrap();
@@ -538,11 +543,26 @@ fn child(mode: String, root: PathBuf) {
                     return;
                 }
                 if mode.ends_with("update-exit") {
-                    h.update(cx, |_, w, cx| view.update(cx, |v, cx| v.probe_begin_update_exit(w, cx))).unwrap();
+                    let updater = cx.update(|cx| view.read(cx).settings.read(cx).updater.clone().unwrap());
+                    if mode == "save-update-exit" {
+                        h.update(cx, |_, w, cx| {
+                            view.read(cx).settings.clone().update(cx, |s, _| {
+                                s.state.set_automatic_update_checks(!s.state.current().automatic_update_checks);
+                                assert!(s.state.dirty());
+                            });
+                            editor.read(cx).shell_probe().0.update(cx, |i, cx| {
+                                i.replace_and_mark_text_in_range(Some(0..faux::NEWER.encode_utf16().count()), faux::NEWER, None, w, cx);
+                            });
+                        }).unwrap();
+                    }
+                    let install = cx.update(|cx| gpui_kit::open_window(WindowOptions { show: false, focus: false, ..Default::default() }, cx, |_, _| updater.clone()).unwrap().0);
+                    install.update(cx, |_, w, cx| { w.render_frame(cx); w.click("updates-install", cx); }).unwrap();
+                    assert!(cx.update(|cx| view.read(cx).restart_pending), "one real click starts save-and-wait");
                     wait_for(cx, &editor, &changed, |s| s.checkpoint == Some(1)).await;
                     while !cx.update(|cx| view.read(cx).settings.read(cx).state.persisted()) {
                         changed.recv().await.unwrap();
                     }
+                    assert!(cx.update(|cx| matches!(updater.read(cx).state(), Some(pilot_desktop_updater::State::Working { work: pilot_desktop_updater::Work::PreparingExit, .. }))), "one click reaches the existing installer handoff after the saves");
                     h.update(cx, |_, w, cx| view.update(cx, |v, cx| {
                         assert_eq!(v.editor.update(cx, |e, cx| e.update_receipt(w, cx)), Some(v.restart_generation));
                         assert!(v.settings.read(cx).state.persisted());

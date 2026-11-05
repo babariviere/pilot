@@ -86,6 +86,16 @@ impl Questions {
     }
 }
 impl ChatEditor {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    pub(crate) fn finish_question_composition(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.questions
+            .input
+            .update(cx, |input, cx| input.unmark_text(window, cx));
+    }
     pub(super) fn question_blocks_discard(&self, cx: &gpui_kit::App) -> bool {
         let Some(key) = self.selected.as_ref() else {
             return false;

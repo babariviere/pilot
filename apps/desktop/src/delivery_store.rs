@@ -253,10 +253,9 @@ impl Book {
         // restart unchanged. In-flight registration is fenced by the add-project sheet.
         // A dismissed Stop keeps an "unknown" summary, but Stop is never retried, so it
         // has nothing left to settle.
-        self.pending
-            .values()
-            .all(|intent| intent.state == "unknown" && intent.operation.is_some())
-            && self.model_changes.is_empty()
+        self.pending.values().all(|intent| {
+            matches!(intent.state.as_str(), "unknown" | "pending") && intent.operation.is_some()
+        }) && self.model_changes.is_empty()
             && self
                 .missions
                 .values()

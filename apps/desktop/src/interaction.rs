@@ -371,6 +371,30 @@ fn publish(
     }
 }
 
+/// Save observations already in memory, without checking or executing any operation.
+#[cfg(any(test, target_os = "macos", target_os = "linux"))]
+fn checkpoint(
+    store: &mut Store,
+    status: &mut WriteState,
+    generation: u64,
+) -> Result<&'static str, Failure> {
+    if store.is_faulted() {
+        return Err("Private state durability is unconfirmed.");
+    }
+    for report in status.delivery_reports.values_mut().filter(|r| !r.saved) {
+        if let Err(error) = store.record_diagnostic(&report.key, &report.delivery) {
+            report.save_error = Some(private_category(store, error));
+            return Err(
+                "A delivery receipt could not be saved. Free storage or resolve the draft storage error before installing.",
+            );
+        }
+        report.saved = true;
+        report.save_error = None;
+    }
+    status.checkpoint = Some(generation);
+    Ok("Update checkpoint saved.")
+}
+
 fn flush(store: &mut Store, pending: &Mutex<BTreeMap<String, Draft>>) -> Result<(), Failure> {
     if store.is_faulted() {
         return Err(
@@ -1051,12 +1075,11 @@ async fn run(options: LocalOptions, mut store: Result<Store, Failure>, channels:
                             }),
                         #[cfg(any(test, target_os = "macos", target_os = "linux"))]
                         Some(WriteCommand::Checkpoint(generation)) => {
-                            if store.is_faulted() {
-                                Err("Private state durability is unconfirmed.")
-                            } else {
-                                status.checkpoint = Some(generation);
-                                Ok("Update checkpoint saved.")
+                            let result = checkpoint(store, &mut status, generation);
+                            if let Err(error) = result {
+                                status.error = Some(error);
                             }
+                            result
                         }
                         Some(WriteCommand::Close) => {
                             status.flushed = true;

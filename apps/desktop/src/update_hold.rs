@@ -75,6 +75,31 @@ pub(crate) enum Destination {
 }
 
 impl Blocker {
+    /// Already admitted work may finish under the install input fence; no new save is sent.
+    pub(crate) fn settling(&self) -> bool {
+        matches!(
+            self,
+            Self::PreferencesLoading
+                | Self::ChatSettings
+                | Self::ChatAction
+                | Self::Preferences(Hold::Sending)
+                | Self::ScopedModels(Hold::Sending)
+                | Self::ProjectSettings(Hold::Sending)
+                | Self::Conversion(Hold::Sending)
+                | Self::AddProject(Hold::Sending)
+                | Self::ChatRename {
+                    hold: Hold::Sending,
+                    ..
+                }
+                | Self::NewMission(Hold::Sending)
+                | Self::Mission {
+                    hold: Hold::Sending,
+                    ..
+                }
+                | Self::Automation(Hold::Sending)
+                | Self::Hook(Hold::Sending)
+        )
+    }
     pub(crate) fn message(&self) -> &'static str {
         use Hold::*;
         match self {

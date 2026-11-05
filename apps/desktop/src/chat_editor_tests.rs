@@ -1,6 +1,214 @@
 use super::*;
 
 #[gpui_kit::test]
+fn gui_update_reports_unsavable_question_without_accepting_an_older_capture(
+    cx: &mut TestAppContext,
+) {
+    let (handle, view, commands) = setup(cx);
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            e.question_context(
+                Some("a"),
+                crate::question::Projection::Pending(question_composer_fixture(4)),
+                true,
+                w,
+                cx,
+            );
+            let text = "界".repeat(TEXT_CAP);
+            e.questions
+                .input
+                .update(cx, |i, cx| i.set_value(text.clone(), w, cx));
+            assert!(!e.begin_gui_update_checkpoint(55, w, cx));
+            assert!(
+                e.update_checkpoint_problem()
+                    .unwrap()
+                    .contains("Question reply")
+            );
+            assert_eq!(e.questions.input.read(cx).value().as_ref(), text);
+            assert!(e.update_checkpoint.is_none());
+        });
+    })
+    .unwrap();
+    assert!(commands.try_recv().is_err());
+}
+
+#[gpui_kit::test]
+fn gui_update_waits_for_an_already_admitted_draft_removal(cx: &mut TestAppContext) {
+    let (handle, view, commands) = setup(cx);
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            e.discarding = Some(("new:old".into(), 1, 9));
+            assert!(e.begin_gui_update_checkpoint(54, w, cx));
+            let mut state = e.state.clone();
+            std::sync::Arc::make_mut(state.book.as_mut().unwrap()).drafts = e.cache.clone();
+            state.checkpoint = Some(54);
+            e.accept(state.clone(), w, cx);
+            assert_eq!(
+                e.update_receipt(w, cx),
+                None,
+                "not before the exact removal ACK"
+            );
+            state.discard = Some(("new:old".into(), 1, 8, Ok(())));
+            e.accept(state.clone(), w, cx);
+            assert_eq!(e.update_receipt(w, cx), None, "not a stale removal ACK");
+            state.discard = Some(("new:old".into(), 1, 9, Ok(())));
+            e.accept(state, w, cx);
+            assert_eq!(e.update_receipt(w, cx), Some(54));
+        });
+    })
+    .unwrap();
+    assert!(matches!(
+        commands.try_recv().unwrap(),
+        WriteCommand::Checkpoint(54)
+    ));
+    assert!(
+        commands.try_recv().is_err(),
+        "update does not remove or send anything"
+    );
+}
+
+#[gpui_kit::test]
+fn gui_update_captures_latest_unicode_while_a_save_and_send_settle(cx: &mut TestAppContext) {
+    let (handle, view, commands) = setup(cx);
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            e.text
+                .update(cx, |i, cx| i.set_value("未送信 👩‍💻 e\u{301}\n  ", w, cx));
+            e.pending.insert("chat:a".into(), 17);
+            e.unsaved_local.insert("chat:a".into());
+            assert!(
+                e.begin_gui_update_checkpoint(51, w, cx),
+                "one install waits, not refuses"
+            );
+            assert_eq!(e.cache["chat:a"].text, "未送信 👩‍💻 e\u{301}\n  ");
+            assert!(!e.ready(), "input fenced after exact capture");
+            e.state.checkpoint = Some(50);
+            assert_eq!(e.update_receipt(w, cx), None);
+            let mut state = e.state.clone();
+            let mut book = (**state.book.as_ref().unwrap()).clone();
+            book.drafts = e.cache.clone();
+            state.book = Some(std::sync::Arc::new(book));
+            state.handled.insert("chat:a".into(), 17);
+            state.checkpoint = Some(51);
+            e.accept(state, w, cx);
+            assert_eq!(e.update_receipt(w, cx), Some(51));
+        });
+    })
+    .unwrap();
+    assert!(matches!(
+        commands.try_recv().unwrap(),
+        WriteCommand::Checkpoint(51)
+    ));
+    assert!(commands.try_recv().is_err(), "update never sends or checks");
+}
+
+#[gpui_kit::test]
+fn gui_update_safely_unmarks_and_captures_composed_text(cx: &mut TestAppContext) {
+    let (handle, view, commands) = setup(cx);
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            e.text.update(cx, |i, cx| {
+                i.replace_and_mark_text_in_range(None, "にほん 👩‍💻", None, w, cx)
+            });
+            assert!(e.marked(w, cx));
+            assert!(e.begin_gui_update_checkpoint(52, w, cx));
+            assert!(!e.marked(w, cx));
+            assert_eq!(e.cache["chat:a"].text, "にほん 👩‍💻");
+            assert_eq!(e.update_receipt(w, cx), None, "still requires Store ACK");
+        });
+    })
+    .unwrap();
+    assert!(matches!(
+        commands.try_recv().unwrap(),
+        WriteCommand::Checkpoint(52)
+    ));
+    assert!(commands.try_recv().is_err());
+}
+
+#[gpui_kit::test]
+fn gui_update_waits_for_image_import_and_keeps_question_reply(cx: &mut TestAppContext) {
+    let (handle, view, commands) = setup(cx);
+    let root = std::env::temp_dir().join(format!("update-import-{}", uuid::Uuid::new_v4()));
+    let host = view.update(cx, |e, _| e.state.book.as_ref().unwrap().host.clone());
+    let mut store = Store::open(root.clone(), host.clone()).unwrap();
+    let (mut client, imported_commands) = Interaction::recording();
+    client.attachment_root = Some(root.clone());
+    view.update(cx, |e, _| e.client = Some(client));
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgba8(2, 2)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            e.attach_images(
+                vec![crate::image_attachments::Incoming::Bytes(png.into_inner())],
+                w,
+                cx,
+            );
+            assert!(e.attachments.importing.is_some());
+            e.question_context(
+                Some("a"),
+                crate::question::Projection::Pending(question_composer_fixture(4)),
+                true,
+                w,
+                cx,
+            );
+            e.questions.input.update(cx, |i, cx| {
+                i.replace_and_mark_text_in_range(None, "返信 e\u{301} 👩‍💻", None, w, cx)
+            });
+            assert!(e.begin_gui_update_checkpoint(53, w, cx));
+            assert!(!e.checkpoint_queued, "import must precede the FIFO receipt");
+            assert_eq!(e.update_receipt(w, cx), None);
+            assert_eq!(
+                e.cache["chat:a"].answer.as_ref().unwrap().text,
+                "返信 e\u{301} 👩‍💻"
+            );
+        });
+    })
+    .unwrap();
+    cx.run_until_parked();
+    cx.update_window(handle, |_, w, cx| {
+        view.update(cx, |e, cx| {
+            assert!(e.attachments.importing.is_none());
+            assert_eq!(e.cache["chat:a"].attachments.len(), 1);
+            e.cache["chat:a"].attachments[0].verify().unwrap();
+            assert!(e.checkpoint_queued);
+            let mut state = e.state.clone();
+            std::sync::Arc::make_mut(state.book.as_mut().unwrap()).drafts = e.cache.clone();
+            state.checkpoint = Some(53);
+            e.accept(state, w, cx);
+            assert_eq!(e.update_receipt(w, cx), Some(53));
+        });
+    })
+    .unwrap();
+    assert!(
+        commands.try_recv().is_err(),
+        "no command on the replaced writer"
+    );
+    assert!(matches!(
+        imported_commands.try_recv().unwrap(),
+        WriteCommand::Checkpoint(53)
+    ));
+    assert!(
+        imported_commands.try_recv().is_err(),
+        "import/checkpoint never sends"
+    );
+    let captured = view.update(cx, |e, _| e.cache.clone());
+    store.save_edits(captured.clone()).unwrap();
+    drop(store);
+    let reopened = Store::open(root.clone(), host).unwrap();
+    assert!(
+        reopened.book.drafts == captured,
+        "cold reopen keeps the exact reply and attachment identity"
+    );
+    reopened.book.drafts["chat:a"].attachments[0]
+        .verify()
+        .unwrap();
+    drop(reopened);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[gpui_kit::test]
 fn update_checkpoint_does_not_require_a_reply_to_database_approval(cx: &mut TestAppContext) {
     for access in [
         serde_json::json!({"id":"grant-1","env":"prod","mode":"write"}),
@@ -354,12 +562,16 @@ fn update_checkpoint_refuses_unknown_delivery_and_native_preedit(cx: &mut TestAp
             assert!(editor.marked(window, cx));
             let before = editor.text.read(cx).value().to_string();
             assert!(!editor.begin_update_checkpoint(9, window, cx));
-            assert!(!editor.begin_gui_update_checkpoint(9, window, cx));
-            assert!(editor.marked(window, cx));
+            assert!(editor.begin_gui_update_checkpoint(9, window, cx));
+            assert!(!editor.marked(window, cx));
             assert_eq!(editor.text.read(cx).value().as_ref(), before);
         });
     })
     .unwrap();
+    assert!(matches!(
+        commands.try_recv().unwrap(),
+        WriteCommand::Checkpoint(9)
+    ));
     assert!(commands.try_recv().is_err());
 }
 
@@ -399,15 +611,6 @@ fn update_checkpoint_retains_only_saved_unknown_and_still_needs_fresh_ack(cx: &m
                 !e.begin_update_checkpoint(11, w, cx),
                 "daemon upgrade remains strict"
             );
-            e.pending.insert("chat:a".into(), 1);
-            assert!(
-                !e.begin_gui_update_checkpoint(11, w, cx),
-                "in-flight request"
-            );
-            e.pending.clear();
-            e.unsaved_local.insert("chat:a".into());
-            assert!(!e.begin_gui_update_checkpoint(11, w, cx), "unsaved text");
-            e.unsaved_local.clear();
             e.state.error = Some("Private state durability is unconfirmed.");
             assert!(!e.begin_gui_update_checkpoint(11, w, cx));
             e.state.error = None;
@@ -423,24 +626,19 @@ fn update_checkpoint_retains_only_saved_unknown_and_still_needs_fresh_ack(cx: &m
                 status: Some(200),
                 acknowledgment: Acknowledgment::Accepted,
             });
+            let mut pending = (*saved).clone();
+            pending.pending.get_mut(&intent.id).unwrap().state = "pending".into();
+            assert!(
+                pending.gui_restart_safe(),
+                "exact pending intent survives app-only restart"
+            );
+            e.state.book = Some(saved.clone());
             e.state
                 .delivery_reports
                 .insert(intent.id.clone(), report.clone());
-            assert!(
-                !e.begin_gui_update_checkpoint(11, w, cx),
-                "a volatile ACK must not be lost even without a store fault"
-            );
-            e.state.delivery_reports.clear();
-            let mut pending = (*saved).clone();
-            pending.pending.get_mut(&intent.id).unwrap().state = "pending".into();
-            e.state.book = Some(std::sync::Arc::new(pending));
-            assert!(
-                !e.begin_gui_update_checkpoint(11, w, cx),
-                "daemon-pending delivery"
-            );
-            e.state.book = Some(saved.clone());
             assert!(e.begin_gui_update_checkpoint(11, w, cx));
             assert_eq!(e.update_receipt(w, cx), None);
+            e.state.delivery_reports.clear();
             let mut flushed = (*saved).clone();
             flushed.drafts = e.cache.clone();
             assert!(flushed.pending[&intent.id] == intent);
