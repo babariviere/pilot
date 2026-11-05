@@ -3,8 +3,10 @@
 **Design only.** D20 selects app-owned scoped memory and automatic consolidation;
 the contracts below are proposals, not implemented behavior or permission to run
 a scheduler, create a memory store, generate skills, migrate data or change review
-gates. [Native Review](mission-native-review.md) proposes the input records; its
-human-authorship, submission and retained-annotation primitives do not yet exist.
+gates. [Native Review](mission-native-review.md#backend-human-feedback) implements global native-only
+drafts, original submitted feedback/retained anchors and an atomic extraction outbox in missions.sqlite.
+This is the input foundation only: no extractor, preference activation or scheduler is installed.
+Its practical native-action authorship is not verified human presence or OS isolation.
 [Review records](mission-review-records.md) are a dormant, separate agent-result
 foundation. Neither is evidence of a deployed learning pipeline.
 

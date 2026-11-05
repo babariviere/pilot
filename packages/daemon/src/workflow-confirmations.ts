@@ -9,6 +9,7 @@ import type {
 	WorkflowOperationKind,
 } from "@pilot/protocol";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
+import { validateFeedback } from "./human-review-anchors.ts";
 import { changeIdPattern } from "./jj-ownership-contract.ts";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash } from "./operation-journal.ts";
@@ -323,14 +324,42 @@ function validateDisclosure(value: ReviewerConsentDisclosure): void {
 		throw new Conflict("Reviewer disclosure or cumulative allowance is invalid");
 }
 
-export function dispositionPayload(value: unknown): ReviewDispositionPayload {
-	exact(value, ["purpose", "targets", "disposition", "body", "expectedPriorRecordId", "packageDigest"]);
+export function dispositionPayload(value: unknown, draft = false): ReviewDispositionPayload {
+	if (
+		value &&
+		typeof value === "object" &&
+		Object.hasOwn(value, "feedback") &&
+		Buffer.byteLength(JSON.stringify(value)) > 48 * 1024
+	)
+		throw new OperationRejected("Review payload exceeds 48 KiB");
+	exact(value, [
+		"purpose",
+		"targets",
+		"disposition",
+		"body",
+		"expectedPriorRecordId",
+		"packageDigest",
+		...(value && typeof value === "object" && Object.hasOwn(value, "feedback") ? ["feedback"] : []),
+	]);
+	if (Object.hasOwn(value, "feedback")) {
+		try {
+			validateFeedback(value.feedback);
+		} catch {
+			throw new OperationRejected("Invalid human review feedback");
+		}
+	}
 	if (
 		value.purpose !== "review-disposition" ||
 		!["comment", "request_changes", "approve"].includes(value.disposition as string) ||
 		typeof value.body !== "string" ||
 		Buffer.byteLength(value.body) > 16 * 1024 ||
-		(value.disposition !== "approve" && !value.body.trim()) ||
+		(!draft &&
+			value.disposition !== "approve" &&
+			!value.body.trim() &&
+			!(value.feedback as ReviewDispositionPayload["feedback"])?.annotations.length &&
+			!(value.feedback as ReviewDispositionPayload["feedback"])?.findings.length &&
+			!(value.feedback as ReviewDispositionPayload["feedback"])?.resolveAnnotationIds.length &&
+			!(value.feedback as ReviewDispositionPayload["feedback"])?.supersedes) ||
 		!(value.expectedPriorRecordId === null || id(value.expectedPriorRecordId)) ||
 		!hash(value.packageDigest) ||
 		!Array.isArray(value.targets) ||

@@ -1,3 +1,4 @@
+import type { HumanReviewFeedback } from "./human-review.ts";
 import type { MissionBrief, MissionDecision } from "./index.ts";
 
 export type WorkflowOperationKind =
@@ -91,6 +92,8 @@ export interface ReviewDispositionPayload {
 	disposition: "comment" | "request_changes" | "approve";
 	body: string;
 	expectedPriorRecordId: string | null;
+	/** Exact user feedback, included in the immutable confirmation package. */
+	feedback?: HumanReviewFeedback;
 	/** Host producer's monotonic request/configuration/authority fence. */
 	packageDigest: string;
 }

@@ -3,6 +3,8 @@ import { chmodSync, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, realpa
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { parentPort, workerData } from "node:worker_threads";
+import type { HumanReviewLineRange } from "@pilot/protocol";
+import { checkLineRange, projectRange, validateAnchor } from "./human-review-anchors.ts";
 import { bindingRecord, changeIdPattern, exact, identifier, repositoryIdPattern } from "./jj-ownership-contract.ts";
 import { captureReview, snapshotHash } from "./review-snapshot-capture.ts";
 import {
@@ -99,6 +101,30 @@ function bytes(snapshotId: string, sha256: string, expected: number): Uint8Array
 let capturing = false;
 const controllers = new Map<number, AbortController>();
 async function dispatch(id: number, method: string, args: Record<string, unknown>): Promise<unknown> {
+	if (method === "validateRange" || method === "projectRange") {
+		const range = args.range as HumanReviewLineRange;
+		validateAnchor({ kind: "lines", snapshotId: args.snapshotId, ranges: [range] });
+		const ref = { snapshotId: String(args.snapshotId), side: range.side, path: range.path, sha256: range.blobSha256 };
+		const old = (await dispatch(id, "read", { snapshotId: args.snapshotId, ref })) as Uint8Array;
+		if (get(args.snapshotId).manifest[range.side].find((e) => e.path === range.path)?.state !== "text")
+			throw new Error("Line anchors require retained text");
+		if (method === "validateRange") {
+			checkLineRange(old, range);
+			return null;
+		}
+		const next = args.next as ReviewSourceRef;
+		const current = get(next.snapshotId),
+			original = get(args.snapshotId);
+		if (
+			current.manifest.request.repositoryId !== original.manifest.request.repositoryId ||
+			current.manifest.request.changeId !== original.manifest.request.changeId ||
+			next.side !== range.side ||
+			current.manifest[next.side].find((e) => e.path === next.path)?.state !== "text"
+		)
+			throw new Error("Cross-subject anchor projection");
+		const bytes = (await dispatch(id, "read", { snapshotId: next.snapshotId, ref: next })) as Uint8Array;
+		return projectRange(range, old, bytes, next.path);
+	}
 	if (method === "get") return get(args.snapshotId);
 	if (method === "list") {
 		exact(args, ["binding", "after"]);
@@ -145,10 +171,11 @@ async function dispatch(id: number, method: string, args: Record<string, unknown
 			throw new Error("Invalid or unavailable review source reference");
 		return bytes(snapshot.snapshotId, ref.sha256, entry.bytes!);
 	}
-	if (method === "diff") {
+	if (method === "diff" || method === "verifyDiff") {
 		const snapshot = get(args.snapshotId);
 		if (!snapshot.manifest.diff) throw new Error("Review diff unavailable");
-		return bytes(snapshot.snapshotId, snapshot.manifest.diff.sha256, snapshot.manifest.diff.bytes);
+		const value = bytes(snapshot.snapshotId, snapshot.manifest.diff.sha256, snapshot.manifest.diff.bytes);
+		return method === "verifyDiff" ? null : value;
 	}
 	if (method === "capture") {
 		if (capturing) throw new Error("Snapshot capture busy");

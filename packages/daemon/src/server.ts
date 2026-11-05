@@ -78,6 +78,7 @@ import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import type { GitHubImportService } from "./github-import.ts";
 import type { GitHubSetupService } from "./github-setup.ts";
+import { dispositionTarget, HumanReviews } from "./human-reviews.ts";
 import { InsightsApply } from "./insights-apply.ts";
 import { insightsSetupDefaults } from "./insights-defaults.ts";
 import { InsightsEnable } from "./insights-enable.ts";
@@ -649,6 +650,37 @@ export function createDaemonServer(
 			end();
 		}
 	};
+	const feedbackReader = (
+		target: Pick<import("@pilot/protocol").ReviewDispositionTarget, "projectId" | "sessionId" | "snapshotId">,
+	) => {
+		if (!missions) throw new ServiceUnavailable("Retained feedback unavailable");
+		const member = missions.store.membership(target.sessionId);
+		const missionId = member?.missionId;
+		const memberFence = canonicalJSON(member ?? null);
+		const contextFence = missionId ? canonicalJSON(missions.store.allocationContextFence(missionId)) : null;
+		const authorize = () => {
+			projects.require(target.projectId);
+			const session = sessions.get(target.sessionId);
+			if (
+				!session ||
+				session.projectId !== target.projectId ||
+				canonicalJSON(missions.store.membership(target.sessionId) ?? null) !== memberFence ||
+				(missionId &&
+					(missions.store.require(missionId).projectId !== target.projectId ||
+						canonicalJSON(missions.store.allocationContextFence(missionId)) !== contextFence))
+			)
+				throw new Conflict("Current retained feedback access changed");
+		};
+		authorize();
+		return sessions.nativeReviewReader(target.sessionId, missionId, target.projectId, authorize, true);
+	};
+	const humanReviews = missions
+		? new HumanReviews({
+				store: missions.store.humanReviews,
+				qualify: (target) => feedbackReader(target).qualify(target),
+				// #70 requirements and required-check/fresh-review producers are absent. Approve refuses.
+			})
+		: undefined;
 	const workflowConfirmations =
 		journal && missions
 			? new WorkflowConfirmations({
@@ -671,7 +703,8 @@ export function createDaemonServer(
 							}),
 						);
 					},
-					// No consent configuration, provider executor or #60 feedback producer is installed here.
+					dispositions: humanReviews,
+					// No consent configuration, provider executor or review prerequisite producer is installed here.
 				})
 			: undefined;
 	const insightsEnable =
@@ -1154,6 +1187,13 @@ export function createDaemonServer(
 				return json(res, 200, { ok: true });
 			}
 			const operation = await readJson<DurableOperation>(req);
+			if (operation?.kind === "review-disposition") {
+				res.setHeader("cache-control", "no-store");
+				// Check and duplicate lookup must not expose inaccessible feedback through a journal receipt.
+				if (!githubSetup || !humanReviews) throw new ServiceUnavailable("Native feedback is unavailable");
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				await humanReviews.lookup(operation);
+			}
 			if (parts[2] !== "receipt" && typeof operation?.kind === "string" && isRetiredDevboxOperation(operation.kind))
 				throw new HttpError(410, "Remote devbox operations are retired; stored receipts are retained");
 			if (
@@ -1182,8 +1222,56 @@ export function createDaemonServer(
 							}
 							return admitOperation(op, traceCarrier({ traceparent: req.headers.traceparent }));
 						});
+			if (operation.kind === "review-disposition" && receipt?.state === "accepted") {
+				const exact = await humanReviews!.lookup(operation);
+				if (!exact || canonicalJSON(exact) !== canonicalJSON(receipt.result))
+					return json(res, 200, { state: "unknown" });
+			}
 			res.setHeader("cache-control", "no-store");
 			return json(res, 200, receipt ?? { state: "unknown" });
+		}
+		if (parts[1] === "review-feedback") {
+			res.setHeader("cache-control", "no-store");
+			if (!humanReviews || !githubSetup) throw new ServiceUnavailable("Native feedback is unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (parts.length === 3 && parts[2] === "target" && req.method === "POST") {
+				const input = await readJson<{ projectId: string; sessionId: string; snapshotId: string }>(req, 1024);
+				if (!input || Object.keys(input).sort().join(",") !== "projectId,sessionId,snapshotId")
+					throw new HttpError(400, "Invalid target selection");
+				const reader = feedbackReader(input);
+				await missions!.store.durable();
+				return json(res, 200, dispositionTarget(input.projectId, await reader.get(input.snapshotId)));
+			}
+			if (parts.length === 3 && parts[2] === "prepare" && req.method === "POST")
+				return json(res, 200, await humanReviews.prepare(await readJson(req, 64 * 1024)));
+			if (parts.length === 4 && parts[2] === "drafts") {
+				if (req.method === "GET") return json(res, 200, (await humanReviews.draft(parts[3]!)) ?? null);
+				if (req.method === "PUT") {
+					const input = await readJson<{
+						expectedRevision: number;
+						content: import("@pilot/protocol").HumanReviewContent;
+					}>(req, 64 * 1024);
+					if (!input || Object.keys(input).sort().join(",") !== "content,expectedRevision")
+						throw new HttpError(400, "Invalid draft fields");
+					return json(res, 200, await humanReviews.saveDraft(parts[3]!, input.expectedRevision, input.content));
+				}
+			}
+			if (parts.length === 3 && parts[2] === "history" && req.method === "POST") {
+				const input = await readJson<{ target: import("@pilot/protocol").ReviewDispositionTarget; after: number }>(
+					req,
+					16 * 1024,
+				);
+				if (!input || Object.keys(input).sort().join(",") !== "after,target")
+					throw new HttpError(400, "Invalid feedback query fields");
+				return json(res, 200, await humanReviews.history(input.target, input.after));
+			}
+			if (parts.length === 5 && parts[2] === "annotations" && parts[4] === "projection" && req.method === "POST") {
+				const input = await readJson<{ target: import("@pilot/protocol").ReviewDispositionTarget }>(req, 4096);
+				if (!input || Object.keys(input).join(",") !== "target")
+					throw new HttpError(400, "Invalid projection query");
+				return json(res, 200, await humanReviews.projectAnnotation(parts[3]!, input.target));
+			}
+			throw new HttpError(404, "Not found");
 		}
 		if (parts[1] === "hello" && parts.length === 2) {
 			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");

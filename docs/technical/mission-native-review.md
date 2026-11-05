@@ -7,12 +7,73 @@ preserving Files/artifacts. Custody stays internal, never navigation ownership. 
 global read surface; #70 supplies authoritative waiting/request state; #60/#65 submit there; #79
 links from Inbox without duplicate review state.
 
-These are selected contracts, **not installed submission/attention/gate behavior**. The historical
+The backend feedback implementation below does not activate native submission UI, attention or gates. The historical
 read-only implementation below is pinned to `cc51bb4af2ddc094618a9e8fb3514891705f76d9`;
 #98/#88 may advance separately. D54's practical native action and D55's bounded reviewer consent
 are [selected separately](mission-authority-review-policy.md#selected-policy-46-and-47). This
 docs-only update creates no code/UI artifact, review, provider spend, live approval, attention,
 gate, migration, cleanup, release or restart. Swift is out of scope; #44/#45 polish stays deferred.
+
+## Backend human feedback
+
+`human-reviews.ts` implements the `QualifiedReviewDispositionSource` used by the existing
+`WorkflowConfirmations` handler. One global store shares `missions.sqlite` and its replica/durability
+lane. It does not invent a mission, task, request, required approval, worker attribution or gate.
+Native UI remains separate. No live data was migrated or submitted during implementation.
+
+- Draft revisions are private native-user drafts. Saving does not dispatch or enqueue extraction.
+  A submission names the exact draft revision/content, when used. A changed or already submitted
+  draft cannot be consumed again. Drafts and original reviews have no worker/mission deletion cascade.
+- The host builds the exact selected comparison and immutable package digest. It binds feedback,
+  selected-set prior history, **each target's** prior history/open threads/change requests, current
+  custody/access, authoritative requirement identity and approval prerequisites. Different and
+  overlapping selections cannot bypass per-target fences. The transaction repeats synchronous
+  access, custody, requirement, prerequisite and prior checks. Capture/browsing/feedback never
+  supplies authoritative request status. #70 owns that producer.
+- Approve needs complete retained input, known current requirements, passing required checks and
+  fresh independent agent review. The latter producers are **not installed**. Production therefore
+  refuses Approve. Comment and Request changes remain possible before readiness. A later Comment
+  does not clear a Request changes or a thread. Record-level supersession must cover every original
+  selected target. An annotation belongs only to its exact anchor target, not every target of its
+  submission; edits/resolutions need that target selected and leave other targets and record-level
+  Request changes untouched. Explicit native-user resolutions close their own threads. Approval cannot silently
+  resolve threads, including newly submitted annotations. No approval applies to a future revision.
+- Submitted records, original comments/anchors and one extraction outbox item commit atomically,
+  before acknowledgment. The outbox starts no extractor, coordinator wake, provider or Inbox work.
+  Finding feedback is a human opinion referencing an agent record, not a change to its authorship
+  or qualification. Explicit edits/supersessions append history and preserve the original bytes.
+- Native capability admission uses the existing practical D54 boundary, not verified human presence
+  or OS isolation. Agent text and opening/dismissing items are not submission paths. Ordinary agent
+  tools receive no draft/submission capability. Draft and feedback routes, including disposition
+  Check, require the existing native capability and fresh retained project/custody access.
+- Existing `review-disposition` operations and their journal own delivery. Feedback stores no second
+  journal or confirmation receipt. Recovery looks up only the exact complete operation after its
+  entered checkpoint. Missing/unreadable rows stay Unknown; recovery never prepares a new package,
+  calls prerequisites or repeats record. Historical acceptance is not current gate authority.
+
+Native backend routes, all under `/api/review-feedback`, are `POST target` (project/session/snapshot
+selection to a host-built exact target), `POST prepare` (complete disposition payload; initial digest
+may be zero), `GET/PUT drafts/:id`, `POST history` (`target`, `after`) and
+`POST annotations/:id/projection` (`target`). Preparation/read routes create no submission.
+Submission still uses `/api/operations`; Check uses `/api/operations/receipt` with the **same exact
+operation** and native capability. Pending remains pending until exact journal reconciliation. A
+missing feedback row cannot be replaced by current matching state or a different operation.
+
+Feedback is optional. Omission stays omitted for old operations and exact recovery. Its strict schema
+allows at most 100 annotations/findings/resolutions and 24 KiB total feedback. Feedback-bearing
+payloads are limited to 48 KiB; omission keeps the existing journal limits and payload bytes.
+Body text is limited to 16 KiB. Original anchors keep snapshot, side, path, source line range, blob,
+excerpt and two-line context hashes. Bytes keep BOM/CR/newlines. Save validates retained text;
+binary/unavailable files support file anchors only. Read-time `reanchor-v1` projections keep originals,
+show same/moved only for exact matches and manifest renames, and report ambiguous/outdated instead
+of guessing. Cross-side ranges carry only with unchanged blobs. Source validation/rewrite matching
+uses the existing retained worker, not the daemon event loop. Daemon-owned ledger mutation fences
+are repository-scoped; they do not claim exclusion against external Git writers.
+
+Focused tests cover restart/durability failures, exact lost ACKs, overlapping selection CAS/blocks,
+stale prerequisites/requirements/custody at commit, private drafts, current access after workspace
+loss, original anchors/supersession and native-only HTTP admission. Native UI/IME/visual acceptance,
+request production, reviewer execution, learning, attention and gate activation remain separate.
 
 ## Implemented read-only slice
 

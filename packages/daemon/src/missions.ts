@@ -48,6 +48,7 @@ import type {
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
+import { HUMAN_REVIEW_SCHEMA, HumanReviewStore } from "./human-review-store.ts";
 import { INSIGHTS_SCHEMA, InsightsBacklog } from "./insights-backlog.ts";
 import type { SharedMissionGroup } from "./mission-catalog.ts";
 import {
@@ -693,6 +694,14 @@ export class MissionStore {
 		transaction: (work) => this.transaction(work, true),
 		durable: () => this.durable(),
 	});
+	/** Global native human feedback shares this database, not a synthetic mission. */
+	readonly humanReviews = new HumanReviewStore({
+		one: (sql, ...params) => this.one(sql, ...params),
+		all: (sql, ...params) => this.all(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work, true),
+		durable: () => this.durable(),
+	});
 
 	/** Bounded host input. The event high-water catches edit/revert and member/owner ABA. */
 	workflowConfirmationState(id: string) {
@@ -739,6 +748,7 @@ export class MissionStore {
 		this.db.exec(KNOWLEDGE_SCHEMA);
 		this.db.exec(INSIGHTS_SCHEMA);
 		this.db.exec(WORKFLOW_CONFIRMATION_SCHEMA);
+		this.db.exec(HUMAN_REVIEW_SCHEMA);
 		// Startup only, on disk before the in-memory replica opens. Never replay a saved placement.
 		this.insights.reviews.recover();
 		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "created_by_session_id"))

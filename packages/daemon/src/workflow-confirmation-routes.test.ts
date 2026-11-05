@@ -133,7 +133,8 @@ test("all five workflow kinds require the existing native capability before rese
 	]) {
 		const op = f.operation(kind, { purpose: kind, ...p });
 		for (const token of ["", "forged", "user"]) assert.equal((await f.post(op, token)).status, 403);
-		assert.deepEqual(await (await f.post(op, "", true)).json(), { state: "unknown" });
+		if (kind === "review-disposition") assert.equal((await f.post(op, "", true)).status, 403);
+		else assert.deepEqual(await (await f.post(op, "", true)).json(), { state: "unknown" });
 	}
 	assert.equal(f.store.workflowConfirmations.latest(f.mission.id, false), undefined);
 	assert.equal(f.store.workflowConfirmations.latest(f.mission.id, true), undefined);

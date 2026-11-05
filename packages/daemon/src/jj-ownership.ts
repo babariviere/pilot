@@ -55,12 +55,52 @@ export class JjOwnershipStore {
 	private readonly observing = new Map<string, Promise<void>>();
 	private readonly file: string;
 	private readonly runner: Runner;
+	private readonly custody = new Map<string, { generation: number; writes: number; observations: number }>();
+	private custodyState(repositoryId: string) {
+		let state = this.custody.get(repositoryId);
+		if (!state) {
+			state = { generation: 0, writes: 0, observations: 0 };
+			this.custody.set(repositoryId, state);
+		}
+		return state;
+	}
+	/** A synchronous commit fence for daemon-owned custody. Not proof against external Git writers. */
+	readFence(repositoryId: string): () => void {
+		identifier(repositoryId, repositoryIdPattern);
+		const state = this.custodyState(repositoryId),
+			generation = state.generation;
+		const check = () => {
+			if (
+				this.closed ||
+				this.closing ||
+				this.fault ||
+				state.writes ||
+				state.observations ||
+				generation !== state.generation
+			)
+				throw new Error("Retained custody changed or is being observed");
+		};
+		check();
+		return check;
+	}
 	constructor(file: string, runner: Runner = run) {
 		this.file = file;
 		this.runner = runner;
 	}
 
 	private rpc<T>(method: string, args: object): Promise<T> {
+		const mutates = method === "register" || method === "apply";
+		const input = args as { repositoryId?: string; binding?: JjOwnershipBinding };
+		const state = mutates ? this.custodyState(input.binding?.repositoryId ?? input.repositoryId!) : undefined;
+		if (state) {
+			state.generation++;
+			state.writes++;
+		}
+		return this.request<T>(method, args).finally(() => {
+			if (state) state.writes--;
+		});
+	}
+	private request<T>(method: string, args: object): Promise<T> {
 		if (this.closed || this.fault) return Promise.reject(this.fault ?? new Error("Ownership store closed"));
 		if (this.pending.size >= 32) return Promise.reject(new Error("Ownership store busy"));
 		if (!this.worker) {
@@ -187,7 +227,13 @@ export class JjOwnershipStore {
 		if (active) return active;
 		if (this.closed || this.closing) return Promise.reject(new Error("Ownership store closed"));
 		if (this.observing.size >= 2) return Promise.reject(new Error("Ownership observation busy"));
-		const work = this.reconcile(repositoryId, workspace, cwd).finally(() => this.observing.delete(key));
+		const state = this.custodyState(repositoryId);
+		state.generation++;
+		state.observations++;
+		const work = this.reconcile(repositoryId, workspace, cwd).finally(() => {
+			this.observing.delete(key);
+			state.observations--;
+		});
 		this.observing.set(key, work);
 		return work;
 	}

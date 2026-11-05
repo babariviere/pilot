@@ -1,10 +1,11 @@
 /** Bounded read projection. The caller is the Local app, not an authenticated session. */
 import { TextDecoder } from "node:util";
 import { compareRetainedCalls, type RetainedCallQuery } from "@pilot/kernel/retained-calls";
-import type { NativeReviewCaptureStatus, NativeReviewSnapshot } from "@pilot/protocol";
+import type { NativeReviewCaptureStatus, NativeReviewSnapshot, ReviewDispositionTarget } from "@pilot/protocol";
 import type { JjOwnershipStore } from "./jj-ownership.ts";
 import { bindingRecord, identifier, type JjOwnershipBinding, repositoryIdPattern } from "./jj-ownership-contract.ts";
 import { deliveryDigest } from "./mission-delivery-evidence.ts";
+import { canonicalJSON, payloadHash } from "./operation-journal.ts";
 import { type ReviewSourceRef, reviewPath } from "./review-snapshot-contract.ts";
 import type { ReviewSnapshotStore } from "./review-snapshots.ts";
 
@@ -13,20 +14,23 @@ export class NoRetainedBinding extends Error {}
 
 export class NativeReviewReader {
 	private readonly snapshots: Pick<ReviewSnapshotStore, "get" | "list" | "diff" | "read"> &
-		Partial<Pick<ReviewSnapshotStore, "identity">>;
+		Partial<Pick<ReviewSnapshotStore, "identity" | "validateRange" | "projectRange" | "verifyDiff">>;
 	private readonly ledger: Pick<JjOwnershipStore, "get"> &
 		Partial<Pick<JjOwnershipStore, "deliveryStatus" | "list" | "binding" | "head">>;
 	private readonly admit: () => Promise<JjOwnershipBinding>;
+	private readonly syncScope?: () => string;
 	constructor(
 		snapshots: Pick<ReviewSnapshotStore, "get" | "list" | "diff" | "read"> &
-			Partial<Pick<ReviewSnapshotStore, "identity">>,
+			Partial<Pick<ReviewSnapshotStore, "identity" | "validateRange" | "projectRange" | "verifyDiff">>,
 		ledger: Pick<JjOwnershipStore, "get"> &
 			Partial<Pick<JjOwnershipStore, "deliveryStatus" | "list" | "binding" | "head">>,
 		admit: () => Promise<JjOwnershipBinding>,
+		syncScope?: () => string,
 	) {
 		this.snapshots = snapshots;
 		this.ledger = ledger;
 		this.admit = admit;
+		this.syncScope = syncScope;
 	}
 	private async scope() {
 		const b = await this.admit();
@@ -151,6 +155,66 @@ export class NativeReviewReader {
 			after: m.after,
 			changes: m.changes,
 			diff: m.diff,
+		};
+	}
+	/** Retained package plus a synchronous last-step fence for a missions.sqlite commit. */
+	async qualify(target: ReviewDispositionTarget) {
+		const ledger = this.ledger as Partial<Pick<JjOwnershipStore, "readFence">>;
+		if (!ledger.readFence || !this.syncScope) throw new Error("Atomic retained feedback admission unavailable");
+		const custody = ledger.readFence(target.repositoryId),
+			scope = this.syncScope();
+		const snapshot = await this.get(target.snapshotId);
+		if (!snapshot.diff) throw new Error("Exact retained comparison patch unavailable");
+		const expected = {
+			projectId: target.projectId,
+			sessionId: snapshot.workerId,
+			snapshotId: snapshot.snapshotId,
+			repositoryId: snapshot.request.repositoryId,
+			changeId: snapshot.request.changeId,
+			baseCommitId: snapshot.request.base.commitId,
+			headCommitId: snapshot.request.head.commitId,
+			layer: snapshot.request.scope.kind,
+			diffSha256: snapshot.diff.sha256,
+			comparisonDigest: payloadHash(
+				canonicalJSON({ snapshotId: snapshot.snapshotId, request: snapshot.request, diff: snapshot.diff }),
+			),
+		};
+		if (canonicalJSON(target) !== canonicalJSON(expected)) throw new Error("Wrong exact retained comparison");
+		if (this.snapshots.verifyDiff) await this.snapshots.verifyDiff(target.snapshotId);
+		else await this.snapshots.diff(target.snapshotId);
+		const ownership = await this.ledger.get(target.repositoryId, target.changeId);
+		const revalidate = () => {
+			custody();
+			if (this.syncScope!() !== scope) throw new Error("Current retained project/access changed");
+		};
+		revalidate();
+		return {
+			snapshot,
+			fence: payloadHash(canonicalJSON({ scope, target, ownership })),
+			revalidate,
+			read: (ref: ReviewSourceRef) => this.readExact(target.snapshotId, ref),
+			...(this.snapshots.validateRange
+				? {
+						validateRange: async (range: import("@pilot/protocol").HumanReviewLineRange) => {
+							revalidate();
+							await this.snapshots.validateRange!(target.snapshotId, range);
+							revalidate();
+						},
+					}
+				: {}),
+			...(this.snapshots.projectRange
+				? {
+						projectRange: async (
+							range: import("@pilot/protocol").HumanReviewLineRange,
+							next: ReviewSourceRef,
+						) => {
+							revalidate();
+							const result = await this.snapshots.projectRange!(target.snapshotId, range, next);
+							revalidate();
+							return result;
+						},
+					}
+				: {}),
 		};
 	}
 	async diff(snapshotId: string) {

@@ -5977,8 +5977,24 @@ ${run.excerpt}`,
 		authorize: () => void,
 		projectBinding = missionId === undefined,
 	) {
-		return new NativeReviewReader(this.reviewSnapshots, this.sharedWorkspaces.ownership, () =>
-			this.retainedWorkerBinding(id, missionId, projectId, authorize, projectBinding),
+		return new NativeReviewReader(
+			this.reviewSnapshots,
+			this.sharedWorkspaces.ownership,
+			() => this.retainedWorkerBinding(id, missionId, projectId, authorize, projectBinding),
+			() => {
+				authorize();
+				const meta = this.metas.get(id);
+				if (this.closing || !meta || meta.projectId !== projectId)
+					throw new Error("Retained project access changed");
+				return JSON.stringify({
+					project: this.projects.require(projectId),
+					workspace: meta.workspace,
+					cwd: meta.cwd,
+					scope: meta.retainedScope,
+					continuedTo: meta.continuedTo,
+					coordinatorView: meta.coordinatorView,
+				});
+			},
 		);
 	}
 	/** Discovery reads custody only, without opening snapshots or enrolling a workspace. */

@@ -28,7 +28,10 @@ export async function retainedReviewFixture() {
 		return binding;
 	};
 	const observe = () => f.store.observeOwnership(w.path, w.shared!);
-	const reader = new NativeReviewReader(snapshots, f.store.ownership, admit);
+	const reader = new NativeReviewReader(snapshots, f.store.ownership, admit, () => {
+		if (!admitted) throw new Error("Membership revoked");
+		return "retained-test-scope";
+	});
 	const commit = (text: string) => {
 		writeFileSync(join(w.path, "a.txt"), text);
 		jj(w.path, "commit", "-m", "Committed parser revision");

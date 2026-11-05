@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { Worker } from "node:worker_threads";
+import type { HumanReviewLineRange } from "@pilot/protocol";
+import type { RangeProjection } from "./human-review-anchors.ts";
 import type { JjOwnershipStore } from "./jj-ownership.ts";
 import type { JjOwnershipBinding } from "./jj-ownership-contract.ts";
 import {
@@ -156,6 +158,27 @@ export class ReviewSnapshotStore {
 		this.open();
 		if (!(await this.exists())) throw new Error("No retained comparison store");
 		return this.rpc("diff", { snapshotId });
+	}
+	/** Validate patch bytes in the retained worker without copying the full patch to the daemon. */
+	async verifyDiff(snapshotId: string): Promise<void> {
+		this.open();
+		if (!(await this.exists())) throw new Error("No retained comparison store");
+		await this.rpc("verifyDiff", { snapshotId });
+	}
+	/** Source-line validation and rewrite matching run in the existing retained worker. */
+	async validateRange(snapshotId: string, range: HumanReviewLineRange): Promise<void> {
+		this.open();
+		if (!(await this.exists())) throw new Error("No retained comparison store");
+		await this.rpc("validateRange", { snapshotId, range });
+	}
+	async projectRange(
+		snapshotId: string,
+		range: HumanReviewLineRange,
+		next: ReviewSourceRef,
+	): Promise<RangeProjection> {
+		this.open();
+		if (!(await this.exists())) throw new Error("No retained comparison store");
+		return this.rpc("projectRange", { snapshotId, range, next });
 	}
 	/** Exact-operation recovery, not a freshness check or permission to retry a different comparison. */
 	lookup(
