@@ -11,9 +11,14 @@ pub(crate) mod slack;
 // Exact summary association, including its validated opener target.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PullRequest {
-    number: u64,
-    repository: String,
-    url: String,
+    pub(crate) number: u64,
+    pub(crate) repository: String,
+    pub(crate) url: String,
+    /// Summary title, when the daemon looked the PR up.
+    pub(crate) title: Option<String>,
+    /// Some only when the summary reads `merged`; inside, GitHub's `mergedAt`
+    /// when it is valid. Bound URLs and other states never imply a merge.
+    pub(crate) merged: Option<Option<u64>>,
 }
 fn number(text: &str) -> Option<u64> {
     (!text.is_empty() && text.len() <= 9 && text.bytes().all(|b| b.is_ascii_digit()))
@@ -53,10 +58,17 @@ fn pr_url(text: &str) -> Option<PullRequest> {
         } else {
             format!("{host}/{}/{}", parts[0], parts[1])
         },
+        title: None,
+        merged: None,
     })
 }
+impl PullRequest {
+    fn same(&self, other: &Self) -> bool {
+        self.url == other.url
+    }
+}
 pub(crate) fn pull_requests(value: &serde_json::Value) -> Vec<PullRequest> {
-    let mut result = Vec::new();
+    let mut result: Vec<PullRequest> = Vec::new();
     // Lists and legacy primary are both authoritative; bound URLs may precede
     // health lookup metadata. Never inspect titles, branches or message text.
     let objects = value["pullRequests"]
@@ -69,14 +81,25 @@ pub(crate) fn pull_requests(value: &serde_json::Value) -> Vec<PullRequest> {
             .as_str()
             .and_then(pr_url)
             .filter(|pr| object["number"].as_u64() == Some(pr.number))
-            && !result.contains(&pr)
+            && !result.iter().any(|p| p.same(&pr))
         {
-            result.push(pr);
+            result.push(PullRequest {
+                title: object["title"]
+                    .as_str()
+                    .filter(|t| !t.trim().is_empty())
+                    .map(|t| crate::local_model::bounded(t, 240)),
+                merged: (object["state"] == "merged").then(|| {
+                    object["mergedAt"]
+                        .as_u64()
+                        .filter(|at| *at > 0 && *at < 1 << 53)
+                }),
+                ..pr
+            });
         }
     }
     for url in value["boundPullRequests"].as_array().into_iter().flatten() {
         if let Some(pr) = url.as_str().and_then(pr_url)
-            && !result.contains(&pr)
+            && !result.iter().any(|p| p.same(&pr))
         {
             result.push(pr);
         }

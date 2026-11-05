@@ -2,12 +2,19 @@
 //! audit (`github_actions_update`) as quiet inline transcript events. The audit
 //! is the authority: outcome comes only from its recorded exit status, never
 //! from command text or output, and an unknown status never reads as success.
+//!
+//! Merged PRs are derived here too, for the reader only: a linked PR whose
+//! session summary reads `merged` becomes one quiet "PR #n merged" line. It is
+//! never stored, sent or added to the agent's context.
 use crate::model::{Message, ReaderKey};
 use serde_json::Value;
 use std::collections::HashMap;
 
 /// The kernel retains the newest 200 actions per chat; Swift shows the same.
 pub(crate) const CAP: usize = 200;
+/// A merged PR whose summary has no valid `mergedAt`: shown without a time,
+/// after the loaded history, never at an invented moment.
+const UNTIMED: u64 = u64::MAX;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kind {
@@ -18,6 +25,8 @@ pub(crate) enum Kind {
     PrEdited,
     PrReopened,
     Updated,
+    /// Derived from linked PR summaries, never read from the audit.
+    PrMerged,
 }
 impl Kind {
     fn read(value: &Value) -> Option<Self> {
@@ -122,6 +131,37 @@ impl Action {
     }
 }
 
+/// One event per merged linked PR, keyed by its canonical repository and
+/// number so equal numbers in different repositories stay distinct.
+pub(crate) fn merges(prs: &[crate::jump::PullRequest]) -> Vec<Action> {
+    let mut out: Vec<Action> = Vec::new();
+    for pr in prs {
+        let Some(at) = pr.merged else { continue };
+        let id = format!(
+            "merged:{}#{}",
+            pr.repository.to_ascii_lowercase(),
+            pr.number
+        );
+        if out.iter().any(|a| a.id == id) {
+            continue;
+        }
+        out.push(Action {
+            id,
+            kind: Some(Kind::PrMerged),
+            description: "PR merged".into(),
+            branch: None,
+            pr: Some(pr.number),
+            title: pr.title.clone(),
+            url: Some(pr.url.clone()),
+            tool_call: None,
+            after_entry: None,
+            at: at.unwrap_or(UNTIMED),
+            outcome: Outcome::Succeeded,
+        });
+    }
+    out
+}
+
 /// One timeline line, possibly several collapsed actions (Swift `ChatEvent`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Event {
@@ -168,6 +208,7 @@ impl Event {
                 "Agent updated GitHub".into(),
                 "Agent's GitHub update failed".into(),
             ],
+            Some(Kind::PrMerged) => [format!("{pr} merged"), format!("{pr} merged")],
             None => [action.description.clone(), "GitHub action failed".into()],
         };
         Self {
@@ -183,6 +224,7 @@ impl Event {
                     Some(Kind::PrEdited) => format!("Agent attempted to edit {pr}"),
                     Some(Kind::PrReopened) => format!("Agent attempted to reopen {pr}"),
                     Some(Kind::Updated) => "Agent attempted a GitHub update".into(),
+                    Some(Kind::PrMerged) => format!("{pr} merged"),
                     None => "Agent attempted a GitHub action".into(),
                 },
             },
@@ -198,6 +240,10 @@ impl Event {
     }
     pub(crate) fn failed(&self) -> bool {
         matches!(self.outcome, Outcome::Failed(_))
+    }
+    /// The event's time, or None for a merge GitHub reported without one.
+    pub(crate) fn time(&self) -> Option<u64> {
+        (self.at != UNTIMED).then_some(self.at)
     }
     pub(crate) fn sentence(&self) -> String {
         if self.count == 1 {
@@ -241,6 +287,9 @@ impl Event {
             self.url.clone(),
             self.uncertainty().map(str::to_owned),
             self.detail(),
+            self.time()
+                .is_none()
+                .then(|| "Merge time unavailable.".to_owned()),
         ]
         .into_iter()
         .flatten()
@@ -282,7 +331,7 @@ fn entry_of(row: &Message) -> Option<u64> {
 /// collapse into one line. `keys` holds each action's stable row ID.
 pub(crate) fn place(
     rows: Vec<Message>,
-    actions: &[Action],
+    actions: &[&Action],
     keys: &HashMap<String, u64>,
     earlier: bool,
 ) -> Vec<Message> {
@@ -306,8 +355,9 @@ pub(crate) fn place(
     }
     // Slot 0 is before every row; slot ix + 1 follows row ix.
     let mut after: HashMap<usize, Vec<&Action>> = HashMap::new();
-    for action in actions {
+    for &action in actions {
         let slot = match (action.after_entry, &action.tool_call) {
+            _ if action.at == UNTIMED => Some(rows.len()),
             (None, None) => match sent.iter().rfind(|(at, _)| *at <= action.at) {
                 Some((_, entry)) => last.get(entry).map(|ix| ix + 1),
                 None => (!earlier).then_some(0),

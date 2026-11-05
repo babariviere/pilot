@@ -571,7 +571,9 @@ pub(crate) struct LiveTranscript {
     pub(crate) unsupported: usize,
     /// The chat's latest GitHub audit snapshot, placed into rows on demand.
     github: Vec<crate::github_event::Action>,
-    /// Stable row IDs per audit action ID, retained while the action is.
+    /// Reader-only merge events derived from the chat's linked PR summaries.
+    merges: Vec<crate::github_event::Action>,
+    /// Stable row IDs per audit action or merge ID, retained while it is.
     github_keys: HashMap<String, u64>,
     /// The newest retained entry when it is a committed assistant turn that
     /// ended in error, as Swift's error row. See `retry_entry`.
@@ -629,6 +631,23 @@ impl LiveTranscript {
         (1 << 63) + self.next_key
     }
 
+    /// Shows the selected chat's merged linked PRs as reader-only events.
+    /// The same summary again changes nothing, so refreshes never duplicate.
+    pub(crate) fn merged(&mut self, prs: &[crate::jump::PullRequest]) {
+        let merges = crate::github_event::merges(prs);
+        if merges == self.merges {
+            return;
+        }
+        for merge in &merges {
+            if !self.github_keys.contains_key(&merge.id) {
+                let key = self.key();
+                self.github_keys.insert(merge.id.clone(), key);
+            }
+        }
+        self.merges = merges;
+        self.presentation_dirty = true;
+    }
+
     pub(crate) fn rows(&mut self) -> Vec<Message> {
         self.presentation_dirty = false;
         let mut rows: Vec<_> = self
@@ -645,12 +664,8 @@ impl LiveTranscript {
                 })
             })
             .collect();
-        rows = crate::github_event::place(
-            rows,
-            &self.github,
-            &self.github_keys,
-            self.cursor.is_some(),
-        );
+        let actions: Vec<_> = self.github.iter().chain(&self.merges).collect();
+        rows = crate::github_event::place(rows, &actions, &self.github_keys, self.cursor.is_some());
         if let Some(live) = self.live.take() {
             rows.extend(self.assistant_rows(self.live_key, &live, None, false));
             self.live = Some(live);
@@ -1312,8 +1327,12 @@ impl LiveTranscript {
             "github_actions_update" => {
                 // A whole snapshot on every change and reconnect: replace, never append.
                 self.github = crate::github_event::Action::read_all(&event["actions"]);
-                let ids: std::collections::HashSet<_> =
-                    self.github.iter().map(|a| a.id.as_str()).collect();
+                let ids: std::collections::HashSet<_> = self
+                    .github
+                    .iter()
+                    .chain(&self.merges)
+                    .map(|a| a.id.as_str())
+                    .collect();
                 self.github_keys.retain(|id, _| ids.contains(id.as_str()));
                 for ix in 0..self.github.len() {
                     if !self.github_keys.contains_key(&self.github[ix].id) {

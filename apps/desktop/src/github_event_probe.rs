@@ -31,6 +31,8 @@ fn action(id: &str, kind: &str, after: u64, exit: serde_json::Value) -> serde_js
     v
 }
 const URL: &str = "https://github.com/acme/app/pull/42";
+const MERGED: &str = "https://github.com/acme/app/pull/57";
+const UNTIMED: &str = "https://github.com/acme/web/pull/42";
 fn rows() -> Vec<Message> {
     let mut model = LiveTranscript::default();
     model.apply(&json!({"type":"snapshot","entries":[
@@ -42,6 +44,12 @@ fn rows() -> Vec<Message> {
     model.apply(&json!({"type":"github_actions_update","actions":[
         action("push", "push", 2, json!(0)), pr, action("failed", "push", 3, json!(1)),
         action("unknown", "push", 3, serde_json::Value::Null)]}));
+    // Reader-only merge lines derived from linked PR summaries.
+    let summary = json!({"id":"chat","pullRequests":[
+        {"number":57,"url":MERGED,"title":"Merge the inline events 🎉","state":"merged","mergedAt":1_793_000_000_000u64},
+        {"number":42,"url":UNTIMED,"title":"Same number, other repository","state":"merged"},
+        {"number":43,"url":"https://github.com/acme/app/pull/43","state":"closed"}]});
+    model.merged(&crate::local_model::chat(&summary).unwrap().pull_requests);
     model.rows()
 }
 fn id_of(rows: &[Message], sentence: &str) -> u64 {
@@ -70,6 +78,12 @@ pub fn run_github_event_probe(cx: &mut HeadlessAppContext) {
     let pr = id_of(&rows, "Agent created PR #42");
     let failed = id_of(&rows, "Agent could not push");
     let unknown = id_of(&rows, "Agent attempted to push");
+    let merged = id_of(&rows, "PR #57 merged");
+    let untimed = id_of(&rows, "PR #42 merged");
+    assert!(
+        rows.iter().all(|r| !r.source().contains("#43")),
+        "closed is not merged"
+    );
     let mut backgrounds = Vec::new();
     for width in [680., 1100.] {
         for dark in [false, true] {
@@ -114,17 +128,38 @@ pub fn run_github_event_probe(cx: &mut HeadlessAppContext) {
                 let message = |id: u64| w.find(("github-event", id)).bounds();
                 assert!(message(push).top() < message(pr).top());
                 assert!(message(pr).top() < message(failed).top());
-                for id in [push, pr, failed, unknown] {
+                assert!(message(unknown).top() < message(merged).top());
+                assert!(message(merged).top() < message(untimed).top());
+                for id in [push, pr, failed, unknown, merged, untimed] {
                     let line = w.find(("github-event", id)).bounds();
                     assert!(line.size.height < px(32.), "one quiet line");
                     assert!(line.right() <= px(width), "fits {width}");
+                    assert!(line.bottom() <= px(600.), "scrolled into view");
                     assert!(
                         painted(&image, line, width),
                         "paints its glyph and sentence"
                     );
                     assert!(w.find(("github-sentence", id)).visible());
+                }
+                for id in [push, pr, failed, unknown, merged] {
                     // The time is a hover detail; nothing else depends on it.
                     assert!(!w.find(("github-time", id)).visible());
+                }
+                assert!(
+                    w.find_all(("github-time", untimed)).is_empty(),
+                    "no invented merge time"
+                );
+                assert!(w.find(("github-title", merged)).visible());
+                assert!(w.find_all(("github-branch", merged)).is_empty());
+                assert!(w.find_all(("github-show", merged)).is_empty());
+                // Each merge copies its own exact link, like the created PR.
+                for (id, url) in [(merged, MERGED), (untimed, UNTIMED)] {
+                    let link = w.find(("github-link", id));
+                    assert_eq!(link.label(), Some("Copy PR link"));
+                    assert!(!link.visible(), "revealed on hover or keyboard focus");
+                    w.pointer_move(link.bounds().center(), None, cx);
+                    w.click(("github-link", id), cx);
+                    assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), url);
                 }
                 let branch = w.find(("github-branch", push)).bounds();
                 assert!(branch.left() > w.find(("github-sentence", push)).bounds().left());

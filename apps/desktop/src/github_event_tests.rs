@@ -438,3 +438,161 @@ fn unknown_actions_and_grouped_rows_keep_uncertainty_in_help() {
         assert!(e.help().contains("exit status is unknown"));
     }
 }
+
+fn summary(prs: Value) -> Vec<crate::jump::PullRequest> {
+    crate::local_model::chat(&json!({"id":"chat","pullRequests":prs}))
+        .unwrap()
+        .pull_requests
+}
+fn pr(repo: &str, number: u64, state: &str, merged_at: Value) -> Value {
+    json!({"number":number,"url":format!("https://github.com/{repo}/pull/{number}"),
+        "title":format!("Ship {repo} 👋"),"state":state,"mergedAt":merged_at,"checkedAt":9_000})
+}
+fn history(model: &mut LiveTranscript) {
+    model.apply(&json!({"type":"snapshot","entries":[
+        entry(1, "Pushing now", 1_000), entry(2, "Opening the PR", 2_000), entry(3, "Done", 3_000)]}));
+}
+
+#[test]
+fn open_pr_that_merges_gets_one_reader_only_line_at_its_merge_time() {
+    let mut model = LiveTranscript::default();
+    history(&mut model);
+    model.merged(&summary(json!([pr("acme/app", 12, "open", Value::Null)])));
+    let before = model.rows();
+    assert_eq!(lines(&before), ["Pushing now", "Opening the PR", "Done"]);
+    let merged = summary(json!([pr("acme/app", 12, "merged", json!(2_500))]));
+    model.merged(&merged);
+    let rows = model.rows();
+    assert_eq!(
+        lines(&rows),
+        [
+            "Pushing now",
+            "Opening the PR",
+            "[PR #12 merged Ship acme/app 👋]",
+            "Done"
+        ]
+    );
+    let event = rows[2].github_event().unwrap();
+    assert_eq!(event.kind, Some(Kind::PrMerged));
+    assert_eq!(
+        event.url.as_deref(),
+        Some("https://github.com/acme/app/pull/12")
+    );
+    assert_eq!((event.time(), rows[2].sent()), (Some(2_500), Some(2_500)));
+    assert!(!event.help().contains("unavailable"));
+    // Reader-only: a quiet event row, never a message from or to anyone.
+    assert_eq!(rows[2].label(), "GitHub event");
+    assert!(rows[2].reader_key().is_none() && rows[2].automatic().is_none());
+    assert_eq!(model.queued, 0);
+    // Repeated summaries, a reconnect snapshot and a re-sent audit keep one
+    // line with the same row identity.
+    let id = rows[2].id();
+    for _ in 0..3 {
+        model.merged(&merged);
+        history(&mut model);
+        model.apply(&json!({"type":"github_actions_update","actions":[]}));
+        let again = model.rows();
+        assert_eq!(lines(&again), lines(&rows));
+        assert_eq!(again[2].id(), id);
+    }
+}
+
+#[test]
+fn reopened_chat_shows_an_existing_merge_once_and_waits_for_its_history() {
+    // Reopen: the summary is known before the snapshot arrives.
+    let merged = summary(json!([pr("acme/app", 12, "merged", json!(1_500))]));
+    let mut model = LiveTranscript::default();
+    model.merged(&merged);
+    history(&mut model);
+    model.merged(&merged);
+    let rows = model.rows();
+    assert_eq!(
+        lines(&rows),
+        [
+            "Pushing now",
+            "[PR #12 merged Ship acme/app 👋]",
+            "Opening the PR",
+            "Done"
+        ]
+    );
+    // Older history not loaded yet: an earlier merge waits for its page.
+    let mut paged = LiveTranscript::default();
+    paged.apply(&json!({"type":"snapshot","entries":[entry(5, "Later", 5_000)]}));
+    paged.cursor = Some(5);
+    paged.merged(&merged);
+    assert_eq!(lines(&paged.rows()), ["Later"]);
+}
+
+#[test]
+fn every_merged_pr_is_distinct_by_repository_and_number() {
+    let mut model = LiveTranscript::default();
+    history(&mut model);
+    let raw = json!({"id":"chat","pullRequests":[
+            pr("acme/app", 7, "merged", json!(1_500)),
+            pr("acme/web", 7, "merged", json!(2_500)),
+            pr("acme/app", 7, "merged", json!(1_500)),
+            pr("acme/app", 8, "merged", json!(2_600))],
+        "pullRequest":pr("acme/app", 7, "merged", json!(1_500)),
+        "boundPullRequests":["https://github.com/acme/app/pull/7"]});
+    model.merged(&crate::local_model::chat(&raw).unwrap().pull_requests);
+    let rows = model.rows();
+    assert_eq!(
+        lines(&rows),
+        [
+            "Pushing now",
+            "[PR #7 merged Ship acme/app 👋]",
+            "Opening the PR",
+            "[PR #7 merged Ship acme/web 👋]",
+            "[PR #8 merged Ship acme/app 👋]",
+            "Done"
+        ]
+    );
+    let urls: Vec<_> = rows
+        .iter()
+        .filter_map(|r| r.github_event().and_then(|e| e.url.clone()))
+        .collect();
+    assert_eq!(
+        urls,
+        [
+            "https://github.com/acme/app/pull/7",
+            "https://github.com/acme/web/pull/7",
+            "https://github.com/acme/app/pull/8"
+        ]
+    );
+    assert_ne!(rows[1].id(), rows[3].id());
+}
+
+#[test]
+fn closed_open_unknown_or_bound_only_prs_never_read_as_merged() {
+    let mut model = LiveTranscript::default();
+    history(&mut model);
+    let raw = json!({"id":"chat","pullRequests":[
+        pr("acme/app", 1, "closed", Value::Null),
+        pr("acme/app", 2, "open", Value::Null),
+        pr("acme/app", 3, "draft", Value::Null),
+        pr("acme/app", 4, "unknown", json!(2_500)),
+        pr("acme/app", 5, "closed", json!(2_500)),
+        {"number":6,"url":"https://github.com/acme/app/pull/6","mergedAt":2_500},
+        {"number":9,"url":"https://github.com/acme/app/pull/10","state":"merged","mergedAt":2_500}],
+        "boundPullRequests":["https://github.com/acme/app/pull/11"]});
+    model.merged(&crate::local_model::chat(&raw).unwrap().pull_requests);
+    assert_eq!(
+        lines(&model.rows()),
+        ["Pushing now", "Opening the PR", "Done"]
+    );
+}
+
+#[test]
+fn merge_without_a_valid_time_shows_untimed_after_history() {
+    for merged_at in [Value::Null, json!(0), json!("2026-01-01"), json!(-1)] {
+        let mut model = LiveTranscript::default();
+        history(&mut model);
+        model.merged(&summary(json!([pr("acme/app", 12, "merged", merged_at)])));
+        let rows = model.rows();
+        assert_eq!(rows.len(), 4);
+        let event = rows[3].github_event().unwrap();
+        assert_eq!(event.sentence(), "PR #12 merged");
+        assert_eq!((event.time(), rows[3].sent()), (None, None));
+        assert!(event.help().contains("Merge time unavailable."));
+    }
+}

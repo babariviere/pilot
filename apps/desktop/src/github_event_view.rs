@@ -70,13 +70,15 @@ impl TranscriptView {
         let detail = event.detail();
         let open = detail.is_some() && self.github_open.contains(&event.id);
         let muted = cx.theme().muted_foreground;
-        let time = SharedString::from(match event.end {
-            Some(end) if end != event.at => format!(
-                "{} to {}",
-                crate::message_time::label(event.at),
-                crate::message_time::label(end)
-            ),
-            _ => crate::message_time::label(event.at),
+        let time = event.time().map(|at| {
+            SharedString::from(match event.end {
+                Some(end) if end != at => format!(
+                    "{} to {}",
+                    crate::message_time::label(at),
+                    crate::message_time::label(end)
+                ),
+                _ => crate::message_time::label(at),
+            })
         });
         let show = detail.is_some().then(|| {
             let event = event.clone();
@@ -177,7 +179,7 @@ impl TranscriptView {
                     })
             }))
             .child(div().flex_1())
-            .child(
+            .children(time.map(|time| {
                 ui::text(Text::Caption, time)
                     .id(("github-time", id))
                     .test_support()
@@ -185,8 +187,8 @@ impl TranscriptView {
                     .whitespace_nowrap()
                     .text_color(muted)
                     .opacity(0.)
-                    .group_hover("message", |s| s.opacity(1.)),
-            );
+                    .group_hover("message", |s| s.opacity(1.))
+            }));
         let mut root = div()
             .id(("message", id))
             .group("message")

@@ -194,7 +194,7 @@ impl Message {
     /// A GitHub audit event row; its source is the line's plain text.
     pub(crate) fn github(id: u64, event: crate::github_event::Event) -> Self {
         let mut row = Self::live(id, "GitHub event".into(), event.line());
-        row.sent = Some(event.at);
+        row.sent = event.time();
         row.github = Some(Arc::new(event));
         row
     }

@@ -1521,6 +1521,10 @@ async fn run(
         } else {
             settle.or_else(|| Some(tokio::time::Instant::now() + DEPARTED_SETTLE))
         };
+        // Reader-only merge lines from the selected chat's linked PR summaries.
+        if let Some(chat) = selected.as_deref().and_then(|id| view.chats.iter().find(|c| c.id == id)) {
+            model.merged(&chat.pull_requests);
+        }
         if !model.prefix_pending && model.presentation_dirty {
             view.rows = model.rows();
         }
