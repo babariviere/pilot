@@ -11,8 +11,12 @@ import type {
 	DurableOperation,
 	InsightsReplacementPayload,
 	InsightsReplacementProgress,
+	InsightsReviewRecord,
+	InsightsSettingsPayload,
+	InsightsSettingsSnapshot,
 	ModelOption,
 } from "@pilot/protocol";
+import { InsightsApply } from "./insights-apply.ts";
 import { InsightsEnable } from "./insights-enable.ts";
 import { InsightsReplacement } from "./insights-replacement.ts";
 import { MissionService } from "./mission-service.ts";
@@ -33,6 +37,10 @@ const model: ModelOption = {
 	name: "Terra 6.1",
 	thinkingLevels: ["high"],
 };
+function settingsPayload(snapshot: InsightsSettingsSnapshot): InsightsSettingsPayload {
+	const { projectId, missionId, expectedHome, context, chat, revision, settings } = snapshot;
+	return { projectId, missionId, expectedHome, context, chat, expectedRevision: revision, settings };
+}
 async function fixture(t: TestContext) {
 	const root = await mkdtemp(join(tmpdir(), "insights-replacement-"));
 	const home = join(root, "home"),
@@ -52,7 +60,7 @@ async function fixture(t: TestContext) {
 		schedules!: ScheduleService,
 		scheduleStore!: ScheduleStore,
 		journal!: OperationJournal;
-	let enable!: InsightsEnable, replacement!: InsightsReplacement, service!: MissionService;
+	let enable!: InsightsEnable, replacement!: InsightsReplacement, apply!: InsightsApply, service!: MissionService;
 	const open = async () => {
 		sessions = new SessionManager(
 			home,
@@ -93,6 +101,7 @@ async function fixture(t: TestContext) {
 		};
 		enable = new InsightsEnable(deps);
 		replacement = new InsightsReplacement(deps);
+		apply = new InsightsApply(deps, enable);
 	};
 	await open();
 	const close = async () => {
@@ -156,6 +165,9 @@ async function fixture(t: TestContext) {
 		get enable() {
 			return enable;
 		},
+		get apply() {
+			return apply;
+		},
 		get service() {
 			return service;
 		},
@@ -194,6 +206,9 @@ async function fixture(t: TestContext) {
 
 test("confirmed deleted report replacement fences old identities and preserves receipts across restart", async (t) => {
 	const f = await fixture(t);
+	const oldReceipt = await f.journal.lookup(f.oldOp);
+	const oldFile = join(f.home, "operations", `${payloadHash(f.oldOp.operationId)}.json`);
+	const oldBytes = await readFile(oldFile);
 	assert.equal((await f.preview()).reason, "old_report_present");
 	await f.deleteOld();
 	const p = await f.preview();
@@ -216,7 +231,8 @@ test("confirmed deleted report replacement fences old identities and preserves r
 	assert.equal(f.schedules.list().find((r) => r.id === f.oldRule.id)!.state, "cancelled");
 	assert.equal(f.sessions.get(op.targetId)?.working, false);
 	assert.equal(f.starts, 0);
-	assert.deepEqual(await f.journal.lookup(f.oldOp), { ...(await f.journal.lookup(f.oldOp))!, state: "accepted" });
+	assert.deepEqual(await f.journal.lookup(f.oldOp), oldReceipt);
+	assert.deepEqual(await readFile(oldFile), oldBytes, "old envelope and receipt bytes stay unchanged");
 	assert.equal((await f.replacement.status(op)).state, "replaced");
 	assert.equal((await f.enable.preflight(f.project.id, f.mission.id)).targetId, op.targetId);
 	assert.equal((await f.enable.preflight(f.project.id, f.mission.id)).state, "existing");
@@ -238,6 +254,8 @@ test("confirmed deleted report replacement fences old identities and preserves r
 	assert.equal((await f.preview()).state, "replaced");
 	assert.equal((await f.replacement.status(op)).state, "replaced");
 	assert.equal(f.schedules.list().length, 2);
+	assert.deepEqual(await f.journal.lookup(f.oldOp), oldReceipt);
+	assert.deepEqual(await readFile(oldFile), oldBytes);
 	assert.equal(f.starts, 0);
 });
 
@@ -253,12 +271,201 @@ test("missing index is unavailable, never deletion proof; preview reads do not s
 	assert.equal(f.starts, 0);
 });
 
+test("replacement preserves old stored history, desired settings and operation bytes without copying them", async (t) => {
+	const f = await fixture(t);
+	const payload = settingsPayload(await f.enable.settings(f.oldId));
+	payload.settings.recurrence = { every: "week", weekday: 2, time: "09:15", timeZone: "Europe/Paris" };
+	payload.settings.budget = { usd: 12, period: "month", enforcement: "advisory", basis: "user_choice" };
+	const save = f.operation("insights-settings", f.oldId, payload);
+	assert.equal((await f.journal.execute(save, (op) => f.enable.saveSettings(op, payload))).state, "accepted");
+	const admission = f.sessions.insightsHostAdmission(f.oldId);
+	const record: InsightsReviewRecord = {
+		status: "partial",
+		windowStart: "2026-03-20T17:00:00Z",
+		windowEnd: "2026-03-27T17:00:00Z",
+		markdown: "Synthetic stored report, not a real review.",
+		checkpoints: [],
+		findingKeys: [],
+		gaps: ["No source history or provider was read."],
+	};
+	for (const action of ["save_report", "save_checkpoint"] as const)
+		await f.missions.insights.call(admission, {
+			action,
+			key: randomUUID(),
+			operationId: randomUUID(),
+			expectedRevision: 0,
+			record,
+		});
+	await f.missions.insights.reviews.reserve(admission, {
+		runId: randomUUID(),
+		windowStart: record.windowStart,
+		windowEnd: record.windowEnd,
+		bounds: payload.settings.bounds,
+		settingsRevision: 1,
+	});
+	await f.missions.insights.reviews.interrupt(f.oldId, "cancelled", "Synthetic cancellation before dispatch");
+	const retained = () =>
+		["insights_items", "insights_revisions", "insights_operations", "insights_settings", "insights_runs"].map(
+			(table) => f.missions["all"](`SELECT * FROM ${table} WHERE mission_id=? ORDER BY rowid`, f.mission.id),
+		);
+	const before = retained();
+	assert.ok(
+		before.every((rows) => rows.length > 0),
+		"preservation assertions cover nonempty rows",
+	);
+	const oldFiles = [f.oldOp, save].map((op) => join(f.home, "operations", `${payloadHash(op.operationId)}.json`));
+	const bytes = await Promise.all(oldFiles.map((path) => readFile(path)));
+	await f.deleteOld();
+	const op = await f.intent();
+	const fresh = JSON.parse(op.payload) as InsightsReplacementPayload;
+	assert.equal(fresh.enable.budget.period, "report");
+	assert.equal(fresh.enable.budget.usd, 5);
+	assert.equal(fresh.enable.recurrence.weekday, 5);
+	assert.equal(fresh.enable.chat, null);
+	assert.equal((await f.run(op)).state, "accepted");
+	for (let n = 0; n < 2; n++) {
+		assert.deepEqual(retained(), before, "old records and history are not rebound or rewritten");
+		assert.deepEqual(await Promise.all(oldFiles.map((path) => readFile(path))), bytes);
+		const successor = await f.enable.settings(op.targetId);
+		assert.equal(successor.revision, 0);
+		assert.equal(successor.settings.budget.usd, 5);
+		assert.notEqual(successor.chat.grantId, payload.chat.grantId);
+		assert.throws(() => f.sessions.insightsHostAdmission(f.oldId));
+		if (n === 0) await f.reopen();
+	}
+	assert.equal(f.starts, 0);
+});
+
+test("successor supports desired Save, separate Apply and pinned Enable after restart", async (t) => {
+	const f = await fixture(t);
+	await f.deleteOld();
+	const replace = await f.intent();
+	const replacementReceipt = await f.run(replace);
+	assert.equal(replacementReceipt.state, "accepted");
+	const file = join(f.home, "operations", `${payloadHash(replace.operationId)}.json`);
+	const bytes = await readFile(file);
+	const snapshot = await f.enable.settings(replace.targetId);
+	const payload = settingsPayload(snapshot);
+	payload.settings.recurrence = { every: "week", weekday: 2, time: "09:15", timeZone: "Europe/Paris" };
+	payload.settings.budget = { usd: 8, period: "month", enforcement: "advisory", basis: "user_choice" };
+	const rows = f.schedules.list();
+	const save = f.operation("insights-settings", replace.targetId, payload);
+	assert.equal((await f.journal.execute(save, (op) => f.enable.saveSettings(op, payload))).state, "accepted");
+	assert.deepEqual(f.schedules.list(), rows, "Save activates nothing");
+	assert.equal(
+		(await f.replacement.status(replace)).state,
+		"blocked",
+		"accepted history does not hide current settings drift",
+	);
+	const historical = await f.enable.status(f.oldOp);
+	assert.equal(historical.state, "unknown", "deleted old Enable is not current successor authority");
+	assert.equal(historical.reason, "report_identity_unavailable");
+	assert.deepEqual(historical.receipt, await f.journal.lookup(f.oldOp));
+	assert.equal((await f.enable.preflight(f.project.id, f.mission.id)).reason, "settings_activation_required");
+	await f.reopen();
+	const preview = await f.apply.preflight(replace.targetId);
+	assert.ok(preview.payload, preview.reason ?? "Apply unavailable");
+	const apply = f.operation("insights-apply", replace.targetId, preview.payload);
+	const result = await f.journal.execute(apply, (op) => f.apply.apply(op, preview.payload!));
+	assert.equal(result.state, "accepted", JSON.stringify(result));
+	const active = f.schedules.list().filter((r) => r.state === "pending");
+	assert.equal(active.length, 1);
+	assert.deepEqual(active[0]!.recurrence, payload.settings.recurrence);
+	assert.equal(active[0]!.insightsSettingsRevision, 1);
+	assert.deepEqual(f.sessions.insightsEnableChat(replace.targetId), snapshot.chat, "same model Apply never regrants");
+	await f.reopen();
+	const enabled = await f.enable.preflight(
+		f.project.id,
+		f.mission.id,
+		undefined,
+		undefined,
+		undefined,
+		replace.targetId,
+	);
+	assert.equal(enabled.state, "existing", JSON.stringify(enabled));
+	assert.equal(enabled.targetId, replace.targetId);
+	assert.equal(enabled.payload?.budget.period, "month");
+	assert.equal(enabled.payload?.settingsRevision, 1);
+	assert.deepEqual(await f.run(replace), replacementReceipt, "old replacement is lookup-only after later Apply");
+	assert.deepEqual(await readFile(file), bytes);
+	assert.equal(f.schedules.list().length, 3);
+	assert.equal(f.starts, 0);
+});
+
+test("completed replacement keeps its exact receipt while current Stop blocks status after restart", async (t) => {
+	const f = await fixture(t);
+	await f.deleteOld();
+	const op = await f.intent();
+	const accepted = await f.run(op);
+	assert.equal(accepted.state, "accepted");
+	const file = join(f.home, "operations", `${payloadHash(op.operationId)}.json`);
+	const bytes = await readFile(file);
+	const rules = f.schedules.list();
+	await f.sessions.stop(op.targetId);
+	for (let n = 0; n < 2; n++) {
+		const status = await f.replacement.status(op);
+		assert.equal(status.state, "blocked");
+		assert.equal(status.reason, "successor_stop_or_authority_changed");
+		assert.deepEqual(status.receipt, accepted, "current Stop never rewrites historical acceptance");
+		assert.deepEqual(await f.run(op), accepted, "completed command remains receipt lookup only");
+		assert.deepEqual(await readFile(file), bytes);
+		assert.deepEqual(f.schedules.list(), rules);
+		if (n === 0) await f.reopen();
+	}
+	assert.equal(f.starts, 0);
+});
+
+for (const drift of ["Stop", "home", "context", "settings"] as const) {
+	test(`successor adoption snapshot rechecks ${drift} after async catalog read`, async (t) => {
+		const f = await fixture(t);
+		await f.deleteOld();
+		const op = await f.intent();
+		assert.equal((await f.run(op)).state, "accepted");
+		const snapshot = await f.enable.settings(op.targetId);
+		let observe!: () => void, resume!: () => void;
+		const entered = new Promise<void>((resolve) => {
+			observe = resolve;
+		});
+		const release = new Promise<void>((resolve) => {
+			resume = resolve;
+		});
+		t.after(() => resume());
+		t.mock.method(f.models, "list", async () => {
+			observe();
+			await release;
+			return { models: [model] };
+		});
+		const read = f.enable.settings(op.targetId);
+		const refused = assert.rejects(read, /changed|Stop|home|host/i);
+		await entered;
+		if (drift === "Stop") await f.sessions.stop(op.targetId);
+		else if (drift === "home") f.sessions["diagnosticHost"]!.lineageId = "changed";
+		else if (drift === "context") f.projects.require(f.project.id).path += "-moved";
+		else
+			await f.missions.insights.settings.save(
+				f.sessions.insightsHostAdmission(op.targetId),
+				randomUUID(),
+				{ synthetic: "concurrent desired save" },
+				0,
+				snapshot.settings,
+				model.id,
+			);
+		resume();
+		await refused;
+		assert.equal(f.starts, 0);
+	});
+}
+
 for (const kind of ["insights-create", "insights-enable", "insights-apply", "insights-settings", "chat-send"]) {
 	test(`pending ${kind} refuses replacement and remains unchanged through passive reads/restart`, async (t) => {
 		const f = await fixture(t);
 		await f.deleteOld();
 		const pending = f.operation(kind, f.oldId, { projectId: f.project.id, missionId: f.mission.id });
-		const before = await f.journal.reserve(pending);
+		await f.journal.reserve(pending);
+		await f.journal.checkpoint(pending, { phase: "synthetic_entered_effect" });
+		const before = await f.journal.lookup(pending);
+		const file = join(f.home, "operations", `${payloadHash(pending.operationId)}.json`);
+		const bytes = await readFile(file);
 		for (let n = 0; n < 2; n++) {
 			assert.equal((await f.preview()).reason, "old_operation_pending_use_receipt");
 			assert.deepEqual(await f.journal.lookup(pending), before);
@@ -266,6 +473,7 @@ for (const kind of ["insights-create", "insights-enable", "insights-apply", "ins
 		await f.reopen();
 		assert.equal((await f.preview()).payload, null);
 		assert.deepEqual(await f.journal.lookup(pending), before);
+		assert.deepEqual(await readFile(file), bytes, "entered old envelope/marker is never settled by inspection");
 		assert.equal(f.schedules.list().length, 1);
 		assert.equal(f.starts, 0);
 	});
@@ -682,6 +890,18 @@ test("HTTP replacement is native-gated; preview and status are passive, scoped, 
 	const accepted = await (await post("operations", true)).json();
 	assert.equal(accepted.state, "accepted", JSON.stringify(accepted));
 	const receiptBytes = await readFile(join(f.home, "operations", `${payloadHash(op.operationId)}.json`), "utf8");
+	assert.notEqual((await post("operations")).status, 200, "even exact re-admission needs native capability");
+	assert.deepEqual(
+		await (await post("operations", true)).json(),
+		accepted,
+		"duplicate confirmation is exact receipt lookup",
+	);
+	for (const changed of [
+		{ ...op, payloadHash: "0".repeat(64) },
+		{ ...op, destination: { ...op.destination, lineageId: "changed" } },
+		{ ...op, targetId: randomUUID() },
+	])
+		assert.equal((await post("operations", true, changed)).status, 400);
 	const status = await post("insights/replacement/status");
 	assert.equal(status.headers.get("cache-control"), "no-store");
 	assert.equal((await status.json()).state, "replaced");

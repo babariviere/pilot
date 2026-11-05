@@ -138,7 +138,9 @@ has the host's UUID form. An older Local keeps the unchanged, disabled Enable.
   budget. Details show both full IDs. Blocked, overflow and unavailable show the reason with **Check
   again**; blocking rules are named; an ambiguous model offers an exact choice. **Back** or Escape leaves.
 - **Replace report chat** freezes the payload verbatim in the private writer, slot `replace:<old>`, kind
-  `insights-replace`, persisted before one native-gated POST. A late preview never replaces it.
+  `insights-replace`, persisted before one native-gated POST. The first click consumes the step
+  synchronously, before the writer replies; another click in the same frame cannot start another
+  command. A late preview never replaces it.
 - **Check** reads status first; only an `unknown` receipt resends the same envelope. Pending markers are
   status-only. **Replaced** beside a pending receipt keeps Check and is not acceptance. Receipts and
   results must name the exact operation, hash, destination and target, both frozen IDs, this target's
@@ -156,8 +158,12 @@ insights_replace`, synthetic Local only). Its interactions run at 1100 light: bl
 preview, Escape back with focus kept, stale and overtaken previews, exact payload, lost ACK, close and
 restart without replay, same-envelope Check, status-only pending steps, completion beside a pending
 receipt, acceptance and pin transition, navigation, an unqualified old home, an untrusted rule, a
-malformed copied grant, a fence-only link, mismatched and exact successor adoption, an older Local and
-rejection. 680 light/dark and 1100 dark are render-only. Limits: headless macOS TestPlatform evidence,
+malformed copied grant, a fence-only link, mismatched/other-home/overtaken successor reads, exact
+adoption across close/reopen/restart, and an older Local over a separate Blocked old report. Added
+interactions count writer requests and operation POSTs for same-frame replacement clicks, keep
+foreign or unfinished accepted ACKs Unknown, and show current replacement Blocked/Partial beside the
+old Enable's historical Unknown. Rejection still refreshes the preview. 680 light/dark and 1100 dark
+are render-only. Limits: headless macOS TestPlatform evidence,
 not OS IME/accessibility, Linux/Wayland, live Local, a real deletion, rules or models.
 
 ## Synthetic host checks
@@ -170,3 +176,101 @@ with restart. Assertions check old receipts, no duplicate chat/rule, no replay a
 Adjacent enable/settings, journal, review/backlog and scheduler tests remain applicable. This is not
 live diagnosis, native UI acceptance, a broad suite pass, real history/provider/scheduling, report
 quality or realized-benefit evidence.
+
+## Joined contract audit
+
+The joined host assertions in `insights-replacement.test.ts` use temporary homes and a worker
+factory that refuses every start. They add checks across the replacement/enable/settings/Apply
+boundary, not a live client-to-daemon recovery exercise:
+
+- Compare the original enable envelope and receipt file bytes before replacement and after restart.
+  Also compare nonempty old report/checkpoint revisions, desired settings, operation receipts and
+  cancelled run rows. These are stored synthetic records, not recovery of deleted transcript files.
+- Replace an old report with saved custom settings. Its new report has a distinct grant and revision
+  zero with the disclosed fixed defaults; old desired settings and history are neither copied nor
+  rebound.
+- Save desired settings on the successor without editing its rule. Its accepted replacement history
+  remains accepted while current replacement status becomes blocked. Apply separately, restart and
+  verify ordinary Enable uses the exact successor, desired revision and new cadence. Re-admitting the
+  old replacement reads its receipt without repeating any effect.
+- Stop a fully completed successor, then restart. Current replacement status stays blocked while the
+  original accepted receipt, immutable file bytes and rules stay unchanged. Re-admitting that
+  completed command reads its receipt and does not undo Stop.
+- Hold the successor settings catalog read, then change Stop, home/lineage, project context or the
+  desired revision. The read refuses instead of returning a stale positive adoption snapshot.
+- Keep old entered-operation markers and envelope bytes unchanged through passive reads and restart.
+  Native capability is required even for exact re-admission. Duplicate confirmations return the same
+  receipt; changed hashes, targets and lineage refuse.
+
+One important host/native distinction: after deletion the historical accepted old Enable returns
+`state:"unknown", reason:"report_identity_unavailable"`, not `state:"blocked"`. Its receipt stays
+accepted. That current Unknown is not an unknown receipt and must never resend the old Enable. The
+native entry-path fixture must use this actual shape; a Blocked-only fixture does not qualify the
+joined deletion path.
+
+The joined audit exposed and corrected a native entry defect: accepted + Unknown previously showed
+only **Not confirmed.**, while a Blocked-only deletion fixture hid the unreachable replacement step.
+`Status::report_missing` now requires the exact accepted receipt, current Unknown and
+`report_identity_unavailable` reason. Only then does **Set up again…** offer a fresh old-ID-pinned
+preflight. It sends no command and provides no deletion or authority proof. Pending, absent, foreign
+or unrelated Unknown receipts/statuses do not gain that route. The mounted fixture now starts with
+unrelated Unknown (Check only), then serves the real deletion shape; a separate Blocked case stays.
+
+The native author reported two failing-before controls: disabling the exact-Unknown entry fix made
+the mounted journey fail waiting for **Set up again…**; before first-click consumption, two same-frame
+replacement clicks reached the writer. Joined verification inspects the actual negative assertions
+and reruns the fixed source without editing Rust/UI. It does not repeat those source mutations.
+The mounted replacement test counts writer requests as well as operation POSTs, so a private-store
+refusal cannot hide the second Start. Malformed ACKs retain the exact envelope/ID/hash and old pin;
+only an explicit Check with an unknown receipt can resend that same envelope.
+
+The native parser's eight replacement units cover exact IDs/hash/home, malformed replies, revision-1
+fences versus revision-2 completion and successor snapshot matching. The full Insights filter's
+40 units are the prior native baseline; the corrected entry adds one unit (41 total), not 41 new
+joined tests. Mounted evidence must be counted
+separately: 1100 light runs interactions, while 680 light/dark and 1100 dark are layout-only. A
+render-only pass does not prove confirmation, adoption, duplicate suppression or restart behavior.
+
+Panel-only adoption from a completed link is not a durable local replacement receipt. Closing and
+reopening keeps that panel's in-memory successor pin and uses it for fresh checks. Restart returns
+to the old pin until the user opens the replacement step and re-derives the exact revision-2 link
+and current successor settings/home/context. Back before a delayed read settles adopts nothing;
+a newer fenced step cannot accept the overtaken reply. Pending/fenced links cannot replace that
+evidence. The historical old Enable status read is passive and must not
+override a current replacement blocker. Progress may show the exact model ID rather than its name
+after restart. Saved immutable operations survive restart; unsaved settings drafts do not.
+
+The native follow-up reproduced the analogous Enable, Save and Apply defect separately, with clean
+accepted ACKs for every arriving envelope. Its reported pre-fix controls each counted two writer
+commands and two POSTs; Apply's control disabled only its own guard. The final mounted assertions
+double-click in one frame, wait for the panel's own writer outcome, then require one command and
+one POST for each action. They compare the sent payload, independently computed UTF-8 SHA-256 and
+stored operation ID/envelope. A host refusal cannot hide a duplicate in these fixtures.
+
+The local confirmation guard is `unanswered(slot)`: the panel already handed its command for that
+slot to the writer but has no matching outcome yet. Matching includes slot and request sequence, so
+an old reply cannot release it. The guard clears on its own writer outcome, or `not_sent` clears the
+slot when handoff failed. Open Pending/Unknown attempts still require Check. Fresh previews and
+explicit retries after refusal remain separate from a duplicate click; writer coalescing and host
+journal semantics did not change. If the writer's matching reply never arrives, the panel stays
+conservative. Finding-decision confirmations were excluded from this follow-up.
+
+Final focused checks on the joined source passed 143 host tests (replacement 36, Enable/Apply 82,
+settings 7, journal 8, backlog 10), 41 Insights units, three shared-fixture units and the four mounted
+Insights probes. Typecheck, scoped Biome, touched native leaf formatting and guide links also passed.
+Scoped production/probe Clippy (`-D warnings`) and its repeated 41-unit/four-probe check passed.
+The clean-ACK double-click journeys are 1100-light interactions, not extra layout-only passes.
+
+Known parent full-target Clippy failures in `chat_actions_restore_tests` and
+`interaction_automatic_tests`, and upstream formatting failures, are outside this selection. Scoped
+production/probe lint does not qualify every test body. The original native base also had one observed
+settings-probe timeout at `insights_settings_probe.rs:695` waiting for lost-Apply-ACK Unknown, after
+Clippy, 40 units and the other selected probes passed. An earlier identical selection without lint
+passed, and a subsequent settings-only rerun passed unchanged. The timeout's cause is unproven.
+That failure remains evidence of a verification limit, not proof of a replacement regression or a
+retroactively clean original-base run; the assertion and its deadline are unchanged.
+The final-base combined lint/check passed without that timeout; this does not establish its cause
+or erase the earlier failure. Existing HTTP MaxListeners and native linker unwind-size warnings
+remain. Previously recorded unrelated schedule/idle-drain failures were not rerun by this selection.
+No OS IME/accessibility, Linux/Wayland, installed-build qualification, live deletion recovery,
+provider review, report quality or realized benefit is established here.

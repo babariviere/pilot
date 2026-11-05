@@ -109,6 +109,13 @@ and rechecks current home/project/backlog, model, settings and grant/Stop fences
 The only enable effects are passive report creation and rule creation. Re-admitting this command
 is not review dispatch, message delivery or provider-input resend.
 
+Enable, desired Save and separate Apply each consume a click burst locally: a second click cannot
+queue another Start while that panel awaits its own writer outcome for the same slot/request.
+An old reply cannot release this guard. A failed handoff or that request's outcome releases it;
+Pending/Unknown then use the retained command's Check, never a fresh Start. The guard does not change
+writer coalescing, native consent, host admission or journal recovery. Mounted clean-ACK fixtures
+count both writer commands and operation POSTs, requiring one of each after two same-frame clicks.
+
 ## Existing and partial setups
 
 Preflight uses private admitted grant identity, never a chat/mission title or mere membership.
@@ -122,6 +129,12 @@ is not a report chat and gains no authority; fresh setup uses a separate stable 
 `enable_pending_use_status` requires the retained operation's status lookup, not a new setup.
 `report_identity_unavailable` means a retained native setup/enable intent or trusted rule references
 a report missing from the current session index. It does **not** prove deletion or revocation.
+The old Enable's passive status can keep its accepted receipt while returning current
+`unknown/report_identity_unavailable`. Native offers **Set up again…** only for that exact accepted
+receipt/current Unknown/reason combination, in addition to its existing Blocked/Partial paths. This
+opens a fresh preflight pinned to the old report ID; it never resends the old Enable or grants
+authority. The unavailable preflight may then offer the separate replacement confirmation. Other
+Unknown states, pending/absent receipts and mismatched identities remain Check-only or malformed.
 Preserve that exact identity and refuse before any create step, even if home/path/lineage changed;
 never derive a substitute report ID. Unavailable live bindings refuse as `report_chat_unavailable`;
 an otherwise admitted identity pointing outside the selected project/backlog refuses as

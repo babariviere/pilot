@@ -17,21 +17,34 @@ from repeating; pending steps stay status-only in the app. Closing, reopening or
 never resends the command. Daemon recovery may finish a setup step not yet entered, not resend a review.
 The result is On only when both the report chat and its weekly automation are confirmed.
 **More → Set up Insights chat…** on a mission still creates just the report chat.
+Repeated clicks on Enable, Replace, Save or Apply before its reply do not send another command.
 
 ## Replace a missing report chat
 
 If Weekly Insights says the linked report chat isn't available, **Replace report chat…** may appear
-in the same panel. It reads Local's exact plan first and writes nothing. One confirmation names the
+in the same panel. If an earlier setup is accepted but its current report is unavailable, choose
+**Set up again…** to check that same report first. This does not resend the old setup or create a chat.
+Replacement reads Local's exact plan first and writes nothing. One confirmation names the
 old chat (kept as a record, never reused), the automations it stops, the new empty report chat and
 its fresh fixed settings: schedule and first report, model and thinking, what it reads, the partial
 sample and the approximate budget. It does not restore the old chat's history or copy its access.
-Nothing runs before the first report, and the Automations switch is never changed.
+Replacement starts no immediate review, and the Automations switch is never changed.
 
 **Replace report chat** sends that plan once. If it is interrupted, **Check** reads its status and
 resends the same request only when Local has no record of it. Closing or restarting never resends it.
 Local can refuse: for example when it can't confirm where the old chat lived, earlier work may still
 be running, an automation can't be stopped safely or the plan changed. These stay blocked; there is
 no reset. **Back** or Escape leaves the confirmation without sending anything.
+
+Keep using the same **Check** while an action is unconfirmed. A pending cancellation can remain
+blocked after restart; matching automation values do not prove it finished. Do not delete saved
+requests or set up another backlog to bypass it. A completed replacement keeps the old records,
+but does not restore deleted content or copy old review settings. Review the new settings before
+confirming. Older Local versions keep Enable blocked and do not offer replacement.
+
+If Local already completed the replacement but this app has no accepted replacement receipt,
+reopening the replacement step checks the exact new report before adopting it. That adoption stays
+in the open panel only; after an app restart, use the same step to check it again. No setup is resent.
 
 In the report chat, the **Insights backlog** header button opens the mission's **Tasks** tab.
 Findings have lifecycle chips; use each row's menu to choose a decision, then confirm it.
@@ -58,9 +71,10 @@ changes the report chat's model only when the saved model differs, and starts no
 If Local refuses (for example an unavailable model, or a model switch that would need a paid context
 rebuild), nothing else is tried; decide separately.
 
-Unsaved edits survive closing the panel. If settings changed elsewhere, your edits stay and you
-choose **Discard** or **Keep mine**. An unconfirmed Save or Apply blocks both until **Check**; Check
-only looks up the saved request and resends it, byte for byte, when Local has no record of it.
+Unsaved edits survive closing the panel in the same app session, not an app restart. If settings
+changed elsewhere, your edits stay and you choose **Discard** or **Keep mine**. An unconfirmed
+Save or Apply blocks both until **Check**. Check looks up the saved request and resends it,
+byte for byte, only when Local has no record of it.
 
 Insights is intended to review chat evidence across projects and propose useful improvements.
 Its restricted reader can discover local chats, including archives, and read bounded, sanitized
