@@ -16,6 +16,10 @@ gate, migration, cleanup, release or restart. Swift is out of scope; #44/#45 pol
 
 ## Backend human feedback
 
+The [global optional request source](global-review-requests.md) now supplies explicit coordinator
+and native suggestions and per-target requirement identity. It does not create user-required
+authority, install approval prerequisites, activate gates or add native request UI.
+
 `human-reviews.ts` implements the `QualifiedReviewDispositionSource` used by the existing
 `WorkflowConfirmations` handler. One global store shares `missions.sqlite` and its replica/durability
 lane. It does not invent a mission, task, request, required approval, worker attribution or gate.
@@ -73,7 +77,7 @@ are repository-scoped; they do not claim exclusion against external Git writers.
 Focused tests cover restart/durability failures, exact lost ACKs, overlapping selection CAS/blocks,
 stale prerequisites/requirements/custody at commit, private drafts, current access after workspace
 loss, original anchors/supersession and native-only HTTP admission. Native UI/IME/visual acceptance,
-request production, reviewer execution, learning, attention and gate activation remain separate.
+native request UI, reviewer execution, learning, attention and gate activation remain separate.
 
 ## Implemented read-only slice
 

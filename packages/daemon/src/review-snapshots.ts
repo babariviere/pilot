@@ -124,6 +124,11 @@ export class ReviewSnapshotStore {
 		if (!(await this.exists())) throw new Error("No retained comparison store");
 		return this.rpc("get", { snapshotId });
 	}
+	async comparison(snapshotId: string): Promise<import("@pilot/protocol").NativeReviewComparison> {
+		this.open();
+		if (!(await this.exists())) throw new Error("No retained comparison store");
+		return this.rpc("comparison", { snapshotId });
+	}
 	/** Read-only canonical store identity. Does not create an absent store. */
 	async identity(): Promise<string> {
 		this.open();

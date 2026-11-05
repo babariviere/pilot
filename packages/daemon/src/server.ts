@@ -106,6 +106,7 @@ import { AutomationsRevisionConflict, EnvironmentRevisionConflict, expandHome, t
 import { PTY_INPUT_CHUNK } from "./pty-input.ts";
 import { RepositoryBrowser } from "./repository-browser.ts";
 import { isRetiredDevboxOperation } from "./retired-devboxes.ts";
+import { optionalReviewRequests, retainedFeedbackReader } from "./review-request-access.ts";
 import { ReviewStore } from "./reviews.ts";
 import type { RuntimeContributor } from "./runtime-admission.ts";
 import { RuntimeAdmission, RuntimeResources } from "./runtime-admission.ts";
@@ -654,31 +655,15 @@ export function createDaemonServer(
 		target: Pick<import("@pilot/protocol").ReviewDispositionTarget, "projectId" | "sessionId" | "snapshotId">,
 	) => {
 		if (!missions) throw new ServiceUnavailable("Retained feedback unavailable");
-		const member = missions.store.membership(target.sessionId);
-		const missionId = member?.missionId;
-		const memberFence = canonicalJSON(member ?? null);
-		const contextFence = missionId ? canonicalJSON(missions.store.allocationContextFence(missionId)) : null;
-		const authorize = () => {
-			projects.require(target.projectId);
-			const session = sessions.get(target.sessionId);
-			if (
-				!session ||
-				session.projectId !== target.projectId ||
-				canonicalJSON(missions.store.membership(target.sessionId) ?? null) !== memberFence ||
-				(missionId &&
-					(missions.store.require(missionId).projectId !== target.projectId ||
-						canonicalJSON(missions.store.allocationContextFence(missionId)) !== contextFence))
-			)
-				throw new Conflict("Current retained feedback access changed");
-		};
-		authorize();
-		return sessions.nativeReviewReader(target.sessionId, missionId, target.projectId, authorize, true);
+		return retainedFeedbackReader(missions.store, sessions, projects, target);
 	};
+	const reviewRequests = missions ? optionalReviewRequests(missions.store, sessions, projects) : undefined;
 	const humanReviews = missions
 		? new HumanReviews({
 				store: missions.store.humanReviews,
 				qualify: (target) => feedbackReader(target).qualify(target),
-				// #70 requirements and required-check/fresh-review producers are absent. Approve refuses.
+				requirement: (target) => missions.store.reviewRequests.requirement(target),
+				// Real required-check/fresh-review producers remain absent. Approve refuses.
 			})
 		: undefined;
 	const workflowConfirmations =
@@ -1229,6 +1214,44 @@ export function createDaemonServer(
 			}
 			res.setHeader("cache-control", "no-store");
 			return json(res, 200, receipt ?? { state: "unknown" });
+		}
+		if (parts[1] === "review" && parts[2] === "requests") {
+			res.setHeader("cache-control", "no-store");
+			if (!reviewRequests) throw new ServiceUnavailable("Authoritative Review requests unavailable");
+			const after = () => {
+				const raw = url.searchParams.get("after") ?? "0",
+					n = Number(raw);
+				if (!/^\d+$/.test(raw) || !Number.isSafeInteger(n)) throw new HttpError(400, "Invalid request cursor");
+				return n;
+			};
+			if (req.method === "GET" && parts.length === 3) {
+				for (const key of url.searchParams.keys())
+					if (!["after", "sessionId"].includes(key) || url.searchParams.getAll(key).length !== 1)
+						throw new HttpError(400, "Only exact sessionId and after filters are supported");
+				return json(res, 200, await reviewRequests.page(after(), url.searchParams.get("sessionId") ?? undefined));
+			}
+			if (req.method === "GET" && parts.length === 5 && parts[4] === "history")
+				return json(res, 200, await reviewRequests.history(parts[3]!, after()));
+			// Purpose-specific native actions reuse the existing Local app capability. Neither
+			// a body actor nor the ordinary mission REST API can impersonate a native user.
+			if (!githubSetup) throw new ServiceUnavailable("Native Review request actions unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			const actor = { kind: "native-user" as const };
+			if (req.method === "GET" && parts.length === 5 && parts[3] === "operations")
+				return json(res, 200, (await reviewRequests.lookup(parts[4]!, actor)) ?? { state: "unknown" });
+			if (req.method === "POST" && parts.length === 4 && parts[3] === "suggest")
+				return json(res, 200, await reviewRequests.suggest(actor, await readJson(req, 16 * 1024)));
+			if (req.method === "POST" && parts.length === 4 && ["withdraw", "snooze", "resume"].includes(parts[3]!))
+				return json(
+					res,
+					200,
+					await reviewRequests.transition(
+						actor,
+						parts[3] as "withdraw" | "snooze" | "resume",
+						await readJson(req, 8192),
+					),
+				);
+			throw new HttpError(404, "Not found");
 		}
 		if (parts[1] === "review-feedback") {
 			res.setHeader("cache-control", "no-store");

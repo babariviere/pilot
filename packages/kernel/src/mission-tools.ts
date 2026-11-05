@@ -48,6 +48,8 @@ export const MISSION_ACTIONS = [
 	"answer",
 	"archiveWorker",
 	"restoreWorker",
+	"requestReview",
+	"retireReview",
 ] as const;
 export type MissionAction = (typeof MISSION_ACTIONS)[number];
 
@@ -99,6 +101,7 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 - send (coordinator only): send message to member targetSessionId; wakes idle/paused chats, optional mode steer for corrections that change current work, followUp (default) for anything that can wait. Steer joins a running turn at its next step; either mode starts an idle chat. Returns delivery delivered/queued/rejected, mode and reason; restore archived chats first.
 - answer (coordinator only): answer a member's pending ordinary question using targetSessionId, questionId from status and message. Use approved mission scope and decisions; ask the user for missing decisions, scope changes or approvals. Never grants database access or other user-only permissions. Ordinary send/steer does not answer questions. After uncertain delivery, inspect status; never blindly replay.
 - archiveWorker / restoreWorker (coordinator only): targetSessionId in this mission/project. First establish that assigned work is delivered or explicitly resolved (tasks done/dropped); idle is not completion. Refuses unfinished assignments, assistance, queued inputs and live work. Archive preserves the workspace from automatic pruning/reclamation, history and artifacts; it does not approve completion or authorize deletion. Restore is passive; send/start a separately authorized follow-up explicitly. Repeats are harmless; returns committed archivedAt (null when restored). status includes archived workers. User archive/cleanup controls remain separate.
+- requestReview / retireReview (coordinator only): request supplies an exact optional retained-change suggestion or retires your own suggestion. Same-mission/project member custody only. Never requires human approval, resolves threads or waives gates. Reuse operationId and exact payload after a lost reply; retry returns the original effect, not current state.
 - status (coordinator only): summarize members: state, outcome, branch, compact PR states, tasks and finishedWithoutPR (idle claimed work lacking open/draft/merged PR). targetSessionId returns one member plus lastAssistantReply (1500 chars) and pendingQuestion (questionId, question, context/options, or null). Never starts workers. Status/start return chatUrl (pilot://chat/<id>); use [chat name](chatUrl) when referencing a chat to the user. They also include cached read-only subscriptionUsage per provider (window percent/reset; stale or unknown labelled).
 - bindPr (coordinator only): bind url to targetSessionId, optional taskId to disambiguate. Transfers sole PR-head ownership and unfinished ownership links. Returns {changed, previousOwner, taskLinkRemoved}; references never grant ownership.
 - unbindPr (coordinator only): detach url from targetSessionId, stopping tracking/pushes/follow-ups and removing unfinished ownership links. References/branches stay. Returns {changed, previousOwner, taskLinkRemoved}.`
@@ -182,6 +185,44 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 			),
 			...(coordinator
 				? {
+						request: Type.Optional(
+							Type.Union([
+								Type.Object(
+									{
+										operationId: Type.String({ minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9_-]+$" }),
+										target: Type.Object(
+											{
+												projectId: Type.String(),
+												sessionId: Type.String(),
+												snapshotId: Type.String(),
+												repositoryId: Type.String(),
+												changeId: Type.String(),
+												baseCommitId: Type.String(),
+												headCommitId: Type.String(),
+												layer: StringEnum(["layer", "stack"]),
+												diffSha256: Type.String(),
+												comparisonDigest: Type.String(),
+											},
+											{ additionalProperties: false },
+										),
+										title: Type.String({ minLength: 1, maxLength: 200 }),
+										reason: Type.String({ minLength: 1, maxLength: 4000 }),
+										replacesRequestId: Type.Union([Type.String(), Type.Null()]),
+										replacesExpectedRevision: Type.Union([Type.Integer({ minimum: 1 }), Type.Null()]),
+									},
+									{ additionalProperties: false },
+								),
+								Type.Object(
+									{
+										operationId: Type.String({ minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9_-]+$" }),
+										requestId: Type.String({ minLength: 1, maxLength: 128 }),
+										expectedRevision: Type.Integer({ minimum: 1 }),
+										reason: Type.String({ minLength: 1, maxLength: 4000 }),
+									},
+									{ additionalProperties: false },
+								),
+							]),
+						),
 						questionId: Type.Optional(
 							Type.Integer({ minimum: 1, description: "Exact pending question entry ID from status (answer)." }),
 						),

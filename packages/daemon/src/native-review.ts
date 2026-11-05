@@ -14,14 +14,16 @@ export class NoRetainedBinding extends Error {}
 
 export class NativeReviewReader {
 	private readonly snapshots: Pick<ReviewSnapshotStore, "get" | "list" | "diff" | "read"> &
-		Partial<Pick<ReviewSnapshotStore, "identity" | "validateRange" | "projectRange" | "verifyDiff">>;
+		Partial<Pick<ReviewSnapshotStore, "identity" | "validateRange" | "projectRange" | "verifyDiff" | "comparison">>;
 	private readonly ledger: Pick<JjOwnershipStore, "get"> &
 		Partial<Pick<JjOwnershipStore, "deliveryStatus" | "list" | "binding" | "head">>;
 	private readonly admit: () => Promise<JjOwnershipBinding>;
 	private readonly syncScope?: () => string;
 	constructor(
 		snapshots: Pick<ReviewSnapshotStore, "get" | "list" | "diff" | "read"> &
-			Partial<Pick<ReviewSnapshotStore, "identity" | "validateRange" | "projectRange" | "verifyDiff">>,
+			Partial<
+				Pick<ReviewSnapshotStore, "identity" | "validateRange" | "projectRange" | "verifyDiff" | "comparison">
+			>,
 		ledger: Pick<JjOwnershipStore, "get"> &
 			Partial<Pick<JjOwnershipStore, "deliveryStatus" | "list" | "binding" | "head">>,
 		admit: () => Promise<JjOwnershipBinding>,
@@ -156,6 +158,15 @@ export class NativeReviewReader {
 			changes: m.changes,
 			diff: m.diff,
 		};
+	}
+	/** Exact indexed comparison, with the same custody checks as source reads. */
+	async comparison(snapshotId: string) {
+		if (!this.snapshots.comparison) throw new Error("Exact comparison reader unavailable");
+		const { binding } = await this.snapshot(snapshotId);
+		const comparison = await this.snapshots.comparison(snapshotId);
+		await this.owner(binding, comparison.request.repositoryId, comparison.request.changeId);
+		await this.check(binding);
+		return comparison;
 	}
 	/** Retained package plus a synchronous last-step fence for a missions.sqlite commit. */
 	async qualify(target: ReviewDispositionTarget) {

@@ -126,6 +126,18 @@ async function dispatch(id: number, method: string, args: Record<string, unknown
 		return projectRange(range, old, bytes, next.path);
 	}
 	if (method === "get") return get(args.snapshotId);
+	if (method === "comparison") {
+		const s = get(args.snapshotId),
+			m = s.manifest;
+		const row = db.prepare("SELECT rowid FROM snapshots WHERE id=?").get(s.snapshotId)!;
+		return {
+			snapshotId: s.snapshotId,
+			sequence: Number(row.rowid),
+			capturedAt: m.provenance.capturedAt,
+			request: m.request,
+			status: m.status,
+		};
+	}
 	if (method === "list") {
 		exact(args, ["binding", "after"]);
 		bindingRecord(args.binding);

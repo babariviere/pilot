@@ -50,6 +50,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Mission grouping and contextual decisions](mission-grouping-context.md)
 - [Proposed mission interview and approval contract](mission-interview-approval.md)
 - [Proposed native Review and durable diff annotations](mission-native-review.md)
+- [Global optional Review request producer and read API](global-review-requests.md)
 - [Non-code delivery foundation](mission-non-code-deliveries.md)
 - [Production reviewer bridge and independence contract](mission-production-review-bridge.md)
 - [Workflow approval, review consent and human-review actions](mission-review-app-actions.md)

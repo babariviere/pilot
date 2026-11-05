@@ -676,6 +676,30 @@ test("only coordinators expose the replacement action and forward D-number refer
 	assert.deepEqual(calls, [["supersede", { decisionId: "D7", replacementDecisionId: "D9" }]]);
 });
 
+test("optional review request actions are coordinator-only and forward exact nested payloads", async () => {
+	const calls: unknown[] = [];
+	const coordinator = createMissionTool(async (action, args) => {
+		calls.push([action, args]);
+		return {};
+	}, true);
+	const member = createMissionTool(async () => ({}));
+	const request = {
+		operationId: "retire-exact",
+		requestId: "optional-change",
+		expectedRevision: 2,
+		reason: "My optional suggestion",
+	};
+	const params = { action: "retireReview", request };
+	validateToolArguments(coordinator, { type: "toolCall", id: "retire", name: "mission", arguments: params });
+	assert.throws(() =>
+		validateToolArguments(member, { type: "toolCall", id: "retire", name: "mission", arguments: params }),
+	);
+	assert.ok(!("request" in (member.parameters as { properties: object }).properties));
+	await coordinator.execute("retire", params as never, undefined, undefined, {} as never);
+	assert.deepEqual(calls, [["retireReview", { request }]]);
+	assert.match(coordinator.description, /Never requires human approval, resolves threads or waives gates/);
+});
+
 test("the mission tool forwards actions with only the supplied arguments", async () => {
 	const calls: unknown[] = [];
 	const tool = createMissionTool(async (action, args) => {
@@ -765,7 +789,7 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 	const schema = tool.parameters as {
 		properties: { action: { enum: string[] }; message: unknown; model: unknown; thinking: unknown };
 	};
-	assert.deepEqual(schema.properties.action.enum.slice(-10), [
+	assert.deepEqual(schema.properties.action.enum.slice(-12), [
 		"start",
 		"send",
 		"status",
@@ -776,6 +800,8 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 		"answer",
 		"archiveWorker",
 		"restoreWorker",
+		"requestReview",
+		"retireReview",
 	]);
 	assert.ok(schema.properties.message);
 	assert.equal(tool.annotations?.destructiveHint, true);

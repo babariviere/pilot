@@ -34,6 +34,7 @@ export type * from "./model-scope.ts";
 export type * from "./native-review.ts";
 export type * from "./pi-reload.ts";
 export type * from "./refresh-health.ts";
+export type * from "./review-requests.ts";
 
 /** Lifecycle as seen by the daemon. "parked" means no worker is running; the session resumes on demand. */
 export type SessionState = "parked" | "starting" | "idle" | "working" | "failed";

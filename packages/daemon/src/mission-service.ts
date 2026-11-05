@@ -64,6 +64,7 @@ import {
 	reopenRetainedBrief,
 } from "./retained-brief.ts";
 import { RETAINED_REVIEW_LIMITS, retainedReviewSnapshot } from "./retained-review-contract.ts";
+import { optionalReviewRequests } from "./review-request-access.ts";
 import type { ReviewSnapshotStore } from "./review-snapshots.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { SourceMcpClient } from "./source-mcp.ts";
@@ -1700,6 +1701,8 @@ export class MissionService {
 				"answer",
 				"archiveWorker",
 				"restoreWorker",
+				"requestReview",
+				"retireReview",
 				"status",
 				"bindPr",
 				"unbindPr",
@@ -1718,6 +1721,18 @@ export class MissionService {
 		const who = (id: string | undefined) => (id === undefined ? "user" : id === sessionId ? "you" : id);
 		const str = (key: string) => (typeof args[key] === "string" ? (args[key] as string) : undefined);
 		switch (action) {
+			case "requestReview":
+			case "retireReview": {
+				const requests = optionalReviewRequests(this.store, this.sessions, this.projects);
+				const actor = { kind: "coordinator" as const, missionId, sessionId };
+				return action === "requestReview"
+					? requests.suggest(actor, args.request as unknown as import("@pilot/protocol").ReviewRequestSuggestion)
+					: requests.transition(
+							actor,
+							"retire",
+							args.request as unknown as import("@pilot/protocol").ReviewRequestTransition,
+						);
+			}
 			case "archiveWorker":
 			case "restoreWorker": {
 				const target = str("targetSessionId");
