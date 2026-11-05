@@ -156,6 +156,7 @@ fn value(
 impl Panel {
     /// Project names and paths for display; never a destination.
     pub(crate) fn enable_projects(&mut self, projects: Arc<Vec<Project>>, cx: &mut Context<Self>) {
+        self.review_projects(projects.clone(), cx);
         let Some(flow) = self.enable.as_mut() else {
             return;
         };
@@ -1057,6 +1058,17 @@ impl Panel {
                         d.child(
                             ui::action("insights-enable-recheck", "Check again", Action::Quiet)
                                 .on_click(cx.listener(|v, _, _, cx| v.enable_status_again(cx))),
+                        )
+                    })
+                    .when(accepted && on, |d| {
+                        let session = session.clone();
+                        d.child(
+                            ui::action("insights-enable-review", "Review settings…", Action::Quiet)
+                                .on_click(cx.listener(move |v, _, _, cx| {
+                                    if v.visible {
+                                        cx.emit(Event::EditReview(session.clone()));
+                                    }
+                                })),
                         )
                     }),
             )

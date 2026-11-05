@@ -319,6 +319,20 @@ pub(crate) enum Request {
         target_id: String,
         payload: String,
     },
+    /// Save desired review settings: native-built from the exact snapshot and its revision.
+    Settings {
+        project_id: String,
+        mission_id: String,
+        target_id: String,
+        payload: String,
+    },
+    /// Apply saved settings: the host's preview payload, frozen verbatim at confirmation.
+    Apply {
+        project_id: String,
+        mission_id: String,
+        target_id: String,
+        payload: String,
+    },
 }
 impl Request {
     pub(crate) fn slot(&self) -> String {
@@ -329,6 +343,8 @@ impl Request {
                 session_id, key, ..
             } => format!("lifecycle:{session_id}:{key}"),
             Self::Enable { mission_id, .. } => crate::insights_enable::slot(mission_id),
+            Self::Settings { target_id, .. } => crate::insights_settings::settings_slot(target_id),
+            Self::Apply { target_id, .. } => crate::insights_settings::apply_slot(target_id),
         }
     }
     pub(crate) fn kind(&self) -> &'static str {
@@ -337,6 +353,8 @@ impl Request {
             Self::Revoke { .. } => "insights-revoke",
             Self::Lifecycle { .. } => "insights-lifecycle",
             Self::Enable { .. } => crate::insights_enable::KIND,
+            Self::Settings { .. } => crate::insights_settings::SETTINGS_KIND,
+            Self::Apply { .. } => crate::insights_settings::APPLY_KIND,
         }
     }
     pub(crate) fn target(&self) -> Option<String> {
@@ -345,7 +363,9 @@ impl Request {
             Self::Revoke { session_id, .. } | Self::Lifecycle { session_id, .. } => {
                 Some(session_id.clone())
             }
-            Self::Enable { target_id, .. } => Some(target_id.clone()),
+            Self::Enable { target_id, .. }
+            | Self::Settings { target_id, .. }
+            | Self::Apply { target_id, .. } => Some(target_id.clone()),
         }
     }
     pub(crate) fn payload(&self) -> String {
@@ -390,7 +410,9 @@ impl Request {
                 ("lifecycle", json!(lifecycle.wire())),
             ]),
             // Exactly the bytes the confirmation showed; never rebuilt.
-            Self::Enable { payload, .. } => payload.clone(),
+            Self::Enable { payload, .. }
+            | Self::Settings { payload, .. }
+            | Self::Apply { payload, .. } => payload.clone(),
         }
     }
     pub(crate) fn validate(&self) -> Result<(), Failure> {
@@ -445,6 +467,30 @@ impl Request {
                     return Err(INVALID);
                 }
             }
+            Self::Settings {
+                project_id,
+                mission_id,
+                target_id,
+                payload,
+            } => {
+                if !crate::insights_settings::settings_payload_ok(
+                    payload, project_id, mission_id, target_id,
+                ) {
+                    return Err(INVALID);
+                }
+            }
+            Self::Apply {
+                project_id,
+                mission_id,
+                target_id,
+                payload,
+            } => {
+                if !crate::insights_settings::apply_payload_ok(
+                    payload, project_id, mission_id, target_id,
+                ) {
+                    return Err(INVALID);
+                }
+            }
         }
         if let Self::Lifecycle { key, .. } = self
             && !uuid(key)
@@ -492,10 +538,12 @@ impl Attempt {
     }
     pub(crate) fn validate(&self, slot: &str) -> Result<(), Failure> {
         let op = &self.operation;
-        let cap = if op.kind == crate::insights_enable::KIND {
-            crate::insights_enable::PAYLOAD_CAP
-        } else {
-            4096
+        let cap = match op.kind.as_str() {
+            crate::insights_enable::KIND => crate::insights_enable::PAYLOAD_CAP,
+            crate::insights_settings::SETTINGS_KIND | crate::insights_settings::APPLY_KIND => {
+                crate::insights_settings::PAYLOAD_CAP
+            }
+            _ => 4096,
         };
         if op.payload.len() > cap {
             return Err(CORRUPT);
@@ -525,6 +573,18 @@ impl Attempt {
                     .ok_or(CORRUPT)?,
             },
             crate::insights_enable::KIND => Request::Enable {
+                project_id: id(&p["projectId"])?,
+                mission_id: id(&p["missionId"])?,
+                target_id: op.target_id.clone(),
+                payload: op.payload.clone(),
+            },
+            crate::insights_settings::SETTINGS_KIND => Request::Settings {
+                project_id: id(&p["projectId"])?,
+                mission_id: id(&p["missionId"])?,
+                target_id: op.target_id.clone(),
+                payload: op.payload.clone(),
+            },
+            crate::insights_settings::APPLY_KIND => Request::Apply {
                 project_id: id(&p["projectId"])?,
                 mission_id: id(&p["missionId"])?,
                 target_id: op.target_id.clone(),
@@ -592,6 +652,18 @@ pub(crate) fn outcome(attempt: &Attempt) -> Outcome {
     }
 }
 fn valid_result(op: &Operation, result: &Value) -> bool {
+    match op.kind.as_str() {
+        // Their records carry no top-level session; each names its own exact identity.
+        crate::insights_settings::SETTINGS_KIND => {
+            return result.to_string().len() <= crate::insights_settings::PAYLOAD_CAP
+                && crate::insights_settings::valid_settings_result(op, result);
+        }
+        crate::insights_settings::APPLY_KIND => {
+            return result.to_string().len() <= crate::insights_settings::PAYLOAD_CAP
+                && crate::insights_settings::valid_apply_result(op, result);
+        }
+        _ => {}
+    }
     if result.to_string().len() > RESULT_CAP || result["sessionId"] != op.target_id {
         return false;
     }
@@ -610,6 +682,18 @@ fn valid_result(op: &Operation, result: &Value) -> bool {
                 && id(&result["taskId"]).is_ok()
         }
         _ => false,
+    }
+}
+/// A pending receipt's step marker for exactly this command. Entered, never completed.
+fn valid_pending(op: &Operation, result: Option<&Value>) -> bool {
+    match op.kind.as_str() {
+        crate::insights_settings::SETTINGS_KIND => {
+            crate::insights_settings::valid_settings_pending(result)
+        }
+        crate::insights_settings::APPLY_KIND => {
+            crate::insights_settings::valid_apply_pending(op, result)
+        }
+        _ => true,
     }
 }
 /// An accepted enable reports both resources: the report chat and its weekly rule.
@@ -636,7 +720,7 @@ pub(crate) fn adopt(op: &Operation, receipt: &Value) -> Outcome {
         return Outcome::Unknown(MISMATCH);
     }
     match receipt["state"].as_str() {
-        Some("pending") => Outcome::Pending,
+        Some("pending") if valid_pending(op, receipt.get("result")) => Outcome::Pending,
         Some("accepted") if valid_result(op, &receipt["result"]) => {
             Outcome::Accepted(receipt["result"].clone())
         }

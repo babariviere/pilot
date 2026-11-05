@@ -133,7 +133,7 @@ fn optional_number(value: Option<&Value>) -> Result<Option<u64>, Failure> {
     }
 }
 /// A host reason code: short snake case, displayed only through `reason_text`.
-fn reason(value: Option<&Value>) -> Result<Option<String>, Failure> {
+pub(crate) fn reason(value: Option<&Value>) -> Result<Option<String>, Failure> {
     match value.ok_or(INVALID)? {
         Value::Null => Ok(None),
         Value::String(s)
@@ -151,7 +151,7 @@ fn reason(value: Option<&Value>) -> Result<Option<String>, Failure> {
         _ => Err(INVALID),
     }
 }
-fn same_home(value: &Value, host: &Host) -> bool {
+pub(crate) fn same_home(value: &Value, host: &Host) -> bool {
     // The journal's own lineage check: hostId names the producer's view, not the home.
     value["daemonId"] == host.daemon_id.as_str()
         && value["lineageId"] == host.lineage_id.as_str()
@@ -159,7 +159,7 @@ fn same_home(value: &Value, host: &Host) -> bool {
         && value.as_object().is_some_and(|o| o.len() == 3)
 }
 
-fn model(value: &Value) -> Result<Model, Failure> {
+pub(crate) fn model(value: &Value) -> Result<Model, Failure> {
     match value["state"].as_str() {
         Some("available") if value.as_object().is_some_and(|o| o.len() == 2) => {
             Ok(Model::Available(text(&value["id"], 512)?))

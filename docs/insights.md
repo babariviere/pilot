@@ -1,6 +1,6 @@
 # Insights
 
-**Status: weekly Insights can be enabled from Automations. Settings are fixed for now.**
+**Status: weekly Insights can be enabled from Automations. Review settings are editable; Apply uses them.**
 
 To turn it on, open **Automations → Weekly Insights…**. One confirmation shows the findings
 backlog, the schedule (Fridays 18:00, Europe/Paris), the exact model, what it reads and the
@@ -27,6 +27,25 @@ Use the report chat's **… → Insights settings…** for compact status, model
 details, the **Weekly** state and **Revoke…**. Revoking keeps history and reports. Delivering one improvement never
 retires the report chat. If an action is **Unknown**, use **Check** to look up its durable outcome;
 closing and reopening is not permission to repeat it.
+
+## Review settings
+
+**Review → Settings…** in those settings (or **Review settings…** once weekly Insights is On) edits the
+desired review: day, time and time zone, the exact model, which projects and archives are read,
+excluded projects and chats, the partial sample and an advisory budget per report or per month.
+It shows the resolved model ID and the report chat's thinking level (Default when unset).
+
+**Save** stores these as desired settings only. The current weekly rule keeps its old settings and
+never adopts a saved revision by itself. **Review Apply…** reads a fresh preview from Local and shows
+exactly what **Apply** will do: the revision, model and thinking, schedule, sources and exclusions,
+provider processing, sample, budget and the exact rule it keeps, or cancels and replaces. Apply
+changes the report chat's model only when the saved model differs, and starts no review.
+If Local refuses (for example an unavailable model, or a model switch that would need a paid context
+rebuild), nothing else is tried; decide separately.
+
+Unsaved edits survive closing the panel. If settings changed elsewhere, your edits stay and you
+choose **Discard** or **Keep mine**. An unconfirmed Save or Apply blocks both until **Check**; Check
+only looks up the saved request and resends it, byte for byte, when Local has no record of it.
 
 Insights is intended to review chat evidence across projects and propose useful improvements.
 Its restricted reader can discover local chats, including archives, and read bounded, sanitized
@@ -73,10 +92,8 @@ Terra is suggested only when one configured, available model in the selected pro
 the display name **Terra 6.1**. Missing or ambiguous matches stay unresolved, with no guessed ID or
 Sol fallback. Explicit model choices and existing schedules are unchanged.
 
-The backend can persist validated desired settings; the native editor is still a follow-up.
 Saving settings does not activate them or change an existing model, access grant or automation.
-The backend also provides a separate, explicitly confirmed Apply operation for the future editor.
-It preserves the report chat and replaces only the exact previewed integration-owned weekly rule.
+Apply preserves the report chat and replaces only the exact previewed integration-owned weekly rule.
 Apply starts no report and cannot perform a paid context migration. Interrupted effects stay pending
 without replay; inspecting matching model/rule values is not an acknowledgement.
 See the [settings contract](technical/insights-settings.md) for native integration and limitations.

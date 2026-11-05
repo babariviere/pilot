@@ -142,6 +142,8 @@ pub use local_view::insights_enable_probe::run_insights_enable_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::insights_native_probe::run_insights_native_probe;
 #[cfg(feature = "native-probes")]
+pub use local_view::insights_settings_probe::run_insights_settings_probe;
+#[cfg(feature = "native-probes")]
 pub use local_view::project_settings_probe::run_project_settings_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::project_settings_probe::run_project_slack_probe;
@@ -176,6 +178,7 @@ mod insights;
 mod insights_enable;
 #[cfg(feature = "native-probes")]
 mod insights_probe;
+mod insights_settings;
 mod insights_view;
 #[cfg(feature = "native-probes")]
 pub use insights_probe::run_insights_probe;

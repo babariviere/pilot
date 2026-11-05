@@ -98,6 +98,9 @@ pub(crate) mod insights_enable_probe;
 pub(crate) mod insights_native_probe;
 #[path = "insights_navigation.rs"]
 mod insights_navigation;
+#[cfg(feature = "native-probes")]
+#[path = "insights_settings_probe.rs"]
+pub(crate) mod insights_settings_probe;
 #[path = "jump_navigation.rs"]
 mod jump_navigation;
 #[cfg(feature = "native-probes")]
@@ -407,6 +410,9 @@ pub struct LocalViewer {
     repair: diagnostic_repair_view::RepairPanel,
     /// The open Insights access/setup panel and its event subscription.
     insights: Option<(Entity<crate::insights_view::Panel>, Subscription)>,
+    /// A review settings editor set aside while another Insights panel is open, so its
+    /// unsaved edits return with it. Its events are ignored until it is open again.
+    insights_review: Option<(Entity<crate::insights_view::Panel>, Subscription)>,
     insights_return: Option<gpui_kit::FocusHandle>,
     /// Report chats' findings awaiting a decision (header hint), and the one read.
     insights_counts: std::collections::HashMap<String, insights_navigation::PendingCount>,
@@ -1851,6 +1857,7 @@ impl LocalViewer {
             artifacts_open: false,
             repair: Default::default(),
             insights: None,
+            insights_review: None,
             insights_return: None,
             insights_counts: Default::default(),
             insights_count_read: None,

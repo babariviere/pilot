@@ -245,12 +245,33 @@ impl LocalViewer {
                 if self.insights.is_some() {
                     self.close_insights(w, cx);
                 }
-                let panel = cx.new(|cx| Panel::new(scope, options, model, path, cx));
-                let events = cx.subscribe_in(&panel, w, |v, panel, event, w, cx| {
-                    v.insights_event(panel, event, w, cx)
-                });
-                self.insights = Some((panel.clone(), events));
-                panel
+                // A review editor keeps its draft while another Insights panel is open.
+                if let Some((p, events)) = self.insights.take()
+                    && matches!(p.read(cx).scope, Scope::Review { .. })
+                {
+                    self.insights_review = Some((p, events));
+                }
+                let kept = self
+                    .insights_review
+                    .take_if(|(p, _)| p.read(cx).matches(&scope, &options));
+                match kept {
+                    Some((p, events)) => {
+                        self.insights = Some((p.clone(), events));
+                        p.update(cx, |p, cx| {
+                            p.visible = true;
+                            p.refresh(cx);
+                        });
+                        p
+                    }
+                    None => {
+                        let panel = cx.new(|cx| Panel::new(scope, options, model, path, cx));
+                        let events = cx.subscribe_in(&panel, w, |v, panel, event, w, cx| {
+                            v.insights_event(panel, event, w, cx)
+                        });
+                        self.insights = Some((panel.clone(), events));
+                        panel
+                    }
+                }
             }
         };
         let projects = self.state.projects.clone();
@@ -334,6 +355,11 @@ impl LocalViewer {
                 let session = session.clone();
                 self.close_insights(w, cx);
                 self.open_insights_enable(Some(session), w, cx);
+            }
+            InsightsEvent::EditReview(session) => {
+                let session = session.clone();
+                self.close_insights(w, cx);
+                self.open_insights(Scope::Review { session }, w, cx);
             }
         }
     }

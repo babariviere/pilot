@@ -24,6 +24,8 @@ use std::sync::Arc;
 
 #[path = "insights_enable_view.rs"]
 mod enable;
+#[path = "insights_settings_view.rs"]
+mod review;
 
 pub(crate) enum Event {
     Close,
@@ -42,6 +44,8 @@ pub(crate) enum Event {
     OpenAutomationSettings,
     /// Open the weekly enable confirmation for this report chat.
     EnableWeekly(String),
+    /// Open the review settings editor for this report chat.
+    EditReview(String),
 }
 
 /// What the panel is about. Identity is captured when it opens and never changes.
@@ -71,6 +75,8 @@ pub(crate) enum Scope {
     Enable {
         reports: Vec<(String, String, String)>,
     },
+    /// Desired review settings of one report chat, and their separate Apply.
+    Review { session: String },
 }
 
 #[derive(Clone, Debug, Default)]
@@ -107,6 +113,8 @@ pub(crate) struct Panel {
     scope_open: bool,
     /// Weekly enable state; only for `Scope::Enable`.
     enable: Option<enable::Flow>,
+    /// Review settings state; only for `Scope::Review`.
+    review: Option<review::Editor>,
 }
 impl EventEmitter<Event> for Panel {}
 
@@ -141,10 +149,14 @@ impl Panel {
         let catalog_path = match &scope {
             Scope::Setup { path, .. } => Some(path.clone()),
             Scope::Chat { .. } => catalog_path,
-            Scope::Decide { .. } | Scope::Enable { .. } => None,
+            Scope::Decide { .. } | Scope::Enable { .. } | Scope::Review { .. } => None,
         };
         let enable = match &scope {
             Scope::Enable { reports } => Some(enable::Flow::new(reports.clone())),
+            _ => None,
+        };
+        let review = match &scope {
+            Scope::Review { session } => Some(review::Editor::new(session.clone())),
             _ => None,
         };
         let mut panel = Self {
@@ -167,6 +179,7 @@ impl Panel {
             opened: false,
             scope_open: false,
             enable,
+            review,
         };
         panel.refresh(cx);
         panel
@@ -190,6 +203,7 @@ impl Panel {
                 format!("{} #{number}?", decision_label(*to)).into()
             }
             Scope::Enable { .. } => "Weekly Insights".into(),
+            Scope::Review { .. } => "Review settings".into(),
         }
     }
     /// Show the panel as a dialog; Close and Escape go through the owner.
@@ -197,6 +211,7 @@ impl Panel {
         let title = panel.read(cx).title();
         let width = match panel.read(cx).scope {
             Scope::Decide { .. } => 400.,
+            Scope::Review { .. } => 480.,
             _ => 440.,
         };
         w.open_dialog(cx, {
@@ -219,6 +234,10 @@ impl Panel {
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
         if matches!(self.scope, Scope::Enable { .. }) {
             self.enable_refresh(cx);
+            return;
+        }
+        if matches!(self.scope, Scope::Review { .. }) {
+            self.review_refresh(cx);
             return;
         }
         if let Scope::Chat { session } = self.scope.clone() {
@@ -326,6 +345,9 @@ impl Panel {
         if let Some(Outcome::Accepted(result)) = self.latest().cloned() {
             self.settled(&result, cx);
         }
+        if matches!(self.latest(), Some(Outcome::Rejected(_))) {
+            self.review_refused(cx);
+        }
         if matches!(self.scope, Scope::Enable { .. }) {
             self.enable_sync(cx);
         }
@@ -377,6 +399,7 @@ impl Panel {
             }
             // Success is the passive status of both resources, read on the book change.
             Scope::Enable { .. } => {}
+            Scope::Review { .. } => self.review_settled(result, cx),
         }
     }
     fn send(&mut self, action: model::Action, cx: &mut Context<Self>) {
@@ -476,6 +499,15 @@ impl Panel {
             Scope::Setup { mission, .. } => Some(format!("create:{mission}")),
             Scope::Decide { session, key, .. } => Some(format!("lifecycle:{session}:{key}")),
             Scope::Enable { .. } => self.enable_attempt().map(|a| a.slot.clone()),
+            // An open Apply first: it fences Save as well.
+            Scope::Review { session } => {
+                let apply = crate::insights_settings::apply_slot(session);
+                if self.attempt(&apply).is_some_and(|a| a.open()) {
+                    Some(apply)
+                } else {
+                    Some(crate::insights_settings::settings_slot(session))
+                }
+            }
         }
     }
 }
@@ -509,10 +541,10 @@ fn disclosure(model: &str) -> impl IntoElement {
 }
 
 /// A short, final outcome. Unknown and Pending stay on the Check row instead.
-fn outcome_notice(outcome: &Outcome) -> Option<Notice> {
+fn outcome_notice(outcome: &Outcome, refused: &str) -> Option<Notice> {
     match outcome {
         Outcome::Rejected(reason) => {
-            Some(Notice::new(format!("Not applied: {reason}")).tone(Tone::Error))
+            Some(Notice::new(format!("{refused}: {reason}")).tone(Tone::Error))
         }
         Outcome::Refused(e) => Some(Notice::new(*e).tone(Tone::Error)),
         Outcome::Accepted(_) | Outcome::Pending | Outcome::Unknown(_) => None,
@@ -603,7 +635,14 @@ impl Panel {
                     .test_support()
                     .child(ui::text(Text::Caption, busy)),
             );
-        } else if let Some(n) = self.latest().and_then(outcome_notice) {
+        } else if let Some(n) = self.latest().and_then(|o| {
+            // A refused Save stored nothing; other refusals applied nothing.
+            let saving = self
+                .slot
+                .as_deref()
+                .is_some_and(|s| s.starts_with("settings:"));
+            outcome_notice(o, if saving { "Not saved" } else { "Not applied" })
+        }) {
             tail = tail.child(div().id("insights-outcome").test_support().child(n));
         }
         if let Some(e) = self.error {
@@ -848,6 +887,24 @@ impl Panel {
             ));
         let weekly = self.weekly_field(&session, cx);
         let body = body.child(field("insights-field-weekly", "Weekly", weekly, cx));
+        // Desired review settings: their own editor, Save and a separate Apply.
+        let body = body.when(status.enabled && !status.setup_pending, |b| {
+            let session = session.clone();
+            b.child(field(
+                "insights-field-review",
+                "Review",
+                div().h_flex().child(
+                    ui::action("insights-review-edit", "Settings…", Action::Quiet)
+                        .accessibility_label("Review settings")
+                        .on_click(cx.listener(move |v, _, _, cx| {
+                            if v.visible && !v.waiting() {
+                                cx.emit(Event::EditReview(session.clone()));
+                            }
+                        })),
+                ),
+                cx,
+            ))
+        });
         let mut tail = div().v_flex().gap_3().w_full().min_w_0();
         tail = tail.children(self.check_row(cx));
         if self.confirm_revoke {
@@ -930,6 +987,7 @@ impl Panel {
 
 impl Render for Panel {
     fn render(&mut self, w: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.review_seed(w, cx);
         self.render_panel(w, cx)
     }
 }
@@ -944,6 +1002,7 @@ impl Panel {
             Scope::Setup { .. } => catalog,
             Scope::Decide { .. } => true,
             Scope::Enable { .. } => self.enable_probe_ready(),
+            Scope::Review { .. } => self.review_probe_ready(),
         }
     }
     pub(crate) fn probe_revoke(&mut self, cx: &mut Context<Self>) {
@@ -966,6 +1025,7 @@ impl Panel {
             Scope::Setup { .. } => self.render_setup(cx),
             Scope::Decide { .. } => self.render_decide(cx),
             Scope::Enable { .. } => self.render_enable(cx),
+            Scope::Review { .. } => self.render_review(cx),
         };
         // Only the content scrolls; confirmations, outcomes and actions stay in view.
         let height = (f32::from(w.viewport_size().height) * 0.45).clamp(160., 480.);
@@ -977,8 +1037,18 @@ impl Panel {
             .w_full()
             .min_w_0()
             .track_focus(&self.focus)
-            .on_key_down(cx.listener(|v, e: &gpui_kit::KeyDownEvent, _, cx| {
+            // Input bindings run before key-down listeners: an open composition keeps Escape.
+            .capture_action(cx.listener(|v, _: &gpui_kit::base::input::Escape, w, cx| {
+                if v.review_marked(w, cx) {
+                    cx.stop_propagation();
+                }
+            }))
+            .on_key_down(cx.listener(|v, e: &gpui_kit::KeyDownEvent, w, cx| {
                 if e.keystroke.key == "escape" && v.visible {
+                    // An IME composition owns Escape; the panel stays.
+                    if v.review_marked(w, cx) {
+                        return;
+                    }
                     cx.stop_propagation();
                     if std::mem::take(&mut v.confirm_revoke) {
                         cx.notify();
@@ -1022,8 +1092,8 @@ mod tests {
     }
     #[test]
     fn unknown_and_pending_have_no_second_notice() {
-        assert!(outcome_notice(&Outcome::Pending).is_none());
-        assert!(outcome_notice(&Outcome::Unknown("x")).is_none());
-        assert!(outcome_notice(&Outcome::Rejected("stale".into())).is_some());
+        assert!(outcome_notice(&Outcome::Pending, "Not applied").is_none());
+        assert!(outcome_notice(&Outcome::Unknown("x"), "Not applied").is_none());
+        assert!(outcome_notice(&Outcome::Rejected("stale".into()), "Not saved").is_some());
     }
 }

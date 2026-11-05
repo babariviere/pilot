@@ -1,7 +1,8 @@
 # Insights desired settings
 
-Backend/protocol only. The fixed native flow remains compatible. No settings editor is shipped
-here, and no real grant, history review, provider input or schedule is activated by these APIs.
+The fixed native enable flow remains compatible. The desktop editor is described under
+[Native editor](#native-editor-desktop). No real grant, history review, provider input or schedule
+is activated by these APIs or the editor.
 
 ## Native contract
 
@@ -66,14 +67,12 @@ the separate explicit Apply confirmation below (or an existing explicit chat-mod
 No automatic switch occurs during Save or enable.
 An open old rule with a different revision returns `settings_activation_required`; it is not silently
 edited or unpaused. Use the separate explicit Apply contract below, not Save or an automatic repair.
-Native reconfiguration UI remains separate work.
-The current fixed-only native parser intentionally refuses extended settings payloads. A future
-editor must consume this capability/contract and display every selected value before enabling.
+The fixed enable parser still refuses extended settings payloads; the editor uses Save and Apply.
 
 ## Explicit Apply contract (native handoff)
 
 Require `hello.capabilities.insightsApply:1`, `insightsSettings:1` and the same pinned daemon/lineage.
-This backend/protocol addition does not ship a settings editor or activate any real resources.
+The contract itself activates no real resources.
 
 1. After a separately acknowledged Save, read `GET /api/insights/sessions/:id/apply` (no-store).
    `InsightsApplyPreflight` returns ready + payload, nextAt and unknown pricing/spend, or blocked
@@ -134,6 +133,45 @@ Synthetic coverage: `insights-enable.test.ts` (Apply, fixed compatibility, CAS, 
 crashes, lost effect ACKs), `session-model.test.ts` (host guards/unsupported workers) and
 `model.integration.test.ts` (zero-provider/no-fork safe switches, compacted refusal, late guard
 refusal, unchanged legacy rebuilds). These do not qualify real activation or native UI acceptance.
+
+## Native editor (desktop)
+
+`apps/desktop/src/insights_settings.rs` parses the snapshot and Apply preview strictly (exact keys,
+pinned daemon/lineage home, report chat identity) and validates receipts against the frozen bytes.
+`insights_settings_view.rs` is the **Review settings** panel inside the existing Insights dialog,
+opened from the report chat's Insights settings (**Review → Settings…**) or the enabled weekly state.
+It requires both capabilities; an older Local shows an update notice and reads nothing.
+
+- Edits use existing Kit controls: weekday group, TimeField, time-zone and budget inputs, a catalog
+  model menu (exact ID, `kind:"id"`), All/Selected projects with per-project checkboxes, Include
+  archived, clearing chat exclusions and three bounded sample menus. Unknown excluded project IDs
+  are kept; unavailable selected projects block Save until removed. Thinking is display only.
+- **Save** builds `InsightsSettingsPayload` from the snapshot it was edited from (home and chat
+  verbatim, `expectedRevision` = that revision) and sends it once through the private writer,
+  slot `settings:<report>`. Changing amount or period sets `basis:"user_choice"`.
+- **Review Apply…** needs a saved, unedited revision. It reads the preview and shows every value plus
+  the exact rule (keep, or cancel and replace with the deterministic ID). **Apply** freezes the
+  preview payload verbatim, slot `apply:<report>`. A late preview never replaces a sent Apply.
+- Accepted Save needs `revision = expectedRevision + 1` and identical settings. Pending Save allows
+  only `{phase:"settings_pending"}`. Apply progress must name this report and grant, the planned rule
+  and revision; `applied` only in an accepted receipt. Anything else stays Unknown, never success.
+- Check is the shared passive receipt lookup; only `unknown` resends the same envelope. An open
+  Save or Apply disables both; an open Apply replaces the editor with its frozen values and Check.
+- A newer snapshot keeps unsaved edits: the same revision refreshes fences, another revision marks
+  them stale with **Discard** or **Keep mine** (rebase onto it). Refusals re-read the snapshot.
+  The editor is set aside while another Insights panel is open, so drafts survive route changes
+  within the session. An open IME composition keeps Escape from closing the panel.
+
+Verification: `insights_settings_tests.rs` (strict parsing, payload bytes, replacement ID, receipt
+validation, attempt round trips) and the hidden mounted `insights_settings` probe
+(`cargo test --features native-probes --test insights_settings`, synthetic Local only). It drives the
+real chat-settings entry at 1100 light: passive open, edits, IME Escape, draft across close and route
+change, lost Save ACK, restart without replay, same-envelope Check, exact preview, lost Apply ACK,
+pending precedence, status-only Check, receipt-only acceptance, stale CAS with Keep mine and Discard,
+malformed and foreign receipts, model refusal and an older Local. 680 light/dark and 1100 dark are
+render-only. Limits: time is set on the TimeField state, not typed segments; this is headless
+TestPlatform evidence, not OS IME/accessibility, live Local, real models or rules. Drafts are not
+persisted across app restart; retained operations are.
 
 ## Host enforcement and storage
 

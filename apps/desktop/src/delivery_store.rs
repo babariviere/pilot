@@ -1158,7 +1158,10 @@ impl Store {
         use crate::insights::{Attempt, State};
         request.validate()?;
         let slot = request.slot();
-        if let crate::insights::Request::Enable { payload, .. } = request {
+        if let crate::insights::Request::Enable { payload, .. }
+        | crate::insights::Request::Settings { payload, .. }
+        | crate::insights::Request::Apply { payload, .. } = request
+        {
             // The confirmed home must still be this writer's Local; nothing is retargeted.
             let home = serde_json::from_str::<serde_json::Value>(payload)
                 .map(|p| p["expectedHome"].clone())
