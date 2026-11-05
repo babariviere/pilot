@@ -262,6 +262,8 @@ export class ProjectStore {
 			else delete next.workspace;
 		}
 		if (request.requirePullRequest !== undefined) next.requirePullRequest = request.requirePullRequest;
+		// Even a later edit back to identical settings must invalidate an earlier confirmation.
+		if (JSON.stringify(next) !== JSON.stringify(project)) next.workflowGeneration = randomUUID();
 		this.projects = this.projects.map((existing) => (existing.id === id ? next : existing));
 		await this.persist();
 		return next;

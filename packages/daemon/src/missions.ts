@@ -105,6 +105,7 @@ import { reasonLine } from "./needs-you-reason.ts";
 import { NOTICE_HOURLY_CAP, NOTICE_WINDOW_MS, noticeDeadline, noticeInvolvesSession } from "./notice-dispatcher.ts";
 import { KNOWLEDGE_SCHEMA, ProjectKnowledgeStore } from "./project-knowledge-store.ts";
 import type { PullRequestBinding } from "./sessions.ts";
+import { WORKFLOW_CONFIRMATION_SCHEMA, WorkflowConfirmationStore } from "./workflow-confirmation-store.ts";
 
 /** Who changed mission state. Omitted sessionId means the user (or pilotd itself). */
 export interface MissionActor {
@@ -686,6 +687,33 @@ export class MissionStore {
 		},
 	});
 
+	readonly workflowConfirmations = new WorkflowConfirmationStore({
+		one: (sql, ...params) => this.one(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work, true),
+		durable: () => this.durable(),
+	});
+
+	/** Bounded host input. The event high-water catches edit/revert and member/owner ABA. */
+	workflowConfirmationState(id: string) {
+		const mission = this.require(id);
+		const brief = this.brief(id);
+		if (!brief || Buffer.byteLength(brief.markdown) > 32 * 1024)
+			throw new Conflict("An approval needs a saved brief of at most 32 KiB");
+		const rows = this.all("SELECT * FROM decisions WHERE mission_id=? ORDER BY number LIMIT 129", id);
+		if (rows.length > 128) throw new Conflict("Approval decision limit exceeded");
+		const decisions = rows.map(decisionFrom).filter((d) => !d.replacement && !d.withdrawn);
+		if (Buffer.byteLength(JSON.stringify(decisions)) > 16 * 1024)
+			throw new Conflict("Approval decisions exceed 16 KiB");
+		return {
+			mission,
+			brief,
+			decisions,
+			eventId: Number(this.one("SELECT COALESCE(MAX(id),0) n FROM events WHERE mission_id=?", id)!.n),
+			contextFence: this.allocationContextFence(id),
+		};
+	}
+
 	/** ":memory:" keeps state in memory, for tests. */
 	constructor(file: string) {
 		if (file !== ":memory:") mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
@@ -710,6 +738,7 @@ export class MissionStore {
 		this.db.exec(SCHEMA);
 		this.db.exec(KNOWLEDGE_SCHEMA);
 		this.db.exec(INSIGHTS_SCHEMA);
+		this.db.exec(WORKFLOW_CONFIRMATION_SCHEMA);
 		// Startup only, on disk before the in-memory replica opens. Never replay a saved placement.
 		this.insights.reviews.recover();
 		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "created_by_session_id"))

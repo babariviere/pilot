@@ -318,13 +318,13 @@ export class OperationJournal {
 			return [...targets];
 		});
 	}
-	async reserve(op: DurableOperation): Promise<OperationReceipt> {
+	private async reserveEntry(op: DurableOperation): Promise<{ receipt: OperationReceipt; firstEntry: boolean }> {
 		op = structuredClone(op);
 		return this.serial(async () => {
 			await this.init();
 			await this.cleanRetired();
 			const existing = this.checked(op);
-			if (existing) return structuredClone(existing.receipt);
+			if (existing) return { receipt: structuredClone(existing.receipt), firstEntry: false };
 			if (this.records.size >= MAX_RECORDS) throw new Error("Operation receipt retention is full");
 			await this.prepareDirectory();
 			const record: StoredOperation = {
@@ -340,12 +340,20 @@ export class OperationJournal {
 			await this.persist(join(this.directory, `${payloadHash(op.operationId)}.json`), record);
 			this.records.set(op.operationId, record);
 			this.sequences.set(`${streamKey(op)}:${op.sequence}`, op.operationId);
-			return structuredClone(record.receipt);
+			return { receipt: structuredClone(record.receipt), firstEntry: true };
 		});
 	}
-	async execute(op: DurableOperation, handler: (op: DurableOperation) => Promise<unknown>): Promise<OperationReceipt> {
+	async reserve(op: DurableOperation): Promise<OperationReceipt> {
+		return (await this.reserveEntry(op)).receipt;
+	}
+	async execute(
+		op: DurableOperation,
+		handler: (op: DurableOperation, entry: { firstEntry: boolean }) => Promise<unknown>,
+	): Promise<OperationReceipt> {
 		op = structuredClone(op);
-		const receipt = await this.reserve(op);
+		// Only this atomic reservation can identify a new confirmation. A pending record,
+		// even one without an effect checkpoint, is never fresh authority on re-entry.
+		const { receipt, firstEntry } = await this.reserveEntry(op);
 		if (receipt.state !== "pending") return receipt;
 		const running = this.running.get(op.operationId);
 		if (running) return running;
@@ -354,7 +362,7 @@ export class OperationJournal {
 			let result: unknown;
 			let reason: string | undefined;
 			try {
-				result = await handler(structuredClone(op));
+				result = await handler(structuredClone(op), { firstEntry });
 			} catch (e) {
 				if (!(e instanceof OperationRejected)) return (await this.lookup(op))!;
 				reason = e.message.slice(0, 512);

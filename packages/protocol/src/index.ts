@@ -720,6 +720,8 @@ export interface Project {
 	tracking?: ProjectTrackingConfig;
 	/** Host-owned generation for diagnostic configuration fencing. Never an editable project setting. */
 	trackingGeneration?: string;
+	/** Host-owned workflow configuration ABA fence. Never accepted from project requests. */
+	workflowGeneration?: string;
 	/** Environment profile. Edited through PUT /api/projects/:id/environment, never through project updates. */
 	environment?: import("./environment.ts").ProjectEnvironment;
 	/** Personal hooks. Writes require the native automations endpoint. */
@@ -2174,6 +2176,7 @@ export type * from "./telemetry.ts";
 export type * from "./tracking.ts";
 export type * from "./transfers.ts";
 export type * from "./usage-history.ts";
+export type * from "./workflow-confirmations.ts";
 
 /** Explicit status-only lifecycle, distinct from legacy PATCH side effects. No replay key. */
 export interface MissionLifecycleRequest {

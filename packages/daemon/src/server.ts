@@ -94,7 +94,7 @@ import type { MissionStore } from "./missions.ts";
 import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } from "./model-scope.ts";
 import type { ModelCatalog } from "./models.ts";
 import { MAX_NATIVE_DIAGNOSTIC_BYTES } from "./native-diagnostics.ts";
-import { durableJSON, OperationJournal, OperationRejected } from "./operation-journal.ts";
+import { canonicalJSON, durableJSON, OperationJournal, OperationRejected, payloadHash } from "./operation-journal.ts";
 import { isAllowedOrigin } from "./origin.ts";
 import { PathCompletionReader } from "./path-completion.ts";
 import type { PowerService } from "./power.ts";
@@ -108,7 +108,6 @@ import { isRetiredDevboxOperation } from "./retired-devboxes.ts";
 import { ReviewStore } from "./reviews.ts";
 import type { RuntimeContributor } from "./runtime-admission.ts";
 import { RuntimeAdmission, RuntimeResources } from "./runtime-admission.ts";
-
 import type { ScheduleService } from "./schedules.ts";
 import { CommandRejected, NotFound, type SessionManager } from "./sessions.ts";
 import { SetupError, type SetupService } from "./setup.ts";
@@ -122,6 +121,7 @@ import { validatePatch } from "./tracked-items.ts";
 import { type ReservationReceipt, UpdateReservation } from "./update-reservation.ts";
 import { UsageQueryCapacityError } from "./usage-history.ts";
 import { usageAnalyticsQuery } from "./usage-history-validation.ts";
+import { isWorkflowOperation, WorkflowConfirmations } from "./workflow-confirmations.ts";
 
 /** Native host capability authenticates locally verified updater checkpoints, not agent assertions.
  * The capability holder must validate the signed staged candidate and measured source/GUI build,
@@ -649,6 +649,31 @@ export function createDaemonServer(
 			end();
 		}
 	};
+	const workflowConfirmations =
+		journal && missions
+			? new WorkflowConfirmations({
+					store: missions.store,
+					journal,
+					authorize: (projectId, coordinatorSessionId) => {
+						const project = projects.require(projectId);
+						const coordinator = sessions.get(coordinatorSessionId);
+						if (!coordinator || coordinator.projectId !== projectId || coordinator.archivedAt)
+							throw new Conflict("Workflow coordinator project or availability changed");
+						return payloadHash(
+							canonicalJSON({
+								project,
+								coordinator: {
+									id: coordinatorSessionId,
+									projectId: coordinator.projectId,
+									mode: coordinator.mode,
+									role: coordinator.role,
+								},
+							}),
+						);
+					},
+					// No consent configuration, provider executor or #60 feedback producer is installed here.
+				})
+			: undefined;
 	const insightsEnable =
 		journal && missions && schedules
 			? new InsightsEnable({
@@ -692,6 +717,10 @@ export function createDaemonServer(
 				})
 			: undefined;
 	const admitOperationHeld = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
+		if (isWorkflowOperation(op.kind)) {
+			if (!workflowConfirmations) throw new OperationRejected("Workflow confirmations are unavailable");
+			return workflowConfirmations.admit(op);
+		}
 		let payload: unknown;
 		try {
 			payload = JSON.parse(op.payload);
@@ -1127,7 +1156,12 @@ export function createDaemonServer(
 			const operation = await readJson<DurableOperation>(req);
 			if (parts[2] !== "receipt" && typeof operation?.kind === "string" && isRetiredDevboxOperation(operation.kind))
 				throw new HttpError(410, "Remote devbox operations are retired; stored receipts are retained");
-			if ((operation?.kind === "repair-create" || isInsightsOperation(operation?.kind)) && parts[2] !== "receipt") {
+			if (
+				(operation?.kind === "repair-create" ||
+					isInsightsOperation(operation?.kind) ||
+					isWorkflowOperation(operation?.kind)) &&
+				parts[2] !== "receipt"
+			) {
 				if (!githubSetup) throw new ServiceUnavailable("Native repair confirmation is unavailable");
 				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
 			}
@@ -1135,9 +1169,19 @@ export function createDaemonServer(
 			const receipt =
 				parts[2] === "receipt"
 					? await journal.lookup(operation)
-					: await journal.execute(operation, (op) =>
-							admitOperation(op, traceCarrier({ traceparent: req.headers.traceparent })),
-						);
+					: await journal.execute(operation, async (op, entry) => {
+							if (isWorkflowOperation(op.kind)) {
+								if (!workflowConfirmations)
+									throw new OperationRejected("Workflow confirmations are unavailable");
+								const end = mutations.begin({ kind: "operation", id: op.operationId });
+								try {
+									return await workflowConfirmations.admit(op, entry.firstEntry);
+								} finally {
+									end();
+								}
+							}
+							return admitOperation(op, traceCarrier({ traceparent: req.headers.traceparent }));
+						});
 			res.setHeader("cache-control", "no-store");
 			return json(res, 200, receipt ?? { state: "unknown" });
 		}
@@ -1492,6 +1536,31 @@ export function createDaemonServer(
 				projectId: write.projectId,
 				task,
 			});
+		}
+		if (
+			parts[1] === "missions" &&
+			parts.length === 4 &&
+			["approval-package", "reviewer-consent-package"].includes(parts[3]!)
+		) {
+			if (req.method !== "GET") throw new HttpError(405, "Preparation is read-only");
+			if (!workflowConfirmations) throw new ServiceUnavailable("Workflow confirmations are unavailable");
+			if (
+				[...url.searchParams.keys()].some((key) => key !== "action") ||
+				url.searchParams.getAll("action").length > 1
+			)
+				throw new HttpError(400, "Unsupported confirmation query");
+			const action = url.searchParams.get("action") ?? "approve";
+			if (!["approve", "revoke"].includes(action)) throw new HttpError(400, "Unsupported confirmation action");
+			const purpose =
+				parts[3] === "approval-package"
+					? action === "revoke"
+						? "workflow-revoke"
+						: "workflow-approve"
+					: action === "revoke"
+						? "review-consent-revoke"
+						: "review-consent";
+			res.setHeader("cache-control", "no-store");
+			return json(res, 200, await workflowConfirmations.prepare(parts[2]!, purpose));
 		}
 		if (parts[1] === "projects" && parts[3] === "review") {
 			res.setHeader("cache-control", "no-store");

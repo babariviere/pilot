@@ -52,6 +52,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Non-code delivery foundation](mission-non-code-deliveries.md)
 - [Production reviewer bridge and independence contract](mission-production-review-bridge.md)
 - [Workflow approval, review consent and human-review actions](mission-review-app-actions.md)
+- [Host workflow confirmation receipts (no active gates)](workflow-confirmation-receipts.md)
 - [Proposed review preference memory](mission-review-preference-memory.md)
 - [Versioned review profiles and results (internal)](mission-review-records.md)
 - [Mission roles and explorer admission](mission-roles.md)
