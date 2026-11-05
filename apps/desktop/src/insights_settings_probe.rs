@@ -435,6 +435,7 @@ pub fn run_insights_settings_probe(cx: &mut HeadlessAppContext) {
     }
     save_then_apply(cx, &dir);
     conflicts_and_refusals(cx, &dir);
+    double_confirm(cx, &dir);
     older_local(cx);
     for (width, mode) in [
         (680., ThemeMode::Light),
@@ -445,7 +446,166 @@ pub fn run_insights_settings_probe(cx: &mut HeadlessAppContext) {
     }
     cx.update(|cx| cx.set_reduce_motion(reduced));
     println!(
-        "insights settings: save/apply journey, conflicts/refusals, older Local and 3 render-only layouts passed"
+        "insights settings: save/apply journey, conflicts/refusals, double Save/Apply clicks, older Local and 3 render-only layouts passed"
+    );
+}
+
+/// SHA-256 of the exact UTF-8 payload bytes, computed here rather than by the writer.
+fn sha256(text: &str) -> String {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+/// A clean accepted Save receipt for whatever envelope arrives: the next revision of
+/// exactly the sent settings. A store or host refusal can't hide a second send.
+fn accept_save(body: &Value) -> Value {
+    let op: crate::delivery_store::Operation = serde_json::from_value(body.clone()).unwrap();
+    let p: Value = serde_json::from_str(&op.payload).unwrap();
+    let record = json!({
+        "revision": p["expectedRevision"].as_u64().unwrap() + 1,
+        "settings": p["settings"],
+        "model": p["settings"]["requestedModel"]["value"],
+    });
+    fx::receipt(&op, "accepted", record)
+}
+/// A clean accepted Apply receipt for whatever envelope arrives.
+fn accept_apply(body: &Value) -> Value {
+    let op: crate::delivery_store::Operation = serde_json::from_value(body.clone()).unwrap();
+    fx::receipt(&op, "accepted", fx::progress(&op, "applied"))
+}
+/// Two clicks in one frame, then the outcome: (commands handed to the writer, operation POSTs).
+fn double_click(
+    cx: &mut HeadlessAppContext,
+    h: AnyWindowHandle,
+    s: &Server,
+    view: &Entity<LocalViewer>,
+    id: &'static str,
+    slot: &str,
+) -> (u64, Vec<Value>) {
+    let p = panel(cx, view);
+    let before = cx.update(|cx| p.read(cx).probe_requests().0);
+    cx.update_window(h, |_, w, cx| {
+        w.click(id, cx);
+        w.click(id, cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    // Every command handed over has its own outcome before anything is counted.
+    until(cx, h, |_, cx| {
+        state_is(view, slot, State::Accepted, cx)
+            && ready(view, cx)
+            && p.read(cx).probe_requests().1.is_some()
+    });
+    let (after, latest) = cx.update(|cx| p.read(cx).probe_requests());
+    assert!(
+        matches!(latest, Some(crate::insights::Outcome::Accepted(_))),
+        "{latest:?}"
+    );
+    (after - before, sent(&posts(s), "/api/operations"))
+}
+
+/// Save, then Apply, each clicked twice in one frame. Every ACK is a clean acceptance for
+/// whatever arrives, so only the confirmation itself can keep a second command from going out.
+fn double_confirm(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
+    let width = 1100.;
+    let s = server(true);
+    s.reply(
+        SETTINGS,
+        Reply::json(200, fx::snapshot(0, fx::settings(fx::TERRA), fx::TERRA)),
+    );
+    let m = mount(cx, &s, width, ThemeMode::Light, None);
+    let (h, view) = (m.h, m.view.clone());
+    open_review(cx, h, &view);
+    click(cx, h, "insights-review-day-1");
+    let saved = values(cx, &view).to_value();
+    assert_ne!(saved, fx::settings(fx::TERRA), "a real edit");
+    posts(&s);
+
+    // Save twice in one frame.
+    s.respond(OPERATIONS, accept_save);
+    s.reply(
+        SETTINGS,
+        Reply::json(200, fx::snapshot(1, saved.clone(), fx::TERRA)),
+    );
+    let (commands, ops) = double_click(cx, h, &s, &view, "insights-review-save", SLOT);
+    assert_eq!(
+        (commands, ops.len()),
+        (1, 1),
+        "one Save click reached the writer and one operation was sent"
+    );
+    let op: crate::delivery_store::Operation = serde_json::from_value(ops[0].clone()).unwrap();
+    let payload: Value = serde_json::from_str(&op.payload).unwrap();
+    assert_eq!(
+        (&payload["settings"], &payload["expectedRevision"]),
+        (&saved, &json!(0))
+    );
+    assert_eq!(
+        op.payload_hash,
+        sha256(&op.payload),
+        "hash of the exact bytes"
+    );
+    let a = attempt(cx, &view, SLOT).unwrap();
+    assert_eq!(
+        (a.state, serde_json::to_value(&a.operation).unwrap()),
+        (State::Accepted, ops[0].clone()),
+        "the stored command is the one sent"
+    );
+    let p = panel(cx, &view);
+    until(cx, h, |_, cx| {
+        ready(&view, cx)
+            && p.read(cx)
+                .probe_review_base()
+                .is_some_and(|b| b.revision == 1)
+    });
+
+    // Apply twice in one frame, from its exact preview.
+    let preview = fx::ready(
+        1,
+        saved.clone(),
+        fx::TERRA,
+        fx::TERRA,
+        fx::rule(None, weekly(5, "18:00", "Europe/Paris")),
+    );
+    s.reply(APPLY, Reply::json(200, preview.clone()));
+    click(cx, h, "insights-review-apply");
+    until(cx, h, |_, cx| {
+        ready(&view, cx) && mode(&view, cx) == "preview"
+    });
+    cx.update_window(h, |_, w, _| assert!(!disabled(w, "insights-apply-confirm")))
+        .unwrap();
+    posts(&s);
+    s.respond(OPERATIONS, accept_apply);
+    let (commands, ops) = double_click(cx, h, &s, &view, "insights-apply-confirm", APPLY_SLOT);
+    assert_eq!(
+        (commands, ops.len()),
+        (1, 1),
+        "one Apply click reached the writer and one operation was sent"
+    );
+    let op: crate::delivery_store::Operation = serde_json::from_value(ops[0].clone()).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&op.payload).unwrap(),
+        preview["payload"],
+        "the preview payload, verbatim"
+    );
+    assert_eq!(
+        op.payload_hash,
+        sha256(&op.payload),
+        "hash of the exact bytes"
+    );
+    let a = attempt(cx, &view, APPLY_SLOT).unwrap();
+    assert_eq!(
+        (a.state, serde_json::to_value(&a.operation).unwrap()),
+        (State::Accepted, ops[0].clone())
+    );
+    shot(cx, h, dir, "double-apply");
+    escape(cx, h);
+    drop(p);
+    let root = unmount(cx, m);
+    let _ = std::fs::remove_dir_all(root);
+    println!(
+        "insights settings 1100 Light: double Save and double Apply clicks with clean accepted ACKs send one command each passed"
     );
 }
 

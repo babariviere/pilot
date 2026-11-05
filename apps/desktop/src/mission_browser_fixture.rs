@@ -81,6 +81,9 @@ pub(crate) struct State {
     pub(crate) writes: Vec<(String, String, bool, Value)>,
     /// "METHOD /path" requests that are recorded but not answered until released.
     pub(crate) held: BTreeSet<String>,
+    /// "METHOD /path" replies built from each request's JSON body, for answers that must
+    /// name what the client generated (an operation ID, a payload hash).
+    pub(crate) responders: BTreeMap<String, fn(&Value) -> Value>,
 }
 pub(crate) struct Server {
     pub(crate) options: LocalOptions,
@@ -124,6 +127,14 @@ impl Server {
             .unwrap()
             .overrides
             .insert(path.into(), reply);
+    }
+    /// Answers "METHOD /path" with status 200 and `respond(request body)`, ahead of overrides.
+    pub(crate) fn respond(&self, request: &str, respond: fn(&Value) -> Value) {
+        self.state
+            .lock()
+            .unwrap()
+            .responders
+            .insert(request.into(), respond);
     }
     pub(crate) fn all_gets(&self) -> bool {
         self.state
@@ -184,6 +195,7 @@ async fn serve(mut socket: TcpStream, state: Arc<Mutex<State>>) -> std::io::Resu
     let mut words = request.split_whitespace();
     let method = words.next().unwrap_or("");
     let path = words.next().unwrap_or("");
+    let mut request_body = Value::Null;
     if method != "GET" {
         let end = bytes
             .windows(4)
@@ -206,6 +218,7 @@ async fn serve(mut socket: TcpStream, state: Arc<Mutex<State>>) -> std::io::Resu
         }
         let capability = head.contains("x-pilot-github-capability: ");
         let value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        request_body = value.clone();
         state
             .lock()
             .unwrap()
@@ -216,12 +229,15 @@ async fn serve(mut socket: TcpStream, state: Arc<Mutex<State>>) -> std::io::Resu
         let mut state = state.lock().unwrap();
         assert!(state.seen.len() < 256, "bounded faux request budget");
         state.seen.push((method.into(), path.into()));
-        // "METHOD /path" overrides first, then the path for any method.
-        state
-            .overrides
-            .get(&format!("{method} {path}"))
-            .or_else(|| state.overrides.get(path))
-            .cloned()
+        // Responders first, then "METHOD /path" overrides, then the path for any method.
+        match state.responders.get(&format!("{method} {path}")) {
+            Some(respond) => Some(Reply::json(200, respond(&request_body))),
+            None => state
+                .overrides
+                .get(&format!("{method} {path}"))
+                .or_else(|| state.overrides.get(path))
+                .cloned(),
+        }
     };
     let reply=reply.unwrap_or_else(||{
         if method!="GET"{return Reply::json(405,json!({"error":"No mutation fixture"}));}

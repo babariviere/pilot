@@ -380,6 +380,12 @@ impl Panel {
     pub(crate) fn probe_waiting(&self) -> bool {
         self.waiting()
     }
+    /// This panel handed a command for `slot` to the writer and has no outcome for it yet.
+    /// A second click on the same confirmation can land in that gap, before `waiting()`
+    /// turns true, and would queue a second command. Confirmations check this first.
+    pub(super) fn unanswered(&self, slot: &str) -> bool {
+        self.slot.as_deref() == Some(slot) && self.latest().is_none()
+    }
     /// How many commands this panel has handed to the writer, and the latest one's outcome.
     #[cfg(feature = "native-probes")]
     pub(crate) fn probe_requests(&self) -> (u64, Option<Outcome>) {

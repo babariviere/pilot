@@ -408,7 +408,13 @@ impl Panel {
         .any(|s| self.attempt(s).is_some_and(|a| a.open()))
     }
     fn review_save(&mut self, cx: &mut Context<Self>) {
-        if self.review_open() || self.review.as_ref().is_some_and(|r| r.stale) {
+        // A second click in the same frame finds this Save still unanswered.
+        if self.review_open()
+            || self
+                .review
+                .as_ref()
+                .is_some_and(|r| r.stale || self.unanswered(&review::settings_slot(&r.session)))
+        {
             return;
         }
         let request = self.review_values(cx).and_then(|s| {
@@ -486,7 +492,8 @@ impl Panel {
         else {
             return;
         };
-        if self.review_open() {
+        // A second click in the same frame finds this Apply still unanswered.
+        if self.review_open() || self.unanswered(&review::apply_slot(&r.session)) {
             return;
         }
         let request = f.request(&r.session);

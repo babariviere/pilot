@@ -375,6 +375,7 @@ pub fn run_insights_enable_probe(cx: &mut HeadlessAppContext) {
     reuse_and_recovery(cx, &dir);
     lost_schedule_ack(cx, &dir);
     choice_and_refusals(cx, &dir);
+    double_confirm(cx, &dir);
     for (width, mode) in [
         (680., ThemeMode::Light),
         (680., ThemeMode::Dark),
@@ -384,7 +385,98 @@ pub fn run_insights_enable_probe(cx: &mut HeadlessAppContext) {
     }
     cx.update(|cx| cx.set_reduce_motion(reduced));
     println!(
-        "insights enable: reuse/recovery, lost schedule ACK, choice/refusals and 3 render-only layouts passed"
+        "insights enable: reuse/recovery, lost schedule ACK, choice/refusals, double confirmation and 3 render-only layouts passed"
+    );
+}
+
+/// SHA-256 of the exact UTF-8 payload bytes, computed here rather than by the writer.
+fn sha256(text: &str) -> String {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+/// The host's enabled status for whatever envelope arrives.
+fn enabled_status(body: &Value) -> Value {
+    let op: crate::delivery_store::Operation = serde_json::from_value(body.clone()).unwrap();
+    fx::status(&op, "accepted", fx::enabled(&op), "enabled", None)
+}
+/// A clean accepted receipt for whatever envelope arrives, so a store or host refusal
+/// can't hide a second send.
+fn accept_enable(body: &Value) -> Value {
+    enabled_status(body)["receipt"].clone()
+}
+
+/// Enable clicked twice in one frame with clean accepted ACKs: one command reaches the
+/// writer and one operation is sent, with the preflight's exact bytes.
+fn double_confirm(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
+    let width = 1100.;
+    let s = server();
+    let offer = fx::offer(
+        "project-A",
+        "mission-A",
+        fx::TERRA,
+        REPORT,
+        fx::chat(REPORT, fx::TERRA),
+        Value::Null,
+    );
+    s.reply(PREFLIGHT_A_PINNED, Reply::json(200, offer.clone()));
+    let m = mount(cx, &s, width, ThemeMode::Light, true, None);
+    let (h, view) = (m.h, m.view.clone());
+    from_automations(cx, h, &view);
+    let p = panel(cx, &view);
+    assert!(posts(&s).is_empty(), "opening is passive");
+    s.respond(OPERATIONS, accept_enable);
+    s.respond(STATUS, enabled_status);
+    let before = cx.update(|cx| p.read(cx).probe_requests().0);
+    cx.update_window(h, |_, w, cx| {
+        w.click("insights-enable-confirm", cx);
+        w.click("insights-enable-confirm", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    // Every command handed over has its own outcome before anything is counted.
+    until(cx, h, |_, cx| {
+        ready(&view, cx)
+            && p.read(cx).probe_requests().1.is_some()
+            && p.read(cx).probe_enable() == ("settled", Some("On".into()))
+    });
+    let (after, latest) = cx.update(|cx| p.read(cx).probe_requests());
+    assert!(
+        matches!(latest, Some(crate::insights::Outcome::Accepted(_))),
+        "{latest:?}"
+    );
+    let ops = sent_operations(&posts(&s));
+    assert_eq!(
+        (after - before, ops.len()),
+        (1, 1),
+        "one Enable click reached the writer and one operation was sent"
+    );
+    let op: crate::delivery_store::Operation = serde_json::from_value(ops[0].clone()).unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&op.payload).unwrap(),
+        offer["payload"],
+        "the preflight payload, verbatim"
+    );
+    assert_eq!(
+        op.payload_hash,
+        sha256(&op.payload),
+        "hash of the exact bytes"
+    );
+    let a = attempt(cx, &view, "enable:mission-A").unwrap();
+    assert_eq!(
+        (a.state, serde_json::to_value(&a.operation).unwrap()),
+        (State::Accepted, ops[0].clone()),
+        "the stored command is the one sent"
+    );
+    shot(cx, h, dir, "double-confirm");
+    escape(cx, h);
+    drop(p);
+    let root = unmount(cx, m);
+    let _ = std::fs::remove_dir_all(root);
+    println!(
+        "insights enable 1100 Light: double confirmation with clean accepted ACKs sends one command passed"
     );
 }
 

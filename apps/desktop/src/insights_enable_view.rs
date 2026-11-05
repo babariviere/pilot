@@ -893,7 +893,9 @@ impl Panel {
                 ui::action("insights-enable-confirm", "Enable", Action::Primary)
                     .disabled(!enabled)
                     .on_click(cx.listener(move |v, _, _, cx| {
-                        if let Some(r) = confirm.clone() {
+                        // One confirmation, one command, even for a second click in the
+                        // same frame.
+                        if let Some(r) = confirm.clone().filter(|r| !v.unanswered(&r.slot())) {
                             v.send(model::Action::Start(r), cx);
                         }
                     })),
