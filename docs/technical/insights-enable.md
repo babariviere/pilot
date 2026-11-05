@@ -1,6 +1,7 @@
 # Weekly Insights enable contract
 
 Persisted desired settings are a separate [native settings contract](insights-settings.md).
+Explicit deleted-report recovery has a separate [replacement contract](insights-replacement.md).
 The original fixed command remains byte-compatible; no revision field is added during replay.
 
 Host/protocol implementation. Native UI is separate. No actual access, schedule or review is

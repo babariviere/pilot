@@ -23,6 +23,7 @@ export function isInsightsOperation(kind: string): boolean {
 		"insights-enable",
 		"insights-settings",
 		"insights-apply",
+		"insights-replace",
 		"insights-revoke",
 		"insights-lifecycle",
 	].includes(kind);

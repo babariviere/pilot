@@ -3862,6 +3862,7 @@ ${run.excerpt}`,
 		operationId: string,
 		deferInput = false,
 	): Promise<SessionSummary> {
+		this.insightsBacklog?.replacements.assertCreate(setup.projectId, setup.missionId, targetId, operationId);
 		this.sharing?.assertCreate(targetId, operationId);
 		if (
 			!ID_PATTERN.test(targetId) ||
@@ -3937,13 +3938,69 @@ ${run.excerpt}`,
 				deferInput,
 			);
 		})();
-		this.durableCreateAdmissions.set(key, { targetId, operationId, insightsSetup: setupDigest, result });
+		this.durableCreateAdmissions.set(key, {
+			targetId,
+			operationId,
+			insightsSetup: setupDigest,
+			insightsScope: [setup.projectId, setup.missionId],
+			result,
+		});
 		try {
 			return await result;
 		} finally {
 			this.durableCreateAdmissions.delete(key);
 			end();
 		}
+	}
+
+	/** Replacement requires absent metadata and no admitted executor work, not merely Stop. */
+	insightsReplacementGuard(oldId: string, projectId: string, missionId: string, expectedHome: OperationHost): void {
+		if (this.closing || !this.insightsBacklog || !this.diagnosticHost) throw new Conflict("replacement_unavailable");
+		if (canonicalJSON(this.diagnosticHost) !== canonicalJSON(expectedHome))
+			throw new Conflict("replacement_host_changed");
+		const aliases = (keys: Iterable<string>) => [...keys].some((id) => id.toLowerCase() === oldId);
+		if (aliases(this.metas.keys())) throw new Conflict("old_report_present");
+		if (
+			aliases(this.workers.keys()) ||
+			aliases(this.starting.keys()) ||
+			aliases(this.parking.keys()) ||
+			aliases(this.saving.keys()) ||
+			aliases(this.sending.keys()) ||
+			aliases(this.changingModels.keys()) ||
+			aliases(this.durableCreateAdmissions.keys()) ||
+			aliases(this.newSessionAdmissions) ||
+			[...this.diagnosticContextReads.keys()].some((key) => key.toLowerCase().startsWith(`${oldId}:`)) ||
+			(this.insightsBacklogPending.get(oldId)?.size ?? 0) > 0 ||
+			(this.insightsAccounting.get(oldId)?.size ?? 0) > 0 ||
+			this.insightsReviewPending.size > 0
+		)
+			throw new Conflict("old_work_admitted_wait_for_quiescence");
+		for (const admission of this.durableCreateAdmissions.values())
+			if (admission.insightsScope?.[0] === projectId && admission.insightsScope[1] === missionId)
+				throw new Conflict("report_creation_admitted_wait_for_quiescence");
+		this.insightsBacklog.replacements.assertNoUncertainReview(oldId);
+	}
+	insightsReplacementTarget(id: string): void {
+		this.insightsBacklog?.replacements.assertNotRetired(id);
+	}
+
+	/** Missing index entries are not deletion proof. An existing/unreadable directory refuses. */
+	async insightsReplacementAbsent(
+		oldId: string,
+		projectId: string,
+		missionId: string,
+		expectedHome: OperationHost,
+	): Promise<void> {
+		if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u.test(oldId)) throw new Conflict("invalid_old_identity");
+		this.insightsReplacementGuard(oldId, projectId, missionId, expectedHome);
+		try {
+			await lstat(this.dir(oldId));
+			throw new Conflict("old_storage_present_or_unavailable");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+				throw new Conflict("old_storage_present_or_unavailable");
+		}
+		this.insightsReplacementGuard(oldId, projectId, missionId, expectedHome);
 	}
 
 	/** Metadata-only identity. Never starts a worker or repairs an incomplete grant. */
@@ -4062,6 +4119,7 @@ ${run.excerpt}`,
 
 	private assertInsightsBinding(grant: InsightsGrant): void {
 		validateInsightsGrant(grant);
+		this.insightsBacklog?.replacements.assertNotRetired(grant.reportSessionId);
 		if (
 			!grant.enabled ||
 			grant.home !== resolve(this.home) ||
@@ -6832,12 +6890,19 @@ ${run.excerpt}`,
 	// IDs on disk and in receipts retain their original bytes on both case-sensitive and APFS hosts.
 	private readonly durableCreateAdmissions = new Map<
 		string,
-		{ targetId: string; operationId: string; insightsSetup?: string; result: Promise<SessionSummary> }
+		{
+			targetId: string;
+			operationId: string;
+			insightsSetup?: string;
+			insightsScope?: [string, string];
+			result: Promise<SessionSummary>;
+		}
 	>();
 	private readonly newSessionAdmissions = new Set<string>();
 
 	/** Called only after durable operation reservation. Crash recovery uses this exact target/input ID. */
 	async spawnDurable(request: SpawnRequest, targetId: string, operationId: string): Promise<SessionSummary> {
+		this.insightsBacklog?.replacements.assertNotRetired(targetId);
 		if (request.role === "insights") throw new Conflict("Insights requires trusted native admission");
 		this.sharing?.assertCreate(targetId, operationId);
 		if (!ID_PATTERN.test(targetId)) throw new Conflict("Invalid reserved session ID");
@@ -7483,6 +7548,7 @@ ${run.excerpt}`,
 		flowAdmission?: { rootId: string; flow?: FlowState },
 		deferInsightsInput = false,
 	): Promise<SessionSummary> {
+		if (admission) this.insightsBacklog?.replacements.assertNotRetired(admission.targetId);
 		if (deferInsightsInput && (!insightsGrant || request.role !== "insights"))
 			throw new Conflict("Deferred input requires trusted Insights creation");
 		if (missionAdmission?.role === "explorer" && (request.mode !== "ask" || coordinator))

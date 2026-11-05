@@ -51,8 +51,13 @@ export interface InsightsEnableDependencies {
 		| "insightsApplyChat"
 		| "configureInsightsModel"
 		| "spawnInsightsDurable"
+		| "insightsReplacementGuard"
+		| "insightsReplacementAbsent"
 	>;
-	schedules: Pick<ScheduleService, "list" | "createInsights" | "insightsEnableAvailable" | "cancelInsights">;
+	schedules: Pick<
+		ScheduleService,
+		"list" | "createInsights" | "insightsEnableAvailable" | "cancelInsights" | "insightsReplacementAvailable"
+	>;
 	journal: OperationJournal;
 	now?: () => number;
 }
@@ -235,6 +240,16 @@ export class InsightsEnable {
 				if (rule.insightsDestination?.projectId === projectId && rule.insightsDestination.missionId === missionId)
 					references.add(rule.insightsDestination.sessionId);
 			}
+			const replacements = this.deps.missions.insights.replacements;
+			for (const id of replacements.retainedReferences(projectId, missionId)) references.add(id);
+			if (reportSessionId && replacements.link(reportSessionId))
+				return block("report_superseded_use_replacement_status");
+			// Only a durable completed exact-context link plus the current admitted successor can
+			// qualify historical references. Never change an explicitly pinned target.
+			if (candidates.length === 1 && candidates[0]!.available)
+				for (const id of references)
+					if (replacements.resolves(id, candidates[0]!.sessionId, projectId, missionId, context))
+						references.delete(id);
 			if (reportSessionId === undefined && !candidates.length && references.size === 1)
 				result.targetId = targetId = [...references][0]!;
 			const receipts = await this.deps.journal.targetReceipts("insights-enable", targetId);

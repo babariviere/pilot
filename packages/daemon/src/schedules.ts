@@ -56,6 +56,7 @@ export interface ScheduleDispatch {
 	send(id: string, message: string, mode: "followUp", requestId: string): Promise<void>;
 	get(id: string): { projectId?: string; working?: boolean } | undefined;
 	insightsStatus?(id: string): InsightsStatus | undefined;
+	insightsReplacementTarget?(id: string): void;
 	dispatchInsightsReview?(id: string, request: InsightsReviewDispatch): Promise<InsightsReviewRun>;
 	insightsReviewStatus?(id: string, runId: string): Promise<InsightsReviewRun | null>;
 	onInsightsReviewChange?(listener: () => void): () => void;
@@ -547,6 +548,7 @@ export class ScheduleService {
 		const data = await this.validate(request);
 		const now = this.time.now();
 		this.checkHome(request.expectedHome, data.trigger === "recurring");
+		if (data.target.kind === "message") this.deps.sessions.insightsReplacementTarget?.(data.target.sessionId);
 		return this.store.create({
 			...data,
 			id: randomUUID(),
@@ -591,6 +593,10 @@ export class ScheduleService {
 	insightsEnableAvailable(expectedHome: ScheduleHome): void {
 		this.assertOpen();
 		this.checkHome(expectedHome, true);
+	}
+	insightsReplacementAvailable(expectedHome: ScheduleHome): void {
+		this.insightsEnableAvailable(expectedHome);
+		this.store.assertSettled();
 	}
 	/** Exact previewed integration-owned rule only; never dismiss a terminal/manual row. */
 	cancelInsights(expected: ScheduledItem, expectedHome: ScheduleHome, revalidate: () => void): Promise<ScheduledItem> {
@@ -660,6 +666,7 @@ export class ScheduleService {
 			at: trigger === "at" ? (patch.at ?? old.at!) : undefined,
 			target: patch.target ?? old.target,
 		});
+		if (data.target.kind === "message") this.deps.sessions.insightsReplacementTarget?.(data.target.sessionId);
 		return this.store.replace(old, {
 			...old,
 			...data,

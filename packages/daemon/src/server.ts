@@ -82,6 +82,7 @@ import { InsightsApply } from "./insights-apply.ts";
 import { insightsSetupDefaults } from "./insights-defaults.ts";
 import { InsightsEnable } from "./insights-enable.ts";
 import { admitInsightsOperation, insightsFindingsPage, isInsightsOperation } from "./insights-native.ts";
+import { InsightsReplacement } from "./insights-replacement.ts";
 import type { LiveUpdate, LiveUpdateIdentity, LiveUpdateService, LiveUpdateTarget } from "./live-update.ts";
 import { MachineInformationReader } from "./machine.ts";
 import { McpSetupError, McpSetupStore } from "./mcp-setup.ts";
@@ -677,6 +678,19 @@ export function createDaemonServer(
 					insightsEnable,
 				)
 			: undefined;
+	const insightsReplacement =
+		journal && missions && schedules
+			? new InsightsReplacement({
+					home: _config.home,
+					host: journal.destination,
+					projects,
+					missions: missions.store,
+					models,
+					sessions,
+					schedules,
+					journal,
+				})
+			: undefined;
 	const admitOperationHeld = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
 		let payload: unknown;
 		try {
@@ -686,6 +700,10 @@ export function createDaemonServer(
 		}
 		if (!payload || typeof payload !== "object" || Array.isArray(payload))
 			throw new OperationRejected("Expected operation object");
+		if (op.kind === "insights-replace") {
+			if (!insightsReplacement) throw new OperationRejected("Insights replacement is unavailable");
+			return insightsReplacement.replace(op, payload as import("@pilot/protocol").InsightsReplacementPayload);
+		}
 		if (op.kind === "insights-apply") {
 			if (!insightsApply) throw new OperationRejected("Insights Apply is unavailable");
 			return insightsApply.apply(op, payload as import("@pilot/protocol").InsightsApplyPayload);
@@ -997,6 +1015,36 @@ export function createDaemonServer(
 			if (!session) throw new NotFound("Unknown session");
 			return json(res, 200, await repositories.file(session.cwd, url.searchParams.get("path") ?? ""));
 		}
+		if (parts[1] === "insights" && parts[2] === "replacement" && parts.length === 4) {
+			res.setHeader("cache-control", "no-store");
+			if (!insightsReplacement) throw new ServiceUnavailable("Insights replacement is unavailable");
+			if (parts[3] === "preflight") {
+				if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
+				const projectId = url.searchParams.get("projectId"),
+					missionId = url.searchParams.get("missionId"),
+					oldId = url.searchParams.get("reportSessionId");
+				if (!projectId || !missionId || !oldId)
+					throw new HttpError(400, "projectId, missionId and reportSessionId are required");
+				return json(
+					res,
+					200,
+					await insightsReplacement.preview(
+						projectId,
+						missionId,
+						oldId,
+						url.searchParams.get("model") ?? undefined,
+						url.searchParams.get("thinking") ?? undefined,
+					),
+				);
+			}
+			if (parts[3] === "status") {
+				if (req.method !== "POST") throw new HttpError(405, "Method not allowed");
+				const op = await readJson<DurableOperation>(req);
+				if (op.kind !== "insights-replace") throw new HttpError(400, "Expected insights-replace operation");
+				return json(res, 200, await insightsReplacement.status(op));
+			}
+			throw new HttpError(404, "Not found");
+		}
 		if (parts[1] === "insights" && parts[2] === "enable" && parts.length === 4) {
 			res.setHeader("cache-control", "no-store");
 			if (!insightsEnable) throw new ServiceUnavailable("Weekly Insights is unavailable");
@@ -1107,6 +1155,7 @@ export function createDaemonServer(
 					insightsEnable: insightsEnable && githubSetup ? 1 : undefined,
 					insightsSettings: insightsEnable && githubSetup ? 1 : undefined,
 					insightsApply: insightsApply && githubSetup ? 1 : undefined,
+					insightsReplacement: insightsReplacement && githubSetup ? 1 : undefined,
 					automations: chatSettings?.automationsEnabled() ? 1 : undefined,
 					guardedMissionConversion: missions ? true : undefined,
 					passiveMissionLifecycle: missions ? true : undefined,

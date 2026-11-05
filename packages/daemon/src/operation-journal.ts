@@ -235,6 +235,55 @@ export class OperationJournal {
 			);
 		});
 	}
+	/** Bounded private projection for one replacement. Never expose operation payloads to clients. */
+	async replacementReferences(projectId: string, missionId: string, oldId: string, excludeId?: string) {
+		return this.serial(async () => {
+			await this.init();
+			const items: import("@pilot/protocol").InsightsReplacementReference[] = [];
+			let qualified = false;
+			const qualifications: Array<{ context: unknown; home: unknown }> = [];
+			for (const { operation: op, receipt } of this.records.values()) {
+				if (op.operationId === excludeId || receipt.state === "rejected") continue;
+				if (op.targetId !== oldId && !op.kind.startsWith("insights-")) continue;
+				let p: Record<string, unknown> | undefined;
+				try {
+					if (op.kind.startsWith("insights-")) p = JSON.parse(op.payload);
+				} catch {
+					/* Unparseable target intent still fences. */
+				}
+				// Marker-less contenders have entered no effect. The synchronous scope owner and
+				// durable CAS choose one. Passive preview still refuses these pending contenders.
+				if (
+					excludeId &&
+					op.kind === "insights-replace" &&
+					p?.oldSessionId === oldId &&
+					receipt.state === "pending" &&
+					receipt.result === undefined
+				)
+					continue;
+				const scope = op.kind.startsWith("insights-") && p?.projectId === projectId && p?.missionId === missionId;
+				if (op.targetId !== oldId && !scope) continue;
+				if (items.length === 32) return { items, overflow: true, qualified, qualifications };
+				items.push({
+					operationId: op.operationId,
+					kind: op.kind,
+					targetId: op.targetId,
+					state: receipt.state,
+					payloadHash: op.payloadHash,
+				});
+				if (
+					scope &&
+					op.targetId === oldId &&
+					receipt.state === "accepted" &&
+					(op.kind === "insights-enable" || (op.kind === "insights-replace" && p?.successorSessionId === oldId))
+				) {
+					qualified = true;
+					qualifications.push({ context: p!.context, home: p!.expectedHome });
+				}
+			}
+			return { items, overflow: false, qualified, qualifications };
+		});
+	}
 	/** Retained intent is a refusal fence, not proof a resource still exists or a grant remains valid. */
 	async retainedTargets(
 		kinds: readonly string[],

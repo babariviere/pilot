@@ -183,6 +183,93 @@ export interface InsightsEnableStatus {
 	reason: string | null;
 }
 
+/** Exact old→successor deny/ownership record. A fenced link is not permission to adopt a successor. */
+export interface InsightsReplacementLink {
+	oldSessionId: string;
+	successorSessionId: string;
+	projectId: string;
+	missionId: string;
+	context: string;
+	revision: number;
+	state: "fenced" | "replaced";
+}
+export interface InsightsReplacementReference {
+	operationId: string;
+	kind: string;
+	targetId: string;
+	state: "pending" | "accepted" | "rejected";
+	payloadHash: string;
+}
+/** Projection only: no saved prompt, source history, grant secrets or full operation payload. */
+export interface InsightsReplacementRule {
+	id: string;
+	revision: number;
+	digest: string;
+	title: string;
+	trigger: string;
+	state: string;
+	paused: boolean;
+	targetSessionId: string;
+	recurrence: ScheduleRecurrence | null;
+	disposition: "cancel" | "keep" | "blocked";
+}
+export interface InsightsReplacementPayload {
+	projectId: string;
+	missionId: string;
+	expectedHome: import("./operations.ts").OperationHost;
+	context: string;
+	oldSessionId: string;
+	successorSessionId: string;
+	expectedReplacementRevision: 0;
+	references: InsightsReplacementReference[];
+	rules: InsightsReplacementRule[];
+	/** Fresh fixed settings. No old grant or settings are copied/rebound. */
+	enable: InsightsEnablePayload;
+	disclosure: "insights-replacement-v1";
+}
+export interface InsightsReplacementPreview {
+	projectId: string;
+	missionId: string;
+	oldSessionId: string;
+	state: "ready" | "blocked" | "replaced";
+	reason: string | null;
+	/** Bounded, qualified reference observation, not proof of historical absence/deletion. */
+	coverage: "bounded" | "overflow" | "unavailable";
+	references: InsightsReplacementReference[];
+	rules: InsightsReplacementRule[];
+	supersession: InsightsReplacementLink | null;
+	payload: InsightsReplacementPayload | null;
+	nextAt: number | null;
+	model: InsightsInitialModelResolution;
+	cost: { pricing: "unknown"; spendUsd: null };
+}
+export interface InsightsReplacementProgress {
+	phase:
+		| "fence_pending"
+		| "fenced"
+		| "cancel_pending"
+		| "rules_fenced"
+		| "chat_pending"
+		| "chat_ready"
+		| "schedule_pending"
+		| "replaced";
+	oldSessionId: string;
+	sessionId: string;
+	scheduleId: string;
+	chat: InsightsEnableChat | null;
+	/** Exact acknowledgement digests, not inferred cancellation success. */
+	cancelledRules: Array<{ id: string; revision: number; digest: string }>;
+}
+export interface InsightsReplacementStatus {
+	receipt: import("./operations.ts").OperationDelivery;
+	state: "not_found" | "unknown" | "partial" | "blocked" | "replaced";
+	reason: string | null;
+	supersession: InsightsReplacementLink | null;
+	sessionId: string;
+	scheduleId: string | null;
+	nextAt: number | null;
+}
+
 /** Finding state is not task execution status or permission to execute. */
 export type InsightsLifecycle =
 	| "proposed"
