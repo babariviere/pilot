@@ -442,6 +442,39 @@ pub fn run_diagnostic_repair_probe(cx: &mut HeadlessAppContext) {
             let project = json!({"state":"available","revision":3,"binding":binding()});
             p.review(cx, review(project.clone(), false));
             assert!(p.mounted(cx, "diagnostic-repair-models"));
+            // The default rows follow a later project model edit, without a write.
+            let shown = |cx: &mut HeadlessAppContext| {
+                cx.update_window(p.h, |_, w, _| {
+                    ["diagnostic-repair-model", "diagnostic-repair-thinking"]
+                        .map(|id| w.find(id).value().unwrap_or_default().to_owned())
+                })
+                .unwrap()
+            };
+            assert_eq!(shown(cx), ["Atlas 日本語 · Pi default", "Low"]);
+            let listed = |model: Value| {
+                Arc::new(
+                    crate::local_model::projects(&json!([{"id":"pilot-src","name":"Pilot source","path":"/src/pilot","model":model}]))
+                        .unwrap(),
+                )
+            };
+            for (model, expected) in [
+                (json!("q/c"), ["Boreal 日本語 · Project default", "Off"]),
+                (Value::Null, ["Atlas 日本語 · Pi default", "Low"]),
+            ] {
+                cx.update_window(p.h, |_, w, cx| {
+                    p.v.update(cx, |v, cx| {
+                        v.state.projects = listed(model);
+                        v.follow_repair_project_model(w, cx);
+                    })
+                })
+                .unwrap();
+                settle(cx, p.h);
+                assert_eq!(shown(cx), expected);
+            }
+            assert!(
+                p.commands().is_empty(),
+                "following a project edit writes nothing"
+            );
             for (menu, option) in [
                 ("diagnostic-repair-model", "repair-option-p/b"),
                 ("diagnostic-repair-thinking", "repair-option-high"),

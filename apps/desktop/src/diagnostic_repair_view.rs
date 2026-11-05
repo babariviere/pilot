@@ -461,20 +461,41 @@ impl LocalViewer {
         Some((id, specialist))
     }
 
-    /// The reviewed repair project's Pilot model for new chats, as last listed.
-    fn repair_project_model(&self) -> Option<String> {
+    /// The reviewed repair project, as last listed.
+    fn repair_project(&self) -> Option<&crate::local_model::Project> {
         let (_, Some(review)) = self.repair.review.as_ref()? else {
             return None;
         };
         let ProjectState::Available(b) = &review.project.as_ref().ok()?.state else {
             return None;
         };
-        self.state
-            .projects
-            .iter()
-            .find(|p| p.id == b.project_id)?
-            .model
-            .clone()
+        self.state.projects.iter().find(|p| p.id == b.project_id)
+    }
+
+    /// The reviewed repair project's Pilot model for new chats, as last listed.
+    fn repair_project_model(&self) -> Option<String> {
+        self.repair_project()?.model.clone()
+    }
+
+    /// pilotd applies the project's model when the repair chat starts, so the default
+    /// rows follow a later project edit. An unlisted project or a failed list read
+    /// keeps the menus as they are.
+    pub(super) fn follow_repair_project_model(&mut self, w: &mut Window, cx: &mut Context<Self>) {
+        if self.state.projects_error.is_some() {
+            return;
+        }
+        let Some(project) = self.repair_project() else {
+            return;
+        };
+        let project_model = project.model.clone();
+        let Some(pick) = &self.repair.pick else {
+            return;
+        };
+        if pick.project_model != project_model {
+            let catalog = pick.catalog.clone();
+            self.sync_repair_pick(Some(catalog), project_model, w, cx);
+            cx.notify();
+        }
     }
 
     /// The text a start would send: the user's edit, or the proposal as published.

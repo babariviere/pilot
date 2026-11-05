@@ -40,12 +40,17 @@ describes core fresh Build chats and model changes only:
   else the operation's reported level: `defaultThinking` for a new Build draft,
   `modelChangeThinking` (or, from an older daemon, the scope pin) for a failed chat's
   next attempt. Otherwise **Default**.
-- Ask drafts and existing chats aren't resolved: they show their reported values, or
-  **Default model**/**Default** until the chat reports them. The metadata reads the project
+- Existing chats show their reported values. pilotd saves them once the kernel starts,
+  so archived, restored and parked chats keep theirs. Until a new chat's kernel starts
+  they stay **Default model**/**Default**: the summary doesn't say whether the start is
+  fresh, a continuation or a recovery, and a private workspace may still be preparing.
+  This is deliberate: no start-kind contract is planned for this short window. Ask's own
+  pick isn't reported either; ordinary Ask is being retired. The metadata reads the project
   directory, so a private checkout's own settings or extension hooks can still differ.
 
 While models load or are unavailable the selector says so, rather than resolving.
-The diagnostic repair chat's menus use the same fresh Build resolution.
+The diagnostic repair chat's menus use the same fresh Build resolution, and follow later
+edits to the repair project's model.
 
 ## Audited contracts and authority
 

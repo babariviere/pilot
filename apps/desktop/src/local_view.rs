@@ -747,6 +747,7 @@ impl LocalViewer {
                                     view.state.projects = Arc::new(rows.clone());
                                     view.state.projects_loaded = true;
                                     view.state.projects_error = None;
+                                    view.follow_repair_project_model(window, cx);
                                 }
                                 Err(error) => view.state.projects_error = Some(error),
                             }
@@ -2164,6 +2165,7 @@ impl LocalViewer {
             )
         });
         self.sync_session_failure(window, cx);
+        self.follow_repair_project_model(window, cx);
         self.restore_reader(cx);
         self.sync_history_controls(cx);
         self.rebuild_nav(window, cx);
