@@ -135,6 +135,57 @@ separate work, not authorized here.
 
 ## Budget identity is separate from immutable target identity
 
+### Inactive host accounting implementation
+
+`retained-review-runs.ts` is an uninstalled host seam. `retained-review-run-disk.ts` runs in the
+existing critical-review SQLite worker (schema 4). It adds an explicit `retained-non-code` target,
+not a synthetic chat or PR. Admission pins the structural target, actual sealed manifest, exact
+prepared input descriptor, profile/context/runtime, channel generation and account configuration,
+plus the exact current `WorkflowConfirmations.current(mission, true)` record. Production still has
+no qualified consent configuration, resolver, provider adapter or installed executor.
+
+The trusted host must provide current task/owner/assignment/allocation/profile/configuration and
+ABA authorization checks, byte-preserving acquisition, and a resolved logical task lineage. Those
+ports are requirements, not evidence that the production host can establish them. Unknown author
+lineage remains unknown. No independent-review or approval claim is created by admission.
+
+Budget rows use **host + mission + logical task**, without target, revision, consent or project in
+the spending key. Replacement aliases must resolve to that same logical task. An existing task
+cannot change its persisted mission/logical-task mapping; unresolved, cross-mission and cross-host
+transfers refuse. The host seam checks the actual local host identity; an existing retained ledger
+also refuses a different host namespace. A project transfer cannot reset the key. No generic
+replacement/transfer resolver is installed.
+Effort is an explicit host selection of the existing low/medium/high profiles, never inferred from
+task classification. Their token/time/classifier/final-output bounds and all shared limits remain.
+The additional lifetime money limits are $4/logical task and $20/mission, including uncertain
+reservations, all revisions/rechecks and renewed consent. A new consent is never a new allowance.
+
+The existing reserve-before-send ledger consumes each call claim once. Neither recovery nor a
+lost ACK permits another send. Recovery closes unfinished retained runs and preserves uncertain
+charges. Exact call/usage observations and terminal callbacks are appended with source erasure
+provenance and the existing quota. Completion preserves original report bytes, exact termination
+reason and usage knowledge at completion. Identical retries do nothing; conflicting callbacks
+persist quarantine, never overwrite the accepted completion or refund its charge. Later exact
+usage can settle a charge without changing completion. Recovery settles an already committed usage
+observation if its subsequent settlement was interrupted. Erased observations are not reopened.
+Raw/linkage copies use the existing 30-day raw retention bound (pins/active exceptions remain).
+
+Physical capacity is separate: completion, ledger finish, revocation and recovery do **not** release
+the retained executor slot. A host-observed join/drain/exit acknowledgement is required, including
+after restart. Its opaque ID is an attribution record, not an implemented process supervisor.
+
+Cross-store projection writes a versioned **completion reference** to `missions.sqlite`, with exact
+target, consent operation, producer/binding/completion digests and a unique operation/run pair.
+It waits for mission durability and rechecks current consent/access and critical-store availability
+before returning. This is history linkage only, not `MissionReviewResult`, parsed Pass, independence,
+human approval, checks or gate evidence. No report is coerced into the older review-result schema.
+Future consumers must repeat current authorization; a historical reference is never current authority.
+
+`retained-review-runs.test.ts` uses isolated fake host/provider observations, real vault/ledger and
+real native-confirmation stores. It does not qualify real configuration, account terms, execution,
+physical exit, transmission or spending. No provider send, installed consumer, HTTP/tool surface,
+live approval, migration/adoption, attention or acceptance gate is enabled.
+
 The [selected reviewer/consent policy](mission-authority-review-policy.md#2-what-initial-reviewer-consent-coverage-and-non-code-delivery-scope)
 is D55: bounded mission-level consent, **$20 total per mission and $4 cumulative per task across
 revisions/rechecks**, within all existing shared ceilings. Consent pins disclosed data scope,

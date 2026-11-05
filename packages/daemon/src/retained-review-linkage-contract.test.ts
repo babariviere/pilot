@@ -953,6 +953,17 @@ test("inactive surface has no runtime imports/entry points or fabricated account
 		for (const path of await readdir(src, { recursive: true })) {
 			if (!path.endsWith(".ts") || path.endsWith(".test.ts") || path === "retained-review-linkage-contract.ts")
 				continue;
+			if (
+				src === root &&
+				["retained-review-run-disk.ts", "retained-review-runs.ts", "retained-review-projections.ts"].includes(path)
+			) {
+				assert.doesNotMatch(
+					await readFile(new URL(path, src), "utf8"),
+					/completeSimple|streamSimple|fetch\s*\(/,
+					path,
+				);
+				continue;
+			}
 			assert.doesNotMatch(
 				await readFile(new URL(path, src), "utf8"),
 				/(?:from\s*|import\s*\(|export\s*\*\s*from\s*)["'][^"']*retained-review-linkage-contract/,

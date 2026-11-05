@@ -159,8 +159,11 @@ export class ReviewAccountingDisk {
 			this.clock(now);
 			allowed(gates);
 			const run = this.require("run", runId, now);
+			this.disk.retained.checkApproval(runId, approvalId, now);
 			const approval = this.approval(run, approvalId, now);
 			const target = this.require("target", run.targetId, now);
+			this.disk.retained.capacity(run.id);
+			if (target.snapshot.kind === "retained-non-code") this.disk.retained.sendable(run.id, now);
 			if (!REVIEW_PROFILES[effort] || (target.snapshot.kind === "session") !== (effort === "session"))
 				throw new Error("Invalid target profile");
 			const key = createHash("sha256")
@@ -171,7 +174,9 @@ export class ReviewAccountingDisk {
 						target.snapshot.kind,
 						target.snapshot.kind === "session"
 							? target.snapshot.sessionId
-							: [target.snapshot.repositoryId, target.snapshot.number],
+							: target.snapshot.kind === "pull_request"
+								? [target.snapshot.repositoryId, target.snapshot.number]
+								: [target.snapshot.missionId, target.snapshot.logicalTaskId],
 					]),
 				)
 				.digest("hex");
@@ -236,6 +241,8 @@ export class ReviewAccountingDisk {
 				.get(request.runId) as unknown as Admission | undefined;
 			if (!admission || admission.approval_id !== request.approvalId) throw new Error("Review not admitted");
 			const run = this.require("run", request.runId, now);
+			this.disk.retained.checkRun(run.id, now);
+			this.disk.retained.checkApproval(run.id, request.approvalId, now);
 			const approval = this.approval(run, request.approvalId, now);
 			if (!this.disk.get("evidence", run.evidenceId, now) || !this.disk.get("context", run.contextId, now))
 				throw new Error("Review evidence/context unavailable");
@@ -318,6 +325,7 @@ export class ReviewAccountingDisk {
 				phase: request.phase,
 				reserved,
 			};
+			this.disk.retained.ceiling(run.id, reserved.moneyMicros);
 			this.disk.insert(record);
 			this.db
 				.prepare("INSERT INTO review_calls VALUES(?,?, 'reserved',?,?,?,?,?,?)")
@@ -344,6 +352,8 @@ export class ReviewAccountingDisk {
 			if (call?.state !== "reserved") throw new Error("Call not sendable; no replay");
 			const request = JSON.parse(call.request) as ReviewCallRequest;
 			const run = this.require("run", call.run_id, now);
+			this.disk.retained.checkRun(run.id, now);
+			this.disk.retained.checkApproval(run.id, request.approvalId, now);
 			const approval = this.approval(run, request.approvalId, now);
 			const admission = this.db
 				.prepare("SELECT * FROM review_admissions WHERE run_id=? AND active=1")
@@ -369,12 +379,19 @@ export class ReviewAccountingDisk {
 	settle(
 		callId: string,
 		usage: { inputTokens: number; generatedTokens: number; durationMs: number } | undefined,
+		retainedObservation = false,
 	): void {
 		this.disk.transaction(() => {
 			const call = this.db.prepare("SELECT * FROM review_calls WHERE call_id=?").get(callId) as unknown as
 				| Charge
 				| undefined;
 			if (!call) throw new Error("Unknown call");
+			if (
+				usage &&
+				!retainedObservation &&
+				this.db.prepare("SELECT run_id FROM review_retained_runs WHERE run_id=?").get(call.run_id)
+			)
+				throw new Error("Retained usage requires its exact journal observation");
 			if (!usage) {
 				if (call.state !== "settled")
 					this.db.prepare("UPDATE review_calls SET state='uncertain' WHERE call_id=?").run(callId);
@@ -421,6 +438,7 @@ export class ReviewAccountingDisk {
 			this.db.exec(
 				"UPDATE review_calls SET state='uncertain' WHERE state IN ('reserved','sent'); UPDATE review_admissions SET active=0;",
 			);
+			this.db.exec("UPDATE review_retained_runs SET closed=1 WHERE closed=0");
 		});
 	}
 }

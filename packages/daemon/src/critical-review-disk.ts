@@ -6,6 +6,7 @@ import type { CriticalReviewRecord, CriticalReviewRecords } from "@pilot/protoco
 import { ReviewAccountingDisk } from "./critical-review-accounting.ts";
 import { ReviewRetentionDisk } from "./critical-review-retention.ts";
 import { canonicalJSON } from "./operation-journal.ts";
+import { RETAINED_RUN_SCHEMA, RetainedReviewRunDisk } from "./retained-review-run-disk.ts";
 
 export const reviewId = /^[A-Za-z0-9_-]{1,128}$/;
 const kinds = new Set<keyof CriticalReviewRecords>([
@@ -17,6 +18,7 @@ const kinds = new Set<keyof CriticalReviewRecords>([
 	"approval",
 	"reservation",
 	"disposition",
+	"retained",
 ]);
 export function validateReviewRecord(record: CriticalReviewRecord): void {
 	if (
@@ -31,8 +33,25 @@ export function validateReviewRecord(record: CriticalReviewRecord): void {
 	)
 		throw new Error("Invalid critical review record/version");
 	if (Buffer.byteLength(JSON.stringify(record)) > 4 * 1024 * 1024) throw new Error("Review record exceeds limit");
-	if (record.kind === "target" && !["session", "pull_request"].includes(record.snapshot?.kind))
+	if (record.kind === "target" && !["session", "pull_request", "retained-non-code"].includes(record.snapshot?.kind))
 		throw new Error("Invalid target");
+	if (
+		record.kind === "target" &&
+		record.snapshot.kind === "retained-non-code" &&
+		(![record.snapshot.missionId, record.snapshot.taskId, record.snapshot.logicalTaskId].every((id) =>
+			reviewId.test(id),
+		) ||
+			!/^[a-f0-9]{64}$/.test(record.snapshot.targetSha256))
+	)
+		throw new Error("Invalid retained target");
+	if (
+		record.kind === "retained" &&
+		(!reviewId.test(record.runId) ||
+			typeof record.payload !== "string" ||
+			Buffer.byteLength(record.payload) > 256 * 1024 ||
+			!["binding", "call", "usage", "completion", "conflict"].includes(record.entry))
+	)
+		throw new Error("Invalid retained linkage record");
 	if (
 		record.kind === "evidence" &&
 		(record.sealed !== true ||
@@ -67,6 +86,7 @@ export class CriticalReviewDisk {
 	readonly db: DatabaseSync;
 	readonly retention: ReviewRetentionDisk;
 	readonly accounting: ReviewAccountingDisk;
+	readonly retained: RetainedReviewRunDisk;
 	constructor(file: string) {
 		mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
 		const parent = lstatSync(dirname(file));
@@ -83,7 +103,7 @@ export class CriticalReviewDisk {
 			"PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000; PRAGMA secure_delete=ON;",
 		);
 		const version = Number(this.db.prepare("PRAGMA user_version").get()!.user_version);
-		if (version > 3) {
+		if (version > 4) {
 			this.db.close();
 			throw new Error("Unsupported critical review database version");
 		}
@@ -103,6 +123,8 @@ export class CriticalReviewDisk {
 			COMMIT;`);
 		this.retention = new ReviewRetentionDisk(this);
 		this.accounting = new ReviewAccountingDisk(this);
+		this.db.exec(RETAINED_RUN_SCHEMA);
+		this.retained = new RetainedReviewRunDisk(this);
 		// v1 had immutable records but no lifecycle index. Rebuild once without changing their bytes.
 		if (version < 2)
 			this.transaction(() => {
@@ -112,7 +134,7 @@ export class CriticalReviewDisk {
 				}
 				this.db.exec("PRAGMA user_version=2");
 			});
-		this.db.exec("PRAGMA user_version=3");
+		this.db.exec("PRAGMA user_version=4");
 	}
 	transaction<T>(action: () => T): T {
 		this.db.exec("BEGIN IMMEDIATE");

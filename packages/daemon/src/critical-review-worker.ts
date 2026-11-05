@@ -23,7 +23,19 @@ parentPort!.on("message", ({ id, method, args }) => {
 		else if (method === "send") value = disk.accounting.send(args.callId, args.gates, args.now);
 		else if (method === "settle") value = disk.accounting.settle(args.callId, args.usage);
 		else if (method === "finishRun") value = disk.accounting.finish(args.runId);
-		else if (method === "recoverAccounting") value = disk.accounting.recover();
+		else if (method === "recoverAccounting") {
+			disk.accounting.recover();
+			value = disk.retained.reconcileUsage(args.now);
+		} else if (method === "retainedAdmit") value = disk.retained.admit(args.admission, args.gates, args.now);
+		else if (method === "retainedAdmission") value = disk.retained.admission(args.runId, args.now);
+		else if (method === "retainedObserve")
+			value = disk.retained.observe(args.kind, args.value, args.rawBase64 ?? null, args.now, args.channelGeneration);
+		else if (method === "retainedUsage")
+			value = disk.retained.settleObservation(args.value, args.now, args.channelGeneration);
+		else if (method === "retainedCompletion") value = disk.retained.completion(args.runId, args.now);
+		else if (method === "retainedRevoke") value = disk.retained.revoke(args.runId);
+		else if (method === "retainedExited")
+			value = disk.retained.exited(args.runId, args.observation, args.channelGeneration);
 		else if (method === "close") disk.close();
 		else throw new Error("Unknown critical review operation");
 		parentPort!.postMessage({ id, value });

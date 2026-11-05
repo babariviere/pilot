@@ -105,6 +105,7 @@ import { nativeReviewProfile, nativeReviewRecord } from "./native-review-records
 import { reasonLine } from "./needs-you-reason.ts";
 import { NOTICE_HOURLY_CAP, NOTICE_WINDOW_MS, noticeDeadline, noticeInvolvesSession } from "./notice-dispatcher.ts";
 import { KNOWLEDGE_SCHEMA, ProjectKnowledgeStore } from "./project-knowledge-store.ts";
+import { RETAINED_PROJECTION_SCHEMA, RetainedReviewProjections } from "./retained-review-projections.ts";
 import type { PullRequestBinding } from "./sessions.ts";
 import { WORKFLOW_CONFIRMATION_SCHEMA, WorkflowConfirmationStore } from "./workflow-confirmation-store.ts";
 
@@ -702,6 +703,12 @@ export class MissionStore {
 		transaction: (work) => this.transaction(work, true),
 		durable: () => this.durable(),
 	});
+	readonly retainedReviewProjections = new RetainedReviewProjections({
+		one: (sql, ...params) => this.one(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work, true),
+		durable: () => this.durable(),
+	});
 
 	/** Bounded host input. The event high-water catches edit/revert and member/owner ABA. */
 	workflowConfirmationState(id: string) {
@@ -749,6 +756,7 @@ export class MissionStore {
 		this.db.exec(INSIGHTS_SCHEMA);
 		this.db.exec(WORKFLOW_CONFIRMATION_SCHEMA);
 		this.db.exec(HUMAN_REVIEW_SCHEMA);
+		this.db.exec(RETAINED_PROJECTION_SCHEMA);
 		// Startup only, on disk before the in-memory replica opens. Never replay a saved placement.
 		this.insights.reviews.recover();
 		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "created_by_session_id"))

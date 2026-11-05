@@ -73,6 +73,7 @@ export class ReviewRetentionDisk {
 				references.push(["evidence", cite.manifestId]);
 		}
 		if (record.kind === "approval" || record.kind === "reservation") references.push(["run", record.runId]);
+		if (record.kind === "retained") references.push(["run", record.runId]);
 		if (record.kind === "disposition") references.push(["finding", record.findingId]);
 		for (const [kind, id] of references) {
 			const parent = this.disk.get(kind, id);
@@ -94,7 +95,9 @@ export class ReviewRetentionDisk {
 			!!row &&
 			(!!row.pinned ||
 				!!row.active ||
-				now < Number(row.last_use) + (kind === "evidence" ? REVIEW_RETENTION.rawMs : REVIEW_RETENTION.resultMs))
+				now <
+					Number(row.last_use) +
+						(kind === "evidence" || kind === "retained" ? REVIEW_RETENTION.rawMs : REVIEW_RETENTION.resultMs))
 		);
 	}
 	action(kind: string, id: string, action: "use" | "pin" | "unpin" | "activate" | "release", now: number): void {
@@ -125,7 +128,7 @@ export class ReviewRetentionDisk {
 		this.disk.transaction(() => {
 			for (const row of this.db
 				.prepare(
-					"SELECT kind,id FROM review_retention WHERE pinned=0 AND active=0 AND last_use+CASE WHEN kind='evidence' THEN ? ELSE ? END<=?",
+					"SELECT kind,id FROM review_retention WHERE pinned=0 AND active=0 AND last_use+CASE WHEN kind IN ('evidence','retained') THEN ? ELSE ? END<=?",
 				)
 				.all(REVIEW_RETENTION.rawMs, REVIEW_RETENTION.resultMs, now))
 				this.remove(String(row.kind), String(row.id), "expired");

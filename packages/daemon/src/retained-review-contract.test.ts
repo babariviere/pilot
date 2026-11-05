@@ -1026,6 +1026,10 @@ test("only host acquisition consumes inputs; no execution/transport or policy/li
 		for (const path of await readdir(src, { recursive: true })) {
 			if (!path.endsWith(".ts") || path.endsWith(".test.ts") || path === "retained-review-contract.ts") continue;
 			const source = await readFile(new URL(path, src), "utf8");
+			if (src === root && ["retained-review-run-disk.ts", "retained-review-runs.ts"].includes(path)) {
+				assert.doesNotMatch(source, /completeSimple|streamSimple|fetch\s*\(/, path);
+				continue;
+			}
 			// The authorized acquisition path may prepare bytes, never execute/interpret a reviewer.
 			if (src === root && ["retained-brief.ts", "retained-artifact.ts", "mission-service.ts"].includes(path)) {
 				assert.doesNotMatch(source, /parseRetainedReviewReport|completeSimple|streamSimple/, path);

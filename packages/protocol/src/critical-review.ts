@@ -31,7 +31,8 @@ export interface CriticalReviewTarget extends ReviewRecordBase {
 				boundary: number;
 				treeDigest: string;
 		  }
-		| { kind: "pull_request"; repositoryId: string; number: number; head: string; base: string; mergeBase: string };
+		| { kind: "pull_request"; repositoryId: string; number: number; head: string; base: string; mergeBase: string }
+		| { kind: "retained-non-code"; missionId: string; taskId: string; logicalTaskId: string; targetSha256: string };
 }
 export interface ReviewCitation {
 	manifestId: string;
@@ -146,5 +147,14 @@ export interface CriticalReviewRecords {
 	approval: CriticalReviewApproval;
 	reservation: CriticalReviewReservation;
 	disposition: CriticalReviewDisposition;
+	retained: CriticalReviewRetainedRecord;
+}
+/** Host-private, versioned linkage journal. Not an agent result or approval. */
+export interface CriticalReviewRetainedRecord extends ReviewRecordBase {
+	kind: "retained";
+	runId: string;
+	entry: "binding" | "call" | "usage" | "completion" | "conflict";
+	/** Exact canonical, separately validated host linkage payload. */
+	payload: string;
 }
 export type CriticalReviewRecord = CriticalReviewRecords[keyof CriticalReviewRecords];
