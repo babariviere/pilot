@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.119.0](https://github.com/babariviere/pilot/compare/v1.118.0...v1.119.0) (2026-11-05)
+
+
+### Features
+
+* **desktop:** show merged linked PRs as reader-only chat events ([4a150ac](https://github.com/babariviere/pilot/commit/4a150acb098ba13df66b960f0e33c24959d2cf88))
+* **review:** capture exact persisted brief inputs ([48367a8](https://github.com/babariviere/pilot/commit/48367a8b87b94b84d69e4a8fee2745e10bb0a914))
+
+
+### Bug Fixes
+
+* **desktop:** save drafts automatically before app updates ([8ad248f](https://github.com/babariviere/pilot/commit/8ad248f6c8c2d3ae2185461350ad93b82842796c))
+
 ## [1.118.0](https://github.com/babariviere/pilot/compare/v1.117.0...v1.118.0) (2026-11-05)
 
 
