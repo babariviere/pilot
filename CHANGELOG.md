@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.120.0](https://github.com/babariviere/pilot/compare/v1.119.0...v1.120.0) (2026-11-05)
+
+
+### Features
+
+* **artifacts:** retain exact visual revision containers ([aef6c6e](https://github.com/babariviere/pilot/commit/aef6c6e4e1795f3efbec260cc8b1e5664c70618d))
+* **delivery:** add passive code delivery observations ([57898eb](https://github.com/babariviere/pilot/commit/57898eb5b3fab7f3333d9bc5e22881e32a406606))
+* **desktop:** keep ordinary Ask chats as read-only history ([1f10da3](https://github.com/babariviere/pilot/commit/1f10da3c2a091887da63475a74e61767a73693f1))
+* **insights:** add confirmed deleted-report replacement ([c4e433b](https://github.com/babariviere/pilot/commit/c4e433bfeef652f08e2ec55f805b410de83565fc))
+* **insights:** confirm replacing an unavailable report chat ([943cfd5](https://github.com/babariviere/pilot/commit/943cfd566a31f6bf3d17d2f3c5180888dc6d33fe))
+* **insights:** edit review settings with a separate Apply ([53e95a0](https://github.com/babariviere/pilot/commit/53e95a0e3efec2aa6bb88835bea24b3b58d841a0))
+* **workflow:** add host confirmation receipts ([3fbcd47](https://github.com/babariviere/pilot/commit/3fbcd47cb37f8e7412051e118e39105f0eaf3952))
+
+
+### Bug Fixes
+
+* **desktop:** cut jargon from delivery, artifact and update copy ([de08bf0](https://github.com/babariviere/pilot/commit/de08bf038ed71986c208e02069303831b6885807))
+* **desktop:** make the context usage popup concise ([87a43c7](https://github.com/babariviere/pilot/commit/87a43c78ba5294b81a1a91de4c2ca65c69ad5775))
+* **desktop:** reach report replacement from a deleted report's status ([140d59f](https://github.com/babariviere/pilot/commit/140d59f0c4c73cbcd56f97b1db5c5becc4b7c247))
+
 ## [1.119.0](https://github.com/babariviere/pilot/compare/v1.118.0...v1.119.0) (2026-11-05)
 
 
