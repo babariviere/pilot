@@ -159,5 +159,20 @@ at most 500 messages).
   with the acceptance, survives reopen and retirement, is fixed while sending, and is
   refused for another project.
 
+- `slack_recovery_probe.rs`, in the native `slack_triage` target, connects the
+  production LocalViewer and editor to the real courier and private Store. Eight
+  narrow/wide, light/dark journeys select an exact ticket, keep its project locked,
+  edit Unicode text, paste an image and explicitly Send. They lose the creation
+  reply before or after simulated acceptance, keep newer text and marked input,
+  Close and reopen the courier/Store, restart the owned faux HTTP server, then lose
+  an applied link reply and reopen again. Assertions require unchanged operation
+  bytes, one simulated chat/message admission and one link-start effect, with newer
+  drafts/attachments intact and an immediate Store reopen after Close.
+  The fixture keeps simulated daemon rows/receipts in memory across its HTTP restart;
+  it does not prove production daemon persistence. Its reader inventory is injected.
+  `lost_ack` separately uses real reader sockets, and the random-label owned launchd
+  fixtures separately check Stop staying stopped and verified Restart/Upgrade.
+  These are not one packaged GUI-to-service acceptance journey.
+
 Static captures are appearance evidence, not motion, OS IME/AX or performance
 acceptance. No real Slack, account or settings were used.

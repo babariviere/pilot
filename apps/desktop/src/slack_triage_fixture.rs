@@ -15,7 +15,7 @@ pub(crate) struct Reply {
     /// None drops the connection without a response.
     pub(crate) status: Option<u16>,
     pub(crate) body: Value,
-    /// Apply a PATCH before replying, as pilotd may before a persistence failure.
+    /// Commit a link or creation receipt before dropping/delaying its reply.
     pub(crate) apply: bool,
     pub(crate) delay_ms: u64,
 }
@@ -42,6 +42,9 @@ pub(crate) struct State {
     pub(crate) daemon: String,
     /// Chat-creation receipts by operation id.
     pub(crate) receipts: BTreeMap<String, Value>,
+    pub(crate) link_starts: usize,
+    /// Leave the initial nonacceptance lookup readable, then lose recovery lookups.
+    pub(crate) fail_lookup_after_create: bool,
 }
 impl State {
     pub(crate) fn writes(&self) -> Vec<(String, String, Value)> {
@@ -114,6 +117,13 @@ impl Server {
             daemon: "test-daemon".into(),
             ..Default::default()
         }));
+        Self::listen(listener, options, state)
+    }
+    fn listen(
+        listener: std::net::TcpListener,
+        options: LocalOptions,
+        state: Arc<Mutex<State>>,
+    ) -> Self {
         let shared = state.clone();
         let (stop, mut stopped) = tokio::sync::oneshot::channel::<()>();
         let thread = std::thread::spawn(move || {
@@ -163,13 +173,27 @@ impl Server {
             .replies
             .remove(&(method.into(), path.into()));
     }
+    /// Restart only this owned HTTP fixture, keeping its simulated durable rows/receipts.
+    pub(crate) fn restart(&mut self) {
+        let _ = self.stop.take().unwrap().send(());
+        self.thread.take().unwrap().join().unwrap();
+        let listener =
+            std::net::TcpListener::bind(self.options.loopback().trim_start_matches("http://"))
+                .unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let mut next = Self::listen(listener, self.options.clone(), self.state.clone());
+        self.stop = next.stop.take();
+        self.thread = next.thread.take();
+    }
 }
 impl Drop for Server {
     fn drop(&mut self) {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
-        self.thread.take().unwrap().join().unwrap();
+        if let Some(thread) = self.thread.take() {
+            thread.join().unwrap();
+        }
     }
 }
 
@@ -196,6 +220,7 @@ fn apply(state: &mut State, id: &str, body: &Value) -> Option<Value> {
         item["sessionIds"] = json!(ids);
         item["sessionId"] = json!(session);
         if new && body["start"] == true {
+            state.link_starts += 1;
             item["slack"]["status"] = json!("in_progress");
             item["metadata"]["slackStart"] = json!({"outcome":"reacted"});
         }
@@ -218,15 +243,36 @@ fn apply(state: &mut State, id: &str, body: &Value) -> Option<Value> {
     Some(item.clone())
 }
 
+fn creation(state: &mut State, body: &Value) -> Value {
+    let id = body["operationId"].as_str().unwrap().to_owned();
+    let receipt = json!({"operationId":id,"payloadHash":body["payloadHash"],
+        "destination":body["destination"],"targetId":body["targetId"],
+        "state":"accepted","result":{"sessionId":body["targetId"]}});
+    state.receipts.entry(id).or_insert(receipt).clone()
+}
+
 fn respond(state: &mut State, method: &str, path: &str, body: Value) -> (Option<u16>, Value, u64) {
     assert!(state.seen.len() < 512, "bounded faux request budget");
     state.seen.push((method.into(), path.into(), body.clone()));
     let (route, q) = query(path);
+    if method == "POST"
+        && route == "/api/operations/receipt"
+        && state.fail_lookup_after_create
+        && state
+            .seen
+            .iter()
+            .any(|(m, p, _)| m == "POST" && p == "/api/operations")
+    {
+        return (None, Value::Null, 0);
+    }
     if let Some(reply) = state.replies.get(&(method.into(), route.into())).cloned() {
         if reply.apply
             && let Some(id) = route.strip_prefix("/api/tracked-items/")
         {
             apply(state, id, &body);
+        }
+        if reply.apply && method == "POST" && route == "/api/operations" {
+            creation(state, &body);
         }
         return (reply.status, reply.body, reply.delay_ms);
     }
@@ -294,13 +340,7 @@ fn respond(state: &mut State, method: &str, path: &str, body: Value) -> (Option<
             .get(body["operationId"].as_str().unwrap_or_default())
             .cloned()
             .unwrap_or_else(|| json!({"state":"unknown"}))),
-        ("POST", "/api/operations") => {
-            let id = body["operationId"].as_str().unwrap_or_default().to_owned();
-            let receipt = json!({"operationId":id,"payloadHash":body["payloadHash"],
-                "destination":body["destination"],"targetId":body["targetId"],
-                "state":"accepted","result":{"sessionId":body["targetId"]}});
-            ok(state.receipts.entry(id).or_insert(receipt).clone())
-        }
+        ("POST", "/api/operations") => ok(creation(state, &body)),
         ("GET", "/api/tracking/slack/search") => {
             // pilotd's link form: exact source keys in Slack-tracking projects, done and
             // dismissed included. Words are not modelled.

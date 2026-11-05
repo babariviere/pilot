@@ -74,7 +74,16 @@ impl Journey {
         what: &str,
         condition: impl Fn(&Self, &App) -> bool,
     ) {
-        let deadline = Instant::now() + Duration::from_secs(8);
+        self.until_for(cx, what, Duration::from_secs(8), condition);
+    }
+    fn until_for(
+        &mut self,
+        cx: &mut HeadlessAppContext,
+        what: &str,
+        timeout: Duration,
+        condition: impl Fn(&Self, &App) -> bool,
+    ) {
+        let deadline = Instant::now() + timeout;
         loop {
             self.pump(cx);
             if cx.update(|cx| condition(self, cx)) {
@@ -537,7 +546,9 @@ pub fn run_lost_ack_probe(cx: &mut HeadlessAppContext) {
                 }
                 let known = identity == 0 && matches!(receipt, Receipt::Exact | Receipt::Absent);
                 let lookups = server.seen.lock().unwrap().lookups;
-                j.until(cx, "automatic exact reconciliation completes", |j, _| {
+                // Earlier native interactions can consume several failed lookups.
+                // Cover the courier's 30s maximum backoff plus its 5s HTTP deadline.
+                j.until_for(cx, "automatic exact reconciliation completes", Duration::from_secs(40), |j, _| {
                     if known { return j.last.book.as_ref().is_some_and(|b| !b.pending.contains_key(&original.id)); }
                     j.last.delivery_reports.get(&original.id).is_some_and(|r| {
                         r.saved && r.delivery.diagnostic.is_some_and(|d| {
