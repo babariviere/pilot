@@ -1015,7 +1015,7 @@ test("count ceilings accept valid exact boundaries and reject one more, never si
 	assert.throws(() => parse(p, r));
 });
 
-test("no active entry point/imports, no policy eligibility/history/status/lifecycle effects", async (t) => {
+test("only host brief acquisition consumes inputs; no execution/transport or policy/lifecycle effects", async (t) => {
 	const root = new URL("./", import.meta.url);
 	const contract = await readFile(new URL("retained-review-contract.ts", root), "utf8");
 	assert.doesNotMatch(
@@ -1025,9 +1025,15 @@ test("no active entry point/imports, no policy eligibility/history/status/lifecy
 	for (const src of [root, new URL("../../kernel/src/", root), new URL("../../protocol/src/", root)]) {
 		for (const path of await readdir(src, { recursive: true })) {
 			if (!path.endsWith(".ts") || path.endsWith(".test.ts") || path === "retained-review-contract.ts") continue;
+			const source = await readFile(new URL(path, src), "utf8");
+			// The authorized acquisition path may prepare bytes, never execute/interpret a reviewer.
+			if (src === root && ["retained-brief.ts", "mission-service.ts"].includes(path)) {
+				assert.doesNotMatch(source, /parseRetainedReviewReport|completeSimple|streamSimple/, path);
+				continue;
+			}
 			assert.doesNotMatch(
-				await readFile(new URL(path, src), "utf8"),
-				/(?:from\s*|import\s*\(|export\s*\*\s*from\s*)["'][^"']*retained-review-contract/,
+				source,
+				/(?:from\s*|import\s*\(|export\s*\*\s*from\s*)["'][^"']*(?:retained-review-contract|retained-brief)|\b(?:captureRetainedBrief|reopenRetainedBrief)\s*\(/,
 				path,
 			);
 		}

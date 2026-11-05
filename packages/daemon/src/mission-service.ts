@@ -20,6 +20,7 @@ import type {
 	StartMissionTaskRequest,
 } from "@pilot/protocol";
 import { CoordinatorCompaction } from "./coordinator-compaction.ts";
+import type { CriticalReviewVault } from "./critical-review-vault.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import { evaluateContributionAllocation } from "./mission-contribution-allocation.ts";
@@ -46,6 +47,13 @@ import { MissionTicketReader } from "./mission-ticket-context.ts";
 import { splitTicket } from "./mission-ticket-work.ts";
 import { type MissionActivityQuery, type MissionActor, type MissionStore, normalizeResourceWrite } from "./missions.ts";
 import type { ProjectStore } from "./projects.ts";
+import {
+	captureRetainedBrief,
+	type RetainedBriefHeader,
+	type RetainedBriefHost,
+	reopenRetainedBrief,
+} from "./retained-brief.ts";
+import { RETAINED_REVIEW_LIMITS } from "./retained-review-contract.ts";
 import type { ReviewSnapshotStore } from "./review-snapshots.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { SourceMcpClient } from "./source-mcp.ts";
@@ -120,6 +128,11 @@ function taskMessage(
 
 /** The app's Start chat acts for the user; the coordinator's start must respect user-set preferences. */
 export type TaskStarter = "user" | "coordinator";
+
+export type RetainedBriefConfiguration = Pick<
+	RetainedBriefHeader,
+	"hostId" | "daemonLineageId" | "runId" | "contextPackageSha256" | "runtime"
+> & { vault: CriticalReviewVault; knownSecrets: string[]; profileId: string };
 
 /**
  * An explicit start choice wins, else the tasks' preferred model (a user-set one first), else the project's
@@ -584,6 +597,122 @@ export class MissionService {
 		)
 			throw new Conflict("Only the current coordinator may access contribution allocations");
 		return missionId;
+	}
+
+	/** Host-only acquisition. Configuration comes from the host, never the mission tool/REST.
+	 * Sealing does not admit a review, spend, result, approval or acceptance gate. */
+	async captureRetainedBrief(
+		sessionId: string,
+		taskRef: string,
+		revision: number,
+		host: RetainedBriefConfiguration,
+		signal?: AbortSignal,
+	) {
+		return captureRetainedBrief(this.store, this.retainedBriefHost(sessionId, taskRef, host), revision, signal);
+	}
+	async reopenRetainedBrief(
+		sessionId: string,
+		taskRef: string,
+		descriptor: unknown,
+		host: RetainedBriefConfiguration,
+		signal?: AbortSignal,
+	) {
+		return reopenRetainedBrief(this.store, this.retainedBriefHost(sessionId, taskRef, host), descriptor, signal);
+	}
+	private retainedBriefHost(sessionId: string, taskRef: string, host: RetainedBriefConfiguration): RetainedBriefHost {
+		const missionId = this.allocationAccess(sessionId);
+		const taskId = this.store.resolveTask(missionId, taskRef).id;
+		return {
+			vault: host.vault,
+			knownSecrets: host.knownSecrets,
+			observe: () => {
+				this.allocationAccess(sessionId, missionId);
+				const mission = this.store.require(missionId);
+				this.projects.require(mission.projectId);
+				if (mission.status !== "active") throw new Conflict("Retained brief mission is not active");
+				const task = this.store.task(missionId, taskId);
+				const owner = task.sessionId;
+				if (!owner || this.store.missionOf(owner) !== missionId)
+					throw new Conflict("Retained brief worker membership unavailable");
+				this.assertSameProject(owner, missionId);
+				const allocation = this.store.latestContributionAllocation(missionId, taskId);
+				const submission = latestSubmission(this.store.currentDeliveryEvidence(missionId, taskId));
+				const policy = this.store.latestNonCodeAcceptancePolicy(missionId, taskId);
+				const profile = this.store.reviewProfile(missionId, host.profileId);
+				const contextFence = this.store.allocationContextFence(missionId);
+				const { bytes, ...briefMetadata } = this.store.briefExact(
+					missionId,
+					contextFence.briefRevision,
+					RETAINED_REVIEW_LIMITS.blobBytes,
+				);
+				const brief = {
+					...briefMetadata,
+					markdown: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes),
+				};
+				const observation: DeliveryObservation = {
+					reference: { kind: "brief", revision: contextFence.briefRevision },
+					sourceOwnerSessionId: null,
+					sha256: deliveryDigest(brief),
+					availability: "retained",
+				};
+				if (
+					!allocation ||
+					!submission ||
+					!policy ||
+					!profile ||
+					!brief ||
+					!task.assignment ||
+					task.assignment.classification?.deliveryKind !== "research" ||
+					deliveryDigest(allocation.request.action === "allocate" ? allocation.request.sources : []) !==
+						deliveryDigest([observation]) ||
+					evaluateContributionAllocation(allocation, {
+						task,
+						definitionRevision: this.store.sharedDefinitionRevision(taskId),
+						coordinatorSessionId: sessionId,
+						contextFence,
+						latestAllocationId: allocation.id,
+						submission,
+						observations: [observation],
+					}).applicability !== "current" ||
+					policy.recorderSessionId !== sessionId ||
+					policy.request.ownerSessionId !== owner ||
+					policy.request.definitionRevision !== this.store.sharedDefinitionRevision(taskId) ||
+					deliveryDigest(policy.request.assignment) !== deliveryDigest(task.assignment) ||
+					deliveryDigest(policy.request.expectedContextFence) !== deliveryDigest(contextFence) ||
+					!policy.request.reviews.some(
+						(r) =>
+							r.kind === "independent-agent" &&
+							r.profileId === profile.request.profileId &&
+							r.profileRevision === profile.revision,
+					)
+				)
+					throw new Conflict("Retained brief binding is unavailable, changed or unsupported");
+				return {
+					version: 1,
+					hostId: host.hostId,
+					daemonLineageId: host.daemonLineageId,
+					runId: host.runId,
+					contextPackageSha256: host.contextPackageSha256,
+					runtime: host.runtime,
+					projectId: mission.projectId,
+					missionId,
+					taskId,
+					coordinatorSessionId: sessionId,
+					ownerSessionId: owner,
+					definitionRevision: this.store.sharedDefinitionRevision(taskId),
+					assignment: task.assignment,
+					contextFence,
+					policyId: policy.id,
+					submissionId: submission.id,
+					allocationId: allocation.id,
+					profile: {
+						profileId: profile.request.profileId,
+						revision: profile.revision,
+						definition: profile.request.definition,
+					},
+				};
+			},
+		};
 	}
 	async recordContributionAllocation(sessionId: string, taskRef: string, value: unknown) {
 		const missionId = this.allocationAccess(sessionId);

@@ -386,7 +386,7 @@ release/restart follows. Production qualification and the named implementation g
 
 ## Exact-byte vault read implementation status (D40)
 
-`CriticalReviewVault.readExact(request, signal?)` is a host-only helper with no installed caller.
+`CriticalReviewVault.readExact(request, signal?)` is a host-only helper used by persisted brief acquisition below.
 Its typed internal request pins one manifest ID/digest and 1–20 selected blob IDs/digests/lengths.
 It snapshots the request before waiting, resolves the sealed manifest through the existing store,
 checks pins, duplicate blob IDs and membership, then verifies every original file length and SHA256.
@@ -411,3 +411,40 @@ is outside that size guarantee. Caller-supplied pins or `sealed` claims cannot r
 successful reads are neither admission nor delivery/acceptance evidence. Capture, retention,
 deletion, text reads, accounting and transport are unchanged. Retained dispatch stays disabled,
 force stays OFF, and production review/observation/acceptance remain blocked.
+
+## Persisted brief acquisition
+
+`MissionService.captureRetainedBrief(sessionId, taskRef, revision, host, signal?)` acquires one
+explicit local persisted brief revision, seals host-selected bytes through `CriticalReviewVault.capture`,
+then reopens with `readExact` and prepares the existing retained-review input. It returns either
+`{state: "captured", input}` or `{state: "partial", manifest}`. Vault omissions (including secrets and
+binary content) never become a prepared empty substitute. Quota, missing/stale revisions, revoked access,
+changed bindings/configuration and cancellation reject. There is no endpoint or agent-tool action.
+
+`MissionStore.briefExact` requires an exact positive revision. SQL bounds `length(CAST(markdown AS BLOB))`
+before transferring the BLOB, with the existing input/vault 1 MiB per-blob limit. These are exact UTF-8
+bytes **as persisted in immutable brief history**, including BOM, CRLF, multibyte and empty content.
+Create/write still trim submissions. Discarded pre-trim bytes are unavailable, not reconstructed.
+Decoded fields are used only for the existing reference-observation digest, never as captured bytes.
+Artifact acquisition is unsupported: parsed/derived source/data fields are not original stored bytes.
+
+The trusted host supplies the existing vault, host/daemon-lineage/run IDs, profile selection,
+context-package digest, runtime build/config/model/prompt/tool pins and known secrets. It must observe
+that configuration, not accept request digests as proof. The service derives mission/project/task,
+assignment/definition, owner/coordinator, context fence, current policy/submission/allocation and exact
+profile from live records. The current allocation must select only that brief. It reauthorizes current
+coordinator/project and worker membership/project before and after durability and vault I/O. Existing
+event fences catch coordinator/member and artifact unlink/relink churn, even when values return.
+
+The host can retain `input.descriptor` and call
+`reopenRetainedBrief(sessionId, taskRef, descriptor, host, signal?)` after vault restart. The descriptor
+is bounded and structurally parsed, but grants no access. Reopen repeats current authorization and
+binding checks, compares current raw bytes/reference identity, and checks the real sealed manifest and
+selected blob through `readExact`. Old revisions remain in history but changed context is refused,
+not reopened as current or replaced with latest. Erased/expired evidence is unavailable. Cancellation
+suppresses returned input; a manifest sealed before cancellation or a post-I/O fence failure may remain
+under ordinary vault retention. Neither capture nor reopen refreshes retention or initiates cleanup.
+
+This is acquisition/preparation only. No synthetic session/PR target, generic store, review/provider
+execution, spending, review-result write, approval, acceptance gate, migration or backfill is installed.
+Context/config pins are still host-supplied observations, not qualified execution or authority.

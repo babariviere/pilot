@@ -33,7 +33,7 @@ interface ContentPart {
 	originalSha256: string;
 	originalBytes: number;
 }
-interface InputDescriptor {
+export interface InputDescriptor {
 	version: 1;
 	hostId: string;
 	daemonLineageId: string;
@@ -301,12 +301,8 @@ function manifest(value: unknown): CriticalReviewEvidence {
 	};
 }
 
-/** Supplied descriptors/bytes only. No live reads or independently observed reference/vault facts.
- * All pins are structural claims; this function grants no authorization, authorship or independence. */
-export function prepareRetainedReviewInput(
-	descriptor: unknown,
-	blobs: readonly { blobId: string; bytes: Uint8Array }[],
-): PreparedRetainedReviewInput {
+/** Bounded structural claims only. Does not authorize a read or prove sealing/custody. */
+export function retainedReviewDescriptor(descriptor: unknown): InputDescriptor {
 	const v = snapshot(descriptor, RETAINED_REVIEW_LIMITS.descriptorBytes);
 	fields(v, [
 		"version",
@@ -464,6 +460,17 @@ export function prepareRetainedReviewInput(
 		manifest: m,
 		content,
 	};
+	return d;
+}
+
+/** Supplied descriptors/bytes only. No live reads or independently observed reference/vault facts.
+ * All pins are structural claims; this function grants no authorization, authorship or independence. */
+export function prepareRetainedReviewInput(
+	descriptor: unknown,
+	blobs: readonly { blobId: string; bytes: Uint8Array }[],
+): PreparedRetainedReviewInput {
+	const d = retainedReviewDescriptor(descriptor);
+	const { manifest: m, content, profile, contextFence, runtime } = d;
 	// Bound ALL supplied byte lengths/counts before copying, decoding or hashing ANY original byte.
 	if (!Array.isArray(blobs) || blobs.length !== content.length || Reflect.ownKeys(blobs).length !== blobs.length + 1)
 		invalid();

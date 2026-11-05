@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } f
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { backup, DatabaseSync } from "node:sqlite";
 import { type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
@@ -13,17 +14,19 @@ import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import type { MissionDecision, MissionDetail, ServerMessage, SessionState, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.test.ts";
-
+import { CriticalReviewStore } from "./critical-review-store.ts";
+import { CriticalReviewVault } from "./critical-review-vault.ts";
 import { Conflict } from "./errors.ts";
 import type { NonCodePolicyWrite } from "./mission-non-code-acceptance.ts";
 import type { ReviewProducer, ReviewResultWrite } from "./mission-review-contract.ts";
 import { optionalReviewSeeds } from "./mission-review-seeds.ts";
-import { draftMessage, MissionService } from "./mission-service.ts";
+import { draftMessage, MissionService, type RetainedBriefConfiguration } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { KnowledgeService } from "./project-knowledge.ts";
 import { ProjectStore } from "./projects.ts";
 import type { PullRequestOptions } from "./pull-requests.ts";
+import { retainedReviewDescriptor } from "./retained-review-contract.ts";
 import type { ReviewSnapshot, ReviewSnapshotStore } from "./review-snapshots.ts";
 import { createDaemonServer } from "./server.ts";
 import { CommandRejected, SessionManager, type SessionWorker } from "./sessions.ts";
@@ -8315,4 +8318,455 @@ test("non-code exact recovery checks current actor project again after durabilit
 		f.sessions["require"](f.lead.id).projectId = f.other.id;
 	});
 	await assert.rejects(f.service.lookupNonCodeAcceptancePolicy(f.lead.id, f.task.id, f.request), /project/);
+});
+async function retainedBriefFixture(t: TestContext, persisted = "Plan\r\né😀") {
+	const f = await fixture(t);
+	const lead = await f.spawn(),
+		worker = await f.spawn(),
+		peer = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Brief capture",
+		planningVersion: 1,
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.store.join(worker.id, mission.id);
+	f.store.join(peer.id, mission.id);
+	const task = f.store.addTask(mission.id, {
+		title: "Report",
+		sessionId: worker.id,
+		assignment: {
+			version: 1,
+			expectedRevision: 0,
+			expectedDefinitionRevision: 0,
+			intent: "Report",
+			scope: "One brief",
+			criteria: ["Exact plan"],
+			classification: {
+				version: 1,
+				effort: "small",
+				difficulty: "routine",
+				risk: "low",
+				uncertainty: "known",
+				scope: "bounded",
+				role: "explorer",
+				deliveryKind: "research",
+			},
+		},
+	});
+	f.store.writeBrief(mission.id, "seed", 0);
+	// Seed exact persisted history, including bytes ordinary write trimming can discard.
+	// biome-ignore lint/complexity/useLiteralKeys: Raw SQLite fixture, not a production mutation API.
+	f.store["db"]
+		.prepare("UPDATE brief_revisions SET markdown=? WHERE mission_id=? AND revision=1")
+		.run(persisted, mission.id);
+	await f.service.saveReviewProfile(lead.id, {
+		version: 1,
+		operationId: "profile",
+		profileId: "plan",
+		expectedRevision: 0,
+		definition: {
+			version: 1,
+			purpose: "Exact plan",
+			rubric: "Accuracy",
+			applicableIntents: ["research"],
+			modelSelection: { provider: "fixture", model: "never-called" },
+			reasoningEffort: null,
+			timeLimitMs: 1000,
+			outputInterpretation: { kind: "pass-fail", pass: "Pass", fail: "Fail" },
+		},
+	});
+	const submission = await f.service.submitDeliveryEvidence(worker.id, task.id, {
+		version: 1,
+		operationId: "submission",
+		expectedSubmissionId: null,
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		assignment: task.assignment,
+		kind: "research",
+		claim: "Plan",
+		limitations: "Not reviewed",
+		evidence: [{ kind: "brief", revision: 1 }],
+		coverage: [[0]],
+	});
+	await f.service.recordContributionAllocation(lead.id, task.id, {
+		version: 1,
+		operationId: "allocation",
+		expectedAllocationId: null,
+		action: "allocate",
+		reason: "One brief",
+		submissionId: submission.id,
+		assignment: task.assignment,
+		ownerSessionId: worker.id,
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		expectedContextFence: f.store.allocationContextFence(mission.id),
+		sources: submission.observations,
+	});
+	await f.service.saveNonCodeAcceptancePolicy(lead.id, task.id, {
+		version: 1,
+		operationId: "policy",
+		expectedPolicyId: null,
+		kind: "non-code",
+		assignment: task.assignment,
+		ownerSessionId: worker.id,
+		definitionRevision: f.store.sharedDefinitionRevision(task.id),
+		expectedContextFence: f.store.allocationContextFence(mission.id),
+		destinations: [{ kind: "brief", revision: 1 }],
+		checks: [{ checkId: "plan-check", configVersion: "v1" }],
+		reviews: [
+			{
+				kind: "independent-agent",
+				profileId: "plan",
+				profileRevision: 1,
+				scrutiny: "targeted",
+				provenance: "host-proven-producer-and-independence",
+			},
+		],
+		authorityClaim: null,
+	});
+	const root = await realpath(f.home);
+	let evidence = new CriticalReviewStore(join(root, "evidence.sqlite"));
+	const config: RetainedBriefConfiguration = {
+		vault: new CriticalReviewVault(join(root, "vault"), evidence),
+		knownSecrets: [],
+		profileId: "plan",
+		hostId: "host",
+		daemonLineageId: "lineage",
+		runId: "run",
+		contextPackageSha256: "a".repeat(64),
+		runtime: {
+			buildSha256: "b".repeat(64),
+			configSha256: "c".repeat(64),
+			provider: "fixture",
+			model: "never-called",
+			promptVersion: "v1",
+			toolSchemaVersion: "v1",
+			outputSchemaVersion: 1,
+		},
+	};
+	t.after(() => evidence.close());
+	const capture = (signal?: AbortSignal) => f.service.captureRetainedBrief(lead.id, task.id, 1, config, signal);
+	const captured = async () => {
+		const result = await capture();
+		assert.equal(result.state, "captured");
+		if (result.state !== "captured") throw new Error("Expected captured brief");
+		return result.input;
+	};
+	return {
+		...f,
+		lead,
+		worker,
+		peer,
+		mission,
+		task,
+		config,
+		capture,
+		captured,
+		evidence: () => evidence,
+		restartVault: async () => {
+			await evidence.close();
+			evidence = new CriticalReviewStore(join(root, "evidence.sqlite"));
+			config.vault = new CriticalReviewVault(join(root, "vault"), evidence);
+			await config.vault.recover();
+		},
+	};
+}
+
+for (const source of ["\uFEFFPlan\r\né😀\r\n", "", "\uFEFF", "é😀\r\nPlan"]) {
+	test(`retained brief capture/reopen preserves persisted bytes ${JSON.stringify(source)}`, async (t) => {
+		const f = await retainedBriefFixture(t, source);
+		const input = await f.captured();
+		const descriptor = JSON.parse(JSON.stringify(input.descriptor));
+		const original = Buffer.from(source);
+		assert.equal(descriptor.content[0].originalSha256, createHash("sha256").update(original).digest("hex"));
+		assert.equal(descriptor.content[0].originalBytes, original.length);
+		assert.notEqual(descriptor.content[0].referenceSha256, descriptor.content[0].originalSha256);
+		await f.restartVault();
+		const reopened = await f.service.reopenRetainedBrief(f.lead.id, f.task.id, descriptor, f.config);
+		assert.equal(reopened.inputSha256, input.inputSha256);
+		const exact = await f.config.vault.readExact({
+			manifestId: descriptor.manifest.id,
+			manifestSha256: descriptor.manifest.sha256,
+			blobs: [
+				{
+					blobId: descriptor.content[0].blobId,
+					sha256: descriptor.content[0].originalSha256,
+					length: original.length,
+				},
+			],
+		});
+		assert.deepEqual(Buffer.from(exact.blobs[0]!.bytes), original);
+		assert.equal(f.store.task(f.mission.id, f.task.id).status, "todo");
+		assert.deepEqual(f.store.reviewHistory(f.mission.id, f.task.id), []);
+		assert.equal(f.store.completion(f.mission.id, f.task.id), undefined);
+		assert.equal(f.store.retiredMember(f.worker.id), false);
+	});
+}
+
+test("exact brief reader bounds persisted BLOBs, requires revisions, and leaves trimming unchanged", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "brief-exact-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const path = join(home, "missions.sqlite");
+	let store = new MissionStore(path);
+	const { id } = store.create({ title: "Exact", projectId: "p", brief: "\uFEFF  initial\r\n" });
+	assert.equal(store.brief(id, 1)!.markdown, "initial");
+	store.writeBrief(id, " \uFEFFé😀\r\n ", 1);
+	assert.equal(store.brief(id, 2)!.markdown, "é😀");
+	await store.durable();
+	store.close();
+	const db = new DatabaseSync(path);
+	const raw = "\uFEFF\r\né😀\r\n";
+	db.prepare("UPDATE brief_revisions SET markdown=? WHERE mission_id=? AND revision=1").run(raw, id);
+	db.prepare("UPDATE brief_revisions SET markdown=? WHERE mission_id=? AND revision=2").run("😀".repeat(300_000), id);
+	db.close();
+	store = new MissionStore(path);
+	t.after(() => store.close());
+	assert.deepEqual(Buffer.from(store.briefExact(id, 1, 1024).bytes), Buffer.from(raw));
+	assert.throws(() => store.briefExact(id, 1, Buffer.byteLength(raw) - 1), /quota/);
+	assert.throws(() => store.briefExact(id, 2, 1024 * 1024), /quota/);
+	for (const revision of [0, -1, NaN, 1.1, 3]) assert.throws(() => store.briefExact(id, revision, 1024));
+	assert.throws(() => store.briefExact(id, 1, 1024 * 1024 + 1), /bound/);
+});
+
+for (const change of [
+	"brief",
+	"missing",
+	"raw-edit",
+	"coordinator-aba",
+	"member-aba",
+	"artifact-relink",
+	"assignment",
+	"project",
+	"allocation",
+	"config",
+	"profile",
+] as const) {
+	test(`retained brief reopen refuses ${change}, never falls back`, async (t) => {
+		const f = await retainedBriefFixture(t);
+		const input = await f.captured();
+		if (change === "brief") f.store.writeBrief(f.mission.id, "New plan", 1);
+		if (change === "missing" || change === "raw-edit") {
+			// biome-ignore lint/complexity/useLiteralKeys: Corrupt/missing immutable source negative control.
+			const db = f.store["db"];
+			if (change === "missing")
+				db.prepare("DELETE FROM brief_revisions WHERE mission_id=? AND revision=1").run(f.mission.id);
+			else
+				db.prepare("UPDATE brief_revisions SET markdown='different' WHERE mission_id=? AND revision=1").run(
+					f.mission.id,
+				);
+		}
+		if (change === "coordinator-aba") {
+			f.store.update(f.mission.id, { coordinatorSessionId: f.peer.id });
+			f.store.update(f.mission.id, { coordinatorSessionId: f.lead.id });
+		}
+		if (change === "member-aba") {
+			f.store.leave(f.worker.id);
+			f.store.join(f.worker.id, f.mission.id);
+		}
+		if (change === "artifact-relink") {
+			const link = {
+				sessionId: f.worker.id,
+				artifactId: "unrelated-artifact",
+				revision: 1,
+				title: "Context",
+				kind: "visual" as const,
+			};
+			f.store.linkArtifact(f.mission.id, link);
+			f.store.unlinkArtifact(f.mission.id, link.artifactId);
+			f.store.linkArtifact(f.mission.id, link);
+		}
+		if (change === "assignment")
+			f.store.updateTask(f.mission.id, f.task.id, {
+				assignment: {
+					version: 1,
+					expectedRevision: 1,
+					expectedDefinitionRevision: f.store.sharedDefinitionRevision(f.task.id),
+					intent: "Changed",
+					scope: "One brief",
+					criteria: ["Exact plan"],
+				},
+			});
+		if (change === "project") {
+			// biome-ignore lint/complexity/useLiteralKeys: Host metadata movement negative control.
+			f.sessions["require"](f.worker.id).projectId = f.other.id;
+		}
+		if (change === "allocation") {
+			const prior = f.store.latestContributionAllocation(f.mission.id, f.task.id)!;
+			await f.service.recordContributionAllocation(f.lead.id, f.task.id, {
+				version: 1,
+				operationId: "withdraw",
+				expectedAllocationId: prior.id,
+				action: "withdraw",
+				reason: "Withdraw",
+			});
+		}
+		if (change === "config") f.config.runtime.configSha256 = "d".repeat(64);
+		if (change === "profile")
+			await f.service.saveReviewProfile(f.lead.id, {
+				...f.store.reviewProfile(f.mission.id, "plan")!.request,
+				operationId: "new-profile",
+				expectedRevision: 1,
+			});
+		await assert.rejects(f.service.reopenRetainedBrief(f.lead.id, f.task.id, input.descriptor, f.config));
+	});
+}
+
+test("retained brief requires current coordinator/project, not a supplied descriptor or digest", async (t) => {
+	const f = await retainedBriefFixture(t);
+	const input = await f.captured();
+	await assert.rejects(f.service.captureRetainedBrief(f.worker.id, f.task.id, 1, f.config), /coordinator/);
+	await assert.rejects(f.service.reopenRetainedBrief(f.peer.id, f.task.id, input.descriptor, f.config), /coordinator/);
+	await assert.rejects(f.service.captureRetainedBrief(f.lead.id, f.task.id, 2, f.config), /revision/);
+	const forged = retainedReviewDescriptor(input.descriptor);
+	forged.content[0]!.originalSha256 = "0".repeat(64);
+	await assert.rejects(f.service.reopenRetainedBrief(f.lead.id, f.task.id, forged, f.config));
+	const unsupported = retainedReviewDescriptor(input.descriptor);
+	unsupported.content[0]!.reference = { kind: "artifact", artifactId: "plan", revision: 1 };
+	unsupported.content[0]!.part = "source";
+	unsupported.content[0]!.artifactKind = "visual";
+	await assert.rejects(f.service.reopenRetainedBrief(f.lead.id, f.task.id, unsupported, f.config));
+	// biome-ignore lint/complexity/useLiteralKeys: Host metadata movement negative control.
+	f.sessions["require"](f.lead.id).projectId = f.other.id;
+	await assert.rejects(f.service.reopenRetainedBrief(f.lead.id, f.task.id, input.descriptor, f.config), /project/);
+});
+
+test("retained brief omissions are partial, never a prepared empty replacement", async (t) => {
+	for (const source of ["Plan contains fixture-private", "Plan\0binary"]) {
+		const f = await retainedBriefFixture(t, source);
+		f.config.knownSecrets = ["fixture-private"];
+		const result = await f.capture();
+		assert.equal(result.state, "partial");
+		if (result.state !== "partial") throw new Error("Expected partial");
+		assert.equal(result.manifest.complete, false);
+		assert.equal(result.manifest.entries.length, 0);
+		assert.equal(result.manifest.omissions.length, 1);
+	}
+});
+
+test("retained brief rechecks access and cancellation around queued vault I/O", async (t) => {
+	const f = await retainedBriefFixture(t);
+	const input = await f.captured();
+	await assert.rejects(f.capture(AbortSignal.abort()), { name: "AbortError" });
+	await assert.rejects(
+		f.service.reopenRetainedBrief(f.lead.id, f.task.id, input.descriptor, f.config, AbortSignal.abort()),
+		{ name: "AbortError" },
+	);
+	const original = f.config.vault.readExact.bind(f.config.vault);
+	let entered!: () => void, release!: () => void;
+	const arrived = new Promise<void>((done) => {
+		entered = done;
+	});
+	const gate = new Promise<void>((done) => {
+		release = done;
+	});
+	t.mock.method(f.config.vault, "readExact", async (...args: Parameters<CriticalReviewVault["readExact"]>) => {
+		const result = await original(...args);
+		entered();
+		await gate;
+		return result;
+	});
+	const reading = assert.rejects(
+		f.service.reopenRetainedBrief(f.lead.id, f.task.id, input.descriptor, f.config),
+		/coordinator/,
+	);
+	await arrived;
+	f.store.update(f.mission.id, { coordinatorSessionId: f.peer.id });
+	release();
+	await reading;
+});
+
+test("retained brief cancellation after seal returns no input; erase prevents reopen", async (t) => {
+	const f = await retainedBriefFixture(t);
+	const input = await f.captured();
+	const controller = new AbortController();
+	const original = f.config.vault.capture.bind(f.config.vault);
+	t.mock.method(f.config.vault, "capture", async (...args: Parameters<CriticalReviewVault["capture"]>) => {
+		const result = await original(...args);
+		controller.abort();
+		return result;
+	});
+	await assert.rejects(f.capture(controller.signal), { name: "AbortError" });
+	await f.config.vault.eraseSource(f.mission.id);
+	await assert.rejects(f.service.reopenRetainedBrief(f.lead.id, f.task.id, input.descriptor, f.config), /unavailable/);
+});
+
+for (const phase of ["capture", "readExact"] as const) {
+	test(`retained brief ${phase} suppresses input after in-flight context change`, async (t) => {
+		const f = await retainedBriefFixture(t);
+		const input = await f.captured();
+		const change = () => {
+			f.store.leave(f.worker.id);
+			f.store.join(f.worker.id, f.mission.id);
+		};
+		if (phase === "capture") {
+			const capture = f.config.vault.capture.bind(f.config.vault);
+			t.mock.method(f.config.vault, "capture", async (...args: Parameters<CriticalReviewVault["capture"]>) => {
+				const result = await capture(...args);
+				change();
+				return result;
+			});
+			await assert.rejects(f.capture(), /worker membership unavailable/);
+		} else {
+			const read = f.config.vault.readExact.bind(f.config.vault);
+			t.mock.method(f.config.vault, "readExact", async (...args: Parameters<CriticalReviewVault["readExact"]>) => {
+				const result = await read(...args);
+				change();
+				return result;
+			});
+			await assert.rejects(
+				f.service.reopenRetainedBrief(f.lead.id, f.task.id, input.descriptor, f.config),
+				/worker membership unavailable/,
+			);
+		}
+	});
+}
+
+test("retained brief reopen snapshots descriptors and suppresses an aborted in-flight result", async (t) => {
+	const f = await retainedBriefFixture(t);
+	const input = await f.captured();
+	const descriptor = retainedReviewDescriptor(input.descriptor);
+	const controller = new AbortController();
+	const read = f.config.vault.readExact.bind(f.config.vault);
+	t.mock.method(f.config.vault, "readExact", async (...args: Parameters<CriticalReviewVault["readExact"]>) => {
+		const result = await read(...args);
+		descriptor.runtime.configSha256 = "f".repeat(64);
+		return result;
+	});
+	const result = await f.service.reopenRetainedBrief(f.lead.id, f.task.id, descriptor, f.config);
+	assert.equal(result.inputSha256, input.inputSha256);
+	t.mock.method(f.config.vault, "readExact", async (...args: Parameters<CriticalReviewVault["readExact"]>) => {
+		const result = await read(...args);
+		controller.abort();
+		return result;
+	});
+	await assert.rejects(
+		f.service.reopenRetainedBrief(f.lead.id, f.task.id, input.descriptor, f.config, controller.signal),
+		{ name: "AbortError" },
+	);
+});
+
+test("retained brief reopens serialized input against restarted source store/service and vault", async (t) => {
+	const f = await retainedBriefFixture(t, "\uFEFFPlan\r\né😀\r\n");
+	const input = await f.captured();
+	const descriptor = JSON.parse(JSON.stringify(input.descriptor));
+	const root = await mkdtemp(join(tmpdir(), "brief-source-reopen-"));
+	const path = join(root, "missions.sqlite");
+	// Persist exactly the fixture source database, not reconstructed DTO/display fields.
+	// biome-ignore lint/complexity/useLiteralKeys: Test-only SQLite persistence checkpoint.
+	await backup(f.store["db"], path);
+	await f.restartVault();
+	const store = new MissionStore(path);
+	const service = new MissionService(store, f.sessions, f.projects);
+	t.after(async () => {
+		await service.notices.stop();
+		await service.compaction.stop();
+		await store.durable();
+		store.close();
+		await rm(root, { recursive: true, force: true });
+	});
+	const reopened = await service.reopenRetainedBrief(f.lead.id, f.task.id, descriptor, f.config);
+	assert.equal(reopened.inputSha256, input.inputSha256);
+	assert.equal(reopened.runtimeSha256, input.runtimeSha256);
+	assert.equal(reopened.contextSha256, input.contextSha256);
+	assert.equal(reopened.profileSha256, input.profileSha256);
 });

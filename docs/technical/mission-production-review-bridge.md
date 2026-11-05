@@ -20,8 +20,10 @@ parseRetainedReviewReport(input: PreparedRetainedReviewInput, json: string): Par
 RETAINED_REVIEW_LIMITS
 ```
 
-There is no production consumer, read/acquisition transport, executor, provider call, persisted target/
-producer variant, accounting change or result write. D38 approves the restricted direct-worker direction
+The host-only [persisted brief capture/reopen path](retained-review-run-linkage.md#persisted-brief-acquisition)
+now consumes this input contract for one exact local brief revision. There is no acquisition transport,
+executor, provider call, persisted target/producer variant, accounting change or result write.
+D38 approves the restricted direct-worker direction
 and this foundation, not execution or gates. B/#35, C/#36 and D/#19 remain incomplete and blocked.
 The remaining sections retain their D37 proposal status except for that approved direction.
 

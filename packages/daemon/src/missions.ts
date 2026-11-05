@@ -2641,6 +2641,34 @@ export class MissionStore {
 		}));
 	}
 
+	/** Exact persisted UTF-8, not recovered pre-trim submission bytes. Never defaults to latest.
+	 * SQLite bounds the BLOB before transferring it into JavaScript. */
+	briefExact(id: string, revision: number, maxBytes: number) {
+		this.require(id);
+		if (!Number.isSafeInteger(revision) || revision < 1) throw new Error("Invalid exact brief revision");
+		if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || maxBytes > 1024 * 1024)
+			throw new Error("Invalid exact brief bound");
+		const row = this.one(
+			`SELECT revision, author_session_id, created_at, length(CAST(markdown AS BLOB)) AS size,
+			 CASE WHEN length(CAST(markdown AS BLOB)) <= ? THEN CAST(markdown AS BLOB) END AS bytes
+			 FROM brief_revisions WHERE mission_id = ? AND revision = ?`,
+			maxBytes,
+			id,
+			revision,
+		);
+		if (!row) throw new Conflict("Exact brief revision unavailable");
+		if (Number(row.size) > maxBytes) throw new Conflict("Exact brief byte quota exceeded");
+		if (!(row.bytes instanceof Uint8Array) || row.bytes.byteLength !== Number(row.size))
+			throw new Conflict("Exact brief bytes unavailable");
+		return {
+			missionId: id,
+			revision,
+			...optionalAuthor(row.author_session_id),
+			createdAt: num(row.created_at!),
+			bytes: Uint8Array.from(row.bytes),
+		};
+	}
+
 	writeBrief(id: string, markdown: unknown, expectedRevision: unknown, actor: MissionActor = USER): MissionBrief {
 		this.assertPlanner(id, actor);
 		const content = text(markdown, "markdown", MAX_BRIEF, { empty: true })!;
