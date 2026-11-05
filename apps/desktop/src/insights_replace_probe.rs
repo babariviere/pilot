@@ -1,10 +1,13 @@
 //! Mounted Replace deleted report in the real LocalViewer over an owned synthetic Local
-//! only: the unavailable-report blocker inside Weekly Insights, one passive preview, the
-//! compact confirmation, Escape back, stale and blocked previews, the frozen payload, a lost
-//! ACK across close and restart, same-envelope Check, status-only pending steps, completion
+//! only: the accepted old enable whose present status is Unknown after deletion, the
+//! unavailable-report blocker inside Weekly Insights, one passive preview, the compact
+//! confirmation, Escape back, stale and blocked previews, the frozen payload, a lost ACK
+//! across close and restart, same-envelope Check, status-only pending steps, completion
 //! beside a pending receipt, acceptance, the exact pin transition, adoption of a completed
-//! link after the successor's settings re-read, rejection and render-only layouts. No real
-//! grant, history, provider turn, rule or visible window.
+//! link after the successor's settings re-read (also across close, reopen and restart),
+//! double confirmation, malformed ACKs, current replacement blockers beside the old
+//! enable's status, rejection and render-only layouts. No real grant, history, provider
+//! turn, rule or visible window.
 use super::insights_enable_probe::{
     Mounted, attempt, click, contained, draft, from_automations, mount_with, open, panel, posts,
     ready, settle, type_draft, unmount, until,
@@ -24,6 +27,8 @@ const OPERATIONS: &str = "POST /api/operations";
 const ENABLE_STATUS: &str = "POST /api/insights/enable/status";
 const STATUS: &str = "POST /api/insights/replacement/status";
 const STATUS_PATH: &str = "/api/insights/replacement/status";
+const ENABLE_STATUS_PATH: &str = "/api/insights/enable/status";
+const MISSING: Option<&str> = Some("report_identity_unavailable");
 
 fn pinned(report: &str) -> String {
     format!(
@@ -72,13 +77,15 @@ fn sent(all: &[(String, bool, Value)]) -> Vec<Value> {
         .collect()
 }
 #[track_caller]
-fn status_reads_only(s: &Server, envelope: &Value) {
+fn status_reads_only(s: &Server, envelope: &Value) -> usize {
     // The retained enable beside it may be re-read too; that is passive and never resent.
+    let mut enable_reads = 0;
     let all: Vec<_> = posts(s)
         .into_iter()
         .filter(|(p, cap, b)| {
-            let enable = p == "/api/insights/enable/status";
+            let enable = p == ENABLE_STATUS_PATH;
             assert!(!enable || (!cap && b["kind"] == "insights-enable"));
+            enable_reads += usize::from(enable);
             !enable
         })
         .collect();
@@ -88,6 +95,55 @@ fn status_reads_only(s: &Server, envelope: &Value) {
             .all(|(p, _, b)| p == STATUS_PATH && b == envelope),
         "only passive status reads of the same envelope: {all:?}"
     );
+    enable_reads
+}
+/// Only passive status reads of the old enable's exact envelope; no operation at all.
+#[track_caller]
+fn enable_reads_only(s: &Server, envelope: &Value) {
+    let all = posts(s);
+    assert!(
+        all.iter()
+            .all(|(p, cap, b)| p == ENABLE_STATUS_PATH && !cap && b == envelope),
+        "the old enable is only read, never resent: {all:?}"
+    );
+}
+/// Every operation POST this Local has received, drained or not.
+fn operation_posts(s: &Server) -> usize {
+    s.state
+        .lock()
+        .unwrap()
+        .seen
+        .iter()
+        .filter(|(m, p)| m == "POST" && p == "/api/operations")
+        .count()
+}
+/// GET requests for exactly `path` so far.
+fn gets(s: &Server, path: &str) -> usize {
+    s.state
+        .lock()
+        .unwrap()
+        .seen
+        .iter()
+        .filter(|(m, p)| m == "GET" && p == path)
+        .count()
+}
+/// Only passive status reads without native authority; no operation.
+#[track_caller]
+fn passive_only(s: &Server) {
+    let all = posts(s);
+    assert!(
+        all.iter()
+            .all(|(p, cap, _)| !cap && (p == STATUS_PATH || p == ENABLE_STATUS_PATH)),
+        "only passive status reads: {all:?}"
+    );
+}
+/// SHA-256 of the exact UTF-8 payload bytes, computed here rather than by the writer.
+fn sha256(text: &str) -> String {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 fn shot(cx: &mut HeadlessAppContext, h: AnyWindowHandle, dir: &Option<PathBuf>, name: &str) {
     if let Some(d) = dir {
@@ -108,6 +164,13 @@ fn known(cx: &mut HeadlessAppContext, view: &Entity<LocalViewer>) -> Vec<String>
     let p = panel(cx, view);
     cx.update(|cx| p.read(cx).probe_known("project-A", "mission-A"))
 }
+fn enable_shown(
+    cx: &mut HeadlessAppContext,
+    view: &Entity<LocalViewer>,
+) -> (&'static str, Option<String>) {
+    let p = panel(cx, view);
+    cx.update(|cx| p.read(cx).probe_enable())
+}
 /// Escape inside the panel: it closes the step first, then the panel.
 fn escape(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
     cx.update_window(h, |_, w, cx| w.press("escape", cx))
@@ -122,9 +185,21 @@ fn close(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
     assert!(!cx.update_window(h, |_, w, _| open(w)).unwrap());
 }
 
-/// A report chat enabled through the real flow, then missing from the list after a restart:
-/// the retained accepted enable keeps its identity pinned, and Local calls it unavailable.
+/// A report chat enabled through the real flow, then deleted: after a restart it is missing
+/// from the list, the retained accepted enable keeps its identity pinned, and the host's
+/// present status is Unknown with `report_identity_unavailable` (insights-enable.ts).
 fn deleted(cx: &mut HeadlessAppContext, s: &Server, width: f32, mode: ThemeMode) -> Mounted {
+    deleted_as(cx, s, width, mode, "unknown")
+}
+/// `current` is the old enable's present state after the restart: "unknown" is the host's
+/// shape after deletion; "blocked" (a report that is present but unusable) stays its own path.
+fn deleted_as(
+    cx: &mut HeadlessAppContext,
+    s: &Server,
+    width: f32,
+    mode: ThemeMode,
+    current: &str,
+) -> Mounted {
     s.reply(
         &pinned(fx::OLD),
         Reply::json(
@@ -171,19 +246,23 @@ fn deleted(cx: &mut HeadlessAppContext, s: &Server, width: f32, mode: ThemeMode)
     close(cx, h);
     posts(s);
     let root = unmount(cx, m);
-    // Restart without the report chat: its status is blocked and a pinned check refuses it.
-    s.reply(
-        ENABLE_STATUS,
+    let envelope = serde_json::to_value(&op).unwrap();
+    let historical = |current: &str, reason: Option<&str>| {
         Reply::json(
             200,
-            weekly::status(
-                &op,
-                "accepted",
-                weekly::enabled(&op),
-                "blocked",
-                Some("report_identity_unavailable"),
-            ),
-        ),
+            weekly::status(&op, "accepted", weekly::enabled(&op), current, reason),
+        )
+    };
+    // Restart without the report chat. Before the deletion shape, another Unknown: it
+    // offers Check only.
+    let deletion = current == "unknown";
+    s.reply(
+        ENABLE_STATUS,
+        if deletion {
+            historical("unknown", None)
+        } else {
+            historical(current, MISSING)
+        },
     );
     let mut missing = weekly::blocked(
         "project-A",
@@ -198,12 +277,62 @@ fn deleted(cx: &mut HeadlessAppContext, s: &Server, width: f32, mode: ThemeMode)
     // A composer draft typed before the flow must survive all of it.
     type_draft(cx, h, &view);
     from_automations(cx, h, &view);
-    click(cx, h, "insights-enable-again");
+    if deletion {
+        assert_eq!(
+            enable_shown(cx, &view),
+            ("settled", Some("Not confirmed.".into()))
+        );
+        cx.update_window(h, |_, w, _| {
+            assert!(w.try_find("insights-enable-again").is_none());
+            assert!(w.try_find("insights-enable-recheck").is_some());
+        })
+        .unwrap();
+        // Check again is one more passive read; now the host's exact deletion shape.
+        s.reply(ENABLE_STATUS, historical("unknown", MISSING));
+        click(cx, h, "insights-enable-recheck");
+        until(cx, h, |w, cx| {
+            ready(&view, cx) && w.try_find("insights-enable-again").is_some()
+        });
+    }
     let p = panel(cx, &view);
+    let words = crate::insights_enable::reason_text("report_identity_unavailable");
+    assert_eq!(enable_shown(cx, &view), ("settled", Some(words.into())));
+    let status = cx.update(|cx| p.read(cx).probe_enable_status()).unwrap();
+    assert_eq!(
+        (
+            status.current == crate::insights_enable::Current::Unknown,
+            status.reason.as_deref()
+        ),
+        (deletion, MISSING),
+        "the host's present state is shown as it is, never promoted"
+    );
+    cx.update_window(h, |_, w, _| {
+        assert!(w.try_find("insights-enable-recheck").is_none());
+        assert!(
+            w.try_find("insights-unconfirmed").is_none(),
+            "nothing to resend"
+        );
+        assert!(w.try_find("insights-replace-open").is_none());
+    })
+    .unwrap();
+    // The accepted receipt is history: it stays accepted and is never resent.
+    let old = attempt(cx, &view, "enable:mission-A").unwrap();
+    assert_eq!(
+        (old.state, serde_json::to_value(&old.operation).unwrap()),
+        (State::Accepted, envelope.clone())
+    );
+    enable_reads_only(s, &envelope);
+    click(cx, h, "insights-enable-again");
     until(cx, h, |_, cx| {
         p.read(cx).probe_ready() && p.read(cx).probe_gate() == Some("checked")
     });
-    posts(s);
+    // Set up again is a fresh pinned check of the exact old identity, not a send.
+    enable_reads_only(s, &envelope);
+    assert_eq!(
+        operation_posts(s),
+        1,
+        "only the original enable was ever sent"
+    );
     m
 }
 
@@ -219,6 +348,7 @@ pub fn run_insights_replace_probe(cx: &mut HeadlessAppContext) {
     }
     replacement(cx, &dir);
     adoption_and_refusals(cx, &dir);
+    double_confirm_and_authority(cx, &dir);
     for (width, mode) in [
         (680., ThemeMode::Light),
         (680., ThemeMode::Dark),
@@ -227,7 +357,9 @@ pub fn run_insights_replace_probe(cx: &mut HeadlessAppContext) {
         render_only(cx, &dir, width, mode);
     }
     cx.update(|cx| cx.set_reduce_motion(reduced));
-    println!("insights replace: replacement, adoption/refusals and 3 render-only layouts passed");
+    println!(
+        "insights replace: replacement, adoption/refusals, double confirm/malformed ACK/current authority and 3 render-only layouts passed"
+    );
 }
 
 /// Blocker → passive preview → Escape back → stale preview → confirmation → lost ACK →
@@ -652,6 +784,292 @@ fn shown_words(view: &Entity<LocalViewer>, cx: &App) -> Option<String> {
         .and_then(|(p, _)| p.read(cx).probe_replace().1)
 }
 
+/// Two clicks on one confirmation and two malformed ACKs keep one Unknown attempt with its
+/// exact ID, bytes and hash; only Check resends that envelope. After acceptance, the
+/// replacement's own present Blocked or Partial state is what the panel shows, while the old
+/// enable's historical status (accepted receipt, Unknown) is read beside it.
+fn double_confirm_and_authority(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
+    let width = 1100.;
+    let s = server();
+    let mut m = deleted(cx, &s, width, ThemeMode::Light);
+    let (h, view) = (m.h, m.view.clone());
+    let p = panel(cx, &view);
+    s.reply(
+        &preview_path(None),
+        Reply::json(200, fx::ready("project-A", "mission-A", weekly::TERRA)),
+    );
+    click(cx, h, "insights-replace-open");
+    until(cx, h, |_, cx| {
+        p.read(cx).probe_ready()
+            && p.read(cx)
+                .probe_replace_preview()
+                .is_some_and(|pf| pf.request().is_some())
+    });
+    // A receipt for other bytes is malformed. It is held, so more clicks land meanwhile.
+    s.reply(
+        OPERATIONS,
+        Reply::json(
+            200,
+            json!({"operationId":"0d8f0f5e-3b6c-4f7a-9d1e-2a3b4c5d6e7f","payloadHash":"0".repeat(64),
+                "targetId":fx::SUCCESSOR,"destination":s.options.host(),"state":"accepted",
+                "result":Value::Null}),
+        ),
+    );
+    s.reply(STATUS, Reply::json(503, json!({"error":"synthetic"})));
+    s.hold(OPERATIONS);
+    let before = cx.update(|cx| p.read(cx).probe_requests().0);
+    cx.update_window(h, |_, w, cx| {
+        w.click("insights-replace-confirm", cx);
+        w.click("insights-replace-confirm", cx);
+    })
+    .unwrap();
+    settle(cx, h);
+    until(cx, h, |_, _| {
+        s.state
+            .lock()
+            .unwrap()
+            .writes
+            .iter()
+            .any(|w| w.1 == "/api/operations")
+    });
+    cx.update_window(h, |_, w, cx| {
+        if w.try_find("insights-replace-confirm").is_some() {
+            w.click("insights-replace-confirm", cx);
+        }
+    })
+    .unwrap();
+    settle(cx, h);
+    s.release(OPERATIONS);
+    let slot = format!("replace:{}", fx::OLD);
+    until(cx, h, |w, cx| {
+        w.try_find("insights-unconfirmed").is_some()
+            && ready(&view, cx)
+            && view
+                .read(cx)
+                .insights_book
+                .as_ref()
+                .and_then(|b| b.insights.get(&slot))
+                .is_some_and(|a| a.state == State::Unknown)
+    });
+    assert_eq!(
+        cx.update(|cx| p.read(cx).probe_requests()),
+        (
+            before + 1,
+            Some(crate::insights::Outcome::Unknown(
+                "The receipt doesn't match this Insights action. It was kept unchanged."
+            ))
+        ),
+        "one command reached the writer; its malformed ACK left it Unknown"
+    );
+    cx.update_window(h, |_, w, _| {
+        assert!(w.try_find("insights-outcome").is_none());
+        assert!(w.try_find("insights-error").is_none());
+    })
+    .unwrap();
+    let first = sent(&posts(&s));
+    assert_eq!(first.len(), 1, "one confirmation, one send");
+    let envelope = first[0].clone();
+    let op: crate::delivery_store::Operation = serde_json::from_value(envelope.clone()).unwrap();
+    assert_eq!(
+        (op.kind.as_str(), op.target_id.as_str()),
+        ("insights-replace", fx::SUCCESSOR)
+    );
+    assert_eq!(
+        serde_json::from_str::<Value>(&op.payload).unwrap(),
+        fx::payload("project-A", "mission-A", weekly::TERRA),
+        "the preview payload, verbatim"
+    );
+    assert_eq!(
+        op.payload_hash,
+        sha256(&op.payload),
+        "hash of the exact bytes"
+    );
+    let retained = |cx: &mut HeadlessAppContext, view: &Entity<LocalViewer>| {
+        let a = attempt(cx, view, &slot).unwrap();
+        assert_eq!(
+            (a.state, serde_json::to_value(&a.operation).unwrap()),
+            (State::Unknown, envelope.clone()),
+            "the same Unknown attempt, unchanged"
+        );
+        assert!(a.result.is_none(), "no acceptance is invented");
+    };
+    retained(cx, &view);
+    assert_eq!(shown(cx, &view).0, "progress");
+    assert_eq!(known(cx, &view), [fx::OLD], "a malformed ACK moves no pin");
+    assert_eq!(
+        attempt(cx, &view, "enable:mission-A").unwrap().state,
+        State::Accepted
+    );
+    let count = cx.update(|cx| {
+        view.read(cx).insights_book.as_ref().map_or(0, |b| {
+            b.insights
+                .values()
+                .filter(|a| a.operation.kind == "insights-replace")
+                .count()
+        })
+    });
+    assert_eq!(count, 1, "one replacement attempt");
+    shot(cx, h, dir, "malformed-ack");
+
+    // Check: no record yet, so the same envelope goes once more. Its ACK names this exact
+    // command but an unfinished step as accepted: malformed too, and still Unknown.
+    s.reply(
+        STATUS,
+        Reply::json(
+            200,
+            fx::status(&op, "unknown", Value::Null, "not_found", None),
+        ),
+    );
+    let early = json!({"operationId":op.operation_id,"payloadHash":op.payload_hash,
+        "targetId":op.target_id,"destination":op.destination,"state":"accepted",
+        "result":fx::progress(&op, "chat_ready")});
+    s.reply(OPERATIONS, Reply::json(200, early));
+    click(cx, h, "insights-check");
+    until(cx, h, |_, cx| {
+        ready(&view, cx) && shown_words(&view, cx) == Some("Local has no record of it yet.".into())
+    });
+    let resent = sent(&posts(&s));
+    assert_eq!(
+        resent, first,
+        "Check resends exactly the saved envelope once"
+    );
+    retained(cx, &view);
+    assert_eq!(known(cx, &view), [fx::OLD]);
+    assert_eq!(
+        operation_posts(&s),
+        3,
+        "the enable, then this one envelope twice"
+    );
+
+    // Close and restart: nothing is resent; then the exact accepted receipt settles it.
+    close(cx, h);
+    drop(p);
+    let root = unmount(cx, m);
+    m = mount_with(cx, &s, width, ThemeMode::Light, None, Some(root));
+    let (h, view) = (m.h, m.view.clone());
+    from_automations(cx, h, &view);
+    status_reads_only(&s, &envelope);
+    retained(cx, &view);
+    s.reply(
+        STATUS,
+        Reply::json(
+            200,
+            fx::status(
+                &op,
+                "accepted",
+                fx::progress(&op, "replaced"),
+                "replaced",
+                None,
+            ),
+        ),
+    );
+    s.reply(
+        &pinned(fx::SUCCESSOR),
+        Reply::json(
+            200,
+            weekly::blocked(
+                "project-A",
+                "mission-A",
+                json!({"state":"available","id":weekly::TERRA}),
+                "enable_pending_use_status",
+            ),
+        ),
+    );
+    click(cx, h, "insights-check");
+    until(cx, h, |_, cx| {
+        ready(&view, cx)
+            && shown_words(&view, cx) == Some("Replaced".into())
+            && view
+                .read(cx)
+                .insights_book
+                .as_ref()
+                .and_then(|b| b.insights.get(&slot))
+                .is_some_and(|a| a.state == State::Accepted)
+    });
+    status_reads_only(&s, &envelope);
+    assert_eq!(known(cx, &view), [fx::SUCCESSOR]);
+
+    // The replacement's present blocker outranks everything else; the old enable is only
+    // read, and its historical Unknown never takes over the panel.
+    for (current, reason) in [
+        ("blocked", "successor_stop_or_authority_changed"),
+        ("partial", "successor_schedule_unresolved_or_changed"),
+    ] {
+        close(cx, m.h);
+        let root = unmount(cx, m);
+        let mut now = fx::status(
+            &op,
+            "accepted",
+            fx::progress(&op, "replaced"),
+            current,
+            Some(reason),
+        );
+        now["supersession"] = fx::link("project-A", "mission-A", 2);
+        s.reply(STATUS, Reply::json(200, now));
+        m = mount_with(cx, &s, width, ThemeMode::Light, None, Some(root));
+        let (h, view) = (m.h, m.view.clone());
+        from_automations(cx, h, &view);
+        let p = panel(cx, &view);
+        assert_eq!(
+            shown(cx, &view),
+            (
+                "settled",
+                Some(crate::insights_replace::reason_text(reason).into())
+            ),
+            "{current}"
+        );
+        let old = cx.update(|cx| p.read(cx).probe_enable_status()).unwrap();
+        assert!(old.report_missing(), "the old enable was read: {old:?}");
+        assert!(status_reads_only(&s, &envelope) >= 1, "and only read");
+        assert_eq!(known(cx, &view), [fx::SUCCESSOR]);
+        cx.update_window(h, |_, w, _| {
+            assert!(w.try_find("insights-enable-again").is_some());
+            assert!(w.try_find("insights-replace-open-chat").is_none());
+            assert!(w.try_find("insights-unconfirmed").is_none());
+            contained(w, width);
+        })
+        .unwrap();
+        shot(cx, h, dir, &format!("current-{current}"));
+        if current == "blocked" {
+            // Set up again is a fresh check pinned to the successor; nothing is sent.
+            let mut unusable = weekly::blocked(
+                "project-A",
+                "mission-A",
+                json!({"state":"available","id":weekly::TERRA}),
+                "report_chat_unavailable",
+            );
+            unusable["targetId"] = json!(fx::SUCCESSOR);
+            s.reply(&pinned(fx::SUCCESSOR), Reply::json(200, unusable));
+            let checks = gets(&s, &pinned(fx::SUCCESSOR));
+            let old_checks = gets(&s, &pinned(fx::OLD));
+            click(cx, h, "insights-enable-again");
+            until(cx, h, |_, cx| {
+                p.read(cx).probe_ready() && p.read(cx).probe_gate() == Some("checked")
+            });
+            assert!(gets(&s, &pinned(fx::SUCCESSOR)) > checks);
+            assert_eq!(
+                gets(&s, &pinned(fx::OLD)),
+                old_checks,
+                "the old pin isn't read again"
+            );
+            cx.update_window(h, |_, w, _| {
+                assert!(w.try_find("insights-replace-open").is_none());
+                assert_eq!(w.find("insights-enable-confirm").disabled(), Some(true));
+            })
+            .unwrap();
+            passive_only(&s);
+        }
+    }
+    assert_eq!(operation_posts(&s), 3, "nothing more was ever sent");
+    let h = m.h;
+    close(cx, h);
+    let root = unmount(cx, m);
+    let _ = std::fs::remove_dir_all(root);
+    println!(
+        "insights replace 1100 Light: double confirmation, malformed ACKs, retained Unknown, same-envelope Check, restart, acceptance and current Blocked/Partial beside the old enable's Unknown passed"
+    );
+}
+
 /// Blocked old authority, an older Local, malformed and fenced previews, adoption of a
 /// completed link only after the successor's exact settings re-read, and a rejection.
 fn adoption_and_refusals(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
@@ -770,8 +1188,64 @@ fn adoption_and_refusals(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     })
     .unwrap();
 
+    // A successor snapshot for another home is refused by the re-read itself.
+    let mut elsewhere = snapshot.clone();
+    elsewhere["expectedHome"]["daemonId"] = json!("other-daemon");
+    s.reply(&settings, Reply::json(200, elsewhere));
+    click(cx, h, "insights-replace-retry");
+    check(cx, h);
+    assert!(!cx.update(|cx| p.read(cx).probe_adopted()));
+    assert_eq!(
+        cx.update(|cx| p.read(cx).probe_successor_refusal())
+            .as_deref(),
+        Some("The new report chat couldn't be confirmed. Nothing was adopted.")
+    );
+    assert_eq!(known(cx, &view), [fx::OLD], "another home moves no pin");
+
+    // An exact but slow re-read never lands in the newer step that overtook it.
+    let reads = gets(&s, &settings);
+    s.reply(
+        &settings,
+        Reply {
+            delay_ms: 1_500,
+            ..Reply::json(200, snapshot.clone())
+        },
+    );
+    click(cx, h, "insights-replace-retry");
+    let slow = std::time::Instant::now();
+    until(cx, h, |_, _| gets(&s, &settings) > reads);
+    click(cx, h, "insights-replace-back");
+    let mut fenced = fx::blocked(
+        "project-A",
+        "mission-A",
+        "replacement_pending_use_status",
+        "bounded",
+    );
+    fenced["supersession"] = fx::link("project-A", "mission-A", 1);
+    s.reply(&preview_path(None), Reply::json(200, fenced));
+    click(cx, h, "insights-replace-open");
+    check(cx, h);
+    std::thread::sleep(Duration::from_millis(1_800).saturating_sub(slow.elapsed()));
+    settle(cx, h);
+    assert_eq!(
+        cx.update(|cx| p.read(cx).probe_replace_gate()),
+        Some("checked"),
+        "the newer step keeps its own fenced preview"
+    );
+    assert!(!cx.update(|cx| p.read(cx).probe_adopted()));
+    assert_eq!(
+        known(cx, &view),
+        [fx::OLD],
+        "an overtaken re-read moves no pin"
+    );
+    assert!(posts(&s).is_empty(), "re-reads write nothing");
+
     // The exact re-read adopts it: pins move, and the next check pins the successor.
-    s.reply(&settings, Reply::json(200, snapshot));
+    s.reply(
+        &preview_path(None),
+        Reply::json(200, fx::replaced("project-A", "mission-A")),
+    );
+    s.reply(&settings, Reply::json(200, snapshot.clone()));
     s.reply(
         &pinned(fx::SUCCESSOR),
         Reply::json(
@@ -805,14 +1279,111 @@ fn adoption_and_refusals(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     .unwrap();
     assert!(posts(&s).is_empty(), "adoption is read-only");
     shot(cx, h, dir, "adopted");
+
+    // Close and reopen: the open panel keeps the adoption; its pinned check uses the
+    // successor, and nothing is written.
+    close(cx, h);
+    let successor_checks = gets(&s, &pinned(fx::SUCCESSOR));
+    let old_checks = gets(&s, &pinned(fx::OLD));
+    from_automations(cx, h, &view);
+    assert_eq!(known(cx, &view), [fx::SUCCESSOR]);
+    assert!(gets(&s, &pinned(fx::SUCCESSOR)) > successor_checks);
+    assert_eq!(
+        gets(&s, &pinned(fx::OLD)),
+        old_checks,
+        "the old pin isn't read again"
+    );
+    passive_only(&s);
+    close(cx, h);
+    drop(p);
+    let root = unmount(cx, m);
+
+    // Restart: the adoption lived in the open panel only. The old pin is back until the
+    // exact link is re-derived and the successor's own settings admit it on this home.
+    let mut superseded = weekly::blocked(
+        "project-A",
+        "mission-A",
+        json!({"state":"unavailable","reason":"catalog_unavailable"}),
+        "report_superseded_use_replacement_status",
+    );
+    superseded["targetId"] = json!(fx::OLD);
+    s.reply(&pinned(fx::OLD), Reply::json(200, superseded));
+    let m = mount_with(cx, &s, width, ThemeMode::Light, None, Some(root));
+    let (h, view) = (m.h, m.view.clone());
+    from_automations(cx, h, &view);
+    assert_eq!(known(cx, &view), [fx::OLD]);
+    assert_eq!(
+        enable_shown(cx, &view),
+        (
+            "settled",
+            Some(crate::insights_enable::reason_text("report_identity_unavailable").into())
+        )
+    );
+    click(cx, h, "insights-enable-again");
+    let p = panel(cx, &view);
+    until(cx, h, |w, cx| {
+        p.read(cx).probe_ready() && w.try_find("insights-replace-open").is_some()
+    });
+    // Leaving before a slow exact re-read lands adopts nothing.
+    s.reply(
+        &preview_path(None),
+        Reply::json(200, fx::replaced("project-A", "mission-A")),
+    );
+    s.reply(
+        &settings,
+        Reply {
+            delay_ms: 1_500,
+            ..Reply::json(200, snapshot.clone())
+        },
+    );
+    let reads = gets(&s, &settings);
+    click(cx, h, "insights-replace-open");
+    let slow = std::time::Instant::now();
+    until(cx, h, |_, _| gets(&s, &settings) > reads);
+    click(cx, h, "insights-replace-back");
+    std::thread::sleep(Duration::from_millis(1_800).saturating_sub(slow.elapsed()));
+    settle(cx, h);
+    assert!(!cx.update(|cx| p.read(cx).probe_adopted()));
+    assert_eq!(
+        known(cx, &view),
+        [fx::OLD],
+        "a re-read after Back moves no pin"
+    );
+    cx.update_window(h, |_, w, _| {
+        assert!(w.try_find("insights-replace-open").is_some())
+    })
+    .unwrap();
+    // Re-derived: the exact completed link, then the successor's current settings.
+    s.reply(&settings, Reply::json(200, snapshot));
+    let successor_checks = gets(&s, &pinned(fx::SUCCESSOR));
+    click(cx, h, "insights-replace-open");
+    until(cx, h, |_, cx| {
+        p.read(cx).probe_adopted() && p.read(cx).probe_ready()
+    });
+    assert_eq!(known(cx, &view), [fx::SUCCESSOR]);
+    until(cx, h, |_, _| {
+        gets(&s, &pinned(fx::SUCCESSOR)) > successor_checks
+    });
+    cx.update_window(h, |_, w, _| {
+        assert!(w.try_find("insights-replace-open-chat").is_some());
+        contained(w, width);
+    })
+    .unwrap();
+    passive_only(&s);
+    assert_eq!(
+        operation_posts(&s),
+        1,
+        "only the original enable was ever sent"
+    );
     close(cx, h);
     drop(p);
     let root = unmount(cx, m);
     let _ = std::fs::remove_dir_all(root);
 
     // An older Local without the replacement interface: the blocker offers nothing new.
+    // This path also keeps the distinct Blocked status of a present but unusable report.
     let s = server();
-    let m = deleted(cx, &s, width, ThemeMode::Light);
+    let m = deleted_as(cx, &s, width, ThemeMode::Light, "blocked");
     let (h, view) = (m.h, m.view.clone());
     s.reply("/api/hello", Reply::json(200, hello(false)));
     click(cx, h, "insights-enable-retry");
@@ -911,7 +1482,7 @@ fn adoption_and_refusals(cx: &mut HeadlessAppContext, dir: &Option<PathBuf>) {
     let root = unmount(cx, m);
     let _ = std::fs::remove_dir_all(root);
     println!(
-        "insights replace 1100 Light: unqualified old home, untrusted rule, malformed copied grant, fence-only link, mismatched and exact successor adoption, older Local and rejection passed"
+        "insights replace 1100 Light: unqualified old home, untrusted rule, malformed copied grant, fence-only link, mismatched/other-home/overtaken successor re-reads, exact adoption across close, reopen and restart, older Local over a Blocked old enable and rejection passed"
     );
 }
 

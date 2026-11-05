@@ -1103,6 +1103,16 @@ impl Panel {
                         Tone::Warning,
                     )
                 }
+                // After deletion Local can't recheck the report at all, so it says Unknown.
+                // Only that exact accepted shape leads to a fresh pinned check; other Unknown
+                // states keep Check, and the old command is never resent.
+                (Current::Unknown, _) if accepted && s.report_missing() => {
+                    again = true;
+                    (
+                        weekly::reason_text("report_identity_unavailable").into(),
+                        Tone::Warning,
+                    )
+                }
                 (_, Receipt::Pending(Some(Phase::ChatPending))) => {
                     ("Creating the report chat…".into(), Tone::Quiet)
                 }
@@ -1277,6 +1287,18 @@ impl Panel {
     /// The next run the status field shows for the retained command.
     pub(crate) fn probe_enable_next(&self) -> Option<u64> {
         self.progress(self.enable_attempt()?).next
+    }
+    /// The landed passive status of the retained enable command, if read.
+    pub(crate) fn probe_enable_status(&self) -> Option<weekly::Status> {
+        let a = self.enable_attempt()?;
+        match &self.enable.as_ref()?.status {
+            Some((id, state, Load::Ready(s)))
+                if id == &a.operation.operation_id && *state == a.state =>
+            {
+                Some(s.clone())
+            }
+            _ => None,
+        }
     }
     pub(crate) fn probe_preflight(&self) -> Option<weekly::Preflight> {
         match self.enable.as_ref()?.gate.as_ref()? {

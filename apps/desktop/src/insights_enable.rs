@@ -409,6 +409,17 @@ pub(crate) struct Status {
     pub(crate) next_at: Option<u64>,
     pub(crate) reason: Option<String>,
 }
+impl Status {
+    /// An accepted command whose report Local can no longer find, in the host's exact shape
+    /// after deletion: present state Unknown, reason `report_identity_unavailable`. The
+    /// receipt is history; it proves no grant, deletion, safe effects or activation. It only
+    /// lets the user ask for a fresh, pinned check. Nothing is resent.
+    pub(crate) fn report_missing(&self) -> bool {
+        self.receipt == Receipt::Accepted
+            && self.current == Current::Unknown
+            && self.reason.as_deref() == Some("report_identity_unavailable")
+    }
+}
 /// A pending receipt's step marker for exactly this command, as the host persists it:
 /// `{phase, sessionId, scheduleId, chat}`. Entered, not completed. Returns the phase and the
 /// rule identity the host reserved, which a present status must name unchanged.

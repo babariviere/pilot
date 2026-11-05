@@ -380,6 +380,11 @@ impl Panel {
     pub(crate) fn probe_waiting(&self) -> bool {
         self.waiting()
     }
+    /// How many commands this panel has handed to the writer, and the latest one's outcome.
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_requests(&self) -> (u64, Option<Outcome>) {
+        (self.request, self.latest().cloned())
+    }
     fn attempt(&self, slot: &str) -> Option<&model::Attempt> {
         self.book.as_ref()?.insights.get(slot)
     }

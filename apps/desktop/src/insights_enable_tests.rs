@@ -397,3 +397,55 @@ fn a_pinned_report_refuses_any_substitute() {
     assert!(pf.request().is_none());
     assert!(reason_text("report_identity_unavailable").contains("Nothing new"));
 }
+/// After deletion the host keeps the accepted receipt but reports present state Unknown with
+/// `report_identity_unavailable` (insights-enable.ts status). Only that exact shape lets the
+/// user ask for a fresh pinned check; pending, unrelated or mismatched states never do.
+#[test]
+fn only_an_accepted_missing_report_leads_to_a_fresh_check() {
+    let pf = parse(&f::ready("project-A", "mission-A", f::TERRA)).unwrap();
+    let op = operation(pf.frozen.unwrap().text);
+    const MISSING: Option<&str> = Some("report_identity_unavailable");
+    let deleted = f::status(&op, "accepted", f::enabled(&op), "unknown", MISSING);
+    let s = status(&deleted, &op).unwrap();
+    assert_eq!(
+        (&s.receipt, s.current, s.reason.as_deref(), s.next_at),
+        (&Receipt::Accepted, Current::Unknown, MISSING, None)
+    );
+    assert_eq!(s.schedule_id.as_deref(), Some(f::SCHEDULE));
+    assert!(s.report_missing());
+    // A report present but unusable stays Blocked, a separate path.
+    let present = f::status(&op, "accepted", f::enabled(&op), "blocked", MISSING);
+    assert!(!status(&present, &op).unwrap().report_missing());
+    // Unrelated Unknown states keep Check only.
+    for reason in [
+        None,
+        Some("schedule_unresolved"),
+        Some("report_chat_unavailable"),
+    ] {
+        let other = f::status(&op, "accepted", f::enabled(&op), "unknown", reason);
+        assert!(!status(&other, &op).unwrap().report_missing(), "{reason:?}");
+    }
+    // Pending or unresolved receipts stay status-only, whatever the present state says.
+    for (phase, result) in [
+        ("chat_pending", f::progress(&op, "chat_pending")),
+        ("schedule_pending", f::progress(&op, "schedule_pending")),
+        ("none", Value::Null),
+    ] {
+        let pending = f::status(&op, "pending", result, "unknown", MISSING);
+        assert!(!status(&pending, &op).unwrap().report_missing(), "{phase}");
+    }
+    // No receipt at all, or one for other bytes, is never this shape.
+    assert!(
+        status(
+            &f::status(&op, "unknown", Value::Null, "unknown", MISSING),
+            &op
+        )
+        .is_err()
+    );
+    let mut foreign = deleted.clone();
+    foreign["receipt"]["payloadHash"] = json!("0".repeat(64));
+    assert!(status(&foreign, &op).is_err());
+    let mut elsewhere = deleted;
+    elsewhere["sessionId"] = json!("another");
+    assert!(status(&elsewhere, &op).is_err());
+}

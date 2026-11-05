@@ -711,7 +711,12 @@ impl Panel {
                 )
                 .disabled(confirm.is_none() || waiting)
                 .on_click(cx.listener(move |v, _, _, cx| {
-                    let Some(r) = confirm.clone() else {
+                    // One confirmation, one send. A second click can land before the writer
+                    // reports the first one; the step is already consumed by then.
+                    let Some(r) = confirm
+                        .clone()
+                        .filter(|_| v.step().is_some_and(|s| !s.sent))
+                    else {
                         return;
                     };
                     let before = v.request;
