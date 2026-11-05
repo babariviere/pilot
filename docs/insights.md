@@ -75,6 +75,10 @@ Sol fallback. Explicit model choices and existing schedules are unchanged.
 
 The backend can persist validated desired settings; the native editor is still a follow-up.
 Saving settings does not activate them or change an existing model, access grant or automation.
+The backend also provides a separate, explicitly confirmed Apply operation for the future editor.
+It preserves the report chat and replaces only the exact previewed integration-owned weekly rule.
+Apply starts no report and cannot perform a paid context migration. Interrupted effects stay pending
+without replay; inspecting matching model/rule values is not an acknowledgement.
 See the [settings contract](technical/insights-settings.md) for native integration and limitations.
 Opening the confirmation, reading status or restarting the
 app grants no access and starts no review or schedule. **Enable** authorizes weekly setup, not an

@@ -78,6 +78,7 @@ import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import type { GitHubImportService } from "./github-import.ts";
 import type { GitHubSetupService } from "./github-setup.ts";
+import { InsightsApply } from "./insights-apply.ts";
 import { insightsSetupDefaults } from "./insights-defaults.ts";
 import { InsightsEnable } from "./insights-enable.ts";
 import { admitInsightsOperation, insightsFindingsPage, isInsightsOperation } from "./insights-native.ts";
@@ -660,6 +661,22 @@ export function createDaemonServer(
 					journal,
 				})
 			: undefined;
+	const insightsApply =
+		journal && missions && schedules && insightsEnable
+			? new InsightsApply(
+					{
+						home: _config.home,
+						host: journal.destination,
+						projects,
+						missions: missions.store,
+						models,
+						sessions,
+						schedules,
+						journal,
+					},
+					insightsEnable,
+				)
+			: undefined;
 	const admitOperationHeld = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
 		let payload: unknown;
 		try {
@@ -669,6 +686,10 @@ export function createDaemonServer(
 		}
 		if (!payload || typeof payload !== "object" || Array.isArray(payload))
 			throw new OperationRejected("Expected operation object");
+		if (op.kind === "insights-apply") {
+			if (!insightsApply) throw new OperationRejected("Insights Apply is unavailable");
+			return insightsApply.apply(op, payload as import("@pilot/protocol").InsightsApplyPayload);
+		}
 		if (op.kind === "insights-settings") {
 			if (!insightsEnable) throw new OperationRejected("Insights settings are unavailable");
 			return insightsEnable.saveSettings(op, payload as import("@pilot/protocol").InsightsSettingsPayload);
@@ -1016,12 +1037,16 @@ export function createDaemonServer(
 		if (parts[1] === "insights" && parts[2] === "sessions") {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
-			if (parts.length !== 4 && !(parts.length === 5 && ["findings", "settings"].includes(parts[4]!)))
+			if (parts.length !== 4 && !(parts.length === 5 && ["findings", "settings", "apply"].includes(parts[4]!)))
 				throw new HttpError(404, "Not found");
 			const id = parts[3]!;
 			const status = sessions.insightsStatus(id);
 			if (!status) return json(res, 404, { error: "not_insights" });
 			if (parts.length === 4) return json(res, 200, status);
+			if (parts[4] === "apply") {
+				if (!insightsApply) throw new ServiceUnavailable("Insights Apply is unavailable");
+				return json(res, 200, await insightsApply.preflight(id));
+			}
 			if (parts[4] === "settings") {
 				if (!insightsEnable) throw new ServiceUnavailable("Insights settings are unavailable");
 				return json(res, 200, await insightsEnable.settings(id));
@@ -1081,6 +1106,7 @@ export function createDaemonServer(
 					insights: missions && githubSetup && hello.lineageId ? 1 : undefined,
 					insightsEnable: insightsEnable && githubSetup ? 1 : undefined,
 					insightsSettings: insightsEnable && githubSetup ? 1 : undefined,
+					insightsApply: insightsApply && githubSetup ? 1 : undefined,
 					automations: chatSettings?.automationsEnabled() ? 1 : undefined,
 					guardedMissionConversion: missions ? true : undefined,
 					passiveMissionLifecycle: missions ? true : undefined,

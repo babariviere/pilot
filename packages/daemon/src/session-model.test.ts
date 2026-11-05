@@ -28,6 +28,7 @@ function deferred() {
 }
 
 class FakeWorker implements SessionWorker {
+	modelConfiguration?: 1 = 1;
 	ready = Promise.resolve();
 	state: SessionState = "idle";
 	busy = false;
@@ -41,11 +42,18 @@ class FakeWorker implements SessionWorker {
 	constructor(onPacket: (packet: KernelPacket) => void) {
 		this.onPacket = onPacket;
 	}
-	send(): void {}
+	guardError?: string;
+	send(command: KernelCommand): void {
+		if (command.type === "model.configuration.result") this.guardError = command.error;
+	}
 	async request(command: Command): Promise<void> {
 		this.commands.push(command);
 		await this.gate;
-		if (command.type === "changeModel") {
+		if (command.type === "changeModel" || command.type === "changeModelConfiguration") {
+			if (command.type === "changeModelConfiguration") {
+				this.onPacket({ type: "model.configuration.guard", callId: "synthetic", requestId: command.requestId });
+				if (this.guardError) throw new CommandRejected(this.guardError);
+			}
 			if (this.rejectBusy) throw new CommandRejected("Conversation is busy", "busy");
 			this.usage = { context: { tokens: 5, contextWindow: 200, percent: 2.5 } };
 			this.onPacket({
@@ -105,6 +113,53 @@ async function fixture(t: TestContext) {
 	});
 	return { home, dir, id, projects, sessions, workers, models, list };
 }
+
+test("guarded configuration uses a distinct fail-closed command and revalidates the worker boundary", async (t) => {
+	const f = await fixture(t);
+	let checks = 0;
+	const result = await f.sessions.changeModel(f.id, second, f.models, "low", {
+		guard: () => {
+			checks++;
+		},
+	});
+	assert.equal(result.model, second);
+	assert.equal(f.workers[0]!.commands[0]!.type, "changeModelConfiguration");
+	assert.equal(checks, 4);
+	assert.equal(f.sessions["modelConfigurationGuards"].size, 0);
+});
+
+for (const boundary of [2, 3, 4])
+	test(`guarded configuration refuses authority drift at daemon boundary ${boundary}`, async (t) => {
+		const f = await fixture(t);
+		let checks = 0;
+		await assert.rejects(
+			f.sessions.changeModel(f.id, second, f.models, "low", {
+				guard: () => {
+					if (++checks === boundary) throw new Conflict("Saved revision or authority changed");
+				},
+			}),
+			/Saved revision/,
+		);
+		assert.equal(f.sessions.get(f.id)!.model, first);
+		assert.equal(f.sessions["modelConfigurationGuards"].size, 0);
+	});
+
+test("guarded configuration never falls back when the worker does not support its command", async (t) => {
+	const f = await fixture(t);
+	await f.sessions["ensureWorker"](f.id);
+	const worker = f.workers[0]!;
+	worker.modelConfiguration = undefined;
+	t.mock.method(worker, "request", async (command: Command) => {
+		worker.commands.push(command);
+		throw new CommandRejected("Unsupported command");
+	});
+	await assert.rejects(
+		f.sessions.changeModel(f.id, second, f.models, undefined, { guard: () => {} }),
+		/does not support/,
+	);
+	assert.deepEqual(worker.commands, []);
+	assert.equal(f.sessions.get(f.id)!.model, first);
+});
 
 test("idle parked session switches through the kernel, persists metadata, publishes summary and usage", async (t) => {
 	const f = await fixture(t);

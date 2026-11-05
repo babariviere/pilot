@@ -127,6 +127,7 @@ import { McpChatAttention, type McpStatusSource } from "./mcp-attention.ts";
 import { ModelCatalog } from "./models.ts";
 import { NativeDiagnosticsStore } from "./native-diagnostics.ts";
 import { NativeReviewReader, NoRetainedBinding } from "./native-review.ts";
+import { canonicalJSON } from "./operation-journal.ts";
 import { reasonLine, stuckPullRequestReason } from "./needs-you-reason.ts";
 import { PiReload } from "./pi-reload.ts";
 import {
@@ -320,6 +321,7 @@ export interface WorkerOptions {
 /** Injectable daemon boundaries for deterministic startup tests. */
 export interface SessionWorker {
 	readonly ready: Promise<void>;
+	modelConfiguration?: 1;
 	/** Includes outstanding acknowledgements and accepted input not yet observed in the event stream. */
 	readonly busy?: boolean;
 	state: SessionState;
@@ -845,6 +847,7 @@ class WorkerPool {
 }
 
 export class Worker implements SessionWorker {
+	modelConfiguration?: 1;
 	private exited = false;
 	private initialized = false;
 	readonly child: ChildProcess;
@@ -931,6 +934,7 @@ export class Worker implements SessionWorker {
 				return;
 			}
 			if (packet.type === "ready") {
+				this.modelConfiguration = packet.modelConfiguration;
 				clearTimeout(this.startupTimer);
 				this.usage = packet.usage;
 				this.toolsRunning = packet.toolsRunning;
@@ -1013,7 +1017,7 @@ export class Worker implements SessionWorker {
 			for (const id of [...this.pending.keys()]) this.settle(id, error);
 			onExit(this, code, signal);
 		});
-		this.send({ type: "start", spec });
+		this.send({ type: spec.configurationOnly ? "startConfiguration" : "start", spec });
 		this.refreshActivity();
 	}
 
@@ -1503,6 +1507,7 @@ export class SessionManager {
 	 * changes (rewind, activate) until the replacement kernel is ready.
 	 */
 	private readonly changingModels = new Map<string, Promise<void>>();
+	private readonly modelConfigurationGuards = new Map<string, { worker: SessionWorker; guard(): void }>();
 	/** Kernel answers to rewind and attempt switches, read once their request settles. */
 	private readonly rewindResults = new Map<string, { switched: boolean; content?: string }>();
 	/** Queued messages the kernel withdrew for a waiting Stop, keyed by its abort request. */
@@ -3955,9 +3960,14 @@ ${run.excerpt}`,
 	}
 
 	insightsEnableChat(id: string): import("@pilot/protocol").InsightsEnableChat {
+		if (this.changingModels.has(id)) throw new Conflict("Insights chat is changing configuration");
+		return this.insightsChatIdentity(id);
+	}
+
+	private insightsChatIdentity(id: string): import("@pilot/protocol").InsightsEnableChat {
 		const meta = this.require(id);
 		const grant = this.assertInsightsCurrent(meta);
-		if (!meta.model || this.changingModels.has(id) || meta.nextAttemptModel || meta.failure || meta.initializing)
+		if (!meta.model || meta.nextAttemptModel || meta.failure || meta.initializing)
 			throw new Conflict("Insights chat settings are unavailable or changing");
 		return {
 			sessionId: id,
@@ -3967,6 +3977,54 @@ ${run.excerpt}`,
 			model: meta.model,
 			...(meta.thinking ? { thinking: meta.thinking } : {}),
 		};
+	}
+
+	/** No worker startup, queued delivery or review admission is hidden by a metadata-only idle flag. */
+	insightsApplyChat(id: string): import("@pilot/protocol").InsightsEnableChat {
+		const identity = this.insightsEnableChat(id);
+		const meta = this.require(id);
+		const worker = this.workers.get(id);
+		if (
+			meta.inputError ||
+			worker?.compacting ||
+			worker?.toolsRunning ||
+			worker?.runningJobs?.some((job) => job.state === "running")
+		)
+			throw new Conflict("Report delivery or background work is uncertain");
+		this.assertModelIdle(meta);
+		return identity;
+	}
+
+	/** Exact host-only configuration admission, not a general model tool or a recovery preference. */
+	async configureInsightsModel(
+		id: string,
+		expected: import("@pilot/protocol").InsightsEnableChat,
+		model: string,
+		catalog: Pick<ModelCatalog, "list">,
+		revalidate: () => void,
+	): Promise<import("@pilot/protocol").InsightsEnableChat> {
+		const admission = this.insightsHostAdmission(id);
+		const guard = (generation: number) => {
+			admission.revalidate();
+			revalidate();
+			const current = this.insightsChatIdentity(id);
+			// An omitted legacy/default level may become reported when an idle worker opens.
+			if (expected.thinking === undefined) delete current.thinking;
+			if (canonicalJSON(current) !== canonicalJSON({ ...expected, inputGeneration: generation }))
+				throw new Conflict("Insights model/settings/Stop fence changed");
+		};
+		guard(expected.inputGeneration);
+		await this.changeModel(id, model, catalog, expected.thinking, { guard });
+		admission.revalidate();
+		revalidate();
+		const identity = this.insightsApplyChat(id);
+		if (
+			identity.model !== model ||
+			identity.inputGeneration !== expected.inputGeneration + 1 ||
+			(expected.thinking !== undefined && identity.thinking !== expected.thinking)
+		)
+			throw new Conflict("Insights model acknowledgement differs from confirmation");
+		return identity;
 	}
 
 	/** Recovery proves this operation's passive creation, never a similarly titled chat. */
@@ -6339,10 +6397,13 @@ ${run.excerpt}`,
 		model: string,
 		catalog: Pick<ModelCatalog, "list"> = this.modelCatalog,
 		thinking?: string,
+		configuration?: { guard(generation: number): void },
 	): Promise<SessionSummary> {
 		const end = this.updateGate.begin();
 		let locked = false;
 		let release!: () => void;
+		let configurationRequest: string | undefined;
+		let configurationWorker: SessionWorker | undefined;
 		const settled = new Promise<void>((resolve) => {
 			release = resolve;
 		});
@@ -6359,6 +6420,8 @@ ${run.excerpt}`,
 			if (this.changingModels.has(id) || this.archiveTransitions.has(id))
 				throw new Conflict("Session is changing configuration");
 			this.assertModelIdle(meta);
+			const generation = meta.inputGeneration ?? 0;
+			configuration?.guard(generation);
 			this.changingModels.set(id, settled);
 			locked = true;
 			const name = model.trim();
@@ -6369,19 +6432,28 @@ ${run.excerpt}`,
 				throw new Error(`Thinking level is not supported by ${name}: ${thinking}`);
 			await this.unparked(id);
 			const reopening = !this.workers.has(id);
-			const worker = await this.ensureWorker(id);
+			const worker = await this.ensureWorker(id, !!configuration);
+			if (configuration && reopening) configurationWorker = worker;
 			await worker.ready;
 			if (this.closing) throw new Error("pilotd is shutting down");
 			// A fresh worker's activity snapshot may follow ready. The kernel's atomic guard checks
 			// its durable inbox before switching, so unknown fresh activity is not proof of busy work.
 			this.assertModelIdle(meta, reopening);
+			if (configuration && worker.modelConfiguration !== 1)
+				throw new Conflict("Worker does not support provider-free model configuration");
+			configuration?.guard(generation);
 			const requestId = randomUUID();
 			let result: { switched: boolean } | undefined;
 			meta.inputGeneration = (meta.inputGeneration ?? 0) + 1;
 			await this.save(meta, undefined, undefined, true);
+			if (configuration) {
+				configuration.guard(generation + 1);
+				configurationRequest = requestId;
+				this.modelConfigurationGuards.set(requestId, { worker, guard: () => configuration.guard(generation + 1) });
+			}
 			try {
 				await worker.request({
-					type: "changeModel",
+					type: configuration ? "changeModelConfiguration" : "changeModel",
 					requestId,
 					model: name,
 					...(thinking !== undefined ? { thinking } : {}),
@@ -6393,16 +6465,28 @@ ${run.excerpt}`,
 				result = this.rewindResults.get(requestId);
 				this.rewindResults.delete(requestId);
 			}
+			if (configuration && result?.switched)
+				throw new Conflict("Configuration-only worker attempted a context fork");
 			if (result?.switched) await this.restartAttempt(id, worker, meta);
 			// The modelChanged packet carries the native selection and effective thinking level.
 			meta.updatedAt = Date.now();
-			await this.save(meta);
+			await this.save(meta, undefined, undefined, !!configuration);
 			this.emit(meta);
 			return this.summary(meta);
 		} finally {
-			if (locked) this.changingModels.delete(id);
-			release();
-			end();
+			if (configurationRequest) this.modelConfigurationGuards.delete(configurationRequest);
+			// A cold configuration worker never resumes input. A later explicit action opens normally.
+			try {
+				if (configurationWorker && this.workers.get(id) === configurationWorker) {
+					this.workers.delete(id);
+					this.parked.add(configurationWorker);
+					await configurationWorker.close();
+				}
+			} finally {
+				if (locked) this.changingModels.delete(id);
+				release();
+				end();
+			}
 		}
 	}
 
@@ -10229,7 +10313,7 @@ ${run.excerpt}`,
 		return task;
 	}
 
-	private async ensureWorker(id: string): Promise<SessionWorker> {
+	private async ensureWorker(id: string, configurationOnly = false): Promise<SessionWorker> {
 		this.assertNotContinued(
 			this.require(id),
 			this.require(id).delegationFenced && this.require(id).pending?.some((command) => command.type === "abort"),
@@ -10248,12 +10332,12 @@ ${run.excerpt}`,
 			await this.syncSubscriptionPolicy(this.require(id));
 			// Edits to the database config apply to the next kernel without restarting pilotd.
 			if (this.require(id).role !== "insights") await this.databases?.refresh();
-			return this.openWorker(id);
+			return this.openWorker(id, configurationOnly);
 		});
 	}
 
 	/** Recheck lifecycle and workspace state after waiting for a cold-start slot. */
-	private async openWorker(id: string): Promise<SessionWorker> {
+	private async openWorker(id: string, configurationOnly = false): Promise<SessionWorker> {
 		if (this.sleepPause) throw new ServiceUnavailable("Agents are paused until the next wake with connectivity");
 		const existing = this.workers.get(id);
 		if (existing) return existing;
@@ -10363,6 +10447,7 @@ ${run.excerpt}`,
 			createWorker(
 				{
 					sessionId: id,
+					...(configurationOnly ? { configurationOnly: true as const, stopOnOpen: true } : {}),
 					...(insightsBinding ? { insightsBinding } : {}),
 					...(liveUpdateProposals && meta.projectId === liveUpdateProjectId && this.canProposeLiveUpdate(meta)
 						? { liveUpdateProposals: true }
@@ -10526,6 +10611,19 @@ ${run.excerpt}`,
 
 	private onPacket(meta: SessionMeta, worker: SessionWorker, packet: KernelPacket): void {
 		if (this.parked.has(worker)) return;
+		if (packet.type === "model.configuration.guard") {
+			let error: string | undefined;
+			try {
+				const entry = this.modelConfigurationGuards.get(packet.requestId);
+				if (!entry || entry.worker !== worker || this.workers.get(meta.id) !== worker)
+					throw new Conflict("No matching native model configuration admission");
+				entry.guard();
+			} catch (cause) {
+				error = cause instanceof Error ? cause.message : "Configuration refused";
+			}
+			worker.send({ type: "model.configuration.result", callId: packet.callId, ...(error ? { error } : {}) });
+			return;
+		}
 		// Independent host boundary, including forged IPC from an otherwise restricted kernel.
 		if (meta.role === "insights") {
 			if (this.workers.get(meta.id) !== worker) return;

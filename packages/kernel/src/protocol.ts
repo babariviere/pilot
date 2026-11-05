@@ -169,6 +169,8 @@ export interface KernelSpec {
 	thinking?: string;
 	/** Cancel parked work before recovery can dispatch a model request or tool. */
 	stopOnOpen?: boolean;
+	/** Short-lived configuration worker, opened under the existing Stop request/tool barriers. */
+	configurationOnly?: true;
 	/** Park queued input before recovered work can reach its next boundary. */
 	pauseInputsOnOpen?: number;
 	/** Explicit same-provider continuation after the previous worker's tool drain and close. */
@@ -202,6 +204,8 @@ export interface KernelTelemetryConfiguration {
 
 export type KernelCommand =
 	| { type: "start"; spec: KernelSpec }
+	/** Older workers cannot ignore this mode and resume a recovered inbox. */
+	| { type: "startConfiguration"; spec: KernelSpec }
 	| { type: "autoHandoff.configure"; enabled: boolean }
 	| {
 			type: "input";
@@ -235,6 +239,9 @@ export type KernelCommand =
 			guardToken?: string;
 	  }
 	| { type: "changeModel"; requestId: string; model: string; thinking?: string }
+	/** Distinct command: older workers cannot silently ignore the configuration-only guard. */
+	| { type: "changeModelConfiguration"; requestId: string; model: string; thinking?: string }
+	| { type: "model.configuration.result"; callId: string; error?: string }
 	/** Idle-only extension/resource and MCP configuration reload. Busy is a refusal, never an abort. */
 	| { type: "reloadPi"; requestId: string }
 	/** Drain committed tool effects and quiesce children before relinquishing workspace ownership. */
@@ -333,12 +340,15 @@ export type KernelCommand =
 	| { type: "shutdown" };
 
 export type KernelPacket =
+	| { type: "model.configuration.guard"; callId: string; requestId: string }
 	| { type: "piReloaded"; requestId: string; commands: SessionCommand[] }
 	/** Lifecycle admission, never mere queue placement. Acknowledged before publishing completion. */
 	| { type: "update.paused"; id: string; error?: string }
 	| { type: "systemMessageState"; event: import("./held-inputs.ts").SystemMessageStateEvent }
 	| {
 			type: "ready";
+			/** Provider-free model configuration command and host-boundary guard handshake. */
+			modelConfiguration?: 1;
 			toolsRunning?: boolean;
 			execution?: ExecutionEvidence;
 			model: string;

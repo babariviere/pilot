@@ -9,6 +9,9 @@ import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import type {
 	DurableOperation,
+	InsightsApplyPayload,
+	InsightsApplyPreflight,
+	InsightsApplyProgress,
 	InsightsEnablePayload,
 	InsightsEnableProgress,
 	InsightsSettingsPayload,
@@ -17,6 +20,7 @@ import type {
 	OperationReceipt,
 } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
+import { InsightsApply } from "./insights-apply.ts";
 import { INSIGHTS_INITIAL_DEFAULTS } from "./insights-defaults.ts";
 import { InsightsEnable } from "./insights-enable.ts";
 import { MissionService } from "./mission-service.ts";
@@ -27,7 +31,7 @@ import { ProjectStore } from "./projects.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
 import { createDaemonServer } from "./server.ts";
-import { SessionManager } from "./sessions.ts";
+import { SessionManager, type SessionWorker } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
 
 const host = { hostId: "daemon", daemonId: "synthetic", lineageId: "synthetic-lineage" };
@@ -43,7 +47,7 @@ function settingsPayload(snapshot: InsightsSettingsSnapshot): InsightsSettingsPa
 	return { projectId, missionId, expectedHome, context, chat, expectedRevision: revision, settings };
 }
 
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, withConfigurationWorker = false) {
 	const root = await mkdtemp(join(tmpdir(), "insights-enable-"));
 	const home = join(root, "home"),
 		source = join(root, "source");
@@ -73,9 +77,50 @@ async function fixture(t: TestContext) {
 			projects,
 			undefined,
 			{
-				worker: () => {
+				worker: (spec, onPacket) => {
 					workerStarts++;
-					throw new Error("No provider/kernel turn permitted");
+					if (!withConfigurationWorker) throw new Error("No provider/kernel turn permitted");
+					assert.equal(spec.configurationOnly, true, "cold Apply never resumes a kernel inbox");
+					assert.equal(spec.stopOnOpen, true);
+					let guardError: string | undefined;
+					const worker: SessionWorker = {
+						modelConfiguration: 1,
+						ready: Promise.resolve(),
+						state: "idle",
+						busy: false,
+						close: async () => {},
+						send: (command) => {
+							if (command.type === "model.configuration.result") guardError = command.error;
+						},
+						request: async (command) => {
+							if (command.type !== "changeModelConfiguration")
+								throw new Error(`No input or legacy fallback permitted: ${command.type}`);
+							onPacket({
+								type: "model.configuration.guard",
+								callId: randomUUID(),
+								requestId: command.requestId,
+							});
+							if (guardError) throw new Error(guardError);
+							onPacket({
+								type: "modelChanged",
+								requestId: command.requestId,
+								model: command.model,
+								thinking: command.thinking ?? "low",
+								usage: {},
+							});
+						},
+					};
+					queueMicrotask(() =>
+						onPacket({
+							type: "ready",
+							model: spec.model!,
+							thinking: "low",
+							working: false,
+							usage: {},
+							modelConfiguration: 1,
+						}),
+					);
+					return worker;
 				},
 			},
 			{},
@@ -115,7 +160,10 @@ async function fixture(t: TestContext) {
 		await rm(root, { recursive: true, force: true, maxRetries: 5 });
 	});
 	let sequence = 0;
-	const operation = (payload: InsightsEnablePayload | InsightsSettingsPayload, targetId: string): DurableOperation => {
+	const operation = (
+		payload: InsightsEnablePayload | InsightsSettingsPayload | InsightsApplyPayload,
+		targetId: string,
+	): DurableOperation => {
 		const bytes = JSON.stringify(payload);
 		return {
 			schemaVersion: 1,
@@ -921,17 +969,449 @@ test("native HTTP contract gates only enable, passive reads/status never provisi
 	assert.deepEqual(await (await post("operations/receipt", false, save)).json(), saved);
 	assert.deepEqual(await (await post("operations", true, save)).json(), saved);
 	assert.equal(f.missions.insights.settings.current(f.sessions.insightsHostAdmission(op.targetId))?.revision, 1);
+	assert.equal((await (await fetch(`${root}/hello`)).json()).capabilities.insightsApply, 1);
+	const applyResponse = await fetch(`${root}/insights/sessions/${op.targetId}/apply`);
+	assert.equal(applyResponse.headers.get("cache-control"), "no-store");
+	const preview = (await applyResponse.json()) as InsightsApplyPreflight;
+	assert.ok(preview.payload, preview.reason ?? "Apply unavailable");
+	assert.equal((await fetch(`${root}/insights/sessions/${op.targetId}/apply`, { method: "POST" })).status, 405);
+	const apply = { ...f.operation(preview.payload, op.targetId), kind: "insights-apply" };
+	assert.notEqual((await post("operations", false, apply)).status, 200);
+	assert.equal((await (await post("operations/receipt", false, apply)).json()).state, "unknown");
+	const applied = (await (await post("operations", true, apply)).json()) as OperationReceipt;
+	assert.equal(applied.state, "accepted");
+	assert.equal((applied.result as InsightsApplyProgress).phase, "applied");
+	assert.deepEqual(await (await post("operations/receipt", false, apply)).json(), applied);
+	assert.deepEqual(await (await post("operations", true, apply)).json(), applied);
+	const storedApply = JSON.parse(
+		await readFile(join(f.home, "operations", `${payloadHash(apply.operationId)}.json`), "utf8"),
+	);
+	assert.equal(storedApply.operation.payload, apply.payload);
+	assert.equal(storedApply.operation.payloadHash, apply.payloadHash);
 	f.sessions["metas"].get(op.targetId)!.insightsGrant!.host.hostId = "different";
 	assert.equal(((await (await post("operations", true, stale)).json()) as OperationReceipt).state, "rejected");
 	const blocked = await (await post("insights/enable/status")).json();
 	assert.equal(blocked.state, "blocked");
 	assert.deepEqual(blocked.receipt, accepted, "stale grant blocks current status, never rewrites accepted receipt");
 	assert.equal(spawn.mock.callCount(), 1);
-	assert.equal(create.mock.callCount(), 1);
+	assert.equal(create.mock.callCount(), 2);
 	assert.equal(f.sessions.list().length, 1);
-	assert.equal(f.schedules.list().length, 1);
+	assert.equal(f.schedules.list().length, 2);
 	assert.equal(f.workerStarts, 0);
 	assert.equal(await stat(join(f.home, "sessions", op.targetId, "history.sqlite")).catch(() => null), null);
+});
+
+function applyService(f: Awaited<ReturnType<typeof fixture>>) {
+	return new InsightsApply({
+		home: f.home,
+		host,
+		projects: f.projects,
+		missions: f.missions,
+		models: f.models,
+		sessions: f.sessions,
+		schedules: f.schedules,
+		journal: f.journal,
+	});
+}
+
+async function applyFixture(t: TestContext, changedModel = false, withConfigurationWorker = false) {
+	const f = await fixture(t, withConfigurationWorker);
+	const initial = await f.intent();
+	assert.equal((await f.run(initial)).state, "accepted");
+	const id = initial.targetId;
+	const snapshot = await f.enable.settings(id);
+	const payload = settingsPayload(snapshot);
+	if (changedModel) {
+		f.setModels([model, { ...model, id: "synthetic/second", name: "Second" }]);
+		payload.settings.requestedModel = { kind: "id", value: "synthetic/second" };
+	}
+	const save = { ...f.operation(payload, id), kind: "insights-settings" };
+	assert.equal(
+		(await f.journal.execute(save, (op) => f.enable.saveSettings(op, JSON.parse(op.payload)))).state,
+		"accepted",
+	);
+	const service = applyService(f);
+	const preview = await service.preflight(id);
+	assert.ok(preview.payload, preview.reason ?? "Apply unavailable");
+	const op = { ...f.operation(preview.payload, id), kind: "insights-apply" };
+	return {
+		f,
+		id,
+		service,
+		preview,
+		op,
+		run: () => f.journal.execute(op, (intent) => service.apply(intent, JSON.parse(intent.payload))),
+	};
+}
+
+function syntheticModelChange(t: TestContext, f: Awaited<ReturnType<typeof fixture>>, loseAck = false) {
+	return t.mock.method(
+		f.sessions,
+		"configureInsightsModel",
+		async (...[id, expected, selected, _catalog, guard]: Parameters<SessionManager["configureInsightsModel"]>) => {
+			guard();
+			assert.deepEqual(f.sessions.insightsApplyChat(id), expected);
+			const meta = f.sessions["metas"].get(id)!;
+			meta.model = selected;
+			meta.inputGeneration = (meta.inputGeneration ?? 0) + 1;
+			await f.sessions["save"](meta, undefined, undefined, true);
+			if (loseAck) throw new Error("Synthetic lost model ACK");
+			return f.sessions.insightsApplyChat(id);
+		},
+	);
+}
+
+test("Apply is separate from Save, preserves identity/history/unrelated rules and is idempotent", async (t) => {
+	const { f, id, service, op, run } = await applyFixture(t);
+	const before = f.sessions.insightsEnableChat(id);
+	const unrelated = await f.schedules.create({
+		trigger: "at",
+		at: Date.now() + 1_000_000,
+		target: { kind: "message", sessionId: id, message: "Manual message" },
+	});
+	const old = f.schedules.list().find((r) => r.trigger === "recurring")!;
+	const receipt = await run();
+	assert.equal(receipt.state, "accepted");
+	assert.equal((receipt.result as InsightsApplyProgress).phase, "applied");
+	assert.deepEqual(await run(), receipt);
+	assert.deepEqual(f.sessions.insightsEnableChat(id), before);
+	assert.equal(f.schedules.require(old.id).state, "cancelled");
+	assert.deepEqual(f.schedules.require(unrelated.id), unrelated);
+	const active = f.schedules.list().filter((r) => r.state === "pending" && r.trigger === "recurring");
+	assert.equal(active.length, 1);
+	assert.equal(active[0]!.insightsSettingsRevision, 1);
+	assert.equal(active[0]!.insightsEnableOperationId, op.operationId);
+	assert.equal(active[0]!.runs?.length, 0);
+	assert.ok(active[0]!.at! > active[0]!.handledThrough!);
+	const again = await service.preflight(id);
+	assert.ok(again.payload, again.reason ?? "No reusable preview");
+	const idempotent = { ...f.operation(again.payload, id), kind: "insights-apply" };
+	const rows = f.schedules.list();
+	assert.equal(
+		(await f.journal.execute(idempotent, (op) => service.apply(op, JSON.parse(op.payload)))).state,
+		"accepted",
+	);
+	assert.deepEqual(f.schedules.list(), rows, "unchanged intent does not cancel/recreate");
+	assert.equal(f.workerStarts, 0);
+	assert.equal(await stat(join(f.home, "sessions", id, "history.sqlite")).catch(() => null), null);
+	assert.deepEqual(await readdir(f.source), [], "Apply cannot mutate a source project");
+});
+
+test("Apply integrates the guarded host model command with exact settings and rule replacement", async (t) => {
+	const { f, id, run } = await applyFixture(t, true, true);
+	const result = await run();
+	assert.equal(result.state, "accepted");
+	assert.equal(f.sessions.insightsEnableChat(id).model, "synthetic/second");
+	assert.equal(f.sessions.insightsEnableChat(id).inputGeneration, 1);
+	assert.equal(f.workerStarts, 1);
+	assert.equal(f.schedules.list().filter((r) => r.state === "pending").length, 1);
+});
+
+test("Apply uses the saved exact model/cadence/scope/bounds/budget, never input or regrant", async (t) => {
+	const { f, id, service } = await applyFixture(t, true);
+	const snapshot = await f.enable.settings(id);
+	const change = settingsPayload(snapshot);
+	change.settings.recurrence = { every: "week", weekday: 2, time: "09:15", timeZone: "Europe/Paris" };
+	change.settings.scope = {
+		...change.settings.scope,
+		projects: [f.project.id],
+		includeArchived: false,
+		excludeSessions: [randomUUID()],
+	};
+	change.settings.bounds = { inventoryPages: 2, historyPages: 4, entriesPerPage: 8 };
+	change.settings.budget = { usd: 20, period: "month", enforcement: "advisory", basis: "user_choice" };
+	const save = { ...f.operation(change, id), kind: "insights-settings" };
+	assert.equal(
+		(await f.journal.execute(save, (op) => f.enable.saveSettings(op, JSON.parse(op.payload)))).state,
+		"accepted",
+	);
+	const preview = await service.preflight(id);
+	assert.ok(preview.payload, preview.reason ?? "No preview");
+	assert.deepEqual(preview.payload.record.settings, change.settings);
+	const grant = structuredClone(f.sessions["metas"].get(id)!.insightsGrant);
+	const switched = syntheticModelChange(t, f);
+	const op = { ...f.operation(preview.payload, id), kind: "insights-apply" };
+	assert.equal((await f.journal.execute(op, (op) => service.apply(op, JSON.parse(op.payload)))).state, "accepted");
+	assert.equal(switched.mock.callCount(), 1);
+	assert.equal(f.sessions.insightsEnableChat(id).model, "synthetic/second");
+	assert.deepEqual(f.sessions["metas"].get(id)!.insightsGrant, grant);
+	assert.equal(f.sessions["metas"].get(id)!.pending?.length ?? 0, 0);
+	const rule = f.schedules.list().find((r) => r.state === "pending")!;
+	assert.deepEqual(rule.recurrence, change.settings.recurrence);
+	assert.equal(rule.insightsSettingsRevision, 2);
+	assert.equal(f.workerStarts, 0);
+});
+
+for (const step of ["model", "cancel", "schedule"] as const)
+	test(`lost ${step} acknowledgement stays pending after restart, even with matching resources`, async (t) => {
+		const { f, id, op, run } = await applyFixture(t, step === "model");
+		if (step === "model") syntheticModelChange(t, f, true);
+		else {
+			const method = step === "cancel" ? "cancelInsights" : "createInsights";
+			const original = f.schedules[method].bind(f.schedules);
+			t.mock.method(f.schedules, method, async (...args: never[]) => {
+				await (original as (...args: never[]) => Promise<unknown>)(...args);
+				throw new Error("Synthetic lost ACK");
+			});
+		}
+		const receipt = await run();
+		assert.equal(receipt.state, "pending");
+		assert.equal(
+			(receipt.result as InsightsApplyProgress).phase,
+			`${step === "schedule" ? "schedule" : step === "cancel" ? "cancel" : "model"}_pending`,
+		);
+		const rows = f.schedules.list();
+		await f.reopen();
+		const current = applyService(f);
+		const modelChange = t.mock.method(f.sessions, "configureInsightsModel", async () => {
+			throw new Error("Must not replay model");
+		});
+		const cancel = t.mock.method(f.schedules, "cancelInsights", async () => {
+			throw new Error("Must not replay cancel");
+		});
+		const create = t.mock.method(f.schedules, "createInsights", async () => {
+			throw new Error("Must not replay create");
+		});
+		assert.equal((await current.preflight(id)).state, "blocked");
+		assert.deepEqual(await f.journal.lookup(op), receipt);
+		assert.deepEqual(await f.journal.execute(op, (op) => current.apply(op, JSON.parse(op.payload))), receipt);
+		assert.deepEqual(f.schedules.list(), rows);
+		assert.equal(modelChange.mock.callCount() + cancel.mock.callCount() + create.mock.callCount(), 0);
+	});
+
+for (const phase of [
+	"model_pending",
+	"model_ready",
+	"cancel_pending",
+	"rule_cancelled",
+	"schedule_pending",
+	"applied",
+] as const)
+	test(`crash at durable Apply checkpoint ${phase} never replays entered effects`, async (t) => {
+		const { f, op, run } = await applyFixture(t, true);
+		const modelChange = syntheticModelChange(t, f);
+		const checkpoint = f.journal.checkpoint.bind(f.journal);
+		t.mock.method(f.journal, "checkpoint", async (intent: DurableOperation, result: unknown) => {
+			await checkpoint(intent, result);
+			if ((result as InsightsApplyProgress).phase === phase) throw new Error("Synthetic crash");
+		});
+		assert.equal((await run()).state, "pending");
+		const before = f.schedules.list();
+		await f.reopen();
+		const service = applyService(f);
+		const replayModel = t.mock.method(f.sessions, "configureInsightsModel", async () => {
+			throw new Error("Model replay forbidden");
+		});
+		const result = await f.journal.execute(op, (op) => service.apply(op, JSON.parse(op.payload)));
+		assert.equal(replayModel.mock.callCount(), 0);
+		assert.equal(modelChange.mock.callCount(), phase === "model_pending" ? 0 : 1);
+		if (phase.endsWith("pending")) {
+			assert.equal(result.state, "pending");
+			assert.deepEqual(f.schedules.list(), before);
+		} else assert.equal(result.state, "accepted", "only unentered steps or persisted exact completion may advance");
+	});
+
+for (const drift of ["save", "rule", "revoke", "stop", "home", "lineage", "model", "review", "delivery"] as const)
+	test(`Apply rechecks ${drift} after journal durability, before cancellation`, async (t) => {
+		const { f, id, service, op, run } = await applyFixture(t);
+		const old = f.schedules.list()[0]!;
+		const checkpoint = f.journal.checkpoint.bind(f.journal);
+		t.mock.method(f.journal, "checkpoint", async (intent: DurableOperation, result: unknown) => {
+			await checkpoint(intent, result);
+			if ((result as InsightsApplyProgress).phase !== "cancel_pending") return;
+			const admission = f.sessions.insightsHostAdmission(id);
+			if (drift === "save") {
+				const saved = f.missions.insights.settings.current(admission)!;
+				await f.missions.insights.settings.save(
+					admission,
+					randomUUID(),
+					{},
+					saved.revision,
+					saved.settings,
+					saved.model,
+				);
+			} else if (drift === "rule")
+				await f.schedules.update(old.id, {
+					title: "User edited",
+					expectedRevision: old.revision,
+					expectedHome: host,
+				});
+			else if (drift === "revoke") await f.sessions.revokeInsights(id, 1);
+			else if (drift === "stop") await f.sessions.stop(id);
+			else if (drift === "home") f.sessions["metas"].get(id)!.insightsGrant!.home = "/different";
+			else if (drift === "lineage") f.sessions["metas"].get(id)!.insightsGrant!.host.lineageId = "different";
+			else if (drift === "model") f.setModels([]);
+			else if (drift === "review")
+				await f.missions.insights.reviews.reserve(admission, {
+					runId: randomUUID(),
+					windowStart: "2026-01-01T00:00:00Z",
+					windowEnd: "2026-01-08T00:00:00Z",
+					bounds: { inventoryPages: 1, historyPages: 2, entriesPerPage: 4 },
+					settingsRevision: 1,
+				});
+			else
+				await f.journal.reserve({
+					...op,
+					operationId: randomUUID(),
+					producerId: "other-delivery",
+					kind: "chat-send",
+				});
+		});
+		assert.equal((await run()).state, "pending");
+		assert.equal(f.schedules.require(old.id).state, "pending");
+		assert.equal(f.schedules.list().length, 1);
+		assert.equal((await service.preflight(id)).state, "blocked");
+		assert.equal(f.workerStarts, 0);
+	});
+
+test("concurrent Apply serializes exact target ownership without duplicate replacement", async (t) => {
+	const { f, id, service, op, run } = await applyFixture(t);
+	let release!: () => void;
+	let enter!: () => void;
+	const held = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const entered = new Promise<void>((resolve) => {
+		enter = resolve;
+	});
+	const list = f.models.list.bind(f.models);
+	let first = true;
+	t.mock.method(f.models, "list", async (...args: Parameters<typeof list>) => {
+		if (first) {
+			first = false;
+			enter();
+			await held;
+		}
+		return list(...args);
+	});
+	const firstRun = run();
+	t.after(() => release());
+	await entered;
+	const other = { ...op, operationId: randomUUID(), producerId: "other-native" };
+	assert.equal(
+		(await f.journal.execute(other, (intent) => service.apply(intent, JSON.parse(intent.payload)))).state,
+		"rejected",
+	);
+	release();
+	assert.equal((await firstRun).state, "accepted");
+	assert.equal(
+		f.schedules.list().filter((rule) => rule.trigger === "recurring" && rule.state === "pending").length,
+		1,
+	);
+	assert.equal(f.sessions.list().length, 1);
+	assert.equal(f.workerStarts, 0);
+	assert.equal(f.sessions.insightsApplyChat(id).inputGeneration, 0);
+});
+
+for (const conflict of [
+	"manual",
+	"paused",
+	"terminal",
+	"unavailable",
+	"queued",
+	"global-disabled",
+	"unknown-review",
+	"interrupted-review",
+] as const)
+	test(`Apply refuses ${conflict} without changing a rule or starting work`, async (t) => {
+		const { f, id, service } = await applyFixture(t);
+		const rule = f.schedules.list()[0]!;
+		if (conflict === "manual") {
+			await f.schedules.remove(rule.id, rule.revision);
+			await f.schedules.create({
+				trigger: "recurring",
+				recurrence: rule.recurrence,
+				expectedHome: host,
+				target: rule.target,
+			});
+		} else if (conflict === "paused")
+			await f.schedules.update(rule.id, { paused: true, expectedRevision: rule.revision, expectedHome: host });
+		else if (conflict === "terminal") {
+			const preview = await service.preflight(id);
+			assert.ok(preview.payload);
+			const intent = { ...f.operation(preview.payload, id), kind: "insights-apply" };
+			assert.equal(
+				(await f.journal.execute(intent, (op) => service.apply(op, JSON.parse(op.payload)))).state,
+				"accepted",
+			);
+			const active = f.schedules.list().find((r) => r.state === "pending")!;
+			await f.schedules.remove(active.id, active.revision);
+		} else if (conflict === "unavailable") f.setModels([]);
+		else if (conflict === "global-disabled") f.disable();
+		else if (conflict === "unknown-review" || conflict === "interrupted-review") {
+			const admission = f.sessions.insightsHostAdmission(id);
+			await f.missions.insights.reviews.reserve(admission, {
+				runId: randomUUID(),
+				windowStart: "2026-01-01T00:00:00Z",
+				windowEnd: "2026-01-08T00:00:00Z",
+				bounds: { inventoryPages: 1, historyPages: 2, entriesPerPage: 4 },
+				settingsRevision: 1,
+			});
+			await f.missions.insights.reviews.interrupt(
+				id,
+				conflict === "unknown-review" ? "unknown" : "interrupted",
+				"Uncertain; do not replay",
+			);
+		} else
+			f.sessions["metas"].get(id)!.pending = [
+				{ type: "input", requestId: randomUUID(), content: "Held", mode: "followUp" },
+			];
+		const rows = f.schedules.list();
+		assert.equal((await service.preflight(id)).state, "blocked");
+		assert.deepEqual(f.schedules.list(), rows);
+		assert.equal(f.workerStarts, 0);
+	});
+
+test("replacement refuses if the exact acknowledged cancellation row disappears", async (t) => {
+	const { f, op, run } = await applyFixture(t);
+	const checkpoint = f.journal.checkpoint.bind(f.journal);
+	t.mock.method(f.journal, "checkpoint", async (intent: DurableOperation, result: unknown) => {
+		await checkpoint(intent, result);
+		const progress = result as InsightsApplyProgress;
+		if (progress.phase === "rule_cancelled") {
+			assert.ok(progress.cancelledRule);
+			await f.schedules.remove(progress.cancelledRule.id, progress.cancelledRule.revision);
+		}
+	});
+	const receipt = await run();
+	assert.equal(receipt.state, "pending");
+	assert.equal((receipt.result as InsightsApplyProgress).phase, "rule_cancelled");
+	assert.equal(f.schedules.list().length, 0);
+	await f.reopen();
+	const service = applyService(f);
+	assert.equal((await f.journal.execute(op, (op) => service.apply(op, JSON.parse(op.payload)))).state, "pending");
+	assert.equal(f.schedules.list().length, 0, "no replacement or rollback after an exact-rule refusal");
+});
+
+test("replacement acknowledgement mismatch stays pending without resource inference", async (t) => {
+	const { f, id, run } = await applyFixture(t);
+	const create = f.schedules.createInsights.bind(f.schedules);
+	t.mock.method(f.schedules, "createInsights", async (...args: Parameters<typeof create>) => ({
+		...(await create(...args)),
+		id: randomUUID(),
+	}));
+	assert.equal((await run()).state, "pending");
+	assert.equal(f.schedules.list().filter((rule) => rule.state === "pending").length, 1);
+	assert.equal((await applyService(f).preflight(id)).state, "blocked");
+});
+
+test("competing saved revisions and altered confirmation bytes refuse before effects", async (t) => {
+	const { f, id, service, op } = await applyFixture(t);
+	const snapshot = await f.enable.settings(id);
+	const next = { ...f.operation(settingsPayload(snapshot), id), kind: "insights-settings" };
+	assert.equal(
+		(await f.journal.execute(next, (op) => f.enable.saveSettings(op, JSON.parse(op.payload)))).state,
+		"accepted",
+	);
+	const before = f.schedules.list();
+	assert.equal((await f.journal.execute(op, (op) => service.apply(op, JSON.parse(op.payload)))).state, "rejected");
+	assert.deepEqual(f.schedules.list(), before);
+	const preview = await service.preflight(id);
+	assert.ok(preview.payload);
+	const altered = { ...preview.payload, context: "wrong-context" };
+	const wrong = { ...f.operation(altered, id), kind: "insights-apply" };
+	assert.equal((await f.journal.execute(wrong, (op) => service.apply(op, JSON.parse(op.payload)))).state, "rejected");
+	assert.deepEqual(f.schedules.list(), before);
 });
 
 test("native desired settings save persists choices without activating or mutating chat/grant/rule", async (t) => {

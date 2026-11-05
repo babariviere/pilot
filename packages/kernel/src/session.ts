@@ -313,6 +313,11 @@ export class KernelSession {
 	}
 
 	static async open(spec: KernelSpec, hooks: KernelSessionHooks): Promise<KernelSession> {
+		if (spec.configurationOnly) {
+			if (spec.recoveryModel || spec.continuationModel)
+				throw new Error("Configuration-only startup cannot activate recovery or continuation");
+			spec = { ...spec, stopOnOpen: true };
+		}
 		if (spec.role !== undefined && spec.role !== "diagnostics" && spec.role !== "insights")
 			throw new Error("Invalid specialist profile");
 		if (spec.role === "insights") {
@@ -1130,6 +1135,7 @@ export class KernelSession {
 	async changeModel(
 		model: string,
 		thinking?: string,
+		configuration?: { revalidate(): Promise<void> },
 	): Promise<{ switched: true; attempts?: SessionAttempt[] } | undefined> {
 		if (this.#closing || this.#changingModel || this.#admissions || this.#moving)
 			throw new ConversationBusy(this.conversation.id);
@@ -1145,6 +1151,7 @@ export class KernelSession {
 				const inbox = await tx.doc(InboxDoc, this.conversation.id);
 				if (live.run || live.compactions?.length || inbox.items.length)
 					throw new ConversationBusy(this.conversation.id);
+				if (configuration) await configuration.revalidate();
 				// This is Conversation.configure's operation, in the same commit as the idle check.
 				if (change)
 					await configure(tx, this.conversation.id, {
@@ -1155,6 +1162,13 @@ export class KernelSession {
 		try {
 			await configureIdle();
 			const choice = await this.adapter.resolveModel(model.trim());
+			// Configuration-only admission cannot rebuild history, spend tokens or fork attempts.
+			// Refuse before selecting anything, even when raw replay might happen to fit today.
+			if (configuration && previous.provider !== choice.model.provider) {
+				const head = await this.#storage.findLatestHeadMarker(this.conversation.id, undefined, context);
+				if (head?.kind === "pi.compaction")
+					throw new Error("Configuration-only model change requires context migration; selection unchanged");
+			}
 			if (
 				thinking !== undefined &&
 				!getSupportedThinkingLevels(choice.model).includes(thinking as ModelThinkingLevel)

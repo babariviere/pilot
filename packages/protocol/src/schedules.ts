@@ -79,7 +79,7 @@ export interface ScheduledItem {
 	claimedAt?: number;
 	/** Host-derived fixed-chat intent. Never grants access or downgrades to a generic send. */
 	insightsDestination?: { sessionId: string; projectId: string; missionId: string };
-	/** Host-only setup provenance. Not history authority or review-completion evidence. */
+	/** Exact native enable/apply creator. Not history authority or review-completion evidence. */
 	insightsEnableOperationId?: string;
 	/** Native-confirmed desired settings revision. Absent means the original fixed contract. */
 	insightsSettingsRevision?: number;

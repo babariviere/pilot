@@ -175,6 +175,17 @@ export class InsightsSettings {
 		this.binding(admission);
 		return result;
 	}
+	/** Configuration may not race a preparing, placed or uncertain review. */
+	assertIdle(admission: InsightsAdmission): void {
+		this.binding(admission);
+		if (
+			this.db.one(
+				"SELECT 1 FROM insights_runs WHERE session_id=? AND state IN ('preparing','ready','sent','unknown','interrupted')",
+				admission.binding.reportSessionId,
+			)
+		)
+			throw new Conflict("Review is active or uncertain");
+	}
 	/** Lookup only. A database commit followed by a lost journal ACK never repeats the save. */
 	async receipt(
 		admission: InsightsAdmission,

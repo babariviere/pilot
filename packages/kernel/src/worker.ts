@@ -383,8 +383,22 @@ export function runKernelWorker(): void {
 				await session.editQueuedMessage(command.submissionId, command.content, command.mode, command.guardToken);
 				await send({ type: "accepted", requestId: command.requestId });
 				break;
-			case "changeModel": {
-				const result = await session.changeModel(command.model, command.thinking);
+			case "changeModel":
+			case "changeModelConfiguration": {
+				const result = await session.changeModel(
+					command.model,
+					command.thinking,
+					command.type === "changeModelConfiguration"
+						? {
+								revalidate: () =>
+									callDaemon<void>((callId) => ({
+										type: "model.configuration.guard",
+										callId,
+										requestId: command.requestId,
+									})),
+							}
+						: undefined,
+				);
 				await send({
 					type: "modelChanged",
 					requestId: command.requestId,
@@ -443,6 +457,7 @@ export function runKernelWorker(): void {
 			return;
 		}
 		if (
+			command.type === "model.configuration.result" ||
 			command.type === "mission.result" ||
 			command.type === "memory.result" ||
 			command.type === "knowledge.result" ||
@@ -514,7 +529,9 @@ export function runKernelWorker(): void {
 			else pendingSlackLinked = command.linked;
 			return;
 		}
-		if (command.type === "start") {
+		if (command.type === "start" || command.type === "startConfiguration") {
+			if (command.type === "startConfiguration")
+				command.spec = { ...command.spec, configurationOnly: true, stopOnOpen: true };
 			if (initialization) return;
 			initialization = (async () => {
 				// Do not inherit another worker's accounting epoch in tests or delegated launches.
@@ -592,6 +609,7 @@ export function runKernelWorker(): void {
 				session = opened;
 				await send({
 					type: "ready",
+					modelConfiguration: 1,
 					toolsRunning: session.toolsRunning,
 					model: session.model,
 					thinking: session.thinkingLevel,

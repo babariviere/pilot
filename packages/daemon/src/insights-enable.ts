@@ -34,7 +34,7 @@ const uuid = (value: string) => {
 const MESSAGE = "Prepare the next bounded weekly Insights report.";
 const OPEN = new Set(["pending", "dispatching"]);
 
-interface Dependencies {
+export interface InsightsEnableDependencies {
 	home: string;
 	host: OperationHost;
 	projects: Pick<ProjectStore, "require">;
@@ -48,9 +48,11 @@ interface Dependencies {
 		| "insightsEnableCreated"
 		| "insightsEnableCommitted"
 		| "insightsHostAdmission"
+		| "insightsApplyChat"
+		| "configureInsightsModel"
 		| "spawnInsightsDurable"
 	>;
-	schedules: Pick<ScheduleService, "list" | "createInsights" | "insightsEnableAvailable">;
+	schedules: Pick<ScheduleService, "list" | "createInsights" | "insightsEnableAvailable" | "cancelInsights">;
 	journal: OperationJournal;
 	now?: () => number;
 }
@@ -58,12 +60,12 @@ interface Dependencies {
 /** Uses the existing operation journal for step markers, never a second permission/configuration store. */
 export class InsightsEnable {
 	private readonly running = new Map<string, string>();
-	private readonly deps: Dependencies;
-	constructor(deps: Dependencies) {
+	private readonly deps: InsightsEnableDependencies;
+	constructor(deps: InsightsEnableDependencies) {
 		this.deps = deps;
 	}
 
-	private context(projectId: string, missionId: string): string {
+	context(projectId: string, missionId: string): string {
 		const project = this.deps.projects.require(projectId);
 		const mission = this.deps.missions.require(missionId);
 		if (mission.projectId !== projectId || mission.status !== "active")
@@ -130,6 +132,8 @@ export class InsightsEnable {
 	async saveSettings(op: DurableOperation, payload: InsightsSettingsPayload) {
 		let entered = (await this.deps.journal.lookup(op))?.result !== undefined;
 		try {
+			if ((await this.deps.journal.targetReceipts("insights-apply", op.targetId)).some((r) => r.state === "pending"))
+				throw new Conflict("Insights Apply is pending; use its receipt");
 			if (
 				!equal(
 					Object.keys(payload).sort(),
@@ -234,6 +238,8 @@ export class InsightsEnable {
 			if (reportSessionId === undefined && !candidates.length && references.size === 1)
 				result.targetId = targetId = [...references][0]!;
 			const receipts = await this.deps.journal.targetReceipts("insights-enable", targetId);
+			if ((await this.deps.journal.targetReceipts("insights-apply", targetId)).some((r) => r.state === "pending"))
+				return block("apply_pending_use_status");
 			if (receipts.some((r) => r.operationId !== ownOperationId && r.state === "pending"))
 				return block("enable_pending_use_status");
 			if ([...references].some((id) => !candidates.some((candidate) => candidate.sessionId === id)))

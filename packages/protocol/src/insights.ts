@@ -89,6 +89,37 @@ export interface InsightsSettingsRecord {
 	model: string;
 }
 
+/** Separate explicit Apply confirmation. Save never submits this operation. */
+export interface InsightsApplyPayload {
+	projectId: string;
+	missionId: string;
+	expectedHome: import("./operations.ts").OperationHost;
+	context: string;
+	chat: InsightsEnableChat;
+	record: InsightsSettingsRecord;
+	/** Complete exact preview, including CAS and integration ownership, or no rule. */
+	rule: import("./schedules.ts").ScheduledItem | null;
+}
+
+/** Passive GET /api/insights/sessions/:id/apply. No model/history/worker effects. */
+export interface InsightsApplyPreflight {
+	state: "ready" | "blocked";
+	reason: string | null;
+	payload: InsightsApplyPayload | null;
+	nextAt: number | null;
+	cost: { pricing: "unknown"; spendUsd: null };
+}
+
+/** Entered markers are not receipts. Only ready/cancelled/applied carry exact acknowledged effects. */
+export interface InsightsApplyProgress {
+	phase: "model_pending" | "model_ready" | "cancel_pending" | "rule_cancelled" | "schedule_pending" | "applied";
+	chat: InsightsEnableChat;
+	scheduleId: string;
+	settingsRevision: number;
+	/** Exact live cancellation ACK, retained as a refusal fence before replacement. */
+	cancelledRule?: import("./schedules.ts").ScheduledItem;
+}
+
 /** Exact admitted identity, not a title, membership hint or permission to change settings. */
 export interface InsightsEnableChat {
 	sessionId: string;

@@ -26,6 +26,7 @@ export interface DaemonCapabilities {
 	/** One native-confirmed durable report-chat and weekly-rule setup. */
 	insightsEnable?: 1;
 	insightsSettings?: 1;
+	insightsApply?: 1;
 	/** Bounded active-session cwd path candidates; no home/project-root fallback. */
 	sessionPathCandidates?: 1;
 	/** Failure-fenced passive next-attempt model preferences. */

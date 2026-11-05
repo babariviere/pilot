@@ -1469,6 +1469,95 @@ test("model selection updates native and durable choices, context usage and thin
 	);
 });
 
+test("configuration-only cold open holds recovered input without provider execution or mutation", async (t) => {
+	const f = await fixture(t);
+	const original = await f.open();
+	await original.pauseForUpdate();
+	await original.submit("uncertain", "Do not execute this recovered input", "followUp");
+	await original.close();
+	Object.assign(f.spec, { configurationOnly: true });
+	const configured = await f.open();
+	assert.equal((await configured.harness.inspect(context)).scheduling, "paused");
+	await assert.rejects(configured.changeModel(second, "low", { revalidate: async () => {} }), ConversationBusy);
+	assert.equal(configured.model, first);
+	assert.equal(configured.attempts, undefined);
+	assert.equal(f.a.state.callCount + f.b.state.callCount, 0);
+});
+
+test("configuration-only idle cold open can configure without resuming scheduling", async (t) => {
+	const f = await fixture(t);
+	const original = await f.open();
+	await original.close();
+	Object.assign(f.spec, { configurationOnly: true });
+	const configured = await f.open();
+	await configured.changeModel(third, "low", { revalidate: async () => {} });
+	assert.equal(configured.model, third);
+	assert.equal((await configured.harness.inspect(context)).scheduling, "paused");
+	assert.equal(f.a.state.callCount + f.b.state.callCount, 0);
+});
+
+test("configuration-only switches are provider-free, guarded and never fork", async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	let guards = 0;
+	const configuration = {
+		revalidate: async () => {
+			guards++;
+		},
+	};
+	await session.changeModel(second, "low", configuration);
+	await session.changeModel(third, "low", configuration);
+	assert.equal(session.model, third);
+	assert.equal(session.attempts, undefined);
+	assert.ok(guards >= 6);
+	assert.equal(f.a.state.callCount + f.b.state.callCount, 0);
+	await session.close();
+	const restored = await f.open();
+	assert.equal(restored.model, third);
+});
+
+for (const large of [false, true])
+	test(`configuration-only refuses compacted cross-provider migration before selection (large=${large})`, async (t) => {
+		const f = await fixture(t);
+		const session = await f.open();
+		await providerCompaction(session, large);
+		const before = JSON.stringify(await session.conversation.agent(context));
+		const native = f.adapters[0]!.session.model;
+		await assert.rejects(
+			session.changeModel("pilot-model-b/small", undefined, { revalidate: async () => {} }),
+			/requires context migration/,
+		);
+		assert.equal(session.model, first);
+		assert.equal(f.adapters[0]!.session.model, native);
+		assert.equal(JSON.stringify(await session.conversation.agent(context)), before);
+		assert.equal(session.attempts, undefined);
+		assert.equal(f.a.state.callCount + f.b.state.callCount, 0);
+		await session.changeModel(second, undefined, { revalidate: async () => {} });
+		assert.equal(session.model, second, "same-provider selection remains safe on compacted history");
+	});
+
+for (const refuseAt of [1, 2, 3])
+	test(`configuration-only rechecks host admission at boundary ${refuseAt}`, async (t) => {
+		const f = await fixture(t);
+		const session = await f.open();
+		let checks = 0;
+		await assert.rejects(
+			session.changeModel(third, undefined, {
+				revalidate: async () => {
+					if (++checks === refuseAt) throw new Error("Host revision/grant/Stop changed");
+				},
+			}),
+			/Host revision/,
+		);
+		assert.equal(session.model, first);
+		assert.deepEqual((await session.conversation.agent(context)).model, {
+			provider: "pilot-model-a",
+			modelId: "one",
+		});
+		assert.equal(session.attempts, undefined);
+		assert.equal(f.a.state.callCount + f.b.state.callCount, 0);
+	});
+
 async function providerCompaction(session: KernelSession, large = false) {
 	await session.conversation.commit(async (tx) => {
 		for (let i = 0; i < 70; i++)

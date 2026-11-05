@@ -60,17 +60,80 @@ advances the desired revision. Original rules/commands retain omitted revision f
 bytes. They do not adopt a new revision: a due stale occurrence is claimed and refused, never replayed.
 Old accepted enable receipts stay accepted; their current status can become blocked.
 
-An explicit new enable preflight can use saved settings only when the existing chat's exact model
+The legacy enable preflight can use saved settings only when the existing chat's exact model
 matches the saved resolved ID and the requested model still resolves to that ID. A model change needs
-the separate existing explicit chat-model confirmation. No automatic switch occurs here.
+the separate explicit Apply confirmation below (or an existing explicit chat-model action).
+No automatic switch occurs during Save or enable.
 An open old rule with a different revision returns `settings_activation_required`; it is not silently
-edited or unpaused. This backend exposes no compound reconfiguration action. A caller must separately
-confirm cancellation of that exact pending rule with its existing CAS, then confirm fresh enable.
-The new rule has a distinct settings-qualified identity, pinned `insightsSettingsRevision`, and a
-future start boundary, not replayed past occurrences. Never automate this cancellation as a save effect.
-Native reconfiguration UX remains separate work.
+edited or unpaused. Use the separate explicit Apply contract below, not Save or an automatic repair.
+Native reconfiguration UI remains separate work.
 The current fixed-only native parser intentionally refuses extended settings payloads. A future
 editor must consume this capability/contract and display every selected value before enabling.
+
+## Explicit Apply contract (native handoff)
+
+Require `hello.capabilities.insightsApply:1`, `insightsSettings:1` and the same pinned daemon/lineage.
+This backend/protocol addition does not ship a settings editor or activate any real resources.
+
+1. After a separately acknowledged Save, read `GET /api/insights/sessions/:id/apply` (no-store).
+   `InsightsApplyPreflight` returns ready + payload, nextAt and unknown pricing/spend, or blocked
+   with a reason and null payload. This reads configuration/catalog metadata only; no history,
+   worker startup, grant changes or provider input. Unsaved revision zero cannot be applied.
+   A preview exceeding the existing 64 KiB operation payload limit refuses before confirmation.
+2. Show one compact **Apply** confirmation, separate from **Save**. Display `record.revision`,
+   exact resolved `record.model`, reported thinking (omitted means Default), recurrence/time zone,
+   all source/archive selections and exclusions, partial bounds and advisory budget/period.
+   Disclose selected-provider processing and unknown spend. Show the exact `rule` being retained
+   or cancelled/replaced (ID, revision, title, cadence, target). No manual rule is adopted/cancelled.
+3. Freeze `InsightsApplyPayload` verbatim in a durable operation, kind `insights-apply`, targetId
+   the exact report session. Use the existing private writer, immutable UTF-8 bytes/hash,
+   operation ID/producer/sequence and pinned origin/destination. `expectedHome` stays verbatim;
+   native envelope host labels may be local. Send once through native-gated `/api/operations`.
+4. Accepted result is `InsightsApplyProgress` with phase `applied`, exact acknowledged chat,
+   scheduleId and settingsRevision. This is configuration acknowledgement, never review success.
+   Check is passive `/api/operations/receipt` with the complete retained envelope. Pending/Unknown
+   never constructs a fresh attempt or resends entered effects. Only an unknown receipt may
+   re-admit the same native-confirmed envelope, whose journal closes concurrent-entry races.
+   Pending Apply fences fresh Apply, Save and enable. Do not infer receipt success from GET values.
+
+Apply preserves the report ID, grant, backlog and history. Unchanged settings-qualified rules are
+retained without a write. A changed revision uses an exact integration-owned pending/unpaused rule
+CAS and a distinct deterministic replacement ID. The old row/history remains cancelled; new
+occurrences start strictly in the future. Manual, multiple, dispatching, paused, terminal same-revision
+or untrusted rules refuse without cancellation. Unrelated one-shot/other-chat rules stay untouched.
+There is no global Automations opt-in, review dispatch, source mutation, regrant, substitution,
+automatic rollback or recreation. An unavailable model refuses without fallback.
+
+The existing model command has a distinct opt-in configuration-only discriminant. Old workers
+cannot ignore an optional guard and fall back to ordinary switching. The kernel rechecks host
+admission at its idle/configuration transaction boundary, and requires the worker's advertised
+`modelConfiguration:1` support before sending a command. It refuses **all** compacted cross-provider
+switches before selection, even if raw replay might fit: Apply cannot rebuild context, spend provider
+tokens or fork attempts. Normal callers retain their legacy rebuild semantics. An explicit existing
+thinking level must be supported and is preserved; omitted legacy/default thinking may become
+reported when an idle worker opens. No paid migration is skipped or silently deferred by Apply.
+Refusal requires a separate user decision outside Apply, not automatic repair.
+A cold configuration worker uses a distinct startup discriminant and the existing Stop model/tool
+barriers. It never resumes a recovered inbox, refuses non-idle durable work and closes before
+releasing the per-chat configuration gate. Old workers cannot interpret that startup as ordinary
+resume. A later explicit chat action, not Apply, may open an ordinary worker.
+
+Each effect has a durable entered marker: `model_pending`, `cancel_pending`, `schedule_pending`.
+After lost ACK/crash these phases are status-only forever, even when current values match; there
+is no downstream exact model/cancel receipt to settle them safely. No new ID bypasses that fence.
+`model_ready` and `rule_cancelled` are written only after the live exact effect ACK (or a no-op);
+recovery may perform only the next unentered effect after revalidation. `applied` persists the final
+ACK before journal acceptance. At every step, current home/context/grant/Stop/idle, desired revision,
+model availability, review state, pending delivery and exact rule identity are rechecked. Authority or
+CAS drift after entry leaves partial configuration pending, never a false no-effect rejection.
+Unknown or interrupted reviews block Apply conservatively; inspection does not clear them.
+The exact acknowledged cancelled row is retained in `cancelledRule` and rechecked before replacement.
+Its disappearance/change is a refusal, not permission to recreate or infer this attempt's success.
+
+Synthetic coverage: `insights-enable.test.ts` (Apply, fixed compatibility, CAS, drift, checkpoint
+crashes, lost effect ACKs), `session-model.test.ts` (host guards/unsupported workers) and
+`model.integration.test.ts` (zero-provider/no-fork safe switches, compacted refusal, late guard
+refusal, unchanged legacy rebuilds). These do not qualify real activation or native UI acceptance.
 
 ## Host enforcement and storage
 

@@ -16,6 +16,7 @@ import type {
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { INSIGHTS_INITIAL_DEFAULTS } from "./insights-defaults.ts";
 import type { MissionStore } from "./missions.ts";
+import { canonicalJSON } from "./operation-journal.ts";
 import type { ProjectStore } from "./projects.ts";
 import { RuntimeBackground } from "./runtime-background.ts";
 import { RecurrenceCalendar, validateRecurrence } from "./schedule-recurrence.ts";
@@ -590,6 +591,21 @@ export class ScheduleService {
 	insightsEnableAvailable(expectedHome: ScheduleHome): void {
 		this.assertOpen();
 		this.checkHome(expectedHome, true);
+	}
+	/** Exact previewed integration-owned rule only; never dismiss a terminal/manual row. */
+	cancelInsights(expected: ScheduledItem, expectedHome: ScheduleHome, revalidate: () => void): Promise<ScheduledItem> {
+		return this.runtime.run("remove", async () => {
+			this.insightsEnableAvailable(expectedHome);
+			const old = this.store.require(expected.id);
+			if (
+				!old.insightsEnableOperationId ||
+				old.state !== "pending" ||
+				canonicalJSON(old) !== canonicalJSON(expected)
+			)
+				throw new Conflict("Previewed Insights rule changed");
+			revalidate();
+			return this.store.replace(old, { ...old, state: "cancelled", updatedAt: this.time.now() });
+		});
 	}
 	update(id: string, patch: SchedulePatch): Promise<ScheduledItem> {
 		return this.runtime.run("update", () => this.updateAdmitted(id, patch));
