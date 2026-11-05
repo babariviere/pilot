@@ -1,11 +1,19 @@
 # Coordinator-first desktop workflow
 
-**Current scope correction (D48):** Review is project-owned and chat-first, open directly from a
-chat, including a standalone chat. Project Review aggregates chats/changes; mission is optional
-context/filter. Historical wireframes below do not choose scope, request policy or submission defaults.
-The remaining material choices are the [three-question menu](mission-authority-review-policy.md#remaining-decision-menu-46-and-47),
-with the [request/disposition recommendation](mission-native-review.md#request-and-disposition-decision-47).
-All unselected recommendations remain proposed; no execution/spending/authority expansion follows.
+**Selected scope (D54–D57):** one global change/revision-centered Review across accessible
+projects. Chat/coordinator/Inbox shortcuts open the same exact target; there is no mission Review
+destination. Replace Changes while preserving Files/artifacts. All pending changes stay visible,
+but human approval is actionable only after required checks and agent reviews pass. Browse/comment
+earlier; no inherited approval. D54 selects practical exact native confirmation and bounded
+coordinator delegation; D55 selects $20/mission and $4 cumulative/task reviewer consent within
+shared ceilings. These select implementation, not current spend, live approvals/attention/gates.
+
+Use the [selected policy](mission-authority-review-policy.md#selected-policy-46-and-47) and
+[global request/disposition contract](mission-native-review.md#request-and-disposition-decision-47).
+The companion artifact and wireframes below remain linked historical proposals, superseded where
+they show mission/project/chat-owned Review or unselected request defaults. Handoff 23368 is history,
+not source review of this candidate. No new UI artifact/code, provider spend, adoption/backfill,
+migration, cleanup, release or restart follows. #44/#45 polish remains deferred.
 
 ## Screen and flow inventory
 
@@ -19,15 +27,16 @@ Companion artifact: **Coordinator-first desktop: flow and wireframe vignettes**,
 | --- | --- | --- |
 | Interview and approval | Coordinator conversation; mission brief workspace | Establish the outcome, inspect findings, then explicitly approve an exact brief/authority package. New approval sheet, not a new destination. |
 | Oversight and tasks | Mission Overview / Tasks; conversation mission inspector | Show what needs a decision, what continues and why. Disclose effective authority and exact task evidence without managing worker conversations. |
-| Inbox to Review | Inbox; chat Review; project Review aggregate | Open the same exact chat/change Review, with a return path to the filtered Inbox. Request-backed attention and deep links are future work. |
+| Inbox to Review | Inbox; global Review | Open the same exact change/revision with Back to the filtered Inbox. #70 owns waiting state; #79 links without duplicating it. |
 | Help and recovery | Coordinator conversation; mission Overview | Explain the blocker and smallest human action. New request detail within the existing page, not a worker-chat queue. |
 | Worker history | Mission Members disclosure; archived-chat filter | Find retained deliveries, revisions and conversations after workers retire. Proposed history detail extends existing browsing. |
 | Guidance and provenance | Review Details; mission Overview menu | Optionally inspect what guidance was supplied and correct its scope or interpretation. New on-demand inspector, not a learning dashboard. |
 
 The user manages outcomes and exceptions through the coordinator. Worker chat links remain available
 as evidence, never required steps for approval, feedback, task routing or routine completion.
-All new placements/actions below are proposals. Bracketed actions in wireframes are design notation,
-not enabled controls or API contracts. Opus refinement remains deferred.
+D54–D57 select the contracts above, not the old mock's placement/defaults. Remaining containers and
+bracketed wireframe actions are design notation, not enabled controls or API contracts. Opus polish
+remains deferred; this update changes policy documentation, not presentation geometry.
 
 ## Implemented versus proposed
 
@@ -38,7 +47,7 @@ neither adds retained before/after analysis or activates acceptance gates.
 | Capability | Status at this baseline |
 | --- | --- |
 | Missions browser, Overview, Tasks, brief workspace, members, conversation context | Existing desktop surfaces. Brief saving is editing, not approval. Native standalone creation creates a mission without an agent, not an interview. |
-| Mission Review tab | **Implemented, read-only**, using retained comparisons and Kit Diff. Current worker selection, comparison paging, Unified/Split, file selection, Before/After retained source, Details and optional reported evidence exist. |
+| Historical mission Review tab | **Implemented at this historical baseline, read-only**. D56 requires its removal in favor of global Review (#88), retaining the exact Kit Diff/read foundation. |
 | Eligible-worker capture | **Implemented host checkpoint**, only newly created managed `planningVersion: 1` builder bindings. Saves eligible committed layers separately from reading Review. No live working-copy capture, automatic stacks or complete contribution inventory. |
 | Legacy mission capture | **Unavailable**. Reading, reopening or observing existing work does not enroll or backfill it. Missing comparisons never mean no changes. Existing retained records require valid current custody to read. |
 | Revision-bound submissions, allocation and agent review records | Internal foundations, not an active acceptance/review pipeline. Readable reported records do not attest checks, independence, freshness or acceptance. |
@@ -56,18 +65,19 @@ alternate production capture path for legacy missions.
 
 ## Information architecture and navigation
 
-Keep the existing hierarchy: **Home watches; Inbox acts; Missions browse; Overview orients**.
-Do not add a top-level Review badge, worker management screen or mandatory topic hierarchy.
+Keep **Home watches; Inbox acts; Missions browse; Overview orients**. D56 adds global Review by
+replacing Changes, not a new worker-management hierarchy or mission Review destination. Global
+Review shows pending work even before approval is actionable; Inbox links only to the same records.
 
 | Surface | Keep visible | Reveal on demand / navigation |
 | --- | --- | --- |
 | Home | Mission outcome and working/attention reason | Open mission or coordinator. No new review counter or learning feed. |
 | Inbox | One actionable request and short reason | Exact review, approval package or help detail; retain project/kind/mission filters and return position. Proposed request kinds share one attention source. |
-| Mission Overview | Outcome, next required action, Working now | Open coordinator, brief, Tasks, Review; Findings, Members/history, Decisions, Activity and Authority through existing disclosures/menu patterns. No permanent metadata wall. |
+| Mission Overview | Outcome, next required action, Working now | Open coordinator, brief, Tasks; Findings, Members/history, Decisions, Activity and Authority through existing disclosures/menu patterns. No permanent metadata wall. |
 | Coordinator conversation | Interview, explanations, decision questions | Approval package, cited explorer report/artifact, mission context inspector. The conversation is the planning contact, not the authoritative receipt for every action. |
 | Tasks | Intent, status and blocker when relevant | Selected task details: scope/criteria, owner, actual dependencies, optional phase/topic, authority reason, contributions and criterion-linked evidence. No new task endpoint is assumed. |
-| Review | Worker/subject, exact comparison, relevant warnings and diff | Details: full identity, historical task purpose, reported evidence, analysis limits. Future requests add intent, required action and authored walkthrough before the diff. |
-| Changes companion | Live workspace inspection for the open chat | Future explicit link to retained Review when an exact subject exists. Keep live source separate; no implicit conversion into review or approval. |
+| Global Review | Pending changes across accessible projects; selected change/revision, genuine warnings and continuous file diffs | Optional visible filters narrow the same view. Details retains custody/provenance and evidence; #60/#65 submit only the exact selected set. |
+| Changes replacement; Files/artifacts retained | Remove the Changes sidebar; global Review replaces it. Keep unrelated Files/artifact inspection | View file stays exact snapshot-only. Separate Open current file may leave retained source for the guarded existing live-chat FilePane, with Back to the exact global target. Live content is not review evidence. |
 | Members / history | Active work first, finished/archived disclosed | Retained deliveries, every known owned change, historical revisions and Open conversation. No Restore workspace shortcut after deletion. |
 
 Existing sidebar mission threads still open the coordinator, with an Open mission action; collapsed
@@ -78,7 +88,8 @@ Standalone chat attention and its current behavior remain unchanged until separa
 
 Only four additions need new interaction containers: exact-package approval, request detail,
 retained worker-history detail, and scoped guidance inspection. Reuse existing dialogs, page detail
-and companion patterns; none requires a new global destination. Detailed annotations belong to
+and companion patterns. Global Review is the D56 destination, not additional mission/project Review.
+Detailed annotations belong to
 [the native Review design](mission-native-review.md), not this document.
 
 ## Normal path
@@ -91,23 +102,30 @@ and companion patterns; none requires a new global destination. Detailed annotat
    and consequences in the interview and an optional Overview Findings disclosure. No explorer
    inbox, launch approval per explorer or invented research budget. Coordinator owns synthesis.
 3. **Approve the package.** Open the brief workspace, inspect outcome, non-goals, criteria, material
-   unknowns and the effective authority package, then use a proposed explicit approval sheet.
+   unknowns and the effective authority package, then use D54's exact native confirmation.
    Show the exact immutable brief, decisions/references and policy versions. Balanced describes
    T1 targeted independent review, T2 full independent review, T3 specialist plus human review;
    checks mandatory and force OFF. Authority details name permitted actions and delivery mode,
    exclusions and escalation thresholds. Approval is not Save, assent inferred from chat, worker
-   admission, task acceptance or merge. Missing trusted approval/enforcement keeps this unavailable.
+   admission, task acceptance or merge. Hostile same-user processes and UI automation are unsupported
+   threats under this practical native assurance. It does not claim verified human presence or OS
+   isolation. Missing action implementation/
+   enforcement keeps it unavailable. D55 reviewer consent is separate: pin scope/provider/model/account/
+   terms, $20 mission/$4 cumulative task total, expiry/revocation, no silent refill/switch/fallback.
 4. **Delegate without babysitting.** Coordinator decomposes/assigns within the approved envelope.
    Overview shows the next meaningful outcome and working tasks, not chat activity as a scoreboard.
    Task details expose effort, difficulty and risk separately; model advice grants no authority.
    Use existing phases and explicit dependencies, with optional text topics and decision pins per
    [grouping/context](mission-grouping-context.md). No labels-as-permissions or new hierarchy.
-5. **Review only when needed.** Agent-only policy work continues quietly after its required gates;
-   future human-required requests enter Inbox. Opening the item selects the exact worker-owned
-   change/comparison in Review. Multiple changes remain individually selectable within one request.
-   Opening, source inspection or Viewed does not approve anything. D48's direct chat/project entry
-   is the selected scope; #88 corrects the historical mission-only browse path separately, without
-   Inbox requests, human verdicts or acceptance actions.
+5. **Review in one place.** Global Review shows all authoritative pending changes, including those
+   waiting for checks/agent review. Human approval becomes actionable only after required checks/
+   agent reviews pass. Early browse/comment is allowed; Comment leaves required approval pending,
+   Request changes blocks. Explicit dispositions cover selected changes/revisions only, never the
+   chat, unseen changes or future revisions. User-only snooze/withdraw never waives a gate; humans
+   resolve their own threads. Coordinator retirement is limited to its own optional suggestions or
+   requests made obsolete by authoritative cancellation, never user-required approval.
+   #88 replaces Changes/removes mission Review while preserving Files/artifacts; #60/#65 submit
+   there, #70 owns waiting/request state, #79 links from Inbox without duplicate review state.
 6. **Assess delivery separately.** Coordinator checks each criterion against exact evidence,
    limitations and required reviews/checks; later allocation identifies selected assessment scope,
    never historical task purpose. Acceptance, eligibility, integration and worker-finished approval
@@ -126,6 +144,9 @@ and companion patterns; none requires a new global destination. Detailed annotat
 
 ## Structural wireframes
 
+**Historical wireframes, not selected D56/D57 placement or submission defaults.** In particular,
+mission Review tabs, worker-first navigation and whole-chat review ownership below are superseded
+by the global contract above. Keep the companion artifact as history; no new mock is produced.
 Illustrative content below is not a live mission, retained capture or approval. These fragments
 use the existing native hierarchy, not new colors, typography or component geometry.
 
@@ -281,8 +302,9 @@ deterministic shortest source-edge witness to a nearest root, not every affected
 calls stay unassigned and counts stay non-exhaustive. Observed-revision receipts and `expectedRevision`
 can reject a changed observation; they are not a freshness lease, atomic snapshot or retained bytes.
 Caller relationships remain source-inferred, not executed paths. Retained Review analysis cannot
-silently reuse a live-workspace graph: structural comparison and retained before/after analysis are
-still absent. The landed [public exploration-pattern study](empryo-code-exploration-evaluation.md)
+silently reuse a live-workspace graph. The current session-only retained `call-changes` read supplies
+bounded TS/JS before/after comparison, not an implemented native Changed paths view (#55).
+The landed [public exploration-pattern study](empryo-code-exploration-evaluation.md)
 distinguishes callable witnesses from file-import inference and historical co-change; those weaker
 relationships must not be relabeled as call paths or acceptance evidence. Its recommendations are
 source-inspected proposals, not new capabilities or comparative/runtime qualification. No explorer
@@ -298,7 +320,7 @@ performance or runtime validation is claimed. Adapt the ideas natively:
 | Explain before diff | Concise **Authored explanation**, with author/revision and uncertainty. It is a narrative, not a generated fact, call graph or gate result. Raw diff remains directly accessible. |
 | Source-linked walkthrough | Steps target exact snapshot, before/after side, logical path, hash and range. Invalid/omitted anchors show Unavailable, never latest/live source. |
 | Important-first folding | Findings and relevant changed roots/files first; unchanged context faint; other files/branches explicitly expandable. Folding never changes review coverage or hides blocking findings/omissions. Provide an all-files path. |
-| Synchronized navigation | Selecting a step/frame focuses its pinned source/diff range; explicit source/diff switch retains comparison, position and Back. Multiple targets require a visible choice. No silent revision switch or workspace Open file. |
+| Synchronized navigation | Selecting a step/frame focuses its pinned source/diff range; source/diff switch retains comparison, position and Back. Multiple targets require a visible choice. No silent revision switch or live substitution. Separate Open current file leaves Review for the existing FilePane under current guards, not a review source. |
 
 Distinguish three evidence types in words: **Authored explanation**, **Static source relationships**
 (body versus edge changes, inferred/unresolved edges and coverage), **Observed runtime evidence**
@@ -325,37 +347,46 @@ Retained identity is historical content identity, **not live freshness, runtime 
 attribution, independence, passing checks, acceptance, integration or permission**. Refresh keeps the
 selected comparison; a newer capture offers an explicit switch with old drafts/history retained.
 
-## One attention flow, project/chat scope decided
+## One attention flow, global change Review
 
-Proposed request-backed attention: worker → coordinator triage → user only for required human review,
-out-of-authority decision or genuine help. Coordinator answers ordinary factual questions itself.
-Unavailable/failed coordinator leaves an actionable durable routing/recovery exception, not silent
-approval or a demand to inspect every worker chat. Existing fallback remains until that path works.
+D56 selects one global Review; D57 selects agent-first approval actionability with all pending
+items visible. #70 is the authoritative waiting/request source. #88 renders the global read
+surface, #60/#65 add submission there and #79 links Inbox to those same records without a second
+review-state store. Captured is not waiting, reviewed or landed. Missing/partial/failed waiting
+source is Unavailable/incomplete, not an empty queue or an inferred list of every capture.
 
-Inbox and Overview show the **same request**, not independent acknowledgements. One row per logical
-request lineage, not per change/capture/message; distinct review and scope/help requests stay distinct.
-The row names chat/change, intent and next action; mission is optional context. New revisions update the
-existing lineage without stealing selection. Opening/reading/dismissing does not resolve required
-action. Authoritative submission, answer consumption, withdrawal or completion resolves the relevant
-request under its contract, not an arbitrary read flag. No new attention source is activated here.
+Worker questions still route through coordinator triage before asking the user for out-of-authority
+decisions or help. Review visibility is not automatic attention: waiting on checks/agent review
+does not require a new Inbox chore. No automatic attention source or timing/SLA activates here.
 
-Human-required review becomes actionable only with its required retained inputs and ordered
-prerequisites; waiting for capture/check/agent review stays quiet in Overview/Review unless user
-intervention is actually required. Human-review ordering versus parallel review remains undecided.
-Automatic retirement success and routine learning create no Inbox chores. Cleanup exceptions go to
-the coordinator first, then the user only when their action/authority is needed. Preserve urgent
-failure and Stop/recovery paths independently of batching; no new timing/SLA is selected.
+Global entry includes accessible projects. Visible optional project/chat/mission, waiting/actionable
+and history filters narrow the same view, never create another destination or grant access. Direct
+chat entry can visibly narrow it, but an exact shortcut opens the same change/revision, not chat-
+owned Review. Exact links remain pinned even when history is filtered out; newer captures offer
+an explicit switch. Back restores originating Inbox/global list/chat filters, selected row and
+scroll; source Back returns to the same diff first. Unauthorized/missing targets never broaden or
+retarget to another project/revision.
 
-D48 removes the placement choice: direct chat Review and project aggregation, including standalone
-chats. A coordinator suggestion links to that same exact change; it cannot require a mission detour.
-Preserve visible filters and originating scope on Back; missing/unauthorized targets never broaden
-silently. The historical artifact is not a selected request policy.
+Retained-source **Open current file**, when offered separately from snapshot-only **View file**,
+uses current home/project/chat/path guards to open the existing live-chat FilePane outside Review.
+Back restores the exact global target/comparison and position. This does not restore the removed
+Changes sidebar or chat-owned Review, use live content as review evidence/fallback, or add browser/
+editor scope. A missing or denied current file leaves the retained target unchanged.
 
-The [question 3 recommendation](mission-native-review.md#request-and-disposition-decision-47) is
-agent-first attention, an explicit exact-comparison-set disposition, user-only snooze, and narrowly
-scoped withdrawal that never waives a human gate. Parallel review and per-change approval are the
-material alternatives. This recommendation remains unselected; #60/#65 implement chosen submission
-semantics, #70 request persistence and #79 Inbox routing only after their separate authorization.
+Normal example: standalone **Improve search** contributes A1 and B1 in **Search**; **Billing** has C1.
+Global Review shows all pending targets across both projects. A1 may wait on agent review while B1
+is actionable, without hiding A1. The user can comment on A1 early, approve B1 only when prerequisites
+pass, or explicitly select A1+B1 once both qualify. None covers C1 or later B2. The same B1 opened
+from its chat, Inbox or a coordinator suggestion has one exact target/history. No mission, PR or
+coordinator is invented for standalone work, and missing captures/source never means no changes.
+
+A mission coordinator linking B1 sends an optional suggestion, not user-required approval or a
+mission Review detour. It may retire its own optional suggestion or a request made obsolete by
+authoritative cancellation, never user-required approval. User-only snooze/withdraw does not satisfy
+a gate; humans resolve their own threads. Required approval remains pending after Comment and
+blocked after Request changes. New revisions preserve history but inherit no approval. These are
+[the selected semantics](mission-native-review.md#request-and-disposition-decision-47), not parallel
+timing or whole-request/chat coverage inferred from the old artifact.
 
 ## Meaningful exceptions and recovery
 
@@ -384,7 +415,8 @@ semantics, #70 request persistence and #79 Inbox routing only after their separa
 - Keep existing native Tab/Shift-Tab, list Up/Down, Enter/Space activation, Escape dismissal and
   Command-[ / Command-] history. Tasks select canonical task IDs; links never resolve by title.
 - Existing Review Selects are keyboard/query accessible. Kit Diff owns selection/copy; Option-Up/Down
-  moves between changes. Escape goes source → diff → Overview. Future Inbox deep links restore the
+  moves between changes. Historical Escape goes source → diff → Overview. D56 global navigation
+  preserves the invoking global list/chat/Inbox; source Back returns to diff first. Inbox links restore the
   originating row, filters and scroll on Back. Do not overload Escape to approve, stop or withdraw.
 - New disclosures/actions have visible labels or accessible names; all important warnings, scope,
   pending/Unknown and recovery remain visible without hover/color alone. Long names/Unicode stay
@@ -396,18 +428,19 @@ semantics, #70 request persistence and #79 Inbox routing only after their separa
   subject rail with a Select. Do not squeeze chat, authority, graph and diff into permanent columns.
   Keep stable sizing and virtual diff/list owners; source/walkthrough selection must not reset scroll.
 - Conversation/composer drafts, pending Send and Stop retain their existing owners. Mission pane owns
-  tab/task identity and readers; Review pane owns exact selection/read generations; future durable
+  task identity/readers, not Review ownership; global Review owns exact selection/read generations;
+  future durable
   domain services own approval/request/review/learning/retirement receipts. Rendering never sends or
   captures. Cancel obsolete reads; admitted writes still settle against their original immutable owner.
 - Preserve explicit Save and current limitations: brief and creation drafts are process-local, not
   magically restart-durable. Proposed durable review drafts/requests require their own implementation.
   No synthetic native check, wireframe or artifact establishes OS IME/AX, smoothness or user acceptance.
 
-## Validation and remaining decisions
+## Validation and qualification
 
-Preparation checks: source/reference audit, local Markdown link/fence/whitespace checks and native
-artifact validation across its flow/vignette controls. No application code changes or runtime tests
-are warranted by this documentation-only proposal. These are design checks, not production probes.
+Preparation checks for this update: source/reference audit and local Markdown link/anchor/fence/
+whitespace checks. The historical artifact stays unchanged; no new visual check is claimed. No app
+code changes or runtime tests are warranted by this docs-only update. These are not production probes.
 
 Future walkthrough obligations: outcome → explicit package → delegated work → exact required review
 → coordinator acceptance/integration → preserved history; keyboard-only traversal; multiple changes
@@ -416,12 +449,19 @@ at every write; blocked human takeover with unknown writers; Stop during wait/re
 failure after archive; optional scoped guidance correction without routine confirmation chores.
 Use owned synthetic fixtures before live adoption; dedicated Review owns detailed annotation tests.
 
-Review placement is decided by D48. Unselected material policy is consolidated into the three-question
-menu above, not the old mock's defaults. Historical roster/custody reads, scope-inspector details and
-safe takeover support remain separate scoped implementation work; they do not add policy questions.
-Recommendations here select no new policy, schema, endpoint, review write, gate or migration.
-Publication of this design is not activation. No UI code, Swift work, worker starts, live capture,
-automatic attention, learning job, merge, archive/delete, release or restart is authorized here.
+D54–D57 close the selected authority/consent/global Review/request policy, not production
+qualification. Concrete native-action admission, original input capture, cumulative accounting,
+restricted reviewer provenance/checks/current destination, submission, waiting state and eventual
+acceptance remain their named consumers. Historical roster/custody and takeover support remain
+separate implementation work, not new policy milestones. No selected policy waives required checks
+or turns missing evidence into Pass. Publication is not activation.
+
+Current source recheck: `cc51bb4af2ddc094618a9e8fb3514891705f76d9`,
+`server.ts:1447-1620`, `mission_browser_view.rs:1827-1830`, `local_view.rs:501` and
+`workspace_changes_view.rs`: retained GETs/historical mission Review and live Changes exist;
+global waiting state, native human submission and D57 actionability are not supplied by those
+surfaces. #98/#88 implementation advances separately; no capture/adoption or shipped global
+queue is inferred from this documentation.
 
 ## Source and contract anchors
 

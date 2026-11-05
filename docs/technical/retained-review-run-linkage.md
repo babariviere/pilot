@@ -1,7 +1,8 @@
 # Retained review run linkage
 
-**Proposal for design review, not an adopted schema or execution authority.** D27 and D36–D38
-permit this design, not a provider call, grant, migration, observer, review submission or gate.
+**Linkage design with selected D54/D55 policy, not an adopted schema or execution authority.**
+The detached D39/D40 foundations below do not install an executor. D54/D55 select native-action/
+consent implementation, not a provider call, grant, migration, observer, review submission or gate.
 The [production bridge](mission-production-review-bridge.md) and its D38 foundation remain the
 baseline. Balanced minimums, force OFF, existing billing and ceilings remain unchanged. Normal
 Bash, jobs, ask_user, credential helpers and account behavior are outside this proposal.
@@ -134,10 +135,20 @@ separate work, not authorized here.
 
 ## Budget identity is separate from immutable target identity
 
-The consolidated [reviewer/consent decision](mission-authority-review-policy.md#2-what-initial-reviewer-consent-coverage-and-non-code-delivery-scope)
-compares a per-run initial lane with delegated mission consent. Its cumulative task allowance and
-logical-task mapping remain recommendations, not selected policy or a spending grant. Existing
-ceilings remain unchanged and retained dispatch remains disabled.
+The [selected reviewer/consent policy](mission-authority-review-policy.md#2-what-initial-reviewer-consent-coverage-and-non-code-delivery-scope)
+is D55: bounded mission-level consent, **$20 total per mission and $4 cumulative per task across
+revisions/rechecks**, within all existing shared ceilings. Consent pins disclosed data scope,
+provider/model/account, terms and total allowance; it expires at mission end/revocation. Expansion
+or renewal needs fresh approval. No automatic account/model switch, paid fallback or silent refill
+on replacement/transfer. D54 supplies practical exact native confirmation, not OS isolation or
+verified human presence. Neither decision grants current transmission/spend or enables dispatch.
+
+Each immutable target/run remains exact and distinct; budget consumption must aggregate across its
+revisions/rechecks and consent renewals cannot silently reset spent/uncertain amounts. Concrete
+mission/task ledger mapping, effort assignment and replacement/transfer reconciliation are #59
+implementation/qualification gaps. Unsupported mapping blocks admission, not a request for another
+policy menu or a fabricated session/PR. Same-model fresh independent evidence-only review is allowed;
+unknown author lineage or unavailable producer observation remains a qualification gap.
 
 The ledger currently enforces effort ceilings low $1, medium $4, high $10 and session $4, plus
 tokens/duration, a shared $20/24h and token ceilings, two active runs, one active target, final
@@ -147,23 +158,19 @@ Subscription pricing is represented separately from API pricing, without a paid 
 limits are ceilings, not an authorization to spend or a new consent. No mapping may bypass or reset
 them by manufacturing new targets, calls, billing modes or profiles.
 
-Candidate **total** mapping, with an explicit exhaustive switch and unknown-kind rejection:
+Required accounting linkage, not an installed target extension:
 
-| Target | Option A, logical budget/concurrency key | Option B, coarser key | Effort |
-| --- | --- | --- | --- |
-| session | existing host/project/session | same | existing session profile only |
-| pull_request | existing host/project/repository/number | same | existing low/medium/high, trusted floor |
-| retained-non-code | host/project/mission/task, stable across allocation, revisions and rechecks | host/project/mission, serializing all its tasks | separately approved low/medium/high mapping or deny; never default to session |
-| unknown / unsupported | deny | deny | deny |
+| Target | Accounting identity / scope | Unchanged constraint or gap |
+| --- | --- | --- |
+| session | Existing host/project/session | Existing session profile and ceilings remain unchanged |
+| pull_request | Existing host/project/repository/number | Existing effort profiles/trusted floor remain unchanged |
+| retained-non-code | Stable host/project/mission/task accounting across exact targets, revisions and rechecks; shared mission total | Enforce D55 $4 task/$20 mission totals plus all shared ceilings. Retained effort and concurrency implementation still need qualification; no default to session or new policy value |
+| unknown / unsupported | Deny | No guessed mapping or fresh allowance |
 
-Option A is a candidate for preventing per-revision concurrency evasion without coupling unrelated
-tasks. Option B is simpler but serializes unrelated tasks. A target's full immutable pins still
-identify its particular run; the key is not evidence identity. Neither option decides whether an
-additional cumulative per-target allowance, approved effort floor, classifier, allocation scope or
-mission-wide budget is appropriate. Existing per-run and rolling ceilings continue across rechecks;
-only a separately trusted allowance and consent could admit any future send. Escalation rules and
-billing cannot be relaxed. Explicitly resolve whether concurrency keys survive task replacement or
-project transfer before implementation. No budget policy is selected here.
+D55 chooses cumulative scope and amounts, not a new per-run effort floor or concurrency exception.
+Preserve existing bounds, call accounting and conservative uncertain charges. Reconcile task
+replacement/project transfer before admitting use; unresolved linkage refuses, never silently
+refills either total. A new target/run/consent ID is not a new spending entitlement.
 
 ## Proposed ordered protocol and recovery
 
@@ -283,23 +290,30 @@ provide this cross-store guarantee.
 | Valid Pass with high findings, omitted criteria, unobserved authorship or unsupported diversity | Preserve claims and gaps; no semantic coverage, independence or authority promotion. |
 | Legacy reader, schema unknown, unrelated project, fake synthetic run | Explicit unavailable/reject; no reinterpretation as a host production run. |
 
-## Recommended next inactive slice and validation questions
+## Implementation consumers and qualification gaps
 
-After coordinator validation, a narrowly scoped **pure, uninstalled** target/binding and producer
-contract could validate exhaustive discriminants, exact IDs/digests, duplicate/conflict behavior and
-total budget-key mapping using fixtures only. It must have no store writes, migration, runtime import,
-observer, transport, provider/account operation or gate effect. Keep the retained kind disabled
-until its mapping is expressly chosen; existing session/PR behavior must remain unchanged. This is
-a proposal for a separately authorized task, not an implementation instruction.
+#49 captures original retained research/plan inputs at exact local brief/artifact revisions; the
+vault cannot acquire missing historical bytes. #52 implements D54 actions and D55 consent/expiry/
+revocation. #59 supplies stable cumulative task/mission accounting, exact consent/run linkage,
+durable completion/projection and no-replay recovery. #64 installs fresh host-owned evidence-only
+execution only under separately admitted authority; same-model is allowed, not diverse judgement
+or OS isolation. #35/#36 qualify checks, coverage and current local destination; #19/#72 own later
+acceptance. This is consumer scope, not another separate inactive-contract milestone.
 
-Coordinator/user validation is needed for budget-key option and effort/floor, whether accounting
-needs cumulative target limits, version/compatibility and retention boundaries, authoritative ABA
-generations, context/runtime/account observation, lossless mission projection, and separate trusted
-approval/consent. Coverage, model/provider diversity and eventual authority remain policy choices.
-Missing real host admission/producer, cross-store atomicity or safe
-reconciliation, lifecycle erasure hooks and independently attested authorship are source-backed
-blockers. They cannot be supplied by this document or fake-provider tests. No adoption/backfill,
-production executor, live review, cleanup or release follows.
+Concrete account/terms binding, retained effort mapping, specialist competence, runtime/author
+observation, lossless projection, cross-store durability/use-revocation ordering, confirmed executor
+exit and cross-store retention/erasure remain unsupported or unqualified. Existing 30/90-day local
+critical-review availability is not a provider erasure guarantee or new annotation policy.
+The detached supplied-claim module below proves none of these. D55 closes consent/budget/domain/
+same-model policy; it does not waive any missing observation or authorize installation, spending,
+gate activation, adoption/backfill, cleanup or release/restart.
+
+Source recheck: `cc51bb4af2ddc094618a9e8fb3514891705f76d9`,
+`critical-review-accounting.ts:15-20,151-215,263-305`,
+`critical-review.ts:23-36,96-109`, `retained-review-linkage-contract.ts:706-710` and
+`mission-review-contract.ts:91-125`. Targets/approval remain session/PR/run-bound, dispatch stays
+disabled and mission result independence/human authorship remain unavailable. Historical proposal
+anchors below describe their own implementation slices, not current production qualification.
 
 ## Inactive linkage implementation status (D39)
 
@@ -308,7 +322,7 @@ implements only six detached, deeply frozen **supplied claim** snapshots: target
 call observation, usage observation, completion and producer. It has no production importer,
 executor, observer, storage, transport or accounting consumer. `retainedReviewDispatchStatus()`
 always returns frozen `{enabled:false, reason:"retained-dispatch-disabled"}`. No retained effort
-or budget key is selected; existing session/PR accounting, accounts, Bash, jobs and ask_user are
+or budget key is implemented; existing session/PR accounting, accounts, Bash, jobs and ask_user are
 unchanged. The conceptual storage/execution schema and protocol above remain proposals.
 
 The exported parsers accept unknown public data and strictly snapshot each whole argument aggregate
@@ -368,7 +382,7 @@ detachment, exact reasons and later usage without terminal mutation. Existing D3
 Equality or parser success establishes no host admission, observed execution, seal, provenance,
 independence, current access, budget/consent, human origin, physical exit, projection or acceptance.
 No production calls, persistence/migration, grant, gate, adoption/backfill, learning, cleanup or
-release/restart follows. Production qualification and the unresolved policies above remain blocked.
+release/restart follows. Production qualification and the named implementation gaps above remain blocked.
 
 ## Exact-byte vault read implementation status (D40)
 

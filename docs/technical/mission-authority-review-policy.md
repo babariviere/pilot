@@ -1,8 +1,8 @@
-# Proposed mission authority, review and delivery policy
+# Mission authority, review and delivery policy
 
-**Docs-only proposal, not an approved decision or active enforcement.** The coordinator owns
-planning and adoption. Except for the approved defaults identified below, these mechanics need
-coordinator/user validation before implementation. This document adds no schema, evaluator,
+**Selected policy, not active enforcement.** D54–D57 close the choices recorded below; other
+proposed mechanics remain qualified as such. The coordinator owns planning and adoption.
+This documentation update adds no schema, evaluator,
 transport, tool, scheduling, provider calls, active gates or merge behavior. It changes no UI,
 Ask roles, live missions, migration, cleanup, release or restart behavior.
 
@@ -37,7 +37,7 @@ created by a role label. Existing supported role boundaries remain in [mission-r
 
 | Actor or boundary | May do within delegated scope | Cannot substitute for |
 | --- | --- | --- |
-| User, through a future trusted explicit action | Approve envelope/adoption, amend authority, give required human review | Passing checks, independent-agent review when required, repository permission/protection |
+| User, through D54's purpose-specific exact native confirmation | Approve envelope/adoption, amend authority, give required human review under the selected practical assurance limits | Passing checks, independent-agent review when required, repository permission/protection |
 | Coordinator | Plan/classify, select approved profiles/executors, assess evidence/findings, accept exact outcomes, request authorized delivery | User-required review, proven independence, source/check/integration observations, authority outside the envelope |
 | Worker or explorer | Execute admitted work using existing capabilities; submit exact evidence, limitations, blockers and proposals | Planning/adoption, self-acceptance, self-reclassification to lower gates, integration permission |
 | Review executor | Apply a pinned rubric to exact inputs; report findings, uncertainty and resolutions | Coordinator acceptance, user authorship, independence proof or integration authority |
@@ -94,8 +94,9 @@ order, score, majority vote or whichever reviewer finished first.
    effective policy/tier/override revision, current actor, requested action and explicit exclusions.
    Separate permission to research, build, submit, review, accept and integrate. Use #2's proposed
    immutable brief/decision/content/authority package and amendment lineage, without claiming its
-   trusted user action/transport is selected or implemented. Ordinary messages, silence, activity,
-   role labels and a coordinator-authored brief are not that trusted approval. Missing/currentness
+   action is already implemented. D54 selects practical native confirmation, not OS isolation.
+   Ordinary messages, silence, activity, role labels and a coordinator-authored brief are not that
+   native approval. Missing/currentness
    conflicts block the affected action; a repository credential cannot supply mission authority.
 2. **Assignment, contributions and exact inputs.** Enumerate all covered tasks and their complete
    assignment/owner/definition fences, classification, criteria and dependencies. Name the physical
@@ -122,10 +123,11 @@ order, score, majority vote or whichever reviewer finished first.
    Repeated reports of the same run do not create independent evidence.
 6. **Review provenance.** For required agent review, require attributable execution plus adequate
    expertise and verified independence for the exact contribution, not self-review or assumed
-   independence from a different chat/model/title. For required human review, require a trusted
-   explicit human-origin action on the exact scope/revision, not coordinator transcription or an
+   independence from a different chat/model/title. For required human review, require D54's explicit
+   purpose-specific native action on the exact scope/revision, not coordinator transcription or an
    agent-authored “user approved” claim. #17 supplies neither guarantee. The detailed independence
-   standard and trusted human transport remain open; absent support blocks the gate.
+   policy is selected below; its production admission and native-action implementation are not
+   qualified by this document. Absent support still blocks the gate.
 7. **Findings and coordinator acceptance.** Show findings per dimension, unresolved disagreements,
    resolution evidence, authorized dismissals and missing criterion coverage. Require no unresolved
    applicable findings and a current coordinator acceptance of the exact submitted outcome. A
@@ -296,7 +298,7 @@ Inspection anchors are the current daemon implementations, not claims of active 
 
 | Foundation to reuse | What it actually establishes | Still missing for this policy |
 | --- | --- | --- |
-| #2 proposal, protocol brief revisions/decisions and coordinator-owned planning | Exact planning content/CAS and existing role boundaries | Selected trusted approval transport, adopted envelope/currentness/amendment/admission/revocation mechanics |
+| #2 proposal, protocol brief revisions/decisions and coordinator-owned planning | Exact planning content/CAS and existing role boundaries | Implemented D54 native action, adopted envelope/currentness/amendment/admission/revocation mechanics |
 | #3 non-code record/reference support | Explicit versioned non-code references, not invented code receipts | Active non-code acceptance/completion; legacy commit format/free text do not verify landing/checks |
 | #4 `mission-classification.ts` / `mission-model-recommendation.ts` | Versioned classification, task fences and advisory allowed-model/suitability/availability diagnostics | Active tier authority/routing; classification/advice is not a grant, execution or availability guarantee |
 | #13 [jj ownership](jj-ownership.md), #20 [retained snapshots](review-snapshots.md) | Worker-creation metadata and immutable bounded layer/stack bytes | Current unsaved/live source and complete contribution reconciliation; D31 allocation is later assessment scope, not historical task-purpose proof |
@@ -311,30 +313,27 @@ Service actor/project checks are reusable boundaries, not hostile-shell/unauthen
 **A current pinned-record Pass is not live freshness, an independent review, a passing check,
 coordinator acceptance or merge authority. Task #17 did not establish those capabilities.**
 
-## Remaining decision menu (#46 and #47)
+<a id="remaining-decision-menu-46-and-47"></a>
 
-**All recommendations below remain proposed.** The coordinator will present the material choices
-to the user and record actual choices and exceptions. A suggested answer, stopping/cancellation,
-generic request to finish, design review or document publication is not approval, delegation,
-consent or an execution grant. Keep both tasks unfinished until their decision criteria are met.
-Balanced, mandatory passing checks, force OFF, coordinator ownership and new-missions-first stay
-fixed. D48 settles project/chat Review; D51 protects uncertain withdrawal authority.
+## Selected policy (#46 and #47)
+
+D54 selects practical native confirmations and bounded coordinator delegation. D55 selects bounded
+mission reviewer consent and the initial research/plan domain. D56/D57 select global Review and
+agent-first human actionability. These are policy/implementation choices, **not current consent,
+live approval, reviewer spending, attention or gate activation**. Balanced, mandatory passing checks,
+force OFF, coordinator ownership and new-missions-first remain unchanged. Historical proposals,
+links and handoff 23368 remain history, not evidence of acceptance of this candidate.
 
 ### 1. Which approval assurance and delegation should be supported?
 
-The [app-action proposal](mission-review-app-actions.md#options-and-recommendation) currently
-requires stronger same-user protection and reports the necessary human-origin source unavailable.
-Two honest choices are a practical, explicitly narrower native-action assurance policy, or retaining
-that stronger requirement and keeping dependent human gates unavailable pending qualification.
+**Selected by D54:** explicit native confirmation of the exact immutable approval package,
+reviewer consent or disposition through purpose-specific actions unavailable to ordinary agent
+tools/REST. The [app-action contract](mission-review-app-actions.md#options-and-recommendation)
+uses practical app-workflow assurance, excluding hostile same-user processes and UI automation.
+It does not claim verified human presence, OS isolation, judgement quality or that every byte was
+read. Production action admission remains unimplemented/unqualified, not enabled by this selection.
 
-**Recommendation, not selected:** explicit native confirmation of the exact immutable package,
-run consent or disposition; purpose-specific admission unavailable to ordinary tools/REST. Count
-it as user-submitted intent only under an explicitly approved threat model that excludes hostile
-same-user process inspection/tampering and UI automation. Do not call it OS isolation, verified
-human presence, proof every byte was read, or an already supported mechanism. Until the user
-chooses assurance and its actual implementation is qualified, human-required gates remain blocked.
-
-Proposed bounded delegation accompanies that choice:
+Bounded delegation implements that choice without granting authority from authorship:
 
 - Bind named actions/destinations and the exact current coordinator; expire on mission end,
   revocation or coordinator replacement. No implicit successor transfer or subdelegation.
@@ -357,37 +356,37 @@ amendments; #67/#73 scoped guidance/oversight; any direct-withdrawal follow-up n
 
 ### 2. What initial reviewer consent, coverage and non-code delivery scope?
 
-Compare per-exact-run consent with a bounded mission-level consent. The latter needs explicit
-future-data categories, account/terms, total allowance, expiry and renewal rules; workflow approval
-alone cannot grant it. Neither alternative is selected or authorizes a provider call now.
+**Selected by D55:** bounded mission-level consent, **$20 total per mission and $4 cumulative per
+task across revisions/rechecks**, within every existing shared ceiling. Workflow approval alone
+is not data/spend consent, and the policy choice does not authorize a provider call now.
 
-**Recommended initial package, not selected:**
-
-- One consent per exact run, displaying selected data/omissions, provider/model/account, billing,
-  terms, local retention and total money/input/generated-token/time allowance. Thinking, repeated
-  input and follow-ups share that total. No automatic replacement run, model/account switch or paid
-  fallback. Unknown terms/account/bounds block transmission; no provider/account is chosen here.
-- Retained non-code accounting uses host/project/mission/task, not a fabricated session/PR or a
-  fresh target per recheck. Propose a cumulative $4 task allowance across revisions/rechecks, with
-  lower per-run consent allowed and uncertain usage charged conservatively. Risk tier is not effort.
-  Keep session/PR ceilings and shared $20/24h/token ceilings unchanged; one active run/task, two/host.
-  Transfers/replacement tasks cannot refill the allowance: automatic remapping is unsupported until
-  explicitly approved. No new mission budget or allowance renewal is inferred.
+- Native consent displays future-data scope and selected data/omissions, concrete provider/model/
+  account, billing, terms, local retention and the total allowance. Thinking, repeated/cached input
+  and follow-ups consume the same bounded allowance. Missing terms/account/enforceable bounds block
+  transmission; no concrete provider/account is selected by D55.
+- Consent expires at mission end or revocation. Expansions and renewals need fresh approval.
+  No automatic account/model switch or paid fallback; no replacement/transfer silently refills it.
+  Each run still binds exact input, profile, context, runtime and consent revision before admission.
+- Accounting needs stable host/project/mission/task linkage across revisions/rechecks, not a fake
+  session/PR or fresh target that resets spending. Uncertain usage remains conservatively charged.
+  Preserve existing effort/session/PR and shared $20/24h/token ceilings and concurrency bounds.
+  Retained-task effort mapping and replacement/transfer accounting require implementation and
+  qualification; unsupported mapping refuses rather than manufacturing fresh allowance.
 - Fresh host-owned evidence-only execution, not author/child/collaborator history. Unknown author
   lineage blocks required independence. Same-model review is permitted; provider/model diversity
   is optional, never a substitute for separation. This adds no OS-isolation claim.
-- Adopt the intent-sensitive table above: targeted covers criteria/net effect/affected paths; full
-  covers all delivered layers/interactions; specialist adds evidenced domain competence and a
-  qualified rubric, not a role label. Every required criterion needs coverage; limitations/omissions
-  cannot become Pass. Keep security, correctness, maintainability and attention distinct.
-- Coordinator may dismiss findings with exact counterevidence/reason within delegated scope, never
-  waive checks, required review or protected constraints. Broader risk acceptance returns to the
-  user. Human-thread disposition is separate, in question 3.
+- Balanced and the intent-sensitive table above govern scrutiny: targeted covers criteria, net
+  effect and affected paths; full covers all delivered layers/interactions; specialist adds domain
+  competence and a qualified rubric, not a role label. Every required criterion needs coverage;
+  limitations/omissions cannot become Pass. Keep security, correctness, maintainability and attention distinct.
+- Coordinator handling of findings remains bounded by the exact delegated actions; neither D54 nor
+  D55 creates general dismissal or waiver authority. Risk/scope/budget expansion returns to the
+  user. Human-owned thread resolution follows D57, in question 3.
 - Initial non-code domain: research/plans at exact local brief/artifact revisions. Require retained
   original bytes, kind, source support and criterion coverage. Unsupported kinds or missing historic
   bytes block that destination; reference metadata or latest display cannot substitute. External
-  publication and executable/side-effectful deliveries are excluded. Code/mixed delivery stays in
-  its own lane; this does not silently select a repository integration mode.
+  publication and executable/side-effectful deliveries are outside this initial domain. Code/mixed
+  delivery stays in its own lane; this does not silently select a repository integration mode.
 - Disclose existing critical-review retention (raw evidence 30 days, other records 90 days after use, with
   active/pinned exceptions) and existing explicit erasure behavior; add no cleanup timer. This does
   not set annotation/draft retention or promise erasure of provider-held data.
@@ -399,18 +398,25 @@ task remapping and external destinations stay named blockers, not automatic poli
 
 ### 3. How should human review requests and dispositions work?
 
-See the [single request/disposition recommendation](mission-native-review.md)
-for agent-first versus parallel ordering, exact coverage, request permissions, filters and a
-multi-change standalone example. D48 entry points are decided, not another choice.
+**Selected by D56/D57:** one global change/revision-centered Review, replacing Changes and removing
+mission Review, with Files/artifacts preserved. All pending changes remain visible; required checks
+and agent reviews must pass before human approval is actionable. Early browsing/comments remain
+possible. Dispositions cover only explicitly selected changes/revisions. Comment leaves required
+approval pending; Request changes blocks; no inherited approval. User-only snooze/withdrawal never
+waives a gate. Humans resolve their own threads; coordinators may retire only their own optional
+suggestions or requests made obsolete by authoritative cancellation, never user-required approval.
+See [request/disposition semantics](mission-native-review.md#request-and-disposition-decision-47)
+for filters, Back, multiple-change and cross-project examples and exact consumer scopes.
 
-## Smallest implementation sequence after actual choices
+## Implementation consumers of the selected choices
 
 1. #52, then #58/#61: implement only the selected native actions, exact receipts, bounded grants,
    amendment/revocation and decision protection. Reuse stores; do not build a generic authority service.
 2. #49/#59/#64 with #35/#36: one exact retained non-code review path, chosen consent/accounting,
    observed coverage/checks and current local destination. Keep execution off until separately admitted.
 3. #60/#65, then #70/#79: private drafts and explicit dispositions, native submission, one durable
-   request linked to the same chat Review, then Inbox routing. #88 read-only entry is independent.
+   request linked to global Review, then Inbox routing. #70 supplies authoritative waiting state;
+   #88 implements the global read surface, not an inferred waiting queue from captured snapshots.
 4. #19/#72 and later delivery consumers only after required evidence and explicit activation.
    Migration, automatic attention, merge/cleanup/release/restart do not follow from this design.
 
@@ -422,7 +428,7 @@ separate coordinator publication turn before push; source-baseline review alone 
 
 ## Source check for this consolidation
 
-Inspected committed baseline: `2ae03ca59fd4514e459d23044d263f6433e10b41`. Earlier sections' historical
+Inspected committed baseline: `cc51bb4af2ddc094618a9e8fb3514891705f76d9`. Earlier sections' historical
 capability notes are not claims that their proposed pipeline is installed.
 
 | Pinned source | Observed boundary |
@@ -430,5 +436,7 @@ capability notes are not claims that their proposed pipeline is installed.
 | `packages/protocol/src/index.ts:1060-1073`; `packages/daemon/src/missions.ts:5217-5355` | No protection/delegation metadata; coordinator proposes withdrawal, user resolves. Author is not authority. |
 | `packages/protocol/src/critical-review.ts:23-36`; `packages/daemon/src/critical-review-accounting.ts:15-20,151-215,263-305` | Session/PR targets and existing ceilings only; no retained-task mapping or consent writer. |
 | `packages/daemon/src/critical-review-retention.ts:1-10,88-99` | Existing local availability limits and active/pinned exceptions, not provider erasure. |
-| `packages/daemon/src/retained-review-linkage-contract.ts:706-710`; `packages/daemon/src/mission-review-contract.ts:91-125` | Dispatch disabled; independence/human authorship unavailable. |
+| `packages/daemon/src/retained-review-linkage-contract.ts:706-710`; `packages/daemon/src/mission-review-contract.ts:91-125` | Dispatch disabled; independence/human authorship unavailable. D54/D55 select policy, not a producer or native-action implementation. |
 | `packages/daemon/src/mission-non-code-acceptance.ts:18-49,176-181,451` | Inert brief/artifact configuration; `eligible:false`, not publication observation. |
+| `packages/daemon/src/missions.ts:2620-2678`; `packages/daemon/src/mission-service.ts:394-434,504-547`; `packages/artifacts/src/store.ts:104-125` | Immutable persisted brief revisions and parsed artifact revisions exist. Brief writes trim input; artifact reads parse JSON and can derive image rendering. Reference digests are not a host-owned original-byte capture or recovery of pre-trim text. #49 qualifies that acquisition separately. |
+| `packages/daemon/src/server.ts:1447-1620`; `apps/desktop/src/mission_browser_view.rs:1827-1830` | Project/session/mission retained GETs and historical mission Review exist; no authoritative global waiting queue, human submission or D57 actionability consumer. #98/#88 advance separately. |
