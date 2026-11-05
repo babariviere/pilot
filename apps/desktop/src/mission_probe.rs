@@ -186,8 +186,8 @@ pub fn run_mission_probe(cx: &mut HeadlessAppContext) {
                 let mut view=LocalViewer::build(None,Some(writer.clone()),w,cx);
                 view.state.projects=Arc::new(crate::local_model::projects(&json!([{"id":"project","name":"Exact project","path":"/synthetic/project"}])).unwrap());
                 view.state.projects_loaded=true;view.state.list_loaded=true;view.state.loaded=true;view.state.status="Synthetic Local fixture".into();
-                view.state.chats=Arc::new(vec![crate::local_model::chat(&json!({"id":"source","projectId":"project","title":"Source title","cwd":"/synthetic/project","mode":"ask","state":"working"})).unwrap(),
-                    crate::local_model::chat(&json!({"id":"other","projectId":"project","title":"Other chat","cwd":"/synthetic/project","mode":"ask","state":"idle"})).unwrap()]);
+                view.state.chats=Arc::new(vec![crate::local_model::chat(&json!({"id":"source","projectId":"project","title":"Source title","cwd":"/synthetic/project","mode":"build","state":"working"})).unwrap(),
+                    crate::local_model::chat(&json!({"id":"other","projectId":"project","title":"Other chat","cwd":"/synthetic/project","mode":"build","state":"idle"})).unwrap()]);
                 view.selected=Some("source".into());view.title="Source title".into();view.generation=1;view.state.generation=1;
                 view.transcript.update(cx,|t,cx|t.replace_readonly(rows.clone(),true,cx));
                 view.editor.update(cx,|e,cx|e.select("chat:source".into(),true,true,w,cx));

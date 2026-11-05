@@ -107,6 +107,9 @@ mod jump_navigation;
 #[path = "jump_probe.rs"]
 pub(crate) mod jump_probe;
 #[cfg(feature = "native-probes")]
+#[path = "legacy_ask_probe.rs"]
+pub(crate) mod legacy_ask_probe;
+#[cfg(feature = "native-probes")]
 #[path = "lost_ack_probe.rs"]
 pub(crate) mod lost_ack_probe;
 #[path = "menu_routing.rs"]
@@ -839,6 +842,7 @@ impl LocalViewer {
                 running_jobs: Default::default(),
                 diagnostic: None,
                 insights: false,
+                legacy_ask: false,
                 cwd: String::new(),
                 project_id: None,
                 model_configuration: None,
@@ -870,6 +874,7 @@ impl LocalViewer {
                 running_jobs: Default::default(),
                 diagnostic: None,
                 insights: false,
+                legacy_ask: false,
                 cwd: String::new(),
                 project_id: None,
                 model_configuration: None,
@@ -901,6 +906,7 @@ impl LocalViewer {
                 running_jobs: Default::default(),
                 diagnostic: None,
                 insights: false,
+                legacy_ask: false,
                 cwd: String::new(),
                 project_id: None,
                 model_configuration: None,
@@ -1109,6 +1115,7 @@ impl LocalViewer {
             running_jobs: Default::default(),
             diagnostic: None,
             insights: false,
+            legacy_ask: false,
             cwd: String::new(),
             project_id: None,
             model_configuration: None,
@@ -1588,6 +1595,7 @@ impl LocalViewer {
                             running_jobs: Default::default(),
                             diagnostic: None,
                             insights: false,
+                            legacy_ask: false,
                             cwd: String::new(),
                             project_id: None,
                             model_configuration: None,
@@ -1951,8 +1959,10 @@ impl LocalViewer {
             return true;
         }
         let generation = self.generation + 1;
+        // Retired Ask chats read stored history only: the live chat stream can
+        // resume their pending work, the passive page never does.
         if !self.client.as_ref().is_some_and(|client| {
-            client.command(if chat.archived {
+            client.command(if chat.archived || chat.legacy_ask {
                 Command::OpenArchive {
                     id: chat.id.clone(),
                     generation,
@@ -1983,6 +1993,7 @@ impl LocalViewer {
         let key = format!("chat:{}", chat.id);
         self.editor.update(cx, |editor, cx| {
             editor.select(key, chat.writable, chat.busy, window, cx);
+            editor.legacy_ask(chat.legacy_ask && !chat.archived, cx);
             editor.input_generation(&chat.id, chat.input_generation);
             editor.attachment_coordinator(chat.mission_coordinator, cx);
         });
@@ -2136,6 +2147,7 @@ impl LocalViewer {
             let (writable, busy) = (chat.writable, chat.busy || self.state.queued > 0);
             self.editor.update(cx, |editor, cx| {
                 editor.permission(writable, busy, cx);
+                editor.legacy_ask(chat.legacy_ask && !chat.archived, cx);
                 editor.input_generation(&chat.id, chat.input_generation);
                 editor.attachment_coordinator(chat.mission_coordinator, cx);
                 editor.background(chat.background_work, cx);
@@ -2698,6 +2710,7 @@ impl LocalViewer {
                     running_jobs: Default::default(),
                     diagnostic: None,
                     insights: false,
+                    legacy_ask: false,
                     cwd: String::new(),
                     project_id: None,
                     attention: None,
@@ -3583,6 +3596,7 @@ mod refresh_tests {
                         running_jobs: Default::default(),
                         diagnostic: None,
                         insights: false,
+                        legacy_ask: false,
                         cwd: String::new(),
                         project_id: None,
                         attention: None,

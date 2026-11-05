@@ -269,6 +269,8 @@ pub(crate) struct Chat {
     pub(crate) diagnostic: Option<std::sync::Arc<crate::diagnostic_repair::Specialist>>,
     /// Persisted Insights report role. Its authority is daemon-enforced, never derived here.
     pub(crate) insights: bool,
+    /// The user's own ordinary Ask chat (`legacy_ask_local`): read-only history here.
+    pub(crate) legacy_ask: bool,
 }
 impl Chat {
     /// Row reason: attention, else live signal, else a non-routine raw state.
@@ -307,6 +309,32 @@ pub(crate) fn interactive_local(value: &Value) -> bool {
         && value["archivedAt"].is_null()
         && value["continuedTo"].is_null()
         && (value["mode"].is_null() || matches!(value["mode"].as_str(), Some("ask" | "build")))
+        && !legacy_ask_local(value)
+}
+
+/// A user's own ordinary Ask chat. Pilot Next no longer converses in these: it shows
+/// their stored history read-only and never starts their work. Mission, flow,
+/// diagnostics and Insights Ask chats are restricted roles, not ordinary Ask, and
+/// keep their own workflows. The daemon still admits Ask for other callers.
+pub(crate) fn legacy_ask_local(value: &Value) -> bool {
+    value["mode"] == "ask"
+        && value["role"].is_null()
+        && value["control"] != true
+        && value["diagnosticHost"].is_null()
+        && ["missionId", "missionRole", "flow"]
+            .iter()
+            .all(|key| value[*key].is_null())
+        && value["missionCoordinator"] != true
+        && value["activeMissionCoordinator"] != true
+}
+
+/// Explicit Stop is admitted apart from Send: a retired Ask chat's already active
+/// work can still be stopped.
+pub(crate) fn stoppable_local(value: &Value) -> bool {
+    messageable_local(value)
+        || (legacy_ask_local(value)
+            && value["archivedAt"].is_null()
+            && value["continuedTo"].is_null())
 }
 
 /// Sending to a specialist does not convert it to Build or grant ordinary tools.
@@ -377,6 +405,7 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
         running_jobs: crate::session_jobs::read(value),
         diagnostic: crate::diagnostic_repair::specialist(value).map(std::sync::Arc::new),
         insights: value["role"] == "insights",
+        legacy_ask: legacy_ask_local(value),
     })
 }
 
@@ -1820,6 +1849,76 @@ mod queued_rows_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ordinary Ask chats are read-only history in every state; restricted Ask roles
+    /// and Build keep their workflows. Classification never rewrites the mode.
+    #[test]
+    fn ordinary_ask_is_read_only_history_and_restricted_ask_roles_keep_messaging() {
+        let ask = |extra: Value| {
+            let mut v = json!({"id":"ask","title":"Ask 日本語 👩‍💻","mode":"ask","state":"idle","cwd":"/synthetic"});
+            for (k, x) in extra.as_object().unwrap() {
+                v[k] = x.clone();
+            }
+            v
+        };
+        for (extra, active) in [
+            (json!({}), true),
+            (json!({"state":"parked"}), true),
+            (
+                json!({"state":"failed","outcome":"failed","canRetryStartup":true}),
+                true,
+            ),
+            (
+                json!({"state":"working","working":true,"pending":[{"id":1}]}),
+                true,
+            ),
+            (json!({"outcome":"question"}), true),
+            (json!({"archivedAt":5}), false),
+            (
+                json!({"continuedTo":"next","continuationOf":"older"}),
+                false,
+            ),
+        ] {
+            let v = ask(extra);
+            let chat = chat(&v).unwrap();
+            assert!(legacy_ask_local(&v) && chat.legacy_ask, "{v}");
+            assert!(
+                !interactive_local(&v) && !messageable_local(&v) && !chat.writable,
+                "{v}"
+            );
+            assert_eq!(stoppable_local(&v), active, "{v}");
+            assert!(!chat.model_configuration.unwrap().allowed);
+            assert_eq!(v["mode"], "ask", "never reinterpreted as Build");
+        }
+        for extra in [
+            json!({"missionId":"m","missionRole":"explorer"}),
+            json!({"missionId":"m"}),
+            json!({"missionCoordinator":true}),
+            json!({"activeMissionCoordinator":true,"missionId":"m"}),
+            json!({"flow":{"id":"f"}}),
+        ] {
+            let v = ask(extra);
+            assert!(!legacy_ask_local(&v), "{v}");
+            assert!(
+                interactive_local(&v) && messageable_local(&v) && stoppable_local(&v),
+                "{v}"
+            );
+            assert!(chat(&v).unwrap().writable && !chat(&v).unwrap().legacy_ask);
+        }
+        let diagnostics = ask(json!({"role":"diagnostics","diagnosticScope":"app"}));
+        let insights = ask(json!({"role":"insights"}));
+        for v in [diagnostics, insights] {
+            assert!(
+                !legacy_ask_local(&v) && messageable_local(&v) && stoppable_local(&v),
+                "{v}"
+            );
+        }
+        for build in [json!({"id":"b","mode":"build"}), json!({"id":"b"})] {
+            assert!(!legacy_ask_local(&build) && interactive_local(&build));
+        }
+        let control = ask(json!({"control":true}));
+        assert!(!legacy_ask_local(&control) && !stoppable_local(&control));
+    }
 
     fn question_entry(id: u64, head: u64) -> Value {
         json!({"id":id,"head":head,"kind":"pilot.question","data":{"question":"Which checks?","options":[{"label":"Tests"}]},"model":[]})

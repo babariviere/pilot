@@ -52,6 +52,27 @@ fn policy_matches_swift_working_retained_history_and_guarded_conversion() {
     );
 }
 
+/// A retired ordinary Ask chat offers no action that starts work. Archive stays.
+#[test]
+fn legacy_ask_offers_no_work_starting_actions() {
+    let options = LocalOptions::synthetic(1);
+    let mut raw = source();
+    raw["mode"] = json!("ask");
+    raw["canRetryStartup"] = json!(true);
+    raw["canRetryHandoff"] = json!(true);
+    raw["outcome"] = json!("failed");
+    raw["workspaceSetup"] = json!({"state":"failed"});
+    let e = Evidence::read(&target(&options, &raw), &raw, true).unwrap();
+    assert!(e.archive && e.can_archive);
+    assert!(!e.can_convert && !e.can_retry_startup && !e.can_retry_turn && !e.can_retry_handoff);
+    assert!(!e.can_rerun_setup && !e.can_compact);
+    // The same fields on an explorer member keep its existing actions.
+    raw["missionId"] = json!("mission");
+    raw["missionRole"] = json!("explorer");
+    let e = Evidence::read(&target(&options, &raw), &raw, true).unwrap();
+    assert!(e.can_retry_startup);
+}
+
 #[test]
 fn usage_pause_does_not_remove_manual_archive_or_implicitly_stop_a_run() {
     let options = LocalOptions::synthetic(1);

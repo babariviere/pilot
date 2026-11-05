@@ -9,7 +9,7 @@ fn open_raw() -> serde_json::Value {
     f::source()
 }
 fn other() -> crate::local_model::Chat {
-    crate::local_model::chat(&json!({"id":"other","title":"Another open conversation","projectId":"project","cwd":"/synthetic/project","mode":"ask","state":"idle"})).unwrap()
+    crate::local_model::chat(&json!({"id":"other","title":"Another open conversation","projectId":"project","cwd":"/synthetic/project","mode":"build","state":"idle"})).unwrap()
 }
 /// Publishes the list (and this chat's rows) as the stream would.
 fn publish(

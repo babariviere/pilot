@@ -11,6 +11,24 @@ Restore is offered for archived non-retained history. Retired Control history
 stays read-only. The daemon remains authoritative about work not represented in
 the received summary, concurrent sends, startup and workspace transitions.
 
+## Retired Ask chats
+
+Pilot Next creates only Build chats, and a user's own existing Ask chat
+(`mode: "ask"` with no role, mission, flow or Control marker,
+`local_model::legacy_ask_local`) is read-only history. It opens through the
+passive `GET /api/sessions/:id/history` pages (as Archive does), never the live
+chat stream that can resume pending work, so opening, reconnecting and paging
+start nothing. Its composer keeps drafts and IME but cannot Send, reply to a
+question, queue, change model, Force, Continue, retry startup, rerun setup,
+compact or make a mission. Saved delivery envelopes stay byte-identical and are
+never dispatched; nothing is converted to Build or deleted. Explicit Stop stays
+available while its work is active, admitted by `stoppable_local` apart from
+Send. Archive and Restore are unchanged. Mission explorers, flow reviewers,
+diagnostics and Insights chats run in Ask too and keep their workflows.
+
+This is a GUI retirement only. The daemon still admits Ask from other clients,
+schedules and automations, and Pilot Next does not stop that work.
+
 The source is captured as the Local endpoint plus daemon/storage-lineage home,
 canonical session and project IDs and received row metadata. Reordering and
 recycling do not retarget commands. Removal, changed row/project metadata,

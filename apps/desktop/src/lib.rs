@@ -580,4 +580,6 @@ pub use local_view::application_quit_probe::run_application_quit_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::archive_probe::run_archive_probe;
 #[cfg(feature = "native-probes")]
+pub use local_view::legacy_ask_probe::run_legacy_ask_probe;
+#[cfg(feature = "native-probes")]
 pub use local_view::lost_ack_probe::run_lost_ack_probe;

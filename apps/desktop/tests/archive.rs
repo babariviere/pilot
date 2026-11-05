@@ -13,4 +13,5 @@ fn main() {
         pilot_desktop::TranscriptView::bind_keys(cx);
     });
     pilot_desktop::run_archive_probe(&mut cx);
+    pilot_desktop::run_legacy_ask_probe(&mut cx);
 }

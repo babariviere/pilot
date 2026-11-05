@@ -32,7 +32,7 @@ impl Daemon {
             .unwrap();
         let options = LocalOptions::synthetic(listener.local_addr().unwrap().port());
         let state = Arc::new(Mutex::new(State {
-            chat: json!({"id":"unloaded-ID","title":"Same title","projectId":"project","mode":"ask","state":"idle","cwd":"/synthetic/project"}),
+            chat: json!({"id":"unloaded-ID","title":"Same title","projectId":"project","mode":"build","state":"idle","cwd":"/synthetic/project"}),
             hello: json!({"daemonId":"test-daemon","lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true}}),
             status: 200,
             slow: false,

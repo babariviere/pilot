@@ -71,7 +71,7 @@ pub(crate) fn catalog() -> Value {
 }
 impl Seen {
     pub(crate) fn session(&self) -> Value {
-        let mut v = json!({"id":"source","cwd":"/synthetic/project","mode":"ask","state":match self.mode {Mode::Busy=>"working",Mode::Parked=>"parked",Mode::Failed=>"failed",_=>"idle"},"working":matches!(self.mode,Mode::Busy),"model":if matches!(self.mode,Mode::Stale){"q/c"}else{&self.model},"thinking":self.thinking,"updatedAt":self.clock,"error":if matches!(self.mode,Mode::Parked){json!("Retained kernel diagnostic")}else{Value::Null},"subscriptionPause":if self.paused(){json!({"forced":self.forced,"windows":[{"provider":"anthropic","label":"5h","usedPercent":97,"resetsAt":"2099-01-01T18:00:00Z"}]})}else{Value::Null}});
+        let mut v = json!({"id":"source","cwd":"/synthetic/project","mode":"build","state":match self.mode {Mode::Busy=>"working",Mode::Parked=>"parked",Mode::Failed=>"failed",_=>"idle"},"working":matches!(self.mode,Mode::Busy),"model":if matches!(self.mode,Mode::Stale){"q/c"}else{&self.model},"thinking":self.thinking,"updatedAt":self.clock,"error":if matches!(self.mode,Mode::Parked){json!("Retained kernel diagnostic")}else{Value::Null},"subscriptionPause":if self.paused(){json!({"forced":self.forced,"windows":[{"provider":"anthropic","label":"5h","usedPercent":97,"resetsAt":"2099-01-01T18:00:00Z"}]})}else{Value::Null}});
         if self.continued {
             v["continuedTo"] = json!("next");
         }
@@ -103,7 +103,7 @@ impl Seen {
     }
     /// The replacement chat another provider's continuation starts.
     pub(crate) fn continued_chat(&self, model: &str) -> Value {
-        json!({"id":"next","cwd":"/synthetic/project","mode":"ask","state":"starting","working":true,"title":"Continued 日本語","model":model,"updatedAt":self.clock})
+        json!({"id":"next","cwd":"/synthetic/project","mode":"build","state":"starting","working":true,"title":"Continued 日本語","model":model,"updatedAt":self.clock})
     }
 }
 impl Server {

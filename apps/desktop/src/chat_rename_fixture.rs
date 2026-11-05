@@ -35,7 +35,7 @@ impl Drop for Daemon {
     }
 }
 pub(crate) fn source() -> Value {
-    json!({"id":"source","projectId":"project","title":"Unselected chat 👩‍💻 é","cwd":"/synthetic/project","mode":"ask","state":"idle"})
+    json!({"id":"source","projectId":"project","title":"Unselected chat 👩‍💻 é","cwd":"/synthetic/project","mode":"build","state":"idle"})
 }
 impl Daemon {
     pub(crate) async fn start(behavior: Behavior) -> Self {

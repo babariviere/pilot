@@ -165,6 +165,8 @@ impl Evidence {
             && raw["offlinePaused"] != true
             && raw["runningJobs"].as_array().is_none_or(Vec::is_empty);
         let has_setup = raw["workspaceSetup"]["state"].is_string();
+        // A retired Ask chat never starts work from here: no reload or setup.
+        let legacy_ask = crate::local_model::legacy_ask_local(raw);
         Ok(Self {
             target: target.clone(),
             stamp: Value::Object(stamp),
@@ -174,7 +176,7 @@ impl Evidence {
                 && crate::local_model::interactive_local(raw)
                 && raw["missionId"].is_null()
                 && target.chat.project_id.is_some(),
-            can_retry_startup: raw["canRetryStartup"] == true,
+            can_retry_startup: raw["canRetryStartup"] == true && !legacy_ask,
             can_retry_turn: raw["outcome"] == "failed"
                 && raw["canRetryStartup"] != true
                 && raw["nextAttemptModel"].is_null()
@@ -187,6 +189,7 @@ impl Evidence {
             has_setup,
             can_rerun_setup: has_setup
                 && idle
+                && !legacy_ask
                 && raw["control"] != true
                 && raw["workspaceSetup"]["state"] != "pending",
             can_compact: idle

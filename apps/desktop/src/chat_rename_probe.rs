@@ -182,7 +182,7 @@ pub fn run_chat_rename_probe(cx: &mut HeadlessAppContext) {
                 let mut v=LocalViewer::build(Some(client),Some(writer.clone()),w,cx);
                 v.chat_actions.update(cx,|a,cx|a.connect(server.options.clone(),cx));
                 v.state.status="Synthetic Local fixture".into();v.state.loaded=true;v.state.list_loaded=true;v.state.generation=1;v.generation=1;
-                v.state.chats=Arc::new(vec![crate::local_model::chat(&f::source()).unwrap(),crate::local_model::chat(&json!({"id":"other","title":"Selected working conversation","projectId":"project","cwd":"/synthetic/project","mode":"ask","state":"working","working":true})).unwrap()]);
+                v.state.chats=Arc::new(vec![crate::local_model::chat(&f::source()).unwrap(),crate::local_model::chat(&json!({"id":"other","title":"Selected working conversation","projectId":"project","cwd":"/synthetic/project","mode":"build","state":"working","working":true})).unwrap()]);
                 v.state.projects=Arc::new(crate::local_model::projects(&json!([{"id":"project","name":"Synthetic","path":"/synthetic/project"}])).unwrap());v.state.projects_loaded=true;
                 v.selected=Some("other".into());v.title="Selected working conversation".into();
                 v.transcript.update(cx,|t,cx|t.replace_readonly(rows.clone(),true,cx));

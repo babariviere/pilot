@@ -17,6 +17,9 @@ operation, destination, target, hash, payload and question-purpose metadata.
 Accepted replies stay guarded until canonical metadata says that question has
 gone away, rather than enabling a duplicate confirmation.
 
+A retired ordinary Ask chat (see [chat actions](chat-actions.md#retired-ask-chats))
+shows its questions as read-only history. Replies stay disabled and nothing is sent.
+
 ## Contract and authority
 
 Swift's `AgentQuestion.reply` formats the selected labels in source order,

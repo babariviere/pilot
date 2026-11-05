@@ -148,7 +148,7 @@ fn one(cx: &mut HeadlessAppContext, width: f32, mode: ThemeMode) {
                         v.state.loaded = true;
                         v.state.status = "Synthetic Local fixture".into();
                         let chat = |extra: serde_json::Value| {
-                            let mut base = json!({"title":"Chat","projectId":"project-A","cwd":"/synthetic/A","mode":"ask","state":"idle"});
+                            let mut base = json!({"title":"Chat","projectId":"project-A","cwd":"/synthetic/A","mode":"build","state":"idle"});
                             base.as_object_mut()
                                 .unwrap()
                                 .extend(extra.as_object().unwrap().clone());

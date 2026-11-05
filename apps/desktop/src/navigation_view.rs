@@ -318,6 +318,7 @@ impl LocalViewer {
                     running_jobs: Default::default(),
                     diagnostic: None,
                     insights: false,
+                    legacy_ask: false,
                     cwd: String::new(),
                     project_id: None,
                     model_configuration: None,

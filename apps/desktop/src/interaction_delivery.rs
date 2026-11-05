@@ -566,6 +566,31 @@ impl DeliveryOwner<'_> {
                         .inspect_err(|_| diagnostic.category = Category::Refused)?;
                 }
             }
+            // A retired Ask chat keeps its saved envelope, but Pilot never dispatches it.
+            if op.kind == "chat-send" && intent.automatic.is_some() && receipt["state"] == "pending"
+            {
+                if !crate::delivery_store::token(&op.target_id) {
+                    return Err("Invalid Local chat target");
+                }
+                let summary = self
+                    .effect(observe(
+                        options,
+                        diagnostic,
+                        Stage::Target,
+                        client.get(format!(
+                            "{}/api/sessions/{}",
+                            options.loopback(),
+                            op.target_id
+                        )),
+                    ))
+                    .await?;
+                if summary["id"] != op.target_id.as_str()
+                    || crate::local_model::legacy_ask_local(&summary)
+                {
+                    diagnostic.category = Category::Refused;
+                    return Err("Ask chats are read-only. This saved message stays unsent.");
+                }
+            }
             if op.kind == "chat-send" && intent.automatic.is_none() {
                 if !crate::delivery_store::token(&op.target_id) {
                     return Err("Invalid Local chat target");

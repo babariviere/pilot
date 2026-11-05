@@ -125,7 +125,7 @@ pub fn run_mission_comments_probe(cx: &mut HeadlessAppContext) {
             let chats: Arc<Vec<Chat>> = Arc::new(
                 [("chat-A", "Coordinator chat"), ("chat-B", "Planner 計画 with a long title")]
                     .iter()
-                    .map(|(id, title)| crate::local_model::chat(&json!({"id":id,"title":title,"projectId":"project-A","cwd":"/synthetic/A","mode":"ask","state":"idle"})).unwrap())
+                    .map(|(id, title)| crate::local_model::chat(&json!({"id":id,"title":title,"projectId":"project-A","cwd":"/synthetic/A","mode":"build","state":"idle"})).unwrap())
                     .collect(),
             );
             let (h, view) = cx

@@ -1318,6 +1318,7 @@ async fn coordinator_images_keep_exact_delivery_and_drafts_on_refusal_or_unknown
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Behavior {
     Diagnostic,
+    LegacyAsk,
     ImageBuild,
     ImageCoordinator,
     AnswerIdle,
@@ -1351,6 +1352,7 @@ struct Seen {
     offline: bool,
     question_replies: bool,
     image_coordinator: bool,
+    legacy_ask: bool,
     bad_identity: bool,
     requests: Vec<(String, String)>,
     operations: BTreeMap<String, Value>,
@@ -1437,7 +1439,7 @@ impl Daemon {
                                 }
                                 else if method=="GET"&&path.starts_with("/api/sessions/") {
                                     let id=path.rsplit('/').next().unwrap();
-                                    json!({"id":id,"mode":if matches!(behavior,Behavior::ImageBuild|Behavior::ImageCoordinator){"build"}else{"ask"},"missionCoordinator":seen.image_coordinator||behavior==Behavior::ImageCoordinator,"control":behavior==Behavior::Readonly,"state":if matches!(behavior,Behavior::AnswerIdle|Behavior::AnswerLost|Behavior::AnswerDelegated){"idle"}else{"working"},"role":if behavior==Behavior::AnswerDelegated{Some("review")}else if behavior==Behavior::Diagnostic{Some("diagnostics")}else{None},"diagnosticScope":if behavior==Behavior::Diagnostic{Some("app")}else{None},"projectId":seen.projects.get(id)})
+                                    json!({"id":id,"mode":if matches!(behavior,Behavior::ImageBuild|Behavior::ImageCoordinator){"build"}else{"ask"},"missionRole":if behavior==Behavior::LegacyAsk||seen.legacy_ask{None}else{Some("explorer")},"missionCoordinator":seen.image_coordinator||behavior==Behavior::ImageCoordinator,"control":behavior==Behavior::Readonly,"state":if matches!(behavior,Behavior::AnswerIdle|Behavior::AnswerLost|Behavior::AnswerDelegated){"idle"}else{"working"},"role":if behavior==Behavior::AnswerDelegated{Some("review")}else if behavior==Behavior::Diagnostic{Some("diagnostics")}else{None},"diagnosticScope":if behavior==Behavior::Diagnostic{Some("app")}else{None},"projectId":seen.projects.get(id)})
                                 } else if method=="POST"&&path.ends_with("/stop") {
                                     seen.stops+=1;
                                     if behavior==Behavior::LostStop{lose_response=true;}
@@ -1842,6 +1844,92 @@ async fn pending_checks_do_not_repost_and_cold_load_waits_for_recovery_tick() {
     client.command(WriteCommand::Check { id, retry: false });
     until(&updates, |s| s.notice == "Sending…").await;
     assert_eq!(daemon.seen.lock().unwrap().envelopes.len(), 1);
+}
+
+/// A retired ordinary Ask chat takes explicit Stop, never a message.
+#[tokio::test]
+async fn legacy_ask_refuses_messages_but_admits_explicit_stop() {
+    let daemon = Daemon::start(Behavior::LegacyAsk).await;
+    let temp = Temp::new();
+    let (client, updates) = ready(&daemon, &temp).await;
+    submit(&client, "chat:a", 1, "保持 draft 👩‍💻 e\u{301}", 1, false);
+    let state = until(&updates, |s| s.handled.get("chat:a") == Some(&1)).await;
+    let book = state.book.clone().unwrap();
+    assert_eq!(book.drafts["chat:a"].text, "保持 draft 👩‍💻 e\u{301}");
+    {
+        let seen = daemon.seen.lock().unwrap();
+        assert_eq!(seen.executions, 0);
+        assert!(
+            seen.envelopes.is_empty(),
+            "no message reaches a retired Ask chat"
+        );
+        assert_eq!(seen.stops, 0);
+    }
+    // The saved envelope stays exactly as captured, never reinterpreted or dropped.
+    let pending: Vec<_> = book.pending.values().cloned().collect();
+    assert!(
+        pending
+            .iter()
+            .all(|i| i.state == "unknown" && i.operation.is_some())
+    );
+    assert!(client.command(WriteCommand::Submit {
+        key: "chat:b".into(),
+        draft: Box::new(draft(1, "")),
+        follow_up: false,
+        stop: true,
+        request: 2,
+    }));
+    let state = until(&updates, |s| s.handled.get("chat:b") == Some(&2)).await;
+    assert!(state.error.is_none(), "{:?}", state.error);
+    assert_eq!(daemon.seen.lock().unwrap().stops, 1);
+    assert_eq!(daemon.seen.lock().unwrap().executions, 0);
+    let after = state.book.as_ref().unwrap();
+    assert!(
+        after.drafts["chat:b"]
+            .recovered
+            .iter()
+            .any(|r| r == "synthetic queued input"),
+        "withdrawn queued text is kept"
+    );
+    for intent in &pending {
+        assert!(after.pending.get(&intent.id) == Some(intent));
+    }
+    assert!(client.command(WriteCommand::Close));
+    until(&updates, |s| s.flushed).await;
+}
+
+/// A pending envelope saved before its chat counted as retired Ask is kept but never re-entered.
+#[tokio::test]
+async fn legacy_ask_pending_envelope_is_kept_without_dispatch() {
+    let daemon = Daemon::start(Behavior::Pending).await;
+    let temp = Temp::new();
+    let (client, updates) = ready(&daemon, &temp).await;
+    submit(&client, "chat:a", 1, "pending before retirement", 1, false);
+    let state = until(&updates, |s| s.handled.get("chat:a") == Some(&1)).await;
+    let id = state.book.as_ref().unwrap().drafts["chat:a"]
+        .pending
+        .clone()
+        .unwrap();
+    let intent = state.book.as_ref().unwrap().pending[&id].clone();
+    let envelopes = {
+        let mut seen = daemon.seen.lock().unwrap();
+        seen.legacy_ask = true;
+        seen.envelopes.len()
+    };
+    client.command(WriteCommand::Check {
+        id: id.clone(),
+        retry: true,
+    });
+    let state = until(&updates, |s| s.notice.contains("Ask chats are read-only")).await;
+    assert_eq!(daemon.seen.lock().unwrap().envelopes.len(), envelopes);
+    // Only its delivery observation may change; the envelope stays exact.
+    let kept = &state.book.as_ref().unwrap().pending[&id];
+    assert!(kept.operation == intent.operation && kept.state == intent.state);
+    assert!(
+        kept.key == intent.key && kept.target == intent.target && kept.revision == intent.revision
+    );
+    assert!(client.command(WriteCommand::Close));
+    until(&updates, |s| s.flushed).await;
 }
 
 #[tokio::test]

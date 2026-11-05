@@ -95,7 +95,7 @@ fn one(cx: &mut HeadlessAppContext, width: f32, mode: ThemeMode, dir: &Option<Pa
                             [("mission-A".to_owned(), NAME.to_owned())].into_iter().collect(),
                         ));
                         let chat = |extra: serde_json::Value| {
-                            let mut base = json!({"title":"Chat","projectId":"project-A","cwd":"/synthetic/A","mode":"ask","state":"idle"});
+                            let mut base = json!({"title":"Chat","projectId":"project-A","cwd":"/synthetic/A","mode":"build","state":"idle"});
                             base.as_object_mut()
                                 .unwrap()
                                 .extend(extra.as_object().unwrap().clone());

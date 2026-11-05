@@ -56,7 +56,7 @@ impl Daemon {
             .unwrap();
         let options = LocalOptions::synthetic(listener.local_addr().unwrap().port());
         let seen = Arc::new(Mutex::new(Seen {
-            source: json!({"id":"source","projectId":"project","title":"Source title","mode":"ask","state":"working"}),
+            source: json!({"id":"source","projectId":"project","title":"Source title","mode":"build","state":"working"}),
             hello: json!({"daemonId":"test-daemon","lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true,"guardedMissionConversion":true}}),
             posts: Vec::new(),
             bodies: Vec::new(),

@@ -131,6 +131,9 @@ pub(crate) struct ChatEditor {
     cache: BTreeMap<String, Draft>,
     selected: Option<String>,
     writable: bool,
+    /// The selected chat is a retired ordinary Ask chat: read-only, but its
+    /// already active work can still be stopped.
+    legacy_ask: bool,
     busy: bool,
     input_generation: Option<(String, u64)>,
     thinking: bool,
@@ -239,6 +242,7 @@ impl ChatEditor {
             cache: BTreeMap::new(),
             selected: None,
             writable: false,
+            legacy_ask: false,
             busy: false,
             input_generation: None,
             thinking: false,
@@ -375,6 +379,7 @@ impl ChatEditor {
         self.selected = None;
         self.project_picker = None;
         self.writable = false;
+        self.legacy_ask = false;
         self.busy = false;
         self.background_work = false;
         self.jobs_only = false;
@@ -516,6 +521,7 @@ impl ChatEditor {
         self.attachments.choosing = None;
         self.attachment_coordinator(false, cx);
         self.writable = writable;
+        self.legacy_ask = false;
         self.busy = busy;
         self.thinking = false;
         self.compacting = false;
@@ -535,6 +541,17 @@ impl ChatEditor {
         self.writable = writable;
         self.busy = busy;
         cx.notify();
+    }
+    /// Marks the selected chat as retired Ask: Send stays unavailable, Stop doesn't.
+    pub(crate) fn legacy_ask(&mut self, legacy: bool, cx: &mut Context<Self>) {
+        if self.legacy_ask != legacy {
+            self.legacy_ask = legacy;
+            cx.notify();
+        }
+    }
+    /// Stop is admitted apart from Send.
+    fn stoppable(&self) -> bool {
+        self.writable || self.legacy_ask
     }
 
     pub(crate) fn activity(&mut self, active: bool, cx: &mut Context<Self>) {
@@ -941,7 +958,7 @@ impl ChatEditor {
         } else {
             "Stop current work. Withdrawn queued text is kept for recovery."
         })
-        .disabled(!self.ready() || !self.writable || self.waiting() || self.error.is_some())
+        .disabled(!self.ready() || !self.stoppable() || self.waiting() || self.error.is_some())
         .on_click(cx.listener(move |view, _, window, cx| {
             if view.selected == selected {
                 view.submit(true, window, cx);
@@ -1065,7 +1082,11 @@ impl ChatEditor {
             return;
         }
         if !self.ready()
-            || !self.writable
+            || !(if stop {
+                self.stoppable()
+            } else {
+                self.writable
+            })
             || self.waiting()
             || self.marked(window, cx)
             || self.error.is_some()
@@ -1624,7 +1645,9 @@ impl Render for ChatEditor {
             self.sync_project_rows_enabled(cx);
         }
         // The placeholder states what typing does here, including read-only.
-        let placeholder = if !self.writable {
+        let placeholder = if self.legacy_ask && !self.writable {
+            "Ask chats are read-only."
+        } else if !self.writable {
             "This chat is read-only."
         } else if is_new && self.diagnostic_chat() {
             "What would you like to investigate?"

@@ -240,8 +240,8 @@ fn mount(
                     v.state.generation = 1;
                     v.generation = 1;
                     v.state.chats = Arc::new(vec![
-                        crate::local_model::chat(&json!({"id":"plain","title":"Ordinary chat","projectId":"project-A","cwd":"/synthetic/A","mode":"ask","state":"idle"})).unwrap(),
-                        crate::local_model::chat(&json!({"id":REPORT,"title":"Weekly Insights 日本語","projectId":"project-A","missionId":"mission-A","cwd":"/synthetic/A","mode":"ask","state":"idle","role":"insights","model":fx::TERRA})).unwrap(),
+                        crate::local_model::chat(&json!({"id":"plain","title":"Ordinary chat","projectId":"project-A","cwd":"/synthetic/A","mode":"build","state":"idle"})).unwrap(),
+                        crate::local_model::chat(&json!({"id":REPORT,"title":"Weekly Insights 日本語","projectId":"project-A","missionId":"mission-A","cwd":"/synthetic/A","mode":"build","state":"idle","role":"insights","model":fx::TERRA})).unwrap(),
                     ]);
                     v.state.projects = Arc::new(
                         crate::local_model::projects(&json!([

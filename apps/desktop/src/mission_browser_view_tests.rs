@@ -105,7 +105,7 @@ fn late_source_or_generation_never_relabels_a_page_or_enables_a_chat_link(cx: &m
         v.online=false;assert!(!v.can_open(&f::key("mission-A"),7));assert_eq!(v.catalog.as_ref().unwrap().rows.len(),3);
         v.online=true;v.generation=8;v.route=Some(Route::Detail(f::key("mission-A")));
         let d=Arc::new(model::detail(&f::key("mission-A"),&f::detail("mission-A")).unwrap());let m=Arc::new(model::members(&d,&f::members("mission-A")).unwrap());
-        v.chats=Arc::new(vec![crate::local_model::chat(&serde_json::json!({"id":"chat-A","projectId":"project-A","title":"Same chat title","state":"idle","mode":"ask"})).unwrap()]);
+        v.chats=Arc::new(vec![crate::local_model::chat(&serde_json::json!({"id":"chat-A","projectId":"project-A","title":"Same chat title","state":"idle","mode":"build"})).unwrap()]);
         v.accept(Response{generation:8,route:Route::Detail(f::key("mission-A")),result:Ok(Data::Detail(d.clone(),Ok(m.clone())))},cx);
         assert!(v.can_link(&d.key,"chat-A",8));assert!(!v.can_link(&d.key,"chat-A",7));assert!(!v.can_link(&d.key,"not-loaded",8));assert!(!v.can_link(&f::key("mission-B"),"chat-A",8));
         let mut metadata=(*v.chats).clone();metadata[0].title="Streaming metadata rename".into();metadata[0].busy=true;assert!(!v.link_availability_changed(&metadata));metadata[0].project_id=Some("project-B".into());assert!(v.link_availability_changed(&metadata));
@@ -340,7 +340,7 @@ fn coordinator_jump_opens_only_the_displayed_missions_exact_coordinator(cx: &mut
     });
     let chat = |id: &str, title: &str, extra: serde_json::Value| {
         let mut v =
-            json!({"id":id,"title":title,"projectId":"project-A","state":"idle","mode":"ask"});
+            json!({"id":id,"title":title,"projectId":"project-A","state":"idle","mode":"build"});
         v.as_object_mut()
             .unwrap()
             .extend(extra.as_object().unwrap().clone());

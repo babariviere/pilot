@@ -55,7 +55,7 @@ pub fn run_project_add_probe(cx: &mut HeadlessAppContext) {
             let mut v=LocalViewer::build(None,Some(writer.clone()),w,cx);
             v.selected=Some("source".into());v.title="Keep this conversation".into();v.generation=1;v.state.generation=1;
             v.state.loaded=true;v.state.projects_loaded=true;v.state.list_loaded=true;v.state.status="Synthetic Local fixture".into();
-            v.state.chats=Arc::new(vec![crate::local_model::chat(&json!({"id":"source","title":"Keep this conversation","mode":"ask","cwd":"/synthetic/original","state":"idle"})).unwrap()]);
+            v.state.chats=Arc::new(vec![crate::local_model::chat(&json!({"id":"source","title":"Keep this conversation","mode":"build","cwd":"/synthetic/original","state":"idle"})).unwrap()]);
             v.transcript.update(cx,|t,cx|t.replace_readonly((1..24).map(|id|Message::live(id,"assistant".into(),format!("Retain this conversation {id}. {}","Synthetic paragraph 日本語 👩‍💻. ".repeat(12)))).collect(),true,cx));
             v.editor.update(cx,|e,cx|e.select("chat:source".into(),true,false,w,cx));
             v.rebuild_nav(w,cx);v.listen_writes(updates,w,cx);v

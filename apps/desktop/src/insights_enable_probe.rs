@@ -201,9 +201,9 @@ fn mount(
                     v.state.list_loaded = true;
                     v.state.generation = 1;
                     v.generation = 1;
-                    let mut chats = vec![crate::local_model::chat(&json!({"id":"plain","title":"Ordinary chat","projectId":"project-A","cwd":"/synthetic/A","mode":"ask","state":"idle"})).unwrap()];
+                    let mut chats = vec![crate::local_model::chat(&json!({"id":"plain","title":"Ordinary chat","projectId":"project-A","cwd":"/synthetic/A","mode":"build","state":"idle"})).unwrap()];
                     if report {
-                        chats.push(crate::local_model::chat(&json!({"id":REPORT,"title":"Weekly Insights 日本語","projectId":"project-A","missionId":"mission-A","cwd":"/synthetic/A","mode":"ask","state":"idle","role":"insights","model":fx::TERRA})).unwrap());
+                        chats.push(crate::local_model::chat(&json!({"id":REPORT,"title":"Weekly Insights 日本語","projectId":"project-A","missionId":"mission-A","cwd":"/synthetic/A","mode":"build","state":"idle","role":"insights","model":fx::TERRA})).unwrap());
                     }
                     v.state.chats = Arc::new(chats);
                     v.state.projects = Arc::new(

@@ -1259,6 +1259,22 @@ fn writable_summary(value: &Value, target: &str) -> Result<(), Failure> {
     }
     Ok(())
 }
+/// Explicit Stop only. A retired Ask chat takes Stop but never a message.
+async fn stoppable(
+    client: &reqwest::Client,
+    options: &LocalOptions,
+    target: &str,
+) -> Result<Value, Failure> {
+    if !crate::delivery_store::token(target) {
+        return Err("Invalid Local chat target");
+    }
+    let value =
+        read_json(client.get(format!("{}/api/sessions/{target}", options.loopback()))).await?;
+    if value["id"] != target || !crate::local_model::stoppable_local(&value) {
+        return Err("This Local conversation is retained, archived, continued or not writable");
+    }
+    Ok(value)
+}
 
 /// An ended turn takes any reply as its next message. A working turn takes
 /// one only for the awaited (`blocking`) ask its run published.
@@ -1305,7 +1321,11 @@ async fn send_preflight(
                 "A model switch is unconfirmed. Inspect and acknowledge it before sending; the draft is retained.",
             );
         }
-        let summary = writable(client, options, target).await?;
+        let summary = if stop {
+            stoppable(client, options, target).await?
+        } else {
+            writable(client, options, target).await?
+        };
         if !stop && !draft.attachments.is_empty() && summary["missionCoordinator"] == true {
             let directory = crate::image_attachments::pasted_directory()
                 .ok_or("Attachment storage is unavailable. This draft was not sent.")?;

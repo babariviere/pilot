@@ -68,7 +68,7 @@ pub(crate) fn run(cx: &mut HeadlessAppContext) {
         v.missions.update(cx,|b,_| b.options(server.options.clone()));
         v.state.projects=Arc::new(crate::local_model::projects(&json!([{"id":"project-A","name":"Synthetic project","path":"/synthetic/A"}])).unwrap());
         v.state.projects_loaded=true;v.state.list_loaded=true;v.state.loaded=true;v.state.status="Synthetic Decisions shell".into();
-        v.state.chats=Arc::new(vec![crate::local_model::chat(&json!({"id":"chat-A","title":"Retained chat","projectId":"project-A","mode":"ask","state":"idle"})).unwrap()]);
+        v.state.chats=Arc::new(vec![crate::local_model::chat(&json!({"id":"chat-A","title":"Retained chat","projectId":"project-A","mode":"build","state":"idle"})).unwrap()]);
         v.selected=Some("chat-A".into());v.generation=1;v.state.generation=1;
         v.transcript.update(cx,|t,cx| t.replace_readonly(rows.clone(),true,cx));
         v.editor.update(cx,|e,cx| e.select("chat:chat-A".into(),true,false,w,cx));

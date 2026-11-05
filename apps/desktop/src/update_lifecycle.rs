@@ -680,7 +680,7 @@ pub(crate) fn probe_update_blockers(cx: &mut gpui_kit::HeadlessAppContext) {
         &json!([{"id":"a","name":"Synthetic Atlas","path":"/synthetic/a"}]),
     )
     .unwrap();
-    let raw = json!({"id":"synthetic","projectId":"a","title":"Atlas conversation","cwd":"/synthetic/a","mode":"ask","state":"idle"});
+    let raw = json!({"id":"synthetic","projectId":"a","title":"Atlas conversation","cwd":"/synthetic/a","mode":"build","state":"idle"});
     let chats = vec![crate::local_model::chat(&raw).unwrap()];
     let (client, _reads) = LocalClient::synthetic_commands();
     let (writer, writes) = Interaction::recording();
