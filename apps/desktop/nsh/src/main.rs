@@ -58,6 +58,12 @@ fn main() -> std::process::ExitCode {
     #[cfg(feature = "native-probes")]
     let work_probe = args.iter().any(|a| a == "--check-work");
     #[cfg(feature = "native-probes")]
+    let history_probe = args.iter().any(|a| a == "--check-history");
+    #[cfg(feature = "native-probes")]
+    if history_probe && let Some(fixture) = &fixture {
+        fixture.history("a", 96);
+    }
+    #[cfg(feature = "native-probes")]
     if work_probe && let Some(fixture) = &fixture {
         fixture.work("a");
     }
@@ -109,6 +115,9 @@ fn main() -> std::process::ExitCode {
             prompts: prompt_probe,
             #[cfg(feature = "native-probes")]
             work: work_probe.then(|| fixture.as_ref().expect("work probe fixture").clone()),
+            #[cfg(feature = "native-probes")]
+            history: history_probe
+                .then(|| fixture.as_ref().expect("history probe fixture").clone()),
         },
     );
     #[cfg(feature = "native-probes")]

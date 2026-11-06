@@ -494,13 +494,14 @@ fn work_view(ui: Ui, location: Location, message: ReadSignal<Message>) -> impl I
 pub(super) fn row(ui: Ui, location: Location, row: Memo<Option<Message>>) -> impl IntoElement {
     each(
         move || row.get().into_iter().collect::<Vec<_>>(),
-        |m| m.id,
+        |m| (m.reader.clone(), m.reader.is_none().then_some(m.id)),
         move |message, _| {
             if message.with_untracked(|m| m.work.is_some()) {
                 work_view(ui, location.clone(), message).into_element()
             } else {
                 view()
                     .min_w(px(0.))
+                    .child(super::history::context(ui, message))
                     .style_when(
                         move || message.with(|m| m.mine),
                         |v| {

@@ -15,6 +15,13 @@ use std::{
     path::PathBuf,
     sync::Arc,
 };
+#[path = "nsh_find.rs"]
+mod find;
+pub use find::{FindSnapshot, FindTarget};
+
+/// Canonical committed reader identity, scoped by the selected location.
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub struct ReaderKey(crate::model::ReaderKey);
 
 /// Captured question and navigation identity. Never a user-message destination.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,7 +72,7 @@ pub struct Prompt {
 }
 
 /// A captured editor location. Old callbacks cannot edit or send in another chat.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct Location {
     pub session: String,
     generation: u64,
@@ -86,6 +93,7 @@ pub struct SidebarRow {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Message {
     pub id: u64,
+    pub reader: Option<ReaderKey>,
     pub source: String,
     pub mine: bool,
     pub plain: bool,
@@ -195,6 +203,10 @@ pub struct Snapshot {
     pub thinking: bool,
     pub earlier: bool,
     pub loading_earlier: bool,
+    pub history_status: String,
+    pub history_loaded: bool,
+    pub behind: bool,
+    pub find: FindSnapshot,
     pub closed: bool,
 }
 
@@ -203,6 +215,7 @@ pub struct Update(Event);
 enum Event {
     Read(Box<Presentation>),
     Write(Box<WriteState>),
+    Find(find::Reply),
 }
 
 /// Event-driven subscriptions. Waiting does not poll or perform UI-thread I/O.
@@ -210,6 +223,7 @@ enum Event {
 pub struct Events {
     reads: async_channel::Receiver<Presentation>,
     writes: async_channel::Receiver<WriteState>,
+    finds: async_channel::Receiver<find::Reply>,
 }
 impl Events {
     /// Wait for the next worker publication, or both workers to close.
@@ -217,8 +231,10 @@ impl Events {
         use futures_util::{FutureExt, select};
         let read = self.reads.recv().fuse();
         let write = self.writes.recv().fuse();
-        futures_util::pin_mut!(read, write);
+        let find = self.finds.recv().fuse();
+        futures_util::pin_mut!(read, write, find);
         select! {
+            value = find => value.ok().map(|v| Update(Event::Find(v))),
             value = read => match value {
                 Ok(value) => Some(Update(Event::Read(Box::new(value)))),
                 Err(_) => self.writes.recv().await.ok().map(|v| Update(Event::Write(Box::new(v)))),
@@ -252,6 +268,8 @@ pub struct Adapter {
     problem: Option<&'static str>,
     access: Vec<crate::database_access::Reply>,
     retiring: BTreeMap<String, u64>,
+    find: find::Find,
+    earlier_request: Option<(u64, u64)>,
 }
 
 impl Adapter {
@@ -260,10 +278,15 @@ impl Adapter {
     pub fn start(options: LocalOptions, state: PathBuf) -> Self {
         let (reader, reads) = LocalClient::start(options.clone());
         let (courier, writes) = Interaction::start(options, Ok(state));
+        let (find, finds) = find::Find::new();
         Self {
             reader,
             courier,
-            events: Events { reads, writes },
+            events: Events {
+                reads,
+                writes,
+                finds,
+            },
             read: Presentation::default(),
             write: WriteState::default(),
             drafts: BTreeMap::new(),
@@ -280,6 +303,8 @@ impl Adapter {
             problem: None,
             access: Vec::new(),
             retiring: BTreeMap::new(),
+            find,
+            earlier_request: None,
         }
     }
 
@@ -296,7 +321,19 @@ impl Adapter {
     /// Apply a publication. A late reader generation never replaces another chat.
     pub fn accept(&mut self, update: Update) {
         match update.0 {
+            Event::Find(reply) => self.find.accept(reply),
             Event::Read(read) => {
+                if read.generation == self.generation {
+                    if self.read.reader_revision != read.reader_revision {
+                        self.find.invalidate();
+                    }
+                    if self
+                        .earlier_request
+                        .is_some_and(|(_, revision)| read.page_revision > revision)
+                    {
+                        self.earlier_request = None;
+                    }
+                }
                 self.memory.observe(&read.chats);
                 if let Some(location) = &self.selected
                     && let Some(chat) = read.chats.iter().find(|c| c.id == location.session)
@@ -336,6 +373,18 @@ impl Adapter {
             }
         }
         self.retire_answer(false);
+        self.refresh_find(false);
+        if self.find.loading && !self.read.page_busy && self.earlier_request.is_none() {
+            if self.read.page_error
+                || self.read.chat_issue
+                || self.read.limited
+                || self.read.cursor.is_none()
+            {
+                self.find.loading = false;
+            } else if let Some(location) = self.selected.clone() {
+                self.earlier(&location);
+            }
+        }
     }
 
     /// Select an exact canonical chat without starting its agent.
@@ -371,6 +420,8 @@ impl Adapter {
             return false;
         }
         self.generation = generation;
+        self.find.reset();
+        self.earlier_request = None;
         self.selected = Some(Location {
             session: id.into(),
             generation,
@@ -729,16 +780,103 @@ impl Adapter {
     }
 
     /// Ask the existing paginated reader for the next older page.
-    pub fn earlier(&self, location: &Location) -> bool {
-        self.current(location)
+    pub fn earlier(&mut self, location: &Location) -> bool {
+        let queued = self.current(location)
             && self.read.generation == location.generation
+            && self.read.loaded
+            && self.earlier_request.is_none()
             && !self.read.page_busy
             && self.read.cursor.is_some_and(|before| {
                 self.reader.command(Command::Earlier {
                     before,
                     generation: location.generation,
                 })
-            })
+            });
+        if queued {
+            self.earlier_request = Some((location.generation, self.read.page_revision));
+            self.read.page_busy = true;
+            self.read.page_error = false;
+        }
+        queued
+    }
+
+    /// Top-scroll retries only on a new approach, never loops on a failed page.
+    pub fn history_top(&mut self, location: &Location) {
+        if !self.read.page_error {
+            self.earlier(location);
+        }
+    }
+
+    /// Reopen only when the production reader omitted newer entries.
+    pub fn latest(&mut self, location: &Location) {
+        if !self.current(location) {
+            return;
+        }
+        if self.read.behind {
+            let generation = self.generation + 1;
+            let command = if self.read.passive_history {
+                Command::OpenArchive {
+                    id: location.session.clone(),
+                    generation,
+                }
+            } else {
+                Command::Open {
+                    id: location.session.clone(),
+                    generation,
+                }
+            };
+            if self.reader.command(command) {
+                self.generation = generation;
+                self.selected = Some(Location {
+                    session: location.session.clone(),
+                    generation,
+                });
+                self.find.reset();
+                self.earlier_request = None;
+            }
+        } else {
+            self.follow(location, true);
+        }
+    }
+
+    pub fn find_open(&mut self, location: &Location, open: bool) {
+        if !self.current(location) {
+            return;
+        }
+        if open {
+            self.find.open = true;
+            self.refresh_find(false);
+        } else {
+            self.find.reset();
+        }
+    }
+    pub fn find_query(&mut self, location: &Location, query: &str) {
+        if !self.current(location) || !self.find.open || self.find.query == query {
+            return;
+        }
+        self.find.invalidate();
+        self.find.query = query.into();
+        self.refresh_find(true);
+    }
+    pub fn find_step(&mut self, location: &Location, previous: bool) {
+        if self.current(location) {
+            self.find.step(previous);
+        }
+    }
+    pub fn find_history(&mut self, location: &Location, loading: bool) {
+        if !self.current(location) || !self.find.open {
+            return;
+        }
+        self.find.loading = loading;
+        self.find.cancelled = !loading;
+        if loading {
+            self.earlier(location);
+        }
+    }
+    fn refresh_find(&mut self, navigate: bool) {
+        if self.read.generation == self.generation {
+            self.find.refresh(&self.read, navigate);
+        }
     }
     /// Reading older text must not be dragged to the streaming tail.
     pub fn follow(&self, location: &Location, following: bool) {
@@ -760,6 +898,7 @@ impl Adapter {
             return false;
         }
         self.closing = true;
+        self.find.reset();
         true
     }
 
@@ -949,6 +1088,7 @@ impl Adapter {
                 .iter()
                 .map(|m| Message {
                     id: m.id(),
+                    reader: m.reader_key().map(ReaderKey),
                     source: if m.image_data().is_some() || m.artifact_data().is_some() {
                         format!("{}\n\nPreview unavailable in this chat slice.", m.source())
                     } else {
@@ -1012,6 +1152,16 @@ impl Adapter {
             thinking: current && self.read.thinking,
             earlier: current && self.read.cursor.is_some(),
             loading_earlier: self.read.page_busy,
+            history_status: if current && self.read.page_error {
+                "Earlier messages unavailable. Try again.".into()
+            } else if current && (self.read.limited || self.read.omitted > 0) {
+                "History is partial".into()
+            } else {
+                String::new()
+            },
+            history_loaded: current && self.read.loaded,
+            behind: current && self.read.behind,
+            find: self.find.snapshot(&self.read, current),
             closed: self.closing
                 && self.write.flushed
                 && self.write.error.is_none()

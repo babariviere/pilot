@@ -126,16 +126,56 @@ set, so Pilot composes the lower-level native controls. No engine or control
 replacement is needed. Disclosure choices live outside recycled cells, keyed by
 chat and canonical calls; an inner keyed region prevents a recycled row from
 keeping another call's callbacks. Navigation generation still fences actions.
-NSH owns keyed-list scroll anchoring and follow-end behavior. This slice does
-not claim full-history or cross-recycled-row selection qualification.
+NSH owns keyed-list scroll anchoring and follow-end behavior. Cross-recycled-row
+selection remains unqualified.
 The list uses NSH's bottom-aligned chat mode. Latest overlays the transcript,
 so revealing that control does not resize the reader viewport.
+
+## Lazy history and Find
+
+The initial chat socket opts into the existing `history=paged-v1` recent window.
+No history GET runs on initial selection. NSH's native
+`on_load_more_at_start` requests the next existing 24-entry page as the reader
+approaches the top. Earlier messages remains a native list-header fallback.
+Canonical `ReaderKey`s, not projected row allocations, key the list. Native
+anchoring preserves the reading position during prepend and concurrent append;
+Latest follows the end and rereads the bounded tail only when the production
+reader says newer entries were omitted.
+
+Find (⌘F) opens a native input with count, wrapping previous/next and Close.
+Enter/Shift-Enter navigate; Escape closes and returns focus to the composer.
+Search is literal and case-sensitive, with the existing 1 KiB query and 1,000-hit
+limits, committed-message eligibility and tool/placeholder exclusions. The tray
+explicitly says Loaded messages only until Load full history finishes the same
+sequential read lane used by the shipping app. Stop loading, query changes,
+close and chat switches cancel further traversal. An already-entered read may
+finish; it never starts another traversal for an old query or location. Failed,
+limited and cancelled coverage never becomes All messages or an unqualified
+No matches. One off-thread scanner coalesces queued work and rejects old results.
+
+Upstream components inspected at unmodified `7571948e`: native Input, Button,
+VirtualList keys/header/start-loading/viewability, ElementRef measurement and
+scroll-to-index, and owner-scoped `on_key`. They cover this workflow without a
+custom scroll engine. NSH does not keep Pilot's cross-chat canonical reader
+marks; a small app-owned in-memory mark uses native measurements and re-pages
+to its key on return. The hidden native 96-entry fixture also exposed a return
+from entry 73 to the tail during concurrent prepend/append despite stable keys.
+The same measured mark is reapplied through native scroll-to-index on prepend.
+NSH's `after_answer` waits for the row props to reach the list; navigation then
+resolves the canonical key again, rather than keeping an index from an old page.
+This is an observed integration mismatch, not a hardware
+scrolling claim or an upstream root-cause diagnosis. It adds no store, transport
+or custom scroll engine. NSH TextView has no public
+literal-source-to-rendered range mapping/paint-range API. As in the shipping
+Find's source context fallback, an exact Unicode context marks the active
+occurrence beside its original row without replacing Markdown or native
+selection. No upstream patches, cache edits or selection workaround is used.
 
 ## Isolated verification
 
 ```sh
 bash apps/desktop/scripts/cargo.sh test --locked -p pilot-nsh \
-  --features native-probes --test chat --test work -- --test-threads=1
+  --features native-probes --test chat --test work --test history -- --test-threads=1
 bash apps/desktop/scripts/cargo.sh clippy --locked -p pilot-nsh \
   --features native-probes --all-targets -- -D warnings
 bash apps/desktop/scripts/cargo.sh build --locked -p pilot-nsh --features native-probes
@@ -164,6 +204,16 @@ requests and restricted roles. These are real NSH views with a synthetic host,
 not mockups or evidence of live approval behavior.
 The native question probe also simulates AppKit marked text and verifies that
 Close does not release it. This is not hardware input-method qualification.
+
+The history matrix uses 96-entry histories across four pages. It checks a passive
+bounded first load, top-triggered prepend with concurrent append, the same reader
+position on chat return, explicit Latest, keyboard Find, an older-page-only
+Unicode match and wrapping navigation. Adapter/headless tests also cover query
+and chat cancellation, reader failure and partial coverage, the inherited query
+and hit limits, and preserved drafts. Native reader checks wait for the canonical
+source and its position, not a transient Latest button during page restoration.
+An isolated history run reproduced missing composer readiness; its cause remains
+unknown. The existing one-click readiness gate and failure evidence are kept.
 
 The matrix also exercises hidden real native work groups in each profile
 (`--check-work`): folded, expanded, live-tail, individual output/code and failure
@@ -199,11 +249,12 @@ Rust formatting, exact shared-pin checks and all 72 CI-wrapper tests also passed
 
 Home, Inbox, Review, Missions, Automations and Settings are visibly unavailable.
 Chat creation, attachments, unsupported permission types,
-full-history Find, persistent sidebar preferences, update/package integration and
+persistent sidebar preferences, update/package integration and
 other workflows remain in the current app. Stored sources remain untouched;
 unsupported image/artifact content shows a placeholder, never a browser fallback.
-Earlier history uses the existing reader, but complete long-history navigation
-and anchor qualification remain later acceptance work.
+Lazy-history/Find tests use synthetic multi-page histories through the real
+production reader, not live conversations. Hardware scrolling/selection and
+release-build long-history performance remain acceptance work.
 
 Tests and captures do not qualify hardware IME, cross-recycled-row selection,
 large-history speed, OS shutdown/logout, power loss, updater close coordination or

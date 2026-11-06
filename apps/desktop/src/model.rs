@@ -12,7 +12,7 @@ pub(crate) const TICK_MS: u64 = 250;
 
 /// Session-relative canonical identity. The Local reader/cache supplies owner
 /// and generation qualification. Never derived from a presentation allocation.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum ReaderKey {
     Entry {
         entry: u64,

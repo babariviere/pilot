@@ -1,6 +1,7 @@
 //! Native chat migration using Pilot's shipping Local reader, courier and Store.
 #[cfg(feature = "native-probes")]
 pub mod fixture;
+mod history;
 #[path = "../../../../experiments/nsh-pilot/src/icons.rs"]
 mod icons;
 #[path = "../../../../experiments/nsh-pilot/src/theme.rs"]
@@ -66,6 +67,7 @@ struct Ui {
     snapshot: Signal<Snapshot>,
     composing: Signal<bool>,
     disclosures: Signal<transcript::Choices>,
+    readings: Stored<history::Readings>,
 }
 impl Ui {
     fn publish(self) {
@@ -542,6 +544,23 @@ fn conversation(ui: Ui, location: Location) -> impl IntoElement {
     let stop_location = location.clone();
     let earlier_location = location.clone();
     let follow_location = location.clone();
+    let top_location = location.clone();
+    let latest_location = location.clone();
+    let reader = history::Reader::new(ui, location.clone(), list);
+    let find = history::Controls::new(ui, location.clone(), list, editor, reader.clone());
+    let row_reader = reader.clone();
+    let scroll_reader = reader.clone();
+    let latest_reader = reader.clone();
+    watch_scroll(
+        move || list.node(),
+        move |event| {
+            let remaining = event.content_size.height.0 - event.size.height.0 - event.offset.y.0;
+            gap.set(remaining);
+            scroll_reader.scrolled(remaining < 40.);
+            ui.adapter
+                .with(|a| a.follow(&follow_location, remaining < 40.));
+        },
+    );
     view()
         .flex_1()
         .min_w(px(0.))
@@ -568,22 +587,16 @@ fn conversation(ui: Ui, location: Location) -> impl IntoElement {
                             label(move || ui.snapshot.with(|s| s.project.clone()), 11.)
                                 .text_color(META),
                         ),
-                ),
+                )
+                .child(find.trigger()),
         )
+        .child(find.bar())
         .child(when(
-            move || ui.snapshot.with(|s| s.earlier),
+            move || ui.snapshot.with(|s| !s.history_status.is_empty()),
             move || {
-                let location = earlier_location.clone();
-                button()
-                    .accessibility_label("Earlier messages")
-                    .disabled(move || ui.snapshot.with(|s| s.loading_earlier))
-                    .on_press(move || {
-                        ui.adapter.with(|a| {
-                            a.earlier(&location);
-                        });
-                    })
-                    .h(px(28.))
-                    .child(label("Earlier messages", 11.).text_color(META))
+                label(move || ui.snapshot.with(|s| s.history_status.clone()), 11.)
+                    .px(px(24.))
+                    .text_color(WARNING)
             },
         ))
         .child(
@@ -599,7 +612,9 @@ fn conversation(ui: Ui, location: Location) -> impl IntoElement {
                             let row = computed(move || {
                                 ui.snapshot.with(|s| s.messages.get(at.index()).cloned())
                             });
+                            let reference = row_reader.row(row);
                             view()
+                                .element_ref(&reference)
                                 .w_full()
                                 .max_w(px(912.))
                                 .self_center()
@@ -608,11 +623,16 @@ fn conversation(ui: Ui, location: Location) -> impl IntoElement {
                         },
                     )
                     .test_id("transcript")
+                    .focusable(true)
                     .element_ref(&list)
                     .flex_1()
                     .keys(move || {
-                        ui.snapshot
-                            .with(|s| s.messages.iter().map(|m| m.id).collect::<Vec<_>>())
+                        ui.snapshot.with(|s| {
+                            s.messages
+                                .iter()
+                                .map(|m| (m.reader.clone(), m.reader.is_none().then_some(m.id)))
+                                .collect::<Vec<_>>()
+                        })
                     })
                     .estimated_item_size(px(200.))
                     .alignment(nsh_core::ListAlignment::Bottom)
@@ -620,17 +640,37 @@ fn conversation(ui: Ui, location: Location) -> impl IntoElement {
                     .content_padding_x(px(24.))
                     .content_padding_y(px(26.))
                     .row_gap(px(28.))
-                    .on_scroll(move |event: &ScrollEvent| {
-                        let remaining =
-                            event.content_size.height.0 - event.size.height.0 - event.offset.y.0;
-                        gap.set(remaining);
-                        ui.adapter
-                            .with(|a| a.follow(&follow_location, remaining < 40.));
+                    .header(when(
+                        move || ui.snapshot.with(|s| s.earlier),
+                        move || {
+                            let location = earlier_location.clone();
+                            button()
+                                .accessibility_label("Earlier messages")
+                                .disabled(move || ui.snapshot.with(|s| s.loading_earlier))
+                                .on_press(move || {
+                                    ui.adapter.with(|a| {
+                                        a.earlier(&location);
+                                    });
+                                    ui.publish();
+                                })
+                                .h(px(28.))
+                                .child(label("Earlier messages", 11.).text_color(META))
+                        },
+                    ))
+                    .on_viewable_items_change(move |items: &nsh_core::element::ViewableItems| {
+                        reader.visible(items)
+                    })
+                    .load_more_at_start_threshold(0.25)
+                    .on_load_more_at_start(move || {
+                        ui.adapter.with(|a| a.history_top(&top_location));
+                        ui.publish();
                     }),
                 )
                 .child(when(
-                    move || gap.get() > 40.,
+                    move || gap.get() > 40. || ui.snapshot.with(|s| s.behind),
                     move || {
+                        let location = latest_location.clone();
+                        let latest_reader = latest_reader.clone();
                         button()
                             .accessibility_label("Latest message")
                             .h(px(28.))
@@ -640,7 +680,12 @@ fn conversation(ui: Ui, location: Location) -> impl IntoElement {
                             .px(px(10.))
                             .rounded(px(6.))
                             .bg(CARD)
-                            .on_press(move || list.scroll_to_end(false))
+                            .on_press(move || {
+                                latest_reader.latest();
+                                ui.adapter.with(|a| a.latest(&location));
+                                ui.publish();
+                                list.scroll_to_end(false);
+                            })
                             .child(label("Latest", 12.))
                     },
                 )),
@@ -915,6 +960,7 @@ fn workbench(config: Config) -> impl IntoElement {
         snapshot,
         composing: signal(false),
         disclosures: signal(transcript::Choices::default()),
+        readings: stored(history::Readings::default()),
     };
     let events = adapter.with(|a| a.events());
     let close = config.close;
@@ -975,7 +1021,7 @@ fn workbench(config: Config) -> impl IntoElement {
         ))
         .child(each(
             move || snapshot.with(|s| s.location.clone().into_iter().collect::<Vec<_>>()),
-            |l| l.session.clone(),
+            |l| l.clone(),
             move |location, _| conversation(ui, location.get()),
         ))
 }

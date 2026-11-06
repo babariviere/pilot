@@ -328,6 +328,8 @@ async fn existing_output_bounds_keep_the_limit_disclosure_and_full_script_source
         call.output, call.shown_output,
         "an incomplete non-header result stays literal"
     );
+    // Reader readiness is independent of the courier's initial Store open.
+    until(&mut adapter, |s| s.editable).await;
     assert!(adapter.close());
     until(&mut adapter, |s| s.closed).await;
 }

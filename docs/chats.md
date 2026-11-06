@@ -29,6 +29,10 @@ On macOS, **⌘.** stops the open chat's working agent.
 ## Read and review
 
 Older history loads as you scroll. Work and tool activity can be expanded for details.
+In the additive NSH app, **Find** (⌘F) searches literal, case-sensitive message
+source. Choose **Load full history** to include older pages. The coverage label
+shows when only loaded messages were searched, or loading stopped or failed.
+Enter and Shift-Enter move through matches. Escape closes Find.
 Build chats expose changes, artifacts, and related pull requests. A diff preview
 does not itself apply a change.
 

@@ -30,6 +30,9 @@ pub struct State {
     pub decisions: Vec<(String, Value)>,
     pub lose_decision_ack: bool,
     pub refuse_decision: bool,
+    pub histories: BTreeMap<String, Vec<Value>>,
+    pub history_failure: bool,
+    pub history_delay_ms: u64,
 }
 
 /// A process-local synthetic daemon on an OS-assigned loopback port.
@@ -103,6 +106,26 @@ impl Fixture {
     }
     pub fn changed(&self) {
         let _ = self.changes.send(());
+    }
+    /// Multiple real reader pages; the old-only query preserves exact Unicode.
+    pub fn history(&self, session: &str, count: u64) {
+        self.state.lock().expect("fixture state").histories.insert(session.into(),
+            (1..=count).map(|id| entry(id, if id % 2 == 0 { "user" } else { "assistant" },
+                &if id == 3 || id == 7 { format!("Older {id}: {HISTORY_QUERY} and {HISTORY_QUERY}  ") }
+                else { format!("History message {id}. Exact source 日本語 👩🏽‍💻.\n\nA readable paragraph for the native reader.") })).collect());
+        self.changed();
+    }
+    pub fn append_history(&self, session: &str) {
+        let mut state = self.state.lock().expect("fixture state");
+        let entries = state.histories.get_mut(session).expect("paged fixture");
+        let next = entries.last().unwrap()["id"].as_u64().unwrap() + 1;
+        entries.push(entry(
+            next,
+            "assistant",
+            &format!("Concurrent append {next}. 日本語"),
+        ));
+        drop(state);
+        self.changed();
     }
     pub fn question(&self, session: &str, id: u64, data: Value) {
         self.state.lock().expect("fixture state").questions.insert(
@@ -188,6 +211,7 @@ impl Drop for Fixture {
     }
 }
 
+pub const HISTORY_QUERY: &str = "cafe\u{301} 👩🏽‍💻 <&> 日本語";
 fn entry(id: u64, role: &str, text: &str) -> Value {
     json!({"id":id,"kind":format!("pi.{role}"),"model":[{"role":role,"content":[{"type":"text","text":text}]}]})
 }
@@ -253,62 +277,82 @@ async fn connection_task(
         }
         let mut seq = 0;
         let mut last_text: Option<String> = None;
+        let mut history_sent = 0;
         loop {
             let publication = {
                 let state = state.lock().expect("fixture state");
                 if let Some(id) = &id {
                     seq += 1;
-                    let mut entries = vec![
-                        entry(1, "user", "Keep the current app usable."),
-                        entry(
-                            2,
-                            "assistant",
-                            "This chat uses the production Local reader and courier.\n\n日本語 and **native Markdown** stay readable.",
-                        ),
-                    ];
-                    let mut saved = state.messages.get(id).cloned().unwrap_or_default();
-                    let working = state.working.as_deref() == Some(id);
-                    let live = working.then(|| saved.pop()).flatten();
-                    entries.extend(saved);
-                    let question = state.questions.get(id).cloned().unwrap_or(Value::Null);
-                    if !question.is_null() {
-                        entries.push(question.clone());
-                    }
-                    let events = if let Some(work) = state.work_events.get(id) {
-                        let mut events = vec![
-                            json!({"type":"snapshot","entries":entries,"history":{"context":{"conversationId":0,"tail":100},"more":false}}),
-                        ];
-                        events.extend(work.clone());
-                        events
-                    } else if let Some(live) = live {
-                        let text = live["model"][0]["content"][0]["text"]
-                            .as_str()
-                            .unwrap_or("")
-                            .to_owned();
-                        let events = if let Some(previous) = &last_text {
+                    if let Some(history) = state.histories.get(id) {
+                        let tail = history.last().unwrap()["id"].as_u64().unwrap();
+                        let events = if history_sent == 0 {
+                            let start = history.len().saturating_sub(24);
+                            let before = history[start]["id"].clone();
                             vec![
-                                json!({"type":"message_update","changes":[{"type":"text_delta","contentIndex":0,"delta":text.strip_prefix(previous).unwrap_or("")}]}),
+                                json!({"type":"snapshot","entries":&history[start..],"history":{"context":{"conversationId":0,"tail":tail},"more":start>0,"before":before,"question":null}}),
+                            ]
+                        } else {
+                            history
+                                .iter()
+                                .filter(|entry| entry["id"].as_u64().unwrap() > history_sent)
+                                .map(|entry| json!({"type":"message_end","entry":entry}))
+                                .collect()
+                        };
+                        history_sent = tail;
+                        json!({"type":"events","sessionId":id,"seq":seq,"events":events})
+                    } else {
+                        let mut entries = vec![
+                            entry(1, "user", "Keep the current app usable."),
+                            entry(
+                                2,
+                                "assistant",
+                                "This chat uses the production Local reader and courier.\n\n日本語 and **native Markdown** stay readable.",
+                            ),
+                        ];
+                        let mut saved = state.messages.get(id).cloned().unwrap_or_default();
+                        let working = state.working.as_deref() == Some(id);
+                        let live = working.then(|| saved.pop()).flatten();
+                        entries.extend(saved);
+                        let question = state.questions.get(id).cloned().unwrap_or(Value::Null);
+                        if !question.is_null() {
+                            entries.push(question.clone());
+                        }
+                        let events = if let Some(work) = state.work_events.get(id) {
+                            let mut events = vec![
+                                json!({"type":"snapshot","entries":entries,"history":{"context":{"conversationId":0,"tail":100},"more":false}}),
+                            ];
+                            events.extend(work.clone());
+                            events
+                        } else if let Some(live) = live {
+                            let text = live["model"][0]["content"][0]["text"]
+                                .as_str()
+                                .unwrap_or("")
+                                .to_owned();
+                            let events = if let Some(previous) = &last_text {
+                                vec![
+                                    json!({"type":"message_update","changes":[{"type":"text_delta","contentIndex":0,"delta":text.strip_prefix(previous).unwrap_or("")}]}),
+                                ]
+                            } else {
+                                vec![
+                                    json!({"type":"snapshot","entries":entries,"history":{"context":{"conversationId":0,"tail":100},"more":false,"question":null}}),
+                                    json!({"type":"message_start","message":{"role":"assistant","content":[{"type":"text","text":"A"}]}}),
+                                    json!({"type":"message_update","changes":[{"type":"text_delta","contentIndex":0,"delta":text.strip_prefix('A').unwrap_or(&text)}]}),
+                                ]
+                            };
+                            last_text = Some(text);
+                            events
+                        } else if last_text.take().is_some() {
+                            vec![
+                                json!({"type":"message_end","entry":entries.last()}),
+                                json!({"type":"run_end"}),
                             ]
                         } else {
                             vec![
-                                json!({"type":"snapshot","entries":entries,"history":{"context":{"conversationId":0,"tail":100},"more":false,"question":null}}),
-                                json!({"type":"message_start","message":{"role":"assistant","content":[{"type":"text","text":"A"}]}}),
-                                json!({"type":"message_update","changes":[{"type":"text_delta","contentIndex":0,"delta":text.strip_prefix('A').unwrap_or(&text)}]}),
+                                json!({"type":"snapshot","entries":entries,"run":if question["data"]["blocking"]==true {json!({"startedAt":1})}else{Value::Null},"history":{"context":{"conversationId":0,"tail":100},"more":false,"question":question}}),
                             ]
                         };
-                        last_text = Some(text);
-                        events
-                    } else if last_text.take().is_some() {
-                        vec![
-                            json!({"type":"message_end","entry":entries.last()}),
-                            json!({"type":"run_end"}),
-                        ]
-                    } else {
-                        vec![
-                            json!({"type":"snapshot","entries":entries,"run":if question["data"]["blocking"]==true {json!({"startedAt":1})}else{Value::Null},"history":{"context":{"conversationId":0,"tail":100},"more":false,"question":question}}),
-                        ]
-                    };
-                    json!({"type":"events","sessionId":id,"seq":seq,"events":events})
+                        json!({"type":"events","sessionId":id,"seq":seq,"events":events})
+                    }
                 } else {
                     json!({"type":"sessions","sessions":summaries(&state)})
                 }
@@ -371,6 +415,10 @@ async fn connection_task(
         return;
     }
     let payload: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    if path.contains("/history?") {
+        let delay = state.lock().unwrap().history_delay_ms;
+        tokio::time::sleep(Duration::from_millis(delay)).await;
+    }
     let mut lost = false;
     let mut notify = false;
     let mut status = 200;
@@ -384,7 +432,47 @@ async fn connection_task(
             ("GET", "/api/projects") => projects(),
             ("GET", "/api/sessions?archived=all") => summaries(&state),
             ("GET", path) if path.contains("/history?") => {
-                json!({"entries":[entry(1,"user","Read-only history"),entry(2,"assistant","Legacy Ask stays passive.")],"more":false})
+                if state.history_failure {
+                    status = 503;
+                    json!({"error":"synthetic reader failure"})
+                } else if let Some(entries) = path
+                    .strip_prefix("/api/sessions/")
+                    .and_then(|s| s.split('/').next())
+                    .and_then(|id| state.histories.get(id))
+                {
+                    let parameter = |name: &str| {
+                        path.split_once('?').unwrap().1.split('&').find_map(|p| {
+                            p.strip_prefix(&format!("{name}="))
+                                .and_then(|n| n.parse::<u64>().ok())
+                        })
+                    };
+                    let before = parameter("before").unwrap();
+                    let view = path.split_once("view=").map(|(_, value)| {
+                        let mut bytes = Vec::new();
+                        let mut parts = value.as_bytes().iter().copied();
+                        while let Some(byte) = parts.next() {
+                            bytes.push(if byte == b'%' {
+                                let hex = [parts.next().unwrap(), parts.next().unwrap()];
+                                u8::from_str_radix(std::str::from_utf8(&hex).unwrap(), 16).unwrap()
+                            } else {
+                                byte
+                            });
+                        }
+                        serde_json::from_slice::<Value>(&bytes).unwrap()
+                    });
+                    let tail = view
+                        .as_ref()
+                        .and_then(|v| v["tail"].as_u64())
+                        .unwrap_or_else(|| entries.last().unwrap()["id"].as_u64().unwrap());
+                    let older: Vec<_> = entries
+                        .iter()
+                        .filter(|e| e["id"].as_u64().unwrap() < before)
+                        .collect();
+                    let start = older.len().saturating_sub(24);
+                    json!({"context":{"conversationId":0,"tail":tail},"before":before,"entries":&older[start..],"more":start>0,"nextBefore":(start>0).then(|| older[start]["id"].clone())})
+                } else {
+                    json!({"entries":[entry(1,"user","Read-only history"),entry(2,"assistant","Legacy Ask stays passive.")],"more":false})
+                }
             }
             ("POST", "/api/operations/receipt") => {
                 if state.hide_receipt {

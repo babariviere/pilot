@@ -14,20 +14,20 @@ use std::{
 };
 
 const MATCHES: usize = 1000;
-pub(super) const QUERY_BYTES: usize = 1024;
+pub(crate) const QUERY_BYTES: usize = 1024;
 
 #[derive(Clone, PartialEq, Eq)]
-pub(super) struct Hit {
-    pub(super) key: ReaderKey,
-    pub(super) source: Arc<String>,
-    pub(super) range: Range<usize>,
+pub(crate) struct Hit {
+    pub(crate) key: ReaderKey,
+    pub(crate) source: Arc<String>,
+    pub(crate) range: Range<usize>,
 }
 #[derive(Default)]
-pub(super) struct Results {
-    pub(super) hits: Vec<Hit>,
-    pub(super) limited: bool,
+pub(crate) struct Results {
+    pub(crate) hits: Vec<Hit>,
+    pub(crate) limited: bool,
 }
-pub(super) fn eligible(row: &Message) -> bool {
+pub(crate) fn eligible(row: &Message) -> bool {
     matches!(
         row.reader_key(),
         Some(ReaderKey::Entry { model: Some(_), .. })
@@ -50,7 +50,7 @@ fn placeholder(source: &str) -> bool {
     .any(|s| source.contains(s))
 }
 
-pub(super) fn scan(rows: Vec<Message>, query: &str, cancel: &AtomicBool) -> Results {
+pub(crate) fn scan(rows: Vec<Message>, query: &str, cancel: &AtomicBool) -> Results {
     let mut result = Results::default();
     if query.is_empty() || query.len() > QUERY_BYTES {
         return result;
@@ -89,7 +89,7 @@ pub(super) fn scan(rows: Vec<Message>, query: &str, cancel: &AtomicBool) -> Resu
     }
     result
 }
-pub(super) fn step(active: usize, count: usize, previous: bool) -> usize {
+pub(crate) fn step(active: usize, count: usize, previous: bool) -> usize {
     if count == 0 {
         0
     } else if previous {

@@ -13,7 +13,7 @@ pub(crate) mod message_fold_view;
 #[path = "question_entry_view.rs"]
 pub(crate) mod question_entry_view;
 #[path = "transcript_find.rs"]
-mod transcript_find;
+pub(crate) mod transcript_find;
 #[path = "transcript_find_view.rs"]
 mod transcript_find_view;
 use std::{collections::HashMap, time::Duration};

@@ -61,6 +61,18 @@ def main():
                     path = capture.with_stem(capture.stem + suffix)
                     assert path.stat().st_size > 10000, f"missing work capture: {path}"
                 print(f"PASS {appearance} {width}: native work/Notes/disclosure/keyboard/navigation/Stop")
+            with tempfile.TemporaryDirectory(prefix="nsh-native-history-") as temporary:
+                capture = args.output.resolve() / f"{appearance}-{width}-history.png"
+                command = [str(args.binary.resolve()), "--fixture", "--check-history",
+                           "--state-dir", str(Path(temporary) / "profile"),
+                           "--width", str(width), "--capture", str(capture)]
+                if appearance == "dark":
+                    command.append("--dark")
+                subprocess.run(command, check=True, timeout=60)
+                for suffix in ("", "-prepend", "-find", "-restored", "-latest"):
+                    path = capture.with_stem(capture.stem + suffix)
+                    assert path.stat().st_size > 10000, f"missing history capture: {path}"
+                print(f"PASS {appearance} {width}: lazy pages/anchor/append/Find/Unicode/keyboard/Close")
 
 
 if __name__ == "__main__":

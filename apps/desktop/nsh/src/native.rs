@@ -160,6 +160,8 @@ pub(super) struct Probes {
     pub prompts: bool,
     #[cfg(feature = "native-probes")]
     pub work: Option<std::sync::Arc<pilot_nsh::fixture::Fixture>>,
+    #[cfg(feature = "native-probes")]
+    pub history: Option<std::sync::Arc<pilot_nsh::fixture::Fixture>>,
 }
 pub(super) fn run(
     options: platform::AppOptions,
@@ -225,7 +227,9 @@ pub(super) fn run(
     });
     #[cfg(feature = "native-probes")]
     if let Some(path) = capture {
-        if let Some(fixture) = probes.work {
+        if let Some(fixture) = probes.history {
+            probe::history_start(path, fixture);
+        } else if let Some(fixture) = probes.work {
             probe::work_start(path, fixture);
         } else {
             probe::start(path, probes.restart, probes.prompts);

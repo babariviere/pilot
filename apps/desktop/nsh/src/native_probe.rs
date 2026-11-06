@@ -242,6 +242,258 @@ fn wheel(window: &NSWindow, delta: i32) {
     }
 }
 
+fn app_key(window: &NSWindow, text: &str, code: u16, modifiers: NSEventModifierFlags) {
+    let chars = NSString::from_str(text);
+    let event = NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+        NSEventType::KeyDown, NSPoint::new(0.,0.), modifiers,
+        NSProcessInfo::processInfo().systemUptime(), window.windowNumber(), None, &chars, &chars, false, code
+    ).expect("native app key");
+    // The real upstream local key monitor runs through NSApplication's queue.
+    // No OS event posting, window activation or internal engine dispatch.
+    NSApplication::sharedApplication(MainThreadMarker::from(window))
+        .postEvent_atStart(&event, false);
+}
+
+fn native_text(view: &NSView) -> Option<String> {
+    NSAccessibility::accessibilityValue(view)
+        .and_then(|value| value.downcast::<NSString>().ok())
+        .map(|value| value.to_string())
+}
+fn wait_text(text: &'static str) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !on_main(|w| {
+        descendants(&w.contentView().unwrap())
+            .iter()
+            .any(|view| native_text(view).as_deref() == Some(text))
+    }) {
+        assert!(Instant::now() < deadline, "native text {text} unavailable");
+        std::thread::sleep(Duration::from_millis(30));
+    }
+}
+fn prose_position(window: &NSWindow, prefix: &str) -> Option<f64> {
+    let root = window.contentView()?;
+    descendants(&root).into_iter().find_map(|view| {
+        if view.isHiddenOrHasHiddenAncestor()
+            || !native_text(&view).is_some_and(|s| s.starts_with(prefix))
+        {
+            return None;
+        }
+        let layer = view.layer()?;
+        let rect = layer.convertRect_toLayer(layer.bounds(), root.layer().as_deref());
+        (rect.origin.y >= 76.
+            && rect.origin.y + rect.size.height <= root.bounds().size.height - 62.)
+            .then_some(rect.origin.y)
+    })
+}
+
+pub(super) fn history_start(path: PathBuf, fixture: std::sync::Arc<pilot_nsh::fixture::Fixture>) {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("capture directory");
+    }
+    std::thread::spawn(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let settle = || std::thread::sleep(Duration::from_millis(350));
+            let capture = |suffix: &str| {
+                on_main(|w| {
+                    screenshot(
+                        w,
+                        &path.with_file_name(format!(
+                            "{}{suffix}.png",
+                            path.file_stem().unwrap().to_string_lossy()
+                        )),
+                    )
+                })
+            };
+            let pages = || {
+                fixture
+                    .state
+                    .lock()
+                    .unwrap()
+                    .requests
+                    .iter()
+                    .filter(|(_, p)| p.contains("/history?"))
+                    .count()
+            };
+            wait_for("Open chat a");
+            open_chat("a", &path);
+            settle();
+            assert_eq!(pages(), 0, "initial load is bounded and passive");
+            on_main(|w| {
+                let input = editor(w).unwrap();
+                w.makeFirstResponder(Some(&input));
+                // SAFETY: main-thread native fixture input.
+                unsafe {
+                    input.insertText_replacementRange(
+                        &NSString::from_str("history draft 日本語 👩🏽‍💻"),
+                        NSRange::new(usize::MAX, 0),
+                    );
+                }
+            });
+            settle();
+            capture("");
+            fixture.state.lock().unwrap().history_delay_ms = 1000;
+            on_main(|w| app_key(w, "f", 3, NSEventModifierFlags::Command));
+            wait_for("Find source (case-sensitive)");
+            settle();
+            on_main(|w| {
+                let input = w
+                    .firstResponder()
+                    .and_then(|r| r.downcast::<NSTextView>().ok())
+                    .expect("native Find focus");
+                // SAFETY: navigate to the first loaded canonical row using the real Find input.
+                unsafe {
+                    input.insertText_replacementRange(
+                        &NSString::from_str("History message 73."),
+                        NSRange::new(usize::MAX, 0),
+                    );
+                }
+            });
+            wait_text("1 of 1");
+            let anchor = || {
+                on_main(|w| {
+                    let root = w.contentView().unwrap();
+                    let target = descendants(&root).into_iter().find(|v| {
+                        !v.isHiddenOrHasHiddenAncestor()
+                            && native_text(v)
+                                .is_some_and(|s| s.starts_with("History message 73. Exact source"))
+                    })?;
+                    let layer = target.layer()?;
+                    Some(
+                        layer
+                            .convertRect_toLayer(layer.bounds(), root.layer().as_deref())
+                            .origin
+                            .y,
+                    )
+                })
+            };
+            let deadline = Instant::now() + Duration::from_secs(15);
+            let before = loop {
+                if let Some(y) = anchor() {
+                    break y;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "canonical native anchor missing: {}",
+                    on_main(native_evidence)
+                );
+                std::thread::sleep(Duration::from_millis(30));
+            };
+            capture("-top-before");
+            fixture.append_history("a");
+            settle();
+            capture("-append");
+            eprintln!(
+                "native history append: before={before}, after={:?}, completed pages={}",
+                anchor(),
+                pages()
+            );
+            while pages() == 0 {
+                assert!(
+                    Instant::now() < deadline,
+                    "top scroll did not load an older page"
+                );
+                std::thread::sleep(Duration::from_millis(30));
+            }
+            settle();
+            assert!(pages() >= 1, "top-scroll requests an older page");
+            capture("-top-after");
+            let after = anchor().unwrap_or_else(|| {
+                panic!(
+                    "canonical native anchor lost after prepend; before={before}, pages={}",
+                    pages()
+                )
+            });
+            assert!(
+                (before - after).abs() < 0.5,
+                "prepend + concurrent append preserve canonical anchor: {before} -> {after}"
+            );
+            assert!(
+                on_main(|w| has_label(w, "Latest message")),
+                "reader stays away from tail"
+            );
+            capture("-prepend");
+            on_main(|w| press(w, "Close find (Escape)"));
+            settle();
+            on_main(|w| {
+                let input = editor(w).unwrap();
+                w.makeFirstResponder(Some(&input));
+                app_key(w, "f", 3, NSEventModifierFlags::Command);
+            });
+            wait_for("Find source (case-sensitive)");
+            settle();
+            on_main(|w| {
+                let input = w
+                    .firstResponder()
+                    .and_then(|r| r.downcast::<NSTextView>().ok())
+                    .expect("Find input focused by keyboard shortcut");
+                assert!(
+                    !input_label(&input).is_some_and(|s| s.starts_with("Message in")),
+                    "Find, not composer, owns focus"
+                );
+                // SAFETY: exact source inserted into the focused native Find input.
+                unsafe {
+                    input.insertText_replacementRange(
+                        &NSString::from_str(pilot_nsh::fixture::HISTORY_QUERY),
+                        NSRange::new(usize::MAX, 0),
+                    );
+                }
+            });
+            wait_for("Load full history");
+            wait_text("No matches in loaded messages");
+            on_main(|w| press(w, "Load full history"));
+            wait_text("All messages · literal source");
+            wait_text("1 of 4");
+            on_main(|w| press(w, "Next match (Enter)"));
+            wait_text("2 of 4");
+            settle();
+            capture("-find");
+            on_main(|w| press(w, "Previous match (Shift-Enter)"));
+            wait_text("1 of 4");
+            on_main(|w| press(w, "Previous match (Shift-Enter)"));
+            wait_text("4 of 4");
+            on_main(|w| press(w, "Next match (Enter)"));
+            wait_text("1 of 4");
+            on_main(|w| press(w, "Close find (Escape)"));
+            settle();
+            on_main(|w| {
+                assert_eq!(
+                    editor(w).unwrap().string().to_string(),
+                    "history draft 日本語 👩🏽‍💻"
+                )
+            });
+            let position = on_main(|w| prose_position(w, "Older 3:"))
+                .expect("old-page reader before navigation");
+            open_chat("b", &path);
+            open_chat("a", &path);
+            let deadline = Instant::now() + Duration::from_secs(15);
+            let mut stable = 0;
+            while stable < 4 {
+                let restored = on_main(|w| prose_position(w, "Older 3:"));
+                stable = if restored.is_some_and(|y| (y - position).abs() < 0.5) {
+                    stable + 1
+                } else {
+                    0
+                };
+                assert!(
+                    Instant::now() < deadline,
+                    "canonical chat return changed reader position: before={position}, after={restored:?}"
+                );
+                std::thread::sleep(Duration::from_millis(30));
+            }
+            capture("-restored");
+            wait_for("Latest message");
+            on_main(|w| press(w, "Latest message"));
+            settle();
+            capture("-latest");
+            assert!(fixture.state.lock().unwrap().envelopes.is_empty());
+            on_main(|w| w.performClose(None));
+        }));
+        if result.is_err() {
+            std::process::exit(1);
+        }
+    });
+}
+
 pub(super) fn work_start(path: PathBuf, fixture: std::sync::Arc<pilot_nsh::fixture::Fixture>) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).expect("capture directory");
