@@ -6,6 +6,13 @@ coordination records, not GitHub issues. This is the implementation map for
 D132–D134, not product acceptance or a new architecture prerequisite.
 Only this document changes. The first chat slice (#563) proceeds in parallel.
 
+Plan alignment: brief revision **186**, read after initial publication. The
+coordinator's #564–571 workstreams are the execution plan; #161/#162 are NSH
+acceptance and #572 owns separate Linux qualification. A–F below are source-map
+sections, **not a competing task hierarchy**. The old-task tables preserve the
+initial audit snapshot. Legacy references are now delegated to replacements;
+#55/#82/#240/#302/#435 were dropped as superseded, **not delivered**.
+
 ## Scope and evidence
 
 Replace framework-specific views with Rust/native NSH. Keep the approved design,
@@ -115,10 +122,52 @@ tests nor its hidden captures establishes durable chat or large-history speed.
 
 ## Coherent implementation slices
 
-Sequence by dependency, not by the number of legacy tickets. Each row is a
-delivery boundary with focused tests and honest unavailable states in the
-replacement. It does not authorize dropping a capability from the current app.
-Base shell/adapter work starts now; later surfaces need not block that slice.
+Use the current workstreams below, splitting bounded implementation assignments
+only where ownership or a concrete contract gap requires it. Each delivered
+slice needs focused tests and honest unavailable states in the replacement.
+Nothing here authorizes dropping a capability from the current app. Base
+shell/adapter work starts now; later surfaces need not block that slice.
+
+### Current workstream crosswalk
+
+All source names in this table are under `apps/desktop/src/` unless a different
+root is stated. D134 selects **Sol** for existing-component migration, not a
+fresh design exercise. Reuse the exact files/adapters enumerated in A–F.
+
+| Current task | Actual reusable surfaces/modules | Precise ownership, gaps or split advice |
+| --- | --- | --- |
+| #563 first vertical slice | A1: `local_client.rs`, `local_model.rs`, `interaction.rs`, `interaction_delivery.rs`, `delivery_store.rs`, `navigation.rs`, sidebar identity/order and real Store/loopback fixtures. | Establish the smallest reusable source seam; durable drafts/Unknown, exact selection and safe close precede writable enabling. Later workstreams extend it, not independent stores/transports. |
+| #564 chat controls/sidebar | A3 plus sidebar models: `sidebar_tree.rs`, `sidebar_memory.rs`, `sidebar_folders.rs`, `chat_order.rs`, `chat_actions.rs`, `chat_models.rs`, `queued_message.rs`, `question.rs`, `database_access.rs`, context/subscription/failure adapters, `session_jobs.rs`, `session_todos.rs`, `session_subagents.rs`. | Own attachment creation/paste/drop/preview/remove, new-chat/project/model forms and chat-location drafts. Explicitly include child-conversation navigation/drafts/send, jobs/log/Stop and public todos; these are delivered capabilities even though the title says controls/sidebar. Keep shared header/Links-inspector navigation here, not a new Review-only substitute. Missing branch/workspace overrides, held-input management and attempt/rewind remain pre-existing residuals, not automatically approved additions. |
+| #565 transcript/history/tools/images | A2 and B conversation images: `model.rs`, `local_model.rs`, `transcript_find.rs`, `tool_presentation.rs`, `tool_script.rs`, `message_fold.rs`, `question_entry.rs`, `compaction_event.rs`, `github_event.rs`, `conversation_images.rs`, lazy read lanes in `local_client.rs`. | Own image display/selection/Copy/zoom and geometry in transcript, not attachment submission or standalone artifact reads. Include assistant Notes, structured answered questions, compaction/live status and GUI-only PR-merge events. Preserve #382's specific disclosure request for an implementation check; do not restore rejected ribbon. Reuse #457 request-count evidence for this reader integration, not a separate performance rewrite. |
+| #566 artifact readers/native visuals | B: `artifact_model.rs`, `artifact_gallery.rs`, gallery/image workers, `artifact_image.rs`, `artifact_view.rs`, `visual_runtime.rs`, `visual_wire.rs`, `visual_scene.rs`, `visual_session.rs`, drawing/chart plans, `native_mermaid.rs`, `artifact_link.rs`; existing `apps/desktop/visual-worker`. | Own artifact decoding/reader/inline-visual scene and interaction; #565 owns transcript placement/reading anchor. Current schema/render parity first. #495 did **not** implement a revision picker; catalogue remains blocked. Export/project enumeration are residuals, not delivered source to port. #536–541 must stay separately scoped enhancements; #537 explicitly needs approval for its image-reference contract. |
+| #567 Review | B Review: `native_review.rs`, `native_review_reader.rs`, `native_review_view.rs`, `native_review_render.rs`, `review_navigation.rs`, `workflow_confirmation.rs`; `session_file_view.rs` and reader for explicit Open. | Model **and** reader import Kit diff types. Extract/replace that concrete boundary; keep exact bytes/hash/anchors and unavailable rows. Use `packages/daemon/src/testing/review-host.ts` for real creation/capture/custody. Own Review snapshot View → live-chat FilePane Open, not all conversation links just because legacy #133 points here. General PR attach/move/merge remains an absent legacy capability, not an enabled migration action. |
+| #568 Missions | C except Insights: `mission_browser.rs`, `mission_reader.rs`, `mission_transport.rs`, mission brief/activity/task readers, create/metadata/lifecycle/task transport families, decisions/comments/resources/artifacts and inspector models. | Group bounded assignments by browse/inspector, ordinary edit forms, and task/resource/decision surfaces as needed. Reuse adjacent chat inspector and pinned artifact reader, do not copy them. Phase definition, membership/coordinator management, assignment/dependencies/task start and resource writes are concrete legacy gaps; migration cannot silently implement them through unsafe existing mutations. |
+| #569 Home/Inbox/Insights/Automations | D plus C Insights and E Usage: `app_shell.rs`, `inbox.rs`, `home_sky.rs`, `attention.rs`, `slack_triage.rs`, `slack_triage_transport.rs`, `chat_tracked.rs`, `insights.rs`, enable/replace/settings models, `scheduled_messages.rs`, reader, `recurring_schedules.rs`, `automation_hooks.rs`/transport, `usage_overview.rs`/reader/records. | Split by actual surface when assigning: Home/attention, Slack board, Insights, Automations and Usage. Own dated Usage dashboard/records because legacy #146 routes here; #570 owns Settings entry/preferences, not a duplicate usage data owner. At audited source, Insights is **mission-backed**, not the proposed standalone app-level replacement. Recheck landed standalone work before porting; do not invent app records/routes. Keep current scheduling `expectedHome` admission and once-per-item Slack Start linkage via #564 courier. |
+| #570 Settings/projects/integrations | E: `settings_state.rs`, `settings_worker.rs`, `scoped_models.rs`/worker, `chat_settings.rs`, `project_settings.rs`/transport, `project_registration.rs`, `project_slack.rs`/reader, `project_memory.rs`/reader, `knowledge.rs`/reader, `mcp_status.rs`/reader, `diagnostics.rs`, `diagnostic_repair.rs`, client folder model. | Explicitly include separate **Knowledge** and Memory windows, exact revisions/source navigation, not only Settings categories. Scope statements name historical environment/database/power/Linear workflows that are not all present in GPUI: separate actual ports from absent-feature/contract reviews. Project default-model editing (#492) and current energy status UI (#493) are blocked audit outcomes. Full-memory search/forgetting, notification policy and actual evidence erasure are not existing implementations. |
+| #571 native shell/updater/distribution | F: app menu/native routing, Command Palette, shortcuts, desktop links/clipboard, `bundled_runtime.rs`, `running_identity.rs`, update/daemon lifecycle UI attachments, `apps/desktop/updater`, packaging/native helper scripts and `apps/power`. | Split native shell/menus from updater attachment/full-payload qualification if needed, not a new lifecycle framework. Own common safe external-link routing used by #564/#565/#566/#567; each surface owns its activation/source fence. Existing notification implementation is missing, so #143 is a scoped capability gap, not a port. Keep NSH updater comparison below; existing transaction is reusable and no trust/feed switch is implied. |
+| #161 lifecycle acceptance | A/F: real courier/Store tests, `application_quit_probe.rs`, `tests/application_quit.rs`, `lost_ack_fixture.rs`, update-exit/native should-terminate cases. | Qualify actual NSH process Close/Quit/external termination, immediate Store reopen and preserved drafts/Unknown. App-restart checkpoint is not a daemon replacement receipt. Include secondary Settings/forms and child composers, not the main editor alone. |
+| #162 input/motion/performance acceptance | A/B/F content/selection corpora, prototype hidden AppKit insertion/capture, native history/scroll/Markdown/image/artifact probes and source-matched release controls. | Hardware IME/clipboard and active-app focus/menu checks remain distinct from hidden synthetic interactions. Keep dropped #240/#302 corpora as regression evidence, not GPUI optimization requirements or NSH failures. #567 Review diff selection/copy and #568/#570 secondary editors also need input coverage; do not limit acceptance to dependencies' chat/artifact views. |
+| #572 separate Linux qualification | Existing visual-worker confinement, `linux_bundled_runtime.rs`, updater native-linux/service code, Linux package/runtime/Wayland scripts, `apps/power`; #31/#391/#406 evidence. | GTK/native-backend presence is not Wayland/service/confinement/power qualification. Keep exact distribution/architecture/compositor and real user-manager/hardware prerequisites explicit. No old host authority or macOS acceptance transfers. |
+
+**Concrete handoff boundaries, not new workstreams:** attachment admission and
+drafts #564 → conversation image placement #565 → shared artifact decode/scene
+#566; Review retained source #567 → existing live FilePane in chat #564; mission
+inspector #568 → shared navigation #564/#571; Slack Start #569 → existing courier
+#564; all secondary input owners → Close/update collector #571 and acceptance
+#161. Each caller keeps source identity and stale-result fences. This avoids
+multiple agents owning the same editor, route handler, Store or image cache.
+
+**Stale closures for coordinator:** #353/#359 proposals and #457/#458/#459
+investigations report completion without a feature commit; retain evidence and
+close administratively rather than waiting for the replacement implementation.
+#347 power audit, #351 Linux warning diagnosis, #385 first-stage service plan and
+#410 Ask-removal audit likewise have delivered conclusions, with remaining
+policy/native gaps kept separately. #87's old SwiftUI readiness failure is not
+an NSH native-artifact rendering requirement; preserve quarantine evidence and
+decide its old-app CI disposition. #461 needs narrowing between new service-store
+retirement already present and unresolved legacy-root exclusion. None of these
+closures would mean delivered NSH parity. #344/#390 live-operation requests,
+#413 backend Ask policy and #321 retirement remain separate authority gates.
 
 ### A. First production chat, then complete conversation behavior
 
