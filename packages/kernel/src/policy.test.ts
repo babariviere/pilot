@@ -23,6 +23,26 @@ const mission: MissionContext = {
 	decisions: ["IDs are opaque strings"],
 };
 
+test("capability guidance distinguishes nested discovery, command failures and authority", () => {
+	for (const context of [{}, { ask: { source: "/fixture/source" } }]) {
+		const prompt = pilotPrompt(context);
+		assert.match(prompt, /callable through codemode without a direct declaration/);
+		assert.match(prompt, /Before claiming a tool is unavailable, check current discovery/);
+		assert.match(prompt, /searchTools\/describeTool inside codemode/);
+		assert.match(prompt, /syntax\/template error alone does not establish permission loss/);
+		assert.match(prompt, /inspect output and exit_code/);
+		assert.match(prompt, /Discovery grants no authority and does not prove command success/);
+	}
+	assert.match(
+		pilotPrompt({ ask: { source: "/fixture/source" } }),
+		/Do not write repository files, execute arbitrary commands/,
+	);
+	assert.match(
+		pilotPrompt({ role: "diagnostics" }),
+		/cannot read source, arbitrary files or credentials, run commands/,
+	);
+});
+
 test("explorer guidance reports research and capability gaps without publication or planning authority", () => {
 	const prompt = missionPrompt({ ...mission, planningVersion: 1, role: "explorer", coordinator: "other" });
 	assert.match(prompt, /Mission role: explorer/);

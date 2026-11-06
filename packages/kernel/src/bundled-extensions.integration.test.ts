@@ -140,6 +140,65 @@ test("clean configuration has all bundled tools and required auth across reload"
 	assert.equal(typeof f.runtime.getRegisteredProviderConfig("anthropic")?.streamSimple, "function");
 });
 
+test("Build shell is discoverable through codemode and command syntax errors do not withdraw access", async (t) => {
+	const f = await fixture(t);
+	const adapter = await f.open();
+	assert.deepEqual(
+		adapter.extension.tools?.map((tool) => tool.name),
+		["codemode"],
+	);
+	assert.ok(adapter.session.getCallableToolNames().includes("bash"));
+	const codemode = adapter.session.agent.state.tools.find((tool) => tool.name === "codemode")!;
+	adapter.session.agent.state.messages.push(
+		fauxAssistantMessage(
+			{ type: "toolCall", id: "shell-discovery", name: "codemode", arguments: {} },
+			{ stopReason: "toolUse" },
+		),
+	);
+	const result = await codemode.execute(
+		"shell-discovery",
+		{
+			code: `
+if (!(await searchTools("bash")).some(tool => tool.name === "bash")) throw new Error("Shell not discovered");
+if (!await describeTool("bash")) throw new Error("Shell declaration missing");
+const first = await tools.bash({command: "printf shell-fixture-ok"});
+if (first.exit_code !== 0 || first.output !== "shell-fixture-ok") throw new Error("Harmless command failed");
+text(first);
+const failed = await tools.bash({command: "if then"});
+if (failed.exit_code === 0 || !failed.output.includes("syntax error")) throw new Error("Syntax failure not reported");
+text(failed);
+const last = await tools.bash({command: "printf shell-still-available"});
+if (last.exit_code !== 0 || last.output !== "shell-still-available") throw new Error("Shell access changed");
+text(last);
+`,
+		},
+		undefined,
+	);
+	assert.ok(!result.isError, JSON.stringify(result));
+	const output = JSON.stringify(result.content);
+	assert.match(output, /bash/);
+	assert.match(output, /shell-fixture-ok/);
+	assert.match(output, /exit_code/);
+	assert.match(output, /syntax error/i);
+	assert.match(output, /shell-still-available/);
+	assert.doesNotMatch(output, /permission denied|denies tool|not available/i);
+	assert.ok(adapter.session.getCallableToolNames().includes("bash"));
+
+	// Withdrawing one adapter's shell must not change another Build's permissions.
+	const other = await NativeAdapter.open({
+		cwd: f.root,
+		agentDir: f.agentDir,
+		sessionFile: join(f.root, "other.jsonl"),
+		projectTrusted: false,
+		settingsManager: SettingsManager.inMemory({ defaultTools: ["bash"] }),
+		sessionOptions: { modelRuntime: f.runtime, model: f.faux.getModel() },
+	});
+	f.adapters.push(other);
+	adapter.setToolActive("bash", false);
+	assert.ok(!adapter.session.getCallableToolNames().includes("bash"));
+	assert.ok(other.session.getCallableToolNames().includes("bash"));
+});
+
 test("host reload discovers edited extensions, preserves host policy and fails closed until repaired", async (t) => {
 	const f = await fixture(t);
 	const adapter = await f.open();

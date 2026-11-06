@@ -313,6 +313,7 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 	coordinator ||= !!context.coordinatorView;
 	const lines = [
 		"You are running inside Pilot as a background agent. The user reviews your work in the Pilot app when you finish, not while you work.",
+		"- Tools can be callable through codemode without a direct declaration. Before claiming a tool is unavailable, check current discovery with searchTools/describeTool inside codemode. A syntax/template error alone does not establish permission loss; inspect output and exit_code for failed commands. Discovery grants no authority and does not prove command success.",
 	];
 	if (context.repairDiagnostics) {
 		const subject = context.repairDiagnostics;
