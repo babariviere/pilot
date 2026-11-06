@@ -51,13 +51,14 @@ async function fixture(t: TestContext, disk = false) {
 		allowed = true,
 		authority = 1,
 		custody = 1;
-	let duringQualify: (() => void) | undefined;
+	let duringQualify: ((target: ReturnType<typeof dispositionTarget>) => void | Promise<void>) | undefined;
+	const denied = new Set<string>();
 	const snapshots = new Map<string, NativeReviewSnapshot>();
 	const qualify = async (target: ReturnType<typeof dispositionTarget>) => {
 		const observed = custody;
 		const s = snapshots.get(target.snapshotId);
 		if (!s) throw new Error("Exact retained source unavailable");
-		duringQualify?.();
+		await duringQualify?.(target);
 		const revalidate = () => {
 			if (!allowed || observed !== custody) throw new Error("Custody unavailable");
 		};
@@ -83,7 +84,8 @@ async function fixture(t: TestContext, disk = false) {
 			authorize(actor, target) {
 				const observed = authority;
 				const revalidate = () => {
-					if (!allowed || observed !== authority) throw new Error("Authority changed");
+					if (!allowed || observed !== authority || denied.has(target.sessionId))
+						throw new Error("Authority changed");
 					if (
 						actor.kind === "coordinator" &&
 						(actor.sessionId !== "lead" || actor.missionId !== "mission" || target.sessionId !== "worker")
@@ -119,6 +121,7 @@ async function fixture(t: TestContext, disk = false) {
 		source,
 		suggestion,
 		snapshots,
+		denied,
 		qualify,
 		allow(v: boolean) {
 			allowed = v;
@@ -129,7 +132,7 @@ async function fixture(t: TestContext, disk = false) {
 		revokeCustody() {
 			custody++;
 		},
-		during(v?: () => void) {
+		during(v?: typeof duringQualify) {
 			duringQualify = v;
 		},
 		async reopen() {
@@ -164,6 +167,7 @@ test("only explicit suggestions produce a durable queue; exact retry/dedup survi
 	const page = await f.source().page();
 	assert.equal(page.requests.length, 1);
 	assert.equal(page.requests[0].sequence, 1);
+	assert.ok(!("unavailable" in page.requests[0]));
 	assert.equal(page.requests[0].comparison.sequence, 101);
 	assert.equal(page.requests[0].actionability, "unknown");
 	await assert.rejects(f.source().suggest(native, { ...input, title: "Different bytes" }), /payload changed/);
@@ -307,32 +311,188 @@ test("global pages are bounded, equality-only, independent of comparison sequenc
 	await assert.rejects(source.page(0, "worker*"), /identifier/i);
 });
 
-test("stale/offline sources and later row or authority changes refuse instead of fake empty or unsaved positives", async (t) => {
+test("unavailable first, middle and later-page rows keep their exact redacted slots and cursors", async (t) => {
+	const f = await fixture(t),
+		source = f.source();
+	const inputs = Array.from({ length: 23 }, (_, i) => f.suggestion(i + 1, `worker${i + 1}`));
+	for (const input of inputs) await source.suggest(native, input);
+	const first = await source.page(),
+		second = await source.page(first.next!);
+	const before = inputs.map((input) => ({
+		requirement: f.store.reviewRequests.requirement(input.target),
+		receipt: f.store.reviewRequests.operation(input.operationId),
+	}));
+	const records = [...first.requests, ...second.requests].map((r) => ({
+		record: f.store.reviewRequests.get(r.requestId),
+		history: f.store.reviewRequests.history(r.requestId, 0),
+	}));
+	for (const n of [1, 10, 20, 21]) f.denied.add(`worker${n}`);
+	const redact = (row: (typeof first.requests)[number]) =>
+		[1, 10, 20, 21].includes(row.sequence) ? unavailable(row) : row;
+	assert.deepEqual(await source.page(), { requests: first.requests.map(redact), next: 20 });
+	assert.deepEqual(await source.page(20), { requests: second.requests.map(redact), next: null });
+	assert.deepEqual(await source.page(0, "worker10"), { requests: [unavailable(first.requests[9])], next: null });
+	assert.deepEqual(await source.page(0, "worker1x"), { requests: [], next: null });
+	assert.deepEqual(
+		inputs.map((input) => ({
+			requirement: f.store.reviewRequests.requirement(input.target),
+			receipt: f.store.reviewRequests.operation(input.operationId),
+		})),
+		before,
+	);
+	for (const { record, history } of records) {
+		assert.deepEqual(f.store.reviewRequests.get(record!.requestId), record);
+		assert.deepEqual(f.store.reviewRequests.history(record!.requestId, 0), history);
+	}
+	f.denied.clear();
+	assert.deepEqual(await source.page(), first);
+	assert.deepEqual(await source.page(20), second);
+});
+
+function unavailable(row: { requestId: string; sequence: number; state: string }) {
+	return { requestId: row.requestId, sequence: row.sequence, state: row.state, unavailable: true };
+}
+
+test("redaction keeps every persisted state and leaves its original history intact", async (t) => {
+	const f = await fixture(t),
+		source = f.source();
+	const inputs = Array.from({ length: 5 }, (_, i) => f.suggestion(i + 1));
+	const receipts = [];
+	for (let i = 0; i < inputs.length; i++)
+		receipts.push(await source.suggest(i === 3 ? coordinator : native, inputs[i]));
+	await source.transition(native, "snooze", transition(receipts[1].requestId, 1));
+	await source.transition(native, "withdraw", transition(receipts[2].requestId, 1));
+	await source.transition(coordinator, "retire", transition(receipts[3].requestId, 1));
+	await source.suggest(native, {
+		...f.suggestion(6),
+		replacesRequestId: receipts[4].requestId,
+		replacesExpectedRevision: 1,
+	});
+	const healthy = await source.page();
+	assert.deepEqual(
+		healthy.requests.map((row) => row.state),
+		["pending", "snoozed", "withdrawn", "retired", "replaced", "pending"],
+	);
+	const histories = healthy.requests.map((r) => f.store.reviewRequests.history(r.requestId, 0));
+	f.allow(false);
+	assert.deepEqual(await source.page(), { requests: healthy.requests.map(unavailable), next: null });
+	assert.deepEqual(
+		healthy.requests.map((r) => f.store.reviewRequests.history(r.requestId, 0)),
+		histories,
+	);
+	await assert.rejects(source.transition(coordinator, "retire", transition(receipts[0].requestId, 1)), /Authority/);
+	f.allow(true);
+	assert.deepEqual(await source.page(), healthy);
+});
+
+test("source failures redact only that row; mutation, history and receipt access still refuse", async (t) => {
 	const f = await fixture(t),
 		source = f.source(),
 		a = f.suggestion(),
 		b = f.suggestion(2);
-	await source.suggest(native, a);
+	const receipt = await source.suggest(native, a);
 	await source.suggest(native, b);
+	const healthy = await source.page();
 	f.allow(false);
-	await assert.rejects(source.page(), /Authority/);
+	assert.deepEqual((await source.page()).requests, healthy.requests.map(unavailable));
 	await assert.rejects(source.lookup(a.operationId, native), /Authority/);
+	await assert.rejects(source.history(receipt.requestId), /Authority/);
+	await assert.rejects(source.transition(native, "withdraw", transition(receipt.requestId, 1)), /Authority/);
+	await assert.rejects(source.transition(native, "snooze", transition(receipt.requestId, 1)), /Authority/);
+	await assert.rejects(source.suggest(native, a), /Authority/);
 	f.allow(true);
 	f.snapshots.delete(a.target.snapshotId);
-	await assert.rejects(source.page(), /source unavailable/);
+	const redacted = { requests: [unavailable(healthy.requests[0]), healthy.requests[1]], next: null };
+	assert.deepEqual(await source.page(), redacted);
+	await assert.rejects(source.lookup(a.operationId, native), /source unavailable/);
 	f.snapshots.set(a.target.snapshotId, snapshot());
-	let n = 0;
-	f.during(() => {
-		if (++n === 2) f.revokeAuthority();
+	// A still-readable snapshot with changed comparison metadata is not the original comparison.
+	f.snapshots.get(a.target.snapshotId)!.capturedAt++;
+	assert.deepEqual(await source.page(), redacted);
+	f.snapshots.set(a.target.snapshotId, snapshot());
+	assert.deepEqual(await source.page(), healthy);
+	assert.equal(f.store.reviewRequests.get(receipt.requestId)!.revision, 1);
+	assert.equal(f.store.reviewRequests.history(receipt.requestId, 0).length, 1);
+});
+
+test("an earlier row revoked while a later row awaits loses its data without hiding healthy rows", async (t) => {
+	const f = await fixture(t),
+		source = f.source();
+	await source.suggest(native, f.suggestion(1, "first"));
+	await source.suggest(native, f.suggestion(2, "later"));
+	const healthy = await source.page();
+	let enter!: () => void, release!: () => void;
+	const entered = new Promise<void>((resolve) => {
+			enter = resolve;
+		}),
+		released = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+	f.during(async (target) => {
+		if (target.sessionId !== "later") return;
+		enter();
+		await released;
 	});
-	await assert.rejects(source.page(), /Authority changed/);
+	const reading = source.page();
+	try {
+		await entered;
+		f.denied.add("first");
+	} finally {
+		release();
+	}
+	assert.deepEqual(await reading, {
+		requests: [unavailable(healthy.requests[0]), healthy.requests[1]],
+		next: null,
+	});
 	f.during();
+	f.denied.clear();
+	assert.deepEqual(await source.page(), healthy);
+});
+
+test("durable rechecks pinned authority and custody without selecting fresh unsaved authority", async (t) => {
+	const f = await fixture(t),
+		source = f.source(),
+		a = f.suggestion();
+	await source.suggest(native, a);
+	await source.suggest(native, f.suggestion(2));
+	const healthy = await source.page();
 	const originalDurable = f.store.reviewRequests.durable.bind(f.store.reviewRequests);
-	t.mock.method(f.store.reviewRequests, "durable", async () => {
+	for (const revoke of [f.revokeAuthority, f.revokeCustody]) {
+		const mock = t.mock.method(f.store.reviewRequests, "durable", async () => {
+			await originalDurable();
+			revoke();
+		});
+		assert.deepEqual(await source.page(), { requests: healthy.requests.map(unavailable), next: null });
+		mock.mock.restore();
+		assert.deepEqual(await source.page(), healthy);
+	}
+	const mock = t.mock.method(f.store.reviewRequests, "durable", async () => {
 		await originalDurable();
 		f.revokeAuthority();
 	});
 	await assert.rejects(source.lookup(a.operationId, native), /Authority changed/);
+	mock.mock.restore();
+});
+
+test("page/store/barrier/cursor failures still fail globally, including wholly unavailable pages", async (t) => {
+	const f = await fixture(t),
+		source = f.source();
+	await source.suggest(native, f.suggestion());
+	for (const method of ["page", "get", "durable"] as const) {
+		const mock = t.mock.method(f.store.reviewRequests, method, () => {
+			throw new Error(`Global ${method} failure`);
+		});
+		await assert.rejects(source.page(), new RegExp(`Global ${method} failure`));
+		mock.mock.restore();
+	}
+	f.allow(false);
+	const mock = t.mock.method(f.store.reviewRequests, "durable", async () => {
+		throw new Error("Global durable failure");
+	});
+	await assert.rejects(source.page(), /Global durable failure/);
+	mock.mock.restore();
+	for (const after of [-1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])
+		await assert.rejects(source.page(after), /cursor/);
 });
 
 test("durability barrier failure leaves an exact effect recoverable without replay", async (t) => {

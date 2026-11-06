@@ -267,10 +267,28 @@ test("real native standalone producer and global reader have no capture inferenc
 	assert.equal(h.store.humanReviews.targetState(a.target).latestRecordId, null);
 });
 
-test("current project/member/custody checks are repeated after real async reads; missing source is unavailable", async (t) => {
+test("current source failures redact only their queue row; fresh access recovers without weakening mutation access", async (t) => {
 	const h = await host(t),
 		a = await h.add(true);
 	const receipt = (await h.service.call(h.lead, "requestReview", { request: a.suggestion })) as { requestId: string };
+	const g = fixture();
+	t.after(() => g.close());
+	const secondProject = await h.projects.create({ path: realpathSync(g.source) });
+	const b = await h.add(false, secondProject);
+	assert.equal((await h.request("review/requests/suggest", "POST", b.suggestion)).status, 200);
+	const healthy = await (await h.request("review/requests")).json();
+	const redacted = {
+		requests: [
+			{ requestId: receipt.requestId, sequence: 1, state: "pending", unavailable: true },
+			healthy.requests[1],
+		],
+		next: null,
+	};
+	const expectUnavailable = async () => {
+		const res = await h.request("review/requests");
+		assert.equal(res.status, 200);
+		assert.deepEqual(await res.json(), redacted);
+	};
 	const original = h.sessions.nativeReviewReader.bind(h.sessions);
 	let leave = true;
 	const mock = t.mock.method(h.sessions, "nativeReviewReader", (...args: Parameters<typeof original>) => {
@@ -286,7 +304,7 @@ test("current project/member/custody checks are repeated after real async reads;
 		});
 		return reader;
 	});
-	assert.notEqual((await h.request("review/requests")).status, 200);
+	await expectUnavailable();
 	await assert.rejects(
 		h.service.call(h.lead, "retireReview", {
 			request: {
@@ -300,19 +318,70 @@ test("current project/member/custody checks are repeated after real async reads;
 	);
 	mock.mock.restore();
 	h.store.join(a.sessionId, h.mission.id);
-	assert.equal((await h.request("review/requests")).status, 200);
+	assert.deepEqual(await (await h.request("review/requests")).json(), healthy);
 	// Workspace loss is not source loss: exact retained reads need no live file fallback.
 	rmSync(a.w.path, { recursive: true, force: true });
-	assert.equal((await h.request("review/requests")).status, 200);
-	// Project access changes must not silently drop a queue row or widen source access.
-	const require = h.projects.require.bind(h.projects);
-	t.mock.method(h.projects, "require", (id: string) => {
-		if (id === h.project.id) throw new Error("Project access unavailable");
-		return require(id);
+	assert.deepEqual(await (await h.request("review/requests")).json(), healthy);
+	// Synthetic current metadata loss and movement, not a restore/move API or a new grant.
+	// biome-ignore lint/complexity/useLiteralKeys: Test-only current metadata fault injection.
+	const metas = h.sessions["metas"];
+	const meta = metas.get(a.sessionId)!;
+	metas.delete(a.sessionId);
+	await expectUnavailable();
+	for (const path of [
+		`review/requests/${receipt.requestId}/history`,
+		`review/requests/operations/${a.suggestion.operationId}`,
+	])
+		assert.notEqual((await h.request(path)).status, 200);
+	for (const action of ["snooze", "withdraw"])
+		assert.notEqual(
+			(
+				await h.request(`review/requests/${action}`, "POST", {
+					operationId: randomUUID(),
+					requestId: receipt.requestId,
+					expectedRevision: 1,
+					reason: "No access",
+				})
+			).status,
+			200,
+		);
+	metas.set(a.sessionId, { ...meta, projectId: secondProject.id });
+	await expectUnavailable();
+	metas.set(a.sessionId, meta);
+	assert.deepEqual(await (await h.request("review/requests")).json(), healthy);
+	// Keep the real access path, but make only one retained snapshot unreadable.
+	// biome-ignore lint/complexity/useLiteralKeys: Test-only retained read fault injection.
+	const snapshots = h.sessions["reviewSnapshots"];
+	const get = snapshots.get.bind(snapshots);
+	const unreadable = t.mock.method(snapshots, "get", async (id: string) => {
+		if (id === a.target.snapshotId) throw new Error("Unreadable private/path snapshot bytes");
+		return get(id);
 	});
-	const unavailable = await h.request("review/requests");
-	assert.notEqual(unavailable.status, 200);
-	assert.ok(!(await unavailable.json()).requests);
+	await expectUnavailable();
+	unreadable.mock.restore();
+	assert.deepEqual(await (await h.request("review/requests")).json(), healthy);
+	await h.projects.remove(h.project.id);
+	await expectUnavailable();
+	assert.deepEqual(await (await h.request(`review/requests?sessionId=${a.sessionId}`)).json(), {
+		requests: [redacted.requests[0]],
+		next: null,
+	});
+	assert.deepEqual(await (await h.request(`review/requests?sessionId=${b.sessionId}`)).json(), {
+		requests: [healthy.requests[1]],
+		next: null,
+	});
+	assert.equal(h.store.reviewRequests.get(receipt.requestId)!.revision, 1);
+	assert.equal(h.store.reviewRequests.history(receipt.requestId, 0).length, 1);
+	assert.equal(h.store.reviewRequests.requirement(a.target).state, "requested");
+	for (const method of ["page", "get", "durable"] as const) {
+		const failure = t.mock.method(h.store.reviewRequests, method, () => {
+			throw new Error(`Global ${method} failure`);
+		});
+		const res = await h.request("review/requests");
+		assert.notEqual(res.status, 200);
+		assert.equal((await res.json()).requests, undefined);
+		failure.mock.restore();
+	}
 });
 
 test("absent request source is explicit service-unavailable, never an empty reviewed queue", async (t) => {

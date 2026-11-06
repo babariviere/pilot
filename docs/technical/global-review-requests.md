@@ -80,10 +80,11 @@ There is no POST status workaround. A lost response is recovered by exact lookup
 finding similar current state. Current actor/project/source authority is still required on recovery.
 
 Readers pin observed rows and authority before `durable()`, then recheck after async work. They never
-select a later unsaved latest row as positive evidence. Revocation or concurrent row changes refuse
-the read; source/project/custody failures never silently omit a row. Workspace loss alone does not
-remove readable retained bytes. This does not widen existing read scope or promise source access
-after membership/custody loss.
+select a later unsaved latest row or authority as positive evidence. Concurrent request row changes
+refuse the read. On queue pages only, source/project/custody failures redact the affected row rather
+than failing the whole page or silently omitting it. History, receipt lookup and mutations still
+refuse unavailable source access. Workspace loss alone does not remove readable retained bytes.
+This does not widen existing read scope or promise source access after membership/custody loss.
 
 ## Fixed global read seam
 
@@ -92,6 +93,19 @@ GET /api/review/requests?after=N[&sessionId=id]
 => {requests:[{requestId,sequence,state,actionability,projectId,sessionId,title,comparison}],next}
 ```
 
+Each queue entry is either the unchanged healthy row above or exactly:
+
+```ts
+{ requestId, sequence, state, unavailable: true }
+```
+
+An unavailable row has no title, project/session IDs, target/comparison, reason, path, raw error or
+actionability. It keeps its original sequence and state. Clients must show it as disabled/unavailable,
+never empty, ready or reviewed. A passive Refresh can recover the healthy row when legitimate current
+access returns. GET does not restore access, move a chat, replace a target, grant authority or change
+requests, history, requirements or receipts. Withdrawal, snooze, retirement, history and operation
+recovery keep their existing current-access checks; the redacted row grants none of these actions.
+
 At most 20 rows per page, ascending **request creation sequence**, independent of `comparison.sequence`.
 `next` is the last request sequence when more rows exist, otherwise null. This is read-point
 pagination, not an atomic cross-page snapshot or a change feed. A later refresh from zero sees
@@ -99,8 +113,13 @@ transitions to existing rows. All persisted states, including snoozed and termin
 remain readable; consumers may present waiting/history filters without inventing state. `sessionId`
 is equality-only and optional. No automatic focused-chat/mission filter. Unknown filters/duplicate
 query keys are rejected. The default spans all supported requests, with current access checked per
-row and after async reads. A source or custody failure fails the page explicitly, never fake empty,
-reviewed, a live-file fallback or a partial page presented as complete. Missing request service is 503.
+row and after async reads. Only per-row source access, qualification and fence failures become
+unavailable entries. Earlier rows are rechecked while later rows await and after durability; a revoked
+row loses its details too. Once redacted, a row stays redacted for that read, without selecting fresh
+authority after the barrier. All slots, including unavailable entries, count toward the 20-row limit
+and keep the original cursor position and exact optional session filter. Page/store, durability and
+cursor failures still fail the whole request, never fabricate empty success. There is no live-file
+fallback. Missing request service is 503.
 Successful empty coverage means no matching supported **optional suggestions**, not that required
 approvals are satisfied or that every capture was reviewed.
 
@@ -118,8 +137,10 @@ Missing production prerequisites continue to refuse Approve, regardless of optio
 
 Focused request tests exercise real missions.sqlite reopen, exact/concurrent deduplication, lost
 acknowledgements, original historical lookup after withdrawal/replacement, distinct actor origins,
-revision CAS, bounded/equality-only reads, stale/offline sources, held authority changes, retained
-workspace loss, native capability admission, real standalone/v1 mission custody and IPC producers.
+revision CAS, bounded/equality-only reads, exact redaction at first/middle/later-page slots, stable
+cursors, missing/moved chats, removed projects, unreadable snapshots, revocation during later-row
+reads and durability, fresh-access recovery, and global store/barrier/cursor refusal. They also cover
+retained workspace loss, native capability admission, real standalone/v1 mission custody and IPC producers.
 Feedback tests preserve exact per-target fences and no production approval prerequisites.
 Native submission UI, required-request creation, authoritative work cancellation, Inbox links,
 learning, provider execution and gate activation remain separate. No live data was adopted.

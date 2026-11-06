@@ -27,7 +27,14 @@ export interface ReviewRequestRow {
 	title: string;
 	comparison: NativeReviewComparison;
 }
+/** Source access failed at this read point. No source details or review readiness are disclosed. */
+export interface UnavailableReviewRequestRow {
+	requestId: string;
+	sequence: number;
+	state: ReviewRequestState;
+	unavailable: true;
+}
 export interface ReviewRequestPage {
-	requests: ReviewRequestRow[];
+	requests: (ReviewRequestRow | UnavailableReviewRequestRow)[];
 	next: number | null;
 }

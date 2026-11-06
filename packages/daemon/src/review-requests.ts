@@ -166,30 +166,50 @@ export class ReviewRequests {
 		cursor(after);
 		if (sessionId !== undefined) id(sessionId);
 		const page = this.deps.store.page(after, sessionId),
-			revalidations = [];
+			revalidations: Array<(() => void) | undefined> = [];
+		const revalidateRows = () => {
+			for (let i = 0; i < revalidations.length; i++) {
+				try {
+					revalidations[i]?.();
+				} catch {
+					// A revoked row stays redacted for this read, even if access later returns.
+					revalidations[i] = undefined;
+				}
+			}
+		};
 		for (const record of page.records) {
-			const access = await this.access({ kind: "native-user" }, record.target);
-			if (canonicalJSON(access.comparison) !== canonicalJSON(record.comparison))
-				throw new Conflict("Original request comparison changed");
-			// Keep only the fence, not twenty full retained source manifests.
-			revalidations.push(access.revalidate);
+			let revalidate: (() => void) | undefined;
+			try {
+				const access = await this.access({ kind: "native-user" }, record.target);
+				if (canonicalJSON(access.comparison) !== canonicalJSON(record.comparison))
+					throw new Conflict("Original request comparison changed");
+				// Pin only the fence, not twenty full retained source manifests, before durable().
+				revalidate = access.revalidate;
+			} catch {
+				// Only source access/qualification fails per row. Store and barrier failures still refuse the page.
+			}
+			revalidations.push(revalidate);
 			this.current(page.records);
-			for (const revalidate of revalidations) revalidate();
+			revalidateRows();
 		}
 		await this.deps.store.durable();
 		this.current(page.records);
-		for (const revalidate of revalidations) revalidate();
+		revalidateRows();
 		return {
-			requests: page.records.map((r) => ({
-				requestId: r.requestId,
-				sequence: r.sequence,
-				state: r.state,
-				actionability: "unknown",
-				projectId: r.target.projectId,
-				sessionId: r.target.sessionId,
-				title: r.title,
-				comparison: r.comparison,
-			})),
+			requests: page.records.map((r, i) =>
+				revalidations[i]
+					? {
+							requestId: r.requestId,
+							sequence: r.sequence,
+							state: r.state,
+							actionability: "unknown",
+							projectId: r.target.projectId,
+							sessionId: r.target.sessionId,
+							title: r.title,
+							comparison: r.comparison,
+						}
+					: { requestId: r.requestId, sequence: r.sequence, state: r.state, unavailable: true },
+			),
 			next: page.next,
 		};
 	}
