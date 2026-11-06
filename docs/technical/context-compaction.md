@@ -1,21 +1,13 @@
-# Ordinary-chat context compaction and history recall
+# Archived deterministic compaction experiment
 
-Pilot Next also exposes an off-by-default [automatic handoff](auto-handoff.md) setting.
-When enabled, ordinary chats replace processed model context with a prepared handoff
-at blocking model boundaries, retaining unconsumed inputs and unseen tool-image rounds
-under their original IDs instead of using the automatic policies below. Manual
-compaction and coordinator summary-tree memory keep their existing behavior.
+Status: retired. See [Posthorse](posthorse.md) for the replacement. The deterministic
+compaction flag, policy, diagnostic writer and benchmark below are no longer active.
+The implementation and benchmark entry point have been removed. These historical
+measurements do not establish Posthorse quality, cost or performance.
+Stored conversations, compaction markers and handoff text remain readable and unchanged.
+History recall remains available; compaction does not delete the original transcript.
 
-Status: opt-in. Default rollout stays blocked until the digest is validated with real providers. Set
-`PILOT_DETERMINISTIC_COMPACTION=1` in pilotd's environment (kernels inherit it) to enable it; otherwise ordinary
-chats keep pi-durable's default thresholds and model summaries, and `history_recall` is available either way.
-
-[context-edit-compaction.md](context-edit-compaction.md) proposes trimming old tool output in place with
-pi-durable context edits, as an addition to the digest.
-
-When enabled, ordinary chats (Build, Ask, diagnostics and mission chats) compact with a deterministic digest. Control is
-unchanged: it keeps its OptChat memory hierarchy and has Harness compaction disabled. Project memory remains
-the only cross-chat memory store; compaction never writes to it.
+The remaining sections record the retired experiment, not current setup instructions.
 
 ## When compaction runs
 
@@ -152,11 +144,10 @@ private, capped (256 KB, two segments, mode 0600) writer as `performance.jsonl`,
 
 Model summary retries remain pi-durable's; their failures appear as `priorFailure` on the next record.
 
-## Benchmark
+## Historical benchmark
 
-```sh
-node packages/kernel/src/context-compaction.bench.ts [--seed=20261019] [--chats=24] [--scale=10000] [--json]
-```
+The removed `context-compaction.bench.ts` entry point used seed `20261019`,
+24 chats and a scale of 10,000. It is not a runnable benchmark in this tree.
 
 Offline and deterministic per seed: no network, account, paid model or private transcript.
 

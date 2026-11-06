@@ -12,9 +12,9 @@ use gpui_kit::{
     div,
 };
 
-pub(crate) const LABEL: &str = "Automatic handoff (experimental)";
-const DESCRIPTION: &str = "Continues long chats in a fresh context at 70% of the model window. History is kept. Mission coordinators are excluded.";
-const TIMING: &str = "A handoff already started may finish after you turn this off.";
+const LABEL: &str = "Enable automations (experimental)";
+const DESCRIPTION: &str =
+    "Runs project commands on this host. Turning off stops new commands; running ones may finish.";
 
 pub(crate) struct ChatSettings {
     focus: FocusHandle,
@@ -54,19 +54,11 @@ impl ChatSettings {
             self.dispatch(request, job, cx);
         }
     }
-    pub(crate) fn set(&mut self, auto_handoff: bool, cx: &mut Context<Self>) {
+    pub(crate) fn set(&mut self, automations: bool, cx: &mut Context<Self>) {
         if self.source.is_none() {
             return;
         }
-        if let Some((request, job)) = self.model.begin_save(auto_handoff) {
-            self.dispatch(request, job, cx);
-        }
-    }
-    fn set_automations(&mut self, enabled: bool, cx: &mut Context<Self>) {
-        if self.source.is_none() {
-            return;
-        }
-        if let Some((request, job)) = self.model.begin_save_automations(enabled) {
+        if let Some((request, job)) = self.model.begin_save(automations) {
             self.dispatch(request, job, cx);
         }
     }
@@ -97,12 +89,9 @@ impl ChatSettings {
 /// Words for the current outcome, beside the control it describes.
 fn note(note: Note) -> (&'static str, Tone) {
     match note {
-        Note::Saved(true) => (
-            "Saved. Applies from each chat's next model request.",
-            Tone::Quiet,
-        ),
+        Note::Saved(true) => ("Saved. Applies to new commands.", Tone::Quiet),
         Note::Saved(false) => (
-            "Saved. A handoff already underway may still finish.",
+            "Saved. New commands won't start; running ones may finish.",
             Tone::Quiet,
         ),
         Note::Unsupported => (
@@ -146,7 +135,7 @@ impl Render for ChatSettings {
         let muted = cx.theme().muted_foreground;
         // The box appears only for an acknowledged value; otherwise the state is said in words.
         let control = match self.model.value() {
-            Some(on) => Checkbox::new("chat-auto-handoff")
+            Some(on) => Checkbox::new("chat-automations")
                 .label(LABEL)
                 .checked(on)
                 .disabled(phase != Phase::Idle)
@@ -157,7 +146,7 @@ impl Render for ChatSettings {
                 }))
                 .into_any_element(),
             None => div()
-                .id("chat-auto-handoff-unknown")
+                .id("chat-automations-unknown")
                 .test_support()
                 .v_flex()
                 .gap(gpui_kit::px(ui::Space::META))
@@ -181,41 +170,18 @@ impl Render for ChatSettings {
             _ => None,
         };
         let check = phase == Phase::Idle && self.model.value().is_none();
-        let automations = match self.model.automations() {
-            Some(on) => Checkbox::new("chat-automations")
-                .label("Enable automations (experimental)")
-                .checked(on)
-                .disabled(phase != Phase::Idle)
-                .on_change(cx.listener(|owner, checked: &bool, window, cx| {
-                    owner.focus.focus(window, cx);
-                    owner.set_automations(*checked, cx);
-                }))
-                .into_any_element(),
-            None => ui::text(
-                Text::Caption,
-                if phase == Phase::Loading {
-                    "Checking automations…"
-                } else {
-                    "Automations unavailable. Check again or update Pilot."
-                },
-            )
-            .text_color(muted)
-            .into_any_element(),
-        };
         page.child(
             div()
                 .v_flex()
                 .gap_2()
                 .min_w_0()
+                .child(ui::heading(
+                    "chat-automations-title",
+                    "Automations",
+                    Text::Headline,
+                ))
                 .child(control)
-                .child(ui::text(Text::Caption, DESCRIPTION).text_color(muted))
-                .child(ui::text(Text::Caption, TIMING).text_color(muted)),
-        )
-        .child(
-            div().v_flex().gap_2().min_w_0()
-                .child(ui::heading("chat-automations-title", "Automations", Text::Headline))
-                .child(automations)
-                .child(ui::text(Text::Caption, "Runs project commands on this host. Turning off stops new commands; running ones may finish.").text_color(muted))
+                .child(ui::text(Text::Caption, DESCRIPTION).text_color(muted)),
         )
         .children(status.map(|status| {
             ui::text(Text::Caption, status)
@@ -224,13 +190,7 @@ impl Render for ChatSettings {
                 .text_color(muted)
         }))
         .children(self.model.note().map(|n| {
-            let (title, tone) = if self.model.saving_automations() {
-                match n {
-                    Note::Saved(_) => ("Saved. Applies to new commands.", Tone::Quiet),
-                    Note::Unknown(_) => ("Couldn't confirm. It may have saved; check again before changing it.", Tone::Warning),
-                    _ => note(n),
-                }
-            } else { note(n) };
+            let (title, tone) = note(n);
             div()
                 .id("chat-settings-note")
                 .test_support()

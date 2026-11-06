@@ -701,14 +701,17 @@ does not cancel a PATCH. Synthetic windows have no daemon authority.
 Chats is a peer category after Appearance, using the existing Settings list,
 shared text/notice/action roles and Kit Checkbox. Cmd-comma (or Settings… in the
 app menu) opens Settings; category arrows and Return reach Chats, then
-Tab and Space operate the checkbox. Cmd-S never writes this page. There is no
-extra palette command or parallel navigation.
+Tab and Space operate the Automations checkbox. Cmd-S never writes this page.
+There is no extra palette command or parallel navigation.
 
 This is a host-global daemon setting, not a GUI preference. Each Chats opening
 refreshes with read-only GET /api/chat-settings unless a request is already in
 flight. No polling, automatic PATCH or retry. The schema-1 document contains
-exactly `schemaVersion`, `autoHandoff` and `revision`. Each explicit toggle
-PATCHes exactly `autoHandoff` and `expectedRevision`. The acknowledged checkbox
+`schemaVersion`, `automations` and `revision`. A retired `autoHandoff` boolean
+from an older daemon is accepted and ignored; the app never shows or writes it.
+A document without `automations` is Unavailable. Each explicit toggle PATCHes
+exactly `automations` and `expectedRevision`, with the native capability
+header. The acknowledged checkbox
 stays unchanged and disabled while saving. Only a 200 with the exact requested
 value and a new revision earns Saved. A 400 retains the old value; a 409 takes
 one read-back and asks the user to review, never resending. A 503, lost response,
@@ -716,9 +719,8 @@ or malformed acknowledgment is Unknown, never success. Check again is read-only.
 An older daemon is Unavailable, never an unchecked default.
 
 A pending PATCH blocks app-owned restart, including after Settings closes.
-Read-only GET and retained Unknown do not. The timing caption names 70% of the
-model window (earlier for very small windows), the native tool-safe
-model-request boundary, and that an admitted handoff may finish after disabling.
+Read-only GET and retained Unknown do not. The caption says that turning
+automations off stops new commands and that running ones may finish.
 
 Transcript `pi.compaction` markers with `data.mode = "handoff"` say Context
 handoff, with handoff disclosure/copy labels rather than compaction-summary

@@ -171,7 +171,7 @@ impl Server {
                         ("GET", "/api/projects", _) => Some((200, s.list())),
                         ("GET", "/api/chat-settings", _) => Some((
                             200,
-                            json!({"schemaVersion":1,"autoHandoff":false,"automations":s.enabled,"revision":"r1"}),
+                            json!({"schemaVersion":1,"automations":s.enabled,"revision":"r1"}),
                         )),
                         ("PUT", _, Some(project)) => {
                             assert!(capability, "hook writes carry the native capability");

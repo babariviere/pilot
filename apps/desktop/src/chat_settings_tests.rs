@@ -4,8 +4,7 @@ use serde_json::json;
 
 fn snapshot(on: bool, revision: &str) -> Snapshot {
     Snapshot {
-        auto_handoff: on,
-        automations: Some(false),
+        automations: on,
         revision: revision.into(),
     }
 }
@@ -13,23 +12,31 @@ fn snapshot(on: bool, revision: &str) -> Snapshot {
 #[test]
 fn parse_accepts_only_the_exact_schema_one_document() {
     assert_eq!(
+        parse(br#"{"schemaVersion":1,"automations":true,"revision":"r1"}"#),
+        Ok(snapshot(true, "r1"))
+    );
+    // A daemon that still echoes the retired setting is read; the value is ignored.
+    assert_eq!(
         parse(br#"{"schemaVersion":1,"autoHandoff":true,"automations":false,"revision":"r1"}"#),
-        Some(snapshot(true, "r1"))
+        Ok(snapshot(false, "r1"))
     );
     for bad in [
-        r#"{"schemaVersion":2,"autoHandoff":true,"revision":"r1"}"#,
-        r#"{"schemaVersion":1,"autoHandoff":true,"revision":""}"#,
-        r#"{"schemaVersion":1,"autoHandoff":"yes","revision":"r1"}"#,
-        r#"{"schemaVersion":1,"revision":"r1"}"#,
-        r#"{"schemaVersion":1,"autoHandoff":false,"revision":"r1","extra":0}"#,
-        r#"{"schemaVersion":1,"autoHandoff":false,"autoHandoff":true,"revision":"r1"}"#,
-        r#"{"schemaVersion":1,"autoHandoff":false,"revision":"a\nb"}"#,
+        r#"{"schemaVersion":2,"automations":true,"revision":"r1"}"#,
+        r#"{"schemaVersion":1,"automations":true,"revision":""}"#,
+        r#"{"schemaVersion":1,"automations":"yes","revision":"r1"}"#,
+        r#"{"schemaVersion":1,"autoHandoff":"yes","automations":true,"revision":"r1"}"#,
+        r#"{"schemaVersion":1,"automations":false,"revision":"r1","extra":0}"#,
+        r#"{"schemaVersion":1,"automations":false,"automations":true,"revision":"r1"}"#,
+        r#"{"schemaVersion":1,"automations":false,"revision":"a\nb"}"#,
         "<html>Not found</html>",
     ] {
-        assert_eq!(parse(bad.as_bytes()), None, "{bad}");
+        assert_eq!(parse(bad.as_bytes()), Err(ReadFailure::Unreadable), "{bad}");
     }
-    let long = json!({"schemaVersion":1,"autoHandoff":false,"revision":"r".repeat(257)});
-    assert_eq!(parse(long.to_string().as_bytes()), None);
+    let long = json!({"schemaVersion":1,"automations":false,"revision":"r".repeat(257)});
+    assert_eq!(
+        parse(long.to_string().as_bytes()),
+        Err(ReadFailure::Unreadable)
+    );
 }
 
 #[test]
@@ -55,7 +62,7 @@ fn model_never_saves_from_unknown_and_shows_only_acknowledged_values() {
     assert_eq!(
         job,
         Job::Save {
-            auto_handoff: true,
+            automations: true,
             expected_revision: "r1".into()
         }
     );
@@ -126,7 +133,7 @@ fn rejected_and_unsent_keep_the_acknowledged_value_conflict_adopts_the_read_back
     assert_eq!(
         model.begin_save(true).unwrap().1,
         Job::Save {
-            auto_handoff: true,
+            automations: true,
             expected_revision: "r9".into()
         },
         "the next explicit toggle uses the read-back revision"
@@ -147,7 +154,7 @@ async fn read_then_patch_sends_exactly_the_contract_body() {
     let saved = reply(
         &server,
         Job::Save {
-            auto_handoff: true,
+            automations: true,
             expected_revision: "r1".into(),
         },
     )
@@ -156,7 +163,7 @@ async fn read_then_patch_sends_exactly_the_contract_body() {
     let state = server.state.lock().unwrap();
     assert_eq!(
         state.patches(),
-        [json!({"autoHandoff":true,"expectedRevision":"r1"})]
+        [json!({"automations":true,"expectedRevision":"r1"})]
     );
     assert_eq!(state.count("GET"), 1, "no read-back after an exact ACK");
 }
@@ -178,7 +185,7 @@ async fn older_daemon_is_unsupported_not_off() {
 #[tokio::test]
 async fn failures_map_to_truthful_outcomes() {
     let save = |revision: &str| Job::Save {
-        auto_handoff: true,
+        automations: true,
         expected_revision: revision.into(),
     };
     let conflict = Server::start(Mode::Conflict);
@@ -227,29 +234,15 @@ async fn failures_map_to_truthful_outcomes() {
 }
 
 #[test]
-fn automations_share_the_revision_and_never_replay_unknown() {
-    let mut model = Model::default();
-    assert!(model.begin_save_automations(true).is_none());
-    let (request, _) = model.begin_read().unwrap();
-    model.finish(request, Reply::Read(Ok(snapshot(false, "r1"))));
-    assert_eq!(model.automations(), Some(false));
-    let (request, job) = model.begin_save_automations(true).unwrap();
-    assert_eq!(
-        job,
-        Job::SaveAutomations {
-            enabled: true,
-            expected_revision: "r1".into()
-        }
-    );
-    assert!(model.begin_save(true).is_none());
-    assert_eq!(model.automations(), Some(false));
-    model.finish(request, Reply::Save(Saved::Unknown));
-    assert_eq!(model.automations(), None);
-    assert!(model.begin_save_automations(true).is_none());
-}
-
-#[test]
-fn old_daemons_do_not_claim_an_automation_value() {
-    let old = parse(br#"{"schemaVersion":1,"autoHandoff":false,"revision":"r1"}"#).unwrap();
-    assert_eq!(old.automations, None);
+fn daemons_without_automations_are_unsupported_not_off() {
+    for old in [
+        r#"{"schemaVersion":1,"autoHandoff":false,"revision":"r1"}"#,
+        r#"{"schemaVersion":1,"revision":"r1"}"#,
+    ] {
+        assert_eq!(
+            parse(old.as_bytes()),
+            Err(ReadFailure::Unsupported),
+            "{old}"
+        );
+    }
 }

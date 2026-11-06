@@ -1,0 +1,93 @@
+diff --git a/src/notes.ts b/src/notes.ts
+--- a/src/notes.ts
++++ b/src/notes.ts
+@@ -1,4 +1,5 @@
+-import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
++import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
++import { stat } from "node:fs/promises";
+ import { dirname } from "node:path";
+ import { setImmediate } from "node:timers/promises";
+ import {
+@@ -16,7 +17,8 @@
+ 	type PolicyContext,
+ 	type TextResult,
+ } from "./contracts.ts";
+-import { isBinaryFile, notesDir, publishFile, readText } from "./files.ts";
++import { notesDir, publishFile, readText } from "./files.ts";
++import { readNoteBytes } from "./note-read.ts";
+ import { notePath, scopeDirectory } from "./note-scopes.ts";
+ import type { NoteCall, NotesStore, SessionNotes } from "./note-store.ts";
+ import { NoteDiscovery, noteLabel } from "./note-discovery.ts";
+@@ -95,19 +97,23 @@
+ 	const relative = requireValue(params.path, "path", params.op);
+ 	const target = await session.read(relative, { scope: params.scope, signal: access.signal });
+ 	const path = target.path;
+-	const info = statSync(path, { throwIfNoEntry: false });
++	const info = await stat(path).catch((error: NodeJS.ErrnoException) => {
++		if (error.code === "ENOENT") return undefined;
++		throw error;
++	});
+ 	if (info === undefined) {
+ 		throw new Error(`No note at ${relative}. Use op "list" to see available notes.`);
+ 	}
+ 	if (info.isDirectory()) {
+ 		return listNotes(session, { ...params, scope: scopeDirectory(target.address) }, access);
+ 	}
+-	if (await isBinaryFile(path)) {
++	const bytes = await readNoteBytes(path, info, access.signal);
++	if (bytes.subarray(0, 8_000).includes(0)) {
+ 		throw new Error(
+ 			`${relative} is a binary file (${formatSize(info.size)}); notes read returns text only.`,
+ 		);
+ 	}
+-	const text = readFileSync(path, "utf8");
++	const text = bytes.toString("utf8");
+ 	const offset = params.offset ?? 0;
+ 	if (offset > 0 && offset >= text.length) {
+ 		throw new Error(`Offset ${offset} is past the end of ${relative} (${text.length} chars).`);
+diff --git a/src/note-read.ts b/src/note-read.ts
+new file mode 100644
+--- /dev/null
++++ b/src/note-read.ts
+@@ -0,0 +1,41 @@
++import { constants, type Stats } from "node:fs";
++import fs from "node:fs/promises";
++
++export const MAX_NOTE_READ_BYTES = 1024 * 1024;
++
++function unchanged(before: Stats, after: Stats): boolean {
++	return before.dev === after.dev && before.ino === after.ino &&
++		before.size === after.size && before.mtimeMs === after.mtimeMs &&
++		before.ctimeMs === after.ctimeMs && after.isFile();
++}
++
++/** One limited snapshot. Never reopen the path for binary detection or decoding. */
++export async function readNoteBytes(path: string, expected: Stats, signal?: AbortSignal): Promise<Buffer> {
++	signal?.throwIfAborted();
++	// Nonblocking open prevents a replacement FIFO from hanging before fstat rejects it.
++	const file = await fs.open(path, constants.O_RDONLY | constants.O_NONBLOCK);
++	try {
++		signal?.throwIfAborted();
++		const before = await file.stat();
++		if (!unchanged(expected, before)) throw new Error("The note changed before reading. Retry the read.");
++		if (before.size > MAX_NOTE_READ_BYTES) throw new Error("This note exceeds the 1 MiB read limit.");
++		const buffer = Buffer.alloc(MAX_NOTE_READ_BYTES + 1);
++		let length = 0;
++		while (length < buffer.length) {
++			signal?.throwIfAborted();
++			const { bytesRead } = await file.read(buffer, length, Math.min(64 * 1024, buffer.length - length), length);
++			signal?.throwIfAborted();
++			if (bytesRead === 0) break;
++			length += bytesRead;
++		}
++		if (length > MAX_NOTE_READ_BYTES) throw new Error("This note exceeds the 1 MiB read limit.");
++		const after = await file.stat();
++		const current = await fs.stat(path);
++		signal?.throwIfAborted();
++		if (length !== before.size || !unchanged(before, after) || !unchanged(after, current))
++			throw new Error("The note changed while reading. Retry the read.");
++		return buffer.subarray(0, length);
++	} finally {
++		await file.close();
++	}
++}

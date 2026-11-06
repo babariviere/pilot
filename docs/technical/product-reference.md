@@ -373,8 +373,9 @@ Mission discovery uses the cached, read-only `GET /api/mission-catalog` endpoint
 Legacy Control databases remain on disk, but their runtime, tools, APIs and compaction are removed.
 
 Mission coordinators default to bounded summary-tree memory, including safe adoption by existing
-coordinators at normal compaction boundaries. Ordinary chats keep their existing compaction by default,
-with experimental automatic handoff available in **Settings → Chats**. Internal
+coordinators at normal compaction boundaries. Ordinary-chat automatic context management is described
+in [Posthorse](posthorse.md). The earlier automatic handoff and deterministic digest experiments
+are retired. Internal
 summaries use provider-matched Luna 6 or Haiku 5.5 only when authenticated and available; otherwise
 existing compaction remains in place. Originals and `history_recall` are preserved. See
 [coordinator memory](coordinator-memory.md) for model identities, safety and evidence limits.
@@ -520,42 +521,23 @@ Beside the usage warning, **Force work** lets that chat and its subagents contin
 limit, including windows that cross or move later. The override ends once all of the chat's windows reset or
 clear, or when the provider itself rejects a request. **Pause at limit** restores the guard early.
 
-**Settings → Chats → Automatic handoff (experimental)** replaces automatic compaction in ordinary chats
-with a fresh model context. It is off by default. When on, Pilot prepares a tool-free handoff using the chat's
-current model at the next safe model-request boundary above 70% of the model's
-window (small windows reserve additional room). The structured handoff targets at most
-8,000 UTF-8 bytes (16,384-byte hard limit), preserving constraints, decisions, work state, verification and
-next steps. It saves the handoff before replacing
-processed history. Unconsumed inputs and unseen tool-image rounds keep their original entries. The conversation,
-workspace, full history, artifacts and mission membership stay the same;
-mission coordinators keep their OptChat-inspired memory. A handoff already underway may finish after you turn
-the setting off. An invalid or interrupted handoff preserves the original context and reports a failure instead
-of silently falling back or replaying an uncertain request. See [automatic handoff](auto-handoff.md).
+[Posthorse](posthorse.md) replaces the retired automatic handoff and deterministic compaction
+experiments. Their former setting and environment flag are no longer active. Stored handoff text
+and conversations remain readable; retirement does not migrate or delete history.
 
-With automatic handoff off, when you message a long chat (context at 40% of the window or 100k tokens,
+When you message a long chat (context at 40% of the window or 100k tokens,
 whichever is lower) after the provider's prompt cache has expired (5 minutes for Anthropic, 10 for OpenAI,
 longer with
 `PI_CACHE_RETENTION=long`), Pilot compacts it first and your message waits behind the summary. Every model
 request in the turn then reads the short summary instead of rereading the whole history at full price.
 A warm cache is never discarded, and automatic messages don't trigger it.
 
-With `PILOT_DETERMINISTIC_COMPACTION=1` set for pilotd (opt-in until validated with real providers), ordinary
-chats also compact during a turn, at any model request boundary (including between tool calls),
-once total input passes 100k tokens, or earlier when a smaller model window needs the room. Compaction
-is deterministic and makes no model call: Pilot keeps about 20k tokens of recent context verbatim and replaces
-the rest with a digest of about 5k tokens, rebuilt each time from the original transcript. The digest keeps
-the goal, near-verbatim directives and corrections (marking superseded ones), decisions, open questions,
-changed files, commits, test results, unresolved failures and key tool output, each with its source entry.
-If a digest would not shrink the context enough, Pilot keeps the context and waits for more growth. Manual
-compaction with your own instructions still uses the model summary. Without the setting, ordinary chats keep the
-Harness defaults and model summaries. Legacy Control files are left untouched.
-
 Compaction never deletes the transcript. Ordinary chats have a `history_recall` tool that searches (ranked by
 relevance, or newest first) and reads the chat's own earlier messages and tool output, including parts compacted
-out of context. Results and digests are bounded, redacted, linked to their source entries and labeled as
+out of context. Results are bounded, redacted, linked to their source entries and labeled as
 untrusted quotes. Historical grants are never restated, and permissions and pending questions stay in Pilot's
-own state. See [context compaction](context-compaction.md) for the policy, safeguards, instrumentation and
-the offline benchmark.
+own state. See [Posthorse](posthorse.md) for active context management and the
+[archived digest experiment](context-compaction.md) for historical measurements, not rollout evidence.
 
 Changing an idle chat's model keeps its existing context when the provider stays the same. When a different
 provider cannot use its compacted context, Pilot automatically creates a new conversation attempt from the

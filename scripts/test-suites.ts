@@ -102,7 +102,6 @@ const fast = new Set([
 	"kernel/attention",
 	"kernel/context-digest",
 	"kernel/database-tool",
-	"kernel/deterministic-compaction",
 	"kernel/gh-stack",
 	"kernel/history-privacy",
 	"kernel/history-recall",

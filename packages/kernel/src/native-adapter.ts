@@ -6,6 +6,7 @@
  * provider authentication from the user's pi configuration (settings, packages, extensions, MCP).
  */
 import { createHash, randomUUID } from "node:crypto";
+import { dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { SubscriptionGate } from "@babariviere/pi-extensions/subscription-gate";
 import type { JsonValue, Context as TaskContext } from "@earendil-works/chord";
@@ -86,6 +87,7 @@ import { runningJobs } from "./jobs.ts";
 import { MEMORY_TOOL_NAMES } from "./memory-tools.ts";
 import { type PerformanceSink, type PreparationMark, RequestTiming } from "./performance.ts";
 import type { AskContext } from "./policy.ts";
+import { Posthorse } from "./posthorse.ts";
 import { REPAIR_PROPOSAL_TOOL } from "./repair-proposal-tool.ts";
 import { SHELL_STATUS_DETAIL, shellDeadline } from "./shell-deadline.ts";
 import type { SubagentBridge } from "./subagents.ts";
@@ -104,6 +106,8 @@ export interface ExtensionInput {
 }
 
 export interface NativeAdapterOptions {
+	/** Context management is unavailable to coordinators and legacy read-only roles. */
+	posthorseEligible?: () => boolean;
 	/** Trusted IPC-backed source admission, only for a daemon-managed coordinator worker. */
 	coordinatorSources?: import("./coordinator-sources.ts").ReadCoordinatorSources;
 	/** Operational-read-only profile. Personal resources and every tool except diagnostics are unavailable. */
@@ -303,6 +307,7 @@ export class NativeAdapter {
 	readonly #offlineGate: OfflineGate;
 	readonly #reportSubscriptionLimit?: ReportSubscriptionLimit;
 	#physicalSubscriptionProvider?: string;
+	#posthorse?: Posthorse;
 
 	readonly session: AgentSession;
 	readonly usage: UsageTracker;
@@ -455,9 +460,20 @@ export class NativeAdapter {
 		// The Harness compacts and retries; the native session must not do either on its own.
 		settingsManager.applyOverrides({
 			cacheWarming: "off",
-			compaction: { enabled: false },
 			retry: { enabled: false },
 		});
+		const posthorse = readOnly
+			? undefined
+			: await Posthorse.create({
+					directory: join(
+						dirname(
+							options.sessionFile ??
+								join(agentDir, "sessions", options.sessionId ?? randomUUID(), "native.session"),
+						),
+						"posthorse",
+					),
+					enabled: options.posthorseEligible ?? (() => true),
+				});
 		let renderPrompt: (() => string) | undefined;
 		let registerHostTool: ((tool: ToolDefinition) => void) | undefined;
 		const hostTools = new Map((options.hostTools ?? []).map((tool) => [tool.name, tool]));
@@ -546,6 +562,7 @@ export class NativeAdapter {
 								}
 							: {}),
 						extensionFactories: [
+							...(posthorse ? [posthorse.factory] : []),
 							{ name: "codemode", builtin: true, replaceable: true, factory: createCodemodeExtension() },
 							{ name: "tool-search", builtin: true, replaceable: true, factory: createToolSearchExtension() },
 							{ name: "mcp", builtin: true, replaceable: true, factory: mcp },
@@ -626,6 +643,7 @@ export class NativeAdapter {
 			allowedTools,
 			toolActivity,
 		);
+		adapter.#posthorse = posthorse;
 		adapter.#onToolsRunningChanged = options.onToolsRunningChanged;
 		adapter.#afterReload = () => options.subagents?.refresh();
 		// The SDK loop never runs here. Its default getter would report idle throughout
@@ -752,6 +770,12 @@ export class NativeAdapter {
 		if (this.#activity) return;
 		this.#harness = harness;
 		this.#conversationId = conversationId;
+		const conversation = await harness.conversation(conversationId, BACKGROUND_CONTEXT);
+		if (!conversation) throw new Error("Native adapter conversation is missing");
+		this.#posthorse?.bind(harness, conversation, {
+			context: () => this.session.extensionRunner.createContext(),
+			policy: () => this.session.settingsManager.getCompactionSettings(this.session.model),
+		});
 		const activity = await watchActivity(harness, conversationId, BACKGROUND_CONTEXT);
 		this.#activity = activity;
 		let notifiedVersion = activity.settledVersion;
@@ -879,6 +903,7 @@ export class NativeAdapter {
 			this.refreshTools();
 		}
 		// Borrow the committed view. Most callers need only the isolated native mirror above.
+		await this.#posthorse?.sync(view, context);
 		return view.messages;
 	}
 	private async persistCustomEntries(before: Set<string>, context: TaskContext, prompt?: NativePrompt): Promise<void> {
@@ -1025,6 +1050,11 @@ export class NativeAdapter {
 		this.assertOpen();
 		this.#registerHostTool(tool);
 		this.refreshTools();
+	}
+
+	/** Live Pi settings feed Posthorse and the durable scheduler, never a second model loop. */
+	posthorsePolicy() {
+		return this.#posthorse?.policy();
 	}
 
 	/** Declare or withdraw a registered tool from the next request. Returns whether the tool is now active. */
@@ -1289,6 +1319,7 @@ export class NativeAdapter {
 				}),
 			],
 		};
+		if (this.#posthorse) this.extension = this.#posthorse.extension(this.extension);
 		this.onToolsChanged?.(this.extension);
 		return this.extension;
 	}

@@ -13,8 +13,7 @@ const REVISION_BYTES: usize = 256;
 /// One acknowledged daemon value and the revision a write must name.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Snapshot {
-    pub(crate) auto_handoff: bool,
-    pub(crate) automations: Option<bool>,
+    pub(crate) automations: bool,
     pub(crate) revision: String,
 }
 
@@ -22,29 +21,34 @@ pub(crate) struct Snapshot {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Wire {
     schema_version: u64,
-    auto_handoff: bool,
     #[serde(default)]
     automations: Option<bool>,
+    /// Retired setting that older daemons still send. Accepted and ignored, never written.
+    #[serde(default, rename = "autoHandoff")]
+    _legacy_auto_handoff: Option<bool>,
     revision: String,
 }
 
-/// Schema 1 document with known fields and a bounded non-empty revision.
-pub(crate) fn parse(bytes: &[u8]) -> Option<Snapshot> {
-    let wire: Wire = serde_json::from_slice(bytes).ok()?;
-    (wire.schema_version == 1
-        && !wire.revision.is_empty()
-        && wire.revision.len() <= REVISION_BYTES
-        && !wire.revision.chars().any(char::is_control))
-    .then_some(Snapshot {
-        auto_handoff: wire.auto_handoff,
-        automations: wire.automations,
+/// Schema 1 document with known fields and a bounded non-empty revision. A daemon
+/// without the automations field cannot change it, so it is Unsupported, never "off".
+pub(crate) fn parse(bytes: &[u8]) -> Result<Snapshot, ReadFailure> {
+    let wire: Wire = serde_json::from_slice(bytes).map_err(|_| ReadFailure::Unreadable)?;
+    if wire.schema_version != 1
+        || wire.revision.is_empty()
+        || wire.revision.len() > REVISION_BYTES
+        || wire.revision.chars().any(char::is_control)
+    {
+        return Err(ReadFailure::Unreadable);
+    }
+    Ok(Snapshot {
+        automations: wire.automations.ok_or(ReadFailure::Unsupported)?,
         revision: wire.revision,
     })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ReadFailure {
-    /// The daemon predates the endpoint. Never read as "off".
+    /// The daemon predates the endpoint or the automations field. Never read as "off".
     Unsupported,
     /// Unreachable, identity changed, or the daemon reported the store unavailable.
     Unavailable,
@@ -76,12 +80,8 @@ pub(crate) enum Reply {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Job {
     Read,
-    SaveAutomations {
-        enabled: bool,
-        expected_revision: String,
-    },
     Save {
-        auto_handoff: bool,
+        automations: bool,
         expected_revision: String,
     },
 }
@@ -90,13 +90,13 @@ impl Job {
     pub(crate) fn lost(&self) -> Reply {
         match self {
             Self::Read => Reply::Read(Err(ReadFailure::Unavailable)),
-            Self::Save { .. } | Self::SaveAutomations { .. } => Reply::Save(Saved::Unknown),
+            Self::Save { .. } => Reply::Save(Saved::Unknown),
         }
     }
     fn refused(&self) -> Reply {
         match self {
             Self::Read => Reply::Read(Err(ReadFailure::Unavailable)),
-            Self::Save { .. } | Self::SaveAutomations { .. } => Reply::Save(Saved::NotSent),
+            Self::Save { .. } => Reply::Save(Saved::NotSent),
         }
     }
 }
@@ -140,14 +140,10 @@ pub(crate) fn client() -> reqwest::Result<reqwest::Client> {
 pub(crate) async fn run(client: &reqwest::Client, options: &LocalOptions, job: Job) -> Reply {
     match job {
         Job::Read => Reply::Read(read(client, options).await),
-        Job::SaveAutomations {
-            enabled,
-            expected_revision,
-        } => Reply::Save(save_setting(client, options, enabled, &expected_revision, true).await),
         Job::Save {
-            auto_handoff,
+            automations,
             expected_revision,
-        } => Reply::Save(save(client, options, auto_handoff, &expected_revision).await),
+        } => Reply::Save(save(client, options, automations, &expected_revision).await),
     }
 }
 
@@ -181,30 +177,21 @@ pub(crate) async fn read(
         .await
         .map_err(|_| ReadFailure::Unavailable)?;
     match response.status().as_u16() {
-        200 => body(response)
-            .await
-            .and_then(|bytes| parse(&bytes))
-            .ok_or(ReadFailure::Unreadable),
+        200 => match body(response).await {
+            Some(bytes) => parse(&bytes),
+            None => Err(ReadFailure::Unreadable),
+        },
         404 | 405 | 501 => Err(ReadFailure::Unsupported),
         _ => Err(ReadFailure::Unavailable),
     }
 }
 
+/// PATCHes exactly `automations` and `expectedRevision`, with the native capability.
 pub(crate) async fn save(
     client: &reqwest::Client,
     options: &LocalOptions,
-    auto_handoff: bool,
-    expected_revision: &str,
-) -> Saved {
-    save_setting(client, options, auto_handoff, expected_revision, false).await
-}
-
-async fn save_setting(
-    client: &reqwest::Client,
-    options: &LocalOptions,
-    value: bool,
-    expected_revision: &str,
     automations: bool,
+    expected_revision: &str,
 ) -> Saved {
     if expected_revision.is_empty() || expected_revision.len() > REVISION_BYTES {
         return Saved::NotSent;
@@ -212,43 +199,34 @@ async fn save_setting(
     if crate::local_client::gate(client, options).await.is_err() {
         return Saved::NotSent;
     }
-    let field = if automations {
-        "automations"
-    } else {
-        "autoHandoff"
+    let Ok(capability) = options.model_scope_capability() else {
+        return Saved::NotSent;
     };
+    let Ok(mut header) = reqwest::header::HeaderValue::from_str(&capability) else {
+        return Saved::NotSent;
+    };
+    header.set_sensitive(true);
     let request = serde_json::json!({
-        field: value,
+        "automations": automations,
         "expectedRevision": expected_revision,
     });
-    let mut request_builder = client
+    let response = match client
         .patch(format!("{}{PATH}", options.loopback()))
         .header("Content-Type", "application/json")
-        .body(request.to_string());
-    if automations {
-        let Ok(capability) = options.model_scope_capability() else {
-            return Saved::NotSent;
-        };
-        let Ok(mut header) = reqwest::header::HeaderValue::from_str(&capability) else {
-            return Saved::NotSent;
-        };
-        header.set_sensitive(true);
-        request_builder = request_builder.header("x-pilot-github-capability", header);
-    }
-    let response = match request_builder.send().await {
+        .header("x-pilot-github-capability", header)
+        .body(request.to_string())
+        .send()
+        .await
+    {
         Ok(response) => response,
         // A refused connection never delivered the body. Anything later might have.
         Err(error) if error.is_connect() => return Saved::NotSent,
         Err(_) => return Saved::Unknown,
     };
     match response.status().as_u16() {
-        200 => match body(response).await.and_then(|bytes| parse(&bytes)) {
-            Some(saved)
-                if (if automations {
-                    saved.automations == Some(value)
-                } else {
-                    saved.auto_handoff == value
-                }) && saved.revision != expected_revision =>
+        200 => match body(response).await.map(|bytes| parse(&bytes)) {
+            Some(Ok(saved))
+                if saved.automations == automations && saved.revision != expected_revision =>
             {
                 Saved::Ack(saved)
             }
@@ -290,33 +268,11 @@ pub(crate) struct Model {
     phase: Phase,
     note: Option<Note>,
     request: u64,
-    saving_automations: bool,
 }
 impl Model {
-    /// Acknowledged value, or None when unknown, unavailable or not yet read.
+    /// Acknowledged automations value, or None when unknown, unavailable or not yet read.
     pub(crate) fn value(&self) -> Option<bool> {
-        self.current.as_ref().map(|s| s.auto_handoff)
-    }
-    pub(crate) fn automations(&self) -> Option<bool> {
-        self.current.as_ref().and_then(|s| s.automations)
-    }
-    pub(crate) fn saving_automations(&self) -> bool {
-        self.saving_automations
-    }
-    pub(crate) fn begin_save_automations(&mut self, enabled: bool) -> Option<(u64, Job)> {
-        let current = self.current.as_ref()?;
-        if self.phase != Phase::Idle || current.automations? == enabled {
-            return None;
-        }
-        let job = Job::SaveAutomations {
-            enabled,
-            expected_revision: current.revision.clone(),
-        };
-        self.request += 1;
-        self.phase = Phase::Saving(enabled);
-        self.saving_automations = true;
-        self.note = None;
-        Some((self.request, job))
+        self.current.as_ref().map(|s| s.automations)
     }
     pub(crate) fn phase(&self) -> Phase {
         self.phase
@@ -334,18 +290,17 @@ impl Model {
         Some((self.request, Job::Read))
     }
     /// Only from an acknowledged value that differs; never from Unknown.
-    pub(crate) fn begin_save(&mut self, auto_handoff: bool) -> Option<(u64, Job)> {
+    pub(crate) fn begin_save(&mut self, automations: bool) -> Option<(u64, Job)> {
         let current = self.current.as_ref()?;
-        if self.phase != Phase::Idle || current.auto_handoff == auto_handoff {
+        if self.phase != Phase::Idle || current.automations == automations {
             return None;
         }
         let job = Job::Save {
-            auto_handoff,
+            automations,
             expected_revision: current.revision.clone(),
         };
         self.request += 1;
-        self.phase = Phase::Saving(auto_handoff);
-        self.saving_automations = false;
+        self.phase = Phase::Saving(automations);
         self.note = None;
         Some((self.request, job))
     }

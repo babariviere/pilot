@@ -99,6 +99,8 @@ export interface RebuildOptions {
 	tail: EntryId;
 	/** Available transcript tokens after reserving the current system prompt, tools and next reply. */
 	budget: number;
+	/** Tool-free writer input capacity. Its request does not carry the destination chat's tool declarations. */
+	sourceBudget?: number;
 	maxOutputTokens: number;
 	context: Context;
 	signal: AbortSignal;
@@ -152,8 +154,10 @@ export async function rebuildContext(options: RebuildOptions): Promise<EntryDraf
 		};
 	// Release the bounded raw plan before walking the entire transcript in chronological chunks.
 	edits.length = 0;
-	const summaryBudget = Math.min(budget, 24_000);
-	const maxTokens = Math.min(4096, options.maxOutputTokens, Math.floor(summaryBudget / 4));
+	const summaryBudget = Math.min(options.sourceBudget ?? budget, 24_000);
+	if (!Number.isFinite(summaryBudget) || summaryBudget < 1024)
+		throw new Error("The selected model has too little room for the rebuild writer");
+	const maxTokens = Math.min(4096, options.maxOutputTokens, Math.floor(budget / 4), Math.floor(summaryBudget / 4));
 	const chunkChars = Math.floor((summaryBudget - maxTokens - 512) * 3);
 	let summary = "";
 	let chunk = "";

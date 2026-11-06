@@ -55,11 +55,9 @@ import {
 } from "./attempts.ts";
 import { reconcileCompletion } from "./attention.ts";
 import { autoCompactionThreshold, shouldAutoCompact } from "./auto-compaction.ts";
-import { AutoHandoff } from "./auto-handoff.ts";
 import { chatEvents, compactionEvents } from "./chat-events.ts";
 import { CoordinatorMemory } from "./coordinator-memory.ts";
 import { createDatabaseTool, type DatabaseCall } from "./database-tool.ts";
-import { compactionLine, DeterministicCompaction, deterministicCompactionEnabled } from "./deterministic-compaction.ts";
 import { createDiagnosticContextTool, type DiagnosticContextCall } from "./diagnostic-context-tool.ts";
 import { createDiagnosticHistoryTool, type DiagnosticHistoryCall } from "./diagnostic-history-tool.ts";
 import { createDiagnosticLogTool, type DiagnosticLogCall } from "./diagnostic-log-tool.ts";
@@ -251,9 +249,6 @@ export class KernelSession {
 	#storage!: Storage;
 	#usageCapture?: UsageCapture;
 	#attempts?: SessionAttempt[];
-	#compactionLog?: PerformanceLog;
-	#autoHandoffSetting = { enabled: false };
-	#autoHandoff?: AutoHandoff;
 
 	readonly harness: Harness;
 	readonly conversation: Conversation;
@@ -268,10 +263,6 @@ export class KernelSession {
 		return this.#openTodoCount;
 	}
 
-	/** Passive host preference. An admitted handoff may finish; later boundaries read the new value. */
-	configureAutoHandoff(enabled: boolean): void {
-		this.#autoHandoffSetting.enabled = enabled;
-	}
 	private readonly subagents: SubagentBridge;
 	private readonly callMission?: MissionCall;
 	private readonly callMemory?: MemoryCall;
@@ -377,11 +368,6 @@ export class KernelSession {
 			process.env.PILOT_PERF_TIMINGS === "0"
 				? undefined
 				: new PerformanceLog(join(spec.storageDir, "performance.jsonl"));
-		// Content-free compaction sizes and outcomes, under the same local-timing switch and caps.
-		const compactionLog =
-			!deterministicCompactionEnabled() || process.env.PILOT_PERF_TIMINGS === "0"
-				? undefined
-				: new PerformanceLog(join(spec.storageDir, "compaction.jsonl"), { serialize: compactionLine });
 		let adapter: NativeAdapter | undefined;
 		let harness: Harness | undefined;
 		let todoBridge: { close(): Promise<void> } | undefined;
@@ -392,7 +378,6 @@ export class KernelSession {
 			(value) => hooks.onJobsChanged?.(value),
 		);
 		let artifactConversation: Conversation | undefined;
-		const handoffSetting = { enabled: spec.autoHandoff === true };
 		const subagents = new SubagentBridge(hooks.onSubagentsChanged);
 		const toolDrain = new ToolDrain();
 		const mission: { current?: MissionContext } = { current: spec.mission };
@@ -621,26 +606,8 @@ export class KernelSession {
 				? ({ kind: "chat", target: spec.diagnosticTarget } as const)
 				: spec.diagnosticScope;
 			const historyRecall = !spec.pilot?.ask && !spec.role;
-			// Ordinary chats may compact to a deterministic digest (opt-in until validated with real providers).
-			const digestCompaction = !deterministicCompactionEnabled()
-				? undefined
-				: new DeterministicCompaction({
-						harness: () => harness,
-						recall: historyRecall,
-						...(compactionLog ? { log: compactionLog } : {}),
-					});
-			const autoHandoff = new AutoHandoff({
-				harness: () => harness,
-				enabled: () => handoffSetting.enabled,
-				eligible: (id) => artifactConversation?.id === id && mission.current?.coordinator !== "self",
-				manualPolicy: (window) => {
-					const legacy = digestCompaction?.policy(window, artifactConversation?.id).harness;
-					return legacy
-						? { reserveTokens: legacy.reserveTokens, keepRecentTokens: legacy.keepRecentTokens }
-						: undefined;
-				},
-			});
 			adapter = await NativeAdapter.open({
+				posthorseEligible: () => !spec.role && mission.current?.coordinator !== "self",
 				onToolsRunningChanged: hooks.onToolsRunningChanged,
 				subscriptionPolicy: spec.subscriptionPolicy,
 				reportSubscriptionLimit: hooks.reportSubscriptionLimit,
@@ -768,10 +735,8 @@ export class KernelSession {
 					compactionEvents(provenance ? provenance.prepare(tracked) : tracked, () => harness),
 					() => harness,
 				);
-				const handoffs = autoHandoff.extension(events);
-				return toolDrain.prepare(
-					coordinatorMemory.extension(digestCompaction ? digestCompaction.extension(handoffs) : handoffs),
-					(context) => adapter!.waitForSubscription(context.abortSignal),
+				return toolDrain.prepare(coordinatorMemory.extension(events), (context) =>
+					adapter!.waitForSubscription(context.abortSignal),
 				);
 			};
 			const coordinatorMemory = new CoordinatorMemory({
@@ -839,10 +804,7 @@ export class KernelSession {
 					// The Harness reads settings on every resolution, so the getter follows model and window changes.
 					settings: Object.defineProperty({ ...settings }, "compaction", {
 						enumerable: true,
-						get: () =>
-							coordinatorMemory.policy(window()) ??
-							autoHandoff.policy(window(), artifactConversation?.id) ??
-							digestCompaction?.policy(window(), artifactConversation?.id).harness,
+						get: () => coordinatorMemory.policy(window()) ?? adapter!.posthorsePolicy(),
 					}),
 				},
 				context,
@@ -923,8 +885,6 @@ export class KernelSession {
 				hooks.callMemory,
 			);
 			openedSession = session;
-			session.#autoHandoffSetting = handoffSetting;
-			session.#autoHandoff = autoHandoff;
 			session.todoBridge = todoBridge;
 			session.#openTodoCount = openTodoCount;
 			session.#compactSession = compaction.compactSession;
@@ -943,7 +903,6 @@ export class KernelSession {
 			session.#cwd = spec.cwd;
 			session.#storage = owned.storage;
 			session.#usageCapture = usageCapture;
-			session.#compactionLog = compactionLog;
 			session.#attempts = publicAttempts(await harness.snapshot(AttemptsDoc, context));
 			if (!session.#reportedWorking) {
 				session.#completion = await reconcileCompletion(owned.storage, harness, conversation, context, undefined);
@@ -1074,7 +1033,6 @@ export class KernelSession {
 			else await owned.storage.close(context).catch(() => undefined);
 			await adapter?.close().catch(() => undefined);
 			await performanceLog?.close();
-			await compactionLog?.close();
 			owned.release();
 			throw error;
 		}
@@ -1197,6 +1155,9 @@ export class KernelSession {
 					conversationId: this.conversation.id,
 					tail: tail.id,
 					budget,
+					sourceBudget:
+						Math.floor(choice.model.contextWindow * 0.95) -
+						Math.min(choice.model.maxTokens, 16_384, Math.floor(choice.model.contextWindow * 0.2)),
 					maxOutputTokens: choice.model.maxTokens,
 					context,
 					signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
@@ -1534,10 +1495,8 @@ export class KernelSession {
 	 */
 	private async compactBeforeUserInput(): Promise<void> {
 		try {
-			const model = this.adapter.model;
-			const window = this.adapter.models.getModel(model.provider, model.modelId)?.contextWindow ?? 0;
-			// Automatic handoff runs after input placement at the native model boundary, never as an idle reset.
-			if (this.#autoHandoff?.policy(window, this.conversation.id)) return;
+			// Posthorse rolls over only at active model boundaries, never because an idle cache expired.
+			if (this.adapter.posthorsePolicy()) return;
 			// Context usage is refreshed after every run, so most messages stop here without a storage read.
 			const usage = this.adapter.usage.current.context;
 			if (usage?.tokens === undefined || usage.tokens < autoCompactionThreshold(usage.contextWindow)) return;
@@ -1953,7 +1912,6 @@ export class KernelSession {
 				try {
 					await this.adapter.close();
 				} finally {
-					await this.#compactionLog?.close().catch(() => undefined);
 					this.release();
 				}
 			}

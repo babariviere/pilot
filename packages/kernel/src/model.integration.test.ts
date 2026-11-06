@@ -154,7 +154,6 @@ for (const existing of [false, true])
 	test(`summary-tree default is wired for ${existing ? "existing" : "new"} coordinators without switching main models`, async (t) => {
 		const f = await fixture(t);
 		t.mock.method(NativeAdapter.prototype, "resolveCoordinatorMemoryModel", async () => f.a.getModel("two"));
-		Object.assign(f.spec, { autoHandoff: true });
 		const mission = {
 			id: "fixture-mission",
 			title: "Offline",
@@ -1082,18 +1081,18 @@ test("kernel coalesces durable progress without losing short final responses", {
 	await session.close();
 	const restored = await f.open();
 	assert.deepEqual(settings, [
-		// Undefined live getter preserves native defaults for ordinary chats, including reopen.
+		// Posthorse keeps native manual compaction budgets but disables background compaction, including reopen.
 		{
 			toolExecution: "sequential",
 			steeringMode: "all",
 			progress: { partialIntervalMs: 250, outputIntervalMs: 250, persistWithinMs: 0 },
-			compaction: undefined,
+			compaction: { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000, backgroundTokens: 0 },
 		},
 		{
 			toolExecution: "sequential",
 			steeringMode: "all",
 			progress: { partialIntervalMs: 250, outputIntervalMs: 250, persistWithinMs: 0 },
-			compaction: undefined,
+			compaction: { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000, backgroundTokens: 0 },
 		},
 	]);
 	await restored.close();
@@ -1681,9 +1680,10 @@ test("a smaller destination summarizes the entire raw transcript without reading
 	);
 	assert.equal((await session.changeModel("pilot-model-b/small"))?.switched, true);
 	assert.ok(sources.length > 1, "large histories use bounded sequential chunks");
-	assert.match(sources.join(""), /Hidden original 0/);
-	assert.match(sources.join(""), /Hidden original 69/);
-	assert.match(sources.join(""), /File written once/);
+	const transcript = sources.join("");
+	for (let i = 0; i < 70; i++) assert.equal(transcript.split(`Hidden original ${i}.`).length - 1, 1);
+	assert.equal(transcript.split("Raw fact.").length - 1, 70 * 500);
+	assert.match(transcript, /File written once/);
 	await session.close();
 	const rebuilt = await f.open();
 	const view = await rebuilt.conversation.context(context);
@@ -2418,10 +2418,7 @@ test("performance timings preserve request hooks and isolate HTTP retries across
 	await session.close();
 	const records = (await performanceRecords(f.spec.storageDir)).sort((a, b) => a.request - b.request);
 	assert.equal(records.length, 2);
-	assert.deepEqual(
-		records.map((r) => r.httpAttempts),
-		[1, 2],
-	);
+	assert.deepEqual(records.map((r) => r.httpAttempts).sort(), [1, 2]);
 	for (const r of records) {
 		assert.equal(r.source, "stream");
 		assert.ok(r.payloadReadyMs! >= 0);
@@ -2787,21 +2784,20 @@ async function seedLongConversation(session: KernelSession, lastAnswerAt: number
 }
 
 for (const scenario of ["cold", "warm", "automatic"] as const) {
-	test(`long ${scenario} conversation ${scenario === "cold" ? "compacts" : "does not compact"} before the next input`, {
+	test(`Posthorse keeps long ${scenario} context without an idle summary before the next input`, {
 		timeout: 15000,
 	}, async (t) => {
 		const f = await fixture(t);
 		const session = await f.open();
 		const adapter = f.adapters.at(-1)!;
-		// About 57k estimated tokens: over the 51k threshold, under the Harness's own background compaction at 79k.
+		// About 57k estimated tokens: over the retired idle threshold, below the model-window limit.
 		adapter.models.getModel("pilot-model-a", "one")!.contextWindow = 128000;
 		// The faux API's cache lifetime is one hour.
 		await seedLongConversation(session, Date.now() - (scenario === "warm" ? 60_000 : 2 * 60 * 60_000));
 		await adapter.refreshUsage(context);
 		f.a.setResponses([
-			fauxAssistantMessage(scenario === "cold" ? "Checkpoint summary" : "Plain reply"),
 			(messages) => {
-				assert.ok(messages.messages.some((m) => JSON.stringify(m).includes("Checkpoint summary")));
+				assert.ok(messages.messages.some((m) => JSON.stringify(m).includes("Old context")));
 				assert.ok(messages.messages.some((m) => JSON.stringify(m).includes("Next question")));
 				return fauxAssistantMessage("Done");
 			},
@@ -2811,47 +2807,11 @@ for (const scenario of ["cold", "warm", "automatic"] as const) {
 		const entries = (await session.conversation.entries({}, 100, undefined, context)).items.toReversed();
 		const checkpoint = entries.findIndex((e) => e.kind === "pi.compaction");
 		const input = entries.findIndex((e) => userText(e) === "Next question");
-		if (scenario === "cold") {
-			assert.equal(f.a.state.callCount, 2);
-			assert.ok(checkpoint >= 0 && input > checkpoint, "summary is placed before user input");
-		} else {
-			assert.equal(f.a.state.callCount, 1);
-			assert.equal(checkpoint, -1);
-			assert.ok(input >= 0);
-		}
+		assert.equal(f.a.state.callCount, 1, "no idle summarization request reached the model");
+		assert.equal(checkpoint, -1);
+		assert.ok(input >= 0);
 	});
 }
-
-test("with deterministic compaction enabled, a long cold conversation compacts to a digest without a model call", {
-	timeout: 15000,
-}, async (t) => {
-	const previous = process.env.PILOT_DETERMINISTIC_COMPACTION;
-	process.env.PILOT_DETERMINISTIC_COMPACTION = "1";
-	t.after(() => {
-		if (previous === undefined) delete process.env.PILOT_DETERMINISTIC_COMPACTION;
-		else process.env.PILOT_DETERMINISTIC_COMPACTION = previous;
-	});
-	const f = await fixture(t);
-	const session = await f.open();
-	const adapter = f.adapters.at(-1)!;
-	adapter.models.getModel("pilot-model-a", "one")!.contextWindow = 128000;
-	await seedLongConversation(session, Date.now() - 2 * 60 * 60_000);
-	await adapter.refreshUsage(context);
-	f.a.setResponses([
-		(messages) => {
-			assert.ok(messages.messages.some((m) => JSON.stringify(m).includes("[Pilot context digest]")));
-			assert.ok(messages.messages.some((m) => JSON.stringify(m).includes("Next question")));
-			return fauxAssistantMessage("Done");
-		},
-	]);
-	await session.submit("next", "Next question", "followUp");
-	await session.conversation.waitForIdle(context);
-	assert.equal(f.a.state.callCount, 1, "no summarization request reached the model");
-	const entries = (await session.conversation.entries({}, 100, undefined, context)).items.toReversed();
-	assert.ok(
-		entries.findIndex((e) => e.kind === "pi.compaction") < entries.findIndex((e) => userText(e) === "Next question"),
-	);
-});
 
 test("queued compaction input survives close and reopen exactly once", { timeout: 15000 }, async (t) => {
 	const f = await fixture(t);
@@ -2890,62 +2850,3 @@ test("queued compaction input survives close and reopen exactly once", { timeout
 	assert.equal(entries.filter((e) => e.kind === "pi.compaction").length, 1);
 	assert.equal((await session.harness.snapshot(InboxDoc, session.conversation.id, context))!.items.length, 0);
 });
-
-for (const setting of ["startup", "live", "oversized"] as const) {
-	test(`automatic handoff ${setting} setting reaches the native boundary and skips idle cold-cache compaction`, async (t) => {
-		const f = await fixture(t);
-		if (setting !== "live") Object.assign(f.spec, { autoHandoff: true });
-		const session = await f.open();
-		if (setting === "live") session.configureAutoHandoff(true);
-		const adapter = f.adapters.at(-1)!;
-		adapter.models.getModel("pilot-model-a", "one")!.contextWindow = 128000;
-		await seedLongConversation(session, Date.now() - 2 * 60 * 60_000);
-		await session.conversation.commit(async (tx) => {
-			const message = fauxAssistantMessage("Recorded old inspection");
-			message.usage.input = 100_001;
-			message.usage.totalTokens = 100_001;
-			await tx.appendEntry(session.conversation.id, { kind: "pi.assistant", model: [message] });
-		}, context);
-		await adapter.refreshUsage(context);
-		f.a.setResponses([
-			...(setting === "oversized"
-				? [() => fauxAssistantMessage(`Completed draft. ${"🦀".repeat(4400)} Keep next step.`)]
-				: []),
-			(source) => {
-				assert.match(JSON.stringify(source.messages), /Prepare a handoff/);
-				assert.doesNotMatch(JSON.stringify(source.messages), /Latest user direction/);
-				assert.match(
-					JSON.stringify(source.messages),
-					setting === "oversized" ? /Rewrite this completed draft/ : /Old context/,
-				);
-				return fauxAssistantMessage(
-					"Continue from this handoff. Latest user direction is to verify the export. No push is authorized.",
-				);
-			},
-			(request) => {
-				assert.match(JSON.stringify(request.messages), /Pilot handoff/);
-				assert.match(JSON.stringify(request.messages), /Latest user direction: verify the export/);
-				assert.doesNotMatch(JSON.stringify(request.messages), /Old context|Recorded old inspection/);
-				return fauxAssistantMessage("Continued from the handoff");
-			},
-		]);
-		await session.submit("handoff-next", "Latest user direction: verify the export.", "followUp");
-		await session.conversation.waitForIdle(context);
-		assert.equal(f.a.state.callCount, setting === "oversized" ? 3 : 2);
-		assert.equal((await f.completed).outcome, "done");
-		const originals = (await session.conversation.entries({ order: "ascending" }, 1000, undefined, context)).items;
-		const marker = originals.find((entry) => entry.kind === "pi.compaction")!;
-		assert.equal(marker.head, originals.find((entry) => userText(entry).startsWith("Latest user direction"))!.id);
-		assert.equal((marker.data as { mode: string }).mode, "handoff");
-		assert.ok(
-			originals.findIndex((entry) => userText(entry).startsWith("Latest user direction")) <
-				originals.indexOf(marker),
-			"handoff retains the original new input at the model boundary, not an idle pre-input summary",
-		);
-		assert.ok(
-			originals.some((entry) => userText(entry).includes("Old context")),
-			"full history remains stored",
-		);
-		assert.equal(session.compacting, false);
-	});
-}

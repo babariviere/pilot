@@ -147,7 +147,6 @@ export function runKernelWorker(): void {
 	let updateRevision = 0;
 	/** Latest context sent while the kernel was still starting. */
 	let pendingMission: { context?: MissionContext } | undefined;
-	let pendingAutoHandoff: boolean | undefined;
 	let pendingSlackLinked: boolean | undefined;
 	const configureTelemetry = (configuration: import("./protocol.ts").KernelTelemetryConfiguration) => {
 		setPerformanceCollectionEnabled(configuration.localDiagnostics);
@@ -497,11 +496,6 @@ export function runKernelWorker(): void {
 			workspaceCalls.delete(command.callId);
 			return;
 		}
-		if (command.type === "autoHandoff.configure") {
-			pendingAutoHandoff = command.enabled;
-			if (session) session.configureAutoHandoff(command.enabled);
-			return;
-		}
 		if (command.type === "mission.context") {
 			if (session) session.setMission(command.context);
 			else pendingMission = { ...(command.context ? { context: command.context } : {}) };
@@ -603,7 +597,6 @@ export function runKernelWorker(): void {
 						callDaemon((callId) => ({ type: "artifact.reference.get", callId, id, revision })),
 					prepareWorkspace,
 				});
-				opened.configureAutoHandoff(pendingAutoHandoff ?? command.spec.autoHandoff ?? false);
 				if (pendingMission) opened.setMission(pendingMission.context);
 				if (pendingSlackLinked !== undefined) opened.setSlackLinked(pendingSlackLinked);
 				session = opened;

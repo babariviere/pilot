@@ -32,11 +32,8 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Code relationships and retained comparison evaluation](code-relationships-evaluation.md)
 - [Empryo exploration patterns for Pilot](empryo-code-exploration-evaluation.md)
 - [Descriptor-anchored source traversal (design only)](descriptor-anchored-source-traversal.md)
-- [Experimental automatic handoff](auto-handoff.md)
-- [Ordinary-chat context compaction and history recall](context-compaction.md)
+- [Posthorse context management](posthorse.md)
 - [Passive model and thinking defaults](model-defaults.md)
-- [In-place context edits for compaction (design note)](context-edit-compaction.md)
-- [Ordinary-chat handoff comparison](handoff-comparison.md)
 - [Shared context and independent task execution](shared-context.md)
 - [Coordinator summary-tree memory](coordinator-memory.md)
 - [Narrow coordinator repository inspection (design only)](coordinator-repository-inspection.md)
@@ -113,6 +110,11 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Feature-adoption catalog](feature-adoption.md)
 
 ## Performance and experiments
+
+- [Archived automatic handoff experiment](auto-handoff.md)
+- [Archived deterministic compaction measurements](context-compaction.md)
+- [Archived in-place context edits proposal (never implemented)](context-edit-compaction.md)
+- [Historical handoff comparison (not Posthorse evidence)](handoff-comparison.md)
 
 - [CPU and memory audit](performance-check.md)
 - [I/O amplification audit](io-performance-check.md)

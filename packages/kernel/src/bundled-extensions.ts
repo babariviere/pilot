@@ -43,6 +43,7 @@ export function bundledResourceLoader(
 			ANTHROPIC_AUTH_PATH,
 		],
 		ownedPackages: {
+			"pi-posthorse": ["*"],
 			"@babariviere/pi-extensions": profile
 				? [...PILOT_EXTENSION_NAMES.map((name) => `extensions/${name}`), "embedding/pilot.ts", "embedding/child.ts"]
 				: [],

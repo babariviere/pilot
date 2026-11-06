@@ -26,11 +26,18 @@ provider enforcement. **Pause at limit** restores the guard early.
 Open **Context…** in the chat header for reported context and direct/child accounting.
 Compaction shortens model context, not your saved transcript.
 
-**Settings → Chats → Automatic handoff (experimental)** is off by default.
-When enabled, ordinary chats prepare a fresh context at a safe boundary above 70%
-of the model window, with extra room reserved for small windows. The same visible
-chat, workspace, history, and mission membership remain. Coordinators use their own
-memory policy. An invalid or interrupted handoff keeps the original context.
+Ordinary Build chats use **Posthorse** to start fresh context windows while keeping
+the same chat, workspace, saved history, and mission membership. It keeps a recent
+tail and a recovery record without a summary-model call on supported windows.
+The agent can save private task notes and search older text when needed.
+
+Pi's compaction settings control the rollover threshold and recent tail. There is
+no separate Automatic handoff toggle. Idle cache expiry does not trigger rollover.
+Coordinators keep their own memory policy. Failed tools or Stop prevent a requested
+clean reset. **Compact** still requests a model summary; very small windows can also
+use native summarization. Kept history does not guarantee that the model recalls it.
+
+[Technical details and compatibility limits](technical/posthorse.md).
 
 Changing providers may need a separate continuation. Read its confirmation and
 finish or stop background jobs and close live terminals first.

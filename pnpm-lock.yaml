@@ -176,7 +176,8 @@ overrides:
 
 patchedDependencies:
   '@earendil-works/pi-coding-agent@1.5.0': 103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015
-  '@earendil-works/pi-durable@1.5.0': f908994d7444e762efb5bc07d773c5ddcf04844a0693cdbff7b58a61e4c8cd3d
+  '@earendil-works/pi-durable@1.5.0': 4a75765119eb381a319f68ac7347f7272849c322eb64589ba1f61df5724a69be
+  pi-posthorse@0.10.10: 2350318d1ada346cb6cc3ae8251bd35d714e4e9b3c407fcabe14dd960934915a
 
 importers:
 
@@ -263,7 +264,7 @@ importers:
         version: 1.5.0(esbuild@0.28.2)(ws@8.22.1)
       '@earendil-works/pi-durable':
         specifier: 1.5.0
-        version: 1.5.0(patch_hash=f908994d7444e762efb5bc07d773c5ddcf04844a0693cdbff7b58a61e4c8cd3d)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.12.3)(ws@8.22.1)
+        version: 1.5.0(patch_hash=4a75765119eb381a319f68ac7347f7272849c322eb64589ba1f61df5724a69be)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.12.3)(ws@8.22.1)
       '@types/pg':
         specifier: ^8.23.1
         version: 8.23.1
@@ -299,7 +300,7 @@ importers:
         version: 1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1)
       '@earendil-works/pi-durable':
         specifier: 1.5.0
-        version: 1.5.0(patch_hash=f908994d7444e762efb5bc07d773c5ddcf04844a0693cdbff7b58a61e4c8cd3d)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.12.3)(ws@8.22.1)
+        version: 1.5.0(patch_hash=4a75765119eb381a319f68ac7347f7272849c322eb64589ba1f61df5724a69be)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.12.3)(ws@8.22.1)
       '@earendil-works/pi-mcp':
         specifier: 1.5.0
         version: 1.5.0
@@ -318,6 +319,9 @@ importers:
       jiti:
         specifier: 2.7.0
         version: 2.7.0
+      pi-posthorse:
+        specifier: 0.10.10
+        version: 0.10.10(patch_hash=2350318d1ada346cb6cc3ae8251bd35d714e4e9b3c407fcabe14dd960934915a)(@earendil-works/pi-coding-agent@1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1))(@earendil-works/pi-tui@1.5.0)(typebox@1.4.4)
       typebox:
         specifier: 1.4.4
         version: 1.4.4
@@ -332,7 +336,7 @@ importers:
         version: 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1)
       '@earendil-works/pi-durable':
         specifier: 1.5.0
-        version: 1.5.0(patch_hash=f908994d7444e762efb5bc07d773c5ddcf04844a0693cdbff7b58a61e4c8cd3d)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.12.3)(ws@8.22.1)
+        version: 1.5.0(patch_hash=4a75765119eb381a319f68ac7347f7272849c322eb64589ba1f61df5724a69be)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.12.3)(ws@8.22.1)
 
   packages/telemetry:
     dependencies:
@@ -1327,6 +1331,21 @@ packages:
   pgpass@1.0.5:
     resolution: {integrity: sha512-FdW9r/jQZhSeohs1Z3sI1yxFQNFvMcnmfuj4WBMUTxOrAyLMaTcE1aAMBiTlbMNaXvBCQuVi0R7hd8udDSP7ug==}
 
+  pi-posthorse@0.10.10:
+    resolution: {integrity: sha512-grJONz5YR+weiuKmMbtI1Kr9iRrFerHi1FERy59u/cYfzBwnxtkzMU37duwGoEdjr1MSAsfD7JJrCugXlnzDsg==}
+    engines: {node: '>=24.12.0'}
+    peerDependencies:
+      '@earendil-works/pi-coding-agent': '>=1.5.0'
+      '@earendil-works/pi-tui': 1.5.0
+      typebox: '*'
+    peerDependenciesMeta:
+      '@earendil-works/pi-coding-agent':
+        optional: true
+      '@earendil-works/pi-tui':
+        optional: true
+      typebox:
+        optional: true
+
   postgres-array@2.0.0:
     resolution: {integrity: sha512-VpZrUqU5A69eQyW2c5CA1jtLecCsN2U/bD6VilrFDWq5+5UIEVO7nazS3TEcHf1zuPYO/sqGvUvW62g86RXZuA==}
     engines: {node: '>=4'}
@@ -1665,7 +1684,7 @@ snapshots:
       '@earendil-works/chord': 1.5.0(esbuild@0.28.2)(ws@8.22.1)
       '@earendil-works/pi-ai': 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1)
       '@earendil-works/pi-coding-agent': 1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1)
-      '@earendil-works/pi-durable': 1.5.0(patch_hash=f908994d7444e762efb5bc07d773c5ddcf04844a0693cdbff7b58a61e4c8cd3d)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.12.3)(ws@8.22.1)
+      '@earendil-works/pi-durable': 1.5.0(patch_hash=4a75765119eb381a319f68ac7347f7272849c322eb64589ba1f61df5724a69be)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.12.3)(ws@8.22.1)
       '@earendil-works/pi-tui': 1.5.0
       defuddle: 0.19.6
       linkedom: 0.18.14
@@ -1835,7 +1854,7 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-durable@1.5.0(patch_hash=f908994d7444e762efb5bc07d773c5ddcf04844a0693cdbff7b58a61e4c8cd3d)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.12.3)(ws@8.22.1)':
+  '@earendil-works/pi-durable@1.5.0(patch_hash=4a75765119eb381a319f68ac7347f7272849c322eb64589ba1f61df5724a69be)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.12.3)(ws@8.22.1)':
     dependencies:
       '@earendil-works/chord': 1.5.0(esbuild@0.28.2)(ws@8.22.1)
       '@earendil-works/pi-ai': 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1)
@@ -2513,6 +2532,12 @@ snapshots:
   pgpass@1.0.5:
     dependencies:
       split2: 4.2.0
+
+  pi-posthorse@0.10.10(patch_hash=2350318d1ada346cb6cc3ae8251bd35d714e4e9b3c407fcabe14dd960934915a)(@earendil-works/pi-coding-agent@1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1))(@earendil-works/pi-tui@1.5.0)(typebox@1.4.4):
+    optionalDependencies:
+      '@earendil-works/pi-coding-agent': 1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1)
+      '@earendil-works/pi-tui': 1.5.0
+      typebox: 1.4.4
 
   postgres-array@2.0.0: {}
 

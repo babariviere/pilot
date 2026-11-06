@@ -300,10 +300,20 @@ test("reload rereads mcp.json and closes old transports before connecting the re
 	assert.deepEqual(connections, ["before", "after"]);
 });
 
-test("personal profile and auth copies never evaluate, while unrelated extensions still load", async (t) => {
+test("personal profile, Posthorse and auth copies never evaluate, while unrelated extensions still load", async (t) => {
 	const f = await fixture(t);
 	const marker = join(f.root, "duplicate-ran");
 	const pkg = join(f.root, "personal-package");
+	const posthorse = join(f.root, "personal-posthorse");
+	await mkdir(posthorse);
+	await writeFile(
+		join(posthorse, "package.json"),
+		JSON.stringify({ name: "pi-posthorse", pi: { extensions: ["index.ts"] } }),
+	);
+	await writeFile(
+		join(posthorse, "index.ts"),
+		"throw new Error('Duplicate Posthorse must never import'); export default () => {};",
+	);
 	await mkdir(join(pkg, "extensions", "jobs"), { recursive: true });
 	await mkdir(join(f.agentDir, "extensions"));
 	await writeFile(
@@ -328,7 +338,7 @@ test("personal profile and auth copies never evaluate, while unrelated extension
 	);
 	await writeFile(
 		join(f.agentDir, "settings.json"),
-		JSON.stringify({ packages: [pkg], extensions: [await obsoleteAuth(f.root)] }),
+		JSON.stringify({ packages: [pkg, posthorse], extensions: [await obsoleteAuth(f.root)] }),
 	);
 	const adapter = await NativeAdapter.open({
 		cwd: f.root,

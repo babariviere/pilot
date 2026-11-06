@@ -27,7 +27,6 @@ pub(crate) enum Mode {
     Malformed,
 }
 pub(crate) struct State {
-    pub(crate) auto_handoff: bool,
     pub(crate) automations: bool,
     pub(crate) revision: u32,
     pub(crate) mode: Mode,
@@ -37,7 +36,7 @@ pub(crate) struct State {
 }
 impl State {
     fn document(&self) -> Value {
-        json!({"schemaVersion":1,"autoHandoff":self.auto_handoff,"automations":self.automations,"revision":format!("r{}",self.revision)})
+        json!({"schemaVersion":1,"automations":self.automations,"revision":format!("r{}",self.revision)})
     }
     pub(crate) fn count(&self, method: &str) -> usize {
         self.requests
@@ -77,7 +76,6 @@ impl Server {
         let options = LocalOptions::synthetic(listener.local_addr().unwrap().port())
             .with_scope_home(home.clone());
         let state = Arc::new(Mutex::new(State {
-            auto_handoff: false,
             automations: false,
             revision: 1,
             mode,
@@ -143,9 +141,8 @@ impl Server {
                         ("GET", "/api/chat-settings", _) => (200, s.document().to_string()),
                         ("PATCH", "/api/chat-settings", mode) => {
                             let fields = payload.as_object().map(|o| o.len());
-                            assert_eq!(fields, Some(2), "exactly autoHandoff and expectedRevision");
-                            let automation = payload.get("automations").is_some();
-                            let requested = payload[if automation { "automations" } else { "autoHandoff" }].as_bool().unwrap();
+                            assert_eq!(fields, Some(2), "exactly automations and expectedRevision");
+                            let requested = payload["automations"].as_bool().unwrap();
                             let expected = payload["expectedRevision"].as_str().unwrap().to_owned();
                             match mode {
                                 Mode::Rejected => (400, json!({"error":"Invalid chat settings"}).to_string()),
@@ -156,7 +153,7 @@ impl Server {
                                 _ if expected != format!("r{}", s.revision) => (409, json!({"error":"conflict"}).to_string()),
                                 Mode::Mismatch => (200, s.document().to_string()),
                                 _ => {
-                                    if automation { s.automations = requested; } else { s.auto_handoff = requested; }
+                                    s.automations = requested;
                                     s.revision += 1;
                                     (200, s.document().to_string())
                                 }

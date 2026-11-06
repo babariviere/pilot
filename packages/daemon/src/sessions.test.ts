@@ -2498,9 +2498,6 @@ test("Insights queued lifecycle saves cannot resurrect an enabled grant", async 
 	const persisted = JSON.parse(await readFile(join(f.home, "sessions", f.id, "meta.json"), "utf8"));
 	assert.equal(persisted.insightsGrant.enabled, false);
 	assert.equal(persisted.insightsGrant.revision, 2);
-	f.sessions.configureAutoHandoff(true);
-	assert.equal(f.worker.spec.autoHandoff, false);
-	assert.ok(f.worker.sent.filter((v) => v.type === "autoHandoff.configure").every((v) => !v.enabled));
 });
 
 for (const change of ["removal", "promotion"] as const) {

@@ -126,8 +126,8 @@ pub fn run_chat_settings_probe(cx: &mut HeadlessAppContext) {
             .unwrap();
         settle(cx, settings);
         cx.update_window(settings, |_, w, _| {
-            assert!(w.try_find("chat-auto-handoff").is_none());
-            assert!(w.try_find("chat-auto-handoff-unknown").is_none());
+            assert!(w.try_find("chat-automations").is_none());
+            assert!(w.try_find("chat-automations-unknown").is_none());
         })
         .unwrap();
         cx.update_window(settings, |_, w, _| w.remove_window())
@@ -182,7 +182,7 @@ pub fn run_chat_settings_probe(cx: &mut HeadlessAppContext) {
             cx.update_window(settings, |_, w, _| {
                 let root = w.find("settings-root").bounds();
                 assert_eq!(root.size, size(px(width), px(HEIGHT)));
-                let control = w.find("chat-auto-handoff");
+                let control = w.find("chat-automations");
                 assert_eq!(control.checked(), Some(false), "{control:?}");
                 assert_ne!(control.disabled(), Some(true));
                 assert!(
@@ -197,7 +197,7 @@ pub fn run_chat_settings_probe(cx: &mut HeadlessAppContext) {
             // Revisiting an acknowledged page rereads external changes without writing.
             {
                 let mut state = server.state.lock().unwrap();
-                state.auto_handoff = true;
+                state.automations = true;
                 state.revision = 2;
             }
             cx.update_window(settings, |_, w, cx| {
@@ -215,7 +215,7 @@ pub fn run_chat_settings_probe(cx: &mut HeadlessAppContext) {
             assert_eq!(server.state.lock().unwrap().count("PATCH"), 0);
             {
                 let mut state = server.state.lock().unwrap();
-                state.auto_handoff = false;
+                state.automations = false;
                 state.revision = 1;
             }
             cx.update_window(settings, |_, w, cx| {
@@ -227,7 +227,7 @@ pub fn run_chat_settings_probe(cx: &mut HeadlessAppContext) {
             assert_eq!(cx.update(|cx| chats.read(cx).probe_state().1), Some(false));
             // Keyboard toggle; the box stays at the acknowledged value until the exact ACK.
             server.state.lock().unwrap().hold = true;
-            tab_to(cx, settings, "chat-auto-handoff");
+            tab_to(cx, settings, "chat-automations");
             cx.update_window(settings, |_, w, cx| w.press("space", cx))
                 .unwrap();
             settle(cx, settings);
@@ -236,7 +236,7 @@ pub fn run_chat_settings_probe(cx: &mut HeadlessAppContext) {
                 (Phase::Saving(true), Some(false), None)
             );
             cx.update_window(settings, |_, w, _| {
-                let control = w.find("chat-auto-handoff");
+                let control = w.find("chat-automations");
                 assert_eq!(control.checked(), Some(false), "no optimistic value");
                 assert_eq!(control.disabled(), Some(true));
                 assert!(w.find("chat-settings-status").visible());
@@ -277,17 +277,17 @@ pub fn run_chat_settings_probe(cx: &mut HeadlessAppContext) {
             );
             assert_eq!(
                 server.state.lock().unwrap().patches(),
-                [json!({"autoHandoff":true,"expectedRevision":"r1"})]
+                [json!({"automations":true,"expectedRevision":"r1"})]
             );
             cx.update_window(settings, |_, w, _| {
-                assert_eq!(w.find("chat-auto-handoff").checked(), Some(true));
+                assert_eq!(w.find("chat-automations").checked(), Some(true));
             })
             .unwrap();
             capture(cx, settings, &dir, name("chats-saved"));
 
             // Changed elsewhere: 409, one read-back, nothing resent.
             server.state.lock().unwrap().mode = Mode::Conflict;
-            cx.update_window(settings, |_, w, cx| w.click("chat-auto-handoff", cx))
+            cx.update_window(settings, |_, w, cx| w.click("chat-automations", cx))
                 .unwrap();
             until(cx, settings, &chats, idle);
             assert_eq!(
@@ -298,7 +298,7 @@ pub fn run_chat_settings_probe(cx: &mut HeadlessAppContext) {
 
             // Daemon could not confirm its write: Unknown, no box, read-only recovery.
             server.state.lock().unwrap().mode = Mode::Unavailable;
-            cx.update_window(settings, |_, w, cx| w.click("chat-auto-handoff", cx))
+            cx.update_window(settings, |_, w, cx| w.click("chat-automations", cx))
                 .unwrap();
             until(cx, settings, &chats, idle);
             assert_eq!(
@@ -306,8 +306,8 @@ pub fn run_chat_settings_probe(cx: &mut HeadlessAppContext) {
                 (Phase::Idle, None, Some(Note::Unknown(false)))
             );
             cx.update_window(settings, |_, w, _| {
-                assert!(w.try_find("chat-auto-handoff").is_none());
-                assert!(w.find("chat-auto-handoff-unknown").visible());
+                assert!(w.try_find("chat-automations").is_none());
+                assert!(w.find("chat-automations-unknown").visible());
                 assert!(w.find("chat-settings-check").visible());
             })
             .unwrap();
@@ -352,25 +352,6 @@ pub fn run_chat_settings_probe(cx: &mut HeadlessAppContext) {
                 assert_eq!((s.count("GET"), s.count("PATCH")), (5, 3));
             }
 
-            // The host automation toggle uses the same CAS, without changing handoff.
-            tab_to(cx, settings, "chat-automations");
-            cx.update_window(settings, |_, w, cx| w.press("space", cx))
-                .unwrap();
-            until(cx, settings, &chats, idle);
-            assert!(server.state.lock().unwrap().automations);
-            assert!(server.state.lock().unwrap().auto_handoff);
-            cx.update_window(settings, |_, w, _| {
-                assert_eq!(w.find("chat-automations").checked(), Some(true));
-            })
-            .unwrap();
-            capture(cx, settings, &dir, name("automations-on"));
-            cx.update_window(settings, |_, w, cx| w.click("chat-automations", cx))
-                .unwrap();
-            until(cx, settings, &chats, idle);
-            assert!(!server.state.lock().unwrap().automations);
-            assert!(server.state.lock().unwrap().auto_handoff);
-            capture(cx, settings, &dir, name("automations-off"));
-
             // An older daemon without the route is Unavailable, never shown as off.
             let older = Server::start(Mode::Unsupported);
             let replaced =
@@ -392,7 +373,7 @@ pub fn run_chat_settings_probe(cx: &mut HeadlessAppContext) {
                 (Phase::Idle, None, Some(Note::Unsupported))
             );
             cx.update_window(settings, |_, w, _| {
-                assert!(w.try_find("chat-auto-handoff").is_none());
+                assert!(w.try_find("chat-automations").is_none());
                 assert!(w.find("chat-settings-note").visible());
             })
             .unwrap();

@@ -32,6 +32,7 @@
 		"@pilot/protocol": "workspace:*",
 		"@pilot/telemetry": "workspace:*",
 		"jiti": "2.7.0",
+		"pi-posthorse": "0.10.10",
 		"typebox": "1.4.4"
 	}
 }

@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { KernelCommand, KernelSpec } from "@pilot/kernel";
+import { ChatSettingsService } from "./chat-settings.ts";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager } from "./sessions.ts";
 
-test("handoff settings reach new, initializing and live workers without reopening", { timeout: 10_000 }, async (t) => {
+test("automation settings never configure worker handoff", { timeout: 10_000 }, async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-handoff-ipc-"));
+	const settings = await ChatSettingsService.open(home);
 	const specs: KernelSpec[] = [];
 	const commands: KernelCommand[][] = [];
 	let finishStartup!: () => void;
@@ -39,8 +41,6 @@ test("handoff settings reach new, initializing and live workers without reopenin
 				packet({ type: "ready", working: false, model: "faux/faux-1", usage: {} });
 				ready();
 			};
-			// Exercise a setting change in the factory's synchronous prefix, before publication.
-			sessions.configureAutoHandoff(true);
 			return worker;
 		},
 	});
@@ -56,22 +56,31 @@ test("handoff settings reach new, initializing and live workers without reopenin
 		const check = () => (specs.length ? resolve() : setImmediate(check));
 		check();
 	});
-	assert.equal(specs[0]?.autoHandoff, false);
-	assert.deepEqual(commands[0]?.[0], { type: "autoHandoff.configure", enabled: true });
-	sessions.configureAutoHandoff(false);
-	assert.deepEqual(commands[0]?.at(-1), { type: "autoHandoff.configure", enabled: false });
+	assert.equal(Object.hasOwn(specs[0]!, "autoHandoff"), false);
+	assert.equal(
+		commands.flat().some((command) => command.type === ("autoHandoff.configure" as string)),
+		false,
+	);
+	await settings.update({ automations: false, expectedRevision: settings.settings().revision });
+	assert.equal(
+		commands.flat().some((command) => command.type === ("autoHandoff.configure" as string)),
+		false,
+	);
 	finishStartup();
 	const unsubscribe = sessions.subscribe(chat.id, () => undefined);
 	t.after(unsubscribe);
-	sessions.configureAutoHandoff(true);
-	assert.deepEqual(commands[0]?.at(-1), { type: "autoHandoff.configure", enabled: true });
+	await settings.update({ automations: true, expectedRevision: settings.settings().revision });
+	assert.equal(
+		commands.flat().some((command) => command.type === ("autoHandoff.configure" as string)),
+		false,
+	);
 	assert.equal(specs.length, 1);
 	const next = await sessions.spawn({ cwd: home, title: "Second", message: "offline fixture" });
 	await new Promise<void>((resolve) => {
 		const check = () => (specs.length === 2 ? resolve() : setImmediate(check));
 		check();
 	});
-	assert.equal(specs[1]?.autoHandoff, true);
+	assert.equal(Object.hasOwn(specs[1]!, "autoHandoff"), false);
 	finishStartup();
 	assert.ok(next.id);
 });

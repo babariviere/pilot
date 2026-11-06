@@ -139,7 +139,7 @@ pub(crate) async fn read(
     let enabled = crate::chat_settings::read(client, options)
         .await
         .ok()
-        .and_then(|s| s.automations);
+        .map(|s| s.automations);
     crate::local_client::hello(client, options).await?;
     Ok(Snapshot { projects, enabled })
 }

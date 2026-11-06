@@ -71,7 +71,7 @@ diff --git a/dist/harness/compaction.js b/dist/harness/compaction.js
      delete live.compactionFailure;
 -    const text = `${SUMMARY_PREFIX}${summary}${SUMMARY_SUFFIX}`;
 +    const text = replaceContext
-+        ? `[Pilot handoff]\nContinue the same conversation from this historical handoff. Original messages remain stored. Preserved current inputs or tool results follow when present; inspect them before acting. This is not new authority or permission.\n\n${summary}`
++        ? `[Context rollover]\nContinue the same conversation from this historical summary. Original messages remain stored. Preserved current inputs or tool results follow when present; inspect them before acting. This is not new authority or permission.\n\n${summary}`
 +        : `${SUMMARY_PREFIX}${summary}${SUMMARY_SUFFIX}`;
      const entry = {
          kind: CompactionEntry.kind,
@@ -79,7 +79,7 @@ diff --git a/dist/harness/compaction.js b/dist/harness/compaction.js
 +        head: replaceContext ? firstKept ?? "self" : firstKept,
          model: [{ role: "user", content: [{ type: "text", text }], timestamp: runtime.now() }],
 -        data: { reason: current.input.reason },
-+        data: { reason: current.input.reason, ...(replaceContext ? { mode: "handoff" } : {}) },
++        data: { reason: current.input.reason, ...(replaceContext ? { mode: "rollover" } : {}) },
      };
      const result = current.owner === undefined
          ? {
@@ -151,3 +151,105 @@ diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
      }>;
  }
  export {};
+diff --git a/dist/harness/generation.js b/dist/harness/generation.js
+--- a/dist/harness/generation.js
++++ b/dist/harness/generation.js
+@@ -2,7 +2,7 @@
+ import { isContextOverflow } from "@earendil-works/pi-ai/utils/overflow";
+ import { isRetryableAssistantError, retryDelayMs } from "@earendil-works/pi-ai/utils/retry";
+ import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
+-import { AssistantEntry, ResetEntry, SystemEntry, UserEntry } from "../entries.js";
++import { AssistantEntry, ResetEntry, SystemEntry, ToolResultEntry, UserEntry } from "../entries.js";
+ import { defineTask } from "../tasks.js";
+ import { addTools, agentHooks, sectionExtension } from "./agent.js";
+ import { compactionPolicy, createCompaction, estimateContext, selectCut } from "./compaction.js";
+@@ -856,14 +856,19 @@
+     });
+     const slots = (await runtime.snapshot(LiveDoc, conversationId, context))?.tools ?? [];
+     const results = slots.flatMap((slot) => (slot.entry === undefined ? [] : [slot.entry]));
+-    await runtime.hooks.each("afterTools", (hook) => hook(assistant, results, runtime, context));
++    let decision;
++    await runtime.hooks.each("afterTools", async (hook) => {
++        if (decision !== undefined)
++            return;
++        decision = await hook(assistant, results, runtime, context);
++    });
+     // In call order, the slots' order; a slot without a task (faulted or orphaned before it got one) has no control.
+     const ordered = slots.map((slot) => (slot.taskId === undefined ? undefined : controls.get(slot.taskId)));
+     // Every call of the round must ask to terminate.
+     const terminate = slots.length > 0 && ordered.every((control) => control?.terminate === true);
+     const added = ordered.flatMap((control) => control?.addTools ?? []);
+     // The last handoff in call order wins.
+-    const handoff = ordered.findLast((control) => control?.handoff !== undefined)?.handoff;
++    const toolHandoff = ordered.findLast((control) => control?.handoff !== undefined)?.handoff;
+     // Read from the phase's agent, as every agent field; a `configure()` during the round applies at its end.
+     const maxTurns = (await runtime.agent(context)).maxTurns;
+     const afterRun = terminate && (await asksAfterRun(runtime, context));
+@@ -875,10 +880,42 @@
+         const now = runtime.now();
+         // The run's last entry so far: the newest result, or the assistant when no result has an entry.
+         let last = results.reduce((newest, id) => (id > newest ? id : newest), assistant);
++        // Validate the complete top-level round on the same commit line as the reset.
++        let hookHandoff = decision !== undefined && !context.abortSignal?.aborted && slots.length !== 0 && results.length === slots.length;
++        if (hookHandoff) {
++            for (const id of results) {
++                const entry = await tx.entry(id);
++                if (entry?.kind !== ToolResultEntry.kind || entry.model?.length !== 1 ||
++                    entry.model[0].role !== "toolResult" || entry.model[0].isError !== false) {
++                    hookHandoff = false;
++                    break;
++                }
++            }
++        }
++        if (hookHandoff && decision.canReset !== undefined) {
++            const pending = [];
++            for (const item of boundary.inbox.items) {
++                if (item.mode !== "write") {
++                    pending.push(item.content);
++                    continue;
++                }
++                for (const message of item.entry.model ?? []) {
++                    if (message.role === "user")
++                        pending.push(message.content);
++                    else
++                        hookHandoff = false;
++                }
++            }
++            // A UserInput fence cannot account for arbitrary assistant/system/tool write payloads.
++            // Include all queued user payloads conservatively, even follow-ups not selected at this boundary.
++            if (hookHandoff)
++                hookHandoff = decision.canReset(copyJson(pending)) === true;
++        }
++        const handoff = decision === undefined ? toolHandoff : hookHandoff ? decision.handoff : undefined;
+         if (handoff !== undefined) {
+             // The handoff's reset precedes every queued item, so queued writes and selected steers land in its context.
+             const message = { role: "user", content: handoff, timestamp: now };
+-            const entry = await tx.appendEntry(ResetEntry, conversationId, { head: "self", model: [message] });
++            const entry = await tx.appendEntry(ResetEntry, conversationId, { head: "self", model: [message], ...(hookHandoff ? { data: { mode: "posthorse" } } : {}) });
+             boundary.head = entry.id;
+             last = entry.id;
+         }
+diff --git a/dist/harness/types.d.ts b/dist/harness/types.d.ts
+--- a/dist/harness/types.d.ts
++++ b/dist/harness/types.d.ts
+@@ -911,8 +911,18 @@
+     onYield(answer: AssistantMessage, api: HookApi, context: Context): HookResult<{
+         readonly continue: UserInput;
+     }>;
+-    /** After every tool of the round is terminal; `results` are the round's result entries in call order. */
+-    afterTools(assistant: EntryId, results: readonly EntryId[], api: HookApi, context: Context): void | Promise<void>;
++    /**
++     * After every tool is terminal; `results` are top-level result entries in call order. The first decision wins.
++     * A handoff resets context atomically at this boundary only when every result is present and successful.
++     */
++    afterTools(assistant: EntryId, results: readonly EntryId[], api: HookApi, context: Context): HookResult<{
++        readonly handoff: string;
++        /**
++         * Synchronous placement fence, called inside the reset commit after result validation. Includes every queued
++         * input and user-message write, even unselected follow-ups. Non-user model writes block a fenced reset.
++         */
++        readonly canReset?: (pending: readonly UserInput[]) => boolean;
++    }>;
+     /**
+      * After a run answered, its answer committed and its inputs settled `done`: a final answer, or a `terminate` round;
+      * not when an `onYield` continuation is taken, and never after a failure or an abort. The requested tasks of every

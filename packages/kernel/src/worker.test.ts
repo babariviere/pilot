@@ -19,7 +19,7 @@ const packet = (id: string): KernelPacket => ({ type: "accepted", requestId: id 
 const options = { maxBytes: 1024, maxPacketBytes: 1024, maxPackets: 3, timeoutMs: 1000 };
 
 for (const configuration of [false, true])
-	test(`auto handoff configuration wins startup races (configuration=${configuration})`, async (t) => {
+	test(`worker opens the requested profile (configuration=${configuration})`, async (t) => {
 		const events = ["message", "disconnect", "SIGTERM", "SIGINT"] as const;
 		const emitter: EventEmitter = process;
 		const previous = new Map(events.map((event) => [event, emitter.listeners(event)]));
@@ -61,12 +61,8 @@ for (const configuration of [false, true])
 				resolveOpen = resolve;
 			});
 		});
-		const configured: boolean[] = [];
 		let finishCommand!: () => void;
 		const session = {
-			configureAutoHandoff(enabled: boolean) {
-				configured.push(enabled);
-			},
 			executionEvidence: async () => undefined,
 			watch: async () =>
 				await new Promise<void>((resolve) => {
@@ -76,19 +72,14 @@ for (const configuration of [false, true])
 		runKernelWorker();
 		const receive = emitter.listeners("message").find((listener) => !previous.get("message")!.includes(listener))!;
 		const send = (command: KernelCommand) => receive(command);
-		send({ type: "autoHandoff.configure", enabled: true });
-		send({ type: configuration ? "startConfiguration" : "start", spec: { autoHandoff: true } as KernelSpec });
+		send({ type: configuration ? "startConfiguration" : "start", spec: {} as KernelSpec });
 		await opened;
-		send({ type: "autoHandoff.configure", enabled: false });
 		resolveOpen(session);
 		await new Promise<void>((resolve) => setImmediate(resolve));
-		assert.deepEqual(configured, [false], "latest startup value, including false, overrides the start spec");
 		assert.ok(packets.some((packet) => packet.type === "ready"));
 		assert.ok(packets.some((packet) => packet.type === "ready" && packet.modelConfiguration === 1));
 		send({ type: "watch", watchId: "blocked" });
 		await new Promise<void>((resolve) => setImmediate(resolve));
-		send({ type: "autoHandoff.configure", enabled: true });
-		assert.deepEqual(configured, [false, true], "configuration bypasses a blocked command queue");
 		finishCommand();
 		await new Promise<void>((resolve) => setImmediate(resolve));
 	});

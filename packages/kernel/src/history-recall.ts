@@ -87,7 +87,8 @@ export function entrySegments(entry: EntryRecord, maxChars = RECALL_LIMITS.maxEn
 				else if (
 					block.type === "toolCall" &&
 					typeof block.name === "string" &&
-					block.name !== HISTORY_RECALL_TOOL
+					block.name !== HISTORY_RECALL_TOOL &&
+					block.name !== "history"
 				) {
 					let args = "";
 					try {
@@ -101,7 +102,11 @@ export function entrySegments(entry: EntryRecord, maxChars = RECALL_LIMITS.maxEn
 					});
 				}
 			}
-		} else if (message.role === "toolResult" && message.toolName !== HISTORY_RECALL_TOOL) {
+		} else if (
+			message.role === "toolResult" &&
+			message.toolName !== HISTORY_RECALL_TOOL &&
+			message.toolName !== "history"
+		) {
 			push({
 				role: "tool",
 				tool: message.toolName,

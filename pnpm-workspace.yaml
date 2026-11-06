@@ -26,6 +26,7 @@ allowBuilds:
 patchedDependencies:
    "@earendil-works/pi-coding-agent@1.5.0": patches/@earendil-works__pi-coding-agent@1.5.0.patch
    "@earendil-works/pi-durable@1.5.0": patches/@earendil-works__pi-durable@1.5.0.patch
+   "pi-posthorse@0.10.10": patches/pi-posthorse@0.10.10.patch
 
 minimumReleaseAgeExclude:
    - "@biomejs/biome@2.6.5"
@@ -40,3 +41,4 @@ minimumReleaseAgeExclude:
    - "@biomejs/cli-win32-arm64@2.6.5"
    - "@biomejs/cli-win32-x64@2.6.5"
    - typebox@1.4.4
+   - pi-posthorse@0.10.10

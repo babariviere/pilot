@@ -16,13 +16,12 @@ function patch(value: unknown): ChatSettingsPatch {
 		!Object.hasOwn(input, "expectedRevision") ||
 		typeof input.expectedRevision !== "string" ||
 		!input.expectedRevision.length ||
-		keys.some((key) => !["autoHandoff", "automations", "expectedRevision"].includes(key)) ||
+		keys.some((key) => !["automations", "expectedRevision"].includes(key)) ||
 		!keys.some((key) => key !== "expectedRevision") ||
 		keys.some((key) => key !== "expectedRevision" && typeof input[key] !== "boolean")
 	)
-		throw new InvalidChatSettings("Expected boolean autoHandoff or automations and expectedRevision");
+		throw new InvalidChatSettings("Expected boolean automations and expectedRevision");
 	return {
-		...(Object.hasOwn(input, "autoHandoff") ? { autoHandoff: input.autoHandoff as boolean } : {}),
 		...(Object.hasOwn(input, "automations") ? { automations: input.automations as boolean } : {}),
 		expectedRevision: input.expectedRevision,
 	};
@@ -72,17 +71,17 @@ export class ChatSettingsService {
 	static async open(home: string, persist = replace): Promise<ChatSettingsService> {
 		const service = new ChatSettingsService(join(home, "chat-settings.json"), persist);
 		try {
-			let value: ChatSettings;
+			let value: ChatSettings & { autoHandoff?: boolean };
 			try {
 				value = JSON.parse(await readFile(service.file, "utf8"));
 			} catch (error) {
 				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-				value = { schemaVersion: 1, autoHandoff: false, automations: false, revision: randomUUID() };
+				value = { schemaVersion: 1, automations: false, revision: randomUUID() };
 				await persist(service.file, value);
 			}
 			if (
 				value?.schemaVersion !== 1 ||
-				typeof value.autoHandoff !== "boolean" ||
+				(value.autoHandoff !== undefined && typeof value.autoHandoff !== "boolean") ||
 				(value.automations !== undefined && typeof value.automations !== "boolean") ||
 				typeof value.revision !== "string" ||
 				!value.revision.length ||
@@ -98,7 +97,9 @@ export class ChatSettingsService {
 				await handle.close();
 			}
 			await syncDirectory(dirname(service.file));
-			service.value = { ...value, automations: value.automations ?? false };
+			// Accept the old on-disk boolean only for migration. It grants no control,
+			// is never exposed, and is removed by the next confirmed settings write.
+			service.value = { schemaVersion: 1, automations: value.automations ?? false, revision: value.revision };
 			service.available = true;
 		} catch {
 			// Never overwrite corrupt, inaccessible or newer settings with defaults.

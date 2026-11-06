@@ -1,7 +1,11 @@
-# In-place context edits for compaction (design note)
+# Archived in-place context edits proposal
 
-Status: proposal. Nothing here is implemented. It compares the compaction model in
-[Shelley's post](https://blog.exe.dev/compaction) with Pilot's current deterministic digest
+Status: archived, never implemented. [Posthorse](posthorse.md) replaces this design direction.
+The flags, fallback policy and benchmark references below describe the retired digest experiment,
+not active features or current implementation instructions. No stored history is changed by this retirement.
+
+The historical proposal compares the compaction model in
+[Shelley's post](https://blog.exe.dev/compaction) with Pilot's then-current deterministic digest
 ([context-compaction.md](context-compaction.md)) and proposes a first step that reuses the part that fits.
 
 ## Shelley's model
@@ -31,7 +35,7 @@ pi-durable 1.3 provides the same storage model, so no new data model is needed:
 
 ## Options
 
-| | Digest (current, opt-in) | Trim tool output (proposed) | Model squish (Shelley) |
+| | Digest (retired experiment) | Trim tool output (proposed) | Model squish (Shelley) |
 | --- | --- | --- | --- |
 | Model calls | None | None | One or two rounds per compaction |
 | Mechanism | `pi.compaction` head marker at a cut | Entry with `replace` edits on old tool results | Entry with `replace`/`omit` edits over ranges |

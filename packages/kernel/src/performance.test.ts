@@ -11,7 +11,6 @@ import {
 	type ReadableSpan,
 	type SpanExporter,
 } from "@pilot/telemetry";
-import { compactionLine } from "./deterministic-compaction.ts";
 import {
 	PerformanceLog,
 	type PerformanceRecord,
@@ -282,30 +281,5 @@ test("interaction timing emits correlated preparation and provider phases withou
 	assert.equal(
 		phases.find((span) => span.attributes["pilot.phase"] === "provider")?.attributes["pilot.retry_count"],
 		1,
-	);
-});
-
-test("a custom serializer writes content-free compaction records in the same private capped log", async (t) => {
-	const dir = await directory(t);
-	const file = join(dir, "compaction.jsonl");
-	const log = new PerformanceLog(file, { serialize: compactionLine });
-	log.record({
-		v: 1,
-		source: "compaction",
-		at: 1,
-		regime: "target",
-		outcome: "digest",
-		beforeTokens: 101_000,
-		text: "secret",
-	});
-	log.record({ v: 1, source: "generation", outcome: "completed" });
-	await log.close();
-	assert.equal((await stat(file)).mode & 0o777, 0o600);
-	assert.deepEqual(
-		(await readFile(file, "utf8"))
-			.trim()
-			.split("\n")
-			.map((line) => JSON.parse(line)),
-		[{ v: 1, source: "compaction", at: 1, regime: "target", outcome: "digest", beforeTokens: 101_000 }],
 	);
 });

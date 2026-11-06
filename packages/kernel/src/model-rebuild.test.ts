@@ -44,6 +44,38 @@ test("rebuild chunks include every raw character, respect output limits and neve
 	assert.match(JSON.stringify(result.model), /Portable summary/);
 });
 
+test("tool-free rebuild chunks do not pay the destination tool-loadout budget", async (t) => {
+	const storage = new MemoryStorage();
+	const session = createSession(storage);
+	t.after(() => session.close(context));
+	const raw = "Kept original fact. ".repeat(4000);
+	const source = await session.commit(async (tx) => {
+		const { id } = await tx.createConversation({ ownership: { kind: "ownerless" } });
+		const tail = await tx.appendEntry(id, { kind: "pi.user", model: [{ role: "user", content: raw, timestamp: 1 }] });
+		return { id, tail: tail.id };
+	}, context);
+	const chunks: string[] = [];
+	const result = await rebuildContext({
+		storage,
+		conversationId: source.id,
+		tail: source.tail,
+		budget: 1100,
+		sourceBudget: 12_000,
+		maxOutputTokens: 2048,
+		context,
+		signal: new AbortController().signal,
+		summarize: async (text, maxTokens) => {
+			assert.equal(maxTokens, 275, "final summary must still fit the small chat budget");
+			assert.ok(estimateTextTokens(text) < 12_000);
+			chunks.push(text.split("<transcript>\n")[1]!.split("\n</transcript>")[0]!);
+			return "Short provider-neutral summary";
+		},
+	});
+	assert.equal(chunks.join("").trim(), `[user]\n${raw.trim()}`);
+	assert.ok(chunks.length < 5, "tool schemas must not force hundreds of tiny summary calls");
+	assert.match(JSON.stringify(result.model), /Short provider-neutral summary/);
+});
+
 for (const summary of ["", "too large ".repeat(500)]) {
 	test(`an ${summary ? "oversized" : "empty"} summary cannot become a new context`, async (t) => {
 		const storage = new MemoryStorage();

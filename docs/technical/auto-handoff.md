@@ -1,4 +1,11 @@
-# Experimental automatic handoff
+# Archived automatic handoff experiment
+
+Status: retired. [Posthorse](posthorse.md) replaces this automatic handoff implementation.
+The setting, writer and tests described below are historical, not current setup instructions.
+Stored conversations and handoff text remain readable; retirement does not rewrite or delete them.
+The recorded checks and measurements apply only to the retired implementation, not Posthorse.
+
+## Historical behavior
 
 Enable **Settings → Chats → Automatic handoff (experimental)** in Pilot Next. The host-global
 setting is off by default. It changes ordinary chats, including mission members, without

@@ -157,12 +157,6 @@ const sessions = new SessionManager(
 	},
 );
 let appliedTelemetry = telemetry.settings();
-try {
-	sessions.configureAutoHandoff(chatSettings.settings().autoHandoff);
-} catch {
-	console.warn("pilotd: chat settings unavailable; automatic handoff remains disabled");
-}
-chatSettings.onChange((settings) => sessions.configureAutoHandoff(settings.autoHandoff));
 sessions.configureTelemetry(telemetry.kernelSettings(), appliedTelemetry.aiUsageBudget);
 telemetry.onChange((settings) => {
 	const exportChanged =

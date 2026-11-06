@@ -1218,21 +1218,6 @@ function sameTrackedSource(a?: SessionTrackedSource, b?: SessionTrackedSource): 
 }
 
 export class SessionManager {
-	private autoHandoff = false;
-
-	configureAutoHandoff(enabled: boolean): void {
-		this.autoHandoff = enabled;
-		for (const [id, worker] of this.workers) {
-			try {
-				worker.send({
-					type: "autoHandoff.configure",
-					enabled: this.metas.get(id)?.role === "insights" ? false : enabled,
-				});
-			} catch (error) {
-				console.warn(`pilotd: automatic handoff configuration IPC failed: ${error}`);
-			}
-		}
-	}
 	private pullRequestObserver?: (
 		observation: import("./tracked-items-disk.ts").SlackPullRequestObservation,
 	) => Promise<void>;
@@ -10646,7 +10631,6 @@ ${run.excerpt}`,
 					...(liveUpdateProposals && meta.projectId === liveUpdateProjectId && this.canProposeLiveUpdate(meta)
 						? { liveUpdateProposals: true }
 						: {}),
-					autoHandoff: meta.role === "insights" ? false : this.autoHandoff,
 					...(repairDiagnostics ? { repairDiagnostics } : {}),
 					...(usageHistory ? { usageHistory } : {}),
 					...(usageMission ? { usageMission } : {}),
@@ -10730,8 +10714,6 @@ ${run.excerpt}`,
 		operations.time("worker.publish", () => {
 			published = worker;
 			this.workers.set(id, worker);
-			// The saved setting may have changed while the asynchronous factory prepared isolation.
-			worker.send({ type: "autoHandoff.configure", enabled: meta.role === "insights" ? false : this.autoHandoff });
 			this.nextWorkerLaunchReason.delete(id);
 			this.aiUsage.observeWorkerLaunch(id, launchReason);
 			for (const packet of earlyPackets) this.onPacket(meta, worker, packet);
