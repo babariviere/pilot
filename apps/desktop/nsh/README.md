@@ -5,14 +5,16 @@ are unchanged. This is not a complete replacement or a release package.
 
 ## Source and reuse
 
-NSH **0.4.0**, pinned by the initial slice on **2026-11-06**:
-`0e4a20bd41ee72a35515cecbf9a7fba88742d911`.
+NSH **0.4.0**, upstream `main`/HEAD observed at **2026-11-06T18:37:37Z**:
+`7571948ee4ad05fbc0b08d774e6afc63e039773d`.
 All NSH dependencies, including testing and transitive platform/core crates,
 share this exact revision in `../Cargo.lock`. No NSH patches, forks, Cargo-cache
 edits, QuickJS, TSX or WebViews are used.
-The question port keeps this exact lock. A later same-day upstream HEAD was
-observed at `7571948ee4ad05fbc0b08d774e6afc63e039773d`; upgrading and requalifying
-that revision is separate work, not a claim that this lock is still upstream HEAD.
+The update from `0e4a20bd41ee72a35515cecbf9a7fba88742d911` spans seven upstream
+commits. Its relevant changes add macOS app-owned windows and route input/focus
+through each event's window root, plus an optional standalone restart command.
+Other changes concern packaging, Android, Linux, Windows and gallery audio.
+Pilot does not adopt these new features. Historical experiments keep their pins.
 
 The layout and tokens start from `experiments/nsh-pilot` at `39a4913c`, not the
 older patched `nsh-chat` study. NSH owns native input, undo, text selection,
@@ -133,6 +135,15 @@ requests and restricted roles. These are real NSH views with a synthetic host,
 not mockups or evidence of live approval behavior.
 The native question probe also simulates AppKit marked text and verifies that
 Close does not release it. This is not hardware input-method qualification.
+
+The `7571948e` dependency recheck passed all 12 adapter/headless chat tests and
+locked builds with and without `native-probes`, without Pilot API changes.
+The hidden native matrix passed all four profiles (12 processes, 20 captures).
+Its first invocation failed the composer lookup after initial chat selection;
+the unchanged binary then passed the complete matrix twice. The cause remains
+unresolved; these passes do not establish hardware input or full-workflow acceptance.
+Scoped clippy (`pilot-nsh`, all targets, `native-probes`, warnings denied),
+Rust formatting, exact shared-pin checks and all 72 CI-wrapper tests also passed.
 
 ## Slice boundary
 

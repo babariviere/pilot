@@ -6,9 +6,9 @@ publish = false
 
 [dependencies]
 pilot-desktop = { path = "..", features = ["nsh-adapter"] }
-nsh-core = { git = "https://github.com/longbridge/nsh", rev = "0e4a20bd41ee72a35515cecbf9a7fba88742d911", features = ["svg"] }
-nsh-base = { git = "https://github.com/longbridge/nsh", rev = "0e4a20bd41ee72a35515cecbf9a7fba88742d911", default-features = false, features = ["highlight"] }
-nsh-engine = { git = "https://github.com/longbridge/nsh", rev = "0e4a20bd41ee72a35515cecbf9a7fba88742d911", default-features = false }
+nsh-core = { git = "https://github.com/longbridge/nsh", rev = "7571948ee4ad05fbc0b08d774e6afc63e039773d", features = ["svg"] }
+nsh-base = { git = "https://github.com/longbridge/nsh", rev = "7571948ee4ad05fbc0b08d774e6afc63e039773d", default-features = false, features = ["highlight"] }
+nsh-engine = { git = "https://github.com/longbridge/nsh", rev = "7571948ee4ad05fbc0b08d774e6afc63e039773d", default-features = false }
 futures-util = "=0.3.34"
 async-channel = "=2.5.0"
 serde_json = "=1.0.154"
@@ -19,8 +19,8 @@ tokio-tungstenite = { version = "=0.30.0", default-features = false, features = 
 native-probes = ["pilot-desktop/native-probes"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
-nsh-platform-macos = { git = "https://github.com/longbridge/nsh", rev = "0e4a20bd41ee72a35515cecbf9a7fba88742d911", default-features = false, features = ["highlight"] }
+nsh-platform-macos = { git = "https://github.com/longbridge/nsh", rev = "7571948ee4ad05fbc0b08d774e6afc63e039773d", default-features = false, features = ["highlight"] }
 dispatch2 = "0.3.1"
 
 [dev-dependencies]
-nsh-testing = { git = "https://github.com/longbridge/nsh", rev = "0e4a20bd41ee72a35515cecbf9a7fba88742d911", default-features = false }
+nsh-testing = { git = "https://github.com/longbridge/nsh", rev = "7571948ee4ad05fbc0b08d774e6afc63e039773d", default-features = false }
