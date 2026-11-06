@@ -313,10 +313,10 @@ impl LocalViewer {
         }
         // Only GUI-owned input and durable state are fenced. Independent agents
         // keep running while the app checkpoints, swaps and reconnects.
-        if !crate::visual_runtime::fence_for_restart() {
-            updater.update(cx,|u,cx|u.defer("A native visual helper is still active or its cleanup is unconfirmed. Close the visual and retry; no process was stopped.",cx));
-            return;
-        }
+        // Ask warm helpers to yield now. The same Install action waits for their
+        // actual capacity release alongside the writer, rather than asking for
+        // another click after already requesting cleanup.
+        let _ = crate::visual_runtime::fence_for_restart();
         let Some(generation) = self.restart_generation.checked_add(1) else {
             crate::visual_runtime::release_restart_fence();
             return;
@@ -362,8 +362,13 @@ impl LocalViewer {
             }
             let _=view.update_in(cx,|view,_,cx|{
                 if view.restart_pending && view.restart_generation==generation {
-                    let message = view.editor.read(cx).update_checkpoint_problem().unwrap_or(
-                        "Saving drafts or settings did not finish. Keep this window open and check the storage error before retrying.");
+                    let message = view.editor.read(cx).update_checkpoint_problem().unwrap_or_else(|| {
+                        if !crate::visual_runtime::fence_for_restart() {
+                            "A native visual helper is still active or its cleanup is unconfirmed. Close the visual and retry; no process was stopped."
+                        } else {
+                            "Saving drafts or settings did not finish. Keep this window open and check the storage error before retrying."
+                        }
+                    });
                     view.end_update_restart(message,cx);
                 }
             });
@@ -372,7 +377,7 @@ impl LocalViewer {
         cx.notify();
     }
     fn safety(&self, window: &mut Window, cx: &mut Context<Self>) -> Option<Safety> {
-        if !self.restart_pending {
+        if !self.restart_pending || !crate::visual_runtime::fence_for_restart() {
             return None;
         }
         let settings_token = self.settings.read(cx).state.durability_token()?;

@@ -55,6 +55,8 @@ packaged managed connections also offer **Pilot Next → Daemon** actions.
 and app preferences, waits for pending saves, then continues automatically.
 It does not send drafts or require a delivery Check. Saved pending messages
 keep their original identity across restart; independent daemon jobs keep running.
+Saved legacy delivery, model-change and mission uncertainty also stays available
+without blocking app replacement or being sent again.
 An actual storage failure or an unsaved secondary form names what needs attention.
 Secrets in session-only access fields are never saved to disk.
 **Stop**, **Restart**, and **Upgrade** run their stages automatically. Stop leaves

@@ -3,6 +3,70 @@ use super::send_waits::{arrived, disconnected, disk, stalled};
 use super::*;
 
 #[tokio::test]
+async fn update_checkpoint_keeps_legacy_model_and_mission_uncertainty_without_network() {
+    let daemon = Daemon::start(Behavior::Accept).await;
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), daemon.options.host()).unwrap();
+    let mut legacy = draft(1, "Legacy 日本語 👩‍💻");
+    legacy.last = Some(crate::delivery_store::Delivery {
+        id: "synthetic-legacy".into(),
+        state: "unknown".into(),
+        target: "legacy".into(),
+        kind: "chat-send".into(),
+        revision: 1,
+        diagnostic: None,
+        answer: None,
+    });
+    store
+        .save_edits(BTreeMap::from([("chat:legacy".into(), legacy)]))
+        .unwrap();
+    store
+        .prepare("chat:stop", &draft(1, "Stop draft"), false, true)
+        .unwrap();
+    store
+        .prepare_model_change(crate::model_wait_fixture::attempt(false))
+        .unwrap();
+    store
+        .prepare_mission(
+            "synthetic-mission",
+            crate::mission_conversion::Request {
+                project_id: "project".into(),
+                from_session_id: "mission-source".into(),
+                title: "Unconfirmed mission".into(),
+                goal: "Keep exact request".into(),
+                coordinator: true,
+                draft: true,
+            },
+        )
+        .unwrap();
+    let original = store.book.clone();
+    let bytes = fs::read(temp.0.join("state-v1.json")).unwrap();
+    assert!(
+        original
+            .pending
+            .values()
+            .all(|i| i.operation.is_none() && i.automatic.is_none())
+    );
+    assert!(!original.restart_settled());
+    drop(store);
+    for generation in [101, 102] {
+        let (client, updates) = ready(&daemon, &temp).await;
+        assert!(client.command(WriteCommand::Checkpoint(generation)));
+        let state = until(&updates, |s| s.checkpoint == Some(generation)).await;
+        assert!(state.error.is_none());
+        assert!(state.book.as_ref().unwrap().as_ref() == &original);
+        assert!(client.command(WriteCommand::Close));
+        until(&updates, |s| s.flushed).await;
+        disconnected(client, updates).await;
+        assert_eq!(fs::read(temp.0.join("state-v1.json")).unwrap(), bytes);
+        assert!(
+            daemon.seen.lock().unwrap().requests.is_empty(),
+            "no lookup, replay or new intent"
+        );
+    }
+}
+
+#[tokio::test]
 async fn update_checkpoint_joins_delayed_send_and_newer_draft_without_replay() {
     for behavior in [Behavior::Accept, Behavior::LostAccepted, Behavior::Pending] {
         let (daemon, reached, release) = stalled(behavior, "/api/operations").await;
@@ -23,7 +87,6 @@ async fn update_checkpoint_joins_delayed_send_and_newer_draft_without_replay() {
         release.send(()).await.unwrap();
         let saved = until(&updates, |s| s.checkpoint == Some(71)).await;
         let book = saved.book.unwrap();
-        assert!(book.gui_restart_safe());
         assert_eq!(book.drafts["chat:a"].text, "Unsent 👩‍💻 e\u{301}\n  ");
         if behavior != Behavior::Accept {
             assert!(book.pending[&original.id].operation == original.operation);
@@ -121,10 +184,6 @@ async fn update_checkpoint_retains_unknown_across_cold_start_without_any_network
             let book = saved.book.unwrap();
             assert!(book.pending[&original.id] == original);
             assert!(
-                book.gui_restart_safe(),
-                "durable Unknown should survive a GUI restart"
-            );
-            assert!(
                 !book.restart_settled(),
                 "daemon upgrade keeps its stricter gate"
             );
@@ -221,7 +280,6 @@ async fn update_checkpoint_retains_interrupted_execute_diagnostic_byte_exact() {
         assert!(client.command(WriteCommand::Checkpoint(generation)));
         let state = until(&updates, |s| s.checkpoint == Some(generation)).await;
         assert!(state.book.as_ref().unwrap().as_ref() == &original);
-        assert!(state.book.as_ref().unwrap().gui_restart_safe());
         assert!(state.error.is_none());
         assert_eq!(fs::read(temp.0.join("state-v1.json")).unwrap(), bytes);
         assert!(daemon.seen.lock().unwrap().requests.is_empty());

@@ -61,25 +61,18 @@ Ordinary macOS startup validates the installed app and reconnects directly to th
 compatible running daemon. It does not publish a runtime, copy the app or require
 a free runtime slot. Updating just the GUI therefore does not grow the runtime
 store, and a store already containing four runtimes does not block reconnection.
-The daemon's actual retained capsule and signed compatibility policy are still
+The daemon's actual owner/build/profile and independent execution root are still
 verified; startup never executes the daemon from the replaceable installed app.
 
-Service installation or a needed daemon upgrade publishes a complete sealed
-capsule, not just Node/kernel. It retains module-relative imports, helpers,
-resources and production dependencies under their original relative paths.
-Capsule identity hashes the bounded path/mode/content/link closure. Publication
-is exclusive, checks signatures and closure before activation, and runs off-UI
-with cooperative cancellation and a deadline. No existing root is overwritten
-or garbage-collected. At most four retained roots are admitted; eligible closures
-are bounded to 2 GiB. New staging directories hold a lease inherited by the copier;
-only proven inactive staging evidence may move intact into the private runtime
-history. Published runtimes are never moved. Legacy unleased stages require an
-exact verified published duplicate and native proof that no copier or runtime
-user still refers to the staging path; uncertainty retains them and refuses.
-History is never purged and retained disk usage may grow. Capacity and archival
-refusals are distinguished from identity failures and uncertain installation.
+Service installation or a needed macOS daemon upgrade publishes a complete sealed
+app, including Node/kernel, dependencies, helpers and resources. It uses the
+separate **Pilot Next Service Runtime** store, with at most active plus candidate.
+Publication verifies signatures and the exact closure off-UI. Qualified unused
+roots retire automatically; native user uncertainty preserves them. The legacy
+**Pilot Next Runtimes** store keeps its distinct four-root admission contract and
+does not consume the new namespace's capacity.
 
-An update's signed full bundle must explicitly list the exact retained capsule
+Legacy retained-capsule guards require the signed bundle to list the exact capsule
 digest in `Contents/Resources/update-runtime-policy.json`. The default empty
 allowlist does not assert compatibility. Production macOS packaging populates
 this policy from explicitly configured identities and verified prior stable macOS releases with the same
@@ -88,6 +81,9 @@ Development bundles still default to an empty allowlist. The exact-source owner 
 remains intact: startup uses the proven retained source, never pretends a new
 runtime is that source. An already-running app-root/legacy daemon is not moved,
 stopped, restarted or retroactively declared independent. Unproven reuse refuses.
+Current macOS service connections instead verify the live independent owner
+without a rolling capsule allowlist. See the
+[source blocker audit](../../../docs/technical/upgrade-readiness.md).
 
 GUI installs use read-only retained-runtime inspection, not the reservation below.
 Agents, jobs and terminals continue throughout the app swap. After durable startup
@@ -95,7 +91,7 @@ acknowledgement, the macOS GUI checks whether its managed daemon needs a separat
 [safe upgrade](daemon-upgrades.md). This check never delays the app installation.
 
 The private owner endpoint authenticates boot/root/build/profile-bound requests
-with a fresh nonce and HMAC. Install preparation acquires a single nonrenewable
+with a fresh nonce and HMAC. Legacy install preparation acquired a nonrenewable
 180-second reservation, after freezing all admissions. Sessions qualify when idle
 or when every worker has paused at a tool boundary; a working, unpaused or changed
 worker refuses. pilotd survives the app swap, so background jobs and open terminals
@@ -109,9 +105,10 @@ authentication for the ordinary loopback API.
 
 0. Leave the daemon running. GUI updates, local reloads and external app-only
    updates never request agent pause or acquire a daemon reservation.
-1. Fence UI admissions and reject preedit, unsaved secondary forms, in-flight or
-   daemon-pending deliveries, unresolved model changes/mission outcomes, active or unreaped visual helpers,
-   and pending preference operations. Nothing is discarded to obtain readiness.
+1. Fence UI admissions, capture composer/question text without discarding IME input,
+   save ordinary preferences, and wait for admitted writes and helper cleanup.
+   Unsent secondary forms, secondary preedit, actual save/import errors and
+   unconfirmed teardown still refuse. Nothing is sent or discarded for readiness.
    A form holds the install only while it has unsent input, an unanswered request
    or (for preferences) an unconfirmed write; a form that was merely opened, closed
    or answered does not, and an Unknown secondary outcome is never resent by a
@@ -121,11 +118,12 @@ authentication for the ordinary loopback API.
    checkpoint returns an actual durable ACK; a timer is never a flush receipt.
    Missing default preferences may be persisted by this explicit checkpoint;
    ordinary clean Settings Save remains a no-op.
-   GUI-only restart may retain a durable Unknown immutable message without
-   resolving it. Startup never checks or resends it; its identity, payload,
-   newer draft and recovery actions survive unchanged. An unsaved volatile
-   delivery observation (including a known ACK) still vetoes restart, as do
-   failed writes and missing/stale checkpoint acknowledgements. Daemon-only upgrades
+   GUI-only restart keeps saved legacy delivery summaries, missing envelopes,
+   model attempts and mission Unknown without resolving them. Cold-open does
+   not send these historical requests. Existing automatic-delivery opt-in stays
+   unchanged; legacy uncertainty never gains it. An unsaved volatile delivery
+   observation (including a known ACK) must first be saved. Failed writes and
+   missing/stale checkpoint acknowledgements still refuse. Daemon-only upgrades
    do not exit the GUI or use this checkpoint; their actual mutation admissions
    are fenced by the daemon's pause and jobs/PTY/child-aware reservation instead.
 3. Validate the whole authenticated candidate, retained capsule, exact process

@@ -521,35 +521,134 @@ fn update_checkpoint_keeps_draft_and_requires_exact_fresh_ack(cx: &mut TestAppCo
 }
 
 #[gpui_kit::test]
-fn update_checkpoint_refuses_unknown_delivery_and_native_preedit(cx: &mut TestAppContext) {
+fn gui_update_admits_each_saved_uncertainty_only_after_fresh_checkpoint(cx: &mut TestAppContext) {
+    for kind in ["summary", "missing", "model", "mission"] {
+        let (handle, view, commands) = setup(cx);
+        let root = std::env::temp_dir().join(format!("update-unknown-{}", uuid::Uuid::new_v4()));
+        let mut store = Store::open(root.clone(), book().host.clone()).unwrap();
+        match kind {
+            "summary" => {
+                store
+                    .save_edits(std::collections::BTreeMap::from([(
+                        "chat:legacy".into(),
+                        Draft {
+                            revision: 1,
+                            last: Some(crate::delivery_store::Delivery {
+                                id: "synthetic-legacy".into(),
+                                state: "unknown".into(),
+                                target: "legacy".into(),
+                                kind: "chat-send".into(),
+                                revision: 1,
+                                diagnostic: None,
+                                answer: None,
+                            }),
+                            ..Default::default()
+                        },
+                    )]))
+                    .unwrap();
+            }
+            "missing" => {
+                store
+                    .prepare("chat:legacy", &Draft::default(), false, true)
+                    .unwrap();
+            }
+            "model" => {
+                store
+                    .prepare_model_change(crate::model_wait_fixture::attempt(false))
+                    .unwrap();
+            }
+            "mission" => {
+                store
+                    .prepare_mission(
+                        "synthetic-mission",
+                        crate::mission_conversion::Request {
+                            project_id: "project".into(),
+                            from_session_id: "legacy".into(),
+                            title: "Unconfirmed".into(),
+                            goal: "Exact request 日本語".into(),
+                            coordinator: true,
+                            draft: true,
+                        },
+                    )
+                    .unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let saved = std::sync::Arc::new(store.book.clone());
+        drop(store);
+        // A real cold-open validates this fixture before it reaches the editor.
+        let reopened = Store::open(root.clone(), book().host.clone()).unwrap();
+        assert!(reopened.book == *saved);
+        cx.update_window(handle, |_, w, cx| {
+            view.update(cx, |e, cx| {
+                e.accept(
+                    WriteState {
+                        book: Some(saved.clone()),
+                        ..Default::default()
+                    },
+                    w,
+                    cx,
+                );
+                assert!(e.begin_gui_update_checkpoint(67, w, cx), "{kind}");
+                assert_eq!(e.update_checkpoint_problem(), None, "{kind}");
+                assert_eq!(e.update_receipt(w, cx), None, "capture is not an ACK");
+                let mut state = e.state.clone();
+                std::sync::Arc::make_mut(state.book.as_mut().unwrap()).drafts = e.cache.clone();
+                state.checkpoint = Some(66);
+                e.accept(state.clone(), w, cx);
+                assert_eq!(e.update_receipt(w, cx), None, "stale ACK: {kind}");
+                state.checkpoint = Some(67);
+                e.accept(state, w, cx);
+                assert_eq!(e.update_receipt(w, cx), Some(67), "{kind}");
+                e.end_update_checkpoint(cx);
+            })
+        })
+        .unwrap();
+        assert!(matches!(
+            commands.try_recv().unwrap(),
+            WriteCommand::Checkpoint(67)
+        ));
+        assert!(
+            commands.try_recv().is_err(),
+            "no Check/send/acknowledge: {kind}"
+        );
+        assert!(reopened.book == *saved, "no record was settled: {kind}");
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[gpui_kit::test]
+fn update_checkpoint_keeps_legacy_unknown_and_native_preedit(cx: &mut TestAppContext) {
     use gpui_kit::{ElementInputHandler, test::TestInput};
     let (handle, view, commands) = setup(cx);
     cx.update_window(handle, |_, window, cx| {
         view.update(cx, |editor, cx| {
-            for state in ["pending", "unknown"] {
-                let mut book = (**editor.state.book.as_ref().unwrap()).clone();
-                book.drafts.insert(
-                    "chat:other".into(),
-                    Draft {
-                        last: Some(crate::delivery_store::Delivery {
-                            id: "unconfirmed".into(),
-                            state: state.into(),
-                            target: "a".into(),
-                            kind: "message".into(),
-                            revision: 1,
-                            diagnostic: None,
-                            answer: None,
-                        }),
-                        ..Default::default()
-                    },
-                );
-                editor.state.book = Some(std::sync::Arc::new(book));
-                assert!(!editor.begin_update_checkpoint(8, window, cx));
-                assert!(
-                    !editor.begin_gui_update_checkpoint(8, window, cx),
-                    "orphan summaries are not retained immutable intents"
-                );
-            }
+            let mut snapshot = (**editor.state.book.as_ref().unwrap()).clone();
+            snapshot.drafts.insert(
+                "chat:other".into(),
+                Draft {
+                    last: Some(crate::delivery_store::Delivery {
+                        id: "unconfirmed".into(),
+                        state: "unknown".into(),
+                        target: "a".into(),
+                        kind: "chat-send".into(),
+                        revision: 1,
+                        diagnostic: None,
+                        answer: None,
+                    }),
+                    revision: 1,
+                    ..Default::default()
+                },
+            );
+            editor.state.book = Some(std::sync::Arc::new(snapshot));
+            assert!(!editor.begin_update_checkpoint(8, window, cx));
+            assert!(
+                editor.begin_gui_update_checkpoint(8, window, cx),
+                "saved legacy uncertainty is not unsaved input"
+            );
+            assert_eq!(editor.update_checkpoint_problem(), None);
+            editor.end_update_checkpoint(cx);
             editor.state.book = Some(book());
         });
         window.render_frame(cx);
@@ -568,6 +667,10 @@ fn update_checkpoint_refuses_unknown_delivery_and_native_preedit(cx: &mut TestAp
         });
     })
     .unwrap();
+    assert!(matches!(
+        commands.try_recv().unwrap(),
+        WriteCommand::Checkpoint(8)
+    ));
     assert!(matches!(
         commands.try_recv().unwrap(),
         WriteCommand::Checkpoint(9)
@@ -628,11 +731,7 @@ fn update_checkpoint_retains_only_saved_unknown_and_still_needs_fresh_ack(cx: &m
             });
             let mut pending = (*saved).clone();
             pending.pending.get_mut(&intent.id).unwrap().state = "pending".into();
-            assert!(
-                pending.gui_restart_safe(),
-                "exact pending intent survives app-only restart"
-            );
-            e.state.book = Some(saved.clone());
+            e.state.book = Some(std::sync::Arc::new(pending));
             e.state
                 .delivery_reports
                 .insert(intent.id.clone(), report.clone());

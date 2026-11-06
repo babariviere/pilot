@@ -66,8 +66,12 @@ pub(crate) fn fence_for_restart() -> bool {
     let Ok(mut held) = RESTART_PERMITS.try_lock() else {
         return false;
     };
-    if held.is_some() || TEARDOWN_FAILED.load(Ordering::Acquire) {
+    if TEARDOWN_FAILED.load(Ordering::Acquire) {
         return false;
+    }
+    if held.is_some() {
+        // The sole restart owner rechecks this fence before prepare and COMMIT.
+        return true;
     }
     // Reserve the whole capacity atomically, not a racy free-count snapshot.
     let Ok(permits) = SLOTS.clone().try_acquire_many_owned(2) else {
@@ -87,6 +91,10 @@ pub(crate) fn release_restart_fence() {
         .lock()
         .unwrap_or_else(|p| p.into_inner())
         .take();
+}
+#[cfg(feature = "native-probes")]
+pub(crate) fn hold_for_restart_probe() -> tokio::sync::OwnedSemaphorePermit {
+    SLOTS.clone().try_acquire_owned().unwrap()
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Fault {
@@ -488,7 +496,16 @@ mod tests {
         drop(active);
         assert!(super::fence_for_restart());
         assert!(super::SLOTS.clone().try_acquire_owned().is_err());
-        assert!(!super::fence_for_restart());
+        assert!(
+            super::fence_for_restart(),
+            "the same install may recheck its fence"
+        );
+        super::TEARDOWN_FAILED.store(true, Ordering::Release);
+        assert!(
+            !super::fence_for_restart(),
+            "even an existing fence cannot hide failed teardown"
+        );
+        super::TEARDOWN_FAILED.store(false, Ordering::Release);
         super::release_restart_fence();
         let all = super::SLOTS.clone().try_acquire_many_owned(2).unwrap();
         drop(all);

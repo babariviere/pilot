@@ -1,6 +1,53 @@
 use super::*;
 
 #[test]
+fn legacy_unknown_is_loadable_but_pending_summary_remains_a_storage_error() {
+    let temp = Temp::new();
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    let mut captured = draft(1, "");
+    captured.last = Some(Delivery {
+        id: "synthetic-legacy".into(),
+        state: "unknown".into(),
+        target: "a".into(),
+        kind: "chat-send".into(),
+        revision: 1,
+        diagnostic: None,
+        answer: None,
+    });
+    save(&mut store, "chat:a", captured);
+    drop(store);
+    let mut store = Store::open(temp.0.clone(), host()).unwrap();
+    let original = fs::read(temp.0.join("state-v1.json")).unwrap();
+    store.retire_empty("chat:a", 1).unwrap();
+    assert_eq!(
+        fs::read(temp.0.join("state-v1.json")).unwrap(),
+        original,
+        "cold-open retirement must not discard an empty legacy Unknown summary"
+    );
+    let mut corrupt = store.book.clone();
+    corrupt
+        .drafts
+        .get_mut("chat:a")
+        .unwrap()
+        .last
+        .as_mut()
+        .unwrap()
+        .state = "pending".into();
+    drop(store);
+    let bytes = serde_json::to_vec(&corrupt).unwrap();
+    fs::write(temp.0.join("state-v1.json"), &bytes).unwrap();
+    assert!(matches!(
+        Store::open(temp.0.clone(), host()),
+        Err("Stored delivery summary is corrupt")
+    ));
+    assert_eq!(
+        fs::read(temp.0.join("state-v1.json")).unwrap(),
+        bytes,
+        "invalid evidence is not overwritten"
+    );
+}
+
+#[test]
 fn diagnostic_draft_preserves_role_host_and_unknown_envelope_across_reopen() {
     let temp = Temp::new();
     let mut store = Store::open(temp.0.clone(), host()).unwrap();

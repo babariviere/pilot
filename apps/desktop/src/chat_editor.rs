@@ -860,6 +860,10 @@ impl ChatEditor {
                     && saved.pending.is_none()
                     && saved.recovered.is_empty()
                     && saved.answer.is_none()
+                    && saved
+                        .last
+                        .as_ref()
+                        .is_none_or(|last| last.state != "unknown")
                     && (saved.last.is_some() || saved.revision > 0)
                     && self.cache.get(key).is_some_and(|local| {
                         local.revision == saved.revision
@@ -1250,14 +1254,6 @@ impl ChatEditor {
                         .book
                         .as_ref()
                         .is_none_or(|b| !b.restart_settled())))
-            || (retain_unknown
-                && self.pending.is_empty()
-                && self.state.delivery_reports.values().all(|r| r.saved)
-                && self
-                    .state
-                    .book
-                    .as_ref()
-                    .is_none_or(|b| !b.gui_restart_safe()))
         {
             return false;
         }
@@ -1314,27 +1310,6 @@ impl ChatEditor {
         }
         if self.state.book.is_none() || self.client.is_none() {
             return Some("Draft storage is not ready. Keep this window open and check its error.");
-        }
-        if self.pending.is_empty()
-            && self.state.delivery_reports.values().all(|r| r.saved)
-            && self
-                .state
-                .book
-                .as_ref()
-                .is_some_and(|b| !b.gui_restart_safe())
-        {
-            let book = self.state.book.as_ref()?;
-            return Some(if !book.model_changes.is_empty() {
-                "A model change is unconfirmed. Open the chat's model recovery controls before installing."
-            } else if book
-                .missions
-                .values()
-                .any(|a| matches!(a.outcome, crate::mission_conversion::Outcome::Unknown))
-            {
-                "A chat-to-mission change is unconfirmed. Open its recovery controls before installing."
-            } else {
-                "A legacy delivery is unconfirmed. Open its chat's delivery controls before installing."
-            });
         }
         None
     }
@@ -1396,14 +1371,15 @@ impl ChatEditor {
                 return None;
             }
         }
-        if !(if retain_unknown {
-            book.gui_restart_safe()
-        } else {
-            book.restart_settled()
-        }) || !self.cache.iter().all(|(key, draft)| {
-            book.drafts.get(key) == Some(draft)
-                || (self.selected.as_ref() != Some(key) && draft == &Draft::default())
-        }) {
+        // Store validates every loaded/written Book. Saved uncertainty, including
+        // legacy records without envelopes, needs no receipt to survive GUI exit.
+        // The FIFO ACK and checks above still exclude unsaved input and live work.
+        if (!retain_unknown && !book.restart_settled())
+            || !self.cache.iter().all(|(key, draft)| {
+                book.drafts.get(key) == Some(draft)
+                    || (self.selected.as_ref() != Some(key) && draft == &Draft::default())
+            })
+        {
             return None;
         }
         Some(generation)

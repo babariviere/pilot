@@ -66,6 +66,8 @@ pub fn run_application_quit_probe() {
     for mode in [
         "update-exit",
         "unknown-update-exit",
+        "legacy-update-exit",
+        "visual-update-exit",
         "answer-update-exit",
         "save-update-exit",
         "external-terminate",
@@ -109,10 +111,27 @@ pub fn run_application_quit_probe() {
             usize::from(
                 mode.starts_with("held")
                     || mode.starts_with("unknown")
+                    || mode.starts_with("legacy")
                     || mode.starts_with("answer")
                     || mode == "fault"
             )
         );
+        if mode.starts_with("legacy") {
+            assert_eq!(
+                next.book.drafts["chat:legacy"].last.as_ref().unwrap().state,
+                "unknown"
+            );
+            assert_eq!(next.book.model_changes["a"].id, "synthetic-model");
+            assert!(
+                next.book.missions["legacy"].outcome == crate::mission_conversion::Outcome::Unknown
+            );
+            assert!(
+                next.book
+                    .pending
+                    .values()
+                    .all(|i| i.operation.is_none() && i.automatic.is_none())
+            );
+        }
         // Replacement owner is writable immediately after the child exited.
         next.save_edits(std::collections::BTreeMap::from([(
             "chat:replacement".into(),
@@ -161,7 +180,61 @@ fn child(mode: String, root: PathBuf) {
             captured(),
         )]))
         .unwrap();
-    let original = if mode.starts_with("unknown") {
+    let original = if mode.starts_with("legacy") {
+        store
+            .save_edits(std::collections::BTreeMap::from([(
+                "chat:legacy".into(),
+                Draft {
+                    revision: 1,
+                    text: String::new(),
+                    last: Some(crate::delivery_store::Delivery {
+                        id: "synthetic-legacy".into(),
+                        state: "unknown".into(),
+                        target: "legacy".into(),
+                        kind: "chat-send".into(),
+                        revision: 1,
+                        diagnostic: None,
+                        answer: None,
+                    }),
+                    ..Default::default()
+                },
+            )]))
+            .unwrap();
+        store
+            .prepare_model_change(crate::chat_models::Attempt {
+                id: "synthetic-model".into(),
+                target: crate::chat_models::Target {
+                    session: "a".into(),
+                    cwd: "/synthetic/project".into(),
+                    model: Some("p/a".into()),
+                    thinking: Some("high".into()),
+                    failed_source: None,
+                },
+                choice: crate::chat_models::Choice {
+                    model: "p/b".into(),
+                    thinking: Some("low".into()),
+                },
+            })
+            .unwrap();
+        store
+            .prepare_mission(
+                "synthetic-mission",
+                crate::mission_conversion::Request {
+                    project_id: "project".into(),
+                    from_session_id: "legacy".into(),
+                    title: "Unconfirmed 日本語".into(),
+                    goal: "Exact request".into(),
+                    coordinator: true,
+                    draft: true,
+                },
+            )
+            .unwrap();
+        Some(
+            store
+                .prepare("chat:missing", &Draft::default(), false, true)
+                .unwrap(),
+        )
+    } else if mode.starts_with("unknown") {
         Some(store.prepare("chat:a", &captured(), false, false).unwrap())
     } else if mode.starts_with("answer") {
         let draft = captured();
@@ -178,6 +251,7 @@ fn child(mode: String, root: PathBuf) {
     } else {
         None
     };
+    let historical = store.book.clone();
     drop(store);
     let root = root.canonicalize().unwrap();
     let original = Arc::new(Mutex::new(original));
@@ -321,6 +395,11 @@ fn child(mode: String, root: PathBuf) {
                     );
                     if let Some(intent) = exit_original.lock().unwrap().as_ref() {
                         unchanged(&replacement.book, intent);
+                    }
+                    if exit_mode.starts_with("legacy") {
+                        assert!(replacement.book.drafts["chat:legacy"] == historical.drafts["chat:legacy"]);
+                        assert!(replacement.book.model_changes == historical.model_changes);
+                        assert!(replacement.book.missions == historical.missions);
                     }
                     if exit_mode.starts_with("held") {
                         // The cancelled HTTP gets an exact late ACK while the independent
@@ -544,6 +623,9 @@ fn child(mode: String, root: PathBuf) {
                 }
                 if mode.ends_with("update-exit") {
                     let updater = cx.update(|cx| view.read(cx).settings.read(cx).updater.clone().unwrap());
+                    let (wake, visual_changed) = async_channel::bounded(1);
+                    cx.update(|cx| cx.observe(&updater, move |_, _| { let _ = wake.try_send(()); }).detach());
+                    let visual = (mode == "visual-update-exit").then(crate::visual_runtime::hold_for_restart_probe);
                     if mode == "save-update-exit" {
                         h.update(cx, |_, w, cx| {
                             view.read(cx).settings.clone().update(cx, |s, _| {
@@ -561,6 +643,13 @@ fn child(mode: String, root: PathBuf) {
                     wait_for(cx, &editor, &changed, |s| s.checkpoint == Some(1)).await;
                     while !cx.update(|cx| view.read(cx).settings.read(cx).state.persisted()) {
                         changed.recv().await.unwrap();
+                    }
+                    if visual.is_some() {
+                        assert!(cx.update(|cx| matches!(updater.read(cx).state(), Some(pilot_desktop_updater::State::ReadyToRestart(_)))), "active helper capacity must still prevent handoff");
+                    }
+                    drop(visual);
+                    while !cx.update(|cx| matches!(updater.read(cx).state(), Some(pilot_desktop_updater::State::Working { work: pilot_desktop_updater::Work::PreparingExit, .. }))) {
+                        visual_changed.recv().await.unwrap();
                     }
                     assert!(cx.update(|cx| matches!(updater.read(cx).state(), Some(pilot_desktop_updater::State::Working { work: pilot_desktop_updater::Work::PreparingExit, .. }))), "one click reaches the existing installer handoff after the saves");
                     h.update(cx, |_, w, cx| view.update(cx, |v, cx| {
