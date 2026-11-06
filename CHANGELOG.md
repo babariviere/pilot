@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.123.0](https://github.com/babariviere/pilot/compare/v1.122.0...v1.123.0) (2026-11-06)
+
+
+### Features
+
+* **desktop:** add native shell production chat slice ([06251a6](https://github.com/babariviere/pilot/commit/06251a607161c254ec4448f63a37b90a1f093332))
+* **desktop:** add native shell question and access prompts ([37606c0](https://github.com/babariviere/pilot/commit/37606c07bdfcdb8d7c55089a7071683e535fe667))
+* **desktop:** migrate lazy history and find to native shell ([f942e49](https://github.com/babariviere/pilot/commit/f942e49c6d9f8e4b13c800de69382ec128f95b55))
+* **desktop:** migrate tool disclosure to native shell ([155ea17](https://github.com/babariviere/pilot/commit/155ea1779534eeb6cc37bf58c959a71d2cbe4441))
+* **desktop:** render conversation images in Native Shell ([b09b6ce](https://github.com/babariviere/pilot/commit/b09b6cecdb4e39fe990fbbe255d1c1826cbc1b79))
+* **experiments:** reproduce Pilot chat and sidebar in NSH ([39a4913](https://github.com/babariviere/pilot/commit/39a4913c302436abbe73338ef29ccb5e3cb71e51))
+* **insights:** add owner execution and safe legacy transfer ([5e6a628](https://github.com/babariviere/pilot/commit/5e6a6285a9f9ff6d8f2801e2498823db60d7515f))
+
+
+### Bug Fixes
+
+* **desktop:** convert native probe points before layer attachment ([3d0639a](https://github.com/babariviere/pilot/commit/3d0639ab587d4f1a0c5f94ce4b2300345dc02f00))
+
 ## [1.122.0](https://github.com/babariviere/pilot/compare/v1.121.0...v1.122.0) (2026-11-06)
 
 
