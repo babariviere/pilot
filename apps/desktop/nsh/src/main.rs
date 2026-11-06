@@ -14,7 +14,7 @@ fn main() -> std::process::ExitCode {
     };
     let fixture_mode = args.iter().any(|a| a == "--fixture");
     #[cfg(feature = "native-probes")]
-    let fixture = fixture_mode.then(pilot_nsh::fixture::Fixture::start);
+    let fixture = fixture_mode.then(|| std::sync::Arc::new(pilot_nsh::fixture::Fixture::start()));
     if !fixture_mode && !args.iter().any(|a| a == "--local") {
         eprintln!(
             "Use --local to connect to the existing daemon, or --fixture with native-probes. No daemon is started."
@@ -55,6 +55,12 @@ fn main() -> std::process::ExitCode {
     };
     let capture = value("--capture").map(PathBuf::from);
     let prompt_probe = args.iter().any(|a| a == "--check-prompts");
+    #[cfg(feature = "native-probes")]
+    let work_probe = args.iter().any(|a| a == "--check-work");
+    #[cfg(feature = "native-probes")]
+    if work_probe && let Some(fixture) = &fixture {
+        fixture.work("a");
+    }
     #[cfg(feature = "native-probes")]
     if prompt_probe && let Some(fixture) = &fixture {
         fixture.question("a",40,serde_json::json!({"question":"Which checks should run? 日本語", "context":"Choose explicitly. Your ordinary draft stays separate.","blocking":true,"multiSelect":true,"options":[{"label":"Typecheck","detail":"Check shared types","suggested":true},{"label":"Tests","detail":"Run focused checks"}]}));
@@ -98,8 +104,12 @@ fn main() -> std::process::ExitCode {
         close,
         replies,
         capture,
-        args.iter().any(|a| a == "--check-saved-draft"),
-        prompt_probe,
+        native::Probes {
+            restart: args.iter().any(|a| a == "--check-saved-draft"),
+            prompts: prompt_probe,
+            #[cfg(feature = "native-probes")]
+            work: work_probe.then(|| fixture.as_ref().expect("work probe fixture").clone()),
+        },
     );
     #[cfg(feature = "native-probes")]
     if prompt_probe && let Some(fixture) = &fixture {

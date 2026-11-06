@@ -49,6 +49,18 @@ def main():
                 assert not book["pending"]
                 assert book["drafts"]["chat:a"].get("answer") is None
                 print(f"PASS {appearance} {width}: native question/choices/Allow/Deny/drafts/Stop/Close")
+            with tempfile.TemporaryDirectory(prefix="nsh-native-work-") as temporary:
+                capture = args.output.resolve() / f"{appearance}-{width}-work.png"
+                command = [str(args.binary.resolve()), "--fixture", "--check-work",
+                           "--state-dir", str(Path(temporary) / "profile"),
+                           "--width", str(width), "--capture", str(capture)]
+                if appearance == "dark":
+                    command.append("--dark")
+                subprocess.run(command, check=True, timeout=60)
+                for suffix in ("", "-streaming", "-detail", "-expanded", "-folded", "-failure"):
+                    path = capture.with_stem(capture.stem + suffix)
+                    assert path.stat().st_size > 10000, f"missing work capture: {path}"
+                print(f"PASS {appearance} {width}: native work/Notes/disclosure/keyboard/navigation/Stop")
 
 
 if __name__ == "__main__":

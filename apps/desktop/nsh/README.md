@@ -102,11 +102,40 @@ the existing courier's final `Close`/`Flushed` publication and exact saved draft
 Marked text, unsaved input or save failure keeps the window open. This embedding
 host is Pilot integration, not a patched NSH lifecycle.
 
+## Work groups and tool details
+
+The transcript uses the production `local_model` work groups and
+`tool_presentation`/`tool_script` summaries through `nsh_adapter`. Canonical
+entry and top-level call identities stay separate from Markdown. Assistant
+Notes remain chronological messages between groups; true Thinking remains a
+transient composer status. Printed tool names or outcomes never create state.
+
+A compact effects-first summary opens the full quiet call list. Without a user
+choice, a live group shows the latest five production work units (consecutive
+successful reads count as one), with Show earlier. An explicit open or fold wins
+over streaming updates. The folded first error opens only its original call.
+No ribbon or grid is used. Each call shows output first, with its own outcome;
+Code or Command is separately collapsed. Copy uses the exact kept literal
+source/output, including any recognized codemode header omitted from display.
+Existing output limits and patch-preview omissions remain disclosed.
+
+NSH's native `Collapsible`, `Button`, `Scroll` and selectable `TextView` provide
+disclosure, keyboard activation and text rendering. `Accordion` was inspected;
+the live-tail/full-list/explicit-fold workflow is not an accordion's binary open
+set, so Pilot composes the lower-level native controls. No engine or control
+replacement is needed. Disclosure choices live outside recycled cells, keyed by
+chat and canonical calls; an inner keyed region prevents a recycled row from
+keeping another call's callbacks. Navigation generation still fences actions.
+NSH owns keyed-list scroll anchoring and follow-end behavior. This slice does
+not claim full-history or cross-recycled-row selection qualification.
+The list uses NSH's bottom-aligned chat mode. Latest overlays the transcript,
+so revealing that control does not resize the reader viewport.
+
 ## Isolated verification
 
 ```sh
 bash apps/desktop/scripts/cargo.sh test --locked -p pilot-nsh \
-  --features native-probes --test chat -- --test-threads=1
+  --features native-probes --test chat --test work -- --test-threads=1
 bash apps/desktop/scripts/cargo.sh clippy --locked -p pilot-nsh \
   --features native-probes --all-targets -- -D warnings
 bash apps/desktop/scripts/cargo.sh build --locked -p pilot-nsh --features native-probes
@@ -136,6 +165,18 @@ not mockups or evidence of live approval behavior.
 The native question probe also simulates AppKit marked text and verifies that
 Close does not release it. This is not hardware input-method qualification.
 
+The matrix also exercises hidden real native work groups in each profile
+(`--check-work`): folded, expanded, live-tail, individual output/code and failure
+captures, native Space disclosure, chat switching and Stop. The Rust work tests
+use the same isolated HTTP/WebSocket host and production adapters. They check
+mixed steps, merged reads, interleaved Notes, Pending/Failed/Unknown, literal
+codemode labels, late output, row recycling and exact Copy without touching the
+system clipboard. The native reader-anchor check sends a synthetic wheel to
+the same native tree while briefly detached, then reattaches it. An ordered-out
+window has no display-link frames; upstream reports an unmapped scroll
+immediately. This uses public embedding/AppKit behavior, not an engine patch,
+and does not qualify hardware scrolling or visible-window timing.
+
 The `7571948e` dependency recheck passed all 12 adapter/headless chat tests and
 locked builds with and without `native-probes`, without Pilot API changes.
 The hidden native matrix passed all four profiles (12 processes, 20 captures).
@@ -157,7 +198,7 @@ Rust formatting, exact shared-pin checks and all 72 CI-wrapper tests also passed
 ## Slice boundary
 
 Home, Inbox, Review, Missions, Automations and Settings are visibly unavailable.
-Chat creation, attachments, unsupported permission types, richer tool disclosure,
+Chat creation, attachments, unsupported permission types,
 full-history Find, persistent sidebar preferences, update/package integration and
 other workflows remain in the current app. Stored sources remain untouched;
 unsupported image/artifact content shows a placeholder, never a browser fallback.

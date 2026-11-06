@@ -89,6 +89,88 @@ pub struct Message {
     pub source: String,
     pub mine: bool,
     pub plain: bool,
+    pub work: Option<Work>,
+}
+
+/// Prepared production work presentation, not parsed transcript prose.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Work {
+    pub title: String,
+    pub active: bool,
+    pub calls: Vec<Call>,
+    /// Swift-style units, including consecutive successful reads as one.
+    pub units: Vec<Vec<usize>>,
+    pub first_error: Option<(usize, String)>,
+}
+
+/// One canonical top-level call. Nested literal names never own its status.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Call {
+    pub id: String,
+    pub key: u64,
+    pub caption: String,
+    pub status: &'static str,
+    pub failed: bool,
+    pub input: Option<(&'static str, Arc<String>)>,
+    pub output: Arc<String>,
+    pub shown_output: Arc<String>,
+    pub duration: Option<String>,
+    pub diff: Arc<String>,
+    pub arguments: Option<Arc<String>>,
+    pub limited: bool,
+}
+impl Work {
+    fn project(work: &crate::tool_presentation::Work) -> Self {
+        use crate::tool_presentation::{self as tools, Status, Unit};
+        Self {
+            title: work.title.clone(),
+            active: work.active,
+            units: work
+                .units()
+                .into_iter()
+                .map(|unit| match unit {
+                    Unit::Step(index) => vec![index],
+                    Unit::Reads(items) => items,
+                })
+                .collect(),
+            first_error: work.first_error(),
+            calls: work
+                .calls()
+                .map(|tool| {
+                    let script = (tool.name == "codemode")
+                        .then(|| tools::script_output(&tool.output))
+                        .flatten();
+                    Call {
+                        id: tool.id.clone(),
+                        key: tool.key,
+                        caption: [tools::sentence(tool), tool.meta.clone()]
+                            .into_iter()
+                            .filter(|part| !part.is_empty())
+                            .collect::<Vec<_>>()
+                            .join(" · "),
+                        status: if tool.status.live() && !work.active {
+                            Status::Interrupted.label()
+                        } else {
+                            tool.status.label()
+                        },
+                        failed: tool.status == Status::Error,
+                        input: tool.input.clone(),
+                        output: tool.output.clone(),
+                        shown_output: script
+                            .as_ref()
+                            .map_or_else(|| tool.output.clone(), |s| Arc::new(s.body.to_owned())),
+                        duration: script.map(|s| format!("{} s", s.wall)),
+                        diff: tool.diff.clone(),
+                        arguments: (tool.input.is_none()
+                            && tool.diff.is_empty()
+                            && !tool.arguments.is_empty())
+                        .then(|| tool.arguments.clone()),
+                        limited: tool.limited,
+                    }
+                })
+                .collect(),
+        }
+    }
 }
 
 /// Coalesced display state. No consumer can mutate delivery or stored history.
@@ -874,6 +956,7 @@ impl Adapter {
                     },
                     mine: m.label().starts_with("You"),
                     plain: m.is_plain(),
+                    work: m.work_data().map(|work| Work::project(work)),
                 })
                 .collect()
         } else {

@@ -155,14 +155,19 @@ fn stop(app: &NSApplication, window: &NSWindow) {
     app.postEvent_atStart(&event, false);
 }
 
+pub(super) struct Probes {
+    pub restart: bool,
+    pub prompts: bool,
+    #[cfg(feature = "native-probes")]
+    pub work: Option<std::sync::Arc<pilot_nsh::fixture::Fixture>>,
+}
 pub(super) fn run(
     options: platform::AppOptions,
     config: Config,
     close: async_channel::Sender<CloseInput>,
     closed: async_channel::Receiver<()>,
     capture: Option<PathBuf>,
-    restart_probe: bool,
-    prompt_probe: bool,
+    probes: Probes,
 ) -> std::process::ExitCode {
     let mtm = MainThreadMarker::new().expect("native main thread");
     let app = NSApplication::sharedApplication(mtm);
@@ -220,10 +225,14 @@ pub(super) fn run(
     });
     #[cfg(feature = "native-probes")]
     if let Some(path) = capture {
-        probe::start(path, restart_probe, prompt_probe);
+        if let Some(fixture) = probes.work {
+            probe::work_start(path, fixture);
+        } else {
+            probe::start(path, probes.restart, probes.prompts);
+        }
     }
     #[cfg(not(feature = "native-probes"))]
-    let _ = (capture, restart_probe, prompt_probe);
+    let _ = (capture, probes.restart, probes.prompts);
     app.run();
     view.stop();
     window.orderOut(None);

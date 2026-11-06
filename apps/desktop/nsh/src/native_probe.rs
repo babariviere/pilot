@@ -179,6 +179,214 @@ fn insert(input: &NSTextView, text: &str) {
         input.insertText_replacementRange(&NSString::from_str(text), NSRange::new(usize::MAX, 0));
     }
 }
+fn control_key(window: &NSWindow, label: &str, code: u16, text: &str) {
+    let control = descendants(&window.contentView().expect("content view"))
+        .into_iter()
+        .find(|v| NSAccessibility::accessibilityLabel(&**v).is_some_and(|s| s.to_string() == label))
+        .unwrap_or_else(|| panic!("keyboard target {label} unavailable"));
+    assert!(
+        window.makeFirstResponder(Some(&control)),
+        "native disclosure accepts keyboard focus"
+    );
+    let chars = NSString::from_str(text);
+    let event = NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+        NSEventType::KeyDown, NSPoint::new(0.,0.), NSEventModifierFlags::empty(),
+        NSProcessInfo::processInfo().systemUptime(), window.windowNumber(), None, &chars, &chars, false, code
+    ).expect("native key");
+    control.keyDown(&event);
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGEventCreateScrollWheelEvent(
+        source: *const std::ffi::c_void,
+        units: u32,
+        wheels: u32,
+        ...
+    ) -> *const std::ffi::c_void;
+    fn CGEventSetLocation(event: *const std::ffi::c_void, location: NSPoint);
+}
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFRelease(value: *const std::ffi::c_void);
+}
+
+fn wheel(window: &NSWindow, delta: i32) {
+    let root = window.contentView().unwrap();
+    let surface = descendants(&root)
+        .into_iter()
+        .find(|v| v.class().name() == c"NshView")
+        .unwrap();
+    // Match upstream's native synthesized wheel, without posting an OS event.
+    // Hidden fixture windows start at (0,0); the point is over transcript prose,
+    // outside its inner output scrollers and the sidebar.
+    let point = window.convertPointToScreen(NSPoint::new(300., 600.));
+    let height = NSScreen::mainScreen(MainThreadMarker::from(window))
+        .unwrap()
+        .frame()
+        .size
+        .height;
+    // SAFETY: owned CoreGraphics event, one variadic i32 wheel, live AppKit host.
+    unsafe {
+        let event = CGEventCreateScrollWheelEvent(std::ptr::null(), 0, 1, delta);
+        assert!(!event.is_null());
+        CGEventSetLocation(event, NSPoint::new(point.x, height - point.y));
+        let native = NSEvent::eventWithCGEvent(&*event.cast());
+        CFRelease(event);
+        // An ordered-out embedding window has no display-link frames. Upstream
+        // reports an unmapped scroll immediately; keep the same native tree and
+        // reattach it after dispatch, without changing or driving the engine.
+        window.setContentView(None);
+        surface.scrollWheel(&native.expect("native wheel"));
+        window.setContentView(Some(&root));
+    }
+}
+
+pub(super) fn work_start(path: PathBuf, fixture: std::sync::Arc<pilot_nsh::fixture::Fixture>) {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("capture directory");
+    }
+    std::thread::spawn(move || {
+        // A failed probe exits the process; it never resumes a fixture after panic.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let settle = || std::thread::sleep(Duration::from_millis(350));
+            let capture = |suffix: &str| {
+                let output = path.with_file_name(format!(
+                    "{}-{suffix}.png",
+                    path.file_stem().unwrap().to_string_lossy()
+                ));
+                on_main(move |w| screenshot(w, &output));
+            };
+            wait_for("Open chat a");
+            open_chat("a", &path);
+            wait_for("Read running.rs · Running…");
+            wait_for("Read c.rs, d.rs");
+            settle();
+            capture("streaming");
+            on_main(|w| press(w, "Read c.rs, d.rs"));
+            wait_for("Read c.rs");
+            on_main(|w| press(w, "Read c.rs, d.rs"));
+            settle();
+            on_main(|w| press(w, "Read running.rs · Running…"));
+            wait_for("Code");
+            on_main(|w| control_key(w, "Code", 49, " "));
+            wait_for("Copy code");
+            on_main(|w| {
+                if has_label(w, "Latest message") {
+                    press(w, "Latest message");
+                }
+            });
+            settle();
+            capture("detail");
+            on_main(|w| wheel(w, 700));
+            settle();
+            let anchor = || {
+                on_main(|w| {
+                    let root = w.contentView().unwrap();
+                    root.displayIfNeeded();
+                    let target = descendants(&root)
+                        .into_iter()
+                        .find(|v| {
+                            NSAccessibility::accessibilityLabel(&**v)
+                                .is_some_and(|s| s.to_string() == "Working · read running.rs")
+                        })
+                        .expect("work reader anchor");
+                    let layer = target.layer().unwrap();
+                    layer
+                        .convertRect_toLayer(layer.bounds(), root.layer().as_deref())
+                        .origin
+                        .y
+                })
+            };
+            capture("anchor-before");
+            let settled_anchor = || {
+                let deadline = Instant::now() + Duration::from_secs(15);
+                let mut previous = anchor();
+                let mut stable = 0;
+                while stable < 4 {
+                    assert!(
+                        Instant::now() < deadline,
+                        "native reader scroll did not settle"
+                    );
+                    std::thread::sleep(Duration::from_millis(30));
+                    let next = anchor();
+                    stable = if (next - previous).abs() < 0.5 {
+                        stable + 1
+                    } else {
+                        0
+                    };
+                    previous = next;
+                }
+                previous
+            };
+            let before = settled_anchor();
+            fixture
+                .state
+                .lock()
+                .expect("fixture state")
+                .work_events
+                .get_mut("a")
+                .unwrap()
+                .last_mut()
+                .unwrap()["output"]["set"] =
+                serde_json::json!("late exact 日本語\n<&> 👩🏽‍💻\n".repeat(12));
+            fixture.changed();
+            settle();
+            capture("anchor-after");
+            let after = settled_anchor();
+            assert!(
+                (after - before).abs() < 0.5,
+                "late output keeps the native reader anchor: before={before}, after={after}"
+            );
+            open_chat("b", &path);
+            open_chat("a", &path);
+            wait_for("Copy code");
+            on_main(|w| control_key(w, "Code", 49, " "));
+            settle();
+            assert!(
+                !on_main(|w| has_label(w, "Copy code")),
+                "Space collapses source after navigation"
+            );
+            on_main(|w| control_key(w, "Read running.rs · Running…", 49, " "));
+            settle();
+            assert!(
+                !on_main(|w| has_label(w, "Copy output")),
+                "Space collapses individual call"
+            );
+            on_main(|w| press(w, "Show earlier work steps"));
+            wait_for("Read a.rs");
+            wait_for("Read b.rs");
+            settle();
+            capture("expanded");
+            on_main(|w| control_key(w, "Working · read running.rs", 49, " "));
+            settle();
+            capture("folded");
+            assert!(
+                !on_main(|w| has_label(w, "Read running.rs · Running…")),
+                "explicit fold wins during streaming"
+            );
+            on_main(|w| wheel(w, 2000));
+            settle();
+            wait_for("Show failed call");
+            on_main(|w| press(w, "Show failed call"));
+            wait_for("Copy output");
+            settle();
+            capture("failure");
+            on_main(|w| screenshot(w, &path));
+            // Stop uses the existing production courier, even with a folded group.
+            wait_for("Stop reply");
+            on_main(|w| press(w, "Stop reply"));
+            settle();
+            assert_eq!(fixture.state.lock().expect("fixture state").stops, ["a"]);
+            on_main(|w| {
+                w.performClose(None);
+            });
+        }));
+        if result.is_err() {
+            std::process::exit(1);
+        }
+    });
+}
 pub(super) fn start(path: PathBuf, restart: bool, prompts: bool) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).expect("capture directory");

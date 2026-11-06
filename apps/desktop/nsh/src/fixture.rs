@@ -24,6 +24,7 @@ pub struct State {
     pub receipts: BTreeMap<String, Value>,
     pub messages: BTreeMap<String, Vec<Value>>,
     pub working: Option<String>,
+    pub work_events: BTreeMap<String, Vec<Value>>,
     pub stops: Vec<String>,
     pub questions: BTreeMap<String, Value>,
     pub decisions: Vec<(String, Value)>,
@@ -110,7 +111,67 @@ impl Fixture {
         );
         self.changed();
     }
+    /// Mixed production-shaped entries and live events, never Markdown tool state.
+    pub fn work(&self, session: &str) {
+        let mut entries = vec![entry(10, "assistant", "Visible Note before work. 日本語")];
+        let mut next = 11;
+        let mut call = |id: &str, name: &str, args: Value, output: Option<(&str, bool)>| {
+            entries.push(json!({"id":next,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":id,"name":name,"arguments":args}]}]}));
+            next += 1;
+            if let Some((text, error)) = output {
+                entries.push(json!({"id":next,"kind":"pi.tool-result","model":[{"role":"toolResult","toolCallId":id,"toolName":name,"isError":error,"content":[{"type":"text","text":text}]}]}));
+                next += 1;
+            }
+        };
+        call(
+            "edited",
+            "edit",
+            json!({"path":"src/main.rs","oldText":"old","newText":"new\nline"}),
+            Some(("Edited", false)),
+        );
+        call(
+            "failed",
+            "codemode",
+            json!({"code":WORK_CODE}),
+            Some((WORK_OUTPUT, true)),
+        );
+        entries.push(entry(
+            next,
+            "assistant",
+            "Visible interleaved Note. Not hidden work or Thinking.",
+        ));
+        next += 1;
+        for (offset, (id, name, args, output)) in [
+            ("read-a", "read", json!({"path":"src/a.rs"}), Some(("read a", false))),
+            ("read-b", "read", json!({"path":"src/b.rs"}), Some(("read b", false))),
+            ("search", "web", json!({"action":"search","query":"literal query"}), Some(("found", false))),
+            ("command", "bash", json!({"command":"cargo check"}), Some(("checked", false))),
+            ("script", "codemode", json!({"code":"await tools.read({path: '日本.rs'});\nawait tools.bash({command: 'printf test'});"}), Some(("Script completed\nWall time 0.2 seconds\nOutput:\n\nNested output says failed, but the script completed.", false))),
+            ("unknown", "codemode", json!({"code":"// Inspect original operation\nawait tools.read({path: 'unknown.rs'});"}), None),
+            ("read-c", "read", json!({"path":"src/c.rs"}), Some(("read c", false))),
+            ("read-d", "read", json!({"path":"src/d.rs"}), Some(("read d", false))),
+            ("fetch", "web", json!({"action":"fetch","url":"https://example.invalid"}), Some(("offline fixture", false))),
+        ].into_iter().enumerate() {
+            let n = next + offset as u64 * 2;
+            entries.push(json!({"id":n,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":id,"name":name,"arguments":args}]}]}));
+            if let Some((text, error)) = output {
+                entries.push(json!({"id":n+1,"kind":"pi.tool-result","model":[{"role":"toolResult","toolCallId":id,"toolName":name,"isError":error,"content":[{"type":"text","text":text}]}]}));
+            }
+        }
+        let mut state = self.state.lock().expect("fixture state");
+        state.messages.insert(session.into(), entries);
+        state.work_events.insert(session.into(), vec![
+            json!({"type":"run_start"}),
+            json!({"type":"message_start","message":{"role":"assistant","timestamp":1,"content":[{"type":"thinking","thinking":"Private reasoning stays transient"},{"type":"toolCall","id":"pending","name":"read","arguments":{"path":"pending.rs"}},{"type":"toolCall","id":"running","name":"codemode","arguments":{"code":"// Stream exact output\nawait tools.read({path: 'running.rs'});"}}]}}),
+            json!({"type":"tool_execution_start","toolCallId":"running","toolName":"codemode"}),
+            json!({"type":"tool_execution_update","toolCallId":"running","output":{"set":"  live 日本語\n<&> 👩🏽‍💻  "}}),
+        ]);
+        drop(state);
+        self.changed();
+    }
 }
+pub const WORK_CODE: &str = "// Verify focused checks\nconst x = await tools.read({path: 'src/main.rs'});\ntext(await tools.bash({command: 'cargo test'}));\n// exact <&> 日本語 👩🏽‍💻  ";
+pub const WORK_OUTPUT: &str = "Script failed\nWall time 0.125 seconds\nOutput:\n\nprinted success first\nScript error:\nError: exact failure <&> 日本語 👩🏽‍💻\n  ";
 impl Default for Fixture {
     fn default() -> Self {
         Self::start()
@@ -132,7 +193,7 @@ fn entry(id: u64, role: &str, text: &str) -> Value {
 }
 fn summary(id: &str, state: &State) -> Value {
     json!({"id":id,"title":match id {"a"=>"Native chat and streaming","b"=>"Keep exact drafts","ask"=>"Legacy Ask","restricted"=>"Restricted chat",_=>"Coordinator"},
-        "state":if state.working.as_deref()==Some(id) || state.questions.get(id).is_some_and(|q|q["data"]["blocking"]==true){"working"}else{"idle"},"mode":if id=="ask" {"ask"}else{"build"},
+        "state":if state.working.as_deref()==Some(id) || state.work_events.get(id).is_some_and(|e| e.iter().any(|e| e["type"]=="run_start")) || state.questions.get(id).is_some_and(|q|q["data"]["blocking"]==true){"working"}else{"idle"},"mode":if id=="ask" {"ask"}else{"build"},
         "control":id=="restricted","missionCoordinator":id=="coordinator", "missionId":if id=="coordinator"{Some("mission")}else{None},
         "projectId":if id=="b"{"project-b"}else{"project-a"},"cwd":"/synthetic/project","createdAt":100,"lastUserMessageAt":if id=="a"{500}else{200},"inputGeneration":0})
 }
@@ -213,7 +274,13 @@ async fn connection_task(
                     if !question.is_null() {
                         entries.push(question.clone());
                     }
-                    let events = if let Some(live) = live {
+                    let events = if let Some(work) = state.work_events.get(id) {
+                        let mut events = vec![
+                            json!({"type":"snapshot","entries":entries,"history":{"context":{"conversationId":0,"tail":100},"more":false}}),
+                        ];
+                        events.extend(work.clone());
+                        events
+                    } else if let Some(live) = live {
                         let text = live["model"][0]["content"][0]["text"]
                             .as_str()
                             .unwrap_or("")
@@ -405,6 +472,9 @@ async fn connection_task(
                     .trim_end_matches("/stop");
                 state.stops.push(id.into());
                 state.working = None;
+                if let Some(events) = state.work_events.get_mut(id) {
+                    *events = vec![json!({"type":"run_end"})];
+                }
                 if let Some(q) = state.questions.get_mut(id) {
                     q["data"]["blocking"] = false.into();
                 }

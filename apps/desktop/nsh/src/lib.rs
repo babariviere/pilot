@@ -5,6 +5,7 @@ pub mod fixture;
 mod icons;
 #[path = "../../../../experiments/nsh-pilot/src/theme.rs"]
 mod theme;
+mod transcript;
 
 use icons::icon;
 use nsh_base::{
@@ -64,6 +65,7 @@ struct Ui {
     adapter: Stored<Adapter>,
     snapshot: Signal<Snapshot>,
     composing: Signal<bool>,
+    disclosures: Signal<transcript::Choices>,
 }
 impl Ui {
     fn publish(self) {
@@ -532,6 +534,7 @@ fn prompt_panel(ui: Ui, target: PromptTarget) -> impl IntoElement {
 
 fn conversation(ui: Ui, location: Location) -> impl IntoElement {
     let list = element_ref();
+    let transcript_location = location.clone();
     let editor = element_ref();
     let gap = signal(0_f32);
     let edit_location = location.clone();
@@ -584,97 +587,64 @@ fn conversation(ui: Ui, location: Location) -> impl IntoElement {
             },
         ))
         .child(
-            view().flex_1().min_h(px(0.)).selectable(true).child(
-                virtual_list(
-                    move || ui.snapshot.with(|s| s.messages.len()),
-                    move |at| {
-                        let row = computed(move || {
-                            ui.snapshot.with(|s| s.messages.get(at.index()).cloned())
-                        });
-                        view()
-                            .w_full()
-                            .max_w(px(912.))
-                            .self_center()
-                            .gap(px(10.))
-                            .style_when(
-                                move || row.with(|r| r.as_ref().is_some_and(|m| m.mine)),
-                                |v| {
-                                    v.self_end()
-                                        .w(nsh_core::geometry::auto())
-                                        .max_w(relative(0.85))
-                                        .rounded(px(12.))
-                                        .p(px(14.))
-                                        .bg(TRAY)
-                                },
-                            )
-                            .child(
-                                text_view()
-                                    .markdown(move || {
-                                        row.with(|r| {
-                                            r.as_ref()
-                                                .filter(|m| !m.plain)
-                                                .map(|m| SharedString::from(m.source.clone()))
-                                        })
-                                    })
-                                    .document(move || {
-                                        row.with(|r| {
-                                            r.as_ref()
-                                                .filter(|m| m.plain)
-                                                .map(|m| plain(m.source.clone()))
-                                        })
-                                    })
-                                    .options(move || MarkdownOptions {
-                                        streaming: ui.snapshot.with(|s| {
-                                            s.working
-                                                && row.with(|r| {
-                                                    r.as_ref().is_some_and(|m| {
-                                                        Some(m.id)
-                                                            == s.messages.last().map(|m| m.id)
-                                                    })
-                                                })
-                                        }),
-                                        ..Default::default()
-                                    })
-                                    .selectable(true)
-                                    .font_family("Inter")
-                                    .text_size(px(15.))
-                                    .line_height(px(23.))
-                                    .text_color(INK)
-                                    .gap(px(12.)),
-                            )
-                    },
-                )
-                .test_id("transcript")
-                .element_ref(&list)
+            view()
+                .relative()
                 .flex_1()
-                .keys(move || {
-                    ui.snapshot
-                        .with(|s| s.messages.iter().map(|m| m.id).collect::<Vec<_>>())
-                })
-                .estimated_item_size(px(200.))
-                .follow_end(px(24.))
-                .content_padding_x(px(24.))
-                .content_padding_y(px(26.))
-                .row_gap(px(28.))
-                .on_scroll(move |event: &ScrollEvent| {
-                    let remaining =
-                        event.content_size.height.0 - event.size.height.0 - event.offset.y.0;
-                    gap.set(remaining);
-                    ui.adapter
-                        .with(|a| a.follow(&follow_location, remaining < 40.));
-                }),
-            ),
+                .min_h(px(0.))
+                .selectable(true)
+                .child(
+                    virtual_list(
+                        move || ui.snapshot.with(|s| s.messages.len()),
+                        move |at| {
+                            let row = computed(move || {
+                                ui.snapshot.with(|s| s.messages.get(at.index()).cloned())
+                            });
+                            view()
+                                .w_full()
+                                .max_w(px(912.))
+                                .self_center()
+                                .gap(px(10.))
+                                .child(transcript::row(ui, transcript_location.clone(), row))
+                        },
+                    )
+                    .test_id("transcript")
+                    .element_ref(&list)
+                    .flex_1()
+                    .keys(move || {
+                        ui.snapshot
+                            .with(|s| s.messages.iter().map(|m| m.id).collect::<Vec<_>>())
+                    })
+                    .estimated_item_size(px(200.))
+                    .alignment(nsh_core::ListAlignment::Bottom)
+                    .follow_end(px(24.))
+                    .content_padding_x(px(24.))
+                    .content_padding_y(px(26.))
+                    .row_gap(px(28.))
+                    .on_scroll(move |event: &ScrollEvent| {
+                        let remaining =
+                            event.content_size.height.0 - event.size.height.0 - event.offset.y.0;
+                        gap.set(remaining);
+                        ui.adapter
+                            .with(|a| a.follow(&follow_location, remaining < 40.));
+                    }),
+                )
+                .child(when(
+                    move || gap.get() > 40.,
+                    move || {
+                        button()
+                            .accessibility_label("Latest message")
+                            .h(px(28.))
+                            .absolute()
+                            .bottom(px(8.))
+                            .right(px(12.))
+                            .px(px(10.))
+                            .rounded(px(6.))
+                            .bg(CARD)
+                            .on_press(move || list.scroll_to_end(false))
+                            .child(label("Latest", 12.))
+                    },
+                )),
         )
-        .child(when(
-            move || gap.get() > 40.,
-            move || {
-                button()
-                    .accessibility_label("Latest message")
-                    .h(px(28.))
-                    .on_press(move || list.scroll_to_end(false))
-                    .child(label("Latest", 12.))
-            },
-        ))
         .child(when(
             move || ui.snapshot.with(|s| s.problem.is_some()),
             move || {
@@ -944,6 +914,7 @@ fn workbench(config: Config) -> impl IntoElement {
         adapter,
         snapshot,
         composing: signal(false),
+        disclosures: signal(transcript::Choices::default()),
     };
     let events = adapter.with(|a| a.events());
     let close = config.close;
