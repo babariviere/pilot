@@ -142,6 +142,15 @@ The hidden native matrix passed all four profiles (12 processes, 20 captures).
 Its first invocation failed the composer lookup after initial chat selection;
 the unchanged binary then passed the complete matrix twice. The cause remains
 unresolved; these passes do not establish hardware input or full-workflow acceptance.
+The probe now clicks each chat once and waits, within the existing 15-second
+readiness deadline, for that exact chat's attached, editable, laid-out native
+composer instead of assuming a 350ms settle proves selection. Native negative
+checks reject a missing composer and another chat's composer. On a readiness
+failure it prints expected/observed editor identities, selected native rows,
+before/after hierarchy and geometry, elapsed time, and saves a separate
+`*.readiness-failure.png` capture. This is fixture-only probe hardening, not a
+production fix or an explanation of the original failure. Two bounded follow-up
+runs (one unchanged, one diagnostic-only) did not reproduce that failure.
 Scoped clippy (`pilot-nsh`, all targets, `native-probes`, warnings denied),
 Rust formatting, exact shared-pin checks and all 72 CI-wrapper tests also passed.
 

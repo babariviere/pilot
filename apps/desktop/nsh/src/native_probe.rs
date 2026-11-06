@@ -31,6 +31,88 @@ fn wait_for(label: &'static str) {
         std::thread::sleep(Duration::from_millis(30));
     }
 }
+fn composer_ready(window: &NSWindow, session: &str) -> bool {
+    let Some(input) = editor(window) else {
+        return false;
+    };
+    input_label(&input).as_deref() == Some(format!("Message in {session}").as_str())
+        && input.isEditable()
+        && input.window().as_deref() == Some(window)
+        && input.bounds().size.width > 0.
+        && input.bounds().size.height > 0.
+}
+fn native_evidence(window: &NSWindow) -> String {
+    let root = window.contentView().expect("content view");
+    let views = descendants(&root);
+    let mut report = format!("root={:?}, native views={}\n", root.bounds(), views.len());
+    use std::fmt::Write;
+    // Keep editor identity and selected rows even if the hierarchy is clipped.
+    for view in &views {
+        if view.isAccessibilitySelected() {
+            let label = NSAccessibility::accessibilityLabel(&**view).map(|s| s.to_string());
+            let _ = writeln!(report, "selected={label:?}");
+        }
+        if let Some(input) = view.downcast_ref::<NSTextView>() {
+            let _ = writeln!(
+                report,
+                "editor={:?} editable={} bounds={:?}",
+                input_label(input),
+                input.isEditable(),
+                input.bounds()
+            );
+        }
+    }
+    for (index, view) in views.iter().take(128).enumerate() {
+        let label = NSAccessibility::accessibilityLabel(&**view).map(|s| s.to_string());
+        let rect = view
+            .layer()
+            .map(|layer| layer.convertRect_toLayer(layer.bounds(), root.layer().as_deref()));
+        let input = view.downcast_ref::<NSTextView>().map(|input| {
+            (
+                input_label(input),
+                input.isEditable(),
+                NSTextInputClient::hasMarkedText(input),
+            )
+        });
+        let _ = writeln!(
+            report,
+            "{index}: {} label={label:?} rect={rect:?} input={input:?}",
+            view.class().name().to_string_lossy()
+        );
+    }
+    report
+}
+fn wait_composer(session: &str, deadline: Instant) -> Result<(), String> {
+    loop {
+        if on_main(|w| composer_ready(w, session)) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(on_main(native_evidence));
+        }
+        std::thread::sleep(Duration::from_millis(30));
+    }
+}
+fn open_chat(session: &str, capture: &Path) {
+    let started = Instant::now();
+    let before = on_main(|w| {
+        let before = native_evidence(w);
+        press(w, &format!("Open chat {session}"));
+        before
+    });
+    // A sidebar label and a fixed settle do not establish native editor readiness.
+    // Never repeat the click: a missing or wrong-chat editor must still fail.
+    if let Err(after) = wait_composer(session, started + Duration::from_secs(15)) {
+        let failure = capture.with_extension("readiness-failure.png");
+        eprintln!(
+            "native composer readiness failed: expected Message in {session}, elapsed={:?}\nbefore click:\n{before}\nafter wait:\n{after}\ncapture={}",
+            started.elapsed(),
+            failure.display()
+        );
+        on_main(|w| screenshot(w, &failure));
+        panic!("native composer for {session} unavailable");
+    }
+}
 fn press(window: &NSWindow, label: &str) {
     let root = window.contentView().expect("content view");
     let views = descendants(&root);
@@ -39,7 +121,12 @@ fn press(window: &NSWindow, label: &str) {
         .find(|v| {
             NSAccessibility::accessibilityLabel(&***v).is_some_and(|text| text.to_string() == label)
         })
-        .expect("native button");
+        .unwrap_or_else(|| {
+            panic!(
+                "native button {label} unavailable\n{}",
+                native_evidence(window)
+            )
+        });
     let surface = views
         .iter()
         .find(|v| v.class().name() == c"NshView")
@@ -101,7 +188,7 @@ pub(super) fn start(path: PathBuf, restart: bool, prompts: bool) {
             let settle = || std::thread::sleep(Duration::from_millis(350));
             if prompts {
                 wait_for("Open chat a");
-                on_main(|w| press(w, "Open chat a"));
+                open_chat("a", &path);
                 wait_for("Send answer");
                 settle();
                 on_main(|w| {
@@ -141,7 +228,7 @@ pub(super) fn start(path: PathBuf, restart: bool, prompts: bool) {
                 settle();
                 let question_capture = path.clone();
                 on_main(move |w| screenshot(w, &question_capture));
-                on_main(|w| press(w, "Open chat b"));
+                open_chat("b", &path);
                 wait_for("Allow database access");
                 settle();
                 let permission = path.with_file_name(format!(
@@ -153,7 +240,7 @@ pub(super) fn start(path: PathBuf, restart: bool, prompts: bool) {
                     press(w, "Deny database access");
                 });
                 settle();
-                on_main(|w| press(w, "Open chat coordinator"));
+                open_chat("coordinator", &path);
                 wait_for("Allow database access");
                 settle();
                 let permission = path.with_file_name(format!(
@@ -165,7 +252,7 @@ pub(super) fn start(path: PathBuf, restart: bool, prompts: bool) {
                     press(w, "Allow database access");
                 });
                 settle();
-                on_main(|w| press(w, "Open chat a"));
+                open_chat("a", &path);
                 wait_for("Send answer");
                 settle();
                 on_main(|w| {
@@ -195,8 +282,7 @@ pub(super) fn start(path: PathBuf, restart: bool, prompts: bool) {
             }
             if restart {
                 wait_for("Open chat b");
-                on_main(|w| press(w, "Open chat b"));
-                settle();
+                open_chat("b", &path);
                 on_main(move |w| {
                     assert_eq!(
                         editor(w).expect("restarted composer").string().to_string(),
@@ -209,8 +295,17 @@ pub(super) fn start(path: PathBuf, restart: bool, prompts: bool) {
                 return;
             }
             wait_for("Open chat a");
-            on_main(|w| press(w, "Open chat a"));
-            settle();
+            // Exercise the actual native predicate/deadline, without test retries.
+            let missing =
+                wait_composer("a", Instant::now()).expect_err("no composer before selection");
+            assert!(!missing.contains("Message in a"));
+            open_chat("a", &path);
+            let wrong =
+                wait_composer("b", Instant::now()).expect_err("wrong chat must not be ready");
+            assert!(
+                wrong.contains("Message in a"),
+                "wrong-chat failure records observed input"
+            );
             on_main(|w| {
                 let input = editor(w).expect("composer");
                 assert!(
@@ -271,8 +366,7 @@ pub(super) fn start(path: PathBuf, restart: bool, prompts: bool) {
                 undo.setGroupsByEvent(true);
             });
             settle();
-            on_main(|w| press(w, "Open chat b"));
-            settle();
+            open_chat("b", &path);
             on_main(|w| {
                 let input = editor(w).expect("second composer");
                 assert_eq!(input.string().to_string(), "");
@@ -286,22 +380,21 @@ pub(super) fn start(path: PathBuf, restart: bool, prompts: bool) {
                 }
             });
             settle();
-            on_main(|w| press(w, "Open chat a"));
-            settle();
+            open_chat("a", &path);
             on_main(|w| {
                 assert_eq!(
                     editor(w).expect("restored composer").string().to_string(),
                     EXACT
                 )
             });
+            wait_for("Send message");
             on_main(|w| press(w, "Send message"));
             wait_for("Stop reply");
             settle();
             on_main(|w| {
                 assert_eq!(editor(w).expect("sent composer").string().to_string(), "");
-                press(w, "Open chat b");
             });
-            settle();
+            open_chat("b", &path);
             on_main(|w| {
                 assert_eq!(
                     editor(w)
@@ -311,13 +404,12 @@ pub(super) fn start(path: PathBuf, restart: bool, prompts: bool) {
                     "independent draft\n保持"
                 )
             });
-            on_main(|w| press(w, "Open chat a"));
-            settle();
+            open_chat("a", &path);
+            wait_for("Stop reply");
             on_main(|w| press(w, "Stop reply"));
             settle();
-            on_main(move |w| screenshot(w, &path));
-            on_main(|w| press(w, "Open chat b"));
-            settle();
+            on_main(|w| screenshot(w, &path));
+            open_chat("b", &path);
             on_main(|w| {
                 assert_eq!(
                     editor(w).expect("saved composer").string().to_string(),
