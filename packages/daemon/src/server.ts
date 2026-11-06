@@ -84,6 +84,7 @@ import { insightsSetupDefaults } from "./insights-defaults.ts";
 import { InsightsEnable } from "./insights-enable.ts";
 import { admitInsightsOperation, insightsFindingsPage, isInsightsOperation } from "./insights-native.ts";
 import { InsightsReplacement } from "./insights-replacement.ts";
+import { InsightsWorkspace, isInsightsWorkspaceOperation } from "./insights-workspace.ts";
 import type { LiveUpdate, LiveUpdateIdentity, LiveUpdateService, LiveUpdateTarget } from "./live-update.ts";
 import { MachineInformationReader } from "./machine.ts";
 import { McpSetupError, McpSetupStore } from "./mcp-setup.ts";
@@ -692,6 +693,21 @@ export function createDaemonServer(
 					// No consent configuration, provider executor or review prerequisite producer is installed here.
 				})
 			: undefined;
+	const insightsWorkspace =
+		journal && missions && schedules
+			? new InsightsWorkspace({
+					home: _config.home,
+					host: journal.destination,
+					projects,
+					models,
+					store: missions.store.insightsWorkspace,
+					journal,
+					legacyGuard: () => {
+						sessions.assertNoLegacyInsights();
+						schedules.assertNoLegacyInsights(journal.destination);
+					},
+				})
+			: undefined;
 	const insightsEnable =
 		journal && missions && schedules
 			? new InsightsEnable({
@@ -735,6 +751,11 @@ export function createDaemonServer(
 				})
 			: undefined;
 	const admitOperationHeld = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
+		if (isInsightsWorkspaceOperation(op.kind)) {
+			if (!insightsWorkspace) throw new OperationRejected("App-owned Insights workspace unavailable");
+			return insightsWorkspace.admit(op);
+		}
+		if (isInsightsOperation(op.kind)) insightsWorkspace?.assertLegacyAllowed();
 		if (isWorkflowOperation(op.kind)) {
 			if (!workflowConfirmations) throw new OperationRejected("Workflow confirmations are unavailable");
 			return workflowConfirmations.admit(op);
@@ -1062,6 +1083,46 @@ export function createDaemonServer(
 			if (!session) throw new NotFound("Unknown session");
 			return json(res, 200, await repositories.file(session.cwd, url.searchParams.get("path") ?? ""));
 		}
+		if (parts[1] === "insights" && parts[2] === "workspace") {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
+			if (!insightsWorkspace) throw new ServiceUnavailable("App-owned Insights workspace unavailable");
+			const route = parts[3];
+			const allowed =
+				route === "preflight"
+					? ["projectId", "model", "thinking"]
+					: (route === "reports" || route === "findings") &&
+							(parts.length === 4 || (parts.length === 6 && parts[5] === "history"))
+						? ["cursor"]
+						: [];
+			for (const key of url.searchParams.keys())
+				if (!allowed.includes(key) || url.searchParams.getAll(key).length !== 1)
+					throw new HttpError(400, "Invalid workspace query");
+			if (parts.length === 3) return json(res, 200, await insightsWorkspace.status());
+			if (parts.length === 4 && route === "preflight")
+				return json(
+					res,
+					200,
+					await insightsWorkspace.preflight(
+						url.searchParams.get("projectId") ?? undefined,
+						url.searchParams.get("model") ?? undefined,
+						url.searchParams.get("thinking") ?? undefined,
+					),
+				);
+			if (parts.length === 4 && route === "settings") return json(res, 200, await insightsWorkspace.settings());
+			if (route === "reports" || route === "findings") {
+				const kind = route === "reports" ? "report" : "finding";
+				if (parts.length === 5) return json(res, 200, await insightsWorkspace.item(kind, parts[4]!));
+				const raw = url.searchParams.get("cursor") ?? "0",
+					cursor = Number(raw);
+				if (!/^\d+$/u.test(raw) || !Number.isSafeInteger(cursor))
+					throw new HttpError(400, "Invalid workspace cursor");
+				if (parts.length === 4) return json(res, 200, await insightsWorkspace.page(kind, cursor));
+				if (parts.length === 6 && parts[5] === "history")
+					return json(res, 200, await insightsWorkspace.history(kind, parts[4]!, cursor));
+			}
+			throw new HttpError(404, "Not found");
+		}
 		if (parts[1] === "insights" && parts[2] === "replacement" && parts.length === 4) {
 			res.setHeader("cache-control", "no-store");
 			if (!insightsReplacement) throw new ServiceUnavailable("Insights replacement is unavailable");
@@ -1184,6 +1245,7 @@ export function createDaemonServer(
 			if (
 				(operation?.kind === "repair-create" ||
 					isInsightsOperation(operation?.kind) ||
+					isInsightsWorkspaceOperation(operation?.kind) ||
 					isWorkflowOperation(operation?.kind)) &&
 				parts[2] !== "receipt"
 			) {
@@ -1191,6 +1253,7 @@ export function createDaemonServer(
 				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
 			}
 			if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
+			if (parts[2] !== "receipt" && isInsightsOperation(operation?.kind)) insightsWorkspace?.assertLegacyAllowed();
 			const receipt =
 				parts[2] === "receipt"
 					? await journal.lookup(operation)
@@ -1311,6 +1374,7 @@ export function createDaemonServer(
 					insightsSettings: insightsEnable && githubSetup ? 1 : undefined,
 					insightsApply: insightsApply && githubSetup ? 1 : undefined,
 					insightsReplacement: insightsReplacement && githubSetup ? 1 : undefined,
+					insightsWorkspace: insightsWorkspace && githubSetup ? 2 : undefined,
 					automations: chatSettings?.automationsEnabled() ? 1 : undefined,
 					guardedMissionConversion: missions ? true : undefined,
 					passiveMissionLifecycle: missions ? true : undefined,

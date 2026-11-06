@@ -28,6 +28,8 @@ export interface DaemonCapabilities {
 	insightsSettings?: 1;
 	insightsApply?: 1;
 	insightsReplacement?: 1;
+	/** App-owned passive projections and native reservation only, not activation. */
+	insightsWorkspace?: 2;
 	/** Bounded active-session cwd path candidates; no home/project-root fallback. */
 	sessionPathCandidates?: 1;
 	/** Failure-fenced passive next-attempt model preferences. */

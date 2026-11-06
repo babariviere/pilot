@@ -96,6 +96,7 @@ export class ScheduleService {
 	private sleeping = false;
 	private started = false;
 	private stopped = false;
+	private inventoryLoaded = false;
 	private tail: Promise<void> = Promise.resolve();
 	private queued = 0;
 	private sweepQueued = false;
@@ -111,6 +112,7 @@ export class ScheduleService {
 	}
 	async load(): Promise<void> {
 		await this.store.load(this.time.now());
+		this.inventoryLoaded = true;
 	}
 	start(): void {
 		if (this.started || this.stopped) return;
@@ -597,6 +599,14 @@ export class ScheduleService {
 	insightsReplacementAvailable(expectedHome: ScheduleHome): void {
 		this.insightsEnableAvailable(expectedHome);
 		this.store.assertSettled();
+	}
+	/** Passive reservation fence, independent of the global Automations opt-in. */
+	assertNoLegacyInsights(expectedHome: ScheduleHome): void {
+		this.assertOpen();
+		this.checkHome(expectedHome, false);
+		this.store.assertSettled();
+		if (!this.inventoryLoaded) throw new Conflict("schedule_inventory_unavailable");
+		if (this.store.hasInsightsIntent()) throw new Conflict("legacy_transition_required");
 	}
 	/** Exact previewed integration-owned rule only; never dismiss a terminal/manual row. */
 	cancelInsights(expected: ScheduledItem, expectedHome: ScheduleHome, revalidate: () => void): Promise<ScheduledItem> {

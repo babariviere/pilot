@@ -225,6 +225,7 @@ export class MissionService {
 		this.reviewProducerObserver = reviewProducerObserver;
 		this.store = store;
 		sessions.setInsightsBacklog(store.insights);
+		sessions.setInsightsWorkspaceStore(store.insightsWorkspace);
 		this.sessions = sessions;
 		this.projects = projects;
 		this.notices = new MissionNotices(store, sessions);

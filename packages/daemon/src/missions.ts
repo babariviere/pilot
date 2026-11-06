@@ -50,6 +50,7 @@ import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import { HUMAN_REVIEW_SCHEMA, HumanReviewStore } from "./human-review-store.ts";
 import { INSIGHTS_SCHEMA, InsightsBacklog } from "./insights-backlog.ts";
+import { INSIGHTS_WORKSPACE_SCHEMA, InsightsWorkspaceStore } from "./insights-workspace-store.ts";
 import type { SharedMissionGroup } from "./mission-catalog.ts";
 import {
 	type AllocationContextFence,
@@ -690,6 +691,15 @@ export class MissionStore {
 		},
 	});
 
+	/** App-owned Insights records never project to ordinary missions or tasks. */
+	readonly insightsWorkspace = new InsightsWorkspaceStore({
+		all: (sql, ...params) => this.all(sql, ...params),
+		one: (sql, ...params) => this.one(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work, true),
+		durable: () => this.durable(),
+	});
+
 	readonly workflowConfirmations = new WorkflowConfirmationStore({
 		one: (sql, ...params) => this.one(sql, ...params),
 		run: (sql, ...params) => this.run(sql, ...params),
@@ -764,6 +774,7 @@ export class MissionStore {
 		this.db.exec(SCHEMA);
 		this.db.exec(KNOWLEDGE_SCHEMA);
 		this.db.exec(INSIGHTS_SCHEMA);
+		this.db.exec(INSIGHTS_WORKSPACE_SCHEMA);
 		this.db.exec(WORKFLOW_CONFIRMATION_SCHEMA);
 		this.db.exec(HUMAN_REVIEW_SCHEMA);
 		this.db.exec(RETAINED_PROJECTION_SCHEMA);

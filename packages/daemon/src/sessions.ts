@@ -1598,6 +1598,8 @@ export class SessionManager {
 	private parkTimer?: ReturnType<typeof setTimeout>;
 	private missions?: SessionMissionBridge;
 	private insightsBacklog?: import("./insights-backlog.ts").InsightsBacklog;
+	private insightsWorkspaceStore?: import("./insights-workspace-store.ts").InsightsWorkspaceStore;
+	private insightsInventoryQualified = false;
 	private insightsBacklogCalls = 0;
 	private readonly insightsBacklogPending = new Map<string, Set<Promise<void>>>();
 	private readonly insightsStopEpochs = new Map<string, number>();
@@ -1606,6 +1608,17 @@ export class SessionManager {
 
 	setInsightsBacklog(backlog: import("./insights-backlog.ts").InsightsBacklog): void {
 		this.insightsBacklog = backlog;
+	}
+	setInsightsWorkspaceStore(store: import("./insights-workspace-store.ts").InsightsWorkspaceStore): void {
+		this.insightsWorkspaceStore = store;
+	}
+	/** Boolean refusal fence only. No summaries, source reads, startup or grant repair. */
+	assertNoLegacyInsights(): void {
+		if (!this.insightsInventoryQualified || this.closing) throw new Conflict("session_inventory_unavailable");
+		for (const meta of this.metas.values())
+			if (meta.role === "insights" || meta.insightsGrant) throw new Conflict("legacy_transition_required");
+		for (const admission of this.durableCreateAdmissions.values())
+			if (admission.insightsScope) throw new Conflict("legacy_creation_pending");
 	}
 	private bindingQueue: Promise<unknown> = Promise.resolve();
 	/** Explicit owners, indexed so PR sync does not scan every chat for each fresh head. */
@@ -3011,6 +3024,8 @@ ${run.excerpt}`,
 	}
 
 	private async loadAdmitted(): Promise<void> {
+		this.insightsInventoryQualified = false;
+		let inventoryQualified = true;
 		await mkdir(this.sessionsDir, { recursive: true, mode: 0o700 });
 		try {
 			const pause = JSON.parse(await readFile(join(this.home, "power-pause.json"), "utf8"));
@@ -3093,9 +3108,11 @@ ${run.excerpt}`,
 				if (legacyRefresh || childWork || migratedPermission || interruptedActions)
 					await this.save(meta, undefined, undefined, migratedPermission);
 			} catch (error) {
+				inventoryQualified = false;
 				console.warn(`pilotd: skipping unreadable session ${id}: ${error}`);
 			}
 		}
+		this.insightsInventoryQualified = inventoryQualified;
 		for (const meta of this.metas.values())
 			for (const url of meta.boundPullRequests ?? [])
 				if (!this.excludedPullRequest(meta, url)) this.boundPullRequestOwners.set(url.toLowerCase(), meta.id);
@@ -3849,6 +3866,7 @@ ${run.excerpt}`,
 		deferInput = false,
 	): Promise<SessionSummary> {
 		this.insightsBacklog?.replacements.assertCreate(setup.projectId, setup.missionId, targetId, operationId);
+		if (this.insightsWorkspaceStore?.hasOwner(resolve(this.home))) throw new Conflict("app_owned_workspace_reserved");
 		this.sharing?.assertCreate(targetId, operationId);
 		if (
 			!ID_PATTERN.test(targetId) ||
@@ -4105,6 +4123,7 @@ ${run.excerpt}`,
 
 	private assertInsightsBinding(grant: InsightsGrant): void {
 		validateInsightsGrant(grant);
+		if (this.insightsWorkspaceStore?.hasOwner(resolve(this.home))) throw new Conflict("app_owned_workspace_reserved");
 		this.insightsBacklog?.replacements.assertNotRetired(grant.reportSessionId);
 		if (
 			!grant.enabled ||

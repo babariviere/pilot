@@ -60,6 +60,11 @@ export class ScheduleStore {
 		if (this.closed || this.broken || this.pending.size)
 			throw new Conflict("Schedule storage busy or unavailable; refresh before replacement");
 	}
+	hasInsightsIntent(): boolean {
+		for (const item of this.items.values())
+			if (item.insightsDestination || item.insightsEnableOperationId || item.insightsReview) return true;
+		return false;
+	}
 	/** Large HTTP/WS indexes are encoded off the daemon event loop. */
 	snapshot(projectId?: string, ws = false): Promise<string> {
 		return this.rpc("snapshot", { expected: { projectId, ws } });

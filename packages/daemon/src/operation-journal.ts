@@ -74,6 +74,7 @@ export class OperationJournal {
 	private readonly retiredFiles = new Set<string>();
 	private queue: Promise<unknown> = Promise.resolve();
 	private queued = 0;
+	private legacyInsightsReservations = 0;
 	private fault?: unknown;
 	private readonly running = new Map<string, Promise<OperationReceipt>>();
 	private readonly directory: string;
@@ -285,6 +286,23 @@ export class OperationJournal {
 		});
 	}
 	/** Retained intent is a refusal fence, not proof a resource still exists or a grant remains valid. */
+	async legacyInsightsGuard(): Promise<() => void> {
+		await this.serial(() => this.init());
+		// Check live reservations synchronously again at the owner transaction boundary.
+		// A prior absent observation is never authority to ignore a later v1 reservation.
+		return () => {
+			if (this.fault) throw new OperationConflict("Insights journal is unavailable");
+			if (this.legacyInsightsReservations) throw new OperationConflict("insights_journal_busy_refresh");
+			for (const { operation, receipt } of this.records.values())
+				if (
+					operation.kind.startsWith("insights-") &&
+					!operation.kind.startsWith("insights-workspace-") &&
+					receipt.state !== "rejected"
+				)
+					throw new OperationConflict("legacy_transition_required");
+		};
+	}
+	/** Retained intent is a refusal fence, not proof a resource still exists or a grant remains valid. */
 	async retainedTargets(
 		kinds: readonly string[],
 		fields: Readonly<Record<string, string>>,
@@ -320,6 +338,9 @@ export class OperationJournal {
 	}
 	private async reserveEntry(op: DurableOperation): Promise<{ receipt: OperationReceipt; firstEntry: boolean }> {
 		op = structuredClone(op);
+		const legacyInsights =
+			typeof op.kind === "string" && op.kind.startsWith("insights-") && !op.kind.startsWith("insights-workspace-");
+		if (legacyInsights) this.legacyInsightsReservations++;
 		return this.serial(async () => {
 			await this.init();
 			await this.cleanRetired();
@@ -341,6 +362,8 @@ export class OperationJournal {
 			this.records.set(op.operationId, record);
 			this.sequences.set(`${streamKey(op)}:${op.sequence}`, op.operationId);
 			return { receipt: structuredClone(record.receipt), firstEntry: true };
+		}).finally(() => {
+			if (legacyInsights) this.legacyInsightsReservations--;
 		});
 	}
 	async reserve(op: DurableOperation): Promise<OperationReceipt> {

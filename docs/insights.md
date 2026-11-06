@@ -2,6 +2,9 @@
 
 **Status: weekly Insights can be enabled from Automations. Review settings are editable; Apply uses them.**
 
+The app-owned workspace backend is a separate foundation. It does not yet replace these
+screens or activate a report. See the [v2 contract](technical/insights-workspace.md).
+
 To turn it on, open **Automations → Weekly Insights…**. One confirmation shows the findings
 backlog, the schedule (Fridays 18:00, Europe/Paris), the exact model, what it reads and the
 approximate budget. **Enable** creates or reuses the report chat and its weekly automation.
