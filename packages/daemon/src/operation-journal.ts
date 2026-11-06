@@ -286,6 +286,65 @@ export class OperationJournal {
 		});
 	}
 	/** Retained intent is a refusal fence, not proof a resource still exists or a grant remains valid. */
+	async legacyTransitionCapture(projectId: string, missionId: string, oldId: string) {
+		await this.serial(() => this.init());
+		const select = () => {
+			if (this.fault || this.legacyInsightsReservations)
+				throw new OperationConflict("legacy_journal_busy_or_unavailable");
+			const records: StoredOperation[] = [];
+			for (const record of this.records.values()) {
+				const { operation: op, receipt } = record;
+				if (receipt.state === "rejected" || op.kind.startsWith("insights-workspace-")) continue;
+				if (op.targetId !== oldId) {
+					if (op.kind.startsWith("insights-"))
+						throw new OperationConflict("other_legacy_operation_requires_combined_recovery");
+					continue;
+				}
+				if (records.length === 32) throw new OperationConflict("legacy_operation_snapshot_capacity");
+				records.push(record);
+			}
+			records.sort((a, b) =>
+				a.operation.operationId < b.operation.operationId
+					? -1
+					: a.operation.operationId > b.operation.operationId
+						? 1
+						: 0,
+			);
+			return records.map((record) => ({
+				operationId: record.operation.operationId,
+				original: JSON.stringify(record),
+			}));
+		};
+		const envelopes = select(),
+			digest = payloadHash(JSON.stringify(envelopes));
+		const guard = () => {
+			if (payloadHash(JSON.stringify(select())) !== digest)
+				throw new OperationConflict("legacy_operations_changed_during_transition");
+		};
+		const references = await this.replacementReferences(projectId, missionId, oldId);
+		guard();
+		return { envelopes, references, hash: digest, guard };
+	}
+	/** Archived receipts never grant permission. This only refuses later unqualified legacy effects. */
+	async transferredLegacyGuard(allowed: Array<{ operationId: string; original: string }>, oldIds: string[]) {
+		await this.serial(() => this.init());
+		const originals = new Map(allowed.map((entry) => [entry.operationId, entry.original]));
+		return () => {
+			if (this.fault || this.legacyInsightsReservations)
+				throw new OperationConflict("legacy_journal_busy_or_unavailable");
+			for (const record of this.records.values()) {
+				if (record.operation.kind.startsWith("insights-workspace-") || record.receipt.state === "rejected")
+					continue;
+				if (!record.operation.kind.startsWith("insights-") && !oldIds.includes(record.operation.targetId)) continue;
+				if (
+					!originals.has(record.operation.operationId) ||
+					originals.get(record.operation.operationId) !== JSON.stringify(record)
+				)
+					throw new OperationConflict("unexpected_legacy_operation_after_transfer");
+			}
+		};
+	}
+	/** Retained intent is a refusal fence, not proof a resource still exists or a grant remains valid. */
 	async legacyInsightsGuard(): Promise<() => void> {
 		await this.serial(() => this.init());
 		// Check live reservations synchronously again at the owner transaction boundary.

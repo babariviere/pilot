@@ -130,7 +130,7 @@ import { ModelCatalog } from "./models.ts";
 import { NativeDiagnosticsStore } from "./native-diagnostics.ts";
 import { NativeReviewReader, NoRetainedBinding } from "./native-review.ts";
 import { reasonLine, stuckPullRequestReason } from "./needs-you-reason.ts";
-import { canonicalJSON } from "./operation-journal.ts";
+import { canonicalJSON, payloadHash } from "./operation-journal.ts";
 import { PiReload } from "./pi-reload.ts";
 import {
 	AUTOMATION_FOLLOW_UP_ATTEMPT_LIMIT,
@@ -440,6 +440,7 @@ interface SessionMeta extends OutcomeMeta {
 	role?: import("@pilot/protocol").SessionRole;
 	/** Host-minted, never copied from SpawnRequest or inherited by children. */
 	insightsGrant?: InsightsGrant;
+	insightsOwner?: Pick<import("./insights-owner-store.ts").InsightsOwnerExecution, "authority" | "binding">;
 	/** Private setup fence. A crash before the final durable save cannot reopen authority. */
 	insightsSetupPending?: true;
 	/** Persisted source-read fence for a bounded turn, including daemon/worker restart. */
@@ -1599,10 +1600,16 @@ export class SessionManager {
 	private missions?: SessionMissionBridge;
 	private insightsBacklog?: import("./insights-backlog.ts").InsightsBacklog;
 	private insightsWorkspaceStore?: import("./insights-workspace-store.ts").InsightsWorkspaceStore;
+	private insightsOwnerStore?: import("./insights-owner-store.ts").InsightsOwnerStore;
+	private insightsTransitionStore?: import("./insights-transition-store.ts").InsightsTransitionStore;
+	private readonly insightsOwnerConfigurationWorkers = new WeakSet<SessionWorker>();
+	private readonly insightsOwnerReady = new WeakMap<SessionWorker, Promise<void>>();
 	private insightsInventoryQualified = false;
 	private insightsBacklogCalls = 0;
 	private readonly insightsBacklogPending = new Map<string, Set<Promise<void>>>();
 	private readonly insightsStopEpochs = new Map<string, number>();
+	/** Confirmation freshness only, never durable grant identity or incarnation inferred from daemon IDs. */
+	readonly insightsAdmissionEpoch = randomUUID();
 	private readonly insightsReviewPending = new Set<Promise<unknown>>();
 	private insightsReviewClosing?: Promise<void>;
 
@@ -1612,11 +1619,459 @@ export class SessionManager {
 	setInsightsWorkspaceStore(store: import("./insights-workspace-store.ts").InsightsWorkspaceStore): void {
 		this.insightsWorkspaceStore = store;
 	}
+	setInsightsOwnerStore(store: import("./insights-owner-store.ts").InsightsOwnerStore): void {
+		this.insightsOwnerStore = store;
+	}
+	setInsightsTransitionStore(store: import("./insights-transition-store.ts").InsightsTransitionStore): void {
+		this.insightsTransitionStore = store;
+	}
+	/** Host-only, independent of all mission authority. */
+	insightsOwnerLease(
+		a: import("./insights-workspace-store.ts").InsightsWorkspaceAuthority,
+	): import("./insights-workspace-store.ts").InsightsWorkspaceAdmission {
+		const snapshot = this.insightsWorkspaceStore?.current(a);
+		if (snapshot?.state !== "reserved") throw new Conflict("owner_workspace_not_reserved");
+		const revalidate = () => {
+			if (
+				this.closing ||
+				a.home !== resolve(this.home) ||
+				this.projects.require(a.owner.projectId).path !== a.projectPath ||
+				canonicalJSON(a.owner.expectedHome) !== canonicalJSON(this.diagnosticHost) ||
+				canonicalJSON(this.insightsWorkspaceStore?.current(a)) !== canonicalJSON(snapshot)
+			)
+				throw new Conflict("owner_authority_changed");
+		};
+		revalidate();
+		return { authority: a, revision: snapshot.revision, revalidate };
+	}
+	private assertInsightsOwner(meta: SessionMeta, configurationOnly = false) {
+		const saved = meta.insightsOwner;
+		if (
+			!saved ||
+			meta.insightsGrant ||
+			meta.role !== "insights" ||
+			meta.mode !== "ask" ||
+			meta.archivedAt !== undefined ||
+			meta.failure ||
+			meta.projectId !== saved.authority.owner.projectId ||
+			meta.id !== saved.authority.owner.reportSessionId ||
+			this.missions?.membership(meta.id)
+		)
+			throw new Conflict("owner_profile_unavailable");
+		this.insightsOwnerLease(saved.authority).revalidate();
+		const current = this.insightsOwnerStore?.current(saved.authority);
+		if (
+			!(current?.state === "active" || (configurationOnly && current?.state === "configuring")) ||
+			!current.binding.enabled ||
+			canonicalJSON(current.binding) !== canonicalJSON(saved.binding) ||
+			meta.model !== current.settings.model ||
+			meta.thinking !== (current.effectiveThinking ?? current.thinking)
+		)
+			throw new Conflict("owner_execution_not_active");
+		return saved.binding;
+	}
+	insightsOwnerAdmission(
+		id: string,
+		worker?: SessionWorker,
+	): import("./insights-admission.ts").InsightsOwnerAdmission {
+		const meta = this.require(id);
+		this.validateMode(meta);
+		const binding = structuredClone(this.assertInsightsOwner(meta));
+		const epoch = this.insightsStopEpochs.get(id);
+		const revalidate = () => {
+			if (
+				epoch !== this.insightsStopEpochs.get(id) ||
+				this.require(id) !== meta ||
+				(worker && this.workers.get(id) !== worker) ||
+				canonicalJSON(binding) !== canonicalJSON(this.assertInsightsOwner(meta))
+			)
+				throw new Conflict("owner_admission_changed");
+		};
+		revalidate();
+		return { binding, revalidate };
+	}
+	private executionAdmission(id: string, worker?: SessionWorker) {
+		return this.require(id).insightsOwner
+			? this.insightsOwnerAdmission(id, worker)
+			: worker
+				? this.insightsAdmission(id, worker)
+				: this.insightsHostAdmission(id);
+	}
+	private ownerAccountingAdmission(id: string, worker: SessionWorker) {
+		if (!this.insightsOwnerConfigurationWorkers.has(worker)) return this.executionAdmission(id, worker);
+		const meta = this.require(id),
+			binding = structuredClone(this.assertInsightsOwner(meta, true)),
+			epoch = this.insightsStopEpochs.get(id);
+		const revalidate = () => {
+			if (
+				this.workers.get(id) !== worker ||
+				epoch !== this.insightsStopEpochs.get(id) ||
+				canonicalJSON(this.assertInsightsOwner(meta, true)) !== canonicalJSON(binding)
+			)
+				throw new Conflict("owner_configuration_accounting_changed");
+		};
+		revalidate();
+		return { binding, revalidate };
+	}
+	/** Creates an inert report. Provisioning authority cannot dispatch input. */
+	async spawnInsightsOwnerDurable(
+		execution: import("./insights-owner-store.ts").InsightsOwnerExecution,
+		operationId: string,
+	): Promise<SessionSummary> {
+		const { authority, binding, settings, thinking } = execution;
+		const lease = this.insightsOwnerLease(authority);
+		lease.revalidate();
+		if (
+			execution.state !== "provisioning" ||
+			canonicalJSON(this.insightsOwnerStore?.current(authority)) !== canonicalJSON(execution)
+		)
+			throw new Conflict("owner_creation_changed");
+		const id = authority.owner.reportSessionId;
+		const key = id.toLowerCase();
+		if (this.durableCreateAdmissions.has(key) || this.metas.has(id))
+			throw new Conflict("owner_creation_already_entered");
+		this.sharing?.assertCreate(id, operationId);
+		const end = this.updateGate.begin();
+		const result = this.spawnAdmitted(
+			{
+				projectId: authority.owner.projectId,
+				model: settings.model,
+				thinking,
+				message: "Insights report. Await a confirmed review.",
+				title: "Insights",
+				mode: "ask",
+				role: "insights",
+			},
+			false,
+			undefined,
+			{ targetId: id, operationId },
+			undefined,
+			undefined,
+			undefined,
+			true,
+			{ authority, binding },
+		);
+		this.durableCreateAdmissions.set(key, { targetId: id, operationId, result });
+		try {
+			const created = await result;
+			lease.revalidate();
+			const saved = JSON.parse(await readFile(join(this.dir(id), "meta.json"), "utf8")) as SessionMeta;
+			lease.revalidate();
+			if (
+				saved.createOperationId !== operationId ||
+				saved.pending?.length ||
+				canonicalJSON(saved.insightsOwner) !== canonicalJSON({ authority, binding })
+			)
+				throw new Conflict("owner_create_receipt_unavailable");
+			return created;
+		} finally {
+			this.durableCreateAdmissions.delete(key);
+			end();
+		}
+	}
+	insightsOwnerStatus(id: string) {
+		const meta = this.metas.get(id);
+		if (!meta?.insightsOwner) return undefined;
+		let available = false;
+		try {
+			this.assertInsightsOwner(meta);
+			available = true;
+		} catch {
+			/* Preserve unavailable identity. */
+		}
+		return { owner: meta.insightsOwner.authority.owner, available };
+	}
+	insightsOwnerControl(id: string, operationId?: string) {
+		const meta = this.require(id),
+			generation = meta.inputGeneration ?? 0,
+			epoch = this.insightsStopEpochs.get(id);
+		if (!meta.insightsOwner || (operationId && (meta.createOperationId !== operationId || generation !== 0)))
+			throw new Conflict("owner_control_identity_changed");
+		const revalidateAt = (expectedGeneration: number) => {
+			this.insightsOwnerLease(meta.insightsOwner!.authority).revalidate();
+			if (
+				this.require(id) !== meta ||
+				(meta.inputGeneration ?? 0) !== expectedGeneration ||
+				this.insightsStopEpochs.get(id) !== epoch ||
+				meta.archivedAt !== undefined ||
+				meta.failure
+			)
+				throw new Conflict("owner_control_stop_fence_changed");
+		};
+		const revalidate = () => revalidateAt(generation);
+		revalidate();
+		return { inputGeneration: generation, revalidate, revalidateAt };
+	}
+	insightsOwnerScheduleBounds(
+		id: string,
+		revision: number,
+		recurrence?: import("@pilot/protocol").ScheduleRecurrence,
+	) {
+		const admission = this.insightsOwnerAdmission(id);
+		const current = this.insightsOwnerStore!.current(this.require(id).insightsOwner!.authority)!;
+		if (
+			current.settings.revision !== revision ||
+			(recurrence && canonicalJSON(recurrence) !== canonicalJSON(current.settings.settings.recurrence))
+		)
+			throw new Conflict("owner_settings_changed");
+		admission.revalidate();
+		return current.settings.settings.bounds;
+	}
+	insightsOwnerApplySnapshot(id: string) {
+		const meta = this.require(id),
+			control = this.insightsOwnerControl(id),
+			worker = this.workers.get(id);
+		if (
+			!meta.insightsOwner ||
+			meta.insightsGrant ||
+			this.missions?.membership(id) ||
+			!meta.model ||
+			meta.nextAttemptModel ||
+			meta.inputError ||
+			worker?.compacting ||
+			worker?.toolsRunning ||
+			worker?.runningJobs?.some((j) => j.state === "running")
+		)
+			throw new Conflict("owner_apply_report_unavailable");
+		this.assertModelIdle(meta);
+		control.revalidate();
+		return {
+			reportInputGeneration: control.inputGeneration,
+			model: meta.model,
+			...(meta.thinking === undefined ? {} : { thinking: meta.thinking }),
+			reportBindingHash: payloadHash(canonicalJSON(meta.insightsOwner)),
+		};
+	}
+	/** Native legacy projection only. Disabled/archived profiles remain readable, never executable. */
+	insightsLegacyIdentity(id: string, projectId: string, missionId: string) {
+		const meta = this.require(id);
+		this.validateMode(meta);
+		const grant = meta.insightsGrant;
+		validateInsightsGrant(grant);
+		if (
+			meta.insightsOwner ||
+			meta.role !== "insights" ||
+			grant.reportSessionId !== id ||
+			grant.projectId !== projectId ||
+			meta.projectId !== projectId ||
+			grant.missionId !== missionId ||
+			grant.home !== resolve(this.home) ||
+			grant.projectPath !== this.projects.require(projectId).path ||
+			canonicalJSON(grant.host) !== canonicalJSON(this.diagnosticHost)
+		)
+			throw new Conflict("legacy_projection_identity_unavailable");
+		return {
+			grantId: grant.grantId,
+			grantRevision: grant.revision,
+			enabled: grant.enabled,
+			archived: meta.archivedAt !== undefined,
+			inputGeneration: meta.inputGeneration ?? 0,
+			model: meta.model ?? null,
+			thinking: meta.thinking ?? null,
+			bindingHash: payloadHash(canonicalJSON(grant)),
+		};
+	}
+	/** Transfer requires an exited executor and drained admissions, not merely a Stop response. */
+	insightsLegacyStorageDirectory(id: string, projectId: string, missionId: string): string {
+		this.insightsLegacyQuiescence(id, projectId, missionId);
+		return join(this.dir(id), "durable");
+	}
+	insightsLegacyQuiescence(id: string, projectId: string, missionId: string) {
+		const identity = this.insightsLegacyIdentity(id, projectId, missionId),
+			meta = this.require(id);
+		if (
+			!this.insightsInventoryQualified ||
+			this.closing ||
+			identity.enabled ||
+			meta.working ||
+			meta.initializing ||
+			meta.preparing ||
+			meta.kernelRestartPending ||
+			meta.pending?.length ||
+			this.workers.has(id) ||
+			this.starting.has(id) ||
+			this.parking.has(id) ||
+			this.saving.has(id) ||
+			this.sending.has(id) ||
+			this.changingModels.has(id) ||
+			this.durableCreateAdmissions.has(id.toLowerCase()) ||
+			this.newSessionAdmissions.has(id.toLowerCase()) ||
+			this.insightsBacklogPending.get(id)?.size ||
+			this.insightsAccounting.get(id)?.size ||
+			this.insightsReviewPending.size ||
+			[...this.diagnosticContextReads.keys()].some((key) => key.startsWith(`${id}:`))
+		)
+			throw new Conflict("legacy_executor_not_quiescent_or_grant_not_revoked");
+		this.insightsBacklog?.replacements.assertNoUncertainReview(id);
+		return identity;
+	}
+	async closeInsightsOwnerIdle(id: string, guard: () => void): Promise<void> {
+		guard();
+		this.insightsOwnerApplySnapshot(id);
+		const worker = this.workers.get(id);
+		if (worker) {
+			if (!worker.hasChildren || (await worker.hasChildren()))
+				throw new Conflict("owner_executor_children_unknown_or_running");
+			guard();
+			this.insightsOwnerApplySnapshot(id);
+			if (this.workers.get(id) !== worker) throw new Conflict("owner_worker_changed");
+			this.workers.delete(id);
+			this.parked.add(worker);
+			await worker.close();
+		}
+		await this.drainInsightsOwner(id);
+		guard();
+	}
+	async admitInsightsOwnerBinding(
+		id: string,
+		expected: ReturnType<SessionManager["insightsOwnerApplySnapshot"]>,
+		guard: () => void,
+	): Promise<void> {
+		guard();
+		if (canonicalJSON(this.insightsOwnerApplySnapshot(id)) !== canonicalJSON(expected) || this.workers.has(id))
+			throw new Conflict("owner_admission_snapshot_changed");
+		const meta = this.require(id),
+			current = this.insightsOwnerStore!.current(meta.insightsOwner!.authority);
+		if (current?.state !== "configuring") throw new Conflict("owner_apply_not_entered");
+		meta.insightsOwner = { authority: current.authority, binding: structuredClone(current.binding) };
+		await this.save(meta, undefined, undefined, true);
+		guard();
+		const saved = JSON.parse(await readFile(join(this.dir(id), "meta.json"), "utf8")) as SessionMeta;
+		guard();
+		if (canonicalJSON(saved.insightsOwner) !== canonicalJSON(meta.insightsOwner))
+			throw new Conflict("owner_admission_ack_unavailable");
+	}
+	async configureInsightsOwnerModel(
+		id: string,
+		model: string,
+		thinking: string | undefined,
+		catalog: Pick<ModelCatalog, "list">,
+		guard: (generation: number) => void,
+	): Promise<void> {
+		const initial = this.insightsOwnerApplySnapshot(id);
+		await this.changeModel(id, model, catalog, thinking, { guard, preserveThinking: true });
+		const current = this.insightsOwnerApplySnapshot(id);
+		if (
+			current.model !== model ||
+			current.reportInputGeneration !== initial.reportInputGeneration + 1 ||
+			(thinking !== undefined && current.thinking !== thinking)
+		)
+			throw new Conflict("owner_model_ack_differs_from_confirmation");
+		guard(current.reportInputGeneration);
+	}
+	async dispatchInsightsOwnerReview(id: string, input: import("@pilot/protocol").InsightsReviewDispatch) {
+		const end = this.updateGate.begin();
+		const work = this.dispatchInsightsOwnerReviewAdmitted(id, structuredClone(input));
+		this.insightsReviewPending.add(work);
+		try {
+			return await work;
+		} finally {
+			this.insightsReviewPending.delete(work);
+			end();
+		}
+	}
+	private async dispatchInsightsOwnerReviewAdmitted(
+		id: string,
+		request: import("@pilot/protocol").InsightsReviewDispatch,
+	) {
+		const admission = this.insightsOwnerAdmission(id);
+		const reviews = this.insightsOwnerStore!.reviews;
+		const execution = this.insightsOwnerStore!.current(this.require(id).insightsOwner!.authority)!;
+		this.insightsOwnerScheduleBounds(id, request.settingsRevision ?? 0);
+		const retiredReport = this.insightsTransitionStore?.retiredReportId(execution.authority.owner.workspaceId);
+		const allowed = (sourceId: string) => {
+			if (sourceId === retiredReport) return false;
+			const source = this.metas.get(sourceId);
+			if (!source || sourceId === id) return false;
+			if (source.projectId && !this.projects.get(source.projectId)) return false;
+			return insightsSourceAllowed(execution.settings.settings, source);
+		};
+		if (!(await reviews.reserve(admission, request))) return (await reviews.status(admission, request.runId))!;
+		let attempted = false;
+		try {
+			await reviews.prepare(
+				admission,
+				request,
+				async (selector) => {
+					admission.revalidate();
+					const result = await this.readDiagnosticContext(
+						{ ...selector, host: admission.binding.host },
+						this.shutdownSignal.signal,
+						allowed,
+					);
+					admission.revalidate();
+					return result;
+				},
+				allowed,
+			);
+			reviews.assertActive(admission, request.runId);
+			const requestId = `insights-review:${request.runId}`;
+			if (!this.canSendNotice(id, requestId)) throw new Conflict("Owner report is not idle");
+			const meta = this.require(id);
+			this.sending.set(id, 1);
+			try {
+				meta.insightsReviewRun = request.runId;
+				meta.pending ??= [];
+				meta.pending.push({
+					type: "input",
+					requestId,
+					mode: "followUp",
+					onlyIfIdle: true,
+					content: `Review the bounded host-prepared evidence for ${request.windowStart} through ${request.windowEnd}. Run/report key: ${request.runId}. Read every insights_backlog review_context page. Revisit prior findings with list/get. Save one partial report with this exact run key and expectedRevision=0. Dates are context, not certified coverage. Findings grant no implementation authority.`,
+				});
+				attempted = true;
+				await this.save(meta, undefined, undefined, true);
+				reviews.assertActive(admission, request.runId);
+				const rejected = await this.start(id, true);
+				if (rejected.has(requestId) || meta.pending?.some((c) => c.requestId === requestId))
+					throw new Conflict("Owner input placement unknown");
+				await reviews.sent(admission, request.runId);
+			} finally {
+				this.sending.delete(id);
+			}
+		} catch {
+			await reviews.interrupt(
+				id,
+				attempted ? "unknown" : "interrupted",
+				"Owner review interrupted; never replay",
+				request.runId,
+			);
+		}
+		return (await reviews.status(admission, request.runId))!;
+	}
+	async insightsOwnerReviewStatus(id: string, runId: string) {
+		return this.insightsOwnerStore!.reviews.status(this.insightsOwnerAdmission(id), runId);
+	}
+	async insightsOwnerBacklog(id: string, input: unknown, worker?: SessionWorker) {
+		const admission = this.insightsOwnerAdmission(id, worker);
+		const lease = this.insightsOwnerLease(this.require(id).insightsOwner!.authority);
+		return this.insightsOwnerStore!.backlog(this.insightsWorkspaceStore!, lease, admission, input);
+	}
+	async drainInsightsOwner(id: string): Promise<void> {
+		await Promise.allSettled(this.insightsBacklogPending.get(id) ?? []);
+		await Promise.all(this.insightsAccounting.get(id) ?? []);
+		await this.saving.get(id);
+		if (this.get(id)?.working || this.starting.has(id) || this.sending.has(id) || this.changingModels.has(id))
+			throw new Conflict("owner_execution_not_quiescent");
+	}
 	/** Boolean refusal fence only. No summaries, source reads, startup or grant repair. */
 	assertNoLegacyInsights(): void {
 		if (!this.insightsInventoryQualified || this.closing) throw new Conflict("session_inventory_unavailable");
 		for (const meta of this.metas.values())
-			if (meta.role === "insights" || meta.insightsGrant) throw new Conflict("legacy_transition_required");
+			if ((meta.role === "insights" && !meta.insightsOwner) || meta.insightsGrant)
+				throw new Conflict("legacy_transition_required");
+		for (const admission of this.durableCreateAdmissions.values())
+			if (admission.insightsScope) throw new Conflict("legacy_creation_pending");
+	}
+	/** A committed transfer denies the old identity; it does not authorize another old executor. */
+	assertOnlyTransferredLegacy(selector: import("@pilot/protocol").InsightsLegacySelector): void {
+		if (!this.insightsInventoryQualified || this.closing) throw new Conflict("session_inventory_unavailable");
+		for (const meta of this.metas.values()) {
+			if (!((meta.role === "insights" && !meta.insightsOwner) || meta.insightsGrant)) continue;
+			if (meta.id !== selector.reportSessionId)
+				throw new Conflict("other_legacy_executor_requires_combined_recovery");
+			this.insightsLegacyQuiescence(meta.id, selector.projectId, selector.missionId);
+		}
 		for (const admission of this.durableCreateAdmissions.values())
 			if (admission.insightsScope) throw new Conflict("legacy_creation_pending");
 	}
@@ -3865,6 +4320,7 @@ ${run.excerpt}`,
 		operationId: string,
 		deferInput = false,
 	): Promise<SessionSummary> {
+		this.insightsTransitionStore?.assertScope(setup.projectId, setup.missionId);
 		this.insightsBacklog?.replacements.assertCreate(setup.projectId, setup.missionId, targetId, operationId);
 		if (this.insightsWorkspaceStore?.hasOwner(resolve(this.home))) throw new Conflict("app_owned_workspace_reserved");
 		this.sharing?.assertCreate(targetId, operationId);
@@ -3985,6 +4441,7 @@ ${run.excerpt}`,
 		this.insightsBacklog.replacements.assertNoUncertainReview(oldId);
 	}
 	insightsReplacementTarget(id: string): void {
+		this.insightsTransitionStore?.assertTarget(id);
 		this.insightsBacklog?.replacements.assertNotRetired(id);
 	}
 
@@ -4123,6 +4580,7 @@ ${run.excerpt}`,
 
 	private assertInsightsBinding(grant: InsightsGrant): void {
 		validateInsightsGrant(grant);
+		this.insightsTransitionStore?.assertTarget(grant.reportSessionId);
 		if (this.insightsWorkspaceStore?.hasOwner(resolve(this.home))) throw new Conflict("app_owned_workspace_reserved");
 		this.insightsBacklog?.replacements.assertNotRetired(grant.reportSessionId);
 		if (
@@ -4217,11 +4675,13 @@ ${run.excerpt}`,
 	/** Passive scheduler wakeups, not a source-chat subscription or a dispatch authorization. */
 	onInsightsReviewChange(listener: () => void): () => void {
 		const stopReview = this.insightsBacklog?.reviews.onChange(listener);
+		const stopOwner = this.insightsOwnerStore?.reviews.onChange(listener);
 		const stopIdle = this.onChange((session) => {
 			if (session.role === "insights" && !session.working) listener();
 		});
 		return () => {
 			stopReview?.();
+			stopOwner?.();
 			stopIdle();
 		};
 	}
@@ -4346,7 +4806,7 @@ ${run.excerpt}`,
 	/** Passive public state. Never starts workers or repairs an unavailable grant. */
 	insightsStatus(id: string): import("@pilot/protocol").InsightsStatus | undefined {
 		const meta = this.metas.get(id);
-		if (meta?.role !== "insights") return undefined;
+		if (meta?.role !== "insights" || meta.insightsOwner) return undefined;
 		let available = false;
 		try {
 			this.assertInsightsCurrent(meta);
@@ -4375,6 +4835,8 @@ ${run.excerpt}`,
 	}
 
 	private async insightsHistory(callerId: string, worker: SessionWorker, input: unknown, signal?: AbortSignal) {
+		if (this.require(callerId).insightsOwner)
+			throw new Conflict("Owner execution uses only bounded host-prepared review_context evidence");
 		const admission = this.insightsAdmission(callerId, worker);
 		if (this.insightsBacklog?.settings.current(admission))
 			throw new Conflict("Configured Insights uses only bounded host-prepared review_context evidence");
@@ -6584,7 +7046,7 @@ ${run.excerpt}`,
 		model: string,
 		catalog: Pick<ModelCatalog, "list"> = this.modelCatalog,
 		thinking?: string,
-		configuration?: { guard(generation: number): void },
+		configuration?: { guard(generation: number): void; preserveThinking?: boolean },
 	): Promise<SessionSummary> {
 		const end = this.updateGate.begin();
 		let locked = false;
@@ -6597,6 +7059,7 @@ ${run.excerpt}`,
 		try {
 			const meta = this.require(id);
 			this.assertNotContinued(meta);
+			if (meta.insightsOwner && !configuration) throw new Conflict("owner_model_changes_require_confirmed_apply");
 			if (typeof model !== "string" || !model.trim()) throw new Error("model is required");
 			if (this.closing) throw new Error("pilotd is shutting down");
 			if (meta.archivedAt !== undefined)
@@ -6622,6 +7085,15 @@ ${run.excerpt}`,
 			const worker = await this.ensureWorker(id, !!configuration);
 			if (configuration && reopening) configurationWorker = worker;
 			await worker.ready;
+			if (configuration?.preserveThinking && meta.insightsOwner) {
+				await this.insightsOwnerReady.get(worker);
+				if (thinking === undefined) {
+					const execution = this.insightsOwnerStore!.current(meta.insightsOwner.authority)!;
+					thinking = execution.effectiveThinking ?? execution.thinking;
+					if (thinking === undefined || !option.thinkingLevels?.includes(thinking))
+						throw new Conflict("owner_reported_thinking_unavailable_for_selected_model");
+				}
+			}
 			if (this.closing) throw new Error("pilotd is shutting down");
 			// A fresh worker's activity snapshot may follow ready. The kernel's atomic guard checks
 			// its durable inbox before switching, so unknown fresh activity is not proof of busy work.
@@ -6745,7 +7217,14 @@ ${run.excerpt}`,
 		if (meta.role !== undefined && meta.role !== "diagnostics" && meta.role !== "insights")
 			throw new Error("Invalid session role");
 		if (meta.role === "insights") {
-			validateInsightsGrant(meta.insightsGrant);
+			if (meta.insightsOwner) {
+				if (
+					meta.insightsGrant ||
+					meta.insightsOwner.authority.home !== resolve(this.home) ||
+					meta.insightsOwner.binding.schemaVersion !== 2
+				)
+					throw new Conflict("Invalid owner Insights profile");
+			} else validateInsightsGrant(meta.insightsGrant);
 			if (
 				meta.mode !== "ask" ||
 				meta.control ||
@@ -6760,12 +7239,13 @@ ${run.excerpt}`,
 				meta.diagnosticHistoryAccess ||
 				meta.diagnosticRepairProposal ||
 				meta.diagnosticRepairStart ||
-				meta.insightsGrant.reportSessionId !== meta.id ||
-				meta.insightsGrant.projectId !== meta.projectId ||
-				meta.insightsGrant.home !== resolve(this.home)
+				(meta.insightsOwner?.binding.reportSessionId ?? meta.insightsGrant?.reportSessionId) !== meta.id ||
+				(meta.insightsOwner?.binding.projectId ?? meta.insightsGrant?.projectId) !== meta.projectId ||
+				(meta.insightsOwner?.authority.home ?? meta.insightsGrant?.home) !== resolve(this.home)
 			)
 				throw new Conflict("Invalid Insights profile");
-		} else if (meta.insightsGrant !== undefined) throw new Conflict("Insights grant requires its restricted profile");
+		} else if (meta.insightsGrant !== undefined || meta.insightsOwner !== undefined)
+			throw new Conflict("Insights grant requires its restricted profile");
 		if (meta.control) {
 			if (
 				meta.mode !== "ask" ||
@@ -7573,15 +8053,17 @@ ${run.excerpt}`,
 		insightsGrant?: InsightsGrant,
 		flowAdmission?: { rootId: string; flow?: FlowState },
 		deferInsightsInput = false,
+		ownerExecution?: Pick<import("./insights-owner-store.ts").InsightsOwnerExecution, "authority" | "binding">,
 	): Promise<SessionSummary> {
 		if (admission) this.insightsBacklog?.replacements.assertNotRetired(admission.targetId);
-		if (deferInsightsInput && (!insightsGrant || request.role !== "insights"))
+		if (deferInsightsInput && ((!insightsGrant && !ownerExecution) || request.role !== "insights"))
 			throw new Conflict("Deferred input requires trusted Insights creation");
 		if (missionAdmission?.role === "explorer" && (request.mode !== "ask" || coordinator))
 			throw new Conflict("Explorer admission requires a non-coordinator Ask session");
 		if (typeof request.message !== "string" || !request.message.trim()) throw new Error("message is required");
 		if (
 			request.role === "insights" &&
+			!ownerExecution &&
 			(!insightsGrant ||
 				coordinator ||
 				request.projectId !== insightsGrant.projectId ||
@@ -7594,6 +8076,32 @@ ${run.excerpt}`,
 				request.diagnosticRepair !== undefined)
 		)
 			throw new Conflict("Insights requires trusted native admission");
+		if (
+			ownerExecution &&
+			(insightsGrant ||
+				request.role !== "insights" ||
+				request.mode !== "ask" ||
+				coordinator ||
+				request.missionId !== undefined ||
+				request.projectId !== ownerExecution.authority.owner.projectId ||
+				admission?.targetId !== ownerExecution.authority.owner.reportSessionId ||
+				request.cwd !== undefined ||
+				request.workspace !== undefined ||
+				request.baseBranch !== undefined ||
+				request.diagnosticRepair !== undefined)
+		)
+			throw new Conflict("Invalid owner creation");
+		const assertOwnerCreate = () => {
+			if (!ownerExecution) return;
+			this.insightsOwnerLease(ownerExecution.authority).revalidate();
+			const current = this.insightsOwnerStore?.current(ownerExecution.authority);
+			if (
+				current?.state !== "provisioning" ||
+				canonicalJSON(current.binding) !== canonicalJSON(ownerExecution.binding)
+			)
+				throw new Conflict("Owner creation authority changed");
+		};
+
 		if (request.role !== undefined && request.role !== "diagnostics" && request.role !== "insights")
 			throw new Error("Unknown session role");
 		if (request.mode !== undefined && request.mode !== "build" && request.mode !== "ask")
@@ -7726,6 +8234,7 @@ ${run.excerpt}`,
 		this.assertDiagnosticRepairAdmission(request);
 		try {
 			if (insightsGrant) this.assertInsightsBinding(insightsGrant);
+			assertOwnerCreate();
 			await mkdir(this.dir(id), { recursive: true, mode: 0o700 });
 		} catch (error) {
 			this.newSessionAdmissions.delete(folded);
@@ -7754,6 +8263,7 @@ ${run.excerpt}`,
 			id,
 			...(request.role ? { role: request.role } : {}),
 			...(insightsGrant ? { insightsGrant, insightsSetupPending: true as const } : {}),
+			...(ownerExecution ? { insightsOwner: structuredClone(ownerExecution) } : {}),
 			...(request.diagnosticScope === "app" ? { diagnosticScope: "app" as const } : {}),
 			...(request.diagnosticScope === "app" && this.diagnosticHost
 				? { diagnosticHost: request.diagnosticHost ?? this.diagnosticHost }
@@ -7799,6 +8309,7 @@ ${run.excerpt}`,
 			if (request.diagnosticRepair) await this.repairProject.validateCurrent(request.diagnosticRepair.binding);
 			this.assertDiagnosticRepairAdmission(request);
 			if (insightsGrant) this.assertInsightsBinding(insightsGrant);
+			assertOwnerCreate();
 			if (flowAdmission && !this.flowInputAllowed(meta, admission!.operationId))
 				throw new Conflict("Flow admission changed");
 			await this.save(meta, undefined, undefined, Boolean(admission));
@@ -8446,12 +8957,16 @@ ${run.excerpt}`,
 	async stop(id: string): Promise<StopResponse> {
 		const meta = this.require(id);
 		this.assertNotContinued(meta, true);
-		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
+		if (this.changingModels.has(id) && !meta.insightsOwner)
+			throw new Conflict("Session is changing its model or conversation");
 		if (this.closing) throw new Error("pilotd is shutting down");
 		let interrupted: Promise<void> | undefined;
 		if (meta.role === "insights") {
 			this.insightsStopEpochs.set(id, (this.insightsStopEpochs.get(id) ?? 0) + 1);
-			interrupted = this.insightsBacklog?.reviews.interrupt(id, "cancelled", "Stopped; never replay this run");
+			interrupted = Promise.all([
+				this.insightsBacklog?.reviews.interrupt(id, "cancelled", "Stopped; never replay this run"),
+				this.insightsOwnerStore?.reviews.interrupt(id, "cancelled", "Stopped; never replay this run"),
+			]).then(() => undefined);
 			void interrupted?.catch(() => undefined);
 		}
 		const flowRoot = this.flowRoot(meta);
@@ -8540,7 +9055,7 @@ ${run.excerpt}`,
 		this.stopResults.set(requestId, []);
 		try {
 			const starting = meta.initializing;
-			let admission = this.start(id);
+			let admission = this.start(id, !!meta.insightsOwner && this.changingModels.has(id));
 			// Do not make Stop wait for startup preparation, worker readiness, or an in-flight command
 			// acknowledgement. Those are deliberately released by the caller after Stop returns. Their
 			// existing drain will see the persisted abort; a settled drain can be awaited and retried below.
@@ -8551,7 +9066,7 @@ ${run.excerpt}`,
 				// An existing drain can finish just before observing the abort saved above.
 				// Await it first so start() can register a fresh drain for that still-pending abort.
 				if (starting && meta.pending?.some((command) => command.requestId === requestId)) {
-					admission = this.start(id);
+					admission = this.start(id, !!meta.insightsOwner && this.changingModels.has(id));
 					rejected = await admission;
 					if (rejected.has(requestId)) throw rejected.get(requestId);
 				}
@@ -8654,6 +9169,12 @@ ${run.excerpt}`,
 	 */
 	private async deliver(id: string, worker: SessionWorker, command: PendingCommand): Promise<void> {
 		if (command.type !== "input") return worker.request(command);
+		if (this.require(id).insightsOwner) {
+			await this.insightsOwnerReady.get(worker);
+			const current = this.insightsOwnerStore!.current(this.require(id).insightsOwner!.authority)!;
+			if (current.thinking === undefined && current.effectiveThinking === undefined)
+				throw new Conflict("owner_default_thinking_not_reported");
+		}
 		const reviewRun = command.requestId.startsWith("insights-review:")
 			? command.requestId.slice("insights-review:".length)
 			: undefined;
@@ -8661,13 +9182,15 @@ ${run.excerpt}`,
 			if (!reviewRun) return;
 			try {
 				if (!this.insightsBacklog) throw new Conflict("Insights backlog unavailable");
-				this.insightsBacklog.reviews.assertActive(this.insightsAdmission(id, worker), reviewRun);
+				if (this.require(id).insightsOwner)
+					this.insightsOwnerStore!.reviews.assertActive(this.insightsOwnerAdmission(id, worker), reviewRun);
+				else this.insightsBacklog.reviews.assertActive(this.insightsAdmission(id, worker), reviewRun);
 			} catch {
 				throw new CommandRejected("Review terminal or unavailable; never replay", "stopped");
 			}
 		};
 		assertReview();
-		const insights = this.require(id).role === "insights" ? this.insightsAdmission(id, worker) : undefined;
+		const insights = this.require(id).role === "insights" ? this.executionAdmission(id, worker) : undefined;
 		this.delivering.set(id, command.requestId);
 		const traceKey = this.inputTraceKey(id, command.requestId);
 		const trace = this.inputTraces.get(traceKey);
@@ -10125,7 +10648,10 @@ ${run.excerpt}`,
 		this.diagnosticContextReads.clear();
 		this.diagnosticReadBroker.close();
 		this.closing = true;
-		this.insightsReviewClosing ??= this.insightsBacklog?.reviews.interruptAll();
+		this.insightsReviewClosing ??= Promise.all([
+			this.insightsBacklog?.reviews.interruptAll(),
+			this.insightsOwnerStore?.reviews.interruptAll(),
+		]).then(() => undefined);
 		const drainInsightsReviews = this.insightsReviewClosing;
 		const drainActions = this.actionRunner?.close();
 		const drainRepairProjects = this.repairProject.close();
@@ -10628,7 +11154,8 @@ ${run.excerpt}`,
 		const liveUpdateProjectId = meta.projectId;
 		const liveUpdateProposals =
 			this.canProposeLiveUpdate(meta) && (await this.liveUpdate!.eligible(liveUpdateProjectId!).catch(() => false));
-		const insightsGrant = meta.role === "insights" ? this.assertInsightsCurrent(meta) : undefined;
+		const ownerBinding = meta.insightsOwner ? this.assertInsightsOwner(meta, configurationOnly) : undefined;
+		const insightsGrant = meta.role === "insights" && !ownerBinding ? this.assertInsightsCurrent(meta) : undefined;
 		const insightsBinding = insightsGrant
 			? (() => {
 					const {
@@ -10647,6 +11174,7 @@ ${run.excerpt}`,
 					sessionId: id,
 					...(configurationOnly ? { configurationOnly: true as const, stopOnOpen: true } : {}),
 					...(insightsBinding ? { insightsBinding } : {}),
+					...(ownerBinding ? { insightsOwnerBinding: structuredClone(ownerBinding) } : {}),
 					...(liveUpdateProposals && meta.projectId === liveUpdateProjectId && this.canProposeLiveUpdate(meta)
 						? { liveUpdateProposals: true }
 						: {}),
@@ -10716,6 +11244,15 @@ ${run.excerpt}`,
 		// Preserve synchronous fixture factories, and publish before replaying callbacks from an
 		// asynchronously prepared isolated process. No callback may observe an uninitialized owner.
 		const worker = opening instanceof Promise ? await opening : opening;
+		if (ownerBinding && configurationOnly) this.insightsOwnerConfigurationWorkers.add(worker);
+		if (ownerBinding) {
+			try {
+				this.assertInsightsOwner(meta, configurationOnly);
+			} catch (error) {
+				await worker.close();
+				throw error;
+			}
+		}
 		if (insightsGrant) {
 			try {
 				this.assertInsightsCurrent(meta);
@@ -10879,7 +11416,7 @@ ${run.excerpt}`,
 			if (this.workers.get(meta.id) !== worker) return;
 			void Promise.resolve()
 				.then(async () => {
-					const admission = meta.role === "insights" ? this.insightsAdmission(meta.id, worker) : undefined;
+					const admission = meta.role === "insights" ? this.ownerAccountingAdmission(meta.id, worker) : undefined;
 					const { generation, captureFloor, retentionFloor } = await this.usageHistory.status();
 					admission?.revalidate();
 					if (this.workers.get(meta.id) === worker)
@@ -10932,7 +11469,7 @@ ${run.excerpt}`,
 			if (this.workers.get(meta.id) !== worker) return;
 			const writing = Promise.resolve()
 				.then(async () => {
-					const admission = meta.role === "insights" ? this.insightsAdmission(meta.id, worker) : undefined;
+					const admission = meta.role === "insights" ? this.ownerAccountingAdmission(meta.id, worker) : undefined;
 					// Accounting is not model authority to write another chat's attribution or source namespace.
 					const row = admission
 						? {
@@ -11125,11 +11662,11 @@ ${run.excerpt}`,
 				return;
 			}
 			this.insightsBacklogCalls++;
-			let admission: InsightsAdmission | undefined;
+			let admission: import("./insights-admission.ts").InsightsReviewAdmission | undefined;
 			let admissionError: unknown;
 			try {
 				// Capture before yielding, so Stop also fences a queued call before its transaction.
-				admission = this.insightsAdmission(meta.id, worker);
+				admission = this.executionAdmission(meta.id, worker);
 			} catch (error) {
 				admissionError = error;
 			}
@@ -11139,7 +11676,9 @@ ${run.excerpt}`,
 				.then(async () => {
 					if (!admission) throw admissionError;
 					if (!this.insightsBacklog) throw new Conflict("Insights backlog unavailable");
-					const result = await this.insightsBacklog.call(admission, packet.request);
+					const result = meta.insightsOwner
+						? await this.insightsOwnerBacklog(meta.id, packet.request, worker)
+						: await this.insightsBacklog.call(admission as InsightsAdmission, packet.request);
 					admission.revalidate();
 					worker.send({
 						type: "insights.backlog.result",
@@ -11171,7 +11710,7 @@ ${run.excerpt}`,
 			return;
 		}
 		if (packet.type === "diagnostics.context.call") {
-			let insights: InsightsAdmission | undefined;
+			let insights: import("./insights-admission.ts").InsightsReviewAdmission | undefined;
 			const key = `${meta.id}:${packet.callId}`;
 			const controller = new AbortController();
 			const timer = setTimeout(() => controller.abort(), 10_000);
@@ -11188,7 +11727,7 @@ ${run.excerpt}`,
 			void Promise.resolve()
 				.then(() => {
 					if (this.workers.get(meta.id) !== worker) throw new Conflict("Worker changed");
-					if (meta.role === "insights") insights = this.insightsAdmission(meta.id, worker);
+					if (meta.role === "insights") insights = this.executionAdmission(meta.id, worker);
 					return meta.role === "insights"
 						? this.insightsHistory(meta.id, worker, packet.request, controller.signal)
 						: this.diagnosticContext(meta.id, packet.request, controller.signal);
@@ -11717,6 +12256,34 @@ ${run.excerpt}`,
 				// Opening a transcript or restarting its worker is not new chat activity.
 				meta.model = packet.model;
 				if (packet.thinking !== undefined) meta.thinking = packet.thinking;
+				if (meta.insightsOwner && this.workers.get(meta.id) === worker) {
+					const owner = structuredClone(meta.insightsOwner),
+						generation = meta.inputGeneration ?? 0,
+						epoch = this.insightsStopEpochs.get(meta.id);
+					const guard = () => {
+						this.insightsOwnerLease(owner.authority).revalidate();
+						if (
+							this.workers.get(meta.id) !== worker ||
+							this.require(meta.id) !== meta ||
+							(meta.inputGeneration ?? 0) !== generation ||
+							this.insightsStopEpochs.get(meta.id) !== epoch ||
+							canonicalJSON(meta.insightsOwner) !== canonicalJSON(owner)
+						)
+							throw new Conflict("owner_ready_stop_or_identity_changed");
+					};
+					const ready =
+						packet.thinking === undefined
+							? Promise.reject(new Conflict("owner_ready_thinking_unavailable"))
+							: this.insightsOwnerStore!.resolveDefaultThinking(
+									owner.authority,
+									owner.binding,
+									packet.model,
+									packet.thinking,
+									guard,
+								);
+					this.insightsOwnerReady.set(worker, ready);
+					void ready.catch(() => undefined);
+				}
 				// A fresh kernel recovers from an earlier crash. Queued commands keep their error until admitted.
 				this.kernelErrors.delete(meta.id);
 				if (!meta.pending?.length) delete meta.inputError;
@@ -13102,6 +13669,8 @@ ${run.excerpt}`,
 			// Preserve the immutable execution ceiling across queued lifecycle snapshots.
 			persisted.executionPermission = meta.executionPermission;
 			// Captured lifecycle snapshots must never resurrect an earlier enabled grant.
+			if (meta.insightsOwner) persisted.insightsOwner = structuredClone(meta.insightsOwner);
+			else delete persisted.insightsOwner;
 			if (meta.insightsGrant) persisted.insightsGrant = structuredClone(meta.insightsGrant);
 			else delete persisted.insightsGrant;
 			// Continuation fencing must survive lifecycle snapshots queued before the ownership commit.

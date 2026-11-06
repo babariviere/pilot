@@ -226,6 +226,8 @@ export class MissionService {
 		this.store = store;
 		sessions.setInsightsBacklog(store.insights);
 		sessions.setInsightsWorkspaceStore(store.insightsWorkspace);
+		sessions.setInsightsOwnerStore(store.insightsOwner);
+		sessions.setInsightsTransitionStore(store.insightsTransition);
 		this.sessions = sessions;
 		this.projects = projects;
 		this.notices = new MissionNotices(store, sessions);

@@ -122,12 +122,20 @@ Ordinary mission archive/delete/catalog/task APIs neither own nor expose these r
 
 ## Execution handoff
 
+The unpublished [owner execution work](insights-owner-execution.md) exercises the
+host/session/scheduler seam with synthetic providers. Native-gated execution,
+passive legacy projections and separately confirmed bounded transfer now have
+source contracts. Separate `insightsWorkspaceExecution:2` and
+`insightsWorkspaceTransition:2` capabilities describe those services, never consent
+or Enabled. The reservation capability still must not mean activation support.
+
 The reservation is the durable prerequisite for an owner-backed session/scheduler
 bridge. That bridge must pin this exact authority, preserve Stop generations and
 durable entered markers, and keep entered effects lookup-only. It must not copy a
 v1 grant, infer consent from matching rows, or advertise activation while absent.
-The owner-backed execution adapter and legacy transition are the next host task;
-native UI follows both. They are not enabled by this capability.
+The linked handoff defines their previews, frozen confirmations, Check and status.
+Native UI and installed-app qualification remain separate. Neither is enabled by
+the reservation capability alone.
 
 The next host integration must introduce a distinct versioned owner-backed grant
 and session/scheduler adapter. Do not pass a workspace ID into a v1 mission slot,

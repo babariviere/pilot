@@ -82,8 +82,11 @@ import { dispositionTarget, HumanReviews } from "./human-reviews.ts";
 import { InsightsApply } from "./insights-apply.ts";
 import { insightsSetupDefaults } from "./insights-defaults.ts";
 import { InsightsEnable } from "./insights-enable.ts";
+import { InsightsLegacy, type InsightsLegacySelector } from "./insights-legacy.ts";
 import { admitInsightsOperation, insightsFindingsPage, isInsightsOperation } from "./insights-native.ts";
+import { InsightsOwner, isInsightsOwnerOperation } from "./insights-owner.ts";
 import { InsightsReplacement } from "./insights-replacement.ts";
+import { InsightsTransition } from "./insights-transition.ts";
 import { InsightsWorkspace, isInsightsWorkspaceOperation } from "./insights-workspace.ts";
 import type { LiveUpdate, LiveUpdateIdentity, LiveUpdateService, LiveUpdateTarget } from "./live-update.ts";
 import { MachineInformationReader } from "./machine.ts";
@@ -708,6 +711,55 @@ export function createDaemonServer(
 					},
 				})
 			: undefined;
+	const insightsTransition =
+		journal &&
+		missions?.store.insightsTransition &&
+		missions.store.insightsWorkspace &&
+		sessions.insightsAdmissionEpoch &&
+		schedules
+			? new InsightsTransition({
+					home: _config.home,
+					projects,
+					mission: (id) => {
+						const m = missions.store.require(id);
+						return { projectId: m.projectId, status: m.status };
+					},
+					workspace: missions.store.insightsWorkspace,
+					store: missions.store.insightsTransition,
+					journal,
+					sessions,
+					schedules,
+				})
+			: undefined;
+	const insightsOwner =
+		journal && missions?.store.insightsOwner && sessions.insightsAdmissionEpoch && schedules
+			? new InsightsOwner({
+					home: _config.home,
+					projects,
+					models,
+					workspace: missions.store.insightsWorkspace,
+					store: missions.store.insightsOwner,
+					transition: insightsTransition,
+					sessions,
+					schedules,
+					journal,
+				})
+			: undefined;
+	const insightsLegacy =
+		journal && missions?.store.insightsLegacy
+			? new InsightsLegacy({
+					home: _config.home,
+					host: journal.destination,
+					projects,
+					sessions,
+					journal,
+					records: missions.store.insightsLegacy,
+					mission: (id) => {
+						const m = missions.store.require(id);
+						return { projectId: m.projectId, status: m.status };
+					},
+				})
+			: undefined;
 	const insightsEnable =
 		journal && missions && schedules
 			? new InsightsEnable({
@@ -751,6 +803,14 @@ export function createDaemonServer(
 				})
 			: undefined;
 	const admitOperationHeld = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
+		if (op.kind === "insights-workspace-transfer") {
+			if (!insightsTransition) throw new OperationRejected("Insights transition unavailable");
+			return insightsTransition.admit(op, false);
+		}
+		if (isInsightsOwnerOperation(op.kind)) {
+			if (!insightsOwner) throw new OperationRejected("Owner Insights execution unavailable");
+			return insightsOwner.admit(op);
+		}
 		if (isInsightsWorkspaceOperation(op.kind)) {
 			if (!insightsWorkspace) throw new OperationRejected("App-owned Insights workspace unavailable");
 			return insightsWorkspace.admit(op);
@@ -1083,6 +1143,107 @@ export function createDaemonServer(
 			if (!session) throw new NotFound("Unknown session");
 			return json(res, 200, await repositories.file(session.cwd, url.searchParams.get("path") ?? ""));
 		}
+		if (parts[1] === "insights" && parts[2] === "legacy") {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
+			if (!insightsLegacy || !githubSetup) throw new ServiceUnavailable("Legacy Insights projection unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			for (const key of url.searchParams.keys())
+				if (!["selector", "cursor"].includes(key) || url.searchParams.getAll(key).length !== 1)
+					throw new HttpError(400, "Invalid legacy query");
+			if (parts.length !== 4 || !["reports", "findings", "checkpoints", "settings"].includes(parts[3]!))
+				throw new HttpError(404, "Not found");
+			let selector: InsightsLegacySelector;
+			try {
+				selector = JSON.parse(url.searchParams.get("selector") ?? "null");
+			} catch {
+				throw new HttpError(400, "Invalid legacy selector");
+			}
+			const raw = url.searchParams.get("cursor") ?? "0",
+				cursor = Number(raw);
+			if (!/^\d+$/u.test(raw) || !Number.isSafeInteger(cursor)) throw new HttpError(400, "Invalid legacy cursor");
+			const kind =
+				parts[3] === "reports"
+					? "report"
+					: parts[3] === "findings"
+						? "finding"
+						: parts[3] === "checkpoints"
+							? "checkpoint"
+							: "settings";
+			return json(res, 200, await insightsLegacy.page(selector, kind, cursor));
+		}
+		if (parts[1] === "insights" && parts[2] === "workspace" && parts[3] === "transfer") {
+			res.setHeader("cache-control", "no-store");
+			if (!insightsTransition || !journal || !githubSetup)
+				throw new ServiceUnavailable("Insights transition unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (parts.length !== 5 || !["preflight", "check"].includes(parts[4]!)) throw new HttpError(404, "Not found");
+			if (parts[4] === "check") {
+				if (req.method !== "POST" || [...url.searchParams.keys()].length)
+					throw new HttpError(400, "Expected exact transfer Check");
+				const op = await readJson<DurableOperation>(req);
+				await journal.lookup(op);
+				return json(res, 200, await insightsTransition.check(op));
+			}
+			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
+			for (const key of url.searchParams.keys())
+				if (key !== "selector" || url.searchParams.getAll(key).length !== 1)
+					throw new HttpError(400, "Expected exact legacy selector");
+			let selector: InsightsLegacySelector;
+			try {
+				selector = JSON.parse(url.searchParams.get("selector") ?? "null");
+			} catch {
+				throw new HttpError(400, "Invalid legacy selector");
+			}
+			return json(res, 200, await insightsTransition.preview(selector));
+		}
+		if (parts[1] === "insights" && parts[2] === "workspace" && parts[3] === "execution") {
+			res.setHeader("cache-control", "no-store");
+			if (!insightsOwner || !insightsWorkspace || !journal || !githubSetup)
+				throw new ServiceUnavailable("Owner Insights execution unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if ([...url.searchParams.keys()].length) throw new HttpError(400, "Execution queries must be exact");
+			if (parts.length === 5 && parts[4] === "check") {
+				if (req.method !== "POST") throw new HttpError(405, "Method not allowed");
+				const op = await readJson<DurableOperation>(req);
+				if (!isInsightsOwnerOperation(op.kind)) throw new HttpError(400, "Expected owner operation");
+				await journal.lookup(op); // Validate the original envelope, never execute or settle it.
+				return json(res, 200, await insightsOwner.check(op));
+			}
+			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
+			if (
+				parts.length > 5 ||
+				(parts.length === 5 &&
+					!["preflight", "apply-preflight", "pause-preflight", "revoke-preflight"].includes(parts[4]!))
+			)
+				throw new HttpError(404, "Not found");
+			const workspace = await insightsWorkspace.status();
+			if (!workspace.workspace)
+				return json(res, 200, {
+					schemaVersion: 2,
+					state: workspace.state,
+					reason: workspace.reason,
+					execution: null,
+				});
+			const owner = workspace.workspace.owner;
+			try {
+				if (parts.length === 4) return json(res, 200, await insightsOwner.status(owner));
+				const payload =
+					parts[4] === "preflight"
+						? await insightsOwner.preview(owner)
+						: parts[4] === "apply-preflight"
+							? await insightsOwner.previewApply(owner)
+							: await insightsOwner.previewState(owner, parts[4] === "pause-preflight" ? "pause" : "revoke");
+				return json(res, 200, { schemaVersion: 2, state: "ready", payload, reason: null });
+			} catch (error) {
+				return json(res, 200, {
+					schemaVersion: 2,
+					state: error instanceof Conflict || error instanceof NotFound ? "blocked" : "unavailable",
+					reason: error instanceof Error ? error.message : "execution_unavailable",
+					payload: null,
+				});
+			}
+		}
 		if (parts[1] === "insights" && parts[2] === "workspace") {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
@@ -1233,6 +1394,10 @@ export function createDaemonServer(
 				return json(res, 200, { ok: true });
 			}
 			const operation = await readJson<DurableOperation>(req);
+			if (operation?.kind === "insights-workspace-transfer" && parts[2] === "receipt") {
+				if (!githubSetup) throw new ServiceUnavailable("Native transfer lookup unavailable");
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			}
 			if (operation?.kind === "review-disposition") {
 				res.setHeader("cache-control", "no-store");
 				// Check and duplicate lookup must not expose inaccessible feedback through a journal receipt.
@@ -1246,6 +1411,8 @@ export function createDaemonServer(
 				(operation?.kind === "repair-create" ||
 					isInsightsOperation(operation?.kind) ||
 					isInsightsWorkspaceOperation(operation?.kind) ||
+					isInsightsOwnerOperation(operation?.kind) ||
+					operation?.kind === "insights-workspace-transfer" ||
 					isWorkflowOperation(operation?.kind)) &&
 				parts[2] !== "receipt"
 			) {
@@ -1258,6 +1425,24 @@ export function createDaemonServer(
 				parts[2] === "receipt"
 					? await journal.lookup(operation)
 					: await journal.execute(operation, async (op, entry) => {
+							if (isInsightsOwnerOperation(op.kind)) {
+								if (!insightsOwner) throw new OperationRejected("Owner Insights execution unavailable");
+								const end = mutations.begin({ kind: "operation", id: op.operationId });
+								try {
+									return await insightsOwner.admit(op, entry.firstEntry);
+								} finally {
+									end();
+								}
+							}
+							if (op.kind === "insights-workspace-transfer") {
+								if (!insightsTransition) throw new OperationRejected("Insights transition unavailable");
+								const end = mutations.begin({ kind: "operation", id: op.operationId });
+								try {
+									return await insightsTransition.admit(op, entry.firstEntry);
+								} finally {
+									end();
+								}
+							}
 							if (isWorkflowOperation(op.kind)) {
 								if (!workflowConfirmations)
 									throw new OperationRejected("Workflow confirmations are unavailable");
@@ -1375,6 +1560,8 @@ export function createDaemonServer(
 					insightsApply: insightsApply && githubSetup ? 1 : undefined,
 					insightsReplacement: insightsReplacement && githubSetup ? 1 : undefined,
 					insightsWorkspace: insightsWorkspace && githubSetup ? 2 : undefined,
+					insightsWorkspaceExecution: insightsOwner && githubSetup ? 2 : undefined,
+					insightsWorkspaceTransition: insightsTransition && githubSetup ? 2 : undefined,
 					automations: chatSettings?.automationsEnabled() ? 1 : undefined,
 					guardedMissionConversion: missions ? true : undefined,
 					passiveMissionLifecycle: missions ? true : undefined,

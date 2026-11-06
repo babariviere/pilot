@@ -87,7 +87,7 @@ class FakeWorker implements SessionWorker {
 	}
 }
 
-export async function fixture(t: TestContext, options: SessionManagerOptions = {}) {
+export async function fixture(t: TestContext, options: SessionManagerOptions = {}, factories: SessionFactories = {}) {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "pilot-session-workspaces-")));
 	const home = join(root, "home");
 	const source = join(root, "source");
@@ -124,6 +124,7 @@ export async function fixture(t: TestContext, options: SessionManagerOptions = {
 	const specs: Parameters<SessionFactories["worker"] & {}>[0][] = [];
 	const worker: SessionFactories["worker"] = (spec, onPacket, onExit) => {
 		specs.push(spec);
+		if (factories.worker) return factories.worker(spec, onPacket, onExit);
 		const value = new FakeWorker(onPacket, onExit);
 		workers.push(value);
 		return value;

@@ -47,6 +47,10 @@ async function fixture(t: TestContext, name = "a") {
 		updatedAt: 1,
 	};
 	const sessions = {
+		piReload: {
+			onChange: () => () => {},
+			status: () => ({ operationId: null, pending: 0, reloading: 0, reloaded: 0, failed: 0 }),
+		},
 		setWorkspaceProcessGuard() {},
 		list: () => [session],
 		get: (id: string) => (id === session.id ? session : undefined),
@@ -203,7 +207,8 @@ test("a checked hello cannot bind schedule creation to that daemon/lineage at mu
 	assert.deepEqual(item.target, a.request.target);
 	assert.equal(item.projectId, b.session.projectId, "same session ID is resolved in the replacement home");
 	assert.deepEqual(a.store.list(), []);
-	assert.deepEqual(b.store.list(), [item]);
+	// Compare wire fields; in-memory optional properties may be present as undefined.
+	assert.deepEqual(JSON.parse(JSON.stringify(b.store.list())), [item]);
 	const after = await (await fetch(`${g.url}/api/hello`)).json();
 	assert.equal(after.daemonId, b.hello.daemonId);
 	assert.equal(after.lineageId, b.hello.lineageId);
@@ -232,7 +237,7 @@ test("matching pre/post hello and exact ACK fields still cannot prove the receiv
 	const after = await (await fetch(`${g.url}/api/hello`)).json();
 	assert.deepEqual(after, before, "pre/post hello cannot detect an intervening home");
 	assert.deepEqual(a.store.list(), []);
-	assert.deepEqual(b.store.list(), [item]);
+	assert.deepEqual(JSON.parse(JSON.stringify(b.store.list())), [item]);
 	assert.equal(g.route.posts, 1);
 });
 

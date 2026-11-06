@@ -90,6 +90,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Insights desired settings and native save contract (internal)](insights-settings.md)
 - [Confirmed deleted-report replacement contract (internal)](insights-replacement.md)
 - [App-owned Insights workspace and reservation contract (v2)](insights-workspace.md)
+- [Owner execution and legacy transfer](insights-owner-execution.md)
 - [Agent diagnostics](agent-diagnostics.md)
 - [Native crash, hang and devbox setup diagnostics](native-diagnostics.md)
 - [pilotd event-loop stalls](daemon-stalls.md)

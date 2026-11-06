@@ -56,6 +56,31 @@ export class ScheduleStore {
 	list(projectId?: string): ScheduledItem[] {
 		return structuredClone([...this.items.values()].filter((item) => !projectId || item.projectId === projectId));
 	}
+	hasReportOrRule(reportId: string, ruleId: string): boolean {
+		for (const item of this.items.values())
+			if (item.id === ruleId || (item.target.kind === "message" && item.target.sessionId === reportId)) return true;
+		return false;
+	}
+	/** Do not clone unrelated user prompts into a small native transfer preview. */
+	legacyInsightsItems(oldId: string): ScheduledItem[] {
+		const items: ScheduledItem[] = [];
+		const retired = oldId.toLowerCase();
+		for (const item of this.items.values()) {
+			if (
+				item.insightsOwnerDestination ||
+				!(
+					item.insightsDestination ||
+					item.insightsEnableOperationId ||
+					item.insightsReview ||
+					(item.target.kind === "message" && item.target.sessionId.toLowerCase() === retired)
+				)
+			)
+				continue;
+			if (items.length === 8) throw new Conflict("legacy_rule_snapshot_capacity");
+			items.push(structuredClone(item));
+		}
+		return items;
+	}
 	assertSettled(): void {
 		if (this.closed || this.broken || this.pending.size)
 			throw new Conflict("Schedule storage busy or unavailable; refresh before replacement");
@@ -63,6 +88,15 @@ export class ScheduleStore {
 	hasInsightsIntent(): boolean {
 		for (const item of this.items.values())
 			if (item.insightsDestination || item.insightsEnableOperationId || item.insightsReview) return true;
+		return false;
+	}
+	hasLegacyInsightsIntent(): boolean {
+		for (const item of this.items.values())
+			if (
+				!item.insightsOwnerDestination &&
+				(item.insightsDestination || item.insightsEnableOperationId || item.insightsReview)
+			)
+				return true;
 		return false;
 	}
 	/** Large HTTP/WS indexes are encoded off the daemon event loop. */

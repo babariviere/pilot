@@ -44,6 +44,29 @@ const uuid = (value: string) => {
 	const h = payloadHash(value);
 	return `${h.slice(0, 8)}-${h.slice(8, 12)}-5${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`;
 };
+/** Pure identity derivation. It neither reserves an owner nor grants admission. */
+export function deriveInsightsWorkspaceAuthority(
+	homeValue: string,
+	host: OperationHost,
+	project: { id: string; path: string },
+): InsightsWorkspaceAuthority {
+	const home = resolve(homeValue);
+	if (home !== homeValue || resolve(project.path) !== project.path) throw new Conflict("workspace_path_unavailable");
+	const context = payloadHash(canonicalJSON([2, home, host, project.id, project.path]));
+	return {
+		home,
+		projectPath: project.path,
+		owner: {
+			schemaVersion: 2,
+			workspaceId: uuid(`insights-workspace:${context}`),
+			reportSessionId: uuid(`insights-workspace-report:${context}`),
+			scheduleId: uuid(`insights-workspace-rule:${context}`),
+			projectId: project.id,
+			expectedHome: { ...host },
+			context,
+		},
+	};
+}
 function exact(value: unknown, keys: string[], optional: string[] = []): Record<string, unknown> {
 	if (
 		!value ||
@@ -74,24 +97,7 @@ export class InsightsWorkspace {
 		this.deps = deps;
 	}
 	private authority(projectId: string): InsightsWorkspaceAuthority {
-		const project = this.deps.projects.require(projectId);
-		const home = resolve(this.deps.home);
-		if (home !== this.deps.home || resolve(project.path) !== project.path)
-			throw new Conflict("workspace_path_unavailable");
-		const context = payloadHash(canonicalJSON([2, home, this.deps.host, project.id, project.path]));
-		return {
-			home,
-			projectPath: project.path,
-			owner: {
-				schemaVersion: 2,
-				workspaceId: uuid(`insights-workspace:${context}`),
-				reportSessionId: uuid(`insights-workspace-report:${context}`),
-				scheduleId: uuid(`insights-workspace-rule:${context}`),
-				projectId,
-				expectedHome: { ...this.deps.host },
-				context,
-			},
-		};
+		return deriveInsightsWorkspaceAuthority(this.deps.home, this.deps.host, this.deps.projects.require(projectId));
 	}
 	private guard(a: InsightsWorkspaceAuthority): void {
 		if (!same(a, this.authority(a.owner.projectId))) throw new Conflict("workspace_identity_changed");
@@ -109,6 +115,7 @@ export class InsightsWorkspace {
 	/** Legacy entry points consult the same permanent owner fence before journal reservation. */
 	assertLegacyAllowed(): void {
 		if (this.deps.store.hasOwner(this.deps.home)) throw new Conflict("app_owned_workspace_reserved");
+		if (this.deps.store.hasTransferFence()) throw new Conflict("legacy_transfer_entered_use_receipt");
 	}
 	async status(): Promise<InsightsWorkspaceStatus> {
 		try {

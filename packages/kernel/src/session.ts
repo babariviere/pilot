@@ -83,6 +83,7 @@ import { submitIdleInput } from "./idle-input.ts";
 import { InputOrigins, inputOrigin } from "./input-origin.ts";
 import { createInsightsBacklogTool, type InsightsBacklogCall } from "./insights-backlog-tool.ts";
 import { createInsightsHistoryTool } from "./insights-history-tool.ts";
+import { validateInsightsOwnerBinding } from "./insights-owner-binding.ts";
 import { JobsMonitor } from "./jobs.ts";
 import { createKnowledgeTool } from "./knowledge-tools.ts";
 import { createLiveUpdateTools } from "./live-update-tool.ts";
@@ -313,36 +314,59 @@ export class KernelSession {
 			throw new Error("Invalid specialist profile");
 		if (spec.role === "insights") {
 			const b = spec.insightsBinding;
-			if (
-				!b ||
-				b.schemaVersion !== 1 ||
-				!b.enabled ||
-				!Number.isSafeInteger(b.revision) ||
-				b.revision < 1 ||
-				!b.grantId ||
-				b.reportSessionId !== spec.sessionId ||
-				b.projectId !== spec.projectId ||
-				b.missionId !== spec.mission?.id ||
-				spec.mission?.coordinator === "self" ||
-				!b.host?.hostId ||
-				!b.host.daemonId ||
-				!b.host.lineageId ||
-				!spec.pilot?.ask ||
-				spec.pilot.role !== "insights" ||
-				spec.pilot.workspace ||
-				spec.pilot.coordinatorView ||
-				spec.pilot.ask.branch ||
-				spec.repairDiagnostics ||
-				spec.diagnosticTarget ||
-				spec.diagnosticScope ||
-				spec.diagnosticHistoryAccess ||
-				spec.liveUpdateProposals ||
-				spec.databases ||
-				Object.keys(b).sort().join(",") !==
-					"enabled,grantId,host,missionId,projectId,reportSessionId,revision,schemaVersion"
-			)
-				throw new Error("Invalid Insights start envelope");
-		} else if (spec.insightsBinding) throw new Error("Insights binding requires its restricted profile");
+			const owner = spec.insightsOwnerBinding;
+			if (owner) {
+				validateInsightsOwnerBinding(owner);
+				if (
+					b ||
+					owner.reportSessionId !== spec.sessionId ||
+					owner.projectId !== spec.projectId ||
+					spec.mission ||
+					!spec.pilot?.ask ||
+					spec.pilot.role !== "insights" ||
+					spec.pilot.workspace ||
+					spec.pilot.coordinatorView ||
+					spec.pilot.ask.branch ||
+					spec.repairDiagnostics ||
+					spec.diagnosticTarget ||
+					spec.diagnosticScope ||
+					spec.diagnosticHistoryAccess ||
+					spec.liveUpdateProposals ||
+					spec.databases
+				)
+					throw new Error("Invalid owner Insights start envelope");
+			} else {
+				if (
+					b?.schemaVersion !== 1 ||
+					!b.enabled ||
+					!Number.isSafeInteger(b.revision) ||
+					b.revision < 1 ||
+					!b.grantId ||
+					b.reportSessionId !== spec.sessionId ||
+					b.projectId !== spec.projectId ||
+					b.missionId !== spec.mission?.id ||
+					spec.mission?.coordinator === "self" ||
+					!b.host?.hostId ||
+					!b.host.daemonId ||
+					!b.host.lineageId ||
+					!spec.pilot?.ask ||
+					spec.pilot.role !== "insights" ||
+					spec.pilot.workspace ||
+					spec.pilot.coordinatorView ||
+					spec.pilot.ask.branch ||
+					spec.repairDiagnostics ||
+					spec.diagnosticTarget ||
+					spec.diagnosticScope ||
+					spec.diagnosticHistoryAccess ||
+					spec.liveUpdateProposals ||
+					spec.databases ||
+					Object.keys(b).sort().join(",") !==
+						"enabled,grantId,host,missionId,projectId,reportSessionId,revision,schemaVersion"
+				)
+					throw new Error("Invalid Insights start envelope");
+			}
+		} else if (spec.insightsBinding || spec.insightsOwnerBinding)
+			throw new Error("Insights binding requires its restricted profile");
 		if (spec.mission?.role === "explorer" && !spec.pilot?.ask)
 			throw new Error("Explorer admission requires the read-only Ask runtime");
 		// Reject obsolete persisted start envelopes before opening storage or loading extensions.
@@ -650,7 +674,7 @@ export class KernelSession {
 					...(spec.role === "insights" && hooks.callInsightsBacklog
 						? [createInsightsBacklogTool(hooks.callInsightsBacklog)]
 						: []),
-					...(spec.role === "insights" && hooks.callDiagnosticContext
+					...(spec.role === "insights" && !spec.insightsOwnerBinding && hooks.callDiagnosticContext
 						? [createInsightsHistoryTool(hooks.callDiagnosticContext)]
 						: []),
 					...(spec.repairDiagnostics && hooks.callDiagnostics && hooks.callDiagnosticLogs

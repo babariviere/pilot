@@ -149,8 +149,8 @@ export function insightsSourceAllowed(
 }
 
 export class InsightsSettings {
-	private readonly db: InsightsDb;
-	constructor(db: InsightsDb) {
+	private readonly db: Pick<InsightsDb, "one" | "all" | "run" | "transaction" | "durable" | "validateMission">;
+	constructor(db: Pick<InsightsDb, "one" | "all" | "run" | "transaction" | "durable" | "validateMission">) {
 		this.db = db;
 	}
 	private binding(admission: InsightsAdmission): string {

@@ -3,8 +3,139 @@ import type {
 	InsightsInitialModelResolution,
 	InsightsLifecycle,
 	InsightsReviewSettings,
+	InsightsSettingsRecord,
 } from "./insights.ts";
 import type { OperationHost } from "./operations.ts";
+import type { ScheduledItem } from "./schedules.ts";
+
+export interface InsightsOwnerEnablePayload {
+	schemaVersion: 2;
+	admissionEpoch: string;
+	owner: InsightsWorkspaceOwner;
+	expectedRevision: number;
+	settingsRevision: number;
+	model: string;
+	thinking?: string;
+	settings: import("./insights.ts").InsightsReviewSettings;
+	/** Committed tracking transfer only, never a grant. */
+	transitionId?: string;
+	desiredSettingsRevision?: number;
+	legacyControl?: InsightsWorkspaceTransferPayload["identity"] | null;
+	disclosure: "insights-workspace-enable-v2";
+}
+export interface InsightsWorkspaceTransferPayload {
+	schemaVersion: 2;
+	admissionEpoch: string;
+	owner: InsightsWorkspaceOwner;
+	legacy: InsightsLegacySelector;
+	identity: {
+		grantId: string;
+		grantRevision: number;
+		enabled: boolean;
+		archived: boolean;
+		inputGeneration: number;
+		model: string | null;
+		thinking: string | null;
+		bindingHash: string;
+	};
+	executorProof: { kind: "closed_writer_lease"; digest: string };
+	manifest: { hash: string; rows: number; bytes: number; scope: string | null; counts: Record<string, number> };
+	envelopesHash: string;
+	references: import("./insights.ts").InsightsReplacementReference[];
+	rules: ScheduledItem[];
+	desired: InsightsSettingsRecord;
+	effective: InsightsSettingsRecord;
+	/** Old implicit revision zero becomes owned revision one; saved revisions shift by one. */
+	settingsMapping: "legacy_revision_plus_one";
+	settingsOrigin: "stored" | "initial_enable";
+	model: string;
+	thinking?: string;
+	disclosure: "insights-workspace-transfer-v2";
+}
+export interface InsightsWorkspaceTransferReceipt {
+	schemaVersion: 2;
+	state: "transferred";
+	workspace: InsightsWorkspaceSnapshot;
+	legacy: InsightsLegacySelector;
+	manifestHash: string;
+	rows: number;
+	activation: "not_activated";
+	cancelledRules: ScheduledItem[];
+}
+export interface InsightsWorkspaceTransferPreview {
+	schemaVersion: 2;
+	state: "ready" | "blocked";
+	reason: string | null;
+	payload: InsightsWorkspaceTransferPayload | null;
+}
+export interface InsightsWorkspaceTransferStatus {
+	receipt: import("./operations.ts").OperationDelivery;
+	transfer:
+		| { state: "absent" }
+		| { state: "entered" }
+		| { state: "committed"; result: InsightsWorkspaceTransferReceipt };
+	/** Tracking owner only. Query execution separately; a transfer never means Enabled. */
+	current: InsightsWorkspaceSnapshot | null;
+}
+export interface InsightsOwnerApplyChat {
+	reportInputGeneration: number;
+	model: string;
+	thinking?: string;
+	reportBindingHash: string;
+}
+export interface InsightsOwnerApplyPayload {
+	schemaVersion: 2;
+	admissionEpoch: string;
+	owner: InsightsWorkspaceOwner;
+	expectedRevision: number;
+	grantRevision: number;
+	chat: InsightsOwnerApplyChat;
+	record: InsightsSettingsRecord;
+	rule: ScheduledItem;
+	disclosure: "insights-workspace-apply-v2";
+}
+export interface InsightsOwnerStatePayload {
+	schemaVersion: 2;
+	admissionEpoch: string;
+	owner: InsightsWorkspaceOwner;
+	expectedRevision: number;
+	reportInputGeneration: number;
+	grantRevision: number;
+	rule: ScheduledItem;
+	disclosure: "insights-workspace-pause-v2" | "insights-workspace-revoke-v2";
+}
+/** Passive compatibility projection only. Never native transition consent or v1 authority. */
+export interface InsightsLegacySelector {
+	schemaVersion: 2;
+	reportSessionId: string;
+	projectId: string;
+	missionId: string;
+	expectedHome: OperationHost;
+	context: string;
+}
+
+/** Host-admitted execution, separate from both reservation and immutable v1 grants. */
+export interface InsightsOwnerBinding {
+	schemaVersion: 2;
+	owner: InsightsWorkspaceOwner;
+	grantId: string;
+	revision: number;
+	enabled: boolean;
+	reportSessionId: string;
+	projectId: string;
+	host: OperationHost;
+}
+
+export interface InsightsOwnerExecutionStatus {
+	schemaVersion: 2;
+	owner: InsightsWorkspaceOwner;
+	state: "pending" | "enabled" | "paused" | "revoked" | "blocked";
+	grantRevision: number;
+	settingsRevision: number;
+	model: string;
+	thinking?: string;
+	thinkingSource?: "default" | "explicit";
+}
 
 /** App-owned storage, never a mission, grant or executable task. */
 export interface InsightsWorkspaceOwner {
@@ -89,8 +220,15 @@ export interface InsightsWorkspaceItem {
 	kind: "finding" | "report" | "checkpoint";
 	revision: number;
 	lifecycle: InsightsLifecycle | null;
-	/** Original UTF-8 JSON request, not reserialized nested payload bytes. */
+	/** Original UTF-8 JSON request. A declared legacy snapshot uses a host projection instead. */
 	request: string;
+	origin?: {
+		kind: "legacy_snapshot";
+		transferOperationId: string;
+		sourceTable: string;
+		sourceKey: string;
+		sourceHash: string;
+	};
 	updatedAt: number;
 }
 

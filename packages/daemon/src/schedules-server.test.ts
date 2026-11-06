@@ -33,6 +33,10 @@ test("schedule CRUD API, reconnect snapshot, WS updates, and dashboard provider"
 	};
 	let targetExists = true;
 	const sessions = {
+		piReload: {
+			onChange: () => () => {},
+			status: () => ({ operationId: null, pending: 0, reloading: 0, reloaded: 0, failed: 0 }),
+		},
 		setWorkspaceProcessGuard() {},
 		list: () => [existing],
 		get: () => (targetExists ? existing : undefined),

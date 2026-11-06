@@ -96,11 +96,15 @@ export class InsightsWorkspaceStore {
  UNION ALL SELECT 1 FROM insights_runs UNION ALL SELECT 1 FROM insights_replacements
  UNION ALL SELECT 1 FROM insights_operations UNION ALL SELECT 1 FROM insights_revisions
  UNION ALL SELECT 1 FROM insights_evidence
+ UNION ALL SELECT 1 FROM insights_transfers
  ) LIMIT 1`);
 	}
 	hasOwner(home: string): boolean {
 		this.assertProfile(home);
 		return !!this.db.one("SELECT 1 FROM insights_workspace_owners WHERE profile_home=?", home);
+	}
+	hasTransferFence(): boolean {
+		return !!this.db.one("SELECT 1 FROM insights_transfers LIMIT 1");
 	}
 	private assertProfile(home: string): void {
 		if (this.db.one("SELECT 1 FROM insights_workspace_owners WHERE profile_home<>? LIMIT 1", home))
@@ -237,6 +241,8 @@ export class InsightsWorkspaceStore {
 			const prior = this.receipt(id, op.operationId, raw);
 			if (prior) return prior;
 			if (change.kind === "state") {
+				if (this.db.one("SELECT 1 FROM insights_owner_execution WHERE workspace_id=?", id))
+					throw new Conflict("owner_execution_requires_confirmed_stop");
 				if (snapshot.revision !== change.expectedRevision || snapshot.state === "revoked")
 					throw new Conflict("workspace_revision_changed");
 				this.db.run(
@@ -302,6 +308,13 @@ export class InsightsWorkspaceStore {
 			throw new Conflict("workspace_settings_changed");
 		return result;
 	}
+	reservedConfiguration(lease: InsightsWorkspaceAdmission): { model: string; thinking?: string } {
+		this.validate(lease);
+		const row = this.row(lease.authority.home)!;
+		const op = JSON.parse(String(row.envelope)) as DurableOperation;
+		const payload = JSON.parse(op.payload);
+		return { model: payload.model, ...(payload.thinking === undefined ? {} : { thinking: payload.thinking }) };
+	}
 	private itemNow(id: string, kind: string, key: string): InsightsWorkspaceItem {
 		const row = this.db.one(
 			"SELECT * FROM insights_workspace_items WHERE workspace_id=? AND kind=? AND key=?",
@@ -316,8 +329,29 @@ export class InsightsWorkspaceStore {
 			revision: Number(row.revision),
 			lifecycle: row.lifecycle as InsightsLifecycle | null,
 			request: String(row.request),
+			...this.origin(id, kind, key, Number(row.revision)),
 			updatedAt: Number(row.updated_at),
 		};
+	}
+	private origin(id: string, kind: string, key: string, revision: number): Pick<InsightsWorkspaceItem, "origin"> {
+		const row = this.db.one(
+			"SELECT * FROM insights_workspace_origins WHERE workspace_id=? AND kind=? AND key=? AND revision=?",
+			id,
+			kind,
+			key,
+			revision,
+		);
+		return row
+			? {
+					origin: {
+						kind: "legacy_snapshot",
+						transferOperationId: String(row.transfer_operation_id),
+						sourceTable: String(row.source_table),
+						sourceKey: String(row.source_key),
+						sourceHash: String(row.source_hash),
+					},
+				}
+			: {};
 	}
 	async item(lease: InsightsWorkspaceAdmission, kind: string, key: string) {
 		this.validate(lease);
@@ -357,6 +391,7 @@ export class InsightsWorkspaceStore {
 				lifecycle: row.lifecycle as InsightsLifecycle | null,
 				updatedAt: Number(row.at),
 				cursor: Number(row.seq),
+				...this.origin(id, kind, key, Number(row.revision)),
 			};
 			if (Buffer.byteLength(JSON.stringify([...items, item])) > 64000) break;
 			items.push(item);
@@ -380,7 +415,7 @@ export class InsightsWorkspaceStore {
 	}
 	async page(
 		lease: InsightsWorkspaceAdmission,
-		kind: "finding" | "report",
+		kind: "finding" | "report" | "checkpoint",
 		cursor = 0,
 	): Promise<InsightsWorkspacePage> {
 		if (!Number.isSafeInteger(cursor) || cursor < 0) throw new Conflict("Invalid workspace cursor");
@@ -463,7 +498,7 @@ export class InsightsWorkspaceStore {
 	}
 
 	/** Trusted bridge only. Keeps original request bytes, never projects to a task. */
-	async write(lease: InsightsWorkspaceAdmission, raw: string): Promise<unknown> {
+	async write(lease: InsightsWorkspaceAdmission, raw: string, beforeWrite: () => void = () => {}): Promise<unknown> {
 		bytes(raw);
 		const x = parseInsightsBacklog(JSON.parse(raw));
 		if (!["propose", "amend", "save_report", "save_checkpoint"].includes(x.action) || !("expectedRevision" in x))
@@ -473,6 +508,15 @@ export class InsightsWorkspaceStore {
 			this.validate(lease, true);
 			const priorReceipt = this.receipt(id, x.operationId, raw);
 			if (priorReceipt) return priorReceipt;
+			if (
+				this.db.one(
+					"SELECT 1 FROM insights_workspace_legacy_operations WHERE workspace_id=? AND operation_id=?",
+					id,
+					x.operationId,
+				)
+			)
+				throw new Conflict("legacy_operation_requires_original_receipt");
+			beforeWrite();
 			const finding = "draft" in x;
 			const kind = finding ? "finding" : x.action === "save_report" ? "report" : "checkpoint";
 			const row = this.db.one(
@@ -518,7 +562,8 @@ export class InsightsWorkspaceStore {
 						x.key,
 						e.key,
 					);
-					if (old && old.payload !== payload) throw new Conflict("Evidence is immutable");
+					if (old && canonicalJSON(JSON.parse(String(old.payload))) !== payload)
+						throw new Conflict("Evidence is immutable");
 					this.db.run(
 						"INSERT OR IGNORE INTO insights_workspace_evidence VALUES (?,?,?,?)",
 						id,

@@ -45,6 +45,10 @@ test("schedule GET list/detail are passive even after a pending deadline becomes
 		assert.fail(`passive GET must not invoke ${name}`);
 	};
 	const sessions = {
+		piReload: {
+			onChange: () => () => {},
+			status: () => ({ operationId: null, pending: 0, reloading: 0, reloaded: 0, failed: 0 }),
+		},
 		setWorkspaceProcessGuard() {},
 		list: () => [],
 		get: () => forbidden("session validation"),

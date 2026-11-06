@@ -50,6 +50,9 @@ import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import { HUMAN_REVIEW_SCHEMA, HumanReviewStore } from "./human-review-store.ts";
 import { INSIGHTS_SCHEMA, InsightsBacklog } from "./insights-backlog.ts";
+import { InsightsLegacyRecords } from "./insights-legacy.ts";
+import { INSIGHTS_OWNER_SCHEMA, InsightsOwnerStore } from "./insights-owner-store.ts";
+import { INSIGHTS_TRANSITION_SCHEMA, InsightsTransitionStore } from "./insights-transition-store.ts";
 import { INSIGHTS_WORKSPACE_SCHEMA, InsightsWorkspaceStore } from "./insights-workspace-store.ts";
 import type { SharedMissionGroup } from "./mission-catalog.ts";
 import {
@@ -699,6 +702,25 @@ export class MissionStore {
 		transaction: (work) => this.transaction(work, true),
 		durable: () => this.durable(),
 	});
+	readonly insightsOwner = new InsightsOwnerStore({
+		all: (sql, ...params) => this.all(sql, ...params),
+		one: (sql, ...params) => this.one(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work, true),
+		durable: () => this.durable(),
+	});
+	readonly insightsLegacy = new InsightsLegacyRecords({
+		all: (sql, ...params) => this.all(sql, ...params),
+		one: (sql, ...params) => this.one(sql, ...params),
+		durable: () => this.durable(),
+	});
+	readonly insightsTransition = new InsightsTransitionStore({
+		all: (sql, ...params) => this.all(sql, ...params),
+		one: (sql, ...params) => this.one(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work, true),
+		durable: () => this.durable(),
+	});
 
 	readonly workflowConfirmations = new WorkflowConfirmationStore({
 		one: (sql, ...params) => this.one(sql, ...params),
@@ -775,12 +797,15 @@ export class MissionStore {
 		this.db.exec(KNOWLEDGE_SCHEMA);
 		this.db.exec(INSIGHTS_SCHEMA);
 		this.db.exec(INSIGHTS_WORKSPACE_SCHEMA);
+		this.db.exec(INSIGHTS_OWNER_SCHEMA);
+		this.db.exec(INSIGHTS_TRANSITION_SCHEMA);
 		this.db.exec(WORKFLOW_CONFIRMATION_SCHEMA);
 		this.db.exec(HUMAN_REVIEW_SCHEMA);
 		this.db.exec(RETAINED_PROJECTION_SCHEMA);
 		this.db.exec(REVIEW_REQUEST_SCHEMA);
 		// Startup only, on disk before the in-memory replica opens. Never replay a saved placement.
 		this.insights.reviews.recover();
+		this.insightsOwner.reviews.recover();
 		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "created_by_session_id"))
 			this.db.exec("ALTER TABLE tasks ADD COLUMN created_by_session_id TEXT");
 		// Existing assignments are grandfathered, not retroactively charged.

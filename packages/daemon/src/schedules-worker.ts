@@ -106,7 +106,7 @@ parentPort!.on("message", ({ id, method, item, expected, now }) => {
 			// Do not add an overlapping fixed-chat rule while enable awaits its create ACK.
 			if (
 				item.trigger === "recurring" &&
-				item.insightsDestination &&
+				(item.insightsDestination || item.insightsOwnerDestination) &&
 				list().some(
 					(r) =>
 						r.trigger === "recurring" &&
@@ -142,7 +142,7 @@ parentPort!.on("message", ({ id, method, item, expected, now }) => {
 		} else if (method === "replace" || method === "remove") {
 			if (
 				method === "replace" &&
-				item.insightsDestination &&
+				(item.insightsDestination || item.insightsOwnerDestination) &&
 				item.trigger === "recurring" &&
 				item.target.kind === "message" &&
 				!item.paused &&

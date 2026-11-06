@@ -56,6 +56,16 @@ export interface ScheduleDispatch {
 	send(id: string, message: string, mode: "followUp", requestId: string): Promise<void>;
 	get(id: string): { projectId?: string; working?: boolean } | undefined;
 	insightsStatus?(id: string): InsightsStatus | undefined;
+	insightsOwnerStatus?(
+		id: string,
+	): { owner: import("@pilot/protocol").InsightsWorkspaceOwner; available: boolean } | undefined;
+	insightsOwnerScheduleBounds?(
+		id: string,
+		revision: number,
+		recurrence?: ScheduleRecurrence,
+	): InsightsReviewDispatch["bounds"];
+	dispatchInsightsOwnerReview?(id: string, request: InsightsReviewDispatch): Promise<InsightsReviewRun>;
+	insightsOwnerReviewStatus?(id: string, runId: string): Promise<InsightsReviewRun | null>;
 	insightsReplacementTarget?(id: string): void;
 	dispatchInsightsReview?(id: string, request: InsightsReviewDispatch): Promise<InsightsReviewRun>;
 	insightsReviewStatus?(id: string, runId: string): Promise<InsightsReviewRun | null>;
@@ -298,6 +308,7 @@ export class ScheduleService {
 		// Destination role is host-owned. Message text cannot select/mint Insights authority.
 		const insights =
 			item.target.kind === "message" ? this.deps.sessions.insightsStatus?.(item.target.sessionId) : undefined;
+		const ownerDestination = item.insightsOwnerDestination;
 		const destination =
 			item.insightsDestination ??
 			(insights
@@ -309,7 +320,18 @@ export class ScheduleService {
 				: undefined);
 		let bounds: InsightsReviewDispatch["bounds"] = { ...INSIGHTS_INITIAL_DEFAULTS.bounds };
 		let settingsReady = true;
-		if (destination) {
+		if (ownerDestination) {
+			try {
+				if (!this.deps.sessions.insightsOwnerScheduleBounds) throw new Conflict("Owner execution unsupported");
+				bounds = this.deps.sessions.insightsOwnerScheduleBounds(
+					ownerDestination.reportSessionId,
+					item.insightsSettingsRevision ?? 0,
+					item.recurrence,
+				);
+			} catch {
+				settingsReady = false;
+			}
+		} else if (destination) {
 			try {
 				bounds =
 					this.deps.sessions.insightsScheduleBounds?.(
@@ -322,7 +344,7 @@ export class ScheduleService {
 			}
 		}
 		const review =
-			destination && item.target.kind === "message"
+			(destination || ownerDestination) && item.target.kind === "message"
 				? {
 						sessionId: item.target.sessionId,
 						request: {
@@ -406,18 +428,34 @@ export class ScheduleService {
 					if (claimed.insightsReview) {
 						const { sessionId, request } = claimed.insightsReview;
 						run.insightsReview = { runId: request.runId, state: "unresolved" };
-						if (
-							!settingsReady ||
-							!insights?.available ||
-							insights.projectId !== claimed.projectId ||
-							insights.projectId !== destination?.projectId ||
-							insights.sessionId !== destination?.sessionId ||
-							insights.missionId !== destination?.missionId ||
-							!this.deps.sessions.dispatchInsightsReview
-						)
-							throw new Conflict("Insights authority unavailable; review not sent");
-						const status = await this.deps.sessions.dispatchInsightsReview(sessionId, request);
-						this.applyReviewStatus(run, status);
+						if (ownerDestination) {
+							const current = this.deps.sessions.insightsOwnerStatus?.(sessionId);
+							if (
+								!settingsReady ||
+								!current?.available ||
+								canonicalJSON(current.owner) !== canonicalJSON(ownerDestination) ||
+								claimed.projectId !== current.owner.projectId ||
+								!this.deps.sessions.dispatchInsightsOwnerReview
+							)
+								throw new Conflict("Owner authority unavailable; review not sent");
+							this.applyReviewStatus(
+								run,
+								await this.deps.sessions.dispatchInsightsOwnerReview(sessionId, request),
+							);
+						} else {
+							if (
+								!settingsReady ||
+								!insights?.available ||
+								insights.projectId !== claimed.projectId ||
+								insights.projectId !== destination?.projectId ||
+								insights.sessionId !== destination?.sessionId ||
+								insights.missionId !== destination?.missionId ||
+								!this.deps.sessions.dispatchInsightsReview
+							)
+								throw new Conflict("Insights authority unavailable; review not sent");
+							const status = await this.deps.sessions.dispatchInsightsReview(sessionId, request);
+							this.applyReviewStatus(run, status);
+						}
 					} else {
 						await this.deps.sessions.send(
 							run.sessionId,
@@ -456,7 +494,9 @@ export class ScheduleService {
 	}
 	private async lookupReview(run: ScheduleRun): Promise<void> {
 		try {
-			const status = await this.deps.sessions.insightsReviewStatus?.(run.sessionId!, run.insightsReview!.runId);
+			const status = this.deps.sessions.insightsOwnerStatus?.(run.sessionId!)
+				? await this.deps.sessions.insightsOwnerReviewStatus?.(run.sessionId!, run.insightsReview!.runId)
+				: await this.deps.sessions.insightsReviewStatus?.(run.sessionId!, run.insightsReview!.runId);
 			this.applyReviewStatus(run, status ?? null);
 			if (status?.state === "sent" && !this.deps.sessions.get(run.sessionId!)?.working) {
 				run.outcome = "failed";
@@ -591,10 +631,82 @@ export class ScheduleService {
 			});
 		});
 	}
+	/** Trusted owner bridge only. The ordinary request parser cannot supply this destination. */
+	createOwnerInsights(
+		request: ScheduleRequest,
+		owner: import("@pilot/protocol").InsightsWorkspaceOwner,
+		operationId: string,
+		settingsRevision: number,
+		revalidate: () => void,
+	): Promise<ScheduledItem> {
+		return this.runtime.run("create", async () => {
+			this.assertOpen();
+			const data = await this.validate(request, owner);
+			this.checkHome(request.expectedHome, true);
+			revalidate();
+			if (
+				data.trigger !== "recurring" ||
+				data.target.kind !== "message" ||
+				data.target.sessionId !== owner.reportSessionId ||
+				data.projectId !== owner.projectId ||
+				data.insightsDestination
+			)
+				throw new Conflict("Exact owner schedule required");
+			const now = this.time.now();
+			return this.store.create({
+				...data,
+				id: owner.scheduleId,
+				revision: 1,
+				state: "pending",
+				handledThrough: now,
+				runs: [],
+				createdAt: now,
+				updatedAt: now,
+				insightsOwnerDestination: owner,
+				insightsEnableOperationId: operationId,
+				insightsSettingsRevision: settingsRevision,
+			});
+		});
+	}
 
 	insightsEnableAvailable(expectedHome: ScheduleHome): void {
 		this.assertOpen();
 		this.checkHome(expectedHome, true);
+	}
+	/** Fresh native Apply re-arms one exact cancelled row, preserving occurrence history. */
+	rearmOwnerInsights(
+		expected: ScheduledItem,
+		owner: import("@pilot/protocol").InsightsWorkspaceOwner,
+		operationId: string,
+		settings: import("@pilot/protocol").InsightsSettingsRecord,
+		guard: () => void,
+	): Promise<ScheduledItem> {
+		return this.runtime.run("update", async () => {
+			this.insightsEnableAvailable(owner.expectedHome);
+			const current = this.store.require(owner.scheduleId);
+			if (
+				current.state !== "cancelled" ||
+				current.target.kind !== "message" ||
+				current.target.sessionId !== owner.reportSessionId ||
+				canonicalJSON(current.insightsOwnerDestination) !== canonicalJSON(owner) ||
+				canonicalJSON(current) !== canonicalJSON(expected)
+			)
+				throw new Conflict("owner_apply_cancelled_rule_changed");
+			guard();
+			const now = this.time.now();
+			return this.store.replace(current, {
+				...current,
+				state: "pending",
+				paused: undefined,
+				claimedAt: undefined,
+				at: new RecurrenceCalendar(settings.settings.recurrence).next(now),
+				recurrence: settings.settings.recurrence,
+				handledThrough: now,
+				updatedAt: now,
+				insightsSettingsRevision: settings.revision,
+				insightsEnableOperationId: operationId,
+			});
+		});
 	}
 	insightsReplacementAvailable(expectedHome: ScheduleHome): void {
 		this.insightsEnableAvailable(expectedHome);
@@ -608,6 +720,51 @@ export class ScheduleService {
 		if (!this.inventoryLoaded) throw new Conflict("schedule_inventory_unavailable");
 		if (this.store.hasInsightsIntent()) throw new Conflict("legacy_transition_required");
 	}
+	assertNoLegacyOwnerExecution(expectedHome: ScheduleHome): void {
+		this.assertOpen();
+		this.checkHome(expectedHome, false);
+		this.store.assertSettled();
+		if (!this.inventoryLoaded) throw new Conflict("schedule_inventory_unavailable");
+		if (this.store.hasLegacyInsightsIntent()) throw new Conflict("legacy_transition_required");
+	}
+	assertTransferredLegacy(expectedHome: ScheduleHome, acknowledged: ScheduledItem[], oldId: string): void {
+		this.assertOpen();
+		this.checkHome(expectedHome, false);
+		this.store.assertSettled();
+		if (!this.inventoryLoaded) throw new Conflict("schedule_inventory_unavailable");
+		for (const rule of this.store.legacyInsightsItems(oldId)) {
+			if (!acknowledged.some((ack) => ack.state === "cancelled" && canonicalJSON(ack) === canonicalJSON(rule)))
+				throw new Conflict("legacy_rule_not_exactly_acknowledged");
+		}
+	}
+	/** Confirmed transfer may deny an exact old rule even while global Automations is off. */
+	cancelLegacyForTransfer(
+		expected: ScheduledItem,
+		selector: import("@pilot/protocol").InsightsLegacySelector,
+		guard: () => void,
+	): Promise<ScheduledItem> {
+		return this.runtime.run("remove", async () => {
+			this.assertOpen();
+			this.checkHome(selector.expectedHome, false);
+			this.store.assertSettled();
+			const old = this.store.require(expected.id);
+			if (
+				!old.insightsEnableOperationId ||
+				old.insightsOwnerDestination ||
+				old.state !== "pending" ||
+				canonicalJSON(old) !== canonicalJSON(expected) ||
+				canonicalJSON(old.insightsDestination) !==
+					canonicalJSON({
+						sessionId: selector.reportSessionId,
+						projectId: selector.projectId,
+						missionId: selector.missionId,
+					})
+			)
+				throw new Conflict("legacy_rule_changed_or_cancellation_unknown");
+			guard();
+			return this.store.replace(old, { ...old, state: "cancelled", updatedAt: this.time.now() });
+		});
+	}
 	/** Exact previewed integration-owned rule only; never dismiss a terminal/manual row. */
 	cancelInsights(expected: ScheduledItem, expectedHome: ScheduleHome, revalidate: () => void): Promise<ScheduledItem> {
 		return this.runtime.run("remove", async () => {
@@ -619,6 +776,27 @@ export class ScheduleService {
 				canonicalJSON(old) !== canonicalJSON(expected)
 			)
 				throw new Conflict("Previewed Insights rule changed");
+			revalidate();
+			return this.store.replace(old, { ...old, state: "cancelled", updatedAt: this.time.now() });
+		});
+	}
+	/** Denial must still work with global Automations disabled. Exact CAS/ACK, never GET equality. */
+	cancelOwnerInsights(
+		expected: ScheduledItem,
+		owner: import("@pilot/protocol").InsightsWorkspaceOwner,
+		revalidate: () => void,
+	): Promise<ScheduledItem> {
+		return this.runtime.run("remove", async () => {
+			this.assertOpen();
+			this.checkHome(owner.expectedHome, false);
+			const old = this.store.require(owner.scheduleId);
+			if (
+				!old.insightsEnableOperationId ||
+				old.state !== "pending" ||
+				canonicalJSON(old) !== canonicalJSON(expected) ||
+				canonicalJSON(old.insightsOwnerDestination) !== canonicalJSON(owner)
+			)
+				throw new Conflict("Owner rule changed or cancellation unknown");
 			revalidate();
 			return this.store.replace(old, { ...old, state: "cancelled", updatedAt: this.time.now() });
 		});
@@ -767,6 +945,7 @@ export class ScheduleService {
 			"claimedAt",
 			"insightsReview",
 			"insightsDestination",
+			"insightsOwnerDestination",
 			"insightsEnableOperationId",
 			"insightsSettingsRevision",
 			"firedAt",
@@ -801,6 +980,7 @@ export class ScheduleService {
 	}
 	private async validate(
 		request: ScheduleRequest,
+		owner?: import("@pilot/protocol").InsightsWorkspaceOwner,
 	): Promise<
 		Pick<
 			ScheduledItem,
@@ -887,6 +1067,9 @@ export class ScheduleService {
 			if ("trackedItemId" in raw) throw new Error("trackedItemId is only valid for a chat target");
 			if (typeof raw.sessionId !== "string" || !raw.sessionId.trim()) throw new Error("sessionId is required");
 			const session = this.deps.sessions.get(raw.sessionId);
+			const ownerStatus = this.deps.sessions.insightsOwnerStatus?.(raw.sessionId);
+			if (ownerStatus && canonicalJSON(ownerStatus.owner) !== canonicalJSON(owner))
+				throw new Conflict("Owner schedules require exact native admission");
 			if (!session) throw new NotFound("Unknown target chat");
 			sessionId = raw.sessionId;
 			projectId = session.projectId;

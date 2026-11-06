@@ -139,6 +139,7 @@ export interface KernelSpec {
 	/** Runtime-enforced specialist profile. Omitted for ordinary Build and Ask sessions. */
 	role?: import("@pilot/protocol").SessionRole;
 	insightsBinding?: import("@pilot/protocol").InsightsBinding;
+	insightsOwnerBinding?: import("@pilot/protocol").InsightsOwnerBinding;
 	/** Host-admitted chat that a diagnostics specialist may inspect. */
 	diagnosticTarget?: DiagnosticTargetReference;
 	/** Host-admitted app scope when no chat is attached. */

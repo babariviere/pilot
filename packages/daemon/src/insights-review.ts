@@ -8,12 +8,14 @@ import type {
 	InsightsReviewDispatch,
 	InsightsReviewRecord,
 	InsightsReviewRun,
+	InsightsSettingsRecord,
 } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
-import type { InsightsAdmission } from "./insights-admission.ts";
+import type { InsightsAdmission, InsightsReviewAdmission } from "./insights-admission.ts";
 import type { InsightsDb } from "./insights-backlog.ts";
 import { insightsReviewBudget } from "./insights-defaults.ts";
 import { InsightsSettings } from "./insights-settings.ts";
+import { canonicalJSON, payloadHash } from "./operation-journal.ts";
 
 export const INSIGHTS_REVIEW_SCHEMA = `
 CREATE TABLE IF NOT EXISTS insights_runs (
@@ -90,11 +92,55 @@ function validate(request: InsightsReviewDispatch): void {
 		throw new Conflict("Invalid bounded review dispatch");
 }
 
-export class InsightsReviews {
-	private readonly db: InsightsDb;
+export type InsightsReviewDb = Pick<InsightsDb, "one" | "all" | "run" | "transaction" | "durable" | "validateMission">;
+
+export interface InsightsReviewBackend<A extends InsightsReviewAdmission> {
+	owner: "workspace";
+	settings: {
+		current(admission: A): InsightsSettingsRecord | null;
+		assertDispatch(admission: A, revision?: number): InsightsSettingsRecord | null;
+	};
+}
+
+export class InsightsReviews<A extends InsightsReviewAdmission = InsightsAdmission> {
+	private readonly db: InsightsReviewDb;
+	private readonly backend?: InsightsReviewBackend<A>;
+	private readonly tables: {
+		runs: string;
+		inventory: string;
+		sources: string;
+		patterns: string;
+		reads: string;
+		items: string;
+		owner: string;
+	};
+	private settings() {
+		return (
+			this.backend?.settings ?? (new InsightsSettings(this.db) as unknown as InsightsReviewBackend<A>["settings"])
+		);
+	}
+	private partition(admission: A): string {
+		if (admission.binding.schemaVersion === 2) {
+			if (!this.backend) throw new Conflict("Owner review requires its execution backend");
+			return admission.binding.owner.workspaceId;
+		}
+		if (this.backend) throw new Conflict("Legacy review requires its mission backend");
+		return admission.binding.missionId;
+	}
 	private readonly listeners = new Set<() => void>();
-	constructor(db: InsightsDb) {
+	constructor(db: InsightsReviewDb, backend?: InsightsReviewBackend<A>) {
 		this.db = db;
+		this.backend = backend;
+		const prefix = backend ? "insights_owner_" : "insights_";
+		this.tables = {
+			runs: `${prefix}runs`,
+			inventory: `${prefix}inventory`,
+			sources: `${prefix}sources`,
+			patterns: `${prefix}patterns`,
+			reads: `${prefix}review_reads`,
+			items: backend ? "insights_workspace_items" : "insights_items",
+			owner: backend ? "workspace_id" : "mission_id",
+		};
 	}
 	onChange(listener: () => void): () => void {
 		this.listeners.add(listener);
@@ -106,21 +152,25 @@ export class InsightsReviews {
 	changed(): void {
 		for (const listener of this.listeners) listener();
 	}
-	private scope(admission: InsightsAdmission): string {
+	private scope(admission: A): string {
 		admission.revalidate();
-		this.db.validateMission(admission.binding.missionId, admission.binding.projectId);
-		return hash(admission.binding);
+		this.partition(admission);
+		if (admission.binding.schemaVersion === 1)
+			this.db.validateMission(admission.binding.missionId, admission.binding.projectId);
+		return admission.binding.schemaVersion === 2
+			? payloadHash(canonicalJSON(admission.binding.owner))
+			: hash(admission.binding);
 	}
 	/** Startup only, before admitting dispatch. A saved placement is never automatically replayed. */
 	recover(): void {
 		this.db.run(
-			"UPDATE insights_runs SET state='interrupted',detail='Daemon restarted; input/report completion unknown. Start a distinct run, never replay.' WHERE state IN ('preparing','ready','sent')",
+			`UPDATE ${this.tables.runs} SET state='interrupted',detail='Daemon restarted; input/report completion unknown. Start a distinct run, never replay.' WHERE state IN ('preparing','ready','sent')`,
 		);
 	}
 	private row(sessionId: string, runId: string) {
-		return this.db.one("SELECT * FROM insights_runs WHERE session_id=? AND run_id=?", sessionId, runId);
+		return this.db.one(`SELECT * FROM ${this.tables.runs} WHERE session_id=? AND run_id=?`, sessionId, runId);
 	}
-	private public(row: NonNullable<ReturnType<InsightsReviews["row"]>>): InsightsReviewRun {
+	private public(row: NonNullable<ReturnType<InsightsReviews<A>["row"]>>): InsightsReviewRun {
 		const request = JSON.parse(row.request as string) as InsightsReviewDispatch;
 		return {
 			runId: request.runId,
@@ -131,16 +181,18 @@ export class InsightsReviews {
 			detail: row.detail as string,
 		};
 	}
-	async status(admission: InsightsAdmission, runId: string): Promise<InsightsReviewRun | null> {
+	async status(admission: A, runId: string): Promise<InsightsReviewRun | null> {
 		const scope = this.scope(admission);
 		const row = this.row(admission.binding.reportSessionId, runId);
 		if (row && row.binding !== scope) throw new Conflict("Review binding changed");
 		await this.db.durable();
 		this.scope(admission);
+		if (hash(row ?? null) !== hash(this.row(admission.binding.reportSessionId, runId) ?? null))
+			throw new Conflict("Review changed during read");
 		return row ? this.public(row) : null;
 	}
 	/** Synchronous reservation closes overlap before the first await. Existing IDs are lookup only. */
-	async reserve(admission: InsightsAdmission, request: InsightsReviewDispatch): Promise<boolean> {
+	async reserve(admission: A, request: InsightsReviewDispatch): Promise<boolean> {
 		validate(request);
 		const inserted = this.db.transaction(() => {
 			const scope = this.scope(admission);
@@ -150,7 +202,17 @@ export class InsightsReviews {
 					throw new Conflict("Review run identity changed");
 				return false;
 			}
-			const settings = new InsightsSettings(this.db).assertDispatch(admission, request.settingsRevision);
+			const settings = this.settings().assertDispatch(admission, request.settingsRevision);
+			if (
+				this.backend &&
+				Number(
+					this.db.one(
+						`SELECT COUNT(*) n FROM ${this.tables.runs} WHERE ${this.tables.owner}=?`,
+						this.partition(admission),
+					)!.n,
+				) >= 4096
+			)
+				throw new Conflict("Owner run capacity reached; no history is discarded");
 			if (
 				settings &&
 				Object.keys(request.bounds).some(
@@ -162,14 +224,14 @@ export class InsightsReviews {
 				throw new Conflict("Review bounds differ from confirmed settings");
 			if (
 				this.db.one(
-					"SELECT 1 FROM insights_runs WHERE session_id=? AND state IN ('preparing','ready','sent')",
+					`SELECT 1 FROM ${this.tables.runs} WHERE session_id=? AND state IN ('preparing','ready','sent')`,
 					admission.binding.reportSessionId,
 				)
 			)
 				throw new Conflict("A review is already active");
 			this.db.run(
-				"INSERT INTO insights_runs(mission_id,session_id,run_id,binding,request,state,detail) VALUES (?,?,?,?,?,'preparing','Reserved; no report yet')",
-				admission.binding.missionId,
+				`INSERT INTO ${this.tables.runs}(${this.tables.owner},session_id,run_id,binding,request,state,detail) VALUES (?,?,?,?,?,'preparing','Reserved; no report yet')`,
+				this.partition(admission),
 				admission.binding.reportSessionId,
 				request.runId,
 				scope,
@@ -189,7 +251,7 @@ export class InsightsReviews {
 		runId?: string,
 	): Promise<void> {
 		this.db.run(
-			"UPDATE insights_runs SET state=?,detail=? WHERE session_id=? AND state IN ('preparing','ready','sent') AND (? IS NULL OR run_id=?)",
+			`UPDATE ${this.tables.runs} SET state=?,detail=? WHERE session_id=? AND state IN ('preparing','ready','sent') AND (? IS NULL OR run_id=?)`,
 			state,
 			detail,
 			sessionId,
@@ -206,12 +268,12 @@ export class InsightsReviews {
 	/** An explicit normalized target/mechanism label deduplicates even when a new UUID is proposed.
 	 * Semantic equivalence remains a review judgement, never a host-certified inference.
 	 */
-	pattern(admission: InsightsAdmission, key: string, pattern?: string): void {
+	pattern(admission: A, key: string, pattern?: string): void {
 		this.scope(admission);
 		if (!pattern) {
 			if (
 				this.db.one(
-					"SELECT 1 FROM insights_runs WHERE session_id=? AND state IN ('preparing','ready','sent')",
+					`SELECT 1 FROM ${this.tables.runs} WHERE session_id=? AND state IN ('preparing','ready','sent')`,
 					admission.binding.reportSessionId,
 				)
 			)
@@ -220,45 +282,45 @@ export class InsightsReviews {
 				);
 			return;
 		}
-		const mission = admission.binding.missionId;
+		const mission = this.partition(admission);
 		const old = this.db.one(
-			"SELECT finding_key FROM insights_patterns WHERE mission_id=? AND pattern=?",
+			`SELECT finding_key FROM ${this.tables.patterns} WHERE ${this.tables.owner}=? AND pattern=?`,
 			mission,
 			pattern,
 		);
 		if (old && old.finding_key !== key)
 			throw new Conflict(`Recurring pattern already tracked by ${old.finding_key}; get and amend it`);
 		const assigned = this.db.one(
-			"SELECT pattern FROM insights_patterns WHERE mission_id=? AND finding_key=?",
+			`SELECT pattern FROM ${this.tables.patterns} WHERE ${this.tables.owner}=? AND finding_key=?`,
 			mission,
 			key,
 		);
 		if (assigned && assigned.pattern !== pattern) throw new Conflict("Finding pattern identity is immutable");
 		this.db.run(
-			"INSERT OR IGNORE INTO insights_patterns(mission_id,pattern,finding_key) VALUES (?,?,?)",
+			`INSERT OR IGNORE INTO ${this.tables.patterns}(${this.tables.owner},pattern,finding_key) VALUES (?,?,?)`,
 			mission,
 			pattern,
 			key,
 		);
 	}
-	assertActive(admission: InsightsAdmission, runId: string): void {
+	assertActive(admission: A, runId: string): void {
 		const scope = this.scope(admission);
 		const row = this.row(admission.binding.reportSessionId, runId);
 		if (!row || row.binding !== scope || !active(String(row.state)))
 			throw new Conflict("Review is terminal or unavailable; never replay");
 	}
-	hasActive(admission: InsightsAdmission): boolean {
+	hasActive(admission: A): boolean {
 		this.scope(admission);
 		return !!this.db.one(
-			"SELECT 1 FROM insights_runs WHERE session_id=? AND state IN ('preparing','ready','sent')",
+			`SELECT 1 FROM ${this.tables.runs} WHERE session_id=? AND state IN ('preparing','ready','sent')`,
 			admission.binding.reportSessionId,
 		);
 	}
-	async sent(admission: InsightsAdmission, runId: string): Promise<void> {
+	async sent(admission: A, runId: string): Promise<void> {
 		if ((await this.status(admission, runId))?.state === "partial") return;
 		this.assertActive(admission, runId);
 		this.db.run(
-			"UPDATE insights_runs SET state='sent',detail='Input placed; not report completion' WHERE session_id=? AND run_id=?",
+			`UPDATE ${this.tables.runs} SET state='sent',detail='Input placed; not report completion' WHERE session_id=? AND run_id=?`,
 			admission.binding.reportSessionId,
 			runId,
 		);
@@ -268,7 +330,7 @@ export class InsightsReviews {
 	}
 	/** Prefetch a bounded packet without waking source workers. Positions commit only with the report. */
 	async prepare(
-		admission: InsightsAdmission,
+		admission: A,
 		request: InsightsReviewDispatch,
 		read: Read,
 		allowed: (id: string) => boolean = () => true,
@@ -287,8 +349,9 @@ export class InsightsReviews {
 			],
 		};
 		let after =
-			(this.db.one("SELECT after_id FROM insights_inventory WHERE scope=?", scope)?.after_id as string | null) ??
-			null;
+			(this.db.one(`SELECT after_id FROM ${this.tables.inventory} WHERE scope=?`, scope)?.after_id as
+				| string
+				| null) ?? null;
 		const discovered: Source[] = [];
 		const entriesPerPage =
 			request.settingsRevision === undefined
@@ -330,18 +393,29 @@ export class InsightsReviews {
 		// Queue inventory immediately, but do not consume positions before a report is saved.
 		this.db.transaction(() => {
 			this.assertActive(admission, request.runId);
-			for (const s of discovered)
+			for (const s of discovered) {
+				if (
+					this.backend &&
+					!this.db.one(
+						`SELECT 1 FROM ${this.tables.sources} WHERE scope=? AND session_id=?`,
+						scope,
+						s.sessionId,
+					) &&
+					Number(this.db.one(`SELECT COUNT(*) n FROM ${this.tables.sources} WHERE scope=?`, scope)!.n) >= 4096
+				)
+					throw new Conflict("Owner source capacity reached; unfinished positions are kept");
 				this.db.run(
-					"INSERT INTO insights_sources(scope,session_id,project_id,position) VALUES (?,?,?,?) ON CONFLICT(scope,session_id) DO UPDATE SET project_id=excluded.project_id",
+					`INSERT INTO ${this.tables.sources}(scope,session_id,project_id,position) VALUES (?,?,?,?) ON CONFLICT(scope,session_id) DO UPDATE SET project_id=excluded.project_id`,
 					scope,
 					s.sessionId,
 					s.projectId,
 					JSON.stringify(s.position),
 				);
+			}
 		});
 		const sources = this.db
 			.all(
-				"SELECT session_id,project_id,position FROM insights_sources WHERE scope=? ORDER BY reviewed,seq LIMIT ?",
+				`SELECT session_id,project_id,position FROM ${this.tables.sources} WHERE scope=? ORDER BY reviewed,seq LIMIT ?`,
 				scope,
 				request.settingsRevision === undefined ? request.bounds.historyPages : 200,
 			)
@@ -433,7 +507,7 @@ export class InsightsReviews {
 			// A single packet is intentionally bounded, even for large excerpt entries.
 			if (Buffer.byteLength(JSON.stringify(packet)) > 640 * 1024) throw new Conflict("Review packet exceeds bound");
 			this.db.run(
-				"UPDATE insights_runs SET state='ready',packet=?,detail='Evidence prepared; report not saved' WHERE session_id=? AND run_id=?",
+				`UPDATE ${this.tables.runs} SET state='ready',packet=?,detail='Evidence prepared; report not saved' WHERE session_id=? AND run_id=?`,
 				JSON.stringify(packet),
 				admission.binding.reportSessionId,
 				request.runId,
@@ -454,7 +528,7 @@ export class InsightsReviews {
 				}
 			: fresh();
 	}
-	private validEnvelope(admission: InsightsAdmission, response: DiagnosticContextResponse): boolean {
+	private validEnvelope(admission: A, response: DiagnosticContextResponse): boolean {
 		return (
 			response?.schemaVersion === 1 &&
 			hash(response.host) === hash(admission.binding.host) &&
@@ -465,7 +539,7 @@ export class InsightsReviews {
 		);
 	}
 	private historyReceipt(
-		admission: InsightsAdmission,
+		admission: A,
 		id: string,
 		response: DiagnosticContextResponse,
 		before?: number,
@@ -520,10 +594,10 @@ export class InsightsReviews {
 		});
 	}
 	/** One bounded excerpt per call. Access receipts do not certify semantic inspection or delivery. */
-	context(admission: InsightsAdmission, cursor: number) {
+	context(admission: A, cursor: number) {
 		const scope = this.scope(admission);
 		const row = this.db.one(
-			"SELECT * FROM insights_runs WHERE session_id=? ORDER BY seq DESC LIMIT 1",
+			`SELECT * FROM ${this.tables.runs} WHERE session_id=? ORDER BY seq DESC LIMIT 1`,
 			admission.binding.reportSessionId,
 		);
 		if (!row || row.binding !== scope || !active(String(row.state)) || !row.packet)
@@ -533,31 +607,31 @@ export class InsightsReviews {
 		const parts = this.parts(packet);
 		if (cursor > parts.length) throw new Conflict("Invalid review context cursor");
 		if (cursor < parts.length)
-			this.db.run("INSERT OR IGNORE INTO insights_review_reads(run_seq,cursor) VALUES (?,?)", row.seq!, cursor);
+			this.db.run(`INSERT OR IGNORE INTO ${this.tables.reads}(run_seq,cursor) VALUES (?,?)`, row.seq!, cursor);
 		return {
 			run: this.public(row),
-			budget: insightsReviewBudget(new InsightsSettings(this.db).current(admission)?.settings.budget),
+			budget: insightsReviewBudget(this.settings().current(admission)?.settings.budget),
 			evidence: parts[cursor] ?? null,
 			nextCursor: cursor + 1 < parts.length ? cursor + 1 : null,
 			readerPages: packet.pages.length,
 			excerptParts: parts.length,
 			gaps: packet.gaps,
 			previousReports: this.db.all(
-				"SELECT key,revision,updated_at FROM insights_items WHERE mission_id=? AND kind='report' ORDER BY seq DESC LIMIT 5",
-				admission.binding.missionId,
+				`SELECT key,revision,updated_at FROM ${this.tables.items} WHERE ${this.tables.owner}=? AND kind='report' ORDER BY seq DESC LIMIT 5`,
+				this.partition(admission),
 			),
 			unresolvedRuns: this.db.one(
-				"SELECT COUNT(*) AS count,MIN(json_extract(request,'$.windowStart')) AS earliestWindowStart FROM insights_runs WHERE session_id=? AND seq<? AND state!='partial'",
+				`SELECT COUNT(*) AS count,MIN(json_extract(request,'$.windowStart')) AS earliestWindowStart FROM ${this.tables.runs} WHERE session_id=? AND seq<? AND state!='partial'`,
 				admission.binding.reportSessionId,
 				row.seq!,
 			),
-			pendingSources: this.db.one("SELECT COUNT(*) AS count FROM insights_sources WHERE scope=?", scope),
+			pendingSources: this.db.one(`SELECT COUNT(*) AS count FROM ${this.tables.sources} WHERE scope=?`, scope),
 			limitations:
 				"Excerpt parts split original reader receipts, pagination.returned refers to the original page. Page prior findings with list/get before proposing; not a change feed. No date filter, comprehensive coverage, artifact inspection or storage-incarnation proof. Old sweeps may defer newer activity. Prior interrupted windows remain unresolved.",
 		};
 	}
 	/** Within the report transaction: derive coverage from receipts, never model checkpoint text. */
-	finish(admission: InsightsAdmission, key: string, record: InsightsReviewRecord): InsightsReviewRecord {
+	finish(admission: A, key: string, record: InsightsReviewRecord): InsightsReviewRecord {
 		const row = this.row(admission.binding.reportSessionId, key);
 		if (!row) {
 			if (this.hasActive(admission)) throw new Conflict("Report key must match the active review run");
@@ -570,7 +644,7 @@ export class InsightsReviews {
 		if (request.windowStart !== record.windowStart || request.windowEnd !== record.windowEnd)
 			throw new Conflict("Report window does not match reserved run");
 		const packet = JSON.parse(row.packet as string) as Packet;
-		const reads = this.db.one("SELECT COUNT(*) AS count FROM insights_review_reads WHERE run_seq=?", row.seq!);
+		const reads = this.db.one(`SELECT COUNT(*) AS count FROM ${this.tables.reads} WHERE run_seq=?`, row.seq!);
 		if (Number(reads?.count) !== this.parts(packet).length)
 			throw new Conflict(
 				"Read all review_context pages before saving this report; access is not semantic review proof",
@@ -578,19 +652,19 @@ export class InsightsReviews {
 		const scope = this.scope(admission);
 		for (const s of packet.updates)
 			this.db.run(
-				"UPDATE insights_sources SET position=?,reviewed=? WHERE scope=? AND session_id=?",
+				`UPDATE ${this.tables.sources} SET position=?,reviewed=? WHERE scope=? AND session_id=?`,
 				JSON.stringify(s.position),
 				row.seq!,
 				scope,
 				s.sessionId,
 			);
 		this.db.run(
-			"INSERT INTO insights_inventory(scope,after_id) VALUES (?,?) ON CONFLICT(scope) DO UPDATE SET after_id=excluded.after_id",
+			`INSERT INTO ${this.tables.inventory}(scope,after_id) VALUES (?,?) ON CONFLICT(scope) DO UPDATE SET after_id=excluded.after_id`,
 			scope,
 			packet.inventoryAfter,
 		);
 		this.db.run(
-			"UPDATE insights_runs SET state='partial',report_key=?,detail='Bounded report persisted; not comprehensive coverage, approval, delivery or benefit proof' WHERE session_id=? AND run_id=?",
+			`UPDATE ${this.tables.runs} SET state='partial',report_key=?,detail='Bounded report persisted; not comprehensive coverage, approval, delivery or benefit proof' WHERE session_id=? AND run_id=?`,
 			key,
 			admission.binding.reportSessionId,
 			key,

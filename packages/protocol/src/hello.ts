@@ -30,6 +30,10 @@ export interface DaemonCapabilities {
 	insightsReplacement?: 1;
 	/** App-owned passive projections and native reservation only, not activation. */
 	insightsWorkspace?: 2;
+	/** Native-confirmed owner execution. Support is neither consent nor Enabled. */
+	insightsWorkspaceExecution?: 2;
+	/** Bounded native-confirmed tracking transfer, with separate fresh execution consent. */
+	insightsWorkspaceTransition?: 2;
 	/** Bounded active-session cwd path candidates; no home/project-root fallback. */
 	sessionPathCandidates?: 1;
 	/** Failure-fenced passive next-attempt model preferences. */

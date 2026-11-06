@@ -17,6 +17,14 @@ export interface InsightsAdmission {
 	revalidate(): void;
 }
 
+/** Distinct authority. This is never accepted by the v1 grant parser. */
+export interface InsightsOwnerAdmission {
+	readonly binding: Readonly<import("@pilot/protocol").InsightsOwnerBinding>;
+	revalidate(): void;
+}
+
+export type InsightsReviewAdmission = InsightsAdmission | InsightsOwnerAdmission;
+
 export function validateInsightsGrant(value: unknown): asserts value is InsightsGrant {
 	const v = value as InsightsGrant;
 	if (
