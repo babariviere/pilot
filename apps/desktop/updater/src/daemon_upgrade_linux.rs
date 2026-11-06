@@ -41,6 +41,22 @@ fn unit_path(home: &Path) -> Result<PathBuf, Failure> {
     }
     Ok(config.join("systemd/user").join(UNIT))
 }
+/// Drop-ins that may apply to pilotd: distribution-wide defaults for every user
+/// service (Fedora and Bazzite ship `/usr/lib/systemd/user/service.d/10-timeout-abort.conf`).
+/// Drop-ins aimed at pilotd itself, or added by an administrator or the user, still
+/// make the service unsupported, because they can change what the daemon runs.
+fn only_vendor_wide_drop_ins(paths: &str) -> bool {
+    paths.split_whitespace().all(|path| {
+        let path = Path::new(path);
+        [
+            "/usr/lib/systemd/user/service.d",
+            "/lib/systemd/user/service.d",
+        ]
+        .iter()
+        .any(|dir| path.parent() == Some(Path::new(dir)))
+            && path.extension().is_some_and(|ext| ext == "conf")
+    })
+}
 fn properties() -> Result<BTreeMap<String, String>, Failure> {
     let text = systemctl(&["show".as_ref(),UNIT.as_ref(),"--property=FragmentPath,DropInPaths,MainPID,NeedDaemonReload,ControlGroup,UnitFileState,LoadState".as_ref()])?;
     text.lines()
@@ -164,7 +180,7 @@ impl UserService<'_> {
         let get = |k: &str| p.get(k).map(String::as_str).unwrap_or("");
         let pid = self.pid()?;
         if get("FragmentPath") != self.file.to_str().ok_or(Failure::Unverified)?
-            || !get("DropInPaths").is_empty()
+            || !only_vendor_wide_drop_ins(get("DropInPaths"))
             || get("NeedDaemonReload") != "no"
             || get("LoadState") != "loaded"
             || get("MainPID") != pid.to_string()
@@ -335,7 +351,9 @@ pub fn register(
     }
     let props = properties()?;
     if props.get("MainPID").is_some_and(|p| p != "0")
-        || props.get("DropInPaths").is_some_and(|p| !p.is_empty())
+        || props
+            .get("DropInPaths")
+            .is_some_and(|p| !only_vendor_wide_drop_ins(p))
     {
         return Err(Failure::Unsupported);
     }
@@ -431,6 +449,26 @@ fn save_selected(location: &Location, root: &Path) -> Result<(), Failure> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_distribution_wide_service_drop_ins_are_accepted() {
+        assert!(only_vendor_wide_drop_ins(""));
+        assert!(only_vendor_wide_drop_ins(
+            "/usr/lib/systemd/user/service.d/10-timeout-abort.conf"
+        ));
+        assert!(only_vendor_wide_drop_ins(
+            "/usr/lib/systemd/user/service.d/10-timeout-abort.conf /lib/systemd/user/service.d/20-x.conf"
+        ));
+        for refused in [
+            "/usr/lib/systemd/user/pilotd.service.d/override.conf",
+            "/etc/systemd/user/service.d/10-admin.conf",
+            "/var/home/u/.config/systemd/user/pilotd.service.d/override.conf",
+            "/var/home/u/.config/systemd/user/service.d/10-user.conf",
+            "/usr/lib/systemd/user/service.d/../pilotd.service.d/x.conf",
+            "/usr/lib/systemd/user/service.d/10-timeout-abort.conf /etc/systemd/user/pilotd.service.d/x.conf",
+        ] {
+            assert!(!only_vendor_wide_drop_ins(refused), "{refused}");
+        }
+    }
     #[test]
     #[ignore = "isolated environment without a systemd user manager; no service operations"]
     fn absent_user_manager_refuses_before_profile_or_service_changes() {

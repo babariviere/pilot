@@ -202,7 +202,10 @@ binaries cannot be patched by that claim and must not be used to repair/restart
 the service during coexistence.
 
 Linux keeps its separately qualified retained-runtime/systemd adapter, exact
-unit/MainPID/profile/cgroup checks, and existing host logout policy. The macOS
+unit/MainPID/profile/cgroup checks, and existing host logout policy. Distribution
+defaults for every user service (`/usr/lib/systemd/user/service.d/*.conf`, such as
+Fedora's `10-timeout-abort.conf`) are accepted; pilotd-specific, administrator and
+user drop-ins still refuse registration and upgrades. The macOS
 simplification grants no general PID-signaling, sudo or service-management power.
 
 ## Explicit registration and GUI independence
