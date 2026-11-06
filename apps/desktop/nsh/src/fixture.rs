@@ -107,6 +107,22 @@ impl Fixture {
     pub fn changed(&self) {
         let _ = self.changes.send(());
     }
+    pub fn images(&self, session: &str) {
+        let mut content = Vec::new();
+        for (index, image) in pilot_desktop::nsh_adapter::synthetic_images()
+            .into_iter()
+            .enumerate()
+        {
+            content.push(json!({"type":"text","text":format!("Stored image {}. Original bytes and upright geometry.",index+1)}));
+            content.push(image);
+        }
+        self.state.lock().unwrap().histories.insert(session.into(), vec![
+            entry(10,"assistant","Reader anchor before images. 日本語 👩🏽‍💻"),
+            json!({"id":11,"kind":"pi.message","model":[{"role":if session=="b"{"user"}else{"assistant"},"content":content}]}),
+            entry(12,"user","Reader anchor after images. Original draft stays separate."),
+        ]);
+        self.changed();
+    }
     /// Multiple real reader pages; the old-only query preserves exact Unicode.
     pub fn history(&self, session: &str, count: u64) {
         self.state.lock().expect("fixture state").histories.insert(session.into(),

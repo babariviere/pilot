@@ -162,6 +162,10 @@ pub(super) struct Probes {
     pub work: Option<std::sync::Arc<pilot_nsh::fixture::Fixture>>,
     #[cfg(feature = "native-probes")]
     pub history: Option<std::sync::Arc<pilot_nsh::fixture::Fixture>>,
+    #[cfg(feature = "native-probes")]
+    pub images: Option<std::sync::Arc<pilot_nsh::fixture::Fixture>>,
+    #[cfg(feature = "native-probes")]
+    pub image_admission: Option<pilot_desktop::nsh_adapter::ImageAdmission>,
 }
 pub(super) fn run(
     options: platform::AppOptions,
@@ -208,7 +212,27 @@ pub(super) fn run(
     window.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
     let view = platform::AppView::new(mtm, options);
     window.setContentView(Some(&view.view()));
-    view.load(pilot_nsh::root(config).into());
+    let copied = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let clipboard = copied.clone();
+    view.load(
+        pilot_nsh::root_with_image_copy(config, move |preview| {
+            if hidden {
+                *clipboard.lock().expect("fixture clipboard") = Some(preview.clone());
+                return;
+            }
+            let png = preview.png.clone();
+            dispatch2::DispatchQueue::main().exec_sync(move || {
+                // Upstream Clipboard.writeImage also decodes TIFF synchronously.
+                // Write the existing bounded encoder's PNG directly instead.
+                let board = NSPasteboard::generalPasteboard();
+                board.clearContents();
+                board.setData_forType(Some(&NSData::with_bytes(&png)), unsafe {
+                    NSPasteboardTypePNG
+                });
+            });
+        })
+        .into(),
+    );
     if !hidden {
         window.center();
         window.makeKeyAndOrderFront(None);
@@ -227,7 +251,14 @@ pub(super) fn run(
     });
     #[cfg(feature = "native-probes")]
     if let Some(path) = capture {
-        if let Some(fixture) = probes.history {
+        if let Some(fixture) = probes.images {
+            probe::images::start(
+                path,
+                fixture,
+                copied,
+                probes.image_admission.expect("held fixture admission"),
+            );
+        } else if let Some(fixture) = probes.history {
             probe::history_start(path, fixture);
         } else if let Some(fixture) = probes.work {
             probe::work_start(path, fixture);

@@ -60,6 +60,13 @@ fn main() -> std::process::ExitCode {
     #[cfg(feature = "native-probes")]
     let history_probe = args.iter().any(|a| a == "--check-history");
     #[cfg(feature = "native-probes")]
+    let image_probe = args.iter().any(|a| a == "--check-images");
+    #[cfg(feature = "native-probes")]
+    if image_probe && let Some(fixture) = &fixture {
+        fixture.images("a");
+        fixture.images("b");
+    }
+    #[cfg(feature = "native-probes")]
     if history_probe && let Some(fixture) = &fixture {
         fixture.history("a", 96);
     }
@@ -118,6 +125,12 @@ fn main() -> std::process::ExitCode {
             #[cfg(feature = "native-probes")]
             history: history_probe
                 .then(|| fixture.as_ref().expect("history probe fixture").clone()),
+            #[cfg(feature = "native-probes")]
+            images: image_probe.then(|| fixture.as_ref().expect("image probe fixture").clone()),
+            #[cfg(feature = "native-probes")]
+            image_admission: image_probe.then(|| {
+                pilot_desktop::nsh_adapter::hold_image_previews().expect("isolated decode lane")
+            }),
         },
     );
     #[cfg(feature = "native-probes")]

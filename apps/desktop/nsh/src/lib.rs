@@ -4,6 +4,7 @@ pub mod fixture;
 mod history;
 #[path = "../../../../experiments/nsh-pilot/src/icons.rs"]
 mod icons;
+mod images;
 #[path = "../../../../experiments/nsh-pilot/src/theme.rs"]
 mod theme;
 mod transcript;
@@ -47,8 +48,20 @@ pub struct Config {
 
 /// Build the native root. NSH owns controls, text editing and rendering.
 pub fn root(config: Config) -> Root {
+    root_with_image_copy(config, |preview| {
+        set_clipboard_image(preview.uri.as_ref().clone())
+    })
+}
+
+/// Native embedders can write the already prepared PNG without ImageIO's
+/// synchronous TIFF conversion. Tests inject an isolated clipboard here.
+pub fn root_with_image_copy(
+    config: Config,
+    copy: impl Fn(&pilot_desktop::nsh_adapter::ImagePreview) + Send + Sync + 'static,
+) -> Root {
     let config = Arc::new(config);
-    Root::new::<Workbench>(move || ConnectionProps(Some(config.clone())))
+    let copy: images::CopyImage = Arc::new(copy);
+    Root::new::<Workbench>(move || ConnectionProps(Some(config.clone()), Some(copy.clone())))
         .app_id("dev.pilot.next.nsh")
         .font(Arc::<[u8]>::from(
             include_bytes!("../../assets/fonts/Inter-Regular.ttf").as_slice(),
@@ -68,6 +81,7 @@ struct Ui {
     composing: Signal<bool>,
     disclosures: Signal<transcript::Choices>,
     readings: Stored<history::Readings>,
+    copy_image: Stored<images::CopyImage>,
 }
 impl Ui {
     fn publish(self) {
@@ -878,7 +892,7 @@ fn conversation(ui: Ui, location: Location) -> impl IntoElement {
 
 // Rust-only connection props. No script/JSON conversion or global connection.
 #[derive(Clone)]
-struct ConnectionProps(Option<Arc<Config>>);
+struct ConnectionProps(Option<Arc<Config>>, Option<images::CopyImage>);
 impl PartialEq for ConnectionProps {
     fn eq(&self, other: &Self) -> bool {
         match (&self.0, &other.0) {
@@ -893,7 +907,7 @@ impl Props for ConnectionProps {
         <() as Props>::spec(types)
     }
     fn initial() -> Self {
-        Self(None)
+        Self(None, None)
     }
     fn set(&mut self, name: &str, value: Option<AnyValue>) -> Result<bool, PropError> {
         ().set(name, value)
@@ -916,10 +930,11 @@ impl Component for Workbench {
                 .expect("Rust root connection props")
                 .as_ref()
                 .clone(),
+            props.1.expect("image clipboard callback"),
         )
     }
 }
-fn workbench(config: Config) -> impl IntoElement {
+fn workbench(config: Config, copy_image: images::CopyImage) -> impl IntoElement {
     use nsh_core::{
         desktop::MenuRole,
         element::desktop::{MenuItem, set_application_menu},
@@ -961,6 +976,7 @@ fn workbench(config: Config) -> impl IntoElement {
         composing: signal(false),
         disclosures: signal(transcript::Choices::default()),
         readings: stored(history::Readings::default()),
+        copy_image: stored(copy_image),
     };
     let events = adapter.with(|a| a.events());
     let close = config.close;

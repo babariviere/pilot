@@ -3,6 +3,7 @@ import argparse
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 
@@ -73,6 +74,10 @@ def main():
                     path = capture.with_stem(capture.stem + suffix)
                     assert path.stat().st_size > 10000, f"missing history capture: {path}"
                 print(f"PASS {appearance} {width}: lazy pages/anchor/append/Find/Unicode/keyboard/Close")
+
+
+    subprocess.run([sys.executable, str(Path(__file__).with_name("images-check.py")),
+                    "--binary", str(args.binary), "--output", str(args.output)], check=True)
 
 
 if __name__ == "__main__":

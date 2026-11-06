@@ -494,10 +494,18 @@ fn work_view(ui: Ui, location: Location, message: ReadSignal<Message>) -> impl I
 pub(super) fn row(ui: Ui, location: Location, row: Memo<Option<Message>>) -> impl IntoElement {
     each(
         move || row.get().into_iter().collect::<Vec<_>>(),
-        |m| (m.reader.clone(), m.reader.is_none().then_some(m.id)),
+        |m| {
+            (
+                m.reader.clone(),
+                m.reader.is_none().then_some(m.id),
+                m.image.as_ref().map(|i| i.identity()),
+            )
+        },
         move |message, _| {
             if message.with_untracked(|m| m.work.is_some()) {
                 work_view(ui, location.clone(), message).into_element()
+            } else if let Some(image) = message.with_untracked(|m| m.image.clone()) {
+                super::images::row(ui, location.clone(), image).into_element()
             } else {
                 view()
                     .min_w(px(0.))

@@ -1,5 +1,7 @@
 //! Hidden actual AppKit interactions, not hardware IME or a benchmark.
 use super::*;
+#[path = "native_images_probe.rs"]
+pub(super) mod images;
 use std::{
     path::Path,
     time::{Duration, Instant},

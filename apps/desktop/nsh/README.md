@@ -171,11 +171,56 @@ Find's source context fallback, an exact Unicode context marks the active
 occurrence beside its original row without replacing Markdown or native
 selection. No upstream patches, cache edits or selection workaround is used.
 
+## Stored conversation images
+
+Inline user, assistant and tool-result image blocks keep the production reader's
+exact host/chat/entry/model/block/source-hash identity. Supported PNG, JPEG and
+GIF images appear automatically, with no two-image display cap. Native virtual
+rows queue behind the existing global decode permit. Disposing a row cancels
+its work; navigation generation and the exact current source fence completion,
+selection and Copy. Upright headers reserve the final natural/aspect geometry,
+including EXIF rotation. GIFs show only the first frame. Failures and unsupported
+sources stay explicit; Source copies their provenance. Paths and remote URLs
+never become image loads. Original stored bytes are unchanged.
+
+The Rust/native Image, Button, Dialog, group hover/focus and axis Scroll APIs
+were inspected at unmodified `7571948e`. The public Rust image builder accepts
+encoded sources, not raw raster pixels. One worker uses the existing decoder,
+admission and `image_clipboard::png` encoder to prepare an upright still PNG for
+display and Copy. No decoder, source limits or cache was extracted or duplicated.
+Compressed, source, pixel, axis, raw-buffer and codec limits remain unchanged.
+NSH's own ImageIO display decode is off-thread and sees only that validated PNG.
+
+The native reader has Fit, 100%, zoom in/out, Reset, Copy and Copy source. It owns
+⌘C, ⌘+/⌘−/⌘0/⌘1, Option-arrow panning, middle-button drag and native scrolling.
+100% accounts for display pixel ratio. Zoom changes the reader, not the transcript
+row. The macOS Scroll backend ignores upstream pinch-zoom properties. Explicit
+sizing therefore composes two supported axis Scrolls, without a scroll engine or
+a pinch-support claim. The embedder writes the prepared PNG directly: upstream's
+image clipboard writer also makes TIFF synchronously through ImageIO. Test roots
+inject a private image clipboard; captures never change the system clipboard.
+
+The image matrix holds the production decode permit during navigation, then
+checks unchanged header/pixel geometry and reader position after release. It
+opens all four stored images through native Find/list navigation, verifies exact
+source and PNG Copy ownership, portrait/landscape/EXIF dimensions and GIF's first
+frame, and exercises Fit/100%/zoom/Reset, Option arrows, middle drag, ⌘C, chat
+switches and the kept Unicode draft at 680/1180 in light/dark. Captures include
+actual native rows and a patterned landscape while zoomed, not mockups.
+
+An earlier exploratory traversal with the ordered-out probe's detached wheel
+jumped to the top instead of visiting the middle image. That run is not counted
+as a pass and its cause was not established. The image matrix uses the existing
+Find/native scroll-to-index route for intermediate images; it does not qualify
+hardware wheel/trackpad scrolling or visible-window frame timing. The existing
+history/work probes and hardened attached/disconnected-layer conversion remain
+unchanged. Hardware, large-history performance and Linux acceptance stay open.
+
 ## Isolated verification
 
 ```sh
 bash apps/desktop/scripts/cargo.sh test --locked -p pilot-nsh \
-  --features native-probes --test chat --test work --test history -- --test-threads=1
+  --features native-probes --test chat --test work --test history --test images -- --test-threads=1
 bash apps/desktop/scripts/cargo.sh clippy --locked -p pilot-nsh \
   --features native-probes --all-targets -- -D warnings
 bash apps/desktop/scripts/cargo.sh build --locked -p pilot-nsh --features native-probes
@@ -185,6 +230,8 @@ apps/desktop/target/dev/debug/pilot-nsh --fixture --width 680 --capture /tmp/nsh
 apps/desktop/target/dev/debug/pilot-nsh --fixture --dark --width 680 --capture /tmp/nsh-dark-narrow.png
 python3 apps/desktop/nsh/scripts/native-check.py \
   --binary apps/desktop/target/dev/debug/pilot-nsh --output /tmp/nsh-native-check
+python3 apps/desktop/nsh/scripts/images-check.py \
+  --binary apps/desktop/target/dev/debug/pilot-nsh --output /tmp/nsh-native-images
 ```
 
 The fixture binds an OS-assigned loopback port. Both the runtime and tests use

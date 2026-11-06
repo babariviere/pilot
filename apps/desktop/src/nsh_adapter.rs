@@ -18,6 +18,13 @@ use std::{
 #[path = "nsh_find.rs"]
 mod find;
 pub use find::{FindSnapshot, FindTarget};
+#[path = "nsh_images.rs"]
+mod images;
+#[cfg(feature = "native-probes")]
+pub use images::synthetic_images;
+#[cfg(feature = "native-probes")]
+pub use images::{ImageAdmission, hold_image_previews};
+pub use images::{ImagePreview, InlineImage};
 
 /// Canonical committed reader identity, scoped by the selected location.
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
@@ -98,6 +105,7 @@ pub struct Message {
     pub mine: bool,
     pub plain: bool,
     pub work: Option<Work>,
+    pub image: Option<InlineImage>,
 }
 
 /// Prepared production work presentation, not parsed transcript prose.
@@ -1089,7 +1097,7 @@ impl Adapter {
                 .map(|m| Message {
                     id: m.id(),
                     reader: m.reader_key().map(ReaderKey),
-                    source: if m.image_data().is_some() || m.artifact_data().is_some() {
+                    source: if m.artifact_data().is_some() {
                         format!("{}\n\nPreview unavailable in this chat slice.", m.source())
                     } else {
                         m.source().into()
@@ -1097,6 +1105,9 @@ impl Adapter {
                     mine: m.label().starts_with("You"),
                     plain: m.is_plain(),
                     work: m.work_data().map(|work| Work::project(work)),
+                    image: m
+                        .image_data()
+                        .map(|source| InlineImage::new(m, source.clone())),
                 })
                 .collect()
         } else {
