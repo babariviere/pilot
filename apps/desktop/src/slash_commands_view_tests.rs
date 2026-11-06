@@ -67,21 +67,16 @@ fn leading_slash_opens_native_commands_and_typing_refines(cx: &mut TestAppContex
     type_text(cx, h, &view, "/");
     assert_eq!(
         menu(cx, &view).unwrap(),
-        ["jobs", "compact", "changes", "artifacts", "help"]
+        ["jobs", "compact", "artifacts", "help"]
     );
     act(cx, h, |w, cx| {
         w.render_frame(cx);
         assert!(w.try_find("slash-commands").is_some());
     });
     type_text(cx, h, &view, "a");
-    assert_eq!(
-        menu(cx, &view).unwrap(),
-        ["artifacts", "compact", "changes"]
-    );
+    assert_eq!(menu(cx, &view).unwrap(), ["artifacts", "compact"]);
     press(cx, h, "down");
     assert_eq!(cx.read(|cx| view.read(cx).slash_probe().unwrap().1), 1);
-    press(cx, h, "down");
-    assert_eq!(cx.read(|cx| view.read(cx).slash_probe().unwrap().1), 2);
     press(cx, h, "down");
     assert_eq!(
         cx.read(|cx| view.read(cx).slash_probe().unwrap().1),
@@ -130,21 +125,21 @@ fn tab_completes_and_shift_enter_keeps_a_newline(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn completing_keeps_the_rest_of_the_draft_and_is_undoable(cx: &mut TestAppContext) {
     let (h, view, commands) = setup(cx);
-    set_text(cx, h, &view, "/ch then 👩‍💻 e\u{301}");
+    set_text(cx, h, &view, "/ar then 👩‍💻 e\u{301}");
     act(cx, h, |_, cx| {
         let input = view.read(cx).text.clone();
         input.update(cx, |i, cx| i.set_selected_range(3..3, cx));
     });
-    assert_eq!(menu(cx, &view).unwrap(), ["changes"]);
+    assert_eq!(menu(cx, &view).unwrap(), ["artifacts"]);
     press(cx, h, "tab");
-    assert_eq!(value(cx, &view), "/changes then 👩‍💻 e\u{301}");
+    assert_eq!(value(cx, &view), "/artifacts then 👩‍💻 e\u{301}");
     assert_eq!(
         cx.read(|cx| view.read(cx).cache["chat:a"].text.clone()),
         value(cx, &view),
         "autosaved"
     );
     press(cx, h, "secondary-z");
-    assert_eq!(value(cx, &view), "/ch then 👩‍💻 e\u{301}");
+    assert_eq!(value(cx, &view), "/ar then 👩‍💻 e\u{301}");
     no_submit(&commands);
 }
 
@@ -315,13 +310,13 @@ fn session_commands_apply_only_to_their_exact_source(cx: &mut TestAppContext) {
         };
         assert_eq!(
             names(Some(&source("a", 3))),
-            ["jobs", "compact", "changes", "artifacts", "review", "help"]
+            ["jobs", "compact", "artifacts", "review", "help"]
         );
         // Another chat, a reconnect or no source never uses this list.
         for other in [Some(source("b", 3)), Some(source("a", 4)), None] {
             assert_eq!(
                 names(other.as_ref()),
-                ["jobs", "compact", "changes", "artifacts", "help"]
+                ["jobs", "compact", "artifacts", "help"]
             );
         }
         assert!(e.slash_available("subagent:a:x", None).is_none());
