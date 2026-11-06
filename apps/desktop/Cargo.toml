@@ -11,6 +11,7 @@ test = false
 required-features = ["native-probes"]
 
 [features]
+nsh-adapter = []
 native-probes = ["gpui-kit/test-support", "pilot-desktop-updater/fixture"]
 
 [[test]]
@@ -115,7 +116,7 @@ harness = false
 required-features = ["native-probes"]
 
 [workspace]
-members = ["visual-worker"]
+members = ["visual-worker", "nsh"]
 exclude = ["updater"]
 default-members = ["."]
 

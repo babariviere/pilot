@@ -279,6 +279,10 @@ jobs:
         if: steps.changes.outputs.rust == 'true'
         timeout-minutes: 25
         run: bash apps/desktop/scripts/ci.sh mac-tests
+      - name: NSH native chat interactions and hidden captures
+        if: steps.changes.outputs.rust == 'true'
+        timeout-minutes: 10
+        run: bash apps/desktop/scripts/ci.sh nsh-native
       - name: macOS native renderer capability and synthetic probes
         if: steps.changes.outputs.rust == 'true'
         timeout-minutes: 25

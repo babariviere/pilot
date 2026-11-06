@@ -105,6 +105,8 @@ PY
     cargo nextest run --locked --profile ci --no-tests=warn -p pilot-visual-worker --bin pilot-visual-worker
     # Library suite plus the auto-discovered path-import harness settings_state (not part of --lib).
     nextest -p pilot-desktop --lib --test settings_state
+    # NSH renders separately but uses the same real Local reader/courier/Store.
+    cargo test --locked -p pilot-nsh --features native-probes --test chat -- --test-threads=1
     if [[ "$(uname -s)" == Linux ]]; then
       # Compile native probes and verify unsupported instruction counters fail closed.
       cargo test --locked -p pilot-desktop --features native-probes --lib unsupported_counters_fail_closed
@@ -274,6 +276,13 @@ PY
     # One serial run of exactly these tests (they own helper processes and sandboxes).
     nextest -p pilot-desktop --lib --test-threads=1 -E "$(IFS='|'; echo "${filter[*]}")"
     ;;
+  nsh-native)
+    macos_host
+    mkdir -p target
+    # AppKit NSH is separate from the GPUI Metal capability check.
+    cargo build --locked -p pilot-nsh --features native-probes
+    python3 nsh/scripts/native-check.py --binary target/dev/debug/pilot-nsh --output target/nsh-native
+    ;;
   native)
     macos_host
     mkdir -p target
@@ -317,5 +326,5 @@ OBJC
       { echo '### Rust desktop native coverage'; cat "$status"; } >> "$GITHUB_STEP_SUMMARY"
     fi
     ;;
-  *) echo 'Usage: ci.sh {changed|host|bootstrap|check|linux-gui-check|updater-check|updater-linux-tests|updater-mac-tests|build|artifact|mac-tests|native}' >&2; exit 2 ;;
+  *) echo 'Usage: ci.sh {changed|host|bootstrap|check|linux-gui-check|updater-check|updater-linux-tests|updater-mac-tests|build|artifact|mac-tests|nsh-native|native}' >&2; exit 2 ;;
 esac

@@ -319,6 +319,17 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
         self.assertIn("UNSUPPORTED", (self.root / "summary").read_text())
         self.assertIn("NOT executed or passed", (self.root / "target/ci-native-status.txt").read_text())
 
+    def test_nsh_native_is_separate_macos_only_and_uses_isolated_capture_runner(self):
+        self.run_ci("nsh-native", expected=1, FAKE_OS="Linux", FAKE_ARCH="x86_64")
+        self.assertEqual(self.calls(), [])
+        self.write("bin/python3", '#!/bin/sh\nprintf "%s\\n" "$*" >> "$CALLS"\n')
+        self.run_ci("nsh-native")
+        self.assertEqual(self.calls(), [
+            ["build", "--locked", "-p", "pilot-nsh", "--features", "native-probes"],
+            ["nsh/scripts/native-check.py", "--binary", "target/dev/debug/pilot-nsh", "--output", "target/nsh-native"],
+        ])
+        self.assertIn("ci.sh nsh-native", WORKFLOW.read_text())
+
     def test_native_failure_never_becomes_unsupported_or_pass(self):
         self.run_ci("native", expected=42, FAIL_MATCH="--features native-probes --test rendering")
         self.assertEqual(len(self.calls()), 2)
