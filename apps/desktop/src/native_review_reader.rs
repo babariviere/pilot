@@ -125,9 +125,12 @@ impl Drop for Reader {
     }
 }
 
+/// `on_503` names what a 503 means for this read: only the request list's 503 says the host
+/// has no request source.
 async fn get<T: DeserializeOwned>(
     client: &reqwest::Client,
     url: reqwest::Url,
+    on_503: &'static str,
 ) -> Result<T, &'static str> {
     let mut response = client
         .get(url)
@@ -141,7 +144,7 @@ async fn get<T: DeserializeOwned>(
         return Err(RECORDS_UNAVAILABLE);
     }
     if response.status().as_u16() == 503 {
-        return Err(REQUESTS_UNAVAILABLE);
+        return Err(on_503);
     }
     if response.status().as_u16() != 200 {
         return Err(UNAVAILABLE);
@@ -222,7 +225,7 @@ pub(crate) async fn fetch(
             if let Some(chat) = filter {
                 url.query_pairs_mut().append_pair("sessionId", chat);
             }
-            let v: model::Requests = get(client, url).await?;
+            let v: model::Requests = get(client, url, REQUESTS_UNAVAILABLE).await?;
             let mut seen = std::collections::BTreeSet::new();
             // A chat filter narrows the list; it never admits another chat's request. An
             // unavailable slot names no chat, so only the host's filter can place it.
@@ -246,8 +249,12 @@ pub(crate) async fn fetch(
             Data::Requests(v)
         }
         Route::Comparisons(_, after) => {
-            let v: model::Comparisons =
-                get(client, chat("", &[("after", &after.to_string())])?).await?;
+            let v: model::Comparisons = get(
+                client,
+                chat("", &[("after", &after.to_string())])?,
+                UNAVAILABLE,
+            )
+            .await?;
             if v.comparisons.len() > 20
                 || v.unavailable.as_ref().is_some_and(|u| u.len() > 8192)
                 || v.capture.as_ref().is_some_and(|c| !c.valid())
@@ -268,14 +275,18 @@ pub(crate) async fn fetch(
             if !selected.valid() {
                 return Err(model::INVALID);
             }
-            let v: model::Snapshot =
-                get(client, chat(&format!("/{}", selected.snapshot_id), &[])?).await?;
+            let v: model::Snapshot = get(
+                client,
+                chat(&format!("/{}", selected.snapshot_id), &[])?,
+                UNAVAILABLE,
+            )
+            .await?;
             // The retained creator must be this exact custody chat.
             let c = route.chat().ok_or(model::INVALID)?;
             v.validate(&c.key.id, &c.project, selected)?;
             let files = if v.diff.is_some() {
                 let url = chat(&format!("/{}/patch", selected.snapshot_id), &[])?;
-                match get::<Patch>(client, url).await {
+                match get::<Patch>(client, url, UNAVAILABLE).await {
                     Ok(p) if p.snapshot_id == selected.snapshot_id => v.parse_patch(&p.patch),
                     Ok(_) => Err(model::INVALID),
                     Err(ACCESS_REFUSED) => return Err(ACCESS_REFUSED),
@@ -290,7 +301,12 @@ pub(crate) async fn fetch(
             if !model::hex(snapshot, 64) {
                 return Err(model::INVALID);
             }
-            let v: Records = get(client, chat(&format!("/{snapshot}/records"), &[])?).await?;
+            let v: Records = get(
+                client,
+                chat(&format!("/{snapshot}/records"), &[])?,
+                UNAVAILABLE,
+            )
+            .await?;
             Data::Records(v.lines()?)
         }
         Route::Source(_, snapshot, side, path, sha) => {
@@ -304,7 +320,7 @@ pub(crate) async fn fetch(
                 &format!("/{snapshot}/source"),
                 &[("side", side), ("path", path), ("sha256", sha)],
             )?;
-            let v: SourceText = get(client, u).await?;
+            let v: SourceText = get(client, u, UNAVAILABLE).await?;
             if &v.snapshot_id != snapshot
                 || v.text.len() > 2 * 1024 * 1024
                 || model::hash(v.text.as_bytes()) != *sha

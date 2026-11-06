@@ -501,6 +501,58 @@ fn project_owned_capture_needs_this_exact_project_and_no_task_scope() {
     assert!(serde_json::from_value::<model::Snapshot>(v).is_err());
 }
 #[tokio::test]
+async fn a_503_outside_the_request_list_is_not_called_a_request_source() {
+    let s = Server::start();
+    f::install(&s);
+    let client = client();
+    let down = || Reply::json(503, json!({"error":"Service unavailable"}));
+    let c: model::Comparison = serde_json::from_value(f::comparison(1, "layer")).unwrap();
+    let id = c.snapshot_id.clone();
+    let snapshot = Route::Snapshot(ch("chat-B"), Box::new(c.clone()));
+    let sha = model::hash(b"retained lower\n");
+    let source = Route::Source(
+        ch("chat-B"),
+        id.clone(),
+        "after".into(),
+        "a.rs".into(),
+        sha.clone(),
+    );
+    // The patch read alone fails: the manifest loads, the diff says why it is missing.
+    f::reply(&s, &format!("{}/{id}/patch", f::ROOT), down());
+    let Data::Snapshot(_, files) = fetch(&client, &s.options, &snapshot).await.unwrap() else {
+        panic!("snapshot");
+    };
+    assert_eq!(files.err(), Some(UNAVAILABLE));
+    for path in [
+        format!("{}?after=0", f::ROOT),
+        format!("{}/{id}", f::ROOT),
+        format!("{}/{id}/records", f::ROOT),
+        format!("{}/{id}/source?side=after&path=a.rs&sha256={sha}", f::ROOT),
+    ] {
+        f::reply(&s, &path, down());
+    }
+    for route in [
+        Route::Comparisons(ch("chat-B"), 0),
+        snapshot,
+        Route::Records(ch("chat-B"), id.clone()),
+        source,
+    ] {
+        assert_eq!(
+            fetch(&client, &s.options, &route).await.err(),
+            Some(UNAVAILABLE),
+            "{route:?}"
+        );
+    }
+    // Only the request list's 503 means the host has no request source.
+    s.reply(f::REQUESTS, down());
+    assert_eq!(
+        fetch(&client, &s.options, &Route::Requests(home(), 0, None))
+            .await
+            .err(),
+        Some(REQUESTS_UNAVAILABLE)
+    );
+}
+#[tokio::test]
 async fn unavailable_rows_keep_their_slot_and_disclose_nothing() {
     let s = Server::start();
     f::install(&s);

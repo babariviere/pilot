@@ -727,6 +727,11 @@ fn from_chat(
             json!({"error":"Retained Review unavailable in this scope"}),
         ),
     );
+    // chat-C's request list has another page, which may hold a request for its saved
+    // revision below, so that revision is never labelled as having no request.
+    let mut first_page = r::list(vec![r::requests()[2].clone()]);
+    first_page["next"] = json!(3);
+    s.reply(&r::requests_from("chat-C"), Reply::json(200, first_page));
     open_chat(cx, h, view, "chat-C");
     click(cx, h, "chat-review");
     idle(cx, h, &pane);
@@ -737,14 +742,26 @@ fn from_chat(
         assert_eq!(p.4, Some(crate::native_review_reader::ACCESS_REFUSED));
     });
     r::install(s);
-    // The chat's saved revision without a request opens in the same view, as itself:
-    // never labelled pending and never a minted request.
+    // The chat's saved revision opens in the same view, as itself: never labelled pending
+    // or as having no request, and never a minted request.
     click(cx, h, "review-page-back");
     idle(cx, h, &pane);
     cx.update(|cx| {
         assert_eq!(pane.read(cx).probe_requests(), ["req-3"]);
         assert_eq!(pane.read(cx).probe_saved(), [format!("{:064x}", 0xc002)]);
     });
+    cx.update_window(h, |_, w, _| {
+        let label = w
+            .find(("review-saved", 0usize))
+            .label()
+            .unwrap_or_default()
+            .to_owned();
+        assert!(
+            label.contains("Request status not shown here") && !label.contains("No review request"),
+            "{label}"
+        );
+    })
+    .unwrap();
     cx.update_window(h, |_, w, cx| w.click(("review-saved", 0usize), cx))
         .unwrap();
     settle(cx, h);
@@ -761,7 +778,10 @@ fn from_chat(
         let p = pane.read(cx).probe(cx);
         assert_eq!(p.1, Some(format!("{:064x}", 0xc002)));
         assert_eq!((p.3, p.4), (1, None));
-        assert_eq!(pane.read(cx).probe_status(), Some("No review request"));
+        assert_eq!(
+            pane.read(cx).probe_status(),
+            Some("Request status not shown here")
+        );
     });
     assert_eq!(s.write_count(), 0, "opening never requests review");
     // A new standalone chat's project-owned capture in another project shows its exact

@@ -99,10 +99,14 @@ request · <state>** row. It discloses nothing else and can't be opened; if it w
 cleared. Refresh recovers it only under current access. Opening a
 row targets that exact request and revision; Back returns to the list. A chat's header **Review**
 opens the same view narrowed to that chat (**All changes** removes the filter). That narrowed list
-also shows the chat's saved revisions that no listed request covers, labelled **No review request**:
-opening one never creates a request or marks it pending. Saved revisions page on their own (**More
-saved revisions**), apart from request paging. If the request list can't be read, the page says
-review requests are unavailable, never empty, and a chat's saved revisions are still shown. A chat
+also shows the chat's saved revisions that the loaded request page doesn't cover, labelled **Request
+status not shown here**: a request may exist on another page or while the list is unavailable, so
+Review never says a saved revision has no request. Opening one never creates a request or marks it
+pending. Saved revisions page on their own (**More saved revisions**), apart from request paging. If
+the request list can't be read, the page says review requests are unavailable, never empty, and a
+chat's saved revisions are still shown; that warning stays while one of them is open. Only the
+request list's 503 means the host has no request source; a 503 on any other Review read is a general
+unavailable error. A chat
 without retained custody says **Not captured**. A chat capture outside a mission has no agent
 assessment scope, and Revision details says so instead of offering evidence. A reload restores the
 exact request or saved revision it showed only if the host still lists it.
@@ -154,7 +158,7 @@ Before: a full-width file dropdown sat above the diff, so it read as one file at
 pushed IDs and caveats above the diff; Refresh could slide under a scrollbar; an optional evidence
 failure disabled choosing another revision; and the diff area was blank before a selection.
 
-The diff is the existing virtualized Kit 0.8.1 `Diff`, not the live Changes renderer. Unified/Split,
+The diff is the existing virtualized Kit 0.9.0 `Diff`, not the live Changes renderer. Unified/Split,
 file navigation and Before/After source all refer to the same retained comparison. Source previews
 are capped at64 KiB with an explicit incomplete-preview notice; source reads remain bounded to2 MiB.
 Binary/unsupported sides are not decoded as text. Missing patches, partial manifests, unsafe paths,
@@ -272,11 +276,14 @@ The hidden `native_review_host` target runs the same LocalViewer against
 creation-only standalone enrollment in two projects, managed jj workspaces, repeated worker
 checkpoints (each saves a limited batch), the snapshot store and missions.sqlite review requests,
 behind a logging proxy. The worker is a fake, so no provider, model turn or reviewer runs. Requests
-exist only after the fixture's explicit setup posts, sent straight to the daemon; the journey checks
-that the app only reads and that browsing changes no request. It covers the empty list, saved-only
+exist only after the fixture's explicit setup posts, sent straight to the daemon. The journey checks
+that every app request through the proxy is a GET and that each stored request's ID, revision,
+state and sequence are unchanged by browsing. Its normal finish requires the fixture's teardown to
+report no failures and the host process to exit cleanly. It covers the empty list, saved-only
 revisions, two changes with two revisions each from one chat, exact source and Kit Diff copy, request
 and saved paging, history labels, an unavailable slot from a moved chat, a missing request source
-(a proxied 503), offline, Open current file and Back, keyboard, list scroll, and narrow dark layout.
+(a proxied 503) including a requested revision opened through the saved fallback, offline, Open
+current file and Back, keyboard, list scroll, and narrow dark layout.
 Chat moves, the 503 and offline are fixture faults, not product APIs.
 
 ## Supporting annotation design (not installed)
@@ -297,9 +304,9 @@ absence of reads/Kit Diff noted here; proposed write/request contracts below rem
 
 | Surface | What it actually does today | Consequence for Review |
 | --- | --- | --- |
-| `gpui-kit = "=0.8.1"` → `gpui_kit::component::diff` | Read-only virtualized patch view: `DiffState` (files, `DiffMode::{Unified,Split}`, folding, `set_selected_lines`, `scroll_to_line`, `scroll_to_file`, `next_change`/`previous_change`, `DiffEvent::Selection*`), `Diff` builder (`annotations`, `render_annotation`, `on_add_annotation`, `on_line_click`, `on_line_hover`, header slots, soft wrap) | Render with Kit, no custom renderer. Parse/install retained patches only |
+| `gpui-kit = "=0.9.0"` → `gpui_kit::component::diff` | Read-only virtualized patch view: `DiffState` (files, `DiffMode::{Unified,Split}`, folding, `set_selected_lines`, `scroll_to_line`, `scroll_to_file`, `next_change`/`previous_change`, `DiffEvent::Selection*`), `Diff` builder (`annotations`, `render_annotation`, `on_add_annotation`, `on_line_click`, `on_line_hover`, header slots, soft wrap) | Render with Kit, no custom renderer. Parse/install retained patches only |
 | `DiffAnnotation` | Only `line(id, DiffLinePosition)` (one side, one-based source line) or `file(id, path)`. No range annotation, no summary slot | A range annotation is an app record displayed under its **end** line, with its range shown in text and re-selected via `set_selected_lines` on focus |
-| `annotation_content` | Compatibility alias of `render_annotation` in 0.8.1 | Use `render_annotation` in new code |
+| `annotation_content` | Compatibility alias of `render_annotation` in 0.9.0 | Use `render_annotation` in new code |
 | `on_add_annotation` | Shows an add button on the hovered line and at the end of a selection; passes `DiffLineRange` (may end on the other side in patch order) | The handler opens an app-owned draft editor; it creates nothing durable itself |
 | Kit Diff key bindings (`Diff` context) | Arrows, PageUp/Down, Home/End, Shift-Up/Down extend selection, Cmd/Ctrl-C copy, Cmd/Ctrl-A select all. No Return, next-change or add-comment binding | App binds review commands in its own context (proposal below); verify keyboard line placement in a probe |
 | `DiffFile` | `parse`/`parse_with`, `status` (incl. Renamed, Copied, Unchanged, Conflicted), `is_binary`, `is_truncated`, additions/deletions; never reconstructs missing context | Missing context or bytes stay visibly unavailable; never filled from live files |
@@ -307,8 +314,8 @@ absence of reads/Kit Diff noted here; proposed write/request contracts below rem
 | `src/inbox.rs`, `src/attention.rs` | Read-only loaded-summary Inbox with Needs you and Ready to merge, project filter, exact-ID chat activation. Opening does not mark reviewed | Add Needs review as a data-backed source; keep "opening is not acknowledgement" |
 | #13, #20, #18, #17, #22 | Dormant host-only Store/Service APIs. No HTTP/IPC/tool transport | Every Review read and write below needs new admitted transport |
 
-Before the slice, no apps/desktop code used Kit `Diff`. The earlier concept artifact said Kit 0.8.0; the pinned
-version is 0.8.1 and both versions have the same annotation shape.
+Before the slice, no apps/desktop code used Kit `Diff`. The earlier concept artifact said Kit 0.8.0; the slice
+pinned 0.8.1, and the current pin is 0.9.0. All three have the same annotation shape.
 
 ## Vocabulary and authority layers
 
@@ -625,7 +632,7 @@ path) and outcome (fixed in revision N, declined with reason, retracted).
 
 | Need | Exists | Missing (prerequisite, not designed away) |
 | --- | --- | --- |
-| Diff rendering, selection, line/file annotations | Kit 0.8.1 `Diff`/`DiffState` | Multi-range highlight; verify keyboard line cursor before adding a binding |
+| Diff rendering, selection, line/file annotations | Kit 0.9.0 `Diff`/`DiffState` | Multi-range highlight; verify keyboard line cursor before adding a binding |
 | Worker change inventory | #13 ledger and admitted project/session/mission retained discovery | Global change navigation (#88), authoritative waiting inventory (#70); capture discovery is not waiting state |
 | Exact comparisons | #20 bounded retained reads and creation-only checkpoint for eligible mission builders | #98 standalone creation-only capture and #88 global consumer; no existing-chat enrollment on read |
 | Submissions, judgement, allocation | #18, #22 dormant records | Transport; active acceptance (#19) |

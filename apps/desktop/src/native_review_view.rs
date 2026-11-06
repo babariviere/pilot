@@ -90,6 +90,9 @@ impl SelectItem for Item {
 type Picker = SelectState<SearchableVec<Item>>;
 const MOVED: &str =
     "This change's chat is now in another project. Its Review here was closed and cleared.";
+/// A saved revision shown outside the loaded request page. A request may still exist on
+/// another page or while the request list is unavailable, so this never claims there is none.
+const SAVED_STATUS: &str = "Request status not shown here";
 pub(crate) struct Pane {
     scope: Option<Scope>,
     /// The change this page targets, if one is open.
@@ -399,7 +402,7 @@ impl Pane {
                     session: chat,
                     project: self.saved_project.clone()?,
                     title: c.label(),
-                    status: "No review request",
+                    status: SAVED_STATUS,
                     comparison: c.clone(),
                 })
             }

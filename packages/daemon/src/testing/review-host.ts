@@ -57,7 +57,8 @@ type Command = {
 	snapshotId?: string;
 };
 
-async function main() {
+/** Returns the process exit code: 0 only after a close command whose teardown had no failures. */
+async function main(): Promise<number> {
 	const cleanups: (() => unknown)[] = [];
 	// The shared fixture only registers teardown; it never runs tests itself.
 	const t = { after: (fn: () => unknown) => void cleanups.push(fn) } as unknown as TestContext;
@@ -358,7 +359,7 @@ async function main() {
 						cleanups.reverse().reduce((p, run) => p.then(run), Promise.resolve<unknown>(undefined)),
 					);
 					emit({ ok: c.cmd, failures });
-					return;
+					return failures.length ? 1 : 0;
 				}
 				default:
 					throw new Error(`Unknown command ${c.cmd}`);
@@ -367,10 +368,12 @@ async function main() {
 			emit({ ok: c.cmd, error: error instanceof Error ? error.message : String(error) });
 		}
 	}
+	// Input ended without a close command: teardown never ran.
+	return 1;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-	await main();
-	// Fixture-owned handles may outlive teardown; the native probe waits for this exit.
-	process.exit(0);
+	const code = await main();
+	// Fixture-owned handles may outlive teardown; the native probe checks this exit code.
+	process.exit(code);
 }

@@ -354,14 +354,15 @@ impl Pane {
     }
 
     /// Every listed change as one row: its title, then its exact revision and request
-    /// status. A chat-narrowed list adds that chat's saved revisions without a request,
-    /// never labelled pending. Opening a row targets that exact change.
+    /// status. A chat-narrowed list adds that chat's saved revisions the loaded request page
+    /// doesn't cover. Their request status isn't known here: never pending, never "none".
+    /// Opening a row targets that exact change.
     fn list(&self, cx: &mut Context<Self>) -> AnyElement {
         let saved = self.saved_rows().enumerate().map(|(ix, c)| {
             let id = c.snapshot_id.clone();
             ui::action(("review-saved", ix), "", Action::Quiet)
                 .accessibility_label(SharedString::from(format!(
-                    "{} · No review request",
+                    "{} · {SAVED_STATUS}",
                     c.label()
                 )))
                 .w_full()
@@ -369,7 +370,7 @@ impl Pane {
                 .py_2()
                 .child(
                     ui::ResourceLabel::new(SharedString::from(c.label()))
-                        .detail("No review request")
+                        .detail(SAVED_STATUS)
                         .icon(crate::app_icon::AppIcon::Changes),
                 )
                 .on_click(
@@ -449,17 +450,29 @@ impl Pane {
         if let Some(e) = self.error {
             push("review-error", Notice::new(e).tone(Tone::Warning));
         }
-        if let Some(e) = self
-            .requests_failed
-            .filter(|_| self.selected.is_none() && self.has_rows())
-        {
-            push(
-                "review-unavailable",
-                Notice::new(
-                    "Review requests couldn't be read. Only this chat's saved revisions are shown.",
-                )
-                .detail(e),
-            );
+        if let Some(e) = self.requests_failed {
+            // An open saved revision keeps the warning: its request status is unknown.
+            let saved_open = self
+                .selected
+                .as_ref()
+                .is_some_and(|s| matches!(s.target, Target::Saved(_)));
+            if saved_open {
+                push(
+                    "review-unavailable",
+                    Notice::new(
+                        "Review requests couldn't be read, so this revision's request status is unknown.",
+                    )
+                    .detail(e),
+                );
+            } else if self.selected.is_none() && self.has_rows() {
+                push(
+                    "review-unavailable",
+                    Notice::new(
+                        "Review requests couldn't be read. Only this chat's saved revisions are shown.",
+                    )
+                    .detail(e),
+                );
+            }
         }
         if let Some(n) = self.capture_notice.filter(|_| self.selected.is_none()) {
             push("review-capture-notice", Notice::new(n).tone(Tone::Warning));

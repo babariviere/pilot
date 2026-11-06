@@ -33,6 +33,8 @@ struct Host {
     lines: mpsc::Receiver<Value>,
     port: u16,
     projects: Value,
+    /// Set by the checked normal finish; Drop is only best-effort cleanup after a panic.
+    finished: bool,
 }
 impl Host {
     fn start() -> Self {
@@ -68,6 +70,7 @@ impl Host {
             lines,
             port: first["port"].as_u64().unwrap() as u16,
             projects: first["projects"].clone(),
+            finished: false,
         }
     }
     fn options(&self) -> LocalOptions {
@@ -134,9 +137,32 @@ impl Host {
             .map(|v| crate::local_model::chat(v).expect("real session summary"))
             .collect()
     }
+    /// Normal end of the journey: the fixture's teardown must report no failures and the host
+    /// must exit cleanly within the same bound Drop allows, before any success is printed.
+    fn finish(mut self) {
+        let reply = self.send(json!({"cmd":"close"}));
+        assert_eq!(
+            reply["failures"],
+            json!([]),
+            "Review host teardown failed: {reply}"
+        );
+        let end = Instant::now() + Duration::from_secs(30);
+        let status = loop {
+            if let Some(status) = self.child.try_wait().expect("Review host status") {
+                break status;
+            }
+            assert!(Instant::now() < end, "Review host did not exit after close");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        self.finished = true;
+        assert!(status.success(), "Review host exited with {status}");
+    }
 }
 impl Drop for Host {
     fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
         let _ = writeln!(self.stdin, "{}", json!({"cmd":"close"}));
         let _ = self.stdin.flush();
         let end = Instant::now() + Duration::from_secs(30);
@@ -150,6 +176,12 @@ impl Drop for Host {
     }
 }
 
+/// Every app request through the proxy is a read.
+fn gets_only(log: &[(String, String)]) {
+    for (method, path) in log {
+        assert_eq!(method, "GET", "{path}");
+    }
+}
 fn settle(cx: &mut HeadlessAppContext, h: AnyWindowHandle) {
     for _ in 0..3 {
         cx.run_until_parked();
@@ -347,7 +379,7 @@ pub fn run_native_review_host_probe(cx: &mut HeadlessAppContext) {
     let chats = host.sessions();
     assert_eq!(chats.len(), 4);
     set_chats(cx, h, &view, chats.clone());
-    host.log();
+    gets_only(&host.log());
 
     // 1. Nothing was requested yet: an honest empty global list, and reading mints nothing.
     click(cx, h, "nav-review");
@@ -376,7 +408,10 @@ pub fn run_native_review_host_probe(cx: &mut HeadlessAppContext) {
         assert_eq!(shown(cx, &pane).as_deref(), Some(listed[ix].as_str()));
         cx.update(|cx| {
             assert_eq!(pane.read(cx).probe(cx).4, None);
-            assert_eq!(pane.read(cx).probe_status(), Some("No review request"));
+            assert_eq!(
+                pane.read(cx).probe_status(),
+                Some("Request status not shown here")
+            );
             assert_eq!(
                 pane.read(cx).probe_enrollment().as_deref(),
                 Some("project-owned chat capture · no task scope")
@@ -424,7 +459,8 @@ pub fn run_native_review_host_probe(cx: &mut HeadlessAppContext) {
     let stored = host.requests();
     assert_eq!(stored.as_array().unwrap().len(), 22);
     assert_eq!(stored[1][2], "withdrawn");
-    host.log();
+    // Steps 1 and 2: every app request through the proxy was a read.
+    gets_only(&host.log());
 
     // 4. The global list pages by request order, with exact labels; history is not waiting.
     click(cx, h, "review-page-all");
@@ -632,7 +668,7 @@ pub fn run_native_review_host_probe(cx: &mut HeadlessAppContext) {
     });
 
     // 10. No request source is unavailable, never empty. A chat still shows its saved
-    // revisions, labelled as having no request.
+    // revisions. All four have stored requests, so none is labelled as having no request.
     host.send(json!({"cmd":"fail-requests"}));
     click(cx, h, "review-refresh");
     idle(cx, h, &pane);
@@ -652,6 +688,53 @@ pub fn run_native_review_host_probe(cx: &mut HeadlessAppContext) {
         assert!(w.find("review-unavailable").bounds().size.height > px(0.))
     })
     .unwrap();
+    let saved_label = |cx: &mut HeadlessAppContext| {
+        cx.update_window(h, |_, w, _| {
+            let label = w
+                .find(("review-saved", 0usize))
+                .label()
+                .unwrap_or_default()
+                .to_owned();
+            assert!(
+                label.contains("Request status not shown here")
+                    && !label.contains("No review request"),
+                "{label}"
+            );
+        })
+        .unwrap();
+    };
+    saved_label(cx);
+    // A requested revision opened through this fallback keeps the warning and an honest status,
+    // through Refresh and Back.
+    let warned = |cx: &mut HeadlessAppContext, pane: &Entity<Pane>| {
+        cx.update_window(h, |_, w, _| {
+            assert!(w.find("review-unavailable").bounds().size.height > px(0.))
+        })
+        .unwrap();
+        cx.update(|cx| {
+            assert_eq!(
+                pane.read(cx).probe_status(),
+                Some("Request status not shown here")
+            )
+        });
+    };
+    click(cx, h, ("review-saved", 0usize));
+    idle(cx, h, &pane);
+    assert_eq!(target(cx, &view), review(Some(&a), None, Some(&listed[0])));
+    assert_eq!(shown(cx, &pane).as_deref(), Some(listed[0].as_str()));
+    warned(cx, &pane);
+    click(cx, h, "review-refresh");
+    idle(cx, h, &pane);
+    assert_eq!(shown(cx, &pane).as_deref(), Some(listed[0].as_str()));
+    warned(cx, &pane);
+    press(cx, h, "escape");
+    assert_eq!(target(cx, &view), review(Some(&a), None, None));
+    idle(cx, h, &pane);
+    cx.update_window(h, |_, w, _| {
+        assert!(w.find("review-unavailable").bounds().size.height > px(0.))
+    })
+    .unwrap();
+    saved_label(cx);
     host.send(json!({"cmd":"restore-requests"}));
     // Offline is an error, never an empty list.
     host.send(json!({"cmd":"offline"}));
@@ -713,16 +796,13 @@ pub fn run_native_review_host_probe(cx: &mut HeadlessAppContext) {
     settle(cx, h);
     assert_eq!(target(cx, &view), review(None, None, None));
 
-    // Browsing, captures and faults changed no request, and the app only read.
-    assert_eq!(
-        host.requests(),
-        stored,
-        "no request was minted, changed or replayed"
-    );
+    // Browsing and faults changed no stored request's ID, revision, state or sequence, and
+    // the app only read.
+    assert_eq!(host.requests(), stored, "no request was added or changed");
     let log = host.log();
     assert!(!log.is_empty());
-    for (method, path) in &log {
-        assert_eq!(method, "GET", "{path}");
+    gets_only(&log);
+    for (_, path) in &log {
         assert!(
             !path.contains("/review")
                 || !(path.contains("/missions/") || path.contains("/projects/")),
@@ -732,7 +812,7 @@ pub fn run_native_review_host_probe(cx: &mut HeadlessAppContext) {
     cx.update_window(h, |_, w, _| w.remove_window()).unwrap();
     drop(view);
     cx.run_until_parked();
-    drop(host);
+    host.finish();
     println!(
         "native Review host: real standalone creation/capture in two projects, real request store and routes; empty, saved-only, exact revisions/source/diff copy, request and saved paging, history labels, unavailable slot, missing request source, offline, current-file handoff, keyboard, scroll, narrow/dark. Fake worker, fixture-only setup requests and faults; not OS input, IME, AX or performance acceptance"
     );
