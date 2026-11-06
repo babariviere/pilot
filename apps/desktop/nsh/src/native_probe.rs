@@ -67,6 +67,7 @@ fn native_evidence(window: &NSWindow) -> String {
         let rect = view
             .layer()
             .map(|layer| layer.convertRect_toLayer(layer.bounds(), root.layer().as_deref()));
+        let native_rect = view.convertRect_toView(view.bounds(), Some(&root));
         let input = view.downcast_ref::<NSTextView>().map(|input| {
             (
                 input_label(input),
@@ -76,7 +77,7 @@ fn native_evidence(window: &NSWindow) -> String {
         });
         let _ = writeln!(
             report,
-            "{index}: {} label={label:?} rect={rect:?} input={input:?}",
+            "{index}: {} label={label:?} rect={rect:?} native_rect={native_rect:?} input={input:?}",
             view.class().name().to_string_lossy()
         );
     }
@@ -96,16 +97,34 @@ fn wait_composer(session: &str, deadline: Instant) -> Result<(), String> {
 fn open_chat(session: &str, capture: &Path) {
     let started = Instant::now();
     let before = on_main(|w| {
+        check_press_coordinates(w);
         let before = native_evidence(w);
         press(w, &format!("Open chat {session}"));
         before
     });
     // A sidebar label and a fixed settle do not establish native editor readiness.
     // Never repeat the click: a missing or wrong-chat editor must still fail.
-    if let Err(after) = wait_composer(session, started + Duration::from_secs(15)) {
+    let deadline = started + Duration::from_secs(15);
+    let selected = || {
+        let label = format!("Open chat {session}");
+        on_main(|w| {
+            descendants(&w.contentView().expect("content view"))
+                .iter()
+                .any(|view| {
+                    view.isAccessibilitySelected()
+                        && NSAccessibility::accessibilityLabel(&**view)
+                            .is_some_and(|text| text.to_string() == label)
+                })
+        })
+    };
+    while !selected() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    let selection_published = selected();
+    if let Err(after) = wait_composer(session, deadline) {
         let failure = capture.with_extension("readiness-failure.png");
         eprintln!(
-            "native composer readiness failed: expected Message in {session}, elapsed={:?}\nbefore click:\n{before}\nafter wait:\n{after}\ncapture={}",
+            "native composer readiness failed: expected Message in {session}, selection_published={selection_published}, elapsed={:?}\nbefore click:\n{before}\nafter wait:\n{after}\ncapture={}",
             started.elapsed(),
             failure.display()
         );
@@ -131,15 +150,10 @@ fn press(window: &NSWindow, label: &str) {
         .iter()
         .find(|v| v.class().name() == c"NshView")
         .expect("NSH surface");
-    let layer = target.layer().expect("button layer");
-    let rect = layer.convertRect_toLayer(layer.bounds(), root.layer().as_deref());
-    let point = root.convertPoint_toView(
-        NSPoint::new(
-            rect.origin.x + rect.size.width / 2.,
-            rect.origin.y + rect.size.height / 2.,
-        ),
-        None,
-    );
+    assert_eq!(target.window().as_deref(), Some(window), "attached target");
+    assert!(!target.isHiddenOrHasHiddenAncestor(), "visible target");
+    assert!(target.bounds().size.width > 0. && target.bounds().size.height > 0.);
+    let point = root.convertPoint_toView(press_point(target, &root), None);
     for kind in [NSEventType::LeftMouseDown, NSEventType::LeftMouseUp] {
         let event=NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(kind,point,NSEventModifierFlags::empty(),NSProcessInfo::processInfo().systemUptime(),window.windowNumber(),None,0,1,1.).expect("mouse event");
         if kind == NSEventType::LeftMouseDown {
@@ -148,6 +162,81 @@ fn press(window: &NSWindow, label: &str) {
             surface.mouseUp(&event);
         }
     }
+}
+fn press_point(target: &NSView, root: &NSView) -> NSPoint {
+    if let (Some(layer), Some(root_layer)) = (target.layer(), root.layer()) {
+        let mut ancestor = Some(layer.clone());
+        while let Some(current) = ancestor {
+            if current == root_layer {
+                // NSH scrolls can move their content with layer transforms
+                // before the native view bounds catch up.
+                let rect = layer.convertRect_toLayer(layer.bounds(), Some(&root_layer));
+                return NSPoint::new(
+                    rect.origin.x + rect.size.width / 2.,
+                    rect.origin.y + rect.size.height / 2.,
+                );
+            }
+            ancestor = current.superlayer();
+        }
+    }
+    let bounds = target.bounds();
+    // AppKit's view hierarchy is placed before its backing layers are attached.
+    // A disconnected layer conversion omits ancestors. Use native geometry then.
+    target.convertPoint_toView(
+        NSPoint::new(
+            bounds.origin.x + bounds.size.width / 2.,
+            bounds.origin.y + bounds.size.height / 2.,
+        ),
+        Some(root),
+    )
+}
+
+fn check_press_coordinates(window: &NSWindow) {
+    let mtm = MainThreadMarker::from(window);
+    let root = NSView::initWithFrame(
+        NSView::alloc(mtm),
+        NSRect::new(NSPoint::new(0., 0.), NSSize::new(680., 820.)),
+    );
+    let parent = NSView::initWithFrame(
+        NSView::alloc(mtm),
+        NSRect::new(NSPoint::new(8., 510.), NSSize::new(231., 300.)),
+    );
+    let target = NSView::initWithFrame(
+        NSView::alloc(mtm),
+        NSRect::new(NSPoint::new(0., 32.), NSSize::new(231., 50.)),
+    );
+    for view in [&root, &parent, &target] {
+        view.setWantsLayer(true);
+    }
+    root.addSubview(&parent);
+    parent.addSubview(&target);
+    let expected = NSPoint::new(123.5, 567.);
+    let layer = target.layer().unwrap();
+    // Match NSH's frame placement before AppKit attaches the layer hierarchy.
+    layer.setBounds(target.bounds());
+    layer.setAnchorPoint(NSPoint::new(0., 0.));
+    layer.setPosition(target.frame().origin);
+    let rect = layer.convertRect_toLayer(layer.bounds(), root.layer().as_deref());
+    let legacy = NSPoint::new(
+        rect.origin.x + rect.size.width / 2.,
+        rect.origin.y + rect.size.height / 2.,
+    );
+    assert_eq!(legacy, NSPoint::new(115.5, 57.), "captured wrong center");
+    assert_eq!(press_point(&target, &root), expected);
+
+    // Once attached, preserve layer-only movement rather than falling back to
+    // native bounds (the real work-disclosure fixture exercises NSH scrolling).
+    let root_layer = root.layer().unwrap();
+    let parent_layer = parent.layer().unwrap();
+    root_layer.addSublayer(&parent_layer);
+    parent_layer.addSublayer(&layer);
+    for (view, backing) in [(&parent, &parent_layer), (&target, &layer)] {
+        backing.setBounds(view.bounds());
+        backing.setAnchorPoint(NSPoint::new(0., 0.));
+        backing.setPosition(view.frame().origin);
+    }
+    parent_layer.setPosition(NSPoint::new(8., 471.));
+    assert_eq!(press_point(&target, &root), NSPoint::new(123.5, 528.));
 }
 fn screenshot(window: &NSWindow, path: &Path) {
     let view = window.contentView().expect("content view");

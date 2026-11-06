@@ -212,8 +212,9 @@ Unicode match and wrapping navigation. Adapter/headless tests also cover query
 and chat cancellation, reader failure and partial coverage, the inherited query
 and hit limits, and preserved drafts. Native reader checks wait for the canonical
 source and its position, not a transient Latest button during page restoration.
-An isolated history run reproduced missing composer readiness; its cause remains
-unknown. The existing one-click readiness gate and failure evidence are kept.
+An isolated history run reproduced missing composer readiness. Its original
+failure evidence is kept. The coordinate follow-up below fixes
+a demonstrated probe error, not production composer mounting.
 
 The matrix also exercises hidden real native work groups in each profile
 (`--check-work`): folded, expanded, live-tail, individual output/code and failure
@@ -244,6 +245,36 @@ production fix or an explanation of the original failure. Two bounded follow-up
 runs (one unchanged, one diagnostic-only) did not reproduce that failure.
 Scoped clippy (`pilot-nsh`, all targets, `native-probes`, warnings denied),
 Rust formatting, exact shared-pin checks and all 72 CI-wrapper tests also passed.
+
+### Native probe coordinate follow-up
+
+The captured history failure had no selected row and still showed Choose a chat.
+Its before-click layer rectangle for chat a was `(0,32,231,50)`. The old probe
+therefore sent window point `(115.5,57)`, which NSH's flipped root reads as
+`(115.5,763)`, not the chat row. The snapshot and click run in the same main-queue
+closure. Label existence did not establish backing-layer attachment. The later
+layer rectangles alone must not be used as the before-click geometry.
+
+The probe now checks that the target's backing-layer ancestry reaches the
+content layer before using layer conversion. Until it does, AppKit's native
+view conversion supplies the center without waiting for display. A deterministic
+nested-view regression reproduces the wrong layer conversion before layout and
+checks the exact native center. Attached layers keep the original conversion:
+NSH scrolls can move content with layer transforms before view bounds catch up.
+A first broad view-only change failed the native work-disclosure check for this
+reason; that failed run is not counted as a pass.
+The one click, original 15-second deadline, exact attached/editable/nonzero
+composer predicate and failure capture remain. It observes the exact native
+sidebar selection before checking the composer, and failure reports distinguish
+selection publication from editor readiness and include both view/layer geometry.
+No app callback, adapter, backend, NSH source or dependency pin changed.
+This does not diagnose the older uncaptured failure or qualify hardware input.
+
+Follow-up verification passed the deterministic disconnected/attached-layer
+regression, the full hidden light/dark × 680/1180 matrix (20 processes, 84
+captures), scoped rustfmt/clippy with warnings denied and the locked native-probe
+build. All native work used the private mbx CPU2/4GiB reservation. Runtime and
+adapter code did not change, so this follow-up did not rerun headless adapters.
 
 ## Slice boundary
 
