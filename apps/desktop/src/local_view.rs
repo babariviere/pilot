@@ -3712,7 +3712,11 @@ mod refresh_tests {
         view.read_with(cx, |v, _| {
             assert!(!v.artifacts_open);
             assert_eq!(v.selected.as_deref(), Some("owner"));
-            assert!(v.state.chat_status.contains("owner mismatch"));
+            assert!(
+                v.state
+                    .chat_status
+                    .contains("This artifact belongs to another chat.")
+            );
         });
         assert!(commands.try_recv().is_err());
         let mut expected = wrong;
