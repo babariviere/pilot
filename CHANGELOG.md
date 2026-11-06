@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.121.0](https://github.com/babariviere/pilot/compare/v1.120.0...v1.121.0) (2026-11-06)
+
+
+### Features
+
+* **context:** replace automatic handoff and digest with Posthorse ([475dada](https://github.com/babariviere/pilot/commit/475dadaf3bb7b3da4a3a4ea9f4489948ec1478fb))
+* **desktop:** add native workflow confirmation sheets ([64423fc](https://github.com/babariviere/pilot/commit/64423fcb536215ad3b4cdcefc78955313dd2b197))
+* **desktop:** global Review replaces the Changes sidebar ([5b5e58b](https://github.com/babariviere/pilot/commit/5b5e58bf9fea6ad47dc413fbfd1b44deb65f5124))
+* **insights:** add app-owned workspace reservation contracts ([c08d185](https://github.com/babariviere/pilot/commit/c08d185177146baec75f18b54ccb49e73a65c90c))
+* **review:** add retained visual precheck adapter ([d115e00](https://github.com/babariviere/pilot/commit/d115e00a1cd479dc1d297a03639dc468633e8214))
+* **review:** persist human feedback and exact annotations ([500dc3c](https://github.com/babariviere/pilot/commit/500dc3c2d27655e20869738e1bf094bf37772bbe))
+* **review:** persist optional global change requests ([11f756d](https://github.com/babariviere/pilot/commit/11f756d459dc5cf09ea1d51bb2f78e178663b33a))
+* **reviews:** persist retained run accounting and linkage ([6332fda](https://github.com/babariviere/pilot/commit/6332fda07ef1f708adcce76a457523012173b87d))
+
+
+### Bug Fixes
+
+* **desktop:** repair stale artifact-owner copy check and register insights_replace ([18d2736](https://github.com/babariviere/pilot/commit/18d27364f4c3c4a5521a291eb90f5a3e85eb8c99))
+* **desktop:** send each Insights confirmation once per click burst ([09a79fc](https://github.com/babariviere/pilot/commit/09a79fc5cddb772c58c91795788684ced7b09603))
+* **kernel:** verify nested tools before reporting access loss ([91b01a7](https://github.com/babariviere/pilot/commit/91b01a74d63a8fdf475ad500da7c87865e7135ca))
+* **review:** isolate unavailable request rows ([f201af4](https://github.com/babariviere/pilot/commit/f201af4eeaaa97c2c508c1847b3d1cb944dcf53f))
+
 ## [1.120.0](https://github.com/babariviere/pilot/compare/v1.119.0...v1.120.0) (2026-11-05)
 
 
