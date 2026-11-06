@@ -57,7 +57,7 @@ fn worker_exit_closes_coalescing_receiver_even_before_runtime_initialization() {
     let (commands, events) = async_channel::bounded(1);
     let retained = events.clone();
     {
-        let _guard = CloseRequests(events);
+        let _guard = CloseOnDrop(events);
     }
     assert!(retained.is_closed());
     assert!(

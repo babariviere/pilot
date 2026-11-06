@@ -14,7 +14,7 @@ acting: a question, failed run, usage hold, and unmerged work need different res
 Background jobs can keep a chat working after its agent finishes a reply.
 
 Use a chat's row menu to rename, pin, archive, or restore it. **Archive** in the
-project selector lets you search retained archived chats and read their history.
+project selector lets you search archived chats and read their saved history.
 Reading archived history does not restore the chat or start work.
 
 Archiving is not a workspace backup. Generated outputs can be removed and safe

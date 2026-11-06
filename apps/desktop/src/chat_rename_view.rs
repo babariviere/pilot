@@ -32,7 +32,7 @@ impl Rename {
         cx: &mut Context<Self>,
     ) -> Self {
         let input = cx.new(|cx| {
-            let mut i = InputState::new(w, cx).validate(|s, _| chat_rename::bounded(s));
+            let mut i = InputState::new(w, cx).validate(|s, _| chat_rename::fits_title_limit(s));
             i.set_value(evidence.target.chat.title.clone(), w, cx);
             i
         });

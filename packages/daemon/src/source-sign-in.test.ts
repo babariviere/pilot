@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, type TestContext } from "node:test";
+import { type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { TrackedKind } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
 import { SourceSignInCancelled, SourceSignInFailed } from "./source-sign-in.ts";
-import { SourceSignInRequired } from "./source-mcp.ts";
+import { SourceSignInRequired } from "./source-tool-rules.ts";
 import { SourceRegistry } from "./sources.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 

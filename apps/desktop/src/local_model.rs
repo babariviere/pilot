@@ -59,7 +59,7 @@ pub(crate) fn projects(value: &Value) -> Result<Vec<Project>, &'static str> {
         }
         out.push(Project {
             id: id.into(),
-            name: bounded(
+            name: crate::text::truncate_with_ellipsis(
                 value["name"]
                     .as_str()
                     .filter(|s| !s.is_empty())
@@ -382,8 +382,14 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
         model_configuration: Some(crate::chat_models::SessionModel::read(value)),
         attention: crate::attention::project(value, signal),
         id: id.into(),
-        title: bounded(value["title"].as_str().unwrap_or("Untitled chat"), 240),
-        state: bounded(value["state"].as_str().unwrap_or("unknown"), 40),
+        title: crate::text::truncate_with_ellipsis(
+            value["title"].as_str().unwrap_or("Untitled chat"),
+            240,
+        ),
+        state: crate::text::truncate_with_ellipsis(
+            value["state"].as_str().unwrap_or("unknown"),
+            40,
+        ),
         archived: value["archivedAt"].is_number(),
         local_draft: false,
         session_path: crate::session_clipboard::path(value),
@@ -395,7 +401,7 @@ pub(crate) fn chat(value: &Value) -> Option<Chat> {
             || matches!(value["state"].as_str(), Some("working" | "starting")),
         signal,
         background_work,
-        cwd: bounded(value["cwd"].as_str().unwrap_or(""), 4096),
+        cwd: crate::text::truncate_with_ellipsis(value["cwd"].as_str().unwrap_or(""), 4096),
         project_id: value["projectId"]
             .as_str()
             .filter(|id| valid_id(id))
@@ -521,17 +527,6 @@ pub(crate) fn mission_titles(value: &Value) -> Option<std::collections::HashMap<
             })
             .collect(),
     )
-}
-
-pub(crate) fn bounded(text: &str, cap: usize) -> String {
-    if text.len() <= cap {
-        return text.into();
-    }
-    let mut end = cap.saturating_sub(3);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &text[..end])
 }
 
 #[derive(Default)]
@@ -947,7 +942,8 @@ impl LiveTranscript {
         if !self.admit(id, 0) {
             return;
         }
-        let kind = bounded(entry["kind"].as_str().unwrap_or("unknown"), 80);
+        let kind =
+            crate::text::truncate_with_ellipsis(entry["kind"].as_str().unwrap_or("unknown"), 80);
         let mut rows = Vec::new();
         if crate::question_entry::is_reply_bookkeeping(entry) {
             // The reply is already an ordinary user row. These records only
@@ -1707,7 +1703,7 @@ fn slim_message(value: &Value) -> Value {
                 continue;
             }
             if kind == "toolCall" {
-                content.push(serde_json::json!({"type":"toolCall","id":block["id"].as_str().filter(|id|!id.is_empty()&&id.len()<=256),"name":block["name"].as_str().map(|name|bounded(name,160)),"arguments":block["arguments"]}));
+                content.push(serde_json::json!({"type":"toolCall","id":block["id"].as_str().filter(|id|!id.is_empty()&&id.len()<=256),"name":block["name"].as_str().map(|name|crate::text::truncate_with_ellipsis(name,160)),"arguments":block["arguments"]}));
                 continue;
             }
             content.push(serde_json::json!({"type":kind,field:text}));

@@ -22,7 +22,7 @@ Short guides for the desktop app. Start with [installation and setup](getting-st
 
 [Insights](insights.md) covers one-confirmation weekly enable from Automations, review settings with Save and Apply, Tasks-tab decisions and access settings.
 
-Pilot runs work locally. Remote devbox execution is retired; retained history and
+Pilot runs work locally. Remote devbox execution is retired; saved history and
 drafts are not migrated or submitted elsewhere.
 
 Implementation contracts, proposals, benchmarks, and historical material belong in

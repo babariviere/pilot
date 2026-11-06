@@ -108,25 +108,14 @@ pub(crate) async fn submit(
         ),
     }
 }
-async fn body(mut response: reqwest::Response) -> Result<Value, &'static str> {
-    if response
-        .content_length()
-        .is_some_and(|n| n > model::WIRE_BYTES as u64)
-    {
-        return Err("Oversized task response.");
-    }
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
+async fn body(response: reqwest::Response) -> Result<Value, &'static str> {
+    crate::response_json::read(response, model::WIRE_BYTES)
         .await
-        .map_err(|_| "Interrupted task response.")?
-    {
-        if bytes.len().saturating_add(chunk.len()) > model::WIRE_BYTES {
-            return Err("Oversized task response.");
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    serde_json::from_slice(&bytes).map_err(|_| "Malformed task response.")
+        .map_err(|failure| match failure {
+            crate::response_json::Failure::Oversized => "Oversized task response.",
+            crate::response_json::Failure::Interrupted => "Interrupted task response.",
+            crate::response_json::Failure::Malformed => "Malformed task response.",
+        })
 }
 
 #[cfg(test)]

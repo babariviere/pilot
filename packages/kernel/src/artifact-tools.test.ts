@@ -73,7 +73,7 @@ function execute(tool: ToolDefinition, args: unknown, signal?: AbortSignal) {
 	return tool.execute("call-1", args, signal, undefined, { cwd: process.cwd() } as ExtensionToolContext);
 }
 
-test("retired kinds are absent from authoring schemas and forged writes fail before callbacks", async () => {
+test("retired kinds are absent from write schemas and forged writes fail before callbacks", async () => {
 	const f = fixture();
 	const tool = f.tools[0]!;
 	const schema = tool.parameters as { properties: { kind: { enum: string[] }; action: { enum: string[] } } };
@@ -172,7 +172,7 @@ test("artifact tools declare structured output, sequential execution and a compa
 		assert.match(tool.namespace!.description!, /tools\.artifact/);
 		assert.match(tool.namespace!.description!, /pilot-artifacts skill/);
 		assert.ok(tool.namespace!.instructions!.includes(ARTIFACT_SKILL_PATH));
-		assert.match(tool.description, /pilot-artifacts skill before authoring/);
+		assert.match(tool.description, /pilot-artifacts skill before creating or updating artifacts/);
 		assert.ok(tool.description.length < 1600, `description bloated to ${tool.description.length} characters`);
 		assert.match(tool.description, /512 KiB|16 MiB/);
 		assert.match(tool.description, /expectedRevision/);

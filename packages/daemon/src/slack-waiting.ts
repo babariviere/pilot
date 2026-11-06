@@ -3,7 +3,7 @@ import type { TrackedItem } from "@pilot/protocol";
 import { parseSlackThreadReplies, type SlackReply, slackTimestamp } from "./slack-format.ts";
 import { parseSlackIdentity, type SlackIdentity } from "./slack-mentions.ts";
 import { slackStartAllowed } from "./slack-start.ts";
-import { SourceToolError } from "./source-mcp.ts";
+import { SourceToolError } from "./source-tool-rules.ts";
 import type { SourcePollContext } from "./sources.ts";
 import type { TrackedItemStore } from "./tracked-items.ts";
 

@@ -59,13 +59,13 @@ async function conversationView(
 ): Promise<{ events: AgentEvent[]; completion?: SessionCompletion }> {
 	const session = createSession(storage);
 	try {
-		// Match the durable structural view: newest head marker first, then all retained
+		// Match the durable structural view: newest head marker first, then all kept
 		// non-head entries. Compaction/reset history is not the active transcript.
 		const head = recent ? undefined : await storage.findLatestHeadMarker(id, undefined, context);
-		const bounded = recent ? await readRecentEntries(storage, id, context) : undefined;
+		const recentPage = recent ? await readRecentEntries(storage, id, context) : undefined;
 		const range: EntryRecord[] = [];
 		let cursor: Cursor | undefined;
-		while (!bounded) {
+		while (!recentPage) {
 			const page = await storage.scanEntries(
 				{ conversationId: id, ...(head ? { minEntryId: head.head } : {}) },
 				256,
@@ -84,20 +84,20 @@ async function conversationView(
 			session.snapshot(UsageDoc, id, context),
 			session.snapshot(AttentionDoc, id, context),
 		]);
-		if (bounded) {
+		if (recentPage) {
 			const held = await session.snapshot(HeldInputsDoc, id, context);
-			bounded.history.question =
+			recentPage.history.question =
 				held?.questionPending === false
 					? null
-					: await readQuestionBoundary(storage, bounded.history.context, context);
+					: await readQuestionBoundary(storage, recentPage.history.context, context);
 		}
 		const snapshot: AgentEvent = {
 			type: "snapshot",
-			...(bounded ? { history: bounded.history } : {}),
+			...(recentPage ? { history: recentPage.history } : {}),
 			entries: await chatEventEntries(
 				session,
 				await new InputOrigins(storage, await lineage(storage, id, context), context).entries(
-					bounded?.entries ?? (head ? [head, ...range.filter((entry) => entry.head === undefined)] : range),
+					recentPage?.entries ?? (head ? [head, ...range.filter((entry) => entry.head === undefined)] : range),
 				),
 				context,
 			),
@@ -203,7 +203,7 @@ export async function readSubagentTranscript(
 	return { full: true, events, ...(ids.length ? { cursor: Math.max(...ids) } : {}) };
 }
 
-/** One page of retained entries from before the active transcript (hidden by compaction or reset). */
+/** One page of saved entries from before the active transcript (hidden by compaction or reset). */
 export interface EarlierEntriesRead {
 	/** Oldest first. */
 	entries: EntryRecord[];
@@ -374,7 +374,7 @@ function diagnosticHistoryUnavailable(
 }
 
 /**
- * Read a bounded newest-first storage page for one host-authorized diagnostic target. The response is chronological,
+ * Read a limited newest-first storage page for one host-authorized diagnostic target. The response is chronological,
  * each entry is byte-truncated explicitly, and callers continue toward older entries with `nextBefore`. This opens
  * only a short read transaction and never initializes or wakes the target's kernel.
  */

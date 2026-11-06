@@ -26,7 +26,6 @@ import { ConversationBusy, Harness, InboxDoc, type JsonObject, LiveDoc } from "@
 import type { SessionCompletion, SessionJob } from "@pilot/protocol";
 import { Type } from "typebox";
 import { userText } from "./attempts.ts";
-import { observeCommits } from "./commits.ts";
 import { CoordinatorMemoryDoc } from "./coordinator-memory.ts";
 import type { MemoryModel } from "./coordinator-memory-model.ts";
 import { MAX_FAILURE_CHARS } from "./failure.ts";
@@ -1324,17 +1323,20 @@ test("native idle checks read committed compaction/inbox activity before async e
 	]);
 	const session = await f.open();
 	const idleAtCommit: boolean[] = [];
-	const stop = observeCommits(session.harness, (publication) => {
-		if (
-			publication.changes.some(
-				(change) =>
-					change.type === "document" &&
-					[LiveDoc.definition.kind, InboxDoc.definition.kind].includes(change.record.kind),
+	const observation = session.harness.observeCommits({
+		advance(publication) {
+			if (
+				publication.changes.some(
+					(change) =>
+						change.type === "document" &&
+						[LiveDoc.definition.kind, InboxDoc.definition.kind].includes(change.record.kind),
+				)
 			)
-		)
-			idleAtCommit.push(ctx.isIdle());
+				idleAtCommit.push(ctx.isIdle());
+		},
+		end() {},
 	});
-	t.after(stop);
+	t.after(() => observation.detach());
 	await session.conversation.commit(async (tx) => {
 		(await tx.doc(LiveDoc, session.conversation.id)).compactions = [
 			{ taskId: 999 as never, trigger: "manual", blocking: false, attempt: 0 },

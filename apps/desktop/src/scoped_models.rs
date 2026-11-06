@@ -42,7 +42,7 @@ pub(crate) fn valid_selection(value: &Option<Vec<String>>) -> Result<(), Failure
         && (patterns.is_empty()
             || patterns.len() > 256
             || patterns.iter().any(|p| {
-                crate::mission_conversion::trim_text(p).is_empty()
+                crate::text::trim_text(p).is_empty()
                     || p.len() > 256
                     || p.chars().any(|c| c < ' ' || c == '\u{7f}')
             }))

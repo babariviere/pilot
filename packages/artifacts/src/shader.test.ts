@@ -1,7 +1,30 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { prepareArtifact } from "./render.ts";
-import { checkShader, formatShaderErrors, shaderFragmentSource } from "./shader.ts";
+import { checkShader, formatShaderDiagnostics, formatShaderErrors, shaderFragmentSource } from "./shader.ts";
+
+test("shader diagnostics preserve excerpts, line numbers, limits and the publication prefix", () => {
+	const source = `  first;  \r\n\t${"x".repeat(201)}\r\n`;
+	const errors = [
+		{ message: "wrapper" },
+		{ line: 1, message: "first error" },
+		{ line: 2, message: "long line" },
+		{ line: 3, message: "empty line" },
+		{ line: 99, message: "missing line" },
+	];
+	const expected = `wrapper\nline 1: first error\n    first;\nline 2: long line\n    ${"x".repeat(200)}\nline 3: empty line\nline 99: missing line`;
+	assert.equal(formatShaderDiagnostics(errors, source), expected);
+	assert.equal(
+		formatShaderErrors(errors, source),
+		`Shader does not compile as GLSL ES 3.00. Nothing was published. Fix these errors and try again:\n${expected}`,
+	);
+	const ten = Array.from({ length: 10 }, (_, index) => ({ message: `error ${index}` }));
+	assert.equal(formatShaderDiagnostics(ten, ""), ten.map((error) => error.message).join("\n"));
+	assert.equal(
+		formatShaderDiagnostics([...ten, { message: "hidden" }], ""),
+		`${ten.map((error) => error.message).join("\n")}\n…and 1 more`,
+	);
+});
 
 const valid = `void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 	vec2 uv = fragCoord / iResolution.xy;

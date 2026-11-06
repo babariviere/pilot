@@ -1,7 +1,7 @@
 /** Mission orchestration: validation against projects and sessions, agent tool calls and kernel contexts. */
 import { randomUUID, webcrypto } from "node:crypto";
 import type { MissionAction, MissionContext } from "@pilot/kernel";
-import { validateMissionAuthoring } from "@pilot/kernel/mission-authoring";
+import { validateMissionWrite } from "@pilot/kernel/mission-write";
 import type {
 	ArtifactRevision,
 	CreateMissionRequest,
@@ -23,8 +23,8 @@ import { CoordinatorCompaction } from "./coordinator-compaction.ts";
 import type { CriticalReviewVault } from "./critical-review-vault.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
-import { githubRepository } from "./github.ts";
 import type { CodePullRequestObservation } from "./github-delivery.ts";
+import { githubRepository } from "./github-url.ts";
 import { observeCodeContributions, observeCodeIntegration } from "./mission-code-delivery.ts";
 import { evaluateContributionAllocation } from "./mission-contribution-allocation.ts";
 import {
@@ -1714,7 +1714,7 @@ export class MissionService {
 				`Only the mission coordinator can use ${action === "task" && args.order === undefined ? "task model or thinking" : action}`,
 			);
 		const actor = { sessionId };
-		validateMissionAuthoring(action, args);
+		validateMissionWrite(action, args);
 		const who = (id: string | undefined) => (id === undefined ? "user" : id === sessionId ? "you" : id);
 		const str = (key: string) => (typeof args[key] === "string" ? (args[key] as string) : undefined);
 		switch (action) {

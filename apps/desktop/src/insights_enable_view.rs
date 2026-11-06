@@ -557,6 +557,7 @@ impl Panel {
         self.enable_preflight(cx);
     }
 
+    #[cfg(feature = "native-probes")]
     pub(super) fn enable_probe_ready(&self) -> bool {
         let Some(flow) = &self.enable else {
             return true;

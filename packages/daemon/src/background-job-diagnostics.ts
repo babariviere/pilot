@@ -2,7 +2,7 @@
 
 import { createHash } from "node:crypto";
 import type { MissionLinearSync, RefreshReason, TrackedKind } from "@pilot/protocol";
-import { SourceRateLimited, SourceSignInRequired } from "./source-mcp.ts";
+import { SourceRateLimited, SourceSignInRequired } from "./source-tool-rules.ts";
 
 export type BackgroundJob =
 	| "linked_linear_sync"

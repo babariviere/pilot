@@ -25,7 +25,7 @@ network returns. Authentication, quota, and ordinary provider errors are not off
 pauses. Active tools finish their admitted work rather than being replayed.
 
 **Stop** remains available during a pause and saves cancellation before recovery.
-Reading retained history does not restart an agent.
+Reading saved history does not restart an agent.
 
 ## Linux
 

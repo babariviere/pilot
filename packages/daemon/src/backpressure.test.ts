@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { test } from "node:test";
-import { setTimeout as delay } from "node:timers/promises";
-import { type BackpressureSocket, boundedSender } from "./backpressure.ts";
+import { type BackpressureSocket, createSocketSender } from "./backpressure.ts";
 
 class Socket extends EventEmitter implements BackpressureSocket {
 	readonly OPEN = 1;
@@ -28,7 +27,7 @@ class Socket extends EventEmitter implements BackpressureSocket {
 
 test("bounds queued UTF-8 bytes and disconnects explicitly instead of dropping state deltas", () => {
 	const socket = new Socket();
-	const send = boundedSender(socket, 10);
+	const send = createSocketSender(socket, 10);
 	send("ééé"); // Six bytes, not three characters.
 	send("next");
 	send("overflow");
@@ -40,9 +39,9 @@ test("bounds queued UTF-8 bytes and disconnects explicitly instead of dropping s
 	socket.emit("close");
 });
 
-test("allows drained messages, also checks transport buffering, and rejects oversized snapshots", () => {
+test("allows drained messages and checks transport buffering", () => {
 	const socket = new Socket();
-	const send = boundedSender(socket, 10);
+	const send = createSocketSender(socket, 10);
 	send("1234567890");
 	socket.callbacks.shift()!();
 	send("another");
@@ -52,27 +51,26 @@ test("allows drained messages, also checks transport buffering, and rejects over
 	send("xx");
 	assert.equal(socket.closes.length, 1);
 	socket.emit("close");
-	const large = new Socket();
-	boundedSender(large, 10)("12345678901");
-	assert.deepEqual(large.sent, []);
-	assert.equal(large.closes[0]?.[0], 1013);
-	large.emit("close");
 });
 
-test("terminates a stalled close and clears the deadline on normal close", async () => {
+test("terminates a stalled close and clears the deadline on normal close", (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
 	const stalled = new Socket();
-	boundedSender(stalled, 1, 10)("too large");
+	createSocketSender(stalled, 1, 10)("too large");
 	const closed = new Socket();
-	boundedSender(closed, 1, 10)("too large");
+	createSocketSender(closed, 1, 10)("too large");
 	closed.emit("close");
-	await delay(30);
+	t.mock.timers.tick(9);
+	assert.equal(stalled.terminated, false);
+	assert.equal(closed.terminated, false);
+	t.mock.timers.tick(1);
 	assert.equal(stalled.terminated, true);
 	assert.equal(closed.terminated, false);
 });
 
 test("send errors disconnect and closed sockets do not queue messages", () => {
 	const socket = new Socket();
-	const send = boundedSender(socket, 10);
+	const send = createSocketSender(socket, 10);
 	send("state");
 	socket.callbacks.shift()!(new Error("failed"));
 	assert.equal(socket.closes.length, 1);
@@ -83,7 +81,7 @@ test("send errors disconnect and closed sockets do not queue messages", () => {
 
 test("default allowance accepts legitimate snapshots larger than 8 MiB without a reconnect loop", () => {
 	const socket = new Socket();
-	const send = boundedSender(socket);
+	const send = createSocketSender(socket);
 	send("x".repeat(16 * 1024 * 1024));
 	assert.equal(socket.sent.length, 1);
 	assert.equal(socket.closes.length, 0);
@@ -102,7 +100,7 @@ test("default allowance accepts legitimate snapshots larger than 8 MiB without a
 
 test("individual messages still respect the native frame limit despite queue headroom", () => {
 	const socket = new Socket();
-	boundedSender(socket)("x".repeat(64 * 1024 * 1024 + 1));
+	createSocketSender(socket)("x".repeat(64 * 1024 * 1024 + 1));
 	assert.equal(socket.sent.length, 0);
 	assert.equal(socket.closes[0]?.[0], 1013);
 	socket.emit("close");

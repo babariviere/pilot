@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
-import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.test.ts";
+import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.ts";
 import { Conflict } from "./errors.ts";
 
 import { assertHistory, DAY, fixture, seedHistory } from "./testing/session-workspace.ts";

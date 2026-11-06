@@ -1,5 +1,6 @@
 /** Event-driven, read-only checks. Never edits PRs, posts on GitHub or merges. */
-import { linkedPullRequest, run } from "./github.ts";
+import { run } from "./github.ts";
+import { linkedPullRequest } from "./github-url.ts";
 import { closingIssueIds, type linearPrGuidance, ticketScope } from "./mission-linear-pr-guidance.ts";
 import type { MissionStore } from "./missions.ts";
 import { RuntimeBackground } from "./runtime-background.ts";

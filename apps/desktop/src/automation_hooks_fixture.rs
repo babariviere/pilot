@@ -31,6 +31,7 @@ pub(crate) fn sample() -> Value {
 pub(crate) enum Mode {
     Accept,
     /// Another client saved first: the revision moves and the PUT gets 409 with the current list.
+    #[cfg(feature = "native-probes")]
     Conflict,
     /// 400 with the daemon's validation message.
     Rejected,
@@ -191,6 +192,7 @@ impl Server {
                                     Some((400, json!({"error":"checks: cwd must be relative"})))
                                 }
                                 Mode::Lost => None,
+                                #[cfg(feature = "native-probes")]
                                 Mode::Conflict => {
                                     let mut moved = current.clone();
                                     moved["revision"] = json!(revision + 1);

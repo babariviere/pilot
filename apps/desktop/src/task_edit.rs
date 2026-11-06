@@ -18,13 +18,13 @@ impl Content {
         if title.encode_utf16().count() > TITLE_UNITS || body.encode_utf16().count() > BODY_UNITS {
             return Err("Title is limited to 200 UTF-16 units; body to 8000. Nothing was saved.");
         }
-        let title = crate::mission_conversion::trim_text(title);
+        let title = crate::text::trim_text(title);
         if title.is_empty() {
             return Err("A task title is required.");
         }
         Ok(Self {
             title: title.into(),
-            body: crate::mission_conversion::trim_text(body).into(),
+            body: crate::text::trim_text(body).into(),
         })
     }
 }

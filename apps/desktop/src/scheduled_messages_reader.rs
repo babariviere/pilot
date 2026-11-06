@@ -1,5 +1,6 @@
 //! Fixed passive schedule GET, plus explicit writes: Cancel/Dismiss/Delete (DELETE), revision-checked
 //! rule edits (PATCH) and creation (POST), each fenced to the checked Local home. Never retried.
+use crate::close_on_drop::CloseOnDrop;
 use crate::{
     LocalOptions,
     scheduled_messages::{Item, RowAction, Snapshot},
@@ -56,12 +57,6 @@ pub(crate) struct Reader {
     commands: async_channel::Sender<Request>,
     replace: async_channel::Receiver<Request>,
 }
-struct CloseRequests(async_channel::Receiver<Request>);
-impl Drop for CloseRequests {
-    fn drop(&mut self) {
-        self.0.close();
-    }
-}
 impl Reader {
     pub(crate) fn start(
         options: LocalOptions,
@@ -73,7 +68,7 @@ impl Reader {
         std::thread::Builder::new()
             .name("local-scheduled-items-reader".into())
             .spawn(move || {
-                let _close = CloseRequests(events.clone());
+                let _close = CloseOnDrop(events.clone());
                 let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else { return; };
                 runtime.block_on(async move {
                     let Ok(client) = reqwest::Client::builder()

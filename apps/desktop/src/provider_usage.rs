@@ -1,5 +1,5 @@
 //! Passive provider snapshots forwarded by Local, independent of token/cost accounting.
-use crate::local_model::{self, Chat};
+use crate::local_model::Chat;
 use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,7 +37,7 @@ impl Snapshot {
                 let percent = w["usedPercent"]
                     .as_f64()
                     .filter(|p| p.is_finite() && *p >= 0.)?;
-                let label = local_model::bounded(w["label"].as_str()?.trim(), 80);
+                let label = crate::text::truncate_with_ellipsis(w["label"].as_str()?.trim(), 80);
                 if label.is_empty() {
                     return None;
                 }

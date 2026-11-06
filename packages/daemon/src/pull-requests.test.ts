@@ -7,7 +7,6 @@ import {
 	createdBookmarks,
 	discoverPullRequest as discover,
 	discoverLinkedPullRequest as discoverLinked,
-	githubRepository,
 	hasPendingBoundPullRequests,
 	type PullRequestSession,
 	repositoryState,
@@ -297,30 +296,6 @@ test("bindings, exclusions and cached terminal states recognize case aliases", a
 		[42],
 	);
 	assert.equal(hasPendingBoundPullRequests({ ...target, previousPullRequests: result.others }), true);
-});
-
-test("normalizes HTTPS, SSH and enterprise origins, rejecting local paths and option-like identities", () => {
-	for (const remote of [
-		"https://github.com/octo/repo.git",
-		"git@github.com:octo/repo.git",
-		"ssh://git@github.com/octo/repo",
-		"https://github.com/octo/repo/",
-	])
-		assert.equal(githubRepository(remote).identity, "github.com/octo/repo");
-	assert.equal(
-		githubRepository("ssh://git@github.example.com/team/repo.git").identity,
-		"github.example.com/team/repo",
-	);
-	for (const remote of [
-		"/local/repo",
-		"file:///local/repo",
-		"--repo=evil",
-		"https://github.com/-owner/repo",
-		"git@github.com:owner/--repo",
-		"https://github.com/owner/repo?foo=bar",
-		"https://github.com/owner/repo/extra",
-	])
-		assert.throws(() => githubRepository(remote));
 });
 
 test("direct pushes to the workspace default branch do not discover unrelated PRs", async () => {

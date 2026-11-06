@@ -480,8 +480,7 @@ impl Render for Form {
         let editable = d.row.text().is_some() && d.row.token.is_some();
         let mode = d.mode.as_deref().unwrap_or(&d.row.mode).to_owned();
         let text = d.input.read(cx).value();
-        let valid = !crate::mission_conversion::trim_text(&text).is_empty()
-            && text.len() <= model::TEXT_BYTES;
+        let valid = !crate::text::trim_text(&text).is_empty() && text.len() <= model::TEXT_BYTES;
         let changed = d.row.text() != Some(text.as_ref()) || mode != d.row.mode;
         let unsaved = d.unsaved(self.row(id), cx);
         let restorable = !queued && d.local_text(cx).is_some();

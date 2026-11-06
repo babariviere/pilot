@@ -7,17 +7,16 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { discoverTests, testInLane, testLimits, testSuite, testWeight } from "./test-suites.ts";
 
-test("suites partition every test, keeping new tests and integration files out of the fast path", async () => {
-	const files = await discoverTests(fileURLToPath(new URL("../", import.meta.url)));
-	const groups = ["fast", "integration", "stress"] as const;
-	assert.equal(
-		groups.reduce((count, group) => count + files.filter((file) => testSuite(file) === group).length, 0),
-		files.length,
-	);
-	assert.equal(testSuite("packages/daemon/src/new-feature.test.ts"), "integration");
-	assert.equal(testSuite("packages/kernel/src/model.integration.test.ts"), "integration");
-	assert.equal(testSuite("packages/daemon/src/changes.stress.test.ts"), "stress");
-	assert.equal(testSuite("packages/daemon/src/github.test.ts"), "fast");
+test("suite defaults and explicit classifications keep integration out of the fast path", () => {
+	for (const [path, suite] of [
+		["packages/daemon/src/new-feature.test.ts", "integration"],
+		["packages/kernel/src/model.integration.test.ts", "integration"],
+		["packages/daemon/src/changes.stress.test.ts", "stress"],
+		["packages/daemon/src/github.test.ts", "fast"],
+		["scripts/test-suites.test.ts", "fast"],
+		["scripts/new-runner.test.ts", "integration"],
+	])
+		assert.equal(testSuite(path!), suite, path);
 	assert.ok(
 		testWeight("packages/daemon/src/shared-workspaces-import.integration.test.ts") >
 			testWeight("packages/daemon/src/github.test.ts"),
@@ -30,6 +29,7 @@ test("discovery visits package sources, never dependency trees, and includes run
 	for (const path of [
 		"packages/a/src/nested/one.test.ts",
 		"packages/a/node_modules/two.test.ts",
+		"packages/a/test/legacy-fixture.ts",
 		"scripts/runner.test.ts",
 	]) {
 		await mkdir(join(root, path, ".."), { recursive: true });

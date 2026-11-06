@@ -10,10 +10,11 @@ import type { ProjectDashboard, ServerMessage, SessionSummary, SourceSignIn, Tra
 import { WebSocket } from "ws";
 import { pollLinear } from "./linear-source.ts";
 import type { ModelCatalog } from "./models.ts";
+import { PiReload } from "./pi-reload.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
 import type { SessionManager } from "./sessions.ts";
-import { SourceSignInRequired } from "./source-mcp.ts";
+import { SourceSignInRequired } from "./source-tool-rules.ts";
 import { SourceRegistry } from "./sources.ts";
 import type { TerminalManager } from "./terminals.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
@@ -53,6 +54,10 @@ test("tracking HTTP, WS invalidation and DashboardProviders.tracked share projec
 	const sessions = {
 		list: () => [],
 		get: (id: string) => chats.get(id),
+		piReload: new PiReload(
+			() => false,
+			async () => false,
+		),
 		onChange: () => () => {},
 		onArtifactsChanged: () => () => {},
 		setWorkspaceProcessGuard() {},
@@ -371,6 +376,10 @@ test("Linear cycle/fallback and transient prefill are exposed through the tracki
 	const sessions = {
 		list: () => [],
 		get: (id: string) => (id === "chat" ? { id, projectId: project.id } : undefined),
+		piReload: new PiReload(
+			() => false,
+			async () => false,
+		),
 		onChange: () => () => {},
 		onArtifactsChanged: () => () => {},
 		setWorkspaceProcessGuard() {},

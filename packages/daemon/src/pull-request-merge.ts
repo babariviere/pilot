@@ -1,7 +1,8 @@
 /** Explicit user merges only. The read-only discovery/sync path never calls this service. */
 import type { MergePullRequestRequest, PullRequestMergeMethod, PullRequestMergePreview } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
-import { githubRepository, type Repository, run } from "./github.ts";
+import { run } from "./github.ts";
+import { githubRepository, type Repository } from "./github-url.ts";
 import type { Runner } from "./workspaces.ts";
 
 export function mergeTarget(raw: string): { repo: Repository; number: number } {

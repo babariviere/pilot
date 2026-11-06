@@ -174,6 +174,7 @@ impl Server {
             .remove(&(method.into(), path.into()));
     }
     /// Restart only this owned HTTP fixture, keeping its simulated durable rows/receipts.
+    #[cfg(feature = "native-probes")]
     pub(crate) fn restart(&mut self) {
         let _ = self.stop.take().unwrap().send(());
         self.thread.take().unwrap().join().unwrap();

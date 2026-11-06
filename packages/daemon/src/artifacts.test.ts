@@ -12,7 +12,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { ArtifactNotFound, ArtifactStore } from "@pilot/artifacts";
 import type { ArtifactRevision, ArtifactSummary, MissionDetail, ServerMessage } from "@pilot/protocol";
 import { WebSocket } from "ws";
-import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.test.ts";
+import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import type { ModelCatalog } from "./models.ts";

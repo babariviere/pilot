@@ -25,7 +25,7 @@ import {
 	sourceRateLimit,
 	sourceToolFailure,
 	validSourceArguments,
-} from "./source-mcp.ts";
+} from "./source-tool-rules.ts";
 
 interface Connection {
 	state: string;

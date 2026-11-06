@@ -2,7 +2,7 @@
 
 ## Read usage
 
-Home shows cached provider subscription reports. **Usage** shows retained token
+Home shows cached provider subscription reports. **Usage** shows saved token
 history, daily trends, and catalog cost estimates. Filter historical data by project
 or inspect individual requests without treating page rows as complete totals.
 

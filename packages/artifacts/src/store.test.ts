@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { LegacyArtifactFixture } from "../test/legacy-fixture.test.ts";
+import { LegacyArtifactFixture } from "../test/legacy-fixture.ts";
 import { ArtifactNotFound, ArtifactStore } from "./store.ts";
 
 const document = {
@@ -11,6 +11,28 @@ const document = {
 	kind: "visual" as const,
 	source: 'function visual({ ui }) { return () => ui.text("Hello"); }',
 };
+
+test("publication keeps JSON data, normalized titles and exact source", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "artifact-serialization-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const store = new ArtifactStore(dir, { sessionId: "session" });
+	const data = { label: "é", values: [0, false, null] };
+	const source =
+		'  ({ ui, data }) => { if (data.label !== "é") throw Error("wrong data"); return () => ui.text(data.label); }\r\n';
+	const created = await store.create({ title: "  Native  ", kind: "visual", source, data });
+	assert.equal(created.title, "Native");
+	assert.equal(created.source, source);
+	assert.equal(created.data, data);
+	const stored = await store.get(created.id);
+	assert.equal(stored.title, "Native");
+	assert.equal(stored.source, source);
+	assert.deepEqual(stored.data, data);
+	const directory = join(dir, "artifacts", created.id);
+	const before = await readFile(join(directory, "latest.json"));
+	await assert.rejects(store.update(created.id, { ...document, data: "é".repeat(512 * 1024) }), /1 MiB/);
+	assert.deepEqual(await readFile(join(directory, "latest.json")), before);
+	await assert.rejects(readFile(join(directory, "2.json")), { code: "ENOENT" });
+});
 
 for (const kind of ["html", "react", "swiftui"] as const) {
 	test(`${kind} history stays exact and inert; rejected writes leave bytes untouched`, async (t) => {

@@ -3,7 +3,7 @@
 `kind: "visual"` is the **first choice** for charts, stats, tables, small dashboards, controls (tabs, toggles,
 sliders, buttons), UI mockups and design alternatives, Mermaid diagrams (`ui.mermaid`) and 2D drawings or animations
 (`ui.canvas`). Pilot draws visuals natively in the chat: light and dark, the chat's fonts, selectable text and no web
-page. HTML, React and SwiftUI authoring and preview are removed; existing sources remain read-only.
+page. Creating and previewing HTML, React and SwiftUI artifacts is no longer supported; existing sources remain read-only.
 Shader rendering is deferred in Pilot Next, including `ui.shader`. Use layout, typography and vectors for mockups.
 
 The API is in [visual.d.ts](visual.d.ts). A visual is a **plain JavaScript function** defined in your codemode script
@@ -187,7 +187,7 @@ two slow frames in a row stop the canvas with the error. Keep frames to a few th
 
 ## Mermaid
 
-`ui.mermaid(source)` accepts a bounded native flowchart subset, at most20KiB UTF-8:
+`ui.mermaid(source)` accepts a limited native flowchart subset, at most 20 KiB UTF-8:
 `flowchart`/`graph` plus `TD`, `TB`, `BT`, `LR` or `RL`; ASCII letter-led IDs;
 plain Unicode labels in `[]`, `()` or `{}`; `-->`/`---` and optional `|edge label|`.
 Chains and newline/semicolon statements are supported. Limits:48nodes,96edges,
@@ -215,7 +215,7 @@ Previously stored sources remain inspectable; this does not certify their syntax
 
 ## Shader
 
-This existing API is retained for compatibility. Shader rendering is unavailable in Pilot Next;
+This existing API is kept for compatibility. Shader rendering is unavailable in Pilot Next;
 do not use it for Next mockups. This reference does not enable a shader or browser fallback.
 
 `ui.shader` draws a Shadertoy-style `mainImage` with Metal, as wide as the column. The GLSL is the same as a shader

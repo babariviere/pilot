@@ -1,5 +1,5 @@
 //! Immutable explicit task submission. GETs never settle a lost creation ACK.
-use crate::{local_model::valid_id, mission_browser::Key, mission_conversion::trim_text};
+use crate::{local_model::valid_id, mission_browser::Key, text::trim_text};
 use serde_json::Value;
 
 pub(crate) const TITLE_UNITS: usize = 200;

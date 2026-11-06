@@ -72,7 +72,7 @@ fn compact_pending_unknown_and_stale_results_share_action_fences() {
             .finish(7, &e, Outcome::Unknown)
     );
     a.inspected(&e, Some(7));
-    a.observe(&[e.target.chat.clone()]);
+    a.observe(std::slice::from_ref(&e.target.chat));
     assert!(
         a.blocked("source"),
         "GET/list cannot prove compaction admission"
@@ -296,7 +296,7 @@ fn failure_retry_follows_the_shared_report_for_this_failure_only() {
             RetryView::Failed("Refused")
         );
         assert!(a.begin_retry_check("source", Some(42)).is_some());
-        assert!(a.reports.get("source").is_none(), "nothing was submitted");
+        assert!(!a.reports.contains_key("source"), "nothing was submitted");
     }
     // An unconfirmed turn retry may have resent the message: never offered again.
     let mut a = actions();

@@ -143,7 +143,7 @@ export async function createAskTools(
 			annotations: readOnlyAnnotations,
 			label: "ls",
 			description:
-				"List source directory entries, marking directories and unfollowed symlinks/submodules. Output is bounded.",
+				"List source directory entries, marking directories and unfollowed symlinks/submodules. Output is limited.",
 			parameters: Type.Object({ path, limit }),
 			outputSchema: Type.String(),
 			async execute(_id, args, signal) {
@@ -165,7 +165,7 @@ export async function createAskTools(
 			annotations: readOnlyAnnotations,
 			label: "find",
 			description:
-				"Find source files by glob (*, **, ?). Matches source-relative paths or basenames. Skips symlinks, submodules, .git, .jj and node_modules. Bounded to 10000 visited entries.",
+				"Find source files by glob (*, **, ?). Matches source-relative paths or basenames. Skips symlinks, submodules, .git, .jj and node_modules. Limited to 10000 visited entries.",
 			parameters: Type.Object({ path, pattern: Type.String(), limit }),
 			outputSchema: Type.String(),
 			async execute(_id, args, signal) {
@@ -183,7 +183,7 @@ export async function createAskTools(
 			annotations: readOnlyAnnotations,
 			label: "grep",
 			description:
-				"Search source text for a literal string, not a regular expression. Reports path:line:text. Skips binary files, symlinks, submodules and metadata/dependency directories. Bounded to 32 MiB scanned and 10000 entries. Narrow path for large repositories.",
+				"Search source text for a literal string, not a regular expression. Reports path:line:text. Skips binary files, symlinks, submodules and metadata/dependency directories. Limited to 32 MiB scanned and 10000 entries. Narrow path for large repositories.",
 			parameters: Type.Object({
 				path,
 				pattern: Type.String({ minLength: 1, maxLength: 1024 }),

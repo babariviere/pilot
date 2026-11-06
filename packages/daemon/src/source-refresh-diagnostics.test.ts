@@ -6,8 +6,8 @@ import { type TestContext, test } from "node:test";
 import type { TrackingJson } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
 import { createSlackPoller } from "./slack-source.ts";
-import { SourceRateLimited, SourceSignInRequired, SourceToolError } from "./source-mcp.ts";
 import { refreshAssessment, SourceRefreshDiagnostics } from "./source-refresh-diagnostics.ts";
+import { SourceRateLimited, SourceSignInRequired, SourceToolError } from "./source-tool-rules.ts";
 import { SourceRegistry } from "./sources.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 

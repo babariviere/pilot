@@ -33,7 +33,7 @@ pub(crate) fn read(value: &Value) -> Arc<[Job]> {
         }
         jobs.push(Job {
             id: id.into(),
-            name: crate::local_model::bounded(if name.is_empty() { id } else { name }, 240),
+            name: crate::text::truncate_with_ellipsis(if name.is_empty() { id } else { name }, 240),
             started_at: started as i64,
             output_path: job["outputPath"].as_str().unwrap_or_default().into(),
         });

@@ -158,7 +158,7 @@ fn response(state: &mut State, method: &str, path: &str, body: Value) -> Reply {
         let Some(text) = body["markdown"].as_str() else {
             return Reply::json(400, json!({"error":"Invalid markdown"}));
         };
-        let text = crate::mission_conversion::trim_text(text).to_owned();
+        let text = crate::text::trim_text(text).to_owned();
         if state.current == 0 || state.versions.get(&state.current) != Some(&text) {
             state.current += 1;
             state.versions.insert(state.current, text.clone());

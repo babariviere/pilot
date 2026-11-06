@@ -71,7 +71,7 @@ fn text(value: &Value, cap: usize) -> Option<String> {
     value
         .as_str()
         .filter(|s| !s.trim().is_empty())
-        .map(|s| crate::local_model::bounded(s, cap))
+        .map(|s| crate::text::truncate_with_ellipsis(s, cap))
 }
 impl Action {
     pub(crate) fn read(value: &Value) -> Option<Self> {

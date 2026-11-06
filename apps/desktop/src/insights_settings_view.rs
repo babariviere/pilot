@@ -551,6 +551,7 @@ impl Panel {
         self.review_refresh(cx);
     }
 
+    #[cfg(feature = "native-probes")]
     pub(super) fn review_probe_ready(&self) -> bool {
         let Some(r) = &self.review else {
             return true;
@@ -566,7 +567,7 @@ impl Panel {
     fn review_apply_attempt(&self) -> Option<(model::Attempt, Frozen)> {
         let r = self.review.as_ref()?;
         let a = self.attempt(&review::apply_slot(&r.session))?.clone();
-        let f = Frozen::retained(&a.operation)?;
+        let f = Frozen::from_operation(&a.operation)?;
         Some((a, f))
     }
 

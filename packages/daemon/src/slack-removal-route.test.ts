@@ -9,7 +9,8 @@ import { test } from "node:test";
 import type { TrackingJson } from "@pilot/protocol";
 import { slackReactionUser, validSlackReactionOwner } from "./slack-reaction-owner.ts";
 import { loadSlackRemovalRoute, parseSlackRemovalRoute, slackRemovalCall } from "./slack-removal-route.ts";
-import { decodeMcpResult, PiSourceMcpClient, SlackRemovalError, validSourceArguments } from "./source-mcp.ts";
+import { PiSourceMcpClient } from "./source-mcp.ts";
+import { decodeMcpResult, SlackRemovalError, validSourceArguments } from "./source-tool-rules.ts";
 
 const route = {
 	server: { url: "https://mcp.example.com/mcp", headers: { Authorization: "Bearer fixture-scoped-key" } },

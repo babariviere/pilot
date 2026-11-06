@@ -13,19 +13,17 @@
  */
 import type { SessionPullRequest } from "@pilot/protocol";
 import {
-	githubRepository,
 	type HealthRequest,
 	type HealthResult,
-	linkedPullRequest,
 	lookupHealth,
 	lookupPullRequests,
 	type PullRequestProblems,
 	RateLimits,
-	type Repository,
 	run,
 	toSessionPullRequest,
 } from "./github.ts";
 import { observeCodePullRequest } from "./github-delivery.ts";
+import { githubRepository, linkedPullRequest, type Repository } from "./github-url.ts";
 import { discoverPullRequestHealth } from "./pull-request-health.ts";
 import {
 	checksState,

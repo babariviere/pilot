@@ -6,6 +6,7 @@ import {
 	NodeTelemetry,
 	type ReadableSpan,
 	type SpanExporter,
+	type TelemetryAttributes,
 	type TelemetryInFlightEvent,
 	traceCarrier,
 	validateOtlpEndpoint,
@@ -58,6 +59,70 @@ function options(exporter: SpanExporter, enabled = true) {
 		exporter,
 	};
 }
+
+test("estimate status, amount and pricing combinations preserve recording decisions", async (t) => {
+	const exporter = new MemoryExporter();
+	const telemetry = new NodeTelemetry(options(exporter));
+	t.after(() => telemetry.shutdown());
+	let accepted = 0;
+	let rejected = 0;
+	for (const status of [undefined, "unavailable", "catalog_estimate", "partial_catalog_estimate"] as const) {
+		for (const amount of [undefined, 0, 123]) {
+			for (const pricing of [undefined, "pi_catalog"] as const) {
+				const attributes: TelemetryAttributes = {
+					...(status === undefined ? {} : { "pilot.ai.estimate_status": status }),
+					...(amount === undefined ? {} : { "pilot.ai.estimated_usd_micros": amount }),
+					...(pricing === undefined ? {} : { "pilot.ai.pricing_source": pricing }),
+				};
+				const valid =
+					status === undefined || status === "unavailable"
+						? amount === undefined && pricing === undefined
+						: amount !== undefined && pricing === "pi_catalog";
+				const span = telemetry.startSpan("pilot.ai.usage", attributes);
+				assert.equal(span.recording, valid, JSON.stringify(attributes));
+				if (valid) accepted++;
+				else rejected++;
+				span.end();
+			}
+		}
+	}
+	assert.equal(await telemetry.forceFlush(), true);
+	assert.equal(exporter.spans.length, accepted);
+	assert.equal(telemetry.stats.invalid, rejected);
+});
+
+test("billing and launch pairings accept zero and reject unpaired observations", async (t) => {
+	const exporter = new MemoryExporter();
+	const telemetry = new NodeTelemetry(options(exporter));
+	t.after(() => telemetry.shutdown());
+	let accepted = 0;
+	let rejected = 0;
+	const cases: Array<[TelemetryAttributes, boolean]> = [];
+	for (const status of [undefined, "unavailable", "known"] as const)
+		for (const amount of [undefined, 0, 123])
+			cases.push([
+				{
+					...(status === undefined ? {} : { "pilot.ai.billed_status": status }),
+					...(amount === undefined ? {} : { "pilot.ai.billed_usd_micros": amount }),
+				},
+				status === "known" ? amount !== undefined : amount === undefined,
+			]);
+	cases.push(
+		[{ "pilot.ai.launch_reason": "initial" }, false],
+		[{ "pilot.ai.launch_count": 0 }, false],
+		[{ "pilot.ai.launch_reason": "initial", "pilot.ai.launch_count": 0 }, true],
+	);
+	for (const [attributes, valid] of cases) {
+		const span = telemetry.startSpan("pilot.ai.usage", attributes);
+		assert.equal(span.recording, valid, JSON.stringify(attributes));
+		if (valid) accepted++;
+		else rejected++;
+		span.end();
+	}
+	assert.equal(await telemetry.forceFlush(), true);
+	assert.equal(exporter.spans.length, accepted);
+	assert.equal(telemetry.stats.invalid, rejected);
+});
 
 test("exports only reviewed span and resource fields", async () => {
 	const exporter = new MemoryExporter();

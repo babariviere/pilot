@@ -1,5 +1,6 @@
 /** On-demand host reads. No polling, mutation, cached-green fallback or delivery authority. */
-import { graphql, linkedPullRequest, type RateLimits } from "./github.ts";
+import { graphql, type RateLimits } from "./github.ts";
+import { linkedPullRequest } from "./github-url.ts";
 import { deliveryDigest } from "./mission-delivery-evidence.ts";
 import type { Runner } from "./workspaces.ts";
 

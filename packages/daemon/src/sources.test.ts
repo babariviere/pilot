@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { Conflict } from "./errors.ts";
 import { ProjectStore } from "./projects.ts";
-import { SourceSignInRequired } from "./source-mcp.ts";
+import { SourceSignInRequired } from "./source-tool-rules.ts";
 import { SourceRegistry } from "./sources.ts";
 import type { TrackedInput } from "./tracked-items.ts";
 import { TrackedItemStore } from "./tracked-items.ts";

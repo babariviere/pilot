@@ -129,7 +129,7 @@ fn response(state: &mut State, method: &str, path: &str, body: Value) -> Reply {
         assert_eq!(body.as_object().unwrap().len(), 2);
         return Reply::json(
             201,
-            json!({"id":"task-created","number":42,"title":crate::mission_conversion::trim_text(body["title"].as_str().unwrap()),"body":crate::mission_conversion::trim_text(body["body"].as_str().unwrap()),"status":"todo","order":3,"createdAt":1,"updatedAt":1}),
+            json!({"id":"task-created","number":42,"title":crate::text::trim_text(body["title"].as_str().unwrap()),"body":crate::text::trim_text(body["body"].as_str().unwrap()),"status":"todo","order":3,"createdAt":1,"updatedAt":1}),
         );
     }
     Reply::json(404, json!({"error":"Unsupported synthetic path"}))

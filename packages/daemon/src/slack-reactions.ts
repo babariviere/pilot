@@ -1,7 +1,7 @@
 import type { TrackedItem, TrackingJson } from "@pilot/protocol";
 import { validSlackReactionOwner } from "./slack-reaction-owner.ts";
 import { slackStartAllowed } from "./slack-start.ts";
-import { SlackRemovalError, SourceToolError, validSourceArguments } from "./source-mcp.ts";
+import { SlackRemovalError, SourceToolError, validSourceArguments } from "./source-tool-rules.ts";
 import type { SourcePollContext } from "./sources.ts";
 import type { TrackedItemStore } from "./tracked-items.ts";
 

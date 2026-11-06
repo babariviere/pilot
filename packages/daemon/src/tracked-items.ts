@@ -16,7 +16,7 @@ import type { SizeReservation } from "./linear-size.ts";
 import type { CaseGroup, CaseInput } from "./slack-cases.ts";
 import type { SlackClassification } from "./slack-classifier.ts";
 import type { SlackReactionOwner } from "./slack-reaction-owner.ts";
-import type { SlackRemovalFailure } from "./source-mcp.ts";
+import type { SlackRemovalFailure } from "./source-tool-rules.ts";
 import type {
 	InboxQuery,
 	InboxTracked,

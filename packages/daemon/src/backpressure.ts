@@ -12,7 +12,7 @@ export interface BackpressureSocket {
 const MAX_FRAME_BYTES = 64 * 1024 * 1024;
 // A full-size snapshot needs headroom for live deltas while it drains. A one-frame queue cap
 // would repeatedly disconnect even a healthy reader of a near-limit active transcript.
-export function boundedSender(socket: BackpressureSocket, maxBytes = 2 * MAX_FRAME_BYTES, graceMs = 1000) {
+export function createSocketSender(socket: BackpressureSocket, maxBytes = 2 * MAX_FRAME_BYTES, graceMs = 1000) {
 	let pendingBytes = 0;
 	let disconnected = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;

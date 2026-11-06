@@ -395,7 +395,7 @@ fn retained_attempts_round_trip_and_refuse_edits() {
     );
     let fr = preview(&v, f::REPORT, &host()).unwrap().frozen.unwrap();
     let op = operation(APPLY_KIND, fr.text.clone());
-    assert_eq!(Frozen::retained(&op).unwrap(), fr);
+    assert_eq!(Frozen::from_operation(&op).unwrap(), fr);
     let apply = Attempt {
         slot: apply_slot(f::REPORT),
         operation: op,

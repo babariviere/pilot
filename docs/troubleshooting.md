@@ -7,7 +7,7 @@ and background job each need a different response. Failure details can be select
 or copied without retrying the run.
 
 - **Startup failed:** fix the reported configuration or extension dependency, then
-  choose **Retry Startup** where offered. Queued messages and history are retained.
+  choose **Retry Startup** where offered. Queued messages and history are kept.
 - **Usage hold:** wait for reset or review [Force work](usage.md#subscription-pauses).
 - **Offline:** restore connectivity. Do not repeatedly resend the task.
 - **MCP sign-in:** open [Connections](connections.md) for the named server.
@@ -30,7 +30,7 @@ an already accepted message.
 ## Ask about Pilot
 
 On macOS, **Help → Ask about Pilot…** opens a read-only diagnostics conversation.
-Describe the problem and include the reported error. Diagnostics reads bounded,
+Describe the problem and include the reported error. Diagnostics reads limited,
 sanitized evidence; it does not gain arbitrary shell or filesystem access.
 
 A repair is separate Build work, not something an investigation silently starts.
@@ -53,7 +53,7 @@ Use **Settings → Updates** for the available app and daemon controls. On macOS
 packaged managed connections also offer **Pilot Next → Daemon** actions.
 **Install and restart** saves current chat drafts, question replies, attachments
 and app preferences, waits for pending saves, then continues automatically.
-It does not send drafts or require a delivery Check. Retained pending messages
+It does not send drafts or require a delivery Check. Saved pending messages
 keep their original identity across restart; independent daemon jobs keep running.
 An actual storage failure or an unsaved secondary form names what needs attention.
 Secrets in session-only access fields are never saved to disk.

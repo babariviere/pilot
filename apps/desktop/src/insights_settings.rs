@@ -557,7 +557,7 @@ fn frozen_body(p: &Value, session: &str) -> Result<Frozen, Failure> {
 }
 impl Frozen {
     /// A retained Apply's frozen values, from its own bytes and destination.
-    pub(crate) fn retained(op: &Operation) -> Option<Self> {
+    pub(crate) fn from_operation(op: &Operation) -> Option<Self> {
         if op.kind != APPLY_KIND {
             return None;
         }

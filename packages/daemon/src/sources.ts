@@ -40,14 +40,7 @@ import { addSlackDone, refreshSlackReactions, removeSlackEyes } from "./slack-re
 import { type SlackAdder, slackChannelProgress, slackExcerpt, slackThread } from "./slack-source.ts";
 import { slackStart, slackStartAllowed } from "./slack-start.ts";
 import type { SlackWaitingWatcher } from "./slack-waiting.ts";
-import {
-	SlackRemovalError,
-	type SlackRemovalFailure,
-	type SourceMcpClient,
-	SourceRateLimited,
-	SourceSignInRequired,
-	SourceToolError,
-} from "./source-mcp.ts";
+import type { SourceMcpClient } from "./source-mcp.ts";
 import {
 	refreshAssessment,
 	SOURCE_REFRESH_CADENCE_MS,
@@ -55,6 +48,13 @@ import {
 	SourceRefreshDiagnostics,
 } from "./source-refresh-diagnostics.ts";
 import { SourceSignIns } from "./source-sign-in.ts";
+import {
+	SlackRemovalError,
+	type SlackRemovalFailure,
+	SourceRateLimited,
+	SourceSignInRequired,
+	SourceToolError,
+} from "./source-tool-rules.ts";
 import type { SourceCheckpoint, TrackedInput, TrackedItemStore, TrackedQuery } from "./tracked-items.ts";
 import { SLACK_BUDGET_WINDOW_MS, SLACK_HOURLY_BUDGET, SLACK_REACTION_RECHECK_MS } from "./tracked-items-disk.ts";
 import { lookupLinearTeams, lookupSlackChannels } from "./tracking-lookup.ts";

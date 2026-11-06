@@ -20,7 +20,7 @@ import {
 	parseSlackMentions,
 	type SlackIdentity,
 } from "./slack-mentions.ts";
-import { SourceToolError } from "./source-mcp.ts";
+import { SourceToolError } from "./source-tool-rules.ts";
 import type { SourcePollContext, SourcePoller, SourcePollResult } from "./sources.ts";
 import type { TrackedInput, TrackedItemStore } from "./tracked-items.ts";
 import type { SlackCache } from "./tracked-items-disk.ts";

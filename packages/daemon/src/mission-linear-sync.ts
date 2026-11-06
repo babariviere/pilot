@@ -12,13 +12,13 @@ import { workflowStates } from "./linear-workflow.ts";
 import type { MissionStore } from "./missions.ts";
 import type { ProjectStore } from "./projects.ts";
 import { RuntimeBackground } from "./runtime-background.ts";
+import type { SourceMcpClient } from "./source-mcp.ts";
 import {
 	SourceConfigurationError,
-	type SourceMcpClient,
 	SourceRateLimited,
 	SourceSignInRequired,
 	SourceToolError,
-} from "./source-mcp.ts";
+} from "./source-tool-rules.ts";
 import { LookupFormatChanged } from "./tracking-lookup.ts";
 
 type Linked = NonNullable<ReturnType<MissionStore["linearSyncResource"]>>;

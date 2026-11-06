@@ -480,19 +480,19 @@ test("corrupt reopened Ask metadata fails closed rather than starting a Build wo
 		commit: f.selected,
 	};
 	const corruptions = [
-		{ ask: undefined },
-		{ ask: { source: f.seed } },
-		{ ask: { source: f.source, gitDir: snapshot.gitDir } },
-		{ ask: { ...snapshot, gitDir: f.source } },
-		{ ask: { ...snapshot, commit: undefined } },
-		{ ask: { ...snapshot, commit: "HEAD" } },
-		{ ask: { ...snapshot, branch: "main~1" } },
-		{ mode: "build", ask: valid.ask },
-		{ mode: undefined, ask: valid.ask },
-		{ mode: "invalid", ask: undefined },
-		{ ask: valid.ask, preparing: { source: f.source, baseBranch: "main" } },
+		{ corrupt: { ask: undefined }, expectedMode: "ask" },
+		{ corrupt: { ask: { source: f.seed } }, expectedMode: "ask" },
+		{ corrupt: { ask: { source: f.source, gitDir: snapshot.gitDir } }, expectedMode: "ask" },
+		{ corrupt: { ask: { ...snapshot, gitDir: f.source } }, expectedMode: "ask" },
+		{ corrupt: { ask: { ...snapshot, commit: undefined } }, expectedMode: "ask" },
+		{ corrupt: { ask: { ...snapshot, commit: "HEAD" } }, expectedMode: "ask" },
+		{ corrupt: { ask: { ...snapshot, branch: "main~1" } }, expectedMode: "ask" },
+		{ corrupt: { mode: "build", ask: valid.ask }, expectedMode: "build" },
+		{ corrupt: { mode: undefined, ask: valid.ask }, expectedMode: "build" },
+		{ corrupt: { mode: "invalid", ask: undefined }, expectedMode: "build" },
+		{ corrupt: { ask: valid.ask, preparing: { source: f.source, baseBranch: "main" } }, expectedMode: "ask" },
 	];
-	for (const corrupt of corruptions) {
+	for (const { corrupt, expectedMode } of corruptions) {
 		await writeFile(join(created.sessionPath!, "meta.json"), JSON.stringify({ ...valid, ...corrupt }));
 		const reopened = await f.manager({
 			snapshot: async () => {
@@ -501,7 +501,7 @@ test("corrupt reopened Ask metadata fails closed rather than starting a Build wo
 		});
 		const unsubscribe = reopened.subscribe(created.id, () => {});
 		await waitFor(() => reopened.get(created.id)?.state === "failed");
-		assert.ok(["ask", "build"].includes(JSON.parse(JSON.stringify(reopened.get(created.id))).mode));
+		assert.equal(reopened.get(created.id)?.mode, expectedMode);
 		assert.throws(() => reopened.assertWritable(created.id));
 		assert.match(reopened.get(created.id)?.error ?? "", /Ask|mode/);
 		assert.equal(f.specs.length, 1);

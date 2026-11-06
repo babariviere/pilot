@@ -3,7 +3,8 @@
 use crate::{
     delivery_store::Book,
     interaction::{Interaction, WriteCommand, WriteState},
-    mission_conversion::{Action as Command, Inspection, Outcome, Request, Target, trim_text},
+    mission_conversion::{Action as Command, Inspection, Outcome, Request, Target},
+    text::trim_text,
     ui::{self, Action, FieldRow, Notice, Text, Tone},
 };
 #[cfg(test)]

@@ -1,5 +1,5 @@
 //! Standalone empty-mission intent, retained independently of browser navigation.
-use crate::{local_model::valid_id, mission_browser::Home, mission_conversion::trim_text};
+use crate::{local_model::valid_id, mission_browser::Home, text::trim_text};
 use serde_json::Value;
 pub(crate) const TITLE_UNITS: usize = 200;
 pub(crate) const BODY_UNITS: usize = 4_000;

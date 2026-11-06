@@ -2,6 +2,7 @@
 #[cfg(test)]
 #[path = "mission_tasks_reader_tests.rs"]
 mod tests;
+use crate::close_on_drop::CloseOnDrop;
 use crate::{
     LocalOptions,
     mission_browser::{Home, Key},
@@ -28,14 +29,6 @@ pub(crate) struct Reader {
     commands: async_channel::Sender<Request>,
     replace: async_channel::Receiver<Request>,
 }
-// The producer retains a receiver for coalescing. A worker exit must explicitly
-// close that lane, including runtime/client initialization failure or unwinding.
-struct CloseRequests(async_channel::Receiver<Request>);
-impl Drop for CloseRequests {
-    fn drop(&mut self) {
-        self.0.close();
-    }
-}
 impl Reader {
     pub(crate) fn start(
         options: LocalOptions,
@@ -47,7 +40,9 @@ impl Reader {
         std::thread::Builder::new()
             .name("local-mission-tasks-reader".into())
             .spawn(move || {
-                let _close = CloseRequests(events.clone());
+                // The producer retains a receiver for coalescing. A worker exit must explicitly
+                // close that lane, including runtime/client initialization failure or unwinding.
+                let _close = CloseOnDrop(events.clone());
                 if let Ok(rt) = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()

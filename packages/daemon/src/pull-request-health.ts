@@ -8,7 +8,6 @@ import {
 	checksPending,
 	checksRunning,
 	failedChecks,
-	githubRepository,
 	type HealthResult,
 	type PullRequestProblems,
 	readinessFields,
@@ -17,6 +16,7 @@ import {
 	stackDivergence,
 	unsupportedReadinessField,
 } from "./github.ts";
+import { githubRepository } from "./github-url.ts";
 import { mergeReadiness } from "./pull-request-readiness.ts";
 import { execFileOffThread } from "./subprocess.ts";
 import type { Runner } from "./workspaces.ts";

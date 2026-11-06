@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-	githubRepository,
 	lookupHealth,
 	lookupPullRequests,
 	RateLimits,
 	toSessionPullRequest,
 	unsupportedReadinessField,
 } from "./github.ts";
+import { githubRepository } from "./github-url.ts";
 import { ProcessFailed } from "./subprocess.ts";
 import type { Runner } from "./workspaces.ts";
 

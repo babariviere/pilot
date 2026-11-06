@@ -90,7 +90,7 @@ function wrapperMessage(message: string): string {
 		: message;
 }
 
-export function formatShaderErrors(errors: ShaderDiagnostic[], source: string): string {
+export function formatShaderDiagnostics(errors: ShaderDiagnostic[], source: string): string {
 	const lines = source.split(/\r?\n/);
 	const shown = errors.slice(0, MAX_ERRORS).map((error) => {
 		if (error.line === undefined) return error.message;
@@ -98,9 +98,13 @@ export function formatShaderErrors(errors: ShaderDiagnostic[], source: string): 
 		return `line ${error.line}: ${error.message}${code ? `\n    ${code.slice(0, 200)}` : ""}`;
 	});
 	if (errors.length > MAX_ERRORS) shown.push(`…and ${errors.length - MAX_ERRORS} more`);
+	return shown.join("\n");
+}
+
+export function formatShaderErrors(errors: ShaderDiagnostic[], source: string): string {
 	return (
 		"Shader does not compile as GLSL ES 3.00. Nothing was published. Fix these errors and try again:\n" +
-		shown.join("\n")
+		formatShaderDiagnostics(errors, source)
 	);
 }
 

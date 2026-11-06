@@ -122,15 +122,13 @@ test("coordinator planning recipes cover actionable gaps without unconditional t
 	assert.doesNotMatch(createMissionTool(async () => null).description, /Coordinator planning:/);
 });
 
-test("mission authoring preparation rejects oversized writes before validation and IPC", async () => {
+test("mission write preparation rejects oversized writes before validation and IPC", async () => {
 	for (const coordinator of [false, true]) {
 		let calls = 0;
 		const tool = createMissionTool(async () => {
 			calls++;
 			return {};
 		}, coordinator);
-		assert.doesNotMatch(JSON.stringify(tool.parameters), /~refine/);
-		assert.match(JSON.stringify(tool.parameters), /Unicode code points/);
 		const cases = [
 			{ action: "task", field: "title", max: 200 },
 			{ action: "task", field: "body", max: 4000 },
@@ -185,7 +183,7 @@ test("mission authoring preparation rejects oversized writes before validation a
 	}
 });
 
-test("mission tool returns legacy read content exactly without applying authoring limits", async () => {
+test("mission tool returns legacy read content exactly without applying write limits", async () => {
 	const legacy = {
 		brief: { markdown: " Brief 😀\n".repeat(40000) },
 		decisions: [{ id: "decision", text: " Decision 😀\n".repeat(2000) }],

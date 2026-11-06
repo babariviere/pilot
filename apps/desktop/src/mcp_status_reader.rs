@@ -1,5 +1,6 @@
 //! Fixed passive MCP GET, plus explicit user actions through the existing Local check and
 //! sign-in routes. The daemon owns probes, browser and credentials; nothing here reads them.
+use crate::close_on_drop::CloseOnDrop;
 use crate::{LocalOptions, mcp_status::Snapshot};
 use std::time::Duration;
 // Same small-snapshot wire safety budget as the existing lifecycle transport.
@@ -53,12 +54,6 @@ pub(crate) struct Reader {
     commands: async_channel::Sender<Request>,
     replace: async_channel::Receiver<Request>,
 }
-struct CloseRequests(async_channel::Receiver<Request>);
-impl Drop for CloseRequests {
-    fn drop(&mut self) {
-        self.0.close();
-    }
-}
 impl Reader {
     pub(crate) fn start(
         options: LocalOptions,
@@ -70,7 +65,7 @@ impl Reader {
         std::thread::Builder::new()
             .name("local-mcp-status-reader".into())
             .spawn(move || {
-                let _close = CloseRequests(events.clone());
+                let _close = CloseOnDrop(events.clone());
                 let Ok(runtime) = tokio::runtime::Builder::new_current_thread().enable_all().build() else { return; };
                 runtime.block_on(async move {
                     let Ok(client) = reqwest::Client::builder()

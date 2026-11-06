@@ -7,15 +7,15 @@ use crate::{
 use serde_json::Value;
 
 pub(crate) const LIMIT: usize = 200;
-pub(crate) fn bounded(value: &str) -> bool {
+pub(crate) fn fits_title_limit(value: &str) -> bool {
     value.len() <= LIMIT * 4 && value.encode_utf16().count() <= LIMIT
 }
 pub(crate) fn normalized(value: &str) -> Option<String> {
-    if !bounded(value) {
+    if !fits_title_limit(value) {
         return None;
     }
     let title = value
-        .split(|c: char| crate::mission_conversion::trim_text(&c.to_string()).is_empty())
+        .split(crate::text::is_ecmascript_whitespace)
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join(" ");

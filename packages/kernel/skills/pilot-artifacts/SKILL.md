@@ -1,6 +1,6 @@
 ---
 name: pilot-artifacts
-description: Author native visuals and images. Use before creating or updating an artifact with the artifact tool.
+description: Create native visuals and images. Use before creating or updating an artifact with the artifact tool.
 ---
 
 # Pilot artifacts
@@ -12,7 +12,7 @@ The `artifact` tool publishes session-local, offline artifacts. Pass source dire
 - PNG, JPEG, GIF or WebP images: [references/images.md](references/images.md)
 - Existing standalone shader contract: [references/shaders.md](references/shaders.md). Shader rendering, including `ui.shader`, remains unavailable in Pilot Next. Do not use shaders for Next mockups.
 
-HTML, React and SwiftUI authoring, publication and preview are removed. Historical sources, revisions, library provenance and IDs remain readable as inert data. Never reinterpret a legacy body as a native visual. Create a new visual if a replacement is needed, without overwriting the original.
+Creating, publishing and previewing HTML, React and SwiftUI artifacts is no longer supported. Historical sources, revisions, library provenance and IDs remain readable as inert data. Never reinterpret a legacy body as a native visual. Create a new visual if a replacement is needed, without overwriting the original.
 
 ## Sandbox and Ask mode
 

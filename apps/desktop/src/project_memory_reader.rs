@@ -1,4 +1,5 @@
 //! Explicit project-scoped tree GETs. Replacement/drop cancels obsolete I/O.
+use crate::close_on_drop::CloseOnDrop;
 use crate::{
     LocalOptions,
     project_memory::{Range, Tree},
@@ -74,12 +75,6 @@ pub(crate) struct Reader {
     commands: async_channel::Sender<Request>,
     replace: async_channel::Receiver<Request>,
 }
-struct CloseRequests(async_channel::Receiver<Request>);
-impl Drop for CloseRequests {
-    fn drop(&mut self) {
-        self.0.close();
-    }
-}
 impl Reader {
     pub(crate) fn start(
         options: LocalOptions,
@@ -90,7 +85,7 @@ impl Reader {
         let (updates, output) = async_channel::bounded(1);
         let stale = output.clone();
         std::thread::Builder::new().name("local-project-memory-reader".into()).spawn(move|| {
-            let _close=CloseRequests(events.clone());
+            let _close=CloseOnDrop(events.clone());
             if let Ok(rt)=tokio::runtime::Builder::new_current_thread().enable_all().build() {rt.block_on(async move {
                 let Ok(client)=reqwest::Client::builder().no_proxy().retry(reqwest::retry::never()).redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(2)).timeout(Duration::from_secs(5)).build() else {return;};
                 let mut next=None;

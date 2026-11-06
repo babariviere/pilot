@@ -1,4 +1,5 @@
 use super::*;
+use crate::local_model;
 use serde_json::json;
 
 fn chat(id: &str, provider: &str, at: Value, percent: u64) -> Chat {

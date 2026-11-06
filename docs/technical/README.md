@@ -20,6 +20,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Testing and test speed](testing.md)
 - [Dependency updates](renovate.md)
 - [TypeScript dependency audit, 2026-10-29](typescript-dependency-audit.md)
+- [Codebase cleanup decisions](untangle-codebase.md)
 - [Durable operations](durable-operations.md)
 - [Tool access by role](tool-access-by-role.md)
 - [System prompts by role](system-prompts-by-role.md)

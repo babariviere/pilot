@@ -2,7 +2,7 @@
 import { Worker } from "node:worker_threads";
 import { loadQuickJSWasm } from "@earendil-works/pi-codemode";
 import type { ArtifactVisual, ArtifactVisualShader } from "@pilot/protocol";
-import { checkShader, type ShaderDiagnostic } from "../shader.ts";
+import { checkShader, formatShaderDiagnostics } from "../shader.ts";
 import type { VisualCheckInput, VisualCheckResult } from "./check.ts";
 import type { VisualShaderTranslation } from "./check-worker.ts";
 import { VISUAL_API_VERSION, VISUAL_LIMITS } from "./schema.ts";
@@ -87,30 +87,19 @@ export async function checkVisual(
 		if (errors.length)
 			throw new VisualCheckError(
 				`Visual check failed. Nothing was published. shader ${name} does not compile as GLSL ES 3.00:\n` +
-					formatGlslErrors(errors, shader.glsl),
+					formatShaderDiagnostics(errors, shader.glsl),
 			);
 		const translation = result.translations?.[index];
 		if (!translation) throw new VisualCheckError("Visual check failed. The shader was not translated to Metal");
 		if ("error" in translation)
 			throw new VisualCheckError(
 				`Visual check failed. Nothing was published. shader ${name} could not be translated to Metal: ` +
-					formatGlslErrors([{ line: translation.line, message: translation.error }], shader.glsl),
+					formatShaderDiagnostics([{ line: translation.line, message: translation.error }], shader.glsl),
 			);
 		shaders.push({ glsl: shader.glsl, inputs: shader.inputs, msl: translation.msl, entry: translation.entry });
 	}
 	const check = { ...result.report, ...(shaders.length ? { shaders: shaders.length } : {}) };
 	return { api: VISUAL_API_VERSION, engine: result.engine, check, ...(shaders.length ? { shaders } : {}) };
-}
-
-function formatGlslErrors(errors: ShaderDiagnostic[], glsl: string): string {
-	const lines = glsl.split(/\r?\n/);
-	const shown = errors.slice(0, 10).map((error) => {
-		if (error.line === undefined) return error.message;
-		const code = lines[error.line - 1]?.trim();
-		return `line ${error.line}: ${error.message}${code ? `\n    ${code.slice(0, 200)}` : ""}`;
-	});
-	if (errors.length > 10) shown.push(`…and ${errors.length - 10} more`);
-	return shown.join("\n");
 }
 
 /** Shown by apps that do not know the visual kind. */

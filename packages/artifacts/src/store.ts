@@ -3,14 +3,14 @@ import { randomUUID } from "node:crypto";
 import { mkdir, open, readdir, readFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import type { ArtifactRevision, ArtifactSummary, ArtifactWrite } from "@pilot/protocol";
-import { assertArtifactWriteKind, prepareArtifact, validateArtifact } from "./render.ts";
+import { assertArtifactWriteKind, prepareArtifact, prepareArtifactWrite } from "./render.ts";
 import { parseStoredVisualRevision, readStoredFile, STORED_REVISION_LIMITS } from "./stored-revision.ts";
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export class ArtifactNotFound extends Error {}
 
-function summary(value: ArtifactRevision): ArtifactSummary {
+function artifactSummary(value: ArtifactRevision): ArtifactSummary {
 	const {
 		source: _source,
 		html: _html,
@@ -193,8 +193,8 @@ export class ArtifactStore {
 		previous?: ArtifactRevision,
 		signal?: AbortSignal,
 	): Promise<ArtifactRevision> {
-		const write = validateArtifact(input);
-		const { visual, ...prepared } = await prepareArtifact(write, { signal, id });
+		const { write, prepared: result } = await prepareArtifactWrite(input, { signal, id });
+		const { visual, ...prepared } = result;
 		signal?.throwIfAborted();
 		const now = Date.now();
 		const artifact: ArtifactRevision = {
@@ -217,7 +217,7 @@ export class ArtifactStore {
 			artifact.kind === "image" ? { ...artifact, html: DERIVED_IMAGE_HTML } : artifact,
 			directory,
 		);
-		await atomicJson(join(directory, "latest.json"), summary(artifact), directory);
+		await atomicJson(join(directory, "latest.json"), artifactSummary(artifact), directory);
 		return artifact;
 	}
 }

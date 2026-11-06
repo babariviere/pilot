@@ -197,6 +197,6 @@ async fn serve(mut stream: tokio::net::TcpStream, state: Arc<Mutex<State>>) -> s
 }
 
 pub(crate) fn ack(body: &Value) -> Value {
-    json!({"mission":{"id":"mission-created","projectId":body["projectId"],"title":crate::mission_conversion::trim_text(body["title"].as_str().unwrap()),"goal":crate::mission_conversion::trim_text(body["goal"].as_str().unwrap()),"status":"active","briefRevision":0,"createdAt":1,"updatedAt":1},
+    json!({"mission":{"id":"mission-created","projectId":body["projectId"],"title":crate::text::trim_text(body["title"].as_str().unwrap()),"goal":crate::text::trim_text(body["goal"].as_str().unwrap()),"status":"active","briefRevision":0,"createdAt":1,"updatedAt":1},
     "tasks":[],"phases":[],"decisions":[],"decisionProposals":[],"comments":[],"artifacts":[],"resources":[],"events":[]})
 }

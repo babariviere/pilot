@@ -112,7 +112,8 @@ import {
 	validateFlowStart,
 	validateFlowState,
 } from "./flows.ts";
-import { githubRepository, linkedPullRequest, type PullRequestProblems } from "./github.ts";
+import type { PullRequestProblems } from "./github.ts";
+import { githubRepository, linkedPullRequest } from "./github-url.ts";
 import {
 	type InsightsAdmission,
 	type InsightsGrant,

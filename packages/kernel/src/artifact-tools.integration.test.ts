@@ -20,7 +20,7 @@ import { createCodemodeExtension, ModelRuntime, SettingsManager } from "@earendi
 import type { SubmissionDraft } from "@earendil-works/pi-durable";
 import { ArtifactStore } from "@pilot/artifacts";
 import type { ArtifactRevision, SessionCompletion } from "@pilot/protocol";
-import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.test.ts";
+import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.ts";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { createArtifactTools } from "./artifact-tools.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";

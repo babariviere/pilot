@@ -7,10 +7,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import { PiSourceMcpClient } from "./source-mcp.ts";
 import {
 	decodeMcpResult,
 	dedicatedSourceTool,
-	PiSourceMcpClient,
 	SourceConfigurationError,
 	SourceRateLimited,
 	SourceSignInRequired,
@@ -18,7 +18,7 @@ import {
 	sourceRateLimit,
 	sourceToolFailure,
 	validSourceArguments,
-} from "./source-mcp.ts";
+} from "./source-tool-rules.ts";
 
 test("MCP decoding accepts structured data or JSON envelopes, not markdown or error results", () => {
 	assert.deepEqual(

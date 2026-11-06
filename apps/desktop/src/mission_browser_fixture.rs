@@ -129,6 +129,7 @@ impl Server {
             .insert(path.into(), reply);
     }
     /// Answers "METHOD /path" with status 200 and `respond(request body)`, ahead of overrides.
+    #[cfg(feature = "native-probes")]
     pub(crate) fn respond(&self, request: &str, respond: fn(&Value) -> Value) {
         self.state
             .lock()
@@ -164,9 +165,11 @@ impl Server {
         std::mem::take(&mut self.state.lock().unwrap().writes)
     }
     /// Records matching requests on arrival but withholds their reply until `release`.
+    #[cfg(feature = "native-probes")]
     pub(crate) fn hold(&self, request: &str) {
         self.state.lock().unwrap().held.insert(request.into());
     }
+    #[cfg(feature = "native-probes")]
     pub(crate) fn release(&self, request: &str) {
         self.state.lock().unwrap().held.remove(request);
     }

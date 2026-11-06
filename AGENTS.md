@@ -42,8 +42,8 @@ Docs to use when the task touches them:
 
 - GUI responsiveness (smooth scrolling, typing and navigation) and daemon CPU, memory, I/O and event-loop load
   are requirements, not polish.
-- Keep blocking I/O and expensive computation off the UI main thread and the daemon event loop. Bound
-  concurrency, queues and retained data, and avoid repeated work and unnecessary view updates.
+- Keep blocking I/O and expensive computation off the UI main thread and the daemon event loop. Limit
+  concurrency, queues and kept data, and avoid repeated work and unnecessary view updates.
 - Prefer event-driven updates over polling, coalesce high-frequency updates, and cancel obsolete work and
   release timers, subscriptions and resources when they are no longer needed.
 - When a change touches a hot path, measure it with large sessions and streaming activity, compare before and
@@ -70,6 +70,10 @@ Docs to use when the task touches them:
   rather than adding one-off styles or a parallel system.
 
 ## Formatting and checks
+
+- Use concrete names and plain language in code, prompts and guides. Prefer "limited" to "bounded",
+  "saved" or "kept" to "retained", and "writing" to "authoring" where meaning stays clear.
+  Keep precise technical terms, wire values and stored field names when compatibility requires them.
 
 - Dependencies use pnpm (`pnpm install`). Each workspace's `node_modules` clones files from the shared
   pnpm store, so per-session installs cost little disk. Declare every imported package in the importing

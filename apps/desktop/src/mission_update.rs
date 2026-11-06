@@ -1,5 +1,5 @@
 //! One explicit user-authored update. Reads cannot settle a missing POST receipt.
-use crate::{mission_browser::Key, mission_conversion::trim_text};
+use crate::{mission_browser::Key, text::trim_text};
 use serde_json::Value;
 
 pub(crate) const TEXT_UNITS: usize = 8_000;

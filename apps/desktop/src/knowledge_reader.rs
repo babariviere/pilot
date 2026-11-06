@@ -1,4 +1,5 @@
 //! Explicit project-scoped knowledge GETs. Replacement or drop cancels obsolete I/O.
+use crate::close_on_drop::CloseOnDrop;
 use crate::{
     LocalOptions,
     knowledge::{Data, Page, Query, Route, WIRE_CAP, parse, path},
@@ -127,12 +128,6 @@ pub(crate) struct Reader {
     commands: async_channel::Sender<Request>,
     replace: async_channel::Receiver<Request>,
 }
-struct CloseRequests(async_channel::Receiver<Request>);
-impl Drop for CloseRequests {
-    fn drop(&mut self) {
-        self.0.close();
-    }
-}
 impl Reader {
     pub(crate) fn start(
         options: LocalOptions,
@@ -145,7 +140,7 @@ impl Reader {
         std::thread::Builder::new()
             .name("local-project-knowledge-reader".into())
             .spawn(move || {
-                let _close = CloseRequests(events.clone());
+                let _close = CloseOnDrop(events.clone());
                 let Ok(rt) = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()

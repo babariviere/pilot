@@ -29,9 +29,12 @@ export type FeatureEvent =
 	| (FeatureEventBase & { stage: "exposure" | "attempt" })
 	| (FeatureEventBase & {
 			stage: "outcome";
-			outcome: FeatureOutcome;
-			reason: FeatureReason;
-	  });
+	  } & (
+				| { outcome: "success"; reason: "none" }
+				| { outcome: "cancelled"; reason: "user" }
+				| { outcome: "failure"; reason: "rejected" | "transport" | "unknown" }
+				| { outcome: "unavailable"; reason: Exclude<FeatureAvailability, "available"> }
+			));
 
 const FEATURES = new Set<string>(FEATURE_NAMES);
 const BASE_KEYS = ["catalogVersion", "feature", "stage"];

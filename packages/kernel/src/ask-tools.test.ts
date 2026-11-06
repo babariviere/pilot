@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, open, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { test, type TestContext } from "node:test";
+import { type TestContext, test } from "node:test";
 import { promisify } from "node:util";
 import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
-import { createAskTools } from "./ask-tools.ts";
 import { ARTIFACT_SKILL_PATH, ARTIFACT_SKILL_REFERENCES } from "./artifact-skill.ts";
+import { createAskTools } from "./ask-tools.ts";
 import type { AskContext } from "./policy.ts";
 
 const git = promisify(execFile);
@@ -119,10 +119,7 @@ for (const snapshot of [false, true]) {
 			"---\n[More lines available; use offset=2.]",
 		);
 		for (const reference of ARTIFACT_SKILL_REFERENCES)
-			assert.match(
-				text(await hostRead("read", { path: reference })),
-				reference.endsWith(".d.ts") ? /^\/\*\*\n \* Pilot native visuals/ : /^# .+ artifacts/,
-			);
+			assert.equal(text(await hostRead("read", { path: reference })), await readFile(reference, "utf8"));
 		for (const path of [
 			dirname(ARTIFACT_SKILL_PATH),
 			join(dirname(ARTIFACT_SKILL_PATH), "other.md"),

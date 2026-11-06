@@ -21,7 +21,7 @@ import { SlackCaseDisk } from "./slack-cases.ts";
 import { parseSlackClassification, type SlackClassification } from "./slack-classifier.ts";
 import { SLACK_SEARCH_CHARS } from "./slack-format.ts";
 import { type SlackReactionOwner, validSlackReactionOwner } from "./slack-reaction-owner.ts";
-import type { SlackRemovalFailure } from "./source-mcp.ts";
+import type { SlackRemovalFailure } from "./source-tool-rules.ts";
 import { TriageGuideDisk } from "./triage-guide-disk.ts";
 
 export type SlackCache = { state: "pending" | "error" } | { state: "done"; result: SlackClassification };

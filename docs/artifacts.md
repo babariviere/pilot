@@ -5,15 +5,15 @@ inspect it, expand it, or copy supported content. A published card keeps its rev
 the artifact list can open the latest version.
 
 Native visuals include charts, tables, diagrams, UI mockups, and interactive controls. Rendering
-support is bounded: unsupported Mermaid syntax shows its source and a reason rather
+support is limited: unsupported Mermaid syntax shows its source and a reason rather
 than pretending a partial graph is complete.
 
 In ordinary Local Build chats, paste clipboard images or drop supported image files
 into the composer. Review the attachment previews before sending. Conversation images
 and raster artifacts offer **Copy image** separately from copying source text.
 
-New artifacts use images or native visuals. HTML, React and SwiftUI authoring and
-preview are no longer available. Their existing sources, revisions and provenance
+New artifacts use images or native visuals. Creating and previewing HTML, React and
+SwiftUI artifacts is no longer available. Their existing sources, revisions and provenance
 remain in history for read-only inspection and copying, not execution. Shader
 rendering remains unavailable in Pilot Next.
 

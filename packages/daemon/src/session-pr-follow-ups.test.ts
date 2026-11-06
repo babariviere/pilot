@@ -8,7 +8,7 @@ import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { KernelCommand } from "@pilot/kernel";
 import type { SessionPullRequest } from "@pilot/protocol";
-import { githubRepository } from "./github.ts";
+import { githubRepository } from "./github-url.ts";
 import { ProjectStore } from "./projects.ts";
 import { mergeReadiness } from "./pull-request-readiness.ts";
 import type { PullRequestResult } from "./pull-requests.ts";

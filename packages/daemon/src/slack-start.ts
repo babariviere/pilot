@@ -1,6 +1,6 @@
 import type { TrackedItem } from "@pilot/protocol";
-import type { SlackReactionOwner } from "./slack-reaction-owner.ts";
-import { validSourceArguments } from "./source-mcp.ts";
+import { isSlackUserId, type SlackReactionOwner } from "./slack-reaction-owner.ts";
+import { validSourceArguments } from "./source-tool-rules.ts";
 import type { SourcePollContext } from "./sources.ts";
 
 /** Start write: eyes on the stored parent, never the reply that surfaced the thread. */
@@ -14,10 +14,9 @@ export async function slackStart(
 	if (!slackStartAllowed(context.config.slackChannels, item)) return { outcome: "skipped" };
 	context.signal.throwIfAborted();
 	const result = (await context.call("startSlack", args)) as { userId?: string };
-	const owner =
-		typeof result?.userId === "string" && /^[UW][A-Z0-9]{1,39}$/.test(result.userId)
-			? { userId: result.userId, channel: channel as string, messageTs: ts as string }
-			: undefined;
+	const owner = isSlackUserId(result?.userId)
+		? { userId: result.userId, channel: channel as string, messageTs: ts as string }
+		: undefined;
 	return { outcome: "reacted", ...(owner ? { owner } : {}) };
 }
 

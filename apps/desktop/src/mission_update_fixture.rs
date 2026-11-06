@@ -133,7 +133,7 @@ fn response(state: &mut State, method: &str, path: &str, body: Value) -> Reply {
         assert_eq!(body["kind"], "update");
         return Reply::json(
             201,
-            json!({"id":42,"kind":"update","text":crate::mission_conversion::trim_text(body["text"].as_str().unwrap()),"at":1}),
+            json!({"id":42,"kind":"update","text":crate::text::trim_text(body["text"].as_str().unwrap()),"at":1}),
         );
     }
 

@@ -6,7 +6,7 @@ import { type TestContext, test } from "node:test";
 import type { Project, TrackingJson } from "@pilot/protocol";
 import { linearParentHeaders, linearPrefill, pollLinear } from "./linear-source.ts";
 import { ProjectStore } from "./projects.ts";
-import { SourceRateLimited } from "./source-mcp.ts";
+import { SourceRateLimited } from "./source-tool-rules.ts";
 import { logCause, type SourcePollContext, SourceRegistry } from "./sources.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 

@@ -114,6 +114,7 @@ test("relocated parser/worker payload needs no source writes, project setup or r
 	await mkdir(join(stage, "node_modules/@babel"), { recursive: true });
 	await writeFile(join(stage, "package.json"), '{"type":"module"}');
 	for (const name of [
+		"analysis-worker.ts",
 		"exploration-runner.ts",
 		"exploration-worker.ts",
 		"exploration-scan.ts",

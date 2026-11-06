@@ -21,7 +21,7 @@ not delete the project's knowledge.
 
 **Needs a check** means relevant changes may have made an entry stale. Saving an
 entry is not verification; writers explicitly observe sources and record scoped
-checks. A check has bounded coverage, not a guarantee that every claim is current.
+checks. A check has limited coverage, not a guarantee that every claim is current.
 
 Opening or refreshing these windows does not start an agent or write repository
 documentation automatically.

@@ -2,14 +2,17 @@
 #[cfg(target_os = "macos")]
 pub mod app_menu;
 pub mod bundled_runtime;
+mod close_on_drop;
 #[cfg(target_os = "macos")]
 mod daemon_menu;
 pub mod diagnostics;
 mod diagnostics_view;
 mod image_attachments;
 mod image_clipboard;
+mod response_json;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 mod running_identity;
+mod text;
 #[cfg(feature = "native-probes")]
 pub use diagnostics_view::probe::run_diagnostics_probe;
 mod bundled_runtime_view;
@@ -176,9 +179,9 @@ mod delivery_store;
 mod diagnostic_repair;
 mod insights;
 mod insights_enable;
-mod insights_replace;
 #[cfg(feature = "native-probes")]
 mod insights_probe;
+mod insights_replace;
 mod insights_settings;
 mod insights_view;
 #[cfg(feature = "native-probes")]

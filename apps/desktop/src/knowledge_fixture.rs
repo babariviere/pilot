@@ -43,6 +43,7 @@ pub(crate) fn linked() -> Value {
 }
 /// A mission pin to revision 1 beside a checked current revision 2. Revision 1 itself
 /// was never checked, so nothing may present it as checked.
+#[cfg(feature = "native-probes")]
 pub(crate) fn pinned_beside_checked(s: &Server) {
     let current = summary(COMPONENT, "component", "Code exploration", 2, "checked");
     let mut c = current.clone();

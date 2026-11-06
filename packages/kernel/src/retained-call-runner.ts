@@ -1,4 +1,4 @@
-import { runExplorationWorker } from "./exploration-runner.ts";
+import { runAnalysisWorker } from "./analysis-worker.ts";
 import type {
 	RetainedCallProvider,
 	RetainedCallQuery,
@@ -14,15 +14,15 @@ export async function compareRetainedCalls(
 	query: RetainedCallQuery = {},
 	signal?: AbortSignal,
 ): Promise<RetainedCallResult> {
-	const bounded = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(15_000)]);
+	const deadlineSignal = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(15_000)]);
 	const input = structuredClone(provider.input);
-	bounded.throwIfAborted();
+	deadlineSignal.throwIfAborted();
 	await provider.authorize();
-	bounded.throwIfAborted();
-	const result = await runExplorationWorker<RetainedCallResult>(
+	deadlineSignal.throwIfAborted();
+	const result = await runAnalysisWorker<RetainedCallResult>(
 		new URL("./retained-call-worker.ts", import.meta.url),
 		{ input, query },
-		bounded,
+		deadlineSignal,
 		async (value) => {
 			if (
 				value &&
@@ -30,7 +30,7 @@ export async function compareRetainedCalls(
 				"stage" in value &&
 				["before", "after"].includes(String(value.stage))
 			) {
-				bounded.throwIfAborted();
+				deadlineSignal.throwIfAborted();
 				await provider.authorize();
 				return new Uint8Array();
 			}
@@ -40,16 +40,16 @@ export async function compareRetainedCalls(
 			const entry = input[ref.side].find((entry) => entry.path === ref.path);
 			if (entry?.state !== "text" || entry.sha256 !== ref.sha256 || !entry.mode.startsWith("100"))
 				throw new Error("Unadmitted retained read");
-			bounded.throwIfAborted();
+			deadlineSignal.throwIfAborted();
 			await provider.authorize();
-			const bytes = await provider.read(ref, bounded);
+			const bytes = await provider.read(ref, deadlineSignal);
 			if (bytes.length !== entry.bytes) throw new Error("Retained byte hash/size mismatch");
 			await provider.authorize();
-			bounded.throwIfAborted();
+			deadlineSignal.throwIfAborted();
 			return bytes;
 		},
 	);
 	await provider.authorize();
-	bounded.throwIfAborted();
+	deadlineSignal.throwIfAborted();
 	return result;
 }

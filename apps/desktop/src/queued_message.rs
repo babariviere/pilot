@@ -141,7 +141,7 @@ impl State {
                     "Structured or oversized messages cannot be edited as text. Original content is retained.",
                 );
             }
-            if text.len() > TEXT_BYTES || crate::mission_conversion::trim_text(text).is_empty() {
+            if text.len() > TEXT_BYTES || crate::text::trim_text(text).is_empty() {
                 return Err(
                     "Enter a message of at most 64 KiB. Empty text does not remove a message.",
                 );

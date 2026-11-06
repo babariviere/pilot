@@ -29,7 +29,7 @@ direct checkouts and Git-only clones are not enrolled. Capture shares the existi
 limit; pending or failed captures stay explicit, without deleting older comparisons.
 
 Pilot monitors eligible agent-owned PRs for CI failures, review feedback, and conflicts.
-Follow-ups are bounded; unresolved problems return to you. Agents do not merge PRs.
+Follow-ups are limited; unresolved problems return to you. Agents do not merge PRs.
 Any supported app merge action requires your confirmation.
 
 ## Archive and restore

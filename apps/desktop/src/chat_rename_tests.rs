@@ -8,8 +8,8 @@ fn bounded_ecmascript_titles() {
     assert_eq!(normalized(" \u{feff}Hi\t 👩‍💻  é  "), Some("Hi 👩‍💻 é".into()));
     assert_eq!(normalized("\u{feff} "), None);
     assert_eq!(normalized("\u{85}"), Some("\u{85}".into()));
-    assert!(bounded(&"😀".repeat(100)));
-    assert!(!bounded(&"😀".repeat(101)));
+    assert!(fits_title_limit(&"😀".repeat(100)));
+    assert!(!fits_title_limit(&"😀".repeat(101)));
     assert!(normalized(&"a".repeat(201)).is_none());
 }
 #[tokio::test]

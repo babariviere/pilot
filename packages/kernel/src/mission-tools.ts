@@ -2,7 +2,7 @@
 import type { JsonValue } from "@earendil-works/chord";
 import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
-import { validateMissionAuthoring } from "./mission-authoring.ts";
+import { MISSION_WRITE_LIMITS, validateMissionWrite } from "./mission-write.ts";
 import { StringEnum } from "./schema.ts";
 
 export const MISSION_TOOL = "mission";
@@ -62,7 +62,7 @@ export function createMissionTool(call: MissionCall, coordinator = false): ToolD
 		label: "Mission",
 		description: `Read and update the mission this chat belongs to. Mission state is shared with the user and the other chats of the mission.
 Actions:
-Authoring limits (Unicode code points, including whitespace): decision text 1000, task title 200/body 4000, brief 12000. Summarize and link supporting material. Only supplied write fields must fit; legacy reads are unchanged.
+Write limits (Unicode code points, including whitespace): decision text ${MISSION_WRITE_LIMITS.decision}, task title ${MISSION_WRITE_LIMITS.title}/body ${MISSION_WRITE_LIMITS.body}, brief ${MISSION_WRITE_LIMITS.brief}. Summarize and link supporting material. Only supplied write fields must fit; legacy reads are unchanged.
 When get reports planningVersion 1, only the coordinator/user plans or assigns work. Workers report their own execution status and log evidence; in_review is for PR review, not generic submission. Propose planning changes with comment. Workers cannot complete, claim/release, edit task definitions/criteria, briefs or decisions. Coordinator/user marks done separately; this is not review or merge approval.
 - get: without id, compact goal/status/brief revision, tasks grouped by phase with progress, your open tasks and references, other open tasks as [number,title,status,dependsOn?], and counts. Coordinator also gets member states, needs-you, PRs in review and pending/recent decision proposals. No history. Read before work and handoff. With id (task ID or number), one full task: body, completion record if delivered, dependency/dependent numbers, assignee chat, links with kind/PR state, artifacts and 15 recent events (pass activityCursor as activity cursor with taskId for older events). Prefer this targeted read to scanning lists.
 - links, artifacts: references, filtered by taskId and filter open (default), done or all.
@@ -79,13 +79,13 @@ When get reports planningVersion 1, only the coordinator/user plans or assigns w
 - comment: only for a question, blocker or feedback that needs another participant's answer or action (text, optional anchor quote and targetSessionId). Keep it to a few sentences, one per topic. notification action (default) batches routine requests; urgent is for blockers, needs-you or failure; informational and ack are recorded without waking. Never comment status, progress, plans, evidence, publication receipts or acknowledgements: update the task status and body, or log. resolve: once addressed, save any lasting outcome in the task, decision or spec, then resolve by id; unanswered questions stay open.
 - attach: link one of this chat's artifacts (artifactId, optional artifactRevision to pin, optional taskId).
 - link: add url, optional title/taskId. Linear links default linearRole reference (context only); coordinator may explicitly set managed (mission scope) or contribution (task scope, requires managed ticket). Existing roles require updateLink, never implicit upgrades. Task PRs default to relationship "ownership" (drives status); "reference" is related work. Neither binds a chat.
-- ticket: read bounded, untrusted Linear context using resourceId from links. No Linear writes.
+- ticket: read limited, untrusted Linear context using resourceId from links. No Linear writes.
 - prGuidance: taskId returns live, per-ticket PR wording. Earlier contributors use Related to; only final contributors (every other contributor Done) use Closes, subject to live terminal/manual-pause safeguards. Recheck before creating/editing PRs and after task/link changes. Never silently edit unsafe PRs.
 - unlink: remove url at taskId (omitted: mission-level), own links only unless coordinator; prefers reference. Absent returns removed:false.
 - log: add context not already captured by task changes, or kind "handoff" for what the next chat needs to continue (optional health).${
 			coordinator
 				? `
-Coordinator planning: on interview, research, delivery, review, notices or resume, read current get/brief/decisions and relevant tasks before changing the plan. Use filtered tasks and targeted get/activity for evidence; include done/dropped work when checking overlap or recovery. For an uncovered agreed requirement, necessary in-scope finding, missing prerequisite or real review follow-up, create a bounded task or update its existing match without extra user confirmation. Define intent, scope and acceptance in body (planningVersion 1: use assignment with its current expectedRevision), link source evidence with link/attach or event/comment references, and set dependsOn for prerequisites. Keep affected tasks blocked with the reason and missing decision/dependency explicit until resolved. Already-covered work or duplicate notices need no new task or unchanged rewrite; re-read after uncertain writes, never blindly replay task creation. Do not create tasks for trivial bookkeeping or speculative frameworks. Preserve actual questions/uncertainty; ask when needed. Out-of-scope suggestions and proposal-only findings stay proposals in comment/log pending a decision, not approved work. Task creation/updates grant no worker starts, provider spend, approval or restricted activation; existing start/permission rules still apply.
+Coordinator planning: on interview, research, delivery, review, notices or resume, read current get/brief/decisions and relevant tasks before changing the plan. Use filtered tasks and targeted get/activity for evidence; include done/dropped work when checking overlap or recovery. For an uncovered agreed requirement, necessary in-scope finding, missing prerequisite or real review follow-up, create a limited task or update its existing match without extra user confirmation. Define intent, scope and acceptance in body (planningVersion 1: use assignment with its current expectedRevision), link source evidence with link/attach or event/comment references, and set dependsOn for prerequisites. Keep affected tasks blocked with the reason and missing decision/dependency explicit until resolved. Already-covered work or duplicate notices need no new task or unchanged rewrite; re-read after uncertain writes, never blindly replay task creation. Do not create tasks for trivial bookkeeping or speculative frameworks. Preserve actual questions/uncertainty; ask when needed. Out-of-scope suggestions and proposal-only findings stay proposals in comment/log pending a decision, not approved work. Task creation/updates grant no worker starts, provider spend, approval or restricted activation; existing start/permission rules still apply.
 - propose (coordinator only): suggest an edit (decisionId, text, reason), hard removal (remove: true), or withdrawal (withdraw: true, reason, operationId). IDs accept D7. Withdrawal keeps text/pins/history; only user acceptance retires guidance. No direct withdrawal authority is inferred. Reuse operationId only for exact withdrawal retries; conflicting requests fail. Never automatically replay unknown effects. get includes pending/recent outcomes.
 - supersede (coordinator only): record an already-authorized replacement with decisionId and replacementDecisionId (IDs or D7, same mission). Keeps old text/history/pins, but retires its guidance. Does not approve policy or edit/remove text. Exact retries are harmless; relinking is rejected.
 - updateLink (coordinator only): explicitly change an existing Linear link using resourceId and linearRole. References never count toward delivery.
@@ -128,13 +128,19 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 				}),
 			),
 			markdown: Type.Optional(
-				Type.String({ description: "Complete replacement brief: max 12000 Unicode code points." }),
+				Type.String({
+					description: `Complete replacement brief: max ${MISSION_WRITE_LIMITS.brief} Unicode code points.`,
+				}),
 			),
 			expectedRevision: Type.Optional(Type.Integer({ minimum: 0, description: "Brief revision you edited." })),
 			revision: Type.Optional(Type.Integer({ minimum: 1, description: "Brief revision to read." })),
-			title: Type.Optional(Type.String({ description: "Task title: max 200 Unicode code points." })),
+			title: Type.Optional(
+				Type.String({ description: `Task title: max ${MISSION_WRITE_LIMITS.title} Unicode code points.` }),
+			),
 			goal: Type.Optional(Type.String({ maxLength: 4000 })),
-			body: Type.Optional(Type.String({ description: "Task details: max 4000 Unicode code points." })),
+			body: Type.Optional(
+				Type.String({ description: `Task details: max ${MISSION_WRITE_LIMITS.body} Unicode code points.` }),
+			),
 			status: Type.Optional(taskStatus),
 			completion: Type.Optional(
 				Type.Object({
@@ -160,8 +166,7 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 			mine: Type.Optional(Type.Boolean({ description: "tasks: only your tasks." })),
 			text: Type.Optional(
 				Type.String({
-					description:
-						"Decision text: max 1000 Unicode code points (decide/propose). Comment or log text: max 8000.",
+					description: `Decision text: max ${MISSION_WRITE_LIMITS.decision} Unicode code points (decide/propose). Comment or log text: max 8000.`,
 				}),
 			),
 			anchor: Type.Optional(
@@ -226,9 +231,13 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 						tasks: Type.Optional(
 							Type.Array(
 								Type.Object({
-									title: Type.String({ description: "Task title: max 200 Unicode code points." }),
+									title: Type.String({
+										description: `Task title: max ${MISSION_WRITE_LIMITS.title} Unicode code points.`,
+									}),
 									body: Type.Optional(
-										Type.String({ description: "Task body: max 4000 Unicode code points." }),
+										Type.String({
+											description: `Task body: max ${MISSION_WRITE_LIMITS.body} Unicode code points.`,
+										}),
 									),
 								}),
 								{
@@ -364,7 +373,7 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 		async execute(_callId, params, signal): Promise<AgentToolResult<JsonValue>> {
 			signal?.throwIfAborted();
 			const { action, ...rest } = params;
-			validateMissionAuthoring(action, rest);
+			validateMissionWrite(action, rest);
 			const args = Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined)) as Record<
 				string,
 				JsonValue
@@ -373,23 +382,14 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 			return { content: [{ type: "text", text: JSON.stringify(data) }], details: data, structuredContent: data };
 		},
 	});
-	// Pi 1.5 validates JSON Schema, not TypeBox refinements. Prepare before validation
-	// and unsafe intent, retaining code-point limits and actionable authoring errors.
-	const authoringError = (value: unknown) => {
-		if (!value || typeof value !== "object") return undefined;
-		const { action, ...args } = value as Record<string, unknown>;
-		try {
-			if (typeof action === "string") validateMissionAuthoring(action, args);
-		} catch (error) {
-			return (error as Error).message;
-		}
-		return undefined;
-	};
+	// Prepare before JSON Schema validation; execute and daemon admission also guard direct calls.
 	return {
 		...tool,
 		prepareArguments(value) {
-			const error = authoringError(value);
-			if (error) throw new Error(error);
+			if (value && typeof value === "object") {
+				const { action, ...args } = value as Record<string, unknown>;
+				if (typeof action === "string") validateMissionWrite(action, args);
+			}
 			return value as Static<typeof tool.parameters>;
 		},
 	};

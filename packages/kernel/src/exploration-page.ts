@@ -1,5 +1,7 @@
-/** Shared bounded, fingerprint-fenced pages for source hits and call edges. */
+/** Shared limited, fingerprint-fenced pages for source hits and call edges. */
 import type { ExplorationPage, ExplorationQuery } from "./exploration-contract.ts";
+
+const PAGE_BYTE_LIMIT = 48 * 1024 - 512;
 
 export function paginate<T>(
 	page: { results: T[]; page: ExplorationPage["page"]; freshness: { fingerprint: string } },
@@ -26,7 +28,7 @@ export function paginate<T>(
 	page.page.retained = hits.length;
 	for (const hit of hits.slice(page.page.offset, page.page.offset + (input.limit ?? 25))) {
 		page.results.push(hit);
-		if (Buffer.byteLength(JSON.stringify(page)) > 48 * 1024 - 512) {
+		if (Buffer.byteLength(JSON.stringify(page)) > PAGE_BYTE_LIMIT) {
 			page.results.pop();
 			break;
 		}
@@ -34,7 +36,7 @@ export function paginate<T>(
 	page.page.returned = page.results.length;
 	if (
 		(hits.length > page.page.offset && !page.page.returned) ||
-		Buffer.byteLength(JSON.stringify(page)) > 48 * 1024 - 512
+		Buffer.byteLength(JSON.stringify(page)) > PAGE_BYTE_LIMIT
 	)
 		throw new Error("Exploration metadata exceeds page budget; narrow path/query");
 	const next = page.page.offset + page.page.returned;

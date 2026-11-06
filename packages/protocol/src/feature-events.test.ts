@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { FEATURE_NAMES, parseFeatureEvent } from "./feature-events.ts";
+import { FEATURE_NAMES, type FeatureEvent, parseFeatureEvent } from "./feature-events.ts";
 
 test("feature catalog accepts each closed stage", () => {
 	for (const feature of FEATURE_NAMES) {
@@ -46,4 +46,25 @@ test("feature catalog rejects content, identifiers and incoherent classification
 		{ ...base, stage: "outcome", outcome: "unwanted", reason: "none" },
 	])
 		assert.equal(parseFeatureEvent(event), undefined);
+});
+
+test("outcomes accept only their matching reasons without changing the event", () => {
+	const base = { catalogVersion: 1, feature: "diagnose_chat", stage: "outcome" } as const;
+	const events: Extract<FeatureEvent, { stage: "outcome" }>[] = [
+		{ ...base, outcome: "success", reason: "none" },
+		{ ...base, outcome: "cancelled", reason: "user" },
+		{ ...base, outcome: "failure", reason: "rejected" },
+		{ ...base, outcome: "failure", reason: "transport" },
+		{ ...base, outcome: "failure", reason: "unknown" },
+		{ ...base, outcome: "unavailable", reason: "not_configured" },
+		{ ...base, outcome: "unavailable", reason: "disconnected" },
+		{ ...base, outcome: "unavailable", reason: "unsupported" },
+	];
+	for (const event of events) {
+		assert.deepEqual(parseFeatureEvent(event), event);
+		for (const reason of new Set(events.map((candidate) => candidate.reason))) {
+			if (events.some((candidate) => candidate.outcome === event.outcome && candidate.reason === reason)) continue;
+			assert.equal(parseFeatureEvent({ ...event, reason }), undefined, `${event.outcome}/${reason}`);
+		}
+	}
 });

@@ -87,7 +87,7 @@ pub(crate) fn pull_requests(value: &serde_json::Value) -> Vec<PullRequest> {
                 title: object["title"]
                     .as_str()
                     .filter(|t| !t.trim().is_empty())
-                    .map(|t| crate::local_model::bounded(t, 240)),
+                    .map(|t| crate::text::truncate_with_ellipsis(t, 240)),
                 merged: (object["state"] == "merged").then(|| {
                     object["mergedAt"]
                         .as_u64()

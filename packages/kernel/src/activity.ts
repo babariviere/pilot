@@ -1,4 +1,3 @@
-import { observeCommits } from "./commits.ts";
 import { wireCompactions } from "./wire-compaction.ts";
 /** Small, commit-consistent run/inbox monitor. Never hydrates transcript history. */
 
@@ -20,7 +19,7 @@ export type ActivityStream = Pick<AgentEventStream, "snapshot" | "start"> & {
 	/** Latest commit, updated synchronously even while notification delivery is blocked. */
 	readonly current: Readonly<SnapshotEvent> | null;
 	readonly idle: boolean;
-	/** Busy-to-idle boundary counter, retained when async frames are coalesced. */
+	/** Busy-to-idle boundary counter, kept when async frames are coalesced. */
 	readonly settledVersion: number;
 	/** Cancellation outcome of the latest busy-to-idle boundary. */
 	readonly settledAborted: boolean;
@@ -181,47 +180,53 @@ export async function watchActivity(session: Session, id: ConversationId, contex
 			let run = initial.run;
 			let queued = initial.inbox;
 			let compactions = initial.compactions;
-			detachCommit = observeCommits(session, (publication) => {
-				if (stopped) return;
-				let touched = false;
-				let aborted = false;
-				for (const change of publication.changes) {
-					if (
-						change.type === "submission" &&
-						change.value.status === "unanswered" &&
-						change.value.reason === "aborted" &&
-						current.run?.inputs.includes(change.value.id)
-					)
-						aborted = true;
-					if (change.type !== "document" || change.conversationId !== id || change.record.key !== undefined)
-						continue;
-					if (change.record.kind === LiveDoc.definition.kind) {
-						const live = change.kind === "change" ? (change.value as Readonly<LiveState>) : null;
-						run = live?.run ? { inputs: [...live.run.inputs] } : undefined;
-						compactions = copyJson(wireCompactions(live?.compactions)) as unknown as SnapshotEvent["compactions"];
-						touched = true;
-					} else if (change.record.kind === InboxDoc.definition.kind) {
-						const inbox = change.kind === "change" ? (change.value as Readonly<InboxState>) : null;
-						queued = (inbox?.items ?? []).map(({ id, mode }) => ({ id, mode }));
-						touched = true;
+			const observation = session.observeCommits({
+				advance(publication) {
+					if (stopped) return;
+					let touched = false;
+					let aborted = false;
+					for (const change of publication.changes) {
+						if (
+							change.type === "submission" &&
+							change.value.status === "unanswered" &&
+							change.value.reason === "aborted" &&
+							current.run?.inputs.includes(change.value.id)
+						)
+							aborted = true;
+						if (change.type !== "document" || change.conversationId !== id || change.record.key !== undefined)
+							continue;
+						if (change.record.kind === LiveDoc.definition.kind) {
+							const live = change.kind === "change" ? (change.value as Readonly<LiveState>) : null;
+							run = live?.run ? { inputs: [...live.run.inputs] } : undefined;
+							compactions = copyJson(
+								wireCompactions(live?.compactions),
+							) as unknown as SnapshotEvent["compactions"];
+							touched = true;
+						} else if (change.record.kind === InboxDoc.definition.kind) {
+							const inbox = change.kind === "change" ? (change.value as Readonly<InboxState>) : null;
+							queued = (inbox?.items ?? []).map(({ id, mode }) => ({ id, mode }));
+							touched = true;
+						}
 					}
-				}
-				if (!touched) return;
-				if (run || isIdle(current)) runAborted = false;
-				else if (current.run) runAborted = aborted;
-				const frame: SnapshotEvent = { ...initial, ...(run ? { run } : {}), inbox: queued, compactions };
-				if (!run) delete frame.run;
-				const key = JSON.stringify(frame);
-				if (key === last) return;
-				last = key;
-				if (!isIdle(current) && isIdle(frame)) {
-					settledVersion++;
-					settledAborted = runAborted;
-				}
-				current = frame;
-				pending = frame;
-				schedule();
+					if (!touched) return;
+					if (run || isIdle(current)) runAborted = false;
+					else if (current.run) runAborted = aborted;
+					const frame: SnapshotEvent = { ...initial, ...(run ? { run } : {}), inbox: queued, compactions };
+					if (!run) delete frame.run;
+					const key = JSON.stringify(frame);
+					if (key === last) return;
+					last = key;
+					if (!isIdle(current) && isIdle(frame)) {
+						settledVersion++;
+						settledAborted = runAborted;
+					}
+					current = frame;
+					pending = frame;
+					schedule();
+				},
+				end() {},
 			});
+			detachCommit = () => observation.detach();
 			detachClose = session.subscribeClose(detach);
 		}, context);
 		context.abortSignal?.throwIfAborted();

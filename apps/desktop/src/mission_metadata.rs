@@ -18,13 +18,13 @@ impl Metadata {
         if title.encode_utf16().count() > TITLE_UNITS || goal.encode_utf16().count() > GOAL_UNITS {
             return Err("Title is limited to 200 UTF-16 units; goal to 4000. Nothing was saved.");
         }
-        let title = crate::mission_conversion::trim_text(title);
+        let title = crate::text::trim_text(title);
         if title.is_empty() {
             return Err("A mission title is required.");
         }
         Ok(Self {
             title: title.into(),
-            goal: crate::mission_conversion::trim_text(goal).into(),
+            goal: crate::text::trim_text(goal).into(),
         })
     }
 }
@@ -35,7 +35,7 @@ pub(crate) fn parse(source: &Source, v: &Value) -> Result<Metadata, &'static str
     {
         return Err("Metadata response belongs to another canonical mission.");
     }
-    // Persisted reads are not new authoring. Preserve legacy text verbatim.
+    // Persisted reads are not new input. Preserve legacy text verbatim.
     Ok(Metadata {
         title: v["title"].as_str().ok_or("Invalid mission title.")?.into(),
         goal: v["goal"].as_str().ok_or("Invalid mission goal.")?.into(),

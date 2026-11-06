@@ -406,8 +406,6 @@ export function telemetryAttributes(value: TelemetryAttributes): TelemetryAttrib
 			continue;
 		return;
 	}
-	if (value["pilot.ai.estimate_status"] === "unavailable" && value["pilot.ai.estimated_usd_micros"] !== undefined)
-		return;
 	if (
 		value["pilot.ai.estimate_status"] !== undefined &&
 		value["pilot.ai.estimate_status"] !== "unavailable" &&
@@ -420,7 +418,6 @@ export function telemetryAttributes(value: TelemetryAttributes): TelemetryAttrib
 	)
 		return;
 	if (value["pilot.ai.pricing_source"] !== undefined && value["pilot.ai.estimated_usd_micros"] === undefined) return;
-	if (value["pilot.ai.billed_status"] === "unavailable" && value["pilot.ai.billed_usd_micros"] !== undefined) return;
 	if (value["pilot.ai.billed_status"] === "known" && value["pilot.ai.billed_usd_micros"] === undefined) return;
 	if (value["pilot.ai.billed_usd_micros"] !== undefined && value["pilot.ai.billed_status"] !== "known") return;
 	if ((value["pilot.ai.launch_reason"] === undefined) !== (value["pilot.ai.launch_count"] === undefined)) return;

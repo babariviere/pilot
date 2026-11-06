@@ -30,9 +30,6 @@ export async function discoverTests(root: string): Promise<string[]> {
 export type Suite = "fast" | "integration" | "stress";
 export type TestLane = "all" | "portable" | "macos";
 
-// Ask no longer needs a native compiler or screenshot host; retain Darwin smoke coverage.
-const macosOnly = new Set<string>();
-
 // Repeat OS-sensitive paths on Darwin while the broad suite runs on Linux.
 const macosCoverage = new Set([
 	"packages/kernel/src/ask.integration.test.ts",
@@ -50,8 +47,8 @@ const macosCoverage = new Set([
 
 export function testInLane(path: string, lane: TestLane): boolean {
 	if (lane === "all") return true;
-	if (lane === "portable") return !macosOnly.has(path);
-	return macosOnly.has(path) || macosCoverage.has(path);
+	if (lane === "portable") return true;
+	return macosCoverage.has(path);
 }
 
 export function testLimits(env: Record<string, string | undefined>) {

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import type { TrackedItem, TrackingJson } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
-import { decodeMcpResult, dedicatedSourceTool, validSourceArguments } from "./source-mcp.ts";
+import { decodeMcpResult, dedicatedSourceTool, validSourceArguments } from "./source-tool-rules.ts";
 import { SourceRegistry } from "./sources.ts";
 import { TrackedItemStore, validatePatch } from "./tracked-items.ts";
 

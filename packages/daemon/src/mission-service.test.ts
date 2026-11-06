@@ -14,7 +14,7 @@ import type { KernelCommand, KernelPacket, KernelSpec } from "@pilot/kernel";
 import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 import type { MissionDecision, MissionDetail, ServerMessage, SessionState, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
-import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.test.ts";
+import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.ts";
 import { CriticalReviewStore } from "./critical-review-store.ts";
 import { CriticalReviewVault } from "./critical-review-vault.ts";
 import { Conflict } from "./errors.ts";

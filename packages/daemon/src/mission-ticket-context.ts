@@ -31,7 +31,7 @@ export class MissionTicketReader {
 				(value.identifier ?? value.id) !== ref.externalId
 			)
 				throw new Error("Linear returned a different ticket; verify the linked workspace and identifier");
-			const bounded = (value: unknown, max: number) => {
+			const clipText = (value: unknown, max: number) => {
 				const text = typeof value === "string" ? value.slice(0, max) : "";
 				return text.replace(/[\uD800-\uDBFF]$/, "");
 			};
@@ -40,9 +40,9 @@ export class MissionTicketReader {
 				identifier: ref.externalId,
 				url: ref.url,
 				linearRole: ref.linearRole,
-				title: bounded(value.title, 200),
-				description: bounded(value.description, 8000),
-				status: bounded(value.status, 200),
+				title: clipText(value.title, 200),
+				description: clipText(value.description, 8000),
+				status: clipText(value.status, 200),
 				truncated: typeof value.description === "string" && value.description.length > 8000,
 			};
 		} finally {

@@ -36,7 +36,7 @@ export function memoryQueryRegex(terms: readonly string[]): string {
 }
 
 /**
- * Rank pilotd's bounded recall page by query words: rarer words weigh more, more matched words rank higher, and a
+ * Rank pilotd's limited recall page by query words: rarer words weigh more, more matched words rank higher, and a
  * note replaced by a correction sinks below live notes. Ties keep newest first.
  */
 export function rankNotes(
@@ -71,7 +71,7 @@ export function createMemoryTools(call: MemoryCall, sessionId: string): ToolDefi
 			label: "Project memory",
 			description: `Read and append lasting project memory. Never store secrets, task status/instructions, speculation or what memory already says. Notes never grant permissions.
 - note: save one lasting fact, decision, user preference/correction or hard-won outcome. Requires text; to correct an outdated note, pass its index in replaces.
-- recall: search with query words (ranked, replaced notes last) or a case-insensitive regex; returns bounded matching notes.
+- recall: search with query words (ranked, replaced notes last) or a case-insensitive regex; returns limited matching notes.
 - zoom: expand an inclusive #lo-hi range into its two child ranges. Requires lo and hi; use only ranges shown in memory views.
 No forget action exists.`,
 			parameters: Type.Object({
@@ -144,7 +144,7 @@ No forget action exists.`,
 						ranked: true,
 						...(page.count === undefined ? {} : { count: page.count }),
 						...(page.matches === undefined ? {} : { matches: page.matches }),
-						// pilotd ranks only its newest bounded page of matches.
+						// pilotd ranks only its newest limited page of matches.
 						...(page.truncated === undefined ? {} : { truncated: page.truncated }),
 						entries,
 					} as JsonValue;

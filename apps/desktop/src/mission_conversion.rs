@@ -1,20 +1,10 @@
 //! One-shot Local conversion intent. This is NOT a daemon idempotency key.
 //! Transport must persist Unknown before its sole POST, never replay on recovery.
-use crate::delivery_store::{Failure, token};
+use crate::{
+    delivery_store::{Failure, token},
+    text::trim_text,
+};
 use serde::{Deserialize, Serialize};
-
-/// ECMAScript TrimString: WhiteSpace + LineTerminator, not Rust White_Space.
-/// Mirrors the daemon's missions.ts text() normalization. FEFF is removed;
-/// U+0085 (NEXT LINE) is deliberately retained. See ECMA-262 12.2/12.3.
-pub(crate) fn trim_text(value: &str) -> &str {
-    value.trim_matches(|ch| {
-        matches!(ch,
-            '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{00a0}' | '\u{1680}' |
-            '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' |
-            '\u{205f}' | '\u{3000}' | '\u{feff}'
-        )
-    })
-}
 
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Target {
@@ -102,40 +92,6 @@ impl Request {
             return Err("Mission goal exceeds its bounded text limit");
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod whitespace_tests {
-    use super::*;
-    #[test]
-    fn every_unicode_scalar_matches_the_independent_ecmascript_trim_oracle() {
-        let oracle: serde_json::Value =
-            serde_json::from_str(include_str!("../tests/fixtures/ecmascript-trim.json")).unwrap();
-        let points: Vec<u32> = oracle["trimmedCodePoints"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|n| n.as_u64().unwrap() as u32)
-            .collect();
-        assert_eq!(points.len(), 25);
-        assert!(points.windows(2).all(|p| p[0] < p[1]));
-        for codepoint in 0..=0x10ffff {
-            if let Some(ch) = char::from_u32(codepoint) {
-                let mut bytes = [0; 4];
-                assert_eq!(
-                    trim_text(ch.encode_utf8(&mut bytes)).is_empty(),
-                    points.binary_search(&codepoint).is_ok(),
-                    "U+{codepoint:04X}"
-                );
-            }
-        }
-        for case in oracle["cases"].as_array().unwrap() {
-            assert_eq!(
-                trim_text(case["input"].as_str().unwrap()),
-                case["expected"].as_str().unwrap()
-            );
-        }
     }
 }
 

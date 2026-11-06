@@ -8,7 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { TrackedItem } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
 import { removeSlackEyes } from "./slack-reactions.ts";
-import { decodeMcpResult, dedicatedSourceTool, SlackRemovalError, validSourceArguments } from "./source-mcp.ts";
+import { decodeMcpResult, dedicatedSourceTool, SlackRemovalError, validSourceArguments } from "./source-tool-rules.ts";
 import { type SourcePoller, SourceRegistry } from "./sources.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 

@@ -7,7 +7,7 @@ import type { AddressInfo } from "node:net";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
 import type { SessionSummary } from "@pilot/protocol";
-import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.test.ts";
+import { LegacyArtifactFixture } from "../../artifacts/test/legacy-fixture.ts";
 import { Conflict } from "./errors.ts";
 import { ModelCatalog } from "./models.ts";
 import { createDaemonServer } from "./server.ts";

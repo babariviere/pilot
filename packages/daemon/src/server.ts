@@ -66,7 +66,7 @@ import type {
 import { nodeTelemetry, type TraceCarrier, traceCarrier } from "@pilot/telemetry";
 import { type WebSocket, WebSocketServer } from "ws";
 import { AttachmentStore } from "./attachment-store.ts";
-import { boundedSender } from "./backpressure.ts";
+import { createSocketSender } from "./backpressure.ts";
 import { RepositoryChanges } from "./changes.ts";
 import { type ChatSettingsService, InvalidChatSettings } from "./chat-settings.ts";
 import { ChatStreams } from "./chat-streams.ts";
@@ -2893,7 +2893,7 @@ export function createDaemonServer(
 		const setupRoute = /^\/api\/setup\/runs\/([a-f0-9-]{36})\/terminal\/ws$/.exec(url.pathname);
 		if (setupRoute && setup) {
 			setupWss.handleUpgrade(req, socket, head, (ws) => {
-				const send = boundedSender(ws, 64 * 1024);
+				const send = createSocketSender(ws, 64 * 1024);
 				let detach: (() => void) | undefined;
 				const report = () =>
 					send(
@@ -3172,7 +3172,7 @@ export function createDaemonServer(
 	}
 
 	wss.on("connection", (ws: WebSocket) => {
-		clients.set(ws, boundedSender(ws));
+		clients.set(ws, createSocketSender(ws));
 		const control = nextControl();
 		if (control) send(ws, control);
 		if (power) send(ws, { type: "power", power: power.status() });
@@ -3272,7 +3272,7 @@ export function createDaemonServer(
 		params: URLSearchParams,
 		traceparent: string | string[] | undefined,
 	): void {
-		const sendData = boundedSender(ws);
+		const sendData = createSocketSender(ws);
 		const send = (message: ServerMessage) => sendData(JSON.stringify(message));
 		let detach: (() => void) | undefined;
 		let closed = false;
@@ -3425,7 +3425,7 @@ export function createDaemonServer(
 
 	/** Stream one subagent's transcript on its own socket: a snapshot first, then appended entries. */
 	function openSubagent(ws: WebSocket, sessionId: string, name: string): void {
-		const sendData = boundedSender(ws);
+		const sendData = createSocketSender(ws);
 		const send = (message: ServerMessage) => sendData(JSON.stringify(message));
 		const report = (message: string) => send({ type: "error", sessionId, name, message });
 		let stop: (() => void) | undefined;
@@ -3459,25 +3459,26 @@ async function missionRoute(
 	const method = req.method;
 	if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "mission") {
 		if (method === "PUT")
-			return json(res, 200, service.join(parts[2]!, await readJson<JoinMissionRequest>(req))), true;
-		if (method === "DELETE") return json(res, 200, service.leave(parts[2]!)), true;
+			return (json(res, 200, service.join(parts[2]!, await readJson<JoinMissionRequest>(req))), true);
+		if (method === "DELETE") return (json(res, 200, service.leave(parts[2]!)), true);
 		return false;
 	}
 	if (parts[1] !== "missions") return false;
 	const id = parts[2];
 	if (parts.length === 2) {
-		if (method === "GET") return json(res, 200, store.list(url.searchParams.get("projectId") ?? undefined)), true;
+		if (method === "GET") return (json(res, 200, store.list(url.searchParams.get("projectId") ?? undefined)), true);
 		if (method === "POST")
-			return json(res, 201, await service.create(await readJson<CreateMissionRequest>(req))), true;
+			return (json(res, 201, await service.create(await readJson<CreateMissionRequest>(req))), true);
 		return false;
 	}
 	if (!id) return false;
 	if (parts.length === 3) {
-		if (method === "GET") return json(res, 200, store.detail(id)), true;
-		if (method === "PATCH") return json(res, 200, store.update(id, await readJson<UpdateMissionRequest>(req))), true;
+		if (method === "GET") return (json(res, 200, store.detail(id)), true);
+		if (method === "PATCH")
+			return (json(res, 200, store.update(id, await readJson<UpdateMissionRequest>(req))), true);
 		if (method === "DELETE") {
 			store.remove(id);
-			return json(res, 200, { ok: true }), true;
+			return (json(res, 200, { ok: true }), true);
 		}
 		return false;
 	}
@@ -3494,36 +3495,36 @@ async function missionRoute(
 				throw new HttpError(400, "revision must be a positive integer");
 			const brief = store.brief(id, value === null ? undefined : Number(value));
 			if (!brief) throw new HttpError(404, "No brief revision");
-			return json(res, 200, brief), true;
+			return (json(res, 200, brief), true);
 		}
 		if (parts.length === 4 && method === "PUT") {
 			const body = await readJson<MissionBriefWrite>(req);
-			return json(res, 200, store.writeBrief(id, body?.markdown, body?.expectedRevision)), true;
+			return (json(res, 200, store.writeBrief(id, body?.markdown, body?.expectedRevision)), true);
 		}
 		if (parts.length === 5 && item === "revisions" && method === "GET")
-			return json(res, 200, store.briefRevisions(id)), true;
+			return (json(res, 200, store.briefRevisions(id)), true);
 		return false;
 	}
 	if (section === "phases") {
-		if (parts.length === 4 && method === "GET") return json(res, 200, store.phases(id)), true;
+		if (parts.length === 4 && method === "GET") return (json(res, 200, store.phases(id)), true);
 		if (parts.length === 4 && method === "POST")
-			return json(res, 201, store.addPhase(id, await readJson<MissionPhaseWrite>(req))), true;
+			return (json(res, 201, store.addPhase(id, await readJson<MissionPhaseWrite>(req))), true);
 		if (parts.length === 5 && method === "PATCH")
-			return json(res, 200, store.updatePhase(id, item!, await readJson<MissionPhaseWrite>(req))), true;
+			return (json(res, 200, store.updatePhase(id, item!, await readJson<MissionPhaseWrite>(req))), true);
 		if (parts.length === 5 && method === "DELETE") {
 			store.removePhase(id, item!);
-			return json(res, 200, { ok: true }), true;
+			return (json(res, 200, { ok: true }), true);
 		}
 		return false;
 	}
 	if (section === "tasks") {
 		if (parts.length === 4 && method === "POST")
-			return json(res, 201, await service.addTask(id, await readJson<MissionTaskWrite>(req))), true;
+			return (json(res, 201, await service.addTask(id, await readJson<MissionTaskWrite>(req))), true);
 		if (parts.length === 5 && method === "PATCH")
-			return json(res, 200, await service.updateTask(id, item!, await readJson<MissionTaskWrite>(req))), true;
+			return (json(res, 200, await service.updateTask(id, item!, await readJson<MissionTaskWrite>(req))), true);
 		if (parts.length === 5 && method === "DELETE") {
 			store.removeTask(id, item!);
-			return json(res, 200, { ok: true }), true;
+			return (json(res, 200, { ok: true }), true);
 		}
 		if (parts.length === 6 && parts[5] === "start" && method === "POST") {
 			const body =
@@ -3533,14 +3534,14 @@ async function missionRoute(
 							if (error instanceof HttpError && error.status === 415) return {};
 							throw error;
 						});
-			return json(res, 201, await service.startTask(id, item!, body ?? {})), true;
+			return (json(res, 201, await service.startTask(id, item!, body ?? {})), true);
 		}
 		return false;
 	}
 	if (section === "decision-proposals") {
 		if (parts.length === 6 && method === "POST" && (parts[5] === "accept" || parts[5] === "reject")) {
 			const write = await readJson<{ text?: string }>(req);
-			return json(res, 200, store.resolveProposal(id, item!, parts[5] === "accept", write?.text)), true;
+			return (json(res, 200, store.resolveProposal(id, item!, parts[5] === "accept", write?.text)), true);
 		}
 		return false;
 	}
@@ -3554,52 +3555,52 @@ async function missionRoute(
 		}
 		if (parts.length === 4 && method === "POST") {
 			const write = await readJson<MissionDecisionWrite>(req);
-			return json(res, 201, store.addDecision(id, write?.text, undefined, write?.audience)), true;
+			return (json(res, 201, store.addDecision(id, write?.text, undefined, write?.audience)), true);
 		}
 		if (parts.length === 5 && method === "PATCH") {
 			const write = await readJson<MissionDecisionWrite>(req);
-			return json(res, 200, store.updateDecision(id, item!, write?.text, undefined, write?.audience)), true;
+			return (json(res, 200, store.updateDecision(id, item!, write?.text, undefined, write?.audience)), true);
 		}
 		if (parts.length === 5 && method === "DELETE") {
 			store.removeDecision(id, item!);
-			return json(res, 200, { ok: true }), true;
+			return (json(res, 200, { ok: true }), true);
 		}
 		return false;
 	}
 	if (section === "comments") {
 		if (parts.length === 4 && method === "POST")
-			return json(res, 201, store.addComment(id, await readJson<MissionCommentWrite>(req))), true;
+			return (json(res, 201, store.addComment(id, await readJson<MissionCommentWrite>(req))), true);
 		if (parts.length === 6 && parts[5] === "resolve" && method === "POST")
-			return json(res, 200, store.resolveComment(id, item!)), true;
+			return (json(res, 200, store.resolveComment(id, item!)), true);
 		if (parts.length === 5 && method === "DELETE") {
 			store.removeComment(id, item!);
-			return json(res, 200, { ok: true }), true;
+			return (json(res, 200, { ok: true }), true);
 		}
 		return false;
 	}
 	if (section === "resources") {
 		if (parts.length === 6 && parts[5] === "linear-sync" && method === "POST") {
 			const write = await readJson<{ action: "pause" | "resume" }>(req);
-			return json(res, 200, store.setLinearSyncPaused(id, item!, write?.action)), true;
+			return (json(res, 200, store.setLinearSyncPaused(id, item!, write?.action)), true);
 		}
 		if (parts.length === 4 && method === "POST")
-			return json(res, 201, store.addResource(id, await readJson<MissionResourceWrite>(req))), true;
+			return (json(res, 201, store.addResource(id, await readJson<MissionResourceWrite>(req))), true);
 		if (parts.length === 5 && method === "PATCH") {
 			json(res, 200, store.updateResource(id, item!, await readJson<MissionResourceUpdate>(req)));
 			return true;
 		}
 		if (parts.length === 5 && method === "DELETE") {
 			store.removeResource(id, item!);
-			return json(res, 200, { ok: true }), true;
+			return (json(res, 200, { ok: true }), true);
 		}
 		return false;
 	}
 	if (section === "artifacts") {
 		if (parts.length === 4 && method === "POST")
-			return json(res, 201, await service.linkArtifact(id, await readJson<MissionArtifactLinkWrite>(req))), true;
+			return (json(res, 201, await service.linkArtifact(id, await readJson<MissionArtifactLinkWrite>(req))), true);
 		if (parts.length === 5 && method === "DELETE") {
 			store.unlinkArtifact(id, item!, {}, url.searchParams.get("taskId") ?? undefined);
-			return json(res, 200, { ok: true }), true;
+			return (json(res, 200, { ok: true }), true);
 		}
 		return false;
 	}
@@ -3607,9 +3608,9 @@ async function missionRoute(
 		if (method === "GET") {
 			const before = url.searchParams.get("before");
 			if (before !== null && !/^\d+$/.test(before)) throw new HttpError(400, "before must be an event ID");
-			return json(res, 200, store.events(id, before === null ? undefined : Number(before))), true;
+			return (json(res, 200, store.events(id, before === null ? undefined : Number(before))), true);
 		}
-		if (method === "POST") return json(res, 201, store.log(id, await readJson<MissionEventWrite>(req))), true;
+		if (method === "POST") return (json(res, 201, store.log(id, await readJson<MissionEventWrite>(req))), true);
 	}
 	return false;
 }

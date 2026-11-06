@@ -10,7 +10,7 @@ import { slackThreadFixture } from "./slack-fixtures.ts";
 import { SlackFormatChanged } from "./slack-format.ts";
 import { dominantSlackGroup, mentionsMe, parseSlackIdentity, parseSlackMentions } from "./slack-mentions.ts";
 import { createSlackPoller } from "./slack-source.ts";
-import { dedicatedSourceTool, SourceToolError, validSourceArguments } from "./source-mcp.ts";
+import { dedicatedSourceTool, SourceToolError, validSourceArguments } from "./source-tool-rules.ts";
 import { type SourcePollContext, SourceRegistry } from "./sources.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 import { SLACK_HOURLY_BUDGET } from "./tracked-items-disk.ts";

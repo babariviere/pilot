@@ -14,8 +14,16 @@ export function assertArtifactWriteKind(kind: unknown): asserts kind is Artifact
 
 export const MAX_SOURCE_BYTES = 512 * 1024;
 
-export function validateArtifact(write: ArtifactWrite): ArtifactWrite & { libraries: ArtifactLibrary[] } {
-	if (!write || typeof write !== "object") throw new Error("Expected an artifact document");
+type ValidatedWrite = ArtifactWrite & { libraries: ArtifactLibrary[] };
+type PreparedArtifact = { html: string; libraries: ArtifactLibrary[]; visual?: ArtifactVisual };
+
+export function validateArtifact(input: ArtifactWrite): ValidatedWrite {
+	return validateWrite(input).write;
+}
+
+function validateWrite(input: ArtifactWrite): { write: ValidatedWrite; dataJSON?: string } {
+	if (!input || typeof input !== "object") throw new Error("Expected an artifact document");
+	const write = { ...input };
 	if (typeof write.title !== "string" || !write.title.trim() || write.title.length > 160)
 		throw new Error("Artifact title must contain 1-160 characters");
 	assertArtifactWriteKind(write.kind);
@@ -28,8 +36,8 @@ export function validateArtifact(write: ArtifactWrite): ArtifactWrite & { librar
 		);
 	if (write.kind === "image") validateImageSource(write.source);
 	if (write.kind === "shader") validateShaderSource(write.source);
-	if (write.kind === "visual") validateVisualWrite(write.source, write.data);
-	else if (write.data !== undefined) throw new Error("Only visual artifacts take data");
+	const dataJSON = write.kind === "visual" ? validateVisualWrite(write.source, write.data) : undefined;
+	if (write.kind !== "visual" && write.data !== undefined) throw new Error("Only visual artifacts take data");
 	if (write.libraries !== undefined && !Array.isArray(write.libraries))
 		throw new Error("Artifact libraries must be an array");
 	const libraries: ArtifactLibrary[] = [];
@@ -37,7 +45,7 @@ export function validateArtifact(write: ArtifactWrite): ArtifactWrite & { librar
 		throw new Error(
 			`${write.kind === "image" ? "Image" : write.kind === "visual" ? "Visual" : "Shader"} artifacts do not use libraries`,
 		);
-	return { ...write, title: write.title.trim(), libraries };
+	return { write: { ...write, title: write.title.trim(), libraries }, dataJSON };
 }
 
 export const ARTIFACT_CSP =
@@ -48,17 +56,22 @@ export const ARTIFACT_RUNTIME_GUARD = `for (const name of ['RTCPeerConnection','
 export async function prepareArtifact(
 	input: ArtifactWrite,
 	options: { signal?: AbortSignal; id?: string } = {},
-): Promise<{ html: string; libraries: ArtifactLibrary[]; visual?: ArtifactVisual }> {
-	const write = validateArtifact(input);
+): Promise<PreparedArtifact> {
+	return (await prepareArtifactWrite(input, options)).prepared;
+}
+
+/** One publication path; the store uses the same normalized write that preparation checked. */
+export async function prepareArtifactWrite(
+	input: ArtifactWrite,
+	options: { signal?: AbortSignal; id?: string } = {},
+): Promise<{ write: ValidatedWrite; prepared: PreparedArtifact }> {
+	const { write, dataJSON } = validateWrite(input);
 	options.signal?.throwIfAborted();
 	// Keep existing shader checks; this does not enable shader rendering in Next.
 	if (write.kind === "shader") await assertShaderCompiles(write.source, options.signal);
 	const visual =
-		write.kind === "visual"
-			? await checkVisual(
-					{ source: write.source, data: validateVisualWrite(write.source, write.data), id: options.id ?? "" },
-					{ signal: options.signal },
-				)
+		dataJSON !== undefined
+			? await checkVisual({ source: write.source, data: dataJSON, id: options.id ?? "" }, { signal: options.signal })
 			: undefined;
 	const body =
 		write.kind === "shader"
@@ -69,5 +82,5 @@ export async function prepareArtifact(
 	// Retain the prepared-document read contract for existing clients, never raw source markup.
 	const html = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}"><meta http-equiv="x-dns-prefetch-control" content="off"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><script>${ARTIFACT_RUNTIME_GUARD}</script></head><body>${body}</body></html>`;
 	if (Buffer.byteLength(html) > 25 * 1024 * 1024) throw new Error("Prepared artifact exceeds 25 MiB");
-	return visual ? { html, libraries: [], visual } : { html, libraries: [] };
+	return { write, prepared: visual ? { html, libraries: [], visual } : { html, libraries: [] } };
 }

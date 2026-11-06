@@ -146,10 +146,10 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 			label: "Artifact",
 			namespace: {
 				name: "artifacts",
-				description: `Publish and inspect ${visuals ? "native visuals, " : ""}images and shaders with tools.artifact. Read the pilot-artifacts skill before authoring.`,
-				instructions: `Read the bundled pilot-artifacts skill at ${ARTIFACT_SKILL_PATH} before authoring.`,
+				description: `Publish and inspect ${visuals ? "native visuals, " : ""}images and shaders with tools.artifact. Read the pilot-artifacts skill before creating or updating artifacts.`,
+				instructions: `Read the bundled pilot-artifacts skill at ${ARTIFACT_SKILL_PATH} before creating or updating artifacts.`,
 			},
-			description: `Publish and inspect session-local offline artifacts. Read the pilot-artifacts skill before authoring.
+			description: `Publish and inspect session-local offline artifacts. Read the pilot-artifacts skill before creating or updating artifacts.
 - create: publish title, kind and source; returns a compact pinned reference.
 - update: replace the complete document by id, not a patch; expectedRevision rejects stale updates.
 - get: read source and metadata by id, optionally at a historical revision. Local artifacts read latest when revision is omitted. Linked mission/task references are read-only: omission uses the pinned revision, or latest for unpinned links; conflicting pins require an explicit linked revision.

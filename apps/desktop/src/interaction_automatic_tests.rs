@@ -176,14 +176,15 @@ async fn distinct_identical_creations_keep_distinct_operations_and_targets() {
         submit(&client, key, 1, "identical text", 1, false);
         until(&updates, |s| s.handled.get(key) == Some(&1)).await;
     }
-    let seen = daemon.seen.lock().unwrap();
-    assert_eq!(seen.executions, 2);
-    assert_ne!(
-        seen.envelopes[0]["operationId"],
-        seen.envelopes[1]["operationId"]
-    );
-    assert_ne!(seen.envelopes[0]["targetId"], seen.envelopes[1]["targetId"]);
-    drop(seen);
+    {
+        let seen = daemon.seen.lock().unwrap();
+        assert_eq!(seen.executions, 2);
+        assert_ne!(
+            seen.envelopes[0]["operationId"],
+            seen.envelopes[1]["operationId"]
+        );
+        assert_ne!(seen.envelopes[0]["targetId"], seen.envelopes[1]["targetId"]);
+    }
     client.command(WriteCommand::Close);
     until(&updates, |s| s.flushed).await;
 }
@@ -218,14 +219,15 @@ async fn lost_ack_and_nonadmission_recover_without_a_user_check() {
                 .state,
             "accepted"
         );
-        let seen = daemon.seen.lock().unwrap();
-        assert_eq!(seen.executions, 1);
-        assert!(
-            seen.envelopes
-                .iter()
-                .all(|e| *e == serde_json::to_value(intent.operation.as_ref().unwrap()).unwrap())
-        );
-        drop(seen);
+        {
+            let seen = daemon.seen.lock().unwrap();
+            assert_eq!(seen.executions, 1);
+            assert!(
+                seen.envelopes.iter().all(
+                    |e| *e == serde_json::to_value(intent.operation.as_ref().unwrap()).unwrap()
+                )
+            );
+        }
         client.command(WriteCommand::Close);
         until(&updates, |s| s.flushed).await;
     }

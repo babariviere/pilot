@@ -157,7 +157,7 @@ impl Save {
         })
     }
     pub(crate) fn acknowledges(&self, brief: &Brief) -> bool {
-        let normalized = crate::mission_conversion::trim_text(&self.markdown);
+        let normalized = crate::text::trim_text(&self.markdown);
         let revision = if self.expected > 0 && normalized == self.base.as_ref() {
             self.expected
         } else {

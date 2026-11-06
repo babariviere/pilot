@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SessionPullRequest } from "@pilot/protocol";
-import { linkedPullRequest } from "./github.ts";
+import { linkedPullRequest } from "./github-url.ts";
 import { type Runner, run } from "./workspaces.ts";
 
 export interface AutoRebaseHost {

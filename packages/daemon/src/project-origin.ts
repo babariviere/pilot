@@ -1,4 +1,4 @@
-import { githubRepository } from "./github.ts";
+import { githubRepository } from "./github-url.ts";
 
 /** Pure navigation identity. Never resolves SSH aliases, expands credentials or contacts a server. */
 export function projectOriginIdentity(raw: string): string | null {

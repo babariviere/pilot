@@ -62,7 +62,7 @@ export function createExplorationTools(
 			label: "Source call paths",
 			annotations,
 			description:
-				"Explore bounded source-inferred callers/callees in TS/TSX/JS/JSX. Select exact declaration coordinates from code_symbols or returned frames (include contentHash/frameId to fence navigation). Returns callsite/frame spans and resolution provenance. Lexical direct calls and relative ESM only; no name-match linking, runtime stacks, type/dispatch or impact proof. Unknown/ambiguous calls, scan/depth/page limits are explicit. No callers found does not prove no impact. Fresh local read-only scan or host-pinned source, no code/config execution.",
+				"Explore limited source-inferred callers/callees in TS/TSX/JS/JSX. Select exact declaration coordinates from code_symbols or returned frames (include contentHash/frameId to fence navigation). Returns callsite/frame spans and resolution provenance. Lexical direct calls and relative ESM only; no name-match linking, runtime stacks, type/dispatch or impact proof. Unknown/ambiguous calls, scan/depth/page limits are explicit. No callers found does not prove no impact. Fresh local read-only scan or host-pinned source, no code/config execution.",
 			parameters: Type.Object({
 				...common,
 				symbol: CallSymbol,
@@ -83,7 +83,7 @@ export function createExplorationTools(
 			label: "Code search",
 			annotations,
 			description:
-				"Rank case-sensitive literal matches (first match per line) with TS/TSX/JS/JSX declaration context. Other UTF-8 text is lexical-only. Fresh source spans, hashes, coverage and bounded pages; not semantic search. Read-only, no project code/config execution. Ordinary read/grep remain available.",
+				"Rank case-sensitive literal matches (first match per line) with TS/TSX/JS/JSX declaration context. Other UTF-8 text is lexical-only. Fresh source spans, hashes, coverage and limited pages; not semantic search. Read-only, no project code/config execution. Ordinary read/grep remain available.",
 			parameters: Type.Object({
 				...common,
 				query: Type.String({

@@ -442,6 +442,7 @@ impl Panel {
         }
     }
 
+    #[cfg(feature = "native-probes")]
     pub(super) fn replace_probe_ready(&self) -> bool {
         let Some(swap) = &self.replace else {
             return true;

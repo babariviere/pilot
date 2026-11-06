@@ -30,3 +30,28 @@ test("publication rejects invalid metadata, oversized text and browser libraries
 	assert.throws(() => validateArtifact({ ...write, libraries: ["react"] }), /do not use libraries/);
 	assert.throws(() => validateArtifact({ ...write, libraries: "react" as never }), /must be an array/);
 });
+
+test("validation normalizes titles, preserves source bytes and keeps visual JSON byte limits", () => {
+	const prefix = "() => () => null // ";
+	const source = prefix + "é".repeat((256 * 1024 - prefix.length) / 2);
+	assert.equal(Buffer.byteLength(source), 256 * 1024);
+	const write = { title: "  Native  ", kind: "visual" as const, source };
+	assert.deepEqual(validateArtifact(write), { ...write, title: "Native", libraries: [] });
+	assert.throws(() => validateArtifact({ ...write, source: `${source}é` }), /256 KiB/);
+	const data = "é".repeat((1024 * 1024 - 2) / 2);
+	assert.equal(validateArtifact({ ...write, data }).data, data);
+	assert.throws(() => validateArtifact({ ...write, data: `${data}é` }), /1 MiB/);
+});
+
+test("public preparation accepts JSON data without changing its result shape", async () => {
+	const data = { label: "é", values: [0, false, null] };
+	const prepared = await prepareArtifact({
+		title: "  Serializer  ",
+		kind: "visual",
+		source:
+			'({ ui, data }) => { if (data.label !== "é") throw Error("wrong data"); return () => ui.text(data.label); }',
+		data,
+	});
+	assert.equal(prepared.visual?.check.nodes, 1);
+	assert.deepEqual(Object.keys(prepared).sort(), ["html", "libraries", "visual"]);
+});

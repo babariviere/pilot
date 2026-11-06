@@ -5,18 +5,14 @@ import type { SessionPullRequest } from "@pilot/protocol";
 import {
 	type Candidate,
 	type ChecksState,
-	githubRepository,
-	linkedPullRequest,
 	lookupPullRequests,
 	type PullRequestBatch,
 	type RateLimits,
-	type Repository,
 	run,
 	toSessionPullRequest,
 } from "./github.ts";
+import { githubRepository, linkedPullRequest, type Repository } from "./github-url.ts";
 import type { Runner } from "./workspaces.ts";
-
-export { githubRepository } from "./github.ts";
 
 export interface PullRequestSession {
 	id: string;
