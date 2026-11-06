@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.122.0](https://github.com/babariviere/pilot/compare/v1.121.0...v1.122.0) (2026-11-06)
+
+
+### Features
+
+* **desktop:** qualify global Review against a real host ([63507e4](https://github.com/babariviere/pilot/commit/63507e4314f821d9937c0c3c14ec8da60fe0be6e))
+
+
+### Bug Fixes
+
+* **desktop:** accept distribution-wide systemd drop-ins for pilotd ([af7acae](https://github.com/babariviere/pilot/commit/af7acaeae7ca7105dcb85a0c8a45ad438961f933))
+* **desktop:** keep Review honest about saved revisions and 503s ([d7dd782](https://github.com/babariviere/pilot/commit/d7dd7820bf6aea2834acc10dd2f9c9bf0539084b))
+* **desktop:** preserve durable uncertainty through app upgrades ([22ee4cc](https://github.com/babariviere/pilot/commit/22ee4cc371c7519a0006745dcbb39505ee05202b))
+
 ## [1.121.0](https://github.com/babariviere/pilot/compare/v1.120.0...v1.121.0) (2026-11-06)
 
 
