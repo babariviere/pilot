@@ -6,13 +6,63 @@ use crate::{
     delivery_store::{Draft, Store},
     interaction::{Interaction, WriteCommand, WriteState},
     local_client::{Command, LocalClient, Presentation},
+    question::{AnswerDraft, Identity, Kind, Projection, Question},
     sidebar_memory::Memory,
     sidebar_tree::{self, Row},
 };
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     path::PathBuf,
+    sync::Arc,
 };
+
+/// Captured question and navigation identity. Never a user-message destination.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PromptTarget {
+    location: Location,
+    identity: Identity,
+}
+impl PromptTarget {
+    /// Native input ownership marker, independent of the visible question prose.
+    pub fn key(&self) -> String {
+        format!(
+            "{}:{}:{}:{}",
+            self.location.session,
+            self.location.generation,
+            self.identity.entry,
+            self.identity.fingerprint
+        )
+    }
+}
+
+/// An offered answer, with no implicit selection or submission.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Choice {
+    pub label: String,
+    pub detail: Option<String>,
+    pub suggested: bool,
+}
+
+/// The current structured prompt. Only database access has an approval contract.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Prompt {
+    pub target: PromptTarget,
+    pub title: String,
+    pub context: Option<String>,
+    pub scope: Option<String>,
+    pub choices: Vec<Choice>,
+    pub multi: bool,
+    pub selected: BTreeSet<usize>,
+    pub text: String,
+    pub revision: u64,
+    pub editable: bool,
+    pub can_answer: bool,
+    pub can_decide: bool,
+    pub approval: bool,
+    pub message: bool,
+    pub allow_label: String,
+    pub status: String,
+}
 
 /// A captured editor location. Old callbacks cannot edit or send in another chat.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,6 +101,8 @@ pub struct Snapshot {
     pub messages: Vec<Message>,
     pub text: String,
     pub recovered: Vec<String>,
+    pub prompt: Option<Prompt>,
+    pub previous_reply: Option<String>,
     pub status: String,
     pub problem: Option<String>,
     pub editable: bool,
@@ -116,6 +168,8 @@ pub struct Adapter {
     query: String,
     closing: bool,
     problem: Option<&'static str>,
+    access: Vec<crate::database_access::Reply>,
+    retiring: BTreeMap<String, u64>,
 }
 
 impl Adapter {
@@ -142,6 +196,8 @@ impl Adapter {
             query: String::new(),
             closing: false,
             problem: None,
+            access: Vec::new(),
+            retiring: BTreeMap::new(),
         }
     }
 
@@ -168,6 +224,13 @@ impl Adapter {
                 self.read = *read;
             }
             Event::Write(write) => {
+                if let Some(reply) = &write.access
+                    && let Some(local) = self.access.iter_mut().find(|local| {
+                        local.request == reply.request && local.decision == reply.decision
+                    })
+                {
+                    *local = reply.clone();
+                }
                 if let Some(book) = &write.book {
                     for (key, saved) in &book.drafts {
                         match self.drafts.get_mut(key) {
@@ -190,6 +253,7 @@ impl Adapter {
                 self.write = *write;
             }
         }
+        self.retire_answer(false);
     }
 
     /// Select an exact canonical chat without starting its agent.
@@ -308,6 +372,235 @@ impl Adapter {
     }
 
     /// Existing courier admission and immutable operation/dedupe semantics only.
+    fn question(&self, target: &PromptTarget) -> Option<Arc<Question>> {
+        if !self.current(&target.location) {
+            return None;
+        }
+        match &self.read.question {
+            Projection::Pending(q) if q.identity == target.identity => Some(q.clone()),
+            _ => None,
+        }
+    }
+
+    /// Save exact question text separately from the ordinary composer.
+    /// An in-flight native composition may finish into its original saved reply.
+    pub fn edit_reply(&mut self, target: &PromptTarget, text: &str) -> bool {
+        self.capture_reply(target, None, text)
+    }
+
+    /// Select an offered choice. Selection alone never transmits an answer.
+    pub fn pick(&mut self, target: &PromptTarget, index: usize, checked: bool) -> bool {
+        let Some(prompt) = self
+            .snapshot()
+            .prompt
+            .filter(|p| p.target == *target && p.editable)
+        else {
+            return false;
+        };
+        let mut selected = prompt.selected;
+        if prompt.multi {
+            if checked {
+                selected.insert(index);
+            } else {
+                selected.remove(&index);
+            }
+        } else {
+            selected.clear();
+            selected.insert(index);
+        }
+        self.capture_reply(target, Some(selected), &prompt.text)
+    }
+
+    fn capture_reply(
+        &mut self,
+        target: &PromptTarget,
+        selected: Option<BTreeSet<usize>>,
+        text: &str,
+    ) -> bool {
+        if !self.current(&target.location) || self.closing || self.write.book.is_none() {
+            return false;
+        }
+        let key = Self::key(&target.location);
+        let mut draft = self.drafts.get(&key).cloned().unwrap_or_default();
+        let saved = draft
+            .answer
+            .as_ref()
+            .filter(|a| a.identity.question == target.identity);
+        if saved
+            .is_some_and(|a| a.text == text && selected.as_ref().is_none_or(|s| *s == a.selected))
+        {
+            return true;
+        }
+        if !draft.editable()
+            || self.waiting.contains_key(&key)
+            || saved.is_some_and(|a| crate::delivery_store::reply_accepted(&draft, &a.identity))
+            || !self.read.chats.iter().any(|c| {
+                c.id == target.location.session && c.writable && !c.legacy_ask && !c.archived
+            })
+            || draft
+                .answer
+                .as_ref()
+                .is_some_and(|a| a.identity.question != target.identity)
+        {
+            return false;
+        }
+        let revision = draft.revision + 1;
+        let answer = if let Some(question) = self.question(target) {
+            if question.content.kind != Kind::Message {
+                return false;
+            }
+            AnswerDraft::capture(
+                &question,
+                revision,
+                selected.unwrap_or_else(|| saved.map(|a| a.selected.clone()).unwrap_or_default()),
+                text.into(),
+            )
+        } else if let Some(saved) = saved.filter(|_| selected.is_none()) {
+            let mut answer = saved.clone();
+            answer.identity.revision = revision;
+            answer.text = text.into();
+            answer.validate().map(|_| answer)
+        } else {
+            return false;
+        };
+        let answer = match answer {
+            Ok(a) => a,
+            Err(error) => {
+                self.problem = Some(error);
+                self.unsaved.insert(key);
+                return false;
+            }
+        };
+        if draft.settled_revision.is_some_and(|r| draft.revision <= r) {
+            draft.settled_revision = Some(revision);
+        }
+        draft.revision = revision;
+        draft.answer = Some(answer);
+        self.drafts.insert(key.clone(), draft.clone());
+        if !self.courier.edit(key.clone(), draft) {
+            self.unsaved.insert(key);
+            self.problem = Some("Question reply not saved. Keep this window open and copy it.");
+            return false;
+        }
+        self.unsaved.remove(&key);
+        self.problem = None;
+        true
+    }
+
+    /// Submit only the captured question/reply revision via the existing courier.
+    pub fn answer(&mut self, target: &PromptTarget, revision: u64) -> bool {
+        let Some(prompt) = self
+            .snapshot()
+            .prompt
+            .filter(|p| p.target == *target && p.can_answer && p.revision == revision)
+        else {
+            return false;
+        };
+        let Some(question) = self.question(&prompt.target) else {
+            return false;
+        };
+        let key = Self::key(&target.location);
+        let Some(mut draft) = self.drafts.get(&key).cloned() else {
+            return false;
+        };
+        draft.input_generation = self
+            .read
+            .chats
+            .iter()
+            .find(|c| c.id == target.location.session)
+            .and_then(|c| c.input_generation);
+        self.request += 1;
+        if !self.courier.command(WriteCommand::Answer {
+            key: key.clone(),
+            draft: Box::new(draft),
+            question,
+            request: self.request,
+        }) {
+            return false;
+        }
+        self.waiting.insert(key, self.request);
+        true
+    }
+
+    /// Explicit Allow/Deny for the exact structured database request only.
+    /// The production contract is one-shot and its reply is volatile, not durable.
+    pub fn decide(&mut self, target: &PromptTarget, allow: bool) -> bool {
+        if !self
+            .snapshot()
+            .prompt
+            .is_some_and(|p| p.target == *target && p.can_decide)
+        {
+            return false;
+        }
+        let Some(question) = self.question(target) else {
+            return false;
+        };
+        let Some(access) = question.content.access.clone() else {
+            return false;
+        };
+        self.request += 1;
+        let decision = crate::database_access::Decision {
+            session: target.location.session.clone(),
+            question: question.identity.clone(),
+            access,
+            allow,
+        };
+        if !self.courier.command(WriteCommand::DatabaseAccess {
+            decision: decision.clone(),
+            request: self.request,
+        }) {
+            return false;
+        }
+        self.access.push(crate::database_access::Reply {
+            decision,
+            request: self.request,
+            outcome: crate::database_access::Outcome::Pending,
+        });
+        true
+    }
+
+    /// Keep an old unsent reply in the existing private recovery list.
+    pub fn recover_reply(&mut self, location: &Location) -> bool {
+        if !self.current(location) || self.snapshot().previous_reply.is_none() {
+            return false;
+        }
+        self.retiring.remove(&Self::key(location));
+        self.retire_answer(true)
+    }
+    fn retire_answer(&mut self, recover: bool) -> bool {
+        let Some(location) = &self.selected else {
+            return false;
+        };
+        let key = Self::key(location);
+        let Some(draft) = self.drafts.get(&key) else {
+            return false;
+        };
+        let Some(answer) = &draft.answer else {
+            return false;
+        };
+        let same = matches!(&self.read.question, Projection::Pending(q) if q.identity == answer.identity.question)
+            && self.read.generation == location.generation;
+        let accepted = crate::delivery_store::reply_accepted(draft, &answer.identity);
+        if self.closing
+            || self.waiting.contains_key(&key)
+            || self.retiring.get(&key) == Some(&draft.revision)
+            || (!recover && (same || !accepted))
+        {
+            return false;
+        }
+        if self.courier.command(WriteCommand::RetireAnswer {
+            key: key.clone(),
+            revision: draft.revision,
+            identity: answer.identity.clone(),
+            recover,
+        }) {
+            self.retiring.insert(key, draft.revision);
+            return true;
+        }
+        false
+    }
+
+    /// Existing courier admission and immutable operation/dedupe semantics only.
     pub fn send(&mut self, location: &Location) -> bool {
         self.submit(location, false)
     }
@@ -404,8 +697,7 @@ impl Adapter {
             && !self.closing;
         let fresh = current && self.read.loaded && self.read.summary_fresh && !self.read.chat_issue;
         let writable = chat.is_some_and(|c| c.writable && !c.archived && !c.legacy_ask);
-        let supported_draft = draft
-            .is_none_or(|d| d.answer.is_none() && d.attachments.is_empty() && d.created.is_none());
+        let supported_draft = draft.is_none_or(|d| d.attachments.is_empty() && d.created.is_none());
         let retained = draft
             .and_then(|d| d.pending.as_ref())
             .and_then(|id| self.write.book.as_ref().and_then(|b| b.pending.get(id)));
@@ -414,7 +706,145 @@ impl Adapter {
             && (retained.is_some_and(|i| i.state == "unknown")
                 || draft.is_some_and(|d| d.last.as_ref().is_some_and(|l| l.state == "unknown")));
         let editable = ready && writable && !waiting && supported_draft;
-        let question = matches!(self.read.question, crate::question::Projection::Pending(_));
+        let question = current && matches!(self.read.question, Projection::Pending(_));
+        let previous_reply = draft.and_then(|d| d.answer.as_ref().filter(|a| {
+            !crate::delivery_store::reply_accepted(d, &a.identity)
+                && a.has_content()
+                && (!current || !matches!(&self.read.question, Projection::Pending(q) if q.identity == a.identity.question))
+        })).map(AnswerDraft::recovery);
+        let prompt = selected.filter(|_| current).and_then(|location| {
+            let Projection::Pending(q) = &self.read.question else {
+                return None;
+            };
+            let answer = draft
+                .and_then(|d| d.answer.as_ref())
+                .filter(|a| a.identity.question == q.identity);
+            let accepted = draft.is_some_and(|d| {
+                d.last.as_ref().is_some_and(|l| {
+                    l.state == "accepted"
+                        && l.answer.as_ref().is_some_and(|a| a.question == q.identity)
+                })
+            });
+            let qfresh = self
+                .read
+                .question_fresh(Some(&location.session), location.generation);
+            let model_pending = self
+                .write
+                .book
+                .as_ref()
+                .is_some_and(|b| b.model_changes.contains_key(&location.session));
+            let access = q.content.access.as_ref();
+            let outcome = self
+                .access
+                .iter()
+                .rev()
+                .find(|r| {
+                    r.decision.session == location.session && r.decision.question == q.identity
+                })
+                .map(|r| &r.outcome);
+            let editable = ready
+                && writable
+                && !waiting
+                && !unknown
+                && qfresh
+                && previous_reply.is_none()
+                && !accepted
+                && !model_pending
+                && q.content.kind == Kind::Message;
+            let (title, scope, allow_label) = if let Some(access) = access {
+                let mode = match access.mode {
+                    crate::question::AccessMode::Read => "read",
+                    crate::question::AccessMode::Write => "write",
+                };
+                (
+                    format!("Allow {mode} access to the {} database?", access.env),
+                    Some(
+                        match access.mode {
+                            crate::question::AccessMode::Read => {
+                                "Read-only, for the rest of this chat."
+                            }
+                            crate::question::AccessMode::Write => {
+                                "Reads and writes, for the rest of this chat."
+                            }
+                        }
+                        .into(),
+                    ),
+                    format!("Allow {mode} access"),
+                )
+            } else {
+                (q.content.question.clone(), None, String::new())
+            };
+            use crate::database_access::Outcome;
+            let status = if !qfresh {
+                "Question is not current. Reply kept.".into()
+            } else if q.content.kind == Kind::AccessUnavailable {
+                "This access request is malformed or unsupported. A message never grants access."
+                    .into()
+            } else if let Some(outcome) = outcome {
+                match outcome {
+                    Outcome::Pending => "Sending decision…".into(),
+                    Outcome::Accepted => "Decision sent. Waiting for the agent.".into(),
+                    Outcome::Unknown(e) => format!("Decision unknown. {e}"),
+                    Outcome::Refused(e) => (*e).into(),
+                }
+            } else if accepted {
+                "Reply sent. Waiting for the agent.".into()
+            } else if unknown {
+                "Reply delivery unknown. Original reply kept; not resent.".into()
+            } else if waiting {
+                "Reply delivery pending".into()
+            } else if model_pending {
+                "A model change is unconfirmed. Your reply is kept.".into()
+            } else if draft.is_some_and(|d| {
+                d.last.as_ref().is_some_and(|l| {
+                    l.state == "rejected"
+                        && l.answer.as_ref().is_some_and(|a| a.question == q.identity)
+                })
+            }) {
+                "Reply not accepted. Edit it before sending again.".into()
+            } else {
+                String::new()
+            };
+            Some(Prompt {
+                target: PromptTarget {
+                    location: location.clone(),
+                    identity: q.identity.clone(),
+                },
+                title,
+                context: q.content.context.clone(),
+                scope,
+                choices: if q.content.kind == Kind::Message {
+                    q.content
+                        .options
+                        .iter()
+                        .map(|o| Choice {
+                            label: o.label.clone(),
+                            detail: o.detail.clone(),
+                            suggested: o.suggested,
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+                multi: q.content.multi,
+                selected: answer.map(|a| a.selected.clone()).unwrap_or_default(),
+                text: answer.map(|a| a.text.clone()).unwrap_or_default(),
+                revision: answer.map_or(0, |a| a.identity.revision),
+                can_answer: editable && answer.is_some_and(|a| matches!(a.reply(q), Ok(Some(_)))),
+                editable,
+                approval: q.content.kind == Kind::Access,
+                message: q.content.kind == Kind::Message,
+                can_decide: ready
+                    && writable
+                    && qfresh
+                    && !waiting
+                    && !unknown
+                    && q.content.kind == Kind::Access
+                    && !matches!(outcome, Some(Outcome::Pending | Outcome::Accepted)),
+                allow_label,
+                status,
+            })
+        });
         let mut problem = self.problem.or(self.write.error).map(str::to_owned);
         if problem.is_none() && unknown {
             problem = Some("Delivery unknown. Original operation kept; no new send.".into());
@@ -422,8 +852,11 @@ impl Adapter {
         if problem.is_none() && !supported_draft {
             problem = Some("This saved draft needs the current app.".into());
         }
-        if problem.is_none() && question {
-            problem = Some("Question pending. Answer in the current app.".into());
+        if problem.is_none()
+            && current
+            && let Projection::Invalid(error) = &self.read.question
+        {
+            problem = Some((*error).into());
         }
         if problem.is_none() && self.read.chat_issue {
             problem = Some(self.read.chat_status.clone());
@@ -458,6 +891,8 @@ impl Adapter {
             recovered: draft
                 .map(|d| d.recovered.as_ref().clone())
                 .unwrap_or_default(),
+            prompt,
+            previous_reply,
             status: if self.closing {
                 "Saving drafts…".into()
             } else if submitting {
@@ -468,6 +903,8 @@ impl Adapter {
                 "Delivery unknown".into()
             } else if chat.is_some_and(|c| c.legacy_ask) {
                 "Read-only Ask".into()
+            } else if question {
+                String::new()
             } else if !fresh {
                 self.read.status.clone()
             } else {
@@ -480,6 +917,7 @@ impl Adapter {
                 && fresh
                 && !unknown
                 && !question
+                && draft.is_none_or(|d| d.answer.is_none())
                 && draft.is_some_and(|d| !d.text.trim().is_empty()),
             can_stop: ready
                 && fresh

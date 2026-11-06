@@ -79,13 +79,120 @@ fn screenshot(window: &NSWindow, path: &Path) {
     std::fs::write(path, data.to_vec()).expect("native capture");
 }
 const EXACT: &str = "  日本語 👩🏽‍💻 cafe\u{301}\nsecond line  ";
-pub(super) fn start(path: PathBuf, restart: bool) {
+fn reply_editor(window: &NSWindow) -> Retained<NSTextView> {
+    descendants(&window.contentView().expect("content view"))
+        .into_iter()
+        .filter_map(|view| view.downcast::<NSTextView>().ok())
+        .find(|view| input_label(view).is_some_and(|l| l.starts_with("Reply in ")))
+        .expect("native question input")
+}
+fn insert(input: &NSTextView, text: &str) {
+    // SAFETY: the fixture calls this on AppKit's main thread with a live input.
+    unsafe {
+        input.insertText_replacementRange(&NSString::from_str(text), NSRange::new(usize::MAX, 0));
+    }
+}
+pub(super) fn start(path: PathBuf, restart: bool, prompts: bool) {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).expect("capture directory");
     }
     std::thread::spawn(move || {
         let result = std::panic::catch_unwind(|| {
             let settle = || std::thread::sleep(Duration::from_millis(350));
+            if prompts {
+                wait_for("Open chat a");
+                on_main(|w| press(w, "Open chat a"));
+                wait_for("Send answer");
+                settle();
+                on_main(|w| {
+                    let ordinary = editor(w).expect("ordinary input");
+                    w.makeFirstResponder(Some(&ordinary));
+                    insert(&ordinary, "ordinary draft\n保持");
+                    let reply = reply_editor(w);
+                    assert!(w.makeFirstResponder(Some(&reply)));
+                    insert(&reply, EXACT);
+                });
+                settle();
+                on_main(|w| {
+                    let reply = reply_editor(w);
+                    // SAFETY: simulate the native marked-text protocol on a whole
+                    // Japanese selection, not hardware/input-method qualification.
+                    unsafe {
+                        reply.setMarkedText_selectedRange_replacementRange(
+                            &NSString::from_str("日本語"),
+                            NSRange::new(3, 0),
+                            NSRange::new(2, 3),
+                        );
+                    }
+                    assert!(NSTextInputClient::hasMarkedText(&*reply));
+                    w.performClose(None);
+                    assert!(
+                        NSTextInputClient::hasMarkedText(&*reply),
+                        "Close cannot release marked input"
+                    );
+                    insert(&reply, "日本語");
+                    assert!(!NSTextInputClient::hasMarkedText(&*reply));
+                    assert_eq!(reply.string().to_string(), EXACT);
+                });
+                settle();
+                on_main(|w| press(w, "Typecheck"));
+                settle();
+                on_main(|w| press(w, "Tests"));
+                settle();
+                let question_capture = path.clone();
+                on_main(move |w| screenshot(w, &question_capture));
+                on_main(|w| press(w, "Open chat b"));
+                wait_for("Allow database access");
+                settle();
+                let permission = path.with_file_name(format!(
+                    "{}-write.png",
+                    path.file_stem().expect("stem").to_string_lossy()
+                ));
+                on_main(move |w| {
+                    screenshot(w, &permission);
+                    press(w, "Deny database access");
+                });
+                settle();
+                on_main(|w| press(w, "Open chat coordinator"));
+                wait_for("Allow database access");
+                settle();
+                let permission = path.with_file_name(format!(
+                    "{}-read.png",
+                    path.file_stem().expect("stem").to_string_lossy()
+                ));
+                on_main(move |w| {
+                    screenshot(w, &permission);
+                    press(w, "Allow database access");
+                });
+                settle();
+                on_main(|w| press(w, "Open chat a"));
+                wait_for("Send answer");
+                settle();
+                on_main(|w| {
+                    assert_eq!(reply_editor(w).string().to_string(), EXACT);
+                    assert_eq!(
+                        editor(w).expect("ordinary input").string().to_string(),
+                        "ordinary draft\n保持"
+                    );
+                    let reply = reply_editor(w);
+                    assert!(w.makeFirstResponder(Some(&reply)));
+                    let range = NSRange::new(2, "日本語".encode_utf16().count());
+                    reply.setSelectedRange(range);
+                    assert_eq!(NSTextInputClient::selectedRange(&*reply), range);
+                    press(w, "Send answer");
+                });
+                settle();
+                on_main(|w| press(w, "Stop reply"));
+                settle();
+                on_main(|w| {
+                    assert_eq!(
+                        editor(w).expect("kept ordinary draft").string().to_string(),
+                        "ordinary draft\n保持"
+                    );
+                    w.performClose(None);
+                });
+                return;
+            }
             if restart {
                 wait_for("Open chat b");
                 on_main(|w| press(w, "Open chat b"));

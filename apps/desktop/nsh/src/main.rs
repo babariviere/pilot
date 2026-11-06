@@ -54,6 +54,14 @@ fn main() -> std::process::ExitCode {
         }
     };
     let capture = value("--capture").map(PathBuf::from);
+    let prompt_probe = args.iter().any(|a| a == "--check-prompts");
+    #[cfg(feature = "native-probes")]
+    if prompt_probe && let Some(fixture) = &fixture {
+        fixture.question("a",40,serde_json::json!({"question":"Which checks should run? 日本語", "context":"Choose explicitly. Your ordinary draft stays separate.","blocking":true,"multiSelect":true,"options":[{"label":"Typecheck","detail":"Check shared types","suggested":true},{"label":"Tests","detail":"Run focused checks"}]}));
+        for (id, mode) in [("b", "write"), ("coordinator", "read")] {
+            fixture.question(id,40,serde_json::json!({"question":"Agent prose does not define the grant", "context":"Needed for the requested query.","databaseAccess":{"id":"grant-1","env":"Development 日本語","mode":mode}}));
+        }
+    }
     if capture.is_some() && !fixture_mode {
         eprintln!("Automated captures require --fixture. No live actions are allowed.");
         return std::process::ExitCode::FAILURE;
@@ -84,14 +92,43 @@ fn main() -> std::process::ExitCode {
         cache: nsh_engine::CacheOptions::off(),
         ..Default::default()
     };
-    native::run(
+    let result = native::run(
         native_options,
         config,
         close,
         replies,
         capture,
         args.iter().any(|a| a == "--check-saved-draft"),
-    )
+        prompt_probe,
+    );
+    #[cfg(feature = "native-probes")]
+    if prompt_probe && let Some(fixture) = &fixture {
+        let state = fixture.state.lock().expect("fixture state");
+        assert_eq!(
+            state.decisions,
+            [
+                (
+                    "b".into(),
+                    serde_json::json!({"id":"grant-1","allow":false})
+                ),
+                (
+                    "coordinator".into(),
+                    serde_json::json!({"id":"grant-1","allow":true})
+                )
+            ]
+        );
+        assert_eq!(state.envelopes.len(), 1);
+        let payload: serde_json::Value =
+            serde_json::from_str(state.envelopes[0]["payload"].as_str().expect("payload"))
+                .expect("payload JSON");
+        assert_eq!(payload["questionReplyId"], 40);
+        assert_eq!(
+            payload["message"],
+            "- Typecheck\n- Tests\n\n日本語 👩🏽‍💻 cafe\u{301}\nsecond line"
+        );
+        assert_eq!(state.stops, ["a"]);
+    }
+    result
 }
 
 #[cfg(not(target_os = "macos"))]

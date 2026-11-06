@@ -8,7 +8,7 @@ mod theme;
 
 use icons::icon;
 use nsh_base::{
-    MarkdownOptions, button, input, text_view,
+    MarkdownOptions, button, checkbox, input, radio, radio_group, text_view,
     text_view::{Block, Document, Inline},
 };
 use nsh_core::{
@@ -20,7 +20,7 @@ use nsh_core::{
 };
 use pilot_desktop::{
     LocalOptions,
-    nsh_adapter::{Adapter, Location, SidebarRow, Snapshot},
+    nsh_adapter::{Adapter, Location, PromptTarget, SidebarRow, Snapshot},
 };
 use std::{path::PathBuf, sync::Arc};
 use theme::*;
@@ -31,6 +31,7 @@ pub struct CloseInput {
     pub session: Option<String>,
     pub text: Option<String>,
     pub composing: bool,
+    pub reply: Option<(String, String)>,
 }
 
 /// Existing connection and state location. No daemon is started by this app.
@@ -66,6 +67,10 @@ struct Ui {
 }
 impl Ui {
     fn publish(self) {
+        // Keep the native input mounted while marked text belongs to it.
+        if self.composing.get_untracked() {
+            return;
+        }
         self.snapshot.set(self.adapter.with(|a| a.snapshot()));
     }
     fn open(self, id: &str) {
@@ -98,6 +103,12 @@ impl Ui {
             }
         });
         self.publish();
+    }
+    fn compose(self, event: &Composition) {
+        self.composing.set(event.composing);
+        if !event.composing {
+            self.publish();
+        }
     }
 }
 
@@ -214,6 +225,309 @@ fn sidebar(ui: Ui) -> impl IntoElement {
         )))
         .child(label("NSH · Chat slice", 10.).p(px(10.)).text_color(META))
         .child(inactive("Settings", "settings"))
+}
+
+fn prompt_panel(ui: Ui, target: PromptTarget) -> impl IntoElement {
+    let current = computed(move || ui.snapshot.with(|s| s.prompt.clone()));
+    let editor = element_ref();
+    let own = target.clone();
+    let send = target.clone();
+    let allow = target.clone();
+    let deny = target.clone();
+    let approval = current.with_untracked(|p| p.as_ref().is_some_and(|p| p.approval));
+    let message = current.with_untracked(|p| p.as_ref().is_some_and(|p| p.message));
+    let choices =
+        current.with_untracked(|p| p.as_ref().map(|p| p.choices.clone()).unwrap_or_default());
+    let multi = current.with_untracked(|p| p.as_ref().is_some_and(|p| p.multi));
+    let choices = choices
+        .into_iter()
+        .enumerate()
+        .map(|(ix, choice)| {
+            let target = target.clone();
+            let content = view()
+                .min_w(px(0.))
+                .gap(px(3.))
+                .child(label(choice.label.clone(), 13.))
+                .child(when(choice.detail.is_some(), move || {
+                    label(choice.detail.clone().unwrap_or_default(), 11.).text_color(META)
+                }))
+                .child(when(choice.suggested, || {
+                    label("Suggested", 10.).text_color(META)
+                }));
+            let checked =
+                move || current.with(|p| p.as_ref().is_some_and(|p| p.selected.contains(&ix)));
+            let disabled = move || {
+                ui.composing.get() || current.with(|p| p.as_ref().is_none_or(|p| !p.editable))
+            };
+            let change = move |value: &bool| {
+                if !ui.composing.get_untracked() {
+                    ui.adapter.with(|a| {
+                        a.pick(&target, ix, *value);
+                    });
+                    ui.publish();
+                }
+            };
+            let indicator = view()
+                .size(px(14.))
+                .border_1()
+                .border_color(META)
+                .rounded(px(if multi { 3. } else { 7. }))
+                .bg(move || if checked() { ACCENT } else { CARD })
+                .items_center()
+                .justify_center()
+                .child(when(checked, move || {
+                    if multi {
+                        label("✓", 11.)
+                            .text_color(AdaptiveColor::rgb(0xffffff, 0x1c1f24))
+                            .into_element()
+                    } else {
+                        view()
+                            .size(px(6.))
+                            .rounded(px(3.))
+                            .bg(AdaptiveColor::rgb(0xffffff, 0x1c1f24))
+                            .into_element()
+                    }
+                }));
+            if multi {
+                checkbox()
+                    .accessibility_label(choice.label)
+                    .checked(checked)
+                    .disabled(disabled)
+                    .on_change(change)
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.))
+                    .py(px(5.))
+                    .indicator(indicator)
+                    .child(content)
+                    .into_element()
+            } else {
+                radio()
+                    .accessibility_label(choice.label)
+                    .checked(checked)
+                    .disabled(disabled)
+                    .on_change(change)
+                    .flex_row()
+                    .items_center()
+                    .gap(px(8.))
+                    .py(px(5.))
+                    .child(indicator)
+                    .child(content)
+                    .into_element()
+            }
+        })
+        .collect::<Vec<_>>();
+    view()
+        .bg(TRAY)
+        .px(px(16.))
+        .py(px(10.))
+        .items_center()
+        .child(
+            view()
+                .w_full()
+                .max_w(px(928.))
+                .gap(px(8.))
+                .child(
+                    scroll().max_h(px(240.)).child(
+                        view()
+                            .gap(px(6.))
+                            .selectable(true)
+                            .child(
+                                label(
+                                    move || {
+                                        current.with(|p| {
+                                            p.as_ref().map(|p| p.title.clone()).unwrap_or_default()
+                                        })
+                                    },
+                                    15.,
+                                )
+                                .font_weight(FontWeight::SEMIBOLD),
+                            )
+                            .child(when(
+                                move || {
+                                    current.with(|p| p.as_ref().is_some_and(|p| p.scope.is_some()))
+                                },
+                                move || {
+                                    label(
+                                        move || {
+                                            current.with(|p| {
+                                                p.as_ref()
+                                                    .and_then(|p| p.scope.clone())
+                                                    .unwrap_or_default()
+                                            })
+                                        },
+                                        13.,
+                                    )
+                                },
+                            ))
+                            .child(when(
+                                move || {
+                                    current
+                                        .with(|p| p.as_ref().is_some_and(|p| p.context.is_some()))
+                                },
+                                move || {
+                                    label(
+                                        move || {
+                                            current.with(|p| {
+                                                p.as_ref()
+                                                    .and_then(|p| p.context.clone())
+                                                    .unwrap_or_default()
+                                            })
+                                        },
+                                        12.,
+                                    )
+                                    .text_color(META)
+                                },
+                            ))
+                            .child(radio_group().children(choices)),
+                    ),
+                )
+                .child(when(message, move || {
+                    let target = own.clone();
+                    let send = send.clone();
+                    input()
+                        .test_id("question-reply")
+                        .label(format!("Reply in {}", target.key()))
+                        .element_ref(&editor)
+                        .multiline(true)
+                        .submit_behavior(SubmitBehavior::Submit)
+                        .value(move || {
+                            current.with(|p| p.as_ref().map(|p| p.text.clone()).unwrap_or_default())
+                        })
+                        .disabled(move || current.with(|p| p.as_ref().is_none_or(|p| !p.editable)))
+                        .placeholder("Add your own words…")
+                        .on_change(move |value: &str| {
+                            ui.adapter.with(|a| {
+                                a.edit_reply(&target, value);
+                            });
+                            ui.publish();
+                        })
+                        .on_composition_change(move |event: &Composition| ui.compose(event))
+                        .on_submit(move |value: &str| {
+                            if ui.composing.get_untracked() {
+                                return;
+                            }
+                            ui.adapter.with(|a| {
+                                if a.edit_reply(&send, value) {
+                                    let revision = a.snapshot().prompt.map_or(0, |p| p.revision);
+                                    a.answer(&send, revision);
+                                }
+                            });
+                            ui.publish();
+                        })
+                        .min_h(px(34.))
+                        .max_h(px(100.))
+                        .px(px(10.))
+                        .py(px(7.))
+                        .rounded(px(6.))
+                        .bg(CARD)
+                        .text_color(INK)
+                        .text_size(px(13.))
+                }))
+                .child(when(
+                    move || current.with(|p| p.as_ref().is_some_and(|p| !p.status.is_empty())),
+                    move || {
+                        label(
+                            move || {
+                                current.with(|p| {
+                                    p.as_ref().map(|p| p.status.clone()).unwrap_or_default()
+                                })
+                            },
+                            12.,
+                        )
+                        .text_color(META)
+                    },
+                ))
+                .child(
+                    view()
+                        .flex_row()
+                        .gap(px(8.))
+                        .justify_end()
+                        .child(when(approval, move || {
+                            let deny = deny.clone();
+                            button()
+                                .accessibility_label("Deny database access")
+                                .disabled(move || {
+                                    ui.composing.get()
+                                        || current
+                                            .with(|p| p.as_ref().is_none_or(|p| !p.can_decide))
+                                })
+                                .on_press(move || {
+                                    if !ui.composing.get_untracked() {
+                                        ui.adapter.with(|a| {
+                                            a.decide(&deny, false);
+                                        });
+                                        ui.publish();
+                                    }
+                                })
+                                .px(px(12.))
+                                .h(px(30.))
+                                .items_center()
+                                .justify_center()
+                                .bg(CARD)
+                                .rounded(px(6.))
+                                .child(label("Deny", 13.))
+                        }))
+                        .child(
+                            button()
+                                .accessibility_label(if approval {
+                                    "Allow database access"
+                                } else {
+                                    "Send answer"
+                                })
+                                .disabled(move || {
+                                    ui.composing.get()
+                                        || current.with(|p| {
+                                            p.as_ref().is_none_or(|p| {
+                                                if approval {
+                                                    !p.can_decide
+                                                } else {
+                                                    !p.can_answer
+                                                }
+                                            })
+                                        })
+                                })
+                                .on_press(move || {
+                                    if ui.composing.get_untracked() {
+                                        return;
+                                    }
+                                    ui.adapter.with(|a| {
+                                        if approval {
+                                            a.decide(&allow, true);
+                                        } else {
+                                            let revision =
+                                                a.snapshot().prompt.map_or(0, |p| p.revision);
+                                            a.answer(&allow, revision);
+                                        }
+                                    });
+                                    ui.publish();
+                                })
+                                .px(px(12.))
+                                .h(px(30.))
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(6.))
+                                .bg(ACCENT)
+                                .child(
+                                    label(
+                                        move || {
+                                            if approval {
+                                                current.with(|p| {
+                                                    p.as_ref()
+                                                        .map(|p| p.allow_label.clone())
+                                                        .unwrap_or_default()
+                                                })
+                                            } else {
+                                                "Send answer".into()
+                                            }
+                                        },
+                                        13.,
+                                    )
+                                    .text_color(AdaptiveColor::rgb(0xffffff, 0x1c1f24)),
+                                ),
+                        ),
+                ),
+        )
 }
 
 fn conversation(ui: Ui, location: Location) -> impl IntoElement {
@@ -374,6 +688,48 @@ fn conversation(ui: Ui, location: Location) -> impl IntoElement {
             },
         ))
         .child(each(
+            move || {
+                ui.snapshot
+                    .with(|s| s.previous_reply.clone().into_iter().collect::<Vec<_>>())
+            },
+            |text| text.clone(),
+            {
+                let location = location.clone();
+                move |text, _| {
+                    let location = location.clone();
+                    view()
+                        .px(px(24.))
+                        .py(px(8.))
+                        .gap(px(6.))
+                        .child(
+                            label("A reply to an earlier question is kept separately.", 12.)
+                                .text_color(META),
+                        )
+                        .child(
+                            text_view()
+                                .document(Some(plain(text.get())))
+                                .selectable(true)
+                                .text_size(px(13.))
+                                .text_color(INK),
+                        )
+                        .child(
+                            button()
+                                .accessibility_label("Keep reply in recovery")
+                                .disabled(move || ui.snapshot.with(|s| s.submitting || !s.editable))
+                                .on_press(move || {
+                                    if !ui.composing.get_untracked() {
+                                        ui.adapter.with(|a| {
+                                            a.recover_reply(&location);
+                                        });
+                                        ui.publish();
+                                    }
+                                })
+                                .child(label("Keep reply in recovery", 12.)),
+                        )
+                }
+            },
+        ))
+        .child(each(
             move || ui.snapshot.with(|s| s.recovered.clone()),
             |text| text.clone(),
             move |text, _| {
@@ -390,6 +746,14 @@ fn conversation(ui: Ui, location: Location) -> impl IntoElement {
                             .text_color(INK),
                     )
             },
+        ))
+        .child(each(
+            move || {
+                ui.snapshot
+                    .with(|s| s.prompt.clone().into_iter().collect::<Vec<_>>())
+            },
+            |prompt| prompt.target.key(),
+            move |prompt, _| prompt_panel(ui, prompt.get().target),
         ))
         .child(
             view().bg(TRAY).px(px(16.)).py(px(6.)).items_center().child(
@@ -408,9 +772,7 @@ fn conversation(ui: Ui, location: Location) -> impl IntoElement {
                             .disabled(move || !ui.snapshot.with(|s| s.editable))
                             .placeholder("Message…")
                             .on_change(move |value: &str| ui.edit(&edit_location, value))
-                            .on_composition_change(move |event: &Composition| {
-                                ui.composing.set(event.composing)
-                            })
+                            .on_composition_change(move |event: &Composition| ui.compose(event))
                             .on_submit(move |value: &str| {
                                 ui.submit(&send_location, Some(value), false)
                             })
@@ -605,6 +967,11 @@ fn workbench(config: Config) -> impl IntoElement {
                             if let Some(location) = current {
                                 if request.session.as_deref() != Some(location.session.as_str()) {return;}
                                 if let Some(text) = request.text && !a.edit(&location,&text) {return;}
+                                if let Some((key, text)) = request.reply {
+                                    let prompt = ui.snapshot.with_untracked(|s| s.prompt.clone());
+                                    let Some(prompt) = prompt.filter(|p| p.target.key() == key) else {return;};
+                                    if !a.edit_reply(&prompt.target, &text) {return;}
+                                }
                             }
                             a.close();
                         });

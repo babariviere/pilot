@@ -5,11 +5,14 @@ are unchanged. This is not a complete replacement or a release package.
 
 ## Source and reuse
 
-NSH **0.4.0**, upstream HEAD observed **2026-11-06**:
+NSH **0.4.0**, pinned by the initial slice on **2026-11-06**:
 `0e4a20bd41ee72a35515cecbf9a7fba88742d911`.
 All NSH dependencies, including testing and transitive platform/core crates,
 share this exact revision in `../Cargo.lock`. No NSH patches, forks, Cargo-cache
 edits, QuickJS, TSX or WebViews are used.
+The question port keeps this exact lock. A later same-day upstream HEAD was
+observed at `7571948ee4ad05fbc0b08d774e6afc63e039773d`; upgrading and requalifying
+that revision is separate work, not a claim that this lock is still upstream HEAD.
 
 The layout and tokens start from `experiments/nsh-pilot` at `39a4913c`, not the
 older patched `nsh-chat` study. NSH owns native input, undo, text selection,
@@ -17,6 +20,11 @@ Markdown, scrolling and rendering. Pilot owns canonical locations and actions.
 The slice uses upstream Rust `Input` (native multiline composer/search),
 `Button`, `TextView` (Markdown/plain documents), `Scroll`, `VirtualList`, keyed
 regions, and the Rust application-menu API with native editing/window roles.
+Pending questions use upstream `Input`, `Checkbox`, `Radio`/`RadioGroup` and
+`Button`. NSH owns selection, keyboard activation and radio arrow-key movement;
+Pilot supplies the existing labels, colors and captured reply identity. No
+choice is selected or submitted by default. Database decisions have no default
+focus or Enter-to-approve shortcut.
 There is no custom text editor, button engine, scroll engine or text renderer.
 The AppKit embedding host is needed because upstream `run_app` closes immediately
 and exposes no cancellable draft-save close hook at this revision. It owns only
@@ -58,10 +66,36 @@ Each callback captures its canonical chat and navigation generation. The existin
 courier saves immutable operations before effects, reconciles eligible sends with
 the same durable envelope, and keeps Unknown across restart. Historical Unknown
 is not a new send. Stop is not automatically replayed. Ordinary legacy Ask and
-restricted chats remain read-only. Pending questions and unsupported saved draft
-forms direct the user to the current app, without sending them as ordinary text.
+restricted chats remain read-only. Unsupported saved draft forms direct the user
+to the current app, without sending them as ordinary text.
 
-AppKit Close/Quit captures the native input and releases focus, then waits for
+## Pending questions and database access
+
+Only the production reader's structured pending-question projection opens the
+question panel. Agent prose never creates a question or approval. A reply has
+its own exact text, choices, entry/fingerprint and captured revision, separate
+from the ordinary draft. Send answer uses the existing `Answer` courier command
+and daemon `questionReplyId` contract, not ordinary composer Send. A changed
+question keeps old text separately; Keep reply in recovery uses the existing
+Store action. Accepted replies retire only through the existing exact-ACK path.
+Pending/Unknown answers remain in the production Store across navigation and
+restart. Neither a stale callback nor a new question retargets the saved reply.
+
+The only supported approval is a well-formed structured database-access request.
+Its title and scope come from the reported environment and read/write mode,
+never agent prose. Allow/Deny invokes the production `DatabaseAccess` command
+with the exact request ID. Malformed requests stay unavailable; this slice adds
+no execution, elevation, Review, repair or other approval authority.
+
+**Existing contract limit:** database decisions have only a volatile courier
+reply, unlike durable question answers. Pending/Accepted/Unknown remains tied to
+its original request during navigation in this process, and nothing is replayed
+on restart. The original decision/result cannot be restored after process exit.
+A still-open request can receive another explicit choice, as in the shipping UI.
+Cross-restart approval-result retention needs a separate storage/receipt contract;
+this facade does not invent one. Full approval restart acceptance remains open.
+
+AppKit Close/Quit captures both native editors and releases focus, then waits for
 the existing courier's final `Close`/`Flushed` publication and exact saved drafts.
 Marked text, unsaved input or save failure keeps the window open. This embedding
 host is Pilot integration, not a patched NSH lifecycle.
@@ -78,6 +112,8 @@ apps/desktop/target/dev/debug/pilot-nsh --fixture --capture /tmp/nsh-light-wide.
 apps/desktop/target/dev/debug/pilot-nsh --fixture --dark --capture /tmp/nsh-dark-wide.png
 apps/desktop/target/dev/debug/pilot-nsh --fixture --width 680 --capture /tmp/nsh-light-narrow.png
 apps/desktop/target/dev/debug/pilot-nsh --fixture --dark --width 680 --capture /tmp/nsh-dark-narrow.png
+python3 apps/desktop/nsh/scripts/native-check.py \
+  --binary apps/desktop/target/dev/debug/pilot-nsh --output /tmp/nsh-native-check
 ```
 
 The fixture binds an OS-assigned loopback port. Both the runtime and tests use
@@ -89,11 +125,19 @@ authority only, not an alternate production transport.
 then starts a second process per profile to check exact saved-draft restoration.
 It also checks that normal Send/Stop settled before closing. The adapter tests
 cover a refused second writer and failed private save without a false close ACK.
+The matrix also runs hidden native question/choice and read/write permission
+interactions, capturing each at both widths in both themes. Tests cover exact
+reply formatting/identity, stale revisions and chat switches, unsent recovery,
+lost ACK/restart without new submission, explicit Allow/Deny, refusal, malformed
+requests and restricted roles. These are real NSH views with a synthetic host,
+not mockups or evidence of live approval behavior.
+The native question probe also simulates AppKit marked text and verifies that
+Close does not release it. This is not hardware input-method qualification.
 
 ## Slice boundary
 
 Home, Inbox, Review, Missions, Automations and Settings are visibly unavailable.
-Chat creation, attachments, question/permission responses, richer tool disclosure,
+Chat creation, attachments, unsupported permission types, richer tool disclosure,
 full-history Find, persistent sidebar preferences, update/package integration and
 other workflows remain in the current app. Stored sources remain untouched;
 unsupported image/artifact content shows a placeholder, never a browser fallback.

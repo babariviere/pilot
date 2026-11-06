@@ -95,29 +95,50 @@ fn native_undo(redo: bool) {
 fn editor(window: &NSWindow) -> Option<Retained<NSTextView>> {
     descendants(&*window.contentView()?)
         .into_iter()
-        .find_map(|view| view.downcast::<NSTextView>().ok())
+        .filter_map(|view| view.downcast::<NSTextView>().ok())
+        .find(|view| input_label(view).is_some_and(|label| label.starts_with("Message in ")))
+}
+fn input_label(input: &NSTextView) -> Option<String> {
+    // SAFETY: inspect a live native input's main-thread parent chain.
+    let mut view = unsafe { input.superview() };
+    while let Some(current) = view {
+        if let Some(label) = NSAccessibility::accessibilityLabel(&*current)
+            && (label.to_string().starts_with("Message in ")
+                || label.to_string().starts_with("Reply in "))
+        {
+            return Some(label.to_string());
+        }
+        // SAFETY: walk the live input's main-thread AppKit parent chain.
+        view = unsafe { current.superview() };
+    }
+    None
 }
 fn request_close(window: &NSWindow, close: &async_channel::Sender<CloseInput>) {
     let input = editor(window);
-    let session = input.as_ref().and_then(|input| {
-        let mut view: Option<Retained<NSView>> = Some(input.clone().into_super().into_super());
-        while let Some(current) = view {
-            if let Some(label) = NSAccessibility::accessibilityLabel(&*current)
-                && let Some(id) = label.to_string().strip_prefix("Message in ")
-            {
-                return Some(id.to_owned());
-            }
-            // SAFETY: walk the live input's main-thread AppKit parent chain.
-            view = unsafe { current.superview() };
-        }
-        None
-    });
+    let inputs = window
+        .contentView()
+        .map(|view| descendants(&view))
+        .unwrap_or_default();
+    let reply = inputs
+        .iter()
+        .filter_map(|v| v.downcast_ref::<NSTextView>())
+        .find(|v| input_label(v).is_some_and(|l| l.starts_with("Reply in ")));
     let request = CloseInput {
-        session,
-        text: input.as_ref().map(|i| i.string().to_string()),
-        composing: input
+        session: input
             .as_ref()
-            .is_some_and(|i| NSTextInputClient::hasMarkedText(&**i)),
+            .and_then(|i| input_label(i))
+            .and_then(|l| l.strip_prefix("Message in ").map(str::to_owned)),
+        text: input.as_ref().map(|i| i.string().to_string()),
+        reply: reply.and_then(|i| {
+            input_label(i).and_then(|l| {
+                l.strip_prefix("Reply in ")
+                    .map(|key| (key.to_owned(), i.string().to_string()))
+            })
+        }),
+        composing: inputs
+            .iter()
+            .filter_map(|v| v.downcast_ref::<NSTextView>())
+            .any(NSTextInputClient::hasMarkedText),
     };
     if request.composing {
         return;
@@ -141,6 +162,7 @@ pub(super) fn run(
     closed: async_channel::Receiver<()>,
     capture: Option<PathBuf>,
     restart_probe: bool,
+    prompt_probe: bool,
 ) -> std::process::ExitCode {
     let mtm = MainThreadMarker::new().expect("native main thread");
     let app = NSApplication::sharedApplication(mtm);
@@ -198,10 +220,10 @@ pub(super) fn run(
     });
     #[cfg(feature = "native-probes")]
     if let Some(path) = capture {
-        probe::start(path, restart_probe);
+        probe::start(path, restart_probe, prompt_probe);
     }
     #[cfg(not(feature = "native-probes"))]
-    let _ = (capture, restart_probe);
+    let _ = (capture, restart_probe, prompt_probe);
     app.run();
     view.stop();
     window.orderOut(None);

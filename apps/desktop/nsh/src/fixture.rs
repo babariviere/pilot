@@ -25,6 +25,10 @@ pub struct State {
     pub messages: BTreeMap<String, Vec<Value>>,
     pub working: Option<String>,
     pub stops: Vec<String>,
+    pub questions: BTreeMap<String, Value>,
+    pub decisions: Vec<(String, Value)>,
+    pub lose_decision_ack: bool,
+    pub refuse_decision: bool,
 }
 
 /// A process-local synthetic daemon on an OS-assigned loopback port.
@@ -99,6 +103,13 @@ impl Fixture {
     pub fn changed(&self) {
         let _ = self.changes.send(());
     }
+    pub fn question(&self, session: &str, id: u64, data: Value) {
+        self.state.lock().expect("fixture state").questions.insert(
+            session.into(),
+            json!({"id":id,"kind":"pilot.question","model":[],"data":data}),
+        );
+        self.changed();
+    }
 }
 impl Default for Fixture {
     fn default() -> Self {
@@ -121,7 +132,7 @@ fn entry(id: u64, role: &str, text: &str) -> Value {
 }
 fn summary(id: &str, state: &State) -> Value {
     json!({"id":id,"title":match id {"a"=>"Native chat and streaming","b"=>"Keep exact drafts","ask"=>"Legacy Ask","restricted"=>"Restricted chat",_=>"Coordinator"},
-        "state":if state.working.as_deref()==Some(id){"working"}else{"idle"},"mode":if id=="ask" {"ask"}else{"build"},
+        "state":if state.working.as_deref()==Some(id) || state.questions.get(id).is_some_and(|q|q["data"]["blocking"]==true){"working"}else{"idle"},"mode":if id=="ask" {"ask"}else{"build"},
         "control":id=="restricted","missionCoordinator":id=="coordinator", "missionId":if id=="coordinator"{Some("mission")}else{None},
         "projectId":if id=="b"{"project-b"}else{"project-a"},"cwd":"/synthetic/project","createdAt":100,"lastUserMessageAt":if id=="a"{500}else{200},"inputGeneration":0})
 }
@@ -198,6 +209,10 @@ async fn connection_task(
                     let working = state.working.as_deref() == Some(id);
                     let live = working.then(|| saved.pop()).flatten();
                     entries.extend(saved);
+                    let question = state.questions.get(id).cloned().unwrap_or(Value::Null);
+                    if !question.is_null() {
+                        entries.push(question.clone());
+                    }
                     let events = if let Some(live) = live {
                         let text = live["model"][0]["content"][0]["text"]
                             .as_str()
@@ -223,7 +238,7 @@ async fn connection_task(
                         ]
                     } else {
                         vec![
-                            json!({"type":"snapshot","entries":entries,"history":{"context":{"conversationId":0,"tail":100},"more":false,"question":null}}),
+                            json!({"type":"snapshot","entries":entries,"run":if question["data"]["blocking"]==true {json!({"startedAt":1})}else{Value::Null},"history":{"context":{"conversationId":0,"tail":100},"more":false,"question":question}}),
                         ]
                     };
                     json!({"type":"events","sessionId":id,"seq":seq,"events":events})
@@ -291,12 +306,13 @@ async fn connection_task(
     let payload: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     let mut lost = false;
     let mut notify = false;
+    let mut status = 200;
     let response = {
         let mut state = state.lock().expect("fixture state");
         state.requests.push((method.clone(), path.clone()));
         match (method.as_str(), path.as_str()) {
             ("GET", "/api/hello") => {
-                json!({"daemonId":if state.bad_identity{"other-daemon"}else{"test-daemon"},"lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true,"durableInputGeneration":1}})
+                json!({"daemonId":if state.bad_identity{"other-daemon"}else{"test-daemon"},"lineageId":"test-lineage","protocolVersion":1,"minimumClientProtocolVersion":1,"capabilities":{"independentExecution":true,"durableInputGeneration":1,"questionReplies":1}})
             }
             ("GET", "/api/projects") => projects(),
             ("GET", "/api/sessions?archived=all") => summaries(&state),
@@ -315,6 +331,7 @@ async fn connection_task(
                 }
             }
             ("POST", "/api/operations") => {
+                lost = state.lose_ack;
                 state.envelopes.push(payload.clone());
                 let id = payload["operationId"]
                     .as_str()
@@ -325,24 +342,62 @@ async fn connection_task(
                     let request: Value =
                         serde_json::from_str(payload["payload"].as_str().expect("payload"))
                             .expect("payload JSON");
-                    let entries = state.messages.entry(target.into()).or_default();
-                    let next = 3 + entries.len() as u64;
-                    entries.push(entry(
-                        next,
-                        "user",
-                        request["message"].as_str().expect("message"),
-                    ));
-                    entries.push(entry(
-                        next + 1,
-                        "assistant",
-                        "A retained partial answer. 日本語 👩🏽‍💻",
-                    ));
-                    state.working = Some(target.into());
-                    state.receipts.insert(id.clone(),json!({"operationId":id,"payloadHash":payload["payloadHash"],"destination":payload["destination"],"targetId":payload["targetId"],"state":"accepted","result":{"sessionId":target}}));
-                    notify = true;
+                    if !request["questionReplyId"].is_null()
+                        && !state
+                            .questions
+                            .get(target)
+                            .is_some_and(|q| q["id"] == request["questionReplyId"])
+                    {
+                        let receipt = json!({"operationId":id,"payloadHash":payload["payloadHash"],"destination":payload["destination"],"targetId":payload["targetId"],"state":"rejected","error":"Question is no longer pending"});
+                        state.receipts.insert(id, receipt.clone());
+                        receipt
+                    } else {
+                        let next = state
+                            .questions
+                            .remove(target)
+                            .and_then(|q| q["id"].as_u64())
+                            .unwrap_or(2)
+                            + 1
+                            + state.messages.get(target).map_or(0, |m| m.len() as u64);
+                        let entries = state.messages.entry(target.into()).or_default();
+                        entries.push(entry(
+                            next,
+                            "user",
+                            request["message"].as_str().expect("message"),
+                        ));
+                        entries.push(entry(
+                            next + 1,
+                            "assistant",
+                            "A retained partial answer. 日本語 👩🏽‍💻",
+                        ));
+                        state.working = Some(target.into());
+                        state.receipts.insert(id.clone(),json!({"operationId":id,"payloadHash":payload["payloadHash"],"destination":payload["destination"],"targetId":payload["targetId"],"state":"accepted","result":{"sessionId":target}}));
+                        notify = true;
+                        state.receipts[&id].clone()
+                    }
+                } else {
+                    state.receipts[&id].clone()
                 }
-                lost = state.lose_ack;
-                state.receipts[&id].clone()
+            }
+            ("POST", path) if path.ends_with("/database-access") => {
+                let id = path
+                    .trim_start_matches("/api/sessions/")
+                    .trim_end_matches("/database-access");
+                state.decisions.push((id.into(), payload.clone()));
+                lost = state.lose_decision_ack;
+                if state.refuse_decision
+                    || !state
+                        .questions
+                        .get(id)
+                        .is_some_and(|q| q["data"]["databaseAccess"]["id"] == payload["id"])
+                {
+                    status = 409;
+                    json!({"error":"This database access request is no longer pending"})
+                } else {
+                    status = 202;
+                    // Keep it projected briefly, as a real reader can lag its ACK.
+                    json!({"ok":true})
+                }
             }
             ("POST", path) if path.ends_with("/stop") => {
                 let id = path
@@ -350,6 +405,9 @@ async fn connection_task(
                     .trim_end_matches("/stop");
                 state.stops.push(id.into());
                 state.working = None;
+                if let Some(q) = state.questions.get_mut(id) {
+                    q["data"]["blocking"] = false.into();
+                }
                 notify = true;
                 json!({"ok":true})
             }
@@ -367,7 +425,7 @@ async fn connection_task(
     }
     let body = response.to_string();
     let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {status} OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     let _ = stream.write_all(response.as_bytes()).await;

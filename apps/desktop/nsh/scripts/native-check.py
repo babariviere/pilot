@@ -33,6 +33,22 @@ def main():
                 subprocess.run(resumed, check=True, timeout=60)
                 assert restart.stat().st_size > 10000
                 print(f"PASS {appearance} {width}: native edit/selection/undo/drafts/Send/Stop/Close")
+            with tempfile.TemporaryDirectory(prefix="nsh-native-prompts-") as temporary:
+                state = Path(temporary) / "profile"
+                capture = args.output.resolve() / f"{appearance}-{width}-question.png"
+                command = [str(args.binary.resolve()), "--fixture", "--check-prompts",
+                           "--state-dir", str(state), "--width", str(width), "--capture", str(capture)]
+                if appearance == "dark":
+                    command.append("--dark")
+                subprocess.run(command, check=True, timeout=60)
+                for path in (capture, capture.with_stem(capture.stem + "-read"),
+                             capture.with_stem(capture.stem + "-write")):
+                    assert path.stat().st_size > 10000, f"missing prompt capture: {path}"
+                book = json.loads((state / "state-v1.json").read_text())
+                assert book["drafts"]["chat:a"]["text"] == "ordinary draft\n保持"
+                assert not book["pending"]
+                assert book["drafts"]["chat:a"].get("answer") is None
+                print(f"PASS {appearance} {width}: native question/choices/Allow/Deny/drafts/Stop/Close")
 
 
 if __name__ == "__main__":
