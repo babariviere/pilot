@@ -536,8 +536,11 @@ impl LocalViewer {
             Target::Missions | Target::Mission(_) => json!({"target": "missions"}),
             Target::Inbox(filter) => json!({"target": "inbox", "id": filter}),
             Target::Project(id) => json!({"target": "project", "id": id}),
-            // Review is a passive reader: a reload reopens its list, not an exact revision.
-            Target::Review(t) => json!({"target": "review", "id": t.chat}),
+            // Review is a passive reader. A reload reopens the same exact request or saved
+            // revision only if the host still lists it; nothing else is substituted.
+            Target::Review(t) => {
+                json!({"target": "review", "id": t.chat, "request": t.request, "snapshot": t.snapshot})
+            }
             Target::Chat(id) => json!({"target": "chat", "id": id}),
             Target::Draft(key) => json!({"target": "draft", "id": key}),
             Target::Empty => serde_json::Value::Null,
@@ -650,10 +653,24 @@ fn update_location(value: &serde_json::Value) -> Option<crate::navigation::Locat
         "archive" => Target::Archive,
         "automations" => Target::Automations,
         "missions" => Target::Missions,
-        "review" => Target::Review(crate::navigation::ReviewTarget {
-            chat: id(&token["id"])?,
-            ..Default::default()
-        }),
+        "review" => {
+            let chat = id(&token["id"])?;
+            let request = id(&token["request"])?;
+            let snapshot = match &token["snapshot"] {
+                Value::Null => None,
+                Value::String(s) if crate::native_review::hex(s, 64) => Some(s.clone()),
+                _ => return None,
+            };
+            // A saved revision is read through its chat and is never also a request.
+            if snapshot.is_some() && (chat.is_none() || request.is_some()) {
+                return None;
+            }
+            Target::Review(crate::navigation::ReviewTarget {
+                chat,
+                request,
+                snapshot,
+            })
+        }
         "inbox" => Target::Inbox(id(&token["id"])?),
         "project" => Target::Project(id(&token["id"])??),
         "chat" => Target::Chat(id(&token["id"])??),
@@ -1098,7 +1115,7 @@ pub(crate) fn probe_update_navigation(cx: &mut gpui_kit::HeadlessAppContext) {
 #[cfg(test)]
 mod tests {
     use super::update_location;
-    use crate::navigation::{Location, Target};
+    use crate::navigation::{Location, ReviewTarget, Target};
     use serde_json::json;
     #[test]
     fn update_navigation_tokens_are_passive_and_validated() {
@@ -1143,6 +1160,32 @@ mod tests {
                 json!({"location":{"target":"draft","id":"new:日本語"}}),
                 at(Target::Draft("new:日本語".into()), None),
             ),
+            (
+                json!({"location":{"target":"review","id":null}}),
+                at(Target::Review(Default::default()), None),
+            ),
+            (
+                json!({"location":{"target":"review","id":"chat-1","request":"req-1"}}),
+                at(
+                    Target::Review(ReviewTarget {
+                        chat: Some("chat-1".into()),
+                        request: Some("req-1".into()),
+                        snapshot: None,
+                    }),
+                    None,
+                ),
+            ),
+            (
+                json!({"location":{"target":"review","id":"chat-1","snapshot":"a".repeat(64)}}),
+                at(
+                    Target::Review(ReviewTarget {
+                        chat: Some("chat-1".into()),
+                        request: None,
+                        snapshot: Some("a".repeat(64)),
+                    }),
+                    None,
+                ),
+            ),
         ] {
             assert_eq!(update_location(&value), Some(expected), "{value}");
         }
@@ -1158,6 +1201,10 @@ mod tests {
             json!({"location":{"target":"draft","id":"chat:a"}}),
             json!({"location":{"target":"draft","id":"new:\u{7}"}}),
             json!({"location":{"target":"draft","id":format!("new:{}", "a".repeat(256))}}),
+            json!({"location":{"target":"review","request":"../req"}}),
+            json!({"location":{"target":"review","id":"chat-1","snapshot":"A".repeat(64)}}),
+            json!({"location":{"target":"review","snapshot":"a".repeat(64)}}),
+            json!({"location":{"target":"review","id":"chat-1","request":"req-1","snapshot":"a".repeat(64)}}),
         ] {
             assert_eq!(update_location(&value), None, "{value}");
         }

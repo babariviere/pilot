@@ -248,6 +248,9 @@ mod workflow_confirmation_navigation;
 #[cfg(feature = "native-probes")]
 #[path = "workflow_confirmation_probe.rs"]
 pub(crate) mod workflow_confirmation_probe;
+#[cfg(feature = "native-probes")]
+#[path = "native_review_host_probe.rs"]
+pub(crate) mod native_review_host_probe;
 use crate::{
     LocalOptions, TranscriptView,
     app_icon::AppIcon,

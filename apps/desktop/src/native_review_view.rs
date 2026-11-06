@@ -100,17 +100,20 @@ pub(crate) struct Pane {
     route: Option<Route>,
     reader: Option<Reader>,
     updates: Option<Task<()>>,
-    requests: Vec<model::ReviewRequest>,
+    /// Listed request slots in request order, including unavailable ones.
+    requests: Vec<model::Row>,
     /// A list page has been read for this scope.
     listed: bool,
-    unavailable: bool,
+    /// The request list couldn't be read. A chat's saved revisions can still be shown.
+    requests_failed: Option<&'static str>,
     next: Option<u64>,
     after: u64,
     /// A chat-narrowed Review also lists that chat's saved revisions, read under the
-    /// project it is in here.
+    /// project it is in here. Saved revisions page separately from requests.
     saved: Vec<model::Comparison>,
     saved_project: Option<String>,
-    saved_more: bool,
+    saved_after: u64,
+    saved_next: Option<u64>,
     not_captured: bool,
     capture_notice: Option<&'static str>,
     capture_limits: Vec<&'static str>,
@@ -151,7 +154,14 @@ impl Pane {
     }
     #[cfg(feature = "native-probes")]
     pub(crate) fn probe_requests(&self) -> Vec<String> {
-        self.requests.iter().map(|r| r.request_id.clone()).collect()
+        self.requests
+            .iter()
+            .map(|r| r.request_id().to_owned())
+            .collect()
+    }
+    #[cfg(feature = "native-probes")]
+    pub(crate) fn probe_statuses(&self) -> Vec<String> {
+        self.requests.iter().map(model::Row::status).collect()
     }
     #[cfg(feature = "native-probes")]
     pub(crate) fn probe_saved(&self) -> Vec<String> {
@@ -265,13 +275,14 @@ impl Pane {
             requests: vec![],
             saved: vec![],
             saved_project: None,
-            saved_more: false,
+            saved_after: 0,
+            saved_next: None,
             not_captured: false,
             capture_notice: None,
             capture_limits: vec![],
             chats: Arc::new(vec![]),
             listed: false,
-            unavailable: false,
+            requests_failed: None,
             next: None,
             after: 0,
             selected: None,
@@ -315,12 +326,13 @@ impl Pane {
             self.requests.clear();
             self.clear_saved();
             self.listed = false;
-            self.unavailable = false;
+            self.requests_failed = None;
             self.scope = scope;
             self.options = options;
             self.error = None;
             self.next = None;
             self.after = 0;
+            self.saved_after = 0;
         }
         let retarget = changed || self.target != target;
         if retarget && !changed {
@@ -358,7 +370,7 @@ impl Pane {
     fn clear_saved(&mut self) {
         self.saved.clear();
         self.saved_project = None;
-        self.saved_more = false;
+        self.saved_next = None;
         self.not_captured = false;
         self.capture_notice = None;
         self.capture_limits.clear();
@@ -366,19 +378,19 @@ impl Pane {
     /// The targeted change, as currently listed. Never guesses another.
     fn listed_target(&self) -> Option<Opened> {
         match self.target.as_ref()? {
-            Target::Request(id) => {
-                self.requests
-                    .iter()
-                    .find(|r| &r.request_id == id)
-                    .map(|r| Opened {
-                        target: Target::Request(r.request_id.clone()),
-                        session: r.session_id.clone(),
-                        project: r.project_id.clone(),
-                        title: r.title.clone(),
-                        status: r.status(),
-                        comparison: r.comparison.clone(),
-                    })
-            }
+            Target::Request(id) => self
+                .requests
+                .iter()
+                .filter_map(model::Row::request)
+                .find(|r| &r.request_id == id)
+                .map(|r| Opened {
+                    target: Target::Request(r.request_id.clone()),
+                    session: r.session_id.clone(),
+                    project: r.project_id.clone(),
+                    title: r.title.clone(),
+                    status: r.status(),
+                    comparison: r.comparison.clone(),
+                }),
             Target::Saved(id) => {
                 let chat = self.scope.as_ref()?.chat.clone()?;
                 let c = self.saved.iter().find(|c| &c.snapshot_id == id)?;
@@ -525,8 +537,16 @@ impl Pane {
             !self
                 .requests
                 .iter()
+                .filter_map(model::Row::request)
                 .any(|r| r.comparison.snapshot_id == c.snapshot_id)
         })
+    }
+    /// The targeted request is listed, but its source is unavailable at this read.
+    fn target_unavailable(&self) -> bool {
+        matches!(&self.target, Some(Target::Request(id)) if self
+            .requests
+            .iter()
+            .any(|r| r.request_id() == id && r.request().is_none()))
     }
     fn has_rows(&self) -> bool {
         !self.requests.is_empty() || self.saved_rows().next().is_some()
@@ -555,6 +575,15 @@ impl Pane {
             return None;
         }
         if self.target.is_some() {
+            if self.target_unavailable() {
+                return Some((
+                    "This request is unavailable.",
+                    Some("Its change can't be read here now. Refresh to retry."),
+                ));
+            }
+            if let (Some(e), Some(Target::Request(_))) = (self.requests_failed, &self.target) {
+                return Some(("Review requests are unavailable.", Some(e)));
+            }
             return Some((
                 "This change isn't in the loaded list.",
                 Some("It may be on another page or no longer listed. Go back to the list."),
@@ -563,11 +592,8 @@ impl Pane {
         if self.has_rows() {
             return None;
         }
-        if self.unavailable {
-            return Some((
-                "Review requests are unavailable.",
-                Some("Saved revisions aren't shown as waiting without a review request."),
-            ));
+        if let Some(e) = self.requests_failed {
+            return Some(("Review requests are unavailable.", Some(e)));
         }
         let from_chat = self.scope.as_ref().is_some_and(|s| s.chat.is_some());
         if from_chat && self.not_captured {
@@ -590,6 +616,7 @@ impl Pane {
         self.selected.as_ref().is_some_and(|p| {
             self.requests
                 .iter()
+                .filter_map(model::Row::request)
                 .map(|r| &r.comparison)
                 .chain(self.saved.iter())
                 .any(|c| p.comparison.superseded_by(c))
@@ -599,7 +626,7 @@ impl Pane {
     fn unlisted(&self) -> bool {
         self.listed
             && self.selected.as_ref().is_some_and(|p| match &p.target {
-                Target::Request(id) => !self.requests.iter().any(|r| &r.request_id == id),
+                Target::Request(id) => !self.requests.iter().any(|r| r.request_id() == id),
                 Target::Saved(id) => !self.saved.iter().any(|c| &c.snapshot_id == id),
             })
     }
@@ -678,6 +705,25 @@ impl Pane {
         self.after = after;
         self.refresh(w, cx);
     }
+    /// Another page of the chat's saved revisions. Request paging stays where it is.
+    fn saved_page(&mut self, after: u64, w: &mut Window, cx: &mut Context<Self>) {
+        if let Some(k) = self.saved_chat() {
+            self.saved_after = after;
+            self.request(Route::Comparisons(k, after), w, cx);
+        }
+    }
+    /// A chat-narrowed Review reads that chat's saved revisions under the project the chat
+    /// is in here. Without a known project, none are read.
+    fn saved_chat(&self) -> Option<wire::Chat> {
+        let id = self.scope.as_ref()?.chat.clone()?;
+        let project = self
+            .chats
+            .iter()
+            .find(|c| c.id == id && !c.local_draft)?
+            .project_id
+            .clone()?;
+        self.chat_ref(&id, &project)
+    }
     pub(crate) fn accept(&mut self, r: wire::Response, cx: &mut Context<Self>) {
         if !self.visible || r.generation != self.generation || self.route.as_ref() != Some(&r.route)
         {
@@ -685,30 +731,43 @@ impl Pane {
         }
         self.busy = false;
         match r.result {
+            Err(e) if matches!(r.route, Route::Requests(..)) => {
+                // An unreadable list never leaves an older one looking current, and no request
+                // target stays open without it. A chat's saved revisions are read next.
+                self.listed = true;
+                self.requests_failed = Some(e);
+                self.requests.clear();
+                self.next = None;
+                self.clear_saved();
+                if matches!(self.target, Some(Target::Request(_))) {
+                    self.close_change(cx);
+                } else {
+                    self.clear_comparison(cx);
+                }
+            }
             Err(e) => {
                 self.error = Some(e);
                 if !matches!(r.route, Route::Records(..)) || e != wire::RECORDS_UNAVAILABLE {
                     self.clear_comparison(cx);
                 }
-                if matches!(r.route, Route::Requests(..)) {
-                    // An unreadable list never leaves an older one looking current.
-                    self.requests.clear();
-                    self.next = None;
-                }
-                if matches!(r.route, Route::Requests(..) | Route::Comparisons(..)) {
+                if matches!(r.route, Route::Comparisons(..)) {
                     self.clear_saved();
                 }
             }
             Ok(Data::Requests(v)) => {
                 // The reader already checked the filter; nothing else is inferred.
                 self.listed = true;
-                self.unavailable = v.unavailable.is_some();
+                self.requests_failed = None;
                 self.requests = v.requests;
                 self.next = v.next;
                 self.error = None;
+                // An open request whose source is now unavailable loses its content too.
+                if self.target_unavailable() {
+                    self.close_change(cx);
+                }
             }
             Ok(Data::Comparisons(v)) => {
-                let Route::Comparisons(chat, _) = &r.route else {
+                let Route::Comparisons(chat, after) = &r.route else {
                     return;
                 };
                 self.capture_notice = v.capture.as_ref().and_then(model::CaptureStatus::notice);
@@ -718,7 +777,8 @@ impl Pane {
                     .map(model::CaptureStatus::limitations)
                     .unwrap_or_default();
                 self.saved = v.comparisons;
-                self.saved_more = v.next.is_some();
+                self.saved_after = *after;
+                self.saved_next = v.next;
                 self.saved_project = Some(chat.project.clone());
                 // On the chat route every `unavailable` reason means no current retained
                 // custody: an honest Not captured state, never an error or a mission
@@ -771,23 +831,10 @@ impl Pane {
         }
         match route {
             Some(Route::Requests(..)) => {
-                // A chat-narrowed Review also lists that chat's saved revisions, under the
-                // project the chat is in here. Without a known project, none are read.
-                let saved = self
-                    .scope
-                    .as_ref()
-                    .and_then(|s| s.chat.clone())
-                    .and_then(|id| {
-                        let project = self
-                            .chats
-                            .iter()
-                            .find(|c| c.id == id && !c.local_draft)?
-                            .project_id
-                            .clone()?;
-                        self.chat_ref(&id, &project)
-                    });
-                match saved {
-                    Some(k) => self.request(Route::Comparisons(k, 0), w, cx),
+                // A chat-narrowed Review also lists that chat's saved revisions, even when
+                // the request list couldn't be read.
+                match self.saved_chat() {
+                    Some(k) => self.request(Route::Comparisons(k, self.saved_after), w, cx),
                     None => self.open_target(w, cx),
                 }
             }

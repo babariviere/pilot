@@ -82,19 +82,31 @@ native request UI, reviewer execution, learning, attention and gate activation r
 ## Implemented read-only slice
 
 D56 replaces D48's chat-first presentation: Review is **one global, change-centered view**. #88
-implements the native read-only correction against the approved #70 request list; until #70's
-production source lands, only strict faux fixtures exercise that list, which is not delivery proof.
+implements the native read-only correction against the #70 request list. A hidden journey runs it
+against a real disposable host (see the verification boundary below).
 Necessary per-project/chat access checks remain internal to global Review.
 
 The sidebar's **Review** opens every change with a review request across this host's projects, one
 row per request: its title, exact saved revision and status. Status comes from the request's own
-state and readiness: **Ready for review**, **Waiting on checks and agent review**, **Pending ·
-readiness unknown**, or **Status unknown** for any other state. Pending never implies ready. Opening a
+state and readiness: **Ready for review**, **Waiting on checks and agent review** or **Pending ·
+readiness unknown** for a pending request, **Snoozed · still open**, **Withdrawn · history**,
+**Retired · history**, **Replaced by another request · history**, or **Status unknown** for any other
+state. Pending never implies ready, and history is never waiting or ready. The page caption counts
+open requests, history and unavailable slots separately; none of them is a count of distinct
+changes. A request whose source the host can't read at this read point arrives as exactly
+`{requestId,sequence,state,unavailable:true}` and keeps its slot as a disabled **Unavailable
+request · <state>** row. It discloses nothing else and can't be opened; if it was open, its content is
+cleared. Refresh recovers it only under current access. Opening a
 row targets that exact request and revision; Back returns to the list. A chat's header **Review**
 opens the same view narrowed to that chat (**All changes** removes the filter). That narrowed list
 also shows the chat's saved revisions that no listed request covers, labelled **No review request**:
-opening one never creates a request or marks it pending. A chat without retained custody says **Not
-captured**. Missions are never a Review destination; the mission Review tab and project Review
+opening one never creates a request or marks it pending. Saved revisions page on their own (**More
+saved revisions**), apart from request paging. If the request list can't be read, the page says
+review requests are unavailable, never empty, and a chat's saved revisions are still shown. A chat
+without retained custody says **Not captured**. A chat capture outside a mission has no agent
+assessment scope, and Revision details says so instead of offering evidence. A reload restores the
+exact request or saved revision it showed only if the host still lists it.
+Missions are never a Review destination; the mission Review tab and project Review
 action were removed. The chat and project are custody for exact reads and context for people, never
 the owner of a review. Review is not an Inbox attention source and has no approval or submit control.
 Full IDs live in Details. A refresh keeps the open revision, says when it is no longer listed, and
@@ -184,10 +196,12 @@ agent tool or approval/write authority. There is no mission-level analysis endpo
 [retained comparison limits](code-exploration.md#internal-retained-tsjs-comparison).
 
 The desktop consumer reads the approved #70 list, `GET /api/review/requests?after=<request
-sequence>[&sessionId=]` → `{requests:[{requestId,sequence,state,actionability,projectId,sessionId,
-title,comparison}],next,unavailable?}` (at most 20 rows, strictly increasing request sequence, an
-exact cursor, no duplicates, `actionability` one of `waiting`/`ready`/`unknown`; a filtered page
-naming another chat is rejected, and an unavailable source is never an empty queue). It never reads
+sequence>[&sessionId=]` → `{requests:[row],next}`, where each row is either
+`{requestId,sequence,state,actionability,projectId,sessionId,title,comparison}` or exactly
+`{requestId,sequence,state,unavailable:true}` (at most 20 rows, strictly increasing request
+sequence, an exact cursor, no duplicates, `actionability` one of `waiting`/`ready`/`unknown`; a
+filtered page naming another chat is rejected, and the host's 503 for a missing request source is
+never an empty queue). It never reads
 project or mission routes. Exact reads use only the session routes above, sending the request's
 listed project (or, for a chat's own saved revisions, the chat's current project here) as
 `expectedProjectId`; a refusal clears content. It shows any chat-route `unavailable` reason as **Not
@@ -252,6 +266,18 @@ nothing. The hidden journey also consumes real jj/SQLite lifecycle-captured comp
 fixture HTTP, preserving selection across newer captures and exercising saved source, failed capture
 and missing custody. Human review writes, attention, active gates, cleanup and Opus refinement
 remain separate work.
+
+The hidden `native_review_host` target runs the same LocalViewer against
+`packages/daemon/src/testing/review-host.ts`: real daemon routes, `SessionManager.spawn`
+creation-only standalone enrollment in two projects, managed jj workspaces, repeated worker
+checkpoints (each saves a limited batch), the snapshot store and missions.sqlite review requests,
+behind a logging proxy. The worker is a fake, so no provider, model turn or reviewer runs. Requests
+exist only after the fixture's explicit setup posts, sent straight to the daemon; the journey checks
+that the app only reads and that browsing changes no request. It covers the empty list, saved-only
+revisions, two changes with two revisions each from one chat, exact source and Kit Diff copy, request
+and saved paging, history labels, an unavailable slot from a moved chat, a missing request source
+(a proxied 503), offline, Open current file and Back, keyboard, list scroll, and narrow dark layout.
+Chat moves, the 503 and offline are fixture faults, not product APIs.
 
 ## Supporting annotation design (not installed)
 

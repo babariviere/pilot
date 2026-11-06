@@ -101,16 +101,102 @@ impl ReviewRequest {
             && self.title.len() <= 8192
             && self.comparison.valid()
     }
-    /// An explicit pending request, and whether approval is actionable yet. Pending never
-    /// implies ready; any other state is unknown, never hidden or read as reviewed.
+    /// The request's exact state, and for a pending request whether approval is actionable
+    /// yet. Pending never implies ready; history is never waiting or ready.
     pub fn status(&self) -> &'static str {
         match (self.state.as_str(), self.actionability.as_str()) {
             ("pending", "ready") => "Ready for review",
             ("pending", "waiting") => "Waiting on checks and agent review",
             ("pending", _) => "Pending · readiness unknown",
+            ("snoozed", _) => "Snoozed · still open",
+            ("withdrawn", _) => "Withdrawn · history",
+            ("retired", _) => "Retired · history",
+            ("replaced", _) => "Replaced by another request · history",
             _ => "Status unknown",
         }
     }
+}
+/// A request the host lists but whose source it couldn't read at this read point. It keeps
+/// its place in the list; no title, chat, project, revision or readiness is disclosed.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct UnavailableRequest {
+    pub request_id: String,
+    pub sequence: u64,
+    pub state: String,
+    pub unavailable: bool,
+}
+/// One listed request slot: readable, or unavailable with only its identity and state.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub(crate) enum Row {
+    Request(Box<ReviewRequest>),
+    Unavailable(UnavailableRequest),
+}
+impl Row {
+    pub fn request_id(&self) -> &str {
+        match self {
+            Self::Request(r) => &r.request_id,
+            Self::Unavailable(r) => &r.request_id,
+        }
+    }
+    pub fn sequence(&self) -> u64 {
+        match self {
+            Self::Request(r) => r.sequence,
+            Self::Unavailable(r) => r.sequence,
+        }
+    }
+    pub fn state(&self) -> &str {
+        match self {
+            Self::Request(r) => &r.state,
+            Self::Unavailable(r) => &r.state,
+        }
+    }
+    pub fn request(&self) -> Option<&ReviewRequest> {
+        match self {
+            Self::Request(r) => Some(r.as_ref()),
+            Self::Unavailable(_) => None,
+        }
+    }
+    pub fn valid(&self) -> bool {
+        match self {
+            Self::Request(r) => r.valid(),
+            Self::Unavailable(r) => {
+                crate::local_model::valid_id(&r.request_id)
+                    && r.sequence > 0
+                    && !r.state.is_empty()
+                    && r.state.len() <= 64
+                    && r.unavailable
+            }
+        }
+    }
+    /// The row's status line. An unavailable row names only its state.
+    pub fn status(&self) -> String {
+        match self {
+            Self::Request(r) => r.status().into(),
+            Self::Unavailable(r) => format!(
+                "Unavailable · {}",
+                state_name(&r.state).unwrap_or("status unknown")
+            ),
+        }
+    }
+    /// Open (pending or snoozed), history (withdrawn, retired or replaced), or unknown.
+    pub fn open(&self) -> Option<bool> {
+        state_name(self.state()).map(|_| is_open(self.state()))
+    }
+}
+fn state_name(state: &str) -> Option<&'static str> {
+    Some(match state {
+        "pending" => "Pending",
+        "snoozed" => "Snoozed",
+        "withdrawn" => "Withdrawn",
+        "retired" => "Retired",
+        "replaced" => "Replaced",
+        _ => return None,
+    })
+}
+fn is_open(state: &str) -> bool {
+    matches!(state, "pending" | "snoozed")
 }
 impl Comparison {
     /// `other` is a later saved revision of the same change and scope.
@@ -213,10 +299,8 @@ impl CaptureStatus {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Requests {
-    pub requests: Vec<ReviewRequest>,
+    pub requests: Vec<Row>,
     pub next: Option<u64>,
-    /// No authoritative request source: unavailable, never an empty queue.
-    pub unavailable: Option<String>,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

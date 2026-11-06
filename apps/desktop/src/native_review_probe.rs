@@ -578,12 +578,12 @@ fn global(
     click(cx, h, "review-back");
     click(cx, h, "review-page-back");
     idle(cx, h, &pane);
-    // No request source is unavailable, distinct from an empty queue and from an error.
+    // No request source (the host's 503) is unavailable, distinct from an empty queue.
     s.reply(
         r::REQUESTS,
         Reply::json(
-            200,
-            json!({"requests":[],"next":null,"unavailable":"not installed"}),
+            503,
+            json!({"error":"Authoritative Review requests unavailable"}),
         ),
     );
     click(cx, h, "review-refresh");

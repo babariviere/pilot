@@ -158,13 +158,18 @@ async fn global_requests_are_explicit_and_a_chat_filter_never_admits_others() {
     assert_eq!(
         v.requests
             .iter()
-            .map(|r| r.request_id.as_str())
+            .map(|r| r.request_id())
             .collect::<Vec<_>>(),
         ["req-1", "req-2", "req-3", "req-4"]
     );
+    let rows: Vec<_> = v
+        .requests
+        .iter()
+        .map(|r| r.request().unwrap().clone())
+        .collect();
     // Several changes from one chat and changes from other projects are each listed.
-    assert_eq!(v.requests[0].session_id, v.requests[1].session_id);
-    assert_eq!(v.requests[3].project_id, "project-B");
+    assert_eq!(rows[0].session_id, rows[1].session_id);
+    assert_eq!(rows[3].project_id, "project-B");
     // Pending never implies approval-ready: readiness is its own field.
     assert_eq!(
         v.requests.iter().map(|r| r.status()).collect::<Vec<_>>(),
@@ -184,10 +189,10 @@ async fn global_requests_are_explicit_and_a_chat_filter_never_admits_others() {
         &f::comparison(3, "layer"),
     ))
     .unwrap();
-    assert!(v.requests[0].comparison.superseded_by(&later.comparison));
-    assert!(!v.requests[1].comparison.superseded_by(&later.comparison));
+    assert!(rows[0].comparison.superseded_by(&later.comparison));
+    assert!(!rows[1].comparison.superseded_by(&later.comparison));
     assert!(
-        !v.requests[3].comparison.superseded_by(&later.comparison),
+        !rows[3].comparison.superseded_by(&later.comparison),
         "another repository"
     );
     let filtered = Route::Requests(home(), 0, Some("chat-B".into()));
@@ -195,28 +200,54 @@ async fn global_requests_are_explicit_and_a_chat_filter_never_admits_others() {
         panic!("requests");
     };
     assert_eq!(mine.requests.len(), 2);
-    // Any state other than an explicit pending request is unknown, never reviewed.
+    // Every known state keeps its exact label. History is never waiting or ready, snoozed
+    // stays open, and any other state is unknown, never reviewed.
     let mut odd = f::requests();
     odd[0]["state"] = json!("approved");
+    odd[1]["state"] = json!("snoozed");
+    odd[2]["state"] = json!("withdrawn");
+    odd[3]["state"] = json!("replaced");
     s.reply(f::REQUESTS, Reply::json(200, f::list(odd)));
     let Data::Requests(v) = fetch(&client, &s.options, &all).await.unwrap() else {
         panic!("requests");
     };
-    assert_eq!(v.requests[0].status(), "Status unknown");
-    // No request source is unavailable, not an empty queue.
+    assert_eq!(
+        v.requests.iter().map(|r| r.status()).collect::<Vec<_>>(),
+        [
+            "Status unknown",
+            "Snoozed · still open",
+            "Withdrawn · history",
+            "Replaced by another request · history"
+        ]
+    );
+    assert_eq!(
+        v.requests.iter().map(|r| r.open()).collect::<Vec<_>>(),
+        [None, Some(true), Some(false), Some(false)]
+    );
+    let mut retired = f::requests();
+    retired[0]["state"] = json!("retired");
+    retired[0]["actionability"] = json!("ready");
+    let retired: model::ReviewRequest = serde_json::from_value(retired[0].clone()).unwrap();
+    assert_eq!(
+        retired.status(),
+        "Retired · history",
+        "history is never ready"
+    );
+    // No request source is unavailable, never an empty queue.
     s.reply(
         f::REQUESTS,
         Reply::json(
-            200,
-            json!({"requests":[],"next":null,"unavailable":"not installed"}),
+            503,
+            json!({"error":"Authoritative Review requests unavailable"}),
         ),
     );
-    let Data::Requests(v) = fetch(&client, &s.options, &all).await.unwrap() else {
-        panic!("requests");
-    };
-    assert!(v.unavailable.is_some() && v.requests.is_empty());
+    assert_eq!(
+        fetch(&client, &s.options, &all).await.err(),
+        Some(REQUESTS_UNAVAILABLE)
+    );
     // A filtered reply with another chat's request, duplicates, disorder, a wrong
-    // cursor, an unavailable list with rows, or a malformed row never reach the view.
+    // cursor, a page-level field the host never sends, or a malformed row never reach
+    // the view.
     let reject = |requests: Vec<serde_json::Value>, next: serde_json::Value| json!({"requests":requests,"next":next});
     s.reply(
         &f::requests_from("chat-B"),
@@ -468,4 +499,85 @@ fn project_owned_capture_needs_this_exact_project_and_no_task_scope() {
     let mut v = f::standalone(&f::comparison(1, "layer"), "chat-B");
     v["enrollmentProjectId"] = json!(7);
     assert!(serde_json::from_value::<model::Snapshot>(v).is_err());
+}
+#[tokio::test]
+async fn unavailable_rows_keep_their_slot_and_disclose_nothing() {
+    let s = Server::start();
+    f::install(&s);
+    let r = f::requests();
+    let hidden = json!({"requestId":"req-x","sequence":2,"state":"pending","unavailable":true});
+    s.reply(
+        f::REQUESTS,
+        Reply::json(200, f::list(vec![r[0].clone(), hidden, r[2].clone()])),
+    );
+    let all = Route::Requests(home(), 0, None);
+    let Data::Requests(v) = fetch(&client(), &s.options, &all).await.unwrap() else {
+        panic!("requests");
+    };
+    assert_eq!(v.requests.len(), 3);
+    // The slot keeps its place and state; nothing else about its change is known.
+    assert_eq!(
+        v.requests
+            .iter()
+            .map(|r| r.request_id())
+            .collect::<Vec<_>>(),
+        ["req-1", "req-x", "req-3"]
+    );
+    assert!(v.requests[1].request().is_none());
+    assert_eq!(v.requests[1].status(), "Unavailable · Pending");
+    assert_eq!(v.requests[1].open(), Some(true));
+    // The host's chat filter places an unavailable slot; it names no chat to check.
+    let filtered = Route::Requests(home(), 0, Some("chat-B".into()));
+    s.reply(
+        &f::requests_from("chat-B"),
+        Reply::json(
+            200,
+            f::list(vec![
+                r[0].clone(),
+                json!({"requestId":"req-x","sequence":2,"state":"withdrawn","unavailable":true}),
+            ]),
+        ),
+    );
+    let Data::Requests(mine) = fetch(&client(), &s.options, &filtered).await.unwrap() else {
+        panic!("requests");
+    };
+    assert_eq!(mine.requests[1].status(), "Unavailable · Withdrawn");
+    assert_eq!(mine.requests[1].open(), Some(false));
+    // Only the exact four fields: no details, no false flag, no partial or extra keys.
+    for hidden in [
+        json!({"requestId":"req-x","sequence":2,"state":"pending","unavailable":false}),
+        json!({"requestId":"req-x","sequence":2,"state":"pending","unavailable":true,"title":"t"}),
+        json!({"requestId":"req-x","sequence":2,"state":"pending","unavailable":true,"sessionId":"chat-B"}),
+        json!({"requestId":"req-x","sequence":2,"state":"pending","unavailable":true,"actionability":"ready"}),
+        json!({"requestId":"req-x","sequence":2,"unavailable":true}),
+        json!({"requestId":"../x","sequence":2,"state":"pending","unavailable":true}),
+        json!({"requestId":"req-x","sequence":2,"state":"","unavailable":true}),
+        json!({"requestId":"req-1","sequence":2,"state":"pending","unavailable":true}),
+        json!({"requestId":"req-x","sequence":1,"state":"pending","unavailable":true}),
+    ] {
+        s.reply(
+            f::REQUESTS,
+            Reply::json(
+                200,
+                f::list(vec![r[0].clone(), hidden.clone(), r[2].clone()]),
+            ),
+        );
+        assert!(
+            fetch(&client(), &s.options, &all).await.is_err(),
+            "{hidden}"
+        );
+    }
+    // A later page starts after an unavailable slot; the cursor is its own sequence.
+    s.reply(
+        f::REQUESTS,
+        Reply::json(
+            200,
+            json!({"requests":[r[0].clone(),{"requestId":"req-x","sequence":2,"state":"pending","unavailable":true}],"next":2}),
+        ),
+    );
+    let Data::Requests(v) = fetch(&client(), &s.options, &all).await.unwrap() else {
+        panic!("requests");
+    };
+    assert_eq!(v.next, Some(2));
+    assert!(s.all_gets());
 }

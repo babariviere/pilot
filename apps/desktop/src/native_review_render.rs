@@ -98,7 +98,19 @@ impl Render for RevisionDetails {
             return panel;
         };
         let target = pane.clone();
-        let mut evidence = section("Evidence", cx)
+        let mut evidence = section("Evidence", cx);
+        if s.enrollment_project_id.is_some() {
+            // A chat capture outside a mission has no assessment scope to read.
+            evidence = evidence.child(
+                caption(
+                    "No agent assessments. Chat captures outside a mission have no assessment scope.",
+                    cx,
+                )
+                .id("review-records-none")
+                .test_support(),
+            );
+        } else {
+            evidence = evidence
             .child(caption(
                 "What workers and agents reported for this revision. Reports aren't checks or acceptance.",
                 cx,
@@ -116,12 +128,13 @@ impl Render for RevisionDetails {
                     .on_click(move |_, w, cx| target.update(cx, |p, cx| p.toggle_records(w, cx))),
                 ),
             );
-        if p.records_open {
-            for (ix, r) in p.records.iter().enumerate() {
-                evidence = evidence.child(SelectableText::new(
-                    ("review-record", ix),
-                    SharedString::from(r.clone()),
-                ));
+            if p.records_open {
+                for (ix, r) in p.records.iter().enumerate() {
+                    evidence = evidence.child(SelectableText::new(
+                        ("review-record", ix),
+                        SharedString::from(r.clone()),
+                    ));
+                }
             }
         }
         panel
@@ -234,23 +247,7 @@ impl Pane {
                     )),
             );
         } else if self.listed && self.has_rows() {
-            let n = self.requests.len() + self.saved_rows().count();
-            row = row.child(
-                caption(
-                    format!(
-                        "{n} {}{}",
-                        if n == 1 { "change" } else { "changes" },
-                        if self.next.is_some() || self.after > 0 {
-                            " on this page"
-                        } else {
-                            ""
-                        }
-                    ),
-                    cx,
-                )
-                .id("review-count")
-                .test_support(),
-            );
+            row = row.child(caption(self.count(), cx).id("review-count").test_support());
         }
         let mut actions = div()
             .id("review-actions")
@@ -280,6 +277,23 @@ impl Pane {
                         .on_click(cx.listener(move |p, _, w, cx| p.page(next, w, cx))),
                 );
             }
+            // A chat's saved revisions page on their own, apart from its requests.
+            if self.saved_after > 0 {
+                actions = actions.child(
+                    ui::action("review-saved-first", "First saved revisions", Action::Quiet)
+                        .accessibility_label("First page of this chat's saved revisions")
+                        .disabled(self.busy)
+                        .on_click(cx.listener(|p, _, w, cx| p.saved_page(0, w, cx))),
+                );
+            }
+            if let Some(next) = self.saved_next {
+                actions = actions.child(
+                    ui::action("review-saved-more", "More saved revisions", Action::Quiet)
+                        .accessibility_label("Next page of this chat's saved revisions")
+                        .disabled(self.busy)
+                        .on_click(cx.listener(move |p, _, w, cx| p.saved_page(next, w, cx))),
+                );
+            }
         }
         if self.snapshot.is_some() || (self.selected.is_none() && !self.capture_limits.is_empty()) {
             actions = actions.child(
@@ -303,6 +317,40 @@ impl Pane {
             .on_click(cx.listener(|p, _, w, cx| p.refresh(w, cx))),
         );
         row.child(actions)
+    }
+    /// What this page lists, by kind. Open requests, history and unavailable slots are
+    /// counted apart; none of them is a count of distinct changes.
+    fn count(&self) -> String {
+        let (mut open, mut history, mut unavailable, mut unknown) = (0, 0, 0, 0);
+        for r in &self.requests {
+            match (r.request().is_some(), r.open()) {
+                (false, _) => unavailable += 1,
+                (true, Some(true)) => open += 1,
+                (true, Some(false)) => history += 1,
+                (true, None) => unknown += 1,
+            }
+        }
+        let saved = self.saved_rows().count();
+        let parts: Vec<String> = [
+            (open, "open request", "open requests"),
+            (history, "in history", "in history"),
+            (unavailable, "unavailable", "unavailable"),
+            (unknown, "with unknown status", "with unknown status"),
+            (saved, "saved revision", "saved revisions"),
+        ]
+        .into_iter()
+        .filter(|(n, ..)| *n > 0)
+        .map(|(n, one, many)| format!("{n} {}", if n == 1 { one } else { many }))
+        .collect();
+        let paged = self.next.is_some()
+            || self.after > 0
+            || self.saved_next.is_some()
+            || self.saved_after > 0;
+        format!(
+            "{}{}",
+            parts.join(" · "),
+            if paged { " on this page" } else { "" }
+        )
     }
 
     /// Every listed change as one row: its title, then its exact revision and request
@@ -348,6 +396,24 @@ impl Pane {
                             .v_flex()
                             .min_w_0()
                             .children(self.requests.iter().enumerate().map(|(ix, r)| {
+                                let Some(r) = r.request() else {
+                                    // Keeps its place; nothing about its change is known here.
+                                    let detail = r.status();
+                                    return ui::action(("review-request", ix), "", Action::Quiet)
+                                        .accessibility_label(SharedString::from(format!(
+                                            "Unavailable request · {detail}"
+                                        )))
+                                        .disabled(true)
+                                        .w_full()
+                                        .h_auto()
+                                        .py_2()
+                                        .child(
+                                            ui::ResourceLabel::new("Unavailable request")
+                                                .detail(SharedString::from(detail))
+                                                .icon(crate::app_icon::AppIcon::Changes),
+                                        )
+                                        .into_any_element();
+                                };
                                 let id = r.request_id.clone();
                                 let detail = format!("{} · {}", r.comparison.label(), r.status());
                                 ui::action(("review-request", ix), "", Action::Quiet)
@@ -383,20 +449,20 @@ impl Pane {
         if let Some(e) = self.error {
             push("review-error", Notice::new(e).tone(Tone::Warning));
         }
-        if self.unavailable && self.selected.is_none() && self.has_rows() {
+        if let Some(e) = self
+            .requests_failed
+            .filter(|_| self.selected.is_none() && self.has_rows())
+        {
             push(
                 "review-unavailable",
-                Notice::new("Review requests are unavailable. Only saved revisions are shown."),
+                Notice::new(
+                    "Review requests couldn't be read. Only this chat's saved revisions are shown.",
+                )
+                .detail(e),
             );
         }
         if let Some(n) = self.capture_notice.filter(|_| self.selected.is_none()) {
             push("review-capture-notice", Notice::new(n).tone(Tone::Warning));
-        }
-        if self.saved_more && self.selected.is_none() {
-            push(
-                "review-saved-more",
-                Notice::new("Only this chat's first 20 saved revisions are shown."),
-            );
         }
         if self.unlisted() {
             push(
@@ -610,21 +676,27 @@ impl Pane {
                     },
                 ))
                 .into_any_element(),
+            // The scrollbar wrapper replaces its child's ID, so the stable ID sits outside.
             div()
                 .id("review-source")
                 .test_support()
                 .flex_1()
                 .min_h_0()
                 .min_w_0()
-                .p(px(ui::Space::CONTROL))
                 .border_1()
                 .border_color(cx.theme().border)
                 .rounded(cx.theme().radius)
-                .font_family(crate::appearance::CODE_FONT)
-                .text_size(px(Text::Body.size()))
-                .track_scroll(&self.source_scroll)
-                .overflow_y_scrollbar()
-                .child(SelectableText::new("review-source-text", text.clone()))
+                .child(
+                    div()
+                        .id("review-source-scroll")
+                        .size_full()
+                        .p(px(ui::Space::CONTROL))
+                        .font_family(crate::appearance::CODE_FONT)
+                        .text_size(px(Text::Body.size()))
+                        .track_scroll(&self.source_scroll)
+                        .overflow_y_scrollbar()
+                        .child(SelectableText::new("review-source-text", text.clone())),
+                )
                 .into_any_element(),
         ]
     }

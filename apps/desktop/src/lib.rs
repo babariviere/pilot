@@ -150,6 +150,8 @@ pub use local_view::project_settings_probe::run_project_settings_probe;
 pub use local_view::project_settings_probe::run_project_slack_probe;
 #[cfg(feature = "native-probes")]
 pub use local_view::workflow_confirmation_probe::run_workflow_confirmation_probe;
+#[cfg(feature = "native-probes")]
+pub use local_view::native_review_host_probe::run_native_review_host_probe;
 #[cfg(any(test, feature = "native-probes"))]
 mod chat_actions_fixture;
 #[cfg(any(test, feature = "native-probes"))]

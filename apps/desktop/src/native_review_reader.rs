@@ -10,8 +10,13 @@ use gpui_kit::component::diff::DiffFile;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::{sync::Arc, time::Duration};
-pub(crate) const ACCESS_REFUSED: &str =
-    "Retained Review access refused. Previous authorized content was cleared. No live fallback.";
+/// The host answers every refused, missing or unreadable revision read the same way, so
+/// this never claims which one happened.
+pub(crate) const ACCESS_REFUSED: &str = "This revision is unavailable here, or access was refused. Earlier content was cleared. No live fallback.";
+pub(crate) const UNAVAILABLE: &str = "Review data is unavailable: missing, unsupported, unreadable or not allowed here. No live fallback.";
+/// The host has no review request source, which is not an empty list.
+pub(crate) const REQUESTS_UNAVAILABLE: &str =
+    "This host doesn't provide review requests right now.";
 pub(crate) const RECORDS_UNAVAILABLE: &str =
     "Related records are unavailable: malformed, partial or unsupported exact assessment scope.";
 
@@ -135,10 +140,11 @@ async fn get<T: DeserializeOwned>(
     if response.status().as_u16() == 422 {
         return Err(RECORDS_UNAVAILABLE);
     }
+    if response.status().as_u16() == 503 {
+        return Err(REQUESTS_UNAVAILABLE);
+    }
     if response.status().as_u16() != 200 {
-        return Err(
-            "Retained Review unavailable: missing, corrupt, unsupported or unauthorized. No live fallback.",
-        );
+        return Err(UNAVAILABLE);
     }
     if response
         .content_length()
@@ -218,22 +224,22 @@ pub(crate) async fn fetch(
             }
             let v: model::Requests = get(client, url).await?;
             let mut seen = std::collections::BTreeSet::new();
-            // A chat filter narrows the list; it never admits another chat's request.
+            // A chat filter narrows the list; it never admits another chat's request. An
+            // unavailable slot names no chat, so only the host's filter can place it.
             if v.requests.len() > 20
-                || v.unavailable
-                    .as_ref()
-                    .is_some_and(|u| u.len() > 8192 || !v.requests.is_empty() || v.next.is_some())
                 || v.requests.iter().any(|r| {
                     !r.valid()
-                        || r.sequence <= *after
-                        || !seen.insert(r.request_id.as_str())
-                        || filter.as_ref().is_some_and(|c| &r.session_id != c)
+                        || r.sequence() <= *after
+                        || !seen.insert(r.request_id())
+                        || filter
+                            .as_ref()
+                            .is_some_and(|c| r.request().is_some_and(|r| &r.session_id != c))
                 })
                 || v.requests
                     .windows(2)
-                    .any(|r| r[0].sequence >= r[1].sequence)
+                    .any(|r| r[0].sequence() >= r[1].sequence())
                 || v.next
-                    .is_some_and(|n| v.requests.last().is_none_or(|r| r.sequence != n))
+                    .is_some_and(|n| v.requests.last().is_none_or(|r| r.sequence() != n))
             {
                 return Err(model::INVALID);
             }
