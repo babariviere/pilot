@@ -1,6 +1,7 @@
 /** On-demand host reads. No polling, mutation, cached-green fallback or delivery authority. */
+import type { ChangeLandingResult, NativeReviewSnapshot } from "@pilot/protocol";
 import { graphql, type RateLimits } from "./github.ts";
-import { linkedPullRequest } from "./github-url.ts";
+import { githubRepository, linkedPullRequest } from "./github-url.ts";
 import { deliveryDigest } from "./mission-delivery-evidence.ts";
 import type { Runner } from "./workspaces.ts";
 
@@ -244,5 +245,96 @@ export async function observeCodePullRequest(
 		};
 	} catch {
 		return { url, status: "unknown", reason: "Exact PR/check observation unavailable, incomplete or denied" };
+	}
+}
+
+/** Explicit host read only. Caller supplies trusted workspace upstream and an owned PR URL, never a cached PR. */
+export async function observeRetainedLanding(
+	snapshot: NativeReviewSnapshot,
+	upstream: string,
+	pullRequest: string | null,
+	cwd: string,
+	runner: Runner,
+	limits: RateLimits,
+): Promise<ChangeLandingResult> {
+	const unknown = (reason: string): ChangeLandingResult => ({ status: "unknown", reason });
+	if (snapshot.request.source !== "committed")
+		return unknown("Working-copy comparisons are not commit landing evidence");
+	try {
+		const repo = githubRepository(upstream);
+		if (pullRequest !== null) {
+			if (linkedPullRequest(pullRequest).repo.identity.toLowerCase() !== repo.identity.toLowerCase())
+				return unknown("Owned PR repository does not match the retained workspace upstream");
+			const pr = await observeCodePullRequest(pullRequest, cwd, runner, limits);
+			if (pr.status !== "observed") return { status: pr.status, reason: pr.reason };
+			const i = pr.identity;
+			if (i.head !== snapshot.request.head.commitId || i.base !== snapshot.request.base.commitId)
+				return unknown("PR does not match the exact retained head/base pair");
+			if (i.state !== "MERGED" || !i.merge) return unknown("PR is proposed or closed without an observed merge");
+			if (pr.integration.status === "unknown") return unknown(pr.integration.reason);
+			return {
+				status: pr.integration.status === "observed" ? "observed" : "not-contained",
+				observedAt: pr.observedAt,
+				repository: repo.identity,
+				defaultRef: i.defaultRef,
+				targetCommitId: i.target,
+				integratedCommitId: i.merge,
+				producer: { kind: "pull-request", url: i.url, headCommitId: i.head, baseCommitId: i.base },
+			};
+		}
+		const read = async () => {
+			if (limits.blockedUntil(repo.host)) throw new Error("GitHub rate budget unavailable");
+			const r = await graphql(
+				repo,
+				`query($owner: String!, $name: String!) {
+				rateLimit { remaining resetAt }
+				repository(owner: $owner, name: $name) { url defaultBranchRef { name target { oid } } }
+			}`,
+				[],
+				cwd,
+				runner,
+				limits,
+			);
+			if (githubRepository(string(r.url)).identity.toLowerCase() !== repo.identity.toLowerCase())
+				throw new Error("Wrong upstream repository");
+			const ref = object(r.defaultBranchRef);
+			return { name: string(ref.name), commit: oid(object(ref.target).oid) };
+		};
+		const before = await read();
+		if (limits.blockedUntil(repo.host)) throw new Error("GitHub rate budget unavailable");
+		const head = oid(snapshot.request.head.commitId);
+		const output = await runner(
+			"gh",
+			[
+				"api",
+				`--hostname=${repo.host}`,
+				`repos/${repo.owner}/${repo.name}/compare/${head}...${before.commit}?per_page=1`,
+			],
+			cwd,
+			20_000,
+		);
+		if (Buffer.byteLength(output) > 4 * 1024 * 1024) throw new Error("GitHub comparison too large");
+		const compared = object(JSON.parse(output));
+		if (
+			oid(object(compared.base_commit).sha) !== head ||
+			!["ahead", "behind", "diverged", "identical"].includes(String(compared.status))
+		)
+			throw new Error("Wrong upstream comparison");
+		const mergeBase = oid(object(compared.merge_base_commit).sha);
+		const contained = ["ahead", "identical"].includes(String(compared.status)) && mergeBase === head;
+		const after = await read();
+		if (deliveryDigest(before) !== deliveryDigest(after))
+			return { status: "stale", reason: "Default branch changed during landing observation" };
+		return {
+			status: contained ? "observed" : "not-contained",
+			observedAt: Date.now(),
+			repository: repo.identity,
+			defaultRef: before.name,
+			targetCommitId: before.commit,
+			integratedCommitId: head,
+			producer: { kind: "default-branch-containment" },
+		};
+	} catch {
+		return unknown("Exact upstream landing observation unavailable, incomplete or denied");
 	}
 }

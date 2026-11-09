@@ -1,7 +1,13 @@
 /** Global feedback in missions.sqlite. No mission/task ownership or request/gate state. */
 import { randomUUID } from "node:crypto";
 import type { SQLInputValue } from "node:sqlite";
-import type { DurableOperation, HumanReviewContent, HumanReviewDraft, ReviewDispositionPayload } from "@pilot/protocol";
+import type {
+	DurableOperation,
+	HumanReviewContent,
+	HumanReviewDraft,
+	HumanReviewRecord,
+	ReviewDispositionPayload,
+} from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import { canonicalJSON, payloadHash } from "./operation-journal.ts";
 
@@ -32,14 +38,8 @@ CREATE TABLE IF NOT EXISTS human_review_extraction_outbox (
  sequence INTEGER PRIMARY KEY AUTOINCREMENT, review_id TEXT NOT NULL UNIQUE
 );
 `;
-export interface HumanReviewRecord {
-	id: string;
-	operationId: string;
-	createdAt: number;
-	confirmed: ReviewDispositionPayload;
-	/** Ingress establishes a practical native action, not verified human presence. */
-	author: { origin: "native-user"; assurance: "practical-native-action"; producerId: string };
-}
+export type { HumanReviewRecord } from "@pilot/protocol";
+
 interface Port {
 	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;
 	all(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue>[];

@@ -168,6 +168,25 @@ export class NativeReviewReader {
 		await this.check(binding);
 		return comparison;
 	}
+	/** Passive metadata plus custody fence. Does not read/verify source or patch blobs. */
+	async retainedHistory(snapshotId: string) {
+		const ledger = this.ledger as Partial<Pick<JjOwnershipStore, "readFence">>;
+		if (!ledger.readFence || !this.syncScope || !this.snapshots.comparison)
+			throw new Error("Fenced retained history reader unavailable");
+		const scope = this.syncScope();
+		// Get the repository-scoped generation before any asynchronous source read.
+		const binding = await this.scope();
+		const custody = ledger.readFence(binding.repositoryId);
+		const snapshot = await this.get(snapshotId);
+		const comparison = await this.snapshots.comparison(snapshotId);
+		const revalidate = () => {
+			custody();
+			if (this.syncScope!() !== scope) throw new Error("Current retained history access changed");
+		};
+		revalidate();
+		// Metadata only: feed discovery must not re-read/hash every retained patch blob.
+		return { snapshot, comparison, revalidate };
+	}
 	/** Retained package plus a synchronous last-step fence for a missions.sqlite commit. */
 	async qualify(target: ReviewDispositionTarget) {
 		const ledger = this.ledger as Partial<Pick<JjOwnershipStore, "readFence">>;

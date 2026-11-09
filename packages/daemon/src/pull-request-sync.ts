@@ -11,7 +11,7 @@
  *   a PR back off, failures back off exponentially and a low GraphQL budget pauses the host.
  * - An entry never runs twice at once, so per-session results apply in order.
  */
-import type { SessionPullRequest } from "@pilot/protocol";
+import type { NativeReviewSnapshot, SessionPullRequest } from "@pilot/protocol";
 import {
 	type HealthRequest,
 	type HealthResult,
@@ -22,7 +22,7 @@ import {
 	run,
 	toSessionPullRequest,
 } from "./github.ts";
-import { observeCodePullRequest } from "./github-delivery.ts";
+import { observeCodePullRequest, observeRetainedLanding } from "./github-delivery.ts";
 import { githubRepository, linkedPullRequest, type Repository } from "./github-url.ts";
 import { discoverPullRequestHealth } from "./pull-request-health.ts";
 import {
@@ -175,6 +175,10 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 	/** Host-only one-shot read, sharing transport and budget without entering the polling scheduler. */
 	observeCodeDelivery(url: string, cwd: string) {
 		return observeCodePullRequest(url, cwd, this.runner, this.limits);
+	}
+	/** Explicit retained landing read. Never enrolls a scheduler entry or uses cached PR state. */
+	observeRetainedLanding(snapshot: NativeReviewSnapshot, upstream: string, pr: string | null, cwd: string) {
+		return observeRetainedLanding(snapshot, upstream, pr, cwd, this.runner, this.limits);
 	}
 
 	/** Check every known session and linked PR once, then keep them on their cadence. */

@@ -30,6 +30,7 @@ export type * from "./github-import.ts";
 export type * from "./github-setup.ts";
 export type * from "./insights.ts";
 export type * from "./insights-workspace.ts";
+export type * from "./landed-changes.ts";
 export type * from "./live-update.ts";
 export type * from "./mcp-setup.ts";
 export type * from "./mission-controls.ts";

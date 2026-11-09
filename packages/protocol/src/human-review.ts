@@ -1,4 +1,13 @@
-import type { ReviewDispositionTarget } from "./workflow-confirmations.ts";
+import type { ReviewDispositionPayload, ReviewDispositionTarget } from "./workflow-confirmations.ts";
+
+export interface HumanReviewRecord {
+	id: string;
+	operationId: string;
+	createdAt: number;
+	confirmed: ReviewDispositionPayload;
+	/** Practical native ingress, not verified human presence. */
+	author: { origin: "native-user"; assurance: "practical-native-action"; producerId: string };
+}
 
 /** Original retained bytes and source lines, never a live-file location. */
 export interface HumanReviewLineRange {

@@ -88,6 +88,7 @@ import { InsightsOwner, isInsightsOwnerOperation } from "./insights-owner.ts";
 import { InsightsReplacement } from "./insights-replacement.ts";
 import { InsightsTransition } from "./insights-transition.ts";
 import { InsightsWorkspace, isInsightsWorkspaceOperation } from "./insights-workspace.ts";
+import { LandedChanges } from "./landed-changes.ts";
 import type { LiveUpdate, LiveUpdateIdentity, LiveUpdateService, LiveUpdateTarget } from "./live-update.ts";
 import { MachineInformationReader } from "./machine.ts";
 import { McpSetupError, McpSetupStore } from "./mcp-setup.ts";
@@ -2068,6 +2069,15 @@ export function createDaemonServer(
 				if (!snapshotId && !/^\d{1,15}$/.test(after)) throw new Error("Invalid cursor");
 				if (chatRoute && (!initialSession!.projectId || initialMember?.coordinator)) {
 					if (snapshotId) throw new HttpError(403, "Retained Review unavailable in this scope");
+					if (url.searchParams.get("view") === "changes")
+						return json(res, 200, {
+							version: 1,
+							scope: "retained-comparisons-only",
+							status: "unavailable",
+							changes: [],
+							next: null,
+							reason: "Not captured. No retained managed ownership binding for this chat.",
+						});
 					return json(res, 200, {
 						comparisons: [],
 						next: null,
@@ -2082,6 +2092,33 @@ export function createDaemonServer(
 					authorize,
 					chatRoute,
 				);
+				// Passive only. No observation producer is installed in a GET handler.
+				if ((!snapshotId && url.searchParams.get("view") === "changes") || section === "history") {
+					if (!missions || !humanReviews) throw new ServiceUnavailable("Change history is unavailable");
+					const feed = new LandedChanges({
+						projectId: mission?.projectId ?? initialSession!.projectId!,
+						reader,
+						store: missions.store.changeLandings,
+						feedback: humanReviews,
+						requests: missions.store.reviewRequests,
+						authorize: () => {
+							authorize();
+							return {
+								revalidate: () => {
+									authorize();
+								},
+							};
+						},
+					});
+					if (!snapshotId) return json(res, 200, await feed.page(Number(after)));
+					const cursor = (name: string) => {
+						const values = url.searchParams.getAll(name);
+						if (values.length > 1 || !/^\d{1,15}$/.test(values[0] ?? "0"))
+							throw new Error("Invalid history cursor");
+						return Number(values[0] ?? 0);
+					};
+					return json(res, 200, await feed.open(snapshotId, cursor("landingAfter"), cursor("reviewAfter")));
+				}
 				if (!snapshotId) {
 					return json(res, 200, await reader.list(Number(after)));
 				}

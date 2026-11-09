@@ -114,6 +114,7 @@ import {
 } from "./flows.ts";
 import type { PullRequestProblems } from "./github.ts";
 import { githubRepository, linkedPullRequest } from "./github-url.ts";
+import { dispositionTarget } from "./human-reviews.ts";
 import {
 	type InsightsAdmission,
 	type InsightsGrant,
@@ -6439,6 +6440,44 @@ ${run.excerpt}`,
 		const before = JSON.stringify(scope());
 		const result = await this.pullRequests.observeCodeDelivery(url, this.require(id).cwd);
 		if (JSON.stringify(scope()) !== before) throw new Conflict("PR source custody changed");
+		return result;
+	}
+
+	/** Explicit host observation under retained source/PR custody. No automatic invocation. */
+	async observeRetainedLanding(
+		id: string,
+		snapshot: import("@pilot/protocol").NativeReviewSnapshot,
+		pr: string | null,
+		authorize: () => void,
+	) {
+		const scope = () => {
+			authorize();
+			const meta = this.require(id);
+			if (
+				this.closing ||
+				snapshot.workerId !== id ||
+				!meta.projectId ||
+				!meta.workspace?.upstream ||
+				(pr !== null && !this.ownedPullRequestUrls(id)?.includes(pr.toLowerCase()))
+			)
+				throw new Conflict("Retained landing custody unavailable");
+			return this.codeDeliveryCustody(id);
+		};
+		const before = JSON.stringify(scope());
+		const meta = this.require(id);
+		const reader = this.nativeReviewReader(
+			id,
+			this.missions?.membership(id)?.missionId,
+			meta.projectId!,
+			authorize,
+			true,
+		);
+		const retained = await reader.qualify(dispositionTarget(meta.projectId!, snapshot));
+		retained.revalidate();
+		if (JSON.stringify(scope()) !== before) throw new Conflict("Retained landing custody changed");
+		const result = await this.pullRequests.observeRetainedLanding(snapshot, meta.workspace!.upstream!, pr, meta.cwd);
+		retained.revalidate();
+		if (JSON.stringify(scope()) !== before) throw new Conflict("Retained landing custody changed");
 		return result;
 	}
 

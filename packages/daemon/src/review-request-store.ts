@@ -277,6 +277,22 @@ export class ReviewRequestStore {
 			)
 			.map((r) => parse<ReviewRequestRecord>(r)!);
 	}
+	/** Exact comparison attention only, including terminal requests. Never changes or resumes them. */
+	forTarget(target: ReviewDispositionTarget) {
+		const records = this.port
+			.all("SELECT record FROM review_requests WHERE target_digest=? ORDER BY sequence LIMIT 101", targetKey(target))
+			.map((r) => parse<ReviewRequestRecord>(r)!);
+		return {
+			records: records.slice(0, 100).map((r) => ({
+				requestId: r.requestId,
+				revision: r.revision,
+				state: r.state,
+				operationId: r.operationId,
+				updatedAt: r.updatedAt,
+			})),
+			complete: records.length <= 100,
+		};
+	}
 	requirement(target: ReviewDispositionTarget): {
 		identity: string;
 		state: "requested" | "not_requested" | "withdrawn" | "unknown";

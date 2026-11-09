@@ -47,6 +47,7 @@ import type {
 	UpdateMissionRequest,
 } from "@pilot/protocol";
 import { ATTENTION_SCHEMA, AttentionStore } from "./attention-store.ts";
+import { CHANGE_LANDING_SCHEMA, ChangeLandingStore } from "./change-landing-store.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import { HUMAN_REVIEW_SCHEMA, HumanReviewStore } from "./human-review-store.ts";
@@ -778,6 +779,13 @@ export class MissionStore {
 		transaction: (work) => this.transaction(work, true),
 		durable: () => this.durable(),
 	});
+	readonly changeLandings = new ChangeLandingStore({
+		one: (sql, ...params) => this.one(sql, ...params),
+		all: (sql, ...params) => this.all(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work, true),
+		durable: () => this.durable(),
+	});
 	readonly retainedReviewProjections = new RetainedReviewProjections({
 		one: (sql, ...params) => this.one(sql, ...params),
 		run: (sql, ...params) => this.run(sql, ...params),
@@ -860,6 +868,7 @@ export class MissionStore {
 		this.db.exec(ATTENTION_SCHEMA);
 		this.db.exec(MISSION_CONTROL_SCHEMA);
 		this.db.exec(HUMAN_REVIEW_SCHEMA);
+		this.db.exec(CHANGE_LANDING_SCHEMA);
 		this.db.exec(RETAINED_PROJECTION_SCHEMA);
 		this.db.exec(REVIEW_REQUEST_SCHEMA);
 		// Startup only, on disk before the in-memory replica opens. Never replay a saved placement.

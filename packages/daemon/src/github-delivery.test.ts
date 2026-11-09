@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { NativeReviewSnapshot } from "@pilot/protocol";
 import { RateLimits } from "./github.ts";
-import { observeCodePullRequest } from "./github-delivery.ts";
+import { observeCodePullRequest, observeRetainedLanding } from "./github-delivery.ts";
 import { PullRequestSync } from "./pull-request-sync.ts";
 import type { Runner } from "./workspaces.ts";
 
@@ -10,6 +11,31 @@ const head = "a".repeat(40),
 	merge = "c".repeat(40),
 	target = "d".repeat(40);
 const url = "https://github.com/octo/repo/pull/1";
+function retained(): NativeReviewSnapshot {
+	return {
+		snapshotId: "e".repeat(64),
+		workerId: "worker",
+		capturedAt: 1,
+		enrollmentTaskIds: [],
+		creation: { changeId: "k".repeat(32), commitId: head, operationId: "a".repeat(128), kind: "workspace-created" },
+		status: "complete",
+		omissions: [],
+		before: [],
+		after: [],
+		changes: [],
+		diff: { sha256: "f".repeat(64), bytes: 0 },
+		request: {
+			requestId: "capture",
+			repositoryId: "b".repeat(64),
+			changeId: "k".repeat(32),
+			operationId: "a".repeat(128),
+			base: { changeId: "l".repeat(32), commitId: base },
+			head: { changeId: "k".repeat(32), commitId: head },
+			scope: { kind: "layer" },
+			source: "committed",
+		},
+	};
+}
 function variables(args: string[]) {
 	return new Map(
 		args
@@ -57,6 +83,159 @@ function checks(nodes: unknown[] = [context()], next = false, endCursor: string 
 function response(repository: unknown, remaining = 4000) {
 	return JSON.stringify({ data: { rateLimit: { remaining, resetAt: "2100-01-01T00:00:00Z" }, repository } });
 }
+function directFixture() {
+	const state = {
+		reads: 0,
+		compares: 0,
+		moved: false,
+		denied: false,
+		wrongRepository: false,
+		compared: { base_commit: { sha: head }, merge_base_commit: { sha: head }, status: "ahead" },
+	};
+	const runner: Runner = async (file, args, cwd) => {
+		assert.equal(file, "gh");
+		assert.equal(cwd, "/host/project");
+		assert.ok(!args.some((a) => /mutation|checkout|fetch|push/.test(a)));
+		if (state.denied) throw new Error("Denied");
+		if (variables(args).has("query")) {
+			state.reads++;
+			return response({
+				url: `https://github.com/octo/${state.wrongRepository ? "other" : "repo"}`,
+				defaultBranchRef: { name: "trunk", target: { oid: state.moved && state.reads > 1 ? merge : target } },
+			});
+		}
+		state.compares++;
+		assert.ok(args.includes(`repos/octo/repo/compare/${head}...${target}?per_page=1`));
+		assert.ok(args.includes("--hostname=github.com"));
+		return JSON.stringify(state.compared);
+	};
+	return {
+		state,
+		runner,
+		read: () =>
+			observeRetainedLanding(
+				retained(),
+				"git@github.com:octo/repo.git",
+				null,
+				"/host/project",
+				runner,
+				new RateLimits(),
+			),
+	};
+}
+
+test("direct delivery observes exact default-branch containment, not a reported push", async () => {
+	const f = directFixture(),
+		r = await f.read();
+	assert.equal(r.status, "observed");
+	if (r.status !== "observed") return;
+	assert.equal(r.repository, "github.com/octo/repo");
+	assert.equal(r.defaultRef, "trunk");
+	assert.equal(r.targetCommitId, target);
+	assert.equal(r.integratedCommitId, head);
+	assert.deepEqual(r.producer, { kind: "default-branch-containment" });
+	assert.equal(f.state.reads, 2);
+	assert.equal(f.state.compares, 1);
+});
+
+test("missing, moved, malformed and diverged upstream evidence cannot prove landing", async () => {
+	for (const mode of ["denied", "moved", "wrongRepository", "wrongBase", "malformed", "diverged"] as const) {
+		const f = directFixture();
+		if (mode === "denied" || mode === "moved" || mode === "wrongRepository") f.state[mode] = true;
+		if (mode === "wrongBase") f.state.compared.base_commit.sha = merge;
+		if (mode === "malformed") f.state.compared.merge_base_commit.sha = "bad";
+		if (mode === "diverged") {
+			f.state.compared.status = "diverged";
+			f.state.compared.merge_base_commit.sha = base;
+		}
+		assert.equal(
+			(await f.read()).status,
+			mode === "moved" ? "stale" : mode === "diverged" ? "not-contained" : "unknown",
+			mode,
+		);
+	}
+});
+
+test("working-copy landing and cross-repository PRs make no network calls", async () => {
+	const f = directFixture(),
+		s = retained();
+	s.request.source = "working-copy";
+	assert.equal(
+		(
+			await observeRetainedLanding(
+				s,
+				"git@github.com:octo/repo.git",
+				null,
+				"/host/project",
+				f.runner,
+				new RateLimits(),
+			)
+		).status,
+		"unknown",
+	);
+	s.request.source = "committed";
+	assert.equal(
+		(
+			await observeRetainedLanding(
+				s,
+				"git@github.com:octo/other.git",
+				url,
+				"/host/project",
+				f.runner,
+				new RateLimits(),
+			)
+		).status,
+		"unknown",
+	);
+	assert.equal(f.state.reads, 0);
+	assert.equal(f.state.compares, 0);
+});
+
+test("PR landing requires exact pair, fresh merged identity and default-target containment", async () => {
+	for (const mode of [
+		"merged",
+		"proposed",
+		"closed",
+		"rewritten",
+		"retargeted",
+		"notContained",
+		"checksUnavailable",
+	] as const) {
+		const f = fixture();
+		if (mode === "proposed") f.state.pr = identity("OPEN");
+		if (mode === "closed") f.state.pr = identity("CLOSED");
+		if (mode === "rewritten") f.state.pr.pullRequest.headRefOid = merge;
+		if (mode === "retargeted") f.state.pr.pullRequest.baseRefOid = target;
+		if (mode === "notContained") f.state.compared.status = "diverged";
+		if (mode === "checksUnavailable")
+			f.state.hook = (args) =>
+				variables(args).get("query")?.includes("object(expression:")
+					? response({ ...f.state.pr, object: null })
+					: undefined;
+		const result = await observeRetainedLanding(
+			retained(),
+			"git@github.com:octo/repo.git",
+			url,
+			"/host/project",
+			f.runner,
+			new RateLimits(),
+		);
+		assert.equal(
+			result.status,
+			mode === "merged" || mode === "checksUnavailable"
+				? "observed"
+				: mode === "notContained"
+					? "not-contained"
+					: "unknown",
+			mode,
+		);
+		if (result.status === "observed") {
+			assert.equal(result.integratedCommitId, merge);
+			assert.deepEqual(result.producer, { kind: "pull-request", url, headCommitId: head, baseCommitId: base });
+		}
+	}
+});
+
 function fixture() {
 	const calls: string[][] = [];
 	let identities = 0,

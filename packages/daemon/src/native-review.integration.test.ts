@@ -5,7 +5,10 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { RetainedCallResult } from "@pilot/kernel/retained-calls";
+import type { LandedChangeHistory, LandedChangesPage } from "@pilot/protocol";
+import { HumanReviews } from "./human-reviews.ts";
 import { jjRepositoryIdentity } from "./jj-ownership.ts";
+import { LandedChanges } from "./landed-changes.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
@@ -164,7 +167,36 @@ test("production call-changes route reads a real retained pair and original BOM 
 	const projects = new ProjectStore(home);
 	await projects.load();
 	const project = await projects.create({ path: realpathSync(f.source) });
-	const sessions = new SessionManager(home, projects);
+	let landingHead = "",
+		githubReads = 0;
+	const sessions = new SessionManager(
+		home,
+		projects,
+		undefined,
+		{},
+		{
+			runner: async (file, args) => {
+				assert.equal(file, "gh");
+				githubReads++;
+				assert.ok(landingHead);
+				if (args.includes("graphql"))
+					return JSON.stringify({
+						data: {
+							repository: {
+								url: "https://github.com/octo/repo",
+								defaultBranchRef: { name: "trunk", target: { oid: landingHead } },
+							},
+						},
+					});
+				assert.ok(args.includes(`repos/octo/repo/compare/${landingHead}...${landingHead}?per_page=1`));
+				return JSON.stringify({
+					base_commit: { sha: landingHead },
+					merge_base_commit: { sha: landingHead },
+					status: "identical",
+				});
+			},
+		},
+	);
 	const store = new MissionStore(":memory:");
 	const service = new MissionService(store, sessions, projects);
 	const terminals = new TerminalManager();
@@ -205,7 +237,13 @@ test("production call-changes route reads a real retained pair and original BOM 
 		projectId: project.id,
 		createdAt: 1,
 		updatedAt: 1,
-		workspace: { source: project.path, base: w.base, jj: true, shared: w.shared! },
+		workspace: {
+			source: project.path,
+			base: w.base,
+			jj: true,
+			shared: w.shared!,
+			upstream: "git@github.com:octo/repo.git",
+		},
 	});
 	const before = '\uFEFFexport function leaf() { return "é😀"; }\r\nexport function caller() { return leaf(); }';
 	const after = before.replace('"é😀"', '"changed😀"');
@@ -262,6 +300,54 @@ test("production call-changes route reads a real retained pair and original BOM 
 		return (await response.json()) as RetainedCallResult;
 	};
 	const first = await readCalls();
+	// biome-ignore lint/complexity/useLiteralKeys: Observe only patch I/O; retain the real reader/store.
+	const patchReads = t.mock.method(sessions["reviewSnapshots"], "verifyDiff");
+	const pageResponse = await fetch(`${api}/sessions/${sessionId}/review?view=changes&expectedProjectId=${project.id}`);
+	assert.equal(pageResponse.status, 200);
+	assert.equal(pageResponse.headers.get("cache-control"), "no-store");
+	const page = (await pageResponse.json()) as LandedChangesPage;
+	assert.equal(page.version, 1);
+	assert.equal(page.scope, "retained-comparisons-only");
+	assert.equal(page.changes.length, 1);
+	assert.ok("comparison" in page.changes[0]!);
+	assert.equal(page.changes[0]!.landing, null, "retention and reported hashes are not landing observations");
+	assert.equal(patchReads.mock.callCount(), 0, "metadata feed does not hash/read retained patches");
+	const historyResponse = await fetch(`${root}/history?expectedProjectId=${project.id}`);
+	assert.equal(historyResponse.status, 200);
+	const history = (await historyResponse.json()) as LandedChangeHistory;
+	assert.equal(history.snapshot.snapshotId, retained.snapshotId);
+	assert.deepEqual(history.snapshot.request, request);
+	assert.deepEqual(history.landing.records, []);
+	assert.deepEqual(history.reviews.records, []);
+	assert.equal(history.reported.status, "unavailable");
+	assert.equal(history.approval, "not-evaluated");
+	assert.equal(history.acceptance, "not-evaluated");
+	assert.ok(patchReads.mock.callCount() > 0, "exact feedback history still qualifies retained patch bytes");
+	patchReads.mock.restore();
+	assert.equal(githubReads, 0, "passive history never invokes the host producer");
+	landingHead = request.head.commitId;
+	const landingReader = sessions.nativeReviewReader(sessionId, mission.id, project.id, () => {}, true);
+	const observer = new LandedChanges({
+		projectId: project.id,
+		reader: landingReader,
+		store: store.changeLandings,
+		feedback: new HumanReviews({ store: store.humanReviews, qualify: (target) => landingReader.qualify(target) }),
+		requests: store.reviewRequests,
+		authorize: () => ({ revalidate() {} }),
+		observe: (s) => sessions.observeRetainedLanding(sessionId, s, null, () => {}),
+	});
+	const landing = await observer.observe("http-observation", retained.snapshotId);
+	assert.equal(landing.result.status, "observed");
+	assert.equal(githubReads, 3);
+	const observedHistory: LandedChangeHistory = { ...history, landing: { records: [landing], next: null } };
+	const observedPageResponse = await fetch(`${api}/sessions/${sessionId}/review?view=changes`);
+	const observedPage = (await observedPageResponse.json()) as LandedChangesPage;
+	const observedRow = observedPage.changes[0]!;
+	assert.ok("comparison" in observedRow);
+	assert.deepEqual(observedRow.observedLanding, landing);
+	assert.equal(githubReads, 3);
+	assert.equal((await fetch(`${root}/history?reviewAfter=bad`)).status, 403);
+	assert.equal((await fetch(`${root}/history`, { method: "POST" })).status, 405);
 	assert.deepEqual(first.pair.request, request);
 	assert.equal(first.pair.snapshotId, retained.snapshotId);
 	assert.equal(first.results.find((r) => r.before[0]?.name === "leaf")!.bodyChanged, true);
@@ -275,6 +361,13 @@ test("production call-changes route reads a real retained pair and original BOM 
 	rmSync(w.path, { recursive: true, force: true });
 	rmSync(w.shared!.repository, { recursive: true, force: true });
 	assert.deepEqual(await readCalls(), first);
+	const reopenedHistoryResponse = await fetch(`${root}/history`);
+	assert.equal(reopenedHistoryResponse.status, 200);
+	assert.deepEqual(
+		await reopenedHistoryResponse.json(),
+		observedHistory,
+		"retained history survives live source rewrites and loss",
+	);
 	for (const side of ["before", "after"] as const) {
 		const original = side === "before" ? before : after;
 		const entry = retained.manifest[side].find((e) => e.path === "code.ts")!;
@@ -296,6 +389,8 @@ test("production call-changes route reads a real retained pair and original BOM 
 		);
 	}
 	assert.equal((await fetch(`${root}/call-changes?expectedProjectId=stale`)).status, 403);
+	assert.equal((await fetch(`${root}/history?expectedProjectId=stale`)).status, 403);
 	store.leave(sessionId);
 	assert.equal((await fetch(`${root}/call-changes`)).status, 403);
+	assert.equal((await fetch(`${root}/history`)).status, 403);
 });

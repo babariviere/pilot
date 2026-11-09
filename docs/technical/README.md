@@ -53,6 +53,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Day interview and agreement backend (host-only)](day-mission-agreements.md)
 - [Proposed native Review and durable diff annotations](mission-native-review.md)
 - [Global optional Review request producer and read API](global-review-requests.md)
+- [Retained changes and landing observations](landed-changes.md)
 - [Non-code delivery foundation](mission-non-code-deliveries.md)
 - [Production reviewer bridge and independence contract](mission-production-review-bridge.md)
 - [Workflow approval, review consent and human-review actions](mission-review-app-actions.md)
