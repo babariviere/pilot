@@ -6,7 +6,7 @@ edition = "2024"
 publish = false
 
 # Separate from the Pilot desktop workspace: Day never links the
-# shipping app, its daemon client or its storage.
+# shipping app or its storage. Only the small native credential reader is shared.
 [workspace]
 
 [lib]
@@ -19,6 +19,13 @@ nsh-base = { git = "https://github.com/longbridge/nsh", rev = "530b73170f61e5bf1
 # The daemon's v1 Day contracts, read in Rust only. Same versions NSH locks.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+reqwest = { version = "=0.13.5", default-features = false }
+tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros"] }
+tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
+futures-util = { version = "0.3", features = ["sink"] }
+async-channel = "2"
+libc = "0.2"
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 nsh-core = { git = "https://github.com/longbridge/nsh", rev = "530b73170f61e5bf16380959de9e622f8ce130cd", features = ["declarations"] }

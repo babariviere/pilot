@@ -1580,6 +1580,8 @@ export function createDaemonServer(
 					passiveMissionLifecycle: missions ? true : undefined,
 					passiveMissionCompletion: missions ? true : undefined,
 					passiveTaskModel: missions ? true : undefined,
+					dayOverview: missions ? 1 : undefined,
+					missionControls: missions && githubSetup && hello.lineageId ? 1 : undefined,
 					passiveFailedModel: hello?.lineageId ? true : undefined,
 					guardedQueue: true,
 					sessionPathCandidates: hello.lineageId ? 1 : undefined,

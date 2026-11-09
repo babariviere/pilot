@@ -65,4 +65,8 @@ export interface DaemonCapabilities {
 	passiveMissionCompletion?: true;
 	/** Explicit task preference saves without reconciliation or agent work. */
 	passiveTaskModel?: true;
+	/** Complete v1 DayOverview and passive report/detail reads. */
+	dayOverview?: 1;
+	/** Native-authenticated, revision-fenced Pause/Resume and exact operation lookup. */
+	missionControls?: 1;
 }

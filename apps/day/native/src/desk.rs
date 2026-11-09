@@ -46,6 +46,8 @@ pub fn limit_done(today: &mut Today) {
 /// The owner of the Today read model and the mock coordinator behind it.
 #[derive(Debug, Clone)]
 pub struct Desk {
+    native: bool,
+    native_controls: bool,
     today: Today,
     overview: Option<DayOverview>,
     details: Vec<MissionDetail>,
@@ -101,6 +103,8 @@ impl Desk {
         let mut today = world.today;
         limit_done(&mut today);
         let mut desk = Desk {
+            native: false,
+            native_controls: true,
             today,
             overview: world.overview,
             details: world.details,
@@ -178,7 +182,7 @@ impl Desk {
 
     /// Whether the read is live. Controls need it.
     fn live(&self) -> bool {
-        self.freshness.0 == FreshnessState::Live && self.overview.is_some()
+        self.freshness.0 == FreshnessState::Live && self.overview.is_some() && self.native_controls
     }
 
     /// Takes a new, complete read. It replaces the last one; local requests
@@ -227,6 +231,79 @@ impl Desk {
         &self.today
     }
 
+    /// Empty native projection. No fixture decisions or fabricated authority.
+    pub(crate) fn native() -> Self {
+        let mut desk = Self::new(Scenario::Unreadable);
+        desk.native = true;
+        desk.native_controls = false;
+        desk.today = Today::default();
+        desk.overview = None;
+        desk.details.clear();
+        desk.now = 0;
+        desk.lose_read(FreshnessState::Unreadable, "No daemon read yet.");
+        desk
+    }
+
+    /// Replace exact details only after the native host checks their source.
+    pub(crate) fn native_read(&mut self, overview: DayOverview, details: Vec<MissionDetail>) {
+        self.details = details;
+        self.apply_overview(overview)
+            .expect("host checked overview");
+    }
+
+    /// Native reads used only for a fresh, host-qualified control intent.
+    pub(crate) fn native_overview(&self) -> Option<&DayOverview> {
+        self.overview.as_ref()
+    }
+
+    pub(crate) fn native_capability(&mut self, allowed: bool) {
+        self.native_controls = allowed;
+    }
+
+    /// Restore or show one exact journaled operation. Never sends it.
+    pub(crate) fn native_pending(
+        &mut self,
+        mission: &str,
+        command: &ControlCommand,
+        delivery: Delivery,
+    ) {
+        let local = self.local_mut(mission);
+        local.delivery = delivery;
+        local.asked = Some(match command.action {
+            ControlAction::Pause => ControlAsk::Pause,
+            ControlAction::Resume => ControlAsk::Resume,
+        });
+        local.command = Some(command.clone());
+        self.changed();
+    }
+
+    /// An acknowledged exact receipt can settle delivery, not an overview/WS.
+    pub(crate) fn native_receipt(&mut self, receipt: ControlOperation) -> IntentOutcome {
+        if receipt.state == OperationState::Acknowledged {
+            return self.apply_receipt(receipt);
+        }
+        let mission = receipt.mission_id.clone();
+        self.native_pending(&mission, &receipt.command, Delivery::Unknown);
+        self.local_mut(&mission).receipt = Some(receipt);
+        self.changed();
+        self.outcome(
+            OutcomeStatus::Unknown,
+            "This operation has not been acknowledged. Check only; do not resend.",
+        )
+    }
+
+    pub(crate) fn native_cancel(&mut self, mission: &str) {
+        let local = self.local_mut(mission);
+        local.delivery = Delivery::Idle;
+        local.command = None;
+        local.asked = None;
+        self.changed();
+    }
+
+    pub(crate) fn native_outcome(&self, status: OutcomeStatus, message: &str) -> IntentOutcome {
+        self.outcome(status, message)
+    }
+
     fn outcome(&self, status: OutcomeStatus, message: &str) -> IntentOutcome {
         IntentOutcome {
             status,
@@ -267,6 +344,12 @@ impl Desk {
 
     /// Checks a decide intent and marks the decision as sending.
     pub fn begin_decide(&mut self, intent: &DecideIntent) -> Result<Started, IntentOutcome> {
+        if self.native {
+            return Err(self.outcome(
+                OutcomeStatus::Rejected,
+                "Decision transport is unavailable.",
+            ));
+        }
         let at = self.current(&intent.decision_id, intent.revision)?;
         let decision = &self.today.decisions[at];
         match decision.delivery {
@@ -578,6 +661,12 @@ impl Desk {
         ask: ControlAsk,
         pause_operation_id: Option<&str>,
     ) -> Result<StartedControl, IntentOutcome> {
+        if self.native {
+            return Err(self.outcome(
+                OutcomeStatus::Rejected,
+                "Native controls require the authenticated host.",
+            ));
+        }
         if !self.live() {
             return Err(self.outcome(
                 OutcomeStatus::Rejected,

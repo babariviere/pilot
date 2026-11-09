@@ -84,6 +84,26 @@ async function fixture(t: TestContext) {
 			},
 		},
 		memory,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		{
+			daemonId: "synthetic-daemon",
+			lineageId: "synthetic-lineage",
+			daemonVersion: "0.0.0",
+			protocolVersion: 1,
+			minimumClientProtocolVersion: 1,
+			platform: process.platform,
+			arch: process.arch,
+			capabilities: {
+				independentExecution: true,
+				powerManagement: false,
+				systemSleepEvents: false,
+				swiftUIArtifacts: false,
+				coordinatorIsolation: false,
+			},
+		},
 	);
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
@@ -134,6 +154,13 @@ async function roundTrip(ws: WebSocket): Promise<void> {
 
 test("Day returns complete existing projections without inferring progress from activity", async (t) => {
 	const f = await fixture(t);
+	const hello = await (await f.api("/hello")).json();
+	assert.equal(hello.capabilities.dayOverview, 1);
+	assert.equal(
+		hello.capabilities.missionControls,
+		undefined,
+		"no native capability service, no controls advertisement",
+	);
 	for (let i = 0; i < 11; i++) {
 		const mission = f.store.create({ projectId: f.project.id, title: `Mission ${i}` });
 		f.put({ id: `working-${i}`, missionId: mission.id, state: "working" });

@@ -27,6 +27,8 @@ type Listeners = Rc<RefCell<Vec<(u64, Callback<Today>)>>>;
 #[class]
 pub struct TodayFeed {
     desk: Desk,
+    native: Option<crate::host::NativeHost>,
+    watch_task: Option<Spawned<()>>,
     listeners: Listeners,
     next_listener: u64,
     latency: Duration,
@@ -35,7 +37,7 @@ pub struct TodayFeed {
 impl TodayFeed {
     /// Sends the read model to every listener, in order with other posts.
     fn publish(&self) {
-        let today = self.desk.today().clone();
+        let today = self.snapshot();
         for (_, listener) in self.listeners.borrow().iter() {
             listener.post(today.clone());
         }
@@ -46,6 +48,9 @@ impl TodayFeed {
         this: Instance<Self>,
         begin: impl FnOnce(&mut Desk) -> Result<StartedAction, IntentOutcome>,
     ) -> IntentOutcome {
+        if let Some(outcome) = this.with(Self::native_attention_unavailable) {
+            return outcome;
+        }
         let started = this.with_mut(|feed| {
             let started = begin(&mut feed.desk);
             if started.is_ok() {
@@ -69,6 +74,63 @@ impl TodayFeed {
     pub fn desk(&self) -> &Desk {
         &self.desk
     }
+
+    fn native_attention_unavailable(&self) -> Option<IntentOutcome> {
+        self.native.as_ref().map(|host| IntentOutcome {
+            status: crate::model::OutcomeStatus::Rejected,
+            revision: host.snapshot().revision,
+            message: "Decision and action transport is not connected. Nothing was sent.".into(),
+        })
+    }
+
+    /// Native-only factory, called under the app root owner. Never exported to TSX.
+    /// Selection and credentials stay with the trusted native bootstrap.
+    pub fn from_host(host: crate::host::NativeHost) -> Self {
+        let listeners: Listeners = Rc::default();
+        let weak = Rc::downgrade(&listeners);
+        let changes = host.changes();
+        let source = host.clone();
+        let watch_task = spawn(async move {
+            while changes.recv().await.is_ok() {
+                let Some(listeners) = weak.upgrade() else {
+                    break;
+                };
+                let today = source.snapshot();
+                for (_, listener) in listeners.borrow().iter() {
+                    listener.post(today.clone());
+                }
+            }
+        });
+        Self {
+            desk: Desk::native(),
+            native: Some(host),
+            watch_task: Some(watch_task),
+            listeners,
+            next_listener: 0,
+            latency: Duration::ZERO,
+        }
+    }
+
+    async fn native_result(
+        host: crate::host::NativeHost,
+        result: async_channel::Receiver<Result<IntentOutcome, crate::host::Error>>,
+    ) -> IntentOutcome {
+        match result.recv().await {
+            Ok(Ok(outcome)) => outcome,
+            error => IntentOutcome { status: if matches!(error, Ok(Err(crate::host::Error::Unknown))) { crate::model::OutcomeStatus::Unknown } else { crate::model::OutcomeStatus::Rejected }, revision: host.snapshot().revision, message: "This request could not be confirmed. Refresh or check the saved operation; nothing is resent.".into() }
+        }
+    }
+}
+
+impl Drop for TodayFeed {
+    fn drop(&mut self) {
+        if let Some(task) = self.watch_task.take() {
+            task.cancel();
+        }
+        if let Some(host) = &self.native {
+            let _ = host.close();
+        }
+    }
 }
 
 #[class]
@@ -78,6 +140,8 @@ impl TodayFeed {
     pub fn new(scenario: Option<Scenario>) -> Self {
         TodayFeed {
             desk: Desk::new(scenario.unwrap_or_default()),
+            native: None,
+            watch_task: None,
             listeners: Rc::default(),
             next_listener: 0,
             latency: MOCK_LATENCY,
@@ -86,7 +150,9 @@ impl TodayFeed {
 
     /// The read model now.
     pub fn snapshot(&self) -> Today {
-        self.desk.today().clone()
+        self.native
+            .as_ref()
+            .map_or_else(|| self.desk.today().clone(), |h| h.snapshot())
     }
 
     /// Calls `listener` with the whole read model after every change, until
@@ -106,6 +172,9 @@ impl TodayFeed {
     /// Answers a decision with one of its options. Resolves once the
     /// coordinator confirms, or with `unknown` when no confirmation came.
     pub async fn decide(this: Instance<Self>, intent: DecideIntent) -> IntentOutcome {
+        if let Some(outcome) = this.with(Self::native_attention_unavailable) {
+            return outcome;
+        }
         let started = this.with_mut(|feed| {
             let started = feed.desk.begin_decide(&intent);
             if started.is_ok() {
@@ -127,6 +196,9 @@ impl TodayFeed {
 
     /// Puts a decision at the end of the queue. It stays unanswered.
     pub fn later(&mut self, intent: DecisionRef) -> IntentOutcome {
+        if let Some(outcome) = self.native_attention_unavailable() {
+            return outcome;
+        }
         let before = self.desk.today().revision;
         let outcome = self.desk.later(&intent);
         if self.desk.today().revision != before {
@@ -137,6 +209,9 @@ impl TodayFeed {
 
     /// Reads whether an unconfirmed send or push landed. Never resends.
     pub async fn check(this: Instance<Self>, intent: DecisionRef) -> IntentOutcome {
+        if let Some(outcome) = this.with(Self::native_attention_unavailable) {
+            return outcome;
+        }
         let started = this.with_mut(|feed| {
             let started = feed.desk.begin_check(&intent);
             if started.is_ok() {
@@ -160,6 +235,9 @@ impl TodayFeed {
     /// screen showed. The question joins the decision's `answers` at once,
     /// as asking; the answer follows. Help never answers the decision.
     pub async fn ask(this: Instance<Self>, intent: AskIntent) -> IntentOutcome {
+        if let Some(outcome) = this.with(Self::native_attention_unavailable) {
+            return outcome;
+        }
         let started = this.with_mut(|feed| {
             let started = feed.desk.begin_ask(&intent);
             if started.is_ok() {
@@ -182,6 +260,9 @@ impl TodayFeed {
     /// Reads whether a question whose answer was lost has a saved answer.
     /// Never asks again.
     pub async fn check_answer(this: Instance<Self>, intent: AnswerRef) -> IntentOutcome {
+        if let Some(outcome) = this.with(Self::native_attention_unavailable) {
+            return outcome;
+        }
         let started = this.with_mut(|feed| {
             let started = feed.desk.begin_check_answer(&intent);
             if started.is_ok() {
@@ -222,6 +303,9 @@ impl TodayFeed {
     /// Reads whether an action request whose answer was lost landed. Never
     /// sends it again.
     pub async fn check_action(this: Instance<Self>, intent: ActionCheck) -> IntentOutcome {
+        if let Some(outcome) = this.with(Self::native_attention_unavailable) {
+            return outcome;
+        }
         let started = this.with_mut(|feed| {
             let started = feed.desk.begin_check_action(&intent);
             if started.is_ok() {
@@ -245,7 +329,10 @@ impl TodayFeed {
     /// control and working chats. Null when the mission is not in the read.
     /// Read it again after every change.
     pub fn mission(&self, mission_id: String) -> Option<MissionPage> {
-        self.desk.mission(&mission_id)
+        self.native.as_ref().map_or_else(
+            || self.desk.mission(&mission_id),
+            |h| h.mission(&mission_id),
+        )
     }
 
     /// Pauses all of a mission's work, named at the control revision the
@@ -253,6 +340,10 @@ impl TodayFeed {
     /// pausing with work that needs a look. A lost answer is `unknown`, and
     /// only `checkControl` can settle it.
     pub async fn pause(this: Instance<Self>, intent: PauseIntent) -> IntentOutcome {
+        if let Some(host) = this.with(|f| f.native.clone()) {
+            let result = host.pause(intent.mission_id, intent.revision);
+            return Self::native_result(host, result).await;
+        }
         let started = this.with_mut(|feed| {
             let started = feed.desk.begin_pause(&intent);
             if started.is_ok() {
@@ -274,6 +365,14 @@ impl TodayFeed {
 
     /// Resumes the work that the named Pause paused, and nothing else.
     pub async fn resume(this: Instance<Self>, intent: ResumeIntent) -> IntentOutcome {
+        if let Some(host) = this.with(|f| f.native.clone()) {
+            let result = host.resume(
+                intent.mission_id,
+                intent.revision,
+                intent.pause_operation_id,
+            );
+            return Self::native_result(host, result).await;
+        }
         let started = this.with_mut(|feed| {
             let started = feed.desk.begin_resume(&intent);
             if started.is_ok() {
@@ -296,6 +395,10 @@ impl TodayFeed {
     /// Reads whether a Pause or Resume whose answer was lost took effect.
     /// Never sends it again.
     pub async fn check_control(this: Instance<Self>, intent: MissionRef) -> IntentOutcome {
+        if let Some(host) = this.with(|f| f.native.clone()) {
+            let result = host.check(intent.mission_id);
+            return Self::native_result(host, result).await;
+        }
         let started = this.with_mut(|feed| {
             let started = feed.desk.begin_check_control(&intent);
             if started.is_ok() {
@@ -322,6 +425,9 @@ impl TodayFeed {
     /// read model. Resolves with the number of pulses made. For
     /// measurements only: it is not a user intent.
     pub async fn pulse(this: Instance<Self>, every_ms: Option<u32>, count: Option<u32>) -> u32 {
+        if this.with(|f| f.native.is_some()) {
+            return 0;
+        }
         let every = every_ms.map_or(PULSE_EVERY, |ms| Duration::from_millis(ms.into()));
         let count = count.unwrap_or(PULSE_COUNT);
         let mut made = 0;

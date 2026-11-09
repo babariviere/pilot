@@ -108,6 +108,10 @@ pub enum FreshnessState {
     Offline,
     /// Nothing could be read. There is no earlier read to show.
     Unreadable,
+    /// Saved on disk; not yet checked against this selected daemon.
+    Cached,
+    /// The source, protocol, capability or authoritative read cannot be used.
+    Unavailable,
 }
 
 /// How fresh Today's read is. Controls need a live read.

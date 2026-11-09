@@ -37,6 +37,8 @@ public struct DaemonCapabilities: Codable, Equatable, Sendable {
     public let passiveMissionLifecycle: Bool?
     public let passiveMissionCompletion: Bool?
     public let passiveTaskModel: Bool?
+    public let dayOverview: Int?
+    public let missionControls: Int?
     public let passiveFailedModel: Bool?
     public let guardedQueue: Bool?
     public var questionReplies: Int? = nil

@@ -12,7 +12,7 @@
 use serde::{Deserialize, Serialize};
 
 /// `GET /api/projects/:projectId/day`: complete local projections.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DayOverview {
     /// Only 1 is read. Another version is refused, not guessed.
@@ -32,7 +32,7 @@ pub struct DayOverview {
 }
 
 /// The parts of `ProjectDashboard` Today reads.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Dashboard {
     /// Active missions, those needing the user first.
@@ -42,7 +42,7 @@ pub struct Dashboard {
 }
 
 /// A dashboard section: rows and the full count.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Section<T> {
     /// Every matching row, not just those in `items`.
@@ -61,7 +61,7 @@ impl<T> Default for Section<T> {
 }
 
 /// `DashboardMission`: task counts are host data, not movement.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DashboardMission {
     pub id: String,
@@ -78,7 +78,7 @@ pub struct DashboardMission {
 }
 
 /// `DashboardWorkingItem`: a chat working now.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkingItem {
     pub session_id: String,
@@ -89,7 +89,7 @@ pub struct WorkingItem {
 }
 
 /// `MissionReportView`.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReportView {
     pub report: Report,
@@ -98,7 +98,7 @@ pub struct ReportView {
 }
 
 /// Whether a report still describes the task's current owner and source.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Currentness {
     Current,
@@ -109,7 +109,7 @@ pub enum Currentness {
 }
 
 /// Where a movement assessment came from. Only `agent_report` exists in v1.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Provenance {
     AgentReport,
@@ -119,7 +119,7 @@ pub enum Provenance {
 }
 
 /// `MissionReport`.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Report {
     pub version: u32,
@@ -135,7 +135,7 @@ pub struct Report {
 }
 
 /// `MissionReportWrite`, without its source token and predecessor.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReportWrite {
     pub version: u32,
@@ -149,7 +149,7 @@ pub struct ReportWrite {
 }
 
 /// An agent's movement assessment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Movement {
     Moving,
@@ -160,7 +160,7 @@ pub enum Movement {
 }
 
 /// `MissionControl`.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Control {
     pub version: u32,
@@ -175,7 +175,7 @@ pub struct Control {
 }
 
 /// A mission's control state. Pausing is not paused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ControlState {
     #[default]
@@ -223,7 +223,7 @@ pub struct ControlCommand {
 
 /// `MissionControlOperation`: a historical receipt. Reading it never
 /// executes or retries work.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ControlOperation {
     pub version: u32,
@@ -237,7 +237,7 @@ pub struct ControlOperation {
 }
 
 /// Where an operation is. An entered operation interrupted is Unknown.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationState {
     Entered,
@@ -247,7 +247,7 @@ pub enum OperationState {
 }
 
 /// `MissionControlMember`.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ControlMember {
     pub session_id: String,
@@ -256,7 +256,7 @@ pub struct ControlMember {
 }
 
 /// One member's place in a Pause or Resume.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemberState {
     Pending,
@@ -270,7 +270,7 @@ pub enum MemberState {
 
 /// The parts of `MissionDetail` (`GET /api/missions/:id`) the mission
 /// overview reads.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MissionDetail {
     pub mission: MissionHead,
@@ -278,7 +278,7 @@ pub struct MissionDetail {
 }
 
 /// The parts of `Mission` the overview reads.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MissionHead {
     pub id: String,
@@ -290,7 +290,7 @@ pub struct MissionHead {
 }
 
 /// `MissionCurrentPhase`.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Phase {
     pub name: String,
@@ -299,7 +299,7 @@ pub struct Phase {
 }
 
 /// The parts of `MissionTask` the overview reads.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Task {
     pub id: String,
@@ -312,7 +312,7 @@ pub struct Task {
 }
 
 /// `MissionTaskStatus`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
     Todo,

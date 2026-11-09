@@ -10,6 +10,7 @@ pub mod contract;
 pub mod desk;
 pub mod feed;
 pub mod fixture;
+pub mod host;
 pub mod model;
 pub mod project;
 

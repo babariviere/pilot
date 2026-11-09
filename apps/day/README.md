@@ -8,7 +8,9 @@ app source.
 Status: Today still runs on **mock data**. Its missions, agent reports and
 Pause controls arrive as the daemon's v1 contracts
 ([mission-controls-reports.md](../../docs/technical/mission-controls-reports.md)),
-read by a mock daemon. Day connects to no daemon, account or user data yet. It is not the default app, it is not packaged or released,
+read by a mock daemon. The Rust-only [native host seam](../../docs/technical/day-native-host.md)
+now supports real authenticated reads and journaled mission controls in isolated tests.
+The default entry still connects to no daemon, account or user data. It is not the default app, it is not packaged or released,
 and it does not change the GPUI or Swift apps or their build. Those apps stay
 the shipping desktop apps until Day passes native acceptance and cutover.
 
@@ -116,14 +118,13 @@ shared update workload: `Desk::pulse` moves the next moving mission on every
 100 ms, adds a result every fourth time, and publishes the whole read model,
 300 times. `TodayFeed.pulse` is for measurements only, not a user intent.
 
-Not built yet: the day
-switcher, New, rituals, Changes, Automations, the sky dither, the daemon
-adapter (reads, WebSocket updates and the native host's control POST) and
+Not built yet: the day switcher, New, rituals, Changes, Automations, the sky
+dither, bootstrap selection for the delivered native daemon host and
 opening a chat from the mission overview. Decisions, actions, help answers,
 results and Coming up still come from the mock world, not from contracts. The
 mock help and action services in `native/` follow the attention contracts
 ([decision-assistance.md](../../docs/technical/decision-assistance.md)), but no
-production host is wired: no authenticated native user, permission checks,
+production attention host is wired: no authenticated native user, permission checks,
 current-question or file readers, read-only help producer, durable receipts or
 capacity errors (the service refuses past 4,096 records). The mock flows are
 not end-to-end. Day shows links as text and opens nothing: `capabilities`
@@ -133,7 +134,8 @@ grants no URL opening.
 
 | Owner | What |
 | --- | --- |
-| Rust (`native/`) | The `Today` read model, every rule for changing it (`Desk`), revisions, delivery state (idle, sending, unknown, checking), the v1 contract mirrors (`contract.rs`) and their projection (`project.rs`), control commands, and the mock coordinator and daemon where a daemon adapter will sit |
+| Rust (`native/`) | The `Today` read model, every rule for changing it (`Desk`), revisions, delivery state (idle, sending, unknown, checking), the v1 contract mirrors (`contract.rs`) and their projection (`project.rs`), control commands, and mock services used by fixtures |
+| Trusted native host (`native/src/host.rs`) | Explicit profile/home/project selection, authenticated loopback reads, invalidation-only WS, private control journal, exact receipt lookup and joined close. Not activated by the mock entry. |
 | TSX | Layout, copy, and screen state: picked option, open help, question drafts, the decision in front |
 
 TSX imports one class, `TodayFeed`, from `pilot-day/native`. Its generated

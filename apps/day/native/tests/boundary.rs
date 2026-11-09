@@ -15,7 +15,7 @@ fn the_screen_gets_typed_read_models_and_intents() {
         "export type MissionState = \"moving\" | \"notMoving\" | \"unreported\" | \"waiting\" | \"stuck\" | \"unconfirmed\" | \"pausing\" | \"paused\" | \"resuming\";",
         "export type ControlState = \"running\" | \"pausing\" | \"paused\" | \"resuming\" | \"unknown\";",
         "export type Currentness = \"current\" | \"stale\" | \"unavailable\";",
-        "export type FreshnessState = \"live\" | \"stale\" | \"offline\" | \"unreadable\";",
+        "export type FreshnessState = \"live\" | \"stale\" | \"offline\" | \"unreadable\" | \"cached\" | \"unavailable\";",
         "  mission(missionId: string): MissionPage | null;",
         "  pause(intent: PauseIntent): Promise<IntentOutcome>;",
         "  resume(intent: ResumeIntent): Promise<IntentOutcome>;",
