@@ -46,6 +46,7 @@ import type {
 	SharedMissionSnapshot,
 	UpdateMissionRequest,
 } from "@pilot/protocol";
+import { ATTENTION_SCHEMA, AttentionStore } from "./attention-store.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import { HUMAN_REVIEW_SCHEMA, HumanReviewStore } from "./human-review-store.ts";
@@ -722,6 +723,13 @@ export class MissionStore {
 		durable: () => this.durable(),
 	});
 
+	/** Help and human actions share the replica, never approval/ask rows. */
+	readonly attention = new AttentionStore({
+		one: (sql, ...params) => this.one(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work, true),
+		durable: () => this.durable(),
+	});
 	readonly workflowConfirmations = new WorkflowConfirmationStore({
 		one: (sql, ...params) => this.one(sql, ...params),
 		run: (sql, ...params) => this.run(sql, ...params),
@@ -800,6 +808,7 @@ export class MissionStore {
 		this.db.exec(INSIGHTS_OWNER_SCHEMA);
 		this.db.exec(INSIGHTS_TRANSITION_SCHEMA);
 		this.db.exec(WORKFLOW_CONFIRMATION_SCHEMA);
+		this.db.exec(ATTENTION_SCHEMA);
 		this.db.exec(HUMAN_REVIEW_SCHEMA);
 		this.db.exec(RETAINED_PROJECTION_SCHEMA);
 		this.db.exec(REVIEW_REQUEST_SCHEMA);
@@ -5256,6 +5265,32 @@ export class MissionStore {
 			: this.one("SELECT * FROM decisions WHERE mission_id = ? AND id = ?", id, decisionId);
 		if (!row) throw new NotFound(`Unknown decision: ${decisionId}`);
 		return decisionFrom(row);
+	}
+	/** Exact help source. A pending proposal is a choice; recorded decisions are binding guidance. */
+	assistanceSource(missionId: string, kind: "proposal" | "binding_decision", id: string) {
+		const mission = this.require(missionId);
+		if (mission.status !== "active") throw new Conflict("Assistance mission is inactive");
+		const decision = kind === "binding_decision" ? this.decision(missionId, id) : undefined;
+		const proposal =
+			kind === "proposal"
+				? this.one(
+						"SELECT * FROM decision_proposals WHERE mission_id=? AND id=? AND status='pending'",
+						missionId,
+						id,
+					)
+				: undefined;
+		if ((!decision && !proposal) || decision?.replacement || decision?.withdrawn)
+			throw new Conflict("Assistance source is no longer current");
+		return {
+			projectId: mission.projectId,
+			eventId: Number(this.one("SELECT COALESCE(MAX(id),0) n FROM events WHERE mission_id=?", missionId)!.n),
+			// Include current binding text with the proposal, not just its proposed replacement.
+			source: JSON.stringify(
+				proposal
+					? { proposal: proposalFrom(proposal), decision: this.decision(missionId, String(proposal.decision_id)) }
+					: { decision },
+			),
+		};
 	}
 
 	proposals(id: string): MissionDecisionProposal[] {

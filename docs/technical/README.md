@@ -22,6 +22,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [TypeScript dependency audit, 2026-10-29](typescript-dependency-audit.md)
 - [Codebase cleanup decisions](untangle-codebase.md)
 - [Durable operations](durable-operations.md)
+- [Decision help and human-action contracts (host seam)](decision-assistance.md)
 - [Upgrade readiness and blocker audit](upgrade-readiness.md)
 - [Resumable upgrade checkpoints and native host APIs](resumable-upgrades.md)
 - [Tool access by role](tool-access-by-role.md)
