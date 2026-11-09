@@ -54,6 +54,8 @@ export type InterviewWrite =
 export interface InterviewAgreementBinding {
 	enrollmentId: string;
 	submission: InterviewSubmission;
+	/** Native spec publication approved by this exact submitted review, never a new grant. */
+	planning?: { revision: number; digest: string };
 }
 
 export interface InterviewContinuation {

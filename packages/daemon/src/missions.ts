@@ -94,6 +94,7 @@ import {
 	nonCodePolicyWrite,
 } from "./mission-non-code-acceptance.ts";
 import { parseNonCodeDelivery } from "./mission-non-code-delivery.ts";
+import { MISSION_PLAN_SCHEMA, MissionPlanStore } from "./mission-plan-store.ts";
 import { assignmentWrite, strictPlanningFields, TASK_WRITE_FIELDS } from "./mission-planning.ts";
 import { MissionReplica } from "./mission-replica.ts";
 import {
@@ -745,6 +746,12 @@ export class MissionStore {
 		transaction: (work) => this.transaction(work, true),
 		durable: () => this.durable(),
 	});
+	/** Native planning snapshots share the replica; no host/UI enrollment is installed. */
+	readonly plans = new MissionPlanStore({
+		one: (sql, ...params) => this.one(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work, true),
+	});
 	/** Internal creation-only Day seam. No REST enrollment or legacy adoption. */
 	readonly interviews = new MissionInterviewStore({
 		one: (sql, ...params) => this.one(sql, ...params),
@@ -764,6 +771,16 @@ export class MissionStore {
 		},
 		ownerFence: (id, owner) => this.interviewOwnerFence(id, owner),
 		mapBrief: (id, markdown) => this.writeBrief(id, markdown, this.require(id).briefRevision).revision,
+		publishedAgreement: (id, brief, submissionDigest) => {
+			const p = this.plans.get(id),
+				publication = p?.publication;
+			return publication &&
+				publication.submissionDigest === submissionDigest &&
+				publication.briefRevision === brief.revision &&
+				publication.markdown === brief.markdown
+				? { revision: p!.revision, digest: publication.digest }
+				: undefined;
+		},
 	});
 	readonly workflowConfirmations = new WorkflowConfirmationStore({
 		one: (sql, ...params) => this.one(sql, ...params),
@@ -865,6 +882,7 @@ export class MissionStore {
 		this.db.exec(INSIGHTS_TRANSITION_SCHEMA);
 		this.db.exec(WORKFLOW_CONFIRMATION_SCHEMA);
 		this.db.exec(MISSION_INTERVIEW_SCHEMA);
+		this.db.exec(MISSION_PLAN_SCHEMA);
 		this.db.exec(ATTENTION_SCHEMA);
 		this.db.exec(MISSION_CONTROL_SCHEMA);
 		this.db.exec(HUMAN_REVIEW_SCHEMA);

@@ -36,6 +36,11 @@ interface Port {
 	create(input: { projectId: string; title: string }, ownerSessionId: string): string;
 	ownerFence(missionId: string, ownerSessionId: string): MissionInterview["ownerFence"];
 	mapBrief(missionId: string, markdown: string): number;
+	publishedAgreement?(
+		missionId: string,
+		brief: { revision: number; markdown: string },
+		submissionDigest: string,
+	): { revision: number; digest: string } | undefined;
 }
 
 /** Append-only snapshots share missions.sqlite's transaction/replica. No wake or worker side effects. */
@@ -158,14 +163,14 @@ export class MissionInterviewStore {
 		const state = this.latest(missionId);
 		if (!state) return undefined;
 		const s = state.submission;
+		const planning = s ? this.port.publishedAgreement?.(missionId, brief, s.digest) : undefined;
 		if (
 			!s ||
-			brief.revision !== s.briefRevision ||
-			brief.markdown !== s.agreementMarkdown ||
+			(!planning && (brief.revision !== s.briefRevision || brief.markdown !== s.agreementMarkdown)) ||
 			canonicalJSON(state.ownerFence) !== canonicalJSON(this.port.ownerFence(missionId, state.fence.ownerSessionId))
 		)
 			throw new Conflict("Current complete interview agreement required");
-		return { enrollmentId: state.fence.enrollmentId, submission: s };
+		return { enrollmentId: state.fence.enrollmentId, submission: s, ...(planning ? { planning } : {}) };
 	}
 	durable(): Promise<void> {
 		return this.port.durable();

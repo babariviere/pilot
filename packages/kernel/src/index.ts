@@ -4,6 +4,7 @@ export { probeReachability, providerOrigin } from "./connectivity.ts";
 export type { CoordinatorSources } from "./coordinator-sources.ts";
 export { formatFailure, safeFailureText } from "./failure.ts";
 export { inputOrigin } from "./input-origin.ts";
+export { createMissionPlanTool, type NativePlanningPort } from "./mission-plan-tool.ts";
 export type { MissionAction } from "./mission-tools.ts";
 export type { AskContext, MissionContext, PilotContext, WorkspaceContext, WorkspaceReset } from "./policy.ts";
 export type {

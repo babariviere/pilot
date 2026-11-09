@@ -90,6 +90,13 @@ import {
 	INTERVIEW_SKILL_ADAPTATION,
 	INTERVIEW_SKILL_PATHS,
 } from "./mission-interview-skills.ts";
+import { createMissionPlanTool, type NativePlanningPort } from "./mission-plan-tool.ts";
+import {
+	assertPlanningSkills,
+	PLANNING_SKILL_ADAPTATION,
+	PLANNING_SKILL_PATHS,
+	planningToolAllowed,
+} from "./mission-planning-skills.ts";
 import { type PerformanceSink, type PreparationMark, RequestTiming } from "./performance.ts";
 import type { AskContext } from "./policy.ts";
 import { Posthorse } from "./posthorse.ts";
@@ -117,6 +124,8 @@ export interface NativeAdapterOptions {
 	coordinatorSources?: import("./coordinator-sources.ts").ReadCoordinatorSources;
 	/** Host-selected new-flow interview only. No legacy auto-enrollment or worker wiring. */
 	missionInterview?: boolean;
+	/** Explicit host-only planning profile. Denies external writes and all execution tools. */
+	missionPlanning?: NativePlanningPort;
 	/** Operational-read-only profile. Personal resources and every tool except diagnostics are unavailable. */
 	diagnostics?: boolean;
 	/** Closed local Insights profile, never a Diagnostics exception. */
@@ -437,7 +446,8 @@ export class NativeAdapter {
 		const readOnly = !!options.ask || specialist;
 		if (options.coordinatorSources && (readOnly || options.bundledExtensions === false))
 			throw new Error("Coordinator source admission requires its bundled native profile");
-		if (options.missionInterview && (!options.coordinatorSources || readOnly))
+		const missionInterview = options.missionInterview || options.missionPlanning;
+		if (missionInterview && (!options.coordinatorSources || readOnly))
 			throw new Error("Mission interview skills require a trusted coordinator host");
 		const allowedTools = insights
 			? [INSIGHTS_HISTORY_TOOL, INSIGHTS_BACKLOG_TOOL]
@@ -486,6 +496,7 @@ export class NativeAdapter {
 		let renderPrompt: (() => string) | undefined;
 		let registerHostTool: ((tool: ToolDefinition) => void) | undefined;
 		const hostTools = new Map((options.hostTools ?? []).map((tool) => [tool.name, tool]));
+		if (options.missionPlanning) hostTools.set("mission_plan", createMissionPlanTool(options.missionPlanning));
 		const usage = new UsageTracker(options.onUsageChanged);
 		const infrastructure = new InfrastructureChildren();
 		const mcp = createTrackedMcpExtension(infrastructure);
@@ -504,6 +515,11 @@ export class NativeAdapter {
 				pi.registerTool(tool);
 			};
 			for (const tool of hostTools.values()) pi.registerTool(tool);
+			if (options.missionPlanning)
+				pi.on("tool_call", (event) => {
+					if (!planningToolAllowed(event.toolName))
+						return { block: true, reason: `Planning profile denies tool: ${event.toolName}` };
+				});
 			if (readOnly) {
 				// Covers nested codemode execution too, not just model declarations.
 				pi.on("tool_call", (event) => {
@@ -556,21 +572,24 @@ export class NativeAdapter {
 						appendSystemPrompt: [
 							...(options.loaderOptions?.appendSystemPrompt ?? []),
 							...(options.memoryPrompt ? [options.memoryPrompt] : []),
-							...(options.missionInterview ? [INTERVIEW_SKILL_ADAPTATION] : []),
+							...(missionInterview ? [INTERVIEW_SKILL_ADAPTATION] : []),
+							...(options.missionPlanning ? [PLANNING_SKILL_ADAPTATION] : []),
 						],
 						cwd,
 						agentDir,
 						settingsManager,
 						additionalSkillPaths: [
 							...artifactSkillPaths,
-							...(options.missionInterview ? INTERVIEW_SKILL_PATHS : []),
+							...(missionInterview ? INTERVIEW_SKILL_PATHS : []),
+							...(options.missionPlanning ? PLANNING_SKILL_PATHS : []),
 							...(options.loaderOptions?.additionalSkillPaths ?? []),
 						],
 						...(options.coordinatorSources
 							? {
 									skillsOverride: (loaded: ReturnType<DefaultResourceLoader["getSkills"]>) => {
 										const selected = options.loaderOptions?.skillsOverride?.(loaded) ?? loaded;
-										if (options.missionInterview) assertInterviewSkills(selected.skills);
+										if (missionInterview) assertInterviewSkills(selected.skills);
+										if (options.missionPlanning) assertPlanningSkills(selected.skills);
 										coordinatorSkills = snapshotCoordinatorSkills(selected.skills, agentDir);
 										return selected;
 									},
@@ -578,7 +597,12 @@ export class NativeAdapter {
 							: {}),
 						extensionFactories: [
 							...(posthorse ? [posthorse.factory] : []),
-							{ name: "codemode", builtin: true, replaceable: true, factory: createCodemodeExtension() },
+							{
+								name: "codemode",
+								builtin: true,
+								replaceable: true,
+								factory: createCodemodeExtension(options.missionPlanning ? { models: false } : {}),
+							},
 							{ name: "tool-search", builtin: true, replaceable: true, factory: createToolSearchExtension() },
 							{ name: "mcp", builtin: true, replaceable: true, factory: mcp },
 							...(options.loaderOptions?.extensionFactories ?? []),

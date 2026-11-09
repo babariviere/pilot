@@ -51,6 +51,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Mission Pause/Resume and versioned agent reports](mission-controls-reports.md)
 - [Proposed mission interview and approval contract](mission-interview-approval.md)
 - [Day interview and agreement backend (host-only)](day-mission-agreements.md)
+- [Native mission planning and Fog of war (host-only)](day-mission-planning.md)
 - [Proposed native Review and durable diff annotations](mission-native-review.md)
 - [Global optional Review request producer and read API](global-review-requests.md)
 - [Retained changes and landing observations](landed-changes.md)
