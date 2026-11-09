@@ -27,6 +27,7 @@ import type { CodePullRequestObservation } from "./github-delivery.ts";
 import { githubRepository } from "./github-url.ts";
 import { observeCodeContributions, observeCodeIntegration } from "./mission-code-delivery.ts";
 import { evaluateContributionAllocation } from "./mission-contribution-allocation.ts";
+import { MissionControls } from "./mission-controls.ts";
 import {
 	type DeliveryObservation,
 	type DeliveryReference,
@@ -38,6 +39,7 @@ import { type LinearClosingGuard, linearPrGuidance, unavailableClosingGuard } fr
 import type { NonCodeAcceptanceState } from "./mission-non-code-acceptance.ts";
 import { parseNonCodeDelivery } from "./mission-non-code-delivery.ts";
 import { MissionNotices } from "./mission-notices.ts";
+import { MissionReports } from "./mission-reports.ts";
 import {
 	evaluateMissionReview,
 	type ReviewProducer,
@@ -195,9 +197,15 @@ export class MissionService {
 	private sharing?: import("./retired-devboxes.ts").LegacyMissionOwnership;
 	setSharedContext(sharing: import("./retired-devboxes.ts").LegacyMissionOwnership): void {
 		this.sharing = sharing;
+		this.controls.setExternalDrain(async (missionId) => {
+			if (sharing.remoteOccupied(missionId))
+				throw new Conflict("Remote mission work has no acknowledged pause adapter");
+		});
 		this.notices.setRemoteOccupied((missionId) => sharing.remoteOccupied(missionId));
 	}
 	readonly notices: MissionNotices;
+	readonly controls: MissionControls;
+	readonly reports: MissionReports;
 	readonly compaction: CoordinatorCompaction;
 	private readonly store: MissionStore;
 	private readonly sessions: SessionManager;
@@ -232,7 +240,22 @@ export class MissionService {
 		this.projects = projects;
 		this.notices = new MissionNotices(store, sessions);
 		this.compaction = new CoordinatorCompaction(store, sessions);
+		this.controls = new MissionControls(store, sessions);
+		this.reports = new MissionReports(store);
 		sessions.setMissionBridge({
+			upgradeResumeFence: (sessionId) => {
+				if (this.sharing?.membership(sessionId)) throw new Conflict("Remote mission controls are unavailable");
+				return this.controls.fence(sessionId);
+			},
+			missionStopped: (sessionId) => {
+				const id = store.missionOf(sessions.missionWorkOwner(sessionId));
+				if (id) store.controls.stop(id);
+			},
+			missionResumeAuthorized: (sessionId, operationId) => this.controls.resumeAuthorized(sessionId, operationId),
+			missionAdmissionHeld: (sessionId) => {
+				const member = store.membership(sessionId);
+				return member ? store.controls.fenceCurrent(member.missionId).held : false;
+			},
 			coordinatorSourceMembers: (sessionId) => {
 				const member = store.membership(sessionId);
 				if (!member?.active || !member.coordinator) return undefined;
@@ -263,11 +286,13 @@ export class MissionService {
 			continueSession: (from, to) => store.continueSession(from, to),
 			noticeAllowed: (sessionId, requestId) => this.notices.allowed(sessionId, requestId),
 			spawnProject: (missionId) => {
+				this.controls.assertOpen(missionId);
 				const mission = store.require(missionId);
 				if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
 				return mission.projectId;
 			},
 			joinSpawn: (sessionId, missionId, coordinator, taskId, admission) => {
+				this.controls.assertOpen(missionId);
 				const mission = store.require(missionId);
 				if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
 				if (coordinator && mission.coordinatorSessionId)
@@ -394,8 +419,8 @@ export class MissionService {
 			this.contexts.set(sessionId, JSON.stringify(context ?? null));
 			sessions.missionChanged(sessionId, context);
 		});
-		store.onChange((missionId, passive, preferenceOnly) => {
-			if (preferenceOnly) return;
+		store.onChange((missionId, passive, preferenceOnly, readModelOnly) => {
+			if (preferenceOnly || readModelOnly) return;
 			operations.time("missions.context.publish", () => {
 				if (!store.get(missionId)) return;
 				if (!passive) {
@@ -1365,6 +1390,7 @@ export class MissionService {
 
 	/** Promote inside spawn admission, before the worker sees its first input. */
 	async startCoordinator(missionId: string, request: StartMissionCoordinatorRequest = {}): Promise<SessionSummary> {
+		this.controls.assertOpen(missionId);
 		if (!request || typeof request !== "object") throw new Error("Expected coordinator start options");
 		const mission = this.store.require(missionId);
 		if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
@@ -1386,6 +1412,7 @@ export class MissionService {
 
 	join(sessionId: string, request: JoinMissionRequest): SessionSummary {
 		if (!request || typeof request.missionId !== "string") throw new Error("missionId is required");
+		this.controls.assertOpen(request.missionId);
 		this.assertSameProject(sessionId, request.missionId);
 		const role = this.store.workerRole(request.missionId, request.role);
 		if (role === "explorer" && this.session(sessionId).mode !== "ask")
@@ -1658,6 +1685,7 @@ export class MissionService {
 
 	/** Repeat at final synchronous spawn admission: a former coordinator cannot borrow an earlier check. */
 	private assertStartActor(missionId: string, sessionId?: string, required = false): void {
+		this.controls.assertOpen(missionId);
 		if (!sessionId && !required) return; // Trusted user path, not a tool-supplied identity.
 		if (
 			!sessionId ||
@@ -1724,6 +1752,11 @@ export class MissionService {
 		const who = (id: string | undefined) => (id === undefined ? "user" : id === sessionId ? "you" : id);
 		const str = (key: string) => (typeof args[key] === "string" ? (args[key] as string) : undefined);
 		switch (action) {
+			case "report": {
+				if (args.report !== undefined) return this.reports.write(missionId, sessionId, args.report);
+				const task = this.store.resolveTask(missionId, args.taskId ?? args.id);
+				return this.reports.source(missionId, sessionId, task.id);
+			}
 			case "requestReview":
 			case "retireReview": {
 				const requests = optionalReviewRequests(this.store, this.sessions, this.projects);

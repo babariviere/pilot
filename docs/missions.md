@@ -18,6 +18,12 @@ In coordinator-owned planning, the coordinator maintains scope, assignments, and
 acceptance criteria. Workers report progress, evidence, and blockers and propose
 planning changes. Evidence alone is not acceptance or permission to expand scope.
 
+Task owners can save versioned movement reports through the mission tool. These are
+agent assessments, not verified progress or accepted delivery. Old reports can become
+stale when their assignment, owner or context changes. Missing reports mean unknown.
+The upcoming Day overview and separate Mission Pause/Resume controls are backend
+contracts only; the current desktop app has not gained those controls yet.
+
 Coordinators can answer ordinary member questions within the approved mission scope.
 Replies are attributed to the coordinator. Database-access approvals remain yours.
 

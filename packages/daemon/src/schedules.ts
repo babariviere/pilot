@@ -54,7 +54,7 @@ const clock: ScheduleClock = {
 export interface ScheduleDispatch {
 	spawn(request: SpawnRequest): Promise<{ id: string }>;
 	send(id: string, message: string, mode: "followUp", requestId: string): Promise<void>;
-	get(id: string): { projectId?: string; working?: boolean } | undefined;
+	get(id: string): { projectId?: string; working?: boolean; missionId?: string } | undefined;
 	insightsStatus?(id: string): InsightsStatus | undefined;
 	insightsOwnerStatus?(
 		id: string,
@@ -79,7 +79,7 @@ export interface ScheduleDispatch {
 export interface ScheduleServiceDeps {
 	sessions: ScheduleDispatch;
 	projects: Pick<ProjectStore, "require">;
-	missions?: Pick<MissionStore, "require">;
+	missions?: Pick<MissionStore, "require"> & Partial<Pick<MissionStore, "controls" | "onChange">>;
 	trackedItems?: Pick<TrackedItemStore, "require" | "patch">;
 	clock?: ScheduleClock;
 	triggers?: ScheduleTriggerSource;
@@ -144,6 +144,7 @@ export class ScheduleService {
 				}),
 			);
 		if (this.deps.subscribeAdmission) this.disposers.push(this.deps.subscribeAdmission(() => this.requestSweep()));
+		if (this.deps.missions?.onChange) this.disposers.push(this.deps.missions.onChange(() => this.requestSweep()));
 		if (this.deps.sessions.onInsightsReviewChange)
 			this.disposers.push(this.deps.sessions.onInsightsReviewChange(() => this.requestSweep()));
 		this.requestSweep();
@@ -191,7 +192,29 @@ export class ScheduleService {
 		});
 	}
 	private activeItems() {
-		return this.store.pendingItems().filter((item) => item.trigger === "at" || this.deps.automationsEnabled?.());
+		return this.store
+			.pendingItems()
+			.filter(
+				(item) =>
+					(item.trigger === "at" || this.deps.automationsEnabled?.()) &&
+					!this.missionHeld(this.store.require(item.id)),
+			);
+	}
+	private missionId(item: ScheduledItem): string | undefined {
+		return item.target.kind === "chat"
+			? item.target.spawn.missionId
+			: this.deps.sessions.get(item.target.sessionId)?.missionId;
+	}
+	private missionHeld(item: ScheduledItem): boolean {
+		const id = this.missionId(item);
+		return !!id && !!this.deps.missions?.controls?.current(id).held;
+	}
+	/** Join already-entered dispatches. Pending rules keep their revisions and user holds. */
+	async drainMission(missionId: string): Promise<void> {
+		await this.tail;
+		if (!this.inventoryLoaded) throw new Error("Schedule inventory is unavailable");
+		if (this.store.list().some((item) => this.missionId(item) === missionId && item.state === "dispatching"))
+			throw new Error("Mission schedule dispatch has no terminal receipt");
 	}
 	private unavailable(): boolean {
 		return this.stopped || this.runtime.frozen || (this.deps.paused ? this.deps.paused() : this.sleeping);
@@ -295,6 +318,7 @@ export class ScheduleService {
 		});
 	}
 	private async fireRecurring(item: ScheduledItem): Promise<void> {
+		if (this.missionHeld(item)) return;
 		if (this.unavailable() || !this.deps.automationsEnabled?.()) return;
 		const calendar = new RecurrenceCalendar(item.recurrence!);
 		const due = calendar.latest(this.time.now());
@@ -388,7 +412,7 @@ export class ScheduleService {
 		let permanentlyMissing = false;
 		try {
 			// Gates can change while SQLite commits. Consume the claim, never admit across a pause/disable.
-			if (this.unavailable() || !this.deps.automationsEnabled?.())
+			if (this.unavailable() || this.missionHeld(claimed) || !this.deps.automationsEnabled?.())
 				throw new Error("Dispatch interrupted before admission");
 			try {
 				this.deps.projects.require(claimed.projectId!);
@@ -542,7 +566,7 @@ export class ScheduleService {
 		}
 	}
 	private async fire(item: ScheduledItem): Promise<void> {
-		if (this.stopped) return;
+		if (this.stopped || this.missionHeld(item)) return;
 		let claimed: ScheduledItem;
 		try {
 			claimed = await this.store.replace(item, {
@@ -561,11 +585,13 @@ export class ScheduleService {
 			if (claimed.target.kind === "chat") {
 				// Recheck the local ticket's project binding before admission.
 				await this.validateTrackedItem(claimed.target.trackedItemId, claimed.projectId);
+				if (this.missionHeld(claimed)) throw new Conflict("Mission dispatch paused before admission");
 				sessionId = (await this.deps.sessions.spawn(claimed.target.spawn)).id;
 				if (claimed.target.trackedItemId)
 					await this.deps.trackedItems!.patch(claimed.target.trackedItemId, { sessionId, start: true });
 			} else {
 				sessionId = claimed.target.sessionId;
+				if (this.missionHeld(claimed)) throw new Conflict("Mission dispatch paused before admission");
 				if (!this.deps.sessions.get(sessionId)) throw new NotFound("Target chat was deleted");
 				await this.deps.sessions.send(sessionId, claimed.target.message, "followUp", `schedule:${claimed.id}`);
 			}

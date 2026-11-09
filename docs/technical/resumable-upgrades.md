@@ -48,6 +48,10 @@ Unknown resume admissions are not automatically replayed after restart.
 
 ## Mission Pause integration boundary
 
+The [mission controller](mission-controls-reports.md) now installs this provider before session recovery.
+Its controls and operation receipts share canonical mission SQLite. Upgrade release cannot resume a
+mission-owned checkpoint; uncertain mission control writes remain unavailable to upgrade recovery.
+
 Mission Pause is a separate service. This upgrade protocol does not implement its member fan-out, schedules,
 queued work, owned jobs/children or mission Resume operation. Its integration hook is:
 

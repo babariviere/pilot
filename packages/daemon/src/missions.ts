@@ -63,6 +63,7 @@ import {
 	assertAllocationSubmission,
 	type ContributionAllocation,
 } from "./mission-contribution-allocation.ts";
+import { MISSION_CONTROL_SCHEMA, MissionControlStore } from "./mission-control-store.ts";
 import {
 	assertDeliveryAssignment,
 	type DeliveryObservation,
@@ -621,7 +622,9 @@ export class MissionStore {
 	/** Replica projections are reused across unrelated mission/memory invalidations. At most one per binding. */
 	private readonly catalogReplicaCache = new Map<string, SharedMissionGroup[]>();
 	private db: DatabaseSync;
-	private readonly listeners = new Set<(missionId: string, passive?: boolean, preferenceOnly?: boolean) => void>();
+	private readonly listeners = new Set<
+		(missionId: string, passive?: boolean, preferenceOnly?: boolean, readModelOnly?: boolean) => void
+	>();
 	private readonly linearSyncListeners = new Set<() => void>();
 	private readonly linearSyncChanged = new Set<string>();
 	private readonly completionListeners = new Set<(projectId: string, missionId: string, at: number) => void>();
@@ -722,6 +725,16 @@ export class MissionStore {
 		run: (sql, ...params) => this.run(sql, ...params),
 		transaction: (work) => this.transaction(work, true),
 		durable: () => this.durable(),
+	});
+
+	/** Pause controls and reported assessments share canonical storage, not task or approval rows. */
+	readonly controls = new MissionControlStore({
+		one: (sql, ...params) => this.one(sql, ...params),
+		all: (sql, ...params) => this.all(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work, true),
+		durable: () => this.durable(),
+		changed: (id) => this.changed(id, [], true, false, true),
 	});
 
 	/** Help and human actions share the replica, never approval/ask rows. */
@@ -845,6 +858,7 @@ export class MissionStore {
 		this.db.exec(WORKFLOW_CONFIRMATION_SCHEMA);
 		this.db.exec(MISSION_INTERVIEW_SCHEMA);
 		this.db.exec(ATTENTION_SCHEMA);
+		this.db.exec(MISSION_CONTROL_SCHEMA);
 		this.db.exec(HUMAN_REVIEW_SCHEMA);
 		this.db.exec(RETAINED_PROJECTION_SCHEMA);
 		this.db.exec(REVIEW_REQUEST_SCHEMA);
@@ -1396,6 +1410,33 @@ export class MissionStore {
 	sharedDefinitionRevision(taskId: string): number {
 		return Number(this.one("SELECT revision FROM shared_task_definitions WHERE id=?", taskId)?.revision ?? 0);
 	}
+	/** Read only report fences in one query, without task bodies, phase projection or per-row lookups. */
+	reportSourceTasks(missionId: string): Map<
+		string,
+		{
+			sessionId?: string;
+			assignment?: import("@pilot/protocol").MissionAssignment;
+			definitionRevision: number;
+			taskEvent: number;
+		}
+	> {
+		return new Map(
+			this.all(
+				`SELECT t.id,t.session_id,t.assignment,COALESCE(d.revision,0) definition_revision,
+			COALESCE((SELECT MAX(e.id) FROM events e WHERE e.mission_id=t.mission_id AND e.task_id=t.id AND e.kind='task'),0) task_event
+			FROM tasks t LEFT JOIN shared_task_definitions d ON d.id=t.id WHERE t.mission_id=?`,
+				missionId,
+			).map((row) => [
+				str(row.id!),
+				{
+					...(row.session_id ? { sessionId: str(row.session_id) } : {}),
+					...(row.assignment ? { assignment: JSON.parse(str(row.assignment)) } : {}),
+					definitionRevision: num(row.definition_revision!),
+					taskEvent: num(row.task_event!),
+				},
+			]),
+		);
+	}
 	sharedVersions(missionId: string, after: number, limit: number): import("@pilot/protocol").SharedEntityVersion[] {
 		return this.all(
 			"SELECT e.id,e.kind,e.revision,e.deleted,d.revision AS definition_revision FROM shared_entities e LEFT JOIN shared_task_definitions d ON e.kind='task' AND e.id=d.id WHERE e.mission_id=? ORDER BY e.kind,e.id LIMIT ? OFFSET ?",
@@ -1608,7 +1649,9 @@ export class MissionStore {
 	}
 
 	/** Called after every committed change of a mission, including membership and deletion. */
-	onChange(listener: (missionId: string, passive?: boolean, preferenceOnly?: boolean) => void): () => void {
+	onChange(
+		listener: (missionId: string, passive?: boolean, preferenceOnly?: boolean, readModelOnly?: boolean) => void,
+	): () => void {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
 	}
@@ -1629,7 +1672,13 @@ export class MissionStore {
 		return () => this.memberListeners.delete(listener);
 	}
 
-	private changed(missionId: string, sessions: string[] = [], passive = false, preferenceOnly = false): void {
+	private changed(
+		missionId: string,
+		sessions: string[] = [],
+		passive = false,
+		preferenceOnly = false,
+		readModelOnly = false,
+	): void {
 		if (this.batchedChanges) {
 			const pending = this.batchedChanges.get(missionId) ?? new Set<string>();
 			for (const session of sessions) pending.add(session);
@@ -1638,7 +1687,10 @@ export class MissionStore {
 		}
 		if (this.referenceBatch === missionId) return;
 		if (this.linearSyncChanged.delete(missionId)) for (const listener of this.linearSyncListeners) listener();
-		for (const listener of this.listeners) listener(missionId, passive, preferenceOnly);
+		for (const listener of this.listeners) {
+			if (readModelOnly) listener(missionId, passive, preferenceOnly, true);
+			else listener(missionId, passive, preferenceOnly);
+		}
 		for (const sessionId of sessions) for (const listener of this.memberListeners) listener(sessionId);
 	}
 
@@ -6545,6 +6597,7 @@ export class MissionStore {
 		const previous = this.one("SELECT to_session_id FROM session_continuations WHERE from_session_id = ?", from);
 		if (previous && previous.to_session_id !== to) throw new Conflict("Chat already continued elsewhere");
 		const id = this.missionOf(from);
+		if (id && this.controls.current(id).held) throw new Conflict("Mission work is paused; ownership cannot move");
 		if (!id) {
 			this.transaction(() => {
 				this.run(
@@ -6657,6 +6710,8 @@ export class MissionStore {
 				throw new Conflict("Mission roles cannot change in place; start a fresh chat");
 			return;
 		}
+		if (this.controls.current(id).held || (previous && this.controls.current(previous).held))
+			throw new Conflict("Mission work is paused; membership cannot move");
 		this.transaction(() => {
 			if (previous) this.detach(sessionId, previous, actor);
 			this.run(

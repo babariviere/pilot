@@ -269,6 +269,7 @@ const schedules = new ScheduleService(scheduleStore, {
 	},
 });
 sessions.setScheduledMessages(schedules);
+missionService.controls.setScheduleDrain((missionId) => schedules.drainMission(missionId));
 
 // Environment setup stays off until its user-facing parts ship (hello.capabilities.environmentSetup).
 const environment = hello.capabilities.environmentSetup

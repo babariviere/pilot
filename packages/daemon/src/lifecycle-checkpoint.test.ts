@@ -269,6 +269,29 @@ test("replacement identity is exact, structural and independent of JSON key orde
 });
 
 const missionFence: MissionResumeFence = { missionId: "mission", pauseGeneration: 2, stopGeneration: 1, held: false };
+test("restart keeps mission checkpoints parked until explicit same-operation Resume", async (t) => {
+	const held = { ...missionFence, held: true },
+		saved = checkpoint({ purpose: "mission-pause", mission: held });
+	const f = await fixture(t, [{ checkpoint: saved }], { mission: () => held });
+	assert.equal(f.opened.length, 0);
+	await f.sessions.resumeMaintenance();
+	assert.equal(f.opened.length, 0);
+	await assert.rejects(f.sessions.resumeMission(f.ids[0]!, randomUUID(), held), /ownership/);
+	assert.equal(await f.sessions.resumeMission(f.ids[0]!, saved.operationId, held), "resumed");
+	assert.equal(f.opened.length, 1);
+	assert.equal(f.commands.filter((command) => command.type === "input").length, 0);
+});
+
+test("restart never replays an entered or Unknown mission checkpoint", async (t) => {
+	const held = { ...missionFence, held: true };
+	for (const phase of ["checkpointing", "resume-admitted", "unknown"] as const) {
+		const saved = checkpoint({ purpose: "mission-pause", mission: held, phase });
+		const f = await fixture(t, [{ checkpoint: saved }], { mission: () => held });
+		assert.equal(f.opened.length, 0);
+		await assert.rejects(f.sessions.resumeMission(f.ids[0]!, saved.operationId, held), /ownership/);
+		assert.equal(f.opened.length, 0);
+	}
+});
 for (const [name, current, expected] of [
 	["unchanged", missionFence, 1],
 	["later Pause", { ...missionFence, pauseGeneration: 3, held: true }, 0],
@@ -307,7 +330,7 @@ test("a mission Pause during durable resume admission vetoes worker creation", a
 		beforeLoad(sessions) {
 			const internal = sessions as unknown as { save(meta: unknown, ...args: unknown[]): Promise<void> };
 			const save = internal.save;
-			t.mock.method(internal, "save", async function (meta: unknown, ...args: unknown[]) {
+			t.mock.method(internal, "save", async (meta: unknown, ...args: unknown[]) => {
 				await save.call(sessions, meta, ...args);
 				if ((meta as { lifecycleCheckpoint?: { phase: string } }).lifecycleCheckpoint?.phase === "resume-admitted")
 					current = { ...missionFence, pauseGeneration: 3, held: true };

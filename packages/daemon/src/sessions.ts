@@ -251,6 +251,12 @@ export interface SessionMissionBridge {
 	 * Missing/throwing providers cannot recover a checkpoint that already pins a mission fence.
 	 */
 	upgradeResumeFence?(sessionId: string): import("./lifecycle-checkpoint.ts").MissionResumeFence | null;
+	/** Synchronous durable-store generation update. Stop still owns its normal cancellation. */
+	missionStopped?(sessionId: string): void;
+	/** Exact acknowledged Mission Resume can wait behind an independent hold. */
+	missionResumeAuthorized?(sessionId: string, pauseOperationId: string): boolean;
+	/** Local Pause admission only. Unsupported remote work is reported, not silently enrolled. */
+	missionAdmissionHeld?(sessionId: string): boolean;
 	/** Current local membership only; historical task/retirement links are never source grants. */
 	coordinatorSourceMembers?(sessionId: string): { projectId: string; sessionIds: string[] } | undefined;
 	/** Creation-only opted-in builder scope. Never enroll an already-existing workspace. */
@@ -2248,6 +2254,7 @@ export class SessionManager {
 		signal?: AbortSignal,
 	): Promise<ActionResult> {
 		const meta = this.require(id);
+		this.assertMissionWorkOpen(id);
 		if (!this.automationsEnabled()) throw new ServiceUnavailable("Automations are disabled");
 		if (
 			this.closing ||
@@ -2274,6 +2281,7 @@ export class SessionManager {
 			excerpt: "",
 		};
 		return this.actionRunner.runAction({
+			revalidate: () => this.assertMissionWorkOpen(id),
 			actionId: `${id}/${runId}`,
 			projectId: meta.projectId,
 			sessionId: id,
@@ -2458,6 +2466,7 @@ export class SessionManager {
 
 	private flowAdmissionOpen(root: SessionMeta, current?: SessionMeta): boolean {
 		return (
+			!this.missionWorkHeld(root.id) &&
 			!!root.flow &&
 			flowActive(root.flow) &&
 			!this.flowFaults.has(root.id) &&
@@ -2677,6 +2686,7 @@ export class SessionManager {
 	private runFinishedPaused(meta: SessionMeta): boolean {
 		const subscription = this.subscriptionPause(meta);
 		return !!(
+			this.missionWorkHeld(meta.id) ||
 			this.closing ||
 			this.sleepPause ||
 			meta.sleepPaused ||
@@ -2776,6 +2786,7 @@ export class SessionManager {
 	}
 
 	private startPostRun(meta: SessionMeta): void {
+		if (this.missionWorkHeld(meta.id)) return;
 		const event = meta.automation?.boundary?.finished;
 		if (
 			!event ||
@@ -3129,6 +3140,7 @@ export class SessionManager {
 	}
 
 	private startWorkspaceSetup(meta: SessionMeta, ready = Promise.resolve()): Promise<void> {
+		if (this.missionWorkHeld(meta.id)) return Promise.resolve();
 		const active = this.workspaceSetups.get(meta.id);
 		if (active) return active.done;
 		const setup = meta.automation?.setup;
@@ -7126,6 +7138,7 @@ ${run.excerpt}`,
 				this.modelConfigurationGuards.set(requestId, { worker, guard: () => configuration.guard(generation + 1) });
 			}
 			try {
+				this.assertMissionWorkOpen(id);
 				await worker.request({
 					type: configuration ? "changeModelConfiguration" : "changeModel",
 					requestId,
@@ -7520,6 +7533,186 @@ ${run.excerpt}`,
 	}
 
 	private lifecycleCheckpoint?: Promise<void>;
+	/** Flow reviewer chats are owned work, not invented mission memberships. */
+	missionWorkOwner(id: string): string {
+		if (this.missions?.membership(id)) return id;
+		const rootId = this.metas.get(id)?.flowRootId;
+		return rootId && this.missions?.membership(rootId) ? rootId : id;
+	}
+	missionWorkBelongs(id: string, missionId: string): boolean {
+		return this.missionWorkMission(id) === missionId;
+	}
+	missionWorkMission(id: string): string | undefined {
+		return this.missions?.membership(this.missionWorkOwner(id))?.missionId;
+	}
+	missionWorkSessions(missionId: string): string[] {
+		// Direct members already come from MissionStore. Only inspect owned flow links here.
+		const roots = new Map<string, string | undefined>(),
+			owned: string[] = [];
+		for (const meta of this.metas.values()) {
+			if (!meta.flowRootId || this.missions?.membership(meta.id)) continue;
+			if (!roots.has(meta.flowRootId))
+				roots.set(meta.flowRootId, this.missions?.membership(meta.flowRootId)?.missionId);
+			if (roots.get(meta.flowRootId) === missionId) owned.push(meta.id);
+		}
+		return owned;
+	}
+	private readonly missionResuming = new Map<string, import("./lifecycle-checkpoint.ts").MissionResumeFence>();
+
+	private missionWorkHeld(id: string): boolean {
+		try {
+			const permit = this.missionResuming.get(id);
+			if (!permit && this.missions?.missionAdmissionHeld)
+				return this.missions.missionAdmissionHeld(this.missionWorkOwner(id));
+			const current = this.missionUpgradeFence(id),
+				matchesPermit = !!permit && canonicalJSON(current) === canonicalJSON(permit);
+			return current?.held === true && !matchesPermit;
+		} catch {
+			return true;
+		}
+	}
+
+	private assertMissionWorkOpen(id: string): void {
+		if (this.missionWorkHeld(id)) throw new Conflict("Mission work is paused");
+	}
+
+	/** Uses the same final inventory/census/close ACK/exit protocol, not the upgrade lease. */
+	async checkpointMission(
+		id: string,
+		operationId: string,
+		fence: import("./lifecycle-checkpoint.ts").MissionResumeFence,
+	): Promise<"paused" | "held"> {
+		const meta = this.require(id);
+		const current = this.missionUpgradeFence(id);
+		if (!current?.held || canonicalJSON(current) !== canonicalJSON(fence))
+			throw new Conflict("Mission pause fence changed");
+		const prior = meta.lifecycleCheckpoint;
+		if (prior && prior.phase !== "resume-acknowledged") {
+			if (
+				prior.purpose === "mission-pause" &&
+				prior.operationId === operationId &&
+				prior.phase === "checkpointed" &&
+				prior.quiescent
+			)
+				return "paused";
+			if (prior.quiescent && prior.phase === "checkpointed") return "held";
+			throw new Conflict("Prior checkpoint is uncertain or stopped");
+		}
+		// Owned shell effects are interrupted and joined, never restarted. Their effects remain uncertain.
+		const actionWasActive = this.actionRunner.isWorking(id);
+		this.workspaceSetups.get(id)?.controller.abort();
+		this.postRunTasks.get(id)?.controller.abort();
+		await this.actionRunner.checkpointSession(id);
+		await this.checkpointLifecycleWorkers(operationId, "mission-pause", undefined, new Set([id]));
+		if (!meta.lifecycleCheckpoint || meta.lifecycleCheckpoint === prior) {
+			if (
+				meta.working ||
+				this.backgroundWorking(meta) ||
+				meta.kernelRestartPending ||
+				meta.inputError ||
+				meta.subagents?.length
+			)
+				throw new Conflict("Cold work has no acknowledged checkpoint");
+			if (!meta.pending?.length) return "held"; // No executor or queued work owned by this Pause.
+			meta.lifecycleCheckpoint = {
+				schema: 1,
+				operationId,
+				purpose: "mission-pause",
+				incarnation: this.lifecycleIncarnation,
+				sessionCreatedAt: meta.createdAt,
+				inputGeneration: meta.inputGeneration ?? 0,
+				inputControlRevision: meta.inputControlRevision ?? 0,
+				mission: fence,
+				prior: {
+					working: !!meta.pending?.length,
+					updatePaused: !!meta.updatePaused,
+					sleepPaused: !!meta.sleepPaused,
+					inputsPaused: !!meta.inputsPaused,
+					subscriptionPaused: this.subscriptionPaused(id),
+				},
+				children: [],
+				admissionOnly: true,
+				phase: "checkpointed",
+			};
+			await this.save(meta, undefined, undefined, true);
+		}
+		if (actionWasActive) throw new Conflict("Interrupted shell effects require inspection; no automatic replay");
+		if (canonicalJSON(this.missionUpgradeFence(id)) !== canonicalJSON(fence))
+			throw new Conflict("Mission pause fence changed during checkpoint");
+		return "paused";
+	}
+
+	/** Only an explicit mission operation can admit its own exact checkpoint. No synthetic input. */
+	async resumeMission(
+		id: string,
+		operationId: string,
+		fence: import("./lifecycle-checkpoint.ts").MissionResumeFence,
+	): Promise<"resumed" | "held"> {
+		const meta = this.require(id),
+			checkpoint = meta.lifecycleCheckpoint;
+		if (
+			checkpoint?.purpose === "mission-pause" &&
+			checkpoint.operationId === operationId &&
+			checkpoint.phase === "stopped"
+		)
+			return "held";
+		if (
+			!checkpoint ||
+			checkpoint.purpose !== "mission-pause" ||
+			checkpoint.operationId !== operationId ||
+			checkpoint.phase !== "checkpointed" ||
+			(!checkpoint.quiescent && !checkpoint.admissionOnly) ||
+			!matchingCheckpoint(checkpoint, meta) ||
+			checkpoint.mission?.missionId !== fence.missionId ||
+			checkpoint.mission?.pauseGeneration !== fence.pauseGeneration ||
+			checkpoint.mission.stopGeneration > fence.stopGeneration ||
+			canonicalJSON(this.missionUpgradeFence(id)) !== canonicalJSON(fence)
+		)
+			throw new Conflict("Mission checkpoint ownership changed");
+		if (
+			checkpoint.prior.updatePaused ||
+			checkpoint.prior.sleepPaused ||
+			checkpoint.prior.inputsPaused ||
+			checkpoint.prior.subscriptionPaused ||
+			meta.inputsPaused ||
+			this.sleepPause ||
+			this.subscriptionPaused(id) ||
+			this.updateGate.frozen ||
+			this.updateGate.paused ||
+			meta.recoveryStopped
+		)
+			return "held";
+		// This explicit Resume may follow another member's Stop. Pin current controls,
+		// but never change this session's input/Stop ownership generations.
+		checkpoint.mission = structuredClone(fence);
+		await this.save(meta, undefined, undefined, true);
+		if (canonicalJSON(this.missionUpgradeFence(id)) !== canonicalJSON(fence) || !matchingCheckpoint(checkpoint, meta))
+			throw new Conflict("Mission resume controls changed");
+		this.missionResuming.set(id, structuredClone(fence));
+		try {
+			if (!checkpoint.prior.working && !meta.pending?.length) {
+				checkpoint.phase = "resume-acknowledged";
+				delete meta.updatePaused;
+				await this.save(meta, undefined, undefined, true);
+				if (
+					this.require(id).lifecycleCheckpoint?.phase !== "resume-acknowledged" ||
+					!matchingCheckpoint(checkpoint, meta) ||
+					canonicalJSON(this.missionUpgradeFence(id)) !== canonicalJSON(fence)
+				)
+					throw new Conflict("Mission idle resume controls changed");
+				return "resumed";
+			}
+			await this.start(id);
+			if (
+				meta.lifecycleCheckpoint !== checkpoint ||
+				this.require(id).lifecycleCheckpoint?.phase !== "resume-acknowledged"
+			)
+				throw new Conflict("Mission resume has no durable ready acknowledgement");
+			return "resumed";
+		} finally {
+			this.missionResuming.delete(id);
+		}
+	}
 	private lifecycleCheckpointOwner?: string;
 	private readonly lifecycleIncarnation = randomUUID();
 	private readonly lifecycleResuming = new Map<string, import("./lifecycle-checkpoint.ts").LifecycleCheckpoint>();
@@ -7562,23 +7755,36 @@ ${run.excerpt}`,
 
 	private async checkpointLifecycleWorkers(
 		operationId: string,
-		purpose: "daemon-upgrade" | "daemon-stop" | "daemon-restart",
+		purpose: "daemon-upgrade" | "daemon-stop" | "daemon-restart" | "mission-pause",
 		replacement?: LifecycleRuntime,
+		selected?: Set<string>,
 	): Promise<void> {
-		if (!this.updateGate.frozen) throw new Error("Lifecycle checkpoint requires frozen admissions");
-		this.updateGate.pause();
-		this.actionRunner?.setUpdatePaused(true);
-		for (const setup of this.workspaceSetups.values()) setup.controller.abort();
+		if (!selected) {
+			if (!this.updateGate.frozen) throw new Error("Lifecycle checkpoint requires frozen admissions");
+			this.updateGate.pause();
+			this.actionRunner?.setUpdatePaused(true);
+		}
+		for (const [id, setup] of this.workspaceSetups) if (!selected || selected.has(id)) setup.controller.abort();
 		let preparationTimer: ReturnType<typeof setTimeout> | undefined;
 		try {
 			await Promise.race([
-				Promise.all([
-					...this.preparations,
-					...this.starting.values(),
-					...this.parking.values(),
-					...[...this.workspaceSetups.values()].map((setup) => setup.done),
-					this.actionRunner.checkpointLifecycle(),
-				]),
+				Promise.all(
+					selected
+						? [...selected].flatMap((id) => [
+								this.starting.get(id),
+								this.parking.get(id),
+								this.workspaceSetups.get(id)?.done,
+								this.postRunTasks.get(id)?.done,
+								this.flowTasks.get(id),
+							])
+						: [
+								...this.preparations,
+								...this.starting.values(),
+								...this.parking.values(),
+								...[...this.workspaceSetups.values()].map((setup) => setup.done),
+								this.actionRunner.checkpointLifecycle(),
+							],
+				),
 				new Promise<never>((_, reject) => {
 					preparationTimer = setTimeout(
 						() => reject(new Error("Lifecycle preparation checkpoint timed out")),
@@ -7589,7 +7795,7 @@ ${run.excerpt}`,
 		} finally {
 			clearTimeout(preparationTimer);
 		}
-		const workers = [...this.workers];
+		const workers = [...this.workers].filter(([id]) => !selected || selected.has(id));
 		if (workers.length > 128 || workers.some(([id]) => (this.require(id).subagents?.length ?? 0) > 256))
 			throw new ServiceUnavailable("Lifecycle checkpoint inventory exceeds the safe limit");
 		// A crash here reopens the same durable inbox/run, never a fresh user input.
@@ -8031,6 +8237,13 @@ ${run.excerpt}`,
 	private lifecycleRecoveryAllowed(meta: SessionMeta): boolean {
 		const checkpoint = meta.lifecycleCheckpoint;
 		if (!checkpoint) return true;
+		if (
+			checkpoint.purpose === "mission-pause" &&
+			checkpoint.phase !== "stopped" &&
+			!this.missionResuming.has(meta.id) &&
+			!this.missions?.missionResumeAuthorized?.(meta.id, checkpoint.operationId)
+		)
+			return checkpoint.phase === "resume-acknowledged";
 		if (checkpoint.phase === "resume-acknowledged") return true;
 		if (
 			checkpoint.host &&
@@ -8053,8 +8266,10 @@ ${run.excerpt}`,
 		return (
 			checkpoint.phase === "checkpointed" &&
 			this.missionAllowsUpgradeResume(meta.id, checkpoint) &&
-			checkpoint.childrenConfirmed === true &&
-			checkpoint.quiescent === true &&
+			((checkpoint.childrenConfirmed === true && checkpoint.quiescent === true) ||
+				(checkpoint.purpose === "mission-pause" &&
+					checkpoint.admissionOnly === true &&
+					checkpoint.children.length === 0)) &&
 			matchingCheckpoint(checkpoint, meta) &&
 			!meta.inputsPaused &&
 			!this.sleepPause &&
@@ -8066,7 +8281,8 @@ ${run.excerpt}`,
 	private missionUpgradeFence(id: string): import("./lifecycle-checkpoint.ts").MissionResumeFence | undefined {
 		const read = this.missions?.upgradeResumeFence;
 		if (!read) return undefined; // Compatibility before mission-pause support is installed.
-		const current = read.call(this.missions, id);
+		const ownerId = this.missionWorkOwner(id);
+		const current = read.call(this.missions, ownerId);
 		if (current === null) return undefined;
 		if (
 			!current ||
@@ -8078,7 +8294,7 @@ ${run.excerpt}`,
 			current.pauseGeneration < 0 ||
 			!Number.isSafeInteger(current.stopGeneration) ||
 			current.stopGeneration < 0 ||
-			current.missionId !== this.missions?.membership(id)?.missionId
+			current.missionId !== this.missions?.membership(ownerId)?.missionId
 		)
 			throw new Conflict("Mission resume controls are unavailable or changed");
 		return structuredClone(current);
@@ -8089,6 +8305,15 @@ ${run.excerpt}`,
 		checkpoint: import("./lifecycle-checkpoint.ts").LifecycleCheckpoint,
 	): boolean {
 		try {
+			if (checkpoint.purpose === "mission-pause") {
+				const permit = this.missionResuming.get(id);
+				if (!permit) return this.missions?.missionResumeAuthorized?.(id, checkpoint.operationId) === true;
+				return (
+					!!permit &&
+					canonicalJSON(checkpoint.mission) === canonicalJSON(permit) &&
+					canonicalJSON(this.missionUpgradeFence(id)) === canonicalJSON(permit)
+				);
+			}
 			if (checkpoint.mission && !this.missions?.upgradeResumeFence) return false;
 			const current = this.missionUpgradeFence(id);
 			return checkpoint.mission
@@ -8893,6 +9118,7 @@ ${run.excerpt}`,
 		inputGeneration?: number,
 	): Promise<void> {
 		const meta = this.require(id);
+		this.assertMissionWorkOpen(id);
 		this.assertHistoryWritable(meta);
 		const resumesStoppedRecovery = meta.recoveryStopped === true;
 		const staleGeneration = inputGeneration !== undefined && inputGeneration !== (meta.inputGeneration ?? 0);
@@ -9197,7 +9423,7 @@ ${run.excerpt}`,
 				return await this.stopAdmitted(meta);
 			} finally {
 				// Reach the kernel before waiting for review durability, but do not ACK a volatile cancellation.
-				await Promise.all([interrupted, flowInterrupted]);
+				await Promise.all([interrupted, flowInterrupted, this.missions?.whenDurable?.()]);
 			}
 		})();
 		this.stoppingInputs.add(stopping);
@@ -9210,6 +9436,7 @@ ${run.excerpt}`,
 
 	private async stopAdmitted(meta: SessionMeta): Promise<StopResponse> {
 		const id = meta.id;
+		this.missions?.missionStopped?.(id);
 		meta.inputGeneration = (meta.inputGeneration ?? 0) + 1;
 		if (meta.lifecycleCheckpoint) {
 			meta.lifecycleCheckpoint.phase = "stopped";
@@ -9230,7 +9457,8 @@ ${run.excerpt}`,
 		}
 		if (this.actionRunner?.isWorking(id)) await this.actionRunner.cancelSession(id);
 		await this.workspaceSetups.get(id)?.done;
-		const parkedForLifecycle = !this.workers.has(id) && !!meta.lifecycleCheckpoint && this.updateGate.frozen;
+		const parkedForLifecycle =
+			!this.workers.has(id) && !!meta.lifecycleCheckpoint && (this.updateGate.frozen || this.missionWorkHeld(id));
 		if (!parkedForLifecycle && this.canRetryStartup(meta)) return this.stopFailedRecovery(meta);
 		if (!parkedForLifecycle && (meta.failure || meta.recoveryStopped)) return this.stoppedWithoutWorker(meta);
 		if (
@@ -9408,6 +9636,7 @@ ${run.excerpt}`,
 	 * acknowledgement, so Stop leaves it to the kernel instead of also restoring it to the composer.
 	 */
 	private async deliver(id: string, worker: SessionWorker, command: PendingCommand): Promise<void> {
+		if (command.type === "input") this.assertMissionWorkOpen(id);
 		if (command.type !== "input") {
 			const meta = this.require(id);
 			const generation = meta.inputGeneration ?? 0;
@@ -9488,6 +9717,7 @@ ${run.excerpt}`,
 			}
 			const dedupeOnly =
 				command.inputGeneration !== undefined && command.inputGeneration !== (meta.inputGeneration ?? 0);
+			this.assertMissionWorkOpen(id);
 			await worker.request({ ...command, ...(trace ? { trace } : {}), ...(dedupeOnly ? { dedupeOnly: true } : {}) });
 			settled = true;
 		} catch (error) {
@@ -9527,6 +9757,7 @@ ${run.excerpt}`,
 			await this.unparked(id);
 			const worker = await this.ensureWorker(id);
 			await worker.ready;
+			this.assertMissionWorkOpen(id);
 			await worker.request({
 				type: "editQueuedMessage",
 				requestId: randomUUID(),
@@ -9618,6 +9849,7 @@ ${run.excerpt}`,
 		});
 		this.changingModels.set(id, settled);
 		try {
+			this.assertMissionWorkOpen(id);
 			await worker.request({ type: "reloadPi", requestId: `piReload:${randomUUID()}` });
 			return true;
 		} catch (error) {
@@ -10114,6 +10346,7 @@ ${run.excerpt}`,
 			const worker = await this.ensureWorker(id);
 			await worker.ready;
 			try {
+				this.assertMissionWorkOpen(id);
 				await worker.request({
 					type: "compact",
 					requestId: randomUUID(),
@@ -10150,6 +10383,7 @@ ${run.excerpt}`,
 			await this.unparked(id);
 			const worker = await this.ensureWorker(id);
 			await worker.ready;
+			this.assertMissionWorkOpen(id);
 			await worker.request(
 				action === "send"
 					? { type: "sendHeldMessages", requestId: randomUUID() }
@@ -10185,6 +10419,7 @@ ${run.excerpt}`,
 			await this.unparked(id);
 			const worker = await this.ensureWorker(id);
 			await worker.ready;
+			this.assertMissionWorkOpen(id);
 			await worker.request({
 				type: "removeQueuedMessage",
 				requestId: randomUUID(),
@@ -10270,6 +10505,7 @@ ${run.excerpt}`,
 			meta.inputGeneration = (meta.inputGeneration ?? 0) + 1;
 			await this.save(meta, undefined, undefined, true);
 			try {
+				this.assertMissionWorkOpen(id);
 				await worker.request(command);
 			} catch (error) {
 				if (error instanceof CommandRejected && error.code === "busy") throw new Conflict(error.message);
@@ -10455,6 +10691,7 @@ ${run.excerpt}`,
 			await this.unparked(id);
 			const worker = await this.ensureWorker(id);
 			await worker.ready;
+			if (command.action === "send") this.assertMissionWorkOpen(id);
 			await worker.request(
 				command.action === "send"
 					? {
@@ -11015,6 +11252,7 @@ ${run.excerpt}`,
 		const existing = this.starting.get(id);
 		if (existing) return existing;
 		const meta = this.require(id);
+		if (this.missionWorkHeld(id) && meta.pending?.[0]?.type !== "abort") return Promise.resolve(new Map());
 		if (!this.workers.has(id) && meta.lifecycleCheckpoint && !this.lifecycleRecoveryAllowed(meta))
 			return Promise.resolve(new Map());
 		if (meta.nextAttemptModel && !meta.recoveryModel) return Promise.resolve(new Map());
@@ -11146,6 +11384,7 @@ ${run.excerpt}`,
 				}
 				while (!this.closing && !this.sleepPause && meta.prActivities?.length) {
 					const activity = meta.prActivities[0]!;
+					this.assertMissionWorkOpen(id);
 					await worker.request(activity);
 					meta.prActivities = meta.prActivities.filter((item) => item !== activity);
 					await this.save(meta);
@@ -11330,6 +11569,7 @@ ${run.excerpt}`,
 	}
 
 	private async ensureWorker(id: string, configurationOnly = false): Promise<SessionWorker> {
+		if (this.require(id).pending?.[0]?.type !== "abort") this.assertMissionWorkOpen(id);
 		this.assertNotContinued(
 			this.require(id),
 			this.require(id).delegationFenced && this.require(id).pending?.some((command) => command.type === "abort"),
@@ -11354,6 +11594,7 @@ ${run.excerpt}`,
 
 	/** Recheck lifecycle and workspace state after waiting for a cold-start slot. */
 	private async openWorker(id: string, configurationOnly = false): Promise<SessionWorker> {
+		if (this.require(id).pending?.[0]?.type !== "abort") this.assertMissionWorkOpen(id);
 		if (this.sleepPause) throw new ServiceUnavailable("Agents are paused until the next wake with connectivity");
 		const existing = this.workers.get(id);
 		if (existing) return existing;
@@ -11408,6 +11649,7 @@ ${run.excerpt}`,
 						: undefined;
 					if (
 						this.closing ||
+						(this.missionWorkHeld(id) && meta.pending?.[0]?.type !== "abort") ||
 						this.sleepPause ||
 						meta.archivedAt !== undefined ||
 						this.isMissionCoordinator(id) !== !!view ||
@@ -11471,6 +11713,7 @@ ${run.excerpt}`,
 				})()
 			: undefined;
 		// Only the factory's synchronous prefix. Awaited isolation/readiness is not main-thread CPU work.
+		if (meta.pending?.[0]?.type !== "abort") this.assertMissionWorkOpen(id);
 		if (checkpoint?.phase === "resume-admitted" && !this.missionAllowsUpgradeResume(id, checkpoint))
 			throw new Conflict("Mission controls changed before worker admission");
 		const opening = operations.time("worker.construct", () =>
@@ -13264,6 +13507,7 @@ ${run.excerpt}`,
 
 	/** Transient admission gates shared by automatic follow-ups and stuck-PR attention. */
 	private pullRequestFollowUpIdle(meta: SessionMeta, allowChecks = false): boolean {
+		if (this.missionWorkHeld(meta.id)) return false;
 		const worker = this.workers.get(meta.id);
 		return Boolean(
 			!this.closing &&

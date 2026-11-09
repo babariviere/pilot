@@ -93,6 +93,7 @@ import { MachineInformationReader } from "./machine.ts";
 import { McpSetupError, McpSetupStore } from "./mcp-setup.ts";
 import { type McpStatusService, SignInUnavailable } from "./mcp-status.ts";
 import { buildMissionCatalog, type MissionCatalogSources } from "./mission-catalog.ts";
+import { parseMissionControl } from "./mission-controls.ts";
 import { parseMissionLifecycle } from "./mission-lifecycle.ts";
 import type { MissionService } from "./mission-service.ts";
 import type { MissionStore } from "./missions.ts";
@@ -1881,6 +1882,32 @@ export function createDaemonServer(
 			}
 			throw new HttpError(404, "Unknown tracking operation");
 		}
+		if (missions && parts[1] === "missions" && parts[3] === "controls") {
+			missions.store.require(parts[2]!);
+			if (req.method === "GET" && parts.length === 4) {
+				await missions.store.durable();
+				return json(res, 200, missions.store.controls.current(parts[2]!));
+			}
+			if (req.method === "GET" && parts.length === 6 && parts[4] === "operations")
+				return json(
+					res,
+					200,
+					(await missions.service.controls.lookup(parts[2]!, parts[5]!)) ?? { state: "unknown" },
+				);
+			if (req.method === "POST" && parts.length === 4) {
+				if (!githubSetup) throw new ServiceUnavailable("Native mission controls unavailable");
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				const write = parseMissionControl(await readJson(req, 4096), catalogHost);
+				return json(res, 200, await missions.service.controls.execute(parts[2]!, write));
+			}
+			throw new HttpError(404, "Unknown mission control operation");
+		}
+		if (missions && parts[1] === "missions" && parts.length === 4 && parts[3] === "reports" && req.method === "GET")
+			return json(res, 200, {
+				version: 1,
+				missionId: parts[2]!,
+				reports: await missions.service.reports.views(parts[2]!),
+			});
 		if (
 			missions &&
 			parts[1] === "missions" &&
@@ -2583,6 +2610,22 @@ export function createDaemonServer(
 			if (rawLimit !== null && (!/^\d+$/.test(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > 100))
 				throw new HttpError(400, "limit must be between 1 and 100");
 			return json(res, 200, dashboards.dashboard(parts[2]!, rawLimit === null ? undefined : Number(rawLimit)));
+		}
+		if (missions && parts[1] === "projects" && parts.length === 4 && parts[3] === "day" && req.method === "GET") {
+			await missions.store.durable();
+			const projectId = parts[2]!,
+				observedAt = Date.now(),
+				list = missions.store.list(projectId);
+			const overview: import("@pilot/protocol").DayOverview = {
+				version: 1,
+				projectId,
+				observedAt,
+				complete: true,
+				dashboard: dashboards.dashboard(projectId, Number.MAX_SAFE_INTEGER),
+				reports: list.flatMap((mission) => missions.service.reports.viewsNow(mission.id, observedAt)),
+				controls: list.map((mission) => missions.store.controls.current(mission.id)),
+			};
+			return json(res, 200, overview);
 		}
 		if (parts[1] === "dashboard" && parts[2] === "counts" && parts.length === 3 && req.method === "GET")
 			return json(res, 200, dashboards.counts());

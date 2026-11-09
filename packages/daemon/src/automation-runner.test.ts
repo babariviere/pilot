@@ -24,6 +24,38 @@ function deferred<T>() {
 	return { promise, resolve };
 }
 
+test("mission action revalidation catches a fence set during durable preparation", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-action-fence-")),
+		pool = new SubprocessPool();
+	const runner = new ActionRunner(pool);
+	t.after(async () => {
+		await runner.close();
+		await pool.close();
+		await rm(home, { recursive: true, force: true });
+	});
+	let held = false,
+		effects = 0;
+	t.mock.method(pool, "run", async () => {
+		effects++;
+		return empty;
+	});
+	const result = await runner.runAction({
+		actionId: "synthetic",
+		projectId: "p",
+		sessionId: "s",
+		cwd: home,
+		run: { argv: ["synthetic"] },
+		record: async (state) => {
+			if (state === "running") held = true;
+		},
+		revalidate: () => {
+			if (held) throw new Error("mission paused");
+		},
+	});
+	assert.equal(effects, 0);
+	assert.equal(result.outcome, "failed");
+});
+
 test("tail mode combines streams, retains the tail and does not terminate a noisy command", async (t) => {
 	const pool = new SubprocessPool();
 	t.after(() => pool.close());

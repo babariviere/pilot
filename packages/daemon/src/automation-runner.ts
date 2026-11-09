@@ -31,6 +31,8 @@ export interface ActionRequest {
 	signal?: AbortSignal;
 	/** Must durably record running before spawn. Result output is already redacted. */
 	record(state: "waiting" | "running" | ActionResult["outcome"], result?: ActionResult): Promise<void>;
+	/** Recheck current owner controls after filesystem/preparation awaits, immediately before spawn. */
+	revalidate?(): void;
 }
 
 interface Entry {
@@ -206,6 +208,17 @@ export class ActionRunner {
 	}
 
 	/** Explicit daemon control interrupts owned commands, never replays their shell effects. */
+	async checkpointSession(sessionId: string): Promise<void> {
+		const entries = [...this.queue, ...this.running].filter((entry) => entry.request.sessionId === sessionId);
+		for (const entry of entries) {
+			entry.interrupted = true;
+			entry.controller.abort();
+		}
+		this.pump();
+		const results = await Promise.allSettled(entries.map((entry) => entry.done));
+		if (results.some((result) => result.status === "rejected")) throw new Error("Action checkpoint was not saved");
+	}
+
 	async checkpointLifecycle(): Promise<void> {
 		const entries = [...this.queue, ...this.running];
 		for (const entry of entries) {
@@ -291,6 +304,8 @@ export class ActionRunner {
 				cap > 256 * 1024
 			)
 				throw new Error("Invalid command bounds");
+			request.revalidate?.();
+			if (controller.signal.aborted) throw new Error("cancelled");
 			const output = await this.pool.run(argv[0], argv.slice(1), {
 				cwd,
 				env: {

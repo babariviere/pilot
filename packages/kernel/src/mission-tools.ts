@@ -28,6 +28,7 @@ const MEMBER_ACTIONS = [
 	"link",
 	"unlink",
 	"log",
+	"report",
 	"ticket",
 	"prGuidance",
 ] as const;
@@ -84,6 +85,7 @@ When get reports planningVersion 1, only the coordinator/user plans or assigns w
 - ticket: read limited, untrusted Linear context using resourceId from links. No Linear writes.
 - prGuidance: taskId returns live, per-ticket PR wording. Earlier contributors use Related to; only final contributors (every other contributor Done) use Closes, subject to live terminal/manual-pause safeguards. Recheck before creating/editing PRs and after task/link changes. Never silently edit unsafe PRs.
 - unlink: remove url at taskId (omitted: mission-level), own links only unless coordinator; prefers reference. Absent returns removed:false.
+- report: taskId alone reads your current task-owner source token and expectedPreviousId. Submit report with those exact fields, version 1, unique reportId, taskId, movement moving|not_moving|unknown, summary, nextStep and evidence strings. Reports are agent assessments, never acceptance or measured progress. Reuse exact reportId after a lost ACK; changed sources reject.
 - log: add context not already captured by task changes, or kind "handoff" for what the next chat needs to continue (optional health).${
 			coordinator
 				? `
@@ -112,6 +114,19 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 		annotations: { openWorldHint: false, destructiveHint: coordinator },
 		parameters: Type.Object({
 			action: StringEnum(coordinator ? MISSION_ACTIONS : MEMBER_ACTIONS),
+			report: Type.Optional(
+				Type.Object({
+					version: Type.Literal(1),
+					reportId: Type.String({ maxLength: 128 }),
+					taskId: Type.String({ maxLength: 128 }),
+					source: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+					expectedPreviousId: Type.Union([Type.String({ maxLength: 128 }), Type.Null()]),
+					movement: StringEnum(["moving", "not_moving", "unknown"] as const),
+					summary: Type.String({ maxLength: 2000 }),
+					nextStep: Type.String({ maxLength: 1000 }),
+					evidence: Type.Array(Type.String({ maxLength: 1000 }), { maxItems: 16 }),
+				}),
+			),
 			...(coordinator ? { role: Type.Optional(StringEnum(["explorer", "builder", "reviewer"] as const)) } : {}),
 			id: Type.Optional(
 				Type.String({

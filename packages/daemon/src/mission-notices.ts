@@ -143,15 +143,20 @@ export class MissionNotices {
 	}
 
 	private deadlines(now: number) {
-		const pending = this.store.noticeDeadlines(now);
+		const pending = this.store
+			.noticeDeadlines(now)
+			.filter(({ missionId }) => !this.store.controls.current(missionId).held);
 		for (const { missionId } of pending) this.refreshActivity(missionId);
-		return pending.length ? this.store.noticeDeadlines(now) : [];
+		return pending.length
+			? this.store.noticeDeadlines(now).filter(({ missionId }) => !this.store.controls.current(missionId).held)
+			: [];
 	}
 
 	/** Recheck member activity at IPC admission, including after asynchronous persistence. */
 	allowed(sessionId: string, requestId: string): boolean {
 		if (!this.store.noticeAllowed(sessionId, requestId)) return false;
 		const missionId = this.store.missionOf(sessionId)!;
+		if (this.store.controls.current(missionId).held) return false;
 		this.refreshActivity(missionId);
 		return this.store.noticeDeadlines(Date.now(), missionId).some(({ at }) => at <= Date.now());
 	}
@@ -167,6 +172,7 @@ export class MissionNotices {
 	private async deliver(missionId: string, now: number): Promise<void> {
 		const mission = this.store.require(missionId);
 		const id = mission.coordinatorSessionId;
+		if (this.store.controls.current(missionId).held) return;
 		if (mission.status !== "active" || this.store.passiveLifecycle(missionId) || !id) return;
 		// prepareNotice returns a frozen retry; canSendNotice allows that same pending ID only.
 		const retry = this.store.pendingNotice(missionId);

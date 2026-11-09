@@ -9,6 +9,7 @@ import { type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ProjectDashboard, ProjectDashboardCounts, ServerMessage, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
+import { MissionReports } from "./mission-reports.ts";
 import type { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import type { ModelCatalog } from "./models.ts";
@@ -40,6 +41,7 @@ async function fixture(t: TestContext) {
 	const chats = new Map<string, SessionSummary>();
 	const listeners = new Set<(session: SessionSummary) => void>();
 	const sessions = {
+		piReload: { onChange: () => () => {}, status: () => ({ state: "idle" }) },
 		setWorkspaceProcessGuard() {},
 		list: (query: { projectId?: string; archived?: string } = {}) =>
 			[...chats.values()].filter((chat) => !query.projectId || chat.projectId === query.projectId),
@@ -73,7 +75,7 @@ async function fixture(t: TestContext) {
 		projects,
 		{} as ModelCatalog,
 		{ isRunning: () => false } as unknown as TerminalManager,
-		{ service: {} as MissionService, store },
+		{ service: { reports: new MissionReports(store) } as MissionService, store },
 		{
 			scheduled: () => pending,
 			onChange(listener) {
@@ -129,6 +131,33 @@ async function roundTrip(ws: WebSocket): Promise<void> {
 	ws.ping();
 	await pong;
 }
+
+test("Day returns complete existing projections without inferring progress from activity", async (t) => {
+	const f = await fixture(t);
+	for (let i = 0; i < 11; i++) {
+		const mission = f.store.create({ projectId: f.project.id, title: `Mission ${i}` });
+		f.put({ id: `working-${i}`, missionId: mission.id, state: "working" });
+	}
+	const short = (await (await f.api(`/projects/${f.project.id}/dashboard`)).json()) as ProjectDashboard;
+	assert.equal(short.working.items.length, 5);
+	const response = await f.api(`/projects/${f.project.id}/day`);
+	assert.equal(response.status, 200);
+	const day = (await response.json()) as import("@pilot/protocol").DayOverview;
+	assert.equal(day.complete, true);
+	assert.equal(day.dashboard.working.items.length, day.dashboard.working.total);
+	assert.equal(day.dashboard.missions.items.length, 11);
+	assert.equal(day.controls.length, 11);
+	assert.deepEqual(day.reports, [], "active sessions are not movement reports");
+	const id = day.controls[0]!.missionId;
+	const control = await (await f.api(`/missions/${id}/controls`)).json();
+	assert.equal(control.state, "running");
+	const denied = await f.api(`/missions/${id}/controls`, {
+		method: "POST",
+		body: JSON.stringify({ action: "pause", actor: "user" }),
+	});
+	assert.equal(denied.status, 503, "missing native authority never admits a control");
+	assert.equal(f.store.controls.current(id).revision, 0);
+});
 
 test("GET /api/projects/:id/dashboard aggregates the project and rejects unknown ones", async (t) => {
 	const f = await fixture(t);

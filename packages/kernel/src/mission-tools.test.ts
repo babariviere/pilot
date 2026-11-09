@@ -41,6 +41,45 @@ test("only coordinator start schema exposes worker roles, never coordinator self
 	assert.match(tool.description, /Reviewer is metadata only/);
 });
 
+test("versioned report schema reads owner context and forwards exact report bytes", async () => {
+	const calls: unknown[] = [],
+		tool = createMissionTool(async (action, args) => {
+			calls.push([action, args]);
+			return {};
+		});
+	const report = {
+		version: 1,
+		reportId: "report",
+		taskId: "task",
+		source: "a".repeat(64),
+		expectedPreviousId: null,
+		movement: "unknown",
+		summary: "Exact\ntext 🦉",
+		nextStep: "Verify",
+		evidence: ["test output"],
+	};
+	const requests: Record<string, JsonValue>[] = [
+		{ action: "report", taskId: "task" },
+		{ action: "report", report },
+	];
+	for (const args of requests) {
+		validateToolArguments(tool, { type: "toolCall", id: "report", name: "mission", arguments: args });
+		await tool.execute("report", args as never, undefined, undefined, {} as never);
+	}
+	assert.deepEqual(calls, [
+		["report", { taskId: "task" }],
+		["report", { report }],
+	]);
+	assert.throws(() =>
+		validateToolArguments(tool, {
+			type: "toolCall",
+			id: "bad",
+			name: "mission",
+			arguments: { action: "report", report: { ...report, version: 2 } },
+		}),
+	);
+});
+
 test("coordinator planning schema exposes only strict versioned assignment writes", () => {
 	const tool = createMissionTool(async () => ({}), true);
 	const args = {

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import type { ScheduledItem, ScheduleRequest, SpawnRequest } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
+import { MissionStore } from "./missions.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import {
 	type ScheduleClock,
@@ -72,6 +73,7 @@ async function fixture(t: TestContext, initialOnline = false) {
 				},
 			]);
 	const clock = new FakeClock();
+	const missions = new MissionStore(":memory:");
 	const triggers = new FakeTriggers();
 	triggers.online = initialOnline;
 	const calls: Array<{
@@ -82,7 +84,7 @@ async function fixture(t: TestContext, initialOnline = false) {
 		requestId?: string;
 		mode?: string;
 	}> = [];
-	const chats = new Map([["existing", { projectId: "p" }]]);
+	const chats = new Map<string, { projectId: string; missionId?: string }>([["existing", { projectId: "p" }]]);
 	let failure: Error | undefined;
 	const sessions = {
 		get: (id: string) => chats.get(id),
@@ -97,6 +99,7 @@ async function fixture(t: TestContext, initialOnline = false) {
 		},
 	};
 	const deps = {
+		missions,
 		trackedItems,
 		clock,
 		triggers,
@@ -118,9 +121,11 @@ async function fixture(t: TestContext, initialOnline = false) {
 		await service.stop();
 		await store.close();
 		await trackedItems.close();
+		missions.close();
 		await rm(home, { recursive: true, force: true });
 	});
 	return {
+		missions,
 		clock,
 		triggers,
 		calls,
@@ -155,6 +160,110 @@ async function fixture(t: TestContext, initialOnline = false) {
 		},
 	};
 }
+test("mission fence holds pending message/chat schedules without changing user revisions", async (t) => {
+	const f = await fixture(t, true);
+	const mission = f.missions.create({ projectId: "p", title: "Synthetic" });
+	f.chats.set("existing", { projectId: "p", missionId: mission.id });
+	const message = await f.service.create({
+		trigger: "at",
+		at: 2000,
+		target: { kind: "message", sessionId: "existing", message: "Synthetic" },
+	});
+	const spawn = chat();
+	if (spawn.target.kind === "chat") spawn.target.spawn.missionId = mission.id;
+	const created = await f.service.create(spawn);
+	const command: import("@pilot/protocol").MissionControlCommand = {
+		version: 1,
+		action: "pause",
+		operationId: "pause",
+		projectId: "p",
+		coordinatorSessionId: null,
+		expectedRevision: 0,
+		home: { daemonId: "d", lineageId: "l" },
+	};
+	f.missions.controls.write(
+		{
+			version: 1,
+			missionId: mission.id,
+			command,
+			ownerFence: "fixture",
+			state: "acknowledged",
+			members: [],
+			control: {
+				version: 1,
+				missionId: mission.id,
+				revision: 1,
+				pauseGeneration: 1,
+				stopGeneration: 0,
+				held: true,
+				state: "paused",
+				operationId: "pause",
+				pauseOperationId: "pause",
+			},
+		},
+		0,
+	);
+	await fire(f);
+	await f.service.drainMission(mission.id);
+	assert.equal(f.calls.length, 0);
+	assert.equal(f.store.require(message.id).revision, message.revision);
+	assert.equal(f.store.require(created.id).revision, created.revision);
+	const record = f.missions.controls.operation("pause")!;
+	record.control = { ...record.control, revision: 2, held: false, state: "running" };
+	f.missions.controls.write(record, 1);
+	await f.settle();
+	assert.equal(f.calls.length, 2);
+});
+
+test("mission Pause during a durable schedule claim never dispatches across its fence", async (t) => {
+	const f = await fixture(t, true),
+		mission = f.missions.create({ projectId: "p", title: "Synthetic" });
+	f.chats.set("existing", { projectId: "p", missionId: mission.id });
+	await f.service.create({
+		trigger: "at",
+		at: 2000,
+		target: { kind: "message", sessionId: "existing", message: "Synthetic" },
+	});
+	const replace = f.store.replace.bind(f.store);
+	t.mock.method(f.store, "replace", async (...args: Parameters<typeof replace>) => {
+		const row = await replace(...args);
+		if (args[1].state === "dispatching") {
+			f.missions.controls.write(
+				{
+					version: 1,
+					missionId: mission.id,
+					ownerFence: "fixture",
+					command: {
+						version: 1,
+						action: "pause",
+						operationId: "race",
+						projectId: "p",
+						coordinatorSessionId: null,
+						expectedRevision: 0,
+						home: { daemonId: "d", lineageId: "l" },
+					},
+					state: "entered",
+					members: [],
+					control: {
+						version: 1,
+						missionId: mission.id,
+						revision: 1,
+						pauseGeneration: 1,
+						stopGeneration: 0,
+						held: true,
+						state: "pausing",
+					},
+				},
+				0,
+			);
+		}
+		return row;
+	});
+	await fire(f);
+	assert.equal(f.calls.length, 0);
+	await f.service.drainMission(mission.id);
+});
+
 /** Make every default-time item due and report online. */
 const fire = async (f: { clock: FakeClock; triggers: FakeTriggers; service: ScheduleService }) => {
 	f.clock.advance(10_000);

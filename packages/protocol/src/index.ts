@@ -32,6 +32,8 @@ export type * from "./insights.ts";
 export type * from "./insights-workspace.ts";
 export type * from "./live-update.ts";
 export type * from "./mcp-setup.ts";
+export type * from "./mission-controls.ts";
+export type * from "./mission-reports.ts";
 export type * from "./model-scope.ts";
 export type * from "./native-review.ts";
 export type * from "./pi-reload.ts";

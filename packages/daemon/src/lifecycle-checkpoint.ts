@@ -66,7 +66,7 @@ export function matchingRuntime(left: LifecycleRuntime, right: LifecycleRuntime)
 export interface LifecycleCheckpoint {
 	schema: 1;
 	operationId: string;
-	purpose: "daemon-upgrade" | "daemon-stop" | "daemon-restart";
+	purpose: "daemon-upgrade" | "daemon-stop" | "daemon-restart" | "mission-pause";
 	incarnation: string;
 	conversationId?: string;
 	originBoot?: string;
@@ -90,6 +90,8 @@ export interface LifecycleCheckpoint {
 	census?: { jobs: number; hasChildren: boolean };
 	/** Set only after final child inventory, clear independent census, close ACK and worker exit. */
 	quiescent?: true;
+	/** Mission-only queued inputs with no admitted executor. Not a kernel/OS-child census. */
+	admissionOnly?: true;
 	/** A later user Stop must finish its exact cancellation before fresh input can clear ownership. */
 	stopAcknowledged?: true;
 	phase: "checkpointing" | "checkpointed" | "resume-admitted" | "resume-acknowledged" | "unknown" | "stopped";

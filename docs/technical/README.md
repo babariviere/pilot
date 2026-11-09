@@ -48,6 +48,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Coordinator-first desktop workflow](mission-desktop-workflow.md)
 - [Proposed worker escalation and human handoff contract](mission-escalation-handoff.md)
 - [Mission grouping and contextual decisions](mission-grouping-context.md)
+- [Mission Pause/Resume and versioned agent reports](mission-controls-reports.md)
 - [Proposed mission interview and approval contract](mission-interview-approval.md)
 - [Day interview and agreement backend (host-only)](day-mission-agreements.md)
 - [Proposed native Review and durable diff annotations](mission-native-review.md)
