@@ -7,12 +7,13 @@ use std::{cell::RefCell, rc::Rc, time::Duration};
 use nsh_core::prelude::*;
 
 use crate::{
-    desk::Desk,
+    desk::{Desk, PULSE_COUNT, PULSE_EVERY},
     model::{AskIntent, DecideIntent, DecisionRef, IntentOutcome, Scenario, Today},
 };
 
 /// How long the mock coordinator takes to answer, so pending states show.
-const MOCK_LATENCY: Duration = Duration::from_millis(350);
+/// The Rust-only Today screen waits the same time.
+pub const MOCK_LATENCY: Duration = Duration::from_millis(350);
 
 type Listeners = Rc<RefCell<Vec<(u64, Callback<Today>)>>>;
 
@@ -140,5 +141,27 @@ impl TodayFeed {
             feed.publish();
             outcome
         })
+    }
+
+    /// Runs the update workload: one pulse every `everyMs` (100 when left
+    /// out), `count` times (300 when left out), each publishing the whole
+    /// read model. Resolves with the number of pulses made. For
+    /// measurements only: it is not a user intent.
+    pub async fn pulse(this: Instance<Self>, every_ms: Option<u32>, count: Option<u32>) -> u32 {
+        let every = every_ms.map_or(PULSE_EVERY, |ms| Duration::from_millis(ms.into()));
+        let count = count.unwrap_or(PULSE_COUNT);
+        let mut made = 0;
+        while made < count {
+            timer(every).await;
+            if this.is_disposed() {
+                break;
+            }
+            this.with_mut(|feed| {
+                feed.desk.pulse();
+                feed.publish();
+            });
+            made += 1;
+        }
+        made
     }
 }

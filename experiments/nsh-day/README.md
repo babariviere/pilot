@@ -28,12 +28,15 @@ existing unmodified checkout.
 ```sh
 cd experiments/nsh-day
 ./nsh.sh run                     # the decisions world, in a native window
-./nsh.sh run Trouble.tsx         # also Quiet.tsx, Large.tsx
+./nsh.sh run Trouble.tsx         # also Quiet.tsx, Large.tsx, Pulse.tsx
 ./nsh.sh check && ./nsh.sh build # types against the Rust declarations, class check
-./nsh.sh test App.test.tsx       # headless flows, boundary and sandbox (10 tests)
+./nsh.sh test App.test.tsx       # headless flows, boundary and sandbox (11 tests)
 ./nsh.sh test Native.test.tsx --target macos  # native captures and input, in output/
 (cd native && cargo test)        # Rust rules and generated declarations
 ```
+
+`rust/` holds the same screen written in Rust only, for the stack
+comparison: [rust/README.md](rust/README.md) has its parity matrix and hooks.
 
 ## What it shows
 
@@ -44,7 +47,10 @@ results since the user last looked, and what is coming up. A decision card has
 user picks an option (Pilot's recommendation is preselected) and presses Decide,
 Confirm or Approve, or puts the decision off with Later. Worlds: `decisions`
 (default), `quiet`, `trouble` (a lost confirmation and an unconfirmed push) and
-`large` (203 missions, 123 results).
+`large` (203 missions, 123 results). `Pulse.tsx` runs the large world with the
+shared update workload: `Desk::pulse` moves the next moving mission on every
+100 ms, adds a result every fourth time, and publishes the whole read model,
+300 times. `TodayFeed.pulse` is for measurements only, not a user intent.
 
 Not in this spike: keyboard triage, decision visuals ("Show me"), the day
 switcher, New, rituals, Changes, Automations and the sky dither.

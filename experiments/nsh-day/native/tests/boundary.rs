@@ -17,6 +17,7 @@ fn the_screen_gets_typed_read_models_and_intents() {
         "  later(intent: DecisionRef): IntentOutcome;",
         "  check(intent: DecisionRef): Promise<IntentOutcome>;",
         "  ask(intent: AskIntent): Promise<IntentOutcome>;",
+        "  pulse(everyMs?: number | null, count?: number | null): Promise<number>;",
         "  onChange(listener: (today: Today) => void): () => void;",
     ] {
         assert!(ts.contains(line), "missing {line:?} in\n{ts}");

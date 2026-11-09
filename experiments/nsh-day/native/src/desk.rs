@@ -4,11 +4,13 @@
 //! production this is where the daemon adapter would sit, behind the same
 //! two-step begin/settle shape.
 
+use std::time::Duration;
+
 use crate::{
     fixture::{Ack, World, world},
     model::{
-        Answer, AskIntent, DecideIntent, Decision, DecisionKind, DecisionRef, Delivery,
-        IntentOutcome, MissionState, OutcomeStatus, Scenario, Today,
+        Answer, AskIntent, DecideIntent, Decision, DecisionKind, DecisionRef, Delivery, DoneEntry,
+        Evidence, IntentOutcome, MissionState, OutcomeStatus, Scenario, Today, Tone,
     },
 };
 
@@ -17,6 +19,12 @@ pub const DONE_LIMIT: usize = 20;
 
 /// The longest question a user may ask, in characters.
 pub const QUESTION_LIMIT: usize = 500;
+
+/// How often the update workload changes the read model by default.
+pub const PULSE_EVERY: Duration = Duration::from_millis(100);
+
+/// How many changes the update workload makes by default.
+pub const PULSE_COUNT: u32 = 300;
 
 /// Keeps the newest [`DONE_LIMIT`] results and counts the rest.
 pub fn limit_done(today: &mut Today) {
@@ -33,6 +41,7 @@ pub struct Desk {
     today: Today,
     acks: Vec<(String, Ack)>,
     answers: Vec<(String, String)>,
+    pulses: u32,
 }
 
 /// A started intent that waits for the coordinator.
@@ -58,6 +67,7 @@ impl Desk {
             today,
             acks: world.acks,
             answers: world.answers,
+            pulses: 0,
         }
     }
 
@@ -306,6 +316,51 @@ impl Desk {
         line.clone_into(&mut mission.line);
         self.today.moving.push(mission);
     }
+
+    /// One step of the update workload, the same for both Today screens:
+    /// the next moving mission (in turn) moves one task on and says so,
+    /// and every fourth step adds a result at the top. Decisions do not
+    /// change, so a pulse never races an intent. Returns the step's number.
+    pub fn pulse(&mut self) -> u32 {
+        self.pulses += 1;
+        let step = self.pulses;
+        let rows = if self.today.moving.is_empty() {
+            &mut self.today.not_moving
+        } else {
+            &mut self.today.moving
+        };
+        if !rows.is_empty() {
+            let at = (step as usize - 1) % rows.len();
+            let row = &mut rows[at];
+            let p = &mut row.progress;
+            if p.todo > 0 {
+                p.todo -= 1;
+                p.active += 1;
+            } else if p.active > 0 {
+                p.active -= 1;
+                p.done += 1;
+            } else {
+                p.todo = p.done;
+                p.done = 0;
+            }
+            row.line = format!("Working on update {step}.");
+            if step.is_multiple_of(4) {
+                let entry = DoneEntry {
+                    id: format!("pulse-{step}"),
+                    text: format!("Update {step} landed with its checks."),
+                    mission_title: row.title.clone(),
+                    evidence: vec![Evidence {
+                        label: format!("{step:07x}"),
+                        tone: Tone::Neutral,
+                    }],
+                };
+                self.today.done.insert(0, entry);
+                limit_done(&mut self.today);
+            }
+        }
+        self.changed();
+        step
+    }
 }
 
 #[cfg(test)]
@@ -423,5 +478,31 @@ mod tests {
             desk.today().moving.len() + desk.today().not_moving.len(),
             203
         );
+    }
+
+    #[test]
+    fn pulses_change_missions_and_results_but_never_decisions() {
+        let mut desk = Desk::new(Scenario::Large);
+        let before = desk.today().clone();
+        let total = |p: &crate::model::Progress| p.done + p.review + p.active + p.blocked + p.todo;
+        for _ in 0..8 {
+            desk.pulse();
+        }
+        let after = desk.today();
+        assert_eq!(after.revision, before.revision + 8);
+        assert_eq!(after.decisions, before.decisions);
+        assert_eq!(after.done.len(), DONE_LIMIT);
+        assert_eq!(after.done_hidden, before.done_hidden + 2);
+        assert_eq!(after.done[0].id, "pulse-8");
+        assert_eq!(after.moving[7].line, "Working on update 8.");
+        for (a, b) in after.moving.iter().zip(&before.moving) {
+            assert_eq!(total(&a.progress), total(&b.progress));
+        }
+        // The same steps give the same model: both screens see one workload.
+        let mut again = Desk::new(Scenario::Large);
+        for _ in 0..8 {
+            again.pulse();
+        }
+        assert_eq!(again.today(), after);
     }
 }

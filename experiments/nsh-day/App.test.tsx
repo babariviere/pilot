@@ -87,6 +87,13 @@ test("a large world keeps Today limited", async () => {
 	await app.waitFor("103 earlier results are not shown here.");
 });
 
+test("the update workload reaches the screen", async () => {
+	const app = await open("./Pulse.tsx", desktop);
+	await app.waitFor("Working on update 4.");
+	await app.waitFor("Update 4 landed with its checks.");
+	await app.waitFor("104 earlier results are not shown here.");
+});
+
 test("intents are typed: unknown keys and wrong types are refused in the call", async () => {
 	const feed = new TodayFeed("decisions");
 	let thrown = "";
