@@ -126,6 +126,14 @@ test("later complete rounds ask new questions, preserve earlier submissions, and
 	);
 	assert.equal(await f.requestCount(), 2);
 	assert.equal((await submit(f)).receipt.state, "rejected");
+	const freshHold = f.store.planningWorkers.get(f.missionId)!.hold;
+	assert.equal((await f.post(first.op)).state, "accepted", "Earlier submitted round remains historical only");
+	assert.equal(await f.requestCount(), 2);
+	assert.deepEqual(f.store.planningWorkers.get(f.missionId)!.hold, freshHold);
+	assert.throws(
+		() => f.store.interviews.binding(f.missionId, f.store.brief(f.missionId)!),
+		/complete interview agreement/,
+	);
 	assert.equal(f.store.interviews.lookup(first.op)!.submission!.answers.length, 2);
 	assert.throws(
 		() => f.store.interviews.assertNewQuestions(f.missionId, f.store.interviews.lookup(first.op)!.questions),
@@ -325,4 +333,90 @@ test("planning idle admission wakes on a late tool-drain packet without ordinary
 	});
 	await waiting;
 	assert.equal(summaries, 0);
+});
+
+test("crash before initial generation preserves only an unanswerable bootstrap across recovery", {
+	timeout: 60000,
+}, async (t) => {
+	const f = await planningWorkerFixture(t);
+	const create = f.sessions.createPlanningWorker.bind(f.sessions);
+	t.mock.method(f.sessions, "createPlanningWorker", async (...args: Parameters<typeof create>) => {
+		await create(...args);
+		await f.crashWorker();
+		throw new Error("Interrupted setup before first generation");
+	});
+	const result = await f.post(f.enrollment);
+	assert.equal(result.state, "pending");
+	const bootstrap = f.store.interviews.lookup(f.enrollment)!;
+	const missionId = bootstrap.fence.missionId;
+	assert.deepEqual(bootstrap.questions, []);
+	assert.equal(bootstrap.submission, null);
+	assert.equal(f.store.planningWorkers.get(missionId)!.phase, "setup");
+	assert.equal(f.store.planningWorkers.call(missionId, "$initial"), undefined);
+	const read = await f.read(missionId);
+	assert.equal(read.status, "preparing");
+	assert.equal(read.view, null);
+	assert.equal(read.contextDigest, null);
+	assert.equal(read.capabilities.answers, "unavailable");
+	const forbiddenSubmit = f.operation(
+		missionId,
+		{ purpose: "interview-submit", expected: { fence: bootstrap.fence, revision: bootstrap.revision } } as {
+			purpose: string;
+		},
+		"0".repeat(64),
+	);
+	assert.equal((await f.post(forbiddenSubmit)).state, "rejected");
+	await f.restart();
+	assert.equal((await f.post(f.enrollment)).state, "pending", "Recovery cannot invent initial admission proof");
+	assert.equal((await f.post(f.enrollment, true)).state, "pending");
+	assert.deepEqual(f.store.interviews.latest(missionId), bootstrap);
+	assert.equal((await f.read(missionId)).status, "preparing");
+	assert.equal(await f.requestCount(), 0);
+	assert.equal(f.specs.length, 1, "Recovery never creates or sends an initial historical input");
+	assert.equal(f.store.tasks(missionId).length, 0);
+});
+
+test("Stop between complete submission and native admission cannot be cleared by continuation", {
+	timeout: 60000,
+}, async (t) => {
+	let release!: () => void, entered!: () => void;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const reached = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	t.after(release);
+	const f = await heldFixture(t);
+	const admit = f.sessions.admitPlanning.bind(f.sessions);
+	let continuationAttempts = 0;
+	t.mock.method(f.sessions, "admitPlanning", async (input: PlanningInput, guard: () => void) => {
+		if (input.operation.kind === "interview-continue") {
+			continuationAttempts++;
+			entered();
+			await gate;
+		}
+		return admit(input, guard);
+	});
+	await answerAll(f);
+	const round = f.store.planningWorkers.get(f.missionId)!.hold;
+	const final = await submit(f);
+	assert.equal(final.receipt.state, "accepted");
+	await reached;
+	assert.equal(f.store.interviews.latest(f.missionId)!.submission!.operationId, final.op.operationId);
+	await f.sessions.stop(f.binding.ownerSessionId);
+	release();
+	await f.server.closePlanning();
+	assert.equal(f.store.planningWorkers.get(f.missionId)!.phase, "continuing");
+	assert.deepEqual(f.store.planningWorkers.get(f.missionId)!.hold, round);
+	assert.equal(await f.requestCount(), 1);
+	assert.equal(continuationAttempts, 1);
+	await f.restart();
+	assert.equal((await f.post(final.op)).state, "accepted", "Historic submission receipt grants no new admission");
+	f.server.recoverOperations();
+	await f.server.closePlanning();
+	assert.equal(await f.requestCount(), 1);
+	assert.equal(f.specs.length, 1);
+	assert.deepEqual(f.store.planningWorkers.get(f.missionId)!.hold, round);
+	assert.equal(f.store.tasks(f.missionId).length, 0);
 });

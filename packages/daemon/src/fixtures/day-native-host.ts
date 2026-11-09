@@ -83,7 +83,15 @@ const chats = members.map(
 		missionId: mission.id,
 	}),
 );
+let planningBridge: Parameters<SessionManager["setPlanningBridge"]>[0] | undefined;
 const sessions = {
+	setPlanningBridge(bridge: NonNullable<typeof planningBridge>) {
+		assert.equal(planningBridge, undefined, "Fixture permits only one current planning bridge");
+		planningBridge = bridge;
+		return () => {
+			if (planningBridge === bridge) planningBridge = undefined;
+		};
+	},
 	piReload: { onChange: () => () => {}, status: () => ({ state: "idle" }) },
 	setWorkspaceProcessGuard() {},
 	list: () => chats,
@@ -118,6 +126,7 @@ const server = createDaemonServer(
 	undefined,
 	native,
 );
+assert.ok(planningBridge, "Production server installs its trusted bridge even in the no-worker fixture");
 await server.runtimeReady;
 server.listen(0, "127.0.0.1");
 await once(server, "listening");
@@ -326,6 +335,8 @@ await Promise.all([
 	new Promise<void>((resolve) => proxy.close(() => resolve())),
 	new Promise<void>((resolve) => server.close(() => resolve())),
 ]);
+await server.closePlanning();
+assert.equal(planningBridge, undefined, "Joined close releases only this server's bridge");
 await native.close();
 store.close();
 await rm(home, { recursive: true, force: true });

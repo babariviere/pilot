@@ -1,6 +1,6 @@
 /** Real daemon, SessionManager and forked kernel, temporary home and faux provider only. */
 import assert from "node:assert/strict";
-import { execFile, fork } from "node:child_process";
+import { type ChildProcess, execFile, fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter, once } from "node:events";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
@@ -107,6 +107,7 @@ export default pi => {
 	let store = new MissionStore(join(home, "missions.sqlite"));
 	const specs: KernelSpec[] = [],
 		kernels: Worker[] = [];
+	const children: ChildProcess[] = [];
 	const changes = new EventEmitter();
 	let logs = "";
 	const newSessions = () =>
@@ -130,6 +131,7 @@ export default pi => {
 							NODE_OPTIONS: `--import=${offline}`,
 						},
 					});
+					children.push(child);
 					child.stdout!.on("data", (b) => {
 						logs = (logs + b).slice(-32768);
 					});
@@ -295,6 +297,12 @@ export default pi => {
 			await start();
 		},
 		projectUpdate: () => projects.update(project.id, { model: "faux/changed" }),
+		async crashWorker(index = 0) {
+			const child = children[index]!;
+			const exited = once(child, "exit");
+			assert.equal(child.kill("SIGKILL"), true);
+			await exited;
+		},
 		logs: () => logs,
 		async requestCount() {
 			return (await readFile(requests, "utf8").catch(() => "")).trim().split("\n").filter(Boolean).length;
