@@ -11143,6 +11143,12 @@ ${run.excerpt}`,
 			throw new CommandRejected("Only the current mission coordinator can answer a member question");
 	}
 
+	/** Passive exact accepted-input lookup. Missing or uncertain receipts never admit work. */
+	async lookupNativeAttentionInput(id: string, operationId: string): Promise<boolean> {
+		const meta = this.require(id);
+		return this.coldReader.readAcceptedInput(join(this.dir(meta.id), "durable"), operationId);
+	}
+
 	/** Passive current question read; never subscribes or starts a worker. */
 	async pendingQuestion(id: string) {
 		const view = await this.recentColdSnapshot(this.require(id));

@@ -1,6 +1,7 @@
 //! Trusted native Today host. Owns sockets, journal and admission outside the VM.
 //! Selection is explicit and immutable. Retire and join this host before replacing
 //! a profile/project; old replies can never populate the replacement's Desk.
+pub mod attention;
 mod enrollment;
 mod journal;
 mod planning;
@@ -48,9 +49,16 @@ pub enum Error {
     Unknown,
     Closed,
     Busy,
+    Capacity,
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if *self == Self::Capacity {
+            return write!(
+                f,
+                "Attention record capacity reached (4096); no records were evicted"
+            );
+        }
         write!(f, "{self:?}")
     }
 }
@@ -74,6 +82,10 @@ struct Shared {
     planning_mission: Mutex<Option<String>>,
     planning_operations: Mutex<std::collections::BTreeMap<String, serde_json::Value>>,
     enrollment: Mutex<Option<enrollment::Selection>>,
+    attention: Mutex<Option<serde_json::Value>>,
+    attention_operations: Mutex<std::collections::BTreeMap<String, serde_json::Value>>,
+    attention_drafts: Mutex<std::collections::BTreeMap<String, serde_json::Value>>,
+    url_opener: Option<attention::UrlOpener>,
 }
 impl Shared {
     fn change<R>(&self, f: impl FnOnce(&mut Desk) -> R) -> R {
@@ -112,6 +124,10 @@ impl Shared {
 }
 
 enum Work {
+    AttentionRead,
+    AttentionSend(serde_json::Value),
+    AttentionCheck(String),
+    AttentionDraft(attention::DraftKey, serde_json::Value),
     Refresh,
     Detail(String),
     Control {
@@ -162,7 +178,16 @@ impl NativeHost {
     /// Start only for an explicit native selection. No environment or home fallback.
     /// File/network work runs off the UI thread. The default mock app never calls this.
     pub fn open(source: Source, ledger: PathBuf) -> Result<Self, Error> {
-        Self::open_selected(source, ledger, None)
+        Self::open_selected(source, ledger, None, None)
+    }
+
+    /// Native root supplies explicit URL navigation authority, never the screen VM.
+    pub fn open_with_navigation(
+        source: Source,
+        ledger: PathBuf,
+        opener: attention::UrlOpener,
+    ) -> Result<Self, Error> {
+        Self::open_selected(source, ledger, None, Some(opener))
     }
 
     /// Native-only selection of a model for new planning. No live profile is enabled.
@@ -171,13 +196,14 @@ impl NativeHost {
         if model.trim().is_empty() || model.len() > 256 {
             return Err(Error::Invalid);
         }
-        Self::open_selected(source, ledger, Some(model))
+        Self::open_selected(source, ledger, Some(model), None)
     }
 
     fn open_selected(
         source: Source,
         ledger: PathBuf,
         model: Option<String>,
+        url_opener: Option<attention::UrlOpener>,
     ) -> Result<Self, Error> {
         if source.port == 0
             || !source.profile.is_absolute()
@@ -200,6 +226,10 @@ impl NativeHost {
             planning_mission: Mutex::new(None),
             planning_operations: Mutex::new(std::collections::BTreeMap::new()),
             enrollment: Mutex::new(None),
+            attention: Mutex::new(None),
+            attention_operations: Mutex::new(std::collections::BTreeMap::new()),
+            attention_drafts: Mutex::new(std::collections::BTreeMap::new()),
+            url_opener,
         });
         let (requests, rx) = async_channel::bounded(16);
         let state = shared.clone();
@@ -521,6 +551,23 @@ async fn run(
     shared: Arc<Shared>,
     requests: Receiver<Request>,
 ) -> Result<(), Error> {
+    for record in journal.attention.values().filter(|r| r.source == t.source) {
+        attention::publish(&shared, record);
+    }
+    for draft in journal
+        .attention_drafts
+        .values()
+        .filter(|r| r.source == t.source)
+    {
+        shared
+            .attention_drafts
+            .lock()
+            .expect("attention drafts poisoned")
+            .insert(
+                serde_json::to_string(&draft.key).map_err(|_| Error::Storage)?,
+                draft.value.clone(),
+            );
+    }
     for record in journal.planning.values().filter(|r| r.source == t.source) {
         publish_planning(&shared, record);
     }
@@ -668,13 +715,24 @@ async fn handle(
     // Immutable source, local identity and project are still requalified below.
     if matches!(
         &work,
-        Work::Check(_) | Work::CheckPlanning(_) | Work::EnrollPlanning(_) | Work::PreparePlanning
+        Work::Check(_)
+            | Work::CheckPlanning(_)
+            | Work::EnrollPlanning(_)
+            | Work::PreparePlanning
+            | Work::AttentionCheck(_)
+            | Work::AttentionDraft(_, _)
     ) {
         shared.open()?;
     } else {
         shared.current(epoch)?;
     }
     match work {
+        work @ (Work::AttentionRead
+        | Work::AttentionSend(_)
+        | Work::AttentionCheck(_)
+        | Work::AttentionDraft(_, _)) => {
+            return attention::handle(t, journal, shared, epoch, work).await;
+        }
         Work::PreparePlanning => return enrollment::prepare(t, journal, shared, epoch).await,
         Work::EnrollPlanning(intent) => {
             return enrollment::send(t, journal, shared, epoch, intent).await;

@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS human_action_operations (
 
 interface Port {
 	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;
+	all(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue>[];
 	run(sql: string, ...params: SQLInputValue[]): void;
 	transaction<T>(work: () => T): T;
 	durable(): Promise<void>;
@@ -25,11 +26,30 @@ interface Port {
 /** Only accessed by AttentionService, which checks authority and validates inputs. No work dispatch. */
 export class AttentionStore {
 	private readonly port: Port;
+	private readonly listeners = new Set<() => void>();
 	constructor(port: Port) {
 		this.port = port;
 	}
 	durable(): Promise<void> {
 		return this.port.durable();
+	}
+	onChange(listener: () => void): () => void {
+		this.listeners.add(listener);
+		return () => this.listeners.delete(listener);
+	}
+	private changed(): void {
+		void this.durable().then(
+			() => {
+				for (const listener of this.listeners) {
+					try {
+						listener();
+					} catch {
+						/* Invalidation cannot change a receipt. */
+					}
+				}
+			},
+			() => {},
+		);
 	}
 	/** Refuse growth, never evict uncertain requests or exact completion receipts. */
 	capacity(): boolean {
@@ -55,6 +75,7 @@ export class AttentionStore {
 				JSON.stringify({ request, state: "entered" } satisfies AssistanceRecord),
 			);
 		});
+		this.changed();
 	}
 	settle(record: AssistanceRecord): void {
 		this.port.transaction(() => {
@@ -67,10 +88,27 @@ export class AttentionStore {
 				record.request.requestId,
 			);
 		});
+		this.changed();
 	}
 	humanAction(id: string): HumanActionRecord | undefined {
 		const row = this.port.one("SELECT record FROM human_actions WHERE id=?", id);
 		return row ? JSON.parse(String(row.record)) : undefined;
+	}
+	/** No pagination or eviction: admission already caps the entire attention ledger. */
+	actionsReadable(projectId: string): boolean {
+		const sizes = this.port.one(
+			"SELECT COUNT(*) n, COALESCE(SUM(length(CAST(record AS BLOB))),0) bytes FROM human_actions WHERE json_extract(record,'$.content.projectId')=?",
+			projectId,
+		)!;
+		return Number(sizes.n) <= 4096 && Number(sizes.bytes) <= 8 * 1024 * 1024;
+	}
+	actions(projectId: string): HumanActionRecord[] {
+		return this.port
+			.all(
+				"SELECT record FROM human_actions WHERE json_extract(record,'$.content.projectId')=? ORDER BY id",
+				projectId,
+			)
+			.map((row) => JSON.parse(String(row.record)));
 	}
 	operation(id: string): { command: HumanActionCommand; record: HumanActionRecord } | undefined {
 		const row = this.port.one("SELECT command,record FROM human_action_operations WHERE operation_id=?", id);
@@ -78,7 +116,7 @@ export class AttentionStore {
 	}
 	/** A synchronous transaction makes validation, expected-prior CAS and exact receipt indivisible. */
 	write(command: HumanActionCommand, build: () => HumanActionRecord): HumanActionRecord {
-		return this.port.transaction(() => {
+		const record = this.port.transaction(() => {
 			if (this.operation(command.operationId)) throw new Error("Operation already recorded");
 			const record = build();
 			this.port.run(
@@ -94,5 +132,7 @@ export class AttentionStore {
 			);
 			return record;
 		});
+		this.changed();
+		return record;
 	}
 }

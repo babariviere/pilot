@@ -1,4 +1,5 @@
 //! One private append-only, fsynced command ledger. Pending records never authorize POST.
+use super::attention::{Draft, Record as AttentionRecord};
 use super::planning::PlanningRecord;
 use super::{Error, Source};
 use crate::contract::{ControlCommand, ControlOperation, DayOverview, MissionDetail};
@@ -49,11 +50,15 @@ pub(super) struct Journal {
     failed: bool,
     pub records: BTreeMap<String, Record>,
     pub planning: BTreeMap<String, PlanningRecord>,
+    pub attention: BTreeMap<String, AttentionRecord>,
+    pub attention_drafts: BTreeMap<String, Draft>,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 enum Entry {
+    Attention(Box<AttentionRecord>),
+    Draft(Box<Draft>),
     Control(Box<Record>),
     Planning(Box<PlanningRecord>),
 }
@@ -115,9 +120,45 @@ impl Journal {
         }
         let mut records: BTreeMap<String, Record> = BTreeMap::new();
         let mut planning: BTreeMap<String, PlanningRecord> = BTreeMap::new();
+        let mut attention: BTreeMap<String, AttentionRecord> = BTreeMap::new();
+        let mut attention_drafts: BTreeMap<String, Draft> = BTreeMap::new();
         for line in body.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
             let entry: Entry = serde_json::from_slice(line).map_err(|_| Error::Storage)?;
             let record = match entry {
+                Entry::Attention(record) => {
+                    record.validate()?;
+                    if let Some(prior) = attention.get(&record.id)
+                        && (prior.source != record.source
+                            || prior.request != record.request
+                            || (prior.not_sent && !record.not_sent)
+                            || (!prior.pending() && prior.receipt != record.receipt))
+                    {
+                        return Err(Error::Storage);
+                    }
+                    attention.insert(record.id.clone(), *record);
+                    if attention.len() + attention_drafts.len() > 4096 {
+                        return Err(Error::Storage);
+                    }
+                    if records.len() + planning.len() + attention.len() + attention_drafts.len()
+                        > MAX_OPERATIONS
+                    {
+                        return Err(Error::Storage);
+                    }
+                    continue;
+                }
+                Entry::Draft(draft) => {
+                    draft.validate()?;
+                    attention_drafts.insert(draft.id(), *draft);
+                    if attention.len() + attention_drafts.len() > 4096 {
+                        return Err(Error::Storage);
+                    }
+                    if records.len() + planning.len() + attention.len() + attention_drafts.len()
+                        > MAX_OPERATIONS
+                    {
+                        return Err(Error::Storage);
+                    }
+                    continue;
+                }
                 Entry::Control(record) => *record,
                 Entry::Planning(record) => {
                     let record = *record;
@@ -136,7 +177,9 @@ impl Journal {
                         return Err(Error::Storage);
                     }
                     planning.insert(record.id().to_owned(), record);
-                    if planning.len() + records.len() > MAX_OPERATIONS {
+                    if planning.len() + records.len() + attention.len() + attention_drafts.len()
+                        > MAX_OPERATIONS
+                    {
                         return Err(Error::Storage);
                     }
                     continue;
@@ -172,7 +215,9 @@ impl Journal {
                 .map_err(|_| Error::Storage)?;
             }
             records.insert(record.command.operation_id.clone(), record);
-            if records.len() + planning.len() > MAX_OPERATIONS {
+            if records.len() + planning.len() + attention.len() + attention_drafts.len()
+                > MAX_OPERATIONS
+            {
                 return Err(Error::Storage);
             }
         }
@@ -185,13 +230,15 @@ impl Journal {
             failed: false,
             records,
             planning,
+            attention,
+            attention_drafts,
         })
     }
 
     pub fn save(&mut self, record: Record) -> Result<(), Error> {
         if self.failed
             || (!self.records.contains_key(&record.command.operation_id)
-                && self.records.len() + self.planning.len() >= MAX_OPERATIONS)
+                && self.count() >= MAX_OPERATIONS)
         {
             return Err(Error::Storage);
         }
@@ -203,9 +250,7 @@ impl Journal {
 
     pub fn save_planning(&mut self, record: PlanningRecord) -> Result<(), Error> {
         record.validate()?;
-        if !self.planning.contains_key(record.id())
-            && self.records.len() + self.planning.len() >= MAX_OPERATIONS
-        {
+        if !self.planning.contains_key(record.id()) && self.count() >= MAX_OPERATIONS {
             return Err(Error::Storage);
         }
         self.append(&record)?;
@@ -238,6 +283,43 @@ impl Journal {
         self.bytes += bytes.len() as u64;
         self.failed = false;
         Ok(())
+    }
+
+    pub fn save_attention(&mut self, record: AttentionRecord) -> Result<(), Error> {
+        record.validate()?;
+        if !self.attention.contains_key(&record.id) && self.count() >= MAX_OPERATIONS {
+            return Err(Error::Storage);
+        }
+        if !self.attention.contains_key(&record.id)
+            && self.attention.len() + self.attention_drafts.len() >= 4096
+        {
+            return Err(Error::Capacity);
+        }
+        self.append(&record)?;
+        self.attention.insert(record.id.clone(), record);
+        Ok(())
+    }
+    pub fn save_attention_draft(&mut self, draft: Draft) -> Result<(), Error> {
+        draft.validate()?;
+        let id = draft.id();
+        if !self.attention_drafts.contains_key(&id) && self.count() >= MAX_OPERATIONS {
+            return Err(Error::Storage);
+        }
+        if !self.attention_drafts.contains_key(&id)
+            && self.attention.len() + self.attention_drafts.len() >= 4096
+        {
+            return Err(Error::Capacity);
+        }
+        self.append(&draft)?;
+        self.attention_drafts.insert(id, draft);
+        Ok(())
+    }
+
+    fn count(&self) -> usize {
+        self.records.len()
+            + self.planning.len()
+            + self.attention.len()
+            + self.attention_drafts.len()
     }
 
     pub fn cached(&self, source: &Source) -> Option<Cache> {

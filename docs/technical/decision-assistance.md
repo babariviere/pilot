@@ -1,9 +1,11 @@
 # Decision help and human actions
 
-These are backend contracts, not a live feature activation. `AttentionService` is an explicit
-host-integration seam. It installs no HTTP route, model producer, scheduler, tool or worker wake.
-The upcoming native host must supply current access checks, exact source/resource readers and
-its authenticated native-user boundary. Mock callbacks do not qualify those production adapters.
+These are backend contracts, not a live feature activation. `AttentionService` owns help and
+human-action receipts in the existing `missions.sqlite`. `NativeAttention` now supplies authenticated
+daemon ingress and the Rust host has a shared-ledger attention transport
+([native boundary](day-native-host.md#attention-transport)). The Day cards remain mock-only until
+their feed adapter is connected. No qualified help executor or dependent-work consumer is installed:
+both capabilities are explicitly unavailable. Transport tests do not qualify those absent adapters.
 
 ## Reuse audit
 
@@ -96,4 +98,6 @@ qualification, external store verification or live scheduler execution.
 Pilot Day's decision and action cards (`apps/day`) use these shapes against an in-process mock, not this
 service: help names the decision revision shown and never changes it; action commands carry the exact
 revision, digest and a new operation ID recorded before sending; a lost answer stays Unknown until a lookup.
-The native host wiring listed above is still required before any of it is live.
+The Rust-only transport now covers authenticated reads, current ordinary questions, local file and
+immutable visual checks, native-created intents, exact receipts and saved draft locations. The
+existing card feed is not yet bound to it. No production provider or automatic continuation is enabled.

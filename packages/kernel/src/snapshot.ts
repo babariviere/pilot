@@ -87,7 +87,7 @@ async function conversationView(
 		if (recentPage) {
 			const held = await session.snapshot(HeldInputsDoc, id, context);
 			recentPage.history.question =
-				held?.questionPending === false
+				held?.stopped || held?.questionPending === false
 					? null
 					: await readQuestionBoundary(storage, recentPage.history.context, context);
 		}

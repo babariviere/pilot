@@ -314,7 +314,7 @@ pub(super) fn exact(
     Ok(r)
 }
 
-async fn body(mut r: reqwest::Response) -> Result<Value, Error> {
+pub(super) async fn body(mut r: reqwest::Response) -> Result<Value, Error> {
     if r.status().as_u16() != 200 {
         return Err(Error::Unavailable);
     }

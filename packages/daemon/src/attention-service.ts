@@ -230,7 +230,8 @@ export class AttentionService {
 			const req = structuredClone(input);
 			const source = this.current(req.scope);
 			if (this.deps.store.assistance(req.requestId)) fail("conflict", "Request already entered; use exact lookup");
-			if (!this.deps.store.capacity()) fail("unavailable", "Attention record capacity reached");
+			if (!this.deps.store.capacity())
+				fail("unavailable", "Attention record capacity reached (4096); no records were evicted");
 			if (!this.deps.generate) fail("unavailable", "No assistance producer configured");
 			this.deps.store.enter(req);
 			await this.deps.store.durable();
@@ -328,7 +329,8 @@ export class AttentionService {
 			}
 			if (this.authorize(value, cmd.kind) !== authority) fail("stale", "Action authority changed");
 			const record = this.deps.store.write(cmd, () => {
-				if (!this.deps.store.capacity()) fail("unavailable", "Attention record capacity reached");
+				if (!this.deps.store.capacity())
+					fail("unavailable", "Attention record capacity reached (4096); no records were evicted");
 				if (cmd.kind === "create") {
 					if (this.deps.store.humanAction(cmd.id)) fail("conflict", "Human action ID already exists");
 				} else this.exact(cmd.expected);

@@ -22,6 +22,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { commitWrites } from "@earendil-works/pi-durable/testing";
 import { watchEvents } from "./agent-events.ts";
 import { AttentionDoc } from "./attention.ts";
+import { HeldInputsDoc } from "./held-inputs.ts";
 import { queueGuardToken } from "./queue.ts";
 import {
 	DIAGNOSTIC_HISTORY_ENTRY_MAX_BYTES,
@@ -35,6 +36,33 @@ import {
 } from "./snapshot.ts";
 import { openSessionReader, openSessionStorage, StorageBusy } from "./storage.ts";
 import { subagentStorageSignature } from "./subagent-watch.ts";
+
+test("native cold question reads exclude a stopped boundary even while questionPending remains true", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "pilot-stopped-question-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const owned = await openSessionStorage(dir);
+	const harness = await Harness.open(owned.storage, { models: createModels(), registry: createRegistry() }, context);
+	try {
+		const root = await harness.root(context);
+		await root.commit(async (tx) => {
+			await tx.appendEntry(root.id, { kind: "pilot.question", data: { question: "Old choice?", options: [] } });
+			(await tx.doc(HeldInputsDoc, root.id)).questionPending = true;
+		}, context);
+		let snapshot = (await readSessionSnapshot(dir, dir, true, true)).events[0];
+		assert.equal(snapshot?.type, "snapshot");
+		assert.equal((snapshot.history?.question?.data as { question?: string })?.question, "Old choice?");
+		await root.commit(async (tx) => {
+			(await tx.doc(HeldInputsDoc, root.id)).stopped = true;
+		}, context);
+		snapshot = (await readSessionSnapshot(dir, dir, true, true)).events[0];
+		assert.equal(snapshot?.type, "snapshot");
+		assert.equal(snapshot.history?.question, null);
+	} finally {
+		await harness.close(context);
+		await owned.storage.close(context);
+		owned.release();
+	}
+});
 
 test("paged cold snapshot and pinned older pages preserve metadata and exact legacy entries", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pilot-paged-reader-"));

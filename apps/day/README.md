@@ -209,11 +209,12 @@ Decisions, actions, help answers, results and Coming up come from mock worlds,
 not from contracts. The
 mock help and action services in `native/` follow the attention contracts
 ([decision-assistance.md](../../docs/technical/decision-assistance.md)), but no
-production attention host is wired: no authenticated native user, permission checks,
-current-question or file readers, read-only help producer, durable receipts or
-capacity errors (the service refuses past 4,096 records). The mock flows are
-not end-to-end. Day shows links as text and opens nothing: `capabilities`
-grants no URL opening.
+production attention card feed is wired yet. The Rust-only attention transport now has authenticated
+native reads, permission/current-question/file checks, durable drafts/intents/receipts, exact lookup
+and explicit 4,096-record capacity refusal. Help execution and dependent-work continuation remain
+explicitly unavailable; their qualification is separate from transport. The mock cards are not end-to-end.
+Day still shows links as text. A native root can supply the transport's permission-checked URL opener,
+but TSX has no URL capability. See [attention transport](../../docs/technical/day-native-host.md#attention-transport).
 
 ## Boundary
 

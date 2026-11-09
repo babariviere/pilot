@@ -21,7 +21,8 @@ mock feed. It does not export selection, HTTP, paths, credentials or arbitrary
 requests to TSX. Native navigation calls `host.read_mission(id)` to fetch exact
 detail, and `host.refresh()` is passive. The eventual native bootstrap must pass
 this feed into the screen; the CLI mock constructor is deliberately unchanged.
-Decision/attention transport is separate and unavailable on this native Desk.
+Attention has a separate Rust-only transport below. The current TodayFeed still refuses attention
+intents rather than silently using its mock; card projection and intent binding are a separate change.
 
 The shared `apps/native-daemon/credentials.rs` reader is the existing Local
 private-file contract, used by GPUI's scoped actions and Day. It checks the daemon
@@ -71,6 +72,65 @@ mission/operation path. The entire command, home, project, revision, action,
 Pause ID and receipt identity must match. Absent, entered, mismatched or unreadable
 receipts remain Unknown. Current controls or WS activity cannot settle them.
 Acknowledged receipts are historical, not proof of current control authority.
+
+## Attention transport
+
+`host/attention.rs` uses the same native worker, Source, capability reader, close fence and journal.
+Rust-only `read_attention` calls authenticated `POST /api/native-attention` with an exact version,
+local home and project. This POST is a passive read, not completion or admission. The daemon checks
+the current project, writable origin chat, membership, Stop generation, configuration and mission
+control fence. Ordinary questions come from the passive current kernel boundary, not a historical
+transcript search. Stopped, replaced, answered and database-access questions cannot become choices.
+Question scope carries the backend's exact entry/event/content/authority identity.
+
+`send_attention` accepts only native action progress/defer/resume/completion, ordinary question
+answer, help, or one exact destination. Rust assigns operation IDs, pins the complete envelope,
+syncs it in the existing ledger, rereads authority, then sends once. Human-action state and receipts
+use `AttentionService` and the original SQLite tables, not a second attention DB. Ordinary answers
+use `attention-answer` in the existing OperationJournal and the kernel's exact questionReplyId and
+inputGeneration admission. Re-entry can only look up an already accepted input. It never sends it
+again, clears Stop, restores a hold or treats a prior answer as current approval.
+
+`save_attention_draft(DraftKey, value)` saves exact draft JSON locally under source, kind, item ID,
+revision and content digest. Saving/navigation never answers or completes anything. Old revisions
+stay readable as history and cannot select a current option. Drafts have a 16 KiB byte limit. The
+shared native ledger allows at most 4,096 attention draft/intent locations; the daemon separately
+allows 4,096 combined help/operation records. Both refuse capacity explicitly, without eviction.
+The existing 64 MiB total journal limit still applies. No file repair or cleanup is automatic.
+The daemon rejects action inventories above 8 MiB before JSON hydration; it never truncates a feed.
+
+`check_attention` uses only the exact saved intent and authenticated receipt lookup, even on cold
+recovery or after a request failed before reaching the daemon. Missing, entered and mismatched
+receipts stay Unknown; a terminal matched ACK cannot be erased by a later failed lookup. Drafts,
+pending intents and exact receipts restore on native reopen. Operation summaries contain historical
+receipts, not current authority. WS only invalidates; it cannot settle any operation.
+
+Action resources are checked off the daemon event loop with limited file reads. Local files must be
+inside the origin's current workspace, with no symlink traversal below that selected root. Reads pin
+a descriptor, size, inode, timestamps and SHA-256, and reject replacement. The 64 MiB per-file limit
+refuses larger files rather than truncating them. Visual artifacts use exact committed numbered JSON
+bytes and SHA-256, never a latest substitute or rendered source. Destination/package labels describe
+the requested target, not verified remote publication. No network check, download or upload occurs.
+
+Native navigation requires a root-owned `UrlOpener` supplied through `open_with_navigation`. Screen
+code cannot install one or name an arbitrary URL. The daemon rechecks the exact action, authority and
+resources and returns only its pinned HTTPS destination; Rust invokes the opener once. Its saved
+receipt proves authorization only, not OS navigation, upload or publication. Navigation outcome is
+explicitly Unknown in historical summaries, and checking/reopening never opens the URL again. The
+default host has no opener and reports `canOpenUrl: false`.
+
+Help execution and dependent-work continuation are separate qualification ports. The server installs
+neither, advertises both as unavailable and never fabricates help. `completion` returns an exact,
+current, durable **user-report** receipt only after resources and authority pass again. It grants no
+new authority and dispatches nothing. Opening/downloading, Later, saved drafts/progress and agent
+prose cannot produce that receipt; even a completed report is not verified publication.
+
+Hidden tests exercise the real daemon/router, private native capability, SQLite, HTTP transport and
+native ledger, with synthetic current-question/input ports and no providers or real navigation.
+Kernel tests separately verify current question/Stop admission and cold-reader exclusion. Coverage
+includes stale/revoked identities, resources, capacity, draft/receipt restart, lost ACK, mismatches,
+lookup-only uncertainty, explicit unavailable help/continuation, and close joining entered I/O.
+These are transport checks, not card/native hardware, keyboard/IME or production provider acceptance.
 
 ## Saved interviews and planning
 

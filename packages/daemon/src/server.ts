@@ -100,6 +100,7 @@ import type { MissionService } from "./mission-service.ts";
 import type { MissionStore } from "./missions.ts";
 import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } from "./model-scope.ts";
 import type { ModelCatalog } from "./models.ts";
+import { NativeAttention } from "./native-attention.ts";
 import { MAX_NATIVE_DIAGNOSTIC_BYTES } from "./native-diagnostics.ts";
 import { isNativePlanningOperation, NativeMissionPlanning } from "./native-mission-planning.ts";
 import { canonicalJSON, durableJSON, OperationJournal, OperationRejected, payloadHash } from "./operation-journal.ts";
@@ -738,6 +739,17 @@ export function createDaemonServer(
 					workers: planningWorkers,
 				})
 			: undefined;
+	const nativeAttention =
+		journal && missions
+			? new NativeAttention({
+					home: journal.destination,
+					store: missions.store,
+					projects,
+					sessions,
+					journal,
+					// Qualified read-only help and dependent-work consumers are separate adapters.
+				})
+			: undefined;
 	const insightsWorkspace =
 		journal && missions && schedules
 			? new InsightsWorkspace({
@@ -845,6 +857,10 @@ export function createDaemonServer(
 				})
 			: undefined;
 	const admitOperationHeld = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
+		if (op.kind === "attention-answer") {
+			if (!nativeAttention) throw new OperationRejected("Native attention unavailable");
+			return nativeAttention.answer(op, false);
+		}
 		if (planningWorkers?.owns(op)) return planningWorkers.recover(op);
 		if (isNativePlanningOperation(op.kind)) {
 			if (!nativePlanning) throw new OperationRejected("Native planning unavailable");
@@ -988,6 +1004,20 @@ export function createDaemonServer(
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (parts[1] === "native-attention" && req.method === "POST" && parts.length <= 3) {
+			res.setHeader("cache-control", "no-store");
+			if (!githubSetup || !nativeAttention) throw new ServiceUnavailable("Native attention unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
+			const end = mutations.begin({ kind: "operation", id: "native-attention" });
+			try {
+				const answer = await nativeAttention.dispatch(await readJson(req), parts[2] === "receipt");
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				return json(res, 200, answer);
+			} finally {
+				end();
+			}
+		}
 		if (parts[1] === "runtime-update") {
 			res.setHeader("cache-control", "no-store");
 			if (!githubSetup || !liveUpdate) throw new ServiceUnavailable("Coordinated live update is unavailable");
@@ -1441,6 +1471,24 @@ export function createDaemonServer(
 				return json(res, 200, { ok: true });
 			}
 			const operation = await readJson<DurableOperation>(req);
+			if (operation?.kind === "attention-answer") {
+				res.setHeader("cache-control", "no-store");
+				if (!githubSetup || !nativeAttention) throw new ServiceUnavailable("Native attention unavailable");
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
+				const saved = await nativeAttention.lookupAnswer(operation);
+				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
+				const end = mutations.begin({ kind: "operation", id: operation.operationId });
+				try {
+					return json(
+						res,
+						200,
+						await journal.execute(operation, (op, entry) => nativeAttention.answer(op, entry.firstEntry)),
+					);
+				} finally {
+					end();
+				}
+			}
 			if (operation?.kind === "planning-enroll") {
 				if (!githubSetup || !planningWorkers)
 					throw new ServiceUnavailable("Planning worker enrollment unavailable");
@@ -1654,6 +1702,7 @@ export function createDaemonServer(
 					dayOverview: missions ? 1 : undefined,
 					missionControls: missions && githubSetup && hello.lineageId ? 1 : undefined,
 					nativePlanning: nativePlanning && githubSetup ? 1 : undefined,
+					nativeAttention: nativeAttention && githubSetup ? 1 : undefined,
 					passiveFailedModel: hello?.lineageId ? true : undefined,
 					guardedQueue: true,
 					sessionPathCandidates: hello.lineageId ? 1 : undefined,
@@ -3464,7 +3513,10 @@ export function createDaemonServer(
 		else catalogMissions.delete(id);
 		refreshMissionCatalog();
 	});
+	// Small coalesced invalidation only. Never put action text/files or a receipt in WS frames.
+	const stopAttentionWatch = missions?.store.attention.onChange(invalidateMissionCatalog);
 	server.on("close", () => {
+		stopAttentionWatch?.();
 		stopDiagnosticReads?.();
 		stopNextControl?.();
 		stopMissionCatalog?.();
