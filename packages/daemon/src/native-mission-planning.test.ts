@@ -4,6 +4,7 @@ import type { InterviewWrite, MissionInterview } from "@pilot/protocol";
 import { interviewDigest } from "./mission-interview-contract.ts";
 import { nativePlanningFixture } from "./native-mission-planning.fixture.ts";
 import { OperationJournal } from "./operation-journal.ts";
+
 const expected = (i: MissionInterview) => ({ fence: i.fence, revision: i.revision });
 
 test("native capability, exact project/home/owner and purpose are required for reads and receipts", async (t) => {
@@ -13,6 +14,8 @@ test("native capability, exact project/home/owner and purpose are required for r
 	assert.equal((await f.read(f.capability, "other-project")).status, 404);
 	const read = await (await f.read()).json();
 	assert.equal(read.capabilities.continuation, "unavailable");
+	assert.equal(read.capabilities.enrollment, "unavailable");
+	assert.equal(read.capabilities.admission, "unavailable");
 	assert.equal(read.capabilities.coordinatorProfile, "not-configured");
 	assert.equal(read.view.plan, null, "configured saved interview with no map differs from unavailable");
 	const op = f.operation(
@@ -271,6 +274,9 @@ test("legacy missions are explicitly not enrolled, not empty or automatically ad
 	assert.equal(read.status, "not-enrolled");
 	assert.equal(read.view, null);
 	assert.equal(read.capabilities.answers, "unavailable");
+	assert.equal(read.capabilities.enrollment, "unavailable");
+	assert.equal(read.capabilities.continuation, "unavailable");
+	assert.equal(read.capabilities.admission, "unavailable");
 	assert.equal(f.store.interviews.latest(old.id), undefined);
 	assert.equal(f.store.require(old.id).planningVersion, undefined);
 });

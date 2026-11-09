@@ -111,8 +111,10 @@ planningVersion 1 mission and a new coordinator. It cannot adopt an existing cha
 Authenticated `GET /api/projects/:project/planning-profile` supplies that versioned profile and
 backend digest without enrollment or model work. Native clients must keep this digest, not hash a
 Rust/UI serialization. `PlanningEnrollment` in `planning-workers.ts` is the exact creation payload.
-The native desktop creation intent is not yet bound, so `enrollment: not-configured` remains honest.
-The host API is not live activation or permission to enroll existing work.
+The [native New binding](day-native-host.md#new-interview-creation) now keeps that exact payload in
+the host command ledger. A Rust-selected source/model and an authenticated, current prepared setup
+are required. Existing-mission reads keep `enrollment: unavailable`; they cannot enroll or adopt work.
+The mock CLI is unchanged. This API is not live activation or permission to enroll existing work.
 
 The transaction saves an **empty, unsubmitable bootstrap**, not invented human questions. The new
 session's metadata pins its enrollment, owner, project, exact home/daemon lineage and upstream profile

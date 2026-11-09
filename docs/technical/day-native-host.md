@@ -106,15 +106,58 @@ Cold open never resends, even if a crash preceded POST. Unavailable/missing/mism
 remain Unknown. A matched terminal ACK is kept if later lookup fails. Joined native close covers
 entered planning HTTP and receipt/journal writes as well as Today controls.
 
+### New interview creation
+
+`NativeHost::open_planning(source, ledger, model)` is a Rust-only, explicit native selection.
+It does not enable a profile, discover a user's home or adopt an existing chat. Ordinary
+`NativeHost::open` has no creation model and cannot enroll. Changing the source or model requires
+closing and joining the old host, not changing a VM field.
+
+`prepare_planning()` reads authenticated `GET /api/projects/:project/planning-profile` and checks
+the selected project, home and capability again after the asynchronous probes. The backend's
+`configurationDigest` and complete profile value are kept, not rebuilt from a native constant or
+rehashed to substitute for the backend digest. A prepared setup pins that response, the model,
+source, purpose and fresh enrollment/owner UUIDs. Its opaque digest is all TSX can name, alongside
+the user's exact goal. Missing configuration or authority leaves `planning_setup()` unavailable.
+Discovery is passive: it creates no daemon record, worker or provider request.
+
+`enroll_planning(NewIntent)` builds the existing `PlanningEnrollment` request and a native-created
+`DurableOperation` with kind `planning-enroll`. It checks the profile, fsyncs the whole pending intent
+in the same native ledger, then checks the profile/authority again before one `/api/operations` POST.
+The daemon's `PlanningWorkers` remains the only enrollment/admission owner. The goal is kept byte
+for byte; only the display title is shortened to the backend's UTF-8 byte limit. Caller-supplied
+owner/session/enrollment IDs and existing-chat adoption are not part of this API.
+
+One shown setup is consumed once. Repeated identical intents return only the saved outcome;
+different goal text against a consumed setup is stale. A later passive prepare can make a new
+identity after a settled outcome, but cannot replace an uncertain intent. Lost ACKs, crashes before
+POST, missing receipts and mismatched results remain Unknown. Recovery uses the retained exact
+envelope at `/api/operations/receipt`, never historical enrollment POSTs. Accepted receipts must
+match the payload hash, destination, operation, enrollment and fresh owner, and name a mission.
+
+`PlanFeed::from_host` begins passive discovery. Its typed `prepareNew()` and `checkNew()` methods
+prepare a later New screen or check uncertain creation without resending. `plan(NewIntent)` now
+binds to native enrollment and selects the acknowledged mission. `canCreate` means mission creation
+only; separate `canStart: false` and `startReason` describe the still-absent standalone-chat adapter.
+The native `start` method refuses independently. No TSX screen or live bootstrap is activated here.
+
+An acknowledged mission may still have `status: preparing`, `view: null` and no context digest.
+That is not an empty completed interview: no answers or submission can be built from it. Coalesced
+WS invalidations trigger authenticated reads of the selected planning page, so the full saved round
+can replace preparing. Event bodies never supply questions or settle the creation receipt. Joined
+host close covers entered enrollment HTTP and ledger work without stopping the daemon's agents.
+
 ### Remaining bootstrap and execution gaps
 
 - The mock CLI entry remains unchanged. Native bootstrap still must pass the selected, root-owned
   host to the Day feeds and join it before replacement/quit. `PlanFeed::from_host` maps planning reads
   and builds exact `InterviewWrite` requests (`apps/day/native/src/plan_host.rs`); it never closes the host.
-- `PlanningWorkers` now implements creation-only host enrollment, trusted kernel profile/IPC, saved
-  round holds and exact planning-only continuation. The desktop New intent is still unbound, so
-  `enrollment: not-configured` remains. Mission existence, legacy `planningVersion`, an actor label
-  or a native bearer alone cannot adopt an existing chat or mission.
+- `PlanningWorkers` implements creation-only enrollment, trusted kernel profile/IPC, saved round
+  holds and exact planning-only continuation. Native New is now typed and journaled, but the CLI
+  remains mock-only and no live bootstrap selects a creation model. The planning-read field
+  `enrollment: unavailable` cannot enroll an existing mission; the prepared native setup governs New.
+  Mission existence, legacy `planningVersion`, an actor label or a native bearer alone cannot adopt
+  an existing chat or mission.
 - Existing flows retain unavailable profile/continuation status. Only an exact new-flow binding
   reports `coordinatorProfile: 1`, `continuation: 1` and its saved phase/continuation operation ID.
   Stop, pause or unavailable authority leaves those capabilities unavailable. No generic send fallback
@@ -159,3 +202,9 @@ remain regression gates. The additional native worker journey uses production HT
 SessionManager and a real forked faux kernel, checks all-question completion and one continuation,
 then joins host/daemon/kernel teardown. It is a hidden transport/lifecycle fixture, not a visible
 screen test, real-provider generation or live activation.
+
+`native/tests/enrollment.rs` starts from an unenrolled isolated daemon. A loopback fault proxy uses
+the real Rust host/credential reader/ledger and a forked faux kernel. It checks passive discovery,
+exact new enrollment, changed configuration/project/owner, post-journal rechecks, single-use setup,
+preparing then the full round, Stop/Pause, lost ACK/result mismatch, restart/no resend and joined
+teardown. The default mock CLI, standalone chat start and production native bootstrap stay separate.

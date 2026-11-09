@@ -1,6 +1,7 @@
 //! Trusted native Today host. Owns sockets, journal and admission outside the VM.
 //! Selection is explicit and immutable. Retire and join this host before replacing
 //! a profile/project; old replies can never populate the replacement's Desk.
+mod enrollment;
 mod journal;
 mod planning;
 mod transport;
@@ -70,7 +71,9 @@ struct Shared {
     listeners: Mutex<Vec<Sender<()>>>,
     detail: Mutex<Option<String>>,
     planning: Mutex<std::collections::BTreeMap<String, (u64, serde_json::Value)>>,
+    planning_mission: Mutex<Option<String>>,
     planning_operations: Mutex<std::collections::BTreeMap<String, serde_json::Value>>,
+    enrollment: Mutex<Option<enrollment::Selection>>,
 }
 impl Shared {
     fn change<R>(&self, f: impl FnOnce(&mut Desk) -> R) -> R {
@@ -125,6 +128,8 @@ enum Work {
         request: serde_json::Value,
     },
     CheckPlanning(String),
+    PreparePlanning,
+    EnrollPlanning(crate::plan::NewIntent),
 }
 struct Request {
     epoch: u64,
@@ -157,6 +162,23 @@ impl NativeHost {
     /// Start only for an explicit native selection. No environment or home fallback.
     /// File/network work runs off the UI thread. The default mock app never calls this.
     pub fn open(source: Source, ledger: PathBuf) -> Result<Self, Error> {
+        Self::open_selected(source, ledger, None)
+    }
+
+    /// Native-only selection of a model for new planning. No live profile is enabled.
+    /// The owner must close and join this host before replacing its selection.
+    pub fn open_planning(source: Source, ledger: PathBuf, model: String) -> Result<Self, Error> {
+        if model.trim().is_empty() || model.len() > 256 {
+            return Err(Error::Invalid);
+        }
+        Self::open_selected(source, ledger, Some(model))
+    }
+
+    fn open_selected(
+        source: Source,
+        ledger: PathBuf,
+        model: Option<String>,
+    ) -> Result<Self, Error> {
         if source.port == 0
             || !source.profile.is_absolute()
             || !ledger.is_absolute()
@@ -175,7 +197,9 @@ impl NativeHost {
             listeners: Mutex::new(Vec::new()),
             detail: Mutex::new(None),
             planning: Mutex::new(std::collections::BTreeMap::new()),
+            planning_mission: Mutex::new(None),
             planning_operations: Mutex::new(std::collections::BTreeMap::new()),
+            enrollment: Mutex::new(None),
         });
         let (requests, rx) = async_channel::bounded(16);
         let state = shared.clone();
@@ -184,7 +208,8 @@ impl NativeHost {
             .spawn(move || {
                 let result = (|| {
                     let journal = Journal::open(ledger)?;
-                    let transport = Transport::new(source)?;
+                    let mut transport = Transport::new(source)?;
+                    transport.planning_model = model;
                     let rt = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()
@@ -289,6 +314,14 @@ impl NativeHost {
     }
     /// Read the complete saved interview and planning proposal. Never starts a worker.
     pub fn read_planning(&self, mission: String) -> Receiver<Result<IntentOutcome, Error>> {
+        if valid_id(&mission) && self.0.shared.open().is_ok() {
+            *self
+                .0
+                .shared
+                .planning_mission
+                .lock()
+                .expect("native planning selection poisoned") = Some(mission.clone());
+        }
         self.request(Work::ReadPlanning(mission))
     }
     /// Full existing protocol records. The native feed maps them to its typed UI model.
@@ -336,6 +369,42 @@ impl NativeHost {
     /// Passive lookup of one retained exact operation. Never resends a human action.
     pub fn check_planning(&self, operation_id: String) -> Receiver<Result<IntentOutcome, Error>> {
         self.request(Work::CheckPlanning(operation_id))
+    }
+    /// Passive authenticated profile discovery for a fresh New screen. No enrollment.
+    /// Refuses to replace an uncertain intent; recovery uses only `check_planning`.
+    pub fn prepare_planning(&self) -> Receiver<Result<IntentOutcome, Error>> {
+        self.request(Work::PreparePlanning)
+    }
+    /// Display-only selection. No home, profile, owner or transport crosses the VM.
+    pub fn planning_setup(&self) -> Option<crate::plan::Setup> {
+        let shared = &self.0.shared;
+        let selection = shared
+            .enrollment
+            .lock()
+            .expect("native enrollment poisoned");
+        selection
+            .as_ref()
+            .filter(|s| !s.used && s.epoch.is_some_and(|e| shared.current(e).is_ok()))
+            .map(|s| s.prepared.setup.clone())
+    }
+    /// Creation summaries, including pending intents restored on cold open.
+    pub fn planning_enrollments(&self) -> Vec<serde_json::Value> {
+        self.0
+            .shared
+            .planning_operations
+            .lock()
+            .expect("native planning receipts poisoned")
+            .values()
+            .filter(|r| r["kind"] == "planning-enroll")
+            .cloned()
+            .collect()
+    }
+    /// Explicit human New intent. All identities come from the native prepared selection.
+    pub fn enroll_planning(
+        &self,
+        intent: crate::plan::NewIntent,
+    ) -> Receiver<Result<IntentOutcome, Error>> {
+        self.request(Work::EnrollPlanning(intent))
     }
     /// Fence immediately, then join entered HTTP, WS, journal and worker off-thread.
     /// Closing never stops/resumes daemon agents or replays a historical command.
@@ -385,6 +454,13 @@ async fn read_planning(
     epoch: u64,
     mission: &str,
 ) -> Result<serde_json::Value, Error> {
+    if !valid_id(mission) {
+        return Err(Error::Invalid);
+    }
+    *shared
+        .planning_mission
+        .lock()
+        .expect("native planning selection poisoned") = Some(mission.into());
     t.gate(false).await?;
     let view = t.planning(mission).await?;
     t.gate(false).await?;
@@ -419,6 +495,14 @@ async fn qualify_planning(
 }
 
 fn fail(shared: &Shared, error: Error) {
+    if let Some(s) = shared
+        .enrollment
+        .lock()
+        .expect("native enrollment poisoned")
+        .as_mut()
+    {
+        s.epoch = None;
+    }
     shared.change(|desk| {
         desk.lose_read(
             match error {
@@ -473,8 +557,12 @@ async fn run(
             biased;
             request = requests.recv() => {
                 let Ok(request) = request else { break; };
+                let preparing = matches!(&request.work, Work::PreparePlanning);
                 let result = handle(&t, &mut journal, &shared, request.epoch, request.work).await;
-                if let Err(e) = result && !matches!(e, Error::Unknown | Error::Busy | Error::Closed) { fail(&shared, e); }
+                if preparing && matches!(result, Err(Error::Unavailable)) {
+                    // Unsupported New configuration must not disable existing Today reads.
+                    shared.change(|_| ());
+                } else if let Err(e) = result && !matches!(e, Error::Unknown | Error::Busy | Error::Closed) { fail(&shared, e); }
                 let _ = request.reply.try_send(result);
             }
             event = events.recv(), if events_open => {
@@ -556,6 +644,16 @@ async fn refresh(
             );
         }
     });
+    let planning = shared
+        .planning_mission
+        .lock()
+        .expect("native planning selection poisoned")
+        .clone();
+    if let Some(mission) = planning {
+        // WS only invalidates. A fresh authenticated GET, never the event body,
+        // advances a preparing bootstrap to the coordinator's complete round.
+        let _ = read_planning(t, shared, epoch, &mission).await;
+    }
     Ok(())
 }
 
@@ -568,12 +666,19 @@ async fn handle(
 ) -> Result<IntentOutcome, Error> {
     // Historical exact receipt lookup is independent of WS invalidations.
     // Immutable source, local identity and project are still requalified below.
-    if matches!(&work, Work::Check(_) | Work::CheckPlanning(_)) {
+    if matches!(
+        &work,
+        Work::Check(_) | Work::CheckPlanning(_) | Work::EnrollPlanning(_) | Work::PreparePlanning
+    ) {
         shared.open()?;
     } else {
         shared.current(epoch)?;
     }
     match work {
+        Work::PreparePlanning => return enrollment::prepare(t, journal, shared, epoch).await,
+        Work::EnrollPlanning(intent) => {
+            return enrollment::send(t, journal, shared, epoch, intent).await;
+        }
         Work::ReadPlanning(mission) => {
             read_planning(t, shared, epoch, &mission).await?;
         }

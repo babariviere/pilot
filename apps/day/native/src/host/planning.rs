@@ -11,6 +11,8 @@ pub(super) struct PlanningRecord {
     pub operation: Value,
     pub receipt: Option<Value>,
     pub not_sent: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_digest: Option<String>,
 }
 impl PlanningRecord {
     pub fn id(&self) -> &str {
@@ -36,7 +38,7 @@ impl PlanningRecord {
             || o["destination"] != home(&self.source, "daemon")
             || !matches!(
                 o["kind"].as_str(),
-                Some("interview-save" | "interview-submit")
+                Some("interview-save" | "interview-submit" | "planning-enroll")
             )
             || o["payload"]
                 .as_str()
@@ -47,10 +49,16 @@ impl PlanningRecord {
         if let Some(r) = &self.receipt {
             exact(r.clone(), o)?;
         }
+        if o["kind"] == "planning-enroll" {
+            super::enrollment::validate_record(&self.source, o, self.setup_digest.as_deref())?;
+        }
         Ok(())
     }
     pub fn summary(&self) -> Value {
-        json!({"operationId":self.id(), "missionId":self.mission(), "kind":self.operation["kind"],
+        let enrollment = self.operation["kind"] == "planning-enroll";
+        json!({"operationId":self.id(), "missionId":if enrollment {self.receipt.as_ref().map(|r| r["result"]["missionId"].clone()).unwrap_or(Value::Null)} else {json!(self.mission())},
+            "enrollmentId":if enrollment {json!(self.mission())} else {Value::Null}, "setupDigest":self.setup_digest,
+            "kind":self.operation["kind"],
             "state": if self.not_sent {"not-sent"} else {self.receipt.as_ref().and_then(|r| r["state"].as_str()).unwrap_or("unknown")},
             "receipt":self.receipt})
     }
@@ -85,6 +93,7 @@ pub(super) fn record(
         source: source.clone(),
         receipt: None,
         not_sent: false,
+        setup_digest: None,
         operation: json!({"schemaVersion":1,"operationId":id,"producerId":uuid::Uuid::new_v4().to_string(),"sequence":1,
             "origin":home(source,"local"),"destination":home(source,"daemon"),"kind":request["purpose"],
             "targetId":mission,"payloadHash":hash(&payload),"payload":payload,"bindingId":digest,"bindingGeneration":1}),
@@ -104,5 +113,39 @@ pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
     {
         return Err(Error::Unknown);
     }
+    if op["kind"] == "planning-enroll" && r["state"] == "accepted" {
+        let request: Value = serde_json::from_str(op["payload"].as_str().ok_or(Error::Unknown)?)
+            .map_err(|_| Error::Unknown)?;
+        if r["result"]["enrollmentId"] != op["targetId"]
+            || r["result"]["ownerSessionId"] != request["ownerSessionId"]
+            || r["result"]["missionId"]
+                .as_str()
+                .is_none_or(|s| !valid_id(s))
+        {
+            return Err(Error::Unknown);
+        }
+    }
+    Ok(r)
+}
+
+pub(super) fn enrollment_record(
+    source: &Source,
+    enrollment: &str,
+    setup: &str,
+    request: Value,
+) -> Result<PlanningRecord, Error> {
+    let payload = serde_json::to_string(&request).map_err(|_| Error::Invalid)?;
+    let r = PlanningRecord {
+        version: 1,
+        source: source.clone(),
+        receipt: None,
+        not_sent: false,
+        setup_digest: Some(setup.into()),
+        operation: json!({"schemaVersion":1,"operationId":uuid::Uuid::new_v4().to_string(),
+            "producerId":uuid::Uuid::new_v4().to_string(),"sequence":1,"origin":home(source,"local"),
+            "destination":home(source,"daemon"),"kind":"planning-enroll","targetId":enrollment,
+            "payloadHash":hash(&payload),"payload":payload,"bindingId":request["configurationDigest"],"bindingGeneration":1}),
+    };
+    r.validate()?;
     Ok(r)
 }

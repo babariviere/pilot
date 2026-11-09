@@ -10,6 +10,9 @@ Pause controls arrive as the daemon's v1 contracts
 ([mission-controls-reports.md](../../docs/technical/mission-controls-reports.md)),
 read by a mock daemon. The Rust-only [native host seam](../../docs/technical/day-native-host.md)
 now supports real authenticated reads and journaled mission controls in isolated tests.
+The Rust-only planning host also binds New interview creation to authenticated profile discovery
+and the same durable command ledger, with exact receipt recovery. Native selection and the CLI's
+mock constructor remain separate; no live creation profile is enabled.
 The default entry still connects to no daemon, account or user data. It is not the default app, it is not packaged or released,
 and it does not change the GPUI or Swift apps or their build. Those apps stay
 the shipping desktop apps until Day passes native acceptance and cutover.

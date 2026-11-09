@@ -15,7 +15,7 @@ use crate::{
     model::IntentOutcome,
     plan::{
         AnswerIntent, InterviewRef, NewIntent, OutcomeStatus, PlanAvailability, PlanOutcome,
-        PlanPage, PlanScenario, Planning, Setup, SubmitIntent,
+        PlanPage, PlanScenario, Planning, SubmitIntent,
     },
     plan_desk::PlanDesk,
     plan_host::{self, Local},
@@ -23,9 +23,18 @@ use crate::{
 
 type Listeners = Rc<RefCell<Vec<(u64, Callback<Planning>)>>>;
 
-/// Why New cannot start anything on the native host yet.
-const NO_CREATE: &str =
-    "Starting a mission or a chat from Day is not connected yet. Nothing was sent.";
+/// Return serialization ownership even if a caller unmounts during HTTP.
+struct Permit(Sender<()>);
+impl Drop for Permit {
+    fn drop(&mut self) {
+        let _ = self.0.try_send(());
+    }
+}
+
+/// Why New cannot create a mission without the native planning selection.
+const NO_CREATE: &str = "Mission planning is not configured for this selection. Nothing was sent.";
+const NO_START: &str =
+    "Starting a standalone chat from Day is not connected yet. Nothing was sent.";
 
 /// The selected mission and what the feed is doing for it.
 #[derive(Debug, Default)]
@@ -55,13 +64,20 @@ impl HostSide {
             .filter(|p| p.available)
             .map(|p| vec![plan_host::row(&p, "")])
             .unwrap_or_default();
+        let setup = self.host.planning_setup();
         Planning {
             revision: state.revision,
             availability: PlanAvailability::Live,
             reason: String::new(),
-            setup: Setup::default(),
-            can_create: false,
-            create_reason: NO_CREATE.into(),
+            can_create: setup.is_some(),
+            create_reason: if setup.is_some() {
+                String::new()
+            } else {
+                NO_CREATE.into()
+            },
+            setup: setup.unwrap_or_default(),
+            can_start: false,
+            start_reason: NO_START.into(),
             plans,
             started: Vec::new(),
         }
@@ -80,12 +96,22 @@ impl HostSide {
         self.state.borrow().mission.clone()
     }
 
-    async fn lock(&self) {
-        let _ = self.token.1.recv().await;
+    fn select_created(&self, operation: &serde_json::Value) -> Option<String> {
+        if operation["state"] != "accepted" {
+            return None;
+        }
+        let mission = operation["missionId"].as_str()?.to_owned();
+        let mut state = self.state.borrow_mut();
+        if state.mission.as_deref() != Some(&mission) {
+            state.mission = Some(mission.clone());
+            state.local = Local::default();
+        }
+        Some(mission)
     }
 
-    fn unlock(&self) {
-        let _ = self.token.0.try_send(());
+    async fn lock(&self) -> Permit {
+        let _ = self.token.1.recv().await;
+        Permit(self.token.0.clone())
     }
 }
 
@@ -190,8 +216,10 @@ impl PlanFeed {
         };
         let weak = Rc::downgrade(&listeners);
         let changes = host.changes();
+        let preparation = host.prepare_planning();
         let source = side.clone();
         let watch_task = spawn(async move {
+            let _ = preparation.recv().await;
             while changes.recv().await.is_ok() {
                 let Some(listeners) = weak.upgrade() else {
                     break;
@@ -268,11 +296,10 @@ impl PlanFeed {
         mark: impl Fn(&mut Local, bool),
         accepted: &str,
     ) -> PlanOutcome {
-        side.lock().await;
+        let _permit = side.lock().await;
         let mission = side.mission();
         let read = mission.as_deref().and_then(|m| side.host.planning(m));
         let (Some(mission), Some(read)) = (mission, read) else {
-            side.unlock();
             return outcome(
                 OutcomeStatus::Rejected,
                 "Open the mission's planning first. Nothing was sent.",
@@ -282,7 +309,6 @@ impl PlanFeed {
         let (digest, request) = match build(&read) {
             Ok(built) => built,
             Err((status, message)) => {
-                side.unlock();
                 return outcome(status, message, Some(mission));
             }
         };
@@ -296,7 +322,6 @@ impl PlanFeed {
             .recv()
             .await;
         mark(&mut side.state.borrow_mut().local, false);
-        side.unlock();
         if !this.is_disposed() {
             this.with(Self::changed);
         }
@@ -394,11 +419,29 @@ impl PlanFeed {
     }
 
     /// Starts a mission from the user's goal, named with the setup shown.
-    /// Pilot asks its questions first; nothing else starts. Resolves with
-    /// the new mission once its first questions arrive.
+    /// Pilot asks its questions first; nothing else starts. An acknowledged
+    /// mission may still be preparing its complete first question list.
     pub async fn plan(this: Instance<Self>, intent: NewIntent) -> PlanOutcome {
-        if this.with(|f| f.native.is_some()) {
-            return outcome(OutcomeStatus::Rejected, NO_CREATE, None);
+        if let Some(side) = this.with(|f| f.native.clone()) {
+            let _permit = side.lock().await;
+            if !this.is_disposed() {
+                this.with(Self::changed);
+            }
+            let reply = side.host.enroll_planning(intent.clone()).recv().await;
+            let record = side
+                .host
+                .planning_enrollments()
+                .into_iter()
+                .find(|r| r["setupDigest"] == intent.setup);
+            let mission = record.as_ref().and_then(|r| side.select_created(r));
+            if !this.is_disposed() {
+                this.with(Self::changed);
+            }
+            return host_outcome(
+                reply,
+                "Mission created. Pilot is preparing its questions; no build started.",
+                mission,
+            );
         }
         let (mission_id, latency) = match Self::begin(&this, |desk| desk.begin_plan(&intent)) {
             Ok(started) => started,
@@ -412,7 +455,7 @@ impl PlanFeed {
     /// the setup shown. It is not a mission and asks no questions.
     pub async fn start(this: Instance<Self>, intent: NewIntent) -> PlanOutcome {
         if this.with(|f| f.native.is_some()) {
-            return outcome(OutcomeStatus::Rejected, NO_CREATE, None);
+            return outcome(OutcomeStatus::Rejected, NO_START, None);
         }
         let (id, latency) = match Self::begin(&this, |desk| desk.begin_start(&intent)) {
             Ok(started) => started,
@@ -420,6 +463,59 @@ impl PlanFeed {
         };
         timer(latency).await;
         Self::settle(&this, |desk| desk.settle_start(&id))
+    }
+
+    /// Reads the selected planning setup for New. No enrollment or provider call.
+    /// An uncertain prior creation blocks a new identity until its exact lookup settles.
+    pub async fn prepare_new(this: Instance<Self>) -> PlanOutcome {
+        let Some(side) = this.with(|f| f.native.clone()) else {
+            return outcome(OutcomeStatus::Accepted, "", None);
+        };
+        let _permit = side.lock().await;
+        let reply = side.host.prepare_planning().recv().await;
+        if !this.is_disposed() {
+            this.with(Self::changed);
+        }
+        host_outcome(reply, "", None)
+    }
+
+    /// Checks one uncertain New enrollment using its saved exact receipt only.
+    /// It never recreates a request, changes its owner or sends the enrollment again.
+    pub async fn check_new(this: Instance<Self>) -> PlanOutcome {
+        let Some(side) = this.with(|f| f.native.clone()) else {
+            return outcome(OutcomeStatus::Rejected, "There is nothing to check.", None);
+        };
+        let _permit = side.lock().await;
+        let operation = side
+            .host
+            .planning_enrollments()
+            .into_iter()
+            .find(|r| matches!(r["state"].as_str(), Some("pending" | "unknown")));
+        let Some(operation) = operation else {
+            return outcome(OutcomeStatus::Rejected, "There is nothing to check.", None);
+        };
+        let id = operation["operationId"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        let reply = side.host.check_planning(id.clone()).recv().await;
+        let record = side
+            .host
+            .planning_enrollments()
+            .into_iter()
+            .find(|r| r["operationId"] == id);
+        let mission = record.as_ref().and_then(|r| side.select_created(r));
+        if let Some(m) = &mission {
+            let _ = side.host.read_planning(m.clone()).recv().await;
+        }
+        if !this.is_disposed() {
+            this.with(Self::changed);
+        }
+        host_outcome(
+            reply,
+            "Creation confirmed. Nothing was sent again.",
+            mission,
+        )
     }
 
     /// Saves one answer as a draft, named with the question list and the

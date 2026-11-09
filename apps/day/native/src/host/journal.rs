@@ -125,6 +125,7 @@ impl Journal {
                     if let Some(prior) = planning.get(record.id())
                         && (prior.source != record.source
                             || prior.operation != record.operation
+                            || prior.setup_digest != record.setup_digest
                             || (prior.not_sent && !record.not_sent)
                             || (prior
                                 .receipt

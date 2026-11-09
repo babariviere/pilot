@@ -535,6 +535,12 @@ impl PlanDesk {
             planning: Planning {
                 revision: 0,
                 can_create: world.availability != PlanAvailability::Unavailable,
+                can_start: world.availability != PlanAvailability::Unavailable,
+                start_reason: if world.availability == PlanAvailability::Unavailable {
+                    world.reason.clone()
+                } else {
+                    String::new()
+                },
                 create_reason: if world.availability == PlanAvailability::Unavailable {
                     world.reason.clone()
                 } else {

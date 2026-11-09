@@ -117,10 +117,14 @@ pub struct Planning {
     pub reason: String,
     /// What a new chat or mission would use.
     pub setup: Setup,
-    /// Whether New can start a mission or a chat here.
+    /// Whether New can create a mission interview here. Not direct chat admission.
     pub can_create: bool,
     /// Why not, when it cannot. Empty otherwise.
     pub create_reason: String,
+    /// Whether New can start a standalone Build chat. Separate from mission planning.
+    pub can_start: bool,
+    /// Why direct chat start is unavailable. Empty when supported.
+    pub start_reason: String,
     /// Missions in planning, newest first.
     pub plans: Vec<PlanRow>,
     /// Chats started directly from New in this app.

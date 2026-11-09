@@ -124,7 +124,7 @@ export class NativeMissionPlanning {
 				view: null,
 				capabilities: {
 					answers: "unavailable",
-					enrollment: "not-configured",
+					enrollment: "unavailable",
 					coordinatorProfile: "not-configured",
 					continuation: "unavailable",
 					admission: "unavailable",
@@ -154,7 +154,7 @@ export class NativeMissionPlanning {
 			view: view.interview.questions.length ? view : null,
 			capabilities: {
 				answers: worker && worker.phase !== "held" ? "unavailable" : 1,
-				enrollment: "not-configured",
+				enrollment: "unavailable",
 				...(this.deps.workers?.status(missionId) ?? {
 					coordinatorProfile: "not-configured",
 					continuation: "unavailable",

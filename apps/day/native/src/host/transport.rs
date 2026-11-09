@@ -18,6 +18,7 @@ pub(super) struct Transport {
     pub client: reqwest::Client,
     pub source: Source,
     pub controls: AtomicBool,
+    pub planning_model: Option<String>,
 }
 
 impl Transport {
@@ -25,6 +26,7 @@ impl Transport {
         Ok(Self {
             source,
             controls: AtomicBool::new(false),
+            planning_model: None,
             client: reqwest::Client::builder()
                 .no_proxy()
                 .retry(reqwest::retry::never())
@@ -179,7 +181,7 @@ impl Transport {
         if v["version"] == 1
             && v["projectId"] == self.source.project_id
             && v["missionId"] == id
-            && v["status"] == "not-enrolled"
+            && matches!(v["status"].as_str(), Some("not-enrolled" | "preparing"))
             && v["view"].is_null()
             && v["capabilities"]["answers"] == "unavailable"
         {
@@ -194,6 +196,26 @@ impl Transport {
         {
             return Err(Error::Invalid);
         }
+        Ok(v)
+    }
+
+    pub async fn planning_profile(&self) -> Result<Value, Error> {
+        if self.planning_model.is_none() {
+            return Err(Error::Unavailable);
+        }
+        self.gate(false).await?;
+        let hello = self.get("/api/hello").await?;
+        if hello["capabilities"]["nativePlanning"] != 1 {
+            return Err(Error::Unavailable);
+        }
+        let v = self
+            .get(&format!(
+                "/api/projects/{}/planning-profile",
+                self.source.project_id
+            ))
+            .await?;
+        super::enrollment::profile(&v, &self.source.project_id)?;
+        self.gate(false).await?;
         Ok(v)
     }
 
