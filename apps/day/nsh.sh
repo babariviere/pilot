@@ -21,4 +21,6 @@ if [ -n "$("$git" -C "$src" status --porcelain --untracked-files=no)" ]; then
 fi
 (cd "$src" && cargo build --quiet -p nsh-cli)
 cd "$here"
+# Native captures are written to output/ (ignored), which a fresh clone lacks.
+if [ "${1:-}" = test ]; then mkdir -p output; fi
 exec "$src/target/debug/nsh" "$@"
