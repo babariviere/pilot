@@ -17,7 +17,7 @@ import type {
 } from "pilot-day/native";
 import { InterviewDoc } from "./InterviewDoc";
 import type { Plans } from "./planning";
-import { closePlanning, fogOpen, put } from "./planView";
+import { closePlanning, fogOpen, put, roundOpen } from "./planView";
 import { TopBar } from "./TodayScreen";
 import { Action, Mark, type MarkKind, SectionTitle } from "./ui";
 
@@ -299,7 +299,7 @@ function Steps(props: { steps: Step[] }) {
 	return (
 		<View testID="steps" class="gap-1">
 			<View class="pb-2">
-				<SectionTitle title="From answers to work" />
+				<SectionTitle title="From plan to work" />
 			</View>
 			<Each of={props.steps} key={(s) => s.label}>
 				{(s) => (
@@ -315,6 +315,62 @@ function Steps(props: { steps: Step[] }) {
 				)}
 			</Each>
 		</View>
+	);
+}
+
+/** Earlier interview rounds: each one's own completion and answers, apart from the plan's approval. */
+function Rounds(props: { page: PlanPage }) {
+	const p = () => props.page;
+	return (
+		<If when={p().rounds.length > 0}>
+			<View testID="rounds" class="gap-1">
+				<SectionTitle title="Earlier interview rounds" count={p().rounds.length} />
+				<Text class="pb-2 text-xs leading-relaxed text-faint">
+					Submitting a round completes that round. It is not agreement to the plan or approval to build.
+				</Text>
+				<Each of={p().rounds} key={(r) => r.id}>
+					{(r) => {
+						const key = () => `${p().missionId}/${r().id}`;
+						const open = () => roundOpen()[key()] === true;
+						return (
+							<Collapsible
+								open={open()}
+								class="border-t border-border py-2"
+								content={
+									<View testID={`round-answers-${r().id}`} class="gap-2 pb-1 pl-4 pt-2">
+										<Each of={r().answers} key={(a) => a.prompt}>
+											{(a) => (
+												<View class="gap-0.5">
+													<Text class="text-xs text-muted-foreground">{a().prompt}</Text>
+													<Text class="text-sm text-foreground">{a().answer || "No answer"}</Text>
+												</View>
+											)}
+										</Each>
+									</View>
+								}
+							>
+								<View
+									testID={`round-${r().id}`}
+									role="button"
+									accessibilityState={{ expanded: open() }}
+									onPress={() => {
+										if (r().answers.length > 0) put(roundOpen, key(), !open());
+									}}
+									class="flex-row items-center gap-3 rounded-md focus-visible:ring-2 focus-visible:ring-ring/40"
+								>
+									<Mark kind={r().state === "submitted" ? "done" : "unreported"} />
+									<Text class="w-40 text-sm text-foreground">{r().title}</Text>
+									<Text class="flex-1 text-sm text-muted-foreground">{r().line}</Text>
+									<If when={r().answers.length > 0}>
+										<Text class="text-xs text-faint">{open() ? "Hide answers" : "Show answers"}</Text>
+									</If>
+								</View>
+							</Collapsible>
+						);
+					}}
+				</Each>
+			</View>
+		</If>
 	);
 }
 
@@ -383,21 +439,7 @@ function Body(props: { plans: Plans; page: PlanPage; title: string }) {
 			<If when={p().available}>
 				<Steps steps={p().steps} />
 			</If>
-			<If when={p().rounds.length > 0}>
-				<View class="gap-1">
-					<View class="pb-2">
-						<SectionTitle title="Earlier rounds" count={p().rounds.length} />
-					</View>
-					<Each of={p().rounds} key={(r) => r.id}>
-						{(r) => (
-							<View class="flex-row gap-3 py-1">
-								<Text class="w-40 text-sm text-foreground">{r().title}</Text>
-								<Text class="flex-1 text-sm text-muted-foreground">{r().line}</Text>
-							</View>
-						)}
-					</Each>
-				</View>
-			</If>
+			<Rounds page={p()} />
 		</View>
 	);
 }

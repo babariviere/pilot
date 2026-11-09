@@ -16,8 +16,8 @@ use serde_json::{Value, json};
 use crate::plan::{
     AnswerIntent, Choice, Delivery, Exploration, ExploreKind, ExploreState, FogArea, Interview,
     OutcomeStatus, PlanPage, PlanRoute, PlanRow, PlanStage, Proposal, PrototypeSupport, Question,
-    QuestionSection, QuestionState, RoundKind, RoundLine, Slice, SliceOwner, Spec, Step, StepState,
-    Story, SubmitIntent, SubmitState,
+    QuestionSection, QuestionState, RoundAnswer, RoundKind, RoundLine, RoundState, Slice,
+    SliceOwner, Spec, Step, StepState, Story, SubmitIntent, SubmitState,
 };
 use crate::plan_desk::ANSWER_ROOM;
 
@@ -246,6 +246,7 @@ fn interview(read: &Value, ops: &[Value], local: &Local) -> Option<Interview> {
         proposal,
         unconfirmed: !local.submitting && !local.checking && unsettled(ops).next().is_some(),
         room: ANSWER_ROOM.saturating_sub(used) as u32,
+        accepting: read["capabilities"]["answers"] == 1,
     })
 }
 
@@ -381,6 +382,17 @@ fn step(label: &str, state: StepState, line: &str) -> Step {
 pub fn page(read: &Value, ops: &[Value], local: &Local) -> PlanPage {
     let mission_id = s(&read["missionId"]);
     let fresh = read["fresh"].as_bool().unwrap_or(false);
+    if read["status"] == "preparing" {
+        // A new mission whose coordinator is still writing its first full list.
+        return PlanPage {
+            mission_id,
+            available: true,
+            fresh,
+            stage: PlanStage::Planning,
+            note: "Pilot is writing the questions. Nothing is asked yet.".into(),
+            ..PlanPage::default()
+        };
+    }
     if read["status"] != "available" || !read["view"].is_object() {
         return PlanPage {
             mission_id,
@@ -395,35 +407,22 @@ pub fn page(read: &Value, ops: &[Value], local: &Local) -> PlanPage {
     let caps = &read["capabilities"];
     let interview = interview(read, ops, local);
     let submitted_any = view["interview"]["submission"].is_object();
-    let continuation = caps["continuation"] != "unavailable";
+    // Only an exact new-flow worker binding reports continuation 1, with its phase.
+    let continuation = caps["continuation"] == 1;
+    let continued = match (continuation, submitted_any, caps["phase"].as_str()) {
+        (false, _, _) => StepState::Unavailable,
+        (true, true, Some("continuing")) => StepState::Now,
+        (true, true, Some("active" | "holding")) => StepState::Done,
+        _ => StepState::Waiting,
+    };
     let publication = &plan["publication"];
     let published = publication.is_object();
     let tasks = arr(&publication["tasks"]).len();
-    let submit = interview.as_ref().map(|i| i.submit);
-    let submitted = match submit {
-        Some(SubmitState::Submitting | SubmitState::Checking) => StepState::Now,
-        Some(SubmitState::Unknown) => StepState::Unknown,
-        _ if submitted_any => StepState::Done,
-        _ => StepState::Waiting,
-    };
     let published_line = format!("Published as {tasks} tasks. No work started.");
     let steps = vec![
         step(
-            "Answers submitted",
-            submitted,
-            if submitted == StepState::Unknown {
-                "Not confirmed. Pilot only checks; it does not send them again."
-            } else {
-                "Saving a draft never submits."
-            },
-        ),
-        step(
             "Pilot continues planning",
-            if continuation {
-                StepState::Waiting
-            } else {
-                StepState::Unavailable
-            },
+            continued,
             if continuation {
                 "Planning only. It starts no build work."
             } else {
@@ -476,12 +475,35 @@ pub fn page(read: &Value, ops: &[Value], local: &Local) -> PlanPage {
         _ if !continuation => PlanStage::Submitted,
         _ => PlanStage::Planning,
     };
+    // The read holds the latest submission only; earlier rounds stay with the daemon.
     let rounds = if submitted_any {
         let sub = &view["interview"]["submission"];
+        let answers = arr(&sub["questions"])
+            .iter()
+            .map(|q| {
+                let a = arr(&sub["answers"])
+                    .iter()
+                    .find(|a| a["questionId"] == q["id"]);
+                let meaning = a
+                    .map(|a| s(&a["selectedOption"]["meaning"]))
+                    .unwrap_or_default();
+                let text = a.map(|a| s(&a["text"])).unwrap_or_default();
+                RoundAnswer {
+                    prompt: s(&q["prompt"]),
+                    answer: [meaning.as_str(), text.trim()]
+                        .into_iter()
+                        .filter(|p| !p.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(". "),
+                }
+            })
+            .collect();
         vec![RoundLine {
             id: s(&sub["operationId"]),
             title: format!("Round {}", sub["fence"]["questionSetRevision"]),
             line: format!("{} answers, submitted", arr(&sub["answers"]).len()),
+            state: RoundState::Submitted,
+            answers,
         }]
     } else {
         Vec::new()

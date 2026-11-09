@@ -228,7 +228,16 @@ fn saves_and_one_submission_go_through_the_exact_host_requests() {
         PlanStage::Submitted,
         "continuation is unavailable, so nothing is planning"
     );
-    assert_eq!(page.steps[0].state, StepState::Done);
+    // The submitted round is history with its exact answers, apart from plan approval.
+    assert_eq!(page.rounds.len(), 1);
+    assert_eq!(page.rounds[0].answers[0].answer, "exact\n💬");
+    assert_eq!(page.rounds[0].answers[0].prompt, "What should change?");
+    let approved = page
+        .steps
+        .iter()
+        .find(|s| s.label == "Plan approved")
+        .unwrap();
+    assert_eq!(approved.state, StepState::Waiting);
     // Submitted answers are fixed, and a second submission is refused before sending.
     let posts = f.cmd("stats", true)["posts"].clone();
     assert!(plan_host::save_request(&v, &intent(&v, Some("fix"), "")).is_err());
@@ -336,6 +345,92 @@ fn a_round_without_questions_is_never_shown_or_submittable() {
     };
     assert_eq!(
         plan_host::submit_request(&read, &submit).unwrap_err().0,
+        OutcomeStatus::Rejected
+    );
+}
+
+#[test]
+fn continuation_follows_the_worker_phase_and_only_a_bound_worker() {
+    let fence = json!({"missionId":"m","ownerSessionId":"o","enrollmentId":"e","questionSetRevision":1,"answerRevision":0});
+    let q = json!({"id":"q","section":"outcome","prompt":"Why?","options":[{"id":"a","meaning":"A"}],"recommendedOptionId":null});
+    let sub = json!({"operationId":"s","fence":fence,"questions":[q],"answers":[{"questionId":"q","questionDigest":"d","selectedOption":{"id":"a","meaning":"A"},"text":""}],"agreementMarkdown":"","briefRevision":1,"digest":"x"});
+    let read = |caps: Value, submitted: bool| {
+        json!({"version":1,"projectId":"p","missionId":"m","status":"available","contextDigest":"0".repeat(64),
+        "questionDigests":{"q":"d"},"fresh":true,"capabilities":caps,
+        "view":{"plan":null,"destination":"d","interview":{"fence":fence,"revision":2,"questions":[q],"answers":[],"submission":if submitted { sub.clone() } else { Value::Null }}}})
+    };
+    let step = |v: &Value| {
+        let page = plan_host::page(v, &[], &Local::default());
+        (
+            page.steps
+                .iter()
+                .find(|s| s.label == "Pilot continues planning")
+                .unwrap()
+                .state,
+            page.stage,
+        )
+    };
+    assert_eq!(
+        step(&read(
+            json!({"answers":1,"continuation":"unavailable"}),
+            true
+        )),
+        (StepState::Unavailable, PlanStage::Submitted)
+    );
+    assert_eq!(
+        step(&read(
+            json!({"answers":1,"continuation":1,"phase":"held"}),
+            false
+        ))
+        .0,
+        StepState::Waiting
+    );
+    assert_eq!(
+        step(&read(
+            json!({"answers":1,"continuation":1,"phase":"continuing"}),
+            true
+        ))
+        .0,
+        StepState::Now
+    );
+    assert_eq!(
+        step(&read(
+            json!({"answers":1,"continuation":1,"phase":"active"}),
+            true
+        )),
+        (StepState::Done, PlanStage::Planning)
+    );
+}
+
+#[test]
+fn a_preparing_mission_and_a_round_not_yet_held_say_so() {
+    let read = json!({"version":1,"projectId":"p","missionId":"m","status":"preparing","contextDigest":null,"view":null,"fresh":true,
+        "capabilities":{"answers":"unavailable","continuation":"unavailable"}});
+    let page = plan_host::page(&read, &[], &Local::default());
+    assert!(page.available && page.interview.is_none());
+    assert_eq!(
+        page.note,
+        "Pilot is writing the questions. Nothing is asked yet."
+    );
+    let fence = json!({"missionId":"m","ownerSessionId":"o","enrollmentId":"e","questionSetRevision":1,"answerRevision":0});
+    let q = json!({"id":"q","section":"outcome","prompt":"Why?","options":[{"id":"a","meaning":"A"}],"recommendedOptionId":null});
+    let read = json!({"version":1,"projectId":"p","missionId":"m","status":"available","contextDigest":"0".repeat(64),
+        "questionDigests":{"q":"d"},"fresh":true,"capabilities":{"answers":"unavailable","continuation":"unavailable"},
+        "view":{"plan":null,"destination":"d","interview":{"fence":fence,"revision":1,"questions":[q],"answers":[],"submission":null}}});
+    let iv = plan_host::page(&read, &[], &Local::default())
+        .interview
+        .unwrap();
+    assert!(!iv.accepting);
+    let intent = AnswerIntent {
+        interview_id: iv.id,
+        question_set: 1,
+        question_id: "q".into(),
+        digest: "d".into(),
+        choice_id: Some("a".into()),
+        text: String::new(),
+    };
+    assert_eq!(
+        plan_host::save_request(&read, &intent).unwrap_err().0,
         OutcomeStatus::Rejected
     );
 }

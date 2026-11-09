@@ -4,9 +4,34 @@
 
 use crate::plan::{
     Exploration, ExploreKind, ExploreState, FogArea, PlanAvailability, PlanRoute, PlanScenario,
-    Proposal, QuestionSection as S, RoundKind, Setup, Slice, SliceOwner, Spec, StepState, Story,
+    Proposal, QuestionSection as S, RoundKind, RoundLine, RoundState, Setup, Slice, SliceOwner,
+    Spec, StepState, Story,
 };
 use crate::plan_desk::{Ask, Plan, PlanWorld, Round, Script, SubmitAck, digest};
+
+/// An earlier, submitted round of `asks`, each answered as given.
+fn submitted_round(
+    id: &str,
+    title: &str,
+    asks: Vec<Ask>,
+    answers: &[(&str, Option<&str>, &str)],
+) -> RoundLine {
+    let asks: Vec<Ask> = asks
+        .into_iter()
+        .map(|a| match answers.iter().find(|(q, _, _)| *q == a.id) {
+            Some((_, choice, text)) => a.answer(*choice, text),
+            None => a,
+        })
+        .collect();
+    let round = Round::new(id, RoundKind::Mission, 1, asks);
+    RoundLine {
+        id: s(id),
+        title: s(title),
+        line: format!("{} answers, submitted", round.asks.len()),
+        state: RoundState::Submitted,
+        answers: round.answers(),
+    }
+}
 
 fn s(text: &str) -> String {
     text.into()
@@ -295,7 +320,10 @@ fn export(trouble: bool) -> Plan {
 }
 
 /// The questions only tool results raise. They depend on an answer.
-fn export_round_two() -> Round {
+/// The second round: new questions only, raised by round 1's answers. It
+/// never repeats a round 1 question. When an earlier answer leaves a gap, a
+/// newly framed follow-up names the answer and the gap.
+fn export_round_two(shared: bool) -> Round {
     let mut asks = vec![
         Ask::new(
             "secrets",
@@ -316,6 +344,17 @@ fn export_round_two() -> Round {
             ],
         ),
     ];
+    if shared {
+        asks.push(Ask::new(
+            "links",
+            S::Constraints,
+            "In round 1 you said exports are also for teammates who do not use Pilot. They cannot open links to Pilot chats. What should an export do with those links?",
+            &[
+                ("text", "Keep them as plain text", false),
+                ("drop", "Leave them out", true),
+            ],
+        ));
+    }
     for ask in &mut asks {
         ask.new = true;
     }
@@ -429,16 +468,26 @@ fn review_round(id: &str, round: u32, proposal: &Proposal) -> Round {
 fn export_review() -> Plan {
     let mut plan = export_plan();
     plan.rounds = vec![
-        crate::plan::RoundLine {
-            id: s("export-1"),
-            title: s("Round 1"),
-            line: s("7 answers, submitted"),
-        },
-        crate::plan::RoundLine {
-            id: s("export-2"),
-            title: s("Round 2"),
-            line: s("2 answers, submitted"),
-        },
+        submitted_round(
+            "export-1",
+            "Round 1",
+            export_asks(),
+            &[
+                ("who", Some("both"), ""),
+                ("what", Some("tools"), ""),
+                ("formats", Some("markdown"), ""),
+                ("where", Some("panel"), ""),
+                ("size", Some("warn"), ""),
+                ("check", Some("fast"), ""),
+                ("pr", Some("yes"), "Mark it as a draft first."),
+            ],
+        ),
+        submitted_round(
+            "export-2",
+            "Round 2",
+            export_round_two(false).asks,
+            &[("secrets", Some("omit"), ""), ("long", Some("fold"), "")],
+        ),
     ];
     plan.submitted = StepState::Done;
     plan.continued = StepState::Done;
@@ -513,10 +562,12 @@ pub(crate) fn amend_during_review(plan: &mut Plan) {
     });
     let proposal = self::proposal(proposal.spec, proposal.slices, proposal.open_fog);
     if let Some(old) = plan.round.take() {
-        plan.rounds.push(crate::plan::RoundLine {
+        plan.rounds.push(RoundLine {
             id: old.id,
             title: format!("Review, round {}", old.round),
-            line: s("Closed: the plan changed"),
+            line: s("Closed: the plan changed, so this review does not count"),
+            state: RoundState::Closed,
+            answers: Vec::new(),
         });
     }
     let round = plan.next_round;
@@ -566,11 +617,18 @@ fn linux(current: bool) -> Plan {
     plan.script = Script::LinuxTopic;
     plan.submitted = StepState::Done;
     plan.continued = StepState::Done;
-    plan.rounds = vec![crate::plan::RoundLine {
-        id: s("linux-1"),
-        title: s("Round 1"),
-        line: s("5 answers, submitted"),
-    }];
+    plan.rounds = vec![submitted_round(
+        "linux-1",
+        "Round 1",
+        first_round("linux").asks,
+        &[
+            ("n1", Some("b"), ""),
+            ("n2", Some("a"), ""),
+            ("n3", Some("a"), ""),
+            ("n4", Some("a"), "Try it on my own laptop."),
+            ("n5", Some("a"), ""),
+        ],
+    )];
     let mut desktops = item(
         "desktops",
         "Which desktops count",
@@ -735,9 +793,17 @@ pub(crate) fn advance(plan: &mut Plan, round: Round) {
         (Script::Export, RoundKind::Mission) if round.round == 1 => {
             let tools = matches!(round.chosen("what").as_deref(), Some("tools" | "all"));
             if tools {
-                plan.round = Some(export_round_two());
+                let shared = matches!(round.chosen("who").as_deref(), Some("team" | "both"));
+                let next = export_round_two(shared);
+                plan.note = if shared {
+                    s(
+                        "Your answers raised three new questions, one about a gap in an earlier answer.",
+                    )
+                } else {
+                    s("Your answer about tool results raised two more questions.")
+                };
+                plan.round = Some(next);
                 plan.next_round = 3;
-                plan.note = s("Your answer about tool results raised two more questions.");
             } else {
                 review_for_export(plan);
             }

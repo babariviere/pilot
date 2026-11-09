@@ -253,9 +253,31 @@ pub struct Interview {
     pub unconfirmed: bool,
     /// Room left for all answers together, in bytes. A save past it is refused.
     pub room: u32,
+    /// Whether answers can be saved now. Pilot may not be ready to wait for them yet.
+    pub accepting: bool,
 }
 
-/// One earlier, submitted round.
+/// How an earlier interview round ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+pub enum RoundState {
+    /// The user submitted it. Its answers are fixed history.
+    #[default]
+    Submitted,
+    /// It closed without counting, such as a review whose plan changed.
+    Closed,
+}
+
+/// One answer of an earlier round, exactly as submitted.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+pub struct RoundAnswer {
+    /// The question, as Pilot asked it then.
+    pub prompt: String,
+    /// The answer in words: the chosen suggestion, then the user's text.
+    pub answer: String,
+}
+
+/// One earlier interview round. Submitting a round completes that round only:
+/// it is not the mission's agreement or approval to build.
 #[derive(Debug, Clone, Default, PartialEq, JsObject)]
 pub struct RoundLine {
     /// Stable.
@@ -264,6 +286,10 @@ pub struct RoundLine {
     pub title: String,
     /// One line, such as "7 answers, submitted".
     pub line: String,
+    /// How it ended.
+    pub state: RoundState,
+    /// Its answers as submitted. Empty when it closed without counting.
+    pub answers: Vec<RoundAnswer>,
 }
 
 /// How a mission is planned.

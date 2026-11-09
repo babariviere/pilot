@@ -11,7 +11,8 @@ use crate::plan::{
     AnswerIntent, Choice, Delivery, Exploration, FogArea, Interview, InterviewRef, NewIntent,
     OutcomeStatus, PlanAvailability, PlanOutcome, PlanPage, PlanRoute, PlanRow, PlanScenario,
     PlanStage, Planning, Proposal, PrototypeSupport, Question, QuestionSection, QuestionState,
-    RoundKind, RoundLine, Setup, StartedChat, Step, StepState, SubmitIntent, SubmitState,
+    RoundAnswer, RoundKind, RoundLine, RoundState, Setup, StartedChat, Step, StepState,
+    SubmitIntent, SubmitState,
 };
 use crate::plan_world;
 
@@ -252,6 +253,7 @@ impl Round {
             proposal: self.proposal.clone(),
             unconfirmed: false,
             room: ANSWER_ROOM.saturating_sub(self.answer_bytes(None)) as u32,
+            accepting: true,
         }
     }
 
@@ -270,6 +272,30 @@ impl Round {
             .and_then(|a| a.saved.as_ref())
             .map(|s| s.text.trim().to_owned())
             .unwrap_or_default()
+    }
+
+    /// Every answer in words, as submitted: the chosen suggestion's exact
+    /// meaning, then the user's text.
+    pub(crate) fn answers(&self) -> Vec<RoundAnswer> {
+        self.asks
+            .iter()
+            .map(|a| {
+                let saved = a.saved.as_ref();
+                let meaning = saved
+                    .and_then(|s| s.choice.as_ref())
+                    .map(|c| c.meaning.as_str())
+                    .unwrap_or_default();
+                let text = saved.map(|s| s.text.trim()).unwrap_or_default();
+                RoundAnswer {
+                    prompt: a.prompt.clone(),
+                    answer: [meaning, text]
+                        .into_iter()
+                        .filter(|p| !p.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(". "),
+                }
+            })
+            .collect()
     }
 }
 
@@ -406,26 +432,12 @@ impl Plan {
     }
 
     fn steps(&self) -> Vec<Step> {
-        let submitted = match self.round.as_ref().map(|r| r.submit) {
-            Some(SubmitState::Submitting | SubmitState::Checking) => StepState::Now,
-            Some(SubmitState::Unknown) => StepState::Unknown,
-            _ => self.submitted,
-        };
         let step = |label: &str, state: StepState, line: &str| Step {
             label: label.into(),
             state,
             line: line.into(),
         };
         vec![
-            step(
-                "Answers submitted",
-                submitted,
-                if submitted == StepState::Unknown {
-                    "Not confirmed. Pilot only checks; it does not send them again."
-                } else {
-                    "Saving a draft never submits."
-                },
-            ),
             step(
                 "Pilot continues planning",
                 self.continued,
@@ -918,6 +930,8 @@ impl PlanDesk {
             id: round.id.clone(),
             title,
             line,
+            state: RoundState::Submitted,
+            answers: round.answers(),
         });
         plan.submitted = StepState::Done;
         if plan.continuation {

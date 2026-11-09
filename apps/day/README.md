@@ -43,7 +43,7 @@ cd apps/day
 ./nsh.sh run Interview.tsx       # planning: also NewMission.tsx, Wayfinder.tsx, Review.tsx, PlanTrouble.tsx, Held.tsx, Long.tsx, PlanOff.tsx
 ./nsh.sh check && ./nsh.sh build # types against the Rust declarations, class check
 ./nsh.sh test App.test.tsx       # headless flows, boundary and sandbox (26 tests)
-./nsh.sh test Plan.test.tsx      # New, interviews, maps and review, and the planning boundary (16 tests)
+./nsh.sh test Plan.test.tsx      # New, interviews, maps and review, and the planning boundary (19 tests)
 ./nsh.sh test Native.test.tsx --target macos  # native captures and input, in output/
 (cd native && cargo test)        # Rust rules and generated declarations
 ```
@@ -124,12 +124,14 @@ New (the button on Today, or Command-N) asks what the user wants done. "Plan a
 mission" starts a mission whose questions come first; "Start as one chat"
 starts one Build chat directly, after the user confirms the exact words,
 project, model and access. A mission's planning page shows its interview. Pilot
-saves the whole question list first; the screen shows one question at a time,
-starting at the first without an answer. Back, Next (or "Skip for now") and the
-question numbers reach any question; "See all questions" shows every question
-on one page to answer freely. Each question has suggested answers (Pilot may
-mark one Recommended), "Something else", and one text field for the user's own
-answer or added detail. Answers save as drafts, in any order, and come back
+saves the whole question list first; the interview card shows one question at a
+time, starting at the first without an answer. Back, Next (or "Skip for now"),
+"All answers" and "See all questions" reach any question. Suggested answers carry
+their number key (Pilot may mark one Recommended): 1 to 9 picks one, and pressing
+it again clears it; 0 opens one text field for the user's own words or detail
+to a pick; Return moves on and Escape leaves the field. A later round holds new
+questions only; earlier rounds stay as read-only history with their answers,
+apart from the plan's approval. Answers save as drafts, in any order, and come back
 after leaving; switching a suggestion keeps the text. A recommendation, a
 skipped question or a blank draft is never an answer. The last page lists every
 answer by section with the one Submit, which stays off until every question of
@@ -156,9 +158,11 @@ steps; starting work is never on this page.
 `PlanFeed::from_host` (Rust only) binds the planning screens to the native
 host's saved interview reads, saves, submission and exact receipt checks
 (`native/src/plan_host.rs`, with the backend's own question digests). There,
-New cannot start a mission or a chat, and "Pilot continues planning" and "Work
-started" say they are not connected: no enrollment, continuation or worker
-admission exists yet. A mission without a saved interview says so instead of
+New cannot start a mission or a chat yet (the desktop New intent is unbound).
+"Pilot continues planning" follows a bound planning worker's phase and says it is
+not connected otherwise; "Work started" stays unavailable (no agreement or build
+admission). Earlier rounds show only the latest submitted one: the host read
+carries no older round history. A mission without a saved interview says so instead of
 showing an empty plan.
 
 Not built yet: the day switcher, rituals, Changes, Automations, the sky

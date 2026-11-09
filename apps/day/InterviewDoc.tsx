@@ -5,11 +5,12 @@
 // answers (one may be marked Recommended), "Something else", and a text
 // field for the user's own answer or added detail. Answers save as drafts;
 // a recommendation is never an answer.
-import { computed, effect, keymap, Text, View, type ViewRef } from "nsh";
-import { Button, Input, Radio, RadioGroup, Toggle } from "nsh/base";
+import { cleanup, computed, effect, keymap, signal, Text, View, type ViewRef } from "nsh";
+import { Button, Input, Toggle } from "nsh/base";
 import type { Interview, PlanPage, Question, QuestionSection } from "pilot-day/native";
 import {
 	answerText,
+	CLEARED,
 	checkSubmit,
 	composeAnswer,
 	editAnswer,
@@ -20,8 +21,19 @@ import {
 	unsaved,
 } from "./planCommands";
 import type { Plans } from "./planning";
-import { answerKey, answerMessages, atQuestion, focusAsk, planMessages, put, seeAll, submitting } from "./planView";
-import { Action, Mark, type MarkKind } from "./ui";
+import {
+	answerKey,
+	answerMessages,
+	atQuestion,
+	focusAsk,
+	focusField,
+	planMessages,
+	put,
+	seeAll,
+	submitting,
+	writing,
+} from "./planView";
+import { Action, KeyCap, KeyHint, Mark, type MarkKind } from "./ui";
 
 /** The page after the last question: every answer, and Submit. No question id can hold a NUL. */
 const REVIEW = "\u0000answers";
@@ -40,7 +52,7 @@ const NEXT_KEY = keymap.label("mod+enter");
 
 /** Whether the answers are fixed: submitted, on their way, or not confirmed. */
 function fixed(interview: Interview): boolean {
-	return interview.submit !== "open" || interview.unconfirmed;
+	return interview.submit !== "open" || interview.unconfirmed || !interview.accepting;
 }
 
 /** Whether the user gave this question an answer, saved or not yet. */
@@ -92,70 +104,27 @@ function saveLine(interview: Interview, question: Question): string {
 	return "";
 }
 
-function placeholder(choice: string | null | undefined): string {
-	if (choice === null) return "Write your answer";
-	if (choice === undefined) return "Or write your own answer";
-	return "Add detail (optional)";
+/** The key that picks choice `id` of `question`: 1 to 9, in order. */
+function keyOf(question: Question, id: string): string {
+	const n = question.choices.findIndex((c) => c.id === id) + 1;
+	return n >= 1 && n <= 9 ? String(n) : "";
 }
 
-/** The numbers above the question: where each question is, and a way to reach it. */
-function Index(props: { plans: Plans; interview: Interview }) {
-	const iv = () => props.interview;
-	return (
-		<View class="flex-row flex-wrap gap-1">
-			<Each of={iv().questions} key={(q) => q.id}>
-				{(q) => {
-					const n = () => iv().questions.findIndex((x) => x.id === q().id) + 1;
-					const here = () => place(iv()) === q().id;
-					const word = () =>
-						questionMark(iv(), q()) === "ready"
-							? "answered"
-							: questionMark(iv(), q()) === "unknown"
-								? "changed, answer again"
-								: "not answered";
-					return (
-						<Button
-							testID={`goto-${q().id}`}
-							accessibilityLabel={`Question ${n()}, ${word()}`}
-							onPress={() => go(props.plans, iv(), q().id)}
-							class="size-7 items-center justify-center rounded-md hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
-							classList={{ "bg-selection": here() }}
-						>
-							<Text
-								class="text-xs"
-								classList={{
-									"text-foreground font-semibold": here(),
-									"text-ok-ink": !here() && questionMark(iv(), q()) === "ready",
-									"text-needs-ink": !here() && questionMark(iv(), q()) === "unknown",
-									"text-faint": !here() && questionMark(iv(), q()) === "unreported",
-								}}
-							>
-								{String(n())}
-							</Text>
-						</Button>
-					);
-				}}
-			</Each>
-			<Button
-				testID="goto-review"
-				accessibilityLabel="Your answers and Submit"
-				onPress={() => go(props.plans, iv(), REVIEW)}
-				class="h-7 items-center justify-center rounded-md px-2 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
-				classList={{ "bg-selection": place(iv()) === REVIEW }}
-			>
-				<Text class="text-xs text-muted-foreground">Answers</Text>
-			</Button>
-		</View>
-	);
+/** The keys that pick a suggestion of `question`, such as "1–3". */
+function pickKeys(question: Question | undefined): string {
+	const n = Math.min(9, question?.choices.length ?? 0);
+	return n <= 1 ? "1" : `1–${n}`;
 }
 
-/** One question: its words, suggestions, "Something else" and the text field. */
+/** One question: its words, numbered suggestions and the user's own words. */
 function QuestionView(props: {
 	plans: Plans;
 	page: PlanPage;
 	interview: Interview;
 	question: Question;
-	/** Shown in the list of all questions: a smaller title. */
+	/** The question's section and how much of it is answered, such as "Limits · 1 of 2". */
+	section: string;
+	/** Shown in the list of all questions: a smaller title, the text field always open. */
 	compact?: boolean;
 }) {
 	const q = () => props.question;
@@ -164,17 +133,42 @@ function QuestionView(props: {
 	const choice = computed(() => shownChoice(iv(), q()));
 	const text = computed(() => answerText(iv(), q()));
 	const locked = () => fixed(iv());
+	const picked = () => typeof choice() === "string";
+	// The text field opens on 0, for own words or detail, and stays open while it holds text.
+	const open = () => props.compact === true || writing()[key] === true || text().trim() !== "";
 	// Answering keeps this question in front: the place no longer depends on what is unanswered.
 	const stay = () => put(atQuestion, iv().id, q().id);
-	const pick = (id: string | null) => {
+	// Pressing the chosen suggestion again clears it.
+	const pick = (id: string) => {
 		stay();
-		pickAnswer(props.plans, props.page.missionId, iv(), q(), id);
+		pickAnswer(props.plans, props.page.missionId, iv(), q(), choice() === id ? CLEARED : id);
 	};
-	const radios: ViewRef[] = [];
+	const write = () => {
+		stay();
+		put(writing, key, true);
+		focusField.set(key);
+	};
+	const toggles: ViewRef[] = [];
+	const field = signal<ViewRef | null>(null);
+	let stopEscape: (() => void) | null = null;
+	cleanup(() => stopEscape?.());
+	effect(() => {
+		const node = field();
+		if (focusField() === key && node) {
+			node.focus();
+			focusField.set(null);
+		}
+	});
+	// Escape leaves the field, keeps the text and returns to the suggestions.
+	const leaveField = () => {
+		field()?.blur();
+		const at = q().choices.findIndex((c) => c.id === choice());
+		toggles[Math.max(at, 0)]?.focus();
+	};
 	effect(() => {
 		if (focusAsk() !== key) return;
 		const at = q().choices.findIndex((c) => c.id === choice());
-		const target = radios[Math.max(at, 0)];
+		const target = toggles[Math.max(at, 0)];
 		if (target) {
 			target.focus();
 			focusAsk.set(null);
@@ -182,15 +176,13 @@ function QuestionView(props: {
 	});
 	return (
 		<View testID={`question-${q().id}`} class="gap-3">
-			<Text class="text-xs text-faint">
-				{q().new ? `${SECTION_WORDS[q().section]} · New this round` : SECTION_WORDS[q().section]}
-			</Text>
+			<Text class="text-xs text-faint">{q().new ? `${props.section} · New this round` : props.section}</Text>
 			<Text
 				role="header"
 				class={
 					props.compact
 						? "text-base font-semibold leading-snug text-foreground"
-						: "text-xl font-semibold leading-snug text-foreground"
+						: "text-xl font-semibold leading-snug text-card-foreground"
 				}
 			>
 				{q().prompt}
@@ -201,73 +193,100 @@ function QuestionView(props: {
 					<Text class="text-xs text-muted-foreground">{`Your earlier answer: ${q().earlier}`}</Text>
 				</View>
 			</If>
-			<RadioGroup class="gap-0.5">
+			<View class="gap-0.5" accessibilityLabel="Suggested answers">
 				<Each of={q().choices} key={(c) => c.id}>
 					{(c) => (
-						<Radio
+						<Toggle
 							ref={(node) => {
-								radios[q().choices.findIndex((x) => x.id === c().id)] = node;
+								toggles[q().choices.findIndex((x) => x.id === c().id)] = node;
 							}}
-							checked={choice() === c().id}
+							testID={`choice-${q().id}-${c().id}`}
+							pressed={choice() === c().id}
 							disabled={locked()}
 							accessibilityLabel={c().recommended ? `${c().meaning}, recommended` : c().meaning}
 							onChange={() => pick(c().id)}
-							class="group flex-row gap-3 rounded-lg px-2.5 py-2 checked:bg-selection hover:bg-accent checked:hover:bg-selection disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-ring/40"
+							class="group flex-row items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-accent aria-pressed:bg-selection aria-pressed:hover:bg-selection disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-ring/40"
 						>
-							<View class="mt-0.5 size-4 items-center justify-center rounded-full border border-input group-checked:border-primary">
-								<View class="size-2 rounded-full group-checked:bg-primary" />
-							</View>
+							<KeyCap label={keyOf(q(), c().id)} on={choice() === c().id} />
 							<View class="flex-1 flex-row flex-wrap items-baseline gap-2">
-								<Text class="text-sm text-foreground">{c().meaning}</Text>
+								<Text class="text-base text-foreground">{c().meaning}</Text>
 								<If when={c().recommended}>
 									<Text class="text-xs text-muted-foreground">Recommended</Text>
 								</If>
 							</View>
-						</Radio>
+							<If when={!props.compact && choice() === c().id && !locked()}>
+								<KeyHint keys="↩" label="next" />
+							</If>
+						</Toggle>
 					)}
 				</Each>
-				<Radio
-					checked={choice() === null}
-					disabled={locked()}
-					onChange={() => pick(null)}
-					class="group flex-row gap-3 rounded-lg px-2.5 py-2 checked:bg-selection hover:bg-accent checked:hover:bg-selection disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-ring/40"
+				<If
+					when={open()}
+					else={
+						<Button
+							testID={`own-${q().id}`}
+							accessibilityLabel={picked() ? "Add detail to your choice" : "Answer in your own words"}
+							disabled={locked()}
+							onPress={write}
+							class="flex-row items-center gap-3 rounded-xl px-3 py-2.5 hover:bg-accent disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-ring/40"
+						>
+							<KeyCap label="0" />
+							<Text class="text-base text-muted-foreground">
+								{picked() ? "Add detail" : "Something else: write your own"}
+							</Text>
+						</Button>
+					}
 				>
-					<View class="mt-0.5 size-4 items-center justify-center rounded-full border border-input group-checked:border-primary">
-						<View class="size-2 rounded-full group-checked:bg-primary" />
+					<View class="gap-1.5 px-3 pt-1.5">
+						<View class="flex-row items-center gap-3">
+							<KeyCap label="0" on={choice() === null} />
+							<Text class="text-sm text-muted-foreground">
+								{picked() ? "Detail for your choice" : "Your own words"}
+							</Text>
+						</View>
+						<View class="gap-1 pl-8">
+							<Input
+								ref={(node) => field.set(node)}
+								testID={`answer-${q().id}`}
+								accessibilityLabel={`Your answer to: ${q().prompt}`}
+								multiline
+								readonly={locked()}
+								value={text()}
+								placeholder={picked() ? "Optional" : "Say it your way"}
+								onChange={({ value }) => {
+									stay();
+									editAnswer(props.plans, props.page.missionId, iv(), q(), value);
+								}}
+								onCompositionChange={({ composing }) => composeAnswer(props.plans, iv(), q(), composing)}
+								onFocus={() => {
+									stopEscape?.();
+									stopEscape = keymap.bind("escape", leaveField, { when: "always" });
+								}}
+								onBlur={() => {
+									stopEscape?.();
+									stopEscape = null;
+									void saveNow(props.plans, key);
+								}}
+								class="min-h-16 rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-primary"
+							/>
+							<If when={answerMessages()[key]}>
+								<Text role="alert" class="text-xs text-needs-ink">
+									{answerMessages()[key] ?? ""}
+								</Text>
+							</If>
+							<If when={iv().room < 2048}>
+								<Text class="text-xs text-needs-ink">
+									{`Room left for all answers: about ${iv().room} characters.`}
+								</Text>
+							</If>
+						</View>
 					</View>
-					<Text class="flex-1 text-sm text-muted-foreground">Something else</Text>
-				</Radio>
-			</RadioGroup>
-			<View class="gap-1">
-				<Input
-					testID={`answer-${q().id}`}
-					accessibilityLabel={`Your answer to: ${q().prompt}`}
-					multiline
-					readonly={locked()}
-					value={text()}
-					placeholder={placeholder(choice())}
-					onChange={({ value }) => {
-						stay();
-						editAnswer(props.plans, props.page.missionId, iv(), q(), value);
-					}}
-					onCompositionChange={({ composing }) => composeAnswer(props.plans, iv(), q(), composing)}
-					onBlur={() => void saveNow(props.plans, key)}
-					class="min-h-16 rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground focus:border-primary"
-				/>
-				<View class="flex-row gap-2">
-					<If when={answerMessages()[key]}>
-						<Text role="alert" class="flex-1 text-xs text-needs-ink">
-							{answerMessages()[key] ?? ""}
-						</Text>
-					</If>
-					<If when={iv().room < 2048}>
-						<Text class="flex-1 text-xs text-needs-ink">
-							{`Room left for all answers: about ${iv().room} characters.`}
-						</Text>
-					</If>
-					<View class="flex-1" />
-					<Text class="text-xs text-faint">{saveLine(iv(), q())}</Text>
-				</View>
+				</If>
+				<If when={!open() && answerMessages()[key]}>
+					<Text role="alert" class="px-3 text-xs text-needs-ink">
+						{answerMessages()[key] ?? ""}
+					</Text>
+				</If>
 			</View>
 		</View>
 	);
@@ -425,30 +444,48 @@ function Answers(props: { plans: Plans; page: PlanPage; interview: Interview }) 
 }
 
 /**
- * Keys while a question shows: Command-Return moves on (from the text field
- * too), J and K move on and back, 1 to 9 pick a suggestion. Letters and
- * digits type into the field instead while it has the focus.
+ * Keys while one question shows: 1 to 9 pick a suggestion (again: clear it),
+ * 0 opens the text field for own words or detail, Return or J
+ * moves on and K moves back. Command-Return moves on from the text field
+ * too. Letters and digits type into the field while it has the focus.
+ * See all turns these keys off.
  */
 function bindKeys(plans: Plans, missionId: string, interview: () => Interview) {
 	const current = () => {
 		const iv = interview();
+		if (seeAll()[iv.id] === true) return undefined;
 		return iv.questions.find((q) => q.id === place(iv));
 	};
+	const next = () => {
+		if (seeAll()[interview().id] !== true) step(plans, interview(), 1);
+	};
+	const answer = (q: Question, choice: string | null) => {
+		const iv = interview();
+		if (fixed(iv)) return;
+		put(atQuestion, iv.id, q.id);
+		pickAnswer(plans, missionId, iv, q, choice);
+	};
 	// Bindings go with the component that made them.
-	keymap.bind("mod+enter", () => step(plans, interview(), 1), { when: "always" });
+	keymap.bind("mod+enter", next, { when: "always" });
 	const keys: Record<string, () => void> = {
-		j: () => step(plans, interview(), 1),
-		k: () => step(plans, interview(), -1),
+		enter: next,
+		j: next,
+		k: () => {
+			if (seeAll()[interview().id] !== true) step(plans, interview(), -1);
+		},
+		"0": () => {
+			const q = current();
+			if (!q || fixed(interview())) return;
+			put(atQuestion, interview().id, q.id);
+			put(writing, answerKey(interview(), q), true);
+			focusField.set(answerKey(interview(), q));
+		},
 	};
 	for (let n = 1; n <= 9; n++) {
 		keys[String(n)] = () => {
-			const iv = interview();
 			const q = current();
 			const c = q?.choices[n - 1];
-			if (q && c && !fixed(iv)) {
-				put(atQuestion, iv.id, q.id);
-				pickAnswer(plans, missionId, iv, q, c.id);
-			}
+			if (q && c) answer(q, shownChoice(interview(), q) === c.id ? CLEARED : c.id);
 		};
 	}
 	keymap.bind(keys);
@@ -469,10 +506,15 @@ export function InterviewDoc(props: { plans: Plans; page: PlanPage; interview: I
 		if (iv().kind === "topic") return `Questions about “${iv().topic}”`;
 		return iv().round > 1 ? `Questions, round ${iv().round}` : "Questions";
 	};
+	const sectionLine = (q: Question) => {
+		const all = iv().questions.filter((x) => x.section === q.section);
+		const done = all.filter((x) => x.state === "answered").length;
+		return `${SECTION_WORDS[q.section]} · ${done} of ${all.length}`;
+	};
 	return (
-		<View testID="interview" class="gap-5 rounded-2xl border border-border-strong bg-card px-6 py-5">
+		<View testID="interview" class="gap-5 rounded-2xl border border-border-strong bg-card px-6 py-6">
 			<View class="gap-2">
-				<View class="flex-row items-baseline gap-2">
+				<View class="flex-row flex-wrap items-baseline gap-x-3 gap-y-1">
 					<Text role="header" class="text-sm font-semibold text-muted-foreground">
 						{heading()}
 					</Text>
@@ -482,6 +524,16 @@ export function InterviewDoc(props: { plans: Plans; page: PlanPage; interview: I
 							? `${iv().answered} of ${total()} answered`
 							: `Question ${number()} of ${total()} · ${iv().answered} answered`}
 					</Text>
+					<If when={total() > 1 && !fixed(iv()) && !all() && at() !== REVIEW}>
+						<Button
+							testID="goto-review"
+							accessibilityLabel="All answers and Submit"
+							onPress={() => go(props.plans, iv(), REVIEW)}
+							class="rounded-md px-1.5 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+						>
+							<Text class="text-xs text-primary">All answers</Text>
+						</Button>
+					</If>
 					<If when={total() > 1 && !fixed(iv())}>
 						<Toggle
 							testID="see-all"
@@ -492,7 +544,7 @@ export function InterviewDoc(props: { plans: Plans; page: PlanPage; interview: I
 								if (q) void saveNow(props.plans, answerKey(iv(), q));
 								put(seeAll, iv().id, !all());
 							}}
-							class="rounded-md px-2 py-0.5 hover:bg-accent aria-pressed:bg-selection focus-visible:ring-2 focus-visible:ring-ring/40"
+							class="rounded-md px-1.5 hover:bg-accent aria-pressed:bg-selection focus-visible:ring-2 focus-visible:ring-ring/40"
 						>
 							<Text class="text-xs text-primary">See all questions</Text>
 						</Toggle>
@@ -502,8 +554,15 @@ export function InterviewDoc(props: { plans: Plans; page: PlanPage; interview: I
 					<View class="h-full bg-progress" style={{ flexGrow: iv().answered, flexBasis: 0 }} />
 					<View class="h-full" style={{ flexGrow: total() - iv().answered, flexBasis: 0 }} />
 				</View>
-				<If when={total() > 1 && !all()}>
-					<Index plans={props.plans} interview={iv()} />
+				<If when={!iv().accepting}>
+					<Text class="text-xs text-needs-ink">
+						Pilot is not ready to take answers yet. You can read the questions; answering opens soon.
+					</Text>
+				</If>
+				<If when={iv().round > 1 && iv().kind === "mission"}>
+					<Text class="text-xs text-faint">
+						New questions only. Earlier answers stay as they were, under Earlier interview rounds.
+					</Text>
 				</If>
 			</View>
 			<If when={all()}>
@@ -514,7 +573,14 @@ export function InterviewDoc(props: { plans: Plans; page: PlanPage; interview: I
 								<Text class="text-xs text-faint">
 									{`Question ${iv().questions.findIndex((x) => x.id === q().id) + 1} of ${total()}`}
 								</Text>
-								<QuestionView plans={props.plans} page={props.page} interview={iv()} question={q()} compact />
+								<QuestionView
+									plans={props.plans}
+									page={props.page}
+									interview={iv()}
+									question={q()}
+									section={sectionLine(q())}
+									compact
+								/>
 							</View>
 						)}
 					</Each>
@@ -522,9 +588,17 @@ export function InterviewDoc(props: { plans: Plans; page: PlanPage; interview: I
 			</If>
 			<If when={current()} else={<Answers plans={props.plans} page={props.page} interview={iv()} />}>
 				<Each of={current() ? [current() as Question] : []} key={(q) => q.id}>
-					{(q) => <QuestionView plans={props.plans} page={props.page} interview={iv()} question={q()} />}
+					{(q) => (
+						<QuestionView
+							plans={props.plans}
+							page={props.page}
+							interview={iv()}
+							question={q()}
+							section={sectionLine(q())}
+						/>
+					)}
 				</Each>
-				<View class="flex-row flex-wrap items-center gap-2">
+				<View class="flex-row flex-wrap items-center gap-2 border-t border-border pt-4">
 					<Action label="‹ Back" disabled={number() <= 1} onPress={() => step(props.plans, iv(), -1)} />
 					<Action
 						primary
@@ -539,12 +613,16 @@ export function InterviewDoc(props: { plans: Plans; page: PlanPage; interview: I
 						}
 						onPress={() => step(props.plans, iv(), 1)}
 					/>
+					<Text class="pl-1 text-xs text-faint">{current() ? saveLine(iv(), current() as Question) : ""}</Text>
 					<View class="flex-1" />
-					<Text class="text-xs text-faint">
-						{review()
-							? "Read the whole plan above first."
-							: "Recommended suggestions are not answers until you pick them."}
-					</Text>
+					<If when={current()}>
+						<View class="flex-row flex-wrap items-center gap-3.5">
+							<KeyHint keys={pickKeys(current())} label="pick" />
+							<KeyHint keys="0" label="write" />
+							<KeyHint keys="↩" label="next" />
+							<KeyHint keys="←" label="back" />
+						</View>
+					</If>
 				</View>
 			</If>
 		</View>

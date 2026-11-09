@@ -428,7 +428,19 @@ fn asking_for_changes_brings_a_new_plan_and_review() {
         (review.kind, review.round, review.proposal),
         (RoundKind::Review, 4, proposal.digest)
     );
-    assert_eq!(page.steps[2].state, StepState::Waiting);
+    let approved = page
+        .steps
+        .iter()
+        .find(|s| s.label == "Plan approved")
+        .unwrap();
+    assert_eq!(approved.state, StepState::Waiting);
+    // The asked-for change is history, not approval.
+    let last = page.rounds.last().unwrap();
+    assert_eq!(last.line, "You asked for changes");
+    assert_eq!(
+        last.answers[0].answer,
+        "Not yet. Change it first (say what below). Add a copy-to-clipboard option"
+    );
 }
 
 #[test]
@@ -506,7 +518,13 @@ fn a_held_submission_is_kept_and_nothing_continues() {
     let page = desk.page("export").unwrap();
     assert_eq!(page.stage, PlanStage::Submitted);
     assert_eq!(desk.continuations("export"), 0);
-    assert_eq!(page.steps[1].state, StepState::Unavailable);
+    let continues = page
+        .steps
+        .iter()
+        .find(|s| s.label == "Pilot continues planning")
+        .unwrap();
+    assert_eq!(continues.state, StepState::Unavailable);
+    assert!(page.steps.iter().all(|s| s.label != "Answers submitted"));
     assert!(page.proposal.is_none());
 }
 
@@ -549,4 +567,45 @@ fn forty_questions_all_need_answers_and_the_answer_room_is_kept() {
         OutcomeStatus::Rejected
     );
     assert_eq!(interview(&desk, "long").revision, before);
+}
+
+#[test]
+fn a_later_round_holds_new_questions_only_and_frames_follow_ups() {
+    for (who, follow_up) in [("you", false), ("both", true)] {
+        let mut desk = PlanDesk::new(PlanScenario::Interview);
+        let first: Vec<String> = interview(&desk, "export")
+            .questions
+            .iter()
+            .map(|q| q.id.clone())
+            .collect();
+        save(&mut desk, "export", "who", Some(who), "");
+        for (q, c) in [
+            ("what", "tools"),
+            ("where", "panel"),
+            ("check", "fast"),
+            ("pr", "yes"),
+        ] {
+            save(&mut desk, "export", q, Some(c), "");
+        }
+        assert_eq!(submit(&mut desk, "export").0, OutcomeStatus::Accepted);
+        desk.advance("export");
+        let page = desk.page("export").unwrap();
+        let next = page.interview.unwrap();
+        assert!(
+            next.questions
+                .iter()
+                .all(|q| !first.contains(&q.id) && q.state == QuestionState::Open)
+        );
+        let gap = next.questions.iter().find(|q| q.id == "links");
+        assert_eq!(gap.is_some(), follow_up);
+        if let Some(gap) = gap {
+            assert!(
+                gap.prompt.starts_with("In round 1 you said"),
+                "{}",
+                gap.prompt
+            );
+        }
+        // Round 1 stays as submitted history.
+        assert_eq!(page.rounds[0].answers.len(), first.len());
+    }
 }

@@ -8,6 +8,21 @@ import { PlanFeed } from "pilot-day/native";
 const desktop = { platform: "macos", width: 1100, height: 1400 } as const;
 const SUBMIT = "id:submit";
 
+type App = Awaited<ReturnType<typeof open>>;
+
+/** Writes in question `id`'s text field, opening it first the way a user does (0, or the row). */
+async function write(app: App, id: string, text: string) {
+	if (!app.shows(`id:answer-${id}`)) await app.press(`id:own-${id}`);
+	await app.type(`id:answer-${id}`, text);
+}
+
+/** Goes to question `id` through the answers page, as a user would without the keyboard. */
+async function goTo(app: App, id: string) {
+	if (app.shows("id:goto-review")) await app.press("id:goto-review");
+	await app.press(`id:review-${id}`);
+	await app.waitFor(`id:question-${id}`);
+}
+
 test("Today shows New and a mission whose questions wait", async () => {
 	const app = await open("./App.tsx", desktop);
 	await app.waitFor("Planning");
@@ -25,11 +40,11 @@ test("one question at a time, starting at the first without an answer; a recomme
 	expect(app.shows("What should one export include?")).toBe(true);
 	expect(app.shows("Who is the export for?")).toBe(false);
 	expect(app.shows("Recommended")).toBe(true);
-	expect(app.shows("Something else")).toBe(true);
+	expect(app.shows("id:own-what")).toBe(true);
 	expect(app.shows("role:button[Skip for now]")).toBe(true);
 	expect(app.shows(SUBMIT)).toBe(false);
 	// Earlier answers are there, exactly, when the user goes back.
-	await app.press("id:goto-size");
+	await goTo(app, "size");
 	await app.waitFor("How large can one export be?");
 	expect(app.value("id:answer-size")).toBe("Warn above 5 MB; never stop.");
 	await app.press("role:button[‹ Back]");
@@ -42,11 +57,11 @@ test("skipped questions stay unanswered and block the one Submit until every que
 	await app.waitFor("Question 2 of 7 · 3 answered");
 	await app.press("role:button[Skip for now]");
 	await app.waitFor("Question 3 of 7 · 3 answered");
-	await app.press("id:goto-pr");
+	await goTo(app, "pr");
 	await app.press("Yes, open it and wait for my review");
 	await app.waitFor("Question 7 of 7 · 4 answered");
-	await app.press("id:goto-check");
-	await app.type("id:answer-check", "A long chat opens in Obsidian");
+	await goTo(app, "check");
+	await write(app, "check", "A long chat opens in Obsidian");
 	await app.waitFor("Question 6 of 7 · 5 answered");
 	await app.keyboard.press("mod+enter");
 	await app.waitFor("Question 7 of 7 · 5 answered");
@@ -57,27 +72,34 @@ test("skipped questions stay unanswered and block the one Submit until every que
 	expect(app.shows("2 questions left. Pilot continues only after you submit.")).toBe(true);
 	expect(app.enabled(SUBMIT)).toBe(false);
 	// Nothing continued from saving or moving around.
-	expect(app.shows("Answers submitted: Not yet")).toBe(true);
 	expect(app.shows("Pilot continues planning: Not yet")).toBe(true);
 	await app.press("role:button[Next unanswered]");
 	await app.waitFor("What should one export include?");
 	await app.press("Messages and tool results");
-	await app.press("id:goto-where");
+	await goTo(app, "where");
 	await app.press("Ask every time, with a save panel");
-	await app.type("id:answer-where", "Remember the last folder");
+	await write(app, "where", "Remember the last folder");
 	await app.waitFor("Question 4 of 7 · 7 answered");
 	await app.press("id:goto-review");
 	await app.waitFor("Submitting sends every answer at once. Nothing starts building.");
 	expect(app.shows("What it should achieve · 2 of 2")).toBe(true);
 	await app.press(SUBMIT);
-	await app.waitFor("Answers submitted: Done");
+	await app.waitFor("Pilot continues planning: Done");
 	// Only the answer about tool results raises a new round, with new questions only.
 	await app.waitFor("Questions, round 2");
 	expect(app.shows("Your answer about tool results raised two more questions.")).toBe(true);
+	expect(app.shows("New questions only. Earlier answers stay as they were, under Earlier interview rounds.")).toBe(
+		true,
+	);
 	expect(app.shows("Question 1 of 2 · 0 answered")).toBe(true);
 	expect(app.shows("Tool results can hold secrets. What should an export do with them?")).toBe(true);
 	expect(app.shows("7 answers, submitted")).toBe(true);
-	expect(app.shows("id:goto-who")).toBe(false);
+	expect(app.shows("Who is the export for?")).toBe(false);
+	// Round 1 is history to read, not rows to answer again.
+	await app.press("id:round-export-1");
+	await app.waitFor("id:round-answers-export-1");
+	expect(app.shows("Who is the export for?")).toBe(true);
+	expect(app.shows("id:answer-who")).toBe(false);
 });
 
 test("See all shows every question to answer freely; it answers and submits nothing by itself", async () => {
@@ -100,9 +122,9 @@ test("See all shows every question to answer freely; it answers and submits noth
 	}
 	expect(app.shows("3 of 7 answered")).toBe(true);
 	expect(app.enabled(SUBMIT)).toBe(false);
-	expect(app.shows("Answers submitted: Not yet")).toBe(true);
+	expect(app.shows("Pilot continues planning: Not yet")).toBe(true);
 	await app.press("id:question-pr >> No, keep it local until I say");
-	await app.type("id:answer-check", "Opens in Obsidian");
+	await write(app, "check", "Opens in Obsidian");
 	await app.waitFor("5 of 7 answered");
 	await app.press("id:see-all");
 	// Back to one at a time, at the question last answered.
@@ -115,16 +137,17 @@ test("switching suggestions keeps the text, and drafts come back after leaving",
 	await app.press("id:plan-export");
 	await app.waitFor("What should one export include?");
 	await app.press("Messages only");
-	await app.type("id:answer-what", "Skip images");
+	await write(app, "what", "Skip images");
 	await app.press("Messages, tool results and artifacts");
 	expect(app.value("id:answer-what")).toBe("Skip images");
-	await app.press("Something else");
+	// Pressing the chosen suggestion again clears it; the text becomes the answer.
+	await app.press("Messages, tool results and artifacts");
 	expect(app.value("id:answer-what")).toBe("Skip images");
 	await app.waitFor("Question 2 of 7 · 4 answered");
 	await app.press("role:button[Back to Today]");
 	await app.waitFor("4 of 7 answered");
 	await app.press("id:plan-export");
-	await app.press("id:goto-what");
+	await goTo(app, "what");
 	await app.waitFor("What should one export include?");
 	expect(app.value("id:answer-what")).toBe("Skip images");
 });
@@ -132,8 +155,8 @@ test("switching suggestions keeps the text, and drafts come back after leaving",
 test("typing keeps its focus and text while answers save", async () => {
 	const app = await open("./App.tsx", desktop);
 	await app.press("id:plan-export");
-	await app.press("id:goto-check");
-	await app.type("id:answer-check", "Opens");
+	await goTo(app, "check");
+	await write(app, "check", "Opens");
 	await app.waitFor("Question 6 of 7 · 4 answered");
 	for (const key of ["f", "a", "s", "t"]) await app.keyboard.press(key);
 	expect(app.value("id:answer-check")).toBe("Opensfast");
@@ -148,7 +171,7 @@ test("a changed question keeps the earlier answer but needs a new one; a lost su
 	expect(app.shows("This question changed after you answered. Answer it again.")).toBe(true);
 	expect(app.shows("Your earlier answer: Always the Downloads folder")).toBe(true);
 	await app.press("The folder you picked last time");
-	await app.press("id:goto-check");
+	await goTo(app, "check");
 	expect(app.shows("Your earlier answer: Any chat exports without errors. Including chats with images.")).toBe(true);
 	expect(app.value("id:answer-check")).toBe("Including chats with images.");
 	await app.press("A 2,000-message chat exports in under 2 seconds");
@@ -156,11 +179,10 @@ test("a changed question keeps the earlier answer but needs a new one; a lost su
 	await app.press("id:goto-review");
 	await app.press(SUBMIT);
 	await app.waitFor("Pilot sent your answers but heard nothing back. It will not send them again until it checks.");
-	expect(app.shows("Answers submitted: Not confirmed")).toBe(true);
+	expect(app.shows("Not confirmed")).toBe(true);
 	expect(app.shows(SUBMIT)).toBe(false);
 	await app.press("role:button[Check again]");
 	await app.waitFor("Pilot continues planning: Done");
-	expect(app.shows("Answers submitted: Done")).toBe(true);
 	await app.waitFor("Questions, round 2");
 });
 
@@ -169,9 +191,9 @@ test("a topic interview whose map changed keeps answers but cannot be submitted"
 	await app.press("id:plan-linux");
 	await app.waitFor("Questions about “Which desktops count”");
 	await app.press("GNOME and KDE");
-	await app.press("id:goto-working");
+	await goTo(app, "working");
 	await app.press("Today, New and chats work; no tray icon");
-	await app.press("id:goto-packages");
+	await goTo(app, "packages");
 	await app.press("No. One portable package");
 	await app.waitFor("Question 3 of 3 · 3 answered");
 	await app.press("id:goto-review");
@@ -192,7 +214,7 @@ test("a plan that changes during review closes the review; the earlier choice do
 	);
 	await app.waitFor("Rebuild after branch switch");
 	expect(app.shows("Question 1 of 1 · 0 answered")).toBe(true);
-	expect(app.shows("Closed: the plan changed")).toBe(true);
+	expect(app.shows("Closed: the plan changed, so this review does not count")).toBe(true);
 });
 
 test("a review shows the whole plan; approval, publication and work are separate", async () => {
@@ -231,8 +253,7 @@ test("when Pilot cannot continue, the submitted answers are kept and every later
 	await app.press("id:question-pr >> Yes, open it and wait for my review");
 	await app.waitFor("7 of 7 answered");
 	await app.press(SUBMIT);
-	await app.waitFor("Answers submitted: Done");
-	expect(app.shows("Pilot continues planning: Not here")).toBe(true);
+	await app.waitFor("Pilot continues planning: Not here");
 	expect(app.shows("Not connected here yet. Your submitted answers are kept.")).toBe(true);
 	expect(app.shows("Submitted, waiting to continue")).toBe(true);
 	await app.wait(1200);
@@ -243,8 +264,7 @@ test("a 40-question interview shows one at a time, and all of them on See all", 
 	const app = await open("./Long.tsx", desktop);
 	await app.press("id:plan-long");
 	await app.waitFor("Question 1 of 40 · 5 answered");
-	expect(app.count("id:goto-q40")).toBe(1);
-	await app.press("id:goto-q40");
+	await goTo(app, "q40");
 	await app.waitFor("Question 40: which way should setting group 40 go?");
 	expect(app.shows("Question 40 of 40 · 5 answered")).toBe(true);
 	await app.press("id:see-all");
@@ -396,4 +416,72 @@ test("planning intents are typed, name what was shown, need every answer and nev
 	const steps = feed.page("linux")?.steps ?? [];
 	expect(steps.find((s) => s.label === "Work started")?.state).toBe("unavailable");
 	feed.dispose();
+});
+
+test("keys answer fast: digits pick, 0 opens the text field, Return moves on and Escape comes back", async () => {
+	const app = await open("./App.tsx", desktop);
+	await app.press("id:plan-export");
+	await app.waitFor("Question 2 of 7 · 3 answered");
+	for (const hint of ["1–3", "pick", "write", "next"]) expect(app.shows(hint)).toBe(true);
+	await app.keyboard.press("3");
+	await app.waitFor("Question 2 of 7 · 4 answered");
+	await app.keyboard.press("enter");
+	await app.waitFor("Question 3 of 7 · 4 answered");
+	await app.keyboard.press("enter");
+	await app.waitFor("Where may Pilot write the file?");
+	await app.keyboard.press("0");
+	// The keyboard is in the field now: letters and digits type.
+	for (const key of ["a", "s", "k", "1"]) await app.keyboard.press(key);
+	expect(app.value("id:answer-where")).toBe("ask1");
+	await app.waitFor("Question 4 of 7 · 5 answered");
+	await app.keyboard.press("escape");
+	await app.keyboard.press("1");
+	await app.waitFor("Saved");
+	expect(app.value("id:answer-where")).toBe("ask1");
+	await app.keyboard.press("k");
+	await app.waitFor("Should other formats wait?");
+});
+
+test("earlier rounds are history with their answers, apart from the plan's approval", async () => {
+	const app = await open("./Review.tsx", desktop);
+	await app.press("id:plan-export");
+	await app.waitFor("id:rounds");
+	expect(app.shows("Earlier interview rounds")).toBe(true);
+	expect(
+		app.shows("Submitting a round completes that round. It is not agreement to the plan or approval to build."),
+	).toBe(true);
+	expect(app.shows("Plan approved: Not yet")).toBe(true);
+	expect(app.shows("Yes, open it and wait for my review. Mark it as a draft first.")).toBe(false);
+	await app.press("id:round-export-1");
+	await app.waitFor("Yes, open it and wait for my review. Mark it as a draft first.");
+	expect(app.shows("id:round-answers-export-1")).toBe(true);
+	// A review that closed because the plan changed does not count.
+	const trouble = await open("./PlanTrouble.tsx", desktop);
+	await trouble.press("id:plan-search");
+	await trouble.press("Yes. Publish it as tasks; start nothing yet");
+	await trouble.waitFor("Closed: the plan changed, so this review does not count");
+	expect(trouble.shows("Plan approved: Not yet")).toBe(true);
+});
+
+test("pressing the chosen suggestion again clears it, by click or by its key", async () => {
+	const app = await open("./App.tsx", desktop);
+	await app.press("id:plan-export");
+	await app.waitFor("Question 2 of 7 · 3 answered");
+	await app.press("Messages only");
+	await app.waitFor("Question 2 of 7 · 4 answered");
+	await app.press("Messages only");
+	await app.waitFor("Question 2 of 7 · 3 answered");
+	expect(app.shows("role:button[Skip for now]")).toBe(true);
+	await app.keyboard.press("2");
+	await app.waitFor("Question 2 of 7 · 4 answered");
+	await app.keyboard.press("2");
+	await app.waitFor("Question 2 of 7 · 3 answered");
+	// Own words stay the answer when the suggestion is cleared.
+	await app.keyboard.press("1");
+	await write(app, "what", "Skip images");
+	await app.keyboard.press("escape");
+	await app.keyboard.press("1");
+	await app.wait(1200);
+	expect(app.shows("Question 2 of 7 · 4 answered")).toBe(true);
+	expect(app.value("id:answer-what")).toBe("Skip images");
 });

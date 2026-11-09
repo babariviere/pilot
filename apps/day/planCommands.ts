@@ -43,6 +43,21 @@ const composing = new Set<string>();
 
 function remember(missionId: string, interview: Interview, question: Question): string {
 	const key = answerKey(interview, question);
+	// A save still on its way updates the saved text and choice it carries;
+	// keep those rather than the older read, so a later save never sends stale text.
+	const before = shown.get(key);
+	const same = before && before.interviewId === interview.id && before.digest === question.digest;
+	if (before && same) {
+		// One record per answer, so a save in flight updates what the next save sends.
+		before.missionId = missionId;
+		before.questionSet = interview.questionSet;
+		// With nothing in flight, the latest read is the saved answer.
+		if (!saving.has(key)) {
+			before.chosen = question.chosen ?? null;
+			before.text = question.text;
+		}
+		return key;
+	}
 	shown.set(key, {
 		missionId,
 		interviewId: interview.id,
@@ -68,10 +83,18 @@ export function answerText(interview: Interview, question: Question): string {
 export function shownChoice(interview: Interview, question: Question): string | null | undefined {
 	const key = answerKey(interview, question);
 	const picks = answerPicks();
-	if (key in picks) return picks[key];
+	if (key in picks) {
+		const pick = picks[key];
+		// A cleared pick chooses nothing: the user's own words, if any, are the answer.
+		if (pick === CLEARED) return answerText(interview, question).trim() === "" ? undefined : null;
+		return pick;
+	}
 	if (question.state !== "answered") return undefined;
 	return question.chosen ?? null;
 }
+
+/** The pick of a suggestion pressed again: it chooses nothing. */
+export const CLEARED = "";
 
 /** Whether the answer has unsaved text or an unsaved pick. */
 export function unsaved(interview: Interview, question: Question): boolean {
@@ -95,7 +118,7 @@ function send(plans: Plans, key: string): Promise<void> {
 			questionSet: at.questionSet,
 			questionId: at.questionId,
 			digest: at.digest,
-			choiceId: choice ?? null,
+			choiceId: choice === CLEARED ? null : (choice ?? null),
 			text,
 		});
 		if (outcome.status === "accepted") {
@@ -103,7 +126,7 @@ function send(plans: Plans, key: string): Promise<void> {
 			if (answerDrafts()[key] === text) drop(answerDrafts, key);
 			if (choice !== null && answerPicks()[key] === choice) drop(answerPicks, key);
 			at.text = text;
-			at.chosen = choice ?? null;
+			at.chosen = choice === CLEARED ? null : (choice ?? null);
 			drop(answerMessages, key);
 		} else {
 			put(answerMessages, key, outcome.message);

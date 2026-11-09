@@ -24,6 +24,33 @@ export function Mark(props: { kind: MarkKind }) {
 	return <View class={`size-2 rounded-full ${MARKS[props.kind]}`} />;
 }
 
+/** A key the user can press, as a small cap. `on` fills it: the choice it picks is chosen. */
+export function KeyCap(props: { label: string; on?: boolean }) {
+	return (
+		<View
+			class="h-5 min-w-5 items-center justify-center rounded-md px-1"
+			classList={{ "bg-primary": props.on === true, "bg-muted": props.on !== true }}
+		>
+			<Text
+				class="text-xs font-semibold"
+				classList={{ "text-primary-foreground": props.on === true, "text-muted-foreground": props.on !== true }}
+			>
+				{props.label}
+			</Text>
+		</View>
+	);
+}
+
+/** A keyboard hint: a key cap and what it does, such as "0 write". */
+export function KeyHint(props: { keys: string; label: string }) {
+	return (
+		<View class="flex-row items-center gap-1.5">
+			<KeyCap label={props.keys} />
+			<Text class="text-xs text-faint">{props.label}</Text>
+		</View>
+	);
+}
+
 /** A command. `primary` marks the decision's one default commit. */
 export function Action(props: {
 	label: string;

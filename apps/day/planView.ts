@@ -32,10 +32,16 @@ export const planMessages = signal<Record<string, string>>({});
 export const submitting = signal<Record<string, boolean>>({});
 /** Whether the fog of war is open, by mission. */
 export const fogOpen = signal<Record<string, boolean>>({});
+/** Whether an earlier round's answers are open, by mission and round. */
+export const roundOpen = signal<Record<string, boolean>>({});
 /** The question each interview shows, or "review" for its answers page, by interview. */
 export const atQuestion = signal<Record<string, string>>({});
 /** Set to an answer key whose first choice should take the keyboard focus once. */
 export const focusAsk = signal<string | null>(null);
+/** Set to an answer key whose text field should take the keyboard focus once. */
+export const focusField = signal<string | null>(null);
+/** Whether the user opened a question's text field, by answer key. */
+export const writing = signal<Record<string, boolean>>({});
 /** Whether an interview shows all its questions at once, by interview. One at a time is the default. */
 export const seeAll = signal<Record<string, boolean>>({});
 
