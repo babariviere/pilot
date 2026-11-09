@@ -28,9 +28,22 @@
 			"!**/node_modules",
 			"!**/dist",
 			"!**/.pi",
+			"!**/.nsh",
 			"!apps/macos",
 			"!.agents/skills/impeccable",
 			"!.agents/skills/intent"
 		]
-	}
+	},
+	"overrides": [
+		{
+			"includes": ["experiments/nsh-day/**"],
+			"linter": {
+				"rules": {
+					"a11y": {
+						"useValidAriaRole": "off"
+					}
+				}
+			}
+		}
+	]
 }

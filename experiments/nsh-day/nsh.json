@@ -1,0 +1,15 @@
+{
+	"name": "Pilot Day (mock)",
+	"id": "dev.pilot.day.spike",
+	"version": "0.1.0",
+	"build": 1,
+	"appearance": "system",
+	"theme": "theme.json",
+	"window": {
+		"title": "Pilot Day (mock data)",
+		"defaultSize": { "width": 1100, "height": 820 },
+		"minSize": { "width": 420, "height": 480 }
+	},
+	"rust": "native",
+	"capabilities": {}
+}

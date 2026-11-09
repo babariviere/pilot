@@ -1,0 +1,23 @@
+[package]
+name = "pilot-day-native"
+description = "Mock Pilot Day read models and intents exported to the TSX Today screen."
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Separate from the Pilot desktop workspace: this spike never links the
+# shipping app, its daemon client or its storage.
+[workspace]
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# Unmodified upstream NSH, one exact revision for every NSH crate.
+nsh-core = { git = "https://github.com/longbridge/nsh", rev = "530b73170f61e5bf16380959de9e622f8ce130cd" }
+nsh-base = { git = "https://github.com/longbridge/nsh", rev = "530b73170f61e5bf16380959de9e622f8ce130cd" }
+
+[dev-dependencies]
+nsh-core = { git = "https://github.com/longbridge/nsh", rev = "530b73170f61e5bf16380959de9e622f8ce130cd", features = ["declarations"] }
+nsh-engine = { git = "https://github.com/longbridge/nsh", rev = "530b73170f61e5bf16380959de9e622f8ce130cd" }
+nsh-testing = { git = "https://github.com/longbridge/nsh", rev = "530b73170f61e5bf16380959de9e622f8ce130cd", features = ["bundle"] }
