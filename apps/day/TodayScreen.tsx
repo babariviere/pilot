@@ -8,6 +8,7 @@ import { ActionCard } from "./ActionCard";
 import type { Changes } from "./changeFeed";
 import { showChanges } from "./changesView";
 import { commit, later, pickNth, toggleHelp } from "./commands";
+import { DayLine } from "./DayLine";
 import { DecisionCard, decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
 import { stageMark, stageWord } from "./PlanScreen";
@@ -458,7 +459,7 @@ export function TodayScreen(props: { day: Day; plans?: Plans; changes?: Changes 
 				<If when={today().freshness.state !== "unreadable"} else={<Unreadable day={props.day} />}>
 					<View class="gap-12">
 						<View class="gap-3 pt-6">
-							<Text class="text-xs text-muted-foreground">{today().dateLine}</Text>
+							<DayLine day={props.day} />
 							<Text role="header" class="text-2xl font-semibold leading-tight tracking-tight text-foreground">
 								{headline(props.day)}
 							</Text>

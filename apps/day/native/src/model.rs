@@ -25,6 +25,12 @@ pub enum Scenario {
     /// Store upload whose file is replaced once and whose first report is
     /// lost.
     Actions,
+    /// The user's first look: nothing read before, one mission with no
+    /// report yet and nothing waiting, in the morning.
+    FirstUse,
+    /// A calm evening: nothing waits, results came in since the afternoon
+    /// and two missions keep moving.
+    Evening,
 }
 
 /// What a decision asks for. It decides which actions the card offers.
@@ -596,6 +602,48 @@ pub struct DoneEntry {
     pub mission_title: String,
     /// What shows it happened.
     pub evidence: Vec<Evidence>,
+    /// What the result rests on: an agent's report, a landing Pilot saw or
+    /// the user's acceptance. Never more than the source says.
+    pub basis: DoneBasis,
+}
+
+/// What a result rests on. An agent's report is never read as acceptance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+pub enum DoneBasis {
+    /// An agent reports it done. Pilot has not checked it.
+    #[default]
+    Reported,
+    /// Pilot saw its commit on the default branch. Landing is not acceptance.
+    Landed,
+    /// The user accepted it, such as by approving its review.
+    Accepted,
+}
+
+/// The part of the user's local day a read belongs to. Day offers the
+/// start of the day in the morning and the end of the day in the evening.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+pub enum DayPart {
+    /// The read carries no local time. Day offers neither.
+    #[default]
+    Unknown,
+    /// Before noon.
+    Morning,
+    /// From noon to 16:00.
+    Afternoon,
+    /// From 16:00.
+    Evening,
+}
+
+/// Whether the user looked at Day before this read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+pub enum Visit {
+    /// Pilot cannot tell. Day claims neither a first look nor a return.
+    #[default]
+    Unknown,
+    /// The user's first look: there is nothing earlier to catch up on.
+    First,
+    /// The user looked before, at `last_looked`.
+    Returning,
 }
 
 /// Something scheduled to happen.
@@ -624,6 +672,13 @@ pub struct Today {
     pub summary: String,
     /// Where the user left off, if they did.
     pub left_off: Option<String>,
+    /// The user's local date the read belongs to, such as "2026-11-09".
+    /// Empty when unknown. The screen keeps its start and end of day by it.
+    pub date: String,
+    /// The part of the day the read belongs to.
+    pub part: DayPart,
+    /// Whether the user looked before.
+    pub visit: Visit,
     /// Confirmed results of the user's own actions, newest last.
     pub notes: Vec<String>,
     /// What waits for the user, in order.
@@ -640,7 +695,8 @@ pub struct Today {
     pub not_moving: Vec<MissionRow>,
     /// Missions with no current report. Not the same as not moving.
     pub unreported: Vec<MissionRow>,
-    /// When the user last looked, such as "at 09:15".
+    /// When the user last looked, such as "at 09:15". Empty when unknown or
+    /// before the first look.
     pub last_looked: String,
     /// Results since the user last looked. Limited to the newest 20.
     pub done: Vec<DoneEntry>,

@@ -12,8 +12,8 @@ use crate::{
         Section, Task, TaskStatus, WorkingItem,
     },
     model::{
-        Bar, Decision, DecisionKind, DecisionOption, Delivery, DoneEntry, Evidence, FreshnessState,
-        Scenario, Scheduled, Today, Tone, Visual,
+        Bar, DayPart, Decision, DecisionKind, DecisionOption, Delivery, DoneBasis, DoneEntry,
+        Evidence, FreshnessState, Scenario, Scheduled, Today, Tone, Visit, Visual,
     },
     project::MINUTE,
 };
@@ -23,6 +23,9 @@ pub const NOW: u64 = 1_794_229_320_000;
 
 /// The mock project.
 pub const PROJECT: &str = "mock-project";
+
+/// The mock local date every world is read on.
+pub const DATE: &str = "2026-11-09";
 
 /// The mock home every control command is pinned to.
 pub fn home() -> Home {
@@ -88,6 +91,8 @@ pub fn world(scenario: Scenario) -> World {
         Scenario::Offline => offline(),
         Scenario::Unreadable => unreadable(),
         Scenario::Actions => with_actions(),
+        Scenario::FirstUse => first_use(),
+        Scenario::Evening => evening(),
     }
 }
 
@@ -403,6 +408,22 @@ fn done(id: &str, text: &str, mission_title: &str, evidence: Vec<Evidence>) -> D
         text: s(text),
         mission_title: s(mission_title),
         evidence,
+        basis: DoneBasis::Reported,
+    }
+}
+
+/// A result with what it rests on.
+fn done_on(basis: DoneBasis, entry: DoneEntry) -> DoneEntry {
+    DoneEntry { basis, ..entry }
+}
+
+/// The day facts of a read: its date, part of day and visit.
+fn day(today: Today, part: DayPart, visit: Visit) -> Today {
+    Today {
+        date: s(DATE),
+        part,
+        visit,
+        ..today
     }
 }
 
@@ -417,17 +438,23 @@ fn scheduled(id: &str, text: &str, when: &str, note: Option<&str>) -> Scheduled 
 
 fn base_done() -> Vec<DoneEntry> {
     vec![
-        done(
-            "d5",
-            "Tidy shell setup finished. Shell starts in 84 ms, was 310 ms.",
-            "Tidy shell setup",
-            vec![ev("3 commits"), ev("Startup timing")],
+        done_on(
+            DoneBasis::Accepted,
+            done(
+                "d5",
+                "Tidy shell setup finished. Shell starts in 84 ms, was 310 ms.",
+                "Tidy shell setup",
+                vec![ev("3 commits"), ev("Startup timing")],
+            ),
         ),
-        done(
-            "d1",
-            "Older messages now load while a reply streams.",
-            "Native desktop app",
-            vec![ev("a41c9e2"), ev("38 tests passed")],
+        done_on(
+            DoneBasis::Landed,
+            done(
+                "d1",
+                "Older messages now load while a reply streams.",
+                "Native desktop app",
+                vec![ev("a41c9e2"), ev("38 tests passed")],
+            ),
         ),
         done(
             "d4",
@@ -597,6 +624,9 @@ fn decisions() -> World {
         revision: 1,
         date_line: s("Monday 9 November, 11:02"),
         headline: s("Three short things need you."),
+        date: s(DATE),
+        part: DayPart::Morning,
+        visit: Visit::Returning,
         summary: s(
             "Quieter notifications needs a rule choice. The native app wants to open a test copy of Pilot. Search is still testing.",
         ),
@@ -700,6 +730,9 @@ fn quiet() -> World {
         revision: 1,
         date_line: s("Monday 9 November, 09:12"),
         headline: s("Nothing needs you today."),
+        date: s(DATE),
+        part: DayPart::Morning,
+        visit: Visit::Returning,
         summary: s(
             "Overnight, Tidy shell setup finished and the native app moved on to images. Faster search is running its last checks.",
         ),
@@ -846,6 +879,9 @@ fn trouble() -> World {
         revision: 1,
         date_line: s("Monday 9 November, 16:48"),
         headline: s("One check failed. One push is unconfirmed."),
+        date: s(DATE),
+        part: DayPart::Evening,
+        visit: Visit::Returning,
         summary: s(
             "Faster search stopped on 2 Linux test failures and needs a choice. The native app is waiting to confirm a push. You paused Quieter notifications.",
         ),
@@ -1030,6 +1066,8 @@ fn unreadable() -> World {
         today: Today {
             revision: 1,
             date_line: s("Monday 9 November, 11:02"),
+            date: s(DATE),
+            part: DayPart::Morning,
             ..Today::default()
         },
         overview: None,
@@ -1099,4 +1137,114 @@ fn with_actions() -> World {
         actions::Ack::Lose,
     ]);
     world
+}
+
+/// The user's first look, in the morning: nothing read before and nothing
+/// waiting. One mission has started; no agent has reported on it yet.
+fn first_use() -> World {
+    let today = day(
+        Today {
+            revision: 1,
+            date_line: s("Monday 9 November, 08:50"),
+            headline: s("Welcome to Pilot."),
+            summary: s("One mission has started. No agent has reported on it yet."),
+            ..Today::default()
+        },
+        DayPart::Morning,
+        Visit::First,
+    );
+    let overview = overview(
+        vec![dash("native", "Native desktop app", [0, 0, 1, 0, 6], 1, 0)],
+        vec![working("w-plan", "Plan the first slice", "native", 4)],
+        Vec::new(),
+        vec![running("native")],
+    );
+    World {
+        today,
+        overview: Some(overview),
+        details: Vec::new(),
+        freshness: (FreshnessState::Live, ""),
+        acks: Vec::new(),
+        control_acks: Vec::new(),
+        answers: Vec::new(),
+        lost_answers: Vec::new(),
+        actions: Actions::default(),
+    }
+}
+
+/// The quiet world in the evening: nothing waits, three results came in
+/// since the afternoon and two missions keep moving.
+fn evening() -> World {
+    let mut world = quiet();
+    world.today = day(
+        Today {
+            date_line: s("Monday 9 November, 18:20"),
+            headline: s("Nothing needs you."),
+            summary: s(
+                "Tidy shell setup finished and older messages now load while a reply streams. The native app and Faster search keep going.",
+            ),
+            left_off: Some(s("You were reading the search benchmark in Faster search.")),
+            last_looked: s("at 13:30"),
+            ..world.today
+        },
+        DayPart::Evening,
+        Visit::Returning,
+    );
+    world
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_world_names_its_day() {
+        for (scenario, part, visit) in [
+            (Scenario::Decisions, DayPart::Morning, Visit::Returning),
+            (Scenario::Quiet, DayPart::Morning, Visit::Returning),
+            (Scenario::Trouble, DayPart::Evening, Visit::Returning),
+            (Scenario::Offline, DayPart::Morning, Visit::Returning),
+            (Scenario::Actions, DayPart::Morning, Visit::Returning),
+            (Scenario::FirstUse, DayPart::Morning, Visit::First),
+            (Scenario::Evening, DayPart::Evening, Visit::Returning),
+        ] {
+            let today = today(scenario);
+            assert_eq!(today.date, DATE, "{scenario:?}");
+            assert_eq!((today.part, today.visit), (part, visit), "{scenario:?}");
+            assert_eq!(
+                today.last_looked.is_empty(),
+                visit == Visit::First,
+                "{scenario:?}"
+            );
+        }
+        // Nothing read: Day claims neither a first look nor a return.
+        assert_eq!(today(Scenario::Unreadable).visit, Visit::Unknown);
+    }
+
+    #[test]
+    fn a_first_look_has_nothing_to_catch_up_on() {
+        let today = today(Scenario::FirstUse);
+        assert!(today.done.is_empty() && today.decisions.is_empty() && today.left_off.is_none());
+        assert!(today.finished.is_empty() && today.coming_up.is_empty());
+    }
+
+    #[test]
+    fn results_rest_on_what_their_source_says() {
+        let bases: Vec<_> = today(Scenario::Quiet)
+            .done
+            .iter()
+            .map(|d| d.basis)
+            .collect();
+        assert_eq!(
+            bases,
+            [DoneBasis::Accepted, DoneBasis::Landed, DoneBasis::Reported]
+        );
+        // Results without a known basis stay agent reports.
+        assert!(
+            today(Scenario::Trouble)
+                .done
+                .iter()
+                .all(|d| d.basis == DoneBasis::Reported)
+        );
+    }
 }

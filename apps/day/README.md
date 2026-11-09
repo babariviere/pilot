@@ -43,10 +43,12 @@ the same as `apps/day/nsh.sh <command>`.
 cd apps/day
 ./nsh.sh run                     # the decisions world, in a native window
 ./nsh.sh run Trouble.tsx         # also Actions.tsx, Quiet.tsx, Large.tsx, Pulse.tsx, Offline.tsx, Unreadable.tsx
+./nsh.sh run FirstUse.tsx        # start and end of day: also Evening.tsx, Quiet.tsx, Trouble.tsx
 ./nsh.sh run Interview.tsx       # planning: also NewMission.tsx, Wayfinder.tsx, Review.tsx, PlanTrouble.tsx, Held.tsx, Long.tsx, PlanOff.tsx
 ./nsh.sh run Changes.tsx         # kept changes: also ChangesTrouble.tsx, ChangesEmpty.tsx, ChangesOff.tsx, ChangesLarge.tsx
 ./nsh.sh check && ./nsh.sh build # types against the Rust declarations, class check
 ./nsh.sh test App.test.tsx       # headless flows, boundary and sandbox (26 tests)
+./nsh.sh test Ritual.test.tsx    # start and end of day and standup notes (9 tests)
 ./nsh.sh test Plan.test.tsx      # New, interviews, maps and review, and the planning boundary (19 tests)
 ./nsh.sh test Changes.test.tsx   # Changes: list, exact reopen, Later, lost answer, unavailable, boundary (10 tests)
 ./nsh.sh test Native.test.tsx --target macos  # native captures and input, in output/
@@ -104,7 +106,30 @@ unconfirmed push, a lost answer to a question, a paused mission, a lost Pause
 answer and a Pause that does not finish everywhere), `actions` (one decision
 and the Chrome Web Store upload: the zip is replaced before the first report,
 and the next report's answer is lost), `large` (204 missions, 123 results),
-`offline` (the last read, 6 minutes old) and `unreadable` (nothing read).
+`offline` (the last read, 6 minutes old), `unreadable` (nothing read),
+`firstUse` (the user's first look: nothing to catch up on) and `evening`
+(nothing waits, three results since the afternoon).
+
+Start and end of day. Today's date line quietly offers "Start the day" in the
+morning and "End the day" in the evening, and always "Standup notes". The part
+of day, the local date and whether the user looked before (`part`, `date`,
+`visit`) come from Rust's `Today`; when they are unknown, Day offers neither
+ritual. The start of day has three short steps with visible progress: what
+happened since the user looked (or, on a first look, that there is nothing to
+catch up on), where they left off and the latest results; what needs them; and
+each mission's next step in its agent's own words, with what is scheduled.
+"Decide now" only brings Today's first item forward. The end of day is one page:
+results since the user looked, what still waits (it stays on Today), missions
+that are not moving or have no current report, what keeps moving, and, after
+"Close the day", where tomorrow starts. Standup notes list Done, Next and
+Waiting as selectable plain text. Every result names what it rests on (an agent
+report, a landing Pilot saw, or the user's acceptance: `DoneEntry.basis`, an
+agent report unless known), every plan its report's age and currentness, and a
+read that is not live says so. Rituals read Today only and send no intent:
+skipping, leaving or closing one answers, approves and starts nothing. "Skip for
+today" and finishing a ritual stop Today offering it for that date; Escape
+leaves it unmarked. These marks are screen state for this run of the app, not
+saved across restarts, and no schedule is created or turned on.
 
 Missions come only from agent reports. A current report that says moving puts
 a mission under Moving; one that says not moving, or a Pause, under Not
@@ -206,7 +231,7 @@ feed; native refresh/currentness UI remains follow-up work. Writing review feedb
 from Day is not built. The mock "Read more" adds the next page; native `more`
 queues a new complete read and does not acknowledge its completion.
 
-Not built yet: the day switcher, rituals, Automations, the sky
+Not built yet: the day switcher, Automations, the sky
 dither, bootstrap selection for the delivered native daemon host and
 opening a chat from the mission overview. The default entries use mock worlds.
 Decisions, actions, help answers, results and Coming up come from mock worlds,

@@ -1044,6 +1044,7 @@ impl Desk {
                         label: format!("{step:07x}"),
                         tone: Tone::Neutral,
                     }],
+                    basis: crate::model::DoneBasis::Reported,
                 };
                 self.today.done.insert(0, entry);
                 limit_done(&mut self.today);
