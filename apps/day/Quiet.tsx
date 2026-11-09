@@ -1,7 +1,7 @@
 // Nothing waits.
 import { mount } from "nsh";
+import { DayScreen } from "./DayScreen";
 import { openDay } from "./day";
-import { TodayScreen } from "./TodayScreen";
 
 const day = openDay("quiet");
-mount(() => <TodayScreen day={day} />);
+mount(() => <DayScreen day={day} />);

@@ -23,6 +23,10 @@ Both screens use one read model, one set of rules and one mock coordinator:
 calls `TodayFeed`. Its theme is [`apps/day/theme.json`](../../theme.json),
 read by `nsh.json` (`../../theme.json`) and by `theme_tokens` in `src/lib.rs`.
 
+The fixture froze with the stack comparison. It still shows only the Moving
+and Not moving groups: the TSX app's "No current report" group, report
+provenance, mission overview and Pause controls are not mirrored here.
+
 ## Parity matrix
 
 | Aspect             | TSX (`apps/day`)                                                           | Rust (`fixtures/rust-today`)                                                                  | Status                                                           |

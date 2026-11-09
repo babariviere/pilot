@@ -8,7 +8,10 @@ use nsh_core::prelude::*;
 
 use crate::{
     desk::{Desk, PULSE_COUNT, PULSE_EVERY},
-    model::{AskIntent, DecideIntent, DecisionRef, IntentOutcome, Scenario, Today},
+    model::{
+        AskIntent, DecideIntent, DecisionRef, IntentOutcome, MissionPage, MissionRef, PauseIntent,
+        ResumeIntent, Scenario, Today,
+    },
 };
 
 /// How long the mock coordinator takes to answer, so pending states show.
@@ -138,6 +141,82 @@ impl TodayFeed {
         timer(latency).await;
         this.with_mut(|feed| {
             let outcome = feed.desk.settle_ask(&intent);
+            feed.publish();
+            outcome
+        })
+    }
+
+    /// One mission in full: its row, tasks with their agents' reports,
+    /// control and working chats. Null when the mission is not in the read.
+    /// Read it again after every change.
+    pub fn mission(&self, mission_id: String) -> Option<MissionPage> {
+        self.desk.mission(&mission_id)
+    }
+
+    /// Pauses all of a mission's work, named at the control revision the
+    /// screen showed. Resolves once the service answers: paused, or still
+    /// pausing with work that needs a look. A lost answer is `unknown`, and
+    /// only `checkControl` can settle it.
+    pub async fn pause(this: Instance<Self>, intent: PauseIntent) -> IntentOutcome {
+        let started = this.with_mut(|feed| {
+            let started = feed.desk.begin_pause(&intent);
+            if started.is_ok() {
+                feed.publish();
+            }
+            started.map(|s| (s, feed.latency))
+        });
+        let (started, latency) = match started {
+            Ok(started) => started,
+            Err(outcome) => return outcome,
+        };
+        timer(latency).await;
+        this.with_mut(|feed| {
+            let outcome = feed.desk.settle_control(&started);
+            feed.publish();
+            outcome
+        })
+    }
+
+    /// Resumes the work that the named Pause paused, and nothing else.
+    pub async fn resume(this: Instance<Self>, intent: ResumeIntent) -> IntentOutcome {
+        let started = this.with_mut(|feed| {
+            let started = feed.desk.begin_resume(&intent);
+            if started.is_ok() {
+                feed.publish();
+            }
+            started.map(|s| (s, feed.latency))
+        });
+        let (started, latency) = match started {
+            Ok(started) => started,
+            Err(outcome) => return outcome,
+        };
+        timer(latency).await;
+        this.with_mut(|feed| {
+            let outcome = feed.desk.settle_control(&started);
+            feed.publish();
+            outcome
+        })
+    }
+
+    /// Reads whether a Pause or Resume whose answer was lost took effect.
+    /// Never sends it again.
+    pub async fn check_control(this: Instance<Self>, intent: MissionRef) -> IntentOutcome {
+        let started = this.with_mut(|feed| {
+            let started = feed.desk.begin_check_control(&intent);
+            if started.is_ok() {
+                feed.publish();
+            }
+            started.map(|s| (s, feed.latency))
+        });
+        let (operation, latency) = match started {
+            Ok(started) => started,
+            Err(outcome) => return outcome,
+        };
+        timer(latency).await;
+        this.with_mut(|feed| {
+            let outcome = feed
+                .desk
+                .settle_check_control(&intent.mission_id, &operation);
             feed.publish();
             outcome
         })

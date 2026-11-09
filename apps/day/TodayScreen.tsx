@@ -1,29 +1,14 @@
 // Today: what needs the user, which missions move, what landed and what
 // comes next. Read-only over the Rust read model, except through intents.
-import { Scroll, Text, View } from "nsh";
-import type { Decision, MissionRow, MissionState } from "pilot-day/native";
+// Movement comes only from agents' reports; a mission without a current
+// report is shown as such, never as not moving.
+import { type JSX, Scroll, Text, View } from "nsh";
+import type { Decision, MissionRow } from "pilot-day/native";
 import { DecisionCard, decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
-import { EvidenceChip, InlineAction, Mark, type MarkKind, SectionTitle, Track } from "./ui";
-import { focused } from "./view";
-
-const STATE_WORDS: Record<MissionState, string> = {
-	moving: "Moving",
-	waiting: "Waiting for you",
-	stuck: "Stuck",
-	unconfirmed: "Unconfirmed",
-	paused: "Paused",
-	later: "Starts later",
-};
-
-const STATE_MARKS: Record<MissionState, MarkKind> = {
-	moving: "moving",
-	waiting: "needs",
-	stuck: "failed",
-	unconfirmed: "unknown",
-	paused: "paused",
-	later: "later",
-};
+import { EvidenceChip, InlineAction, Mark, RowLink, SectionTitle, Track } from "./ui";
+import { focused, openMission } from "./view";
+import { freshnessLine, provenance, rowLine, stateMark, stateTone, stateWord } from "./words";
 
 function actionFor(decision: Decision | undefined): string {
 	if (!decision) return "";
@@ -49,38 +34,63 @@ function total(row: MissionRow): number {
 	return p.done + p.review + p.active + p.blocked + p.todo;
 }
 
+/** A mission's state: its mark and words. */
+export function MissionStatus(props: { row: MissionRow }) {
+	return (
+		<View class="flex-row items-center gap-1.5">
+			<Mark kind={stateMark(props.row)} />
+			<Text
+				class="text-xs"
+				classList={{
+					"text-needs-ink": stateTone(props.row) === "needs",
+					"text-failed-ink": stateTone(props.row) === "failed",
+					"text-muted-foreground": stateTone(props.row) === "quiet",
+				}}
+			>
+				{stateWord(props.row)}
+			</Text>
+		</View>
+	);
+}
+
 function MissionLine(props: { day: Day; row: MissionRow }) {
 	const decision = () => props.day.today().decisions.find((d) => d.id === props.row.decisionId);
+	const meta = () => {
+		const parts = [props.row.report ? provenance(props.row.report) : "", props.row.stage];
+		return parts.filter(Boolean).join(" · ");
+	};
 	return (
 		<View class="gap-1.5 border-t border-border py-3.5">
-			<View class="flex-row items-baseline gap-3">
-				<Text class="flex-1 text-sm font-medium text-foreground">{props.row.title}</Text>
-				<View class="flex-row items-center gap-1.5">
-					<Mark kind={STATE_MARKS[props.row.state]} />
-					<Text
-						class="text-xs"
-						classList={{
-							"text-needs-ink": props.row.state === "waiting" || props.row.state === "unconfirmed",
-							"text-failed-ink": props.row.state === "stuck",
-							"text-muted-foreground":
-								props.row.state === "moving" || props.row.state === "paused" || props.row.state === "later",
-						}}
-					>
-						{STATE_WORDS[props.row.state]}
-					</Text>
-				</View>
-			</View>
+			<RowLink
+				testID={`mission-${props.row.id}`}
+				title={props.row.title}
+				accessibilityLabel={`${props.row.title}, ${stateWord(props.row)}. Open the mission.`}
+				onPress={() => openMission(props.row.id)}
+			>
+				<MissionStatus row={props.row} />
+			</RowLink>
 			<View class="flex-row flex-wrap items-baseline gap-x-1.5">
-				<Text class="text-sm text-muted-foreground">{props.row.line}</Text>
+				<Text class="text-sm text-muted-foreground">{rowLine(props.row)}</Text>
 				<If when={decision()}>
 					<InlineAction label={actionFor(decision())} onPress={() => focused.set(props.row.decisionId ?? null)} />
 				</If>
 			</View>
-			<View class="flex-row items-center gap-3 pt-1">
+			<View class="flex-row flex-wrap items-center gap-x-3 gap-y-1 pt-1">
 				<Track progress={props.row.progress} />
-				<Text class="flex-1 text-xs text-faint">{props.row.stage}</Text>
+				<Text class="flex-1 text-xs text-faint">{meta()}</Text>
 				<Text class="text-xs text-faint">{`${props.row.progress.done} of ${total(props.row)} done`}</Text>
 			</View>
+		</View>
+	);
+}
+
+function MissionGroup(props: { day: Day; label: string; rows: MissionRow[]; first: boolean }) {
+	return (
+		<View classList={{ "pt-3": !props.first }}>
+			<Text class="pb-1.5 text-xs text-faint">{`${props.label}  ${props.rows.length}`}</Text>
+			<Each of={props.rows} key={(m) => m.id}>
+				{(m) => <MissionLine day={props.day} row={m()} />}
+			</Each>
 		</View>
 	);
 }
@@ -137,25 +147,72 @@ function Decisions(props: { day: Day }) {
 
 function Missions(props: { day: Day }) {
 	const today = () => props.day.today();
+	const count = () => today().moving.length + today().notMoving.length + today().unreported.length;
 	return (
 		<View class="gap-3">
-			<SectionTitle title="Missions" count={today().moving.length + today().notMoving.length} />
+			<SectionTitle title="Missions" count={count()} />
+			<If when={count() === 0}>
+				<Text class="text-sm text-muted-foreground">No active missions.</Text>
+			</If>
 			<If when={today().moving.length > 0}>
-				<View>
-					<Text class="pb-1.5 text-xs text-faint">{`Moving  ${today().moving.length}`}</Text>
-					<Each of={today().moving} key={(m) => m.id}>
-						{(m) => <MissionLine day={props.day} row={m()} />}
-					</Each>
-				</View>
+				<MissionGroup day={props.day} label="Moving" rows={today().moving} first />
 			</If>
 			<If when={today().notMoving.length > 0}>
-				<View class="pt-3">
-					<Text class="pb-1.5 text-xs text-faint">{`Not moving  ${today().notMoving.length}`}</Text>
-					<Each of={today().notMoving} key={(m) => m.id}>
-						{(m) => <MissionLine day={props.day} row={m()} />}
-					</Each>
-				</View>
+				<MissionGroup
+					day={props.day}
+					label="Not moving"
+					rows={today().notMoving}
+					first={today().moving.length === 0}
+				/>
 			</If>
+			<If when={today().unreported.length > 0}>
+				<MissionGroup
+					day={props.day}
+					label="No current report"
+					rows={today().unreported}
+					first={today().moving.length + today().notMoving.length === 0}
+				/>
+			</If>
+		</View>
+	);
+}
+
+/** A quiet line when the read shown is not live. */
+export function FreshnessNote(props: { day: Day }) {
+	const freshness = () => props.day.today().freshness;
+	return (
+		<If when={freshnessLine(freshness())}>
+			<View testID="freshness" class="flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">
+				<Mark kind="unknown" />
+				<Text class="flex-1 text-sm text-foreground">{freshnessLine(freshness())}</Text>
+			</View>
+		</If>
+	);
+}
+
+/** Today when nothing could be read: say so, and show nothing guessed. */
+function Unreadable(props: { day: Day }) {
+	return (
+		<View testID="unreadable" class="gap-2 pt-6">
+			<Text role="header" class="text-2xl font-semibold leading-tight tracking-tight text-foreground">
+				Today could not be read.
+			</Text>
+			<Text class="text-base leading-relaxed text-muted-foreground">
+				{`${props.day.today().freshness.reason} Pilot shows Today again once it can read it. Nothing here is guessed.`}
+			</Text>
+		</View>
+	);
+}
+
+/** Pilot's mark and name, with the mock data note. */
+export function TopBar(props: { children?: JSX.Element }) {
+	return (
+		<View class="flex-row items-center gap-2">
+			{props.children}
+			<View class="size-4 rounded-md bg-primary" />
+			<Text class="text-sm font-semibold text-foreground">Pilot</Text>
+			<View class="flex-1" />
+			<Text class="text-xs text-faint">Mock data</Text>
 		</View>
 	);
 }
@@ -235,32 +292,31 @@ export function TodayScreen(props: { day: Day }) {
 	return (
 		<Scroll class="flex-1 bg-background">
 			<View class="w-full max-w-2xl self-center gap-12 px-6 pb-24 pt-6">
-				<View class="flex-row items-center gap-2">
-					<View class="size-4 rounded-md bg-primary" />
-					<Text class="text-sm font-semibold text-foreground">Pilot</Text>
-					<View class="flex-1" />
-					<Text class="text-xs text-faint">Mock data</Text>
-				</View>
+				<TopBar />
+				<If when={today().freshness.state !== "unreadable"} else={<Unreadable day={props.day} />}>
+					<View class="gap-12">
+						<View class="gap-3 pt-6">
+							<Text class="text-xs text-muted-foreground">{today().dateLine}</Text>
+							<Text role="header" class="text-2xl font-semibold leading-tight tracking-tight text-foreground">
+								{headline(props.day)}
+							</Text>
+							<Text class="text-base leading-relaxed text-muted-foreground">{today().summary}</Text>
+							<If when={today().leftOff && today().decisions.length === 0}>
+								<Text class="text-xs text-primary">{today().leftOff ?? ""}</Text>
+							</If>
+							<FreshnessNote day={props.day} />
+						</View>
 
-				<View class="gap-3 pt-6">
-					<Text class="text-xs text-muted-foreground">{today().dateLine}</Text>
-					<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
-						{headline(props.day)}
-					</Text>
-					<Text class="text-base leading-relaxed text-muted-foreground">{today().summary}</Text>
-					<If when={today().leftOff && today().decisions.length === 0}>
-						<Text class="text-xs text-primary">{today().leftOff ?? ""}</Text>
-					</If>
-				</View>
+						<Decisions day={props.day} />
+						<Missions day={props.day} />
+						<DoneSince day={props.day} />
+						<ComingUp day={props.day} />
 
-				<Decisions day={props.day} />
-				<Missions day={props.day} />
-				<DoneSince day={props.day} />
-				<ComingUp day={props.day} />
-
-				<Text class="border-t border-border pt-5 text-xs text-faint">
-					That is everything for now. Pilot will tell you if something needs you.
-				</Text>
+						<Text class="border-t border-border pt-5 text-xs text-faint">
+							That is everything for now. Pilot will tell you if something needs you.
+						</Text>
+					</View>
+				</If>
 			</View>
 		</Scroll>
 	);

@@ -5,7 +5,7 @@ import { Button, Toggle } from "nsh/base";
 import type { Evidence, Progress } from "pilot-day/native";
 
 /** A still state mark. Words beside it carry the meaning. */
-export type MarkKind = "needs" | "failed" | "ready" | "unknown" | "moving" | "paused" | "later" | "done";
+export type MarkKind = "needs" | "failed" | "ready" | "unknown" | "moving" | "still" | "paused" | "unreported" | "done";
 
 const MARKS: Record<MarkKind, string> = {
 	needs: "bg-needs",
@@ -14,8 +14,9 @@ const MARKS: Record<MarkKind, string> = {
 	done: "bg-faint",
 	unknown: "border-2 border-needs",
 	moving: "border-2 border-faint",
+	still: "bg-faint",
 	paused: "bg-faint",
-	later: "border border-dashed border-faint",
+	unreported: "border border-dashed border-faint",
 };
 
 /** A small round mark for a state. */
@@ -45,6 +46,27 @@ export function Action(props: {
 			<Text class={props.primary ? "text-sm font-medium text-primary-foreground" : "text-sm text-muted-foreground"}>
 				{props.label}
 			</Text>
+		</Button>
+	);
+}
+
+/** A row that opens what it names: its title, then trailing content. */
+export function RowLink(props: {
+	testID: string;
+	title: string;
+	accessibilityLabel: string;
+	onPress: () => void;
+	children?: JSX.Element;
+}) {
+	return (
+		<Button
+			testID={props.testID}
+			accessibilityLabel={props.accessibilityLabel}
+			onPress={props.onPress}
+			class="group flex-row items-baseline gap-3 rounded-md focus-visible:ring-2 focus-visible:ring-ring/40"
+		>
+			<Text class="flex-1 text-sm font-medium text-foreground group-hover:underline">{props.title}</Text>
+			{props.children}
 		</Button>
 	);
 }

@@ -6,6 +6,10 @@ import { TodayFeed } from "pilot-day/native";
 const desktop = { platform: "macos", width: 1100, height: 900 } as const;
 /** The decision card's own commit, not a mission row's link to it. */
 const DECIDE = "id:decision >> role:button[Decide]";
+/** The confirmation's Pause, not the "Pause mission" that opens it. */
+const PAUSE = "id:pause >> role:button[Pause]";
+const RUNNING =
+	"Running. Pause stops every agent, schedule and job in this mission at a safe point. You can resume it later.";
 
 test("Today shows decisions first, then moving and waiting missions", async () => {
 	const app = await open("./App.tsx", desktop);
@@ -94,6 +98,112 @@ test("the update workload reaches the screen", async () => {
 	await app.waitFor("104 earlier results are not shown here.");
 });
 
+test("a mission without a current report is not counted as not moving", async () => {
+	const app = await open("./App.tsx", desktop);
+	await app.waitFor("No current report  1");
+	expect(app.shows("Not moving  2")).toBe(true);
+	expect(app.shows("No report yet")).toBe(true);
+	expect(app.shows("No report yet. One chat working.")).toBe(true);
+	expect(app.shows("Agent report · 12 min ago · Verify")).toBe(true);
+});
+
+test("a mission opens with its report, tasks and working chats, and Escape goes back", async () => {
+	const app = await open("./App.tsx", desktop);
+	await app.press("id:mission-search");
+	await app.waitFor("Show search results in under 200 ms for large workspaces.");
+	for (const text of [
+		"Latest report",
+		"Next: Fix anything that fails, then open the release pull request.",
+		"Agent report · 12 min ago · references not checked by Pilot",
+		"Integration tests on Linux",
+		"In progress",
+		"Working now",
+		"since 34 min ago",
+		RUNNING,
+	]) {
+		expect(app.shows(text)).toBe(true);
+	}
+	expect(app.shows("Three short things need you.")).toBe(false);
+	await app.keyboard.press("escape");
+	await app.waitFor("Three short things need you.");
+	await app.press("id:mission-docs");
+	await app.waitFor("The task list is not available here yet.");
+	await app.press("role:button[Back to Today]");
+	await app.waitFor("Three short things need you.");
+});
+
+test("pause asks first, stays Pausing until its receipt, and resume brings it back", async () => {
+	const app = await open("./App.tsx", desktop);
+	await app.press("id:mission-search");
+	await app.press("role:button[Pause mission]");
+	await app.waitFor("Pause all work in Faster search?");
+	await app.press("role:button[Cancel]");
+	expect(app.shows("Pause all work in Faster search?")).toBe(false);
+	await app.press("role:button[Pause mission]");
+	await app.press(PAUSE);
+	await app.waitFor("Stopping work at safe points. Not paused yet.");
+	expect(app.shows("role:button[Resume]")).toBe(false);
+	await app.waitFor("Paused. Nothing in it runs until you resume it.");
+	expect(app.shows("#3 Integration tests on Linux")).toBe(true);
+	expect(app.shows("role:button[Pause mission]")).toBe(false);
+	await app.press("role:button[Resume]");
+	await app.waitFor("Starting the paused work again.");
+	await app.waitFor(RUNNING);
+	await app.keyboard.press("escape");
+	await app.waitFor("Moving  1");
+});
+
+test("a paused mission stays Not moving, and resumed without a current report it is unreported", async () => {
+	const app = await open("./Trouble.tsx", desktop);
+	await app.waitFor("Paused. Nothing in it runs until you resume it.");
+	expect(app.shows("Old coordinator report · yesterday")).toBe(true);
+	await app.press("id:mission-notify");
+	await app.press("role:button[Resume]");
+	await app.waitFor(RUNNING);
+	await app.keyboard.press("escape");
+	await app.waitFor("No current report  1");
+	expect(app.shows("Old report")).toBe(true);
+});
+
+test("a lost pause answer stays unknown and is only checked, never resent", async () => {
+	const app = await open("./Trouble.tsx", desktop);
+	await app.press("id:mission-release");
+	await app.press("role:button[Pause mission]");
+	await app.press(PAUSE);
+	await app.waitFor("Pilot asked to pause but heard nothing back. It will not ask again until it checks.");
+	expect(app.shows("role:button[Pause mission]")).toBe(false);
+	await app.press("role:button[Check again]");
+	await app.waitFor("Paused. Nothing in it runs until you resume it.");
+});
+
+test("a pause that does not finish everywhere stays Pausing and names what needs a look", async () => {
+	const app = await open("./Trouble.tsx", desktop);
+	await app.press("id:mission-native");
+	await app.press("role:button[Pause mission]");
+	await app.press(PAUSE);
+	await app.waitFor("Pausing did not finish everywhere. Some work needs a look.");
+	expect(app.shows("Did not confirm")).toBe(true);
+	expect(app.shows("The chat did not confirm its checkpoint.")).toBe(true);
+	expect(app.shows("role:button[Pause mission]")).toBe(false);
+	expect(app.shows("role:button[Resume]")).toBe(false);
+});
+
+test("offline keeps the last read visible and turns controls off", async () => {
+	const app = await open("./Offline.tsx", desktop);
+	await app.waitFor("Offline. Pilot's service is not answering. Showing what Pilot read 6 min ago.");
+	expect(app.shows("Moving  1")).toBe(true);
+	await app.press("id:mission-search");
+	await app.waitFor("Pause and Resume need a fresh read.");
+	expect(app.shows("role:button[Pause mission]")).toBe(false);
+});
+
+test("nothing readable is said plainly, with nothing guessed", async () => {
+	const app = await open("./Unreadable.tsx", desktop);
+	await app.waitFor("Today could not be read.");
+	expect(app.shows("No decisions waiting. Pilot keeps going on its own.")).toBe(false);
+	expect(app.shows("Missions")).toBe(false);
+});
+
 test("intents are typed: unknown keys and wrong types are refused in the call", async () => {
 	const feed = new TodayFeed("decisions");
 	let thrown = "";
@@ -112,6 +222,17 @@ test("intents are typed: unknown keys and wrong types are refused in the call", 
 	expect(feed.snapshot().decisions[0].delivery).toBe("idle");
 	const stale = feed.later({ decisionId: "q1", revision: 9 });
 	expect(stale.status).toBe("stale");
+	// A Pause names the mission and the revision shown; Rust adds the home,
+	// project, coordinator and operation. TSX cannot supply them.
+	const forged = { missionId: "search", revision: 0, coordinatorSessionId: "c-other" };
+	let refused = "";
+	await feed.pause(forged).catch((error: unknown) => {
+		refused = String(error);
+	});
+	expect(refused).toContain("TypeError");
+	const old = await feed.pause({ missionId: "search", revision: 5 });
+	expect(old.status).toBe("stale");
+	expect(feed.mission("search")?.row.control.delivery).toBe("idle");
 	feed.dispose();
 });
 

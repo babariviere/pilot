@@ -1,6 +1,6 @@
 [package]
 name = "pilot-day-native"
-description = "Mock Pilot Day read models and intents exported to the TSX Today screen."
+description = "Pilot Day read models, v1 daemon contract projection and intents exported to the TSX Today screen."
 version = "0.1.0"
 edition = "2024"
 publish = false
@@ -16,6 +16,9 @@ path = "src/lib.rs"
 # Unmodified upstream NSH, one exact revision for every NSH crate.
 nsh-core = { git = "https://github.com/longbridge/nsh", rev = "530b73170f61e5bf16380959de9e622f8ce130cd" }
 nsh-base = { git = "https://github.com/longbridge/nsh", rev = "530b73170f61e5bf16380959de9e622f8ce130cd" }
+# The daemon's v1 Day contracts, read in Rust only. Same versions NSH locks.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [dev-dependencies]
 nsh-core = { git = "https://github.com/longbridge/nsh", rev = "530b73170f61e5bf16380959de9e622f8ce130cd", features = ["declarations"] }

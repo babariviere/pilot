@@ -17,6 +17,10 @@ pub enum Scenario {
     Trouble,
     /// Many missions and results, for scrolling and memory checks.
     Large,
+    /// The decisions world, but the service stopped answering 6 minutes ago.
+    Offline,
+    /// Nothing could be read, and there is no earlier read.
+    Unreadable,
 }
 
 /// What a decision asks for. It decides which actions the card offers.
@@ -62,22 +66,182 @@ pub enum Tone {
     Bad,
 }
 
-/// Whether a mission is moving, and if not, why.
+/// What a mission row says about the mission, most pressing first: its
+/// control, then a decision it waits for, then its agents' reports.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
 pub enum MissionState {
-    /// Agents are working on it.
+    /// A current agent report says it is moving.
     #[default]
     Moving,
+    /// A current agent report says it is not moving.
+    NotMoving,
+    /// No current agent report: none yet, only old ones, or unavailable.
+    /// Never read as not moving.
+    Unreported,
     /// It waits for a decision from the user.
     Waiting,
     /// It stopped on a failure and needs a decision.
     Stuck,
-    /// It waits until an earlier outcome is confirmed.
+    /// An earlier outcome, or a Pause or Resume, is not confirmed.
     Unconfirmed,
-    /// It is paused until a set time or until the user resumes it.
+    /// Its work is stopping at safe points. Not paused yet.
+    Pausing,
+    /// Paused: nothing in it runs until the user resumes it.
     Paused,
-    /// It starts later today.
-    Later,
+    /// Its paused work is starting again.
+    Resuming,
+}
+
+/// Whether Today shows a fresh read of the project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+pub enum FreshnessState {
+    /// The latest read is current.
+    #[default]
+    Live,
+    /// The service answers, but the read shown is older than expected.
+    Stale,
+    /// The service does not answer. The last read is kept and shown.
+    Offline,
+    /// Nothing could be read. There is no earlier read to show.
+    Unreadable,
+}
+
+/// How fresh Today's read is. Controls need a live read.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+pub struct Freshness {
+    /// Live, stale, offline or unreadable.
+    pub state: FreshnessState,
+    /// How old the read shown is, such as "6 min ago". Empty when nothing was read.
+    pub age: String,
+    /// Why it is not live, in a few words. Empty while live.
+    pub reason: String,
+}
+
+/// Whether a report still describes its task's current owner and source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+pub enum Currentness {
+    /// It describes the task as it is now.
+    #[default]
+    Current,
+    /// The task changed or the report is over a day old. It may no longer hold.
+    Stale,
+    /// It could not be read or checked.
+    Unavailable,
+}
+
+/// An agent's own assessment of whether its task moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+pub enum Movement {
+    /// The agent reports the task moving.
+    #[default]
+    Moving,
+    /// The agent reports the task not moving.
+    NotMoving,
+    /// The agent could not tell, or the value is unknown.
+    Unknown,
+}
+
+/// An agent's latest report on one task. Agent words, not verified proof.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+pub struct ReportLine {
+    /// The task it reports on.
+    pub task_id: String,
+    /// Whether it still describes the task.
+    pub currentness: Currentness,
+    /// What the agent says about movement.
+    pub movement: Movement,
+    /// Whether the mission's coordinator wrote it, rather than a worker.
+    pub by_coordinator: bool,
+    /// How long ago it was written, such as "12 min ago".
+    pub age: String,
+    /// The agent's summary, exactly as written.
+    pub summary: String,
+    /// The agent's next step, exactly as written.
+    pub next_step: String,
+    /// References the agent named. Reported, not checked by Pilot.
+    pub evidence: Vec<String>,
+}
+
+/// A mission's control, as the service last reported it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+pub enum ControlState {
+    /// Not paused.
+    #[default]
+    Running,
+    /// Work is stopping at safe points. Not paused yet.
+    Pausing,
+    /// Paused and acknowledged.
+    Paused,
+    /// Paused work is starting again.
+    Resuming,
+    /// The service cannot say.
+    Unknown,
+}
+
+/// What a control request asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+pub enum ControlAsk {
+    /// Pause all of the mission's work.
+    #[default]
+    Pause,
+    /// Resume the work one Pause paused.
+    Resume,
+}
+
+/// Where one member chat is in the last Pause or Resume.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+pub enum MemberState {
+    /// Not reached yet.
+    #[default]
+    Pending,
+    /// Being paused or resumed now.
+    Entered,
+    /// Paused at a safe point.
+    Paused,
+    /// Started again.
+    Resumed,
+    /// Held: it had nothing running, or another hold keeps it.
+    Held,
+    /// Its outcome is not known. It needs a look.
+    Unknown,
+}
+
+/// One member chat in the last Pause or Resume.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+pub struct MemberLine {
+    /// The chat, as the user knows it.
+    pub title: String,
+    /// Where it is.
+    pub state: MemberState,
+    /// Why, when the service said.
+    pub reason: Option<String>,
+}
+
+/// A mission's Pause control, with the user's own request.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+pub struct ControlView {
+    /// The control as the service last reported it.
+    pub state: ControlState,
+    /// Changes whenever the control changes. Pause and Resume name it.
+    pub revision: u32,
+    /// Whether a Pause still holds the mission's work.
+    pub held: bool,
+    /// While paused: the Pause a Resume must name.
+    pub pause_operation_id: Option<String>,
+    /// Where the user's own request is.
+    pub delivery: Delivery,
+    /// What the user's request asks, while it is sending, unknown or checking.
+    pub asked: Option<ControlAsk>,
+    /// Member chats in the last Pause or Resume this app saw.
+    pub members: Vec<MemberLine>,
+    /// Problems the service reported, exactly as written.
+    pub issues: Vec<String>,
+    /// Whether the last Pause or Resume ended with work that needs a look.
+    pub needs_look: bool,
+    /// Whether Pause can be asked now: a live read, nothing in flight, running.
+    pub can_pause: bool,
+    /// Whether Resume can be asked now: a live read, nothing in flight, paused.
+    pub can_resume: bool,
 }
 
 /// What an intent did.
@@ -197,10 +361,79 @@ pub struct MissionRow {
     pub line: String,
     /// The decision it waits for, if any.
     pub decision_id: Option<String>,
-    /// Its current stage, such as "Stage 2 of 5 · History and images".
+    /// Its current stage, such as "History and images". Empty when unknown.
     pub stage: String,
     /// Its tasks by state.
     pub progress: Progress,
+    /// The newest current report, else the newest report. None before any.
+    pub report: Option<ReportLine>,
+    /// Its Pause control.
+    pub control: ControlView,
+    /// Member chats working now. Activity, not progress.
+    pub working: u32,
+}
+
+/// A task of a mission, with its agent's latest report.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+pub struct TaskLine {
+    /// Stable for the task's life.
+    pub id: String,
+    /// The task's number in its mission.
+    pub number: u32,
+    /// The task's title.
+    pub title: String,
+    /// Its status, as the mission records it.
+    pub status: TaskStatus,
+    /// Its agent's latest report, if any.
+    pub report: Option<ReportLine>,
+}
+
+/// A task's status, as the mission records it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+pub enum TaskStatus {
+    /// Not started.
+    #[default]
+    Todo,
+    /// Being worked on.
+    InProgress,
+    /// Stopped.
+    Blocked,
+    /// Waiting for review.
+    InReview,
+    /// Someone else owns it.
+    Delegated,
+    /// Done.
+    Done,
+    /// A status this build does not know.
+    Unknown,
+}
+
+/// A chat working on a mission now. Supporting detail, not progress.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+pub struct ChatLine {
+    /// Stable for the chat's life.
+    pub id: String,
+    /// The chat's title.
+    pub title: String,
+    /// When its current work started, such as "12 min ago".
+    pub since: String,
+}
+
+/// One mission in full: its row, tasks, reports, control and chats.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+pub struct MissionPage {
+    /// The same row Today shows.
+    pub row: MissionRow,
+    /// What the mission is for. Empty when unknown.
+    pub goal: String,
+    /// Whether the task list could be read.
+    pub tasks_known: bool,
+    /// Its tasks in order, dropped tasks left out.
+    pub tasks: Vec<TaskLine>,
+    /// Chats working on it now.
+    pub chats: Vec<ChatLine>,
+    /// How fresh the read is.
+    pub freshness: Freshness,
 }
 
 /// One result since the user last looked.
@@ -246,10 +479,15 @@ pub struct Today {
     pub notes: Vec<String>,
     /// What waits for the user, in order.
     pub decisions: Vec<Decision>,
-    /// Missions that agents are working on.
+    /// How fresh the read is. Everything below is from that read.
+    pub freshness: Freshness,
+    /// Missions a current agent report says are moving.
     pub moving: Vec<MissionRow>,
-    /// Missions that wait, are paused or start later.
+    /// Missions a current agent report says are not moving, and paused or
+    /// pausing missions.
     pub not_moving: Vec<MissionRow>,
+    /// Missions with no current report. Not the same as not moving.
+    pub unreported: Vec<MissionRow>,
     /// When the user last looked, such as "at 09:15".
     pub last_looked: String,
     /// Results since the user last looked. Limited to the newest 20.
@@ -292,6 +530,36 @@ pub struct AskIntent {
     pub decision_id: String,
     /// The question, as the user wrote it.
     pub question: String,
+}
+
+/// Pause all of a mission's work.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[prop(exact)]
+pub struct PauseIntent {
+    /// The mission.
+    pub mission_id: String,
+    /// The control's revision the screen showed.
+    pub revision: u32,
+}
+
+/// Resume the work one Pause paused.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[prop(exact)]
+pub struct ResumeIntent {
+    /// The mission.
+    pub mission_id: String,
+    /// The control's revision the screen showed.
+    pub revision: u32,
+    /// The Pause the screen showed. Only its work resumes.
+    pub pause_operation_id: String,
+}
+
+/// Name one mission.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[prop(exact)]
+pub struct MissionRef {
+    /// The mission.
+    pub mission_id: String,
 }
 
 /// What an intent did.

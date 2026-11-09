@@ -33,3 +33,34 @@ test("Today in a narrow window", async () => {
 	await app.waitFor("2 integration tests fail on Linux");
 	await app.screenshot("output/trouble-light-480.png");
 });
+
+test("Mission overview in light, dark and a narrow window", async () => {
+	for (const [colorScheme, width] of [
+		["light", 1100],
+		["dark", 1100],
+		["light", 480],
+	] as const) {
+		const app = await open("./Trouble.tsx", { platform: "macos", width, height: 900, colorScheme });
+		await app.waitFor("Paused. Nothing in it runs until you resume it.");
+		await app.screenshot(`output/missions-${colorScheme}-${width}.png`);
+		await app.press("id:mission-native");
+		await app.press("role:button[Pause mission]");
+		await app.press("id:pause >> role:button[Pause]");
+		await app.waitFor("Pausing did not finish everywhere. Some work needs a look.");
+		await app.screenshot(`output/mission-pausing-${colorScheme}-${width}.png`);
+	}
+});
+
+test("Today offline and unreadable", async () => {
+	const offline = await open("./Offline.tsx", { platform: "macos", width: 1100, height: 900 });
+	await offline.waitFor("Offline. Pilot's service is not answering. Showing what Pilot read 6 min ago.");
+	await offline.screenshot("output/today-offline-1100.png");
+	const unreadable = await open("./Unreadable.tsx", {
+		platform: "macos",
+		width: 480,
+		height: 900,
+		colorScheme: "dark",
+	});
+	await unreadable.waitFor("Today could not be read.");
+	await unreadable.screenshot("output/today-unreadable-dark-480.png");
+});

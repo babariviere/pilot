@@ -1,0 +1,8 @@
+// The decisions world, but Pilot's service stopped answering 6 minutes ago:
+// the last read stays visible, and Pause and Resume wait for a fresh one.
+import { mount } from "nsh";
+import { DayScreen } from "./DayScreen";
+import { openDay } from "./day";
+
+const day = openDay("offline");
+mount(() => <DayScreen day={day} />);

@@ -1,17 +1,24 @@
 //! The single owner of the Today read model, with no UI and no JS. Each
-//! intent is checked against the decision's revision and delivery state
-//! before anything changes. For now a mock coordinator answers; in
-//! production this is where the daemon adapter would sit, behind the same
-//! two-step begin/settle shape.
+//! intent is checked against the revision and delivery state it names
+//! before anything changes. Missions are projected from the daemon's v1
+//! reads (`DayOverview`, `MissionDetail`, control receipts). For now a mock
+//! coordinator and a mock daemon answer; in production this is where the
+//! daemon adapter sits, behind the same two-step begin/settle shape.
 
 use std::time::Duration;
 
 use crate::{
-    fixture::{Ack, World, world},
-    model::{
-        Answer, AskIntent, DecideIntent, Decision, DecisionKind, DecisionRef, Delivery, DoneEntry,
-        Evidence, IntentOutcome, MissionState, OutcomeStatus, Scenario, Today, Tone,
+    contract::{
+        self as c, ControlAction, ControlCommand, ControlMember, ControlOperation, DayOverview,
+        MissionDetail, OperationState, ReportView,
     },
+    fixture::{self, Ack, ControlAck, NOW, World, world},
+    model::{
+        Answer, AskIntent, ControlAsk, DecideIntent, Decision, DecisionKind, DecisionRef, Delivery,
+        DoneEntry, Evidence, FreshnessState, IntentOutcome, MissionPage, MissionRef, OutcomeStatus,
+        PauseIntent, ResumeIntent, Scenario, Today, Tone,
+    },
+    project::{self, ControlLocal, Inputs},
 };
 
 /// The most results Today keeps. Older ones are counted, not sent.
@@ -39,9 +46,30 @@ pub fn limit_done(today: &mut Today) {
 #[derive(Debug, Clone)]
 pub struct Desk {
     today: Today,
+    overview: Option<DayOverview>,
+    details: Vec<MissionDetail>,
+    freshness: (FreshnessState, String),
+    now: u64,
+    local: Vec<(String, ControlLocal)>,
+    /// Receipts the mock daemon saved, by operation. Lookups read them;
+    /// nothing here executes a command twice.
+    daemon_ops: Vec<ControlOperation>,
+    next_operation: u32,
     acks: Vec<(String, Ack)>,
+    control_acks: Vec<(String, ControlAck)>,
     answers: Vec<(String, String)>,
     pulses: u32,
+}
+
+/// A Pause or Resume that was recorded and sent, and waits for its answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartedControl {
+    /// The mission.
+    pub mission_id: String,
+    /// The operation, recorded before the send.
+    pub operation_id: String,
+    /// How the mock daemon will answer.
+    pub ack: ControlAck,
 }
 
 /// A started intent that waits for the coordinator.
@@ -63,12 +91,92 @@ impl Desk {
     pub fn from_world(world: World) -> Self {
         let mut today = world.today;
         limit_done(&mut today);
-        Desk {
+        let mut desk = Desk {
             today,
+            overview: world.overview,
+            details: world.details,
+            freshness: (world.freshness.0, world.freshness.1.to_owned()),
+            now: NOW,
+            local: Vec::new(),
+            daemon_ops: Vec::new(),
+            next_operation: 0,
             acks: world.acks,
+            control_acks: world.control_acks,
             answers: world.answers,
             pulses: 0,
-        }
+        };
+        desk.project();
+        desk
+    }
+
+    /// Projects missions and freshness from the reads into the read model.
+    fn project(&mut self) {
+        self.today.freshness = project::freshness(
+            self.freshness.0,
+            self.overview.as_ref().map(|o| o.observed_at),
+            &self.freshness.1,
+            self.now,
+        );
+        let groups = match &self.overview {
+            Some(overview) => project::missions(&Inputs {
+                overview,
+                details: &self.details,
+                decisions: &self.today.decisions,
+                local: &self.local,
+                live: self.live(),
+                now: self.now,
+            }),
+            None => project::Groups::default(),
+        };
+        self.today.moving = groups.moving;
+        self.today.not_moving = groups.not_moving;
+        self.today.unreported = groups.unreported;
+    }
+
+    /// Whether the read is live. Controls need it.
+    fn live(&self) -> bool {
+        self.freshness.0 == FreshnessState::Live && self.overview.is_some()
+    }
+
+    /// Takes a new, complete read. It replaces the last one; local requests
+    /// still waiting keep their state.
+    pub fn apply_overview(&mut self, overview: DayOverview) -> Result<(), c::ReadError> {
+        c::check_overview(&overview)?;
+        self.now = self.now.max(overview.observed_at);
+        self.overview = Some(overview);
+        self.freshness = (FreshnessState::Live, String::new());
+        self.changed();
+        Ok(())
+    }
+
+    /// Marks the read as no longer live, keeping it on screen: `state` is
+    /// stale, offline or unreadable, with `reason` in a few words.
+    pub fn lose_read(&mut self, state: FreshnessState, reason: &str) {
+        self.freshness = (state, reason.to_owned());
+        self.changed();
+    }
+
+    /// Moves the clock to `now` (epoch ms). Ages and expiry follow it.
+    pub fn set_now(&mut self, now: u64) {
+        self.now = now;
+        self.changed();
+    }
+
+    /// The overview of mission `id`, or None when it is not in the read.
+    pub fn mission(&self, id: &str) -> Option<MissionPage> {
+        let overview = self.overview.as_ref()?;
+        project::page(
+            &Inputs {
+                overview,
+                details: &self.details,
+                decisions: &self.today.decisions,
+                local: &self.local,
+                live: self.live(),
+                now: self.now,
+            },
+            id,
+            self.today.freshness.clone(),
+        )
     }
 
     /// The read model.
@@ -86,6 +194,7 @@ impl Desk {
 
     fn changed(&mut self) {
         self.today.revision += 1;
+        self.project();
     }
 
     fn position(&self, id: &str) -> Option<usize> {
@@ -149,6 +258,7 @@ impl Desk {
         let decision = self.touch(at);
         decision.delivery = Delivery::Sending;
         decision.sent_option = Some(intent.option_id.clone());
+        self.project();
         Ok(Started {
             decision_id: intent.decision_id.clone(),
             ack,
@@ -176,13 +286,14 @@ impl Desk {
                     "{} has your answer: {label}.",
                     decision.mission_title
                 ));
-                self.resume_mission(&decision, "Back on it after your answer.");
+                self.coordinator_reports(&decision.mission_id, "Back on it after your answer.");
                 self.changed();
                 self.outcome(OutcomeStatus::Accepted, "")
             }
             Ack::Lose => {
                 let decision = self.touch(at);
                 decision.delivery = Delivery::Unknown;
+                self.project();
                 self.outcome(
                     OutcomeStatus::Unknown,
                     "Pilot sent your answer but heard nothing back. It will check before it sends anything again.",
@@ -221,6 +332,7 @@ impl Desk {
         }
         let decision = self.touch(at);
         decision.delivery = Delivery::Checking;
+        self.project();
         Ok(Started {
             decision_id: intent.decision_id.clone(),
             ack: Ack::Confirm,
@@ -242,7 +354,7 @@ impl Desk {
         self.today
             .notes
             .push(format!("Checked {}: {what}.", decision.mission_title));
-        self.resume_mission(&decision, "Confirmed. Back on it.");
+        self.coordinator_reports(&decision.mission_id, "Confirmed. Back on it.");
         self.changed();
         self.outcome(OutcomeStatus::Accepted, "")
     }
@@ -287,68 +399,430 @@ impl Desk {
         self.outcome(OutcomeStatus::Accepted, "")
     }
 
-    fn resume_mission(&mut self, decision: &Decision, line: &str) {
-        let Some(at) = self
-            .today
-            .not_moving
-            .iter()
-            .position(|m| m.decision_id.as_deref() == Some(decision.id.as_str()))
-        else {
+    /// The mock coordinator reports its mission moving again, as a real
+    /// coordinator would after an answer. Movement only ever comes from a
+    /// report; answering a decision alone moves nothing.
+    fn coordinator_reports(&mut self, mission_id: &str, summary: &str) {
+        let now = self.now;
+        let Some(overview) = self.overview.as_mut() else {
             return;
         };
-        let mut mission = self.today.not_moving.remove(at);
-        // Another decision may still hold the mission.
-        if let Some(next) = self
-            .today
-            .decisions
+        let mut view: ReportView = fixture::report(&fixture::ReportSpec {
+            mission: mission_id,
+            task: &format!("{mission_id}-coordination"),
+            by: &format!("c-{mission_id}"),
+            minutes_ago: 0,
+            movement: c::Movement::Moving,
+            currentness: c::Currentness::Current,
+            summary,
+            next: "Go on within the agreement.",
+            evidence: &[],
+        });
+        view.report.reported_at = now;
+        overview.reports.push(view);
+    }
+
+    fn local(&self, mission_id: &str) -> Option<&ControlLocal> {
+        self.local
             .iter()
-            .find(|d| d.mission_id == mission.id)
-        {
-            mission.decision_id = Some(next.id.clone());
-            self.today.not_moving.insert(at, mission);
-            return;
+            .find(|(id, _)| id == mission_id)
+            .map(|(_, local)| local)
+    }
+
+    fn local_mut(&mut self, mission_id: &str) -> &mut ControlLocal {
+        let at = match self.local.iter().position(|(id, _)| id == mission_id) {
+            Some(at) => at,
+            None => {
+                self.local
+                    .push((mission_id.to_owned(), ControlLocal::default()));
+                self.local.len() - 1
+            }
+        };
+        &mut self.local[at].1
+    }
+
+    /// Checks a Pause or Resume against the read the screen showed, then
+    /// records its command before anything is sent.
+    fn begin_control(
+        &mut self,
+        mission_id: &str,
+        revision: u32,
+        ask: ControlAsk,
+        pause_operation_id: Option<&str>,
+    ) -> Result<StartedControl, IntentOutcome> {
+        if !self.live() {
+            return Err(self.outcome(
+                OutcomeStatus::Rejected,
+                "Pilot needs a fresh read before it can pause or resume. Nothing was sent.",
+            ));
         }
-        mission.state = MissionState::Moving;
-        mission.decision_id = None;
-        // The task that waited on the decision is being worked on again.
-        mission.progress.active += mission.progress.blocked;
-        mission.progress.blocked = 0;
-        line.clone_into(&mut mission.line);
-        self.today.moving.push(mission);
+        let overview = self.overview.as_ref().expect("a live read");
+        let Some(mission) = overview
+            .dashboard
+            .missions
+            .items
+            .iter()
+            .find(|m| m.id == mission_id)
+        else {
+            return Err(self.outcome(OutcomeStatus::Stale, "This mission is no longer active."));
+        };
+        match self
+            .local(mission_id)
+            .map_or(Delivery::Idle, |l| l.delivery)
+        {
+            Delivery::Idle => {}
+            Delivery::Sending => {
+                return Err(
+                    self.outcome(OutcomeStatus::Rejected, "A request is already on its way.")
+                );
+            }
+            Delivery::Unknown | Delivery::Checking => {
+                return Err(self.outcome(
+                    OutcomeStatus::Rejected,
+                    "Pilot must check the earlier request first. It never sends twice without checking.",
+                ));
+            }
+        }
+        let Some(control) = overview
+            .controls
+            .iter()
+            .find(|c| c.mission_id == mission_id)
+        else {
+            return Err(self.outcome(
+                OutcomeStatus::Rejected,
+                "Pilot cannot read this mission's controls. Nothing was sent.",
+            ));
+        };
+        if control.revision != u64::from(revision) {
+            return Err(self.outcome(
+                OutcomeStatus::Stale,
+                "This mission's controls changed. Read them again.",
+            ));
+        }
+        match ask {
+            ControlAsk::Pause if control.state != c::ControlState::Running || control.held => {
+                return Err(self.outcome(OutcomeStatus::Rejected, "This mission is not running."));
+            }
+            ControlAsk::Resume
+                if control.state != c::ControlState::Paused
+                    || control.pause_operation_id.as_deref() != pause_operation_id =>
+            {
+                return Err(self.outcome(
+                    OutcomeStatus::Stale,
+                    "Only the Pause shown can be resumed. Read the mission again.",
+                ));
+            }
+            _ => {}
+        }
+        self.next_operation += 1;
+        let command = ControlCommand {
+            version: 1,
+            // Production uses a random UUID, saved durably before the send.
+            operation_id: format!("op-{mission_id}-{}", self.next_operation),
+            home: fixture::home(),
+            project_id: overview.project_id.clone(),
+            coordinator_session_id: mission.coordinator_session_id.clone(),
+            expected_revision: control.revision,
+            action: match ask {
+                ControlAsk::Pause => ControlAction::Pause,
+                ControlAsk::Resume => ControlAction::Resume,
+            },
+            pause_operation_id: pause_operation_id.map(str::to_owned),
+        };
+        let ack = self
+            .control_acks
+            .iter()
+            .find(|(id, _)| id == mission_id)
+            .map_or(ControlAck::Acknowledge, |(_, ack)| *ack);
+        let started = StartedControl {
+            mission_id: mission_id.to_owned(),
+            operation_id: command.operation_id.clone(),
+            ack,
+        };
+        let local = self.local_mut(mission_id);
+        local.delivery = Delivery::Sending;
+        local.asked = Some(ask);
+        local.command = Some(command);
+        self.changed();
+        Ok(started)
+    }
+
+    /// Checks a Pause intent and records its command.
+    pub fn begin_pause(&mut self, intent: &PauseIntent) -> Result<StartedControl, IntentOutcome> {
+        self.begin_control(&intent.mission_id, intent.revision, ControlAsk::Pause, None)
+    }
+
+    /// Checks a Resume intent and records its command. Only the Pause the
+    /// screen showed may resume.
+    pub fn begin_resume(&mut self, intent: &ResumeIntent) -> Result<StartedControl, IntentOutcome> {
+        self.begin_control(
+            &intent.mission_id,
+            intent.revision,
+            ControlAsk::Resume,
+            Some(&intent.pause_operation_id),
+        )
+    }
+
+    /// The mock daemon runs a command once and saves its receipt, the way
+    /// the real one answers `POST /api/missions/:id/controls`.
+    fn daemon_execute(
+        &mut self,
+        command: &ControlCommand,
+        mission_id: &str,
+        ack: ControlAck,
+    ) -> ControlOperation {
+        let overview = self.overview.as_ref().expect("a read");
+        let prior = overview
+            .controls
+            .iter()
+            .find(|c| c.mission_id == mission_id)
+            .cloned()
+            .expect("a control");
+        let mut sessions: Vec<String> = Vec::new();
+        let mut add = |id: &str| {
+            if !sessions.iter().any(|s| s == id) {
+                sessions.push(id.to_owned());
+            }
+        };
+        let working: Vec<&str> = overview
+            .dashboard
+            .working
+            .items
+            .iter()
+            .filter(|w| w.mission_id.as_deref() == Some(mission_id))
+            .map(|w| w.session_id.as_str())
+            .collect();
+        if let Some(coordinator) = overview
+            .dashboard
+            .missions
+            .items
+            .iter()
+            .find(|m| m.id == mission_id)
+            .and_then(|m| m.coordinator_session_id.as_deref())
+        {
+            add(coordinator);
+        }
+        for id in &working {
+            add(id);
+        }
+        for task in self
+            .details
+            .iter()
+            .filter(|d| d.mission.id == mission_id)
+            .flat_map(|d| d.tasks.iter())
+        {
+            if let Some(id) = task.session_id.as_deref() {
+                add(id);
+            }
+        }
+        let pause = command.action == ControlAction::Pause;
+        let inspect = ack == ControlAck::Inspect;
+        let mut flagged = false;
+        let members = sessions
+            .into_iter()
+            .map(|session_id| {
+                let busy = working.contains(&session_id.as_str());
+                let (state, reason) = if inspect && busy && !flagged {
+                    flagged = true;
+                    (
+                        c::MemberState::Unknown,
+                        Some("The chat did not confirm its checkpoint.".to_owned()),
+                    )
+                } else if !busy {
+                    (c::MemberState::Held, None)
+                } else if pause {
+                    (c::MemberState::Paused, None)
+                } else {
+                    (c::MemberState::Resumed, None)
+                };
+                ControlMember {
+                    session_id,
+                    state,
+                    reason,
+                }
+            })
+            .collect();
+        let acknowledged = !inspect;
+        let control = c::Control {
+            revision: prior.revision + 2,
+            pause_generation: prior.pause_generation + u64::from(pause),
+            held: pause || !acknowledged,
+            state: match (pause, acknowledged) {
+                (true, true) => c::ControlState::Paused,
+                (true, false) => c::ControlState::Pausing,
+                (false, true) => c::ControlState::Running,
+                (false, false) => c::ControlState::Unknown,
+            },
+            operation_id: Some(command.operation_id.clone()),
+            pause_operation_id: if pause {
+                Some(command.operation_id.clone())
+            } else {
+                command.pause_operation_id.clone()
+            },
+            ..prior
+        };
+        let receipt = ControlOperation {
+            version: 1,
+            mission_id: mission_id.to_owned(),
+            command: command.clone(),
+            control,
+            members,
+            issues: Vec::new(),
+            state: if acknowledged {
+                OperationState::Acknowledged
+            } else {
+                OperationState::Unknown
+            },
+        };
+        self.daemon_ops.push(receipt.clone());
+        receipt
+    }
+
+    /// Takes a receipt: the control it reports replaces the read's, and the
+    /// user's request is settled.
+    fn apply_receipt(&mut self, receipt: ControlOperation) -> IntentOutcome {
+        let needs_look = receipt.state != OperationState::Acknowledged;
+        if let Some(overview) = self.overview.as_mut()
+            && let Some(control) = overview
+                .controls
+                .iter_mut()
+                .find(|c| c.mission_id == receipt.mission_id)
+            && receipt.control.revision >= control.revision
+        {
+            *control = receipt.control.clone();
+        }
+        let local = self.local_mut(&receipt.mission_id.clone());
+        local.delivery = Delivery::Idle;
+        local.asked = None;
+        local.command = None;
+        local.receipt = Some(receipt);
+        self.changed();
+        if needs_look {
+            self.outcome(
+                OutcomeStatus::Unknown,
+                "It did not finish everywhere. Some work needs a look before anything else is sent.",
+            )
+        } else {
+            self.outcome(OutcomeStatus::Accepted, "")
+        }
+    }
+
+    /// Applies the mock daemon's answer to a started Pause or Resume.
+    pub fn settle_control(&mut self, started: &StartedControl) -> IntentOutcome {
+        let Some(command) = self
+            .local(&started.mission_id)
+            .and_then(|l| l.command.clone())
+            .filter(|c| c.operation_id == started.operation_id)
+        else {
+            return self.outcome(OutcomeStatus::Unknown, "Pilot lost track of this request.");
+        };
+        let receipt = self.daemon_execute(&command, &started.mission_id, started.ack);
+        if started.ack == ControlAck::Lose {
+            self.local_mut(&started.mission_id).delivery = Delivery::Unknown;
+            self.changed();
+            return self.outcome(
+                OutcomeStatus::Unknown,
+                "Pilot asked but heard nothing back. It will not ask again until it checks.",
+            );
+        }
+        self.apply_receipt(receipt)
+    }
+
+    /// Starts a read-only lookup of a request whose answer was lost.
+    pub fn begin_check_control(&mut self, intent: &MissionRef) -> Result<String, IntentOutcome> {
+        let Some(operation_id) = self
+            .local(&intent.mission_id)
+            .filter(|l| l.delivery == Delivery::Unknown)
+            .and_then(|l| l.command.as_ref())
+            .map(|c| c.operation_id.clone())
+        else {
+            return Err(self.outcome(OutcomeStatus::Rejected, "There is nothing to check."));
+        };
+        self.local_mut(&intent.mission_id).delivery = Delivery::Checking;
+        self.changed();
+        Ok(operation_id)
+    }
+
+    /// Applies what the lookup read. It never sends the command again.
+    pub fn settle_check_control(&mut self, mission_id: &str, operation_id: &str) -> IntentOutcome {
+        let found = self
+            .daemon_ops
+            .iter()
+            .find(|op| op.command.operation_id == operation_id)
+            .cloned();
+        match found {
+            Some(receipt) if receipt.state == OperationState::Entered => {
+                self.local_mut(mission_id).delivery = Delivery::Unknown;
+                self.changed();
+                self.outcome(
+                    OutcomeStatus::Unknown,
+                    "It is still in progress. Check again in a moment.",
+                )
+            }
+            Some(receipt) => self.apply_receipt(receipt),
+            None => {
+                let local = self.local_mut(mission_id);
+                local.delivery = Delivery::Idle;
+                local.asked = None;
+                local.command = None;
+                self.changed();
+                self.outcome(
+                    OutcomeStatus::Accepted,
+                    "Pilot found no record of that request. Nothing changed.",
+                )
+            }
+        }
     }
 
     /// One step of the update workload, the same for both Today screens:
-    /// the next moving mission (in turn) moves one task on and says so,
-    /// and every fourth step adds a result at the top. Decisions do not
-    /// change, so a pulse never races an intent. Returns the step's number.
+    /// the next moving mission (in turn) moves one task on and its agent's
+    /// newest report says so, and every fourth step adds a result at the
+    /// top. Decisions do not change, so a pulse never races an intent.
+    /// Returns the step's number.
     pub fn pulse(&mut self) -> u32 {
         self.pulses += 1;
         let step = self.pulses;
         let rows = if self.today.moving.is_empty() {
-            &mut self.today.not_moving
+            &self.today.not_moving
         } else {
-            &mut self.today.moving
+            &self.today.moving
         };
-        if !rows.is_empty() {
-            let at = (step as usize - 1) % rows.len();
-            let row = &mut rows[at];
-            let p = &mut row.progress;
-            if p.todo > 0 {
-                p.todo -= 1;
-                p.active += 1;
-            } else if p.active > 0 {
-                p.active -= 1;
-                p.done += 1;
-            } else {
-                p.todo = p.done;
-                p.done = 0;
+        if let (Some(overview), false) = (self.overview.as_mut(), rows.is_empty()) {
+            let row = &rows[(step as usize - 1) % rows.len()];
+            let (id, title) = (row.id.clone(), row.title.clone());
+            if let Some(m) = overview
+                .dashboard
+                .missions
+                .items
+                .iter_mut()
+                .find(|m| m.id == id)
+            {
+                let counted =
+                    m.tasks_done + m.tasks_in_review + m.tasks_in_progress + m.tasks_blocked;
+                if m.tasks_total > counted {
+                    m.tasks_in_progress += 1;
+                } else if m.tasks_in_progress > 0 {
+                    m.tasks_in_progress -= 1;
+                    m.tasks_done += 1;
+                } else {
+                    m.tasks_done = 0;
+                }
             }
-            row.line = format!("Working on update {step}.");
+            if let Some(view) = overview
+                .reports
+                .iter_mut()
+                .filter(|v| v.report.mission_id == id)
+                .max_by_key(|v| v.report.reported_at)
+            {
+                view.report.write.summary = format!("Working on update {step}.");
+                view.report.reported_at = self.now;
+                view.currentness = c::Currentness::Current;
+            }
             if step.is_multiple_of(4) {
                 let entry = DoneEntry {
                     id: format!("pulse-{step}"),
                     text: format!("Update {step} landed with its checks."),
-                    mission_title: row.title.clone(),
+                    mission_title: title,
                     evidence: vec![Evidence {
                         label: format!("{step:07x}"),
                         tone: Tone::Neutral,
@@ -474,9 +948,10 @@ mod tests {
         let desk = Desk::new(Scenario::Large);
         assert_eq!(desk.today().done.len(), DONE_LIMIT);
         assert_eq!(desk.today().done_hidden, 103);
+        let today = desk.today();
         assert_eq!(
-            desk.today().moving.len() + desk.today().not_moving.len(),
-            203
+            today.moving.len() + today.not_moving.len() + today.unreported.len(),
+            204
         );
     }
 
@@ -504,5 +979,288 @@ mod tests {
             again.pulse();
         }
         assert_eq!(again.today(), after);
+    }
+
+    fn ids(rows: &[crate::model::MissionRow]) -> Vec<&str> {
+        rows.iter().map(|r| r.id.as_str()).collect()
+    }
+
+    fn row<'a>(desk: &'a Desk, id: &str) -> &'a crate::model::MissionRow {
+        let t = desk.today();
+        t.moving
+            .iter()
+            .chain(&t.not_moving)
+            .chain(&t.unreported)
+            .find(|r| r.id == id)
+            .unwrap()
+    }
+
+    fn pause(desk: &Desk, id: &str) -> PauseIntent {
+        PauseIntent {
+            mission_id: id.into(),
+            revision: row(desk, id).control.revision,
+        }
+    }
+
+    #[test]
+    fn missions_move_only_on_current_agent_reports() {
+        use crate::model::{Currentness, MissionState};
+        let desk = Desk::new(Scenario::Decisions);
+        let t = desk.today();
+        assert_eq!(ids(&t.moving), ["search"]);
+        assert_eq!(ids(&t.not_moving), ["native", "notify"]);
+        // Working chats and task counts are not movement, and a missing
+        // report is not "not moving".
+        assert_eq!(ids(&t.unreported), ["docs"]);
+        assert_eq!(row(&desk, "docs").state, MissionState::Unreported);
+        assert_eq!(row(&desk, "docs").working, 1);
+        let search = row(&desk, "search").report.clone().unwrap();
+        assert_eq!(search.age, "12 min ago");
+        assert!(!search.by_coordinator);
+        assert_eq!(search.evidence, ["7c1e04a", "Benchmark chart"]);
+        assert_eq!(row(&desk, "native").state, MissionState::Waiting);
+
+        let quiet = Desk::new(Scenario::Quiet);
+        let notify = row(&quiet, "notify");
+        assert_eq!(ids(&quiet.today().unreported), ["notify"]);
+        assert_eq!(
+            notify.report.as_ref().unwrap().currentness,
+            Currentness::Unavailable
+        );
+
+        let trouble = Desk::new(Scenario::Trouble);
+        let notify = row(&trouble, "notify");
+        assert_eq!(notify.state, MissionState::Paused);
+        assert_eq!(
+            notify.report.as_ref().unwrap().currentness,
+            Currentness::Stale
+        );
+        assert_eq!(notify.report.as_ref().unwrap().age, "yesterday");
+        assert!(trouble.today().not_moving.iter().any(|r| r.id == "notify"));
+        assert_eq!(row(&trouble, "search").state, MissionState::Stuck);
+    }
+
+    #[test]
+    fn a_pause_is_pausing_until_its_receipt_says_paused() {
+        use crate::model::{ControlState, MemberState, MissionState};
+        let mut desk = Desk::new(Scenario::Decisions);
+        let intent = pause(&desk, "search");
+        let started = desk.begin_pause(&intent).unwrap();
+        let search = row(&desk, "search");
+        assert_eq!(search.state, MissionState::Pausing);
+        assert_eq!(search.control.state, ControlState::Running);
+        assert!(!search.control.can_pause && !search.control.can_resume);
+        assert!(desk.today().not_moving.iter().any(|r| r.id == "search"));
+        let command = desk.local("search").unwrap().command.clone().unwrap();
+        assert_eq!(command.coordinator_session_id.as_deref(), Some("c-search"));
+        assert_eq!(
+            (command.expected_revision, command.project_id.as_str()),
+            (0, "mock-project")
+        );
+        assert_eq!(command.home, crate::fixture::home());
+        // A second Pause while the first is on its way is refused.
+        let again = desk.begin_pause(&intent).unwrap_err();
+        assert_eq!(again.status, OutcomeStatus::Rejected);
+
+        assert_eq!(
+            desk.settle_control(&started).status,
+            OutcomeStatus::Accepted
+        );
+        let search = row(&desk, "search");
+        assert_eq!(search.state, MissionState::Paused);
+        assert_eq!(search.control.state, ControlState::Paused);
+        assert!(search.control.can_resume && !search.control.needs_look);
+        assert_eq!(
+            search.control.pause_operation_id.as_deref(),
+            Some(started.operation_id.as_str())
+        );
+        let members: Vec<_> = search
+            .control
+            .members
+            .iter()
+            .map(|m| (m.title.as_str(), m.state))
+            .collect();
+        assert_eq!(
+            members,
+            [
+                ("Coordinator", MemberState::Held),
+                ("#3 Integration tests on Linux", MemberState::Paused),
+            ]
+        );
+    }
+
+    #[test]
+    fn resume_names_the_exact_pause_and_only_a_report_moves_it_again() {
+        use crate::model::MissionState;
+        let mut desk = Desk::new(Scenario::Trouble);
+        let notify = row(&desk, "notify").control.clone();
+        let wrong = desk
+            .begin_resume(&ResumeIntent {
+                mission_id: "notify".into(),
+                revision: notify.revision,
+                pause_operation_id: "op-other".into(),
+            })
+            .unwrap_err();
+        assert_eq!(wrong.status, OutcomeStatus::Stale);
+        let started = desk
+            .begin_resume(&ResumeIntent {
+                mission_id: "notify".into(),
+                revision: notify.revision,
+                pause_operation_id: notify.pause_operation_id.clone().unwrap(),
+            })
+            .unwrap();
+        assert_eq!(row(&desk, "notify").state, MissionState::Resuming);
+        let command = desk.local("notify").unwrap().command.clone().unwrap();
+        assert_eq!(command.pause_operation_id.as_deref(), Some("op-earlier"));
+        assert_eq!(
+            desk.settle_control(&started).status,
+            OutcomeStatus::Accepted
+        );
+        // Running again, but its only report is old: not reported, not moving.
+        assert_eq!(row(&desk, "notify").state, MissionState::Unreported);
+        assert!(desk.today().unreported.iter().any(|r| r.id == "notify"));
+    }
+
+    #[test]
+    fn a_lost_answer_stays_unknown_and_a_check_only_reads() {
+        use crate::model::{ControlState, MissionState};
+        let mut desk = Desk::new(Scenario::Trouble);
+        let started = desk.begin_pause(&pause(&desk, "release")).unwrap();
+        assert_eq!(desk.settle_control(&started).status, OutcomeStatus::Unknown);
+        let release = row(&desk, "release");
+        assert_eq!(release.state, MissionState::Unconfirmed);
+        assert_eq!(release.control.delivery, Delivery::Unknown);
+        assert_eq!(
+            release.control.state,
+            ControlState::Running,
+            "no answer, no new state"
+        );
+        assert!(!release.control.can_pause);
+        let refused = desk.begin_pause(&pause(&desk, "release")).unwrap_err();
+        assert_eq!(refused.status, OutcomeStatus::Rejected);
+        let mission = MissionRef {
+            mission_id: "release".into(),
+        };
+        let operation = desk.begin_check_control(&mission).unwrap();
+        assert_eq!(operation, started.operation_id);
+        assert_eq!(row(&desk, "release").control.delivery, Delivery::Checking);
+        assert_eq!(
+            desk.settle_check_control("release", &operation).status,
+            OutcomeStatus::Accepted
+        );
+        assert_eq!(row(&desk, "release").state, MissionState::Paused);
+        // The daemon ran the command once; the check only read its receipt.
+        assert_eq!(desk.daemon_ops.len(), 1);
+        assert_eq!(
+            desk.begin_check_control(&mission).unwrap_err().status,
+            OutcomeStatus::Rejected
+        );
+    }
+
+    #[test]
+    fn an_unfinished_pause_stays_pausing_and_needs_a_look() {
+        use crate::model::{MemberState, MissionState};
+        let mut desk = Desk::new(Scenario::Trouble);
+        let started = desk.begin_pause(&pause(&desk, "native")).unwrap();
+        assert_eq!(desk.settle_control(&started).status, OutcomeStatus::Unknown);
+        let native = row(&desk, "native");
+        assert_eq!(native.state, MissionState::Pausing);
+        assert!(native.control.needs_look && native.control.held);
+        assert!(!native.control.can_pause && !native.control.can_resume);
+        assert!(
+            native
+                .control
+                .members
+                .iter()
+                .any(|m| m.state == MemberState::Unknown
+                    && m.reason.as_deref() == Some("The chat did not confirm its checkpoint."))
+        );
+    }
+
+    #[test]
+    fn controls_need_a_live_read_and_the_revision_shown() {
+        let mut desk = Desk::new(Scenario::Decisions);
+        let stale = desk
+            .begin_pause(&PauseIntent {
+                mission_id: "search".into(),
+                revision: 9,
+            })
+            .unwrap_err();
+        assert_eq!(stale.status, OutcomeStatus::Stale);
+        desk.lose_read(FreshnessState::Offline, "Pilot's service is not answering.");
+        assert!(!row(&desk, "search").control.can_pause);
+        let offline = desk.begin_pause(&pause(&desk, "search")).unwrap_err();
+        assert_eq!(offline.status, OutcomeStatus::Rejected);
+        assert!(
+            desk.local("search").is_none(),
+            "nothing was recorded or sent"
+        );
+
+        let offline = Desk::new(Scenario::Offline);
+        assert_eq!(offline.today().freshness.state, FreshnessState::Offline);
+        assert_eq!(offline.today().freshness.age, "6 min ago");
+        assert_eq!(
+            ids(&offline.today().moving),
+            ["search"],
+            "the last read stays visible"
+        );
+
+        let unreadable = Desk::new(Scenario::Unreadable);
+        let t = unreadable.today();
+        assert_eq!(t.freshness.state, FreshnessState::Unreadable);
+        assert!(t.moving.is_empty() && t.not_moving.is_empty() && t.unreported.is_empty());
+        assert!(unreadable.mission("search").is_none());
+    }
+
+    #[test]
+    fn the_mission_page_lists_tasks_reports_and_working_chats() {
+        use crate::model::TaskStatus;
+        let desk = Desk::new(Scenario::Decisions);
+        let page = desk.mission("search").unwrap();
+        assert!(page.tasks_known);
+        assert_eq!(
+            page.goal,
+            "Show search results in under 200 ms for large workspaces."
+        );
+        let tasks: Vec<_> = page
+            .tasks
+            .iter()
+            .map(|t| (t.number, t.status, t.report.is_some()))
+            .collect();
+        assert_eq!(
+            tasks,
+            [
+                (1, TaskStatus::Done, false),
+                (2, TaskStatus::Done, false),
+                (3, TaskStatus::InProgress, true),
+                (4, TaskStatus::Todo, false),
+            ]
+        );
+        assert_eq!(page.chats.len(), 1);
+        assert_eq!(page.chats[0].since, "34 min ago");
+        assert_eq!(page.row.stage, "Verify");
+        let docs = desk.mission("docs").unwrap();
+        assert!(!docs.tasks_known && docs.tasks.is_empty());
+        assert!(desk.mission("nope").is_none());
+    }
+
+    #[test]
+    fn a_new_read_replaces_the_old_one_and_reports_age_with_the_clock() {
+        use crate::model::MissionState;
+        let mut desk = Desk::new(Scenario::Decisions);
+        desk.lose_read(FreshnessState::Offline, "Pilot's service is not answering.");
+        let mut next = desk.overview.clone().unwrap();
+        next.observed_at = NOW + 30 * crate::project::MINUTE;
+        next.reports.retain(|v| v.report.mission_id != "search");
+        desk.apply_overview(next).unwrap();
+        assert_eq!(desk.today().freshness.state, FreshnessState::Live);
+        assert_eq!(row(&desk, "search").state, MissionState::Unreported);
+        assert_eq!(
+            row(&desk, "notify").report.as_ref().unwrap().age,
+            "50 min ago"
+        );
+        let mut bad = desk.overview.clone().unwrap();
+        bad.version = 2;
+        assert!(desk.apply_overview(bad).is_err());
     }
 }

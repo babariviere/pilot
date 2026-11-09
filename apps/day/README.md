@@ -5,8 +5,10 @@ TSX, with its read model and rules in a Rust crate (`native/`). It started as
 the Today spike in `experiments/nsh-day` and now lives here as the only Day
 app source.
 
-Status: Today still runs on **mock data**. Day connects to no daemon, account
-or user data yet. It is not the default app, it is not packaged or released,
+Status: Today still runs on **mock data**. Its missions, agent reports and
+Pause controls arrive as the daemon's v1 contracts
+([mission-controls-reports.md](../../docs/technical/mission-controls-reports.md)),
+read by a mock daemon. Day connects to no daemon, account or user data yet. It is not the default app, it is not packaged or released,
 and it does not change the GPUI or Swift apps or their build. Those apps stay
 the shipping desktop apps until Day passes native acceptance and cutover.
 
@@ -35,9 +37,9 @@ the same as `apps/day/nsh.sh <command>`.
 ```sh
 cd apps/day
 ./nsh.sh run                     # the decisions world, in a native window
-./nsh.sh run Trouble.tsx         # also Quiet.tsx, Large.tsx, Pulse.tsx
+./nsh.sh run Trouble.tsx         # also Quiet.tsx, Large.tsx, Pulse.tsx, Offline.tsx, Unreadable.tsx
 ./nsh.sh check && ./nsh.sh build # types against the Rust declarations, class check
-./nsh.sh test App.test.tsx       # headless flows, boundary and sandbox (11 tests)
+./nsh.sh test App.test.tsx       # headless flows, boundary and sandbox (19 tests)
 ./nsh.sh test Native.test.tsx --target macos  # native captures and input, in output/
 (cd native && cargo test)        # Rust rules and generated declarations
 ```
@@ -61,31 +63,58 @@ results since the user last looked, and what is coming up. A decision card has
 "Say it simpler", "More context", and a question answered inside the card. The
 user picks an option (Pilot's recommendation is preselected) and presses Decide,
 Confirm or Approve, or puts the decision off with Later. Worlds: `decisions`
-(default), `quiet`, `trouble` (a lost confirmation and an unconfirmed push) and
-`large` (203 missions, 123 results). `Pulse.tsx` runs the large world with the
+(default), `quiet`, `trouble` (a lost confirmation, an unconfirmed push, a
+paused mission, a lost Pause answer and a Pause that does not finish
+everywhere), `large` (204 missions, 123 results), `offline` (the last read,
+6 minutes old) and `unreadable` (nothing read).
+
+Missions come only from agent reports. A current report that says moving puts
+a mission under Moving; one that says not moving, or a Pause, under Not
+moving. A mission with no current report (none yet, an old one, or one that
+could not be checked) goes under "No current report", never under Not moving.
+Working chats and task counts are shown as facts, not as movement. Rows show
+who reported and how long ago; named evidence is marked as not checked.
+
+A mission row opens the mission overview (Escape or "‹ Today" goes back): its
+latest report, tasks with their agents' reports, the chats working now, and
+the Pause control. Pause asks first, shows Pausing until the service returns
+a receipt that says paused, and lists each member chat. A Pause that does not
+finish everywhere stays Pausing and names what needs a look. A lost answer
+stays Unconfirmed; only "Check again" settles it, and it only reads. Resume
+names the exact Pause it resumes. Pause and Resume need a live read: offline,
+the last read stays on screen and the controls are off. `Pulse.tsx` runs the large world with the
 shared update workload: `Desk::pulse` moves the next moving mission on every
 100 ms, adds a result every fourth time, and publishes the whole read model,
 300 times. `TodayFeed.pulse` is for measurements only, not a user intent.
 
 Not built yet: keyboard triage, decision visuals ("Show me"), the day
-switcher, New, rituals, Changes, Automations and the sky dither.
+switcher, New, rituals, Changes, Automations, the sky dither, the daemon
+adapter (reads, WebSocket updates and the native host's control POST) and
+opening a chat from the mission overview. Decisions, results and Coming up
+still come from the mock world, not from contracts.
 
 ## Boundary
 
 | Owner | What |
 | --- | --- |
-| Rust (`native/`) | The `Today` read model, every rule for changing it (`Desk`), revisions, delivery state (idle, sending, unknown, checking), and the mock coordinator where a daemon adapter will sit |
+| Rust (`native/`) | The `Today` read model, every rule for changing it (`Desk`), revisions, delivery state (idle, sending, unknown, checking), the v1 contract mirrors (`contract.rs`) and their projection (`project.rs`), control commands, and the mock coordinator and daemon where a daemon adapter will sit |
 | TSX | Layout, copy, and screen state: picked option, open help, question drafts, the decision in front |
 
 TSX imports one class, `TodayFeed`, from `pilot-day/native`. Its generated
 declarations (`.nsh/types/pilot-day/native.d.ts`) are the whole contract:
 
-- Read: `snapshot(): Today` and `onChange(listener): () => void`. TSX mirrors the
-  model in one signal that only the listener sets.
-- Intents: `decide(DecideIntent)`, `later(DecisionRef)`, `check(DecisionRef)` and
-  `ask(AskIntent)`, each returning an `IntentOutcome` (accepted, stale, rejected,
-  unknown). Intents are `#[prop(exact)]`: an unknown key or a wrong type is a
+- Read: `snapshot(): Today`, `onChange(listener): () => void` and
+  `mission(missionId): MissionPage | null`. TSX mirrors the model in one signal
+  that only the listener sets, and reads a mission page again on each change.
+- Intents: `decide(DecideIntent)`, `later(DecisionRef)`, `check(DecisionRef)`,
+  `ask(AskIntent)`, `pause(PauseIntent)`, `resume(ResumeIntent)` and
+  `checkControl(MissionRef)`, each returning an `IntentOutcome` (accepted,
+  stale, rejected, unknown). Intents are `#[prop(exact)]`: an unknown key or a wrong type is a
   `TypeError` in the call, before Rust acts.
+- A Pause names only the mission and the control revision shown; a Resume
+  also names the Pause shown. Rust adds the home, project, coordinator and a
+  new operation ID, and records the command before sending. TSX cannot supply
+  them (`native/tests/boundary.rs` checks the declarations).
 - An intent names the decision's revision. A changed decision is `stale`. A
   second send is refused. A lost confirmation leaves the decision `unknown`; only
   a read-only check can settle it, and nothing resends.

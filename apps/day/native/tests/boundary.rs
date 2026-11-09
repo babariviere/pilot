@@ -12,7 +12,14 @@ fn the_screen_gets_typed_read_models_and_intents() {
     let ts = ts();
     for line in [
         "export type Delivery = \"idle\" | \"sending\" | \"unknown\" | \"checking\";",
-        "export type MissionState = \"moving\" | \"waiting\" | \"stuck\" | \"unconfirmed\" | \"paused\" | \"later\";",
+        "export type MissionState = \"moving\" | \"notMoving\" | \"unreported\" | \"waiting\" | \"stuck\" | \"unconfirmed\" | \"pausing\" | \"paused\" | \"resuming\";",
+        "export type ControlState = \"running\" | \"pausing\" | \"paused\" | \"resuming\" | \"unknown\";",
+        "export type Currentness = \"current\" | \"stale\" | \"unavailable\";",
+        "export type FreshnessState = \"live\" | \"stale\" | \"offline\" | \"unreadable\";",
+        "  mission(missionId: string): MissionPage | null;",
+        "  pause(intent: PauseIntent): Promise<IntentOutcome>;",
+        "  resume(intent: ResumeIntent): Promise<IntentOutcome>;",
+        "  checkControl(intent: MissionRef): Promise<IntentOutcome>;",
         "  decide(intent: DecideIntent): Promise<IntentOutcome>;",
         "  later(intent: DecisionRef): IntentOutcome;",
         "  check(intent: DecisionRef): Promise<IntentOutcome>;",
@@ -32,9 +39,26 @@ fn the_only_export_is_the_feed_and_it_has_no_transport() {
         .filter(|line| line.starts_with("export declare"))
         .collect();
     assert_eq!(values, ["export declare class TodayFeed {"], "{ts}");
-    for word in ["url", "fetch", "socket", "daemon", "path", "token"] {
+    // Control commands are built in Rust: TSX names only the mission, the
+    // revision it showed and, for Resume, the Pause it showed. It never sees
+    // a home, project, coordinator or a new operation it could forge.
+    for word in [
+        "url",
+        "fetch",
+        "socket",
+        "daemon",
+        "path",
+        "token",
+        "home",
+        "lineage",
+        "projectid",
+        "coordinatorsessionid",
+        "expectedrevision",
+    ] {
         assert!(
-            !ts.to_lowercase().contains(&format!("{word}:")),
+            ![":", "?:"]
+                .iter()
+                .any(|end| ts.to_lowercase().contains(&format!(" {word}{end}"))),
             "the boundary names {word:?}:\n{ts}"
         );
     }

@@ -1,6 +1,6 @@
 // State the screen owns: what the user is looking at and typing. Rust
-// never sees it until an intent carries it. Keyed by decision id, so it
-// survives reordering, recycling and hot updates of the screens.
+// never sees it until an intent carries it. Keyed by decision or mission
+// id, so it survives reordering, recycling and hot updates of the screens.
 import { type Signal, signal } from "nsh";
 import type { Decision } from "pilot-day/native";
 
@@ -19,6 +19,25 @@ export const messages = signal<Record<string, string>>({});
 export const asking = signal<Record<string, boolean>>({});
 /** The decision the user brought to the front, if any. */
 export const focused = signal<string | null>(null);
+
+/** The mission whose overview is open, or null for Today. */
+export const route = signal<string | null>(null);
+/** The mission whose Pause waits for the user's confirmation, if any. */
+export const confirming = signal<string | null>(null);
+/** The last message a control intent returned, by mission. */
+export const controlMessages = signal<Record<string, string>>({});
+
+/** Opens the overview of mission `id`. */
+export function openMission(id: string) {
+	confirming.set(null);
+	route.set(id);
+}
+
+/** Goes back to Today. */
+export function closeMission() {
+	confirming.set(null);
+	route.set(null);
+}
 
 /** Sets one decision's value in a keyed store. */
 export function setFor<T>(store: Signal<Record<string, T>>, id: string, value: T) {

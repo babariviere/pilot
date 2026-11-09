@@ -1473,6 +1473,8 @@ version = "0.1.0"
 dependencies = [
  "nsh-base",
  "nsh-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

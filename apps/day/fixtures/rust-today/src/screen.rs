@@ -18,22 +18,25 @@ use crate::{
 fn state_words(state: MissionState) -> &'static str {
     match state {
         MissionState::Moving => "Moving",
+        MissionState::NotMoving => "Not moving",
+        MissionState::Unreported => "No current report",
         MissionState::Waiting => "Waiting for you",
         MissionState::Stuck => "Stuck",
         MissionState::Unconfirmed => "Unconfirmed",
+        MissionState::Pausing => "Pausing",
         MissionState::Paused => "Paused",
-        MissionState::Later => "Starts later",
+        MissionState::Resuming => "Resuming",
     }
 }
 
 fn state_mark(state: MissionState) -> MarkKind {
     match state {
-        MissionState::Moving => MarkKind::Moving,
+        MissionState::Moving | MissionState::Resuming => MarkKind::Moving,
         MissionState::Waiting => MarkKind::Needs,
         MissionState::Stuck => MarkKind::Failed,
         MissionState::Unconfirmed => MarkKind::Unknown,
-        MissionState::Paused => MarkKind::Paused,
-        MissionState::Later => MarkKind::Later,
+        MissionState::NotMoving | MissionState::Pausing | MissionState::Paused => MarkKind::Paused,
+        MissionState::Unreported => MarkKind::Later,
     }
 }
 
@@ -41,9 +44,12 @@ fn state_ink(state: MissionState) -> AdaptiveColor {
     match state {
         MissionState::Waiting | MissionState::Unconfirmed => token("needs-ink"),
         MissionState::Stuck => token("failed-ink"),
-        MissionState::Moving | MissionState::Paused | MissionState::Later => {
-            theme().muted_foreground
-        }
+        MissionState::Moving
+        | MissionState::NotMoving
+        | MissionState::Unreported
+        | MissionState::Pausing
+        | MissionState::Paused
+        | MissionState::Resuming => theme().muted_foreground,
     }
 }
 
