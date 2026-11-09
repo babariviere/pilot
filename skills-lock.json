@@ -6,6 +6,18 @@
       "sourceType": "github",
       "skillPath": "skills/gpui-kit/SKILL.md",
       "computedHash": "e401812a1269fd2caa07d307867f25c38c974f706f34bd52a8da8465b85ddd75"
+    },
+    "nsh": {
+      "source": "longbridge/nsh",
+      "sourceType": "github",
+      "skillPath": "skills/nsh/SKILL.md",
+      "computedHash": "0beb837853218bc34ef054b63e1ba33fb499afacc5b8f8fcf65430402e440276"
+    },
+    "nsh-design-guides": {
+      "source": "longbridge/nsh",
+      "sourceType": "github",
+      "skillPath": "skills/nsh-design-guides/SKILL.md",
+      "computedHash": "45ec8b370135a090fb8b8f3eb876a79599a636a1466dc3c78491b868f4ce8d55"
     }
   }
 }
