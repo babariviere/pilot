@@ -330,7 +330,7 @@ export type KernelCommand =
 	| { type: "workspace.prepared"; callId: string; workspace?: WorkspaceContext }
 	| { type: "update.pause"; id: string }
 	| { type: "checkpointUpdate"; requestId: string }
-	| { type: "checkpointLifecycle"; requestId: string }
+	| { type: "checkpointLifecycle"; requestId: string; operationId: string }
 	| { type: "update.resume" }
 	| { type: "telemetry.configure"; configuration: KernelTelemetryConfiguration }
 	| { type: "diagnostics.configure"; enabled: boolean }
@@ -376,6 +376,16 @@ export type KernelPacket =
 	/** Confirm a provider-reported usage hold before retrying only its pending request. */
 	| { type: "subscription.limit"; callId: string; limit: import("./subscription-limit.ts").SubscriptionLimitReport }
 	| { type: "children"; requestId: string; hasChildren: boolean }
+	/** Private final child identities and independent census after durable close, before its ACK. */
+	| {
+			type: "lifecycle.checkpointed";
+			requestId: string;
+			operationId: string;
+			conversationId: string;
+			children: KernelSubagent[];
+			jobs: number;
+			hasChildren: boolean;
+	  }
 	| { type: "jobs"; requestId: string; jobs: SessionJob[] }
 	/** Full replacement, after every change reported by the subagents extension. */
 	| { type: "subagents"; subagents: KernelSubagent[] }

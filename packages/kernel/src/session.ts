@@ -1073,7 +1073,9 @@ export class KernelSession {
 	resumeAfterUpdate(): void {
 		this.#updateRevision++;
 		this.#updateToolsPaused = false;
-		if (!this.#releaseStoppedRequests) this.#toolDrain.resume();
+		// A parked Stop owns the entire tree until its durable abort arrives.
+		if (this.#releaseStoppedRequests) return;
+		this.#toolDrain.resume();
 		void this.subagents
 			.lifecycle("resumeTools")
 			.catch((error) => console.warn("pilot: could not resume subagents", error));
@@ -1806,6 +1808,25 @@ export class KernelSession {
 		await this.subagents.lifecycle("checkpoint");
 	}
 
+	/** Durable close plus separate final identities and jobs/OS-child census. Not process exit proof. */
+	async checkpointLifecycle() {
+		if (this.#closing) throw new Error("Lifecycle checkpoint cannot inspect an already closing kernel");
+		let jobs: number | undefined;
+		await this.#close(async () => {
+			// The harness has joined tools, but the jobs registry is still attached.
+			// Never convert its later detachment into an empty jobs observation.
+			jobs = (await this.jobs()).length;
+		});
+		if (jobs === undefined) throw new Error("Lifecycle jobs census is unavailable");
+		if (this.subagentList.length > 256) throw new Error("Lifecycle child inventory exceeds the safe limit");
+		return {
+			conversationId: String(this.conversation.id),
+			children: this.subagentList,
+			jobs,
+			hasChildren: await this.hasChildren(),
+		};
+	}
+
 	hasChildren(): Promise<boolean> {
 		return this.adapter.hasChildren();
 	}
@@ -1924,6 +1945,10 @@ export class KernelSession {
 
 	/** Pause: pending work stays durable and resumes on the next open. */
 	close(): Promise<void> {
+		return this.#close();
+	}
+
+	#close(beforeAdapterClose?: () => Promise<void>): Promise<void> {
 		this.#closing ??= (async () => {
 			this.#modelChangeAbort?.abort(new Error("Session is closing"));
 			await this.jobsMonitor?.close();
@@ -1934,7 +1959,11 @@ export class KernelSession {
 				await this.harness.close(context);
 			} finally {
 				try {
-					await this.adapter.close();
+					try {
+						await beforeAdapterClose?.();
+					} finally {
+						await this.adapter.close();
+					}
 				} finally {
 					this.release();
 				}

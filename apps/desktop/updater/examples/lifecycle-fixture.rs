@@ -25,6 +25,7 @@ use std::{
 
 const OWNER: &str = include_str!("../../../../packages/daemon/src/runtime-owner.ts");
 const RESERVATION: &str = include_str!("../../../../packages/daemon/src/update-reservation.ts");
+const CHECKPOINT: &str = include_str!("../../../../packages/daemon/src/lifecycle-checkpoint.ts");
 const NODE: &str = r#"
 import {realpath,writeFile,readFile,appendFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -651,6 +652,10 @@ fn bundle(
         runtime.join("packages/daemon/src/update-reservation.ts"),
         RESERVATION,
     )?;
+    fs::write(
+        runtime.join("packages/daemon/src/lifecycle-checkpoint.ts"),
+        CHECKPOINT,
+    )?;
     fs::write(runtime.join("packages/daemon/src/fixture-owner.ts"), NODE)?;
     let stamp = serde_json::json!({"schema":1,"source":"a".repeat(40),"version":"0.1.0","protocol":1,"platform":"darwin","arch":"arm64","node":"24.21.0"});
     fs::write(
@@ -844,6 +849,10 @@ fn bundle(
     fs::write(
         app.join("runtime/packages/daemon/src/update-reservation.ts"),
         RESERVATION,
+    )?;
+    fs::write(
+        app.join("runtime/packages/daemon/src/lifecycle-checkpoint.ts"),
+        CHECKPOINT,
     )?;
     fs::write(
         app.join("runtime/packages/daemon/src/fixture-owner.ts"),

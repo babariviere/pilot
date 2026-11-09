@@ -1,6 +1,7 @@
 /** Bounded admission ownership for an explicit update. Never drains, signals or stops work itself. */
 import { randomBytes } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { type LifecycleRuntime, matchingRuntime, validLifecycleRuntime } from "./lifecycle-checkpoint.ts";
 import type { RuntimeResources } from "./runtime-admission.ts";
 
 export interface ReservationReceipt {
@@ -11,6 +12,8 @@ export interface ReservationReceipt {
 	purpose?: "daemon-upgrade" | "daemon-stop" | "daemon-restart";
 	/** Explicit user lifecycle action, never inferred for startup or GUI updates. */
 	interrupt?: true;
+	/** Signed exact target for explicit replacement. Does not grant service-management authority. */
+	replacement?: LifecycleRuntime;
 }
 
 export class UpdateReservation {
@@ -25,6 +28,7 @@ export class UpdateReservation {
 	private readonly checkpoint?: (
 		operationId: string,
 		purpose: NonNullable<ReservationReceipt["purpose"]>,
+		replacement?: LifecycleRuntime,
 	) => Promise<void>;
 	private readonly now: () => number;
 	private readonly duration: number;
@@ -34,7 +38,11 @@ export class UpdateReservation {
 		duration = 180_000,
 		daemonResources?: Pick<RuntimeResources, "freezeAdmissions" | "blockers">,
 		controlsIdle?: () => boolean,
-		checkpoint?: (operationId: string, purpose: NonNullable<ReservationReceipt["purpose"]>) => Promise<void>,
+		checkpoint?: (
+			operationId: string,
+			purpose: NonNullable<ReservationReceipt["purpose"]>,
+			replacement?: LifecycleRuntime,
+		) => Promise<void>,
 	) {
 		this.resources = resources;
 		this.daemonResources = daemonResources;
@@ -64,8 +72,15 @@ export class UpdateReservation {
 		operationId: string,
 		purpose?: ReservationReceipt["purpose"],
 		interrupt?: true,
+		replacement?: LifecycleRuntime,
 	): Promise<ReservationReceipt> {
 		this.expire();
+		if (
+			replacement !== undefined &&
+			(!interrupt || purpose !== "daemon-upgrade" || !validLifecycleRuntime(replacement))
+		)
+			throw new Error("update_reservation_replacement_invalid");
+		replacement = replacement ? structuredClone(replacement) : undefined;
 		const control = purpose === "daemon-stop" || purpose === "daemon-restart";
 		if (interrupt !== undefined && (interrupt !== true || !purpose || !this.checkpoint))
 			throw new Error("update_reservation_purpose_invalid");
@@ -95,7 +110,8 @@ export class UpdateReservation {
 			release = resources.freezeAdmissions();
 			// Only the explicit interrupt contract may checkpoint unfinished work.
 			// Legacy callers keep their idle/tool-boundary admission.
-			if (interrupt) await this.checkpoint!(operationId, purpose!);
+			if (interrupt)
+				await this.checkpoint!(operationId, purpose!, replacement ? structuredClone(replacement) : undefined);
 			if (control && !interrupt && !this.controlsIdle!()) throw new Error("update_reservation_not_idle");
 			const blockers = await Promise.race([
 				resources.blockers(),
@@ -114,8 +130,9 @@ export class UpdateReservation {
 				token: randomBytes(32).toString("hex"),
 				...(purpose ? { purpose } : {}),
 				...(interrupt ? { interrupt } : {}),
+				...(replacement ? { replacement: structuredClone(replacement) } : {}),
 			};
-			this.active = { ...receipt, until, release };
+			this.active = { ...structuredClone(receipt), until, release };
 			this.scheduleExpiry();
 			return receipt;
 		} catch (error) {
@@ -136,6 +153,10 @@ export class UpdateReservation {
 			receipt.operationId !== this.active.operationId ||
 			receipt.purpose !== this.active.purpose ||
 			receipt.interrupt !== this.active.interrupt ||
+			(receipt.replacement === undefined) !== (this.active.replacement === undefined) ||
+			(receipt.replacement !== undefined &&
+				(!validLifecycleRuntime(receipt.replacement) ||
+					!matchingRuntime(receipt.replacement, this.active.replacement!))) ||
 			receipt.token !== this.active.token
 		)
 			throw new Error("update_reservation_expired");
@@ -145,6 +166,7 @@ export class UpdateReservation {
 			token: this.active.token,
 			...(this.active.purpose ? { purpose: this.active.purpose } : {}),
 			...(this.active.interrupt ? { interrupt: true } : {}),
+			...(this.active.replacement ? { replacement: structuredClone(this.active.replacement) } : {}),
 		};
 	}
 	cancel(receipt: ReservationReceipt): void {

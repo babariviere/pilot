@@ -788,6 +788,41 @@ test("a new execution drain is busy even during a reentrant idle worker factory 
 	off();
 });
 
+test("an idle notification cannot grant an update lease while Stop is still admitted", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const created = await sessions.spawn({ cwd: f.source, message: "initial" });
+	await sessions["starting"].get(created.id);
+	const save = sessions["save"].bind(sessions);
+	const internal = sessions as unknown as { save: typeof save };
+	const entered = deferred();
+	const release = deferred();
+	let held = false;
+	const paused = t.mock.method(internal, "save", async (...args: Parameters<typeof save>) => {
+		await save(...args);
+		if (!held && args[0].inputGeneration === 1) {
+			held = true;
+			entered.resolve();
+			await release.promise;
+		}
+	});
+	const stopping = sessions.stop(created.id);
+	try {
+		await entered.promise;
+		f.workers[0]!.finish();
+		await until(() => sessions["saving"].size === 0);
+		assert.equal(sessions["starting"].size, 0);
+		assert.equal(sessions["saving"].size, 0);
+		assert.equal(sessions.get(created.id)?.state, "idle");
+		assert.deepEqual(sessions.prepareUpdate(), { ready: false }, "Stop still owns the cancellation admission");
+	} finally {
+		release.resolve();
+	}
+	await stopping;
+	paused.mock.restore();
+	await until(() => sessions.prepareUpdate().ready);
+});
+
 async function until(check: () => boolean | Promise<boolean>): Promise<void> {
 	const deadline = performance.now() + 3_000;
 	while (!(await check())) {

@@ -121,6 +121,7 @@ export default pi => {
 }
 
 for (const mode of [
+	"update-lifecycle",
 	"update",
 	"update-resume",
 	"update-resume-race",
@@ -290,7 +291,7 @@ for (const mode of [
 				const checkpoint = session.checkpointForUpdate();
 				session.resumeAfterUpdate();
 				await checkpoint;
-			} else {
+			} else if (mode !== "update-lifecycle") {
 				await session.checkpointForUpdate();
 				assert.equal(await session.hasChildren(), false, "daemon inspection checkpoints owned drained children");
 				await session.checkpointForUpdate();
@@ -304,7 +305,12 @@ for (const mode of [
 		}
 		if (mode !== "update-resume-race") assert.equal(await readFile(join(root, "effects"), "utf8"), "1");
 		if (mode === "update-resume") session.resumeAfterUpdate();
-		else if (mode !== "update-resume-race") await session.close();
+		else if (mode === "update-lifecycle") {
+			const closed = await session.checkpointLifecycle();
+			assert.equal(closed.children[0]?.conversationId, identity, "final inventory preserves the exact child");
+			assert.equal(closed.jobs, 0);
+			assert.equal(closed.hasChildren, false, "durable close ACK is separate from the OS child census");
+		} else if (mode !== "update-resume-race") await session.close();
 		if (mode === "stop") {
 			const stopped = await stopRecoveryChildren({
 				directory: spec.storageDir,

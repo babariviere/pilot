@@ -122,6 +122,13 @@ import {
 } from "./insights-admission.ts";
 import { insightsSourceAllowed } from "./insights-settings.ts";
 import { type JjProjectScope, workerScope } from "./jj-ownership-contract.ts";
+import {
+	checkpointRecoveryHeld,
+	type LifecycleRuntime,
+	matchingCheckpoint,
+	matchingMissionResumeFence,
+	matchingRuntime,
+} from "./lifecycle-checkpoint.ts";
 import { LifecycleDiagnostics } from "./lifecycle-diagnostics.ts";
 import { LongJobTimers, longJobAttention } from "./long-jobs.ts";
 import { forkMainViewWorker, MainViewStore } from "./main-view.ts";
@@ -239,6 +246,11 @@ export interface MissionSpawnAdmission {
 
 /** Mission state lives in its own store. Sessions read membership and forward tool calls through this bridge. */
 export interface SessionMissionBridge {
+	/** Current durable mission controls for upgrade recovery; null means no current membership.
+	 * Mission Pause owns this state and all mission-wide work. Install before enabling those controls.
+	 * Missing/throwing providers cannot recover a checkpoint that already pins a mission fence.
+	 */
+	upgradeResumeFence?(sessionId: string): import("./lifecycle-checkpoint.ts").MissionResumeFence | null;
 	/** Current local membership only; historical task/retirement links are never source grants. */
 	coordinatorSourceMembers?(sessionId: string): { projectId: string; sessionIds: string[] } | undefined;
 	/** Creation-only opted-in builder scope. Never enroll an already-existing workspace. */
@@ -568,6 +580,8 @@ interface SessionMeta extends OutcomeMeta {
 	initializing?: boolean;
 	/** Reopen even an idle parent after an update, so its pending child work recovers too. */
 	updatePaused?: boolean;
+	/** Exact explicit lifecycle owner, persisted before worker/child interruption. */
+	lifecycleCheckpoint?: import("./lifecycle-checkpoint.ts").LifecycleCheckpoint;
 	/** Durable clone recipe, including the selected plain origin branch across restarts. */
 	preparing?: { source: string; baseBranch?: string };
 	pending?: PendingCommand[];
@@ -1502,6 +1516,7 @@ export class SessionManager {
 	private readonly rewindResults = new Map<string, { switched: boolean; content?: string }>();
 	/** Queued messages the kernel withdrew for a waiting Stop, keyed by its abort request. */
 	private readonly stopResults = new Map<string, { requestId?: string; content: string }[]>();
+	private readonly stoppingInputs = new Set<Promise<StopResponse>>();
 	/** Input whose kernel admission is in flight or uncertain, by session. Stop leaves it to the kernel. */
 	private readonly delivering = new Map<string, string>();
 	private readonly modelCatalog: ModelCatalog;
@@ -7505,16 +7520,51 @@ ${run.excerpt}`,
 	}
 
 	private lifecycleCheckpoint?: Promise<void>;
+	private lifecycleCheckpointOwner?: string;
+	private readonly lifecycleIncarnation = randomUUID();
+	private readonly lifecycleResuming = new Map<string, import("./lifecycle-checkpoint.ts").LifecycleCheckpoint>();
+	private readonly lifecycleClosing = new Map<
+		SessionWorker,
+		{ requestId: string; checkpoint: import("./lifecycle-checkpoint.ts").LifecycleCheckpoint; censusClear: boolean }
+	>();
+	private lifecycleRuntime?: import("./lifecycle-checkpoint.ts").LifecycleRuntimeIdentity;
+
+	/** Set from the profile-lease owner, never from HTTP/display observations. */
+	bindLifecycleRuntime(identity: import("./lifecycle-checkpoint.ts").LifecycleRuntimeIdentity): void {
+		if (this.lifecycleRuntime) throw new Error("Lifecycle runtime is already bound");
+		this.lifecycleRuntime = structuredClone(identity);
+	}
 
 	/** Explicit managed lifecycle only. Save recovery before interrupting any kernel. */
-	checkpointLifecycle(): Promise<void> {
-		this.lifecycleCheckpoint ??= this.checkpointLifecycleWorkers().finally(() => {
+	checkpointLifecycle(
+		operationId: string,
+		purpose: "daemon-upgrade" | "daemon-stop" | "daemon-restart",
+		replacement?: LifecycleRuntime,
+	): Promise<void> {
+		// Stop/restart retains this runtime. Legacy callers cannot silently authorize
+		// recovery under an unspecified new runtime after the original boot exits.
+		if (!replacement && this.lifecycleRuntime?.runtimeRoot && this.lifecycleRuntime.build)
+			replacement = { runtimeRoot: this.lifecycleRuntime.runtimeRoot, build: this.lifecycleRuntime.build };
+		const owner = canonicalJSON({ operationId, purpose, replacement: replacement ?? null });
+		if (this.lifecycleCheckpoint && this.lifecycleCheckpointOwner !== owner)
+			return Promise.reject(new Conflict("Another lifecycle operation owns the checkpoint"));
+		this.lifecycleCheckpointOwner = owner;
+		this.lifecycleCheckpoint ??= this.checkpointLifecycleWorkers(
+			operationId,
+			purpose,
+			replacement ? structuredClone(replacement) : undefined,
+		).finally(() => {
 			this.lifecycleCheckpoint = undefined;
+			this.lifecycleCheckpointOwner = undefined;
 		});
 		return this.lifecycleCheckpoint;
 	}
 
-	private async checkpointLifecycleWorkers(): Promise<void> {
+	private async checkpointLifecycleWorkers(
+		operationId: string,
+		purpose: "daemon-upgrade" | "daemon-stop" | "daemon-restart",
+		replacement?: LifecycleRuntime,
+	): Promise<void> {
 		if (!this.updateGate.frozen) throw new Error("Lifecycle checkpoint requires frozen admissions");
 		this.updateGate.pause();
 		this.actionRunner?.setUpdatePaused(true);
@@ -7524,6 +7574,7 @@ ${run.excerpt}`,
 			await Promise.race([
 				Promise.all([
 					...this.preparations,
+					...this.starting.values(),
 					...this.parking.values(),
 					...[...this.workspaceSetups.values()].map((setup) => setup.done),
 					this.actionRunner.checkpointLifecycle(),
@@ -7539,41 +7590,114 @@ ${run.excerpt}`,
 			clearTimeout(preparationTimer);
 		}
 		const workers = [...this.workers];
+		if (workers.length > 128 || workers.some(([id]) => (this.require(id).subagents?.length ?? 0) > 256))
+			throw new ServiceUnavailable("Lifecycle checkpoint inventory exceeds the safe limit");
 		// A crash here reopens the same durable inbox/run, never a fresh user input.
 		await Promise.all(
-			workers.map(async ([id]) => {
+			workers.map(async ([id, worker]) => {
 				const meta = this.require(id);
+				if (meta.lifecycleCheckpoint && checkpointRecoveryHeld(meta.lifecycleCheckpoint))
+					throw new Conflict("An uncertain lifecycle checkpoint requires inspection");
+				const mission = this.missionUpgradeFence(id);
+				meta.lifecycleCheckpoint = {
+					schema: 1,
+					operationId,
+					purpose,
+					incarnation: `${this.lifecycleRuntime?.boot ?? this.lifecycleIncarnation}:${this.workerGenerations.get(id) ?? 0}`,
+					...(this.lifecycleRuntime ? { originBoot: this.lifecycleRuntime.boot } : {}),
+					...(this.lifecycleRuntime?.host ? { host: structuredClone(this.lifecycleRuntime.host) } : {}),
+					...(replacement ? { replacement: structuredClone(replacement) } : {}),
+					sessionCreatedAt: meta.createdAt,
+					inputGeneration: meta.inputGeneration ?? 0,
+					inputControlRevision: meta.inputControlRevision ?? 0,
+					...(mission ? { mission } : {}),
+					prior: {
+						working:
+							!!meta.working ||
+							this.backgroundWorking(meta) ||
+							worker.busy === true ||
+							worker.state === "working",
+						updatePaused: !!meta.updatePaused,
+						sleepPaused: !!meta.sleepPaused || !!this.sleepPause,
+						inputsPaused: !!meta.inputsPaused,
+						subscriptionPaused: this.subscriptionPaused(id),
+					},
+					children: (meta.subagents ?? []).map(({ name, storage, conversationId, state }) => ({
+						name,
+						storage,
+						conversationId,
+						state,
+					})),
+					phase: "checkpointing",
+				};
 				meta.updatePaused = true;
 				await this.save(meta, undefined, undefined, true);
 			}),
 		);
 		const results = await Promise.allSettled(
 			workers.map(async ([id, worker]) => {
+				const meta = this.require(id);
+				const checkpoint = meta.lifecycleCheckpoint!;
+				if (this.workers.get(id) !== worker) throw new Conflict("Lifecycle worker incarnation changed");
+				const closing = { requestId: randomUUID(), checkpoint, censusClear: false };
+				this.lifecycleClosing.set(worker, closing);
 				this.parked.add(worker);
 				let timer: ReturnType<typeof setTimeout> | undefined;
 				let acknowledged = false;
+				let exited = false;
+				let persistenceFailure: { error: unknown } | undefined;
 				try {
 					await Promise.race([
-						worker.request({ type: "checkpointLifecycle", requestId: randomUUID() }).then(() => {
-							acknowledged = true;
-						}),
+						worker.request({ type: "checkpointLifecycle", requestId: closing.requestId, operationId }),
 						new Promise<never>((_, reject) => {
 							timer = setTimeout(() => reject(new Error("Kernel lifecycle checkpoint timed out")), 10_000);
 						}),
 					]);
+					acknowledged = true;
 				} finally {
 					clearTimeout(timer);
 					// Join confirmed exit even on a failed ACK. Never overlap storage owners.
-					await worker.close();
-					if (this.workers.get(id) === worker) this.workers.delete(id);
-					this.lastUse.delete(id);
+					try {
+						await worker.close();
+						exited = true;
+					} catch (error) {
+						persistenceFailure = { error };
+					}
+					this.lifecycleClosing.delete(worker);
+					if (exited && this.workers.get(id) === worker) this.workers.delete(id);
+					if (exited) this.lastUse.delete(id);
+					if (meta.lifecycleCheckpoint === checkpoint) {
+						if (acknowledged && closing.censusClear && exited) checkpoint.quiescent = true;
+						if (checkpoint.phase !== "stopped")
+							checkpoint.phase = checkpoint.quiescent ? "checkpointed" : "unknown";
+						try {
+							await this.save(meta, undefined, undefined, true);
+						} catch (error) {
+							checkpoint.phase = "unknown";
+							persistenceFailure = { error };
+						}
+					}
 				}
+				if (persistenceFailure) throw persistenceFailure.error;
 				if (!acknowledged) throw new Error("Kernel lifecycle checkpoint was not acknowledged");
+				if (!closing.censusClear)
+					throw new Error("Kernel lifecycle child inventory or process census is unavailable or not clear");
 			}),
 		);
 		await Promise.all([...this.saving.values()]);
 		const failure = results.find((result) => result.status === "rejected");
 		if (failure?.status === "rejected") throw failure.reason;
+	}
+
+	/** Host-local manifest only. Child storage identities must not be exposed as display summaries. */
+	lifecycleManifest(
+		operationId: string,
+	): { sessionId: string; checkpoint: import("./lifecycle-checkpoint.ts").LifecycleCheckpoint }[] {
+		return [...this.metas.values()].flatMap((meta) =>
+			meta.lifecycleCheckpoint?.operationId === operationId
+				? [{ sessionId: meta.id, checkpoint: structuredClone(meta.lifecycleCheckpoint) }]
+				: [],
+		);
 	}
 
 	/** Passive, bounded observations. Never pauses, checkpoints, starts or closes workers. */
@@ -7592,6 +7716,8 @@ ${run.excerpt}`,
 		for (const blocker of this.actionRunner?.blockers() ?? []) add(blocker);
 		for (const [id, meta] of this.metas) {
 			const worker = this.workers.get(id);
+			if (meta.lifecycleCheckpoint && checkpointRecoveryHeld(meta.lifecycleCheckpoint))
+				add({ kind: "unknown-process", id: `lifecycle:${id}`, sessionId: id });
 			if (
 				meta.working ||
 				meta.preparing ||
@@ -7667,6 +7793,9 @@ ${run.excerpt}`,
 	}
 	private async inspectRuntimeBlockers(): Promise<import("./runtime-admission.ts").RuntimeBlocker[]> {
 		const blockers: import("./runtime-admission.ts").RuntimeBlocker[] = [...(this.actionRunner?.blockers() ?? [])];
+		for (const [id, meta] of this.metas)
+			if (meta.lifecycleCheckpoint && checkpointRecoveryHeld(meta.lifecycleCheckpoint))
+				blockers.push({ kind: "unknown-process", id: `lifecycle:${id}`, sessionId: id });
 		for (const id of this.workspaceSetups.keys())
 			blockers.push({ kind: "automation", id: `workspace-setup:${id}`, sessionId: id });
 		for (const [id, task] of this.postRunTasks)
@@ -7771,6 +7900,9 @@ ${run.excerpt}`,
 	private checkUpdateReadiness(): UpdatePreparation {
 		const busy =
 			this.closing ||
+			// Stop stays admitted through its kernel reply and durable cancellation.
+			// An idle notification during that drain is not an update-safe boundary.
+			this.stoppingInputs.size !== 0 ||
 			this.starting.size !== 0 ||
 			this.preparations.size !== 0 ||
 			this.saving.size !== 0 ||
@@ -7870,8 +8002,11 @@ ${run.excerpt}`,
 			return;
 		}
 		if (!this.sleepPause)
-			for (const worker of this.workers.values())
-				if (this.updatePausing.has(worker)) worker.send({ type: "update.resume" });
+			for (const [id, worker] of this.workers) {
+				const checkpoint = this.require(id).lifecycleCheckpoint;
+				if (this.updatePausing.has(worker) && (!checkpoint || !checkpointRecoveryHeld(checkpoint)))
+					worker.send({ type: "update.resume" });
+			}
 		this.updatePausing.clear();
 		this.updateGate.release();
 		this.actionRunner?.setUpdatePaused(false);
@@ -7884,11 +8019,83 @@ ${run.excerpt}`,
 			this.observeRunFinished(meta, this.summary(meta));
 			this.startPostRun(meta);
 			if (!meta.updatePaused) continue;
+			if (meta.lifecycleCheckpoint && !this.lifecycleRecoveryAllowed(meta)) continue;
 			if (this.workers.has(meta.id)) {
 				delete meta.updatePaused;
 				this.emit(meta);
 				void this.save(meta).catch((error) => console.warn("pilotd: could not clear update pause", error));
 			} else if (!this.closing && !meta.failure && meta.archivedAt === undefined) void this.start(meta.id);
+		}
+	}
+
+	private lifecycleRecoveryAllowed(meta: SessionMeta): boolean {
+		const checkpoint = meta.lifecycleCheckpoint;
+		if (!checkpoint) return true;
+		if (checkpoint.phase === "resume-acknowledged") return true;
+		if (
+			checkpoint.host &&
+			(checkpoint.host.daemonId !== this.lifecycleRuntime?.host?.daemonId ||
+				checkpoint.host.lineageId !== this.lifecycleRuntime?.host?.lineageId)
+		)
+			return false;
+		if (checkpoint.replacement && checkpoint.originBoot !== this.lifecycleRuntime?.boot) {
+			const runtime = this.lifecycleRuntime;
+			if (
+				!runtime?.runtimeRoot ||
+				!runtime.build ||
+				!matchingRuntime(checkpoint.replacement, { runtimeRoot: runtime.runtimeRoot, build: runtime.build })
+			)
+				return false;
+		}
+		// Parked Stop persists an abort. Reopening after release delivers that abort with
+		// stopOnOpen, never resumes the previously interrupted model or children first.
+		if (checkpoint.phase === "stopped") return meta.pending?.[0]?.type === "abort";
+		return (
+			checkpoint.phase === "checkpointed" &&
+			this.missionAllowsUpgradeResume(meta.id, checkpoint) &&
+			checkpoint.childrenConfirmed === true &&
+			checkpoint.quiescent === true &&
+			matchingCheckpoint(checkpoint, meta) &&
+			!meta.inputsPaused &&
+			!this.sleepPause &&
+			!this.subscriptionPaused(meta.id) &&
+			!meta.recoveryStopped
+		);
+	}
+
+	private missionUpgradeFence(id: string): import("./lifecycle-checkpoint.ts").MissionResumeFence | undefined {
+		const read = this.missions?.upgradeResumeFence;
+		if (!read) return undefined; // Compatibility before mission-pause support is installed.
+		const current = read.call(this.missions, id);
+		if (current === null) return undefined;
+		if (
+			!current ||
+			typeof current.missionId !== "string" ||
+			!current.missionId ||
+			current.missionId.length > 128 ||
+			typeof current.held !== "boolean" ||
+			!Number.isSafeInteger(current.pauseGeneration) ||
+			current.pauseGeneration < 0 ||
+			!Number.isSafeInteger(current.stopGeneration) ||
+			current.stopGeneration < 0 ||
+			current.missionId !== this.missions?.membership(id)?.missionId
+		)
+			throw new Conflict("Mission resume controls are unavailable or changed");
+		return structuredClone(current);
+	}
+
+	private missionAllowsUpgradeResume(
+		id: string,
+		checkpoint: import("./lifecycle-checkpoint.ts").LifecycleCheckpoint,
+	): boolean {
+		try {
+			if (checkpoint.mission && !this.missions?.upgradeResumeFence) return false;
+			const current = this.missionUpgradeFence(id);
+			return checkpoint.mission
+				? !!current && matchingMissionResumeFence(checkpoint.mission, current)
+				: current === undefined;
+		} catch {
+			return false;
 		}
 	}
 
@@ -8710,6 +8917,12 @@ ${run.excerpt}`,
 			if (this.delivering.get(id) === requestId) this.delivering.delete(id);
 			throw new CommandRejected("This message was cancelled by Stop or a model change. Input retained.", "stopped");
 		}
+		if (meta.lifecycleCheckpoint && checkpointRecoveryHeld(meta.lifecycleCheckpoint))
+			throw new Conflict(
+				"Upgrade checkpoint outcome is unknown. Inspect lifecycle recovery before sending new work.",
+			);
+		if (meta.lifecycleCheckpoint?.phase === "stopped" && !meta.lifecycleCheckpoint.stopAcknowledged)
+			throw new Conflict("Stop cancellation is not acknowledged. Retry Stop before sending new work.");
 		if (answerQuestionId !== undefined) {
 			this.assertQuestionAnswerActor(id, requestId);
 		}
@@ -8776,6 +8989,13 @@ ${run.excerpt}`,
 			if (inputGeneration === undefined || inputGeneration === (meta.inputGeneration ?? 0)) {
 				delete meta.cancelled;
 				delete meta.recoveryStopped;
+				if (
+					meta.lifecycleCheckpoint?.phase === "stopped" &&
+					!report &&
+					!inputOrigin(requestId) &&
+					!meta.pending?.some((command) => command.type === "abort")
+				)
+					delete meta.lifecycleCheckpoint;
 			}
 			// Pending duplicates retain their original payload; accepted retries are deduped by the kernel.
 			if (!meta.pending?.some((command) => command.requestId === requestId)) {
@@ -8972,17 +9192,29 @@ ${run.excerpt}`,
 		const flowRoot = this.flowRoot(meta);
 		const flowInterrupted = flowRoot ? this.endFlow(flowRoot, "cancelled", "Flow stopped") : undefined;
 		void flowInterrupted?.catch(() => undefined);
+		const stopping = (async () => {
+			try {
+				return await this.stopAdmitted(meta);
+			} finally {
+				// Reach the kernel before waiting for review durability, but do not ACK a volatile cancellation.
+				await Promise.all([interrupted, flowInterrupted]);
+			}
+		})();
+		this.stoppingInputs.add(stopping);
 		try {
-			return await this.stopAdmitted(meta);
+			return await stopping;
 		} finally {
-			// Reach the kernel before waiting for review durability, but do not ACK a volatile cancellation.
-			await Promise.all([interrupted, flowInterrupted]);
+			this.stoppingInputs.delete(stopping);
 		}
 	}
 
 	private async stopAdmitted(meta: SessionMeta): Promise<StopResponse> {
 		const id = meta.id;
 		meta.inputGeneration = (meta.inputGeneration ?? 0) + 1;
+		if (meta.lifecycleCheckpoint) {
+			meta.lifecycleCheckpoint.phase = "stopped";
+			delete meta.lifecycleCheckpoint.stopAcknowledged;
+		}
 		await this.save(meta, undefined, undefined, true);
 		this.cancelPostRun(meta);
 		if (meta.automation) {
@@ -8998,22 +9230,25 @@ ${run.excerpt}`,
 		}
 		if (this.actionRunner?.isWorking(id)) await this.actionRunner.cancelSession(id);
 		await this.workspaceSetups.get(id)?.done;
-		if (this.canRetryStartup(meta)) return this.stopFailedRecovery(meta);
-		if (meta.failure || meta.recoveryStopped) return this.stoppedWithoutWorker(meta);
+		const parkedForLifecycle = !this.workers.has(id) && !!meta.lifecycleCheckpoint && this.updateGate.frozen;
+		if (!parkedForLifecycle && this.canRetryStartup(meta)) return this.stopFailedRecovery(meta);
+		if (!parkedForLifecycle && (meta.failure || meta.recoveryStopped)) return this.stoppedWithoutWorker(meta);
 		if (
 			!meta.initializing &&
 			!this.workers.has(id) &&
+			!meta.lifecycleCheckpoint &&
 			!meta.pending?.length &&
 			!meta.kernelRestartPending &&
 			!meta.sleepPaused &&
 			!meta.inputsPaused &&
 			meta.outcome !== "question" &&
-			!meta.working
+			!meta.working &&
+			!this.backgroundWorking(meta)
 		)
 			return this.stoppedWithoutWorker(meta);
 		// Stop is allowed for an existing worker, but must not reopen a parked worker during a lease.
 		// A sleep pause needs no admission: persist cancellation now, drain it before recovery on wake.
-		if (!this.workers.has(id) && !this.sleepPause) this.updateGate.assertOpen();
+		if (!this.workers.has(id) && !this.sleepPause && !parkedForLifecycle) this.updateGate.assertOpen();
 		// Drop queued input, and abort anything whose acknowledgement was in flight. The user's own undelivered messages
 		// go back to the composer. One in flight reaches the kernel first, which either withdraws it too or runs it.
 		const delivering = this.delivering.get(id);
@@ -9049,9 +9284,13 @@ ${run.excerpt}`,
 		meta.pending = [{ type: "abort", requestId }, ...automatic];
 		delete meta.inputsPaused;
 		if (meta.preparing) meta.cancelled = true;
-		await this.save(meta);
+		await this.save(meta, undefined, undefined, parkedForLifecycle);
 		this.emit(meta);
 		if (meta.preparing) for (const listener of this.watchers.get(id)?.values() ?? []) listener([emptySnapshot]);
+		if (parkedForLifecycle) {
+			const draft = unsent.map((message) => message.content).join("\n\n");
+			return draft ? { ok: true, draft } : { ok: true };
+		}
 		this.stopResults.set(requestId, []);
 		try {
 			const starting = meta.initializing;
@@ -9151,6 +9390,7 @@ ${run.excerpt}`,
 			this.kernelErrors.delete(id);
 			clearOutcome(meta);
 			meta.updatedAt = Date.now();
+			if (meta.lifecycleCheckpoint?.phase === "stopped") meta.lifecycleCheckpoint.stopAcknowledged = true;
 			await this.save(meta, undefined, undefined, true);
 			this.emit(meta);
 			for (const [watchId, listener] of this.watchers.get(id) ?? []) this.watchColdHistory(meta, watchId, listener);
@@ -9168,7 +9408,21 @@ ${run.excerpt}`,
 	 * acknowledgement, so Stop leaves it to the kernel instead of also restoring it to the composer.
 	 */
 	private async deliver(id: string, worker: SessionWorker, command: PendingCommand): Promise<void> {
-		if (command.type !== "input") return worker.request(command);
+		if (command.type !== "input") {
+			const meta = this.require(id);
+			const generation = meta.inputGeneration ?? 0;
+			await worker.request(command);
+			if (
+				command.type === "abort" &&
+				meta.lifecycleCheckpoint?.phase === "stopped" &&
+				(meta.inputGeneration ?? 0) === generation &&
+				meta.pending?.[0] === command
+			) {
+				meta.lifecycleCheckpoint.stopAcknowledged = true;
+				await this.save(meta, undefined, undefined, true);
+			}
+			return;
+		}
 		if (this.require(id).insightsOwner) {
 			await this.insightsOwnerReady.get(worker);
 			const current = this.insightsOwnerStore!.current(this.require(id).insightsOwner!.authority)!;
@@ -10707,6 +10961,9 @@ ${run.excerpt}`,
 		await Promise.allSettled([...this.workspaceSetups.values()].map((setup) => setup.done));
 		await Promise.allSettled(this.runFinishing.values());
 		await Promise.allSettled([...this.postRunTasks.values()].map((task) => task.done));
+		// Stop is intentionally admitted under an upgrade fence. Join its entire
+		// operation before the final save barrier and profile-lease release.
+		await Promise.allSettled([...this.stoppingInputs]);
 		await Promise.all([...this.saving.values()]);
 		await this.aiUsage.close();
 		await this.legacyUsageMigration;
@@ -10758,6 +11015,8 @@ ${run.excerpt}`,
 		const existing = this.starting.get(id);
 		if (existing) return existing;
 		const meta = this.require(id);
+		if (!this.workers.has(id) && meta.lifecycleCheckpoint && !this.lifecycleRecoveryAllowed(meta))
+			return Promise.resolve(new Map());
 		if (meta.nextAttemptModel && !meta.recoveryModel) return Promise.resolve(new Map());
 		if (meta.control || this.passiveNoticeOnly(meta)) return Promise.resolve(new Map());
 		if (meta.delegationFenced && !meta.pending?.some((command) => command.type === "abort"))
@@ -10847,10 +11106,38 @@ ${run.excerpt}`,
 				const refresh = this.workspaceRefreshes.get(id);
 				if (refresh) await refresh;
 				if (this.closing || this.sleepPause) return;
+				const checkpoint = meta.lifecycleCheckpoint;
+				if (!this.workers.has(id) && checkpoint?.phase === "checkpointed") {
+					if (!this.lifecycleRecoveryAllowed(meta)) return;
+					checkpoint.phase = "resume-admitted";
+					this.lifecycleResuming.set(id, checkpoint);
+					await this.save(meta, undefined, undefined, true);
+					// Stop can win while the resume admission is becoming durable.
+					if (
+						checkpoint.phase !== "resume-admitted" ||
+						!matchingCheckpoint(checkpoint, meta) ||
+						!this.missionAllowsUpgradeResume(id, checkpoint)
+					) {
+						if (checkpoint.phase === "resume-admitted") {
+							checkpoint.phase = "checkpointed";
+							await this.save(meta, undefined, undefined, true);
+						}
+						return;
+					}
+				}
 				const worker = await this.ensureWorker(id);
 				await worker.ready;
 				if (this.closing || this.sleepPause) return;
 				if (this.workers.get(id) !== worker) throw new WorkerUnavailable("Kernel exited during startup");
+				if (checkpoint?.phase === "resume-admitted" && meta.lifecycleCheckpoint === checkpoint) {
+					checkpoint.phase = "resume-acknowledged";
+					try {
+						await this.save(meta, undefined, undefined, true);
+					} catch (error) {
+						checkpoint.phase = "unknown";
+						throw error;
+					}
+				}
 				delete meta.sleepPaused;
 				if (meta.updatePaused) {
 					delete meta.updatePaused;
@@ -10989,6 +11276,10 @@ ${run.excerpt}`,
 					return;
 				}
 			} catch (error) {
+				if (meta.lifecycleCheckpoint?.phase === "resume-admitted") {
+					meta.lifecycleCheckpoint.phase = "unknown";
+					await this.save(meta, undefined, undefined, true);
+				}
 				if (this.closing || this.sleepPause) return;
 				if (error instanceof WorkerUnavailable) {
 					// Startup may have committed state before its acknowledgement was lost. Keep stable IDs.
@@ -11029,6 +11320,7 @@ ${run.excerpt}`,
 			.then(() => rejected)
 			.finally(() => {
 				this.starting.delete(id);
+				this.lifecycleResuming.delete(id);
 				this.emit(meta);
 				void this.archiveMissionCoordinator(meta);
 			});
@@ -11067,6 +11359,16 @@ ${run.excerpt}`,
 		if (existing) return existing;
 		if (this.closing) throw new Error("pilotd is shutting down");
 		const meta = this.require(id);
+		const checkpoint = meta.lifecycleCheckpoint;
+		if (checkpoint?.phase === "resume-admitted" && !this.missionAllowsUpgradeResume(id, checkpoint))
+			throw new Conflict("Mission controls changed during upgrade recovery");
+		if (
+			checkpoint &&
+			checkpoint.phase !== "resume-acknowledged" &&
+			!(checkpoint.phase === "resume-admitted" && this.lifecycleResuming.get(id) === checkpoint) &&
+			!(checkpoint.phase === "stopped" && meta.pending?.[0]?.type === "abort")
+		)
+			throw new Conflict("Lifecycle recovery has not admitted this worker");
 		const launchReason: AIWorkerLaunchReason | undefined = meta.kernelRestartPending
 			? "crash_recovery"
 			: this.nextWorkerLaunchReason.get(id);
@@ -11109,6 +11411,7 @@ ${run.excerpt}`,
 						this.sleepPause ||
 						meta.archivedAt !== undefined ||
 						this.isMissionCoordinator(id) !== !!view ||
+						(checkpoint?.phase === "resume-admitted" && !this.missionAllowsUpgradeResume(id, checkpoint)) ||
 						meta.coordinatorView?.scratch !== view?.scratch
 					) {
 						child?.once("error", () => {});
@@ -11168,6 +11471,8 @@ ${run.excerpt}`,
 				})()
 			: undefined;
 		// Only the factory's synchronous prefix. Awaited isolation/readiness is not main-thread CPU work.
+		if (checkpoint?.phase === "resume-admitted" && !this.missionAllowsUpgradeResume(id, checkpoint))
+			throw new Conflict("Mission controls changed before worker admission");
 		const opening = operations.time("worker.construct", () =>
 			createWorker(
 				{
@@ -11342,6 +11647,36 @@ ${run.excerpt}`,
 	}
 
 	private onPacket(meta: SessionMeta, worker: SessionWorker, packet: KernelPacket): void {
+		// A user Stop can be admitted while this exact worker is closing. Its reply
+		// still belongs to the waiting Stop, not to discarded lifecycle display state.
+		if (packet.type === "aborted" && this.lifecycleClosing.has(worker) && this.stopResults.has(packet.requestId)) {
+			this.stopResults.set(packet.requestId, packet.withdrawn ?? []);
+			return;
+		}
+		if (packet.type === "lifecycle.checkpointed") {
+			const closing = this.lifecycleClosing.get(worker);
+			if (
+				closing &&
+				this.workers.get(meta.id) === worker &&
+				meta.lifecycleCheckpoint === closing.checkpoint &&
+				closing.requestId === packet.requestId &&
+				closing.checkpoint.operationId === packet.operationId &&
+				packet.children.length <= 256 &&
+				packet.conversationId
+			) {
+				closing.checkpoint.children = packet.children.map(({ name, storage, conversationId, state }) => ({
+					name,
+					storage,
+					conversationId,
+					state,
+				}));
+				closing.checkpoint.conversationId = packet.conversationId;
+				closing.checkpoint.childrenConfirmed = true;
+				closing.checkpoint.census = { jobs: packet.jobs, hasChildren: packet.hasChildren };
+				closing.censusClear = packet.jobs === 0 && packet.hasChildren === false;
+			}
+			return;
+		}
 		if (this.parked.has(worker)) return;
 		if (packet.type === "model.configuration.guard") {
 			let error: string | undefined;
@@ -13496,6 +13831,7 @@ ${run.excerpt}`,
 		if (this.writtenSubscriptionPolicies.get(meta.id) === contents) {
 			await saved;
 			this.restoreSubscriptionAdmission(meta.id);
+			this.resumeCheckpointAfterHold(meta);
 			return;
 		}
 		const write = this.subscriptionPolicyWrites
@@ -13515,6 +13851,18 @@ ${run.excerpt}`,
 		this.subscriptionPolicyWrites = write;
 		await Promise.all([saved, write]);
 		this.restoreSubscriptionAdmission(meta.id);
+		this.resumeCheckpointAfterHold(meta);
+	}
+
+	private resumeCheckpointAfterHold(meta: SessionMeta): void {
+		if (
+			meta.lifecycleCheckpoint?.phase === "checkpointed" &&
+			!this.updateGate.paused &&
+			!this.updateGate.frozen &&
+			!this.workers.has(meta.id) &&
+			this.lifecycleRecoveryAllowed(meta)
+		)
+			void this.start(meta.id).catch((error) => console.warn("pilotd: lifecycle hold recovery", error));
 	}
 
 	private restoreSubscriptionAdmission(id: string): void {
@@ -13666,6 +14014,10 @@ ${run.excerpt}`,
 			const file = join(this.dir(meta.id), "meta.json");
 			const temp = `${file}.${randomUUID()}.tmp`;
 			const persisted = operations.time("sessions.metadata.parse", () => JSON.parse(snapshot) as SessionMeta);
+			// Late lifecycle snapshots cannot resurrect ownership or an earlier Stop generation.
+			if (meta.lifecycleCheckpoint) persisted.lifecycleCheckpoint = structuredClone(meta.lifecycleCheckpoint);
+			else delete persisted.lifecycleCheckpoint;
+			persisted.inputGeneration = meta.inputGeneration;
 			// Preserve the immutable execution ceiling across queued lifecycle snapshots.
 			persisted.executionPermission = meta.executionPermission;
 			// Captured lifecycle snapshots must never resurrect an earlier enabled grant.

@@ -26,6 +26,18 @@ async function fixture(t: TestContext) {
 	const projects = new ProjectStore(home);
 	const commands: KernelCommand[] = [];
 	let report!: (packet: KernelPacket) => void;
+	const checkpointReply = (
+		command: Extract<KernelCommand, { type: "checkpointLifecycle" }>,
+		census = { jobs: 0, hasChildren: false },
+	) =>
+		report({
+			type: "lifecycle.checkpointed",
+			requestId: command.requestId,
+			operationId: command.operationId,
+			conversationId: "root",
+			children: [],
+			...census,
+		});
 	const worker: SessionWorker = {
 		ready: Promise.resolve(),
 		state: "idle",
@@ -34,7 +46,10 @@ async function fixture(t: TestContext) {
 			commands.push(command);
 			if (command.type === "update.pause") report({ type: "update.paused", id: command.id });
 		},
-		request: async () => {},
+		request: async (command) => {
+			commands.push(command);
+			if (command.type === "checkpointLifecycle") checkpointReply(command);
+		},
 		close: async () => {},
 		jobs: async () => [],
 		hasChildren: async () => false,
@@ -105,6 +120,8 @@ async function fixture(t: TestContext) {
 		owner,
 		sessions,
 		worker,
+		report: (packet: KernelPacket) => report(packet),
+		checkpointReply,
 		terminals,
 		commands,
 		chat,
@@ -175,7 +192,12 @@ for (const purpose of ["daemon-upgrade", "daemon-stop", "daemon-restart"] as con
 			assert.equal(journal.phase, "checkpointing");
 			const meta = JSON.parse(await readFile(join(f.home, "sessions", f.chat.id, "meta.json"), "utf8"));
 			assert.equal(meta.updatePaused, true);
+			assert.equal(meta.lifecycleCheckpoint.operationId, input.operationId);
+			assert.equal(meta.lifecycleCheckpoint.phase, "checkpointing");
+			assert.equal(meta.lifecycleCheckpoint.inputGeneration, meta.inputGeneration ?? 0);
+			assert.ok(meta.lifecycleCheckpoint.incarnation);
 			checkpoints++;
+			f.checkpointReply(command as Extract<KernelCommand, { type: "checkpointLifecycle" }>);
 		};
 		const input = { operationId: randomUUID(), purpose, interrupt: true };
 		const held = await f.request("prepare", input);
@@ -186,6 +208,10 @@ for (const purpose of ["daemon-upgrade", "daemon-stop", "daemon-restart"] as con
 		assert.equal((await f.request("prepare", input)).status, 409);
 		assert.equal(checkpoints, 1);
 		assert.equal(JSON.parse(await readFile(join(f.home, ".daemon-lifecycle.json"), "utf8")).phase, "checkpointed");
+		const manifest = f.sessions.lifecycleManifest(input.operationId);
+		assert.equal(manifest.length, 1);
+		assert.equal(manifest[0]!.sessionId, f.chat.id);
+		assert.equal(manifest[0]!.checkpoint.phase, "checkpointed");
 		assert.equal(
 			f.commands.some((command) => command.type === "abort"),
 			false,
@@ -381,4 +407,214 @@ test("daemon reservation never substitutes an idle worker for an acknowledged to
 		pauses,
 		"reservation never drains work itself",
 	);
+});
+
+test("parked Stop commits its generation and abort under the upgrade fence", async (t) => {
+	const f = await fixture(t);
+	f.report({ type: "working", working: true });
+	const held = await f.request("prepare", { operationId: randomUUID(), purpose: "daemon-upgrade", interrupt: true });
+	assert.equal(held.status, 200);
+	const before = f.commands.length;
+	assert.deepEqual(await f.sessions.stop(f.chat.id), { ok: true });
+	const meta = JSON.parse(await readFile(join(f.home, "sessions", f.chat.id, "meta.json"), "utf8"));
+	assert.equal(meta.inputGeneration, 1);
+	assert.equal(meta.lifecycleCheckpoint.phase, "stopped");
+	assert.equal(meta.pending[0].type, "abort");
+	assert.equal(f.commands.length, before, "parked Stop cannot open or resume a worker under the fence");
+	assert.equal((await f.request("cancel", held.receipt)).status, 200);
+	await f.sessions.resumeMaintenance();
+	const deadline = Date.now() + 3_000;
+	while (!f.commands.some((command) => command.type === "abort")) {
+		assert.ok(Date.now() < deadline);
+		await delay(1);
+	}
+	assert.equal(
+		f.commands.slice(before).some((command) => command.type === "input" || command.type === "update.resume"),
+		false,
+	);
+});
+
+test("Stop during checkpoint cannot be overwritten by the late close ACK", async (t) => {
+	const f = await fixture(t);
+	f.report({ type: "working", working: true });
+	let entered!: () => void;
+	const checkpointing = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	f.worker.request = async (command) => {
+		if (command.type === "checkpointLifecycle") {
+			entered();
+			await gate;
+			f.checkpointReply(command);
+		}
+		if (command.type === "abort")
+			f.report({
+				type: "aborted",
+				requestId: command.requestId,
+				withdrawn: [{ requestId: "queued", content: "exact queued draft" }],
+			});
+	};
+	const input = { operationId: randomUUID(), purpose: "daemon-upgrade", interrupt: true };
+	const preparing = f.request("prepare", input);
+	try {
+		await checkpointing;
+		assert.deepEqual(await f.sessions.stop(f.chat.id), { ok: true, draft: "exact queued draft" });
+	} finally {
+		release();
+	}
+	const held = await preparing;
+	assert.equal(held.status, 200);
+	const checkpoint = f.sessions.lifecycleManifest(input.operationId)[0]!.checkpoint;
+	assert.equal(checkpoint.phase, "stopped");
+	assert.equal(checkpoint.inputGeneration, 0, "original ownership must not follow later user intent");
+});
+
+test("lost explicit checkpoint ACK remains unknown after cancellation, even with no worker", async (t) => {
+	const f = await fixture(t);
+	const input = { operationId: randomUUID(), purpose: "daemon-upgrade", interrupt: true };
+	f.worker.request = async () => {
+		throw new Error("checkpoint reply lost");
+	};
+	assert.equal((await f.request("prepare", input)).status, 409);
+	await f.sessions.resumeMaintenance();
+	assert.equal(f.sessions.lifecycleManifest(input.operationId)[0]!.checkpoint.phase, "unknown");
+	assert.equal(
+		f.commands.some((command) => command.type === "update.resume"),
+		false,
+	);
+	assert.equal((await f.request("prepare", { operationId: randomUUID(), purpose: "daemon-upgrade" })).status, 409);
+});
+
+for (const census of [
+	{ jobs: 1, hasChildren: false },
+	{ jobs: 0, hasChildren: true },
+]) {
+	test(`explicit close ACK does not override jobs=${census.jobs} children=${census.hasChildren}`, async (t) => {
+		const f = await fixture(t);
+		f.worker.request = async (command) => {
+			if (command.type === "checkpointLifecycle") f.checkpointReply(command, census);
+		};
+		const input = { operationId: randomUUID(), purpose: "daemon-upgrade", interrupt: true };
+		assert.equal((await f.request("prepare", input)).status, 409);
+		const checkpoint = f.sessions.lifecycleManifest(input.operationId)[0]!.checkpoint;
+		assert.equal(checkpoint.phase, "unknown");
+		assert.equal(checkpoint.quiescent, undefined);
+		assert.deepEqual(checkpoint.census, census);
+	});
+}
+
+test("close ACK without the exact operation child inventory never proves quiescence", async (t) => {
+	const f = await fixture(t);
+	f.worker.request = async (command) => {
+		if (command.type === "checkpointLifecycle") f.checkpointReply({ ...command, operationId: randomUUID() });
+	};
+	const input = { operationId: randomUUID(), purpose: "daemon-upgrade", interrupt: true };
+	assert.equal((await f.request("prepare", input)).status, 409);
+	assert.equal(f.sessions.lifecycleManifest(input.operationId)[0]!.checkpoint.childrenConfirmed, undefined);
+});
+
+test("close ACK and clear child census still wait for the exact worker exit", async (t) => {
+	const f = await fixture(t);
+	let entered!: () => void;
+	const closing = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	let exit!: () => void;
+	const exitGate = new Promise<void>((resolve) => {
+		exit = resolve;
+	});
+	f.worker.close = async () => {
+		entered();
+		await exitGate;
+	};
+	const input = { operationId: randomUUID(), purpose: "daemon-upgrade", interrupt: true };
+	const preparing = f.request("prepare", input);
+	try {
+		await closing;
+		const checkpoint = f.sessions.lifecycleManifest(input.operationId)[0]!.checkpoint;
+		assert.equal(checkpoint.phase, "checkpointing");
+		assert.equal(checkpoint.quiescent, undefined);
+		await assert.rejects(f.sessions.send(f.chat.id, "admission race"), /update/);
+	} finally {
+		exit();
+	}
+	assert.equal((await preparing).status, 200);
+	assert.equal(f.sessions.lifecycleManifest(input.operationId)[0]!.checkpoint.quiescent, true);
+});
+
+test("failed ownership save cannot interrupt or replace the existing worker", async (t) => {
+	const f = await fixture(t);
+	const internal = f.sessions as unknown as { save(meta: unknown, ...args: unknown[]): Promise<void> };
+	const save = internal.save;
+	const mocked = t.mock.method(internal, "save", async function (meta: unknown, ...args: unknown[]) {
+		if ((meta as { lifecycleCheckpoint?: { phase: string } }).lifecycleCheckpoint?.phase === "checkpointing")
+			throw new Error("checkpoint ownership fsync failed");
+		return save.call(f.sessions, meta, ...args);
+	});
+	const before = f.commands.length;
+	const input = { operationId: randomUUID(), purpose: "daemon-upgrade", interrupt: true };
+	assert.equal((await f.request("prepare", input)).status, 409);
+	assert.equal(
+		f.commands
+			.slice(before)
+			.some(
+				(command) =>
+					command.type === "checkpointLifecycle" ||
+					command.type === "shutdown" ||
+					command.type === "update.resume",
+			),
+		false,
+	);
+	mocked.mock.restore();
+});
+
+test("replacement shutdown joins a parked Stop admitted after the checkpoint", async (t) => {
+	const f = await fixture(t);
+	f.report({ type: "working", working: true });
+	assert.equal(
+		(await f.request("prepare", { operationId: randomUUID(), purpose: "daemon-upgrade", interrupt: true })).status,
+		200,
+	);
+	const internal = f.sessions as unknown as { save(meta: unknown, ...args: unknown[]): Promise<void> };
+	const save = internal.save;
+	let entered!: () => void;
+	const savingStop = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	let release!: () => void;
+	const saveGate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	let held = false;
+	const mocked = t.mock.method(internal, "save", async function (meta: unknown, ...args: unknown[]) {
+		if (!held && (meta as { lifecycleCheckpoint?: { phase: string } }).lifecycleCheckpoint?.phase === "stopped") {
+			held = true;
+			entered();
+			await saveGate;
+		}
+		return save.call(f.sessions, meta, ...args);
+	});
+	const stopped = f.sessions.stop(f.chat.id);
+	await savingStop;
+	let exited = false;
+	const shuttingDown = f.sessions.shutdown().then(() => {
+		exited = true;
+	});
+	try {
+		await delay(20);
+		assert.equal(exited, false, "a replacement cannot release the profile before its admitted Stop commits");
+	} finally {
+		release();
+	}
+	await stopped;
+	await shuttingDown;
+	mocked.mock.restore();
+	const meta = JSON.parse(await readFile(join(f.home, "sessions", f.chat.id, "meta.json"), "utf8"));
+	assert.equal(meta.inputGeneration, 1);
+	assert.equal(meta.pending[0].type, "abort");
+	assert.equal(meta.lifecycleCheckpoint.phase, "stopped");
 });

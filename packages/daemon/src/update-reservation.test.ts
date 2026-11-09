@@ -1,9 +1,50 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { LifecycleRuntime } from "./lifecycle-checkpoint.ts";
 import { RuntimeAdmission, RuntimeResources } from "./runtime-admission.ts";
 import { UpdateReservation } from "./update-reservation.ts";
 
 const operation = "12345678-1234-1234-1234-123456789abc";
+
+test("explicit replacement is signed, immutable and cannot be changed by a returned receipt", async () => {
+	const target: LifecycleRuntime = {
+		runtimeRoot: "/immutable/candidate/runtime",
+		build: {
+			schema: 1,
+			source: "a".repeat(40),
+			version: "1.2.0",
+			protocol: 1,
+			platform: "darwin",
+			arch: "arm64",
+			node: "24.21.0",
+		},
+	};
+	const resources = { freezeAdmissions: () => () => {}, blockers: async () => [] };
+	let checkpointTarget: LifecycleRuntime | undefined;
+	const gate = new UpdateReservation(
+		resources,
+		undefined,
+		undefined,
+		resources,
+		() => true,
+		async (_id, _purpose, replacement) => {
+			checkpointTarget = replacement;
+		},
+	);
+	try {
+		await assert.rejects(gate.prepare(operation, undefined, undefined, target), /replacement_invalid/);
+		const receipt = await gate.prepare(operation, "daemon-upgrade", true, target);
+		assert.deepEqual(checkpointTarget, target);
+		assert.deepEqual(gate.verify(receipt), receipt);
+		target.runtimeRoot = "/mutated/input";
+		assert.notEqual(gate.verify(receipt).replacement?.runtimeRoot, target.runtimeRoot);
+		receipt.replacement!.runtimeRoot = "/mutated/receipt";
+		assert.throws(() => gate.verify(receipt), /expired/);
+		assert.throws(() => gate.verify({ ...receipt, replacement: undefined }), /expired/);
+	} finally {
+		gate.close();
+	}
+});
 function fixture() {
 	let clock = 0,
 		frozen = 0,

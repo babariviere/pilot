@@ -27,7 +27,7 @@ def phase_timings(output):
 def hashes():
     paths = [p for p in (DESKTOP / "updater").rglob("*")
              if p.is_file() and p.suffix in (".rs", ".m", ".toml", ".lock") and "target" not in p.parts]
-    paths += [ROOT / "packages/daemon/src" / name for name in ("runtime-owner.ts", "update-reservation.ts")]
+    paths += [ROOT / "packages/daemon/src" / name for name in ("runtime-owner.ts", "update-reservation.ts", "lifecycle-checkpoint.ts")]
     paths += [Path(__file__).resolve()]
     return {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(paths)}
 

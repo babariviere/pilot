@@ -522,6 +522,11 @@ export function createDaemonServer(
 		...(setup ? [setup] : []),
 	];
 	const runtimeResources = new RuntimeResources([...runtimeSources, ...(liveUpdate?.contributors ?? [])]);
+	if (bootstrap)
+		sessions.bindLifecycleRuntime({
+			...bootstrap.identity(),
+			...(hello?.lineageId ? { host: { daemonId: hello.daemonId, lineageId: hello.lineageId } } : {}),
+		});
 	liveUpdate?.service.attach(runtimeResources);
 	// Freeze synchronously before loading retained maintenance, before any recovery is admitted.
 	const runtimeReady = liveUpdate?.service.load() ?? Promise.resolve();
@@ -560,7 +565,7 @@ export function createDaemonServer(
 		},
 		// Stop/Restart cannot interrupt an unfinished run merely because it paused.
 		() => sessions.prepareUpdate().ready,
-		async (operationId, purpose) => {
+		async (operationId, purpose, replacement) => {
 			// Intent is on disk before the first interrupted tool/job. The native
 			// handoff journal separately owns service stop/start and runtime identity.
 			await durableJSON(join(_config.home, ".daemon-lifecycle.json"), {
@@ -571,7 +576,7 @@ export function createDaemonServer(
 			});
 			lifecycleInterrupted = true;
 			const checkpoints = await Promise.allSettled([
-				sessions.checkpointLifecycle(),
+				sessions.checkpointLifecycle(operationId, purpose, replacement),
 				terminals.checkpointLifecycle(),
 			]);
 			const failed = checkpoints.find((result) => result.status === "rejected");
@@ -581,6 +586,7 @@ export function createDaemonServer(
 				operationId,
 				purpose,
 				phase: "checkpointed",
+				affectedSessions: sessions.lifecycleManifest(operationId),
 			});
 		},
 	);
@@ -627,7 +633,12 @@ export function createDaemonServer(
 		}
 		if (action === "inspect") return receipt;
 		if (action === "prepare") {
-			const prepared = await reservations.prepare(receipt.operationId, receipt.purpose, receipt.interrupt);
+			const prepared = await reservations.prepare(
+				receipt.operationId,
+				receipt.purpose,
+				receipt.interrupt,
+				receipt.replacement,
+			);
 			coordinatedReservation = binding ? { operationId: receipt.operationId, binding } : undefined;
 			return coordinated ? { ...prepared, liveUpdate: structuredClone(coordinated) } : prepared;
 		}

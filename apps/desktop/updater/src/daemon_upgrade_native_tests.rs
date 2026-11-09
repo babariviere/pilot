@@ -25,7 +25,7 @@ const reservation=new UpdateReservation(resources,undefined,180000,resources,()=
 });
 owner.updates(async(action,value)=>{
  if(action==='prepare'){
-   const exact=await reservation.prepare(value.operationId,value.purpose,value.interrupt);
+   const exact=await reservation.prepare(value.operationId,value.purpose,value.interrupt,value.replacement);
    if(existsSync(process.env.PILOT_HOME+'/lost-prepare')){
      writeFileSync(process.env.PILOT_HOME+'/fixture-receipt',JSON.stringify(exact),{mode:0o600});
      await new Promise(()=>{});
@@ -79,6 +79,11 @@ fn bundle(root: &Path, name: &str, id: &str, build: &str, node: &Path, _new: boo
     fs::write(
         runtime.join("packages/daemon/src/update-reservation.ts"),
         include_str!("../../../../packages/daemon/src/update-reservation.ts"),
+    )
+    .unwrap();
+    fs::write(
+        runtime.join("packages/daemon/src/lifecycle-checkpoint.ts"),
+        include_str!("../../../../packages/daemon/src/lifecycle-checkpoint.ts"),
     )
     .unwrap();
     // Exercise the production Swift stamp producer, not a fixture-only tuple.

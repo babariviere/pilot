@@ -65,7 +65,10 @@ test("a queued Stop fences parked recovery until abort, preserving drafts and he
 		);
 	}, context);
 	assert.equal(f.faux.state.callCount, 0);
-	await session.close();
+	const closed = await session.checkpointLifecycle();
+	assert.equal(closed.jobs, 0);
+	assert.equal(closed.hasChildren, false);
+	assert.ok(closed.conversationId);
 	session = await KernelSession.open({ ...spec, stopOnOpen: true }, { onWorking: () => {} });
 	assert.equal((await session.harness.inspect(context)).scheduling, "paused");
 	await session.pauseForUpdate();

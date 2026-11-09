@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Connection {
     location: Location,

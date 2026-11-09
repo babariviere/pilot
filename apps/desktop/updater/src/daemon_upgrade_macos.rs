@@ -330,11 +330,11 @@ impl LaunchAgent<'_> {
 impl Handoff for LaunchAgent<'_> {
     fn reserve(&mut self) -> Result<(), Failure> {
         self.reservation = Some(if !self.automatic {
-            super::reservation::Reservation::prepare_explicit(
+            super::reservation::Reservation::prepare_replacement(
                 &self.location,
                 &self.owner,
-                "daemon-upgrade",
                 self.coordinated.as_ref(),
+                &json!({"runtimeRoot": self.current.join(crate::layout::RUNTIME), "build": super::native::runtime_stamp(&self.current)?}),
             )?
         } else {
             super::reservation::Reservation::prepare(&self.location, &self.owner)?

@@ -25,7 +25,7 @@ impl Reservation {
         purpose: &str,
         binding: Option<&Value>,
     ) -> Result<Self, Failure> {
-        Self::prepare_request(location, owner, purpose, binding, false)
+        Self::prepare_request(location, owner, purpose, binding, false, None)
     }
     pub(super) fn prepare_explicit(
         location: &Location,
@@ -33,7 +33,22 @@ impl Reservation {
         purpose: &str,
         binding: Option<&Value>,
     ) -> Result<Self, Failure> {
-        Self::prepare_request(location, owner, purpose, binding, true)
+        Self::prepare_request(location, owner, purpose, binding, true, None)
+    }
+    pub(super) fn prepare_replacement(
+        location: &Location,
+        owner: &Value,
+        binding: Option<&Value>,
+        replacement: &Value,
+    ) -> Result<Self, Failure> {
+        Self::prepare_request(
+            location,
+            owner,
+            "daemon-upgrade",
+            binding,
+            true,
+            Some(replacement),
+        )
     }
     fn prepare_request(
         location: &Location,
@@ -41,6 +56,7 @@ impl Reservation {
         purpose: &str,
         binding: Option<&Value>,
         interrupt: bool,
+        replacement: Option<&Value>,
     ) -> Result<Self, Failure> {
         if !["daemon-upgrade", "daemon-stop", "daemon-restart"].contains(&purpose) {
             return Err(Failure::Unsupported);
@@ -61,6 +77,9 @@ impl Reservation {
         }
         if let Some(binding) = binding {
             request["liveUpdate"] = binding.clone();
+        }
+        if let Some(replacement) = replacement {
+            request["replacement"] = replacement.clone();
         }
         let receipt =
             coordination::signed_update(location, owner, &request, "prepare").map_err(failure)?;
@@ -104,9 +123,12 @@ fn validate_receipt(receipt: &Value, request: &Value) -> Result<(), Failure> {
     let bound = request.get("liveUpdate");
     if receipt.as_object().is_none_or(|v| {
         v.len()
-            != 4 + usize::from(bound.is_some()) + usize::from(request.get("interrupt").is_some())
+            != 4 + usize::from(bound.is_some())
+                + usize::from(request.get("interrupt").is_some())
+                + usize::from(request.get("replacement").is_some())
     }) || receipt.get("liveUpdate") != bound
         || receipt.get("interrupt") != request.get("interrupt")
+        || receipt.get("replacement") != request.get("replacement")
         || receipt["schema"] != 1
         || receipt["operationId"] != request["operationId"]
         || receipt["purpose"] != request["purpose"]
@@ -150,6 +172,27 @@ mod tests {
             deadline: Instant::now() - Duration::from_secs(1),
         };
         assert_eq!(expired.fresh(), Err(Failure::Busy));
+    }
+    #[test]
+    fn replacement_receipt_requires_the_exact_signed_target_and_interrupt() {
+        let request = json!({"operationId":"new","purpose":"daemon-upgrade","interrupt":true,"replacement":{"runtimeRoot":"/immutable/candidate/runtime","build":{"source":"a".repeat(40)}}});
+        let mut receipt = request.clone();
+        receipt["schema"] = 1.into();
+        receipt["token"] = "b".repeat(64).into();
+        assert_eq!(validate_receipt(&receipt, &request), Ok(()));
+        for field in ["replacement", "interrupt"] {
+            let mut missing = receipt.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert_eq!(
+                validate_receipt(&missing, &request),
+                Err(Failure::Unverified)
+            );
+        }
+        receipt["replacement"]["runtimeRoot"] = "/immutable/other/runtime".into();
+        assert_eq!(
+            validate_receipt(&receipt, &request),
+            Err(Failure::Unverified)
+        );
     }
 }
 

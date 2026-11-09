@@ -27,6 +27,11 @@ pub mod installer;
 ))]
 pub mod iteration;
 pub mod layout;
+#[cfg(any(
+    all(target_os = "macos", feature = "native-macos"),
+    all(target_os = "linux", feature = "native-linux")
+))]
+pub mod lifecycle;
 #[cfg(any(test, target_os = "linux"))]
 pub mod linux;
 pub mod manifest;

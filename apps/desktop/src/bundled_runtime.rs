@@ -648,14 +648,10 @@ pub(crate) fn daemon_upgrade_needed(
         let root = package_root(&executable).map_err(|_| Failure::Unverified)?;
         let trust =
             pilot_desktop_updater::helper::compiled_trust().map_err(|_| Failure::Unverified)?;
-        pilot_desktop_updater::daemon_upgrade::needed(
-            location,
-            root,
-            &trust,
-            &daemon_id,
-            &lineage_id,
-            &cancel,
+        pilot_desktop_updater::lifecycle::DaemonLifecycle::new(
+            pilot_desktop_updater::app_update::Connection::new(location, daemon_id, lineage_id),
         )
+        .needed(root, &trust, &cancel)
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -712,15 +708,10 @@ pub(crate) fn upgrade_daemon_coordinated(
     let capsule =
         service_runtime(root, &trust, &cancel, deadline).map_err(|_| Failure::Unverified)?;
     // Do not clean transaction evidence before durable coordinated completion.
-    pilot_desktop_updater::daemon_upgrade::upgrade_coordinated(
-        location,
-        &capsule,
-        &trust,
-        &daemon_id,
-        &lineage_id,
-        &cancel,
-        binding,
+    pilot_desktop_updater::lifecycle::DaemonLifecycle::new(
+        pilot_desktop_updater::app_update::Connection::new(location, daemon_id, lineage_id),
     )
+    .upgrade_coordinated(&capsule, &trust, &cancel, binding)
 }
 
 fn upgrade_daemon(
@@ -757,18 +748,15 @@ fn upgrade_daemon(
         })?;
         #[cfg(target_os = "linux")]
         let capsule = own_capsule(root, &cancel, deadline).map_err(|_| Failure::Unverified)?;
-        #[cfg(target_os = "macos")]
-        let worker = if automatic {
-            pilot_desktop_updater::daemon_upgrade::upgrade_startup
+        let mode = if automatic {
+            pilot_desktop_updater::lifecycle::UpgradeMode::Startup
         } else {
-            pilot_desktop_updater::daemon_upgrade::upgrade
+            pilot_desktop_updater::lifecycle::UpgradeMode::Explicit
         };
-        #[cfg(target_os = "linux")]
-        let worker = {
-            let _ = automatic;
-            pilot_desktop_updater::daemon_upgrade::upgrade
-        };
-        worker(location, &capsule, &trust, &daemon_id, &lineage_id, &cancel)?;
+        pilot_desktop_updater::lifecycle::DaemonLifecycle::new(
+            pilot_desktop_updater::app_update::Connection::new(location, daemon_id, lineage_id),
+        )
+        .upgrade(&capsule, &trust, mode, &cancel)?;
         #[cfg(target_os = "macos")]
         {
             // The switched daemon no longer reads the exchanged GUI or old runtime.
