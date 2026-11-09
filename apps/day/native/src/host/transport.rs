@@ -192,6 +192,7 @@ impl Transport {
             || v["missionId"] != id
             || v["status"] != "available"
             || v["view"]["interview"]["fence"]["missionId"] != id
+            || !v["view"]["interviewHistory"].is_array()
             || v["contextDigest"].as_str().is_none_or(|s| s.len() != 64)
         {
             return Err(Error::Invalid);

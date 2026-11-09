@@ -475,39 +475,40 @@ pub fn page(read: &Value, ops: &[Value], local: &Local) -> PlanPage {
         _ if !continuation => PlanStage::Submitted,
         _ => PlanStage::Planning,
     };
-    // The read holds the latest submission only; earlier rounds stay with the daemon.
-    let rounds = if submitted_any {
-        let sub = &view["interview"]["submission"];
-        let answers = arr(&sub["questions"])
-            .iter()
-            .map(|q| {
-                let a = arr(&sub["answers"])
-                    .iter()
-                    .find(|a| a["questionId"] == q["id"]);
-                let meaning = a
-                    .map(|a| s(&a["selectedOption"]["meaning"]))
-                    .unwrap_or_default();
-                let text = a.map(|a| s(&a["text"])).unwrap_or_default();
-                RoundAnswer {
-                    prompt: s(&q["prompt"]),
-                    answer: [meaning.as_str(), text.trim()]
-                        .into_iter()
-                        .filter(|p| !p.is_empty())
-                        .collect::<Vec<_>>()
-                        .join(". "),
-                }
-            })
-            .collect();
-        vec![RoundLine {
-            id: s(&sub["operationId"]),
-            title: format!("Round {}", sub["fence"]["questionSetRevision"]),
-            line: format!("{} answers, submitted", arr(&sub["answers"]).len()),
-            state: RoundState::Submitted,
-            answers,
-        }]
-    } else {
-        Vec::new()
-    };
+    // History never supplies the current interview, proposal, intents or approval.
+    let rounds = arr(&view["interviewHistory"])
+        .iter()
+        .map(|entry| {
+            let sub = &entry["interview"]["submission"];
+            let answers = arr(&sub["questions"])
+                .iter()
+                .map(|q| {
+                    let a = arr(&sub["answers"])
+                        .iter()
+                        .find(|a| a["questionId"] == q["id"]);
+                    let meaning = a
+                        .map(|a| s(&a["selectedOption"]["meaning"]))
+                        .unwrap_or_default();
+                    let text = a.map(|a| s(&a["text"])).unwrap_or_default();
+                    RoundAnswer {
+                        prompt: s(&q["prompt"]),
+                        answer: [meaning.as_str(), text.trim()]
+                            .into_iter()
+                            .filter(|p| !p.is_empty())
+                            .collect::<Vec<_>>()
+                            .join(". "),
+                    }
+                })
+                .collect();
+            RoundLine {
+                id: s(&sub["operationId"]),
+                title: format!("Round {}", sub["fence"]["questionSetRevision"]),
+                line: format!("{} answers, submitted", arr(&sub["answers"]).len()),
+                state: RoundState::Submitted,
+                answers,
+            }
+        })
+        .collect();
     PlanPage {
         mission_id,
         title: String::new(),

@@ -161,11 +161,13 @@ steps; starting work is never on this page.
 `PlanFeed::from_host` (Rust only) binds the planning screens to the native
 host's saved interview reads, saves, submission and exact receipt checks
 (`native/src/plan_host.rs`, with the backend's own question digests). There,
-New cannot start a mission or a chat yet (the desktop New intent is unbound).
+Native New can create an interview; standalone chat start stays unavailable.
+The default entry remains mock-only.
 "Pilot continues planning" follows a bound planning worker's phase and says it is
 not connected otherwise; "Work started" stays unavailable (no agreement or build
-admission). Earlier rounds show only the latest submitted one: the host read
-carries no older round history. A mission without a saved interview says so instead of
+admission). Earlier rounds show every submitted round and its saved answers in order,
+including after reopening. They are read-only, not current answers or approval.
+A mission without a saved interview says so instead of
 showing an empty plan.
 
 Not built yet: the day switcher, rituals, Changes, Automations, the sky

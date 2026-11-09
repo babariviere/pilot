@@ -88,6 +88,17 @@ configuration, decisions, brief and complete planning revision across async read
 binds that evidence. A legacy/non-enrolled mission returns `status: not-enrolled`, `view: null` and
 explicit unavailable capabilities. This differs from an enrolled interview with no map yet.
 
+`view.interviewHistory` lists every original submitted snapshot in SQLite append order, including
+the latest submission. Each entry contains the complete `interview` at submission (revision,
+owner fence, enrollment/question/answer revisions, exact questions, option meanings, custom text,
+submission operation/digest and brief revision). Its `plan` is the immutable snapshot that opened
+that question set through the same operation, or `null` for an initial interview without one.
+It is not today's plan. No new store, migration or guessed historical context is used.
+The same current owner/project checks and durability barrier protect history. An empty list means
+no submissions; failed authorization, storage or a missing history field is unavailable, not empty.
+The native mapper fills the existing read-only `RoundLine` list in that order. History never supplies
+the current interview, intent, review approval, worker hold or continuation authority.
+
 `write_interview(mission, contextDigest, InterviewWrite)` accepts only `interview-save` and
 `interview-submit`. It rechecks the exact displayed interview CAS and complete context, fsyncs the
 entire native-created `DurableOperation`, checks again, then uses the existing `/api/operations`
@@ -180,6 +191,7 @@ node --test --test-timeout=120000 --test-concurrency=2 \
   packages/daemon/src/mission-controls.test.ts \
   packages/daemon/src/project-dashboard-server.test.ts \
   packages/daemon/src/native-mission-planning.test.ts
+node --test --test-timeout=120000 packages/daemon/src/interview-history.test.ts
 pnpm typecheck
 ```
 
@@ -208,3 +220,10 @@ the real Rust host/credential reader/ledger and a forked faux kernel. It checks 
 exact new enrollment, changed configuration/project/owner, post-journal rechecks, single-use setup,
 preparing then the full round, Stop/Pause, lost ACK/result mismatch, restart/no resend and joined
 teardown. The default mock CLI, standalone chat start and production native bootstrap stay separate.
+
+`native/tests/plan_host.rs` also drives three rounds through the real native host and isolated daemon,
+then reopens both. It checks exact retained history, independent active edits, chronological mapping,
+old-review refusal, revoked-owner refusal, missing-versus-empty history and zero historical resends.
+`interview-history.test.ts` checks the original submitted snapshots and opening topic/review context,
+changed-proposal publication refusal and owner-membership ABA. These are hidden fixture checks, not
+live enrollment, provider runs or native visual acceptance.

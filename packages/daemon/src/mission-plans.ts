@@ -164,6 +164,7 @@ export class MissionPlans {
 			})),
 			knowledge,
 			interview: pin.interview,
+			interviewHistory: store.interviews.history(missionId),
 			frontier: pin.plan ? planFrontier(pin.plan) : [],
 			activeFog: pin.plan ? activeFog(pin.plan) : [],
 			exploration: pin.plan

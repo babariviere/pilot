@@ -7,9 +7,9 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { WebSocket, WebSocketServer } from "ws";
-import { nativePlanningFixture } from "../native-mission-planning.fixture.ts";
+import { interviewHistoryFixture } from "../interview-history.fixture.ts";
 
-const f = await nativePlanningFixture();
+const { f, nextRound } = await interviewHistoryFixture();
 const ledger = join(f.home, "commands.jsonl");
 let posts = 0,
 	lookups = 0,
@@ -18,6 +18,7 @@ let posts = 0,
 	missing = false;
 let hold: (() => void) | undefined;
 let block = false;
+let missingHistory = false;
 let entered: (() => void) | undefined;
 const sockets = new Set<WebSocket>();
 const wss = new WebSocketServer({ noServer: true });
@@ -55,6 +56,7 @@ const proxy = createServer(async (req, res) => {
 			...(bytes.length ? { body: bytes } : {}),
 		});
 		const body = await reply.json();
+		if (missingHistory && body.view) delete body.view.interviewHistory;
 		if (writing && block) {
 			block = false;
 			await new Promise<void>((resolve) => {
@@ -118,6 +120,8 @@ for await (const line of createInterface({ input: process.stdin })) {
 		hold = undefined;
 	}
 	if (command.action === "owner") f.coordinator = undefined;
+	if (command.action === "next-round") await nextRound();
+	if (command.action === "missing-history") missingHistory = command.value;
 	if (command.action === "restart") {
 		for (const socket of sockets) socket.close();
 		await f.restart();

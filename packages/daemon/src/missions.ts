@@ -762,6 +762,7 @@ export class MissionStore {
 	});
 	readonly interviews = new MissionInterviewStore({
 		one: (sql, ...params) => this.one(sql, ...params),
+		all: (sql, ...params) => this.all(sql, ...params),
 		run: (sql, ...params) => this.run(sql, ...params),
 		transaction: (work) => this.transaction(work, true),
 		durable: () => this.durable(),

@@ -5,6 +5,7 @@ import type {
 	InterviewQuestion,
 	InterviewWrite,
 	MissionInterview,
+	MissionPlan,
 } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import {
@@ -29,6 +30,7 @@ CREATE TABLE IF NOT EXISTS mission_flow_entries (
 `;
 interface Port {
 	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;
+	all(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue>[];
 	run(sql: string, ...params: SQLInputValue[]): void;
 	transaction<T>(work: () => T): T;
 	durable(): Promise<void>;
@@ -113,6 +115,28 @@ export class MissionInterviewStore {
 			missionId,
 		);
 		return row ? JSON.parse(String(row.state)) : undefined;
+	}
+	/** Original submitted snapshots in append order, not later drafts carrying old answers.
+	 * Context is the immutable plan snapshot that opened that question set, never today's plan.
+	 * Callers must check current owner/project access and durability before exposing these records. */
+	history(missionId: string): { interview: MissionInterview; plan: MissionPlan | null }[] {
+		return this.port
+			.all(
+				`SELECT submitted.state, (
+				SELECT p.state FROM mission_interviews opened
+				JOIN mission_plans p ON p.operation_id=opened.operation_id AND p.mission_id=opened.mission_id
+				WHERE opened.mission_id=submitted.mission_id AND opened.sequence<submitted.sequence
+				AND json_extract(opened.state,'$.fence.questionSetRevision')=json_extract(submitted.state,'$.fence.questionSetRevision')
+				ORDER BY opened.sequence LIMIT 1
+			) AS plan FROM mission_interviews submitted
+			WHERE submitted.mission_id=? AND submitted.operation_id=json_extract(submitted.state,'$.submission.operationId')
+			ORDER BY submitted.sequence`,
+				missionId,
+			)
+			.map((row) => ({
+				interview: JSON.parse(String(row.state)),
+				plan: row.plan ? JSON.parse(String(row.plan)) : null,
+			}));
 	}
 	/** New enrolled worker rounds must ask new clarification questions, not repeat submitted ones. */
 	assertNewQuestions(missionId: string, questions: InterviewQuestion[]): void {

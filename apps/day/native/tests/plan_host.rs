@@ -156,6 +156,115 @@ fn the_real_read_maps_with_backend_digests_and_honest_unavailable_steps() {
 }
 
 #[test]
+fn all_submitted_rounds_survive_real_daemon_and_native_host_reopen() {
+    let mut f = Fixture::new();
+    let host = f.open();
+    ready(&host);
+    let mission = f.mission();
+    let mut history = json!([]);
+    let mut first_submit = None;
+    for n in 0..3 {
+        let v = read(&host, &mission);
+        assert_eq!(v["view"]["interviewHistory"], history);
+        let page = plan_host::page(&v, &[], &Local::default());
+        assert_eq!(page.rounds.len(), n);
+        let choice = if n == 2 { "approve" } else { "fix" };
+        let text = format!("  round {n}\n💬 exact  ");
+        let save = plan_host::save_request(&v, &intent(&v, Some(choice), &text)).unwrap();
+        assert_eq!(
+            send(&host, &mission, save).unwrap().status,
+            OutcomeStatus::Accepted
+        );
+        let v = read(&host, &mission);
+        assert_eq!(
+            v["view"]["interviewHistory"], history,
+            "active edits never rewrite submitted answers"
+        );
+        let iv = plan_host::page(&v, &[], &Local::default())
+            .interview
+            .unwrap();
+        let submit = SubmitIntent {
+            interview_id: iv.id,
+            revision: iv.revision,
+            proposal: iv.proposal,
+        };
+        if n == 0 {
+            first_submit = Some(submit.clone());
+        }
+        let built = plan_host::submit_request(&v, &submit).unwrap();
+        assert_eq!(
+            send(&host, &mission, built).unwrap().status,
+            OutcomeStatus::Accepted
+        );
+        let v = read(&host, &mission);
+        history = v["view"]["interviewHistory"].clone();
+        assert_eq!(history.as_array().unwrap().len(), n + 1);
+        assert_eq!(history[n]["interview"]["answers"][0]["text"], text);
+        f.cmd("next-round", true);
+    }
+    let v = read(&host, &mission);
+    let page = plan_host::page(&v, &[], &Local::default());
+    assert_eq!(page.rounds.len(), 3);
+    for (n, round) in page.rounds.iter().enumerate() {
+        assert_eq!(
+            round.id,
+            history[n]["interview"]["submission"]["operationId"]
+        );
+        assert_eq!(
+            round.answers[0].prompt,
+            history[n]["interview"]["questions"][0]["prompt"]
+        );
+        assert!(
+            round.answers[0]
+                .answer
+                .contains(&format!("round {n}\n💬 exact"))
+        );
+    }
+    assert!(
+        plan_host::submit_request(&v, first_submit.as_ref().unwrap()).is_err(),
+        "history carries no current intent"
+    );
+    assert_eq!(page.stage, PlanStage::Review);
+    assert_eq!(
+        page.steps
+            .iter()
+            .find(|s| s.label == "Plan approved")
+            .unwrap()
+            .state,
+        StepState::Waiting
+    );
+    let posts = f.cmd("stats", true)["posts"].clone();
+    reply(host.close()).unwrap();
+    f.cmd("restart", true);
+    let host = f.open();
+    ready(&host);
+    let v = read(&host, &mission);
+    assert_eq!(v["view"]["interviewHistory"], history);
+    assert_eq!(
+        plan_host::page(&v, &[], &Local::default()).rounds,
+        page.rounds
+    );
+    assert_eq!(
+        f.cmd("stats", true)["posts"],
+        posts,
+        "history reads and reopening never replay"
+    );
+    f.cmd("missing-history", true);
+    assert!(
+        reply(host.read_planning(mission.clone())).is_err(),
+        "missing history is unavailable, not empty"
+    );
+    f.cmd("missing-history", false);
+    f.cmd("owner", true);
+    assert!(
+        reply(host.read_planning(mission)).is_err(),
+        "revoked owners cannot read history"
+    );
+    assert_eq!(f.cmd("stats", true)["posts"], posts);
+    reply(host.close()).unwrap();
+}
+
+#[test]
 fn saves_and_one_submission_go_through_the_exact_host_requests() {
     let mut f = Fixture::new();
     let host = f.open();
