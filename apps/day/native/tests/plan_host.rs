@@ -320,3 +320,22 @@ fn a_mission_without_a_saved_interview_is_unavailable_not_empty() {
     let refused = plan_host::save_request(&read, &AnswerIntent::default()).unwrap_err();
     assert_eq!(refused.0, OutcomeStatus::Rejected);
 }
+
+#[test]
+fn a_round_without_questions_is_never_shown_or_submittable() {
+    let fence = json!({"missionId":"m","ownerSessionId":"o","enrollmentId":"e","questionSetRevision":1,"answerRevision":0});
+    let read = json!({"version":1,"projectId":"p","missionId":"m","status":"available","contextDigest":"0".repeat(64),
+        "questionDigests":{},"fresh":true,"capabilities":{"answers":1,"continuation":"unavailable"},
+        "view":{"plan":null,"destination":"d","interview":{"fence":fence,"revision":1,"questions":[],"answers":[],"submission":null}}});
+    let page = plan_host::page(&read, &[], &Local::default());
+    assert!(page.available && page.interview.is_none());
+    let submit = SubmitIntent {
+        interview_id: "e-1".into(),
+        revision: 1,
+        proposal: String::new(),
+    };
+    assert_eq!(
+        plan_host::submit_request(&read, &submit).unwrap_err().0,
+        OutcomeStatus::Rejected
+    );
+}

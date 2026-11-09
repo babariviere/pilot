@@ -203,6 +203,11 @@ fn round_kind(read: &Value) -> (RoundKind, String, String) {
 fn interview(read: &Value, ops: &[Value], local: &Local) -> Option<Interview> {
     let iv = &read["view"]["interview"];
     let id = interview_id(read)?;
+    // A round with no questions (such as an enrollment's internal bootstrap
+    // round) is never shown as an interview and can never be submitted.
+    if arr(&iv["questions"]).is_empty() {
+        return None;
+    }
     let (kind, topic, proposal) = round_kind(read);
     let set = iv["fence"]["questionSetRevision"].as_u64().unwrap_or(0) as u32;
     let questions: Vec<Question> = arr(&iv["questions"])
