@@ -1,4 +1,5 @@
 //! One private append-only, fsynced command ledger. Pending records never authorize POST.
+use super::planning::PlanningRecord;
 use super::{Error, Source};
 use crate::contract::{ControlCommand, ControlOperation, DayOverview, MissionDetail};
 use serde::{Deserialize, Serialize};
@@ -47,6 +48,14 @@ pub(super) struct Journal {
     bytes: u64,
     failed: bool,
     pub records: BTreeMap<String, Record>,
+    pub planning: BTreeMap<String, PlanningRecord>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum Entry {
+    Control(Box<Record>),
+    Planning(Box<PlanningRecord>),
 }
 
 fn private(file: &File) -> Result<(), Error> {
@@ -105,8 +114,33 @@ impl Journal {
             return Err(Error::Storage);
         }
         let mut records: BTreeMap<String, Record> = BTreeMap::new();
+        let mut planning: BTreeMap<String, PlanningRecord> = BTreeMap::new();
         for line in body.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
-            let record: Record = serde_json::from_slice(line).map_err(|_| Error::Storage)?;
+            let entry: Entry = serde_json::from_slice(line).map_err(|_| Error::Storage)?;
+            let record = match entry {
+                Entry::Control(record) => *record,
+                Entry::Planning(record) => {
+                    let record = *record;
+                    record.validate()?;
+                    if let Some(prior) = planning.get(record.id())
+                        && (prior.source != record.source
+                            || prior.operation != record.operation
+                            || (prior.not_sent && !record.not_sent)
+                            || (prior
+                                .receipt
+                                .as_ref()
+                                .is_some_and(|r| r["state"] != "pending")
+                                && prior.receipt != record.receipt))
+                    {
+                        return Err(Error::Storage);
+                    }
+                    planning.insert(record.id().to_owned(), record);
+                    if planning.len() + records.len() > MAX_OPERATIONS {
+                        return Err(Error::Storage);
+                    }
+                    continue;
+                }
+            };
             if record.version != 1
                 || !super::valid_id(&record.mission)
                 || record.command.version != 1
@@ -137,7 +171,7 @@ impl Journal {
                 .map_err(|_| Error::Storage)?;
             }
             records.insert(record.command.operation_id.clone(), record);
-            if records.len() > MAX_OPERATIONS {
+            if records.len() + planning.len() > MAX_OPERATIONS {
                 return Err(Error::Storage);
             }
         }
@@ -149,14 +183,37 @@ impl Journal {
             bytes,
             failed: false,
             records,
+            planning,
         })
     }
 
     pub fn save(&mut self, record: Record) -> Result<(), Error> {
         if self.failed
             || (!self.records.contains_key(&record.command.operation_id)
-                && self.records.len() >= MAX_OPERATIONS)
+                && self.records.len() + self.planning.len() >= MAX_OPERATIONS)
         {
+            return Err(Error::Storage);
+        }
+        self.append(&record)?;
+        self.records
+            .insert(record.command.operation_id.clone(), record);
+        Ok(())
+    }
+
+    pub fn save_planning(&mut self, record: PlanningRecord) -> Result<(), Error> {
+        record.validate()?;
+        if !self.planning.contains_key(record.id())
+            && self.records.len() + self.planning.len() >= MAX_OPERATIONS
+        {
+            return Err(Error::Storage);
+        }
+        self.append(&record)?;
+        self.planning.insert(record.id().to_owned(), record);
+        Ok(())
+    }
+
+    fn append(&mut self, record: &impl Serialize) -> Result<(), Error> {
+        if self.failed {
             return Err(Error::Storage);
         }
         private(&self.file)?;
@@ -166,7 +223,7 @@ impl Journal {
             self.failed = true;
             return Err(Error::Storage);
         }
-        let mut bytes = serde_json::to_vec(&record).map_err(|_| Error::Storage)?;
+        let mut bytes = serde_json::to_vec(record).map_err(|_| Error::Storage)?;
         bytes.push(b'\n');
         if self.bytes + bytes.len() as u64 > MAX_LEDGER {
             return Err(Error::Storage);
@@ -178,8 +235,6 @@ impl Journal {
             .and_then(|_| self.file.sync_all())
             .map_err(|_| Error::Storage)?;
         self.bytes += bytes.len() as u64;
-        self.records
-            .insert(record.command.operation_id.clone(), record);
         self.failed = false;
         Ok(())
     }

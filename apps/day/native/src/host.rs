@@ -2,6 +2,7 @@
 //! Selection is explicit and immutable. Retire and join this host before replacing
 //! a profile/project; old replies can never populate the replacement's Desk.
 mod journal;
+mod planning;
 mod transport;
 
 use crate::{
@@ -68,6 +69,8 @@ struct Shared {
     connected: AtomicBool,
     listeners: Mutex<Vec<Sender<()>>>,
     detail: Mutex<Option<String>>,
+    planning: Mutex<std::collections::BTreeMap<String, (u64, serde_json::Value)>>,
+    planning_operations: Mutex<std::collections::BTreeMap<String, serde_json::Value>>,
 }
 impl Shared {
     fn change<R>(&self, f: impl FnOnce(&mut Desk) -> R) -> R {
@@ -115,6 +118,13 @@ enum Work {
         pause: Option<String>,
     },
     Check(String),
+    ReadPlanning(String),
+    WriteInterview {
+        mission: String,
+        digest: String,
+        request: serde_json::Value,
+    },
+    CheckPlanning(String),
 }
 struct Request {
     epoch: u64,
@@ -164,6 +174,8 @@ impl NativeHost {
             connected: AtomicBool::new(false),
             listeners: Mutex::new(Vec::new()),
             detail: Mutex::new(None),
+            planning: Mutex::new(std::collections::BTreeMap::new()),
+            planning_operations: Mutex::new(std::collections::BTreeMap::new()),
         });
         let (requests, rx) = async_channel::bounded(16);
         let state = shared.clone();
@@ -275,6 +287,56 @@ impl NativeHost {
     pub fn check(&self, id: String) -> Receiver<Result<IntentOutcome, Error>> {
         self.request(Work::Check(id))
     }
+    /// Read the complete saved interview and planning proposal. Never starts a worker.
+    pub fn read_planning(&self, mission: String) -> Receiver<Result<IntentOutcome, Error>> {
+        self.request(Work::ReadPlanning(mission))
+    }
+    /// Full existing protocol records. The native feed maps them to its typed UI model.
+    pub fn planning(&self, mission: &str) -> Option<serde_json::Value> {
+        self.0
+            .shared
+            .planning
+            .lock()
+            .expect("native planning poisoned")
+            .get(mission)
+            .map(|(epoch, v)| {
+                let mut v = v.clone();
+                v["fresh"] = serde_json::Value::Bool(
+                    !self.0.shared.closed.load(Ordering::SeqCst)
+                        && *epoch == self.0.shared.epoch.load(Ordering::SeqCst),
+                );
+                v
+            })
+    }
+    /// Exact saved-operation summaries, not transport envelopes or credentials.
+    pub fn planning_operations(&self, mission: &str) -> Vec<serde_json::Value> {
+        self.0
+            .shared
+            .planning_operations
+            .lock()
+            .expect("native planning receipts poisoned")
+            .values()
+            .filter(|r| r["missionId"] == mission)
+            .cloned()
+            .collect()
+    }
+    /// Explicit human save or complete submission, bound to the displayed context and CAS.
+    pub fn write_interview(
+        &self,
+        mission: String,
+        digest: String,
+        request: serde_json::Value,
+    ) -> Receiver<Result<IntentOutcome, Error>> {
+        self.request(Work::WriteInterview {
+            mission,
+            digest,
+            request,
+        })
+    }
+    /// Passive lookup of one retained exact operation. Never resends a human action.
+    pub fn check_planning(&self, operation_id: String) -> Receiver<Result<IntentOutcome, Error>> {
+        self.request(Work::CheckPlanning(operation_id))
+    }
     /// Fence immediately, then join entered HTTP, WS, journal and worker off-thread.
     /// Closing never stops/resumes daemon agents or replays a historical command.
     pub fn close(&self) -> Receiver<Result<(), Error>> {
@@ -302,6 +364,60 @@ impl NativeHost {
     }
 }
 
+fn publish_planning(shared: &Shared, record: &planning::PlanningRecord) {
+    shared
+        .planning_operations
+        .lock()
+        .expect("native planning receipts poisoned")
+        .insert(record.id().to_owned(), record.summary());
+    shared.change(|_| ());
+}
+fn planning_status(record: &planning::PlanningRecord) -> OutcomeStatus {
+    match record.receipt.as_ref().and_then(|r| r["state"].as_str()) {
+        Some("accepted") => OutcomeStatus::Accepted,
+        Some("rejected") => OutcomeStatus::Rejected,
+        _ => OutcomeStatus::Unknown,
+    }
+}
+async fn read_planning(
+    t: &Transport,
+    shared: &Shared,
+    epoch: u64,
+    mission: &str,
+) -> Result<serde_json::Value, Error> {
+    t.gate(false).await?;
+    let view = t.planning(mission).await?;
+    t.gate(false).await?;
+    shared.current(epoch)?;
+    {
+        let mut reads = shared.planning.lock().expect("native planning poisoned");
+        // The daemon owns saved drafts. Keep just the selected complete read in native memory.
+        reads.clear();
+        reads.insert(mission.to_owned(), (epoch, view.clone()));
+    }
+    shared.change(|_| ());
+    Ok(view)
+}
+async fn qualify_planning(
+    t: &Transport,
+    shared: &Shared,
+    epoch: u64,
+    mission: &str,
+    digest: &str,
+    request: &serde_json::Value,
+) -> Result<(), Error> {
+    let read = read_planning(t, shared, epoch, mission).await?;
+    let interview = &read["view"]["interview"];
+    if read["contextDigest"] != digest
+        || request["expected"]["fence"] != interview["fence"]
+        || request["expected"]["revision"] != interview["revision"]
+        || read["capabilities"]["answers"] != 1
+    {
+        return Err(Error::Stale);
+    }
+    Ok(())
+}
+
 fn fail(shared: &Shared, error: Error) {
     shared.change(|desk| {
         desk.lose_read(
@@ -321,6 +437,9 @@ async fn run(
     shared: Arc<Shared>,
     requests: Receiver<Request>,
 ) -> Result<(), Error> {
+    for record in journal.planning.values().filter(|r| r.source == t.source) {
+        publish_planning(&shared, record);
+    }
     if let Some(cache) = journal.cached(&t.source) {
         shared.change(|desk| {
             desk.native_read(cache.overview, cache.details);
@@ -449,12 +568,91 @@ async fn handle(
 ) -> Result<IntentOutcome, Error> {
     // Historical exact receipt lookup is independent of WS invalidations.
     // Immutable source, local identity and project are still requalified below.
-    if matches!(&work, Work::Check(_)) {
+    if matches!(&work, Work::Check(_) | Work::CheckPlanning(_)) {
         shared.open()?;
     } else {
         shared.current(epoch)?;
     }
     match work {
+        Work::ReadPlanning(mission) => {
+            read_planning(t, shared, epoch, &mission).await?;
+        }
+        Work::WriteInterview {
+            mission,
+            digest,
+            request,
+        } => {
+            if journal
+                .planning
+                .values()
+                .any(|r| r.source == t.source && r.mission() == mission && r.pending())
+            {
+                return Err(Error::Unknown);
+            }
+            let mut record =
+                planning::record(&t.source, mission.clone(), digest.clone(), request.clone())?;
+            qualify_planning(t, shared, epoch, &mission, &digest, &request).await?;
+            journal.save_planning(record.clone())?;
+            publish_planning(shared, &record);
+            if let Err(e) = qualify_planning(t, shared, epoch, &mission, &digest, &request).await {
+                record.not_sent = true;
+                journal.save_planning(record.clone())?;
+                publish_planning(shared, &record);
+                return Err(e);
+            }
+            shared.current(epoch)?;
+            match t.planning_operation(&record.operation, false).await {
+                Ok(receipt) => {
+                    record.receipt = Some(receipt);
+                    // Preserve an exact volatile ACK even when local receipt saving fails.
+                    if journal.save_planning(record.clone()).is_err() {
+                        journal.poison();
+                        publish_planning(shared, &record);
+                        return Ok(shared.outcome(
+                            OutcomeStatus::Unknown,
+                            "Receipt saving failed. Check the saved operation; do not resend.",
+                        ));
+                    }
+                    publish_planning(shared, &record);
+                    let status = planning_status(&record);
+                    // Re-read saved progress without marking unrelated Today data offline/stale.
+                    // A raced/closed read leaves the prior planning snapshot explicitly stale.
+                    let next = shared.epoch.fetch_add(1, Ordering::SeqCst).wrapping_add(1);
+                    if shared.open().is_ok() {
+                        let _ = read_planning(t, shared, next, &mission).await;
+                    }
+                    return Ok(
+                        shared.outcome(status, "Saved planning action. This does not start work.")
+                    );
+                }
+                Err(_) => {
+                    return Ok(shared.outcome(
+                        OutcomeStatus::Unknown,
+                        "No exact acknowledgement. Check the saved operation; do not resend.",
+                    ));
+                }
+            }
+        }
+        Work::CheckPlanning(id) => {
+            let mut record = journal
+                .planning
+                .get(&id)
+                .filter(|r| r.source == t.source)
+                .cloned()
+                .ok_or(Error::Unknown)?;
+            t.gate(false).await?;
+            shared.open()?;
+            // A matched terminal ACK cannot be erased by a later failed lookup.
+            if record.pending() {
+                record.receipt = Some(t.planning_operation(&record.operation, true).await?);
+                journal.save_planning(record.clone())?;
+                publish_planning(shared, &record);
+            }
+            return Ok(shared.outcome(
+                planning_status(&record),
+                "Exact saved operation lookup only.",
+            ));
+        }
         Work::Refresh => refresh(t, journal, shared, epoch, None).await?,
         Work::Detail(id) => {
             refresh(t, journal, shared, epoch, Some(&id)).await?;

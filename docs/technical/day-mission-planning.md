@@ -1,8 +1,10 @@
 # Native mission planning
 
-Host-only backend and trusted kernel profile. No production ingress, coordinator enrollment,
-native UI, automatic research dispatch or live activation is installed. Existing missions and
-running work are not enrolled, restarted or changed. This is not native acceptance.
+Backend and trusted kernel profile, with authenticated native saved-state reads and human answer
+ingress through the [Day host](day-native-host.md#saved-interviews-and-planning). Coordinator enrollment,
+worker-profile IPC, qualified continuation, automatic research dispatch and live activation remain
+unavailable. Existing missions and running work are not enrolled, restarted or changed.
+Transport fixtures are not native screen acceptance.
 
 ## Audit and reuse
 
@@ -43,8 +45,8 @@ for arbitrary hostile extension code.
 historical `read`), `knowledge` to the linked same-project Knowledge reader, and `write` to journaled
 `admit`. It must keep a complete durable envelope per call ID. A new envelope after an uncertain
 call is not recovery. Bind `receipt` to passive exact-envelope journal lookup within this mission;
-the tool's `check` action cannot invoke a handler. There is deliberately no production binding or
-automatic enrollment here.
+the tool's `check` action cannot invoke a handler. A production worker-port binding and automatic
+enrollment are still absent. The native human ingress cannot impersonate this coordinator port.
 
 - Use Wayfinder for unclear multi-session routes. Bounded work uses the existing grill-with-docs route.
 - `plan-map` saves destination, source locators, precise planning questions and coarse in-scope fog.

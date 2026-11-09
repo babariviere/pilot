@@ -101,6 +101,7 @@ import type { MissionStore } from "./missions.ts";
 import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } from "./model-scope.ts";
 import type { ModelCatalog } from "./models.ts";
 import { MAX_NATIVE_DIAGNOSTIC_BYTES } from "./native-diagnostics.ts";
+import { isNativePlanningOperation, NativeMissionPlanning } from "./native-mission-planning.ts";
 import { canonicalJSON, durableJSON, OperationJournal, OperationRejected, payloadHash } from "./operation-journal.ts";
 import { isAllowedOrigin } from "./origin.ts";
 import { PathCompletionReader } from "./path-completion.ts";
@@ -709,6 +710,16 @@ export function createDaemonServer(
 					// No consent configuration, provider executor or review prerequisite producer is installed here.
 				})
 			: undefined;
+	const nativePlanning =
+		journal && missions && workflowConfirmations
+			? new NativeMissionPlanning({
+					store: missions.store,
+					journal,
+					projects,
+					sessions,
+					confirmations: workflowConfirmations,
+				})
+			: undefined;
 	const insightsWorkspace =
 		journal && missions && schedules
 			? new InsightsWorkspace({
@@ -816,6 +827,10 @@ export function createDaemonServer(
 				})
 			: undefined;
 	const admitOperationHeld = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
+		if (isNativePlanningOperation(op.kind)) {
+			if (!nativePlanning) throw new OperationRejected("Native planning unavailable");
+			return nativePlanning.admit(op, false);
+		}
 		if (op.kind === "insights-workspace-transfer") {
 			if (!insightsTransition) throw new OperationRejected("Insights transition unavailable");
 			return insightsTransition.admit(op, false);
@@ -1407,6 +1422,25 @@ export function createDaemonServer(
 				return json(res, 200, { ok: true });
 			}
 			const operation = await readJson<DurableOperation>(req);
+			if (isNativePlanningOperation(operation?.kind)) {
+				res.setHeader("cache-control", "no-store");
+				if (!githubSetup || !nativePlanning) throw new ServiceUnavailable("Native planning unavailable");
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
+				// Requalify reads, including terminal duplicates. No unauthenticated receipt escape.
+				const saved = await nativePlanning.lookup(operation);
+				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
+				const end = mutations.begin({ kind: "operation", id: operation.operationId });
+				try {
+					const receipt = await journal.execute(operation, (op, entry) =>
+						nativePlanning.admit(op, entry.firstEntry),
+					);
+					await nativePlanning.lookup(operation);
+					return json(res, 200, receipt);
+				} finally {
+					end();
+				}
+			}
 			if (operation?.kind === "insights-workspace-transfer" && parts[2] === "receipt") {
 				if (!githubSetup) throw new ServiceUnavailable("Native transfer lookup unavailable");
 				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
@@ -1582,6 +1616,7 @@ export function createDaemonServer(
 					passiveTaskModel: missions ? true : undefined,
 					dayOverview: missions ? 1 : undefined,
 					missionControls: missions && githubSetup && hello.lineageId ? 1 : undefined,
+					nativePlanning: nativePlanning && githubSetup ? 1 : undefined,
 					passiveFailedModel: hello?.lineageId ? true : undefined,
 					guardedQueue: true,
 					sessionPathCandidates: hello.lineageId ? 1 : undefined,
@@ -1884,6 +1919,13 @@ export function createDaemonServer(
 				}
 			}
 			throw new HttpError(404, "Unknown tracking operation");
+		}
+		if (parts[1] === "projects" && parts.length === 6 && parts[3] === "missions" && parts[5] === "planning") {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET") throw new HttpError(405, "Planning preparation is read-only");
+			if (!githubSetup || !nativePlanning) throw new ServiceUnavailable("Native planning unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			return json(res, 200, await nativePlanning.read(parts[2]!, parts[4]!));
 		}
 		if (missions && parts[1] === "missions" && parts[3] === "controls") {
 			missions.store.require(parts[2]!);

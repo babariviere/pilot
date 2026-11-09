@@ -1,9 +1,10 @@
 # Day interview and agreement backend
 
-Host-only implementation. No production route, coordinator startup flag, native confirmation,
-dispatch adapter, legacy enrollment or gate activation is installed. Local tests use temporary
-homes and a faux admission adapter. Passing these tests is not native acceptance or permission
-to activate the flow. Existing mission admission behavior is unchanged.
+The [native host ingress](day-native-host.md#saved-interviews-and-planning) now exposes authenticated
+saved-interview reads, human answer saves and complete submission for already enrolled scopes.
+No coordinator startup flag, qualified dispatch adapter, legacy enrollment or gate activation is
+installed. Local tests use temporary homes and no live providers. Passing these tests is not native
+screen acceptance or permission to activate the flow. Existing mission admission is unchanged.
 
 ## New-flow enrollment and confirmation boundaries
 

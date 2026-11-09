@@ -162,6 +162,65 @@ impl Transport {
         serde_json::from_value(v).map_err(|_| Error::Invalid)
     }
 
+    pub async fn planning(&self, id: &str) -> Result<Value, Error> {
+        if !valid_id(id) {
+            return Err(Error::Invalid);
+        }
+        let hello = self.get("/api/hello").await?;
+        if hello["capabilities"]["nativePlanning"] != 1 {
+            return Err(Error::Unavailable);
+        }
+        let v = self
+            .get(&format!(
+                "/api/projects/{}/missions/{id}/planning",
+                self.source.project_id
+            ))
+            .await?;
+        if v["version"] == 1
+            && v["projectId"] == self.source.project_id
+            && v["missionId"] == id
+            && v["status"] == "not-enrolled"
+            && v["view"].is_null()
+            && v["capabilities"]["answers"] == "unavailable"
+        {
+            return Ok(v);
+        }
+        if v["version"] != 1
+            || v["projectId"] != self.source.project_id
+            || v["missionId"] != id
+            || v["status"] != "available"
+            || v["view"]["interview"]["fence"]["missionId"] != id
+            || v["contextDigest"].as_str().is_none_or(|s| s.len() != 64)
+        {
+            return Err(Error::Invalid);
+        }
+        Ok(v)
+    }
+
+    pub async fn planning_operation(
+        &self,
+        operation: &Value,
+        lookup: bool,
+    ) -> Result<Value, Error> {
+        let token = self.local()?;
+        let r = self
+            .client
+            .post(self.url(if lookup {
+                "/api/operations/receipt"
+            } else {
+                "/api/operations"
+            }))
+            .header("x-pilot-github-capability", token)
+            .header("content-type", "application/json")
+            .body(serde_json::to_vec(operation).map_err(|_| Error::Invalid)?)
+            .send()
+            .await
+            .map_err(|_| Error::Unknown)?;
+        let v = body(r).await.map_err(|_| Error::Unknown)?;
+        self.local().map_err(|_| Error::Unknown)?;
+        super::planning::exact(v, operation)
+    }
+
     pub async fn control(&self, id: &str) -> Result<c::Control, Error> {
         let v = self.get(&format!("/api/missions/{id}/controls")).await?;
         let c: c::Control = serde_json::from_value(v).map_err(|_| Error::Invalid)?;

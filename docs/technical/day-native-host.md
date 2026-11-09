@@ -72,6 +72,56 @@ Pause ID and receipt identity must match. Absent, entered, mismatched or unreada
 receipts remain Unknown. Current controls or WS activity cannot settle them.
 Acknowledged receipts are historical, not proof of current control authority.
 
+## Saved interviews and planning
+
+The same `NativeHost` worker and private command ledger now carry saved interview actions.
+`read_planning(mission)` uses authenticated `GET /api/projects/:project/missions/:mission/planning`.
+It returns the existing `MissionPlans.view`, including the complete proposal spec, testing decisions,
+slices, dependencies, ownership, frontier, fog, sources and saved interview. It never substitutes a
+digest for the proposal. Native memory keeps only the selected complete read; SQLite owns drafts.
+`questionDigests` supplies the backend's exact digest per displayed question. Do not recompute it
+with a UI serializer, whose key order may differ. After a matched acknowledgement, the host passively
+rereads saved progress; a failed/raced read cannot erase the historical receipt.
+
+The daemon checks current project, coordinator membership/owner event fences, session mode and
+configuration, decisions, brief and complete planning revision across async reads. A context digest
+binds that evidence. A legacy/non-enrolled mission returns `status: not-enrolled`, `view: null` and
+explicit unavailable capabilities. This differs from an enrolled interview with no map yet.
+
+`write_interview(mission, contextDigest, InterviewWrite)` accepts only `interview-save` and
+`interview-submit`. It rechecks the exact displayed interview CAS and complete context, fsyncs the
+entire native-created `DurableOperation`, checks again, then uses the existing `/api/operations`
+endpoint. Native capability authentication and current owner/project checks guard both execution
+and `/api/operations/receipt`. The existing `MissionInterviews`, `OperationJournal` and
+`missions.sqlite` transaction/replica remain the only backend effect owners. Human saves preserve
+exact option meanings/text. Proposal approval is an answer in the existing exact review round,
+followed by complete submission, not a new approval API. None of these operations starts work.
+
+`planning_operations(mission)` exposes only operation summaries; envelopes and credentials stay
+in Rust. `check_planning(operationId)` resolves the retained exact envelope by passive lookup.
+Cold open never resends, even if a crash preceded POST. Unavailable/missing/mismatched receipts
+remain Unknown. A matched terminal ACK is kept if later lookup fails. Joined native close covers
+entered planning HTTP and receipt/journal writes as well as Today controls.
+
+### Remaining bootstrap and execution gaps
+
+- The mock CLI entry remains unchanged. Native bootstrap still must pass the selected, root-owned
+  host to the Day feeds and join it before replacement/quit. UI mapping belongs to the interview UI.
+- Fresh creation requires a trusted enrollment adapter which creates a new coordinator already held
+  at the interview boundary. No such production adapter is installed. Mission existence, legacy
+  `planningVersion`, a caller actor label or a native bearer alone cannot enroll an existing mission.
+- Kernel `missionPlanning`/`missionInterview` options already load the actual pinned upstream skills,
+  not imitation prompts, but no worker IPC/profile/hold binding currently supplies those options.
+  The status says `coordinatorProfile: not-configured`; this ingress does not start a generic worker.
+- A qualified continuation adapter is absent. It must durably dedupe the exact submitted intent and
+  pass allocation/coordinator, permission/model, Stop/pause, review and lifecycle gates at actual
+  guarded admission. Continuation/admission remain unavailable rather than fall back to a message.
+- Trusted coordinator map/proposal/publication writes are not human native operations. Published-task
+  amendments remain refused by the existing service; no amendment adapter is added.
+
+These are explicit integration gaps, not native production acceptance. There is no live enrollment,
+provider run, automation activation, app/service restart, release, default switch or legacy removal.
+
 ## Verification
 
 ```sh
@@ -80,7 +130,8 @@ CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo +1.99.1 test \
   --manifest-path apps/day/native/Cargo.toml -j 2
 node --test --test-timeout=120000 --test-concurrency=2 \
   packages/daemon/src/mission-controls.test.ts \
-  packages/daemon/src/project-dashboard-server.test.ts
+  packages/daemon/src/project-dashboard-server.test.ts \
+  packages/daemon/src/native-mission-planning.test.ts
 pnpm typecheck
 ```
 
@@ -93,3 +144,11 @@ cold recovery, missing/mismatched receipt lookup, exclusive journal ownership,
 storage failure and close while POST is entered. No real agents, providers or
 user controls run. Native screen acceptance and live bootstrap integration remain
 separate gates; these are native transport tests, not UI acceptance.
+
+`native/tests/planning.rs` drives the real Rust host against an isolated production daemon with disk
+SQLite and the actual operation journal. It checks exact drafts/restart, complete submission, lost ACK,
+missing/mismatched exact lookup, cold-open no replay and joined close. The daemon ingress suite adds
+authentication, project/home/owner/configuration fences, topic changes, complete proposal availability,
+late authority loss and explicit legacy non-enrollment. Existing interview/planning/skill-loader suites
+remain regression gates. Fixtures create records directly only as trusted test setup; they never prove
+that the missing production enrollment or worker admission adapters exist.

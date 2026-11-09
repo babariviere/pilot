@@ -69,4 +69,6 @@ export interface DaemonCapabilities {
 	dayOverview?: 1;
 	/** Native-authenticated, revision-fenced Pause/Resume and exact operation lookup. */
 	missionControls?: 1;
+	/** Authenticated saved native interview reads/answers. Does not imply enrollment or execution. */
+	nativePlanning?: 1;
 }

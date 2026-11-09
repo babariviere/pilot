@@ -26,6 +26,7 @@ futures-util = { version = "0.3", features = ["sink"] }
 async-channel = "2"
 libc = "0.2"
 uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
 
 [dev-dependencies]
 nsh-core = { git = "https://github.com/longbridge/nsh", rev = "530b73170f61e5bf16380959de9e622f8ce130cd", features = ["declarations"] }
