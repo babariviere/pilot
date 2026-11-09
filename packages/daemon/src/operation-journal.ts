@@ -236,6 +236,16 @@ export class OperationJournal {
 			);
 		});
 	}
+	/** Final synchronous admission fence, after an awaited journal read. Refuse any in-flight
+	 * journal I/O rather than missing a revocation that is not published in memory yet. */
+	assertNoPending(kinds: readonly string[], targetId: string): void {
+		if (!this.initialized || this.fault || this.queued)
+			throw new Error("Operation journal is not settled for admission");
+		for (const { operation, receipt } of this.records.values()) {
+			if (operation.targetId === targetId && kinds.includes(operation.kind) && receipt.state === "pending")
+				throw new Error("Revocation is uncertain; no new admission");
+		}
+	}
 	/** Bounded private projection for one replacement. Never expose operation payloads to clients. */
 	async replacementReferences(projectId: string, missionId: string, oldId: string, excludeId?: string) {
 		return this.serial(async () => {

@@ -75,6 +75,7 @@ import {
 	latestJudgement,
 	latestSubmission,
 } from "./mission-delivery-evidence.ts";
+import { MISSION_INTERVIEW_SCHEMA, MissionInterviewStore } from "./mission-interview-store.ts";
 import {
 	type LinearContributor,
 	type LinearSyncRecord,
@@ -730,6 +731,26 @@ export class MissionStore {
 		transaction: (work) => this.transaction(work, true),
 		durable: () => this.durable(),
 	});
+	/** Internal creation-only Day seam. No REST enrollment or legacy adoption. */
+	readonly interviews = new MissionInterviewStore({
+		one: (sql, ...params) => this.one(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work, true),
+		durable: () => this.durable(),
+		create: (input, ownerSessionId) => {
+			if (this.membership(ownerSessionId)) throw new Conflict("Interview owner already belongs to a mission");
+			const mission = this.create({
+				...input,
+				planningVersion: 1,
+				brief: "Interview in progress. No work approved.",
+			});
+			this.join(ownerSessionId, mission.id);
+			this.update(mission.id, { coordinatorSessionId: ownerSessionId });
+			return mission.id;
+		},
+		ownerFence: (id, owner) => this.interviewOwnerFence(id, owner),
+		mapBrief: (id, markdown) => this.writeBrief(id, markdown, this.require(id).briefRevision).revision,
+	});
 	readonly workflowConfirmations = new WorkflowConfirmationStore({
 		one: (sql, ...params) => this.one(sql, ...params),
 		run: (sql, ...params) => this.run(sql, ...params),
@@ -760,6 +781,20 @@ export class MissionStore {
 		durable: () => this.durable(),
 	});
 
+	/** Owner-only membership fence. Other members must not strand a saved interview. */
+	interviewOwnerFence(id: string, ownerSessionId: string) {
+		this.require(id);
+		return {
+			memberEventId: Number(
+				this.one(
+					"SELECT COALESCE(MAX(id),0) n FROM events WHERE mission_id=? AND kind='member' AND session_id=?",
+					id,
+					ownerSessionId,
+				)!.n,
+			),
+			coordinatorEventId: this.allocationContextFence(id).coordinatorEventId,
+		};
+	}
 	/** Bounded host input. The event high-water catches edit/revert and member/owner ABA. */
 	workflowConfirmationState(id: string) {
 		const mission = this.require(id);
@@ -808,6 +843,7 @@ export class MissionStore {
 		this.db.exec(INSIGHTS_OWNER_SCHEMA);
 		this.db.exec(INSIGHTS_TRANSITION_SCHEMA);
 		this.db.exec(WORKFLOW_CONFIRMATION_SCHEMA);
+		this.db.exec(MISSION_INTERVIEW_SCHEMA);
 		this.db.exec(ATTENTION_SCHEMA);
 		this.db.exec(HUMAN_REVIEW_SCHEMA);
 		this.db.exec(RETAINED_PROJECTION_SCHEMA);

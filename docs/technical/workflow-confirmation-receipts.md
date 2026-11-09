@@ -12,6 +12,10 @@ native host-action capability before journal reservation. The capability is an i
 not workflow authority by itself. Actor labels and extra keys are rejected. The host binds the
 kind, full immutable payload, target, host lineage and operation identity through the existing
 `DurableOperation` and `OperationJournal`. There is no new capability file or authentication service.
+Creation-enrolled Day interviews also bind the exact complete submitted answer snapshot to the
+approval package. Its host-only consumer and uninstalled-adapter boundary are documented in
+[Day mission agreements](day-mission-agreements.md). No legacy gate is activated by this addition.
+
 The practical assurance excludes hostile same-user processes and UI automation. Native user
 confirmation remains separately unqualified; this is not proof of human presence.
 

@@ -85,6 +85,11 @@ import { INSIGHTS_BACKLOG_TOOL } from "./insights-backlog-tool.ts";
 import { INSIGHTS_HISTORY_TOOL } from "./insights-history-tool.ts";
 import { runningJobs } from "./jobs.ts";
 import { MEMORY_TOOL_NAMES } from "./memory-tools.ts";
+import {
+	assertInterviewSkills,
+	INTERVIEW_SKILL_ADAPTATION,
+	INTERVIEW_SKILL_PATHS,
+} from "./mission-interview-skills.ts";
 import { type PerformanceSink, type PreparationMark, RequestTiming } from "./performance.ts";
 import type { AskContext } from "./policy.ts";
 import { Posthorse } from "./posthorse.ts";
@@ -110,6 +115,8 @@ export interface NativeAdapterOptions {
 	posthorseEligible?: () => boolean;
 	/** Trusted IPC-backed source admission, only for a daemon-managed coordinator worker. */
 	coordinatorSources?: import("./coordinator-sources.ts").ReadCoordinatorSources;
+	/** Host-selected new-flow interview only. No legacy auto-enrollment or worker wiring. */
+	missionInterview?: boolean;
 	/** Operational-read-only profile. Personal resources and every tool except diagnostics are unavailable. */
 	diagnostics?: boolean;
 	/** Closed local Insights profile, never a Diagnostics exception. */
@@ -430,6 +437,8 @@ export class NativeAdapter {
 		const readOnly = !!options.ask || specialist;
 		if (options.coordinatorSources && (readOnly || options.bundledExtensions === false))
 			throw new Error("Coordinator source admission requires its bundled native profile");
+		if (options.missionInterview && (!options.coordinatorSources || readOnly))
+			throw new Error("Mission interview skills require a trusted coordinator host");
 		const allowedTools = insights
 			? [INSIGHTS_HISTORY_TOOL, INSIGHTS_BACKLOG_TOOL]
 			: diagnostics
@@ -547,15 +556,21 @@ export class NativeAdapter {
 						appendSystemPrompt: [
 							...(options.loaderOptions?.appendSystemPrompt ?? []),
 							...(options.memoryPrompt ? [options.memoryPrompt] : []),
+							...(options.missionInterview ? [INTERVIEW_SKILL_ADAPTATION] : []),
 						],
 						cwd,
 						agentDir,
 						settingsManager,
-						additionalSkillPaths: [...artifactSkillPaths, ...(options.loaderOptions?.additionalSkillPaths ?? [])],
+						additionalSkillPaths: [
+							...artifactSkillPaths,
+							...(options.missionInterview ? INTERVIEW_SKILL_PATHS : []),
+							...(options.loaderOptions?.additionalSkillPaths ?? []),
+						],
 						...(options.coordinatorSources
 							? {
 									skillsOverride: (loaded: ReturnType<DefaultResourceLoader["getSkills"]>) => {
 										const selected = options.loaderOptions?.skillsOverride?.(loaded) ?? loaded;
+										if (options.missionInterview) assertInterviewSkills(selected.skills);
 										coordinatorSkills = snapshotCoordinatorSkills(selected.skills, agentDir);
 										return selected;
 									},

@@ -1,5 +1,6 @@
 import type { HumanReviewFeedback } from "./human-review.ts";
 import type { MissionBrief, MissionDecision } from "./index.ts";
+import type { InterviewAgreementBinding } from "./mission-interview.ts";
 
 export type WorkflowOperationKind =
 	| "workflow-approve"
@@ -44,6 +45,8 @@ export interface WorkflowConfirmationPackage {
 		coordinatorEventId: number;
 	};
 	configurationDigest: string;
+	/** Present only for creation-enrolled full-list interviews. No legacy adoption. */
+	agreement?: InterviewAgreementBinding;
 	policy: {
 		scrutiny: "Balanced";
 		requiredChecks: "must-pass";

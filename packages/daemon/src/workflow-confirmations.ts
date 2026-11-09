@@ -120,6 +120,9 @@ export class WorkflowConfirmations {
 			eventId: state.eventId,
 			contextFence: state.contextFence,
 			configurationDigest,
+			...(!purpose.endsWith("revoke") && this.deps.store.interviews.latest(missionId)
+				? { agreement: this.deps.store.interviews.binding(missionId, state.brief) }
+				: {}),
 			policy: {
 				scrutiny: "Balanced",
 				requiredChecks: "must-pass",
@@ -137,6 +140,8 @@ export class WorkflowConfirmations {
 			workflowApprovalOperationId,
 			disclosure,
 		};
+		if (Buffer.byteLength(canonicalJSON(value)) > 60 * 1024)
+			throw new Conflict("Complete workflow approval package exceeds 60 KiB; no truncation");
 		return { ...value, digest: digest(value) };
 	}
 	/** No row, capability or permission is created by preparation. Re-read after the durability await. */
@@ -198,6 +203,18 @@ export class WorkflowConfirmations {
 		} catch {
 			return { state: "stale", record };
 		}
+	}
+	/** Final synchronous consumer fence. Call only after current(), immediately before effect commit. */
+	assertApproval(missionId: string, operationId: string, packageDigest: string): void {
+		this.deps.journal.assertNoPending(["workflow-revoke"], missionId);
+		const record = this.deps.store.workflowConfirmations.latest(missionId, false);
+		if (
+			record?.kind !== "workflow-approve" ||
+			record.operationId !== operationId ||
+			record.confirmed.package.digest !== packageDigest ||
+			this.build(missionId, "workflow-approve").digest !== packageDigest
+		)
+			throw new Conflict("Exact current workflow approval required");
 	}
 	async admit(op: DurableOperation, firstEntry = false): Promise<unknown> {
 		if (!isWorkflowOperation(op.kind)) throw new OperationRejected("Unsupported workflow purpose");

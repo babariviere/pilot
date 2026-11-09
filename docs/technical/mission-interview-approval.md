@@ -1,5 +1,9 @@
 # Proposed mission interview and approval contract
 
+The creation-only Day implementation is described in [Day mission agreements](day-mission-agreements.md).
+It has no production ingress/dispatch wiring. The proposal below is historical design context;
+its one-question/conversational assumptions do not override Day's complete-list submission boundary.
+
 **Proposal, not an implemented gate or an adopted mission decision.** The coordinator owns the
 plan and its final adoption; workers and explorers contribute evidence and proposals. This document
 does not authorize implementation, admission, delivery, migration or changes to an existing mission.

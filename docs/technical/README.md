@@ -49,6 +49,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Proposed worker escalation and human handoff contract](mission-escalation-handoff.md)
 - [Mission grouping and contextual decisions](mission-grouping-context.md)
 - [Proposed mission interview and approval contract](mission-interview-approval.md)
+- [Day interview and agreement backend (host-only)](day-mission-agreements.md)
 - [Proposed native Review and durable diff annotations](mission-native-review.md)
 - [Global optional Review request producer and read API](global-review-requests.md)
 - [Non-code delivery foundation](mission-non-code-deliveries.md)

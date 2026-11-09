@@ -2169,6 +2169,7 @@ export type { MachineInformation } from "./machine.ts";
 export type * from "./mcp.ts";
 export type * from "./memory.ts";
 export type * from "./mission-catalog.ts";
+export type * from "./mission-interview.ts";
 export * from "./operations.ts";
 export type { PowerSettings, PowerStatus } from "./power.ts";
 export type * from "./repositories.ts";
