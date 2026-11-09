@@ -8,15 +8,16 @@
 use std::time::Duration;
 
 use crate::{
+    actions::Actions,
     contract::{
         self as c, ControlAction, ControlCommand, ControlMember, ControlOperation, DayOverview,
         MissionDetail, OperationState, ReportView,
     },
     fixture::{self, Ack, ControlAck, NOW, World, world},
     model::{
-        Answer, AskIntent, ControlAsk, DecideIntent, Decision, DecisionKind, DecisionRef, Delivery,
-        DoneEntry, Evidence, FreshnessState, IntentOutcome, MissionPage, MissionRef, OutcomeStatus,
-        PauseIntent, ResumeIntent, Scenario, Today, Tone,
+        Answer, AnswerRef, AnswerState, AskIntent, ControlAsk, DecideIntent, Decision,
+        DecisionKind, DecisionRef, Delivery, DoneEntry, Evidence, FreshnessState, IntentOutcome,
+        MissionPage, MissionRef, OutcomeStatus, PauseIntent, ResumeIntent, Scenario, Today, Tone,
     },
     project::{self, ControlLocal, Inputs},
 };
@@ -58,6 +59,14 @@ pub struct Desk {
     acks: Vec<(String, Ack)>,
     control_acks: Vec<(String, ControlAck)>,
     answers: Vec<(String, String)>,
+    /// Decisions whose next answer to a question is lost on the way back.
+    lost_answers: Vec<String>,
+    /// Answers the mock help service saved, by question: lookups read them.
+    saved_answers: Vec<(String, String)>,
+    /// The decision revision each question was asked about.
+    asked_at: Vec<(String, u32)>,
+    next_answer: u32,
+    actions: Actions,
     pulses: u32,
 }
 
@@ -103,14 +112,48 @@ impl Desk {
             acks: world.acks,
             control_acks: world.control_acks,
             answers: world.answers,
+            lost_answers: world.lost_answers,
+            saved_answers: Vec::new(),
+            asked_at: Vec::new(),
+            next_answer: 0,
+            actions: world.actions,
             pulses: 0,
         };
         desk.project();
         desk
     }
 
+    /// The same desk after Day restarts: the service's rows and receipts
+    /// and Day's journal stay; requests in flight become unknown.
+    pub fn restart(&self) -> Self {
+        let mut desk = Desk {
+            actions: self.actions.restart(),
+            ..self.clone()
+        };
+        desk.changed();
+        desk
+    }
+
+    pub(crate) fn actions_mut(&mut self) -> &mut Actions {
+        &mut self.actions
+    }
+
+    /// Adds a confirmed result of the user's own action.
+    pub(crate) fn note(&mut self, note: String) {
+        self.today.notes.push(note);
+    }
+
+    pub(crate) fn changed_actions(&mut self) {
+        self.changed();
+    }
+
+    pub(crate) fn outcome_now(&self, status: OutcomeStatus, message: &str) -> IntentOutcome {
+        self.outcome(status, message)
+    }
+
     /// Projects missions and freshness from the reads into the read model.
     fn project(&mut self) {
+        self.today.actions = self.actions.view();
         self.today.freshness = project::freshness(
             self.freshness.0,
             self.overview.as_ref().map(|o| o.observed_at),
@@ -359,11 +402,11 @@ impl Desk {
         self.outcome(OutcomeStatus::Accepted, "")
     }
 
-    /// Checks a question before it is sent.
-    pub fn begin_ask(&mut self, intent: &AskIntent) -> Result<(), IntentOutcome> {
-        if self.position(&intent.decision_id).is_none() {
-            return Err(self.outcome(OutcomeStatus::Stale, "This decision is no longer waiting."));
-        }
+    /// Checks a question against the decision's revision and shows it as
+    /// asking. Help is not an answer: the decision, its revision and its
+    /// delivery stay as they are. Returns the question's id.
+    pub fn begin_ask(&mut self, intent: &AskIntent) -> Result<String, IntentOutcome> {
+        let at = self.current(&intent.decision_id, intent.revision)?;
         let question = intent.question.trim();
         if question.is_empty() {
             return Err(self.outcome(OutcomeStatus::Rejected, "Write a question first."));
@@ -374,29 +417,114 @@ impl Desk {
                 "Keep the question under 500 characters.",
             ));
         }
-        Ok(())
+        self.next_answer += 1;
+        let id = format!("question-{}", self.next_answer);
+        self.asked_at.push((id.clone(), intent.revision));
+        self.today.decisions[at].answers.push(Answer {
+            id: id.clone(),
+            question: intent.question.clone(),
+            ..Answer::default()
+        });
+        self.changed();
+        Ok(id)
     }
 
-    /// Adds Pilot's answer to the question. The question is kept exactly as
-    /// written.
-    pub fn settle_ask(&mut self, intent: &AskIntent) -> IntentOutcome {
-        let Some(at) = self.position(&intent.decision_id) else {
+    fn answer_mut(&mut self, decision_id: &str, answer_id: &str) -> Option<&mut Answer> {
+        let at = self.position(decision_id)?;
+        self.today.decisions[at]
+            .answers
+            .iter_mut()
+            .find(|a| a.id == answer_id)
+    }
+
+    /// Marks an answer ready, and whether its decision changed since the
+    /// question was asked.
+    fn answered(&mut self, decision_id: &str, answer_id: &str, text: String) {
+        let asked = self
+            .asked_at
+            .iter()
+            .find(|(id, _)| id == answer_id)
+            .map(|(_, revision)| *revision);
+        let now = self
+            .position(decision_id)
+            .map(|at| self.today.decisions[at].revision);
+        if let Some(answer) = self.answer_mut(decision_id, answer_id) {
+            answer.answer = text;
+            answer.state = AnswerState::Ready;
+            answer.earlier = asked != now;
+        }
+    }
+
+    /// Adds Pilot's answer to the question asked as `answer_id`. The
+    /// question is kept exactly as written. The mock help service saves
+    /// every answer; a lost one stays unknown until a check reads it.
+    pub fn settle_ask(&mut self, decision_id: &str, answer_id: &str) -> IntentOutcome {
+        if self.position(decision_id).is_none() {
             return self.outcome(OutcomeStatus::Stale, "This decision is no longer waiting.");
-        };
+        }
         let answer = self
             .answers
             .iter()
-            .find(|(id, _)| *id == intent.decision_id)
+            .find(|(id, _)| id == decision_id)
             .map_or("Pilot will answer from the mission's history.", |(_, a)| {
                 a.as_str()
             })
             .to_owned();
-        let decision = self.touch(at);
-        decision.answers.push(Answer {
-            question: intent.question.clone(),
-            answer,
-        });
+        self.saved_answers
+            .push((answer_id.to_owned(), answer.clone()));
+        if let Some(lost) = self.lost_answers.iter().position(|id| id == decision_id) {
+            self.lost_answers.remove(lost);
+            if let Some(a) = self.answer_mut(decision_id, answer_id) {
+                a.state = AnswerState::Unknown;
+            }
+            self.changed();
+            return self.outcome(
+                OutcomeStatus::Unknown,
+                "Pilot asked, but no answer came back. It will check before it asks again.",
+            );
+        }
+        self.answered(decision_id, answer_id, answer);
+        self.changed();
         self.outcome(OutcomeStatus::Accepted, "")
+    }
+
+    /// Starts a read-only check of a question whose answer was lost.
+    pub fn begin_check_answer(&mut self, intent: &AnswerRef) -> Result<(), IntentOutcome> {
+        let Some(answer) = self.answer_mut(&intent.decision_id, &intent.answer_id) else {
+            return Err(self.outcome(OutcomeStatus::Stale, "This question is no longer here."));
+        };
+        if answer.state != AnswerState::Unknown {
+            return Err(self.outcome(OutcomeStatus::Rejected, "There is nothing to check."));
+        }
+        answer.state = AnswerState::Checking;
+        self.changed();
+        Ok(())
+    }
+
+    /// Reads the saved answer, if any. Never asks again.
+    pub fn settle_check_answer(&mut self, intent: &AnswerRef) -> IntentOutcome {
+        let saved = self
+            .saved_answers
+            .iter()
+            .find(|(id, _)| *id == intent.answer_id)
+            .map(|(_, a)| a.clone());
+        match saved {
+            Some(answer) => {
+                self.answered(&intent.decision_id, &intent.answer_id, answer);
+                self.changed();
+                self.outcome(OutcomeStatus::Accepted, "")
+            }
+            None => {
+                if let Some(a) = self.answer_mut(&intent.decision_id, &intent.answer_id) {
+                    a.state = AnswerState::Unknown;
+                }
+                self.changed();
+                self.outcome(
+                    OutcomeStatus::Unknown,
+                    "Pilot found no saved answer yet. It did not ask again.",
+                )
+            }
+        }
     }
 
     /// The mock coordinator reports its mission moving again, as a real
@@ -928,19 +1056,115 @@ mod tests {
         let mut desk = Desk::new(Scenario::Decisions);
         let ask = AskIntent {
             decision_id: "q2".into(),
+            revision: 1,
             question: "  Does it touch my data?\nReally? ".into(),
         };
-        desk.begin_ask(&ask).unwrap();
-        desk.settle_ask(&ask);
+        let id = desk.begin_ask(&ask).unwrap();
+        assert_eq!(
+            desk.today().decisions[1].answers[0].state,
+            AnswerState::Asking
+        );
+        desk.settle_ask("q2", &id);
         assert_eq!(desk.today().decisions[1].answers[0].question, ask.question);
         let empty = AskIntent {
             decision_id: "q2".into(),
+            revision: 1,
             question: " \n ".into(),
         };
         assert_eq!(
             desk.begin_ask(&empty).unwrap_err().status,
             OutcomeStatus::Rejected
         );
+    }
+
+    #[test]
+    fn help_never_answers_or_changes_the_decision() {
+        let mut desk = Desk::new(Scenario::Decisions);
+        let before = desk.today().decisions[0].clone();
+        let ask = AskIntent {
+            decision_id: "q1".into(),
+            revision: before.revision,
+            question: "Just pick the best one?".into(),
+        };
+        let id = desk.begin_ask(&ask).unwrap();
+        desk.settle_ask("q1", &id);
+        let after = &desk.today().decisions[0];
+        assert_eq!(after.id, "q1");
+        assert_eq!(
+            (after.revision, after.delivery, after.sent_option.clone()),
+            (before.revision, Delivery::Idle, None)
+        );
+        assert_eq!(after.answers[0].state, AnswerState::Ready);
+        assert!(!after.answers[0].earlier);
+        assert!(desk.today().notes.is_empty());
+        assert!(
+            desk.today()
+                .notes
+                .iter()
+                .all(|n| !n.contains("has your answer"))
+        );
+    }
+
+    #[test]
+    fn a_question_names_the_revision_and_a_changed_decision_marks_its_answer() {
+        let mut desk = Desk::new(Scenario::Trouble);
+        let stale = AskIntent {
+            decision_id: "f1".into(),
+            revision: 4,
+            question: "Why?".into(),
+        };
+        assert_eq!(
+            desk.begin_ask(&stale).unwrap_err().status,
+            OutcomeStatus::Stale
+        );
+        let ask = AskIntent {
+            revision: 1,
+            ..stale
+        };
+        let id = desk.begin_ask(&ask).unwrap();
+        // The user answers the decision while the question is out.
+        desk.begin_decide(&decide("f1", 1, "a")).unwrap();
+        desk.settle_ask("f1", &id);
+        let answer = &desk.today().decisions[0].answers[0];
+        assert_eq!((answer.state, answer.earlier), (AnswerState::Ready, true));
+    }
+
+    #[test]
+    fn a_lost_answer_stays_unknown_and_a_check_only_reads_it() {
+        let mut desk = Desk::new(Scenario::Trouble);
+        let ask = AskIntent {
+            decision_id: "u1".into(),
+            revision: desk.today().decisions[1].revision,
+            question: "What if it did not land?".into(),
+        };
+        let id = desk.begin_ask(&ask).unwrap();
+        let lost = desk.settle_ask("u1", &id);
+        assert_eq!(lost.status, OutcomeStatus::Unknown);
+        let answer = &desk.today().decisions[1].answers[0];
+        assert_eq!(
+            (answer.state, answer.answer.as_str()),
+            (AnswerState::Unknown, "")
+        );
+        let saved = desk.saved_answers.len();
+        let check = AnswerRef {
+            decision_id: "u1".into(),
+            answer_id: id,
+        };
+        desk.begin_check_answer(&check).unwrap();
+        assert_eq!(
+            desk.settle_check_answer(&check).status,
+            OutcomeStatus::Accepted
+        );
+        assert_eq!(
+            desk.saved_answers.len(),
+            saved,
+            "the check asked nothing again"
+        );
+        assert_eq!(
+            desk.today().decisions[1].answers[0].state,
+            AnswerState::Ready
+        );
+        assert_eq!(desk.today().decisions[1].answers.len(), 1);
     }
 
     #[test]

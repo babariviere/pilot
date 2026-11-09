@@ -5,6 +5,7 @@
 //! transport of its own, and the app's capabilities deny network, sockets,
 //! files, processes and host calls.
 
+pub mod actions;
 pub mod contract;
 pub mod desk;
 pub mod feed;

@@ -2,12 +2,14 @@
 // comes next. Read-only over the Rust read model, except through intents.
 // Movement comes only from agents' reports; a mission without a current
 // report is shown as such, never as not moving.
-import { type JSX, Scroll, Text, View } from "nsh";
+import { effect, type JSX, keymap, Scroll, Text, View } from "nsh";
 import type { Decision, MissionRow } from "pilot-day/native";
+import { ActionCard } from "./ActionCard";
+import { commit, later, pickNth, toggleHelp } from "./commands";
 import { DecisionCard, decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
 import { EvidenceChip, InlineAction, Mark, RowLink, SectionTitle, Track } from "./ui";
-import { focused, openMission } from "./view";
+import { focused, focusFront, front, type Item, move, openMission, queue } from "./view";
 import { freshnessLine, provenance, rowLine, stateMark, stateTone, stateWord } from "./words";
 
 function actionFor(decision: Decision | undefined): string {
@@ -22,7 +24,7 @@ const WORDS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eig
 /** The headline: the coordinators' summary, until the user starts answering. */
 function headline(day: Day): string {
 	const today = day.today();
-	const left = today.decisions.length;
+	const left = today.decisions.length + today.actions.length;
 	if (today.notes.length === 0) return today.headline;
 	if (left === 0) return "That was everything. Pilot is back on it.";
 	if (left === 1) return "One thing left.";
@@ -72,7 +74,13 @@ function MissionLine(props: { day: Day; row: MissionRow }) {
 			<View class="flex-row flex-wrap items-baseline gap-x-1.5">
 				<Text class="text-sm text-muted-foreground">{rowLine(props.row)}</Text>
 				<If when={decision()}>
-					<InlineAction label={actionFor(decision())} onPress={() => focused.set(props.row.decisionId ?? null)} />
+					<InlineAction
+						label={actionFor(decision())}
+						onPress={() => {
+							focused.set(props.row.decisionId ?? null);
+							focusFront.set(true);
+						}}
+					/>
 				</If>
 			</View>
 			<View class="flex-row flex-wrap items-center gap-x-3 gap-y-1 pt-1">
@@ -95,13 +103,24 @@ function MissionGroup(props: { day: Day; label: string; rows: MissionRow[]; firs
 	);
 }
 
-function Decisions(props: { day: Day }) {
+function itemTitle(item: Item): string {
+	return item.kind === "decision" ? item.decision.title : item.action.title;
+}
+
+/** What waits for the user: one card in front, the rest as "Up next". */
+function NeedsYou(props: { day: Day }) {
+	const items = () => queue(props.day.today());
+	const first = () => front(props.day.today());
+	const rest = () => items().filter((item) => item.id !== first()?.id);
 	const decisions = () => props.day.today().decisions;
-	const front = () => decisions().find((d) => d.id === focused()) ?? decisions()[0];
-	const rest = () => decisions().filter((d) => d.id !== front()?.id);
+	// A focus request with no card to take it lapses, so a later arrival
+	// never takes the focus on its own.
+	effect(() => {
+		if (focusFront() && !first()) focusFront.set(false);
+	});
 	return (
 		<View class="gap-4">
-			<SectionTitle title="Decisions" count={decisions().length} />
+			<SectionTitle title="Needs you" count={items().length} />
 			<Each of={props.day.today().notes} key={(note) => note}>
 				{(note) => (
 					<View class="flex-row items-center gap-2.5 rounded-xl bg-ok-soft px-4 py-3">
@@ -111,31 +130,54 @@ function Decisions(props: { day: Day }) {
 				)}
 			</Each>
 			<If
-				when={front()}
-				else={<Text class="text-base text-foreground">No decisions waiting. Pilot keeps going on its own.</Text>}
+				when={first()}
+				else={<Text class="text-base text-foreground">Nothing needs you. Pilot keeps going on its own.</Text>}
 			>
-				<Each of={front() ? [front() as Decision] : []} key={(d) => d.id}>
-					{(d) => (
-						<DecisionCard
-							day={props.day}
-							decision={d()}
-							index={decisions().indexOf(d())}
-							count={decisions().length}
-						/>
+				<Each of={first() ? [first() as Item] : []} key={(item) => item.id}>
+					{(item) => (
+						<If
+							when={item().kind === "decision"}
+							else={
+								<ActionCard
+									day={props.day}
+									action={(item() as Extract<Item, { kind: "action" }>).action}
+									index={items().findIndex((i) => i.id === item().id)}
+									count={items().length}
+								/>
+							}
+						>
+							<DecisionCard
+								day={props.day}
+								decision={(item() as Extract<Item, { kind: "decision" }>).decision}
+								index={items().findIndex((i) => i.id === item().id)}
+								count={items().length}
+								later={decisions().length > 1}
+							/>
+						</If>
 					)}
 				</Each>
 			</If>
 			<If when={rest().length > 0}>
 				<View class="gap-0.5">
-					<Each of={rest()} key={(d) => d.id}>
-						{(d) => (
+					<Each of={rest()} key={(item) => item.id}>
+						{(item) => (
 							<View class="flex-row items-center gap-2.5 py-1.5">
-								<Mark kind={decisionMark(d())} />
+								<Mark
+									kind={
+										item().kind === "decision"
+											? decisionMark((item() as Extract<Item, { kind: "decision" }>).decision)
+											: "needs"
+									}
+								/>
 								<Text class="flex-1 text-sm text-muted-foreground">
-									{"Up next: "}
-									<Text class="text-foreground">{d().title}</Text>
+									{item().kind === "decision" ? "Up next: " : "Up next, action for you: "}
+									<Text class="text-foreground">{itemTitle(item())}</Text>
 								</Text>
-								<Text class="text-xs text-faint">{d().effort}</Text>
+								<Text class="text-xs text-faint">
+									{item().kind === "decision"
+										? (item() as Extract<Item, { kind: "decision" }>).decision.effort
+										: (item() as Extract<Item, { kind: "action" }>).action.effort}
+								</Text>
 							</View>
 						)}
 					</Each>
@@ -143,6 +185,51 @@ function Decisions(props: { day: Day }) {
 			</If>
 		</View>
 	);
+}
+
+/**
+ * Keyboard triage while Today shows: J and K bring the next or previous item
+ * forward, 1 to 9 pick an option, S, C, V and Q open help, L puts the item
+ * off and Command-Return takes its one next action. Letters and digits never
+ * fire while a text field has the focus; help keys never pick or send.
+ */
+function bindTriage(day: Day) {
+	const decision = (): Decision | undefined => {
+		const item = front(day.today());
+		return item?.kind === "decision" ? item.decision : undefined;
+	};
+	const keys: Record<string, () => void> = {
+		j: () => move(day.today(), 1),
+		k: () => move(day.today(), -1),
+		l: () => later(day, front(day.today())),
+		"mod+enter": () => commit(day, front(day.today())),
+		s: () => {
+			const d = decision();
+			if (d) toggleHelp(d, "simpler");
+		},
+		c: () => {
+			const d = decision();
+			if (d) toggleHelp(d, "more");
+		},
+		v: () => {
+			const d = decision();
+			if (d?.visual) toggleHelp(d, "visual");
+		},
+		q: () => {
+			const d = decision();
+			if (d) toggleHelp(d, "ask");
+		},
+	};
+	for (let n = 1; n <= 9; n++) {
+		keys[String(n)] = () => {
+			const d = decision();
+			if (d) {
+				pickNth(d, n);
+				focusFront.set(true);
+			}
+		};
+	}
+	keymap.bind(keys);
 }
 
 function Missions(props: { day: Day }) {
@@ -289,6 +376,7 @@ function ComingUp(props: { day: Day }) {
 /** The whole Today screen for `props.day`. */
 export function TodayScreen(props: { day: Day }) {
 	const today = () => props.day.today();
+	bindTriage(props.day);
 	return (
 		<Scroll class="flex-1 bg-background">
 			<View class="w-full max-w-2xl self-center gap-12 px-6 pb-24 pt-6">
@@ -307,7 +395,7 @@ export function TodayScreen(props: { day: Day }) {
 							<FreshnessNote day={props.day} />
 						</View>
 
-						<Decisions day={props.day} />
+						<NeedsYou day={props.day} />
 						<Missions day={props.day} />
 						<DoneSince day={props.day} />
 						<ComingUp day={props.day} />

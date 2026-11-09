@@ -21,6 +21,10 @@ pub enum Scenario {
     Offline,
     /// Nothing could be read, and there is no earlier read.
     Unreadable,
+    /// One decision and one action only the user can take: a Chrome Web
+    /// Store upload whose file is replaced once and whose first report is
+    /// lost.
+    Actions,
 }
 
 /// What a decision asks for. It decides which actions the card offers.
@@ -280,13 +284,57 @@ pub struct DecisionOption {
     pub recommended: bool,
 }
 
+/// Where an answer to the user's question is. Help never answers the
+/// decision itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+pub enum AnswerState {
+    /// Pilot is writing the answer.
+    #[default]
+    Asking,
+    /// The answer is here.
+    Ready,
+    /// The question was saved, but no answer came back. Only a check reads
+    /// it; nothing asks again.
+    Unknown,
+    /// Reading whether an answer was saved. Changes nothing.
+    Checking,
+}
+
 /// A question the user asked about a decision, and Pilot's answer.
 #[derive(Debug, Clone, Default, PartialEq, JsObject)]
 pub struct Answer {
+    /// Stable for the question's life. A check names it.
+    pub id: String,
     /// The question, as the user wrote it.
     pub question: String,
-    /// Pilot's answer.
+    /// Pilot's answer. Empty until it is ready.
     pub answer: String,
+    /// Where the answer is.
+    pub state: AnswerState,
+    /// Whether the decision changed after the question was asked, so the
+    /// answer may not fit it any more.
+    pub earlier: bool,
+}
+
+/// One bar of a decision's chart.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+pub struct Bar {
+    /// What it counts.
+    pub label: String,
+    /// The count. Bars of one chart share a scale.
+    pub value: u32,
+}
+
+/// A picture of the facts behind a decision. It explains; it never
+/// answers.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+pub struct Visual {
+    /// What the picture shows, in one sentence.
+    pub explanation: String,
+    /// The chart's bars.
+    pub bars: Vec<Bar>,
+    /// Where it comes from: the artifact and the exact revision it pins.
+    pub source: String,
 }
 
 /// Something only the user can decide.
@@ -325,12 +373,109 @@ pub struct Decision {
     pub evidence: Vec<Evidence>,
     /// What was sent or pushed, when the user asks.
     pub details: Option<String>,
+    /// A picture of the facts, when Pilot has one for this decision.
+    pub visual: Option<Visual>,
     /// Questions the user asked, with Pilot's answers.
     pub answers: Vec<Answer>,
     /// Where the user's answer is.
     pub delivery: Delivery,
     /// The option the user sent, while it is sending or unknown.
     pub sent_option: Option<String>,
+}
+
+/// A file the user needs for an action, pinned to exact bytes.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+pub struct ActionFile {
+    /// The file's name, such as "pilot-helper-1.4.2.zip".
+    pub name: String,
+    /// The version it holds.
+    pub version: String,
+    /// The start and end of its SHA-256, to compare with what the user has.
+    pub digest: String,
+}
+
+/// Where the user takes the action.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+pub struct Destination {
+    /// The place, as the user knows it.
+    pub label: String,
+    /// Its address, shown so the user can open it. Opening it completes
+    /// nothing.
+    pub link: String,
+    /// The item or version there that the action is about.
+    pub target: String,
+}
+
+/// Who asked for an action.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+pub struct Origin {
+    /// The chat that asked.
+    pub chat_title: String,
+    /// The chat's address.
+    pub chat_link: String,
+    /// Its mission's title. Empty outside a mission.
+    pub mission_title: String,
+}
+
+/// Whether an action waits now or was put off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+pub enum ActionState {
+    /// It waits for the user.
+    #[default]
+    Pending,
+    /// The user put it off. It still waits.
+    Deferred,
+}
+
+/// What the user asked of an action, while it is sending, unknown or
+/// checking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+pub enum ActionAsk {
+    /// Save progress.
+    #[default]
+    Progress,
+    /// Put it off.
+    Later,
+    /// Report it done.
+    Complete,
+}
+
+/// Something only the user can do outside Pilot, such as an upload. Not a
+/// decision and not an approval: Pilot waits for the user's report.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+pub struct HumanAction {
+    /// Stable for the action's life.
+    pub id: String,
+    /// Changes whenever the action changes. Intents name it.
+    pub revision: u32,
+    /// What to do, as a title.
+    pub title: String,
+    /// Why Pilot needs the user for it.
+    pub why: String,
+    /// The one next step, in a sentence.
+    pub next_step: String,
+    /// How long it takes.
+    pub effort: String,
+    /// The files to use, pinned to exact bytes.
+    pub files: Vec<ActionFile>,
+    /// Where to do it.
+    pub destination: Destination,
+    /// Who asked.
+    pub origin: Origin,
+    /// What the user reports back when done. Empty when a plain "done"
+    /// is enough.
+    pub needs: Vec<String>,
+    /// The progress the user saved, exactly as written.
+    pub progress: String,
+    /// Waiting now, or put off.
+    pub state: ActionState,
+    /// Set when Pilot replaced the request since the user last saw it,
+    /// saying what changed.
+    pub replaced: Option<String>,
+    /// Where the user's last request is.
+    pub delivery: Delivery,
+    /// What that request asks, while it is sending, unknown or checking.
+    pub asked: Option<ActionAsk>,
 }
 
 /// How much of a mission is done, by task state.
@@ -479,6 +624,9 @@ pub struct Today {
     pub notes: Vec<String>,
     /// What waits for the user, in order.
     pub decisions: Vec<Decision>,
+    /// What only the user can do outside Pilot, in order. Shown with the
+    /// decisions, but they are actions, not approvals.
+    pub actions: Vec<HumanAction>,
     /// How fresh the read is. Everything below is from that read.
     pub freshness: Freshness,
     /// Missions a current agent report says are moving.
@@ -528,8 +676,62 @@ pub struct DecisionRef {
 pub struct AskIntent {
     /// The decision.
     pub decision_id: String,
+    /// The decision's revision the screen showed.
+    pub revision: u32,
     /// The question, as the user wrote it.
     pub question: String,
+}
+
+/// Name one question about a decision.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[prop(exact)]
+pub struct AnswerRef {
+    /// The decision.
+    pub decision_id: String,
+    /// The question.
+    pub answer_id: String,
+}
+
+/// Name one action at the revision the screen showed.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[prop(exact)]
+pub struct ActionRef {
+    /// The action.
+    pub action_id: String,
+    /// The action's revision the screen showed.
+    pub revision: u32,
+}
+
+/// Save the user's progress on an action. It does not complete it.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[prop(exact)]
+pub struct ProgressIntent {
+    /// The action.
+    pub action_id: String,
+    /// The action's revision the screen showed.
+    pub revision: u32,
+    /// The progress, exactly as written.
+    pub progress: String,
+}
+
+/// Report an action done. The user's report, not proof it worked.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[prop(exact)]
+pub struct CompleteIntent {
+    /// The action.
+    pub action_id: String,
+    /// The action's revision the screen showed.
+    pub revision: u32,
+    /// What the user did, exactly as written.
+    pub report: String,
+}
+
+/// Name one action, to check its last request.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[prop(exact)]
+pub struct ActionCheck {
+    /// The action.
+    pub action_id: String,
 }
 
 /// Pause all of a mission's work.

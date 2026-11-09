@@ -69,6 +69,143 @@ test("help: simpler words, more context, and a question answered in the card", a
 	expect(app.value("id:question")).toBe("");
 });
 
+test("keys bring the next item forward and the focus lands on its choice", async () => {
+	const app = await open("./App.tsx", desktop);
+	await app.waitFor("1 of 3");
+	await app.keyboard.press("j");
+	await app.waitFor("2 of 3");
+	expect(app.shows("Up next: How should finished work reach you?")).toBe(true);
+	await app.keyboard.press("k");
+	await app.waitFor("1 of 3");
+	await app.keyboard.press("j");
+	await app.waitFor("2 of 3");
+	// The keyboard focus is on the chosen option, so Down picks the next one.
+	await app.keyboard.press("down");
+	await app.keyboard.press("mod+enter");
+	await app.waitFor("Native desktop app has your answer: Skip it.");
+	await app.waitFor("Two things left.");
+});
+
+test("keys pick an option and open help, and help sends nothing", async () => {
+	const app = await open("./App.tsx", desktop);
+	await app.waitFor("1 of 3");
+	await app.keyboard.press("3");
+	await app.keyboard.press("s");
+	await app.waitFor("Pilot sends too many notifications. Choose when it should tell you about finished work.");
+	await app.keyboard.press("c");
+	await app.waitFor("Questions and failures still notify you right away with every option.");
+	await app.keyboard.press("v");
+	await app.waitFor("Last week, 35 of 41 notifications were finished work. Only 6 needed you.");
+	expect(app.shows("From Notification chart, revision 2. It explains; it does not answer for you.")).toBe(true);
+	expect(app.shows("Finished work")).toBe(true);
+	expect(app.shows("Sending your answer…")).toBe(false);
+	expect(app.shows("has your answer")).toBe(false);
+	expect(app.shows("1 of 3")).toBe(true);
+	await app.keyboard.press("l");
+	await app.waitFor("Up next: How should finished work reach you?");
+	expect(app.shows("has your answer")).toBe(false);
+	await app.keyboard.press("k");
+	await app.waitFor("3 of 3");
+	// The pick survives Later; Command-Return sends exactly that.
+	await app.keyboard.press("mod+enter");
+	await app.waitFor("Quieter notifications has your answer: Only failures and questions.");
+});
+
+test("letters type into a question, Escape leaves it and its draft stays", async () => {
+	const app = await open("./App.tsx", desktop);
+	await app.waitFor("1 of 3");
+	await app.keyboard.press("q");
+	await app.keyboard.press("j");
+	await app.keyboard.press("k");
+	expect(app.value("id:question")).toBe("jk");
+	expect(app.shows("1 of 3")).toBe(true);
+	// Command-Return in the question does not decide.
+	await app.keyboard.press("mod+enter");
+	expect(app.shows("Sending your answer…")).toBe(false);
+	await app.keyboard.press("escape");
+	await app.keyboard.press("j");
+	await app.waitFor("2 of 3");
+	await app.keyboard.press("k");
+	await app.waitFor("1 of 3");
+	expect(app.value("id:question")).toBe("jk");
+	expect(app.shows("has your answer")).toBe(false);
+});
+
+test("a lost answer to a question stays unknown and is only checked", async () => {
+	const app = await open("./Trouble.tsx", desktop);
+	await app.waitFor("1 of 2");
+	await app.keyboard.press("j");
+	await app.waitFor("2 of 2");
+	await app.keyboard.press("q");
+	await app.type("id:question", "What if it did not land?");
+	await app.press("role:button[Ask]");
+	await app.waitFor("No answer came back. Pilot will not ask again until it checks.");
+	expect(app.value("id:question")).toBe("");
+	await app.press("id:check-answer");
+	await app.waitFor(
+		"If it did not land, Pilot pushes once more, then tells you. It never pushes twice without checking.",
+	);
+	expect(app.shows("No answer came back. Pilot will not ask again until it checks.")).toBe(false);
+});
+
+test("an action shows what to do, the exact file, where it goes and who asked", async () => {
+	const app = await open("./Actions.tsx", desktop);
+	await app.waitFor("Two things need you.");
+	expect(app.shows("Up next, action for you: Upload Pilot Helper 1.4.2 to the Chrome Web Store")).toBe(true);
+	await app.keyboard.press("j");
+	await app.waitFor("id:action");
+	for (const text of [
+		"Action for you",
+		"pilot-helper-1.4.2.zip · version 1.4.2 · sha256 9f3c…a1d0",
+		"Pilot Helper, package 1.4.2 on the Chrome Web Store",
+		"text:https://chrome.google.com/webstore/devconsole",
+		"“Ship the browser helper” · pilot://chat/db252a71-781a-458d-815f-41d42856d27d",
+		"Uploading needs your Chrome Web Store developer account. Pilot cannot sign in to it.",
+		"Opening the link or the file does not count. Only your report does.",
+	]) {
+		expect(app.shows(text)).toBe(true);
+	}
+	expect(app.shows("Approve")).toBe(false);
+	expect(app.enabled("role:button[Mark done]")).toBe(false);
+	// Command-Return without a report asks for one and reports nothing.
+	await app.keyboard.press("mod+enter");
+	await app.waitFor("Say what you did first. Pilot needs it to go on.");
+	await app.keyboard.press("escape");
+	await app.type("id:report", "Downloaded the zip");
+	await app.press("role:button[Save progress]");
+	await app.waitFor("Progress saved. This is not done yet.");
+	expect(app.shows("Saved progress: Downloaded the zip")).toBe(true);
+	expect(app.shows("You reported done")).toBe(false);
+	await app.press("role:button[Later]");
+	await app.waitFor("Up next, action for you: Upload Pilot Helper 1.4.2 to the Chrome Web Store");
+	await app.keyboard.press("j");
+	await app.waitFor("Action for you · put off");
+	expect(app.shows("Saved progress: Downloaded the zip")).toBe(true);
+});
+
+test("a replaced file refuses the old report, and a lost answer is only checked", async () => {
+	const app = await open("./Actions.tsx", desktop);
+	await app.keyboard.press("j");
+	await app.type("id:report", "Uploaded 1.4.2");
+	await app.press("role:button[Mark done]");
+	await app.waitFor("Nothing was saved: this action changed before your request arrived. Read it again.");
+	expect(app.shows("Pilot replaced this request with a new file: pilot-helper-1.4.3.zip (version 1.4.3).")).toBe(true);
+	expect(app.shows("pilot-helper-1.4.3.zip · version 1.4.3 · sha256 41be…07c2")).toBe(true);
+	// The draft stays, so the user corrects it rather than typing it again.
+	expect(app.value("id:report")).toBe("Uploaded 1.4.2");
+	await app.clear("id:report");
+	await app.type("id:report", "Uploaded 1.4.3; the dashboard shows 1.4.3");
+	await app.press("role:button[Mark done]");
+	await app.waitFor("Pilot sent your report but heard nothing back. It will not send it again until it checks.");
+	expect(app.shows("role:button[Mark done]")).toBe(false);
+	await app.press("role:button[Check again]");
+	await app.waitFor(
+		"You reported done: Upload Pilot Helper 1.4.3 to the Chrome Web Store. Pilot has not checked the Chrome Web Store itself.",
+	);
+	await app.waitFor("One thing left.");
+	expect(app.shows("id:action")).toBe(false);
+});
+
 test("a lost confirmation stays unknown and is only checked, never resent", async () => {
 	const app = await open("./Trouble.tsx", desktop);
 	await app.waitFor("2 integration tests fail on Linux");
@@ -82,7 +219,7 @@ test("a lost confirmation stays unknown and is only checked, never resent", asyn
 
 test("nothing waiting is said calmly", async () => {
 	const app = await open("./Quiet.tsx", desktop);
-	await app.waitFor("No decisions waiting. Pilot keeps going on its own.");
+	await app.waitFor("Nothing needs you. Pilot keeps going on its own.");
 	expect(app.shows("You were reading the history slice in Native desktop app.")).toBe(true);
 });
 
@@ -200,7 +337,7 @@ test("offline keeps the last read visible and turns controls off", async () => {
 test("nothing readable is said plainly, with nothing guessed", async () => {
 	const app = await open("./Unreadable.tsx", desktop);
 	await app.waitFor("Today could not be read.");
-	expect(app.shows("No decisions waiting. Pilot keeps going on its own.")).toBe(false);
+	expect(app.shows("Nothing needs you. Pilot keeps going on its own.")).toBe(false);
 	expect(app.shows("Missions")).toBe(false);
 });
 
@@ -230,9 +367,37 @@ test("intents are typed: unknown keys and wrong types are refused in the call", 
 		refused = String(error);
 	});
 	expect(refused).toContain("TypeError");
+	// Help and actions name the revision shown, too.
+	const oldAsk = await feed.ask({ decisionId: "q1", revision: 9, question: "Why?" });
+	expect(oldAsk.status).toBe("stale");
+	expect(feed.snapshot().decisions[0].answers).toEqual([]);
+	let forgedAsk = "";
+	await feed.ask({ decisionId: "q1", question: "Why?" } as never).catch((error: unknown) => {
+		forgedAsk = String(error);
+	});
+	expect(forgedAsk).toContain("TypeError");
 	const old = await feed.pause({ missionId: "search", revision: 5 });
 	expect(old.status).toBe("stale");
 	expect(feed.mission("search")?.row.control.delivery).toBe("idle");
+	feed.dispose();
+});
+
+test("action reports name the revision shown and cannot carry extra authority", async () => {
+	const feed = new TodayFeed("actions");
+	const action = feed.snapshot().actions[0];
+	const stale = await feed.complete({ actionId: action.id, revision: action.revision + 3, report: "Uploaded" });
+	expect(stale.status).toBe("stale");
+	let forged = "";
+	await feed
+		.complete({ actionId: action.id, revision: action.revision, report: "Uploaded", source: "agent" } as never)
+		.catch((error: unknown) => {
+			forged = String(error);
+		});
+	expect(forged).toContain("TypeError");
+	const nothing = await feed.checkAction({ actionId: action.id });
+	expect(nothing.status).toBe("rejected");
+	expect(feed.snapshot().actions[0].delivery).toBe("idle");
+	expect(feed.snapshot().notes).toEqual([]);
 	feed.dispose();
 });
 

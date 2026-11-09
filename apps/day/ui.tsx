@@ -1,8 +1,8 @@
 // The Day screen's styled controls, drawn from nsh/base behavior and the
 // theme's tokens. Pages compose these; they do not restyle base controls.
-import { type JSX, Text, View } from "nsh";
+import { type JSX, Text, View, type ViewRef } from "nsh";
 import { Button, Toggle } from "nsh/base";
-import type { Evidence, Progress } from "pilot-day/native";
+import type { Bar, Evidence, Progress } from "pilot-day/native";
 
 /** A still state mark. Words beside it carry the meaning. */
 export type MarkKind = "needs" | "failed" | "ready" | "unknown" | "moving" | "still" | "paused" | "unreported" | "done";
@@ -30,12 +30,20 @@ export function Action(props: {
 	primary?: boolean;
 	disabled?: boolean;
 	accessibilityLabel?: string;
+	/** The keyboard shortcut, shown as a tooltip, such as "⌘↩". */
+	shortcut?: string;
+	testID?: string;
+	/** Hears the button's view, to give it the keyboard focus. */
+	anchor?: (node: ViewRef) => void;
 	onPress: () => void;
 }) {
 	return (
 		<Button
+			ref={props.anchor}
+			testID={props.testID}
 			disabled={props.disabled}
 			accessibilityLabel={props.accessibilityLabel ?? null}
+			tooltip={props.shortcut ? `${props.label}  ${props.shortcut}` : undefined}
 			onPress={props.onPress}
 			class={
 				props.primary
@@ -72,19 +80,33 @@ export function RowLink(props: {
 }
 
 /** An inline text command inside a sentence. */
-export function InlineAction(props: { label: string; onPress: () => void }) {
+export function InlineAction(props: { label: string; testID?: string; onPress: () => void }) {
 	return (
-		<Button onPress={props.onPress} class="rounded-sm focus-visible:ring-2 focus-visible:ring-ring/40">
+		<Button
+			testID={props.testID}
+			onPress={props.onPress}
+			class="rounded-sm focus-visible:ring-2 focus-visible:ring-ring/40"
+		>
 			<Text class="text-sm text-needs-ink underline">{props.label}</Text>
 		</Button>
 	);
 }
 
 /** A help toggle on a decision card. */
-export function HelpChip(props: { label: string; pressed: boolean; onChange: (pressed: boolean) => void }) {
+export function HelpChip(props: {
+	label: string;
+	pressed: boolean;
+	/** The key that toggles it, shown as a tooltip. */
+	shortcut?: string;
+	/** Hears the chip's view, to give it the keyboard focus. */
+	anchor?: (node: ViewRef) => void;
+	onChange: (pressed: boolean) => void;
+}) {
 	return (
 		<Toggle
+			ref={props.anchor}
 			pressed={props.pressed}
+			tooltip={props.shortcut ? `${props.label}  ${props.shortcut}` : undefined}
 			onChange={({ pressed }) => props.onChange(pressed)}
 			class="group rounded-full border border-border-strong px-3 py-1 hover:bg-accent aria-pressed:border-primary/40 aria-pressed:bg-selection focus-visible:ring-2 focus-visible:ring-ring/40"
 		>
@@ -123,6 +145,27 @@ export function SectionTitle(props: { title: string; count?: number | null; chil
 			</If>
 			<View class="flex-1" />
 			{props.children}
+		</View>
+	);
+}
+
+/** A small horizontal bar chart: one labelled bar per count, on one scale. Words carry every number. */
+export function Bars(props: { bars: Bar[] }) {
+	const most = () => Math.max(1, ...props.bars.map((b) => b.value));
+	return (
+		<View class="gap-2">
+			<Each of={props.bars} key={(b) => b.label}>
+				{(b) => (
+					<View class="flex-row items-center gap-3">
+						<Text class="w-28 text-xs text-muted-foreground">{b().label}</Text>
+						<View class="h-2 flex-1 flex-row overflow-hidden rounded-full bg-track">
+							<View class="h-full rounded-full bg-progress" style={{ flexGrow: b().value, flexBasis: 0 }} />
+							<View class="h-full" style={{ flexGrow: most() - b().value, flexBasis: 0 }} />
+						</View>
+						<Text class="w-8 text-right text-xs text-foreground">{String(b().value)}</Text>
+					</View>
+				)}
+			</Each>
 		</View>
 	);
 }

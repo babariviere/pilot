@@ -24,6 +24,13 @@ fn the_screen_gets_typed_read_models_and_intents() {
         "  later(intent: DecisionRef): IntentOutcome;",
         "  check(intent: DecisionRef): Promise<IntentOutcome>;",
         "  ask(intent: AskIntent): Promise<IntentOutcome>;",
+        "  checkAnswer(intent: AnswerRef): Promise<IntentOutcome>;",
+        "  saveProgress(intent: ProgressIntent): Promise<IntentOutcome>;",
+        "  actionLater(intent: ActionRef): Promise<IntentOutcome>;",
+        "  complete(intent: CompleteIntent): Promise<IntentOutcome>;",
+        "  checkAction(intent: ActionCheck): Promise<IntentOutcome>;",
+        "export type AnswerState = \"asking\" | \"ready\" | \"unknown\" | \"checking\";",
+        "export type ActionAsk = \"progress\" | \"later\" | \"complete\";",
         "  pulse(everyMs?: number | null, count?: number | null): Promise<number>;",
         "  onChange(listener: (today: Today) => void): () => void;",
     ] {

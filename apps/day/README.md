@@ -37,9 +37,9 @@ the same as `apps/day/nsh.sh <command>`.
 ```sh
 cd apps/day
 ./nsh.sh run                     # the decisions world, in a native window
-./nsh.sh run Trouble.tsx         # also Quiet.tsx, Large.tsx, Pulse.tsx, Offline.tsx, Unreadable.tsx
+./nsh.sh run Trouble.tsx         # also Actions.tsx, Quiet.tsx, Large.tsx, Pulse.tsx, Offline.tsx, Unreadable.tsx
 ./nsh.sh check && ./nsh.sh build # types against the Rust declarations, class check
-./nsh.sh test App.test.tsx       # headless flows, boundary and sandbox (19 tests)
+./nsh.sh test App.test.tsx       # headless flows, boundary and sandbox (26 tests)
 ./nsh.sh test Native.test.tsx --target macos  # native captures and input, in output/
 (cd native && cargo test)        # Rust rules and generated declarations
 ```
@@ -57,16 +57,45 @@ point, script or build uses it, and `tsconfig.json` excludes it.
 
 ## What it shows
 
-Today follows the selected D design: the coordinators' headline, one decision
-in front with "Up next" below it, missions split into Moving and Not moving,
-results since the user last looked, and what is coming up. A decision card has
-"Say it simpler", "More context", and a question answered inside the card. The
-user picks an option (Pilot's recommendation is preselected) and presses Decide,
-Confirm or Approve, or puts the decision off with Later. Worlds: `decisions`
-(default), `quiet`, `trouble` (a lost confirmation, an unconfirmed push, a
-paused mission, a lost Pause answer and a Pause that does not finish
-everywhere), `large` (204 missions, 123 results), `offline` (the last read,
-6 minutes old) and `unreadable` (nothing read).
+Today follows the selected D design: the coordinators' headline, one item
+under "Needs you" in front with "Up next" below it, missions split into Moving
+and Not moving, results since the user last looked, and what is coming up.
+
+A decision card has "Say it simpler", "More context", "Show me" (a small chart
+with the artifact revision it comes from) and questions answered inside the
+card. A question shows as asking until its answer comes; a lost answer stays
+unknown and only "Check again" reads it. An answer to a decision that changed
+since the question says so. Help never picks, sends or approves. The user
+picks an option (Pilot's recommendation is preselected) and presses Decide,
+Confirm or Approve, or puts the decision off with Later. A pick belongs to the
+revision it was made on: if the decision changes, the user picks again.
+
+An action card is for something only the user can do outside Pilot, such as
+the Chrome Web Store upload in `Actions.tsx`. It says "Action for you", never
+Approve, and shows the one next step, why Pilot needs the user, the exact file
+(name, version and digest), where it goes, its link and the chat that asked.
+The user saves progress, puts it off with Later, or reports it done in their
+own words. Opening the link or the file reports nothing. A report is kept as
+the user's word: Today says Pilot has not checked the store. If the agent
+replaced the file first, the report is refused as stale and the draft stays.
+A lost answer stays unknown until "Check again" reads the receipt; nothing is
+sent twice.
+
+Keyboard triage works while Today shows: J and K bring the next or previous
+item forward, 1 to 9 pick an option, S, C, V and Q open simpler words,
+context, the chart and a question, L puts the item off and Command-Return takes
+its one next action (Decide, Confirm, Approve, Check again or Mark done). After
+the user's own triage the focus lands on the card in front: the chosen option,
+else its first help, or Later on an action card. Letters and digits type into a
+question or report instead; Escape leaves the field, keeps its draft and
+returns to the card. Drafts, picks and open help are kept per item.
+
+Worlds: `decisions` (default), `quiet`, `trouble` (a lost confirmation, an
+unconfirmed push, a lost answer to a question, a paused mission, a lost Pause
+answer and a Pause that does not finish everywhere), `actions` (one decision
+and the Chrome Web Store upload: the zip is replaced before the first report,
+and the next report's answer is lost), `large` (204 missions, 123 results),
+`offline` (the last read, 6 minutes old) and `unreadable` (nothing read).
 
 Missions come only from agent reports. A current report that says moving puts
 a mission under Moving; one that says not moving, or a Pause, under Not
@@ -87,11 +116,18 @@ shared update workload: `Desk::pulse` moves the next moving mission on every
 100 ms, adds a result every fourth time, and publishes the whole read model,
 300 times. `TodayFeed.pulse` is for measurements only, not a user intent.
 
-Not built yet: keyboard triage, decision visuals ("Show me"), the day
+Not built yet: the day
 switcher, New, rituals, Changes, Automations, the sky dither, the daemon
 adapter (reads, WebSocket updates and the native host's control POST) and
-opening a chat from the mission overview. Decisions, results and Coming up
-still come from the mock world, not from contracts.
+opening a chat from the mission overview. Decisions, actions, help answers,
+results and Coming up still come from the mock world, not from contracts. The
+mock help and action services in `native/` follow the attention contracts
+([decision-assistance.md](../../docs/technical/decision-assistance.md)), but no
+production host is wired: no authenticated native user, permission checks,
+current-question or file readers, read-only help producer, durable receipts or
+capacity errors (the service refuses past 4,096 records). The mock flows are
+not end-to-end. Day shows links as text and opens nothing: `capabilities`
+grants no URL opening.
 
 ## Boundary
 
@@ -107,7 +143,9 @@ declarations (`.nsh/types/pilot-day/native.d.ts`) are the whole contract:
   `mission(missionId): MissionPage | null`. TSX mirrors the model in one signal
   that only the listener sets, and reads a mission page again on each change.
 - Intents: `decide(DecideIntent)`, `later(DecisionRef)`, `check(DecisionRef)`,
-  `ask(AskIntent)`, `pause(PauseIntent)`, `resume(ResumeIntent)` and
+  `ask(AskIntent)`, `checkAnswer(AnswerRef)`, `saveProgress(ProgressIntent)`,
+  `actionLater(ActionRef)`, `complete(CompleteIntent)`, `checkAction(ActionCheck)`,
+  `pause(PauseIntent)`, `resume(ResumeIntent)` and
   `checkControl(MissionRef)`, each returning an `IntentOutcome` (accepted,
   stale, rejected, unknown). Intents are `#[prop(exact)]`: an unknown key or a wrong type is a
   `TypeError` in the call, before Rust acts.
@@ -115,7 +153,9 @@ declarations (`.nsh/types/pilot-day/native.d.ts`) are the whole contract:
   also names the Pause shown. Rust adds the home, project, coordinator and a
   new operation ID, and records the command before sending. TSX cannot supply
   them (`native/tests/boundary.rs` checks the declarations).
-- An intent names the decision's revision. A changed decision is `stale`. A
+- Decision and action intents, questions included, name the revision shown.
+  An action request also carries a new operation ID and digest that Rust adds
+  and records before sending (`native/src/actions.rs`). A changed decision is `stale`. A
   second send is refused. A lost confirmation leaves the decision `unknown`; only
   a read-only check can settle it, and nothing resends.
 

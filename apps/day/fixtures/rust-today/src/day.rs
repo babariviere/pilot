@@ -135,16 +135,20 @@ impl Day {
         });
     }
 
-    /// Asks Pilot a question about a decision; the answer joins the
-    /// decision's `answers`.
+    /// Asks Pilot a question about a decision; the question joins the
+    /// decision's `answers` at once and its answer follows.
     pub fn ask(&self, intent: AskIntent, done: impl FnOnce(IntentOutcome) + 'static) {
-        if let Err(outcome) = self.desk.with(|desk| desk.begin_ask(&intent)) {
-            return done(outcome);
-        }
+        let id = match self.desk.with(|desk| desk.begin_ask(&intent)) {
+            Ok(id) => id,
+            Err(outcome) => return done(outcome),
+        };
+        self.publish();
         let day = *self;
         self.spawn(async move {
             timer(MOCK_LATENCY).await;
-            let outcome = day.desk.with(|desk| desk.settle_ask(&intent));
+            let outcome = day
+                .desk
+                .with(|desk| desk.settle_ask(&intent.decision_id, &id));
             day.publish();
             done(outcome);
         });
@@ -279,8 +283,16 @@ impl Day {
         self.set_asking(id, true);
         let day = *self;
         let id = id.to_owned();
+        let revision = self.desk.with(|desk| {
+            desk.today()
+                .decisions
+                .iter()
+                .find(|d| d.id == id)
+                .map_or(0, |d| d.revision)
+        });
         let intent = AskIntent {
             decision_id: id.clone(),
+            revision,
             question: question.clone(),
         };
         self.ask(intent, move |outcome| {

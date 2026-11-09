@@ -7,10 +7,12 @@ use std::{cell::RefCell, rc::Rc, time::Duration};
 use nsh_core::prelude::*;
 
 use crate::{
+    actions::StartedAction,
     desk::{Desk, PULSE_COUNT, PULSE_EVERY},
     model::{
-        AskIntent, DecideIntent, DecisionRef, IntentOutcome, MissionPage, MissionRef, PauseIntent,
-        ResumeIntent, Scenario, Today,
+        ActionCheck, ActionRef, AnswerRef, AskIntent, CompleteIntent, DecideIntent, DecisionRef,
+        IntentOutcome, MissionPage, MissionRef, PauseIntent, ProgressIntent, ResumeIntent,
+        Scenario, Today,
     },
 };
 
@@ -37,6 +39,30 @@ impl TodayFeed {
         for (_, listener) in self.listeners.borrow().iter() {
             listener.post(today.clone());
         }
+    }
+
+    /// Sends one recorded action request and applies its answer.
+    async fn send_action(
+        this: Instance<Self>,
+        begin: impl FnOnce(&mut Desk) -> Result<StartedAction, IntentOutcome>,
+    ) -> IntentOutcome {
+        let started = this.with_mut(|feed| {
+            let started = begin(&mut feed.desk);
+            if started.is_ok() {
+                feed.publish();
+            }
+            started.map(|s| (s, feed.latency))
+        });
+        let (started, latency) = match started {
+            Ok(started) => started,
+            Err(outcome) => return outcome,
+        };
+        timer(latency).await;
+        this.with_mut(|feed| {
+            let outcome = feed.desk.settle_action(&started);
+            feed.publish();
+            outcome
+        })
     }
 
     /// The feed's owner, for a Rust screen or a test.
@@ -130,17 +156,86 @@ impl TodayFeed {
         })
     }
 
-    /// Asks Pilot a question about a decision; the answer joins the
-    /// decision's `answers`.
+    /// Asks Pilot a question about a decision, named at the revision the
+    /// screen showed. The question joins the decision's `answers` at once,
+    /// as asking; the answer follows. Help never answers the decision.
     pub async fn ask(this: Instance<Self>, intent: AskIntent) -> IntentOutcome {
-        let started = this.with_mut(|feed| feed.desk.begin_ask(&intent).map(|()| feed.latency));
+        let started = this.with_mut(|feed| {
+            let started = feed.desk.begin_ask(&intent);
+            if started.is_ok() {
+                feed.publish();
+            }
+            started.map(|id| (id, feed.latency))
+        });
+        let (id, latency) = match started {
+            Ok(started) => started,
+            Err(outcome) => return outcome,
+        };
+        timer(latency).await;
+        this.with_mut(|feed| {
+            let outcome = feed.desk.settle_ask(&intent.decision_id, &id);
+            feed.publish();
+            outcome
+        })
+    }
+
+    /// Reads whether a question whose answer was lost has a saved answer.
+    /// Never asks again.
+    pub async fn check_answer(this: Instance<Self>, intent: AnswerRef) -> IntentOutcome {
+        let started = this.with_mut(|feed| {
+            let started = feed.desk.begin_check_answer(&intent);
+            if started.is_ok() {
+                feed.publish();
+            }
+            started.map(|()| feed.latency)
+        });
         let latency = match started {
             Ok(latency) => latency,
             Err(outcome) => return outcome,
         };
         timer(latency).await;
         this.with_mut(|feed| {
-            let outcome = feed.desk.settle_ask(&intent);
+            let outcome = feed.desk.settle_check_answer(&intent);
+            feed.publish();
+            outcome
+        })
+    }
+
+    /// Saves the user's progress on an action, named at the revision the
+    /// screen showed. It does not complete the action.
+    pub async fn save_progress(this: Instance<Self>, intent: ProgressIntent) -> IntentOutcome {
+        Self::send_action(this, |desk| desk.begin_progress(&intent)).await
+    }
+
+    /// Puts an action off. It still waits for the user.
+    pub async fn action_later(this: Instance<Self>, intent: ActionRef) -> IntentOutcome {
+        Self::send_action(this, |desk| desk.begin_action_later(&intent)).await
+    }
+
+    /// Reports an action done, in the user's words. Pilot keeps it as the
+    /// user's report, not as proof that the action worked. A lost answer
+    /// is `unknown`, and only `checkAction` can settle it.
+    pub async fn complete(this: Instance<Self>, intent: CompleteIntent) -> IntentOutcome {
+        Self::send_action(this, |desk| desk.begin_complete(&intent)).await
+    }
+
+    /// Reads whether an action request whose answer was lost landed. Never
+    /// sends it again.
+    pub async fn check_action(this: Instance<Self>, intent: ActionCheck) -> IntentOutcome {
+        let started = this.with_mut(|feed| {
+            let started = feed.desk.begin_check_action(&intent);
+            if started.is_ok() {
+                feed.publish();
+            }
+            started.map(|op| (op, feed.latency))
+        });
+        let (operation, latency) = match started {
+            Ok(started) => started,
+            Err(outcome) => return outcome,
+        };
+        timer(latency).await;
+        this.with_mut(|feed| {
+            let outcome = feed.desk.settle_check_action(&intent.action_id, &operation);
             feed.publish();
             outcome
         })

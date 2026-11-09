@@ -28,6 +28,40 @@ test("Today in dark appearance", async () => {
 	await app.screenshot("output/today-dark-1100.png");
 });
 
+test("keyboard triage on a real platform: focus, picks, help and a question draft", async () => {
+	const app = await open("./App.tsx", { platform: "macos", width: 1100, height: 900 });
+	await app.waitFor("1 of 3");
+	await app.keyboard.press("j");
+	await app.waitFor("2 of 3");
+	await app.keyboard.press("down");
+	await app.screenshot("output/today-keys-focus-1100.png");
+	await app.keyboard.press("k");
+	await app.keyboard.press("v");
+	await app.waitFor("id:visual");
+	await app.keyboard.press("q");
+	await app.keyboard.press("j");
+	expect(app.value("id:question")).toBe("j");
+	await app.keyboard.press("escape");
+	await app.keyboard.press("j");
+	await app.waitFor("2 of 3");
+	await app.keyboard.press("k");
+	expect(app.value("id:question")).toBe("j");
+	await app.screenshot("output/today-keys-help-1100.png");
+});
+
+test("an action card in light, dark and a narrow window", async () => {
+	for (const [colorScheme, width] of [
+		["light", 1100],
+		["dark", 1100],
+		["light", 480],
+	] as const) {
+		const app = await open("./Actions.tsx", { platform: "macos", width, height: 900, colorScheme });
+		await app.keyboard.press("j");
+		await app.waitFor("id:action");
+		await app.screenshot(`output/action-${colorScheme}-${width}.png`);
+	}
+});
+
 test("Today in a narrow window", async () => {
 	const app = await open("./Trouble.tsx", { platform: "macos", width: 480, height: 900 });
 	await app.waitFor("2 integration tests fail on Linux");

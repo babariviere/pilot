@@ -5,14 +5,15 @@
 //! the same [`Today`] values for a like-for-like comparison.
 
 use crate::{
+    actions::{self, Actions, Content},
     contract::{
         Control, ControlState, Currentness, Dashboard, DashboardMission, DayOverview, Home,
         MissionDetail, MissionHead, Movement, Phase, Provenance, Report, ReportView, ReportWrite,
         Section, Task, TaskStatus, WorkingItem,
     },
     model::{
-        Decision, DecisionKind, DecisionOption, Delivery, DoneEntry, Evidence, FreshnessState,
-        Scenario, Scheduled, Today, Tone,
+        Bar, Decision, DecisionKind, DecisionOption, Delivery, DoneEntry, Evidence, FreshnessState,
+        Scenario, Scheduled, Today, Tone, Visual,
     },
     project::MINUTE,
 };
@@ -71,6 +72,10 @@ pub struct World {
     pub control_acks: Vec<(String, ControlAck)>,
     /// The canned answer to any question about a decision, by id.
     pub answers: Vec<(String, String)>,
+    /// Decisions whose first answer to a question is lost on the way back.
+    pub lost_answers: Vec<String>,
+    /// The mock human-action service.
+    pub actions: Actions,
 }
 
 /// The world for `scenario`.
@@ -82,6 +87,7 @@ pub fn world(scenario: Scenario) -> World {
         Scenario::Large => large(200, 120),
         Scenario::Offline => offline(),
         Scenario::Unreadable => unreadable(),
+        Scenario::Actions => with_actions(),
     }
 }
 
@@ -501,6 +507,26 @@ fn decisions() -> World {
             ),
         ],
         evidence: vec![ev("Notification chart"), ev("Audit notes")],
+        visual: Some(Visual {
+            explanation: s(
+                "Last week, 35 of 41 notifications were finished work. Only 6 needed you.",
+            ),
+            bars: vec![
+                Bar {
+                    label: s("Finished work"),
+                    value: 35,
+                },
+                Bar {
+                    label: s("Questions"),
+                    value: 4,
+                },
+                Bar {
+                    label: s("Failures"),
+                    value: 2,
+                },
+            ],
+            source: s("Notification chart, revision 2"),
+        }),
         ..decision(
             "q1",
             DecisionKind::Choice,
@@ -664,6 +690,8 @@ fn decisions() -> World {
                 s("Yes. Light and dark captures are attached to the result."),
             ),
         ],
+        lost_answers: Vec::new(),
+        actions: Actions::default(),
     }
 }
 
@@ -732,6 +760,8 @@ fn quiet() -> World {
         acks: Vec::new(),
         control_acks: Vec::new(),
         answers: Vec::new(),
+        lost_answers: Vec::new(),
+        actions: Actions::default(),
     }
 }
 
@@ -929,6 +959,9 @@ fn trouble() -> World {
                 ),
             ),
         ],
+        // The first answer to a question about the unconfirmed push is lost.
+        lost_answers: vec![s("u1")],
+        actions: Actions::default(),
     }
 }
 
@@ -1008,5 +1041,62 @@ fn unreadable() -> World {
         acks: Vec::new(),
         control_acks: Vec::new(),
         answers: Vec::new(),
+        lost_answers: Vec::new(),
+        actions: Actions::default(),
     }
+}
+
+/// The chat that asked for the Chrome Web Store upload.
+pub const UPLOAD_CHAT: &str = "pilot://chat/db252a71-781a-458d-815f-41d42856d27d";
+
+/// The Chrome Web Store upload for Pilot Helper `version`.
+pub fn upload(version: &str, digest: &str) -> Content {
+    Content {
+        title: format!("Upload Pilot Helper {version} to the Chrome Web Store"),
+        why: s(
+            "Uploading needs your Chrome Web Store developer account. Pilot cannot sign in to it.",
+        ),
+        next_step: s(
+            "In the developer dashboard, open Pilot Helper, choose Package, upload this zip, then submit it for review.",
+        ),
+        effort: s("About 5 min"),
+        files: vec![(format!("pilot-helper-{version}.zip"), s(version), s(digest))],
+        destination: (
+            s("the Chrome Web Store"),
+            s("https://chrome.google.com/webstore/devconsole"),
+            format!("Pilot Helper, package {version}"),
+        ),
+        origin: (
+            s("Ship the browser helper"),
+            s(UPLOAD_CHAT),
+            s("Browser helper"),
+        ),
+        needs: vec![s("The version the dashboard shows after you upload")],
+    }
+}
+
+/// The mock service with the one Chrome Web Store upload, answering
+/// reports as `acks` says.
+pub fn actions(acks: Vec<actions::Ack>) -> Actions {
+    Actions::new(
+        vec![(s("cws"), upload("1.4.2", "sha256 9f3c…a1d0"))],
+        vec![(s("cws"), acks)],
+    )
+}
+
+/// One decision and the Chrome Web Store upload. The first report arrives
+/// after the agent replaced the zip, so it is stale; the next one lands,
+/// but its answer is lost.
+fn with_actions() -> World {
+    let mut world = decisions();
+    world.today.decisions.truncate(1);
+    world.today.headline = s("Two things need you.");
+    world.today.summary = s(
+        "Quieter notifications needs a rule choice. The browser helper is built and waits for you to upload it.",
+    );
+    world.actions = actions(vec![
+        actions::Ack::Replace(Box::new(upload("1.4.3", "sha256 41be…07c2"))),
+        actions::Ack::Lose,
+    ]);
+    world
 }

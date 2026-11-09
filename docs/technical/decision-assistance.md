@@ -90,3 +90,10 @@ help modes, async staleness, invalid authority fields, immutable visuals, restar
 files, changed origins, explicit user completion, exact duplicate/lost ACK lookup and durability
 races. These fixtures do not claim native UI acceptance, production provider/resource-reader
 qualification, external store verification or live scheduler execution.
+
+## Pilot Day cards (mock)
+
+Pilot Day's decision and action cards (`apps/day`) use these shapes against an in-process mock, not this
+service: help names the decision revision shown and never changes it; action commands carry the exact
+revision, digest and a new operation ID recorded before sending; a lost answer stays Unknown until a lookup.
+The native host wiring listed above is still required before any of it is live.
