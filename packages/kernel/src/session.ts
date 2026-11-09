@@ -97,6 +97,15 @@ import { rebuildContext } from "./model-rebuild.ts";
 import { NativeAdapter } from "./native-adapter.ts";
 import { recentSnapshot } from "./paged-history.ts";
 import { PerformanceLog } from "./performance.ts";
+import { admitPlanningInput, holdPlanning, PlanningWorkerDoc, planningBoundary } from "./planning-boundary.ts";
+import {
+	assertPlanningBinding,
+	type PlanningInput,
+	type PlanningWorkerBinding,
+	type PlanningWorkerReply,
+	type PlanningWorkerRequest,
+	planningJSON,
+} from "./planning-worker.ts";
 import type { WorkspaceContext } from "./policy.ts";
 import { type MissionContext, withPilotPolicy } from "./policy.ts";
 import type { KernelSpec, KernelSubagent } from "./protocol.ts";
@@ -159,6 +168,8 @@ async function pinnedAgent(
 }
 
 export interface KernelSessionHooks {
+	callPlanning?(request: PlanningWorkerRequest, signal?: AbortSignal): Promise<PlanningWorkerReply>;
+	guardPlanning?(operationId: string): Promise<void>;
 	reportUsageHistory?: import("./usage-capture.ts").PublishUsage;
 	acquireUsageEpoch?: import("./usage-capture.ts").AcquireUsageEpoch;
 	reportSubscriptionLimit?: import("./subscription-limit.ts").ReportSubscriptionLimit;
@@ -218,6 +229,8 @@ export interface KernelSessionHooks {
 }
 
 export class KernelSession {
+	private planningBinding?: PlanningWorkerBinding;
+	private planningGuard?: (operationId: string) => Promise<void>;
 	readonly #ask: boolean;
 	#compactSession!: ReturnType<typeof createManualCompaction>["compactSession"];
 	readonly #watches = new Map<string, () => Promise<void>>();
@@ -305,6 +318,20 @@ export class KernelSession {
 	}
 
 	static async open(spec: KernelSpec, hooks: KernelSessionHooks): Promise<KernelSession> {
+		if (spec.planning) {
+			assertPlanningBinding(spec.planning);
+			if (
+				spec.pilot?.ask ||
+				spec.role ||
+				!spec.pilot?.coordinatorView ||
+				!hooks.callPlanning ||
+				!hooks.guardPlanning ||
+				spec.planning.ownerSessionId !== spec.sessionId ||
+				spec.planning.projectId !== spec.projectId ||
+				spec.planning.missionId !== spec.mission?.id
+			)
+				throw new Error("Trusted planning profile unavailable");
+		}
 		if (spec.configurationOnly) {
 			if (spec.recoveryModel || spec.continuationModel)
 				throw new Error("Configuration-only startup cannot activate recovery or continuation");
@@ -402,6 +429,26 @@ export class KernelSession {
 			(value) => hooks.onJobsChanged?.(value),
 		);
 		let artifactConversation: Conversation | undefined;
+		const planningCall = async (request: PlanningWorkerRequest, signal?: AbortSignal): Promise<unknown> => {
+			let reply: PlanningWorkerReply;
+			try {
+				reply = await hooks.callPlanning!(request, signal);
+			} catch (error) {
+				if (artifactConversation && ["write", "questions"].includes(request.action))
+					await artifactConversation.commit(async (tx) => {
+						(await tx.doc(HeldInputsDoc, artifactConversation!.id)).planning = true;
+					}, context);
+				throw error;
+			}
+			if (reply.hold) {
+				if (!artifactConversation) throw new Error("Planning conversation unavailable");
+				await holdPlanning(artifactConversation, spec.planning!, reply.hold, context);
+			} else if (reply.blocked && artifactConversation)
+				await artifactConversation.commit(async (tx) => {
+					(await tx.doc(HeldInputsDoc, artifactConversation!.id)).planning = true;
+				}, context);
+			return reply.value;
+		};
 		const subagents = new SubagentBridge(hooks.onSubagentsChanged);
 		const toolDrain = new ToolDrain();
 		const mission: { current?: MissionContext } = { current: spec.mission };
@@ -516,7 +563,7 @@ export class KernelSession {
 			return result.result;
 		};
 		let wakePrompt = "";
-		if (spec.projectId && hooks.callMemory && !spec.pilot?.ask) {
+		if (spec.projectId && hooks.callMemory && !spec.pilot?.ask && !spec.planning) {
 			let wakeTimer: ReturnType<typeof setTimeout> | undefined;
 			try {
 				const wake = await Promise.race([
@@ -585,7 +632,7 @@ export class KernelSession {
 				...(spec.pilot?.executionPermission ? { executionPermission: { ...spec.pilot.executionPermission } } : {}),
 				...(spec.role ? { role: spec.role } : {}),
 				ghStack,
-				projectMemory: !spec.role && !!spec.projectId && !!hooks.callMemory,
+				projectMemory: !spec.role && !spec.planning && !!spec.projectId && !!hooks.callMemory,
 			};
 			const refreshWorkspace = hooks.prepareWorkspace;
 			const prepareWorkspace = refreshWorkspace
@@ -631,6 +678,22 @@ export class KernelSession {
 				: spec.diagnosticScope;
 			const historyRecall = !spec.pilot?.ask && !spec.role;
 			adapter = await NativeAdapter.open({
+				...(spec.planning
+					? {
+							missionInterview: true,
+							missionPlanning: {
+								read: (revision, signal) =>
+									planningCall({ action: "read", ...(revision === undefined ? {} : { revision }) }, signal),
+								knowledge: (id, revision, signal) =>
+									planningCall({ action: "knowledge", id, revision }, signal),
+								receipt: (operationId, signal) => planningCall({ action: "receipt", operationId }, signal),
+								write: (toolCallId, request, signal) =>
+									planningCall({ action: "write", toolCallId, request }, signal),
+								questions: (toolCallId, request, signal) =>
+									planningCall({ action: "questions", toolCallId, request }, signal),
+							},
+						}
+					: {}),
 				posthorseEligible: () => !spec.role && mission.current?.coordinator !== "self",
 				onToolsRunningChanged: hooks.onToolsRunningChanged,
 				subscriptionPolicy: spec.subscriptionPolicy,
@@ -734,7 +797,7 @@ export class KernelSession {
 			});
 			// Only mission chats declare the tool. It stays registered so joining can enable it live.
 			adapter.coordinatorMemoryActive = () =>
-				!spec.pilot?.ask && !spec.role && mission.current?.coordinator === "self";
+				!spec.pilot?.ask && !spec.role && !spec.planning && mission.current?.coordinator === "self";
 			if (missionTools.length) adapter.setToolActive(MISSION_TOOL, !!mission.current);
 			if (!spec.pilot?.ask) adapter.setToolActive("todo", mission.current?.coordinator !== "self");
 			// Likewise slack_status, declared once pilotd reports the chat attached to a Slack triage message.
@@ -759,13 +822,14 @@ export class KernelSession {
 					compactionEvents(provenance ? provenance.prepare(tracked) : tracked, () => harness),
 					() => harness,
 				);
-				return toolDrain.prepare(coordinatorMemory.extension(events), (context) =>
-					adapter!.waitForSubscription(context.abortSignal),
+				return toolDrain.prepare(
+					coordinatorMemory.extension(spec.planning ? planningBoundary(events, () => harness) : events),
+					(context) => adapter!.waitForSubscription(context.abortSignal),
 				);
 			};
 			const coordinatorMemory = new CoordinatorMemory({
 				scope: () =>
-					!spec.pilot?.ask && !spec.role && mission.current?.coordinator === "self"
+					!spec.pilot?.ask && !spec.role && !spec.planning && mission.current?.coordinator === "self"
 						? mission.current.id
 						: undefined,
 				provider: () => adapter!.model.provider,
@@ -988,6 +1052,18 @@ export class KernelSession {
 				}
 			});
 			await adapter.refreshUsage(context);
+			session.planningBinding = spec.planning;
+			session.planningGuard = hooks.guardPlanning;
+			if (
+				spec.planning &&
+				(spec.planningHeldOnOpen || (await harness.snapshot(PlanningWorkerDoc, conversation.id, context))?.hold)
+			) {
+				// Never reconstruct an interrupted tool stack or consume historical queued input.
+				await conversation.abort(context);
+				await conversation.commit(async (tx) => {
+					(await tx.doc(HeldInputsDoc, conversation.id)).planning = true;
+				}, context);
+			}
 			if (spec.pauseInputsOnOpen !== undefined)
 				await pauseInputs(harness, conversation.id, context, spec.pauseInputsOnOpen);
 			const interruptedQuestion = await initializeQuestionHold(
@@ -1389,6 +1465,33 @@ export class KernelSession {
 		this.#admissions++;
 		try {
 			await this.subagents.command(command);
+		} finally {
+			this.#admissions--;
+		}
+	}
+
+	/** Durable admission. Retrying the same requestId returns the existing submission. */
+	async submitPlanning(input: PlanningInput): Promise<void> {
+		if (
+			!this.planningBinding ||
+			planningJSON(input.binding) !== planningJSON(this.planningBinding) ||
+			!this.planningGuard ||
+			this.#closing ||
+			this.#changingModel ||
+			this.#moving
+		)
+			throw new Error("Planning admission unavailable");
+		this.#admissions++;
+		try {
+			await this.serializeInput(() =>
+				admitPlanningInput(
+					this.harness,
+					this.conversation,
+					input,
+					() => this.planningGuard!(input.operation.operationId),
+					context,
+				),
+			);
 		} finally {
 			this.#admissions--;
 		}

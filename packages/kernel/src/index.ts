@@ -6,6 +6,14 @@ export { formatFailure, safeFailureText } from "./failure.ts";
 export { inputOrigin } from "./input-origin.ts";
 export { createMissionPlanTool, type NativePlanningPort } from "./mission-plan-tool.ts";
 export type { MissionAction } from "./mission-tools.ts";
+export type {
+	PlanningInput,
+	PlanningRound,
+	PlanningWorkerBinding,
+	PlanningWorkerReply,
+	PlanningWorkerRequest,
+} from "./planning-worker.ts";
+export { assertPlanningBinding, PLANNING_PROFILE } from "./planning-worker.ts";
 export type { AskContext, MissionContext, PilotContext, WorkspaceContext, WorkspaceReset } from "./policy.ts";
 export type {
 	DiagnosticLogExcerpt,

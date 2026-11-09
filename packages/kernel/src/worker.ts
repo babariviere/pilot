@@ -297,6 +297,10 @@ export function runKernelWorker(): void {
 		await initialization;
 		if (!session) throw new Error("Kernel has not started");
 		switch (command.type) {
+			case "planning.input":
+				await session.submitPlanning(command.input);
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
 			case "reloadPi":
 				await session.reloadPi();
 				await send({ type: "piReloaded", requestId: command.requestId, commands: session.commands });
@@ -461,6 +465,8 @@ export function runKernelWorker(): void {
 			return;
 		}
 		if (
+			command.type === "planning.result" ||
+			command.type === "planning.guard.result" ||
 			command.type === "model.configuration.result" ||
 			command.type === "mission.result" ||
 			command.type === "memory.result" ||
@@ -555,6 +561,10 @@ export function runKernelWorker(): void {
 					process.env.PILOT_EXECUTION_PERMISSION = JSON.stringify(command.spec.pilot.executionPermission);
 				else delete process.env.PILOT_EXECUTION_PERMISSION;
 				const opened = await KernelSession.open(command.spec, {
+					callPlanning: (request, signal) =>
+						callDaemon((callId) => ({ type: "planning.call", callId, request }), signal, false),
+					guardPlanning: (operationId) =>
+						callDaemon((callId) => ({ type: "planning.guard", callId, operationId })),
 					onSystemMessageState: (event) => {
 						void send({ type: "systemMessageState", event });
 					},

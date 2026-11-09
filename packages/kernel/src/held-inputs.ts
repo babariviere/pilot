@@ -362,6 +362,7 @@ export async function admitWithHeld(
 	return session.commit(async (tx) => {
 		const held = await tx.doc(HeldInputsDoc, conversationId);
 		if (revision !== undefined && revision <= (held.controlRevision ?? 0)) return { started: false };
+		if (held.planning) throw new InputGenerationRefused("Saved interview is awaiting an exact planning continuation");
 		if (input?.dedupeOnly) {
 			const existing = await tx.submissionByRequest(conversationId, input.requestId);
 			if (existing) return { id: existing.id, held: held.items.some((item) => item.id === existing.id) };

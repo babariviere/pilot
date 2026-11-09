@@ -24,6 +24,7 @@ interface Dependencies {
 	/** Host ingress checks coordinator authority; answer saves/submission MUST be native human actions.
 	 * No actor label in a model request can satisfy this check. */
 	authorize(purpose: string, missionId: string, ownerSessionId: string): void;
+	validateRound?(questions: InterviewQuestion[]): void;
 }
 const kinds = [
 	"plan-map",
@@ -443,6 +444,7 @@ export class MissionPlans {
 						throw new Conflict("Unblocked Needs grilling topic required");
 					const questions = request.questions;
 					validateQuestions(questions);
+					this.deps.validateRound?.(questions);
 					const i = pin.interview;
 					const updated = this.deps.store.interviews.write(
 						op,
@@ -474,6 +476,7 @@ export class MissionPlans {
 					];
 					const i = pin.interview;
 					// Same transaction: no round without its native proposal binding. Prior answers stay saved.
+					this.deps.validateRound?.(questions);
 					const updated = this.deps.store.interviews.write(
 						op,
 						{ purpose: "interview-questions", expected: { fence: i.fence, revision: i.revision }, questions },

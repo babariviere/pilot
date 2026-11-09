@@ -113,6 +113,7 @@ import {
 import { nativeReviewProfile, nativeReviewRecord } from "./native-review-records.ts";
 import { reasonLine } from "./needs-you-reason.ts";
 import { NOTICE_HOURLY_CAP, NOTICE_WINDOW_MS, noticeDeadline, noticeInvolvesSession } from "./notice-dispatcher.ts";
+import { PLANNING_WORKER_SCHEMA, PlanningWorkerStore } from "./planning-worker-store.ts";
 import { KNOWLEDGE_SCHEMA, ProjectKnowledgeStore } from "./project-knowledge-store.ts";
 import { RETAINED_PROJECTION_SCHEMA, RetainedReviewProjections } from "./retained-review-projections.ts";
 import { REVIEW_REQUEST_SCHEMA, ReviewRequestStore } from "./review-request-store.ts";
@@ -753,6 +754,12 @@ export class MissionStore {
 		transaction: (work) => this.transaction(work, true),
 	});
 	/** Internal creation-only Day seam. No REST enrollment or legacy adoption. */
+	readonly planningWorkers = new PlanningWorkerStore({
+		one: (sql, ...params) => this.one(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work, true),
+		changed: (id) => this.changed(id, [], true, false, true),
+	});
 	readonly interviews = new MissionInterviewStore({
 		one: (sql, ...params) => this.one(sql, ...params),
 		run: (sql, ...params) => this.run(sql, ...params),
@@ -770,6 +777,7 @@ export class MissionStore {
 			return mission.id;
 		},
 		ownerFence: (id, owner) => this.interviewOwnerFence(id, owner),
+		submitted: (state, op) => this.planningWorkers.submitted(state, op),
 		mapBrief: (id, markdown) => this.writeBrief(id, markdown, this.require(id).briefRevision).revision,
 		publishedAgreement: (id, brief, submissionDigest) => {
 			const p = this.plans.get(id),
@@ -882,6 +890,7 @@ export class MissionStore {
 		this.db.exec(INSIGHTS_TRANSITION_SCHEMA);
 		this.db.exec(WORKFLOW_CONFIRMATION_SCHEMA);
 		this.db.exec(MISSION_INTERVIEW_SCHEMA);
+		this.db.exec(PLANNING_WORKER_SCHEMA);
 		this.db.exec(MISSION_PLAN_SCHEMA);
 		this.db.exec(ATTENTION_SCHEMA);
 		this.db.exec(MISSION_CONTROL_SCHEMA);

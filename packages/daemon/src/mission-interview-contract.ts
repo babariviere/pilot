@@ -77,6 +77,7 @@ export function validateAnswers(value: unknown, questions: InterviewQuestion[]):
 	}
 }
 export function completeAnswers(state: MissionInterview): InterviewAnswer[] {
+	if (!state.questions.length) throw new Conflict("Planning interview is not ready");
 	const answers = state.questions.map((q) => state.answers.find((a) => a.questionId === q.id));
 	if (answers.some((a) => !a || (!a.selectedOption && !a.text.trim())))
 		throw new Conflict("Every question needs an explicit answer");

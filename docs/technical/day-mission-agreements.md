@@ -2,9 +2,11 @@
 
 The [native host ingress](day-native-host.md#saved-interviews-and-planning) now exposes authenticated
 saved-interview reads, human answer saves and complete submission for already enrolled scopes.
-No coordinator startup flag, qualified dispatch adapter, legacy enrollment or gate activation is
-installed. Local tests use temporary homes and no live providers. Passing these tests is not native
-screen acceptance or permission to activate the flow. Existing mission admission is unchanged.
+The [creation-only worker binding](day-mission-planning.md#worker-enrollment-and-return-boundary)
+supplies the trusted profile, durable round hold and planning-only continuation for explicitly
+enrolled new flows. The desktop New action is not connected. Legacy enrollment and builder admission
+remain unavailable. Local tests use temporary homes and faux providers, not user accounts. Passing
+these tests is not native screen acceptance or permission to activate the flow.
 
 ## New-flow enrollment and confirmation boundaries
 
@@ -67,7 +69,8 @@ store durability. Any re-entry, including restart, is lookup-only. Missing/unrea
 checkpoints and uncertain admissions remain pending (Unknown), never replay. Exact historic rows or
 committed adapter receipts may settle the original operation without renewing current authority.
 
-`QualifiedMissionFlowAdapter` is deliberately absent in production. It must perform its own current
+`PlanningWorkers` implements `QualifiedMissionFlowAdapter` for **interview continuation only**.
+Small-ask and agreement/build adapters remain absent. Any such adapter must perform its own current
 model/permission/lifecycle checks and invoke the supplied synchronous guard at the actual admission
 commit, after all asynchronous preparation. It must durably record the complete operation and provide
 exact lookup. A queued future start without that guarded commit is not acceptance. Approval guards
@@ -90,8 +93,9 @@ The adapter tells Pi to read the actual dependencies instead of invoking an unav
 It adapts upstream's whole-frontier rounds to saved full-list native questions, options plus text,
 and the exact submission gate. Documentation remains a proposal within existing write permissions.
 Skill prose cannot start subagents, write files, expand permissions or bypass lifecycle checks.
-There is no parallel imitation grilling prompt. Real generation and native confirmation journeys
-still need the new host/UI integration; loader and receipt fixtures do not establish that acceptance.
+There is no parallel imitation grilling prompt. Real-provider generation and native screen acceptance
+remain separate gates. The isolated worker journey uses a faux provider through the real loader,
+worker IPC and daemon, not user accounts.
 
 ## Checks
 

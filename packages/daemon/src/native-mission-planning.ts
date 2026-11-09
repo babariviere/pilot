@@ -6,6 +6,7 @@ import { isInterviewOperation, MissionInterviews } from "./mission-interviews.ts
 import { isPlanOperation, MissionPlans } from "./mission-plans.ts";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash, sameHost } from "./operation-journal.ts";
+import type { PlanningWorkers } from "./planning-workers.ts";
 import type { ProjectStore } from "./projects.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { WorkflowConfirmations } from "./workflow-confirmations.ts";
@@ -18,6 +19,7 @@ interface Dependencies {
 	projects: ProjectStore;
 	sessions: SessionManager;
 	confirmations: WorkflowConfirmations;
+	workers?: PlanningWorkers;
 }
 
 export class NativeMissionPlanning {
@@ -131,10 +133,13 @@ export class NativeMissionPlanning {
 			};
 		}
 		this.scope(missionId, projectId);
+		const worker = this.deps.store.planningWorkers.get(missionId);
 		const contextDigest = this.digest(missionId);
 		const check = () => {
 			this.scope(missionId, projectId);
 			if (this.digest(missionId) !== contextDigest) throw new Conflict("Native planning context changed");
+			if (canonicalJSON(this.deps.store.planningWorkers.get(missionId)) !== canonicalJSON(worker))
+				throw new Conflict("Native planning worker changed during read");
 		};
 		const plans = new MissionPlans({ ...this.deps, authorize: check });
 		const view = await plans.view(missionId);
@@ -143,15 +148,17 @@ export class NativeMissionPlanning {
 			version: 1,
 			projectId,
 			missionId,
-			status: "available",
-			contextDigest,
+			status: view.interview.questions.length ? "available" : "preparing",
+			contextDigest: view.interview.questions.length ? contextDigest : null,
 			questionDigests: Object.fromEntries(view.interview.questions.map((q) => [q.id, interviewDigest(q)])),
-			view,
+			view: view.interview.questions.length ? view : null,
 			capabilities: {
-				answers: 1,
+				answers: worker && worker.phase !== "held" ? "unavailable" : 1,
 				enrollment: "not-configured",
-				coordinatorProfile: "not-configured",
-				continuation: "unavailable",
+				...(this.deps.workers?.status(missionId) ?? {
+					coordinatorProfile: "not-configured",
+					continuation: "unavailable",
+				}),
 				admission: "unavailable",
 				prototype: "unavailable",
 			},
@@ -204,6 +211,8 @@ export class NativeMissionPlanning {
 		const authority = this.authority(op.targetId);
 		const check = () => {
 			this.envelope(op);
+			const worker = this.deps.store.planningWorkers.get(op.targetId);
+			if (worker && worker.phase !== "held") throw new Conflict("Saved planning round is not ready for answers");
 			if (this.digest(op.targetId) !== op.bindingId) throw new Conflict("Native planning context changed");
 		};
 		const result = await this.interviews(check).admit(op, true);
@@ -221,6 +230,7 @@ export class NativeMissionPlanning {
 		} catch (cause) {
 			throw new Error("Unknown saved planning operation; lookup only", { cause });
 		}
+		if (op.kind === "interview-submit") this.deps.workers?.submitted(op.targetId, op.operationId);
 		return result;
 	}
 }

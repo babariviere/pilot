@@ -105,6 +105,7 @@ import { isNativePlanningOperation, NativeMissionPlanning } from "./native-missi
 import { canonicalJSON, durableJSON, OperationJournal, OperationRejected, payloadHash } from "./operation-journal.ts";
 import { isAllowedOrigin } from "./origin.ts";
 import { PathCompletionReader } from "./path-completion.ts";
+import { PlanningWorkers } from "./planning-workers.ts";
 import type { PowerService } from "./power.ts";
 import { type DashboardProviders, ProjectDashboardService } from "./project-dashboard.ts";
 import type { KnowledgeService } from "./project-knowledge.ts";
@@ -384,7 +385,12 @@ export function createDaemonServer(
 	subscriptions?: import("./subscription-refresh.ts").SubscriptionRefresh,
 	chatSettings?: ChatSettingsService,
 	liveUpdate?: RuntimeUpdateIntegration,
-): Server & { runtimeResources: RuntimeResources; runtimeReady: Promise<void>; recoverOperations(): void } {
+): Server & {
+	runtimeResources: RuntimeResources;
+	runtimeReady: Promise<void>;
+	recoverOperations(): void;
+	closePlanning(): Promise<void>;
+} {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	sessions.diagnosticFeatureUsage = telemetry ? (host) => telemetry.featureUsage.snapshot(host) : undefined;
 	sessions.diagnosticDomainRead = async (request) => {
@@ -710,6 +716,17 @@ export function createDaemonServer(
 					// No consent configuration, provider executor or review prerequisite producer is installed here.
 				})
 			: undefined;
+	const planningWorkers =
+		journal && missions && workflowConfirmations
+			? new PlanningWorkers({
+					home: _config.home,
+					store: missions.store,
+					journal,
+					projects,
+					sessions,
+					confirmations: workflowConfirmations,
+				})
+			: undefined;
 	const nativePlanning =
 		journal && missions && workflowConfirmations
 			? new NativeMissionPlanning({
@@ -718,6 +735,7 @@ export function createDaemonServer(
 					projects,
 					sessions,
 					confirmations: workflowConfirmations,
+					workers: planningWorkers,
 				})
 			: undefined;
 	const insightsWorkspace =
@@ -827,6 +845,7 @@ export function createDaemonServer(
 				})
 			: undefined;
 	const admitOperationHeld = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
+		if (planningWorkers?.owns(op)) return planningWorkers.recover(op);
 		if (isNativePlanningOperation(op.kind)) {
 			if (!nativePlanning) throw new OperationRejected("Native planning unavailable");
 			return nativePlanning.admit(op, false);
@@ -1422,6 +1441,24 @@ export function createDaemonServer(
 				return json(res, 200, { ok: true });
 			}
 			const operation = await readJson<DurableOperation>(req);
+			if (operation?.kind === "planning-enroll") {
+				if (!githubSetup || !planningWorkers)
+					throw new ServiceUnavailable("Planning worker enrollment unavailable");
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
+				const saved = await journal.lookup(operation);
+				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
+				const end = mutations.begin({ kind: "operation", id: operation.operationId });
+				try {
+					return json(
+						res,
+						200,
+						await journal.execute(operation, (op, entry) => planningWorkers.enroll(op, entry.firstEntry)),
+					);
+				} finally {
+					end();
+				}
+			}
 			if (isNativePlanningOperation(operation?.kind)) {
 				res.setHeader("cache-control", "no-store");
 				if (!githubSetup || !nativePlanning) throw new ServiceUnavailable("Native planning unavailable");
@@ -1919,6 +1956,13 @@ export function createDaemonServer(
 				}
 			}
 			throw new HttpError(404, "Unknown tracking operation");
+		}
+		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "planning-profile") {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET") throw new HttpError(405, "Planning profile is read-only");
+			if (!githubSetup || !planningWorkers) throw new ServiceUnavailable("Trusted planning profile unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			return json(res, 200, planningWorkers.profile(parts[2]!));
 		}
 		if (parts[1] === "projects" && parts.length === 6 && parts[3] === "missions" && parts[5] === "planning") {
 			res.setHeader("cache-control", "no-store");
@@ -3272,7 +3316,10 @@ export function createDaemonServer(
 		});
 	};
 	const server = bootstrap ? (bootstrap.install(handleRequest), bootstrap.server) : createServer(handleRequest);
-	server.once("close", () => reservations.close());
+	server.once("close", () => {
+		reservations.close();
+		void planningWorkers?.close();
+	});
 
 	// The control socket carries only small subscription messages. Terminal pastes use the terminal socket.
 	const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
@@ -3854,6 +3901,7 @@ export function createDaemonServer(
 		runtimeResources,
 		runtimeReady,
 		recoverOperations,
+		closePlanning: () => planningWorkers?.close() ?? Promise.resolve(),
 	});
 }
 /** Mission routes under /api/missions and /api/sessions/:id/mission. Returns false when nothing matched. */

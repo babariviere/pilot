@@ -41,6 +41,7 @@ interface Port {
 		brief: { revision: number; markdown: string },
 		submissionDigest: string,
 	): { revision: number; digest: string } | undefined;
+	submitted?(state: MissionInterview, op: DurableOperation): void;
 }
 
 /** Append-only snapshots share missions.sqlite's transaction/replica. No wake or worker side effects. */
@@ -56,6 +57,18 @@ export class MissionInterviewStore {
 		questions: InterviewQuestion[],
 	): MissionInterview {
 		validateQuestions(questions);
+		return this.createSnapshot(op, input, ownerSessionId, questions);
+	}
+	/** Creation-only bootstrap, not a human round. Empty state cannot be submitted. */
+	enroll(op: DurableOperation, input: { projectId: string; title: string }, ownerSessionId: string): MissionInterview {
+		return this.createSnapshot(op, input, ownerSessionId, []);
+	}
+	private createSnapshot(
+		op: DurableOperation,
+		input: { projectId: string; title: string },
+		ownerSessionId: string,
+		questions: InterviewQuestion[],
+	): MissionInterview {
 		return this.port.transaction(() => {
 			const existing = this.lookup(op);
 			if (existing) return existing;
@@ -100,6 +113,21 @@ export class MissionInterviewStore {
 			missionId,
 		);
 		return row ? JSON.parse(String(row.state)) : undefined;
+	}
+	/** New enrolled worker rounds must ask new clarification questions, not repeat submitted ones. */
+	assertNewQuestions(missionId: string, questions: InterviewQuestion[]): void {
+		validateQuestions(questions);
+		if (
+			this.port.one(
+				`SELECT 1 FROM mission_interviews m, json_each(m.state,'$.submission.questions') old, json_each(?) fresh
+			WHERE m.mission_id=? AND (json_extract(old.value,'$.id')=json_extract(fresh.value,'$.id') OR json_extract(old.value,'$.prompt')=json_extract(fresh.value,'$.prompt')) LIMIT 1`,
+				JSON.stringify(questions),
+				missionId,
+			)
+		)
+			throw new Conflict(
+				"Later interviews need new clarification questions; earlier answers remain reference context",
+			);
 	}
 	lookup(op: DurableOperation): MissionInterview | undefined {
 		const row = this.port.one("SELECT operation,state FROM mission_interviews WHERE operation_id=?", op.operationId);
@@ -155,6 +183,7 @@ export class MissionInterviewStore {
 			}
 			state.revision++;
 			this.insert(state, op);
+			if (request.purpose === "interview-submit") this.port.submitted?.(state, op);
 			return state;
 		});
 	}

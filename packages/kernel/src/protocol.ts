@@ -133,6 +133,9 @@ export interface KernelSubagent extends SessionSubagent {
 }
 
 export interface KernelSpec {
+	/** Creation-only trusted profile. Never inferred from membership or prompt text. */
+	planning?: import("./planning-worker.ts").PlanningWorkerBinding;
+	planningHeldOnOpen?: boolean;
 	/** Local accounting epoch, never telemetry or provider options. */
 	usageHistory?: import("./usage-capture.ts").UsageCaptureEpoch;
 	usageMission?: NonNullable<import("@pilot/protocol").UsageObservation["attribution"]>["mission"];
@@ -202,6 +205,14 @@ export interface KernelTelemetryConfiguration {
 }
 
 export type KernelCommand =
+	| { type: "planning.input"; requestId: string; input: import("./planning-worker.ts").PlanningInput }
+	| {
+			type: "planning.result";
+			callId: string;
+			result?: import("./planning-worker.ts").PlanningWorkerReply;
+			error?: string;
+	  }
+	| { type: "planning.guard.result"; callId: string; error?: string }
 	| { type: "start"; spec: KernelSpec }
 	/** Older workers cannot ignore this mode and resume a recovered inbox. */
 	| { type: "startConfiguration"; spec: KernelSpec }
@@ -338,6 +349,8 @@ export type KernelCommand =
 	| { type: "shutdown" };
 
 export type KernelPacket =
+	| { type: "planning.call"; callId: string; request: import("./planning-worker.ts").PlanningWorkerRequest }
+	| { type: "planning.guard"; callId: string; operationId: string }
 	| { type: "model.configuration.guard"; callId: string; requestId: string }
 	| { type: "piReloaded"; requestId: string; commands: SessionCommand[] }
 	/** Lifecycle admission, never mere queue placement. Acknowledged before publishing completion. */

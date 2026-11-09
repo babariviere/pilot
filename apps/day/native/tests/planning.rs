@@ -19,8 +19,12 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::script("day-native-planning.ts")
+    }
+    fn script(name: &str) -> Self {
         let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../packages/daemon/src/fixtures/day-native-planning.ts");
+            .join("../../../packages/daemon/src/fixtures")
+            .join(name);
         let mut child = Command::new("node")
             .arg(script)
             .env_remove("PILOT_HOME")
@@ -63,6 +67,63 @@ impl Fixture {
         let source: Source = serde_json::from_value(self.info["source"].clone()).unwrap();
         NativeHost::open(source, self.info["ledger"].as_str().unwrap().into()).unwrap()
     }
+}
+
+#[test]
+fn real_planning_worker_yields_then_continues_once_after_every_answer() {
+    let mut f = Fixture::script("day-planning-worker.ts");
+    let host = f.open();
+    ready(&host);
+    let view = read(&host, f.mission());
+    assert_eq!(view["capabilities"]["coordinatorProfile"], 1);
+    assert_eq!(f.cmd("stats", false)["requests"], 1);
+    assert_eq!(
+        reply(write(&host, f.mission(), &view, false, "partial draft"))
+            .unwrap()
+            .status,
+        OutcomeStatus::Accepted
+    );
+    let partial = read(&host, f.mission());
+    assert_eq!(
+        reply(write(&host, f.mission(), &partial, true, ""))
+            .unwrap()
+            .status,
+        OutcomeStatus::Rejected
+    );
+    assert_eq!(f.cmd("stats", false)["requests"], 1);
+    let view = read(&host, f.mission());
+    let interview = &view["view"]["interview"];
+    let answers: Vec<Value> = interview["questions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|q| json!({"questionId":q["id"],"questionDigest":view["questionDigests"][q["id"].as_str().unwrap()],"selectedOption":q["options"][0],"text":" exact detail\n"}))
+        .collect();
+    let request = json!({"purpose":"interview-save","expected":{"fence":interview["fence"],"revision":interview["revision"]},"answers":answers});
+    assert_eq!(
+        reply(host.write_interview(
+            f.mission().into(),
+            view["contextDigest"].as_str().unwrap().into(),
+            request
+        ))
+        .unwrap()
+        .status,
+        OutcomeStatus::Accepted
+    );
+    let view = read(&host, f.mission());
+    assert_eq!(
+        reply(write(&host, f.mission(), &view, true, ""))
+            .unwrap()
+            .status,
+        OutcomeStatus::Accepted
+    );
+    assert_eq!(f.cmd("idle", false)["requests"], 2);
+    reply(host.close()).unwrap();
+    assert_eq!(f.cmd("close", false)["closed"], true);
+    assert!(
+        f.child.wait().unwrap().success(),
+        "fixture joins its real kernel and exits cleanly"
+    );
 }
 impl Drop for Fixture {
     fn drop(&mut self) {

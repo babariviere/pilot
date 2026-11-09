@@ -95,7 +95,10 @@ endpoint. Native capability authentication and current owner/project checks guar
 and `/api/operations/receipt`. The existing `MissionInterviews`, `OperationJournal` and
 `missions.sqlite` transaction/replica remain the only backend effect owners. Human saves preserve
 exact option meanings/text. Proposal approval is an answer in the existing exact review round,
-followed by complete submission, not a new approval API. None of these operations starts work.
+followed by complete submission, not a new approval API. Saves never start work. For an explicitly
+enrolled new planning owner, final complete submission can request one guarded **planning-only**
+continuation through the [worker binding](day-mission-planning.md#worker-enrollment-and-return-boundary).
+It is not workflow approval or builder admission.
 
 `planning_operations(mission)` exposes only operation summaries; envelopes and credentials stay
 in Rust. `check_planning(operationId)` resolves the retained exact envelope by passive lookup.
@@ -108,15 +111,16 @@ entered planning HTTP and receipt/journal writes as well as Today controls.
 - The mock CLI entry remains unchanged. Native bootstrap still must pass the selected, root-owned
   host to the Day feeds and join it before replacement/quit. `PlanFeed::from_host` maps planning reads
   and builds exact `InterviewWrite` requests (`apps/day/native/src/plan_host.rs`); it never closes the host.
-- Fresh creation requires a trusted enrollment adapter which creates a new coordinator already held
-  at the interview boundary. No such production adapter is installed. Mission existence, legacy
-  `planningVersion`, a caller actor label or a native bearer alone cannot enroll an existing mission.
-- Kernel `missionPlanning`/`missionInterview` options already load the actual pinned upstream skills,
-  not imitation prompts, but no worker IPC/profile/hold binding currently supplies those options.
-  The status says `coordinatorProfile: not-configured`; this ingress does not start a generic worker.
-- A qualified continuation adapter is absent. It must durably dedupe the exact submitted intent and
-  pass allocation/coordinator, permission/model, Stop/pause, review and lifecycle gates at actual
-  guarded admission. Continuation/admission remain unavailable rather than fall back to a message.
+- `PlanningWorkers` now implements creation-only host enrollment, trusted kernel profile/IPC, saved
+  round holds and exact planning-only continuation. The desktop New intent is still unbound, so
+  `enrollment: not-configured` remains. Mission existence, legacy `planningVersion`, an actor label
+  or a native bearer alone cannot adopt an existing chat or mission.
+- Existing flows retain unavailable profile/continuation status. Only an exact new-flow binding
+  reports `coordinatorProfile: 1`, `continuation: 1` and its saved phase/continuation operation ID.
+  Stop, pause or unavailable authority leaves those capabilities unavailable. No generic send fallback
+  is used. An empty bootstrap reports `preparing` and cannot be answered or submitted.
+- Agreement/build and small-ask admission adapters remain absent. Submission cannot bypass their
+  independent approval, assignment, permission/model, review, budget or lifecycle gates.
 - Trusted coordinator map/proposal/publication writes are not human native operations. Published-task
   amendments remain refused by the existing service; no amendment adapter is added.
 
@@ -151,5 +155,7 @@ SQLite and the actual operation journal. It checks exact drafts/restart, complet
 missing/mismatched exact lookup, cold-open no replay and joined close. The daemon ingress suite adds
 authentication, project/home/owner/configuration fences, topic changes, complete proposal availability,
 late authority loss and explicit legacy non-enrollment. Existing interview/planning/skill-loader suites
-remain regression gates. Fixtures create records directly only as trusted test setup; they never prove
-that the missing production enrollment or worker admission adapters exist.
+remain regression gates. The additional native worker journey uses production HTTP enrollment,
+SessionManager and a real forked faux kernel, checks all-question completion and one continuation,
+then joins host/daemon/kernel teardown. It is a hidden transport/lifecycle fixture, not a visible
+screen test, real-provider generation or live activation.

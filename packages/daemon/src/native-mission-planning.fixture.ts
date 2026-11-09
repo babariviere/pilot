@@ -8,10 +8,10 @@ import { join } from "node:path";
 import type { DurableOperation, InterviewQuestion, SessionSummary } from "@pilot/protocol";
 import { GitHubSetupService } from "./github-setup.ts";
 import { daemonHello } from "./hello.ts";
-import { MissionInterviews } from "./mission-interviews.ts";
 import { MissionControls } from "./mission-controls.ts";
-import { MissionReports } from "./mission-reports.ts";
+import { MissionInterviews } from "./mission-interviews.ts";
 import { MissionPlans } from "./mission-plans.ts";
+import { MissionReports } from "./mission-reports.ts";
 import type { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
@@ -131,6 +131,7 @@ export async function nativePlanningFixture() {
 	const stop = async () => {
 		server.closeAllConnections();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await server.closePlanning();
 		await native.close();
 		await store.durable();
 	};

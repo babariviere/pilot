@@ -1,8 +1,9 @@
 # Native mission planning
 
 Backend and trusted kernel profile, with authenticated native saved-state reads and human answer
-ingress through the [Day host](day-native-host.md#saved-interviews-and-planning). Coordinator enrollment,
-worker-profile IPC, qualified continuation, automatic research dispatch and live activation remain
+ingress through the [Day host](day-native-host.md#saved-interviews-and-planning). Creation-only enrollment,
+worker-profile IPC and planning-only continuation are implemented for explicitly enrolled new flows.
+Desktop New/bootstrap, build admission, automatic research dispatch and live activation remain
 unavailable. Existing missions and running work are not enrolled, restarted or changed.
 Transport fixtures are not native screen acceptance.
 
@@ -45,8 +46,8 @@ for arbitrary hostile extension code.
 historical `read`), `knowledge` to the linked same-project Knowledge reader, and `write` to journaled
 `admit`. It must keep a complete durable envelope per call ID. A new envelope after an uncertain
 call is not recovery. Bind `receipt` to passive exact-envelope journal lookup within this mission;
-the tool's `check` action cannot invoke a handler. A production worker-port binding and automatic
-enrollment are still absent. The native human ingress cannot impersonate this coordinator port.
+the tool's `check` action cannot invoke a handler. `PlanningWorkers` now binds that port through
+versioned private worker IPC. The native human ingress cannot impersonate this coordinator port.
 
 - Use Wayfinder for unclear multi-session routes. Bounded work uses the existing grill-with-docs route.
 - `plan-map` saves destination, source locators, precise planning questions and coarse in-scope fog.
@@ -101,12 +102,65 @@ durability remain pending (Unknown), never replay. Lost publication ACKs cannot 
 Fresh publication operations refuse after the first committed task publication, even after a new proposal;
 reviewed amendments to already-published tasks need a separate update adapter, not duplicate creation.
 
+## Worker enrollment and return boundary
+
+`planning-enroll` is a purpose-bound, native-capability-authenticated operation on the existing
+operation endpoint. Its exact payload names a fresh owner ID, project, title, requested goal/model,
+profile source/version and current project-configuration digest. It creates only a new
+planningVersion 1 mission and a new coordinator. It cannot adopt an existing chat or mission.
+Authenticated `GET /api/projects/:project/planning-profile` supplies that versioned profile and
+backend digest without enrollment or model work. Native clients must keep this digest, not hash a
+Rust/UI serialization. `PlanningEnrollment` in `planning-workers.ts` is the exact creation payload.
+The native desktop creation intent is not yet bound, so `enrollment: not-configured` remains honest.
+The host API is not live activation or permission to enroll existing work.
+
+The transaction saves an **empty, unsubmitable bootstrap**, not invented human questions. The new
+session's metadata pins its enrollment, owner, project, exact home/daemon lineage and upstream profile
+before worker startup. `KernelSpec.planning` loads the actual trusted skills and binds only native
+planning IPC. Generic mission writes, MCP writes, ordinary chat sends, model-continuation transfer,
+shell fallback and builder admission are not alternative paths.
+
+The profiled worker saves its complete first list with `mission_plan` action `questions`. Later
+`questions`, `plan-ask` and `plan-review` operations save whole new rounds. `planning_workers` saves
+a provisional hold **before** the round operation can enter effects. After the exact snapshot is
+durable, the tool returns that round and saves the matching hold in the worker's durable Harness.
+Its outer tool result terminates the turn; there is no promise waiting for human answers.
+Recovered held work never reconstructs a lost tool stack or consumes a historical input.
+
+Every question in the current list needs an explicit option selection or nonblank custom answer.
+Skipped questions and displayed recommendations do not count. Limits are **40 questions, 12 KiB for
+the question list, 8 options per question, 12 KiB for answers and 4,000 UTF-8 bytes of custom text per
+answer**. Oversized lists refuse rather than silently drop questions. Presentation can show one
+question or all questions; navigation and autosaves have no continuation effect. Later rounds contain
+new clarification questions only. Reusing a previously submitted question ID or exact prompt refuses;
+skill guidance requires specifically framed follow-ups rather than semantic repetitions. The host
+does not claim to detect every paraphrase. Append-only interview snapshots keep earlier submissions.
+
+Explicit complete submission saves its exact continuation envelope in the **same SQLite transaction**
+as the answers/agreement snapshot. Only that fresh submit may request one planning-only continuation.
+The adapter waits for the previous turn's idle boundary, checks current owner/membership/allocation
+context, model/permission configuration, Stop generations, pause/input controls and lifecycle gates,
+and invokes the exact guard inside native input admission after asynchronous preparation. The native
+hold, exact operation receipt and one Harness input commit together. It does not clear Stop, drain
+someone else's queued inputs, grant workflow/review approval or start builders. Build admission still
+needs its independent approval, assignment, permission and review adapters.
+
+Call envelopes are kept by exact tool-call ID. Pending/entered recovery and lost ACKs use exact
+saved-effect/native receipt lookup only. Restart, GET, receipt checks and duplicate submissions never
+resend historical inputs. A missing receipt remains Unknown. Newer Stop/holds, owner changes,
+replaced rounds, changed context and uncertain admissions refuse without replay. A provably rejected
+round operation with no saved effect may release only its own provisional hold. Storage is limited
+to 512 kept call envelopes and 128 native planning admissions per enrolled flow; full stores refuse.
+Close aborts idle waiters, joins entered tools/admissions and drains writes before storage closes.
+
 ## Integration gaps
 
 - Day's planning screens (`apps/day`: New, one-question interview with See all, Wayfinder map, full
   proposal review) run on mock worlds and, through `PlanFeed::from_host`, on the native host's saved
-  human ingress ([apps/day/README.md](../../apps/day/README.md)). Enrollment, the planning worker
-  profile/hold and continuation remain unavailable and are shown so. The screens are not native acceptance.
+  human ingress ([apps/day/README.md](../../apps/day/README.md)). The screens are not native acceptance.
+- Native bootstrap/New binding and screen acceptance remain Day host/UI integration work. The worker
+  adapter makes no native visual changes or acceptance claim. Human reads report `preparing` with no
+  editable view until questions exist, and answers are unavailable until the round hold is saved.
 - The typed research frontier is passive in this delivery. Automatic linked research execution needs
   a qualified event-driven scheduler/session adapter with Autopilot, permission, budget, Stop/pause,
   lifecycle and exact-operation receipts. No live research automation is activated or implied.

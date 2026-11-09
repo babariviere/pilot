@@ -451,6 +451,8 @@ export interface SessionFactories {
 }
 
 interface SessionMeta extends OutcomeMeta {
+	/** Creation-only planning profile. Never synthesized from mission membership. */
+	planning?: import("@pilot/kernel").PlanningWorkerBinding;
 	/** Persisted authority ceiling, independent of prompts, model and worker lifetime. */
 	executionPermission?: ExecutionPermission;
 	/** Legacy history discriminator only. Never enables an execution profile. */
@@ -1240,6 +1242,194 @@ function sameTrackedSource(a?: SessionTrackedSource, b?: SessionTrackedSource): 
 }
 
 export class SessionManager {
+	private planningBridge?: {
+		assert(binding: import("@pilot/kernel").PlanningWorkerBinding): void;
+		held(binding: import("@pilot/kernel").PlanningWorkerBinding): boolean;
+		call(
+			binding: import("@pilot/kernel").PlanningWorkerBinding,
+			request: import("@pilot/kernel").PlanningWorkerRequest,
+			guard: () => void,
+		): Promise<import("@pilot/kernel").PlanningWorkerReply>;
+		close(): Promise<void>;
+	};
+	private readonly planningCalls = new Set<Promise<unknown>>();
+	private readonly planningGuards = new Map<string, { worker: SessionWorker; guard(): void }>();
+	private readonly planningIdleWaiters = new Map<string, Set<() => void>>();
+	setPlanningBridge(bridge: NonNullable<SessionManager["planningBridge"]>): () => void {
+		if (this.planningBridge) throw new Conflict("Planning worker bridge already configured");
+		this.planningBridge = bridge;
+		return () => {
+			if (this.planningBridge === bridge) this.planningBridge = undefined;
+		};
+	}
+	planningIdentity(id: string): unknown {
+		const m = this.require(id);
+		return {
+			binding: m.planning,
+			projectId: m.projectId,
+			mode: m.mode,
+			role: m.role,
+			model: m.model,
+			thinking: m.thinking,
+			permission: m.executionPermission,
+			inputGeneration: m.inputGeneration ?? 0,
+			inputControlRevision: m.inputControlRevision ?? 0,
+			inputsPaused: m.inputsPaused ?? false,
+			archivedAt: m.archivedAt ?? null,
+			cancelled: m.cancelled ?? false,
+			recoveryStopped: m.recoveryStopped ?? false,
+			delegationFenced: m.delegationFenced ?? false,
+			continuedTo: m.continuedTo ?? null,
+		};
+	}
+	assertPlanningOpen(id: string): void {
+		const meta = this.require(id);
+		this.assertMissionWorkOpen(id);
+		this.assertNotContinued(meta);
+		if (
+			this.closing ||
+			this.sleepPause ||
+			meta.cancelled ||
+			meta.recoveryStopped ||
+			meta.inputsPaused ||
+			meta.archivedAt ||
+			meta.failure ||
+			this.changingModels.has(id) ||
+			meta.lifecycleCheckpoint ||
+			meta.delegationFenced
+		)
+			throw new Conflict("Planning worker is stopped, held or unavailable");
+	}
+	/** Only this host method mints metadata, before the first worker or input exists. */
+	async createPlanningWorker(
+		binding: import("@pilot/kernel").PlanningWorkerBinding,
+		title: string,
+		model: string,
+		guard: () => void,
+	): Promise<void> {
+		const end = this.updateGate.begin();
+		try {
+			if (!ID_PATTERN.test(binding.ownerSessionId))
+				throw new Conflict("Planning requires a fresh canonical session ID");
+			guard();
+			if (this.metas.has(binding.ownerSessionId)) throw new Conflict("Planning enrollment requires a new chat");
+			await this.spawnAdmitted(
+				{
+					projectId: binding.projectId,
+					title,
+					model,
+					message: "Planning setup",
+					mode: "build",
+					workspace: "direct",
+				},
+				true,
+				undefined,
+				{ targetId: binding.ownerSessionId, operationId: binding.creationOperationId },
+				undefined,
+				undefined,
+				undefined,
+				false,
+				undefined,
+				binding,
+				guard,
+			);
+			guard();
+			await this.prepareCoordinatorRole(binding.ownerSessionId);
+			guard();
+			const worker = await this.ensureWorker(binding.ownerSessionId);
+			await worker.ready;
+			guard();
+		} finally {
+			end();
+		}
+	}
+	/** Never clears Stop or any other owner's input/lifecycle holds. No generic message outbox. */
+	async admitPlanning(
+		input: import("@pilot/kernel").PlanningInput,
+		guard: () => void,
+	): Promise<{ admissionId: string }> {
+		const end = this.updateGate.begin(),
+			id = input.binding.ownerSessionId;
+		let worker: SessionWorker | undefined;
+		const check = () => {
+			guard();
+			const meta = this.require(id);
+			this.assertMissionWorkOpen(id);
+			this.assertHistoryWritable(meta);
+			this.assertNotContinued(meta);
+			if (
+				this.closing ||
+				this.sleepPause ||
+				meta.archivedAt ||
+				meta.inputsPaused ||
+				meta.cancelled ||
+				meta.recoveryStopped ||
+				meta.failure ||
+				meta.lifecycleCheckpoint ||
+				meta.pending?.length ||
+				this.changingModels.has(id) ||
+				canonicalJSON(meta.planning) !== canonicalJSON(input.binding)
+			)
+				throw new Conflict("Planning admission is held or unavailable");
+			if (worker && this.workers.get(id) !== worker) throw new Conflict("Planning worker changed");
+		};
+		try {
+			check();
+			await this.prepareCoordinatorRole(id);
+			check();
+			worker = await this.ensureWorker(id);
+			await worker.ready;
+			check();
+			this.planningGuards.set(input.operation.operationId, { worker, guard: check });
+			await worker.request({ type: "planning.input", requestId: input.operation.operationId, input });
+			return { admissionId: input.operation.operationId };
+		} finally {
+			this.planningGuards.delete(input.operation.operationId);
+			end();
+		}
+	}
+	/** Passive exact request receipt. Never opens a worker or sends an input. */
+	async lookupPlanning(input: import("@pilot/kernel").PlanningInput): Promise<{ admissionId: string } | undefined> {
+		const meta = this.require(input.binding.ownerSessionId);
+		if (canonicalJSON(meta.planning) !== canonicalJSON(input.binding)) throw new Conflict("Planning binding changed");
+		if (await this.coldReader.readAcceptedInput(join(this.dir(meta.id), "durable"), input.operation.operationId))
+			return { admissionId: input.operation.operationId };
+		return undefined;
+	}
+	async planningIdle(id: string, guard: () => void, signal: AbortSignal): Promise<void> {
+		await new Promise<void>((resolve, reject) => {
+			let off = () => {};
+			const finish = (error?: unknown) => {
+				off();
+				signal.removeEventListener("abort", abort);
+				error ? reject(error) : resolve();
+			};
+			const abort = () => finish(signal.reason ?? new Error("Planning closed"));
+			const check = () => {
+				try {
+					guard();
+					const worker = this.workers.get(id);
+					if (!worker || (worker.state === "idle" && !worker.busy && !worker.toolsRunning)) finish();
+				} catch (e) {
+					finish(e);
+				}
+			};
+			const offChange = this.onChange((s) => {
+				if (s.id === id) check();
+			});
+			const waiters = this.planningIdleWaiters.get(id) ?? new Set<() => void>();
+			waiters.add(check);
+			this.planningIdleWaiters.set(id, waiters);
+			off = () => {
+				offChange();
+				waiters.delete(check);
+				if (!waiters.size) this.planningIdleWaiters.delete(id);
+			};
+			signal.addEventListener("abort", abort, { once: true });
+			if (signal.aborted) abort();
+			else check();
+		});
+	}
 	private pullRequestObserver?: (
 		observation: import("./tracked-items-disk.ts").SlackPullRequestObservation,
 	) => Promise<void>;
@@ -6689,6 +6879,7 @@ ${run.excerpt}`,
 		let locked = false;
 		try {
 			const meta = this.require(id);
+			if (meta.planning) throw new Conflict("Planning profile cannot transfer to an ordinary chat");
 			if (meta.role === "insights" || meta.insightsGrant)
 				throw new Conflict("Insights cannot transfer its restricted profile through continuation");
 			if (this.sharing?.membership(id)) this.assertNotContinued(meta);
@@ -6935,6 +7126,8 @@ ${run.excerpt}`,
 	}
 
 	private async applyContinuation(source: SessionMeta, target: SessionMeta): Promise<void> {
+		if (source.planning || target.planning)
+			throw new Conflict("Planning profile cannot transfer to an ordinary chat");
 		if (source.role === "insights" || source.insightsGrant || target.role === "insights" || target.insightsGrant)
 			throw new Conflict("Insights cannot transfer its restricted profile through continuation");
 		if (source.continuedTo && source.continuedTo !== target.id)
@@ -8525,6 +8718,8 @@ ${run.excerpt}`,
 		flowAdmission?: { rootId: string; flow?: FlowState },
 		deferInsightsInput = false,
 		ownerExecution?: Pick<import("./insights-owner-store.ts").InsightsOwnerExecution, "authority" | "binding">,
+		planning?: import("@pilot/kernel").PlanningWorkerBinding,
+		planningGuard?: () => void,
 	): Promise<SessionSummary> {
 		if (admission) this.insightsBacklog?.replacements.assertNotRetired(admission.targetId);
 		if (deferInsightsInput && ((!insightsGrant && !ownerExecution) || request.role !== "insights"))
@@ -8563,6 +8758,7 @@ ${run.excerpt}`,
 		)
 			throw new Conflict("Invalid owner creation");
 		const assertOwnerCreate = () => {
+			planningGuard?.();
 			if (!ownerExecution) return;
 			this.insightsOwnerLease(ownerExecution.authority).revalidate();
 			const current = this.insightsOwnerStore?.current(ownerExecution.authority);
@@ -8728,6 +8924,7 @@ ${run.excerpt}`,
 			cwd = join(this.dir(id), "workspace");
 		}
 		const meta: SessionMeta = {
+			...(planning ? { planning: structuredClone(planning) } : {}),
 			...(flowAdmission
 				? { flowRootId: flowAdmission.rootId, ...(flowAdmission.flow ? { flow: flowAdmission.flow } : {}) }
 				: {}),
@@ -8758,17 +8955,18 @@ ${run.excerpt}`,
 			...(preparing && mode === "build" && project && !request.missionId && !request.role && !coordinator
 				? { retainedScope: { version: 2 as const, sessionId: id, projectId: project.id } }
 				: {}),
-			...(deferInsightsInput ? {} : { initializing: true as const }),
-			pending: deferInsightsInput
-				? []
-				: [
-						{
-							type: "input",
-							requestId: admission?.operationId ?? randomUUID(),
-							content: request.message,
-							mode: "followUp",
-						},
-					],
+			...(deferInsightsInput || planning ? {} : { initializing: true as const }),
+			pending:
+				deferInsightsInput || planning
+					? []
+					: [
+							{
+								type: "input",
+								requestId: admission?.operationId ?? randomUUID(),
+								content: request.message,
+								mode: "followUp",
+							},
+						],
 			createdAt: now,
 			updatedAt: now,
 			lastUserMessageAt: now,
@@ -8833,7 +9031,7 @@ ${run.excerpt}`,
 		}
 		const summary = this.summary(meta);
 		this.emit(meta);
-		if (!deferInsightsInput) void this.start(id, true);
+		if (!deferInsightsInput && !planning) void this.start(id, true);
 		return summary;
 	}
 
@@ -8920,6 +9118,7 @@ ${run.excerpt}`,
 		const worker = this.workers.get(id);
 		return (
 			!!meta &&
+			!meta.planning &&
 			!this.isRetainedHistory(meta) &&
 			!meta.continuedTo &&
 			!meta.continuationPending &&
@@ -9157,6 +9356,7 @@ ${run.excerpt}`,
 		inputGeneration?: number,
 	): Promise<void> {
 		const meta = this.require(id);
+		if (meta.planning) throw new Conflict("Planning chats use saved interviews, not ordinary messages");
 		this.assertMissionWorkOpen(id);
 		this.assertHistoryWritable(meta);
 		const resumesStoppedRecovery = meta.recoveryStopped === true;
@@ -11178,6 +11378,7 @@ ${run.excerpt}`,
 		this.diagnosticContextReads.clear();
 		this.diagnosticReadBroker.close();
 		this.closing = true;
+		const drainPlanning = this.planningBridge?.close();
 		this.insightsReviewClosing ??= Promise.all([
 			this.insightsBacklog?.reviews.interruptAll(),
 			this.insightsOwnerStore?.reviews.interruptAll(),
@@ -11213,6 +11414,8 @@ ${run.excerpt}`,
 		await Promise.allSettled([...this.insightsReviewPending]);
 		await drainInsightsReviews;
 		await Promise.all([...this.workers.values()].map((worker) => worker.close()));
+		await Promise.allSettled([...this.planningCalls]);
+		await drainPlanning;
 		await Promise.allSettled([...this.parking.values()]);
 		await this.coldReader.close();
 		this.subagentWatchStore?.close();
@@ -11759,6 +11962,9 @@ ${run.excerpt}`,
 			createWorker(
 				{
 					sessionId: id,
+					...(meta.planning
+						? { planning: meta.planning, planningHeldOnOpen: this.planningBridge?.held(meta.planning) ?? true }
+						: {}),
 					...(configurationOnly ? { configurationOnly: true as const, stopOnOpen: true } : {}),
 					...(insightsBinding ? { insightsBinding } : {}),
 					...(ownerBinding ? { insightsOwnerBinding: structuredClone(ownerBinding) } : {}),
@@ -11929,6 +12135,81 @@ ${run.excerpt}`,
 	}
 
 	private onPacket(meta: SessionMeta, worker: SessionWorker, packet: KernelPacket): void {
+		if (packet.type === "planning.guard") {
+			let error: string | undefined;
+			try {
+				const entry = this.planningGuards.get(packet.operationId);
+				if (!entry || entry.worker !== worker || this.workers.get(meta.id) !== worker)
+					throw new Conflict("No exact planning admission");
+				entry.guard();
+			} catch (e) {
+				error = e instanceof Error ? e.message : "Planning refused";
+			}
+			worker.send({ type: "planning.guard.result", callId: packet.callId, ...(error ? { error } : {}) });
+			return;
+		}
+		if (packet.type === "planning.call") {
+			const guard = () => {
+				if (this.closing || this.workers.get(meta.id) !== worker || this.parked.has(worker))
+					throw new Conflict("Planning worker changed");
+			};
+			const call = Promise.resolve()
+				.then(() => {
+					if (
+						!meta.planning ||
+						!this.planningBridge ||
+						this.planningCalls.size > 8 ||
+						this.workers.get(meta.id) !== worker ||
+						this.parked.has(worker)
+					)
+						throw new Conflict("Trusted planning worker unavailable");
+					this.planningBridge.assert(meta.planning);
+					return this.planningBridge.call(meta.planning, packet.request, guard);
+				})
+				.then(
+					(result) => {
+						if (this.workers.get(meta.id) === worker)
+							worker.send({ type: "planning.result", callId: packet.callId, result });
+					},
+					(error) => {
+						if (this.workers.get(meta.id) !== worker) return;
+						let blocked = true;
+						try {
+							if (meta.planning && this.planningBridge) blocked = this.planningBridge.held(meta.planning);
+						} catch {
+							/* Unavailable stays held. */
+						}
+						worker.send({
+							type: "planning.result",
+							callId: packet.callId,
+							result: { value: { state: "rejected", reason: formatFailure(error, "Planning") }, blocked },
+						});
+					},
+				);
+			this.planningCalls.add(call);
+			void call.finally(() => this.planningCalls.delete(call));
+			return;
+		}
+		if (meta.planning) {
+			const denied = {
+				"mission.call": "mission.result",
+				"memory.call": "memory.result",
+				"knowledge.call": "knowledge.result",
+				"database.call": "database.result",
+				"slack.call": "slack.result",
+				"liveUpdate.propose": "liveUpdate.result",
+				"insights.backlog.call": "insights.backlog.result",
+			} as const;
+			const resultType = denied[packet.type as keyof typeof denied];
+			if (resultType && "callId" in packet) {
+				worker.send({
+					type: resultType,
+					callId: packet.callId,
+					error: "Planning profile permits only its bound native port",
+				});
+				return;
+			}
+		}
 		// A user Stop can be admitted while this exact worker is closing. Its reply
 		// still belongs to the waiting Stop, not to discarded lifecycle display state.
 		if (packet.type === "aborted" && this.lifecycleClosing.has(worker) && this.stopResults.has(packet.requestId)) {
@@ -12790,6 +13071,7 @@ ${run.excerpt}`,
 		if (packet.type === "tools.running") {
 			if (this.workers.get(meta.id) !== worker) return;
 			worker.toolsRunning = packet.running;
+			for (const check of this.planningIdleWaiters.get(meta.id) ?? []) check();
 			// No extra summary fan-out in ordinary streaming work.
 			if (this.internetOnline === false || this.subscriptionPaused(meta.id)) this.emit(meta, worker);
 			return;

@@ -15,13 +15,22 @@ import type {
 	SmallAskAdmission,
 } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
-import { interviewDigest } from "./mission-interview-contract.ts";
+import { completeAnswers, interviewDigest, validateQuestions } from "./mission-interview-contract.ts";
 import { MissionInterviews, type QualifiedMissionFlowAdapter } from "./mission-interviews.ts";
 import { MissionStore } from "./missions.ts";
 import { canonicalJSON, durableJSON, OperationJournal, OperationRejected, payloadHash } from "./operation-journal.ts";
 import { WorkflowConfirmations } from "./workflow-confirmations.ts";
 
 const host = { hostId: "native", daemonId: "daemon", lineageId: "lineage" };
+
+test("empty bootstrap cannot submit, and question count/size limits reject instead of truncate", () => {
+	assert.throws(() => completeAnswers({ questions: [], answers: [] } as unknown as MissionInterview), /not ready/);
+	const forty = Array.from({ length: 40 }, (_, index) => ({ ...question(`q${index}`), prompt: "New question" }));
+	validateQuestions(forty);
+	assert.throws(() => validateQuestions([...forty, question("extra")]), /1–40 questions/);
+	assert.throws(() => validateQuestions(forty.map((q) => ({ ...q, prompt: "x".repeat(1000) }))), /12 KiB/);
+	assert.equal(forty.length, 40);
+});
 function operation(kind: string, targetId: string, value: unknown): DurableOperation {
 	const payload = JSON.stringify(value);
 	return {

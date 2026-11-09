@@ -13,6 +13,8 @@ export const HeldInputsDoc = defineDoc<{
 	stopped: boolean;
 	/** Optional for v1 stores. Only explicit resume/redirect releases a pause. */
 	paused?: boolean;
+	/** Independent saved-interview hold. Stop and ordinary input never release it. */
+	planning?: boolean;
 	/** Automatic input cannot act as the reply to an interactive question. */
 	questionPending?: boolean;
 	/** Live ask identity and committed answer. An unanswered interrupted invocation becomes a legacy question. */

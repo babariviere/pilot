@@ -1,5 +1,5 @@
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import type { PlanWrite } from "@pilot/protocol";
+import type { InterviewWrite, PlanWrite } from "@pilot/protocol";
 import { Type } from "typebox";
 
 export interface NativePlanningPort {
@@ -11,6 +11,11 @@ export interface NativePlanningPort {
 	/** Host owns durable envelope identity, retains it by callId, and never replays Unknown effects.
 	 * Only MissionPlans operations, never interview-save/submit or worker admission. */
 	write(callId: string, request: PlanWrite, signal?: AbortSignal): Promise<unknown>;
+	questions?(
+		callId: string,
+		request: Extract<InterviewWrite, { purpose: "interview-questions" }>,
+		signal?: AbortSignal,
+	): Promise<unknown>;
 }
 
 /** Inject only from a trusted opted-in host. No production route or auto-enrollment. */
@@ -161,6 +166,38 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 		description:
 			"Read native mission planning or propose a revision-bound map, fog promotion, question claim/resolution, complete human round, spec and vertical slices. Human answers/submission use native UI, never this tool. Publication creates only reviewed native records, not workers or external issues. Unknown writes require exact receipt lookup, never a new attempt.",
 		parameters: Type.Union([
+			Type.Object(
+				{
+					action: Type.Literal("questions"),
+					request: Type.Object({
+						purpose: Type.Literal("interview-questions"),
+						expected: Type.Object({
+							fence: Type.Object({
+								missionId: key,
+								ownerSessionId: key,
+								enrollmentId: key,
+								questionSetRevision: Type.Integer(),
+								answerRevision: Type.Integer(),
+							}),
+							revision: Type.Integer(),
+						}),
+						questions: Type.Array(
+							Type.Object({
+								id: key,
+								section: Type.Union(
+									["outcome", "non-goals", "constraints", "acceptance", "authority"].map((s) =>
+										Type.Literal(s),
+									),
+								),
+								prompt: Type.String(),
+								options: Type.Array(option),
+								recommendedOptionId: Type.Union([key, Type.Null()]),
+							}),
+						),
+					}),
+				},
+				{ additionalProperties: false },
+			),
 			Type.Object({ action: Type.Literal("check"), operationId: key }, { additionalProperties: false }),
 			Type.Object(
 				{ action: Type.Literal("read"), revision: Type.Optional(Type.Integer({ minimum: 1 })) },
@@ -174,7 +211,14 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 		]),
 		async execute(callId, args, signal) {
 			let result: unknown;
-			if (args.action === "read") result = await port.read(args.revision, signal);
+			if (args.action === "questions") {
+				if (!port.questions) throw new Error("Trusted interview worker binding unavailable");
+				result = await port.questions(
+					callId,
+					args.request as Extract<InterviewWrite, { purpose: "interview-questions" }>,
+					signal,
+				);
+			} else if (args.action === "read") result = await port.read(args.revision, signal);
 			else if (args.action === "check") result = await port.receipt(args.operationId, signal);
 			else if (args.action === "knowledge") result = await port.knowledge(args.id, args.revision, signal);
 			else {
