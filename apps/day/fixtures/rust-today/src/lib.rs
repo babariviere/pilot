@@ -1,5 +1,5 @@
 //! Mock Pilot Day Today, written in Rust only, for the stack comparison
-//! with the TSX spike (`../`). It renders the same read model
+//! with the TSX app (`apps/day`). It renders the same read model
 //! (`pilot_day_native::fixture`), changes it with the same rules
 //! (`pilot_day_native::desk::Desk`) and the same mock coordinator latency,
 //! and matches the TSX screen's layout, copy, controls and update workload.
@@ -77,9 +77,9 @@ pub fn PulseApp() -> impl IntoElement {
     screen::today(Scenario::Large, true)
 }
 
-/// The theme both screens use (`../theme.json`), as tokens for a root.
+/// The theme both screens use (`apps/day/theme.json`), as tokens for a root.
 pub fn theme_tokens() -> Tokens {
-    nsh_base::Theme::from_json(include_str!("../../theme.json"))
+    nsh_base::Theme::from_json(include_str!("../../../theme.json"))
         .expect("theme.json is a valid theme")
         .into_tokens()
 }

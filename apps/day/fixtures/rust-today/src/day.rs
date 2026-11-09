@@ -1,6 +1,6 @@
 //! The screen's one store: Today's read model as the desk last published
 //! it, the intents that change it, and the state the screen owns. The Rust
-//! form of the TSX spike's `day.ts`, `view.ts` and `TodayFeed`: the same
+//! form of the TSX app's `day.ts`, `view.ts` and `TodayFeed`: the same
 //! `Desk`, the same two-step begin/settle intents, the same mock latency,
 //! and the whole read model published after every change.
 

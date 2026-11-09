@@ -1,4 +1,4 @@
-//! Mock Pilot Day for the Native Shell TSX spike. Rust owns the Today read
+//! Mock Pilot Day for the Native Shell TSX app. Rust owns the Today read
 //! model and the rules for changing it ([`desk::Desk`]). TSX receives typed
 //! read models and sends typed intents through [`TodayFeed`]; it has no
 //! transport of its own, and the app's capabilities deny network, sockets,

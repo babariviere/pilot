@@ -1,5 +1,5 @@
 //! The Day screen's styled controls, drawn from `nsh_base` behavior and the
-//! theme's tokens: the Rust form of the TSX spike's `ui.tsx`, part for
+//! theme's tokens: the Rust form of the TSX app's `ui.tsx`, part for
 //! part. Pages compose these; they do not restyle base controls.
 
 use nsh_base::{button, theme, toggle};

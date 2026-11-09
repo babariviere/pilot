@@ -1,16 +1,21 @@
-# Pilot Day Today, NSH TSX spike
+# Pilot Day
 
-An isolated **mock-data** Today screen written in Native Shell (NSH) TSX, with
-its read model and rules in a Rust crate. It is stack evidence, not the
-production app. It connects to no daemon, account or user data, and it does not
-change the GPUI or Swift apps or their build.
+The source of the upcoming Pilot desktop app, written in Native Shell (NSH)
+TSX, with its read model and rules in a Rust crate (`native/`). It started as
+the Today spike in `experiments/nsh-day` and now lives here as the only Day
+app source.
+
+Status: Today still runs on **mock data**. Day connects to no daemon, account
+or user data yet. It is not the default app, it is not packaged or released,
+and it does not change the GPUI or Swift apps or their build. Those apps stay
+the shipping desktop apps until Day passes native acceptance and cutover.
 
 ## Upstream pin
 
 - NSH **0.4.0**, upstream `main` HEAD `530b73170f61e5bf16380959de9e622f8ce130cd`
   (committed 2026-11-09T18:17:26+08:00), rechecked with `git ls-remote` on
   2026-11-09. This is 184 commits after the `7571948` pin of `apps/desktop/nsh`,
-  which this spike does not change.
+  which Day does not change.
 - Every NSH crate, and the `nsh` CLI, comes from that one revision. No patches,
   forks, Cargo cache edits or WebViews. The CLI's generated workspace
   (`.nsh/rust`) adds `[patch]` entries that point at Cargo's own checkout of the
@@ -23,10 +28,12 @@ change the GPUI or Swift apps or their build.
 
 `./nsh.sh` clones the pinned revision into `.tools/nsh` (ignored), refuses a
 modified checkout, builds the CLI and runs it. `NSH_DAY_SOURCE` may name an
-existing unmodified checkout.
+existing unmodified checkout. `nsh.sh` changes to its own directory first, so
+it works from any directory. From the repository root, `pnpm day <command>` is
+the same as `apps/day/nsh.sh <command>`.
 
 ```sh
-cd experiments/nsh-day
+cd apps/day
 ./nsh.sh run                     # the decisions world, in a native window
 ./nsh.sh run Trouble.tsx         # also Quiet.tsx, Large.tsx, Pulse.tsx
 ./nsh.sh check && ./nsh.sh build # types against the Rust declarations, class check
@@ -35,8 +42,16 @@ cd experiments/nsh-day
 (cd native && cargo test)        # Rust rules and generated declarations
 ```
 
-`rust/` holds the same screen written in Rust only, for the stack
-comparison: [rust/README.md](rust/README.md) has its parity matrix and hooks.
+## Fixtures
+
+`fixtures/` holds optional evidence that is not part of the app. No app entry
+point, script or build uses it, and `tsconfig.json` excludes it.
+
+- `fixtures/rust-today/`: the same Today screen written in Rust only, for the
+  stack comparison. It depends on `native/` and `theme.json` as plain Rust and
+  shares the `Desk::pulse` update workload. It is its own Cargo workspace.
+  [fixtures/rust-today/README.md](fixtures/rust-today/README.md) has its
+  parity matrix, hooks and commands.
 
 ## What it shows
 
@@ -52,14 +67,14 @@ shared update workload: `Desk::pulse` moves the next moving mission on every
 100 ms, adds a result every fourth time, and publishes the whole read model,
 300 times. `TodayFeed.pulse` is for measurements only, not a user intent.
 
-Not in this spike: keyboard triage, decision visuals ("Show me"), the day
+Not built yet: keyboard triage, decision visuals ("Show me"), the day
 switcher, New, rituals, Changes, Automations and the sky dither.
 
 ## Boundary
 
 | Owner | What |
 | --- | --- |
-| Rust (`native/`) | The `Today` read model, every rule for changing it (`Desk`), revisions, delivery state (idle, sending, unknown, checking), and the mock coordinator where a daemon adapter would sit |
+| Rust (`native/`) | The `Today` read model, every rule for changing it (`Desk`), revisions, delivery state (idle, sending, unknown, checking), and the mock coordinator where a daemon adapter will sit |
 | TSX | Layout, copy, and screen state: picked option, open help, question drafts, the decision in front |
 
 TSX imports one class, `TodayFeed`, from `pilot-day/native`. Its generated
@@ -81,9 +96,9 @@ loopback `fetch`, a socket, a file read and a process; the test checks that all
 four fail with `ERR_ACCESS_DENIED`.
 
 `pilot_day_native::fixture::today(Scenario)` and `Desk` are plain Rust. A
-Rust-only Today screen can render the same read model for the comparison.
+Rust-only Today screen (`fixtures/rust-today`) renders the same read model.
 
-## Findings
+## Findings from the spike
 
 - **Feasible.** Typed read models and intents cross with no NSH changes:
   `#[class]`, `#[derive(JsObject)]`, `#[derive(PropEnum)]`, `Callback` posts and

@@ -16,7 +16,7 @@ if [ "$("$git" -C "$src" rev-parse HEAD)" != "$rev" ]; then
 	"$git" -C "$src" checkout --quiet --detach "$rev"
 fi
 if [ -n "$("$git" -C "$src" status --porcelain --untracked-files=no)" ]; then
-	echo "nsh.sh: $src has local changes; this spike uses unmodified upstream only" >&2
+	echo "nsh.sh: $src has local changes; Pilot Day uses unmodified upstream only" >&2
 	exit 1
 fi
 (cd "$src" && cargo build --quiet -p nsh-cli)

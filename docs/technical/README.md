@@ -148,6 +148,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 ## Reference collections
 
 - [Desktop implementation contracts](../../apps/desktop/docs/design-system.md)
+- [Pilot Day, the upcoming Native Shell TSX app](../../apps/day/README.md)
 - [Reliability roadmap](reliability/roadmap.md) and [testing strategy](reliability/testing-strategy.md)
 - [Historical product reference](product-reference.md), preserved from the previous README
 - [Screenshot provenance](../screenshots/README.md)

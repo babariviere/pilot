@@ -1,21 +1,21 @@
 [package]
 name = "pilot-day-rust"
-description = "The mock Pilot Day Today screen written in Rust only, matched to the TSX spike for the stack comparison."
+description = "Optional fixture: the mock Pilot Day Today screen written in Rust only, matched to the TSX app for the stack comparison."
 version = "0.1.0"
 edition = "2024"
 publish = false
 
-# Separate from the Pilot desktop workspace and from the TSX spike's crate:
-# this app never links the shipping app, its daemon client or its storage.
+# Separate from the Pilot desktop workspace and from the TSX app's crate:
+# this fixture never links the shipping app, its daemon client or its storage.
 [workspace]
 
 [lib]
 path = "src/lib.rs"
 
 [dependencies]
-# The TSX spike's read model, rules and mock coordinator, used as plain Rust.
-pilot-day-native = { path = "../native" }
-# Unmodified upstream NSH, the same exact revision as the TSX spike.
+# The TSX app's read model, rules and mock coordinator (apps/day/native), used as plain Rust.
+pilot-day-native = { path = "../../native" }
+# Unmodified upstream NSH, the same exact revision as the TSX app.
 nsh-core = { git = "https://github.com/longbridge/nsh", rev = "530b73170f61e5bf16380959de9e622f8ce130cd" }
 nsh-base = { git = "https://github.com/longbridge/nsh", rev = "530b73170f61e5bf16380959de9e622f8ce130cd" }
 

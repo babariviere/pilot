@@ -36,7 +36,7 @@
 	},
 	"overrides": [
 		{
-			"includes": ["experiments/nsh-day/**"],
+			"includes": ["apps/day/**"],
 			"linter": {
 				"rules": {
 					"a11y": {

@@ -1,5 +1,5 @@
 //! The Today flows as a user takes them, on the Rust-only screen. Each test
-//! is the Rust twin of a test in the TSX spike's `App.test.tsx`, with the
+//! is the Rust twin of a test in the TSX app's `App.test.tsx`, with the
 //! same window, selectors, steps and expected texts, so a pass on both
 //! sides shows the two screens behave alike.
 

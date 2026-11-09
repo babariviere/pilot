@@ -1,6 +1,6 @@
 //! The single owner of the Today read model, with no UI and no JS. Each
 //! intent is checked against the decision's revision and delivery state
-//! before anything changes. In the spike, a mock coordinator answers; in
+//! before anything changes. For now a mock coordinator answers; in
 //! production this is where the daemon adapter would sit, behind the same
 //! two-step begin/settle shape.
 

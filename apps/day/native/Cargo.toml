@@ -5,7 +5,7 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-# Separate from the Pilot desktop workspace: this spike never links the
+# Separate from the Pilot desktop workspace: Day never links the
 # shipping app, its daemon client or its storage.
 [workspace]
 

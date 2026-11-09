@@ -1,5 +1,5 @@
 //! The decision in front: what Pilot asks, help to decide, the choices, and
-//! where the answer is. The Rust form of the TSX spike's
+//! where the answer is. The Rust form of the TSX app's
 //! `DecisionCard.tsx`. The desk decides every state change; this card
 //! sends intents and shows the outcome the desk publishes.
 

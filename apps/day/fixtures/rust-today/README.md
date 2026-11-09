@@ -1,29 +1,36 @@
 # Pilot Day Today, Rust-only counterpart
 
-The same mock Today screen as the TSX spike (`../`), written in Rust only, for
-the stack comparison. It is stack evidence, not the production app. It runs no
-JS VM and connects to no daemon, account or user data. The GPUI and Swift
-apps, their build and `apps/desktop/nsh`'s pin do not change.
+An optional fixture: the same mock Today screen as the TSX app
+([`apps/day`](../../README.md)), written in Rust only, for the stack
+comparison. It is stack evidence, not part of the app: no Day entry point,
+script or workspace build uses it. It runs no JS VM and connects to no daemon,
+account or user data. The GPUI and Swift apps, their build and
+`apps/desktop/nsh`'s pin do not change.
 
-It uses the same upstream NSH revision as the TSX spike
+It uses the same upstream NSH revision as the TSX app
 (`530b73170f61e5bf16380959de9e622f8ce130cd`), with no patches, forks, Cargo
-cache edits or WebViews. `Cargo.lock` started from `../native/Cargo.lock`.
+cache edits or WebViews. `Cargo.lock` started from
+[`apps/day/native/Cargo.lock`](../../native/Cargo.lock). The path dependency on
+`../../native` has no lockfile entry for its location, so moving the fixture
+left `Cargo.lock` unchanged.
 
 ## What is shared, and what is not
 
 Both screens use one read model, one set of rules and one mock coordinator:
 `pilot_day_native::fixture::world(Scenario)`, `Desk` and `MOCK_LATENCY`
-(350 ms). Only the UI layer differs. This crate depends on `../native` as
-plain Rust and never calls `TodayFeed`.
+(350 ms). Only the UI layer differs. This crate depends on
+[`apps/day/native`](../../native) (`../../native`) as plain Rust and never
+calls `TodayFeed`. Its theme is [`apps/day/theme.json`](../../theme.json),
+read by `nsh.json` (`../../theme.json`) and by `theme_tokens` in `src/lib.rs`.
 
 ## Parity matrix
 
-| Aspect             | TSX (`../`)                                                                | Rust (`rust/`)                                                                                | Status                                                           |
+| Aspect             | TSX (`apps/day`)                                                           | Rust (`fixtures/rust-today`)                                                                  | Status                                                           |
 | ------------------ | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
 | NSH                | 530b7317, QuickJS VM, TSX screen + `pilot-day/native` crate                | 530b7317, Rust root, no JS VM in the generated runner                                         | Same revision; the VM is the difference under test               |
 | Data               | `fixture::world`, `Desk`                                                   | Same values, same `Desk`                                                                      | Same                                                             |
 | Worlds             | `App`, `Quiet`, `Trouble`, `Large`, `Pulse` `.tsx`                         | `TodayApp`, `QuietApp`, `TroubleApp`, `LargeApp`, `PulseApp`; `TodayRoot { scenario, pulse }` | Same                                                             |
-| Theme, window      | `theme.json`; 1100 × 820, min 420 × 480                                    | `../theme.json`; same window keys                                                             | Same                                                             |
+| Theme, window      | `theme.json`; 1100 × 820, min 420 × 480                                    | `../../theme.json`; same window keys                                                          | Same                                                             |
 | Layout and copy    | `TodayScreen`, `DecisionCard`, `ui.tsx`                                    | `screen.rs`, `card.rs`, `ui.rs`, part for part                                                | Same structure, Tailwind scale and text (see literals below)     |
 | Controls           | `nsh/base` Button, Toggle, Radio, RadioGroup, Input                        | `nsh_base` button, toggle, radio, radio_group, input                                          | Same components                                                  |
 | Native states      | hover, active, focus, disabled, aria-pressed, checked as classes           | Same as typed styles                                                                          | Same, with three noted exceptions                                |
@@ -54,16 +61,19 @@ and -0.75 pt letter spacing on the 30 pt headline (`tracking-tight`).
 
 ## Run and test
 
-`cargo test` runs from `experiments/nsh-day/rust`. The CLI commands run from
-`experiments/nsh-day`: `nsh.sh` is the TSX spike's pinned CLI, and it changes
-to its own directory first, so it takes this app's path.
+`cargo test` and `cargo clippy` run from `apps/day/fixtures/rust-today`. The
+CLI commands run from `apps/day`: `nsh.sh` is the TSX app's pinned CLI, and it
+changes to its own directory first, so it takes this fixture's path relative
+to `apps/day`.
 
 ```sh
-(cd rust && cargo test)                      # 11 headless flows (tests/today.rs)
-./nsh.sh check rust/nsh.json                 # cargo check --all-targets
-./nsh.sh build rust/nsh.json -o rust/.nsh/out  # validates the root, theme and window
-./nsh.sh test rust                           # cargo test through the CLI
-./nsh.sh run rust/nsh.json                   # TodayApp, visible: not for benchmarks
+cd apps/day
+(cd fixtures/rust-today && cargo test)       # 11 headless flows (tests/today.rs)
+(cd fixtures/rust-today && cargo clippy --all-targets -- -D warnings)
+./nsh.sh check fixtures/rust-today/nsh.json  # cargo check --all-targets
+./nsh.sh build fixtures/rust-today/nsh.json -o fixtures/rust-today/.nsh/out  # validates the root, theme and window
+./nsh.sh test fixtures/rust-today            # cargo test through the CLI
+./nsh.sh run fixtures/rust-today/nsh.json    # TodayApp, visible: not for benchmarks
 ```
 
 Give `build` its `-o`: the default `.nsh/out` is the TSX app's.
@@ -81,12 +91,12 @@ are the entry points it can use, all hidden unless marked visible:
 
 | Need                                  | TSX                                                   | Rust                                                                             |
 | ------------------------------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Headless flows                        | `./nsh.sh test App.test.tsx`                          | `(cd rust && cargo test)`                                                        |
+| Headless flows                        | `./nsh.sh test App.test.tsx`                          | `(cd fixtures/rust-today && cargo test)`                                         |
 | Headless commits and timings per step | `./nsh.sh test App.test.tsx --trace`                  | `EngineConfig { trace: true, .. }` in a Headless test (`nsh::perf` log)          |
-| Scripted steps on one entry           | `./nsh.sh test Large.tsx --trace` with steps on stdin | `./nsh.sh test rust/nsh.json --trace` with steps on stdin (root `TodayApp` only) |
+| Scripted steps on one entry           | `./nsh.sh test Large.tsx --trace` with steps on stdin | `./nsh.sh test fixtures/rust-today/nsh.json --trace` with steps on stdin (root `TodayApp` only) |
 | Update workload                       | `Pulse.tsx`                                           | `PulseApp`, or `root(Scenario::Large, true)`                                     |
 | Change the workload                   | `feed.pulse(everyMs, count)`                          | `Day::pulse_with(every, count)`                                                  |
-| Visible window                        | `./nsh.sh run Large.tsx`                              | `./nsh.sh run rust/nsh.json` (change `root` for other worlds)                    |
+| Visible window                        | `./nsh.sh run Large.tsx`                              | `./nsh.sh run fixtures/rust-today/nsh.json` (change `root` for other worlds)     |
 
 `--target macos` and `nsh run` open visible windows; use them only with the
 user's approval. Headless runs prove behavior and commit work, not native

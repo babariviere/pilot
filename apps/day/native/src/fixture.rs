@@ -1,4 +1,4 @@
-//! The mock worlds behind the Today spike. Every name, number and event is
+//! The mock worlds behind the Today screen. Every name, number and event is
 //! invented and matches the D prototype's synthetic data. A Rust-only Today
 //! screen can render the same [`Today`] values for a like-for-like
 //! comparison.

@@ -14,6 +14,7 @@
 		"dev:daemon": "pnpm --filter @pilot/daemon dev",
 		"start": "pnpm --filter @pilot/daemon start",
 		"app:macos": "apps/macos/scripts/bundle.sh",
+		"day": "apps/day/nsh.sh",
 		"typecheck": "tsgo -p tsconfig.json",
 		"test": "node scripts/test.ts",
 		"bench:workspace": "node scripts/bench/workspace.ts",

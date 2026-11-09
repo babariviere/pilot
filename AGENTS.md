@@ -11,6 +11,8 @@ Pilot runs background [pi](https://github.com/earendil-works/pi) agents on durab
 - `packages/daemon`: `pilotd`. HTTP + WebSocket API, session registry and worker supervision.
 - `apps/macos`: SwiftUI app (SwiftPM, Command Line Tools only). `PilotCore` mirrors `packages/protocol`;
   change both together.
+- `apps/day`: Pilot Day, the upcoming Native Shell TSX desktop app (mock data, not the default yet). Run it with
+  `pnpm day run`; [apps/day/README.md](apps/day/README.md) has the checks. `apps/day/fixtures` is optional evidence.
 
 Docs to use when the task touches them:
 

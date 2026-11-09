@@ -1,5 +1,5 @@
 //! Today: what needs the user, which missions move, what landed and what
-//! comes next. The Rust form of the TSX spike's `TodayScreen.tsx`, section
+//! comes next. The Rust form of the TSX app's `TodayScreen.tsx`, section
 //! for section. Read-only over the read model, except through intents.
 
 use nsh_base::theme;
