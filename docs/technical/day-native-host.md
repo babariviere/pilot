@@ -243,6 +243,45 @@ provider run, automation activation, app/service restart, release, default switc
 
 ## Verification
 
+### Retained Changes
+
+`ChangesFeed::from_host` is native-only and runs under the root owner. The bootstrap
+owns the shared host and must join `close`; dropping this feed cancels only its
+listener task. The mock constructor and default CLI remain unchanged.
+
+`host/changes.rs` uses the existing project review inventory, session
+`review?view=changes&expectedProjectId=…&after=…`, per-session review requests,
+exact `/:snapshotId/history` and `/patch`. It follows every cursor to null before
+publishing, including when later pages contain the newest snapshots. Bounds are
+100 chats, 100 combined feed/request pages, 2,000 rows per kind and 8 MiB of metadata.
+An exceeded limit is Unavailable with `more: true`, not a complete partial feed.
+An unavailable source is distinct from an available empty project. One exact
+reopened page stays in native memory; history pagination remains explicitly marked.
+
+Reads recheck project inventory, immutable native selection/capability and generation
+after asynchronous work. Reopen checks the backend's original comparison digest,
+snapshot/session/project and retained patch hash without BOM decoding or newline
+normalization. The existing projection keeps unknown/unavailable source states.
+Reopening is passive, never a live fallback, capture, approval or feedback write.
+
+Later/Bring back require the displayed request revision and a matching fresh history.
+The native worker saves the exact command/target and fsyncs before admission, repeats
+source/identity/CAS checks, then enters one snooze/resume POST with the existing native
+capability. Receipts must match native actor, operation, canonical payload hash, request,
+revision, state and exact target. Lost replies remain Unknown. Restart restores only
+uncertainty; recovery uses the saved operation GET, never a historical resend or a
+latest-state inference. A terminal receipt is history, not a new currentness grant.
+All entered I/O and journal work belongs to the existing joined host worker.
+
+`native/tests/changes_host.rs` uses the isolated real daemon/retained store in
+`packages/daemon/src/fixtures/day-native-changes.ts`. It covers multiple sessions and
+pages, exact Unicode/CRLF bytes, Later/Bring back CAS, lost ACK and daemon/native restart,
+missing/mismatched lookups, source/identity/capability revocation during reads and after
+journaling, incomplete feeds, unavailable versus empty, digest refusal and joined close.
+No provider, worker, visible UI, live mutation, activation or service restart is involved.
+Native bootstrap selection and refresh/stale-state presentation need UI integration;
+this seam alone is not native screen acceptance or cutover permission.
+
 ```sh
 pnpm install --frozen-lockfile
 CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 cargo +1.99.1 test \

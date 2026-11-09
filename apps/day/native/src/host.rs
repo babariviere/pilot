@@ -2,6 +2,7 @@
 //! Selection is explicit and immutable. Retire and join this host before replacing
 //! a profile/project; old replies can never populate the replacement's Desk.
 pub mod attention;
+mod changes;
 mod enrollment;
 mod journal;
 mod planning;
@@ -72,6 +73,7 @@ pub(super) fn valid_id(s: &str) -> bool {
 }
 
 struct Shared {
+    changes: Mutex<changes::State>,
     desk: Mutex<Desk>,
     epoch: AtomicU64,
     closed: AtomicBool,
@@ -128,6 +130,7 @@ enum Work {
     AttentionSend(serde_json::Value),
     AttentionCheck(String),
     AttentionDraft(attention::DraftKey, serde_json::Value),
+    Changes(changes::Work),
     Refresh,
     Detail(String),
     Control {
@@ -216,6 +219,7 @@ impl NativeHost {
             return Err(Error::Identity);
         }
         let shared = Arc::new(Shared {
+            changes: Mutex::new(changes::State::default()),
             desk: Mutex::new(Desk::native()),
             epoch: AtomicU64::new(0),
             closed: AtomicBool::new(false),
@@ -568,6 +572,7 @@ async fn run(
                 draft.value.clone(),
             );
     }
+    changes::restore(&journal, &t.source, &shared);
     for record in journal.planning.values().filter(|r| r.source == t.source) {
         publish_planning(&shared, record);
     }
@@ -721,6 +726,7 @@ async fn handle(
             | Work::PreparePlanning
             | Work::AttentionCheck(_)
             | Work::AttentionDraft(_, _)
+            | Work::Changes(changes::Work::Check(_))
     ) {
         shared.open()?;
     } else {
@@ -733,6 +739,7 @@ async fn handle(
         | Work::AttentionDraft(_, _)) => {
             return attention::handle(t, journal, shared, epoch, work).await;
         }
+        Work::Changes(work) => return changes::handle(t, journal, shared, epoch, work).await,
         Work::PreparePlanning => return enrollment::prepare(t, journal, shared, epoch).await,
         Work::EnrollPlanning(intent) => {
             return enrollment::send(t, journal, shared, epoch, intent).await;

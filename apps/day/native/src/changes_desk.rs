@@ -694,6 +694,7 @@ impl ChangesDesk {
                     .iter()
                     .find(|k| k.comparison.snapshot_id == r.snapshot_id)?;
                 Some(c::RequestEntry::Row(Box::new(c::RequestRow {
+                    project_id: kept.target.project_id.clone(),
                     request_id: r.request_id.clone(),
                     sequence: r.sequence,
                     state: r.state,

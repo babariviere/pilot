@@ -193,14 +193,18 @@ returns it, each naming the request and revision shown; neither approves,
 reviews or resumes anything. A lost answer stays unconfirmed until "Check
 again" reads the saved operation; nothing is sent twice.
 
-Changes runs on mock data shaped as the daemon's v1 kept-change contracts
+Changes' default entry runs on mock data shaped as the daemon's v1 kept-change contracts
 ([landed-changes.md](../../docs/technical/landed-changes.md)), read through
 serde mirrors (`native/src/changes_contract.rs`) and one projection
-(`changes_project.rs`) that a native host can reuse. No host is bound yet:
-the retained-review reads, the review request snooze and resume, and their
-receipts are not wired, and writing review feedback from Day is not built.
-The daemon reads kept changes oldest first, 20 at a time; "Read more" adds the
-next page, so newer changes can sit past the first read.
+(`changes_project.rs`). `ChangesFeed::from_host` is a Rust-only factory for
+the trusted native host. It reads every oldest-first page across the selected
+project's retained sessions, then publishes a complete feed. Limits or unreadable
+sources produce Unavailable, never a successful partial or empty feed. Exact
+reopen, revision-fenced Later/Bring back and lookup-only recovery use the existing
+daemon routes and private native journal. The bootstrap still needs to supply this
+feed; native refresh/currentness UI remains follow-up work. Writing review feedback
+from Day is not built. The mock "Read more" adds the next page; native `more`
+queues a new complete read and does not acknowledge its completion.
 
 Not built yet: the day switcher, rituals, Automations, the sky
 dither, bootstrap selection for the delivered native daemon host and

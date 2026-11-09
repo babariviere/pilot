@@ -44,6 +44,7 @@ pub(super) struct Cache {
 }
 
 pub(super) struct Journal {
+    pub changes: BTreeMap<String, super::changes::Record>,
     file: File,
     path: PathBuf,
     bytes: u64,
@@ -59,6 +60,7 @@ pub(super) struct Journal {
 enum Entry {
     Attention(Box<AttentionRecord>),
     Draft(Box<Draft>),
+    Changes(Box<super::changes::Record>),
     Control(Box<Record>),
     Planning(Box<PlanningRecord>),
 }
@@ -122,6 +124,7 @@ impl Journal {
         let mut planning: BTreeMap<String, PlanningRecord> = BTreeMap::new();
         let mut attention: BTreeMap<String, AttentionRecord> = BTreeMap::new();
         let mut attention_drafts: BTreeMap<String, Draft> = BTreeMap::new();
+        let mut changes: BTreeMap<String, super::changes::Record> = BTreeMap::new();
         for line in body.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
             let entry: Entry = serde_json::from_slice(line).map_err(|_| Error::Storage)?;
             let record = match entry {
@@ -139,7 +142,11 @@ impl Journal {
                     if attention.len() + attention_drafts.len() > 4096 {
                         return Err(Error::Storage);
                     }
-                    if records.len() + planning.len() + attention.len() + attention_drafts.len()
+                    if changes.len()
+                        + records.len()
+                        + planning.len()
+                        + attention.len()
+                        + attention_drafts.len()
                         > MAX_OPERATIONS
                     {
                         return Err(Error::Storage);
@@ -152,7 +159,37 @@ impl Journal {
                     if attention.len() + attention_drafts.len() > 4096 {
                         return Err(Error::Storage);
                     }
-                    if records.len() + planning.len() + attention.len() + attention_drafts.len()
+                    if changes.len()
+                        + records.len()
+                        + planning.len()
+                        + attention.len()
+                        + attention_drafts.len()
+                        > MAX_OPERATIONS
+                    {
+                        return Err(Error::Storage);
+                    }
+                    continue;
+                }
+                Entry::Changes(record) => {
+                    let record = *record;
+                    record.validate()?;
+                    if let Some(prior) = changes.get(record.id())
+                        && (prior.source != record.source
+                            || prior.sequence != record.sequence
+                            || prior.target != record.target
+                            || prior.action != record.action
+                            || prior.command != record.command
+                            || (prior.not_sent && !record.not_sent)
+                            || (prior.receipt.is_some() && prior.receipt != record.receipt))
+                    {
+                        return Err(Error::Storage);
+                    }
+                    changes.insert(record.id().to_owned(), record);
+                    if changes.len()
+                        + planning.len()
+                        + records.len()
+                        + attention.len()
+                        + attention_drafts.len()
                         > MAX_OPERATIONS
                     {
                         return Err(Error::Storage);
@@ -177,7 +214,11 @@ impl Journal {
                         return Err(Error::Storage);
                     }
                     planning.insert(record.id().to_owned(), record);
-                    if planning.len() + records.len() + attention.len() + attention_drafts.len()
+                    if planning.len()
+                        + changes.len()
+                        + records.len()
+                        + attention.len()
+                        + attention_drafts.len()
                         > MAX_OPERATIONS
                     {
                         return Err(Error::Storage);
@@ -215,7 +256,11 @@ impl Journal {
                 .map_err(|_| Error::Storage)?;
             }
             records.insert(record.command.operation_id.clone(), record);
-            if records.len() + planning.len() + attention.len() + attention_drafts.len()
+            if changes.len()
+                + records.len()
+                + planning.len()
+                + attention.len()
+                + attention_drafts.len()
                 > MAX_OPERATIONS
             {
                 return Err(Error::Storage);
@@ -232,6 +277,7 @@ impl Journal {
             planning,
             attention,
             attention_drafts,
+            changes,
         })
     }
 
@@ -316,10 +362,21 @@ impl Journal {
     }
 
     fn count(&self) -> usize {
-        self.records.len()
+        self.changes.len()
+            + self.records.len()
             + self.planning.len()
             + self.attention.len()
             + self.attention_drafts.len()
+    }
+
+    pub fn save_changes(&mut self, record: super::changes::Record) -> Result<(), Error> {
+        record.validate()?;
+        if !self.changes.contains_key(record.id()) && self.count() >= MAX_OPERATIONS {
+            return Err(Error::Storage);
+        }
+        self.append(&record)?;
+        self.changes.insert(record.id().to_owned(), record);
+        Ok(())
     }
 
     pub fn cached(&self, source: &Source) -> Option<Cache> {

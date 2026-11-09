@@ -9,7 +9,7 @@
 //! These types stay in Rust. TSX gets the projected read model in
 //! [`crate::changes`].
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// `NativeReviewComparison`: one retained comparison.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -62,7 +62,7 @@ pub enum CaptureState {
 }
 
 /// `ReviewDispositionTarget`: the exact feedback target of a snapshot.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Target {
     pub project_id: String,
@@ -200,6 +200,7 @@ pub enum RequestState {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestRow {
+    pub project_id: String,
     pub request_id: String,
     pub sequence: u64,
     pub state: RequestState,
