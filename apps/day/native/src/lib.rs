@@ -6,6 +6,11 @@
 //! files, processes and host calls.
 
 pub mod actions;
+pub mod changes;
+pub mod changes_contract;
+pub mod changes_desk;
+pub mod changes_feed;
+pub mod changes_project;
 pub mod contract;
 pub mod desk;
 pub mod feed;
@@ -21,11 +26,14 @@ pub mod project;
 
 use nsh_core::prelude::*;
 
-pub use crate::{feed::TodayFeed, model::*, plan_feed::PlanFeed};
+pub use crate::{changes_feed::ChangesFeed, feed::TodayFeed, model::*, plan_feed::PlanFeed};
 
 /// The read models and intents the Today screen imports from
 /// `pilot-day/native`.
 #[native_module("pilot-day/native")]
 fn native(registry: &mut Registry) {
-    registry.class::<TodayFeed>().class::<PlanFeed>();
+    registry
+        .class::<TodayFeed>()
+        .class::<PlanFeed>()
+        .class::<ChangesFeed>();
 }

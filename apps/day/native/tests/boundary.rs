@@ -51,6 +51,17 @@ fn the_screen_gets_typed_read_models_and_intents() {
         "export type SubmitState = \"open\" | \"submitting\" | \"submitted\" | \"unknown\" | \"checking\";",
         "export type QuestionState = \"open\" | \"answered\" | \"changed\";",
         "export type StepState = \"waiting\" | \"now\" | \"done\" | \"unknown\" | \"unavailable\";",
+        // Changes: reopening reads one exact snapshot; Later and Bring back
+        // name the request revision shown; nothing here approves.
+        "  change(snapshotId: string): ChangePage | null;",
+        "  open(intent: ChangeRef): Promise<IntentOutcome>;",
+        "  later(intent: AttentionIntent): Promise<IntentOutcome>;",
+        "  bringBack(intent: AttentionIntent): Promise<IntentOutcome>;",
+        "  checkAttention(intent: ChangeRef): Promise<IntentOutcome>;",
+        "  more(): IntentOutcome;",
+        "  onChange(listener: (changes: ChangeList) => void): () => void;",
+        "export type ChangeAttention = \"none\" | \"waiting\" | \"later\" | \"closed\" | \"unknown\";",
+        "export type LandingState = \"unchecked\" | \"seen\" | \"notSeen\" | \"unclear\";",
     ] {
         assert!(ts.contains(line), "missing {line:?} in\n{ts}");
     }
@@ -67,6 +78,7 @@ fn the_only_exports_are_the_feeds_and_they_have_no_transport() {
     assert_eq!(
         values,
         [
+            "export declare class ChangesFeed {",
             "export declare class PlanFeed {",
             "export declare class TodayFeed {"
         ],

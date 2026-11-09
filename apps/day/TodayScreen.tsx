@@ -5,6 +5,8 @@
 import { effect, type JSX, keymap, Scroll, Text, View } from "nsh";
 import type { Decision, MissionRow } from "pilot-day/native";
 import { ActionCard } from "./ActionCard";
+import type { Changes } from "./changeFeed";
+import { showChanges } from "./changesView";
 import { commit, later, pickNth, toggleHelp } from "./commands";
 import { DecisionCard, decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
@@ -420,15 +422,39 @@ function ComingUp(props: { day: Day }) {
 	);
 }
 
+/** The Changes button: how many reviews wait, said to screen readers too. */
+function ChangesButton(props: { changes: Changes }) {
+	const waiting = () => props.changes.list().waiting.length;
+	return (
+		<Action
+			label="Changes"
+			accessibilityLabel={waiting() > 0 ? `Changes, ${waiting()} to review` : "Changes"}
+			onPress={showChanges}
+		/>
+	);
+}
+
 /** The whole Today screen for `props.day`. */
-export function TodayScreen(props: { day: Day; plans?: Plans }) {
+export function TodayScreen(props: { day: Day; plans?: Plans; changes?: Changes }) {
 	const today = () => props.day.today();
 	bindTriage(props.day, props.plans);
 	const plans = props.plans;
+	const changes = props.changes;
 	return (
 		<Scroll class="flex-1 bg-background">
 			<View class="w-full max-w-2xl self-center gap-12 px-6 pb-24 pt-6">
-				<TopBar action={plans ? <Action label="New" shortcut={keymapLabel} onPress={openNew} /> : undefined} />
+				<TopBar
+					action={
+						<View class="flex-row items-center gap-1">
+							<If when={changes}>
+								<ChangesButton changes={changes as Changes} />
+							</If>
+							<If when={plans}>
+								<Action label="New" shortcut={keymapLabel} onPress={openNew} />
+							</If>
+						</View>
+					}
+				/>
 				<If when={today().freshness.state !== "unreadable"} else={<Unreadable day={props.day} />}>
 					<View class="gap-12">
 						<View class="gap-3 pt-6">

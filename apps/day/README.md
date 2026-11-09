@@ -44,9 +44,11 @@ cd apps/day
 ./nsh.sh run                     # the decisions world, in a native window
 ./nsh.sh run Trouble.tsx         # also Actions.tsx, Quiet.tsx, Large.tsx, Pulse.tsx, Offline.tsx, Unreadable.tsx
 ./nsh.sh run Interview.tsx       # planning: also NewMission.tsx, Wayfinder.tsx, Review.tsx, PlanTrouble.tsx, Held.tsx, Long.tsx, PlanOff.tsx
+./nsh.sh run Changes.tsx         # kept changes: also ChangesTrouble.tsx, ChangesEmpty.tsx, ChangesOff.tsx, ChangesLarge.tsx
 ./nsh.sh check && ./nsh.sh build # types against the Rust declarations, class check
 ./nsh.sh test App.test.tsx       # headless flows, boundary and sandbox (26 tests)
 ./nsh.sh test Plan.test.tsx      # New, interviews, maps and review, and the planning boundary (19 tests)
+./nsh.sh test Changes.test.tsx   # Changes: list, exact reopen, Later, lost answer, unavailable, boundary (10 tests)
 ./nsh.sh test Native.test.tsx --target macos  # native captures and input, in output/
 (cd native && cargo test)        # Rust rules and generated declarations
 ```
@@ -170,7 +172,37 @@ including after reopening. They are read-only, not current answers or approval.
 A mission without a saved interview says so instead of
 showing an empty plan.
 
-Not built yet: the day switcher, rituals, Changes, Automations, the sky
+Changes (the Changes button on Today) lists finished work Pilot kept a
+snapshot of: "To review", "Later" and "Earlier", each newest first. Only
+kept snapshots show, not every change in the project. A kept change that
+could not be read keeps its place as a note; it is never counted as none.
+When kept changes cannot be read at all, Changes says so and never shows an
+empty list. A row reopens one exact snapshot: the date it was kept, its head
+and base commits, what was not kept, and a link to a newer snapshot of the
+same change when there is one. "Diff" shows the exact kept patch in NSH's
+read-only `DiffView` (one column, changed words marked, only rows in view
+made; no hunk actions). Rust shows the patch only when its bytes match the
+saved digest and every part of the read names the snapshot asked for.
+"History" lists saved reviews (an approval is of that snapshot, at that
+time), landing checks, review requests and, on request, the full snapshot
+identity. The review request is current at the read; a landing is the last
+time Pilot saw the exact commit on the default branch, never a promise
+about today, and "not checked" never means "never landed". Reopening
+approves nothing. Later (or L) puts a waiting review off and Bring back
+returns it, each naming the request and revision shown; neither approves,
+reviews or resumes anything. A lost answer stays unconfirmed until "Check
+again" reads the saved operation; nothing is sent twice.
+
+Changes runs on mock data shaped as the daemon's v1 kept-change contracts
+([landed-changes.md](../../docs/technical/landed-changes.md)), read through
+serde mirrors (`native/src/changes_contract.rs`) and one projection
+(`changes_project.rs`) that a native host can reuse. No host is bound yet:
+the retained-review reads, the review request snooze and resume, and their
+receipts are not wired, and writing review feedback from Day is not built.
+The daemon reads kept changes oldest first, 20 at a time; "Read more" adds the
+next page, so newer changes can sit past the first read.
+
+Not built yet: the day switcher, rituals, Automations, the sky
 dither, bootstrap selection for the delivered native daemon host and
 opening a chat from the mission overview. The default entries use mock worlds.
 Decisions, actions, help answers, results and Coming up come from mock worlds,
@@ -192,7 +224,7 @@ grants no URL opening.
 | Rust planning (`native/src/plan*.rs`) | The planning read model and intents (`plan.rs`), the mock rules (`plan_desk.rs`), mock worlds (`plan_world.rs`) and `PlanFeed` |
 | TSX | Layout, copy, and screen state: picked option, open help, question drafts, the decision in front, unsaved answer text and picks |
 
-TSX imports two classes, `TodayFeed` and `PlanFeed`, from `pilot-day/native`. Their generated
+TSX imports three classes, `TodayFeed`, `PlanFeed` and `ChangesFeed`, from `pilot-day/native`. Their generated
 declarations (`.nsh/types/pilot-day/native.d.ts`) are the whole contract:
 
 - Read: `snapshot(): Today`, `onChange(listener): () => void` and
@@ -222,6 +254,11 @@ declarations (`.nsh/types/pilot-day/native.d.ts`) are the whole contract:
   answers' revision and, for a review, the plan's digest; `checkSubmit` only
   reads. Rust adds owners, fences and operation IDs. A save never submits and
   never continues the coordinator; a second submission is refused.
+- Changes (`ChangesFeed`): `snapshot`, `onChange` and `change(snapshotId)`
+  read; `open` reads one exact snapshot; `later` and `bringBack` name the
+  snapshot, request and request revision shown; `checkAttention` only reads;
+  `more` reads the next page. Rust records the operation before sending. A
+  changed request is `stale`; nothing here approves or reviews.
 
 `nsh.json` declares `"capabilities": {}`, so the screen's VM may not use the
 network, sockets, files, processes or host calls. `BoundaryProbe.tsx` tries a

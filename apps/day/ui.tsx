@@ -1,7 +1,7 @@
 // The Day screen's styled controls, drawn from nsh/base behavior and the
 // theme's tokens. Pages compose these; they do not restyle base controls.
 import { type JSX, Text, View, type ViewRef } from "nsh";
-import { Button, Toggle } from "nsh/base";
+import { Button, DiffView, Tab, Tabs, Toggle } from "nsh/base";
 import type { Bar, Evidence, Progress } from "pilot-day/native";
 
 /** A still state mark. Words beside it carry the meaning. */
@@ -209,5 +209,60 @@ export function Track(props: { progress: Progress }) {
 			<View class="h-full bg-failed" style={{ flexGrow: props.progress.blocked, flexBasis: 0 }} />
 			<View class="h-full" style={{ flexGrow: props.progress.todo, flexBasis: 0 }} />
 		</View>
+	);
+}
+
+/** A row of tabs. The page shows the selected tab's content below it. */
+export function TabRow(props: { children?: JSX.Element }) {
+	return (
+		<Tabs class="flex-row gap-0.5 rounded-lg bg-muted p-0.5" indicatorClass="inset-y-0.5 rounded-md bg-background">
+			{props.children}
+		</Tabs>
+	);
+}
+
+/** One tab of a `TabRow`. */
+export function TabItem(props: { label: string; selected: boolean; testID?: string; onPress: () => void }) {
+	return (
+		<Tab
+			testID={props.testID}
+			selected={props.selected}
+			onPress={props.onPress}
+			class="group rounded-md px-3 py-1 focus-visible:ring-2 focus-visible:ring-ring/40"
+		>
+			<Text class="text-sm text-muted-foreground group-selected:text-foreground">{props.label}</Text>
+		</Tab>
+	);
+}
+
+/**
+ * A read-only diff of one exact patch: one column, changed words marked,
+ * only the rows in view made. It offers no hunk actions: nothing here edits,
+ * reverts or keeps a change.
+ */
+export function PatchDiff(props: { patch: string; testID?: string }) {
+	return (
+		<DiffView
+			testID={props.testID}
+			patch={props.patch}
+			layout="unified"
+			inline="word"
+			indicators="classic"
+			class="min-h-48 flex-1 overflow-hidden rounded-lg border border-border"
+			classes={{
+				gutter: "bg-muted",
+				lineNumber: "text-faint",
+				content: "text-foreground",
+				lineAdded: "bg-added",
+				lineDeleted: "bg-removed",
+				wordAdded: "bg-added-strong",
+				wordDeleted: "bg-removed-strong",
+				indicatorAdded: "text-ok-ink",
+				indicatorDeleted: "text-failed-ink",
+				separator: "bg-muted text-faint",
+				fileHeader: "bg-secondary text-foreground",
+				filler: "bg-muted",
+			}}
+		/>
 	);
 }

@@ -34,7 +34,11 @@
 			"ok-soft": "#eaf4ef",
 			"failed": "#c93c37",
 			"failed-ink": "#a8302b",
-			"progress": "#5b6ad0"
+			"progress": "#5b6ad0",
+			"added": "#e8f4ec",
+			"added-strong": "#c4e4cf",
+			"removed": "#fbeceb",
+			"removed-strong": "#f2c7c4"
 		},
 		"dark": {
 			"background": "#23262c",
@@ -66,7 +70,11 @@
 			"ok-soft": "#2c3938",
 			"failed": "#f07a72",
 			"failed-ink": "#f59a93",
-			"progress": "#8f9bf0"
+			"progress": "#8f9bf0",
+			"added": "#253a2f",
+			"added-strong": "#2f5a41",
+			"removed": "#3f2a2b",
+			"removed-strong": "#6a3a3a"
 		}
 	}
 }
