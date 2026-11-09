@@ -40,8 +40,10 @@ the same as `apps/day/nsh.sh <command>`.
 cd apps/day
 ./nsh.sh run                     # the decisions world, in a native window
 ./nsh.sh run Trouble.tsx         # also Actions.tsx, Quiet.tsx, Large.tsx, Pulse.tsx, Offline.tsx, Unreadable.tsx
+./nsh.sh run Interview.tsx       # planning: also NewMission.tsx, Wayfinder.tsx, Review.tsx, PlanTrouble.tsx, Held.tsx, Long.tsx, PlanOff.tsx
 ./nsh.sh check && ./nsh.sh build # types against the Rust declarations, class check
 ./nsh.sh test App.test.tsx       # headless flows, boundary and sandbox (26 tests)
+./nsh.sh test Plan.test.tsx      # New, interviews, maps and review, and the planning boundary (16 tests)
 ./nsh.sh test Native.test.tsx --target macos  # native captures and input, in output/
 (cd native && cargo test)        # Rust rules and generated declarations
 ```
@@ -118,10 +120,52 @@ shared update workload: `Desk::pulse` moves the next moving mission on every
 100 ms, adds a result every fourth time, and publishes the whole read model,
 300 times. `TodayFeed.pulse` is for measurements only, not a user intent.
 
-Not built yet: the day switcher, New, rituals, Changes, Automations, the sky
+New (the button on Today, or Command-N) asks what the user wants done. "Plan a
+mission" starts a mission whose questions come first; "Start as one chat"
+starts one Build chat directly, after the user confirms the exact words,
+project, model and access. A mission's planning page shows its interview. Pilot
+saves the whole question list first; the screen shows one question at a time,
+starting at the first without an answer. Back, Next (or "Skip for now") and the
+question numbers reach any question; "See all questions" shows every question
+on one page to answer freely. Each question has suggested answers (Pilot may
+mark one Recommended), "Something else", and one text field for the user's own
+answer or added detail. Answers save as drafts, in any order, and come back
+after leaving; switching a suggestion keeps the text. A recommendation, a
+skipped question or a blank draft is never an answer. The last page lists every
+answer by section with the one Submit, which stays off until every question of
+the round is answered; saving, moving or See all never submits or continues
+anything. A question that changed after it was answered shows the earlier
+answer and needs a new one. A round whose plan changed keeps its answers but
+cannot be submitted. A lost submission stays unknown until "Check again" reads
+it. A later round holds new questions only. Answers together have a limited
+room (12 KiB, the daemon's limit); a quiet note shows when it runs low, and a
+save past it is refused with the text kept. One round holds at most 40
+questions (`Long.tsx`).
+
+A Wayfinder mission also shows where it should end up, questions that need the
+user's answers, research with its state and sources, prototypes as not
+available (until the prototype contract exists), and a folded Fog of war with
+why each area matters, when it is ready and what it became. A topic interview
+answers only its topic. A proposed plan shows in full (problem, solution,
+stories, how it is built and tested, what is left out, its tasks with their
+order and owners, and what is still unknown) above the review question. A plan
+that changes during review closes that review. "From answers to work" keeps
+submission, continuation, approval, publication and starting work as separate
+steps; starting work is never on this page.
+
+`PlanFeed::from_host` (Rust only) binds the planning screens to the native
+host's saved interview reads, saves, submission and exact receipt checks
+(`native/src/plan_host.rs`, with the backend's own question digests). There,
+New cannot start a mission or a chat, and "Pilot continues planning" and "Work
+started" say they are not connected: no enrollment, continuation or worker
+admission exists yet. A mission without a saved interview says so instead of
+showing an empty plan.
+
+Not built yet: the day switcher, rituals, Changes, Automations, the sky
 dither, bootstrap selection for the delivered native daemon host and
-opening a chat from the mission overview. Decisions, actions, help answers,
-results and Coming up still come from the mock world, not from contracts. The
+opening a chat from the mission overview. The default entries use mock worlds.
+Decisions, actions, help answers, results and Coming up come from mock worlds,
+not from contracts. The
 mock help and action services in `native/` follow the attention contracts
 ([decision-assistance.md](../../docs/technical/decision-assistance.md)), but no
 production attention host is wired: no authenticated native user, permission checks,
@@ -136,9 +180,10 @@ grants no URL opening.
 | --- | --- |
 | Rust (`native/`) | The `Today` read model, every rule for changing it (`Desk`), revisions, delivery state (idle, sending, unknown, checking), the v1 contract mirrors (`contract.rs`) and their projection (`project.rs`), control commands, and mock services used by fixtures |
 | Trusted native host (`native/src/host.rs`) | Explicit profile/home/project selection, authenticated loopback reads, invalidation-only WS, private control journal, exact receipt lookup and joined close. Not activated by the mock entry. |
-| TSX | Layout, copy, and screen state: picked option, open help, question drafts, the decision in front |
+| Rust planning (`native/src/plan*.rs`) | The planning read model and intents (`plan.rs`), the mock rules (`plan_desk.rs`), mock worlds (`plan_world.rs`) and `PlanFeed` |
+| TSX | Layout, copy, and screen state: picked option, open help, question drafts, the decision in front, unsaved answer text and picks |
 
-TSX imports one class, `TodayFeed`, from `pilot-day/native`. Its generated
+TSX imports two classes, `TodayFeed` and `PlanFeed`, from `pilot-day/native`. Their generated
 declarations (`.nsh/types/pilot-day/native.d.ts`) are the whole contract:
 
 - Read: `snapshot(): Today`, `onChange(listener): () => void` and
@@ -160,6 +205,14 @@ declarations (`.nsh/types/pilot-day/native.d.ts`) are the whole contract:
   and records before sending (`native/src/actions.rs`). A changed decision is `stale`. A
   second send is refused. A lost confirmation leaves the decision `unknown`; only
   a read-only check can settle it, and nothing resends.
+- Planning (`PlanFeed`): `snapshot`, `onChange` and `page(missionId)` read, and
+  `open(missionId)` asks Rust to read one mission's saved planning;
+  `plan` and `start` name the goal and the setup digest shown; `saveAnswer`
+  names the interview, its question-list revision, the question and its digest
+  as the user saw them when they typed or picked; `submit` names the saved
+  answers' revision and, for a review, the plan's digest; `checkSubmit` only
+  reads. Rust adds owners, fences and operation IDs. A save never submits and
+  never continues the coordinator; a second submission is refused.
 
 `nsh.json` declares `"capabilities": {}`, so the screen's VM may not use the
 network, sockets, files, processes or host calls. `BoundaryProbe.tsx` tries a

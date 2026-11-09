@@ -12,15 +12,20 @@ pub mod feed;
 pub mod fixture;
 pub mod host;
 pub mod model;
+pub mod plan;
+pub mod plan_desk;
+pub mod plan_feed;
+pub mod plan_host;
+pub mod plan_world;
 pub mod project;
 
 use nsh_core::prelude::*;
 
-pub use crate::{feed::TodayFeed, model::*};
+pub use crate::{feed::TodayFeed, model::*, plan_feed::PlanFeed};
 
 /// The read models and intents the Today screen imports from
 /// `pilot-day/native`.
 #[native_module("pilot-day/native")]
 fn native(registry: &mut Registry) {
-    registry.class::<TodayFeed>();
+    registry.class::<TodayFeed>().class::<PlanFeed>();
 }

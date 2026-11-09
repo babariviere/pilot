@@ -8,7 +8,10 @@ import { ActionCard } from "./ActionCard";
 import { commit, later, pickNth, toggleHelp } from "./commands";
 import { DecisionCard, decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
-import { EvidenceChip, InlineAction, Mark, RowLink, SectionTitle, Track } from "./ui";
+import { stageMark, stageWord } from "./PlanScreen";
+import type { Plans } from "./planning";
+import { openNew, openPlan } from "./planView";
+import { Action, EvidenceChip, InlineAction, Mark, RowLink, SectionTitle, Track } from "./ui";
 import { focused, focusFront, front, type Item, move, openMission, queue } from "./view";
 import { freshnessLine, provenance, rowLine, stateMark, stateTone, stateWord } from "./words";
 
@@ -20,6 +23,9 @@ function actionFor(decision: Decision | undefined): string {
 }
 
 const WORDS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
+
+/** The keystroke that opens New, as the platform writes it. */
+const keymapLabel = keymap.label("mod+n");
 
 /** The headline: the coordinators' summary, until the user starts answering. */
 function headline(day: Day): string {
@@ -193,7 +199,7 @@ function NeedsYou(props: { day: Day }) {
  * off and Command-Return takes its one next action. Letters and digits never
  * fire while a text field has the focus; help keys never pick or send.
  */
-function bindTriage(day: Day) {
+function bindTriage(day: Day, plans: Plans | undefined) {
 	const decision = (): Decision | undefined => {
 		const item = front(day.today());
 		return item?.kind === "decision" ? item.decision : undefined;
@@ -203,6 +209,9 @@ function bindTriage(day: Day) {
 		k: () => move(day.today(), -1),
 		l: () => later(day, front(day.today())),
 		"mod+enter": () => commit(day, front(day.today())),
+		"mod+n": () => {
+			if (plans) openNew();
+		},
 		s: () => {
 			const d = decision();
 			if (d) toggleHelp(d, "simpler");
@@ -292,15 +301,53 @@ function Unreadable(props: { day: Day }) {
 }
 
 /** Pilot's mark and name, with the mock data note. */
-export function TopBar(props: { children?: JSX.Element }) {
+export function TopBar(props: { children?: JSX.Element; action?: JSX.Element }) {
 	return (
 		<View class="flex-row items-center gap-2">
 			{props.children}
 			<View class="size-4 rounded-md bg-primary" />
 			<Text class="text-sm font-semibold text-foreground">Pilot</Text>
 			<View class="flex-1" />
+			{props.action}
 			<Text class="text-xs text-faint">Mock data</Text>
 		</View>
+	);
+}
+
+/** Missions in planning, those waiting for the user first. Hidden when there are none. */
+function Planning(props: { plans: Plans }) {
+	const rows = () => {
+		const all = props.plans.planning().plans;
+		return [...all.filter((p) => p.needsYou), ...all.filter((p) => !p.needsYou)];
+	};
+	return (
+		<If when={rows().length > 0}>
+			<View class="gap-1">
+				<View class="pb-1">
+					<SectionTitle title="Planning" count={rows().length} />
+				</View>
+				<Each of={rows()} key={(p) => p.missionId}>
+					{(p) => (
+						<View class="gap-1 border-t border-border py-3">
+							<RowLink
+								testID={`plan-${p().missionId}`}
+								title={p().title}
+								accessibilityLabel={`${p().title}, ${stageWord(p().stage)}. Open its planning.`}
+								onPress={() => openPlan(p().missionId)}
+							>
+								<View class="flex-row items-center gap-1.5">
+									<Mark kind={stageMark(p().stage)} />
+									<Text class={p().needsYou ? "text-xs text-needs-ink" : "text-xs text-muted-foreground"}>
+										{stageWord(p().stage)}
+									</Text>
+								</View>
+							</RowLink>
+							<Text class="text-sm text-muted-foreground">{p().line}</Text>
+						</View>
+					)}
+				</Each>
+			</View>
+		</If>
 	);
 }
 
@@ -374,13 +421,14 @@ function ComingUp(props: { day: Day }) {
 }
 
 /** The whole Today screen for `props.day`. */
-export function TodayScreen(props: { day: Day }) {
+export function TodayScreen(props: { day: Day; plans?: Plans }) {
 	const today = () => props.day.today();
-	bindTriage(props.day);
+	bindTriage(props.day, props.plans);
+	const plans = props.plans;
 	return (
 		<Scroll class="flex-1 bg-background">
 			<View class="w-full max-w-2xl self-center gap-12 px-6 pb-24 pt-6">
-				<TopBar />
+				<TopBar action={plans ? <Action label="New" shortcut={keymapLabel} onPress={openNew} /> : undefined} />
 				<If when={today().freshness.state !== "unreadable"} else={<Unreadable day={props.day} />}>
 					<View class="gap-12">
 						<View class="gap-3 pt-6">
@@ -396,6 +444,9 @@ export function TodayScreen(props: { day: Day }) {
 						</View>
 
 						<NeedsYou day={props.day} />
+						<If when={plans}>
+							<Planning plans={plans as Plans} />
+						</If>
 						<Missions day={props.day} />
 						<DoneSince day={props.day} />
 						<ComingUp day={props.day} />

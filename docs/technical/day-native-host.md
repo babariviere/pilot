@@ -106,7 +106,8 @@ entered planning HTTP and receipt/journal writes as well as Today controls.
 ### Remaining bootstrap and execution gaps
 
 - The mock CLI entry remains unchanged. Native bootstrap still must pass the selected, root-owned
-  host to the Day feeds and join it before replacement/quit. UI mapping belongs to the interview UI.
+  host to the Day feeds and join it before replacement/quit. `PlanFeed::from_host` maps planning reads
+  and builds exact `InterviewWrite` requests (`apps/day/native/src/plan_host.rs`); it never closes the host.
 - Fresh creation requires a trusted enrollment adapter which creates a new coordinator already held
   at the interview boundary. No such production adapter is installed. Mission existence, legacy
   `planningVersion`, a caller actor label or a native bearer alone cannot enroll an existing mission.

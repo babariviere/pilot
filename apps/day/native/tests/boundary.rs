@@ -33,19 +33,40 @@ fn the_screen_gets_typed_read_models_and_intents() {
         "export type ActionAsk = \"progress\" | \"later\" | \"complete\";",
         "  pulse(everyMs?: number | null, count?: number | null): Promise<number>;",
         "  onChange(listener: (today: Today) => void): () => void;",
+        // Planning: drafts name the question shown; one explicit submission
+        // names the saved revision shown; nothing here starts work.
+        "  page(missionId: string): PlanPage | null;",
+        "  open(missionId: string): Promise<PlanOutcome>;",
+        "  plan(intent: NewIntent): Promise<PlanOutcome>;",
+        "  start(intent: NewIntent): Promise<PlanOutcome>;",
+        "  saveAnswer(intent: AnswerIntent): Promise<PlanOutcome>;",
+        "  submit(intent: SubmitIntent): Promise<PlanOutcome>;",
+        "  checkSubmit(intent: InterviewRef): Promise<PlanOutcome>;",
+        "  onChange(listener: (planning: Planning) => void): () => void;",
+        "export type SubmitState = \"open\" | \"submitting\" | \"submitted\" | \"unknown\" | \"checking\";",
+        "export type QuestionState = \"open\" | \"answered\" | \"changed\";",
+        "export type StepState = \"waiting\" | \"now\" | \"done\" | \"unknown\" | \"unavailable\";",
     ] {
         assert!(ts.contains(line), "missing {line:?} in\n{ts}");
     }
 }
 
 #[test]
-fn the_only_export_is_the_feed_and_it_has_no_transport() {
+fn the_only_exports_are_the_feeds_and_they_have_no_transport() {
     let ts = ts();
-    let values: Vec<&str> = ts
+    let mut values: Vec<&str> = ts
         .lines()
         .filter(|line| line.starts_with("export declare"))
         .collect();
-    assert_eq!(values, ["export declare class TodayFeed {"], "{ts}");
+    values.sort_unstable();
+    assert_eq!(
+        values,
+        [
+            "export declare class PlanFeed {",
+            "export declare class TodayFeed {"
+        ],
+        "{ts}"
+    );
     // Control commands are built in Rust: TSX names only the mission, the
     // revision it showed and, for Resume, the Pause it showed. It never sees
     // a home, project, coordinator or a new operation it could forge.

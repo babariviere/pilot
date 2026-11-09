@@ -103,8 +103,10 @@ reviewed amendments to already-published tasks need a separate update adapter, n
 
 ## Integration gaps
 
-- Native screens, full proposal presentation, saved-round human ingress and profile/envelope binding
-  belong to the Day host/UI integration. No native visual changes were made or accepted here.
+- Day's planning screens (`apps/day`: New, one-question interview with See all, Wayfinder map, full
+  proposal review) run on mock worlds and, through `PlanFeed::from_host`, on the native host's saved
+  human ingress ([apps/day/README.md](../../apps/day/README.md)). Enrollment, the planning worker
+  profile/hold and continuation remain unavailable and are shown so. The screens are not native acceptance.
 - The typed research frontier is passive in this delivery. Automatic linked research execution needs
   a qualified event-driven scheduler/session adapter with Autopilot, permission, budget, Stop/pause,
   lifecycle and exact-operation receipts. No live research automation is activated or implied.

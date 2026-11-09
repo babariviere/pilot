@@ -1,5 +1,5 @@
 import { mount } from "nsh";
 import { DayScreen } from "./DayScreen";
-import { day } from "./session";
+import { day, plans } from "./session";
 
-mount(() => <DayScreen day={day} />);
+mount(() => <DayScreen day={day} plans={plans} />);
