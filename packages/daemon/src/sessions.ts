@@ -192,6 +192,7 @@ import {
 	subscriptionProvider,
 	subscriptionUsageReadings,
 } from "./subscription-usage.ts";
+import { cleanTemporaryStorage, TEMPORARY_RETENTION_MS } from "./temporary-storage.ts";
 import { nextToolStallAt, ToolStallWatchdog, toolStallAttention } from "./tool-stalls.ts";
 import { hasUnpublishedWork } from "./unpublished-work.ts";
 import { UpdateGate } from "./update-gate.ts";
@@ -4042,11 +4043,70 @@ ${run.excerpt}`,
 		this.archiveTimer = setTimeout(() => {
 			this.archiveSweep = this.archiveInactiveSessions()
 				.then(() => this.reclaimArchivedWorkspaces())
+				.then(() => this.cleanArchivedTemporaryStorage())
 				.then(() => this.maintainRepositories())
 				.catch((error: unknown) => console.warn(`pilotd: archive maintenance failed: ${error}`))
 				.finally(() => this.scheduleArchiveSweep());
 		}, ARCHIVE_INTERVAL_MS);
 		this.archiveTimer.unref();
+	}
+
+	private temporaryStorageSweepAt = 0;
+
+	/** Slow maintenance, never a chat-list read. Unknown folders and saved artifacts are kept. */
+	private async cleanArchivedTemporaryStorage(): Promise<void> {
+		const now = Date.now();
+		if (now - this.temporaryStorageSweepAt < 3_600_000 || this.closing || this.updateGate.paused) return;
+		const end = this.updateGate.begin();
+		this.temporaryStorageSweepAt = now;
+		try {
+			await cleanTemporaryStorage(this.home, "home", now, () => {
+				if (this.closing) throw new Conflict("pilotd is shutting down");
+			});
+			for (const meta of this.metas.values()) {
+				if (this.closing) break;
+				if (
+					meta.archivedAt === undefined ||
+					meta.archivedAt > now - TEMPORARY_RETENTION_MS ||
+					meta.continuedTo ||
+					meta.continuationPending ||
+					meta.coordinatorView ||
+					meta.coordinatorArchivePreservesWorkspace ||
+					this.archiveTransitions.has(meta.id) ||
+					this.workspaceMaintenance.has(meta.id) ||
+					this.workers.has(meta.id)
+				)
+					continue;
+				const release = this.holdWorkspace(meta.id);
+				const assertSafe = () => {
+					if (
+						meta.archivedAt === undefined ||
+						meta.archivedAt > now - TEMPORARY_RETENTION_MS ||
+						this.workers.has(meta.id)
+					)
+						throw new Conflict("Session changed during temporary cleanup");
+					this.assertWorkspaceQuiescent(meta);
+				};
+				const promise = Promise.resolve().then(async () => {
+					await this.unparked(meta.id);
+					assertSafe();
+					await cleanTemporaryStorage(this.dir(meta.id), "session", now, assertSafe);
+					return this.summary(meta);
+				});
+				this.archiveTransitions.set(meta.id, { archived: "reclaim", promise });
+				try {
+					await promise;
+				} catch (error) {
+					if (!(error instanceof Conflict))
+						console.warn(`pilotd: temporary cleanup failed for ${meta.id}: ${error}`);
+				} finally {
+					if (this.archiveTransitions.get(meta.id)?.promise === promise) this.archiveTransitions.delete(meta.id);
+					release();
+				}
+			}
+		} finally {
+			end();
+		}
 	}
 
 	private async archiveInactiveSessions(): Promise<void> {

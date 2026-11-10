@@ -327,8 +327,13 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 			"- Run focused tests while iterating, then the relevant full suites once before publishing, using the project's verification wrappers. Run long local checks as background jobs so they can finish without blocking other work.",
 			"- Pilot monitors tracked PRs and sends automatic follow-ups for actionable failures. After publishing or rebasing, finish without waiting for remote CI. Do not use jobs, polling loops, `gh pr checks --watch` or `gh run watch` to wait for CI; background jobs are for local verification, not CI monitoring.",
 		);
+	if (!context.ask && !coordinator)
+		lines.push(
+			"- Use TMPDIR (or the OS temporary-directory API) for temporary images, downloads and verification output. Create a unique directory and remove your own temporary files when finished. Never put temporary output or extra checkouts beside the session's storage files or elsewhere under Pilot's data directory. Keep source in the workspace.",
+		);
 	if (artifactsAvailable) {
 		lines.push(
+			"- Publish artifacts you need to keep with the artifact tool, rather than leaving loose files under Pilot's data directory.",
 			"- When a diagram would make an explanation of architecture, workflows or relationships clearer, publish one with the artifact tool without being asked: a simple Mermaid diagram in a visual artifact (ui.mermaid), with a short explanation. Skip it for simple answers or when the user wants text only.",
 		);
 	}

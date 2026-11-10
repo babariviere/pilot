@@ -23,6 +23,15 @@ const mission: MissionContext = {
 	decisions: ["IDs are opaque strings"],
 };
 
+test("Build guidance uses TMPDIR instead of session storage for temporary output", () => {
+	const prompt = pilotPrompt({});
+	assert.match(prompt, /Use TMPDIR \(or the OS temporary-directory API\)/);
+	assert.match(prompt, /Create a unique directory and remove your own temporary files/);
+	assert.match(prompt, /Never put temporary output or extra checkouts beside the session's storage files/);
+	assert.match(pilotPrompt({}, true), /Publish artifacts you need to keep with the artifact tool/);
+	assert.doesNotMatch(pilotPrompt({ ask: { source: "/source" } }), /Create a unique directory/);
+});
+
 test("capability guidance distinguishes nested discovery, command failures and authority", () => {
 	for (const context of [{}, { ask: { source: "/fixture/source" } }]) {
 		const prompt = pilotPrompt(context);

@@ -40,3 +40,21 @@ be reclaimed and restored from saved snapshots. Dependencies may need reinstalli
 
 Track files you need to keep. Ignored files are not a general-purpose backup.
 Reading archived history does not restore a workspace or start an agent.
+
+## Temporary files
+
+Agents should use `TMPDIR` (or the OS temporary-directory API) for temporary
+images, downloads and verification output, then remove their own files. Keep
+source and checkouts in the workspace. Publish artifacts that should stay with
+the conversation using the artifact tool, not loose files beside session storage.
+
+Hourly maintenance removes known abandoned UUID-named atomic-write files after
+seven days. Session files are eligible only after seven archived days, with no
+worker, pending work or live terminal, under the archive maintenance lock.
+Saved artifacts, history, recovery data, databases, locks and operation receipts
+are not temporary files. Unknown folders and legacy scratch need manual review.
+
+Run `node scripts/storage-preview.ts [pilot-home]` for a read-only inventory of
+old atomic-write files and unexpected session folders. Sizes are logical bytes,
+not a promise of recoverable disk space. The preview never deletes anything and
+does not establish that a session is safe to clean.
