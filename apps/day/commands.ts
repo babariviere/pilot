@@ -15,13 +15,63 @@ import {
 	type Item,
 	messages,
 	pick,
+	picks,
+	questionText,
+	replies,
+	replyTarget,
+	replyText,
 	reports,
+	reportText,
 	setFor,
 	setHelp,
 } from "./view";
 
 function say(id: string, message: string) {
 	setFor(messages, id, message);
+}
+
+/**
+ * Gives Rust what the user picked and wrote on `decision`, for the revision
+ * shown. Rust saves it after a short pause; saving never sends or answers.
+ */
+export function saveDecisionDraft(day: Day, decision: Decision) {
+	const picked = picks()[decision.id];
+	const pickNow = picked
+		? picked.revision === decision.revision
+			? picked.option
+			: null
+		: (decision.draft.pick ?? null);
+	const outcome = day.feed.saveDraft({
+		itemId: decision.id,
+		revision: decision.revision,
+		pick: pickNow,
+		text: replyText(decision),
+		question: questionText(decision),
+	});
+	if (outcome.status === "rejected") say(decision.id, outcome.message);
+}
+
+/** Gives Rust the notes or report typed on `action`, for the revision shown. Saving reports nothing. */
+export function saveActionDraft(day: Day, action: HumanAction) {
+	const outcome = day.feed.saveDraft({
+		itemId: action.id,
+		revision: action.revision,
+		pick: null,
+		text: reportText(action),
+		question: "",
+	});
+	if (outcome.status === "rejected") say(action.id, outcome.message);
+}
+
+/** Picks `option` on `decision` and keeps it as a draft. Picking is not answering. */
+export function choose(day: Day, decision: Decision, option: string) {
+	pick(decision, option);
+	saveDecisionDraft(day, decision);
+}
+
+/** Whether `decision` has an answer the user can send now: a pick or, where allowed, their own words. */
+export function canSend(decision: Decision): boolean {
+	return chosen(decision) !== "" || (decision.reply && replyText(decision).trim() !== "");
 }
 
 /** Whether a decision's earlier outcome must be checked before anything else. */
@@ -37,11 +87,28 @@ export function commitLabel(decision: Decision): string {
 	return "Decide";
 }
 
-/** Sends the chosen option of `decision`, at the revision shown. Help never calls this. */
+/**
+ * Sends the chosen option of `decision`, at the revision shown, with the
+ * user's own words where the decision takes them. Help never calls this.
+ */
 export async function decide(day: Day, decision: Decision) {
 	const option = chosen(decision);
-	if (decision.delivery !== "idle" || !option) return;
+	if (decision.delivery !== "idle" || !canSend(decision)) return;
 	say(decision.id, "");
+	if (decision.reply) {
+		const text = replyText(decision);
+		const outcome = await day.feed.reply({
+			decisionId: decision.id,
+			revision: decision.revision,
+			optionId: option || null,
+			text,
+		});
+		say(decision.id, outcome.message);
+		// Clear only the words that were sent; keep anything typed meanwhile.
+		if (outcome.status === "accepted" && (replies()[decision.id] ?? text) === text) setFor(replies, decision.id, "");
+		if (outcome.status === "accepted") focusFront.set(true);
+		return;
+	}
 	const outcome = await day.feed.decide({ decisionId: decision.id, revision: decision.revision, optionId: option });
 	say(decision.id, outcome.message);
 	if (outcome.status === "accepted") focusFront.set(true);
@@ -68,14 +135,15 @@ export function laterDecision(day: Day, decision: Decision) {
 
 /** Asks the question typed on `decision`, about the revision shown. It is help, not an answer. */
 export async function ask(day: Day, decision: Decision) {
-	const question = drafts()[decision.id] ?? "";
+	const question = questionText(decision);
 	if (asking()[decision.id]) return;
 	setFor(asking, decision.id, true);
 	const outcome = await day.feed.ask({ decisionId: decision.id, revision: decision.revision, question });
 	setFor(asking, decision.id, false);
 	// Clear only the text that was sent; keep anything typed meanwhile.
-	if (outcome.status !== "rejected" && outcome.status !== "stale" && (drafts()[decision.id] ?? "") === question) {
+	if (outcome.status !== "rejected" && outcome.status !== "stale" && questionText(decision) === question) {
 		setFor(drafts, decision.id, "");
+		saveDecisionDraft(day, decision);
 	}
 	say(decision.id, outcome.message);
 }
@@ -86,17 +154,27 @@ export async function checkAnswer(day: Day, decision: Decision, answer: Answer) 
 	say(decision.id, outcome.message);
 }
 
-/** Opens or closes one kind of help. Help never picks, sends or approves. */
+/**
+ * Opens or closes one kind of help. Help never picks, sends or approves.
+ * Help Pilot cannot write here stays closed; nothing is asked for it.
+ */
 export function toggleHelp(decision: Decision, kind: Help) {
+	if (decision.helpUnavailable && (kind === "simpler" || kind === "visual" || kind === "ask")) return;
+	if (kind === "more" && decision.more.length === 0) return;
 	const open = !helpOpen(decision.id, kind);
 	setHelp(decision.id, kind, open);
 	if (kind === "ask" && open) focusInput.set(decision.id);
 }
 
 /** Picks the `n`th option (from 1) of `decision` while nothing is on its way. */
-export function pickNth(decision: Decision, n: number) {
+export function pickNth(day: Day, decision: Decision, n: number) {
 	const option = decision.options[n - 1];
-	if (option && decision.delivery === "idle") pick(decision, option.id);
+	if (option && decision.delivery === "idle") choose(day, decision, option.id);
+}
+
+/** Moves the keyboard into `decision`'s own-words field, where it takes them. */
+export function writeReply(decision: Decision) {
+	if (decision.reply && decision.delivery === "idle") focusInput.set(replyTarget(decision.id));
 }
 
 /** Whether an action's last request must be checked before anything else. */
@@ -106,10 +184,10 @@ export function actionNeedsCheck(action: HumanAction): boolean {
 
 /** Saves what the user wrote as progress. The action still waits. */
 export async function saveProgress(day: Day, action: HumanAction) {
-	const progress = reports()[action.id] ?? "";
+	const progress = reportText(action);
 	say(action.id, "");
 	const outcome = await day.feed.saveProgress({ actionId: action.id, revision: action.revision, progress });
-	if (outcome.status === "accepted" && (reports()[action.id] ?? "") === progress) setFor(reports, action.id, "");
+	if (outcome.status === "accepted" && (reports()[action.id] ?? progress) === progress) setFor(reports, action.id, "");
 	say(action.id, outcome.message);
 }
 
@@ -126,7 +204,7 @@ export async function laterAction(day: Day, action: HumanAction) {
 
 /** Reports the action done in the user's words. Opening its link or file never does this. */
 export async function complete(day: Day, action: HumanAction) {
-	const report = reports()[action.id] ?? "";
+	const report = reportText(action);
 	if (action.needs.length > 0 && report.trim() === "") {
 		focusInput.set(action.id);
 		say(action.id, "Say what you did first. Pilot needs it to go on.");
@@ -139,6 +217,24 @@ export async function complete(day: Day, action: HumanAction) {
 		setFor(reports, action.id, "");
 		focusFront.set(true);
 	}
+}
+
+/**
+ * Asks Rust to open the action's pinned link, where Pilot may. Opening it
+ * reports nothing: the action still waits for the user's own report.
+ */
+export async function openLink(day: Day, action: HumanAction) {
+	if (!action.canOpen) return;
+	const outcome = await day.feed.openLink({ actionId: action.id, revision: action.revision });
+	say(action.id, outcome.message);
+}
+
+/** Copies the words written on an earlier revision into the report. They count only once the user sends them. */
+export function useEarlier(day: Day, action: HumanAction) {
+	if (!action.earlierReport) return;
+	setFor(reports, action.id, action.earlierReport);
+	saveActionDraft(day, action);
+	focusInput.set(action.id);
 }
 
 /** Reads whether a lost action request landed. Never resends. */

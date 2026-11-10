@@ -29,6 +29,11 @@ fn the_screen_gets_typed_read_models_and_intents() {
         "  actionLater(intent: ActionRef): Promise<IntentOutcome>;",
         "  complete(intent: CompleteIntent): Promise<IntentOutcome>;",
         "  checkAction(intent: ActionCheck): Promise<IntentOutcome>;",
+        // Drafts and own words name the item and revision shown; a link is
+        // opened by Rust from the daemon's pinned destination, never a URL.
+        "  reply(intent: ReplyIntent): Promise<IntentOutcome>;",
+        "  saveDraft(intent: DraftIntent): IntentOutcome;",
+        "  openLink(intent: ActionRef): Promise<IntentOutcome>;",
         "export type AnswerState = \"asking\" | \"ready\" | \"unknown\" | \"checking\";",
         "export type ActionAsk = \"progress\" | \"later\" | \"complete\";",
         "  pulse(everyMs?: number | null, count?: number | null): Promise<number>;",

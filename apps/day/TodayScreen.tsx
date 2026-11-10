@@ -7,7 +7,7 @@ import type { Decision, MissionRow } from "pilot-day/native";
 import { ActionCard } from "./ActionCard";
 import type { Changes } from "./changeFeed";
 import { showChanges } from "./changesView";
-import { commit, later, pickNth, toggleHelp } from "./commands";
+import { commit, later, pickNth, toggleHelp, writeReply } from "./commands";
 import { DayLine } from "./DayLine";
 import { DecisionCard, decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
@@ -122,6 +122,16 @@ function NeedsYou(props: { day: Day }) {
 	const first = () => front(props.day.today());
 	const rest = () => items().filter((item) => item.id !== first()?.id);
 	const decisions = () => props.day.today().decisions;
+	const attention = () => props.day.today().attention;
+	// What needs the user has its own read. A note shows only when it says
+	// more than the missions' freshness note above.
+	const attentionNote = () => {
+		const a = attention();
+		const f = props.day.today().freshness;
+		if (a.state === "live" || (a.state === f.state && a.reason === f.reason)) return "";
+		return a.reason;
+	};
+	const readable = () => attention().state !== "unreadable" && attention().state !== "unavailable";
 	// A focus request with no card to take it lapses, so a later arrival
 	// never takes the focus on its own.
 	effect(() => {
@@ -130,6 +140,12 @@ function NeedsYou(props: { day: Day }) {
 	return (
 		<View class="gap-4">
 			<SectionTitle title="Needs you" count={items().length} />
+			<If when={attentionNote()}>
+				<View testID="attention-note" class="flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">
+					<Mark kind="unknown" />
+					<Text class="flex-1 text-sm text-foreground">{attentionNote()}</Text>
+				</View>
+			</If>
 			<Each of={props.day.today().notes} key={(note) => note}>
 				{(note) => (
 					<View class="flex-row items-center gap-2.5 rounded-xl bg-ok-soft px-4 py-3">
@@ -140,7 +156,18 @@ function NeedsYou(props: { day: Day }) {
 			</Each>
 			<If
 				when={first()}
-				else={<Text class="text-base text-foreground">Nothing needs you. Pilot keeps going on its own.</Text>}
+				else={
+					<If
+						when={readable()}
+						else={
+							<Text class="text-base text-foreground">
+								Pilot could not read what needs you. Nothing here is guessed.
+							</Text>
+						}
+					>
+						<Text class="text-base text-foreground">Nothing needs you. Pilot keeps going on its own.</Text>
+					</If>
+				}
 			>
 				<Each of={first() ? [first() as Item] : []} key={(item) => item.id}>
 					{(item) => (
@@ -231,12 +258,16 @@ function bindTriage(day: Day, plans: Plans | undefined) {
 			const d = decision();
 			if (d) toggleHelp(d, "ask");
 		},
+		"0": () => {
+			const d = decision();
+			if (d) writeReply(d);
+		},
 	};
 	for (let n = 1; n <= 9; n++) {
 		keys[String(n)] = () => {
 			const d = decision();
 			if (d) {
-				pickNth(d, n);
+				pickNth(day, d, n);
 				focusFront.set(true);
 			}
 		};

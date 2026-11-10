@@ -31,6 +31,9 @@ pub enum Scenario {
     /// A calm evening: nothing waits, results came in since the afternoon
     /// and two missions keep moving.
     Evening,
+    /// An agent's ordinary question that takes the user's own words, where
+    /// Pilot cannot write help: shaped like the native attention cards.
+    Asks,
 }
 
 /// What a decision asks for. It decides which actions the card offers.
@@ -391,6 +394,30 @@ pub struct Decision {
     pub delivery: Delivery,
     /// The option the user sent, while it is sending or unknown.
     pub sent_option: Option<String>,
+    /// Whether the user may answer in their own words, or add detail to
+    /// a pick. An agent's ordinary question allows it.
+    pub reply: bool,
+    /// Why help (simpler words, a chart, questions) is not available for
+    /// this decision. None when it is.
+    pub help_unavailable: Option<String>,
+    /// What the user picked or wrote on this revision and has not sent.
+    pub draft: Draft,
+}
+
+/// What the user picked or wrote on one item and has not sent. Rust saves
+/// it for this exact revision; a draft on an earlier revision picks
+/// nothing now.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+pub struct Draft {
+    /// The option picked, if any. Picking is not answering.
+    pub pick: Option<String>,
+    /// The user's own words: an answer or detail on a decision, notes or a
+    /// report on an action. Exactly as typed.
+    pub text: String,
+    /// An unsent question about a decision, exactly as typed.
+    pub question: String,
+    /// Set when saving it failed. It stays on screen.
+    pub unsaved: bool,
 }
 
 /// A file the user needs for an action, pinned to exact bytes.
@@ -486,6 +513,14 @@ pub struct HumanAction {
     pub delivery: Delivery,
     /// What that request asks, while it is sending, unknown or checking.
     pub asked: Option<ActionAsk>,
+    /// What the user wrote on this revision and has not sent.
+    pub draft: Draft,
+    /// Words the user wrote on an earlier revision, before Pilot changed
+    /// the request. History only: they report nothing.
+    pub earlier_report: Option<String>,
+    /// Whether Pilot can open the destination link for the user. Opening
+    /// it reports nothing.
+    pub can_open: bool,
 }
 
 /// How much of a mission is done, by task state.
@@ -706,6 +741,40 @@ pub struct Today {
     pub finished: Vec<String>,
     /// What happens next, by time.
     pub coming_up: Vec<Scheduled>,
+    /// How fresh the read of decisions and actions is. It can differ from
+    /// the missions' read. Nothing here is guessed when it is not live.
+    pub attention: Freshness,
+}
+
+/// Answer a decision in the user's own words, with or without a pick.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[prop(exact)]
+pub struct ReplyIntent {
+    /// The decision.
+    pub decision_id: String,
+    /// The decision's revision the screen showed.
+    pub revision: u32,
+    /// The option picked, if any.
+    pub option_id: Option<String>,
+    /// The user's own words, exactly as typed. May be empty with a pick.
+    pub text: String,
+}
+
+/// Save what the user picked or wrote on one item, at the revision shown.
+/// Saving never sends, answers or completes anything.
+#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[prop(exact)]
+pub struct DraftIntent {
+    /// The decision or action.
+    pub item_id: String,
+    /// The item's revision the screen showed.
+    pub revision: u32,
+    /// The option picked, if any.
+    pub pick: Option<String>,
+    /// The user's own words or report, exactly as typed.
+    pub text: String,
+    /// An unsent question about a decision, exactly as typed.
+    pub question: String,
 }
 
 /// Answer a decision with one of its options.

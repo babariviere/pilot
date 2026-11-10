@@ -6,6 +6,8 @@
 //! files, processes and host calls.
 
 pub mod actions;
+mod attention_feed;
+pub mod attention_host;
 pub mod changes;
 pub mod changes_contract;
 pub mod changes_desk;

@@ -98,6 +98,9 @@ struct Shared {
     attention_operations: Mutex<std::collections::BTreeMap<String, serde_json::Value>>,
     attention_drafts: Mutex<std::collections::BTreeMap<String, serde_json::Value>>,
     url_opener: Option<attention::UrlOpener>,
+    /// Set once a screen asks for attention. Later authoritative refreshes
+    /// read it again; a WS frame never supplies its content.
+    attention_wanted: AtomicBool,
 }
 impl Shared {
     fn change<R>(&self, f: impl FnOnce(&mut Desk) -> R) -> R {
@@ -280,6 +283,7 @@ impl NativeHost {
             attention_operations: Mutex::new(std::collections::BTreeMap::new()),
             attention_drafts: Mutex::new(std::collections::BTreeMap::new()),
             url_opener,
+            attention_wanted: AtomicBool::new(false),
         });
         let (requests, rx) = async_channel::bounded(16);
         let state = shared.clone();
@@ -676,6 +680,10 @@ async fn run(
                 let Ok(request) = request else { break; };
                 let preparing = matches!(&request.work, Work::PreparePlanning);
                 let local_ritual = matches!(&request.work, Work::Ritual(_) | Work::RitualResults);
+                let attention = matches!(
+                    &request.work,
+                    Work::AttentionRead | Work::AttentionSend(_) | Work::AttentionCheck(_) | Work::AttentionDraft(_, _)
+                );
                 let result = match request.work {
                     Work::Ritual(work) => ritual::handle(&t.source, day.as_ref(), &mut journal, &shared, work),
                     Work::RitualResults => ritual::read_results(&t, day.as_ref(), &mut journal, &shared, request.epoch).await,
@@ -684,6 +692,11 @@ async fn run(
                 if local_ritual || (preparing && matches!(result, Err(Error::Unavailable))) {
                     // Unsupported New configuration must not disable existing Today reads.
                     shared.change(|_| ());
+                } else if attention
+                    && matches!(result, Err(Error::Stale | Error::Invalid | Error::Unavailable | Error::Capacity))
+                {
+                    // A changed card or an unsupported attention read must not
+                    // mark the missions' read or its controls stale.
                 } else if let Err(e) = result && !matches!(e, Error::Unknown | Error::Busy | Error::Closed) { fail(&shared, e); }
                 let _ = request.reply.try_send(result);
             }
@@ -776,6 +789,11 @@ async fn refresh(
         // advances a preparing bootstrap to the coordinator's complete round.
         let _ = read_planning(t, shared, epoch, &mission).await;
     }
+    if shared.attention_wanted.load(Ordering::SeqCst) {
+        // Same rule for attention: a failed read leaves the last one stale,
+        // never a successful empty list.
+        let _ = attention::read(t, shared, epoch).await;
+    }
     Ok(())
 }
 
@@ -788,14 +806,16 @@ async fn handle(
 ) -> Result<IntentOutcome, Error> {
     // Historical exact receipt lookup is independent of WS invalidations.
     // Immutable source, local identity and project are still requalified below.
-    if matches!(
+    // A draft queued before close is local only and is written during the
+    // joined drain, so a safe close keeps the user's last words.
+    if matches!(&work, Work::AttentionDraft(_, _)) {
+    } else if matches!(
         &work,
         Work::Check(_)
             | Work::CheckPlanning(_)
             | Work::EnrollPlanning(_)
             | Work::PreparePlanning
             | Work::AttentionCheck(_)
-            | Work::AttentionDraft(_, _)
             | Work::Changes(changes::Work::Check(_))
     ) {
         shared.open()?;

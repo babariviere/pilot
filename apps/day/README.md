@@ -42,7 +42,7 @@ the same as `apps/day/nsh.sh <command>`.
 ```sh
 cd apps/day
 ./nsh.sh run                     # the decisions world, in a native window
-./nsh.sh run Trouble.tsx         # also Actions.tsx, Quiet.tsx, Large.tsx, Pulse.tsx, Offline.tsx, Unreadable.tsx
+./nsh.sh run Trouble.tsx         # also Actions.tsx, Asks.tsx, Quiet.tsx, Large.tsx, Pulse.tsx, Offline.tsx, Unreadable.tsx
 ./nsh.sh run FirstUse.tsx        # start and end of day: also Evening.tsx, Quiet.tsx, Trouble.tsx
 ./nsh.sh run Interview.tsx       # planning: also NewMission.tsx, Wayfinder.tsx, Review.tsx, PlanTrouble.tsx, Held.tsx, Long.tsx, PlanOff.tsx
 ./nsh.sh run Changes.tsx         # kept changes: also ChangesTrouble.tsx, ChangesEmpty.tsx, ChangesOff.tsx, ChangesLarge.tsx
@@ -51,6 +51,7 @@ cd apps/day
 ./nsh.sh test Ritual.test.tsx    # start and end of day and standup notes (9 tests)
 ./nsh.sh test Plan.test.tsx      # New, interviews, maps and review, and the planning boundary (19 tests)
 ./nsh.sh test Changes.test.tsx   # Changes: list, exact reopen, Later, lost answer, unavailable, boundary (10 tests)
+./nsh.sh test Attention.test.tsx # agent questions, unavailable help, drafts and links that report nothing (4 tests)
 ./nsh.sh test Native.test.tsx --target macos  # native captures and input, in output/
 (cd native && cargo test)        # Rust rules and generated declarations
 ```
@@ -108,7 +109,8 @@ and the Chrome Web Store upload: the zip is replaced before the first report,
 and the next report's answer is lost), `large` (204 missions, 123 results),
 `offline` (the last read, 6 minutes old), `unreadable` (nothing read),
 `firstUse` (the user's first look: nothing to catch up on) and `evening`
-(nothing waits, three results since the afternoon).
+(nothing waits, three results since the afternoon) and `asks` (one agent
+question that takes the user's own words, with no help available).
 
 Start and end of day. Today's date line quietly offers "Start the day" in the
 morning and "End the day" in the evening, and always "Standup notes". The part
@@ -241,13 +243,16 @@ opening a chat from the mission overview. The default entries use mock worlds.
 Decisions, actions, help answers, results and Coming up come from mock worlds,
 not from contracts. The
 mock help and action services in `native/` follow the attention contracts
-([decision-assistance.md](../../docs/technical/decision-assistance.md)), but no
-production attention card feed is wired yet. The Rust-only attention transport now has authenticated
-native reads, permission/current-question/file checks, durable drafts/intents/receipts, exact lookup
-and explicit 4,096-record capacity refusal. Help execution and dependent-work continuation remain
-explicitly unavailable; their qualification is separate from transport. The mock cards are not end-to-end.
-Day still shows links as text. A native root can supply the transport's permission-checked URL opener,
-but TSX has no URL capability. See [attention transport](../../docs/technical/day-native-host.md#attention-transport).
+([decision-assistance.md](../../docs/technical/decision-assistance.md)).
+`TodayFeed::from_host` (Rust only) binds the cards to the native attention transport: agents'
+ordinary questions and human actions, saved drafts (picks, own words, questions, notes) for the
+exact revision shown, the user's Later, exact receipts and lookup-only checks
+([attention cards](../../docs/technical/day-native-host.md#attention-cards)). An agent's question
+takes the user's own words (0 opens the field) and preselects nothing; `Asks.tsx` shows that shape
+on mock data. Help that the daemon reports unavailable is said once on the card and its keys send
+nothing. Dependent-work continuation stays unavailable, and a report never starts work. Links stay
+text unless the native root supplies its permission-checked opener; then "Open link" opens only the
+daemon's pinned link and reports nothing. The default entry still uses mock data.
 
 ## Boundary
 

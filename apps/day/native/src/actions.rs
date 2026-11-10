@@ -245,6 +245,7 @@ impl Actions {
                     replaced: r.replaced.clone(),
                     delivery: flight.map_or(Delivery::Idle, |f| f.delivery),
                     asked: flight.map(|f| f.ask),
+                    ..HumanAction::default()
                 }
             })
             .collect()

@@ -2,17 +2,23 @@
 // where the answer is. Rust decides every state change; this card sends
 // intents (commands.ts) and shows the outcome Rust publishes. Help (simpler
 // words, context, a chart and questions) never picks, sends or approves.
+// Help that Pilot cannot write here is said once and not offered. An
+// agent's question also takes the user's own words; picks and words are
+// kept as drafts for the revision shown.
 import { cleanup, effect, keymap, signal, Text, View, type ViewRef } from "nsh";
 import { Input, Radio, RadioGroup } from "nsh/base";
 import type { Answer, Decision } from "pilot-day/native";
 import {
 	ask,
+	canSend,
 	checkAnswer,
 	checkDecision,
+	choose,
 	commitLabel,
 	decide,
 	laterDecision,
 	needsCheck,
+	saveDecisionDraft,
 	toggleHelp,
 } from "./commands";
 import type { Day } from "./day";
@@ -26,8 +32,11 @@ import {
 	focusInput,
 	helpOpen,
 	messages,
-	pick,
 	pickChanged,
+	questionText,
+	replies,
+	replyTarget,
+	replyText,
 	setFor,
 } from "./view";
 
@@ -99,14 +108,23 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 	const idle = () => d().delivery === "idle";
 	const radios = new Map<string, ViewRef>();
 	let firstChip: ViewRef | undefined;
+	let laterButton: ViewRef | undefined;
+	let commitButton: ViewRef | undefined;
 	const input = signal<ViewRef | null>(null);
+	const replyInput = signal<ViewRef | null>(null);
 	let stopEscape: (() => void) | null = null;
 
-	// The keyboard focus lands on the chosen option, else on the first help.
-	anchors.set(id, () => radios.get(chosen(d())) ?? firstChip);
+	// The keyboard focus lands on the chosen option, else on the first help,
+	// else on the first option or a button; never in a text field.
+	anchors.set(
+		id,
+		() => radios.get(chosen(d())) ?? firstChip ?? radios.get(d().options[0]?.id ?? "") ?? laterButton ?? commitButton,
+	);
 	cleanup(() => {
 		anchors.delete(id);
 		stopEscape?.();
+		// Leaving the card saves its words now rather than after the pause.
+		props.day.feed.flushDrafts();
 	});
 	effect(() => {
 		if (!focusFront()) return;
@@ -123,11 +141,34 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 			focusInput.set(null);
 		}
 	});
-	// Escape leaves the question, keeps its draft and returns to the card.
-	const leaveQuestion = () => {
+	effect(() => {
+		const field = replyInput();
+		if (focusInput() === replyTarget(id) && field) {
+			field.focus();
+			focusInput.set(null);
+		}
+	});
+	// Escape leaves a field, keeps its draft and returns to the card.
+	const leaveField = () => {
 		input()?.blur();
+		replyInput()?.blur();
 		anchors.get(id)?.()?.focus();
 	};
+	const bindEscape = () => {
+		stopEscape?.();
+		stopEscape = keymap.bind("escape", leaveField, { when: "always" });
+	};
+	const unbindEscape = () => {
+		stopEscape?.();
+		stopEscape = null;
+		props.day.feed.flushDrafts();
+	};
+	const meta = () =>
+		[d().missionTitle, d().effort]
+			.filter(Boolean)
+			.map((part) => `· ${part}`)
+			.join(" ");
+	const showOptions = () => d().options.length > (d().reply ? 0 : 1);
 
 	return (
 		<View testID="decision" class="gap-4 rounded-2xl border border-border-strong bg-card px-6 py-6">
@@ -147,7 +188,7 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 					>
 						{d().reason}
 					</Text>
-					<Text class="text-xs text-muted-foreground">{`· ${d().missionTitle} · ${d().effort}`}</Text>
+					<Text class="text-xs text-muted-foreground">{meta()}</Text>
 					<View class="flex-1" />
 					<If when={props.count > 1}>
 						<Text class="text-xs text-faint">{`${props.index + 1} of ${props.count}`}</Text>
@@ -155,48 +196,61 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 				</View>
 			</View>
 
-			<Text class="text-sm leading-relaxed text-card-foreground">
-				{helpOpen(id, "simpler") ? d().simpler : d().context}
-			</Text>
+			<If when={(helpOpen(id, "simpler") && d().simpler) || d().context}>
+				<Text class="text-sm leading-relaxed text-card-foreground">
+					{helpOpen(id, "simpler") && d().simpler ? d().simpler : d().context}
+				</Text>
+			</If>
 
-			<View class="flex-row flex-wrap gap-1.5">
-				<HelpChip
-					label="Say it simpler"
-					shortcut="S"
-					anchor={(node) => {
-						firstChip = node;
-					}}
-					pressed={helpOpen(id, "simpler")}
-					onChange={() => toggleHelp(d(), "simpler")}
-				/>
-				<HelpChip
-					label="More context"
-					shortcut="C"
-					pressed={helpOpen(id, "more")}
-					onChange={() => toggleHelp(d(), "more")}
-				/>
-				<If when={d().visual}>
-					<HelpChip
-						label="Show me"
-						shortcut="V"
-						pressed={helpOpen(id, "visual")}
-						onChange={() => toggleHelp(d(), "visual")}
-					/>
-				</If>
-				<HelpChip
-					label="Ask a question"
-					shortcut="Q"
-					pressed={helpOpen(id, "ask")}
-					onChange={() => toggleHelp(d(), "ask")}
-				/>
-				<If when={d().details}>
-					<HelpChip
-						label="What was pushed"
-						pressed={helpOpen(id, "details")}
-						onChange={() => toggleHelp(d(), "details")}
-					/>
-				</If>
-			</View>
+			<If
+				when={d().helpUnavailable}
+				else={
+					<View class="flex-row flex-wrap gap-1.5">
+						<HelpChip
+							label="Say it simpler"
+							shortcut="S"
+							anchor={(node) => {
+								firstChip = node;
+							}}
+							pressed={helpOpen(id, "simpler")}
+							onChange={() => toggleHelp(d(), "simpler")}
+						/>
+						<If when={d().more.length > 0}>
+							<HelpChip
+								label="More context"
+								shortcut="C"
+								pressed={helpOpen(id, "more")}
+								onChange={() => toggleHelp(d(), "more")}
+							/>
+						</If>
+						<If when={d().visual}>
+							<HelpChip
+								label="Show me"
+								shortcut="V"
+								pressed={helpOpen(id, "visual")}
+								onChange={() => toggleHelp(d(), "visual")}
+							/>
+						</If>
+						<HelpChip
+							label="Ask a question"
+							shortcut="Q"
+							pressed={helpOpen(id, "ask")}
+							onChange={() => toggleHelp(d(), "ask")}
+						/>
+						<If when={d().details}>
+							<HelpChip
+								label="What was pushed"
+								pressed={helpOpen(id, "details")}
+								onChange={() => toggleHelp(d(), "details")}
+							/>
+						</If>
+					</View>
+				}
+			>
+				<Text testID="help-unavailable" class="text-xs text-faint">
+					{d().helpUnavailable ?? ""}
+				</Text>
+			</If>
 
 			<If when={helpOpen(id, "more")}>
 				<View class="gap-1.5 rounded-xl bg-muted px-4 py-3">
@@ -220,7 +274,7 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 				</View>
 			</If>
 
-			<If when={helpOpen(id, "ask")}>
+			<If when={helpOpen(id, "ask") && !d().helpUnavailable}>
 				<View class="gap-3 rounded-xl bg-muted px-4 py-3">
 					<Each of={d().answers} key={(a) => a.id}>
 						{(a) => <AnswerLine day={props.day} decision={d()} answer={a()} />}
@@ -229,17 +283,14 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 						<Input
 							testID="question"
 							ref={(node) => input.set(node)}
-							value={drafts()[id] ?? ""}
-							onChange={({ value }) => setFor(drafts, id, value)}
+							value={questionText(d())}
+							onChange={({ value }) => {
+								setFor(drafts, id, value);
+								saveDecisionDraft(props.day, d());
+							}}
 							onSubmit={() => void ask(props.day, d())}
-							onFocus={() => {
-								stopEscape?.();
-								stopEscape = keymap.bind("escape", leaveQuestion, { when: "always" });
-							}}
-							onBlur={() => {
-								stopEscape?.();
-								stopEscape = null;
-							}}
+							onFocus={bindEscape}
+							onBlur={unbindEscape}
 							submitBehavior="submit"
 							placeholder="Ask about this decision"
 							class="min-h-8 flex-1 rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground focus:border-primary"
@@ -264,7 +315,7 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 
 			<Text class="text-xs leading-relaxed text-muted-foreground">{d().boundary}</Text>
 
-			<If when={d().options.length > 1}>
+			<If when={showOptions()}>
 				<RadioGroup class="gap-1">
 					<Each of={d().options} key={(o) => o.id}>
 						{(o) => (
@@ -272,7 +323,7 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 								ref={(node) => radios.set(o().id, node)}
 								checked={chosen(d()) === o().id}
 								disabled={!idle()}
-								onChange={() => pick(d(), o().id)}
+								onChange={() => choose(props.day, d(), o().id)}
 								class="group flex-row gap-3 rounded-xl px-3 py-2.5 checked:bg-selection hover:bg-accent checked:hover:bg-selection disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-ring/40"
 							>
 								<View class="mt-0.5 size-4 items-center justify-center rounded-full border border-input group-checked:border-primary">
@@ -282,10 +333,14 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 									<View class="flex-row flex-wrap items-baseline gap-2">
 										<Text class="text-sm font-medium text-card-foreground">{o().label}</Text>
 										<If when={o().recommended}>
-											<Text class="text-xs text-muted-foreground">Recommended</Text>
+											<Text class="text-xs text-muted-foreground">
+												{d().reply ? "Suggested" : "Recommended"}
+											</Text>
 										</If>
 									</View>
-									<Text class="text-xs text-muted-foreground">{o().detail}</Text>
+									<If when={o().detail}>
+										<Text class="text-xs text-muted-foreground">{o().detail}</Text>
+									</If>
 								</View>
 							</Radio>
 						)}
@@ -293,6 +348,28 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 				</RadioGroup>
 			</If>
 
+			<If when={d().reply}>
+				<Input
+					testID="reply"
+					ref={(node) => replyInput.set(node)}
+					value={replyText(d())}
+					disabled={!idle()}
+					onChange={({ value }) => {
+						setFor(replies, id, value);
+						saveDecisionDraft(props.day, d());
+					}}
+					onFocus={bindEscape}
+					onBlur={unbindEscape}
+					placeholder={d().options.length > 0 ? "Add detail, or answer in your own words" : "Your answer"}
+					class="min-h-8 rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground focus:border-primary"
+				/>
+			</If>
+
+			<If when={d().draft.unsaved}>
+				<Text role="alert" class="text-sm text-needs-ink">
+					Pilot could not save this draft. It stays here; copy it before you close Pilot.
+				</Text>
+			</If>
 			<If when={pickChanged(d())}>
 				<Text role="alert" class="text-sm text-needs-ink">
 					This decision changed after you picked. Read it again and pick an answer.
@@ -317,7 +394,10 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 							primary
 							label={commitLabel(d())}
 							shortcut={COMMIT_KEY}
-							disabled={!idle() || chosen(d()) === ""}
+							anchor={(node) => {
+								commitButton = node;
+							}}
+							disabled={!idle() || !canSend(d())}
 							onPress={() => void decide(props.day, d())}
 						/>
 					}
@@ -326,15 +406,28 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 						primary
 						label="Check again"
 						shortcut={COMMIT_KEY}
+						anchor={(node) => {
+							commitButton = node;
+						}}
 						disabled={d().delivery === "checking"}
 						onPress={() => void checkDecision(props.day, d())}
 					/>
 				</If>
 				<If when={props.later}>
-					<Action label="Later" shortcut="L" disabled={!idle()} onPress={() => laterDecision(props.day, d())} />
+					<Action
+						label="Later"
+						shortcut="L"
+						anchor={(node) => {
+							laterButton = node;
+						}}
+						disabled={!idle()}
+						onPress={() => laterDecision(props.day, d())}
+					/>
 				</If>
 				<View class="flex-1" />
-				<Text class="text-xs text-faint">{`${COMMIT_KEY} ${commitLabel(d())} · J K next · S C Q help`}</Text>
+				<Text class="text-xs text-faint">
+					{`${COMMIT_KEY} ${commitLabel(d())} · J K next${d().helpUnavailable ? "" : " · S C Q help"}${d().reply ? " · 0 own words" : ""}`}
+				</Text>
 			</View>
 
 			<If when={d().evidence.length > 0}>

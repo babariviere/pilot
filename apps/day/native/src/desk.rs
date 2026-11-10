@@ -164,6 +164,9 @@ impl Desk {
             &self.freshness.1,
             self.now,
         );
+        // Mock decisions and actions share the missions' read. The native
+        // feed replaces this with the attention read's own freshness.
+        self.today.attention = self.today.freshness.clone();
         let groups = match &self.overview {
             Some(overview) => project::missions(&Inputs {
                 overview,

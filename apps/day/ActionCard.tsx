@@ -1,15 +1,26 @@
 // An action only the user can take outside Pilot, such as an upload. It is
 // not a decision or an approval: the card says what to do, why Pilot needs
 // the user, the exact file and where it goes, and waits for the user's own
-// report. Opening the link or the file reports nothing.
+// report. Opening the link or the file reports nothing. What the user types
+// is kept as a draft for the revision shown; words written before Pilot
+// changed the request are shown as history and count only once sent again.
 import { cleanup, effect, keymap, signal, Text, View, type ViewRef } from "nsh";
 import { Input } from "nsh/base";
 import type { ActionAsk, HumanAction } from "pilot-day/native";
-import { actionNeedsCheck, checkAction, complete, laterAction, saveProgress } from "./commands";
+import {
+	actionNeedsCheck,
+	checkAction,
+	complete,
+	laterAction,
+	openLink,
+	saveActionDraft,
+	saveProgress,
+	useEarlier,
+} from "./commands";
 import { COMMIT_KEY } from "./DecisionCard";
 import type { Day } from "./day";
-import { Action, Mark } from "./ui";
-import { anchors, focusFront, focusInput, messages, reports, setFor } from "./view";
+import { Action, InlineAction, Mark } from "./ui";
+import { anchors, focusFront, focusInput, messages, reports, reportText, setFor } from "./view";
 
 function verb(asked: ActionAsk | null | undefined): string {
 	if (asked === "complete") return "your report";
@@ -48,7 +59,7 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 	const a = () => props.action;
 	const id = props.action.id;
 	const idle = () => a().delivery === "idle";
-	const text = () => reports()[id] ?? "";
+	const text = () => reportText(a());
 	const input = signal<ViewRef | null>(null);
 	let stopEscape: (() => void) | null = null;
 
@@ -60,6 +71,8 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 	cleanup(() => {
 		anchors.delete(id);
 		stopEscape?.();
+		// Leaving the card saves its words now rather than after the pause.
+		props.day.feed.flushDrafts();
 	});
 	effect(() => {
 		if (focusFront() && laterButton) {
@@ -78,6 +91,11 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 		input()?.blur();
 		laterButton?.focus();
 	};
+	const meta = () =>
+		[a().origin.missionTitle || a().origin.chatTitle, a().effort]
+			.filter(Boolean)
+			.map((part) => `· ${part}`)
+			.join(" ");
 
 	return (
 		<View testID="action" class="gap-4 rounded-2xl border border-border-strong bg-card px-6 py-6">
@@ -90,7 +108,7 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 					<Text class="text-xs text-needs-ink">
 						{a().state === "deferred" ? "Action for you · put off" : "Action for you"}
 					</Text>
-					<Text class="text-xs text-muted-foreground">{`· ${a().origin.missionTitle || a().origin.chatTitle} · ${a().effort}`}</Text>
+					<Text class="text-xs text-muted-foreground">{meta()}</Text>
 					<View class="flex-1" />
 					<If when={props.count > 1}>
 						<Text class="text-xs text-faint">{`${props.index + 1} of ${props.count}`}</Text>
@@ -105,7 +123,9 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 			</If>
 
 			<View class="gap-1.5">
-				<Text class="text-sm font-medium text-card-foreground">{a().nextStep}</Text>
+				<If when={a().nextStep}>
+					<Text class="text-sm font-medium text-card-foreground">{a().nextStep}</Text>
+				</If>
 				<Text class="text-sm leading-relaxed text-muted-foreground">{a().why}</Text>
 			</View>
 
@@ -120,11 +140,37 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 				</Each>
 				<Fact label="Where">{`${a().destination.target} on ${a().destination.label}`}</Fact>
 				<Fact label="Link">{a().destination.link}</Fact>
+				<If when={a().canOpen}>
+					<View class="flex-row gap-3">
+						<View class="w-20" />
+						<InlineAction testID="open-link" label="Open link" onPress={() => void openLink(props.day, a())} />
+					</View>
+				</If>
 				<Fact label="Asked by">{`“${a().origin.chatTitle}” · ${a().origin.chatLink}`}</Fact>
 			</View>
 
 			<If when={a().progress}>
 				<Text class="text-sm text-muted-foreground">{`Saved progress: ${a().progress}`}</Text>
+			</If>
+
+			<If when={a().earlierReport}>
+				<View class="gap-1">
+					<Text class="text-xs text-faint">
+						Your words from before Pilot changed the request. They do not count as a report.
+					</Text>
+					<View class="flex-row flex-wrap items-baseline gap-x-1.5">
+						<Text testID="earlier-report" class="text-sm text-muted-foreground">
+							{a().earlierReport ?? ""}
+						</Text>
+						<If when={idle()}>
+							<InlineAction
+								testID="use-earlier"
+								label="Use these words"
+								onPress={() => useEarlier(props.day, a())}
+							/>
+						</If>
+					</View>
+				</View>
 			</If>
 
 			<View class="gap-1.5">
@@ -137,7 +183,10 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 					testID="report"
 					ref={(node) => input.set(node)}
 					value={text()}
-					onChange={({ value }) => setFor(reports, id, value)}
+					onChange={({ value }) => {
+						setFor(reports, id, value);
+						saveActionDraft(props.day, a());
+					}}
 					onFocus={() => {
 						stopEscape?.();
 						stopEscape = keymap.bind("escape", leave, { when: "always" });
@@ -145,6 +194,7 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 					onBlur={() => {
 						stopEscape?.();
 						stopEscape = null;
+						props.day.feed.flushDrafts();
 					}}
 					placeholder={a().needs[0] ?? "What you did"}
 					class="min-h-8 rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground focus:border-primary"
@@ -152,6 +202,11 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 				<Text class="text-xs text-faint">Opening the link or the file does not count. Only your report does.</Text>
 			</View>
 
+			<If when={a().draft.unsaved}>
+				<Text role="alert" class="text-sm text-needs-ink">
+					Pilot could not save these words. They stay here; copy them before you close Pilot.
+				</Text>
+			</If>
 			<If when={deliveryLine(a())}>
 				<Text role="alert" class="text-sm text-muted-foreground">
 					{deliveryLine(a())}

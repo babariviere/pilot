@@ -1,6 +1,8 @@
-// State the screen owns: what the user is looking at and typing. Rust
-// never sees it until an intent carries it. Keyed by decision or action
-// id, so it survives reordering, recycling and hot updates of the screens.
+// State the screen owns: what the user is looking at and typing. Keyed by
+// decision or action id, so it survives reordering, recycling and hot
+// updates of the screens. Picks and unsent words also go to Rust as drafts
+// (commands.ts), which saves them for the exact revision shown; after a
+// restart the screen starts from those drafts.
 import { type Signal, signal, type ViewRef } from "nsh";
 import type { Decision, HumanAction, Today } from "pilot-day/native";
 
@@ -16,6 +18,8 @@ export const picks = signal<Record<string, Pick>>({});
 export const help = signal<Record<string, Help[]>>({});
 /** Unsent questions, exactly as typed, by decision. */
 export const drafts = signal<Record<string, string>>({});
+/** Unsent answers or detail in the user's own words, exactly as typed, by decision. */
+export const replies = signal<Record<string, string>>({});
 /** Unsent action notes and reports, exactly as typed, by action. */
 export const reports = signal<Record<string, string>>({});
 /** The last message an intent returned, by decision or action. */
@@ -28,6 +32,26 @@ export const focused = signal<string | null>(null);
 export const focusFront = signal(false);
 /** Set to the id whose question or report input should take the keyboard focus once. */
 export const focusInput = signal<string | null>(null);
+
+/** The focus target of a decision's own-words field. */
+export function replyTarget(id: string): string {
+	return `${id}#reply`;
+}
+
+/** The question typed on `decision`: this run's text, else its saved draft. */
+export function questionText(decision: Decision): string {
+	return drafts()[decision.id] ?? decision.draft.question;
+}
+
+/** The user's own words on `decision`: this run's text, else its saved draft. */
+export function replyText(decision: Decision): string {
+	return replies()[decision.id] ?? decision.draft.text;
+}
+
+/** The notes or report typed on `action`: this run's text, else its saved draft. */
+export function reportText(action: HumanAction): string {
+	return reports()[action.id] ?? action.draft.text;
+}
 
 /** The mission whose overview is open, or null for Today. */
 export const route = signal<string | null>(null);
@@ -77,16 +101,20 @@ export function pickChanged(decision: Decision): boolean {
 
 /**
  * The option the card shows as chosen: what was sent, else the user's pick
- * on this revision, else Pilot's recommendation. A pick on an earlier
- * revision chooses nothing: the user picks again.
+ * on this revision (this run's, else the saved draft's), else Pilot's
+ * recommendation. A pick on an earlier revision chooses nothing: the user
+ * picks again. A decision that takes the user's own words preselects
+ * nothing: an agent's suggestion is not an answer until the user picks it.
  */
 export function chosen(decision: Decision): string {
 	if (decision.sentOption) return decision.sentOption;
-	const picked = picks()[decision.id];
+	const saved = decision.draft.pick;
+	const picked = picks()[decision.id] ?? (saved ? { option: saved, revision: decision.revision } : undefined);
 	if (picked) {
 		if (picked.revision !== decision.revision) return "";
 		if (decision.options.some((o) => o.id === picked.option)) return picked.option;
 	}
+	if (decision.reply) return "";
 	const recommended = decision.options.find((o) => o.recommended) ?? decision.options[0];
 	return recommended ? recommended.id : "";
 }

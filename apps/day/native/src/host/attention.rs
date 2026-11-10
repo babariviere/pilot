@@ -243,6 +243,18 @@ impl NativeHost {
             .get(&serde_json::to_string(key).ok()?)
             .cloned()
     }
+    /// Every saved draft of this source, current and earlier revisions.
+    /// Earlier revisions are history; they never pick or report anything.
+    pub fn attention_drafts(&self) -> Vec<(DraftKey, Value)> {
+        self.0
+            .shared
+            .attention_drafts
+            .lock()
+            .expect("attention drafts poisoned")
+            .iter()
+            .filter_map(|(k, v)| Some((serde_json::from_str(k).ok()?, v.clone())))
+            .collect()
+    }
     /// Runs on the existing worker. Completion means the exact draft crossed fsync.
     pub fn save_attention_draft(
         &self,
@@ -254,6 +266,10 @@ impl NativeHost {
     pub fn read_attention(
         &self,
     ) -> async_channel::Receiver<Result<crate::model::IntentOutcome, Error>> {
+        self.0
+            .shared
+            .attention_wanted
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         self.request(super::Work::AttentionRead)
     }
     /// Rust-only typed adapter input. Host adds identity and a fresh operation before fsync/send.
@@ -405,12 +421,16 @@ pub(super) async fn handle(
                 .ok_or(Error::Stale)?;
             qualifies(&request, &shown)?;
             // An unresolved operation for the same subject blocks a second send, even after reopen.
+            // Navigation changes no record and has no receipt to look up, so an
+            // uncertain open never blocks the user's own report.
             let target = subject(&request);
-            if journal
-                .attention
-                .values()
-                .any(|r| r.source == t.source && r.pending() && subject(&r.request) == target)
-            {
+            if journal.attention.values().any(|r| {
+                r.source == t.source
+                    && r.pending()
+                    && r.request["kind"] != "resource"
+                    && request["kind"] != "resource"
+                    && subject(&r.request) == target
+            }) {
                 return Err(Error::Unknown);
             }
             let id = uuid::Uuid::new_v4().to_string();

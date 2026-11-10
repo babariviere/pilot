@@ -93,6 +93,7 @@ pub fn world(scenario: Scenario) -> World {
         Scenario::Actions => with_actions(),
         Scenario::FirstUse => first_use(),
         Scenario::Evening => evening(),
+        Scenario::Asks => asks(),
     }
 }
 
@@ -796,6 +797,29 @@ fn quiet() -> World {
         lost_answers: Vec::new(),
         actions: Actions::default(),
     }
+}
+
+/// The quiet world with one agent question shaped like a native card: it
+/// takes the user's own words and Pilot has no help to offer for it.
+fn asks() -> World {
+    let mut world = quiet();
+    world.today.headline = s("One question needs you.");
+    world.today.decisions = vec![Decision {
+        title: s("Which package should go to the store?"),
+        reason: s("Asks for your answer"),
+        context: s("The reviewed zip is ready. A rebuild would change its bytes."),
+        boundary: s(
+            "Only you can answer. Pilot sends your answer to “Release chat” once, exactly as you write it.",
+        ),
+        options: vec![
+            opt("option-1", "Reviewed package", "", true),
+            opt("option-2", "Rebuild", "", false),
+        ],
+        reply: true,
+        help_unavailable: Some(s(crate::attention_host::NO_HELP)),
+        ..decision("ask1", DecisionKind::Choice, "native", "Native desktop app")
+    }];
+    world
 }
 
 fn trouble() -> World {

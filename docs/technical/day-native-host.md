@@ -21,8 +21,8 @@ mock feed. It does not export selection, HTTP, paths, credentials or arbitrary
 requests to TSX. Native navigation calls `host.read_mission(id)` to fetch exact
 detail, and `host.refresh()` is passive. The eventual native bootstrap must pass
 this feed into the screen; the CLI mock constructor is deliberately unchanged.
-Attention has a separate Rust-only transport below. The current TodayFeed still refuses attention
-intents rather than silently using its mock; card projection and intent binding are a separate change.
+Attention has a separate Rust-only transport below. `TodayFeed::from_host` projects it into the
+decision and action cards ([attention cards](#attention-cards)).
 
 The shared `apps/native-daemon/credentials.rs` reader is the existing Local
 private-file contract, used by GPUI's scoped actions and Day. It checks the daemon
@@ -124,6 +124,39 @@ neither, advertises both as unavailable and never fabricates help. `completion` 
 current, durable **user-report** receipt only after resources and authority pass again. It grants no
 new authority and dispatches nothing. Opening/downloading, Later, saved drafts/progress and agent
 prose cannot produce that receipt; even a completed report is not verified publication.
+
+### Attention cards
+
+`native/src/attention_host.rs` maps the attention read to Today's cards with pure functions, and
+`attention_feed.rs` binds them to `TodayFeed::from_host`. An agent's ordinary question becomes a
+decision card (`question-<session>-<entry>`, revision 1, since an entry never changes) that takes a
+pick, the user's own words or both, sent once as the chat composers do (label, blank line, words).
+Nothing is preselected for it: a suggestion is not an answer. A human action keeps the record's
+revision. Requests are built from the latest host read and name the revision the screen showed; the
+host rechecks authority before and after its fsync, as above.
+
+- Drafts (pick, own words, help question, action notes) go to `save_attention_draft` under the exact
+  draft key. The feed saves after a short pause or on `flushDrafts`, one at a time, so the ledger
+  grows slowly. `TodayFeed::close` (Rust only) queues unsaved drafts before the close fence; the host
+  writes queued drafts during its joined drain. A failed save stays on screen, marked unsaved.
+- The user's own Later on an action is a new revision: the feed moves the draft to it. A revision the
+  agent made leaves the old draft as read-only history (`earlierReport`), which counts only once sent.
+  Later on a question only reorders this run; nothing is sent.
+- Only an acknowledged receipt is success. A question with an accepted answer leaves the cards; a
+  report adds a note that says Pilot has not checked the result. A lost answer or report stays
+  Unknown, including after its question leaves the read or after restart; Check only looks it up.
+- Help stays unavailable while the daemon reports it so: the card says it once, and its keys and
+  intents send nothing. `openLink` needs the root's opener and reports nothing. A navigation request
+  never blocks the user's own report, since it changes no record and has no receipt to look up.
+- The attention read has its own freshness (`Today.attention`). The host reads it again on every
+  authoritative refresh once a feed asked for it. A failed or unsupported read is unavailable, never
+  an empty list, and attention errors no longer mark the missions' read stale.
+
+`native/tests/attention_feed.rs` drives the feed headlessly against the isolated daemon: drafts across
+safe close, restart and an agent's replacement, the user's Later, stale and exact completion, a lost
+completion settled only by lookup, an unconfirmed answer that is never resent, unavailable help and a
+permission-checked link that leaves the action pending. Continuation after a report and a help
+producer remain absent.
 
 Hidden tests exercise the real daemon/router, private native capability, SQLite, HTTP transport and
 native ledger, with synthetic current-question/input ports and no providers or real navigation.

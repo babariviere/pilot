@@ -2,17 +2,18 @@
 //! send. It has no transport, so the screen cannot reach a daemon through
 //! it.
 
-use std::{cell::RefCell, rc::Rc, time::Duration};
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc, time::Duration};
 
 use nsh_core::prelude::*;
 
 use crate::{
     actions::StartedAction,
+    attention_feed::Native,
     desk::{Desk, PULSE_COUNT, PULSE_EVERY},
     model::{
-        ActionCheck, ActionRef, AnswerRef, AskIntent, CompleteIntent, DecideIntent, DecisionRef,
-        IntentOutcome, MissionPage, MissionRef, PauseIntent, ProgressIntent, ResumeIntent,
-        Scenario, Today,
+        ActionAsk, ActionCheck, ActionRef, AnswerRef, AskIntent, CompleteIntent, DecideIntent,
+        DecisionRef, Draft, DraftIntent, IntentOutcome, MissionPage, MissionRef, OutcomeStatus,
+        PauseIntent, ProgressIntent, ReplyIntent, ResumeIntent, Scenario, Today,
     },
 };
 
@@ -28,6 +29,11 @@ type Listeners = Rc<RefCell<Vec<(u64, Callback<Today>)>>>;
 pub struct TodayFeed {
     desk: Desk,
     native: Option<crate::host::NativeHost>,
+    /// The native host's cards, drafts and this run's requests.
+    side: Option<Native>,
+    /// Mock drafts, by item, with the revision they were written on. Kept
+    /// for this run only; the native side saves them in the host.
+    drafts: BTreeMap<String, (u32, Draft)>,
     watch_task: Option<Spawned<()>>,
     listeners: Listeners,
     next_listener: u64,
@@ -48,9 +54,6 @@ impl TodayFeed {
         this: Instance<Self>,
         begin: impl FnOnce(&mut Desk) -> Result<StartedAction, IntentOutcome>,
     ) -> IntentOutcome {
-        if let Some(outcome) = this.with(Self::native_attention_unavailable) {
-            return outcome;
-        }
         let started = this.with_mut(|feed| {
             let started = begin(&mut feed.desk);
             if started.is_ok() {
@@ -75,35 +78,66 @@ impl TodayFeed {
         &self.desk
     }
 
-    fn native_attention_unavailable(&self) -> Option<IntentOutcome> {
-        self.native.as_ref().map(|host| IntentOutcome {
-            status: crate::model::OutcomeStatus::Rejected,
-            revision: host.snapshot().revision,
-            message: "Decision and action transport is not connected. Nothing was sent.".into(),
-        })
+    fn side(this: &Instance<Self>) -> Option<Native> {
+        this.with(|feed| feed.side.clone())
+    }
+
+    /// Puts the mock drafts on the items they were written for.
+    fn with_drafts(&self, mut today: Today) -> Today {
+        for d in &mut today.decisions {
+            if let Some((revision, draft)) = self.drafts.get(&d.id)
+                && *revision == d.revision
+            {
+                d.draft = draft.clone();
+            }
+        }
+        for a in &mut today.actions {
+            if let Some((revision, draft)) = self.drafts.get(&a.id)
+                && *revision == a.revision
+            {
+                a.draft = draft.clone();
+            }
+        }
+        today
+    }
+
+    /// Rust-only: how long native drafts wait for the next key before they
+    /// are saved. Tests with a manual clock use zero.
+    pub fn set_draft_delay(&self, delay: Duration) {
+        if let Some(side) = &self.side {
+            side.set_draft_delay(delay);
+        }
+    }
+
+    /// Rust-only safe close for the native bootstrap: queues every unsaved
+    /// draft on the host, then closes and joins it. Await it before quit or
+    /// before replacing the selection.
+    pub fn close(&self) -> Option<async_channel::Receiver<Result<(), crate::host::Error>>> {
+        self.side.as_ref().map(Native::close)
     }
 
     /// Native-only factory, called under the app root owner. Never exported to TSX.
     /// Selection and credentials stay with the trusted native bootstrap.
     pub fn from_host(host: crate::host::NativeHost) -> Self {
         let listeners: Listeners = Rc::default();
-        let weak = Rc::downgrade(&listeners);
         let changes = host.changes();
-        let source = host.clone();
+        let side = Native::new(host.clone(), listeners.clone());
+        let weak = Rc::downgrade(&listeners);
+        let source = side.clone();
         let watch_task = spawn(async move {
+            source.reread().await;
             while changes.recv().await.is_ok() {
-                let Some(listeners) = weak.upgrade() else {
+                if weak.upgrade().is_none() {
                     break;
-                };
-                let today = source.snapshot();
-                for (_, listener) in listeners.borrow().iter() {
-                    listener.post(today.clone());
                 }
+                source.publish();
             }
         });
         Self {
             desk: Desk::native(),
             native: Some(host),
+            side: Some(side),
+            drafts: BTreeMap::new(),
             watch_task: Some(watch_task),
             listeners,
             next_listener: 0,
@@ -127,8 +161,9 @@ impl Drop for TodayFeed {
         if let Some(task) = self.watch_task.take() {
             task.cancel();
         }
-        if let Some(host) = &self.native {
-            let _ = host.close();
+        if let Some(side) = &self.side {
+            // Unsaved drafts are queued before the close fence.
+            let _ = side.close();
         }
     }
 }
@@ -142,6 +177,8 @@ impl TodayFeed {
             desk: Desk::new(scenario.unwrap_or_default()),
             native: None,
             watch_task: None,
+            side: None,
+            drafts: BTreeMap::new(),
             listeners: Rc::default(),
             next_listener: 0,
             latency: MOCK_LATENCY,
@@ -150,9 +187,10 @@ impl TodayFeed {
 
     /// The read model now.
     pub fn snapshot(&self) -> Today {
-        self.native
-            .as_ref()
-            .map_or_else(|| self.desk.today().clone(), |h| h.snapshot())
+        match &self.side {
+            Some(side) => side.snapshot(),
+            None => self.with_drafts(self.desk.today().clone()),
+        }
     }
 
     /// Calls `listener` with the whole read model after every change, until
@@ -172,8 +210,15 @@ impl TodayFeed {
     /// Answers a decision with one of its options. Resolves once the
     /// coordinator confirms, or with `unknown` when no confirmation came.
     pub async fn decide(this: Instance<Self>, intent: DecideIntent) -> IntentOutcome {
-        if let Some(outcome) = this.with(Self::native_attention_unavailable) {
-            return outcome;
+        if let Some(side) = Self::side(&this) {
+            return side
+                .answer(
+                    &intent.decision_id,
+                    intent.revision,
+                    Some(intent.option_id),
+                    "",
+                )
+                .await;
         }
         let started = this.with_mut(|feed| {
             let started = feed.desk.begin_decide(&intent);
@@ -194,10 +239,112 @@ impl TodayFeed {
         })
     }
 
+    /// Answers a decision in the user's own words, with or without one of
+    /// its options, at the revision shown. Only decisions that allow a reply
+    /// take it. Resolves once the answer is confirmed, or with `unknown`.
+    pub async fn reply(this: Instance<Self>, intent: ReplyIntent) -> IntentOutcome {
+        if let Some(side) = Self::side(&this) {
+            return side
+                .answer(
+                    &intent.decision_id,
+                    intent.revision,
+                    intent.option_id,
+                    &intent.text,
+                )
+                .await;
+        }
+        if intent.text.trim().is_empty()
+            && let Some(option_id) = intent.option_id
+        {
+            let decide = DecideIntent {
+                decision_id: intent.decision_id,
+                revision: intent.revision,
+                option_id,
+            };
+            return Self::decide(this, decide).await;
+        }
+        this.with(|feed| IntentOutcome {
+            status: OutcomeStatus::Rejected,
+            revision: feed.desk.today().revision,
+            message: "Mock data: answers in your own words need Pilot's service. Nothing was sent."
+                .into(),
+        })
+    }
+
+    /// Keeps what the user picked or wrote on one item, at the revision
+    /// shown. It never sends, answers or completes anything. Native drafts
+    /// are saved after a short pause and on `flushDrafts`, and come back after
+    /// a restart; a draft on an earlier revision picks nothing.
+    pub fn save_draft(&mut self, intent: DraftIntent) -> IntentOutcome {
+        if let Some(side) = &self.side {
+            return side.save_draft(&intent);
+        }
+        let today = self.desk.today();
+        let now = today.revision;
+        let revision = today
+            .decisions
+            .iter()
+            .find(|d| d.id == intent.item_id)
+            .map(|d| d.revision)
+            .or_else(|| {
+                today
+                    .actions
+                    .iter()
+                    .find(|a| a.id == intent.item_id)
+                    .map(|a| a.revision)
+            });
+        let outcome = move |status, message: &str| IntentOutcome {
+            status,
+            revision: now,
+            message: message.into(),
+        };
+        if revision != Some(intent.revision) {
+            return outcome(
+                OutcomeStatus::Stale,
+                "This changed. Your words stay on screen.",
+            );
+        }
+        self.drafts.insert(
+            intent.item_id,
+            (
+                intent.revision,
+                Draft {
+                    pick: intent.pick,
+                    text: intent.text,
+                    question: intent.question,
+                    unsaved: false,
+                },
+            ),
+        );
+        outcome(OutcomeStatus::Accepted, "")
+    }
+
+    /// Saves every waiting draft now, without the pause. Call it when a
+    /// field loses focus or the user moves on.
+    pub fn flush_drafts(&self) {
+        if let Some(side) = &self.side {
+            side.flush();
+        }
+    }
+
+    /// Opens an action's link for the user, when Pilot may. Rust names the
+    /// exact link the daemon pinned; opening it reports nothing.
+    pub async fn open_link(this: Instance<Self>, intent: ActionRef) -> IntentOutcome {
+        if let Some(side) = Self::side(&this) {
+            return side.open_link(&intent.action_id, intent.revision).await;
+        }
+        this.with(|feed| IntentOutcome {
+            status: OutcomeStatus::Rejected,
+            revision: feed.desk.today().revision,
+            message: "Pilot cannot open links here. Copy the link instead; this reports nothing."
+                .into(),
+        })
+    }
+
     /// Puts a decision at the end of the queue. It stays unanswered.
     pub fn later(&mut self, intent: DecisionRef) -> IntentOutcome {
-        if let Some(outcome) = self.native_attention_unavailable() {
-            return outcome;
+        if let Some(side) = &self.side {
+            return side.later(&intent.decision_id, intent.revision);
         }
         let before = self.desk.today().revision;
         let outcome = self.desk.later(&intent);
@@ -209,8 +356,8 @@ impl TodayFeed {
 
     /// Reads whether an unconfirmed send or push landed. Never resends.
     pub async fn check(this: Instance<Self>, intent: DecisionRef) -> IntentOutcome {
-        if let Some(outcome) = this.with(Self::native_attention_unavailable) {
-            return outcome;
+        if let Some(side) = Self::side(&this) {
+            return side.check_answer_of(&intent.decision_id).await;
         }
         let started = this.with_mut(|feed| {
             let started = feed.desk.begin_check(&intent);
@@ -235,8 +382,10 @@ impl TodayFeed {
     /// screen showed. The question joins the decision's `answers` at once,
     /// as asking; the answer follows. Help never answers the decision.
     pub async fn ask(this: Instance<Self>, intent: AskIntent) -> IntentOutcome {
-        if let Some(outcome) = this.with(Self::native_attention_unavailable) {
-            return outcome;
+        if let Some(side) = Self::side(&this) {
+            return side
+                .ask(&intent.decision_id, intent.revision, &intent.question)
+                .await;
         }
         let started = this.with_mut(|feed| {
             let started = feed.desk.begin_ask(&intent);
@@ -260,8 +409,8 @@ impl TodayFeed {
     /// Reads whether a question whose answer was lost has a saved answer.
     /// Never asks again.
     pub async fn check_answer(this: Instance<Self>, intent: AnswerRef) -> IntentOutcome {
-        if let Some(outcome) = this.with(Self::native_attention_unavailable) {
-            return outcome;
+        if let Some(side) = Self::side(&this) {
+            return side.check_help(&intent.answer_id).await;
         }
         let started = this.with_mut(|feed| {
             let started = feed.desk.begin_check_answer(&intent);
@@ -285,11 +434,26 @@ impl TodayFeed {
     /// Saves the user's progress on an action, named at the revision the
     /// screen showed. It does not complete the action.
     pub async fn save_progress(this: Instance<Self>, intent: ProgressIntent) -> IntentOutcome {
+        if let Some(side) = Self::side(&this) {
+            return side
+                .act(
+                    &intent.action_id,
+                    intent.revision,
+                    ActionAsk::Progress,
+                    &intent.progress,
+                )
+                .await;
+        }
         Self::send_action(this, |desk| desk.begin_progress(&intent)).await
     }
 
     /// Puts an action off. It still waits for the user.
     pub async fn action_later(this: Instance<Self>, intent: ActionRef) -> IntentOutcome {
+        if let Some(side) = Self::side(&this) {
+            return side
+                .act(&intent.action_id, intent.revision, ActionAsk::Later, "")
+                .await;
+        }
         Self::send_action(this, |desk| desk.begin_action_later(&intent)).await
     }
 
@@ -297,14 +461,24 @@ impl TodayFeed {
     /// user's report, not as proof that the action worked. A lost answer
     /// is `unknown`, and only `checkAction` can settle it.
     pub async fn complete(this: Instance<Self>, intent: CompleteIntent) -> IntentOutcome {
+        if let Some(side) = Self::side(&this) {
+            return side
+                .act(
+                    &intent.action_id,
+                    intent.revision,
+                    ActionAsk::Complete,
+                    &intent.report,
+                )
+                .await;
+        }
         Self::send_action(this, |desk| desk.begin_complete(&intent)).await
     }
 
     /// Reads whether an action request whose answer was lost landed. Never
     /// sends it again.
     pub async fn check_action(this: Instance<Self>, intent: ActionCheck) -> IntentOutcome {
-        if let Some(outcome) = this.with(Self::native_attention_unavailable) {
-            return outcome;
+        if let Some(side) = Self::side(&this) {
+            return side.check_action(&intent.action_id).await;
         }
         let started = this.with_mut(|feed| {
             let started = feed.desk.begin_check_action(&intent);

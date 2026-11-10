@@ -1,5 +1,6 @@
 /** Hidden native transport fixture. Production HTTP/SQLite with no providers or live navigation. */
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -117,6 +118,21 @@ for await (const line of createInterface({ input: process.stdin })) {
 	if (cmd.action === "stop")
 		f.session = { ...f.session, inputGeneration: (f.session.inputGeneration ?? 0) + 1, outcome: "stopped" };
 	if (cmd.action === "restart") await f.restart();
+	if (cmd.action === "replace") {
+		// The asking agent replaces the request through the same boundary: a new revision.
+		const current = (await f.read()).actions.find((a) => a.record.id === "upload")!;
+		const { id, revision, digest } = current.record;
+		const r = await f.command(
+			{
+				kind: "replace",
+				operationId: randomUUID(),
+				expected: { id, revision, digest },
+				content: { ...current.record.content, action: "Upload reviewed.zip, checked again" },
+			},
+			current.authorityDigest,
+		);
+		if (!r.ok) throw new Error(JSON.stringify(r));
+	}
 	if (cmd.action === "identity") await writeFile(join(f.home, "daemon-id"), "changed\n");
 	if (cmd.action === "hold") hold = true;
 	if (cmd.action === "waitEntered" && posts === 0)
