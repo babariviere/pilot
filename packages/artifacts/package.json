@@ -13,7 +13,7 @@
 		"@pilot/protocol": "workspace:*",
 		"glslang-wasm-validator": "0.1.0",
 		"naga-wasm": "30.2.0",
-		"quickjs-wasi": "3.6.3",
-		"typebox": "1.4.4"
+		"quickjs-wasi": "3.6.4",
+		"typebox": "1.4.6"
 	}
 }
