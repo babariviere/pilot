@@ -7,153 +7,153 @@ importers:
     configDependencies: {}
     packageManagerDependencies:
       pnpm:
-        specifier: 12.16.1
-        version: 12.16.1
+        specifier: 12.18.0
+        version: 12.18.0
 
 packages:
 
-  '@pnpm/exe.android-arm64@12.16.1':
-    resolution: {integrity: sha512-PKf78Ew+i0CBYf0Xc+eMcqQiqyBT+u8XCVg1F5roc98/6wWfdYlWhrUMmEBiKWaJ3JqHxrtt8l1NwZ7qfJt2/Q==}
+  '@pnpm/exe.android-arm64@12.18.0':
+    resolution: {integrity: sha512-fOF6IwgvnUKEmVedGqiAsNPfN2Ry8GvaqzSQOiF3RJFbpBfPKO/6YT54s1GjToyYinRxw9preHHPe4y2N3SzhA==}
     cpu: [arm64]
     os: [android]
 
-  '@pnpm/exe.android-x64@12.16.1':
-    resolution: {integrity: sha512-xdu7gMbB98pdvhwMeA6612Of515FDlRUtfA/1f7nWPZfPLnEdSRBO2u+1N0XBtQ/ennhPH/lrxB1gC6gnR/cdg==}
+  '@pnpm/exe.android-x64@12.18.0':
+    resolution: {integrity: sha512-6OiolnaCsB3/GcJ9XNrenbUH3zFHRJ+5QynrMUUEyThbgnnCzWxa199hpQlOmxN4rAXuYQ0IYgWFNUZxyzg31Q==}
     cpu: [x64]
     os: [android]
 
-  '@pnpm/exe.darwin-arm64@12.16.1':
-    resolution: {integrity: sha512-pVbmIIbhixiLvADLu1WA3TaW8FZy/D72R1De27WbbFx8/2mxvnsTyFVm4fO9kjpjMY7RzJd48CiQ96p8fO3ebQ==}
+  '@pnpm/exe.darwin-arm64@12.18.0':
+    resolution: {integrity: sha512-zkq+4YzVIX39ETYLyC3W7LY7MpHEU/J3nRhHl4i2yPld2Cf2+rEKRh3ejJ4AmaQ77HHJLCktY4Z3jq0fpcxFXg==}
     cpu: [arm64]
     os: [darwin]
 
-  '@pnpm/exe.darwin-x64@12.16.1':
-    resolution: {integrity: sha512-xZvQBFqcZjO7vFKTK3XsJpqY6lnBL9EWSLCzVUPq3kZ94+D96gwJCa76xxGNK8Cj32f4eeM91Qg+yNRR4sRpDw==}
+  '@pnpm/exe.darwin-x64@12.18.0':
+    resolution: {integrity: sha512-qMsL9qx92unOTa6hgkfiTJv8ceZaTx0IQg7InhYDVX2ZrTECujaVEEVypnJK5m3eGUsP1KD7Y4qIgleCwfRsYw==}
     cpu: [x64]
     os: [darwin]
 
-  '@pnpm/exe.freebsd-x64@12.16.1':
-    resolution: {integrity: sha512-zTtunfi9mBhRXiXEJYfwiJj0tk7MgTSfqDSRh+Az9FZ9THazVIiQiVNS8jpcsftDOqu7LKNffQdjmgwHDThfUg==}
+  '@pnpm/exe.freebsd-x64@12.18.0':
+    resolution: {integrity: sha512-/9vy/4ms52cU4MjZ5NhHd6N2d9L9W0kARf5/ff2tweAHu0VeUzs/0qp/7ZHFuddm2Wa/m0AKQoPum9AVUCqKsw==}
     cpu: [x64]
     os: [freebsd]
 
-  '@pnpm/exe.linux-arm64-musl@12.16.1':
-    resolution: {integrity: sha512-BJ3mOmcmQgcUo92Ee/WfEOt1pRiv3y2MMAkhEiYHd85UiPpHTfFhv+SpCbALmfExzXk3UlaRtMYwHlkQymc4VA==}
+  '@pnpm/exe.linux-arm64-musl@12.18.0':
+    resolution: {integrity: sha512-Vp+TIMPPyackVCXkOdEKH/RmAn/r07EcIyrgZYQK7VrkksqZOie0GnWIx+85mPqeFEYCRtXIZAFJ9L4ceTndDg==}
     cpu: [arm64]
     os: [linux]
     libc: [musl]
 
-  '@pnpm/exe.linux-arm64@12.16.1':
-    resolution: {integrity: sha512-JaRd5gNxwdNGBBkrZFt8bknrK4YmHVJBW0JMhUQ0fJ0dEYp6C2GT9ExaCqOO8EwYEyqM+jpKgJIK+8WFaJy3ew==}
+  '@pnpm/exe.linux-arm64@12.18.0':
+    resolution: {integrity: sha512-2dpyVBCHT+FfpuQh9i+7MXAqNWYLCvD5vYr5p6Eimxoga8USLnjbUgyj72AOrO0hjc5ri3TEFP3jiyBHjkSZpQ==}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@pnpm/exe.linux-ppc64@12.16.1':
-    resolution: {integrity: sha512-FnSV0Jv40S1cMv7vFNWwvu0X567Lec4L4HCRead3CFcD6zQDNbGw81s8N5bcKPahtPD9ApVuhsbmFCx4rw6RMw==}
+  '@pnpm/exe.linux-ppc64@12.18.0':
+    resolution: {integrity: sha512-BBOOOfNJ2QwIIya3eKqOjiN4WNTszfRz7HCvw9XggcT7+ftMjNP8XJ/GfW+ltCBeUFR9d8WBVsr2m/NLjX2CZQ==}
     cpu: [ppc64]
     os: [linux]
     libc: [glibc]
 
-  '@pnpm/exe.linux-riscv64@12.16.1':
-    resolution: {integrity: sha512-C1Sww4FN5IttD4atRRhAKmQtSGWVp04ZAKNxO8pfu2bkRPwOW+7v+2DH1Xs1W+kZYYpO86BYDvUcadefF+AgaQ==}
+  '@pnpm/exe.linux-riscv64@12.18.0':
+    resolution: {integrity: sha512-7kMN77xSOYJX8GPSH5RbNAc5oM61LMmcSUukDDUwllnZPXm8GRPskCNsTWy8SCw01Kr1FB+5SwGNMiTdiziLNQ==}
     cpu: [riscv64]
     os: [linux]
     libc: [glibc]
 
-  '@pnpm/exe.linux-s390x@12.16.1':
-    resolution: {integrity: sha512-kn2fautsTcxIMODoovQVqZyfpDRdNgGkoeVqNdrKqbeBBvrEl+fXLkmZiq5xDht1LMr4sYiCNcsMfNMT6JPFmg==}
+  '@pnpm/exe.linux-s390x@12.18.0':
+    resolution: {integrity: sha512-htuSCpEcmDzhKoJqXbPkvfr176dBHU0QIF5mWcRiqxRXAB/1JoYiMYotfjWpk+ztgpB9qlx4XnWlLFAf7gzc6g==}
     cpu: [s390x]
     os: [linux]
     libc: [glibc]
 
-  '@pnpm/exe.linux-x64-musl@12.16.1':
-    resolution: {integrity: sha512-PM6ccHCOe/O9SsTflTJTYWfwogJZa6EmUvpnwZgiPguJBddh20wDQKgxUPXf48rDsPm9vMsIij0uHswwwbXL8g==}
+  '@pnpm/exe.linux-x64-musl@12.18.0':
+    resolution: {integrity: sha512-Uj+vzfIQ62kDP10x36yHZIXVs5ohdNtiPYwn5FhCLlNScHPo0OAI+ShGDtLofiBXKE7umu71Jmjm7N8a8zVcDw==}
     cpu: [x64]
     os: [linux]
     libc: [musl]
 
-  '@pnpm/exe.linux-x64@12.16.1':
-    resolution: {integrity: sha512-RK//8ZLcXGW8A2k8bQOXZDBN1Qu92zN4dYnG1bzj1zoQ1fkZ6jNzZ1AvXtsfGVma795CJtvoaF5bLXf4l/FIUw==}
+  '@pnpm/exe.linux-x64@12.18.0':
+    resolution: {integrity: sha512-OJ+X2wcraldCwj75pCIerWARQSRpdfj0eBTs/2ODyhfeW46ylOnjTIE/GKra6Mn6E72/gBmXS8igrUioa+F9fQ==}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@pnpm/exe.win32-arm64@12.16.1':
-    resolution: {integrity: sha512-Ox3kNNVxtGw6pK7SVejmeOUgHhUTZgAM7NQQ6cU7frPw3ix9+j7d2MGbRg3fyEFAaKWq8ZAZLTQGcDyLnAu+qA==}
+  '@pnpm/exe.win32-arm64@12.18.0':
+    resolution: {integrity: sha512-wEY6jiACGcbhhi5yD59doHqNTndS7AaujaPmtWAu1DKkHru2hy5fJ9yUGecW72Ypaw2/I3BEprfMOopap2NQtw==}
     cpu: [arm64]
     os: [win32]
 
-  '@pnpm/exe.win32-x64@12.16.1':
-    resolution: {integrity: sha512-k+FhRJ0ttphFoFIVB1Sk4v76YJAulafmA/Ly57cysesUhhIzVlApeOShUz0jXubKx317TThlEfpQrukldnqORA==}
+  '@pnpm/exe.win32-x64@12.18.0':
+    resolution: {integrity: sha512-5FJkghO7RLRkQpWxeVEygW9XsmnNuxzPfXbgwFWCHsFyFhpDn/vOdL88ToQEM0Kt5igdW5s6U0/IDH8Dvkt3pg==}
     cpu: [x64]
     os: [win32]
 
-  pnpm@12.16.1:
-    resolution: {integrity: sha512-CR0d7nknV1Zhsl2rPCrjHK/BxU1rce1qZgDPDByxBDSkR+rhQBXxsj4ua+3u1535SpMuIWTSgyKA3OP7MvZW0Q==}
+  pnpm@12.18.0:
+    resolution: {integrity: sha512-nXiC1dyCFH7PxOBiqjSDTgrQKWcQoYN6ERWuASEn02txCeMhrBWYod0KZVl2gbHpmRfhLtDXSerpEYeUM2O+sw==}
     engines: {node: '>=18'}
     hasBin: true
 
 snapshots:
 
-  '@pnpm/exe.android-arm64@12.16.1':
+  '@pnpm/exe.android-arm64@12.18.0':
     optional: true
 
-  '@pnpm/exe.android-x64@12.16.1':
+  '@pnpm/exe.android-x64@12.18.0':
     optional: true
 
-  '@pnpm/exe.darwin-arm64@12.16.1':
+  '@pnpm/exe.darwin-arm64@12.18.0':
     optional: true
 
-  '@pnpm/exe.darwin-x64@12.16.1':
+  '@pnpm/exe.darwin-x64@12.18.0':
     optional: true
 
-  '@pnpm/exe.freebsd-x64@12.16.1':
+  '@pnpm/exe.freebsd-x64@12.18.0':
     optional: true
 
-  '@pnpm/exe.linux-arm64-musl@12.16.1':
+  '@pnpm/exe.linux-arm64-musl@12.18.0':
     optional: true
 
-  '@pnpm/exe.linux-arm64@12.16.1':
+  '@pnpm/exe.linux-arm64@12.18.0':
     optional: true
 
-  '@pnpm/exe.linux-ppc64@12.16.1':
+  '@pnpm/exe.linux-ppc64@12.18.0':
     optional: true
 
-  '@pnpm/exe.linux-riscv64@12.16.1':
+  '@pnpm/exe.linux-riscv64@12.18.0':
     optional: true
 
-  '@pnpm/exe.linux-s390x@12.16.1':
+  '@pnpm/exe.linux-s390x@12.18.0':
     optional: true
 
-  '@pnpm/exe.linux-x64-musl@12.16.1':
+  '@pnpm/exe.linux-x64-musl@12.18.0':
     optional: true
 
-  '@pnpm/exe.linux-x64@12.16.1':
+  '@pnpm/exe.linux-x64@12.18.0':
     optional: true
 
-  '@pnpm/exe.win32-arm64@12.16.1':
+  '@pnpm/exe.win32-arm64@12.18.0':
     optional: true
 
-  '@pnpm/exe.win32-x64@12.16.1':
+  '@pnpm/exe.win32-x64@12.18.0':
     optional: true
 
-  pnpm@12.16.1:
+  pnpm@12.18.0:
     optionalDependencies:
-      '@pnpm/exe.android-arm64': 12.16.1
-      '@pnpm/exe.android-x64': 12.16.1
-      '@pnpm/exe.darwin-arm64': 12.16.1
-      '@pnpm/exe.darwin-x64': 12.16.1
-      '@pnpm/exe.freebsd-x64': 12.16.1
-      '@pnpm/exe.linux-arm64': 12.16.1
-      '@pnpm/exe.linux-arm64-musl': 12.16.1
-      '@pnpm/exe.linux-ppc64': 12.16.1
-      '@pnpm/exe.linux-riscv64': 12.16.1
-      '@pnpm/exe.linux-s390x': 12.16.1
-      '@pnpm/exe.linux-x64': 12.16.1
-      '@pnpm/exe.linux-x64-musl': 12.16.1
-      '@pnpm/exe.win32-arm64': 12.16.1
-      '@pnpm/exe.win32-x64': 12.16.1
+      '@pnpm/exe.android-arm64': 12.18.0
+      '@pnpm/exe.android-x64': 12.18.0
+      '@pnpm/exe.darwin-arm64': 12.18.0
+      '@pnpm/exe.darwin-x64': 12.18.0
+      '@pnpm/exe.freebsd-x64': 12.18.0
+      '@pnpm/exe.linux-arm64': 12.18.0
+      '@pnpm/exe.linux-arm64-musl': 12.18.0
+      '@pnpm/exe.linux-ppc64': 12.18.0
+      '@pnpm/exe.linux-riscv64': 12.18.0
+      '@pnpm/exe.linux-s390x': 12.18.0
+      '@pnpm/exe.linux-x64': 12.18.0
+      '@pnpm/exe.linux-x64-musl': 12.18.0
+      '@pnpm/exe.win32-arm64': 12.18.0
+      '@pnpm/exe.win32-x64': 12.18.0
 
 ---
 lockfileVersion: '9.0'
@@ -165,7 +165,7 @@ settings:
 overrides:
   '@earendil-works/pi-coding-agent>@earendil-works/pi-codemode': 1.5.0
   mermaid>katex: 0.19.1
-  '@earendil-works/pi-coding-agent>undici': 8.12.3
+  '@earendil-works/pi-coding-agent>undici': 8.12.4
   '@earendil-works/pi-codemode': 1.5.0
   '@earendil-works/chord': 1.5.0
   '@earendil-works/pi-agent-core': 1.5.0
@@ -211,17 +211,17 @@ importers:
         specifier: 30.2.0
         version: 30.2.0
       quickjs-wasi:
-        specifier: 3.6.3
-        version: 3.6.3
+        specifier: 3.6.4
+        version: 3.6.4
       typebox:
-        specifier: 1.4.4
-        version: 1.4.4
+        specifier: 1.4.6
+        version: 1.4.6
 
   packages/daemon:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: 1.5.0
-        version: 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1)
+        version: 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.4)(ws@8.22.1)
       '@earendil-works/pi-coding-agent':
         specifier: 1.5.0
         version: 1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1)
@@ -264,7 +264,7 @@ importers:
         version: 1.5.0(esbuild@0.28.2)(ws@8.22.1)
       '@earendil-works/pi-durable':
         specifier: 1.5.0
-        version: 1.5.0(patch_hash=4a75765119eb381a319f68ac7347f7272849c322eb64589ba1f61df5724a69be)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.12.3)(ws@8.22.1)
+        version: 1.5.0(patch_hash=4a75765119eb381a319f68ac7347f7272849c322eb64589ba1f61df5724a69be)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.12.4)(ws@8.22.1)
       '@types/pg':
         specifier: ^8.23.1
         version: 8.23.1
@@ -282,7 +282,7 @@ importers:
     dependencies:
       '@babariviere/pi-extensions':
         specifier: git+https://github.com/babariviere/pi-extensions.git#46eddf8ac376a395b3534af70fa5c7ec8eb0ee6f
-        version: https://codeload.github.com/babariviere/pi-extensions/tar.gz/46eddf8ac376a395b3534af70fa5c7ec8eb0ee6f(@aws-sdk/credential-provider-node@3.972.89)(@earendil-works/pi-ai@1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1))(@earendil-works/pi-coding-agent@1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1))(@earendil-works/pi-tui@1.5.0)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(typebox@1.4.4)(undici@8.12.3)
+        version: https://codeload.github.com/babariviere/pi-extensions/tar.gz/46eddf8ac376a395b3534af70fa5c7ec8eb0ee6f(@aws-sdk/credential-provider-node@3.972.89)(@earendil-works/pi-ai@1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.4)(ws@8.22.1))(@earendil-works/pi-coding-agent@1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1))(@earendil-works/pi-tui@1.5.0)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(typebox@1.4.6)(undici@8.12.4)
       '@babel/parser':
         specifier: 8.1.0
         version: 8.1.0
@@ -291,22 +291,22 @@ importers:
         version: 1.5.0(esbuild@0.28.2)(ws@8.22.1)
       '@earendil-works/pi-agent-core':
         specifier: 1.5.0
-        version: 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1)
+        version: 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.4)(ws@8.22.1)
       '@earendil-works/pi-ai':
         specifier: 1.5.0
-        version: 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1)
+        version: 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.4)(ws@8.22.1)
       '@earendil-works/pi-coding-agent':
         specifier: 1.5.0
         version: 1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1)
       '@earendil-works/pi-durable':
         specifier: 1.5.0
-        version: 1.5.0(patch_hash=4a75765119eb381a319f68ac7347f7272849c322eb64589ba1f61df5724a69be)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.12.3)(ws@8.22.1)
+        version: 1.5.0(patch_hash=4a75765119eb381a319f68ac7347f7272849c322eb64589ba1f61df5724a69be)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.12.4)(ws@8.22.1)
       '@earendil-works/pi-mcp':
         specifier: 1.5.0
         version: 1.5.0
       '@gotgenes/pi-anthropic-auth':
         specifier: 3.4.4
-        version: 3.4.4(@earendil-works/pi-ai@1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1))(@earendil-works/pi-coding-agent@1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1))
+        version: 3.4.4(@earendil-works/pi-ai@1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.4)(ws@8.22.1))(@earendil-works/pi-coding-agent@1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1))
       '@pilot/artifacts':
         specifier: workspace:*
         version: link:../artifacts
@@ -321,10 +321,10 @@ importers:
         version: 2.7.0
       pi-posthorse:
         specifier: 0.10.10
-        version: 0.10.10(patch_hash=2350318d1ada346cb6cc3ae8251bd35d714e4e9b3c407fcabe14dd960934915a)(@earendil-works/pi-coding-agent@1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1))(@earendil-works/pi-tui@1.5.0)(typebox@1.4.4)
+        version: 0.10.10(patch_hash=2350318d1ada346cb6cc3ae8251bd35d714e4e9b3c407fcabe14dd960934915a)(@earendil-works/pi-coding-agent@1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1))(@earendil-works/pi-tui@1.5.0)(typebox@1.4.6)
       typebox:
-        specifier: 1.4.4
-        version: 1.4.4
+        specifier: 1.4.6
+        version: 1.4.6
 
   packages/protocol:
     dependencies:
@@ -333,10 +333,10 @@ importers:
         version: 1.5.0(esbuild@0.28.2)(ws@8.22.1)
       '@earendil-works/pi-ai':
         specifier: 1.5.0
-        version: 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1)
+        version: 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.4)(ws@8.22.1)
       '@earendil-works/pi-durable':
         specifier: 1.5.0
-        version: 1.5.0(patch_hash=4a75765119eb381a319f68ac7347f7272849c322eb64589ba1f61df5724a69be)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.12.3)(ws@8.22.1)
+        version: 1.5.0(patch_hash=4a75765119eb381a319f68ac7347f7272849c322eb64589ba1f61df5724a69be)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.12.4)(ws@8.22.1)
 
   packages/telemetry:
     dependencies:
@@ -1381,8 +1381,8 @@ packages:
   quickjs-wasi@3.6.2:
     resolution: {integrity: sha512-FCqGtGOrMgzUiIrMNMA2YnsOxCNwo31dzqXvclXUC6xeT35NJLKXQJsvbeCTjvoFAwZgEAPg8U6+KAPDGXn8Mg==}
 
-  quickjs-wasi@3.6.3:
-    resolution: {integrity: sha512-gDXhV2yi6oyVcGPYnACIzVbMNsmMlwjryhh3vAk8K589Xk/J06fb2SGbx8GJQnxyJv43pdrNbfP815dTkSYb9g==}
+  quickjs-wasi@3.6.4:
+    resolution: {integrity: sha512-2ze6NpDlJKWIMapoZenSwGmDEy6BEJFW9BmnAY7c+uNX/7ojq1/++5uhTX5l1C13vKy56daUSqWs1eRwr0CJ4g==}
 
   retry@0.12.0:
     resolution: {integrity: sha512-9LkiTwjUh6rT555DtE9rTX+BKByPfrMzEAtnlEtdEwr3Nkffwiihqe2bWADg+OQRjt9gl6ICdmB/ZFDCGAtSow==}
@@ -1440,8 +1440,8 @@ packages:
   typebox@1.3.27:
     resolution: {integrity: sha512-zu+jc1pcy4UiNThxikUr36f0Rybk9PEeCg/NE6adeWr/SKsdNO4EzZHYRDlv2YCVAfj3Odq3dESSo/jNyoBXzA==}
 
-  typebox@1.4.4:
-    resolution: {integrity: sha512-ctPyL8BZibv6HYU6cE3ldDtfCTh7nXM7WPuL3KQVyRRhMnZEzU3o2yLVywxEEFmKEx+8EdeqG1/uTNzazRbxLA==}
+  typebox@1.4.6:
+    resolution: {integrity: sha512-Yh8Mi4hzD7gqcuv9ZIk6HK1KVJKubTlfxaNxkrYK35HCvxoCjCuWVr8cBjQ/ChfA7yliPteJEBWHGFVGWDuF5Q==}
 
   uhyphen@0.2.0:
     resolution: {integrity: sha512-qz3o9CHXmJJPGBdqzab7qAYuW8kQGKNEuoHFYrBwV6hWIMcpAmxDLXojcHfFr9US1Pe6zUswEIJIbLI610fuqA==}
@@ -1449,8 +1449,8 @@ packages:
   undici-types@8.9.0:
     resolution: {integrity: sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg==}
 
-  undici@8.12.3:
-    resolution: {integrity: sha512-+fdndUTwBP86cVjihTp21hZHo7d6oj1c/47XPA3lL8mM0XHs+C4EkcjmgRsFnFk2f/UONGDy9ItBItmXsLOQHw==}
+  undici@8.12.4:
+    resolution: {integrity: sha512-8Mx+uNKKER2bA4AdtedkqRbwUCIJFr2nJckXRe5yrDqzePqwLP7VNcctN8/XdmDSbF7mS+jJKIszlL+vbam1VA==}
     engines: {node: '>=22.19.0'}
 
   web-streams-polyfill@3.3.3:
@@ -1679,17 +1679,17 @@ snapshots:
 
   '@aws/lambda-invoke-store@0.3.0': {}
 
-  '@babariviere/pi-extensions@https://codeload.github.com/babariviere/pi-extensions/tar.gz/46eddf8ac376a395b3534af70fa5c7ec8eb0ee6f(@aws-sdk/credential-provider-node@3.972.89)(@earendil-works/pi-ai@1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1))(@earendil-works/pi-coding-agent@1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1))(@earendil-works/pi-tui@1.5.0)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(typebox@1.4.4)(undici@8.12.3)':
+  '@babariviere/pi-extensions@https://codeload.github.com/babariviere/pi-extensions/tar.gz/46eddf8ac376a395b3534af70fa5c7ec8eb0ee6f(@aws-sdk/credential-provider-node@3.972.89)(@earendil-works/pi-ai@1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.4)(ws@8.22.1))(@earendil-works/pi-coding-agent@1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1))(@earendil-works/pi-tui@1.5.0)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(typebox@1.4.6)(undici@8.12.4)':
     dependencies:
       '@earendil-works/chord': 1.5.0(esbuild@0.28.2)(ws@8.22.1)
-      '@earendil-works/pi-ai': 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1)
+      '@earendil-works/pi-ai': 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.4)(ws@8.22.1)
       '@earendil-works/pi-coding-agent': 1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1)
-      '@earendil-works/pi-durable': 1.5.0(patch_hash=4a75765119eb381a319f68ac7347f7272849c322eb64589ba1f61df5724a69be)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.12.3)(ws@8.22.1)
+      '@earendil-works/pi-durable': 1.5.0(patch_hash=4a75765119eb381a319f68ac7347f7272849c322eb64589ba1f61df5724a69be)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.12.4)(ws@8.22.1)
       '@earendil-works/pi-tui': 1.5.0
       defuddle: 0.19.6
       linkedom: 0.18.14
       parse5: 8.0.1
-      typebox: 1.4.4
+      typebox: 1.4.6
       ws: 8.22.1
       yaml: 2.9.1
     transitivePeerDependencies:
@@ -1772,9 +1772,9 @@ snapshots:
       esbuild: 0.28.2
       ws: 8.22.1
 
-  '@earendil-works/pi-agent-core@1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1)':
+  '@earendil-works/pi-agent-core@1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.4)(ws@8.22.1)':
     dependencies:
-      '@earendil-works/pi-ai': 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1)
+      '@earendil-works/pi-ai': 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.4)(ws@8.22.1)
       '@earendil-works/pi-schema': 1.5.0
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
@@ -1789,7 +1789,7 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-ai@1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1)':
+  '@earendil-works/pi-ai@1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.4)(ws@8.22.1)':
     dependencies:
       '@anthropic-ai/sdk': 0.129.0
       '@aws-sdk/client-bedrock-runtime': 3.1127.0
@@ -1799,7 +1799,7 @@ snapshots:
       '@smithy/node-http-handler': 4.12.1
       http-proxy-agent: 9.1.0
       https-proxy-agent: 9.1.0
-      openai: 7.19.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1)
+      openai: 7.19.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.4)(ws@8.22.1)
       partial-json: 0.1.7
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
@@ -1820,8 +1820,8 @@ snapshots:
 
   '@earendil-works/pi-coding-agent@1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1)':
     dependencies:
-      '@earendil-works/pi-agent-core': 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1)
-      '@earendil-works/pi-ai': 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1)
+      '@earendil-works/pi-agent-core': 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.4)(ws@8.22.1)
+      '@earendil-works/pi-ai': 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.4)(ws@8.22.1)
       '@earendil-works/pi-codemode': 1.5.0
       '@earendil-works/pi-mcp': 1.5.0
       '@earendil-works/pi-tui': 1.5.0
@@ -1840,7 +1840,7 @@ snapshots:
       quickjs-wasi: 3.6.2
       semver: 7.8.5
       typebox: 1.3.27
-      undici: 8.12.3
+      undici: 8.12.4
       yaml: 2.9.0
     transitivePeerDependencies:
       - '@aws-sdk/credential-provider-node'
@@ -1854,10 +1854,10 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-durable@1.5.0(patch_hash=4a75765119eb381a319f68ac7347f7272849c322eb64589ba1f61df5724a69be)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.12.3)(ws@8.22.1)':
+  '@earendil-works/pi-durable@1.5.0(patch_hash=4a75765119eb381a319f68ac7347f7272849c322eb64589ba1f61df5724a69be)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(undici@8.12.4)(ws@8.22.1)':
     dependencies:
       '@earendil-works/chord': 1.5.0(esbuild@0.28.2)(ws@8.22.1)
-      '@earendil-works/pi-ai': 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1)
+      '@earendil-works/pi-ai': 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.4)(ws@8.22.1)
       '@earendil-works/pi-codemode': 1.5.0
       '@earendil-works/pi-schema': 1.5.0
       '@earendil-works/pi-telemetry': 1.5.0
@@ -1980,9 +1980,9 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@gotgenes/pi-anthropic-auth@3.4.4(@earendil-works/pi-ai@1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1))(@earendil-works/pi-coding-agent@1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1))':
+  '@gotgenes/pi-anthropic-auth@3.4.4(@earendil-works/pi-ai@1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.4)(ws@8.22.1))(@earendil-works/pi-coding-agent@1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1))':
     dependencies:
-      '@earendil-works/pi-ai': 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1)
+      '@earendil-works/pi-ai': 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.4)(ws@8.22.1)
       '@earendil-works/pi-coding-agent': 1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1)
 
   '@isaacs/nonrecursive-glob-match@1.0.3': {}
@@ -2474,11 +2474,11 @@ snapshots:
     dependencies:
       boolbase: 2.0.0
 
-  openai@7.19.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1):
+  openai@7.19.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.4)(ws@8.22.1):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.89
       '@smithy/signature-v4': 5.7.4
-      undici: 8.12.3
+      undici: 8.12.4
       ws: 8.22.1
 
   p-retry@4.6.2:
@@ -2533,11 +2533,11 @@ snapshots:
     dependencies:
       split2: 4.2.0
 
-  pi-posthorse@0.10.10(patch_hash=2350318d1ada346cb6cc3ae8251bd35d714e4e9b3c407fcabe14dd960934915a)(@earendil-works/pi-coding-agent@1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1))(@earendil-works/pi-tui@1.5.0)(typebox@1.4.4):
+  pi-posthorse@0.10.10(patch_hash=2350318d1ada346cb6cc3ae8251bd35d714e4e9b3c407fcabe14dd960934915a)(@earendil-works/pi-coding-agent@1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1))(@earendil-works/pi-tui@1.5.0)(typebox@1.4.6):
     optionalDependencies:
       '@earendil-works/pi-coding-agent': 1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1)
       '@earendil-works/pi-tui': 1.5.0
-      typebox: 1.4.4
+      typebox: 1.4.6
 
   postgres-array@2.0.0: {}
 
@@ -2573,7 +2573,7 @@ snapshots:
 
   quickjs-wasi@3.6.2: {}
 
-  quickjs-wasi@3.6.3: {}
+  quickjs-wasi@3.6.4: {}
 
   retry@0.12.0: {}
 
@@ -2618,13 +2618,13 @@ snapshots:
 
   typebox@1.3.27: {}
 
-  typebox@1.4.4: {}
+  typebox@1.4.6: {}
 
   uhyphen@0.2.0: {}
 
   undici-types@8.9.0: {}
 
-  undici@8.12.3: {}
+  undici@8.12.4: {}
 
   web-streams-polyfill@3.3.3: {}
 
