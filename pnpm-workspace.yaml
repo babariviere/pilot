@@ -6,7 +6,7 @@ overrides:
    "@earendil-works/pi-coding-agent>@earendil-works/pi-codemode": 1.5.0
    mermaid>katex: 0.19.1
    # Keep the bundled CLI on the same external undici as the SDK.
-   "@earendil-works/pi-coding-agent>undici": 8.12.3
+   "@earendil-works/pi-coding-agent>undici": 8.12.4
    "@earendil-works/pi-codemode": 1.5.0
    "@earendil-works/chord": 1.5.0
    "@earendil-works/pi-agent-core": 1.5.0
