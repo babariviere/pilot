@@ -51,6 +51,32 @@ To run just affected files without importing every file in a group:
 node --test --test-force-exit --test-concurrency=2 packages/daemon/src/github.test.ts
 ```
 
+### Managed manual Review proof
+
+Run the daemon-only fake-agent journey with inherited `PILOT_*` settings removed:
+
+```sh
+bash -c 'for key in ${!PILOT_@}; do unset "$key"; done; exec node --test --test-timeout=120000 --test-concurrency=2 packages/daemon/src/manual-review-flow.integration.test.ts'
+```
+
+The test creates a new managed standalone Build chat through `SessionManager`. A fake worker makes
+real jj commits in TMPDIR. Its idle packet runs production ownership observation and retained capture.
+Daemon reads discover the chat, exact comparison, patch and source. Nothing seeds ownership or diffs.
+The fixture saves a line-anchored draft and submits Comment and Request changes through the ordinary
+native-capability routes and durable operation admission. It reopens daemon/session/SQLite storage
+and checks the original target, text, anchor, disposition, draft and operation receipts as exact
+stored JSON values. A new revision has no inherited review. Duplicate operations deduplicate, lost ACKs
+use lookup without resubmission, and stale packages, changed targets and changed operation bytes fail.
+
+The native authority is the disposable profile's real app capability, not an agent-tool grant or a
+body-supplied actor. This simulates a native user action; it does not prove human presence or exercise
+the UI. No product provider, live review, required request, reviewer, merge or acceptance gate runs.
+
+Manual feedback has no rollout flag in `HumanReviews`, `WorkflowConfirmations`, retained access or the
+server routes. Normal daemon startup supplies their stores and app capability service. Approve still
+refuses because production required-check and fresh-agent-review producers are absent, not because
+of a feature flag. This test does not invent passing prerequisites or enable those producers.
+
 ### Swift linting
 
 Run `apps/macos/scripts/lint.sh` for the same strict SwiftLint gate used by macOS CI.
