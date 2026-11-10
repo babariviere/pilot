@@ -39,33 +39,40 @@ export class WorkerReviewDelivery {
 					throw new Error("Worker review custody changed");
 			};
 			await check();
-			// At most four comparisons per lifecycle event; remaining work stays visibly pending.
-			for (const request of await this.ledger.deliveries(binding)) {
-				try {
-					const checkOwner = async () => {
-						await check();
-						const owner = (await this.ledger.get(request.repositoryId, request.changeId)).ownership;
-						if (
-							request.repositoryId !== binding.repositoryId ||
-							owner.status !== "owned" ||
-							JSON.stringify(owner.binding) !== JSON.stringify(binding)
-						)
-							throw new Error("Worker review ownership unavailable");
-						await check();
-					};
-					await checkOwner();
-					const saved = await this.snapshots.capture(request);
-					await checkOwner();
-					await this.ledger.settleDelivery(binding, request, false);
-					console.info(
-						`pilotd: worker review retained (worker=${binding.sessionId}, request=${request.requestId}, snapshot=${saved.snapshotId}, status=${saved.manifest.status})`,
-					);
-				} catch (error) {
-					// No raw provider/path error is stored or exposed. The exact request remains retryable.
-					await this.ledger.settleDelivery(binding, request, true, failureKind(error));
-					console.warn(
-						`pilotd: worker review capture failed (worker=${binding.sessionId}, request=${request.requestId}, reason=${failureKind(error)})`,
-					);
+			// Drain in four-comparison batches. Retry failures only in the first batch,
+			// so a quota/source failure cannot loop forever or strand fresh pending work.
+			let pendingOnly = false;
+			while (!this.closing) {
+				const requests = await this.ledger.deliveries(binding, pendingOnly);
+				if (!requests.length) break;
+				pendingOnly = true;
+				for (const request of requests) {
+					try {
+						const checkOwner = async () => {
+							await check();
+							const owner = (await this.ledger.get(request.repositoryId, request.changeId)).ownership;
+							if (
+								request.repositoryId !== binding.repositoryId ||
+								owner.status !== "owned" ||
+								JSON.stringify(owner.binding) !== JSON.stringify(binding)
+							)
+								throw new Error("Worker review ownership unavailable");
+							await check();
+						};
+						await checkOwner();
+						const saved = await this.snapshots.capture(request);
+						await checkOwner();
+						await this.ledger.settleDelivery(binding, request, false);
+						console.info(
+							`pilotd: worker review retained (worker=${binding.sessionId}, request=${request.requestId}, snapshot=${saved.snapshotId}, status=${saved.manifest.status})`,
+						);
+					} catch (error) {
+						// No raw provider/path error is stored or exposed. The exact request remains retryable.
+						await this.ledger.settleDelivery(binding, request, true, failureKind(error));
+						console.warn(
+							`pilotd: worker review capture failed (worker=${binding.sessionId}, request=${request.requestId}, reason=${failureKind(error)})`,
+						);
+					}
 				}
 			}
 		};

@@ -180,7 +180,14 @@ function dispatch(method: string, input: unknown): unknown {
 		});
 	}
 	if (["deliveries", "deliveryStatus", "settleDelivery"].includes(method)) {
-		exact(input, method === "settleDelivery" ? ["binding", "request", "failed", "failure"] : ["binding"]);
+		exact(
+			input,
+			method === "settleDelivery"
+				? ["binding", "request", "failed", "failure"]
+				: method === "deliveries"
+					? ["binding", "pendingOnly"]
+					: ["binding"],
+		);
 		bindingRecord(input.binding);
 		const b = input.binding;
 		const scope = binding(b.repositoryId, b.workspace);
@@ -230,13 +237,15 @@ function dispatch(method: string, input: unknown): unknown {
 						: {}),
 			};
 		}
-		if (method === "deliveries")
+		if (method === "deliveries") {
+			if (typeof input.pendingOnly !== "boolean") throw new Error("Invalid delivery selection");
 			return db
 				.prepare(
-					"SELECT request FROM delivery_checkpoints WHERE repository=? AND workspace=? AND state!='done' ORDER BY attempt,rowid LIMIT 4",
+					`SELECT request FROM delivery_checkpoints WHERE repository=? AND workspace=? AND ${input.pendingOnly ? "state='pending'" : "state!='done'"} ORDER BY attempt,rowid LIMIT 4`,
 				)
 				.all(b.repositoryId, b.workspace)
 				.map((r) => captureRequest(JSON.parse(String(r.request))));
+		}
 		const request = captureRequest(input.request);
 		if (typeof input.failed !== "boolean") throw new Error("Invalid delivery settlement");
 		if (input.failure !== null && !(deliveryFailureKinds as readonly unknown[]).includes(input.failure))

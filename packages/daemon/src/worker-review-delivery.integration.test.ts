@@ -241,7 +241,7 @@ test("a newer lifecycle event during capture is coalesced without losing its rev
 	}
 });
 
-test("bounded failure retries do not starve a newer pending checkpoint", async () => {
+test("one checkpoint drains pending batches without retrying its own failures", async () => {
 	const f = await retainedReviewFixture();
 	const attempted: string[] = [];
 	const writer = new WorkerReviewDelivery(f.store.ownership, {
@@ -253,12 +253,12 @@ test("bounded failure retries do not starve a newer pending checkpoint", async (
 	try {
 		for (let n = 0; n < 5; n++) f.commit(`closed revision ${n}\n`);
 		await writer.checkpoint(f.binding.sessionId, f.admit, f.observe);
-		assert.equal(attempted.length, 4);
-		assert.deepEqual(await f.store.ownership.deliveryStatus(f.binding), { pending: 1, failed: 4 });
-		const first = new Set(attempted);
+		assert.equal(attempted.length, 5);
+		assert.equal(new Set(attempted).size, 5, "no failure loops within one checkpoint");
+		assert.deepEqual(await f.store.ownership.deliveryStatus(f.binding), { pending: 0, failed: 5 });
 		await writer.checkpoint(f.binding.sessionId, f.admit, f.observe);
-		assert.equal(attempted.length, 8);
-		assert.ok(attempted.slice(4).some((id) => !first.has(id)));
+		assert.equal(attempted.length, 9, "at most four old failures retry per event");
+		assert.equal(new Set(attempted.slice(5)).size, 4);
 	} finally {
 		await writer.close();
 		await f.dispose();
@@ -329,6 +329,49 @@ test("queue insertion failure rolls back the ownership observation and cursor to
 		assert.deepEqual(await f.store.ownership.get(request.repositoryId, request.changeId), change);
 		assert.deepEqual(await f.store.ownership.deliveries(f.binding), [request]);
 	} finally {
+		await f.dispose();
+	}
+});
+
+test("close joins an admitted capture and never starts the remaining pending batches", async () => {
+	const f = await retainedReviewFixture();
+	let release!: () => void;
+	let entered!: () => void;
+	const held = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const started = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	let captures = 0;
+	let closed = false;
+	const writer = new WorkerReviewDelivery(f.store.ownership, {
+		capture: async (request) => {
+			captures++;
+			entered();
+			await held;
+			return f.snapshots.capture(request);
+		},
+	});
+	try {
+		for (let n = 0; n < 6; n++) f.commit(`pending at close ${n}\n`);
+		const checkpoint = writer.checkpoint(f.binding.sessionId, f.admit, f.observe);
+		await started;
+		const close = writer.close().then(() => {
+			closed = true;
+		});
+		await Promise.resolve();
+		assert.equal(closed, false, "close must join the capture already admitted");
+		release();
+		await Promise.all([checkpoint, close]);
+		assert.equal(captures, 1);
+		const status = await f.store.ownership.deliveryStatus(f.binding);
+		assert.equal(status.pending, 2, "the second pending batch remains durable and unadmitted");
+		assert.equal(status.failed, 4, "closing never acknowledges uncaptured work as retained");
+		await assert.rejects(writer.checkpoint(f.binding.sessionId, f.admit, f.observe), /closed/);
+	} finally {
+		release();
+		await writer.close();
 		await f.dispose();
 	}
 });

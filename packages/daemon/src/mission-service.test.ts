@@ -79,8 +79,16 @@ test("ownership scope is creation-only trusted builder assignment metadata, neve
 	assert.equal(admission(worker.id), undefined);
 	const legacy = f.store.create({ projectId: f.project.id, title: "Legacy" });
 	f.store.join(worker.id, legacy.id);
-	f.store.addTask(legacy.id, { title: "Legacy work", sessionId: worker.id });
-	assert.equal(admission(worker.id), undefined);
+	const legacyTask = f.store.addTask(legacy.id, { title: "Legacy work", sessionId: worker.id });
+	assert.deepEqual(admission(worker.id), {
+		version: 1,
+		sessionId: worker.id,
+		missionId: legacy.id,
+		taskIds: [legacyTask.id],
+	});
+	// Assignment eligibility is not creation authority for an already-existing chat.
+	// biome-ignore lint/complexity/useLiteralKeys: Inspect the host-only initial recipe boundary.
+	assert.equal(f.sessions["creationOwnershipScope"](f.sessions["require"](worker.id)), undefined);
 });
 
 test("source scope IPC trusts current coordinator membership, retains delivered workspaces and revokes historical roots", async (t) => {

@@ -266,8 +266,8 @@ export class MissionService {
 			},
 			ownershipScope: (sessionId) => {
 				const member = store.membership(sessionId);
-				if (!member?.active || member.coordinator || member.role !== "builder") return undefined;
-				if (store.require(member.missionId).planningVersion !== 1) return undefined;
+				if (!member?.active || member.coordinator || (member.role !== undefined && member.role !== "builder"))
+					return undefined;
 				const taskIds = store
 					.tasks(member.missionId)
 					.filter((task) => task.sessionId === sessionId && isOpen(task))
@@ -277,11 +277,10 @@ export class MissionService {
 			reviewCaptureScope: async (sessionId) => {
 				await store.durable();
 				const member = store.membership(sessionId);
-				if (!member?.active || member.coordinator || member.role !== "builder") return undefined;
+				if (!member?.active || member.coordinator || (member.role !== undefined && member.role !== "builder"))
+					return undefined;
 				const mission = store.require(member.missionId);
-				return mission.planningVersion === 1
-					? { missionId: member.missionId, projectId: mission.projectId }
-					: undefined;
+				return { missionId: member.missionId, projectId: mission.projectId };
 			},
 			continueSession: (from, to) => store.continueSession(from, to),
 			noticeAllowed: (sessionId, requestId) => this.notices.allowed(sessionId, requestId),

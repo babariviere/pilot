@@ -492,6 +492,8 @@ interface SessionMeta extends OutcomeMeta {
 	createMissionId?: string;
 	/** Host-only creation admission. Never synthesized on load, role change or continuation. */
 	retainedScope?: JjProjectScope;
+	/** Host-only initial managed mission creation marker. Never inferred on load or join. */
+	retainedMissionCreation?: true;
 	/** Durable known limits and window-scoped user exemptions, shared with child admission gates. */
 	subscriptionPolicy?: SubscriptionPolicy;
 	continuationOf?: string;
@@ -6834,7 +6836,12 @@ ${run.excerpt}`,
 	}
 	/** Only a marked new creation recipe may mint project/chat custody. */
 	private creationOwnershipScope(meta: SessionMeta) {
-		if (!meta.retainedScope) return this.missions?.ownershipScope?.(meta.id);
+		if (!meta.retainedScope) {
+			if (!meta.retainedMissionCreation) return undefined;
+			if (meta.mode !== "build" || meta.role || meta.continuationOf || meta.workspaceOriginId)
+				throw new Error("Retained mission creation custody unavailable");
+			return this.missions?.ownershipScope?.(meta.id);
+		}
 		workerScope(meta.retainedScope);
 		if (
 			meta.retainedScope.version !== 2 ||
@@ -6887,7 +6894,8 @@ ${run.excerpt}`,
 							JSON.stringify(meta.workspace?.shared) !== workspace ||
 							!member?.active ||
 							member.coordinator ||
-							member.role !== "builder" ||
+							(member.role !== undefined && member.role !== "builder") ||
+							meta.mode === "ask" ||
 							member.missionId !== scope.missionId
 						)
 							throw new Error("Worker review membership changed");
@@ -9014,6 +9022,9 @@ ${run.excerpt}`,
 			...(preparing ? { preparing } : {}),
 			...(preparing && mode === "build" && project && !request.missionId && !request.role && !coordinator
 				? { retainedScope: { version: 2 as const, sessionId: id, projectId: project.id } }
+				: {}),
+			...(preparing && mode === "build" && request.missionId && !request.role && !coordinator
+				? { retainedMissionCreation: true as const }
 				: {}),
 			...(deferInsightsInput || planning ? {} : { initializing: true as const }),
 			pending:
@@ -13270,7 +13281,7 @@ ${run.excerpt}`,
 				this.workers.get(meta.id) === worker &&
 				!packet.working &&
 				!this.backgroundWorking(meta, worker) &&
-				(wasWorking || packet.type === "ready") &&
+				(wasWorking || packet.type === "ready" || (changed && packet.completion)) &&
 				meta.workspace?.shared
 			)
 				void this.checkpointWorkerReview(meta).catch((error: unknown) =>

@@ -18,8 +18,11 @@ Only that marked initial recipe may create a v2 binding; restarting preparation 
 but load, GET, mode changes and continuation never mint the marker. Existing chats, Ask,
 direct checkouts, cwd overrides and Git-only clones remain explicitly not captured.
 
-New managed `planningVersion: 1` builders retain the original v1 mission/task binding and
-authorization. Neither version is converted or backfilled. Both extend their scope with the
+New managed mission builders use the original v1 mission/task binding and authorization,
+including new workers in legacy missions. Mission planning version is not a capture gate.
+A host-only `retainedMissionCreation` marker is saved with the initial managed Build recipe;
+existing unmarked recipes/workspaces are not enrolled on resume, join or GET.
+Neither binding version is converted or backfilled. Both extend their scope with the
 existing exact repository/workspace/path/start-operation fields. The creation transaction
 records activation; observing, reopening or re-registering an older binding cannot activate it.
 
@@ -41,8 +44,10 @@ the **first exact operation**. A newer revision creates a separate request, neve
 The outbox is capped at 10,000 records; quota failure rolls back the observation, not its evidence.
 
 `WorkerReviewDelivery` coalesces lifecycle notifications (including another event during a
-drain), admits at most eight queued workers and serializes captures. A pass tries at most four
-requests, with least-attempted ordering so repeated failures cannot starve newer revisions.
+drain), admits at most eight queued workers and serializes captures. A pass drains pending
+requests in batches of four without needing another prompt or GET. The first batch also
+retries at most four old failures, with least-attempted ordering. Later batches select only
+pending requests, so failures cannot loop forever or strand fresh comparisons.
 Pending/failed requests survive crash and are retried at the next admitted worker checkpoint,
 including ready after worker recovery, not on a Review GET or a polling timer. Current custody
 is rechecked before each capture and after it. Revocation during a capture can leave retained

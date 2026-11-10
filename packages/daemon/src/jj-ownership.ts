@@ -183,9 +183,9 @@ export class JjOwnershipStore {
 	}
 
 	/** Scoped durable outbox. Reads never enroll or observe a workspace. */
-	async deliveries(binding: JjOwnershipBinding): Promise<ReviewCaptureRequest[]> {
+	async deliveries(binding: JjOwnershipBinding, pendingOnly = false): Promise<ReviewCaptureRequest[]> {
 		if (!(await this.available())) return [];
-		return this.rpc("deliveries", { binding });
+		return this.rpc("deliveries", { binding, pendingOnly });
 	}
 	async deliveryStatus(binding: JjOwnershipBinding): Promise<NativeReviewCaptureStatus> {
 		if (!(await this.available())) return { pending: 0, failed: 0 };
