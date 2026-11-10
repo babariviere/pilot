@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import { type TestContext, test } from "node:test";
+import { test } from "node:test";
 import type { KernelCommand, KernelPacket } from "@pilot/kernel";
 import type {
 	NativeReviewCaptureStatus,
@@ -71,13 +71,13 @@ class FakeAgent implements SessionWorker {
 }
 
 async function serve(
-	t: TestContext,
+	own: (close: () => Promise<void>) => void,
 	home: string,
 	sessions: SessionManager,
 	projects: ProjectStore,
-	store: MissionStore,
-	service: MissionService,
 ) {
+	const store = new MissionStore(join(home, "missions.sqlite"));
+	const service = new MissionService(store, sessions, projects);
 	const terminals = new TerminalManager();
 	const server = createDaemonServer(
 		{ home, host: "127.0.0.1", port: 0 },
@@ -87,12 +87,40 @@ async function serve(
 		terminals,
 		{ store, service },
 	);
-	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-	t.after(async () => {
-		await new Promise<void>((resolve) => server.close(() => resolve()));
-		terminals.shutdown();
+	let closing: Promise<void> | undefined;
+	const close = () =>
+		(closing ??= (async () => {
+			const failures: unknown[] = [];
+			// Close consumers before their dependencies, joining every step even on failure.
+			for (const stop of [
+				() =>
+					new Promise<void>((resolve, reject) => {
+						if (!server.listening) return resolve();
+						server.close((error) => (error ? reject(error) : resolve()));
+						server.closeAllConnections();
+					}),
+				() => server.closePlanning(),
+				() => service.notices.stop(),
+				() => sessions.shutdown(),
+				() => terminals.shutdown(),
+				() => store.durable(),
+				() => store.close(),
+			]) {
+				try {
+					await stop();
+				} catch (error) {
+					failures.push(error);
+				}
+			}
+			if (failures.length) throw new AggregateError(failures, "Managed review host teardown failed");
+		})());
+	// The caller registered its owner hook before fixture(t)'s shutdown/removal hook.
+	own(close);
+	await new Promise<void>((resolve, reject) => {
+		server.once("error", reject);
+		server.listen(0, "127.0.0.1", resolve);
 	});
-	return `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
+	return { root: `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`, store, close };
 }
 
 async function get<T>(url: string): Promise<T> {
@@ -103,6 +131,11 @@ async function get<T>(url: string): Promise<T> {
 
 for (const legacyMission of [false, true])
 	test(`managed ${legacyMission ? "legacy-mission" : "standalone"} agent drains six changes from one turn and reopens exact revisions`, async (t) => {
+		let stop: (() => Promise<void>) | undefined;
+		// Node runs after hooks in registration order. Keep all consumers ahead of removal.
+		t.after(async () => {
+			await stop?.();
+		});
 		const agents: FakeAgent[] = [];
 		const f = await fixture(
 			t,
@@ -115,20 +148,11 @@ for (const legacyMission of [false, true])
 				},
 			},
 		);
-		const stores: MissionStore[] = [];
-		const services: MissionService[] = [];
-		t.after(async () => {
-			for (const service of services) await service.notices.stop();
-			for (const store of stores) store.close();
-		});
-		const connect = (sessions: SessionManager) => {
-			const store = new MissionStore(join(f.home, "missions.sqlite"));
-			const service = new MissionService(store, sessions, f.projects);
-			stores.push(store);
-			services.push(service);
-			return { store, service };
+		const own = (close: () => Promise<void>) => {
+			stop = close;
 		};
-		const { store, service } = connect(f.sessions);
+		const host = await serve(own, f.home, f.sessions, f.projects);
+		const { store, root } = host;
 		const mission = store.create({ projectId: f.project.id, title: "Legacy work" });
 		assert.equal(mission.planningVersion, undefined);
 		const task = store.addTask(mission.id, { title: "Write changes" });
@@ -150,7 +174,6 @@ for (const legacyMission of [false, true])
 		const chat = await spawn();
 		const agent = agents[0]!;
 		assert.equal(agent.inputs, 1, "no extra prompt/ready/Review GET is needed to finish capture");
-		const root = await serve(t, f.home, f.sessions, f.projects, store, service);
 		const route = `${root}/sessions/${chat.id}/review`;
 		const first = await get<NativeReviewPage>(route);
 		assert.equal(first.comparisons.length, 6);
@@ -232,14 +255,9 @@ for (const legacyMission of [false, true])
 				assert.equal(owned.ownership.taskAttribution, "unknown");
 			}
 		}
-		await service.notices.stop();
-		await store.durable();
-		await f.sessions.shutdown();
-		store.close();
-		stores.splice(stores.indexOf(store), 1);
+		await host.close();
 		const reopened = await f.manager();
-		const recovered = connect(reopened);
-		const reopenedRoot = await serve(t, f.home, reopened, f.projects, recovered.store, recovered.service);
+		const { root: reopenedRoot } = await serve(own, f.home, reopened, f.projects);
 		assert.deepEqual(await get(`${reopenedRoot}/sessions/${chat.id}/review`), revised);
 		for (const snapshot of snapshots) {
 			assert.deepEqual(await get(`${reopenedRoot}/sessions/${chat.id}/review/${snapshot.snapshotId}`), snapshot);
@@ -254,13 +272,19 @@ for (const legacyMission of [false, true])
 	});
 
 test("an unmarked legacy mission recipe and a later assignment do not adopt existing work", async (t) => {
-	const f = await fixture(t);
-	const store = new MissionStore(join(f.home, "missions.sqlite"));
-	const service = new MissionService(store, f.sessions, f.projects);
+	let stop: (() => Promise<void>) | undefined;
 	t.after(async () => {
-		await service.notices.stop();
-		store.close();
+		await stop?.();
 	});
+	const f = await fixture(t);
+	const { store, root } = await serve(
+		(close) => {
+			stop = close;
+		},
+		f.home,
+		f.sessions,
+		f.projects,
+	);
 	const mission = store.create({ projectId: f.project.id, title: "Existing mission" });
 	const task = store.addTask(mission.id, { title: "Original assignment" });
 	f.sessions["sleepPause"] = { since: Date.now() };
@@ -283,7 +307,6 @@ test("an unmarked legacy mission recipe and a later assignment do not adopt exis
 	jj(meta.cwd, "commit", "-m", "Unbound history");
 	store.addTask(mission.id, { title: "Later assignment", sessionId: chat.id });
 	await f.sessions["checkpointWorkerReview"](meta);
-	const root = await serve(t, f.home, f.sessions, f.projects, store, service);
 	const page = await get<NativeReviewPage & { unavailable?: string }>(`${root}/sessions/${chat.id}/review`);
 	assert.deepEqual(page.comparisons, []);
 	assert.match(page.unavailable!, /No retained managed ownership binding/);
