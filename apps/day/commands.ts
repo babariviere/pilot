@@ -1,7 +1,7 @@
 // Every command on Today, once: the cards' buttons and the keyboard call
 // these. Each names the exact revision on screen; Rust decides what
 // happens and the screen shows the outcome Rust publishes.
-import type { Answer, Decision, HumanAction } from "pilot-day/native";
+import type { Answer, Decision, HumanAction, IntentOutcome } from "pilot-day/native";
 import type { Day } from "./day";
 import {
 	asking,
@@ -34,7 +34,7 @@ function say(id: string, message: string) {
  * Gives Rust what the user picked and wrote on `decision`, for the revision
  * shown. Rust saves it after a short pause; saving never sends or answers.
  */
-export function saveDecisionDraft(day: Day, decision: Decision) {
+export function saveDecisionDraft(day: Day, decision: Decision): IntentOutcome {
 	const picked = picks()[decision.id];
 	const pickNow = picked
 		? picked.revision === decision.revision
@@ -49,10 +49,11 @@ export function saveDecisionDraft(day: Day, decision: Decision) {
 		question: questionText(decision),
 	});
 	if (outcome.status === "rejected") say(decision.id, outcome.message);
+	return outcome;
 }
 
 /** Gives Rust the notes or report typed on `action`, for the revision shown. Saving reports nothing. */
-export function saveActionDraft(day: Day, action: HumanAction) {
+export function saveActionDraft(day: Day, action: HumanAction): IntentOutcome {
 	const outcome = day.feed.saveDraft({
 		itemId: action.id,
 		revision: action.revision,
@@ -61,6 +62,7 @@ export function saveActionDraft(day: Day, action: HumanAction) {
 		question: "",
 	});
 	if (outcome.status === "rejected") say(action.id, outcome.message);
+	return outcome;
 }
 
 /** Picks `option` on `decision` and keeps it as a draft. Picking is not answering. */

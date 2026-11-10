@@ -35,10 +35,15 @@ pub mod project;
 pub mod ritual;
 pub mod ritual_feed;
 mod ritual_results;
+pub mod update;
+pub mod update_feed;
 
 use nsh_core::prelude::*;
 
-pub use crate::{changes_feed::ChangesFeed, feed::TodayFeed, model::*, plan_feed::PlanFeed};
+pub use crate::{
+    changes_feed::ChangesFeed, feed::TodayFeed, model::*, plan_feed::PlanFeed,
+    update_feed::UpdateFeed,
+};
 
 /// The read models and intents the Today screen imports from
 /// `pilot-day/native`.
@@ -48,5 +53,6 @@ fn native(registry: &mut Registry) {
         .class::<TodayFeed>()
         .class::<PlanFeed>()
         .class::<ChangesFeed>()
-        .class::<ritual_feed::RitualFeed>();
+        .class::<ritual_feed::RitualFeed>()
+        .class::<UpdateFeed>();
 }

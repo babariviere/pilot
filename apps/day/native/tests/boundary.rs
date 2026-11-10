@@ -75,6 +75,18 @@ fn the_screen_gets_typed_read_models_and_intents() {
         "  refresh(): IntentOutcome;",
         "  onChange(listener: (changes: ChangeList) => void): () => void;",
         "export type ChangeAttention = \"none\" | \"waiting\" | \"later\" | \"closed\" | \"unknown\";",
+        // Updates: Rust prepares a one-use confirmation for the kind and
+        // revision shown; confirming carries where the user is; a check
+        // only reads. TSX never names a target, version, service or process.
+        "  prepare(intent: PrepareIntent): Prepared;",
+        "  confirm(intent: ConfirmIntent): Promise<IntentOutcome>;",
+        "  cancel(intent: UpdateRef): IntentOutcome;",
+        "  check(): Promise<IntentOutcome>;",
+        "  restored(intent: UpdateRef): Promise<IntentOutcome>;",
+        "  onChange(listener: (service: ServiceView) => void): () => void;",
+        "export type UpdateKind = \"register\" | \"app\" | \"service\" | \"both\";",
+        "export type UpdatePhase = \"running\" | \"done\" | \"stopped\" | \"unknown\" | \"checking\";",
+        "export type ServiceState = \"registered\" | \"absent\" | \"offline\" | \"incompatible\" | \"unknown\";",
         "export type LandingState = \"unchecked\" | \"seen\" | \"notSeen\" | \"unclear\";",
     ] {
         assert!(ts.contains(line), "missing {line:?} in\n{ts}");
@@ -95,7 +107,8 @@ fn the_only_exports_are_the_feeds_and_they_have_no_transport() {
             "export declare class ChangesFeed {",
             "export declare class PlanFeed {",
             "export declare class RitualFeed {",
-            "export declare class TodayFeed {"
+            "export declare class TodayFeed {",
+            "export declare class UpdateFeed {"
         ],
         "{ts}"
     );

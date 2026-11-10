@@ -116,12 +116,14 @@ cd apps/day
 ./nsh.sh run FirstUse.tsx        # start and end of day: also Evening.tsx, Quiet.tsx, Trouble.tsx
 ./nsh.sh run Interview.tsx       # planning: also NewMission.tsx, Wayfinder.tsx, Review.tsx, PlanTrouble.tsx, Held.tsx, Long.tsx, PlanOff.tsx
 ./nsh.sh run Changes.tsx         # kept changes: also ChangesTrouble.tsx, ChangesEmpty.tsx, ChangesOff.tsx, ChangesLarge.tsx
+./nsh.sh run Update.tsx          # updates: also UpdateTrouble.tsx, UpdateRefused.tsx, ServiceAbsent.tsx, ServiceDenied.tsx, ServiceOffline.tsx, ServiceNewer.tsx
 ./nsh.sh run Connected.tsx       # the connected entry: without a native root it says it is not connected
 ./nsh.sh check && ./nsh.sh build # types against the Rust declarations, class check
 ./nsh.sh test App.test.tsx       # headless flows, boundary and sandbox (26 tests)
 ./nsh.sh test Ritual.test.tsx    # start and end of day and standup notes (9 tests)
 ./nsh.sh test Plan.test.tsx      # New, interviews, maps and review, Today's Planning, and the planning boundary (21 tests)
 ./nsh.sh test Changes.test.tsx   # Changes: list, exact reopen, Later, lost answer, unavailable, Read again, diff selection and scroll, boundary (13 tests)
+./nsh.sh test Update.test.tsx    # updates and registration: save, pause, restore, selective resume, stale, lost answer, refusals, boundary (9 tests)
 ./nsh.sh test Attention.test.tsx # agent questions, unavailable help, drafts and links that report nothing (4 tests)
 ./nsh.sh test Native.test.tsx --target macos  # native captures and input, in output/
 (cd native && ../scripts/cargo test --locked) # Rust rules through mbx too
@@ -439,6 +441,25 @@ otherwise the answer only says the read started. Writing review comments from
 Day is not built: the daemon keeps private review drafts with line anchors, but
 the native host does not reach them yet. The mock "Read more" adds the next page.
 
+Updates (the top bar's "Update ready", "Register Pilot" or "Update not
+confirmed", shown only when Pilot's service needs the user) open one page:
+whether the service is registered and answering, this app's and the
+service's versions, the offered update and the agents it touches. "Update…"
+asks Rust for a one-use confirmation that names the exact versions, how
+many working agents pause and how many paused by the user stay as they are.
+Confirming first saves every form to its own store (Today's drafts and
+interview answers); a refused save stops there and keeps the text. Then
+Rust gets one exact `SavedView`: the screen under the page, New's unsent
+goal, the item in front and each interview's question. After the restart
+the window starts fresh, shows that view again without sending anything
+and acknowledges it once; only then do the agents this update paused
+resume. A lost answer shows "Update not confirmed" and offers only Check
+again, which reads. A stopped run says what was not changed and what to do.
+Registration is explicit and its lost answer is only looked up. These run on
+mock rules (`native/src/update.rs`); the trusted native adapter over the
+existing updater is not built (see
+[the update pipeline](../../docs/technical/day-update-pipeline.md#day-update-controls)).
+
 Not built yet: the day switcher, Automations, the sky
 dither, selecting a root for the user's own daemon (the connected entry takes one from its
 native owner) and opening a chat from the mission overview. The default entries use mock worlds.
@@ -465,7 +486,7 @@ daemon's pinned link and reports nothing. The default entry still uses mock data
 | Rust planning (`native/src/plan*.rs`) | The planning read model and intents (`plan.rs`), the mock rules (`plan_desk.rs`), mock worlds (`plan_world.rs`) and `PlanFeed` |
 | TSX | Layout, copy, and screen state: picked option, open help, question drafts, the decision in front, unsaved answer text and picks |
 
-TSX imports three classes, `TodayFeed`, `PlanFeed` and `ChangesFeed`, from `pilot-day/native`. Their generated
+TSX imports `TodayFeed`, `PlanFeed`, `ChangesFeed`, `RitualFeed` and `UpdateFeed` from `pilot-day/native`. Their generated
 declarations (`.nsh/types/pilot-day/native.d.ts`) are the whole contract:
 
 - Read: `snapshot(): Today`, `onChange(listener): () => void` and
@@ -504,6 +525,11 @@ declarations (`.nsh/types/pilot-day/native.d.ts`) are the whole contract:
   `more` reads the next page and `refresh` reads the list again. Rust records
   the operation before sending. A changed request is `stale`; nothing here
   approves or reviews.
+- Updates (`UpdateFeed`): `snapshot` and `onChange` read; `prepare` names
+  the kind and revision shown and returns a one-use confirmation; `confirm`
+  names that confirmation and carries the exact `SavedView`; `cancel` drops
+  it; `check` only reads; `restored` acknowledges a saved view once. TSX
+  never names a target, version, service, profile or process.
 
 `nsh.json` declares `"capabilities": {}`, so the screen's VM may not use the
 network, sockets, files, processes or host calls. `BoundaryProbe.tsx` tries a

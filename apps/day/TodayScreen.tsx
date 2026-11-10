@@ -16,6 +16,8 @@ import { stageMark, stageWord } from "./PlanScreen";
 import type { Plans } from "./planning";
 import { openNew, openPlan } from "./planView";
 import { Action, EvidenceChip, InlineAction, Mark, RowLink, SectionTitle, Track } from "./ui";
+import { updateLabel } from "./UpdateScreen";
+import { showUpdate, updateEntry, updateOpen } from "./updateView";
 import { dataSource, focused, focusFront, front, type Item, move, openMission, queue, todayPlace } from "./view";
 import { freshnessLine, provenance, rowLine, stateMark, stateTone, stateWord } from "./words";
 
@@ -364,12 +366,20 @@ function Unreadable(props: { day: Day }) {
 
 /** Pilot's mark and name, with the mock data note when the window shows mock data. */
 export function TopBar(props: { children?: JSX.Element; action?: JSX.Element }) {
+	// Pilot's service, only when it needs the user: an update, a registration, a lost answer.
+	const update = () => {
+		const entry = updateEntry();
+		return entry && !updateOpen() ? updateLabel(entry.service()) : "";
+	};
 	return (
 		<View class="flex-row items-center gap-2">
 			{props.children}
 			<View class="size-4 rounded-md bg-primary" />
 			<Text class="text-sm font-semibold text-foreground">Pilot</Text>
 			<View class="flex-1" />
+			<If when={update()}>
+				<Action label={update()} testID="update-open" onPress={showUpdate} />
+			</If>
 			{props.action}
 			<If when={dataSource() === "mock"}>
 				<Text class="text-xs text-faint">Mock data</Text>

@@ -15,6 +15,9 @@ import { planRoute } from "./planView";
 import { RitualScreen } from "./RitualScreen";
 import { ritualRoute } from "./ritualView";
 import { TodayScreen } from "./TodayScreen";
+import type { Update } from "./updateFeed";
+import { bindRestore, UpdateScreen } from "./UpdateScreen";
+import { updateEntry, updateOpen } from "./updateView";
 import { route } from "./view";
 
 /** The planning screen the user opened, if any. */
@@ -45,11 +48,22 @@ function Planning(props: { day: Day; plans: Plans }) {
 	);
 }
 
-/** Today, or the mission, planning, Changes or ritual the user opened. */
-export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes }) {
+/** Today, or the mission, planning, Changes, ritual or update page the user opened. */
+export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; update?: Update }) {
+	updateEntry.set(props.update ?? null);
+	if (props.update) bindRestore(props.update, props.changes);
 	return (
-		<If when={ritualRoute()} else={<Screens day={props.day} plans={props.plans} changes={props.changes} />}>
-			<RitualScreen day={props.day} />
+		<If
+			when={props.update && updateOpen()}
+			else={
+				<If when={ritualRoute()} else={<Screens day={props.day} plans={props.plans} changes={props.changes} />}>
+					<RitualScreen day={props.day} />
+				</If>
+			}
+		>
+			<Arrive class="flex-1">
+				<UpdateScreen update={props.update as Update} day={props.day} plans={props.plans} />
+			</Arrive>
 		</If>
 	);
 }

@@ -177,6 +177,44 @@ The native wakeup only schedules the embedding owner's main-thread check; it mus
 host worker. The embedding window still owns quit/reload/menu/navigation fences and a cancellable
 deadline. This opt-in boundary is not a complete production app delegate or an update authorization.
 
+## Day update controls
+
+`apps/day` now has the TSX controls and the screen-state half of all-form restore. They run on mock
+rules only. `UpdateFeed` (`native/src/update_feed.rs`) follows the typed contract above:
+
+- `snapshot()`/`onChange` give one `ServiceView`: registration state (registered, absent, offline,
+  incompatible, unknown), app and service versions, the offer, why it cannot start, the agents an
+  update touches, the waiting confirmation, the latest run and a pending restore.
+- `prepare({kind, revision})` returns a one-use `Confirmation` with exact versions, pause and keep
+  counts and whether the app restarts. `confirm({confirmation, view})` uses it once. A forged,
+  reused or stale confirmation starts nothing. `cancel` drops it. `check()` only reads.
+- `SavedView` is exact (`#[prop(exact)]`) and limited to 64 KiB of text, refused whole when larger.
+  It holds what has no store of its own: the screen under the update page, New's unsent goal, the
+  Today item in front and each interview's question. Today's drafts and interview answers are
+  saved to their own stores first (`updateView.saveForms`); a refused save stops before any pause.
+- `restored({id})` acknowledges a restore once. Only then do upgrade-paused agents resume; agents
+  the user paused stay held. An app-only update pauses nothing.
+
+The mock worlds cover: up to date; app and service update with drafts, working and user-held agents;
+stale target; lost answer settled only by Check; failed save; unproven job exit (durable refusal,
+never shown as updated); unverified signature; absent, lost and macOS-denied registration; offline;
+and an app-only update for a newer service. The UI says "Updated" only after Rust reports the new
+version running, and "Update not confirmed" with Check again for any lost answer.
+
+Not built, and owned by the native host work:
+
+- `UpdateFeed::from_host`: a root-worker adapter over `DaemonLifecycle`, `daemon_upgrade::register`
+  and `ExitGuard::prepare_external`. `apps/day/native/Cargo.toml` does not link
+  `pilot-desktop-updater` yet ("Day never links the shipping app").
+- Bridge methods for these intents. `bridge::METHODS` has no update names, so the connected entry
+  shows no update control.
+- Durable `SavedView` storage in the host journal before COMMIT, and its startup read in the new
+  window, tied to the exact transaction and flush generation. The mock keeps it in memory.
+- Mapping native `Failure`/`Outcome` values and affected-session manifests to `ServiceView` without
+  inventing state. A jobful checkpoint refusal stays "Not updated".
+- Restoring a ritual, scroll position and open help panels. A restored window returns to Today
+  from a ritual and restores scroll to the top.
+
 ## Joined GUI and daemon sequence
 
 1. Resolve and verify the exact signed GUI target and daemon capsule before interrupting work.

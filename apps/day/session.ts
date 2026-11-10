@@ -3,6 +3,7 @@
 import { openChanges } from "./changeFeed";
 import { openDay } from "./day";
 import { openPlanning } from "./planning";
+import { openUpdate } from "./updateFeed";
 
 /** The running app's feed: the decisions world. */
 export const day = openDay();
@@ -10,3 +11,5 @@ export const day = openDay();
 export const plans = openPlanning();
 /** The running app's Changes feed: kept changes in every state. */
 export const changes = openChanges();
+/** The running app's update feed: Pilot's service, up to date. */
+export const update = openUpdate();
