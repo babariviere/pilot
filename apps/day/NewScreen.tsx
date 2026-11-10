@@ -4,6 +4,7 @@
 // confirms the exact words, project and settings.
 import { keymap, Scroll, signal, Text, View } from "nsh";
 import { Input } from "nsh/base";
+import { glide } from "./motion";
 import { planMission, startChat } from "./planCommands";
 import type { Plans } from "./planning";
 import { closePlanning, confirmingStart, goalDraft, newBusy, newMessage, openPlan } from "./planView";
@@ -106,6 +107,7 @@ export function NewScreen(props: { plans: Plans }) {
 								onPress={() => {
 									shownSetup.set(planning().setup.digest);
 									newMessage.set("");
+									glide();
 									confirmingStart.set(true);
 								}}
 							/>

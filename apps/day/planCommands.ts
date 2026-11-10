@@ -212,6 +212,13 @@ export function unsavedCount(interview: Interview): number {
 	return interview.questions.filter((q) => unsaved(interview, q)).length;
 }
 
+/** Saves every answer that waits, in every interview, and waits for each: what a close or an update needs first. */
+export async function flushAll(plans: Plans) {
+	const keys = new Set([...timers.keys(), ...Object.keys(answerDrafts()), ...Object.keys(answerPicks())]);
+	await Promise.all([...keys].map((key) => saveNow(plans, key)));
+	await Promise.all([...saving.values()]);
+}
+
 /**
  * The one submission: saves what is typed, then submits the saved answers
  * shown, and for a review the plan shown. A save that was refused keeps

@@ -46,10 +46,19 @@ invalidate UI mirrors. They carry no data or authority. Read
 `day.today.read` and the selected `day.plan.snapshot` on invalidation, not a
 polling loop or a new network read for every event.
 
-The isolated connected entry needs an asynchronous JSON mirror adapter,
-owned by the root UI, rather than calling the context-only feed factories.
-Substantive TSX integration belongs with the UI owner. The default mock
-entry and its deny-all capabilities are unchanged.
+`apps/day/bridge.ts` is that asynchronous JSON mirror adapter, used by
+`apps/day/Connected.tsx` through `connection.ts`. `ConnectedToday` and
+`ConnectedPlans` fit the `DayFeed`/`PlanningFeed` shapes the screens use
+(`apps/day/feeds.ts`), so no screen knows which feed it has. They first ask
+`day.attention.read`, then `day.today.read` and `day.plan.prepare`; a failed
+first read shows why, never mock data. Each intent is sent once with
+`timeout: 0`: a lost reply is Unknown and only the matching check method
+looks it up. Decision Later reorders this run only. Help, link opening,
+direct chat start, Start, budget and continuation say they are unavailable.
+On `day.flush` the adapter saves every waiting answer and Today draft, and
+acknowledges only when each save was answered and none was refused.
+`native/tests/connected.rs` runs the entry on a real `Bridge`. The default
+mock entry and its deny-all capabilities are unchanged.
 
 Launch parameters expose only:
 
@@ -142,6 +151,10 @@ The native grant intersects the bundle's declared capabilities and does
 not widen them. In particular, the current deny-all mock bundle stays
 denied. This function reports only shutdown, not successful load or native
 capture. No default entry calls it, and hidden tests never open its window.
+The feature gates only this module. `nsh-platform-macos` is a plain
+macOS-only dependency: the NSH CLI resolves every nsh crate's source from
+Cargo's resolve, and an inactive optional dependency is missing there, so
+`nsh check` refused the earlier optional form as "from crates.io".
 
 ## Verification limits
 

@@ -21,7 +21,7 @@ const MARKS: Record<MarkKind, string> = {
 
 /** A small round mark for a state. */
 export function Mark(props: { kind: MarkKind }) {
-	return <View class={`size-2 rounded-full ${MARKS[props.kind]}`} />;
+	return <View class={`size-2 rounded-full transition-colors duration-200 ${MARKS[props.kind]}`} />;
 }
 
 /** A key the user can press, as a small cap. `on` fills it: the choice it picks is chosen. */
@@ -74,8 +74,8 @@ export function Action(props: {
 			onPress={props.onPress}
 			class={
 				props.primary
-					? "min-h-8 flex-row items-center rounded-lg bg-primary px-3.5 py-1 active:opacity-90 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring/40"
-					: "min-h-8 flex-row items-center rounded-lg px-3 py-1 hover:bg-accent active:bg-accent disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring/40"
+					? "min-h-8 flex-row items-center rounded-lg bg-primary px-3.5 py-1 transition duration-150 active:opacity-90 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring/40"
+					: "min-h-8 flex-row items-center rounded-lg px-3 py-1 transition duration-150 hover:bg-accent active:bg-accent disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring/40"
 			}
 		>
 			<Text class={props.primary ? "text-sm font-medium text-primary-foreground" : "text-sm text-muted-foreground"}>

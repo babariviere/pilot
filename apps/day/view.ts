@@ -5,6 +5,7 @@
 // restart the screen starts from those drafts.
 import { type Signal, signal, type ViewRef } from "nsh";
 import type { Decision, HumanAction, Today } from "pilot-day/native";
+import { glide } from "./motion";
 
 /** The help a decision card shows. */
 export type Help = "simpler" | "more" | "visual" | "ask" | "details";
@@ -55,6 +56,8 @@ export function reportText(action: HumanAction): string {
 
 /** The mission whose overview is open, or null for Today. */
 export const route = signal<string | null>(null);
+/** Where the window's read models come from: mock worlds, or the Pilot service its native root chose. Only an entry sets it. */
+export const dataSource = signal<"mock" | "pilot">("mock");
 /** The mission whose Pause waits for the user's confirmation, if any. */
 export const confirming = signal<string | null>(null);
 /** The last message a control intent returned, by mission. */
@@ -85,6 +88,7 @@ export function helpOpen(id: string, kind: Help): boolean {
 /** Opens or closes `kind` help on decision `id`. */
 export function setHelp(id: string, kind: Help, open: boolean) {
 	const now = (help()[id] ?? []).filter((k) => k !== kind);
+	glide();
 	setFor(help, id, open ? [...now, kind] : now);
 }
 
@@ -145,6 +149,7 @@ export function move(today: Today, step: number) {
 	if (!now || all.length < 2) return;
 	const at = all.findIndex((item) => item.id === now.id);
 	const next = all[(at + step + all.length) % all.length];
+	glide();
 	focused.set(next.id);
 	focusFront.set(true);
 }

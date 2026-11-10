@@ -15,11 +15,13 @@ import type {
 	Step,
 	StepState,
 } from "pilot-day/native";
+import type { Day } from "./day";
 import { InterviewDoc } from "./InterviewDoc";
 import type { Plans } from "./planning";
 import { closePlanning, fogOpen, put, roundOpen } from "./planView";
 import { TopBar } from "./TodayScreen";
 import { Action, Mark, type MarkKind, SectionTitle } from "./ui";
+import { openMission } from "./view";
 
 /** The words beside a plan's mark. */
 export function stageWord(stage: PlanStage): string {
@@ -449,11 +451,21 @@ function Body(props: { plans: Plans; page: PlanPage; title: string }) {
  * Opening it asks Rust to read the saved interview and plan; that read
  * answers, submits and starts nothing.
  */
-export function PlanScreen(props: { plans: Plans; missionId: string; title?: string }) {
+export function PlanScreen(props: { day?: Day; plans: Plans; missionId: string; title?: string }) {
 	const page = computed(() => {
 		props.plans.planning();
 		return props.plans.feed.page(props.missionId) ?? null;
 	});
+	// The mission's overview, once Today's read has the mission: its agents'
+	// reports, Pause and the chats working now.
+	const inToday = () => {
+		const t = props.day?.today();
+		return !!t && [...t.moving, ...t.notMoving, ...t.unreported].some((m) => m.id === props.missionId);
+	};
+	const toOverview = () => {
+		closePlanning();
+		openMission(props.missionId);
+	};
 	const reading = signal<"reading" | "read" | "failed">("reading");
 	const message = signal("");
 	const id = props.missionId;
@@ -466,8 +478,16 @@ export function PlanScreen(props: { plans: Plans; missionId: string; title?: str
 		<Scroll class="flex-1 bg-background">
 			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-6">
 				<TopBar />
-				<View class="flex-row">
+				<View class="flex-row items-center gap-2">
 					<Action label="‹ Today" accessibilityLabel="Back to Today" onPress={closePlanning} />
+					<If when={inToday()}>
+						<Action
+							testID="open-overview"
+							label="Mission overview"
+							accessibilityLabel="Open this mission's overview"
+							onPress={toOverview}
+						/>
+					</If>
 				</View>
 				<If when={message() && page()}>
 					<Text role="alert" class="text-sm text-needs-ink">

@@ -1,0 +1,90 @@
+// The connected window's feeds: adapters over the exact JSON calls the
+// window's native root registered (bridge.ts). Screen code cannot choose a
+// service; without a root this window says so and never shows mock data.
+// Kept in its own module, like session.ts, so edits to the screens never
+// reopen the feeds.
+import { host, signal } from "nsh";
+import type { Setup, Today } from "pilot-day/native";
+import { ConnectedPlans, ConnectedToday, call, type Refusal, windowId } from "./bridge";
+import { type Day, mirrorDay } from "./day";
+import { flushAll } from "./planCommands";
+import { mirrorPlanning, type Plans } from "./planning";
+import { answerDrafts, answerPicks } from "./planView";
+
+/** Whether this window has its feeds yet, and which. */
+export type Connection =
+	| { state: "opening" }
+	| { state: "none"; reason: string }
+	| { state: "open"; day: Day; plans: Plans };
+
+/** The window's connection. Only `connect` sets it. */
+export const connection = signal<Connection>({ state: "opening" });
+
+/** Why the first read failed, in one calm sentence. */
+function unreadable(refusal: Refusal): string {
+	switch (refusal) {
+		case "offline":
+			return "Pilot could not reach its service. Nothing is shown rather than a guess.";
+		case "denied":
+			return "This window may not read Pilot's service. Nothing is shown rather than examples.";
+		case "identity":
+			return "The Pilot service this window was opened for changed. Open Day again.";
+		default:
+			return "Pilot could not read its service. Nothing is shown rather than a guess.";
+	}
+}
+
+/** The window's own envelope field, checked on every event. */
+function forWindow(payload: unknown, window: string): payload is { version: 1; window: string; generation?: unknown } {
+	const p = payload as { version?: unknown; window?: unknown } | null;
+	return !!p && p.version === 1 && p.window === window;
+}
+
+/**
+ * Saves every form, then tells the root they are saved for `generation`.
+ * Without an answer for every save, it says nothing: the root's lifecycle
+ * owner then never sees the forms as saved, and nothing is closed on a guess.
+ */
+async function flushForms(window: string, generation: number, today: ConnectedToday, plans: Plans) {
+	const drafts = await today.saveDrafts();
+	await flushAll(plans);
+	const waiting = Object.keys(answerDrafts()).length + Object.keys(answerPicks()).length;
+	if (!drafts || waiting > 0) return;
+	await call(window, "day.flush.ack", { generation });
+}
+
+async function connect() {
+	const window = windowId();
+	if (!window) {
+		connection.set({
+			state: "none",
+			reason: "This window was not opened for a Pilot service, so it shows nothing rather than examples.",
+		});
+		return;
+	}
+	// Asks the root to include what needs the user in its reads; it sends nothing.
+	await call(window, "day.attention.read", {});
+	const first = await call<Today>(window, "day.today.read", {});
+	if (!first.ok) {
+		connection.set({ state: "none", reason: unreadable(first.refusal) });
+		return;
+	}
+	const setup = await call<Setup | null>(window, "day.plan.prepare", {});
+	const today = new ConnectedToday(window, first.snapshot);
+	const planFeed = new ConnectedPlans(window, setup.ok ? (setup.snapshot ?? null) : null);
+	const day = mirrorDay(today);
+	const plans = mirrorPlanning(planFeed);
+	// An invalidation carries no data: read again, never poll.
+	host.on("day.changed", (payload) => {
+		if (!forWindow(payload, window)) return;
+		void today.refresh();
+		void planFeed.refresh();
+	});
+	host.on("day.flush", (payload) => {
+		if (!forWindow(payload, window) || typeof payload.generation !== "number") return;
+		void flushForms(window, payload.generation, today, plans);
+	});
+	connection.set({ state: "open", day, plans });
+}
+
+void connect();

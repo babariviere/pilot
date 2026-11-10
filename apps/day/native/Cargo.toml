@@ -13,10 +13,13 @@ publish = false
 path = "src/lib.rs"
 
 [features]
-macos-host = ["dep:nsh-platform-macos"]
+# Gates the opt-in qualification runner module only. The platform crate is a
+# plain (macOS-only) dependency: the NSH CLI resolves every nsh crate's
+# source from Cargo's resolve, which leaves an inactive optional one out.
+macos-host = []
 
 [target.'cfg(target_os = "macos")'.dependencies]
-nsh-platform-macos = { git = "https://github.com/longbridge/nsh", rev = "e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3", optional = true }
+nsh-platform-macos = { git = "https://github.com/longbridge/nsh", rev = "e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3" }
 
 [dependencies]
 nsh-engine = { git = "https://github.com/longbridge/nsh", rev = "e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3" }

@@ -7,6 +7,7 @@ import type { Changes } from "./changeFeed";
 import { changesRoute } from "./changesView";
 import type { Day } from "./day";
 import { MissionScreen } from "./MissionScreen";
+import { Arrive } from "./motion";
 import { NewScreen } from "./NewScreen";
 import { PlanScreen } from "./PlanScreen";
 import type { Plans } from "./planning";
@@ -25,16 +26,21 @@ function Planning(props: { day: Day; plans: Plans }) {
 			else={
 				<Each of={at()?.kind === "plan" ? [(at() as { missionId: string }).missionId] : []} key={(id) => id}>
 					{(id) => (
-						<PlanScreen
-							plans={props.plans}
-							missionId={id()}
-							title={props.day.feed.mission(id())?.row.title ?? ""}
-						/>
+						<Arrive class="flex-1">
+							<PlanScreen
+								day={props.day}
+								plans={props.plans}
+								missionId={id()}
+								title={props.day.feed.mission(id())?.row.title ?? ""}
+							/>
+						</Arrive>
 					)}
 				</Each>
 			}
 		>
-			<NewScreen plans={props.plans} />
+			<Arrive class="flex-1">
+				<NewScreen plans={props.plans} />
+			</Arrive>
 		</If>
 	);
 }
@@ -56,9 +62,20 @@ function Screens(props: { day: Day; plans?: Plans; changes?: Changes }) {
 				<If
 					when={props.plans && planRoute()}
 					else={
-						<If when={route()} else={<TodayScreen day={props.day} plans={props.plans} changes={props.changes} />}>
+						<If
+							when={route()}
+							else={
+								<Arrive class="flex-1">
+									<TodayScreen day={props.day} plans={props.plans} changes={props.changes} />
+								</Arrive>
+							}
+						>
 							<Each of={route() ? [route() as string] : []} key={(id) => id}>
-								{(id) => <MissionScreen day={props.day} missionId={id()} />}
+								{(id) => (
+									<Arrive class="flex-1">
+										<MissionScreen day={props.day} plans={props.plans} missionId={id()} />
+									</Arrive>
+								)}
 							</Each>
 						</If>
 					}

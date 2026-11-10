@@ -509,6 +509,28 @@ impl TodayFeed {
         )
     }
 
+    /// Reads one mission's tasks, reports and working chats again, for its
+    /// overview. It only reads: nothing is sent, paused or settled. Mock
+    /// data has everything already.
+    pub async fn open_mission(this: Instance<Self>, intent: MissionRef) -> IntentOutcome {
+        if let Some(host) = this.with(|f| f.native.clone()) {
+            let result = host.read_mission(intent.mission_id);
+            return match result.recv().await {
+                Ok(Ok(outcome)) => outcome,
+                _ => IntentOutcome {
+                    status: OutcomeStatus::Rejected,
+                    revision: host.snapshot().revision,
+                    message: "Pilot could not read this mission again. What was read before stays on screen.".into(),
+                },
+            };
+        }
+        this.with(|feed| IntentOutcome {
+            status: OutcomeStatus::Accepted,
+            revision: feed.desk.today().revision,
+            message: String::new(),
+        })
+    }
+
     /// Pauses all of a mission's work, named at the control revision the
     /// screen showed. Resolves once the service answers: paused, or still
     /// pausing with work that needs a look. A lost answer is `unknown`, and

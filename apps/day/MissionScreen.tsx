@@ -3,11 +3,15 @@
 // Reports are agent words, never verified progress. Pause and Resume are
 // intents: Rust builds and fences the command; this screen names only the
 // mission, the revision it showed and, for Resume, the Pause it showed.
-import { computed, keymap, Scroll, Text, View } from "nsh";
-import type { MissionPage, MissionRow, ReportLine, TaskLine } from "pilot-day/native";
+import { computed, keymap, Scroll, signal, Text, View } from "nsh";
+import type { MissionPage, MissionRow, PlanRow, ReportLine, TaskLine } from "pilot-day/native";
 import type { Day } from "./day";
+import { glide } from "./motion";
+import { stageMark, stageWord } from "./PlanScreen";
+import type { Plans } from "./planning";
+import { openPlan } from "./planView";
 import { FreshnessNote, MissionStatus, TopBar } from "./TodayScreen";
-import { Action, EvidenceChip, Mark, SectionTitle, Track } from "./ui";
+import { Action, EvidenceChip, Mark, RowLink, SectionTitle, Track } from "./ui";
 import { closeMission, confirming, controlMessages, setFor } from "./view";
 import { controlLine, memberWord, provenance, rowLine, taskWord } from "./words";
 
@@ -123,7 +127,13 @@ function Pause(props: { day: Day; page: MissionPage }) {
 			</If>
 			<View class="flex-row flex-wrap items-center gap-2">
 				<If when={control().canPause && !asking()}>
-					<Action label="Pause mission" onPress={() => confirming.set(id())} />
+					<Action
+						label="Pause mission"
+						onPress={() => {
+							glide();
+							confirming.set(id());
+						}}
+					/>
 				</If>
 				<If when={control().canResume}>
 					<Action primary label="Resume" onPress={resume} />
@@ -157,10 +167,46 @@ function Task(props: { task: TaskLine }) {
 	);
 }
 
+/**
+ * Where the mission's agreement lives: its saved interview, the plan it
+ * agreed and the tasks it became. A link, not a copy: the planning page
+ * says what it can read, including a mission that has no saved interview.
+ */
+function PlanLink(props: { plans: Plans; missionId: string }) {
+	const row = (): PlanRow | null => props.plans.planning().plans.find((p) => p.missionId === props.missionId) ?? null;
+	const stage = () => {
+		const r = row();
+		return r ? stageWord(r.stage) : "";
+	};
+	return (
+		<View testID="mission-plan" class="gap-2">
+			<SectionTitle title="Plan" />
+			<RowLink
+				testID="open-plan"
+				title="Interview and plan"
+				accessibilityLabel={stage() ? `Interview and plan, ${stage()}. Open it.` : "Interview and plan. Open it."}
+				onPress={() => openPlan(props.missionId)}
+			>
+				<If when={row()}>
+					<View class="flex-row items-center gap-1.5">
+						<Mark kind={stageMark(row()?.stage ?? "planning")} />
+						<Text class={row()?.needsYou ? "text-xs text-needs-ink" : "text-xs text-muted-foreground"}>
+							{stage()}
+						</Text>
+					</View>
+				</If>
+			</RowLink>
+			<Text class="text-sm text-muted-foreground">
+				{row()?.line || "What you answered, the plan Pilot proposed and the tasks it became."}
+			</Text>
+		</View>
+	);
+}
+
 // The overview is a column of independent sections, each reading only
 // `MissionPage`. Later mission detail (planning, Fog of war) adds a field to
 // `MissionPage` in Rust and its own section here; nothing else changes.
-function Body(props: { day: Day; page: MissionPage }) {
+function Body(props: { day: Day; plans?: Plans; page: MissionPage }) {
 	const row = () => props.page.row;
 	return (
 		<View class="gap-10">
@@ -186,6 +232,10 @@ function Body(props: { day: Day; page: MissionPage }) {
 					<Text class="text-xs text-faint">{`${row().progress.done} of ${total(row())} done`}</Text>
 				</View>
 			</View>
+
+			<If when={props.plans}>
+				<PlanLink plans={props.plans as Plans} missionId={row().id} />
+			</If>
 
 			<Pause day={props.day} page={props.page} />
 
@@ -220,11 +270,21 @@ function Body(props: { day: Day; page: MissionPage }) {
 	);
 }
 
-/** The overview of mission `props.missionId`, read again on every change. */
-export function MissionScreen(props: { day: Day; missionId: string }) {
+/**
+ * The overview of mission `props.missionId`, read again on every change.
+ * Opening it asks Rust to read the mission's detail again; that read sends,
+ * pauses and settles nothing.
+ */
+export function MissionScreen(props: { day: Day; plans?: Plans; missionId: string }) {
 	const page = computed(() => {
 		props.day.today();
 		return props.day.feed.mission(props.missionId) ?? null;
+	});
+	const readNote = signal("");
+	const reading = signal(true);
+	void props.day.feed.openMission({ missionId: props.missionId }).then((outcome) => {
+		reading.set(false);
+		readNote.set(outcome.status === "accepted" ? "" : outcome.message);
 	});
 	keymap.bind("escape", () => {
 		if (confirming()) confirming.set(null);
@@ -237,16 +297,23 @@ export function MissionScreen(props: { day: Day; missionId: string }) {
 				<View class="flex-row">
 					<Action label="‹ Today" accessibilityLabel="Back to Today" onPress={closeMission} />
 				</View>
+				<If when={readNote()}>
+					<Text role="alert" class="text-sm text-muted-foreground">
+						{readNote()}
+					</Text>
+				</If>
 				<If
 					when={page()}
 					else={
 						<Text class="text-base text-muted-foreground">
-							This mission is not in the latest read. It may have finished or been archived.
+							{reading()
+								? "Reading this mission…"
+								: "This mission is not in the latest read. It may have finished or been archived."}
 						</Text>
 					}
 				>
 					<Each of={page() ? [page() as MissionPage] : []} key={(p) => p.row.id}>
-						{(p) => <Body day={props.day} page={p()} />}
+						{(p) => <Body day={props.day} plans={props.plans} page={p()} />}
 					</Each>
 				</If>
 			</View>

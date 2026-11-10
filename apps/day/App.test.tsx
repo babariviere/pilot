@@ -269,6 +269,31 @@ test("a mission opens with its report, tasks and working chats, and Escape goes 
 	await app.waitFor("Three short things need you.");
 });
 
+test("a mission's overview leads to its interview and plan, which says when there is none", async () => {
+	const app = await open("./App.tsx", desktop);
+	await app.press("id:mission-search");
+	await app.waitFor("id:mission-plan");
+	expect(app.shows("Interview and plan")).toBe(true);
+	await app.press("id:open-plan");
+	await app.waitFor("This mission is not in planning.");
+	// The mission is on Today, so its overview is one step back.
+	await app.press("id:open-overview");
+	await app.waitFor("id:mission-plan");
+	await app.keyboard.press("escape");
+	await app.waitFor("Three short things need you.");
+});
+
+test("the connected entry without a service says so and shows no mock data", async () => {
+	const app = await open("./Connected.tsx", desktop);
+	await app.waitFor("id:not-connected");
+	expect(app.shows("This window was not opened for a Pilot service, so it shows nothing rather than examples.")).toBe(
+		true,
+	);
+	for (const text of ["Mock data", "Needs you", "Three short things need you."]) {
+		expect(app.shows(text)).toBe(false);
+	}
+});
+
 test("pause asks first, stays Pausing until its receipt, and resume brings it back", async () => {
 	const app = await open("./App.tsx", desktop);
 	await app.press("id:mission-search");

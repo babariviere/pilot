@@ -11,11 +11,12 @@ import { commit, later, pickNth, toggleHelp, writeReply } from "./commands";
 import { DayLine } from "./DayLine";
 import { DecisionCard, decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
+import { Arrive } from "./motion";
 import { stageMark, stageWord } from "./PlanScreen";
 import type { Plans } from "./planning";
 import { openNew, openPlan } from "./planView";
 import { Action, EvidenceChip, InlineAction, Mark, RowLink, SectionTitle, Track } from "./ui";
-import { focused, focusFront, front, type Item, move, openMission, queue } from "./view";
+import { dataSource, focused, focusFront, front, type Item, move, openMission, queue } from "./view";
 import { freshnessLine, provenance, rowLine, stateMark, stateTone, stateWord } from "./words";
 
 function actionFor(decision: Decision | undefined): string {
@@ -171,25 +172,27 @@ function NeedsYou(props: { day: Day }) {
 			>
 				<Each of={first() ? [first() as Item] : []} key={(item) => item.id}>
 					{(item) => (
-						<If
-							when={item().kind === "decision"}
-							else={
-								<ActionCard
+						<Arrive>
+							<If
+								when={item().kind === "decision"}
+								else={
+									<ActionCard
+										day={props.day}
+										action={(item() as Extract<Item, { kind: "action" }>).action}
+										index={items().findIndex((i) => i.id === item().id)}
+										count={items().length}
+									/>
+								}
+							>
+								<DecisionCard
 									day={props.day}
-									action={(item() as Extract<Item, { kind: "action" }>).action}
+									decision={(item() as Extract<Item, { kind: "decision" }>).decision}
 									index={items().findIndex((i) => i.id === item().id)}
 									count={items().length}
+									later={decisions().length > 1}
 								/>
-							}
-						>
-							<DecisionCard
-								day={props.day}
-								decision={(item() as Extract<Item, { kind: "decision" }>).decision}
-								index={items().findIndex((i) => i.id === item().id)}
-								count={items().length}
-								later={decisions().length > 1}
-							/>
-						</If>
+							</If>
+						</Arrive>
 					)}
 				</Each>
 			</If>
@@ -334,7 +337,7 @@ function Unreadable(props: { day: Day }) {
 	);
 }
 
-/** Pilot's mark and name, with the mock data note. */
+/** Pilot's mark and name, with the mock data note when the window shows mock data. */
 export function TopBar(props: { children?: JSX.Element; action?: JSX.Element }) {
 	return (
 		<View class="flex-row items-center gap-2">
@@ -343,7 +346,9 @@ export function TopBar(props: { children?: JSX.Element; action?: JSX.Element }) 
 			<Text class="text-sm font-semibold text-foreground">Pilot</Text>
 			<View class="flex-1" />
 			{props.action}
-			<Text class="text-xs text-faint">Mock data</Text>
+			<If when={dataSource() === "mock"}>
+				<Text class="text-xs text-faint">Mock data</Text>
+			</If>
 		</View>
 	);
 }

@@ -8,6 +8,7 @@
 import { cleanup, computed, effect, keymap, signal, Text, View, type ViewRef } from "nsh";
 import { Button, Input, Toggle } from "nsh/base";
 import type { Interview, PlanPage, Question, QuestionSection } from "pilot-day/native";
+import { Arrive, glide } from "./motion";
 import {
 	answerText,
 	CLEARED,
@@ -76,6 +77,7 @@ function go(plans: Plans, interview: Interview, to: string) {
 	const now = place(interview);
 	const current = interview.questions.find((q) => q.id === now);
 	if (current) void saveNow(plans, answerKey(interview, current));
+	glide();
 	put(atQuestion, interview.id, to);
 	const next = interview.questions.find((q) => q.id === to);
 	focusAsk.set(next ? answerKey(interview, next) : null);
@@ -586,16 +588,25 @@ export function InterviewDoc(props: { plans: Plans; page: PlanPage; interview: I
 					</Each>
 				</View>
 			</If>
-			<If when={current()} else={<Answers plans={props.plans} page={props.page} interview={iv()} />}>
+			<If
+				when={current()}
+				else={
+					<Arrive>
+						<Answers plans={props.plans} page={props.page} interview={iv()} />
+					</Arrive>
+				}
+			>
 				<Each of={current() ? [current() as Question] : []} key={(q) => q.id}>
 					{(q) => (
-						<QuestionView
-							plans={props.plans}
-							page={props.page}
-							interview={iv()}
-							question={q()}
-							section={sectionLine(q())}
-						/>
+						<Arrive>
+							<QuestionView
+								plans={props.plans}
+								page={props.page}
+								interview={iv()}
+								question={q()}
+								section={sectionLine(q())}
+							/>
+						</Arrive>
 					)}
 				</Each>
 				<View class="flex-row flex-wrap items-center gap-2 border-t border-border pt-4">

@@ -116,6 +116,7 @@ cd apps/day
 ./nsh.sh run FirstUse.tsx        # start and end of day: also Evening.tsx, Quiet.tsx, Trouble.tsx
 ./nsh.sh run Interview.tsx       # planning: also NewMission.tsx, Wayfinder.tsx, Review.tsx, PlanTrouble.tsx, Held.tsx, Long.tsx, PlanOff.tsx
 ./nsh.sh run Changes.tsx         # kept changes: also ChangesTrouble.tsx, ChangesEmpty.tsx, ChangesOff.tsx, ChangesLarge.tsx
+./nsh.sh run Connected.tsx       # the connected entry: without a native root it says it is not connected
 ./nsh.sh check && ./nsh.sh build # types against the Rust declarations, class check
 ./nsh.sh test App.test.tsx       # headless flows, boundary and sandbox (26 tests)
 ./nsh.sh test Ritual.test.tsx    # start and end of day and standup notes (9 tests)
@@ -125,6 +126,12 @@ cd apps/day
 ./nsh.sh test Native.test.tsx --target macos  # native captures and input, in output/
 (cd native && ../scripts/cargo test --locked) # Rust rules through mbx too
 ```
+
+`native/tests/connected.rs` runs `Connected.tsx` headless on the released host channel, through
+one `Bridge` over the canonical `DayRoot`. One test needs no daemon (an unreadable selection and the
+flush answer); the journey test uses an isolated daemon with a forked faux kernel
+(`packages/daemon/src/fixtures/day-planning-enrollment.ts`, so it needs the repository's Node
+dependencies). Both are part of the native `cargo test` above.
 
 Script-only checks need neither Cargo nor NSH and never open a window:
 
@@ -177,6 +184,61 @@ point, script or build uses it, and `tsconfig.json` excludes it.
   parity matrix, hooks and commands.
 
 ## What it shows
+
+### The connected window
+
+`Connected.tsx` is Day on a real Pilot service, kept apart from the default mock entry. Its native
+owner opens one `NativeHost` for an explicit selection, wraps it in the canonical `DayRoot` and a
+`Bridge`, and gives the window that bridge's host channel
+([released host boundary](../../docs/technical/day-public-bridge.md)). `bridge.ts` adapts the
+exact JSON calls to the same shapes the screens already use (`feeds.ts`): `ConnectedToday` and
+`ConnectedPlans` mirror the latest read in one signal each, read again on `day.changed` (which
+carries no data), and send each intent once. A lost reply is Unknown and only Check looks it up.
+Help, link opening, direct chat start, Start, budget grants and continuation after a human action
+stay unavailable here and say so. The screen never names a profile, port, path or credential.
+Without a native root (`nsh run`, `nsh test`), the window says it is not connected instead of
+showing examples; a first read that fails says why. "Mock data" shows only on mock entries.
+
+On `day.flush` (the lifecycle owner's request before a close or an update), the window saves every
+waiting interview answer and Today draft, waits for each answer, and only then sends
+`day.flush.ack`. If any save was refused it sends nothing, so the owner never closes on a guess.
+The native owner still has to capture attached inputs and preedit, stop the engine and await
+`Bridge::close`; Drop is not that. Nothing selects a root for the user yet, and the stock runner
+is qualification only. The connected window's `nsh.json` must declare exactly the bridge's method
+names (the tests copy the entry with one); the default app's `nsh.json` stays deny-all.
+
+The mission path runs through four screens without a sidebar: Today, New, the mission's planning
+(interview, proposed plan and the separate steps from answers to work) and the mission's overview
+(reports, Plan, Pause, tasks, working chats). The overview's "Interview and plan" opens the
+planning, and the planning's "Mission overview" goes back once Today's read has the mission. A
+mission without a saved interview says so on its planning page. Opening an overview asks Rust to
+read that mission's detail again (`TodayFeed.openMission`); it sends and settles nothing.
+
+### Motion
+
+`motion.tsx` holds the one motion treatment, built only from upstream NSH motion, layout
+animation and transitions. It has three moves and nothing else:
+
+- **Arrive** (180 ms fade with a 6-point rise, easing out): a screen, the card in front of
+  "Needs you" (after J/K or when an item leaves), an interview question and the answers page.
+- **Glide** (180 ms layout animation): items that arrive or leave Today, missions that change
+  group, the next card coming forward, help panels, the Pause and direct-start confirmations, and
+  the interview card between questions. Collapsible sections keep `nsh/base`'s own reveal.
+- **Ease** (150 to 200 ms color and opacity transitions): buttons and state marks.
+
+Rules: motion follows what Rust already published and never stands for a send, a save or an
+answer; there is no motion on success. Controls are live from the first frame, so Stop, Pause and
+Submit are never delayed. Nothing loops, flashes or bounces. A new motion interrupts the one
+playing and transitions start from what is on screen. Focus, text selection and scroll position are
+not moved by motion; a glide only animates frames the update already changes. When the user asks
+for less motion, Arrive lands at once (NSH's own rule) and glides are skipped; the short color
+eases stay.
+
+Not verified yet: headless tests cannot show motion, so how it looks, its frame rate, interruption
+under fast J/K or typing, and layout stability need a visible native check (not authorized). The
+`Pulse.tsx` workload may glide on every group change; its cost is unmeasured.
+
+### Today
 
 Today follows the selected D design: the coordinators' headline, one item
 under "Needs you" in front with "Up next" below it, missions split into Moving
@@ -359,8 +421,8 @@ Day is not built: the daemon keeps private review drafts with line anchors, but
 the native host does not reach them yet. The mock "Read more" adds the next page.
 
 Not built yet: the day switcher, Automations, the sky
-dither, bootstrap selection for the delivered native daemon host and
-opening a chat from the mission overview. The default entries use mock worlds.
+dither, selecting a root for the user's own daemon (the connected entry takes one from its
+native owner) and opening a chat from the mission overview. The default entries use mock worlds.
 Decisions, actions, help answers, results and Coming up come from mock worlds,
 not from contracts. The
 mock help and action services in `native/` follow the attention contracts
@@ -390,6 +452,9 @@ declarations (`.nsh/types/pilot-day/native.d.ts`) are the whole contract:
 - Read: `snapshot(): Today`, `onChange(listener): () => void` and
   `mission(missionId): MissionPage | null`. TSX mirrors the model in one signal
   that only the listener sets, and reads a mission page again on each change.
+  `openMission(MissionRef)` asks Rust to read one mission's detail again; it only reads.
+- Connection: `Connected.tsx` uses the root's exact JSON calls through `bridge.ts`, adapted to the
+  same `DayFeed`/`PlanningFeed` shapes (`feeds.ts`). TSX cannot name or change the service.
 - Intents: `decide(DecideIntent)`, `later(DecisionRef)`, `check(DecisionRef)`,
   `ask(AskIntent)`, `checkAnswer(AnswerRef)`, `saveProgress(ProgressIntent)`,
   `actionLater(ActionRef)`, `complete(CompleteIntent)`, `checkAction(ActionCheck)`,
