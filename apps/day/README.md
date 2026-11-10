@@ -98,7 +98,7 @@ cd apps/day
 ./nsh.sh test App.test.tsx       # headless flows, boundary and sandbox (26 tests)
 ./nsh.sh test Ritual.test.tsx    # start and end of day and standup notes (9 tests)
 ./nsh.sh test Plan.test.tsx      # New, interviews, maps and review, and the planning boundary (19 tests)
-./nsh.sh test Changes.test.tsx   # Changes: list, exact reopen, Later, lost answer, unavailable, boundary (10 tests)
+./nsh.sh test Changes.test.tsx   # Changes: list, exact reopen, Later, lost answer, unavailable, Read again, diff selection and scroll, boundary (13 tests)
 ./nsh.sh test Attention.test.tsx # agent questions, unavailable help, drafts and links that report nothing (4 tests)
 ./nsh.sh test Native.test.tsx --target macos  # native captures and input, in output/
 (cd native && ../scripts/cargo test --locked) # Rust rules through mbx too
@@ -297,9 +297,13 @@ When kept changes cannot be read at all, Changes says so and never shows an
 empty list. A row reopens one exact snapshot: the date it was kept, its head
 and base commits, what was not kept, and a link to a newer snapshot of the
 same change when there is one. "Diff" shows the exact kept patch in NSH's
-read-only `DiffView` (one column, changed words marked, only rows in view
-made; no hunk actions). Rust shows the patch only when its bytes match the
-saved digest and every part of the read names the snapshot asked for.
+read-only `DiffView` (one column, changed words marked, long lines wrapped,
+each file under its own header, only rows in view made; no hunk actions). The
+diff has no frame of its own and fills the rest of the page under the
+snapshot's facts, which stay in place while the diff scrolls. A line number
+selects its line with a see-through tint, so the code stays readable. Rust
+shows the patch only when its bytes match the saved digest and every part of
+the read names the snapshot asked for.
 "History" lists saved reviews (an approval is of that snapshot, at that
 time), landing checks, review requests and, on request, the full snapshot
 identity. The review request is current at the read; a landing is the last
@@ -310,6 +314,12 @@ returns it, each naming the request and revision shown; neither approves,
 reviews or resumes anything. A lost answer stays unconfirmed until "Check
 again" reads the saved operation; nothing is sent twice.
 
+"Read again" (on the list, and on the unavailable note) reads the whole list
+again. It sends nothing and settles no unconfirmed answer; only "Check again"
+does. A reopened snapshot that cannot show now says why and offers to read
+that same snapshot again. A list stopped by its read limit says more exist
+and shows none of them, never a partial list.
+
 Changes' default entry runs on mock data shaped as the daemon's v1 kept-change contracts
 ([landed-changes.md](../../docs/technical/landed-changes.md)), read through
 serde mirrors (`native/src/changes_contract.rs`) and one projection
@@ -319,9 +329,11 @@ project's retained sessions, then publishes a complete feed. Limits or unreadabl
 sources produce Unavailable, never a successful partial or empty feed. Exact
 reopen, revision-fenced Later/Bring back and lookup-only recovery use the existing
 daemon routes and private native journal. The bootstrap still needs to supply this
-feed; native refresh/currentness UI remains follow-up work. Writing review feedback
-from Day is not built. The mock "Read more" adds the next page; native `more`
-queues a new complete read and does not acknowledge its completion.
+feed. Natively, `refresh` and `more` both queue one new complete read: a refusal
+known at once (no current access, a closed host, a busy queue) says so, and
+otherwise the answer only says the read started. Writing review comments from
+Day is not built: the daemon keeps private review drafts with line anchors, but
+the native host does not reach them yet. The mock "Read more" adds the next page.
 
 Not built yet: the day switcher, Automations, the sky
 dither, bootstrap selection for the delivered native daemon host and
@@ -382,8 +394,9 @@ declarations (`.nsh/types/pilot-day/native.d.ts`) are the whole contract:
 - Changes (`ChangesFeed`): `snapshot`, `onChange` and `change(snapshotId)`
   read; `open` reads one exact snapshot; `later` and `bringBack` name the
   snapshot, request and request revision shown; `checkAttention` only reads;
-  `more` reads the next page. Rust records the operation before sending. A
-  changed request is `stale`; nothing here approves or reviews.
+  `more` reads the next page and `refresh` reads the list again. Rust records
+  the operation before sending. A changed request is `stale`; nothing here
+  approves or reviews.
 
 `nsh.json` declares `"capabilities": {}`, so the screen's VM may not use the
 network, sockets, files, processes or host calls. `BoundaryProbe.tsx` tries a

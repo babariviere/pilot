@@ -3,7 +3,8 @@
 // its read-only diff and its saved history. The snapshot is history, the
 // review request is current at the read, a landing is the last check.
 // Reopening approves nothing. Later and Bring back are intents that name
-// the request and revision shown; Rust fences and sends them.
+// the request and revision shown; Rust fences and sends them. Read again
+// only reads: it sends nothing and settles no unconfirmed answer.
 import { computed, keymap, Scroll, Text, View } from "nsh";
 import type { ChangePage, ChangeRow } from "pilot-day/native";
 import type { Changes } from "./changeFeed";
@@ -78,6 +79,11 @@ async function check(changes: Changes, page: ChangePage) {
 	say(id, "");
 	const outcome = await changes.feed.checkAttention({ snapshotId: id });
 	say(id, outcome.message);
+}
+
+/** Reads the list again. It sends nothing; the list says what the read found. */
+function readAgain(changes: Changes) {
+	listMessage.set(changes.feed.refresh().message);
 }
 
 function rowMeta(row: ChangeRow): string {
@@ -158,8 +164,16 @@ function ChangeList(props: { changes: Changes }) {
 		<Scroll class="flex-1 bg-background">
 			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-6">
 				<TopBar />
-				<View class="flex-row">
+				<View class="flex-row items-center">
 					<Action label="‹ Today" accessibilityLabel="Back to Today" onPress={backFromChanges} />
+					<View class="flex-1" />
+					<If when={list().availability === "available"}>
+						<Action
+							label="Read again"
+							accessibilityLabel="Read kept changes again. This sends nothing."
+							onPress={() => readAgain(props.changes)}
+						/>
+					</If>
 				</View>
 				<View class="gap-2">
 					<Text role="header" class="text-2xl font-semibold leading-tight tracking-tight text-foreground">
@@ -171,6 +185,11 @@ function ChangeList(props: { changes: Changes }) {
 					</Text>
 					<Text class="text-xs text-faint">Only kept snapshots show here, not every change in the project.</Text>
 				</View>
+				<If when={listMessage()}>
+					<Text testID="list-message" class="text-xs text-muted-foreground">
+						{listMessage()}
+					</Text>
+				</If>
 				<If
 					when={list().availability === "available"}
 					else={
@@ -180,7 +199,19 @@ function ChangeList(props: { changes: Changes }) {
 								<Text class="flex-1 text-sm text-foreground">Pilot cannot show kept changes here.</Text>
 							</View>
 							<Text class="text-sm text-muted-foreground">{list().reason}</Text>
+							<If when={list().more}>
+								<Text class="text-sm text-muted-foreground">
+									There are more kept changes than one read holds, so Pilot shows none of them.
+								</Text>
+							</If>
 							<Text class="text-xs text-faint">This is not the same as having none.</Text>
+							<View class="flex-row pt-1">
+								<Action
+									label="Read again"
+									accessibilityLabel="Read kept changes again. This sends nothing."
+									onPress={() => readAgain(props.changes)}
+								/>
+							</View>
 						</View>
 					}
 				>
@@ -231,9 +262,6 @@ function ChangeList(props: { changes: Changes }) {
 							<View class="flex-row">
 								<Action label="Read more" onPress={more} />
 							</View>
-						</If>
-						<If when={listMessage()}>
-							<Text class="text-xs text-muted-foreground">{listMessage()}</Text>
 						</If>
 					</View>
 				</If>
@@ -308,17 +336,14 @@ function Now(props: { changes: Changes; page: ChangePage }) {
 	);
 }
 
-/** The exact kept patch, read-only, with what it does not show. */
+/** The exact kept patch, read-only, with what it does not show. The diff fills the rest of the page. */
 function Diff(props: { page: ChangePage }) {
 	const files = () => props.page.files;
 	const noted = () => files().filter((f) => f.note);
 	const empty = () =>
 		props.page.diffNote || (files().length === 0 ? "No file changed in this snapshot." : "No lines to show.");
 	return (
-		<View class="flex-1 gap-2">
-			<If when={files().length > 0}>
-				<Text class="text-xs text-muted-foreground">{filesLine(files())}</Text>
-			</If>
+		<View class="min-h-0 flex-1 gap-2">
 			<Each of={noted()} key={(f) => f.name}>
 				{(f) => (
 					<Text class="text-xs text-muted-foreground">{`${fileWord(f().status)} ${f().name}: ${f().note}`}</Text>
@@ -448,8 +473,10 @@ function History(props: { page: ChangePage }) {
 function Body(props: { changes: Changes; page: ChangePage }) {
 	const id = () => props.page.identity.snapshotId;
 	const tab = () => changeTabs()[id()] ?? "diff";
+	// The snapshot's facts stay put above the diff: scrolling, selecting or
+	// focusing in the diff never moves or hides them.
 	return (
-		<View class="flex-1 gap-5">
+		<View class="min-h-0 flex-1 gap-4">
 			<View class="gap-2">
 				<Text role="header" class="text-2xl font-semibold leading-tight tracking-tight text-foreground">
 					{props.page.row.title}
@@ -458,7 +485,7 @@ function Body(props: { changes: Changes; page: ChangePage }) {
 			</View>
 			<Kept changes={props.changes} page={props.page} />
 			<Now changes={props.changes} page={props.page} />
-			<View class="flex-row">
+			<View class="flex-row items-center gap-3">
 				<TabRow>
 					<TabItem label="Diff" selected={tab() === "diff"} onPress={() => setFor(changeTabs, id(), "diff")} />
 					<TabItem
@@ -467,9 +494,37 @@ function Body(props: { changes: Changes; page: ChangePage }) {
 						onPress={() => setFor(changeTabs, id(), "history")}
 					/>
 				</TabRow>
+				<If when={tab() === "diff" && props.page.files.length > 0}>
+					<Text class="text-xs text-muted-foreground">{filesLine(props.page.files)}</Text>
+				</If>
 			</View>
 			<If when={tab() === "diff"} else={<History page={props.page} />}>
 				<Diff page={props.page} />
+			</If>
+		</View>
+	);
+}
+
+/** A reopened snapshot that cannot show now: why, and a read of that same snapshot again. */
+function NotShown(props: { changes: Changes; snapshotId: string }) {
+	const message = () => changeMessages()[props.snapshotId] ?? "";
+	const off = () => props.changes.list().availability !== "available";
+	return (
+		<View testID="change-not-shown" class="gap-2">
+			<Text class="text-base text-muted-foreground">
+				{message() || (off() ? "Pilot cannot show this kept snapshot now." : "Reading the kept snapshot.")}
+			</Text>
+			<If when={off()}>
+				<Text class="text-sm text-muted-foreground">{props.changes.list().reason}</Text>
+			</If>
+			<If when={message() || off()}>
+				<View class="flex-row">
+					<Action
+						label="Read again"
+						accessibilityLabel="Read this kept snapshot again. This sends nothing."
+						onPress={() => openChange(props.changes, props.snapshotId)}
+					/>
+				</View>
 			</If>
 		</View>
 	);
@@ -490,19 +545,12 @@ function ChangeScreen(props: { changes: Changes; snapshotId: string }) {
 	});
 	return (
 		<View class="flex-1 bg-background">
-			<View class="w-full max-w-5xl flex-1 self-center gap-5 px-6 pb-6 pt-6">
+			<View class="min-h-0 w-full max-w-5xl flex-1 self-center gap-5 px-6 pb-6 pt-6">
 				<TopBar />
 				<View class="flex-row">
 					<Action label="‹ Changes" accessibilityLabel="Back to Changes" onPress={backFromChanges} />
 				</View>
-				<If
-					when={page()}
-					else={
-						<Text class="text-base text-muted-foreground">
-							{changeMessages()[props.snapshotId] || "Reading the kept snapshot."}
-						</Text>
-					}
-				>
+				<If when={page()} else={<NotShown changes={props.changes} snapshotId={props.snapshotId} />}>
 					<Each of={page() ? [page() as ChangePage] : []} key={(p) => p.identity.snapshotId}>
 						{(p) => <Body changes={props.changes} page={p()} />}
 					</Each>

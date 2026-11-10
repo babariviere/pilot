@@ -69,6 +69,8 @@ fn the_screen_gets_typed_read_models_and_intents() {
         "  bringBack(intent: AttentionIntent): Promise<IntentOutcome>;",
         "  checkAttention(intent: ChangeRef): Promise<IntentOutcome>;",
         "  more(): IntentOutcome;",
+        // Read again only reads: it takes nothing and sends nothing.
+        "  refresh(): IntentOutcome;",
         "  onChange(listener: (changes: ChangeList) => void): () => void;",
         "export type ChangeAttention = \"none\" | \"waiting\" | \"later\" | \"closed\" | \"unknown\";",
         "export type LandingState = \"unchecked\" | \"seen\" | \"notSeen\" | \"unclear\";",

@@ -8,10 +8,13 @@ use std::{cell::RefCell, rc::Rc, time::Duration};
 use nsh_core::prelude::*;
 
 use crate::{
-    changes::{AttentionAsk, AttentionIntent, ChangeList, ChangePage, ChangeRef, ChangesScenario},
+    changes::{
+        AttentionAsk, AttentionIntent, ChangeList, ChangePage, ChangeRef, ChangesAvailability,
+        ChangesScenario,
+    },
     changes_desk::ChangesDesk,
     feed::MOCK_LATENCY,
-    model::IntentOutcome,
+    model::{IntentOutcome, OutcomeStatus},
 };
 
 type Listeners = Rc<RefCell<Vec<(u64, Callback<ChangeList>)>>>;
@@ -86,7 +89,7 @@ impl ChangesFeed {
         host: crate::host::NativeHost,
         result: async_channel::Receiver<Result<IntentOutcome, crate::host::Error>>,
     ) -> IntentOutcome {
-        use crate::{host::Error, model::OutcomeStatus};
+        use crate::host::Error;
         match result.recv().await {
             Ok(Ok(outcome)) => outcome,
             error => IntentOutcome { status: match error {
@@ -95,6 +98,37 @@ impl ChangesFeed {
                 _ => OutcomeStatus::Rejected,
             }, revision: host.changes_snapshot().revision,
                 message:"Read again with current native access, or check an unconfirmed operation. Nothing is resent.".into() }
+        }
+    }
+
+    /// Queues one complete, bounded native read of the whole list. A refusal
+    /// known at once (no current access, a closed host, a full queue) says
+    /// so; otherwise the answer is admission only: the list changes when the
+    /// read ends, and a failed read shows as unavailable, never as none.
+    fn queue_read(host: &crate::host::NativeHost) -> IntentOutcome {
+        use crate::host::Error;
+        let (status, message) = match host.read_changes().try_recv() {
+            Ok(Err(Error::Busy)) => (
+                OutcomeStatus::Rejected,
+                "Pilot is busy with another read. Try again in a moment.",
+            ),
+            Ok(Err(Error::Stale | Error::Identity | Error::Closed)) => (
+                OutcomeStatus::Stale,
+                "Pilot needs fresh native access before it can read kept changes again.",
+            ),
+            Ok(Err(_)) => (
+                OutcomeStatus::Rejected,
+                "Pilot could not start a read of kept changes.",
+            ),
+            _ => (
+                OutcomeStatus::Accepted,
+                "Reading kept changes again. The list updates when the read ends; nothing is sent.",
+            ),
+        };
+        IntentOutcome {
+            status,
+            revision: host.changes_snapshot().revision,
+            message: message.into(),
         }
     }
 
@@ -242,15 +276,32 @@ impl ChangesFeed {
     /// Reads the next page of kept changes, if there is one.
     pub fn more(&mut self) -> IntentOutcome {
         if let Some(host) = &self.native {
-            let _ = host.read_changes();
-            return IntentOutcome {
-                status: crate::model::OutcomeStatus::Accepted,
-                revision: host.changes_snapshot().revision,
-                message: "Reading kept changes. This is not a completion acknowledgement.".into(),
-            };
+            // The native read is always complete and bounded: more reads it all again.
+            return Self::queue_read(host);
         }
         let outcome = self.desk.more();
         self.publish();
         outcome
+    }
+
+    /// Reads the whole list of kept changes again. Passive: it sends,
+    /// approves and resumes nothing, and an unconfirmed Later stays
+    /// unconfirmed until `checkAttention` reads it. Natively the answer only
+    /// says the read started; the list updates when it ends.
+    pub fn refresh(&mut self) -> IntentOutcome {
+        if let Some(host) = &self.native {
+            return Self::queue_read(host);
+        }
+        self.publish();
+        let list = self.desk.list();
+        IntentOutcome {
+            status: OutcomeStatus::Accepted,
+            revision: list.revision,
+            message: if list.availability == ChangesAvailability::Unavailable {
+                "Read again. Pilot still cannot show kept changes here.".into()
+            } else {
+                String::new()
+            },
+        }
     }
 }

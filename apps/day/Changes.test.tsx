@@ -1,8 +1,10 @@
 // Changes as a user takes them: the list, reopening one exact snapshot as
 // history, Later without approval, a lost answer settled only by a check,
-// unavailable versus none, and the typed boundary as TSX sees it.
+// unavailable versus none, Read again as a read only, the diff as part of
+// the page, and the typed boundary as TSX sees it.
 import { expect, open, test } from "nsh/test";
 import { type ChangePage, ChangesFeed, type ChangesScenario } from "pilot-day/native";
+import { DIFF_CLASSES } from "./ui";
 
 const desktop = { platform: "macos", width: 1100, height: 900 } as const;
 
@@ -184,6 +186,95 @@ test("unavailable is never shown as none", async () => {
 	await empty.waitFor("No kept changes yet. Pilot keeps a snapshot when an agent finishes a change.");
 	expect(empty.shows("Pilot cannot show kept changes here.")).toBe(false);
 	expect(empty.shows("To review")).toBe(false);
+});
+
+test("Read again only reads: unavailable stays unavailable, and an unconfirmed Later stays unconfirmed", async () => {
+	const readAgain = "role:button[Read kept changes again. This sends nothing.]";
+	const off = await open("./ChangesOff.tsx", desktop);
+	await off.waitFor("Pilot cannot show kept changes here.");
+	await off.press(readAgain);
+	await off.waitFor("Read again. Pilot still cannot show kept changes here.");
+	expect(off.shows("This is not the same as having none.")).toBe(true);
+	expect(off.shows("No kept changes yet. Pilot keeps a snapshot when an agent finishes a change.")).toBe(false);
+
+	const docs = await read("trouble", byTitle("Review: Docs refresh", "waiting"));
+	const app = await open("./ChangesTrouble.tsx", desktop);
+	await app.press(`id:change-${docs.identity.snapshotId}`);
+	await app.waitFor("role:button[Later]");
+	await app.press("role:button[Later]");
+	await app.waitFor("Pilot sent it but heard nothing back. It sends nothing more until it checks.");
+	await app.press("role:button[Back to Changes]");
+	await app.waitFor("To review");
+	await app.press(readAgain);
+	// Reopening the same snapshot after the read: still unconfirmed, nothing resent.
+	await app.press(`id:change-${docs.identity.snapshotId}`);
+	await app.waitFor("role:button[Check again]");
+	expect(app.shows("Unconfirmed")).toBe(true);
+	expect(app.shows("role:button[Later]")).toBe(false);
+	await app.press("role:button[Check again]");
+	await app.waitFor(
+		"It arrived. Nothing was sent again. Put off. It still waits for your review; nothing was approved.",
+	);
+});
+
+test("a selected diff line keeps its code readable, through a resize", async () => {
+	// The selection's tint is drawn over the code, so it must let it show.
+	expect(DIFF_CLASSES.lineSelected ?? "").toMatch(/\/\d+$/);
+	const older = await read("review", byTitle("Review: History slice", "earlier"));
+	const code = [
+		"    pub fn prepend(&mut self, older: Vec<Row>) {",
+		"        self.rows.splice(0..0, older);",
+		"        self.loaded_older = true;",
+		"        self.scroll_to_tail();",
+	];
+	const app = await open("./Changes.tsx", desktop);
+	await app.press(`id:change-${older.identity.snapshotId}`);
+	await app.waitFor(code[2]);
+	// The file's own header names it in the diff.
+	expect(app.shows("apps/desktop/src/history.rs")).toBe(true);
+	// New line 45 is the patch's last (the only "45" on screen): its number
+	// selects it. The code stays as it was.
+	await app.press("text:45");
+	for (const line of code) expect(app.shows(line)).toBe(true);
+	// A narrow window wraps long lines; these short ones read whole.
+	await app.setViewport(520, 640);
+	await app.waitFor(code[2]);
+	for (const line of code) expect(app.shows(line)).toBe(true);
+	await app.setViewport(desktop.width, desktop.height);
+	await app.waitFor(code[2]);
+	expect(app.shows("No open review request. Earlier requests are in History.")).toBe(true);
+});
+
+test("reading down a long diff keeps the review facts and the next action in place", async () => {
+	const feed = new ChangesFeed("large");
+	const first = feed.snapshot().waiting[0].snapshotId;
+	feed.dispose();
+	const app = await open("./ChangesLarge.tsx", desktop);
+	await app.press(`id:change-${first}`);
+	await app.waitFor("1 file changed, +1200 −0");
+	const facts = () => {
+		expect(app.shows("id:kept")).toBe(true);
+		expect(app.shows("Waiting for your review.")).toBe(true);
+		expect(app.shows("role:button[Later]")).toBe(true);
+	};
+	facts();
+	// The diff scrolls its own rows; nothing above it moves or hides.
+	await app.scroll("id:diff", 600);
+	facts();
+	// A line number in view selects its line (a new file: only the new side numbers it).
+	await app.press("text:40");
+	facts();
+	await app.scroll("id:diff", 4000);
+	facts();
+	await app.setViewport(720, 640);
+	facts();
+	await app.setViewport(desktop.width, desktop.height);
+	await app.scroll("id:diff", -100000);
+	facts();
+	// L still puts it off from here.
+	await app.keyboard.press("l");
+	await app.waitFor("Put off. It still waits for your review; nothing was approved.");
+	expect(app.shows("id:kept")).toBe(true);
 });
 
 test("many kept changes read twenty at a time; a long diff stays one view", async () => {

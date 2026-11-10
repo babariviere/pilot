@@ -312,8 +312,18 @@ pages, exact Unicode/CRLF bytes, Later/Bring back CAS, lost ACK and daemon/nativ
 missing/mismatched lookups, source/identity/capability revocation during reads and after
 journaling, incomplete feeds, unavailable versus empty, digest refusal and joined close.
 No provider, worker, visible UI, live mutation, activation or service restart is involved.
-Native bootstrap selection and refresh/stale-state presentation need UI integration;
-this seam alone is not native screen acceptance or cutover permission.
+
+`ChangesFeed::refresh` (and native `more`) queues one complete read. A refusal known at
+once (closed host, stale generation, full queue) returns Stale or Rejected; otherwise the
+answer is admission only and the list changes when the read ends. It sends nothing and
+settles no Unknown operation. `native/tests/changes_feed.rs` drives the feed a root owner
+builds with `from_host` under a headless root: the first read past the WS admission race,
+Read again, unavailable and limited sources that never show rows, a revoked source during
+reopen, the exact reopened snapshot, revision-fenced Later/Bring back, a lost answer that
+stays Unknown through a re-read and reopen, lookup-only Check (whose receipt is not a
+current read) and refusal after the bootstrap's joined close. The Changes screens show
+Read again, the read limit and a snapshot that cannot show now. Native bootstrap
+selection is still not built; this is not native screen acceptance or cutover permission.
 
 ```sh
 pnpm install --frozen-lockfile
