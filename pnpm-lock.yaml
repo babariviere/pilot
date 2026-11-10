@@ -281,8 +281,8 @@ importers:
   packages/kernel:
     dependencies:
       '@babariviere/pi-extensions':
-        specifier: git+https://github.com/babariviere/pi-extensions.git#2ef1f34f1792bc4afc9ef875942cb520dd7273ff
-        version: https://codeload.github.com/babariviere/pi-extensions/tar.gz/2ef1f34f1792bc4afc9ef875942cb520dd7273ff(@aws-sdk/credential-provider-node@3.972.89)(@earendil-works/pi-ai@1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1))(@earendil-works/pi-coding-agent@1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1))(@earendil-works/pi-tui@1.5.0)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(typebox@1.4.4)(undici@8.12.3)
+        specifier: git+https://github.com/babariviere/pi-extensions.git#73d111af456f3b1b5dcad2f22f34672a4491ab6f
+        version: https://codeload.github.com/babariviere/pi-extensions/tar.gz/73d111af456f3b1b5dcad2f22f34672a4491ab6f(@aws-sdk/credential-provider-node@3.972.89)(@earendil-works/pi-ai@1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1))(@earendil-works/pi-coding-agent@1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1))(@earendil-works/pi-tui@1.5.0)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(typebox@1.4.4)(undici@8.12.3)
       '@babel/parser':
         specifier: 8.1.0
         version: 8.1.0
@@ -450,8 +450,8 @@ packages:
     resolution: {integrity: sha512-sl4Bm6yiMNYrZKkqqDFWN0UfnWhlS8ivKxrYl+6t0gCLrqr8y3B2IqZZbFRkfaVVp7C/baApyh71P+LeE1A2sQ==}
     engines: {node: '>=18.0.0'}
 
-  '@babariviere/pi-extensions@https://codeload.github.com/babariviere/pi-extensions/tar.gz/2ef1f34f1792bc4afc9ef875942cb520dd7273ff':
-    resolution: {gitHosted: true, integrity: sha512-I9N+RA0+dYa4OjMWVNcLMhks9Dxx+Pr6cTNDtBCvcyCD/+lK1I90ijUcwSkOXzyUXLnDX1M6B0AjyWTokSBXYg==, tarball: https://codeload.github.com/babariviere/pi-extensions/tar.gz/2ef1f34f1792bc4afc9ef875942cb520dd7273ff}
+  '@babariviere/pi-extensions@https://codeload.github.com/babariviere/pi-extensions/tar.gz/73d111af456f3b1b5dcad2f22f34672a4491ab6f':
+    resolution: {gitHosted: true, integrity: sha512-FvnPShi28Os9VRZ4StSCcGpQ3l0UN3o88M7Kr138vofX5gp3GNFQhsIsO2sUwQRrR4VGC3n87U60ypan00+OEg==, tarball: https://codeload.github.com/babariviere/pi-extensions/tar.gz/73d111af456f3b1b5dcad2f22f34672a4491ab6f}
     version: 0.1.0
     engines: {node: '>=24.0.0'}
     hasBin: true
@@ -1679,7 +1679,7 @@ snapshots:
 
   '@aws/lambda-invoke-store@0.3.0': {}
 
-  '@babariviere/pi-extensions@https://codeload.github.com/babariviere/pi-extensions/tar.gz/2ef1f34f1792bc4afc9ef875942cb520dd7273ff(@aws-sdk/credential-provider-node@3.972.89)(@earendil-works/pi-ai@1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1))(@earendil-works/pi-coding-agent@1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1))(@earendil-works/pi-tui@1.5.0)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(typebox@1.4.4)(undici@8.12.3)':
+  '@babariviere/pi-extensions@https://codeload.github.com/babariviere/pi-extensions/tar.gz/73d111af456f3b1b5dcad2f22f34672a4491ab6f(@aws-sdk/credential-provider-node@3.972.89)(@earendil-works/pi-ai@1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1))(@earendil-works/pi-coding-agent@1.5.0(patch_hash=103c8cf03ae0dcb7f7e37c5cfd5fe3404ae0f8e32b2b48d982b4b21f2269f015)(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(ws@8.22.1))(@earendil-works/pi-tui@1.5.0)(@smithy/signature-v4@5.7.4)(esbuild@0.28.2)(typebox@1.4.4)(undici@8.12.3)':
     dependencies:
       '@earendil-works/chord': 1.5.0(esbuild@0.28.2)(ws@8.22.1)
       '@earendil-works/pi-ai': 1.5.0(@aws-sdk/credential-provider-node@3.972.89)(@smithy/signature-v4@5.7.4)(undici@8.12.3)(ws@8.22.1)
