@@ -2,9 +2,19 @@
 
 Renovate's native npm and Cargo managers use `config:recommended`, the existing
 24-hour release age and three-PR concurrency limit. Updates require review;
-automerge remains disabled. There is no additional Cargo schedule or grouping.
-Pi SDK releases remain grouped. Git digest updates track upstream pi-extensions
-with pnpm artifact generation.
+automerge remains disabled. Minor and patch updates are grouped by purpose:
+
+- npm runtime dependencies.
+- JavaScript tooling (`@biomejs/*`, `@types/*`, `@typescript/*` and `tsx`), even
+  when a tool is also a runtime dependency.
+- OpenTelemetry packages, separate from other runtime dependencies.
+- Rust dependencies across maintained workspaces and their lockfiles.
+
+Major upgrades stay separate, except for the existing coordinated Pi SDK group.
+Pi SDK rules take precedence over routine groups and still pin dependencies and
+overrides together, including mixed major/minor updates. Git digest updates
+track upstream pi-extensions separately with pnpm artifact generation. Grouping
+adds no schedule and does not enable any paused dependency.
 
 Pi SDK dependencies and overrides currently share 1.5.0. The pi-extensions Git
 pin includes its embedding exports and host lifecycle/tool-drain fixes. Pilot

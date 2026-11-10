@@ -8,6 +8,36 @@
 	"prConcurrentLimit": 3,
 	"packageRules": [
 		{
+			"description": "Batch routine npm runtime updates; review major upgrades separately",
+			"matchManagers": ["npm"],
+			"matchUpdateTypes": ["minor", "patch"],
+			"groupName": "npm runtime dependencies",
+			"groupSlug": "npm-runtime"
+		},
+		{
+			"description": "Keep JavaScript tooling and type definitions out of runtime batches",
+			"matchManagers": ["npm"],
+			"matchUpdateTypes": ["minor", "patch"],
+			"matchPackageNames": ["@biomejs/**", "@types/**", "@typescript/**", "tsx"],
+			"groupName": "JavaScript tooling",
+			"groupSlug": "js-tooling"
+		},
+		{
+			"description": "Update OpenTelemetry packages together without mixing unrelated runtime changes",
+			"matchManagers": ["npm"],
+			"matchUpdateTypes": ["minor", "patch"],
+			"matchPackageNames": ["@opentelemetry/**"],
+			"groupName": "OpenTelemetry",
+			"groupSlug": "opentelemetry"
+		},
+		{
+			"description": "Batch routine crate updates across maintained workspaces and lockfiles",
+			"matchManagers": ["cargo"],
+			"matchUpdateTypes": ["minor", "patch"],
+			"groupName": "Rust dependencies",
+			"groupSlug": "rust-dependencies"
+		},
+		{
 			"description": "GPUI upgrades require coordinated source patches and native qualification",
 			"matchManagers": ["cargo"],
 			"matchPackageNames": ["gpui-*"],

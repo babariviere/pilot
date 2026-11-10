@@ -24,6 +24,38 @@ assert.match(dep.currentDigest, /^[a-f0-9]{40}$/);
 assert.equal(dep.gitRef, true);
 
 const config = JSON.parse(await readFile("/repo/renovate.json", "utf8"));
+// Exercise real rule matching and ordering. Broad groups must not absorb SDK,
+// digest or major updates, and grouping must not enable paused dependencies.
+const groupingCases = [
+	["npm", "pg", "minor", "npm-runtime"],
+	["npm", "ws", "patch", "npm-runtime"],
+	["npm", "tsx", "minor", "js-tooling"],
+	["npm", "@types/node", "patch", "js-tooling"],
+	["npm", "@biomejs/biome", "minor", "js-tooling"],
+	["npm", "@typescript/native-preview", "patch", "js-tooling"],
+	["npm", "@opentelemetry/core", "minor", "opentelemetry"],
+	["npm", "@earendil-works/pi-ai", "minor", "pi-sdk"],
+	["npm", "@earendil-works/pi-ai", "major", "pi-sdk"],
+	["cargo", "serde", "patch", "rust-dependencies"],
+	["cargo", "tokio", "minor", "rust-dependencies"],
+	["npm", "pg", "major", undefined],
+	["npm", "tsx", "major", undefined],
+	["npm", "@opentelemetry/core", "major", undefined],
+	["cargo", "serde", "major", undefined],
+	["npm", "babariviere/pi-extensions", "digest", undefined],
+];
+for (const [manager, depName, updateType, groupSlug] of groupingCases) {
+	const result = await applyPackageRules({
+		...config,
+		manager,
+		depName,
+		packageName: depName,
+		updateType,
+	});
+	assert.equal(result.groupSlug, groupSlug, `${manager}: ${depName} ${updateType}`);
+	assert.equal(result.automerge, false);
+}
+console.log("Routine updates group by purpose; majors and Git digests remain separate from routine batches.");
 const configured = await applyPackageRules({ ...dep, manager: "npm", packageRules: config.packageRules });
 assert.equal(configured.enabled, true, "upstream includes the embedding and lifecycle APIs");
 assert.equal(configured.datasource, "git-refs");
@@ -87,6 +119,7 @@ for (const [packageFile, lockFile, representative] of manifests) {
 			packageName: dep.packageName ?? dep.depName,
 			manager: "cargo",
 			packageFile,
+			updateType: "patch",
 		});
 		const paused = packageFile.startsWith("experiments/") || dep.depName.startsWith("gpui-") || dep.depName === "zip";
 		assert.equal(configured.enabled === false, paused, `${packageFile}: ${dep.depName}`);

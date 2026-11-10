@@ -45,6 +45,22 @@ test("Renovate groups the Pi SDK and keeps required auth pinned without automerg
 	assert.equal(auth.rangeStrategy, "pin");
 });
 
+test("Renovate groups routine updates by purpose before applying specialized rules", () => {
+	const groups = config.packageRules.filter((rule: { groupSlug?: string }) => rule.groupSlug);
+	assert.deepEqual(
+		groups.map((rule: { groupSlug: string }) => rule.groupSlug),
+		["npm-runtime", "js-tooling", "opentelemetry", "rust-dependencies", "pi-sdk"],
+	);
+	for (const rule of groups.slice(0, -1)) {
+		assert.deepEqual(rule.matchUpdateTypes, ["minor", "patch"]);
+		assert.ok(rule.groupName);
+	}
+	assert.deepEqual(groups[0].matchManagers, ["npm"]);
+	assert.deepEqual(groups[1].matchPackageNames, ["@biomejs/**", "@types/**", "@typescript/**", "tsx"]);
+	assert.deepEqual(groups[2].matchPackageNames, ["@opentelemetry/**"]);
+	assert.deepEqual(groups[3].matchManagers, ["cargo"]);
+});
+
 test("Cargo keeps ordinary crates enabled and pauses only documented baselines", () => {
 	assert.deepEqual(config.enabledManagers, ["npm", "cargo"], "toolchain updates stay manual");
 	assert.deepEqual(config.extends, ["config:recommended"]);
@@ -53,8 +69,8 @@ test("Cargo keeps ordinary crates enabled and pauses only documented baselines",
 	assert.equal(config.schedule, undefined);
 	assert.equal(config.ignorePaths, undefined);
 	assert.equal(config.cargo, undefined, "native Cargo matching and artifact generation remain unchanged");
-	const rules = config.packageRules.filter((rule: { matchManagers?: string[] }) =>
-		rule.matchManagers?.includes("cargo"),
+	const rules = config.packageRules.filter(
+		(rule: { matchManagers?: string[] }) => rule.matchManagers?.includes("cargo") && "enabled" in rule,
 	);
 	assert.equal(rules.length, 3);
 	assert.deepEqual(rules[0].matchPackageNames, ["gpui-*"]);
