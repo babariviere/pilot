@@ -78,8 +78,8 @@ browser installation or generated SwiftUI compilation. Use authorized GPUI fixtu
 
 [`renovate.json`](../../renovate.json) configures reviewed update PRs for pnpm and maintained Rust dependencies,
 including required Anthropic auth. Pi SDK packages and workspace overrides update together; `pi-extensions` tracks upstream
-`main` while remaining pinned to a full commit SHA. Its updates are paused until upstream `main` includes
-Pilot's embedding exports; the current pin stays on the compatible embedding commit. The native npm
+`main` while remaining pinned to a full commit SHA. Renovate opens reviewed update PRs for both
+`pi-extensions` and Anthropic auth. The native npm
 manager refreshes `pnpm-lock.yaml` with dependency updates, and Renovate reports artifact generation
 success or failure on every update PR.
 Automerge is disabled. Renovate PRs also check an isolated production runtime before and after ZIP
@@ -89,9 +89,7 @@ Cargo covers the GPUI desktop, visual worker and independent updater. Toolchains
 the updater's parser-specific ZIP pin and experimental comparison baselines stay manual. See
 [dependency update policy](renovate.md) for the inventory and intentional exceptions.
 
-Renovate runs through the [Renovate GitHub App](https://github.com/apps/renovate). Re-enable the
-`pi-extensions` package rule only after upstream `main` includes Pilot's embedding exports and the
-production runtime checks pass.
+Renovate runs through the [Renovate GitHub App](https://github.com/apps/renovate).
 
 ### Architecture
 

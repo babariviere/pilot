@@ -19,7 +19,7 @@
 		"./runtime-environment": "./src/runtime-environment.ts"
 	},
 	"dependencies": {
-		"@babariviere/pi-extensions": "git+https://github.com/babariviere/pi-extensions.git#73d111af456f3b1b5dcad2f22f34672a4491ab6f",
+		"@babariviere/pi-extensions": "git+https://github.com/babariviere/pi-extensions.git#46eddf8ac376a395b3534af70fa5c7ec8eb0ee6f",
 		"@babel/parser": "8.1.0",
 		"@earendil-works/chord": "1.5.0",
 		"@earendil-works/pi-agent-core": "1.5.0",
