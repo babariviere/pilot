@@ -43,8 +43,9 @@ Handlers validate and enqueue to the **existing** NativeHost queue (capacity
 attention services, then replies. There is no new thread, process, transport,
 store, credential registry or global root. Coalesced `day.changed` events
 invalidate UI mirrors. They carry no data or authority. Read
-`day.today.read` and the selected `day.plan.snapshot` on invalidation, not a
-polling loop or a new network read for every event.
+`day.today.read`, `day.plan.inventorySnapshot` and the selected
+`day.plan.snapshot` on invalidation, not a polling loop or a new network read
+for every event.
 
 `apps/day/bridge.ts` is that asynchronous JSON mirror adapter, used by
 `apps/day/Connected.tsx` through `connection.ts`. `ConnectedToday` and
@@ -99,6 +100,7 @@ intent types, not daemon request envelopes:
 | `day.plan.read` | `MissionRef` | `PlanPage` |
 | `day.plan.snapshot` | `MissionRef` | cached `PlanPage`, with freshness |
 | `day.plan.inventory` | `{}` | complete passive `Planning` inventory; failures reject, never imply empty |
+| `day.plan.inventorySnapshot` | `{}` | cached `Planning` inventory, using the same `PlanRow` identities and availability |
 | `day.plan.prepare` | `{}` | `Setup` or null; lookup only |
 | `day.plan.create` | `NewIntent` | `{missionId,page}` or null |
 | `day.plan.save` | `{missionId,intent:AnswerIntent}` | `PlanPage` |
@@ -118,6 +120,18 @@ does not cancel an entered effect. Do not replay it. Retained host operations
 remain Unknown and use exact lookup. Reads do not enroll, submit, start,
 approve, pause or resume anything. Starting work, budget grants, attention
 continuation, help and navigation remain unavailable through this bridge.
+
+Use `day.plan.inventory` on open or explicit Read again to refresh the native
+inventory. Use `day.plan.inventorySnapshot` on `day.changed`: it only projects
+the current native cache on the existing worker, with `outcome: null`. It does
+not run a GET, mark inventory as wanted, write the journal, reset notices or
+emit another change. Native WS invalidation and authenticated refresh remain
+the cache's owners. Missing, invalidated, disconnected, refused or oversized
+inventories stay unavailable, never a successful empty list or a partial page.
+Cached row identities and displayed capability fields are not live permission
+to save, submit, approve or start work. Existing native currentness and intent
+checks still apply. Like other passive snapshots, this read is allowed during
+form flushing but not after the bridge closes; it does not acknowledge a flush.
 
 ## Lifecycle seam, not update acceptance
 

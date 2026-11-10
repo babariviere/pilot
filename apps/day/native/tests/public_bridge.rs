@@ -10,6 +10,9 @@ use pilot_day_native::{
 use serde_json::{Value, json};
 use std::{path::PathBuf, time::Duration};
 
+#[path = "support/inventory_bridge.rs"]
+mod inventory_bridge;
+
 struct Fixture {
     path: PathBuf,
     bridge: Bridge,
@@ -20,8 +23,26 @@ impl Fixture {
         Self::at_port(1)
     }
     fn at_port(port: u16) -> Self {
+        Self::selected(port, false)
+    }
+    fn selected(port: u16, configured: bool) -> Self {
         let path = std::env::temp_dir().join(format!("day-channel-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&path).unwrap();
+        if configured {
+            use std::os::unix::fs::OpenOptionsExt;
+            let profile = path.join("missing-profile");
+            std::fs::create_dir(&profile).unwrap();
+            std::fs::write(profile.join("daemon-id"), "synthetic-daemon").unwrap();
+            std::fs::write(profile.join("storage-lineage"), "synthetic-lineage").unwrap();
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(profile.join("github-app-capability"))
+                .unwrap();
+            write!(file, "{}", json!({"daemonId":"synthetic-daemon","lineageId":"synthetic-lineage","token":"a".repeat(64)})).unwrap();
+        }
         let host = NativeHost::open(
             Source {
                 profile: path.join("missing-profile"),
@@ -295,6 +316,125 @@ fn inventory_is_one_exact_passive_method_with_no_selection_or_write_arguments() 
         "invalid inventory arguments do not poison Today"
     );
     assert_eq!(Fixture::new().run("try { await call('day.plan.inventory'); return 'unexpected'; } catch(e) { return e.code; }", json!({})), json!("ERR_ACCESS_DENIED"));
+}
+
+#[test]
+fn inventory_snapshot_requires_exact_empty_args_and_its_own_capability() {
+    let f = Fixture::new();
+    let result = f.run(r#"return await Promise.all([
+      ...[null, [], {missionId:'forged'}, {refresh:true}].map(args => call('day.plan.inventorySnapshot',args)),
+      call('day.plan.inventorySnapshot',{}, {window:'foreign'}),
+      call('day.plan.inventorySnapshot',{}, {version:2}),
+      call('day.plan.inventorySnapshot')]);"#, Fixture::caps());
+    for i in 0..4 {
+        assert_eq!(result[i]["error"], "invalid", "{result}");
+    }
+    for i in 4..6 {
+        assert_eq!(result[i]["error"], "identity", "{result}");
+    }
+    assert_eq!(
+        result[6]["value"]["snapshot"]["availability"],
+        "unavailable"
+    );
+    assert_eq!(result[6]["value"]["outcome"], Value::Null);
+    assert!(
+        !result[6]["value"]["snapshot"]["reason"]
+            .as_str()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(f.run("try { await call('day.plan.inventorySnapshot'); return 'unexpected'; } catch(e) { return e.code; }", json!({"host":["day.plan.inventory"]})), json!("ERR_ACCESS_DENIED"));
+    assert_eq!(std::fs::read_to_string(f.path.join("journal")).unwrap(), "");
+}
+
+#[test]
+fn changed_then_inventory_snapshot_does_not_perpetuate_notices() {
+    let mut f = Fixture::new();
+    let changes = f.host.changes();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while f.host.snapshot().freshness.state
+                    != pilot_day_native::FreshnessState::Unavailable
+                {
+                    changes.recv().await.unwrap();
+                }
+            })
+            .await
+            .unwrap();
+        });
+    // Attach only after the initial failed source has settled, so its queued
+    // startup invalidation cannot be mistaken for feedback from the read.
+    f.bridge = Bridge::new(DayRoot::new(f.host.clone()));
+    let mut app = f.app(r#"
+let events=0;
+host.on('day.changed', async () => {
+  const count=++events;
+  const before=await call('day.today.read');
+  for(let i=0;i<10;i++) {
+    const read=await call('day.plan.inventorySnapshot');
+    if(read.error || read.value.outcome!==null) throw new Error('snapshot refused');
+  }
+  const after=await call('day.today.read');
+  if(before.value.snapshot.revision!==after.value.snapshot.revision) throw new Error('read changed state');
+  shown.set('events:'+count);
+});
+await call('day.today.read'); shown.set('ready'); return await new Promise(()=>{});"#, Fixture::caps());
+    app.wait_for("ready").unwrap();
+    for n in 1..=3 {
+        let _ = f.host.refresh().recv_blocking();
+        app.wait_for(&format!("text:events:{n}")).unwrap();
+        app.run_for(Duration::from_millis(100)).unwrap();
+        assert!(
+            app.screen().shows(&format!("events:{n}")),
+            "snapshot emitted another notice: {:?}",
+            app.screen().texts()
+        );
+    }
+    assert_eq!(std::fs::read_to_string(f.path.join("journal")).unwrap(), "");
+}
+
+#[test]
+fn inventory_snapshot_is_admitted_during_flush_without_saving_or_acknowledging() {
+    let f = Fixture::new();
+    let mut app = f.app(
+        r#"
+shown.set('ready');
+return await new Promise(resolve => host.on('day.flush', async event => {
+  const read=await call('day.plan.inventorySnapshot');
+  const ack=await call('day.flush.ack',{generation:event.generation});
+  resolve({read,ack});
+}));"#,
+        Fixture::caps(),
+    );
+    app.wait_for("ready").unwrap();
+    let generation = f.bridge.request_flush().unwrap();
+    app.wait_until("snapshot and flush", Duration::from_secs(5), |s| {
+        s.texts().iter().any(|s| s.starts_with("done:"))
+    })
+    .unwrap();
+    let texts = app.screen().texts();
+    let result: Value = serde_json::from_str(
+        texts
+            .iter()
+            .find(|s| s.starts_with("done:"))
+            .unwrap()
+            .strip_prefix("done:")
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        result["read"]["value"]["snapshot"]["availability"],
+        "unavailable"
+    );
+    assert_eq!(result["read"]["value"]["outcome"], Value::Null);
+    assert_eq!(result["ack"]["value"]["snapshot"]["generation"], generation);
+    assert!(!f.bridge.flush_ready(generation));
+    f.bridge.native_capture_finished(generation).unwrap();
+    assert!(f.bridge.flush_ready(generation));
 }
 
 #[test]

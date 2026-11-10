@@ -26,6 +26,7 @@ pub const METHODS: &[&str] = &[
     "day.plan.read",
     "day.plan.snapshot",
     "day.plan.inventory",
+    "day.plan.inventorySnapshot",
     "day.plan.prepare",
     "day.plan.create",
     "day.plan.save",
@@ -94,6 +95,7 @@ pub(crate) enum Command {
     Plan(String),
     PlanSnapshot(String),
     PlanningInventory,
+    PlanningInventorySnapshot,
     Prepare,
     Create(crate::plan::NewIntent),
     Save {
@@ -172,8 +174,12 @@ fn exact<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, Error> {
 fn command(name: &str, args: Value) -> Result<Command, Error> {
     use Command as C;
     Ok(match name {
-        "day.today.read" | "day.plan.prepare" | "day.attention.read" | "day.plan.checkNew"
-        | "day.plan.inventory" => {
+        "day.today.read"
+        | "day.plan.prepare"
+        | "day.attention.read"
+        | "day.plan.checkNew"
+        | "day.plan.inventory"
+        | "day.plan.inventorySnapshot" => {
             if args != json!({}) {
                 return Err(Error::Invalid);
             }
@@ -182,6 +188,7 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 "day.plan.prepare" => C::Prepare,
                 "day.plan.checkNew" => C::CheckNew,
                 "day.plan.inventory" => C::PlanningInventory,
+                "day.plan.inventorySnapshot" => C::PlanningInventorySnapshot,
                 _ => C::Attention,
             }
         }
@@ -295,6 +302,7 @@ impl Command {
                     | Self::Plan(_)
                     | Self::PlanSnapshot(_)
                     | Self::PlanningInventory
+                    | Self::PlanningInventorySnapshot
                     | Self::Attention
             )
         {
@@ -493,6 +501,18 @@ fn code(error: Error) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inventory_snapshot_obeys_the_passive_read_close_fence() {
+        let command = Command::PlanningInventorySnapshot;
+        let mut gate = Gate {
+            flushing: true,
+            ..Gate::default()
+        };
+        assert_eq!(command.admit(&gate), Ok(()));
+        gate.closed = true;
+        assert_eq!(command.admit(&gate), Err(Error::Closed));
+    }
 
     #[test]
     fn a_later_save_invalidates_an_ack_even_before_the_worker_enters_it() {

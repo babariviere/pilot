@@ -98,7 +98,7 @@ async fn run(
     let mut value = Value::Null;
     let mut enrollment = None;
     let work = match &call.command {
-        Command::Today | Command::PlanSnapshot(_) => None,
+        Command::Today | Command::PlanSnapshot(_) | Command::PlanningInventorySnapshot => None,
         Command::Mission(id) => Some(Work::Detail(id.clone())),
         Command::Pause(r) => Some(Work::Control {
             mission: r.mission_id.clone(),
@@ -231,7 +231,9 @@ async fn run(
             value = planning(host, id).unwrap_or(Value::Null);
         }
         Command::Prepare => value = encode(host.planning_setup())?,
-        Command::PlanningInventory => value = encode(host.planning_inventory_snapshot())?,
+        Command::PlanningInventory | Command::PlanningInventorySnapshot => {
+            value = encode(host.planning_inventory_snapshot())?
+        }
         Command::PlanCheck { mission, .. } => {
             value = planning(host, mission).unwrap_or(Value::Null)
         }
