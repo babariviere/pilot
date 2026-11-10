@@ -15,10 +15,10 @@ path = "src/lib.rs"
 [dependencies]
 # The TSX app's read model, rules and mock coordinator (apps/day/native), used as plain Rust.
 pilot-day-native = { path = "../../native" }
-# Unmodified upstream NSH, the same exact revision as the TSX app.
-nsh-core = { git = "https://github.com/longbridge/nsh", rev = "530b73170f61e5bf16380959de9e622f8ce130cd" }
-nsh-base = { git = "https://github.com/longbridge/nsh", rev = "530b73170f61e5bf16380959de9e622f8ce130cd" }
+# Unmodified upstream v0.4.0, the same peeled release commit as the TSX app.
+nsh-core = { git = "https://github.com/longbridge/nsh", rev = "e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3" }
+nsh-base = { git = "https://github.com/longbridge/nsh", rev = "e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3" }
 
 [dev-dependencies]
-nsh-engine = { git = "https://github.com/longbridge/nsh", rev = "530b73170f61e5bf16380959de9e622f8ce130cd", default-features = false }
-nsh-testing = { git = "https://github.com/longbridge/nsh", rev = "530b73170f61e5bf16380959de9e622f8ce130cd", default-features = false }
+nsh-engine = { git = "https://github.com/longbridge/nsh", rev = "e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3", default-features = false }
+nsh-testing = { git = "https://github.com/longbridge/nsh", rev = "e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3", default-features = false }

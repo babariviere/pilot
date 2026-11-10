@@ -7,12 +7,12 @@ script or workspace build uses it. It runs no JS VM and connects to no daemon,
 account or user data. The GPUI and Swift apps, their build and
 `apps/desktop/nsh`'s pin do not change.
 
-It uses the same upstream NSH revision as the TSX app
-(`530b73170f61e5bf16380959de9e622f8ce130cd`), with no patches, forks, Cargo
-cache edits or WebViews. `Cargo.lock` started from
-[`apps/day/native/Cargo.lock`](../../native/Cargo.lock). The path dependency on
-`../../native` has no lockfile entry for its location, so moving the fixture
-left `Cargo.lock` unchanged.
+It uses the same upstream NSH **v0.4.0** release as the TSX app
+(`e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3`), with no patches, forks, Cargo
+cache edits or WebViews. Use the matching installed CLI through `nsh.sh`;
+never build `nsh-cli` locally. Its lock must be resolved for that release,
+not relabeled from the former main snapshot. See the
+[release qualification](../../../../docs/technical/day-nsh-release.md).
 
 ## What is shared, and what is not
 
@@ -31,10 +31,10 @@ provenance, mission overview and Pause controls are not mirrored here.
 
 | Aspect             | TSX (`apps/day`)                                                           | Rust (`fixtures/rust-today`)                                                                  | Status                                                           |
 | ------------------ | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| NSH                | 530b7317, QuickJS VM, TSX screen + `pilot-day/native` crate                | 530b7317, Rust root, no JS VM in the generated runner                                         | Same revision; the VM is the difference under test               |
+| NSH                | v0.4.0 (e626a8dd), QuickJS VM, TSX screen + `pilot-day/native` crate       | v0.4.0 (e626a8dd), Rust root, no JS VM in the generated runner                                | Same release; fixture all-targets check passes, no visual acceptance |
 | Data               | `fixture::world`, `Desk`                                                   | Same values, same `Desk`                                                                      | Same                                                             |
 | Worlds             | `App`, `Quiet`, `Trouble`, `Large`, `Pulse` `.tsx`                         | `TodayApp`, `QuietApp`, `TroubleApp`, `LargeApp`, `PulseApp`; `TodayRoot { scenario, pulse }` | Same                                                             |
-| Theme, window      | `theme.json`; 1100 × 820, min 420 × 480                                    | `../../theme.json`; same window keys                                                          | Same                                                             |
+| Theme, window      | `theme.json`; release CLI `--window-size 1100x820`                         | `../../theme.json`; same release CLI option                                                 | Config `window` unsupported; minimum/title qualification pending   |
 | Layout and copy    | `TodayScreen`, `DecisionCard`, `ui.tsx`                                    | `screen.rs`, `card.rs`, `ui.rs`, part for part                                                | Same structure, Tailwind scale and text (see literals below)     |
 | Controls           | `nsh/base` Button, Toggle, Radio, RadioGroup, Input                        | `nsh_base` button, toggle, radio, radio_group, input                                          | Same components                                                  |
 | Native states      | hover, active, focus, disabled, aria-pressed, checked as classes           | Same as typed styles                                                                          | Same, with three noted exceptions                                |

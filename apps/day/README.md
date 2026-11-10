@@ -19,22 +19,33 @@ the shipping desktop apps until Day passes native acceptance and cutover.
 
 ## Upstream pin
 
-- NSH **0.4.0**, upstream `main` HEAD `530b73170f61e5bf16380959de9e622f8ce130cd`
-  (committed 2026-11-09T18:17:26+08:00), rechecked with `git ls-remote` on
-  2026-11-09. This is 184 commits after the `7571948` pin of `apps/desktop/nsh`,
-  which Day does not change.
-- Every NSH crate, and the `nsh` CLI, comes from that one revision. No patches,
-  forks, Cargo cache edits or WebViews. The CLI's generated workspace
-  (`.nsh/rust`) adds `[patch]` entries that point at Cargo's own checkout of the
-  same revision, so hosts and the app share one `nsh-core`. That checkout was
-  compared with a fresh clone: no differences.
-- `native/Cargo.lock` started from upstream's lock. Without it, Cargo resolved a
-  newer `rolldown` that does not build with this revision.
+- NSH **v0.4.0**, peeled release commit
+  `e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3`, not upstream `main`.
+  Tag resolution was checked on 2026-11-10. The annotated tag is unsigned:
+  this verifies release identity, not a signing identity.
+- Every NSH dependency, including declarations and testing, names that exact
+  Git commit. The installed CLI must report `nsh 0.4.0 (e626a8d)`. No local
+  `nsh-cli` builds, patches, forks, Cargo cache edits or WebViews.
+- The release CLI's generated workspace (`.nsh/rust`) points its hosts and
+  the app at the same resolved release checkout. Keep the real Cargo locks;
+  never relabel a lock from the former `530b7317` main snapshot.
+- [Release source qualification](../../docs/technical/day-nsh-release.md)
+  records provenance, API coverage and remaining native acceptance gaps.
+  Day does not change `apps/desktop/nsh`'s pin.
 
 ## Run and test
 
-Verified on macOS arm64 (2026-11-10): the pinned CLI, native crate and generated
-describe/headless runners compile through mbx. The production wrapper passes
+Verified on macOS arm64 with the installed v0.4.0 CLI (2026-11-10): `check`,
+`build`, App (26), Plan (19) and Attention (4) headless tests, plus 49 native
+library/boundary tests. The native crate checks all targets. All ran offline
+through mbx with private dependencies/cache/targets, debug info and incremental
+off, one Cargo job. No CLI build or visible window. Native host injection,
+window constraints, IME, live updates and packaging are not accepted by these
+checks. See the [qualification report](../../docs/technical/day-nsh-release.md).
+
+Historical main-snapshot evidence on macOS arm64 (2026-11-10, `530b7317`,
+**not release qualification**): the CLI, native crate and generated
+describe/headless runners compiled through mbx. The former wrapper passed
 `check`, `build`, App's 26 headless tests and Attention's 4 tests. Direct native
 library/boundary checks pass 49 tests. No visible window was launched; macOS
 window-host compilation, live development rebuilds and packaging remain unverified.
@@ -54,13 +65,24 @@ If mbx 1.26.0 already exists in Day's `.tools/bin`, the desktop project's
 executable explicitly. Missing or different-version mbx fails, never falls
 back to direct Cargo. Bootstrap does not install Rust or change its defaults.
 
-`nsh.sh` clones the pinned revision into `.tools/nsh` (ignored), refuses tracked
-changes, then builds the CLI **through mbx** with upstream's lock unchanged.
-`NSH_DAY_SOURCE` may name an existing unmodified checkout at the exact pin
-(relative to the calling directory or absolute). An explicit source is borrowed:
-the wrapper never clones, switches or writes build output into it. CLI output
-goes to this Day checkout's `.tools/target/nsh-<revision>`, not the borrowed
-source's `target`. The CLI runs in `apps/day`; entry paths are relative to it.
+`nsh.sh` uses an **installed** CLI: `nsh` on `PATH` (including Homebrew),
+otherwise the official distribution at `~/.nsh/bin/nsh`. `NSH_DAY_CLI` can name an explicit
+installed executable. It must report `nsh 0.4.0 (e626a8d)`; another version or
+the unrelated `nuta/nsh` command shell is refused. Keep the whole installed
+distribution together, since the CLI finds runtime resources beside itself.
+The wrapper never builds `nsh-cli`, clones/switches source or installs tools.
+`NSH_DAY_SOURCE` is no longer used. Cargo runs offline; missing dependencies
+are a setup blocker, not permission to download or change shared caches.
+The CLI runs in `apps/day`; entry paths are relative to it.
+Fresh generated workspaces are seeded from `runner.Cargo.lock`, the release
+runner's real resolved lock. Existing workspace locks are never overwritten.
+This keeps upstream's locked, now-yanked crypto dependency usable without
+editing NSH or the registry index.
+
+The v0.4.0 config does not support the newer `window` key. For an isolated
+preview at the former size, use `pnpm day run --window-size 1100x820`.
+Minimum-size and custom window-title configuration remain a native host gap;
+no visible preview is run by checks.
 From any directory, `apps/day/nsh.sh <command>` works by its absolute path.
 From the repository root, `pnpm day <command>` is the same entry point.
 
@@ -80,10 +102,10 @@ cache access and Blaze are off. Scheduler admission is an estimate, not an OS
 CPU/RSS limit. Private targets still need free disk; caching is not a speedup
 promise. Do not share a writable target with another running build.
 
-Rust defaults to Day's 1.99.1 pin for both CLI and app; explicit
+Rust defaults to Day's 1.99.1 pin for app compilation; explicit
 `RUSTUP_TOOLCHAIN` and real `CARGO` selections are kept. App `CARGO_TARGET_DIR`,
-profile variables and command arguments are kept. The CLI always uses its
-separate dev target. To reduce initial disk use, set
+profile variables and command arguments are kept. The installed CLI is not
+compiled. To reduce initial disk use, set
 `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0` for the command. No global Cargo
 config is changed. Non-macOS builds and cross targets are not qualified here.
 
@@ -111,11 +133,12 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s apps/day/scripts -p te
 shellcheck -x apps/day/nsh.sh apps/day/scripts/{cargo,build-env.sh,bootstrap.sh}
 ```
 
-The fake-executable tests cover dispatch, quoted arguments, source/target
-isolation, missing/wrong mbx, failures, local execution and runtime signals.
+The fake-executable tests cover installed-CLI dispatch, quoted arguments,
+wrong tool/release refusal, no CLI builds/downloads, offline nested Cargo,
+missing/wrong mbx, failures, local execution and runtime signals.
 They do not by themselves prove upstream subprocess coverage or native acceptance.
 
-The real checks used mbx 1.26.0, Rust 1.99.1, offline dependency resolution,
+The historical main-snapshot checks used mbx 1.26.0, Rust 1.99.1, offline dependency resolution,
 debug info off, incremental off and one Cargo job. Owned subprocess observations
 confirmed mbx's `mbx-rustc` wrapper, the CLI's separate target, and native plus
 generated `.nsh/rust` check/describe/test commands writing to private targets.
@@ -135,7 +158,7 @@ Before qualifying a build path, inspect **actual owned compiler subprocesses**,
 not just the launching shell's environment or Cargo metadata. Record the parent
 Cargo command/manifest and toolchain, rustc's `--out-dir`, `-C debuginfo` and
 `-C incremental` for both the native crate and generated `.nsh/rust` runners.
-Include the CLI's separate target. NSH may select a different target from the
+Do not build the CLI. NSH may select a different target from the
 one expected; a parent environment value is not proof that a child used it.
 For a debug-zero, incremental-off verification, unexpected debug/incremental
 flags or an output directory outside the approved private targets stop the
