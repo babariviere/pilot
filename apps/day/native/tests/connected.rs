@@ -324,7 +324,7 @@ fn new_mission_questions_saved_progress_one_submit_and_the_way_back() {
     wait(&mut app, "id:open-overview");
     app.press("id:open-overview").unwrap();
     wait(&mut app, "id:mission-plan");
-    app.press("role:button[‹ Today]").unwrap();
+    app.press("role:button[Back to Today]").unwrap();
     wait(&mut app, &format!("id:mission-{mission}"));
     close(app, bridge);
     f.cmd("close", false);
