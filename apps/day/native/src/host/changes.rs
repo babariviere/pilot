@@ -584,6 +584,62 @@ async fn open(t: &Transport, shared: &Shared, epoch: u64, snapshot: &str) -> Res
     shared.change(|_| ());
     Ok(())
 }
+
+/// Reuse the complete, authenticated retained inventory and exact history checks.
+/// A bounded recap is not a claim about every project result.
+pub(super) async fn ritual_results(
+    t: &Transport,
+    shared: &Shared,
+    epoch: u64,
+    after: u64,
+    through: u64,
+) -> Result<(Vec<crate::model::DoneEntry>, bool), Error> {
+    read(t, shared, epoch).await?;
+    let (mut rows, limited) = {
+        let state = shared.changes.lock().expect("native Changes poisoned");
+        if state.list.unreadable != 0 {
+            return Err(Error::Unavailable);
+        }
+        (
+            state.rows.values().cloned().collect::<Vec<_>>(),
+            state.rows.len() > 20,
+        )
+    };
+    rows.sort_by_key(|r| {
+        std::cmp::Reverse((r.comparison.captured_at, r.target.snapshot_id.clone()))
+    });
+    rows.truncate(20);
+    let authority = t.local()?;
+    let mut entries = Vec::new();
+    for row in rows {
+        let h = history(t, &row).await?;
+        // HTTP already bounds every body; record counts bound projection work as well.
+        if h.landing.records.len() > 100
+            || h.reviews.records.len() > 100
+            || h.reported.claims.len() > 100
+            || h.landing.next.is_some()
+            || h.reviews.next.is_some()
+        {
+            return Err(Error::Unavailable);
+        }
+        if let Some(entry) = crate::ritual_results::result(&h, after, through) {
+            entries.push(entry);
+        }
+    }
+    t.gate(false).await?;
+    if authority != t.local()? {
+        return Err(Error::Identity);
+    }
+    shared.current(epoch)?;
+    if !shared.connected.load(Ordering::SeqCst) {
+        return Err(Error::Stale);
+    }
+    entries.sort_by_key(|(at, entry)| std::cmp::Reverse((*at, entry.id.clone())));
+    Ok((
+        entries.into_iter().map(|(_, entry)| entry).collect(),
+        limited,
+    ))
+}
 async fn qualify(
     t: &Transport,
     shared: &Shared,

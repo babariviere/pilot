@@ -28,10 +28,17 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::with_quiet_events(false)
+    }
+    fn with_quiet_events(quiet: bool) -> Self {
         let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../../packages/daemon/src/fixtures/day-native-planning.ts");
-        let mut child = Command::new("node")
-            .arg(script)
+        let mut command = Command::new("node");
+        command.arg(script);
+        if quiet {
+            command.arg("--quiet-events");
+        }
+        let mut child = command
             .env_remove("PILOT_HOME")
             .env_remove("PILOT_PORT")
             .stdin(Stdio::piped())
@@ -157,7 +164,9 @@ fn the_real_read_maps_with_backend_digests_and_honest_unavailable_steps() {
 
 #[test]
 fn all_submitted_rounds_survive_real_daemon_and_native_host_reopen() {
-    let mut f = Fixture::new();
+    // Test history/storage, not racing notifications between explicit reads.
+    // Production refusal and lost-ACK behavior remain covered by other journeys.
+    let mut f = Fixture::with_quiet_events(true);
     let host = f.open();
     ready(&host);
     let mission = f.mission();

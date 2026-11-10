@@ -10,6 +10,9 @@ import { WebSocket, WebSocketServer } from "ws";
 import { interviewHistoryFixture } from "../interview-history.fixture.ts";
 
 const { f, nextRound } = await interviewHistoryFixture();
+// History persistence tests use explicit reads between rounds. Other journeys
+// retain the real invalidation stream, including stale-write refusal coverage.
+const quietEvents = process.argv.includes("--quiet-events");
 const ledger = join(f.home, "commands.jsonl");
 let posts = 0,
 	lookups = 0,
@@ -81,6 +84,7 @@ proxy.on("upgrade", (req, socket, head) => {
 		const upstream = new WebSocket(`${f.root.replace("http:", "ws:")}${req.url}`);
 		sockets.add(upstream);
 		upstream.on("message", (bytes) => {
+			if (quietEvents && JSON.parse(bytes.toString()).type !== "hello") return;
 			if (client.readyState === WebSocket.OPEN) client.send(bytes.toString());
 		});
 		client.on("close", () => {

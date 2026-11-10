@@ -130,6 +130,10 @@ skipping, leaving or closing one answers, approves and starts nothing. "Skip for
 today" and finishing a ritual stop Today offering it for that date; Escape
 leaves it unmarked. These marks are screen state for this run of the app, not
 saved across restarts, and no schedule is created or turned on.
+The native host now has a separate [saved ritual progress seam](../../docs/technical/day-ritual-progress.md):
+`RitualFeed` reads per-profile/user/date/zone marks, explicit visits and qualified
+kept-change evidence from the existing ledger. Production ritual UI wiring is
+still separate; the mock screens do not use or migrate those records.
 
 Missions come only from agent reports. A current report that says moving puts
 a mission under Moving; one that says not moving, or a Pause, under Not

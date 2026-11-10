@@ -23,6 +23,9 @@ pub mod plan_feed;
 pub mod plan_host;
 pub mod plan_world;
 pub mod project;
+pub mod ritual;
+pub mod ritual_feed;
+mod ritual_results;
 
 use nsh_core::prelude::*;
 
@@ -35,5 +38,6 @@ fn native(registry: &mut Registry) {
     registry
         .class::<TodayFeed>()
         .class::<PlanFeed>()
-        .class::<ChangesFeed>();
+        .class::<ChangesFeed>()
+        .class::<ritual_feed::RitualFeed>();
 }

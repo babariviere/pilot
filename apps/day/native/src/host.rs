@@ -6,6 +6,7 @@ mod changes;
 mod enrollment;
 mod journal;
 mod planning;
+pub mod ritual;
 mod transport;
 
 use crate::{
@@ -36,6 +37,14 @@ pub struct Source {
     pub home: c::Home,
     pub project_id: String,
     pub project_path: String,
+}
+
+/// Optional native root bindings. They share one journal and one close drain.
+#[derive(Default)]
+pub struct Options {
+    pub planning_model: Option<String>,
+    pub url_opener: Option<attention::UrlOpener>,
+    pub day: Option<ritual::DaySource>,
 }
 
 /// Sanitized host failures. Raw paths, payloads and credentials never reach TSX.
@@ -73,6 +82,7 @@ pub(super) fn valid_id(s: &str) -> bool {
 }
 
 struct Shared {
+    ritual: Mutex<ritual::State>,
     changes: Mutex<changes::State>,
     desk: Mutex<Desk>,
     epoch: AtomicU64,
@@ -126,6 +136,8 @@ impl Shared {
 }
 
 enum Work {
+    Ritual(ritual::Work),
+    RitualResults,
     AttentionRead,
     AttentionSend(serde_json::Value),
     AttentionCheck(String),
@@ -181,7 +193,7 @@ impl NativeHost {
     /// Start only for an explicit native selection. No environment or home fallback.
     /// File/network work runs off the UI thread. The default mock app never calls this.
     pub fn open(source: Source, ledger: PathBuf) -> Result<Self, Error> {
-        Self::open_selected(source, ledger, None, None)
+        Self::open_selected(source, ledger, None, None, None)
     }
 
     /// Native root supplies explicit URL navigation authority, never the screen VM.
@@ -190,7 +202,7 @@ impl NativeHost {
         ledger: PathBuf,
         opener: attention::UrlOpener,
     ) -> Result<Self, Error> {
-        Self::open_selected(source, ledger, None, Some(opener))
+        Self::open_selected(source, ledger, None, Some(opener), None)
     }
 
     /// Native-only selection of a model for new planning. No live profile is enabled.
@@ -199,7 +211,39 @@ impl NativeHost {
         if model.trim().is_empty() || model.len() > 256 {
             return Err(Error::Invalid);
         }
-        Self::open_selected(source, ledger, Some(model), None)
+        Self::open_selected(source, ledger, Some(model), None, None)
+    }
+
+    /// Native root selects a current clock and the exact OS user. No live activation.
+    pub fn open_day(
+        source: Source,
+        ledger: PathBuf,
+        day: ritual::DaySource,
+    ) -> Result<Self, Error> {
+        Self::open_selected(source, ledger, None, None, Some(day))
+    }
+
+    /// Compose native bindings without opening competing hosts on one ledger.
+    /// This is not exported to TSX and starts no model or ritual.
+    pub fn open_with_options(
+        source: Source,
+        ledger: PathBuf,
+        options: Options,
+    ) -> Result<Self, Error> {
+        if options
+            .planning_model
+            .as_ref()
+            .is_some_and(|m| m.trim().is_empty() || m.len() > 256)
+        {
+            return Err(Error::Invalid);
+        }
+        Self::open_selected(
+            source,
+            ledger,
+            options.planning_model,
+            options.url_opener,
+            options.day,
+        )
     }
 
     fn open_selected(
@@ -207,6 +251,7 @@ impl NativeHost {
         ledger: PathBuf,
         model: Option<String>,
         url_opener: Option<attention::UrlOpener>,
+        day: Option<ritual::DaySource>,
     ) -> Result<Self, Error> {
         if source.port == 0
             || !source.profile.is_absolute()
@@ -219,6 +264,7 @@ impl NativeHost {
             return Err(Error::Identity);
         }
         let shared = Arc::new(Shared {
+            ritual: Mutex::new(ritual::State::default()),
             changes: Mutex::new(changes::State::default()),
             desk: Mutex::new(Desk::native()),
             epoch: AtomicU64::new(0),
@@ -248,7 +294,7 @@ impl NativeHost {
                         .enable_all()
                         .build()
                         .map_err(|_| Error::Unavailable)?;
-                    rt.block_on(run(transport, journal, state.clone(), rx))
+                    rt.block_on(run(transport, journal, state.clone(), rx, day))
                 })();
                 if let Err(e) = result {
                     fail(&state, e);
@@ -268,13 +314,27 @@ impl NativeHost {
 
     /// Current native projection. No transport or authority leaves Rust.
     pub fn snapshot(&self) -> Today {
-        self.0
+        let mut today = self
+            .0
             .shared
             .desk
             .lock()
             .expect("native Desk poisoned")
             .today()
-            .clone()
+            .clone();
+        let ritual = self.ritual_snapshot();
+        if ritual.availability == crate::ritual::RitualAvailability::Available {
+            today.date = ritual.date;
+            today.date_line = format!("{} ({})", today.date, ritual.time_zone);
+            today.part = ritual.part;
+            today.visit = ritual.visit;
+            if !ritual.last_looked_at.is_empty()
+                && let Ok(at) = ritual.last_looked_at.parse()
+            {
+                today.last_looked = crate::changes_project::date_time(at);
+            }
+        }
+        today
     }
     /// Exact mission projection, if already read. `read_mission` fetches it.
     pub fn mission(&self, id: &str) -> Option<MissionPage> {
@@ -304,7 +364,11 @@ impl NativeHost {
             work,
             reply: tx,
         };
-        if let Err(e) = self.0.shared.current(epoch) {
+        if let Err(e) = if matches!(&request.work, Work::Ritual(_)) {
+            self.0.shared.open()
+        } else {
+            self.0.shared.current(epoch)
+        } {
             let _ = request.reply.try_send(Err(e));
         } else if let Err(e) = self.0.requests.try_send(request) {
             let _ = e.into_inner().reply.try_send(Err(Error::Busy));
@@ -554,6 +618,7 @@ async fn run(
     mut journal: Journal,
     shared: Arc<Shared>,
     requests: Receiver<Request>,
+    day: Option<ritual::DaySource>,
 ) -> Result<(), Error> {
     for record in journal.attention.values().filter(|r| r.source == t.source) {
         attention::publish(&shared, record);
@@ -610,8 +675,13 @@ async fn run(
             request = requests.recv() => {
                 let Ok(request) = request else { break; };
                 let preparing = matches!(&request.work, Work::PreparePlanning);
-                let result = handle(&t, &mut journal, &shared, request.epoch, request.work).await;
-                if preparing && matches!(result, Err(Error::Unavailable)) {
+                let local_ritual = matches!(&request.work, Work::Ritual(_) | Work::RitualResults);
+                let result = match request.work {
+                    Work::Ritual(work) => ritual::handle(&t.source, day.as_ref(), &mut journal, &shared, work),
+                    Work::RitualResults => ritual::read_results(&t, day.as_ref(), &mut journal, &shared, request.epoch).await,
+                    work => handle(&t, &mut journal, &shared, request.epoch, work).await,
+                };
+                if local_ritual || (preparing && matches!(result, Err(Error::Unavailable))) {
                     // Unsupported New configuration must not disable existing Today reads.
                     shared.change(|_| ());
                 } else if let Err(e) = result && !matches!(e, Error::Unknown | Error::Busy | Error::Closed) { fail(&shared, e); }
@@ -733,6 +803,8 @@ async fn handle(
         shared.current(epoch)?;
     }
     match work {
+        Work::Ritual(_) => return Err(Error::Invalid),
+        Work::RitualResults => return Err(Error::Invalid),
         work @ (Work::AttentionRead
         | Work::AttentionSend(_)
         | Work::AttentionCheck(_)

@@ -44,11 +44,14 @@ pub(super) struct Cache {
 }
 
 pub(super) struct Journal {
+    pub rituals: BTreeMap<String, super::ritual::Record>,
     pub changes: BTreeMap<String, super::changes::Record>,
     file: File,
     path: PathBuf,
     bytes: u64,
     failed: bool,
+    #[cfg(test)]
+    pub fail_after_sync: bool,
     pub records: BTreeMap<String, Record>,
     pub planning: BTreeMap<String, PlanningRecord>,
     pub attention: BTreeMap<String, AttentionRecord>,
@@ -58,6 +61,7 @@ pub(super) struct Journal {
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 enum Entry {
+    Ritual(Box<super::ritual::Record>),
     Attention(Box<AttentionRecord>),
     Draft(Box<Draft>),
     Changes(Box<super::changes::Record>),
@@ -79,6 +83,28 @@ fn private(file: &File) -> Result<(), Error> {
 }
 
 impl Journal {
+    pub fn is_failed(&self) -> bool {
+        self.failed
+    }
+    pub fn save_ritual(&mut self, record: super::ritual::Record) -> Result<(), Error> {
+        record.validate()?;
+        let id = record.id();
+        if self
+            .rituals
+            .get(&id)
+            .map_or(record.revision != 1, |prior| !record.follows(prior))
+        {
+            return Err(Error::Stale);
+        }
+        if !self.rituals.contains_key(&id)
+            && (self.rituals.len() >= 4096 || self.count() >= MAX_OPERATIONS)
+        {
+            return Err(Error::Capacity);
+        }
+        self.append(&record)?;
+        self.rituals.insert(id, record);
+        Ok(())
+    }
     pub fn poison(&mut self) {
         self.failed = true;
     }
@@ -125,9 +151,32 @@ impl Journal {
         let mut attention: BTreeMap<String, AttentionRecord> = BTreeMap::new();
         let mut attention_drafts: BTreeMap<String, Draft> = BTreeMap::new();
         let mut changes: BTreeMap<String, super::changes::Record> = BTreeMap::new();
+        let mut rituals: BTreeMap<String, super::ritual::Record> = BTreeMap::new();
         for line in body.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
             let entry: Entry = serde_json::from_slice(line).map_err(|_| Error::Storage)?;
             let record = match entry {
+                Entry::Ritual(record) => {
+                    record.validate().map_err(|_| Error::Storage)?;
+                    if rituals
+                        .get(&record.id())
+                        .map_or(record.revision != 1, |prior| !record.follows(prior))
+                    {
+                        return Err(Error::Storage);
+                    }
+                    rituals.insert(record.id(), *record);
+                    if rituals.len() > 4096
+                        || rituals.len()
+                            + changes.len()
+                            + records.len()
+                            + planning.len()
+                            + attention.len()
+                            + attention_drafts.len()
+                            > MAX_OPERATIONS
+                    {
+                        return Err(Error::Storage);
+                    }
+                    continue;
+                }
                 Entry::Attention(record) => {
                     record.validate()?;
                     if let Some(prior) = attention.get(&record.id)
@@ -142,7 +191,8 @@ impl Journal {
                     if attention.len() + attention_drafts.len() > 4096 {
                         return Err(Error::Storage);
                     }
-                    if changes.len()
+                    if rituals.len()
+                        + changes.len()
                         + records.len()
                         + planning.len()
                         + attention.len()
@@ -159,7 +209,8 @@ impl Journal {
                     if attention.len() + attention_drafts.len() > 4096 {
                         return Err(Error::Storage);
                     }
-                    if changes.len()
+                    if rituals.len()
+                        + changes.len()
                         + records.len()
                         + planning.len()
                         + attention.len()
@@ -185,7 +236,8 @@ impl Journal {
                         return Err(Error::Storage);
                     }
                     changes.insert(record.id().to_owned(), record);
-                    if changes.len()
+                    if rituals.len()
+                        + changes.len()
                         + planning.len()
                         + records.len()
                         + attention.len()
@@ -214,7 +266,8 @@ impl Journal {
                         return Err(Error::Storage);
                     }
                     planning.insert(record.id().to_owned(), record);
-                    if planning.len()
+                    if rituals.len()
+                        + planning.len()
                         + changes.len()
                         + records.len()
                         + attention.len()
@@ -256,7 +309,8 @@ impl Journal {
                 .map_err(|_| Error::Storage)?;
             }
             records.insert(record.command.operation_id.clone(), record);
-            if changes.len()
+            if rituals.len()
+                + changes.len()
                 + records.len()
                 + planning.len()
                 + attention.len()
@@ -273,11 +327,14 @@ impl Journal {
             path,
             bytes,
             failed: false,
+            #[cfg(test)]
+            fail_after_sync: false,
             records,
             planning,
             attention,
             attention_drafts,
             changes,
+            rituals,
         })
     }
 
@@ -326,6 +383,10 @@ impl Journal {
             .write_all(&bytes)
             .and_then(|_| self.file.sync_all())
             .map_err(|_| Error::Storage)?;
+        #[cfg(test)]
+        if self.fail_after_sync {
+            return Err(Error::Storage);
+        }
         self.bytes += bytes.len() as u64;
         self.failed = false;
         Ok(())
@@ -362,7 +423,8 @@ impl Journal {
     }
 
     fn count(&self) -> usize {
-        self.changes.len()
+        self.rituals.len()
+            + self.changes.len()
             + self.records.len()
             + self.planning.len()
             + self.attention.len()

@@ -51,6 +51,11 @@ fn the_screen_gets_typed_read_models_and_intents() {
         "export type SubmitState = \"open\" | \"submitting\" | \"submitted\" | \"unknown\" | \"checking\";",
         "export type QuestionState = \"open\" | \"answered\" | \"changed\";",
         "export type StepState = \"waiting\" | \"now\" | \"done\" | \"unknown\" | \"unavailable\";",
+        "  snapshot(): RitualSnapshot;",
+        "  save(intent: RitualWrite): Promise<IntentOutcome>;",
+        "  visit(intent: RitualVisit): Promise<IntentOutcome>;",
+        "  refreshResults(): Promise<IntentOutcome>;",
+        "export type RitualAvailability = \"unavailable\" | \"available\" | \"unknown\";",
         // Changes: reopening reads one exact snapshot; Later and Bring back
         // name the request revision shown; nothing here approves.
         "  change(snapshotId: string): ChangePage | null;",
@@ -80,6 +85,7 @@ fn the_only_exports_are_the_feeds_and_they_have_no_transport() {
         [
             "export declare class ChangesFeed {",
             "export declare class PlanFeed {",
+            "export declare class RitualFeed {",
             "export declare class TodayFeed {"
         ],
         "{ts}"

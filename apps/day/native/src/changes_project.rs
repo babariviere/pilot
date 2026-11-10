@@ -324,7 +324,7 @@ pub fn newer(pages: &[c::ChangesPage], comparison: &c::Comparison) -> Option<Str
 }
 
 /// Whether every part of a history read names the same exact snapshot.
-fn exact(snapshot_id: &str, h: &c::History, row: Option<&c::ChangeRow>) -> bool {
+pub(crate) fn exact(snapshot_id: &str, h: &c::History, row: Option<&c::ChangeRow>) -> bool {
     let s = &h.snapshot;
     let same_row = row.is_none_or(|r| r.comparison == h.comparison && r.target == h.target);
     h.version == 1

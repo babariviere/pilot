@@ -133,6 +133,63 @@ fn intent(p: &ChangePage) -> AttentionIntent {
 }
 
 #[test]
+fn ritual_recap_uses_real_retained_sources_without_treating_capture_as_completion() {
+    use pilot_day_native::{
+        host::ritual::{DaySource, LocalDay},
+        ritual::RitualAvailability,
+    };
+    let mut f = Fixture::new();
+    let host = NativeHost::open_day(
+        serde_json::from_value(f.info["source"].clone()).unwrap(),
+        PathBuf::from(f.info["ledger"].as_str().unwrap()),
+        DaySource {
+            user_id: unsafe { libc::geteuid() },
+            clock: std::sync::Arc::new(|| {
+                Ok(LocalDay {
+                    date: "2026-11-10".into(),
+                    time_zone: "Europe/Paris".into(),
+                    hour: 9,
+                    unix_ms: 1000,
+                })
+            }),
+        },
+    )
+    .unwrap();
+    reply(host.read_ritual()).unwrap();
+    // Initial WS admission may race a passive read, not an entered write.
+    for attempt in 0..3 {
+        match reply(host.read_ritual_results()) {
+            Ok(_) => break,
+            Err(Error::Stale) if attempt < 2 => continue,
+            e => panic!("retained recap read failed: {e:?}"),
+        }
+    }
+    let view = host.ritual_snapshot();
+    assert_eq!(view.results_availability, RitualAvailability::Available);
+    assert!(
+        view.results.is_empty(),
+        "real snapshot capture and review requests do not prove completion"
+    );
+    assert!(!view.results_limited);
+    f.cmd("digest", true);
+    assert!(reply(host.read_ritual_results()).is_err());
+    assert_eq!(
+        host.ritual_snapshot().results_availability,
+        RitualAvailability::Unavailable,
+        "mismatched history never becomes an empty successful recap"
+    );
+    f.cmd("digest", false);
+    f.cmd("unavailable", true);
+    assert!(reply(host.read_ritual_results()).is_err());
+    assert_eq!(
+        host.ritual_snapshot().results_availability,
+        RitualAvailability::Unavailable
+    );
+    assert_eq!(f.cmd("stats", true)["posts"], 0);
+    reply(host.close()).unwrap();
+}
+
+#[test]
 fn all_oldest_first_pages_across_sessions_exact_reopen_and_revision_fenced_transitions() {
     let mut f = Fixture::sized(true);
     let host = f.open();
