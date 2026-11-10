@@ -133,6 +133,7 @@ pub(super) fn migrate_at(
         lock: None,
         plist_stamp: Some((stamp.dev(), stamp.ino())),
         reservation: None,
+        reservation_attempt: None,
         original_backup: None,
     };
     host.verify_target()?;
@@ -845,6 +846,7 @@ mod tests {
                 lock: None,
                 plist_stamp: Some((stamp.dev(), stamp.ino())),
                 reservation: None,
+                reservation_attempt: None,
                 original_backup: None,
             };
             let replace_inode = || {

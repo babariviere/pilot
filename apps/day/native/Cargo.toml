@@ -6,7 +6,7 @@ edition = "2024"
 publish = false
 
 # Separate from the Pilot desktop workspace: Day never links the
-# shipping app or its storage. Only the small native credential reader is shared.
+# shipping app. Its renderer-independent updater and credential reader are shared.
 [workspace]
 
 [lib]
@@ -19,7 +19,11 @@ path = "src/lib.rs"
 macos-host = []
 
 [target.'cfg(target_os = "macos")'.dependencies]
+pilot-desktop-updater = { path = "../../desktop/updater", features = ["native-macos"] }
 nsh-platform-macos = { git = "https://github.com/longbridge/nsh", rev = "e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+pilot-desktop-updater = { path = "../../desktop/updater", features = ["native-linux"] }
 
 [dependencies]
 nsh-engine = { git = "https://github.com/longbridge/nsh", rev = "e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3" }

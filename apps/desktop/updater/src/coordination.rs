@@ -862,6 +862,7 @@ pub(crate) fn signed_update(
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(1))
+        .retry(reqwest::retry::never())
         .timeout(Duration::from_secs(
             if action == "prepare" && receipt["interrupt"] == true {
                 165
@@ -871,7 +872,7 @@ pub(crate) fn signed_update(
         ))
         .build()
         .map_err(|_| Error::Native)?;
-    let mut response = client
+    let response = client
         .post(format!(
             "http://127.0.0.1:{}/__pilot_runtime_update/v1",
             location.port
@@ -879,10 +880,28 @@ pub(crate) fn signed_update(
         .header("x-pilot-update-proof", proof)
         .body(body)
         .send()
-        .map_err(|_| Error::RuntimeUnverified)?;
-    if response.status() != reqwest::StatusCode::OK {
+        .map_err(|_| Error::CommitUncertain)?;
+    if response.status() == reqwest::StatusCode::CONFLICT {
         return Err(Error::ActiveWork);
     }
+    if response.status() != reqwest::StatusCode::OK {
+        return Err(Error::CommitUncertain);
+    }
+    // The POST may already have checkpointed work. Nothing after this point
+    // can turn a lost or unauthenticated ACK into a pre-effect refusal.
+    signed_response(response, &key, location, expected, &r, &nonce)
+        .map_err(|_| Error::CommitUncertain)
+}
+
+fn signed_response(
+    mut response: reqwest::blocking::Response,
+    key: &ring::hmac::Key,
+    location: &Location,
+    expected: &Value,
+    r: &Value,
+    nonce: &str,
+) -> Result<Value, Error> {
+    use ring::hmac;
     let mut bytes = Vec::new();
     response
         .by_ref()
@@ -902,7 +921,7 @@ pub(crate) fn signed_update(
         .step_by(2)
         .map(|i| u8::from_str_radix(&signature[i..i + 2], 16).map_err(|_| Error::Identity))
         .collect::<Result<_, _>>()?;
-    hmac::verify(&key, format!("update/v1\n{body}").as_bytes(), &signature)
+    hmac::verify(key, format!("update/v1\n{body}").as_bytes(), &signature)
         .map_err(|_| Error::Signature)?;
     let value: Value = serde_json::from_str(body).map_err(|_| Error::Identity)?;
     if value["schema"] != 1

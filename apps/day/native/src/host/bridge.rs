@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use std::sync::{Arc, Mutex, atomic::Ordering};
 
 pub(super) struct Call {
+    pub window: String,
     pub command: Command,
     pub gate: Arc<Mutex<Gate>>,
     pub host: NativeHost,
@@ -73,10 +74,11 @@ pub(super) async fn handle(
     t: &Transport,
     journal: &mut Journal,
     shared: &Shared,
+    updates: &mut super::updates::State,
     epoch: u64,
     call: Call,
 ) {
-    let result = run(t, journal, shared, epoch, &call).await;
+    let result = run(t, journal, shared, updates, epoch, &call).await;
     if let Err(error @ (Error::Identity | Error::Offline | Error::Storage)) = result {
         // A bad item stays isolated; losing the source or journal invalidates
         // source-wide authority just as it does for native feed requests.
@@ -88,12 +90,37 @@ async fn run(
     t: &Transport,
     journal: &mut Journal,
     shared: &Shared,
+    updates: &mut super::updates::State,
     epoch: u64,
     call: &Call,
 ) -> Result<Value, Error> {
     call.command
         .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
     shared.open()?;
+    use super::updates::Command as U;
+    let update = match &call.command {
+        Command::UpdateRead => Some(U::Read),
+        Command::UpdatePrepare(r) => Some(U::Prepare(r.clone(), call.window.clone())),
+        Command::UpdateConfirm(r) => Some(U::Confirm(r.clone(), call.window.clone())),
+        Command::UpdateCancel(r) => Some(U::Cancel(r.clone())),
+        Command::UpdateCheck => Some(U::Check),
+        Command::UpdateRestored(r) => Some(U::Restored(r.clone())),
+        _ => None,
+    };
+    if let Some(command) = update {
+        let outcome = super::updates::handle(t, journal, shared, updates, command).await?;
+        if let Command::UpdateConfirm(r) = &call.command {
+            let wake = {
+                let mut gate = call.gate.lock().expect("bridge gate poisoned");
+                gate.update_requested = Some(r.confirmation.clone());
+                gate.flush_wakeup.clone()
+            };
+            if let Some(wake) = wake {
+                wake();
+            }
+        }
+        return Ok(json!({"snapshot":encode(updates.snapshot())?,"outcome":encode(outcome)?}));
+    }
     let host = &call.host;
     let mut value = Value::Null;
     let mut enrollment = None;
@@ -200,9 +227,10 @@ async fn run(
             }
             Some(Work::AttentionDraft(key, value))
         }
-        Command::Flush(generation, _) => {
+        Command::Flush(generation, _, view) => {
             // FIFO barrier after the consumer awaited every form save. This
             // never proves native preedit capture or that every form registered.
+            updates.save_capture(journal, &call.window, view.as_ref())?;
             journal.finish()?;
             let mut gate = call.gate.lock().expect("bridge gate poisoned");
             call.command.admit(&gate)?;
@@ -210,6 +238,12 @@ async fn run(
             value = json!({"generation":generation});
             None
         }
+        Command::UpdateRead
+        | Command::UpdatePrepare(_)
+        | Command::UpdateConfirm(_)
+        | Command::UpdateCancel(_)
+        | Command::UpdateCheck
+        | Command::UpdateRestored(_) => unreachable!("handled update command"),
     };
     let outcome = if let Some(work) = work {
         Some(super::handle(t, journal, shared, epoch, work).await?)

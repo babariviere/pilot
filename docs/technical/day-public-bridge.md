@@ -112,7 +112,13 @@ intent types, not daemon request envelopes:
 | `day.attention.action` | `{action:ActionRef,ask:ActionAsk,text}` | `Today` |
 | `day.attention.check` | `{id,action:boolean}` | `Today` |
 | `day.attention.draft` | `DraftIntent` | `Today` |
-| `day.flush.ack` | `{generation}` | `{generation}` |
+| `day.update.read` | `{}` | `ServiceView` |
+| `day.update.prepare` | `PrepareIntent` | `ServiceView`, including one opaque confirmation |
+| `day.update.confirm` | `ConfirmIntent` | `ServiceView`; durable capture request, not native entry |
+| `day.update.cancel` | `UpdateRef` | `ServiceView`; cancels only a prepared confirmation |
+| `day.update.check` | `{}` | `ServiceView`; lookup only, never a retry |
+| `day.update.restored` | `UpdateRef` | `ServiceView`; display ACK only, no execution authority |
+| `day.flush.ack` | `{generation,view?:SavedView}` | `{generation}`; an update capture requires the final view |
 
 Mutation delivery and returned view freshness are separate. A timeout,
 aborted consumer, disconnected engine or lost reply is not a refusal and
@@ -175,8 +181,10 @@ Cargo's resolve, and an inactive optional dependency is missing there, so
 
 Isolated released-runtime checks are hidden proof, not visible/native
 acceptance. No live home, model, agent, service, installer or default-app
-selection may be used. The matching Node dependency tree is unavailable;
-daemon-backed lanes remain unrun, not replaced by a mismatched donor.
+selection may be used. Daemon-backed lanes previously lacked matching dependencies.
+The exact repaired frozen dependencies
+are now installed privately, without scripts or changed inputs; real-daemon native
+host lanes execute. This does not qualify a signed production Day app.
 
 ### Executed isolated checks
 

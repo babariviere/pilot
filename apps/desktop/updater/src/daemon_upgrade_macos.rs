@@ -57,19 +57,57 @@ pub fn upgrade_coordinated(
     cancel: &AtomicBool,
     binding: Value,
 ) -> Result<(), Failure> {
-    if binding["runtimeRoot"].as_str() != current.join(crate::layout::RUNTIME).to_str()
-        || binding["build"] != super::native::runtime_stamp(current)?
-        || binding["source"] != binding["build"]["source"]
-        || binding["guiBuild"] != trust.current_build
-        || binding["id"]
-            .as_str()
-            .is_none_or(|s| s.is_empty() || s.len() > 128)
-    {
-        return Err(Failure::Unverified);
+    upgrade_coordinated_report(location, current, trust, daemon, lineage, cancel, binding).result
+}
+
+/// Exact attempted reservation plus its retained manifest. Observation only;
+/// missing/partial evidence never grants quiescence or resume authority.
+pub struct UpgradeReport {
+    pub result: Result<(), Failure>,
+    pub operation_id: Option<String>,
+    pub manifest: Option<Value>,
+}
+pub fn upgrade_coordinated_report(
+    location: Location,
+    current: &Path,
+    trust: &Trust,
+    daemon: &str,
+    lineage: &str,
+    cancel: &AtomicBool,
+    binding: Value,
+) -> UpgradeReport {
+    let mut operation = None;
+    let result = (|| {
+        if binding["runtimeRoot"].as_str() != current.join(crate::layout::RUNTIME).to_str()
+            || binding["build"] != super::native::runtime_stamp(current)?
+            || binding["source"] != binding["build"]["source"]
+            || binding["guiBuild"] != trust.current_build
+            || binding["id"]
+                .as_str()
+                .is_none_or(|s| s.is_empty() || s.len() > 128)
+        {
+            return Err(Failure::Unverified);
+        }
+        let mut host = launch_agent(location.clone(), current, trust, daemon, lineage, cancel)?;
+        host.coordinated = Some(binding);
+        let result = execute(&mut host, cancel);
+        operation = host.reservation_attempt;
+        result
+    })();
+    let manifest = operation.as_ref().and_then(|id| {
+        let value =
+            coordination::private_json(&location.home.join(".daemon-lifecycle.json"), 1024 * 1024)
+                .ok()?;
+        (value["schema"] == 1
+            && value["operationId"] == *id
+            && value["purpose"] == "daemon-upgrade")
+            .then_some(value)
+    });
+    UpgradeReport {
+        result,
+        operation_id: operation,
+        manifest,
     }
-    let mut host = launch_agent(location, current, trust, daemon, lineage, cancel)?;
-    host.coordinated = Some(binding);
-    execute(&mut host, cancel)
 }
 
 /// One startup attempt, with the automatic ownership/version gate rechecked under lock.
@@ -116,6 +154,7 @@ fn launch_agent<'a>(
         lock: None,
         plist_stamp: None,
         reservation: None,
+        reservation_attempt: None,
         original_backup: None,
         automatic: false,
         coordinated: None,
@@ -183,6 +222,7 @@ fn check_needed(host: &mut LaunchAgent<'_>) -> Result<bool, Failure> {
     Ok(needed)
 }
 struct LaunchAgent<'a> {
+    reservation_attempt: Option<String>,
     coordinated: Option<Value>,
     automatic: bool,
     location: Location,
@@ -330,11 +370,14 @@ impl LaunchAgent<'_> {
 impl Handoff for LaunchAgent<'_> {
     fn reserve(&mut self) -> Result<(), Failure> {
         self.reservation = Some(if !self.automatic {
+            let operation = verified(coordination::random_operation())?;
+            self.reservation_attempt = Some(operation.clone());
             super::reservation::Reservation::prepare_replacement(
                 &self.location,
                 &self.owner,
                 self.coordinated.as_ref(),
                 &json!({"runtimeRoot": self.current.join(crate::layout::RUNTIME), "build": super::native::runtime_stamp(&self.current)?}),
+                &operation,
             )?
         } else {
             super::reservation::Reservation::prepare(&self.location, &self.owner)?

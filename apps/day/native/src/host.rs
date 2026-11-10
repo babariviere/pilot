@@ -10,6 +10,7 @@ mod journal;
 mod planning;
 pub mod ritual;
 mod transport;
+pub mod updates;
 
 use crate::{
     contract::{self as c, ControlAction, ControlCommand},
@@ -44,6 +45,7 @@ pub struct Source {
 /// Optional native root bindings. They share one journal and one close drain.
 #[derive(Default)]
 pub struct Options {
+    pub updates: Option<updates::Selection>,
     pub planning_model: Option<String>,
     pub url_opener: Option<attention::UrlOpener>,
     pub day: Option<ritual::DaySource>,
@@ -84,12 +86,13 @@ pub(crate) fn valid_id(s: &str) -> bool {
 }
 
 struct Shared {
+    updates: Mutex<crate::update::ServiceView>,
     notices: Mutex<Vec<std::sync::Weak<dyn Fn() + Send + Sync>>>,
     ritual: Mutex<ritual::State>,
     changes: Mutex<changes::State>,
     desk: Mutex<Desk>,
     epoch: AtomicU64,
-    closed: AtomicBool,
+    closed: Arc<AtomicBool>,
     connected: AtomicBool,
     listeners: Mutex<Vec<Sender<()>>>,
     detail: Mutex<Option<String>>,
@@ -118,7 +121,10 @@ impl Shared {
         drop(listeners);
         let live = {
             let mut notices = self.notices.lock().expect("native notices poisoned");
-            let live: Vec<_> = notices.iter().filter_map(std::sync::Weak::upgrade).collect();
+            let live: Vec<_> = notices
+                .iter()
+                .filter_map(std::sync::Weak::upgrade)
+                .collect();
             notices.retain(|notice| notice.strong_count() != 0);
             live
         };
@@ -154,6 +160,12 @@ impl Shared {
 }
 
 enum Work {
+    UpdateCommit {
+        id: String,
+        proof: crate::bridge::FlushReceipt,
+        window: String,
+        gate: Arc<Mutex<crate::bridge::Gate>>,
+    },
     Bridge(bridge::Call),
     Ritual(ritual::Work),
     RitualResults,
@@ -211,29 +223,48 @@ impl Drop for Handle {
 
 impl NativeHost {
     pub(crate) fn notice(&self, notice: &Arc<dyn Fn() + Send + Sync>) {
-        self.0.shared.notices.lock().expect("native notices poisoned")
+        self.0
+            .shared
+            .notices
+            .lock()
+            .expect("native notices poisoned")
             .push(Arc::downgrade(notice));
     }
     pub(crate) fn bridge(
         &self,
         command: crate::bridge::Command,
+        window: String,
         gate: Arc<Mutex<crate::bridge::Gate>>,
         reply: Box<dyn FnOnce(Result<serde_json::Value, Error>) + Send>,
     ) {
-        let call = bridge::Call { command, gate, host: self.clone(), reply };
+        let call = bridge::Call {
+            command,
+            window,
+            gate,
+            host: self.clone(),
+            reply,
+        };
         let epoch = self.0.shared.epoch.load(Ordering::SeqCst);
         let (tx, _rx) = async_channel::bounded(1);
-        let request = Request { epoch, work: Work::Bridge(call), reply: tx };
+        let request = Request {
+            epoch,
+            work: Work::Bridge(call),
+            reply: tx,
+        };
         if let Err(e) = self.0.requests.try_send(request)
             && let Work::Bridge(call) = e.into_inner().work
         {
-            (call.reply)(Err(if self.0.shared.open().is_err() { Error::Closed } else { Error::Busy }));
+            (call.reply)(Err(if self.0.shared.open().is_err() {
+                Error::Closed
+            } else {
+                Error::Busy
+            }));
         }
     }
     /// Start only for an explicit native selection. No environment or home fallback.
     /// File/network work runs off the UI thread. The default mock app never calls this.
     pub fn open(source: Source, ledger: PathBuf) -> Result<Self, Error> {
-        Self::open_selected(source, ledger, None, None, None)
+        Self::open_selected(source, ledger, None, None, None, None)
     }
 
     /// Native root supplies explicit URL navigation authority, never the screen VM.
@@ -242,7 +273,7 @@ impl NativeHost {
         ledger: PathBuf,
         opener: attention::UrlOpener,
     ) -> Result<Self, Error> {
-        Self::open_selected(source, ledger, None, Some(opener), None)
+        Self::open_selected(source, ledger, None, Some(opener), None, None)
     }
 
     /// Native-only selection of a model for new planning. No live profile is enabled.
@@ -251,7 +282,7 @@ impl NativeHost {
         if model.trim().is_empty() || model.len() > 256 {
             return Err(Error::Invalid);
         }
-        Self::open_selected(source, ledger, Some(model), None, None)
+        Self::open_selected(source, ledger, Some(model), None, None, None)
     }
 
     /// Native root selects a current clock and the exact OS user. No live activation.
@@ -260,7 +291,7 @@ impl NativeHost {
         ledger: PathBuf,
         day: ritual::DaySource,
     ) -> Result<Self, Error> {
-        Self::open_selected(source, ledger, None, None, Some(day))
+        Self::open_selected(source, ledger, None, None, Some(day), None)
     }
 
     /// Compose native bindings without opening competing hosts on one ledger.
@@ -283,6 +314,7 @@ impl NativeHost {
             options.planning_model,
             options.url_opener,
             options.day,
+            options.updates,
         )
     }
 
@@ -292,6 +324,7 @@ impl NativeHost {
         model: Option<String>,
         url_opener: Option<attention::UrlOpener>,
         day: Option<ritual::DaySource>,
+        updates: Option<updates::Selection>,
     ) -> Result<Self, Error> {
         if source.port == 0
             || !source.profile.is_absolute()
@@ -304,12 +337,13 @@ impl NativeHost {
             return Err(Error::Identity);
         }
         let shared = Arc::new(Shared {
+            updates: Mutex::new(updates::State::new(None).snapshot()),
             notices: Mutex::default(),
             ritual: Mutex::new(ritual::State::default()),
             changes: Mutex::new(changes::State::default()),
             desk: Mutex::new(Desk::native()),
             epoch: AtomicU64::new(0),
-            closed: AtomicBool::new(false),
+            closed: Arc::new(AtomicBool::new(false)),
             connected: AtomicBool::new(false),
             listeners: Mutex::new(Vec::new()),
             detail: Mutex::new(None),
@@ -338,7 +372,7 @@ impl NativeHost {
                         .enable_all()
                         .build()
                         .map_err(|_| Error::Unavailable)?;
-                    rt.block_on(run(transport, journal, state.clone(), rx, day))
+                    rt.block_on(run(transport, journal, state.clone(), rx, day, updates))
                 })();
                 if let Err(e) = result {
                     fail(&state, e);
@@ -354,6 +388,21 @@ impl NativeHost {
                 result: None,
             }),
         })))
+    }
+
+    pub(crate) fn commit_update(
+        &self,
+        id: String,
+        proof: crate::bridge::FlushReceipt,
+        window: String,
+        gate: Arc<Mutex<crate::bridge::Gate>>,
+    ) -> Receiver<Result<IntentOutcome, Error>> {
+        self.request(Work::UpdateCommit {
+            id,
+            proof,
+            window,
+            gate,
+        })
     }
 
     /// Current native projection. No transport or authority leaves Rust.
@@ -379,6 +428,15 @@ impl NativeHost {
             }
         }
         today
+    }
+
+    pub fn update_snapshot(&self) -> crate::update::ServiceView {
+        self.0
+            .shared
+            .updates
+            .lock()
+            .expect("native updates poisoned")
+            .clone()
     }
     /// Exact mission projection, if already read. `read_mission` fetches it.
     pub fn mission(&self, id: &str) -> Option<MissionPage> {
@@ -663,7 +721,11 @@ async fn run(
     shared: Arc<Shared>,
     requests: Receiver<Request>,
     day: Option<ritual::DaySource>,
+    selection: Option<updates::Selection>,
 ) -> Result<(), Error> {
+    let mut updates = updates::State::new(selection);
+    updates.restore(&journal, &t.source).await;
+    *shared.updates.lock().expect("native updates poisoned") = updates.snapshot();
     for record in journal.attention.values().filter(|r| r.source == t.source) {
         attention::publish(&shared, record);
     }
@@ -728,10 +790,20 @@ async fn run(
                 let result = match request.work {
                     Work::Bridge(call) => {
                         // JSON failures are isolated from unrelated Today/control reads.
-                        bridge::handle(&t, &mut journal, &shared, request.epoch, call).await;
+                        bridge::handle(&t, &mut journal, &shared, &mut updates, request.epoch, call).await;
                         Ok(shared.outcome(OutcomeStatus::Accepted, ""))
                     }
                     Work::Ritual(work) => ritual::handle(&t.source, day.as_ref(), &mut journal, &shared, work),
+                    Work::UpdateCommit { id, proof, window, gate } => {
+                        let valid = {
+                            let g = gate.lock().expect("bridge gate poisoned");
+                            let (generation, sequence) = proof.parts();
+                            !g.closed && g.sealed && g.forms_saved && g.native_captured
+                                && g.generation == generation && g.save_sequence == sequence
+                        };
+                        if valid { updates::handle(&t, &mut journal, &shared, &mut updates, updates::Command::Commit(id, proof, window)).await }
+                        else { Err(Error::Stale) }
+                    }
                     Work::RitualResults => ritual::read_results(&t, day.as_ref(), &mut journal, &shared, request.epoch).await,
                     work => handle(&t, &mut journal, &shared, request.epoch, work).await,
                 };
@@ -744,7 +816,17 @@ async fn run(
                     // A changed card or an unsupported attention read must not
                     // mark the missions' read or its controls stale.
                 } else if let Err(e) = result && !matches!(e, Error::Unknown | Error::Busy | Error::Closed) { fail(&shared, e); }
+                let changed = {
+                    let mut view = shared.updates.lock().expect("native updates poisoned");
+                    let next = updates.snapshot();
+                    let changed = view.revision != next.revision;
+                    *view = next;
+                    changed
+                };
+                if changed { shared.change(|_| ()); }
                 let _ = request.reply.try_send(result);
+                // The update projection is a passive snapshot. This does not
+                // trigger another service read on a change notification.
             }
             event = events.recv(), if events_open => {
                 if event.is_err() { events_open = false; continue; }
@@ -892,6 +974,7 @@ async fn handle(
     }
     match work {
         Work::Bridge(_) => return Err(Error::Invalid),
+        Work::UpdateCommit { .. } => return Err(Error::Invalid),
         Work::Ritual(_) => return Err(Error::Invalid),
         Work::RitualResults => return Err(Error::Invalid),
         work @ (Work::AttentionRead

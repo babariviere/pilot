@@ -25,7 +25,7 @@ impl Reservation {
         purpose: &str,
         binding: Option<&Value>,
     ) -> Result<Self, Failure> {
-        Self::prepare_request(location, owner, purpose, binding, false, None)
+        Self::prepare_request(location, owner, purpose, binding, false, None, None)
     }
     pub(super) fn prepare_explicit(
         location: &Location,
@@ -33,13 +33,14 @@ impl Reservation {
         purpose: &str,
         binding: Option<&Value>,
     ) -> Result<Self, Failure> {
-        Self::prepare_request(location, owner, purpose, binding, true, None)
+        Self::prepare_request(location, owner, purpose, binding, true, None, None)
     }
     pub(super) fn prepare_replacement(
         location: &Location,
         owner: &Value,
         binding: Option<&Value>,
         replacement: &Value,
+        operation: &str,
     ) -> Result<Self, Failure> {
         Self::prepare_request(
             location,
@@ -48,6 +49,7 @@ impl Reservation {
             binding,
             true,
             Some(replacement),
+            Some(operation),
         )
     }
     fn prepare_request(
@@ -57,6 +59,7 @@ impl Reservation {
         binding: Option<&Value>,
         interrupt: bool,
         replacement: Option<&Value>,
+        operation: Option<&str>,
     ) -> Result<Self, Failure> {
         if !["daemon-upgrade", "daemon-stop", "daemon-restart"].contains(&purpose) {
             return Err(Failure::Unsupported);
@@ -71,7 +74,12 @@ impl Reservation {
         // Server hold is 180s measured before inspection (which may take 10s).
         // Keep five seconds of margin; verify never renews this local deadline.
         let deadline = Instant::now() + Duration::from_secs(175);
-        let mut request = json!({"operationId":coordination::random_operation().map_err(|_|Failure::Unverified)?,"purpose":purpose});
+        let operation = operation
+            .map(str::to_owned)
+            .map(Ok)
+            .unwrap_or_else(coordination::random_operation)
+            .map_err(|_| Failure::Unverified)?;
+        let mut request = json!({"operationId":operation,"purpose":purpose});
         if interrupt {
             request["interrupt"] = true.into();
         }
@@ -83,7 +91,7 @@ impl Reservation {
         }
         let receipt =
             coordination::signed_update(location, owner, &request, "prepare").map_err(failure)?;
-        validate_receipt(&receipt, &request)?;
+        validate_receipt(&receipt, &request).map_err(|_| Failure::Unknown)?;
         let value = Self { receipt, deadline };
         if let Err(error) = value.fresh() {
             value.cancel(location, owner);
@@ -115,6 +123,8 @@ impl Reservation {
 fn failure(error: crate::Error) -> Failure {
     if matches!(error, crate::Error::ActiveWork) {
         Failure::Busy
+    } else if error == crate::Error::CommitUncertain {
+        Failure::Unknown
     } else {
         Failure::Unverified
     }
@@ -222,6 +232,10 @@ mod channel_tests {
             "runtimeRoot",
             "refuse",
             "lost",
+            "truncated",
+            "oversized",
+            "malformed",
+            "serverFailure",
         ] {
             let temp = crate::owned_tests::Temp::new();
             let home = temp.path().canonicalize().unwrap();
@@ -297,6 +311,19 @@ mod channel_tests {
                     .unwrap();
                     return;
                 }
+                if fault == "serverFailure" {
+                    write!(socket, "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                    return;
+                }
+                if ["truncated", "oversized", "malformed"].contains(&fault) {
+                    let (body, declared) = match fault {
+                        "truncated" => ("{}".to_owned(), 1000),
+                        "oversized" => ("x".repeat(16_385), 16_385),
+                        _ => ("{".to_owned(), 1),
+                    };
+                    write!(socket, "HTTP/1.1 200 OK\r\nContent-Length: {declared}\r\nConnection: close\r\n\r\n{body}").unwrap();
+                    return;
+                }
                 let mut body = response_owner;
                 body.as_object_mut().unwrap().remove("secret");
                 body["nonce"] = request["nonce"].clone();
@@ -337,6 +364,17 @@ mod channel_tests {
                 &owner,
             );
             assert_eq!(result.is_ok(), fault == "none", "{fault}");
+            if fault != "none" {
+                assert_eq!(
+                    result.err(),
+                    Some(if fault == "refuse" {
+                        Failure::Busy
+                    } else {
+                        Failure::Unknown
+                    }),
+                    "{fault}: an entered request is not a preflight refusal"
+                );
+            }
             worker.join().unwrap();
         }
     }

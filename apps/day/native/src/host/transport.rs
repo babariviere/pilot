@@ -43,14 +43,17 @@ impl Transport {
 
     /// File identity and capability are checked again after every async read.
     pub fn local(&self) -> Result<reqwest::header::HeaderValue, Error> {
+        Self::local_for(&self.source)
+    }
+    pub(super) fn local_for(source: &super::Source) -> Result<reqwest::header::HeaderValue, Error> {
         for (file, expected) in [
-            ("daemon-id", &self.source.home.daemon_id),
-            ("storage-lineage", &self.source.home.lineage_id),
+            ("daemon-id", &source.home.daemon_id),
+            ("storage-lineage", &source.home.lineage_id),
         ] {
             let f = std::fs::OpenOptions::new()
                 .read(true)
                 .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC)
-                .open(self.source.profile.join(file))
+                .open(source.profile.join(file))
                 .map_err(|_| Error::Identity)?;
             let meta = f.metadata().map_err(|_| Error::Identity)?;
             if !meta.is_file() || meta.len() > 128 {
@@ -65,9 +68,9 @@ impl Transport {
             }
         }
         let token = credentials::capability(
-            &self.source.profile,
-            &self.source.home.daemon_id,
-            &self.source.home.lineage_id,
+            &source.profile,
+            &source.home.daemon_id,
+            &source.home.lineage_id,
         )
         .map_err(|_| Error::Identity)?;
         let mut header =

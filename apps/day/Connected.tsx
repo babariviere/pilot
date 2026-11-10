@@ -34,7 +34,13 @@ function Connected() {
 			}
 		>
 			<Each of={open()} key={() => "open"}>
-				{(c) => <DayScreen day={(c() as Open).day} plans={(c() as Open).plans} />}
+				{(c) => (
+					<DayScreen
+						day={(c() as Open).day}
+						plans={(c() as Open).plans}
+						update={(c() as Open).update ?? undefined}
+					/>
+				)}
 			</Each>
 		</If>
 	);

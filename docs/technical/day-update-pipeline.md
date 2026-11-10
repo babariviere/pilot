@@ -179,8 +179,9 @@ deadline. This opt-in boundary is not a complete production app delegate or an u
 
 ## Day update controls
 
-`apps/day` now has the TSX controls and the screen-state half of all-form restore. They run on mock
-rules only. `UpdateFeed` (`native/src/update_feed.rs`) follows the typed contract above:
+`apps/day` has the TSX controls and the screen-state half of all-form restore. The default entry
+uses mock rules; the connected native path is described below. `UpdateFeed`
+(`native/src/update_feed.rs`) follows the typed contract above:
 
 - `snapshot()`/`onChange` give one `ServiceView`: registration state (registered, absent, offline,
   incompatible, unknown), app and service versions, the offer, why it cannot start, the agents an
@@ -201,19 +202,51 @@ never shown as updated); unverified signature; absent, lost and macOS-denied reg
 and an app-only update for a newer service. The UI says "Updated" only after Rust reports the new
 version running, and "Update not confirmed" with Check again for any lost answer.
 
-Not built, and owned by the native host work:
+The connected entry now uses `connectedUpdates.ts`, not the mock feed. The independent
+`pilot-desktop-updater` crate is linked directly; neither shipping desktop app is linked.
+`UpdateFeed::from_host(bridge.update_window())` supports native embedding on that same root
+and uses the same capture gate and notification as JSON confirmation. Root-only
+`host::updates::Selection` supplies the profile, trust, immutable capsule/proposal and existing
+app transaction. There is no usable production default or VM-selected path, credential or PID.
 
-- `UpdateFeed::from_host`: a root-worker adapter over `DaemonLifecycle`, `daemon_upgrade::register`
-  and `ExitGuard::prepare_external`. `apps/day/native/Cargo.toml` does not link
-  `pilot-desktop-updater` yet ("Day never links the shipping app").
-- Bridge methods for these intents. `bridge::METHODS` has no update names, so the connected entry
-  shows no update control.
-- Durable `SavedView` storage in the host journal before COMMIT, and its startup read in the new
-  window, tied to the exact transaction and flush generation. The mock keeps it in memory.
-- Mapping native `Failure`/`Outcome` values and affected-session manifests to `ServiceView` without
-  inventing state. A jobful checkpoint refusal stays "Not updated".
-- Restoring a ritual, scroll position and open help panels. A restored window returns to Today
-  from a ritual and restores scroll to the top.
+The exact public methods are `day.update.read`, `prepare`, `confirm`, `cancel`, `check` and
+`restored` (each with the `day.update.` prefix). Each needs its own declared capability;
+the default mock bundle remains deny-all. Confirmation consumes one opaque token and fsyncs
+the view/selection/credential binding in the existing journal. It requests native capture,
+not an update effect. `day.flush.ack` then saves the final `SavedView` after all form saves.
+Only the native owner can seal that exact capture generation/save sequence and call
+`Bridge::commit_update`. The entered record is fsynced before the existing controller runs.
+All native work is awaited on the serialized host lane, including during joined root close.
+There is no detached service manager or second update database.
+
+The controller uses `DaemonLifecycle::needed/upgrade_coordinated_report`,
+`daemon_upgrade::register`, and `ExitGuard::prepare_external`. App guard preparation is
+**not** app replacement or success: it stays unconfirmed until the separately owned native
+READY/COMMIT/startup lifecycle exists. App-only never reserves or pauses daemon work.
+Combined app-and-daemon execution is explicitly unavailable, not two independent calls.
+
+Native failures are mapped without copying raw errors. Job/checkpoint refusal is "Not updated";
+uncertain entry stays Unknown. The updater treats lost, malformed, mismatched or
+unauthenticated signed-prepare replies as Unknown,
+not a preflight refusal. Only an explicit conflict is a known checkpoint refusal. The native
+POST has retries disabled. Restart preserves the Check-only fence.
+The existing updater can report the exact attempted reservation
+and its matched retained `.daemon-lifecycle.json` manifest, including a durable refused manifest.
+Only sanitized session IDs and checkpoint observations reach TSX, never child storage paths.
+A saved checkpoint does not prove current resume. Missing inventories are not zero-work proof.
+Day never resumes from a restore ACK; exact selective recovery remains owned by the existing
+daemon lifecycle. Check never registers, replaces, retries a native mutation or resends COMMIT.
+
+The journal binds saved view bytes to the root, transaction, operation, window and sealed flush
+proof. Cold restore only displays data. A verified successor app may read the exact external
+startup guard, but does not acknowledge startup or recover execution here. The live old window
+does not consume its own pending restore. `ServiceView.operation` prevents a previous run's
+success from settling a lost confirmation. Failed form saves keep the old engine alive.
+
+Still unqualified: signed production Day identity/packaging, app delegate/menu lifecycle,
+native READY/COMMIT ownership, complete ritual/scroll/help restoration and joined GUI/daemon
+update/rollback acceptance. Those remain the self-update/joined acceptance work. No live
+registration, update, restart, visible test, release or default switch is enabled by this seam.
 
 ## Joined GUI and daemon sequence
 

@@ -594,7 +594,17 @@ export function createDaemonServer(
 				terminals.checkpointLifecycle(),
 			]);
 			const failed = checkpoints.find((result) => result.status === "rejected");
-			if (failed?.status === "rejected") throw failed.reason;
+			if (failed?.status === "rejected") {
+				// Exact failed attempt evidence, not a quiescence/resume receipt.
+				await durableJSON(join(_config.home, ".daemon-lifecycle.json"), {
+					schema: 1,
+					operationId,
+					purpose,
+					phase: "refused",
+					affectedSessions: sessions.lifecycleManifest(operationId),
+				});
+				throw failed.reason;
+			}
 			await durableJSON(join(_config.home, ".daemon-lifecycle.json"), {
 				schema: 1,
 				operationId,

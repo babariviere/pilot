@@ -455,9 +455,13 @@ the window starts fresh, shows that view again without sending anything
 and acknowledges it once; only then do the agents this update paused
 resume. A lost answer shows "Update not confirmed" and offers only Check
 again, which reads. A stopped run says what was not changed and what to do.
-Registration is explicit and its lost answer is only looked up. These run on
-mock rules (`native/src/update.rs`); the trusted native adapter over the
-existing updater is not built (see
+Registration is explicit and its lost answer is only looked up. The default entry runs
+mock rules (`native/src/update.rs`). The connected entry now reaches the independent
+native updater through exact HostChannel methods and the existing root worker/journal.
+A confirmation saves a capture request; only the native owner can seal the final form-save
+generation and enter the trusted controller. App guard preparation is not replacement,
+and a restore ACK resumes nothing. Production signed Day packaging, app-delegate handoff
+and joined update acceptance remain unavailable (see
 [the update pipeline](../../docs/technical/day-update-pipeline.md#day-update-controls)).
 
 Not built yet: the day switcher, Automations, the sky

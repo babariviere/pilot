@@ -529,6 +529,12 @@ for (const census of [
 		assert.equal(checkpoint.phase, "unknown");
 		assert.equal(checkpoint.quiescent, undefined);
 		assert.deepEqual(checkpoint.census, census);
+		const refusal = JSON.parse(await readFile(join(f.home, ".daemon-lifecycle.json"), "utf8"));
+		assert.equal(refusal.operationId, input.operationId);
+		assert.equal(refusal.phase, "refused");
+		assert.equal(refusal.affectedSessions[0].checkpoint.operationId, input.operationId);
+		assert.equal(refusal.affectedSessions[0].checkpoint.quiescent, undefined);
+		assert.deepEqual(refusal.affectedSessions[0].checkpoint.census, census);
 	});
 }
 
@@ -593,7 +599,7 @@ test("failed ownership save cannot interrupt or replace the existing worker", as
 	const f = await fixture(t);
 	const internal = f.sessions as unknown as { save(meta: unknown, ...args: unknown[]): Promise<void> };
 	const save = internal.save;
-	const mocked = t.mock.method(internal, "save", async function (meta: unknown, ...args: unknown[]) {
+	const mocked = t.mock.method(internal, "save", async (meta: unknown, ...args: unknown[]) => {
 		if ((meta as { lifecycleCheckpoint?: { phase: string } }).lifecycleCheckpoint?.phase === "checkpointing")
 			throw new Error("checkpoint ownership fsync failed");
 		return save.call(f.sessions, meta, ...args);
@@ -633,7 +639,7 @@ test("replacement shutdown joins a parked Stop admitted after the checkpoint", a
 		release = resolve;
 	});
 	let held = false;
-	const mocked = t.mock.method(internal, "save", async function (meta: unknown, ...args: unknown[]) {
+	const mocked = t.mock.method(internal, "save", async (meta: unknown, ...args: unknown[]) => {
 		if (!held && (meta as { lifecycleCheckpoint?: { phase: string } }).lifecycleCheckpoint?.phase === "stopped") {
 			held = true;
 			entered();

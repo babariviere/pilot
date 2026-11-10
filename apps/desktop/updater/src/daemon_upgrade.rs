@@ -123,7 +123,10 @@ mod macos;
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
 pub use macos::control;
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
-pub use macos::{migrate_stopped, needed, upgrade, upgrade_coordinated, upgrade_startup};
+pub use macos::{
+    UpgradeReport, migrate_stopped, needed, upgrade, upgrade_coordinated,
+    upgrade_coordinated_report, upgrade_startup,
+};
 
 /// Preserve incomplete handoff evidence before runtime publication can retire old roots.
 #[cfg(all(target_os = "macos", feature = "native-macos"))]

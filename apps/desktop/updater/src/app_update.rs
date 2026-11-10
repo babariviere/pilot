@@ -133,6 +133,36 @@ pub enum ExitGuard {
         target: PathBuf,
     },
 }
+
+/// Read-only verification of an existing signed app transaction. This grants
+/// neither COMMIT nor daemon-management authority and never stages a payload.
+pub fn verify_prepared_target(
+    transaction: &Path,
+    target: &Path,
+    trust: &Trust,
+    expected: &crate::iteration::ExpectedTarget,
+) -> Result<(), Error> {
+    trust.validate()?;
+    installer::validate_target(target, trust)?;
+    let root = installer::transaction_path(transaction)?;
+    installer::validate_root(&root, target)?;
+    if installer::recovery_phase(transaction)? != installer::Phase::Ready {
+        return Err(Error::RecoveryRequired);
+    }
+    let manifest = installer::signed_manifest(&root, trust)?;
+    expected.verify(manifest.manifest())?;
+    if crate::manifest::Build::parse(expected.build())?
+        <= crate::manifest::Build::parse(&trust.current_build)?
+    {
+        return Err(Error::Version);
+    }
+    NativePlatform.verify(target, trust, &trust.current_build, None)?;
+    NativePlatform.verify_candidate(
+        &installer::preview_bundle(&root, trust)?,
+        trust,
+        manifest.manifest(),
+    )
+}
 impl ExitGuard {
     pub fn prepare_external(
         connection: Connection,

@@ -9,7 +9,7 @@ import { type ServiceView, UpdateFeed, type UpdateScenario } from "pilot-day/nat
 /** Pilot's service as Rust last published it, and the feed to act on it. */
 export type Update = {
 	/** Sends intents. Never written to from TSX state. */
-	feed: UpdateFeed;
+	feed: Pick<UpdateFeed, "snapshot" | "onChange" | "prepare" | "cancel" | "confirm" | "check" | "restored">;
 	/** A mirror of Rust's view. Only the feed's listener sets it. */
 	service: Signal<ServiceView>;
 	/** Stops listening and frees the feed. */

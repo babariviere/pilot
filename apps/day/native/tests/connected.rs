@@ -874,7 +874,12 @@ fn an_answer_saves_to_its_own_mission_after_another_is_opened_and_the_flush_wait
         assert_eq!(save["intent"]["interviewId"], json!(interview));
         assert_eq!(save["intent"]["text"], "Only the messages");
     }
-    assert_eq!(root.args("day.flush.ack"), vec![json!({"generation":7})]);
+    let flushes = root.args("day.flush.ack");
+    assert_eq!(flushes.len(), 1);
+    assert_eq!(flushes[0]["generation"], 7);
+    assert_eq!(flushes[0]["view"]["place"], "plan");
+    assert_eq!(flushes[0]["view"]["id"], "other");
+    assert_eq!(flushes[0]["view"]["questions"], json!(["export-1/what"]));
     drop(app);
     let _ = std::fs::remove_dir_all(entry.parent().unwrap());
 }

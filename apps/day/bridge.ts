@@ -268,10 +268,16 @@ export class ConnectedToday implements DayFeed {
 			let saved = true;
 			while (this.#drafts.size > 0) {
 				const [id, draft] = this.#drafts.entries().next().value as [string, DraftIntent];
-				this.#drafts.delete(id);
 				const r = await call<Today>(this.#window, "day.attention.draft", draft);
-				if (r.ok) this.#take(r.snapshot);
-				else saved = false;
+				if (r.ok) {
+					if (this.#drafts.get(id) === draft) this.#drafts.delete(id);
+					this.#take(r.snapshot);
+				} else {
+					// Keep the exact failed local draft. A later empty flush must
+					// not turn a failed save into an all-form persistence ACK.
+					saved = false;
+					break;
+				}
 			}
 			return saved;
 		});

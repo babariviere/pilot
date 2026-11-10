@@ -6,16 +6,19 @@
 import { host, signal } from "nsh";
 import type { Setup, Today } from "pilot-day/native";
 import { ConnectedPlans, ConnectedToday, call, type Refusal, windowId } from "./bridge";
+import { connectedUpdates } from "./connectedUpdates";
 import { type Day, mirrorDay } from "./day";
 import { flushAll } from "./planCommands";
 import { mirrorPlanning, type Plans } from "./planning";
 import { answerDrafts, answerPicks } from "./planView";
+import type { Update } from "./updateFeed";
+import { captureView, saveForms } from "./updateView";
 
 /** Whether this window has its feeds yet, and which. */
 export type Connection =
 	| { state: "opening" }
 	| { state: "none"; reason: string }
-	| { state: "open"; day: Day; plans: Plans };
+	| { state: "open"; day: Day; plans: Plans; update: Update | null };
 
 /** The window's connection. Only `connect` sets it. */
 export const connection = signal<Connection>({ state: "opening" });
@@ -45,12 +48,14 @@ function forWindow(payload: unknown, window: string): payload is { version: 1; w
  * Without an answer for every save, it says nothing: the root's lifecycle
  * owner then never sees the forms as saved, and nothing is closed on a guess.
  */
-async function flushForms(window: string, generation: number, today: ConnectedToday, plans: Plans) {
+async function flushForms(window: string, generation: number, today: ConnectedToday, plans: Plans, day: Day) {
+	const forms = await saveForms(day, plans);
+	if (!forms.saved) return;
 	const drafts = await today.saveDrafts();
 	await flushAll(plans);
 	const waiting = Object.keys(answerDrafts()).length + Object.keys(answerPicks()).length;
 	if (!drafts || waiting > 0) return;
-	await call(window, "day.flush.ack", { generation });
+	await call(window, "day.flush.ack", { generation, view: captureView() });
 }
 
 async function connect() {
@@ -78,6 +83,7 @@ async function connect() {
 	await planFeed.readInventory();
 	const day = mirrorDay(today);
 	const plans = mirrorPlanning(planFeed);
+	const update = await connectedUpdates(window);
 	// An invalidation carries no data: read again, never poll.
 	host.on("day.changed", (payload) => {
 		if (!forWindow(payload, window)) return;
@@ -86,9 +92,9 @@ async function connect() {
 	});
 	host.on("day.flush", (payload) => {
 		if (!forWindow(payload, window) || typeof payload.generation !== "number") return;
-		void flushForms(window, payload.generation, today, plans);
+		void flushForms(window, payload.generation, today, plans, day);
 	});
-	connection.set({ state: "open", day, plans });
+	connection.set({ state: "open", day, plans, update });
 	// A change the root sent while the first reads ran, before these listeners
 	// existed, is not lost: read the cached views once more. This reads no service.
 	void today.refresh();

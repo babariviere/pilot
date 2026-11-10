@@ -39,6 +39,12 @@ pub const METHODS: &[&str] = &[
     "day.attention.check",
     "day.attention.draft",
     "day.flush.ack",
+    "day.update.read",
+    "day.update.prepare",
+    "day.update.confirm",
+    "day.update.cancel",
+    "day.update.check",
+    "day.update.restored",
 ];
 
 /// Intersect a bundle's declaration with the native exact-name grant.
@@ -59,6 +65,7 @@ pub fn restrict(mut bundle: nsh_engine::Bundle) -> Result<nsh_engine::Bundle, Er
 
 #[derive(Default)]
 pub(crate) struct Gate {
+    pub update_requested: Option<String>,
     pub notice_pending: bool,
     pub closed: bool,
     pub generation: u32,
@@ -76,6 +83,12 @@ pub(crate) struct Gate {
 pub struct FlushReceipt {
     generation: u32,
     save_sequence: u64,
+    window: u128,
+}
+impl FlushReceipt {
+    pub(crate) fn parts(self) -> (u32, u64) {
+        (self.generation, self.save_sequence)
+    }
 }
 
 /// One root and one channel. Never reuse it for another window or selection.
@@ -86,6 +99,39 @@ pub struct Bridge {
     window: String,
     gate: Arc<Mutex<Gate>>,
     _notice: Arc<dyn Fn() + Send + Sync>,
+}
+
+/// Native-only capability for this window's update feed. It uses the SAME
+/// gate, worker and capture notification as its released JSON channel.
+/// It is not exported to the VM and cannot select a host or forge a gate.
+#[derive(Clone)]
+pub struct UpdateWindow {
+    host: crate::host::NativeHost,
+    window: String,
+    gate: Arc<Mutex<Gate>>,
+}
+impl UpdateWindow {
+    pub(crate) fn host(&self) -> crate::host::NativeHost {
+        self.host.clone()
+    }
+    pub(crate) fn request(
+        &self,
+        command: Command,
+    ) -> async_channel::Receiver<Result<crate::model::IntentOutcome, Error>> {
+        let (tx, rx) = async_channel::bounded(1);
+        self.host.bridge(
+            command,
+            self.window.clone(),
+            self.gate.clone(),
+            Box::new(move |result| {
+                let result = result.and_then(|value| {
+                    nsh_core::element::from_json(&value["outcome"]).map_err(|_| Error::Unknown)
+                });
+                let _ = tx.try_send(result);
+            }),
+        );
+        rx
+    }
 }
 
 #[derive(Deserialize)]
@@ -133,7 +179,13 @@ pub(crate) enum Command {
         action: bool,
     },
     Draft(crate::model::DraftIntent),
-    Flush(u32, u64),
+    Flush(u32, u64, Option<crate::update::SavedView>),
+    UpdateRead,
+    UpdatePrepare(crate::update::PrepareIntent),
+    UpdateConfirm(crate::update::ConfirmIntent),
+    UpdateCancel(crate::update::UpdateRef),
+    UpdateCheck,
+    UpdateRestored(crate::update::UpdateRef),
 }
 
 #[derive(Deserialize)]
@@ -159,6 +211,8 @@ struct Check {
 #[serde(deny_unknown_fields)]
 struct Flush {
     generation: u32,
+    #[serde(default)]
+    view: Option<Value>,
 }
 
 fn id(s: &str) -> Result<(), Error> {
@@ -184,6 +238,32 @@ fn exact<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, Error> {
 fn command(name: &str, args: Value) -> Result<Command, Error> {
     use Command as C;
     Ok(match name {
+        "day.update.read" | "day.update.check" => {
+            if args != json!({}) {
+                return Err(Error::Invalid);
+            }
+            if name == "day.update.read" {
+                C::UpdateRead
+            } else {
+                C::UpdateCheck
+            }
+        }
+        "day.update.prepare" => C::UpdatePrepare(decode(&args)?),
+        "day.update.confirm" => {
+            let r: crate::update::ConfirmIntent = decode(&args)?;
+            id(&r.confirmation)?;
+            crate::host::updates::validate_view(&r.view)?;
+            C::UpdateConfirm(r)
+        }
+        "day.update.cancel" | "day.update.restored" => {
+            let r: crate::update::UpdateRef = decode(&args)?;
+            id(&r.id)?;
+            if name == "day.update.cancel" {
+                C::UpdateCancel(r)
+            } else {
+                C::UpdateRestored(r)
+            }
+        }
         "day.today.read"
         | "day.plan.prepare"
         | "day.attention.read"
@@ -282,7 +362,10 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             id(&r.item_id)?;
             C::Draft(r)
         }
-        "day.flush.ack" => C::Flush(exact::<Flush>(args)?.generation, 0),
+        "day.flush.ack" => {
+            let r: Flush = exact(args)?;
+            C::Flush(r.generation, 0, r.view.as_ref().map(decode).transpose()?)
+        }
         _ => return Err(Error::Invalid),
     })
 }
@@ -292,7 +375,7 @@ impl Command {
         if gate.closed || gate.sealed {
             return Err(Error::Closed);
         }
-        if let Self::Flush(generation, sequence) = self {
+        if let Self::Flush(generation, sequence, _) = self {
             return if gate.flushing
                 && gate.forms_requested
                 && *generation == gate.generation
@@ -352,7 +435,7 @@ impl Bridge {
                     }
                     let mut command = command(name, e.args)?;
                     let mut gate = state.lock().expect("bridge gate poisoned");
-                    if let Command::Flush(_, sequence) = &mut command {
+                    if let Command::Flush(_, sequence, _) = &mut command {
                         *sequence = gate.save_sequence;
                     }
                     command.admit(&gate)?;
@@ -372,6 +455,7 @@ impl Bridge {
                         let wake_gate = state.clone();
                         host.bridge(
                             command,
+                            selected.clone(),
                             state.clone(),
                             Box::new(move |result| {
                                 if flush {
@@ -427,6 +511,19 @@ impl Bridge {
     /// Do not attach it to a second engine or reload it after disposal.
     pub fn channel(&self) -> HostChannel {
         self.channel.clone()
+    }
+
+    /// Opaque identity for a native feed attached to this same root/window.
+    pub fn window_identity(&self) -> &str {
+        &self.window
+    }
+
+    pub fn update_window(&self) -> UpdateWindow {
+        UpdateWindow {
+            host: self.root.host().clone(),
+            window: self.window.clone(),
+            gate: self.gate.clone(),
+        }
     }
 
     /// Fence new effects and ask the still-live engine to save ALL form state.
@@ -496,6 +593,15 @@ impl Bridge {
         self.gate.lock().expect("bridge gate poisoned").flush_wakeup = Some(wake);
     }
 
+    /// Confirmed operation waiting for capture, for the native lifecycle owner.
+    pub fn pending_update(&self) -> Option<String> {
+        self.gate
+            .lock()
+            .expect("bridge gate poisoned")
+            .update_requested
+            .clone()
+    }
+
     /// Native lifecycle owner calls this only AFTER attached inputs/preedit were
     /// captured for this generation. No released runner implements this yet.
     pub fn native_capture_finished(&self, generation: u32) -> Result<(), Error> {
@@ -533,6 +639,9 @@ impl Bridge {
         Ok(FlushReceipt {
             generation,
             save_sequence: gate.save_sequence,
+            window: uuid::Uuid::parse_str(&self.window)
+                .expect("native window UUID")
+                .as_u128(),
         })
     }
 
@@ -541,8 +650,29 @@ impl Bridge {
         let gate = self.gate.lock().expect("bridge gate poisoned");
         !gate.closed
             && gate.sealed
+            && receipt.window
+                == uuid::Uuid::parse_str(&self.window)
+                    .expect("native window UUID")
+                    .as_u128()
             && gate.generation == receipt.generation
             && gate.save_sequence == receipt.save_sequence
+    }
+
+    /// Native-only entry after the attached editor owner rechecked and sealed
+    /// its exact capture. A VM confirmation alone cannot enter this method.
+    /// Await the result, then await close before replacing the root.
+    pub fn commit_update(
+        &self,
+        id: String,
+        receipt: FlushReceipt,
+    ) -> Result<async_channel::Receiver<Result<crate::model::IntentOutcome, Error>>, Error> {
+        if !self.sealed(receipt) {
+            return Err(Error::Stale);
+        }
+        Ok(self
+            .root
+            .host()
+            .commit_update(id, receipt, self.window.clone(), self.gate.clone()))
     }
 
     /// Cancel this capture generation without stopping the engine or host.
@@ -618,10 +748,10 @@ mod tests {
             forms_requested: true,
             ..Gate::default()
         };
-        let ack = Command::Flush(1, 7);
+        let ack = Command::Flush(1, 7, None);
         assert_eq!(ack.admit(&gate), Ok(()));
         gate.save_sequence += 1; // Another form save was enqueued behind this ACK.
         assert_eq!(ack.admit(&gate), Err(Error::Stale));
-        assert_eq!(Command::Flush(1, 8).admit(&gate), Ok(()));
+        assert_eq!(Command::Flush(1, 8, None).admit(&gate), Ok(()));
     }
 }

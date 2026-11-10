@@ -44,6 +44,7 @@ pub(super) struct Cache {
 }
 
 pub(super) struct Journal {
+    pub updates: BTreeMap<String, super::updates::Record>,
     pub rituals: BTreeMap<String, super::ritual::Record>,
     pub changes: BTreeMap<String, super::changes::Record>,
     file: File,
@@ -61,6 +62,7 @@ pub(super) struct Journal {
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 enum Entry {
+    Update(Box<super::updates::Record>),
     Ritual(Box<super::ritual::Record>),
     Attention(Box<AttentionRecord>),
     Draft(Box<Draft>),
@@ -152,9 +154,33 @@ impl Journal {
         let mut attention_drafts: BTreeMap<String, Draft> = BTreeMap::new();
         let mut changes: BTreeMap<String, super::changes::Record> = BTreeMap::new();
         let mut rituals: BTreeMap<String, super::ritual::Record> = BTreeMap::new();
+        let mut updates: BTreeMap<String, super::updates::Record> = BTreeMap::new();
         for line in body.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
             let entry: Entry = serde_json::from_slice(line).map_err(|_| Error::Storage)?;
             let record = match entry {
+                Entry::Update(record) => {
+                    record.validate()?;
+                    if updates
+                        .get(&record.id)
+                        .map_or(record.state != "capture", |old| !record.follows(old))
+                    {
+                        return Err(Error::Storage);
+                    }
+                    updates.insert(record.id.clone(), *record);
+                    if updates.len() > 256
+                        || updates.len()
+                            + rituals.len()
+                            + changes.len()
+                            + records.len()
+                            + planning.len()
+                            + attention.len()
+                            + attention_drafts.len()
+                            > MAX_OPERATIONS
+                    {
+                        return Err(Error::Storage);
+                    }
+                    continue;
+                }
                 Entry::Ritual(record) => {
                     record.validate().map_err(|_| Error::Storage)?;
                     if rituals
@@ -165,7 +191,8 @@ impl Journal {
                     }
                     rituals.insert(record.id(), *record);
                     if rituals.len() > 4096
-                        || rituals.len()
+                        || updates.len()
+                            + rituals.len()
                             + changes.len()
                             + records.len()
                             + planning.len()
@@ -191,7 +218,8 @@ impl Journal {
                     if attention.len() + attention_drafts.len() > 4096 {
                         return Err(Error::Storage);
                     }
-                    if rituals.len()
+                    if updates.len()
+                        + rituals.len()
                         + changes.len()
                         + records.len()
                         + planning.len()
@@ -209,7 +237,8 @@ impl Journal {
                     if attention.len() + attention_drafts.len() > 4096 {
                         return Err(Error::Storage);
                     }
-                    if rituals.len()
+                    if updates.len()
+                        + rituals.len()
                         + changes.len()
                         + records.len()
                         + planning.len()
@@ -236,7 +265,8 @@ impl Journal {
                         return Err(Error::Storage);
                     }
                     changes.insert(record.id().to_owned(), record);
-                    if rituals.len()
+                    if updates.len()
+                        + rituals.len()
                         + changes.len()
                         + planning.len()
                         + records.len()
@@ -266,7 +296,8 @@ impl Journal {
                         return Err(Error::Storage);
                     }
                     planning.insert(record.id().to_owned(), record);
-                    if rituals.len()
+                    if updates.len()
+                        + rituals.len()
                         + planning.len()
                         + changes.len()
                         + records.len()
@@ -309,7 +340,8 @@ impl Journal {
                 .map_err(|_| Error::Storage)?;
             }
             records.insert(record.command.operation_id.clone(), record);
-            if rituals.len()
+            if updates.len()
+                + rituals.len()
                 + changes.len()
                 + records.len()
                 + planning.len()
@@ -335,6 +367,7 @@ impl Journal {
             attention_drafts,
             changes,
             rituals,
+            updates,
         })
     }
 
@@ -423,12 +456,32 @@ impl Journal {
     }
 
     fn count(&self) -> usize {
-        self.rituals.len()
+        self.updates.len()
+            + self.rituals.len()
             + self.changes.len()
             + self.records.len()
             + self.planning.len()
             + self.attention.len()
             + self.attention_drafts.len()
+    }
+
+    pub fn save_update(&mut self, record: super::updates::Record) -> Result<(), Error> {
+        record.validate()?;
+        if self
+            .updates
+            .get(&record.id)
+            .map_or(record.state != "capture", |old| !record.follows(old))
+        {
+            return Err(Error::Stale);
+        }
+        if !self.updates.contains_key(&record.id)
+            && (self.updates.len() >= 256 || self.count() >= MAX_OPERATIONS)
+        {
+            return Err(Error::Capacity);
+        }
+        self.append(&record)?;
+        self.updates.insert(record.id.clone(), record);
+        Ok(())
     }
 
     pub fn save_changes(&mut self, record: super::changes::Record) -> Result<(), Error> {

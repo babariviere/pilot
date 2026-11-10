@@ -937,6 +937,7 @@ fn native_launchd_handoff_preserves_external_profile_and_service() {
         lock: None,
         plist_stamp: None,
         reservation: None,
+        reservation_attempt: None,
     };
     assert_eq!(
         check_needed(&mut host),

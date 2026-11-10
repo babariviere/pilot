@@ -123,4 +123,25 @@ impl DaemonLifecycle {
             binding,
         )
     }
+
+    /// Same one-shot controller, with exact attempted reservation evidence.
+    /// The report is not permission to retry or resume any work.
+    #[cfg(target_os = "macos")]
+    pub fn upgrade_coordinated_report(
+        &self,
+        capsule: &Path,
+        trust: &Trust,
+        cancel: &AtomicBool,
+        binding: serde_json::Value,
+    ) -> daemon_upgrade::UpgradeReport {
+        daemon_upgrade::upgrade_coordinated_report(
+            self.connection.location().clone(),
+            capsule,
+            trust,
+            self.connection.daemon(),
+            self.connection.lineage(),
+            cancel,
+            binding,
+        )
+    }
 }

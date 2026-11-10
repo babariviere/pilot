@@ -16,7 +16,8 @@ use nsh_core::prelude::*;
 use crate::model::{IntentOutcome, OutcomeStatus};
 
 /// Which mock world the update feed starts from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum UpdateScenario {
     /// Registered, answering and up to date.
     #[default]
@@ -45,7 +46,8 @@ pub enum UpdateScenario {
 }
 
 /// Whether Pilot's service is registered and answering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ServiceState {
     /// Registered and answering.
     #[default]
@@ -61,7 +63,8 @@ pub enum ServiceState {
 }
 
 /// What an update or registration changes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum UpdateKind {
     /// Registers Pilot's service, with the user's explicit consent.
     #[default]
@@ -75,7 +78,8 @@ pub enum UpdateKind {
 }
 
 /// Where an update run is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum UpdatePhase {
     /// Working through its steps.
     #[default]
@@ -91,7 +95,8 @@ pub enum UpdatePhase {
 }
 
 /// Where one step of a run is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum UpdateStepState {
     /// Not started.
     #[default]
@@ -107,7 +112,8 @@ pub enum UpdateStepState {
 }
 
 /// One step of an update run.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateStep {
     /// What the step does, in a few words.
     pub label: String,
@@ -116,7 +122,8 @@ pub struct UpdateStep {
 }
 
 /// What an update did to an agent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum AgentState {
     /// Working. A service update pauses it at a safe point.
     #[default]
@@ -134,7 +141,8 @@ pub enum AgentState {
 }
 
 /// An agent an update touches, or leaves alone.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentLine {
     /// The agent's chat.
     pub chat: String,
@@ -147,7 +155,8 @@ pub struct AgentLine {
 }
 
 /// An update Pilot can install.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateOffer {
     /// What it updates.
     pub kind: UpdateKind,
@@ -159,7 +168,8 @@ pub struct UpdateOffer {
 
 /// A one-use confirmation Rust prepared. It names the exact versions;
 /// confirming it is the only way to start.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Confirmation {
     /// Opaque; used once.
     pub id: String,
@@ -178,7 +188,8 @@ pub struct Confirmation {
 }
 
 /// One update or registration run.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateRun {
     /// What it changes.
     pub kind: UpdateKind,
@@ -195,7 +206,8 @@ pub struct UpdateRun {
 }
 
 /// The screen a window showed, as the window saved it before an update.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum PlaceKind {
     /// Today.
     #[default]
@@ -215,7 +227,8 @@ pub enum PlaceKind {
 /// Where the user was, and what they typed that has no other store.
 /// Answers and drafts are saved to their own stores first; this keeps the
 /// rest. Showing it again sends nothing.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct SavedView {
     /// The screen under the update page.
@@ -233,7 +246,8 @@ pub struct SavedView {
 }
 
 /// A saved view for a window that just started, used once.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Restore {
     /// Opaque; acknowledged once.
     pub id: String,
@@ -242,8 +256,12 @@ pub struct Restore {
 }
 
 /// Pilot's service, its versions and its updates now.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ServiceView {
+    /// Exact native operation, or empty for a read/mock without one. Check
+    /// never treats another operation's success as this operation's ACK.
+    pub operation: String,
     /// Changes on every publish.
     pub revision: u32,
     /// Whether the service is registered and answering.
@@ -269,7 +287,8 @@ pub struct ServiceView {
 }
 
 /// Prepare an update or registration, named as the screen showed it.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct PrepareIntent {
     /// The kind shown.
@@ -279,7 +298,8 @@ pub struct PrepareIntent {
 }
 
 /// Confirm a prepared update, with where the user is.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct ConfirmIntent {
     /// The confirmation shown.
@@ -289,7 +309,8 @@ pub struct ConfirmIntent {
 }
 
 /// Names a prepared confirmation or a restore, as the screen got it.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct UpdateRef {
     /// The confirmation or restore shown.
@@ -297,7 +318,8 @@ pub struct UpdateRef {
 }
 
 /// What preparing did: a confirmation to show, or why not.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Prepared {
     /// Applied, stale or refused.
     pub status: OutcomeStatus,
