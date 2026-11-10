@@ -33,9 +33,11 @@ the shipping desktop apps until Day passes native acceptance and cutover.
 
 ## Run and test
 
-Verification status: script dispatch tests and the real mbx/Cargo namespace
-preflight pass. End-to-end NSH compilation through mbx, effective nested compiler
-profiles/targets and native launch have **not yet been verified** on this path.
+Verified on macOS arm64 (2026-11-10): the pinned CLI, native crate and generated
+describe/headless runners compile through mbx. The production wrapper passes
+`check`, `build`, App's 26 headless tests and Attention's 4 tests. Direct native
+library/boundary checks pass 49 tests. No visible window was launched; macOS
+window-host compilation, live development rebuilds and packaging remain unverified.
 
 From the repository root (Rust 1.99.1 and macOS Command Line Tools installed):
 
@@ -112,6 +114,22 @@ shellcheck -x apps/day/nsh.sh apps/day/scripts/{cargo,build-env.sh,bootstrap.sh}
 The fake-executable tests cover dispatch, quoted arguments, source/target
 isolation, missing/wrong mbx, failures, local execution and runtime signals.
 They do not by themselves prove upstream subprocess coverage or native acceptance.
+
+The real checks used mbx 1.26.0, Rust 1.99.1, offline dependency resolution,
+debug info off, incremental off and one Cargo job. Owned subprocess observations
+confirmed mbx's `mbx-rustc` wrapper, the CLI's separate target, and native plus
+generated `.nsh/rust` check/describe/test commands writing to private targets.
+Actual rustc arguments matched debug-zero/no-incremental settings. Tracked source
+and Cargo.lock bytes stayed unchanged; the final command sequence exited zero
+and its remaining children drained. Logical growth, including the copied CLI
+cache, stayed under 8 GiB, with more than 97 GiB free. These are build-path
+checks, not native product acceptance or a cache-hit/speedup claim.
+
+A copied target is not a promise of a fresh build: this run still scheduled
+dependency work through mbx. A scheduled compiler wrapper alone proves neither
+a cache miss nor a cold build. The linker also reports a large `__eh_frame`
+compact-unwind warning; exception-unwinding performance was not measured or
+worked around. The status-bar capability warning remains expected in the mocks.
 
 Before qualifying a build path, inspect **actual owned compiler subprocesses**,
 not just the launching shell's environment or Cargo metadata. Record the parent
