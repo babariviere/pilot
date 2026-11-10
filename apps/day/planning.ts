@@ -4,7 +4,12 @@
 // processes.
 import { type Signal, signal } from "nsh";
 import { PlanFeed, type PlanScenario, type Planning } from "pilot-day/native";
+import { changesRoute } from "./changesView";
 import type { PlanningFeed } from "./feeds";
+import { glide } from "./motion";
+import { planRoute } from "./planView";
+import { ritualRoute } from "./ritualView";
+import { route } from "./view";
 
 /** Planning's read model as Rust last published it, and the feed to change it. */
 export type Plans = {
@@ -24,7 +29,13 @@ export function openPlanning(scenario?: PlanScenario): Plans {
 /** Mirrors `feed`'s planning read, mock or connected. Closing stops listening and frees the feed. */
 export function mirrorPlanning(feed: PlanningFeed): Plans {
 	const planning = signal(feed.snapshot());
-	const stop = feed.onChange((next) => planning.set(next));
+	const stop = feed.onChange((next) => {
+		// On Today, missions that arrive in or leave the list, or change stage,
+		// glide to their places. Saves and typing do not move anything, and an
+		// open interview, mission, Changes or ritual never glides because of the list.
+		if (todayShown() && shape(next) !== shape(planning())) glide();
+		planning.set(next);
+	});
 	return {
 		feed,
 		planning,
@@ -33,4 +44,14 @@ export function mirrorPlanning(feed: PlanningFeed): Plans {
 			feed.dispose();
 		},
 	};
+}
+
+/** Whether the list can be read, and which missions it lists at which stage: what a glide follows. */
+function shape(p: Planning): string {
+	return [p.availability, ...p.plans.map((row) => `${row.missionId}:${row.stage}`)].join(",");
+}
+
+/** Whether Today is the screen shown. */
+function todayShown(): boolean {
+	return planRoute() === null && route() === null && !changesRoute() && !ritualRoute();
 }

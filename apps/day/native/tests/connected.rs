@@ -10,22 +10,33 @@
 //! after the forms saved. The second runs the whole New → questions →
 //! saved progress → Submit path against the isolated production daemon with
 //! a forked faux kernel (`day-planning-enrollment.ts`, needs the repository's
-//! Node dependencies).
+//! Node dependencies). After the restart, Today lists the saved mission in
+//! Planning, and its row opens the same saved interview.
+//!
+//! The planning-inventory tests play the native root with a scripted channel
+//! of the same exact names (no daemon, no `NativeHost`): a read and empty
+//! list, refusals that are not an empty list, Read again, invalidations that
+//! read only the root's cached list, and a page older than the inventory.
 use nsh_core::prelude::*;
-use nsh_engine::EngineConfig;
+use nsh_engine::{EngineConfig, HostCall, HostChannel};
 use nsh_testing::{Headless, compile_tsx};
 use pilot_day_native::{
     bridge::{Bridge, METHODS, restrict},
     contract::Home,
+    desk::Desk,
     host::{Error, NativeHost, Source},
+    model::Scenario,
+    plan::{PlanAvailability, PlanIdentity, PlanRow, PlanScenario, PlanStage, Planning},
+    plan_desk::PlanDesk,
     root::DayRoot,
 };
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeMap,
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
-    sync::mpsc,
+    sync::{Arc, Mutex, mpsc},
     time::Duration,
 };
 
@@ -61,11 +72,16 @@ fn ui_sets() -> Vec<Registry> {
 
 /// One window on `bridge`'s channel, desktop-sized.
 fn open(entry: &Path, bridge: &Bridge) -> Headless {
+    open_on(entry, bridge.channel())
+}
+
+/// One window on `channel`, under the same exact-name grant as a bridge's.
+fn open_on(entry: &Path, channel: HostChannel) -> Headless {
     let bundle = restrict(compile_tsx(entry, &ui_sets()).expect("Connected.tsx builds")).unwrap();
     let config = EngineConfig {
         ui_sets: ui_sets(),
         viewport: Size::new(Points(1100.0), Points(1400.0)),
-        host: bridge.channel(),
+        host: channel,
         ..EngineConfig::new(bundle)
     };
     Headless::start(config).expect("the engine starts")
@@ -266,11 +282,25 @@ fn new_mission_questions_saved_progress_one_submit_and_the_way_back() {
         .unwrap();
     close(app, bridge);
 
-    // Reopened: the mission is on Today, its overview leads to its planning,
-    // and the saved answer is still there. Nothing was resent.
+    // Reopened: Today lists the saved mission in Planning, waiting for the
+    // user, and its row opens the same saved interview. Nothing was resent.
     let posts = f.cmd("stats", false)["posts"].clone();
     let (_, bridge) = f.bridge();
     let mut app = open(&entry, &bridge);
+    wait(&mut app, &format!("id:plan-{mission}"));
+    assert!(
+        !has(&app, "id:planning-off"),
+        "a read list is not unavailable"
+    );
+    assert!(app.shows("Questions for you"));
+    app.press(&format!("id:plan-{mission}")).unwrap();
+    wait(&mut app, "id:interview");
+    app.wait_until("saved progress from Today", WAIT, |s| {
+        s.texts().iter().any(|t| t.contains("· 1 answered"))
+    })
+    .unwrap();
+    app.press("role:button[Back to Today]").unwrap();
+    // The overview leads to the same planning too.
     wait(&mut app, &format!("id:mission-{mission}"));
     app.press(&format!("id:mission-{mission}")).unwrap();
     wait(&mut app, "id:open-plan");
@@ -329,5 +359,522 @@ fn new_mission_questions_saved_progress_one_submit_and_the_way_back() {
     close(app, bridge);
     f.cmd("close", false);
     assert!(f.child.wait().unwrap().success());
+    let _ = std::fs::remove_dir_all(entry.parent().unwrap());
+}
+
+/// The fake root's window ID, as a native root would pass it.
+const FAKE_WINDOW: &str = "inventory-window";
+/// What the connected adapter says over a planning page older than the latest reads.
+const OLDER: &str = "This is an older read. Pilot checks again before it saves anything.";
+
+/// A native root played by the test on the released channel: exact names,
+/// replies the test sets, every call kept. Unset names refuse as unavailable.
+/// Like the native bridge, it sends one `day.changed` and then holds further
+/// notices until the next `day.today.read`, and a service read of the planning
+/// list (`day.plan.inventory`) changes the root, so it sends a notice too and
+/// becomes the cached list that `day.plan.inventorySnapshot` returns.
+struct FakeRoot {
+    channel: HostChannel,
+    calls: Arc<Mutex<Vec<(String, Value)>>>,
+    replies: Arc<Mutex<BTreeMap<String, Value>>>,
+    by_mission: Arc<Mutex<BTreeMap<(String, String), Value>>>,
+    pending: Arc<Mutex<bool>>,
+}
+fn answer(snapshot: Value) -> Value {
+    json!({"version":1,"value":{"snapshot":snapshot,"outcome":null}})
+}
+impl FakeRoot {
+    fn new() -> Self {
+        let channel = HostChannel::new();
+        channel.set_params(
+            serde_json::from_value(json!({"day":{"version":1,"window":FAKE_WINDOW}})).unwrap(),
+        );
+        let calls: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
+        let replies: Arc<Mutex<BTreeMap<String, Value>>> = Arc::default();
+        let by_mission: Arc<Mutex<BTreeMap<(String, String), Value>>> = Arc::default();
+        let pending: Arc<Mutex<bool>> = Arc::default();
+        for &name in METHODS {
+            let (calls, replies, by_mission, pending, events) = (
+                calls.clone(),
+                replies.clone(),
+                by_mission.clone(),
+                pending.clone(),
+                channel.clone(),
+            );
+            channel.handle(name, move |call: HostCall| {
+                let data = call.data().clone();
+                calls.lock().unwrap().push((name.to_owned(), data.clone()));
+                if name == "day.today.read" {
+                    *pending.lock().unwrap() = false;
+                }
+                let mission = data["args"]["missionId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned();
+                let reply = by_mission
+                    .lock()
+                    .unwrap()
+                    .get(&(name.to_owned(), mission))
+                    .cloned()
+                    .or_else(|| replies.lock().unwrap().get(name).cloned())
+                    .unwrap_or(json!({"version":1,"error":"unavailable"}));
+                if name == "day.plan.inventory" {
+                    // The root keeps what it read, or nothing current after a refusal.
+                    let cached = if reply.get("value").is_some() {
+                        reply.clone()
+                    } else {
+                        answer(not_current())
+                    };
+                    replies
+                        .lock()
+                        .unwrap()
+                        .insert("day.plan.inventorySnapshot".into(), cached);
+                    let mut pending = pending.lock().unwrap();
+                    if !*pending {
+                        *pending = true;
+                        events
+                            .send("day.changed", json!({"version":1,"window":FAKE_WINDOW}))
+                            .unwrap();
+                    }
+                }
+                call.resolve(reply);
+            });
+        }
+        let root = Self {
+            channel,
+            calls,
+            replies,
+            by_mission,
+            pending,
+        };
+        root.reply(
+            "day.today.read",
+            serde_json::to_value(Desk::new(Scenario::Quiet).today()).unwrap(),
+        );
+        root.reply(
+            "day.attention.read",
+            serde_json::to_value(Desk::new(Scenario::Quiet).today()).unwrap(),
+        );
+        root.reply("day.plan.prepare", Value::Null);
+        root.reply("day.plan.inventorySnapshot", not_current());
+        root
+    }
+    fn reply(&self, name: &str, snapshot: Value) {
+        self.replies
+            .lock()
+            .unwrap()
+            .insert(name.into(), answer(snapshot));
+    }
+    /// A reply to `name` for one mission only.
+    fn reply_for(&self, name: &str, mission: &str, snapshot: Value) {
+        self.by_mission
+            .lock()
+            .unwrap()
+            .insert((name.into(), mission.into()), answer(snapshot));
+    }
+    fn refuse(&self, name: &str, error: &str) {
+        self.replies
+            .lock()
+            .unwrap()
+            .insert(name.into(), json!({"version":1,"error":error}));
+    }
+    fn count(&self, name: &str) -> usize {
+        self.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(n, _)| n == name)
+            .count()
+    }
+    fn args(&self, name: &str) -> Vec<Value> {
+        self.calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(n, _)| n == name)
+            .map(|(_, data)| data["args"].clone())
+            .collect()
+    }
+    /// A service change the root saw: one invalidation, which carries no data.
+    fn changed(&self) {
+        *self.pending.lock().unwrap() = true;
+        self.channel
+            .send("day.changed", json!({"version":1,"window":FAKE_WINDOW}))
+            .unwrap();
+    }
+    /// The lifecycle owner's request to save every form before a close or update.
+    fn flush(&self, generation: u32) {
+        self.channel
+            .send(
+                "day.flush",
+                json!({"version":1,"window":FAKE_WINDOW,"generation":generation}),
+            )
+            .unwrap();
+    }
+}
+
+/// A complete, current inventory read, as the root projects it.
+fn inventory(rows: Vec<PlanRow>) -> Value {
+    serde_json::to_value(Planning {
+        availability: PlanAvailability::Live,
+        plans: rows,
+        ..Planning::default()
+    })
+    .unwrap()
+}
+
+/// The root's cached list after its read was lost: not a list at all.
+fn not_current() -> Value {
+    serde_json::to_value(Planning {
+        availability: PlanAvailability::Unavailable,
+        reason: "Planning missions could not be read. Read again; nothing was started.".into(),
+        ..Planning::default()
+    })
+    .unwrap()
+}
+
+fn plan_row(id: &str, title: &str, stage: PlanStage, identity: PlanIdentity) -> PlanRow {
+    PlanRow {
+        mission_id: id.into(),
+        title: title.into(),
+        stage,
+        line: "Interview answers needed".into(),
+        needs_you: matches!(stage, PlanStage::Questions | PlanStage::Review),
+        identity: Some(identity),
+    }
+}
+
+/// The mock interview's page as a current root read, and its row's identity.
+fn export_page() -> (Value, PlanIdentity) {
+    let page = PlanDesk::new(PlanScenario::Interview)
+        .page("export")
+        .unwrap();
+    let interview = page.interview.clone().unwrap();
+    let mut value = serde_json::to_value(page).unwrap();
+    value["fresh"] = json!(true);
+    value["note"] = json!("");
+    let identity = PlanIdentity {
+        interview_id: interview.id,
+        interview_revision: interview.revision,
+        plan_revision: None,
+    };
+    (value, identity)
+}
+
+#[test]
+fn planning_inventory_is_read_once_and_never_shown_as_empty_when_it_is_not() {
+    let entry = entry();
+
+    // A complete empty list: no Planning section at all, and no note.
+    let root = FakeRoot::new();
+    root.reply("day.plan.inventory", inventory(vec![]));
+    let mut app = open_on(&entry, root.channel.clone());
+    wait(&mut app, "role:button[New]");
+    assert!(!has(&app, "id:planning"), "an empty list shows no section");
+    assert!(!has(&app, "id:planning-off"));
+    assert_eq!(
+        root.count("day.plan.inventory"),
+        1,
+        "read once, before Today shows"
+    );
+    assert_eq!(root.args("day.plan.inventory"), vec![json!({})]);
+    drop(app);
+
+    // A refused read is said apart from having none, with no rows.
+    let root = FakeRoot::new();
+    root.refuse("day.plan.inventory", "unavailable");
+    let mut app = open_on(&entry, root.channel.clone());
+    wait(&mut app, "id:planning-off");
+    for text in [
+        "Pilot cannot show missions in planning here.",
+        "Pilot could not read them.",
+        "This is not the same as having none.",
+    ] {
+        assert!(app.shows(text), "{text}");
+    }
+
+    // Read again only reads; overflow and a changed list are their own reasons.
+    // Each Read again is one service read, and its own notice brings exactly one
+    // cached read: nothing feeds back into another service read.
+    app.wait(Duration::from_millis(300)).unwrap();
+    for (error, reason) in [
+        (
+            "capacity",
+            "More missions are in planning than one read holds, so Pilot shows none of them.",
+        ),
+        ("stale", "They changed while Pilot read them."),
+        ("offline", "Pilot could not reach its service."),
+    ] {
+        root.refuse("day.plan.inventory", error);
+        let before = root.count("day.plan.inventory");
+        let cached = root.count("day.plan.inventorySnapshot");
+        app.press("Read again").unwrap();
+        wait(&mut app, reason);
+        app.wait(Duration::from_millis(300)).unwrap();
+        assert_eq!(root.count("day.plan.inventory"), before + 1);
+        assert_eq!(root.count("day.plan.inventorySnapshot"), cached + 1);
+        assert!(
+            app.shows(reason),
+            "the cached read keeps the reason: {reason}"
+        );
+        assert!(has(&app, "id:planning-off"));
+    }
+
+    // A complete list: those waiting for the user first, each with its stage.
+    let (_, identity) = export_page();
+    root.reply(
+        "day.plan.inventory",
+        inventory(vec![
+            plan_row(
+                "published",
+                "Published plan",
+                PlanStage::Published,
+                identity.clone(),
+            ),
+            plan_row(
+                "export",
+                "Export a chat as Markdown",
+                PlanStage::Questions,
+                identity.clone(),
+            ),
+        ]),
+    );
+    app.press("Read again").unwrap();
+    wait(&mut app, "id:plan-export");
+    assert!(!has(&app, "id:planning-off"));
+    let texts = app
+        .screen()
+        .texts()
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let at = |t: &str| texts.iter().position(|x| x == t).unwrap();
+    assert!(
+        at("Export a chat as Markdown") < at("Published plan"),
+        "needs you first"
+    );
+    assert!(app.shows("Questions for you"));
+
+    // An invalidation reads only the root's cached list: never a new service read.
+    app.wait(Duration::from_millis(300)).unwrap();
+    let reads = root.count("day.plan.inventory");
+    let cached = root.count("day.plan.inventorySnapshot");
+    root.reply("day.plan.inventorySnapshot", not_current());
+    root.changed();
+    wait(&mut app, "id:planning-off");
+    assert!(
+        !has(&app, "id:plan-export"),
+        "a list that is not current shows no rows"
+    );
+    assert!(app.shows("Pilot could not read them."));
+    root.reply(
+        "day.plan.inventorySnapshot",
+        inventory(vec![plan_row(
+            "export",
+            "Export a chat as Markdown",
+            PlanStage::Review,
+            identity,
+        )]),
+    );
+    root.changed();
+    wait(&mut app, "Plan ready for your review");
+    assert!(
+        !has(&app, "id:plan-published"),
+        "a mission that left the list is gone"
+    );
+    app.wait(Duration::from_millis(300)).unwrap();
+    assert_eq!(
+        root.count("day.plan.inventory"),
+        reads,
+        "invalidations never read the service"
+    );
+    assert_eq!(
+        root.count("day.plan.inventorySnapshot"),
+        cached + 2,
+        "one cached read per invalidation, then quiet"
+    );
+    assert_eq!(
+        root.count("day.plan.snapshot"),
+        0,
+        "no planning page is open"
+    );
+    assert!(
+        root.args("day.plan.inventorySnapshot")
+            .iter()
+            .all(|a| *a == json!({}))
+    );
+    drop(app);
+
+    // When the service changed, reading again cannot help, so it is not offered.
+    let root = FakeRoot::new();
+    root.refuse("day.plan.inventory", "identity");
+    let mut app = open_on(&entry, root.channel.clone());
+    wait(
+        &mut app,
+        "The Pilot service changed. Open Day again to see them.",
+    );
+    assert!(has(&app, "id:planning-off"));
+    assert!(!app.shows("Read again"));
+    drop(app);
+    let _ = std::fs::remove_dir_all(entry.parent().unwrap());
+}
+
+#[test]
+fn a_planning_row_opens_its_exact_interview_and_a_page_older_than_the_list_says_so() {
+    let entry = entry();
+    let root = FakeRoot::new();
+    let (page, identity) = export_page();
+    let row = |identity: PlanIdentity| {
+        inventory(vec![plan_row(
+            "export",
+            "Export a chat as Markdown",
+            PlanStage::Questions,
+            identity,
+        )])
+    };
+    root.reply("day.plan.inventory", row(identity.clone()));
+    root.reply("day.plan.inventorySnapshot", row(identity.clone()));
+    root.reply("day.plan.read", page.clone());
+    root.reply("day.plan.snapshot", page.clone());
+    let mut app = open_on(&entry, root.channel.clone());
+
+    // The row opens that mission's own saved interview, read by its exact ID.
+    wait(&mut app, "id:plan-export");
+    app.press("id:plan-export").unwrap();
+    wait(&mut app, "id:interview");
+    assert_eq!(
+        root.args("day.plan.read"),
+        vec![json!({"missionId":"export"})]
+    );
+    assert!(!app.shows(OLDER), "a page as new as the list is current");
+
+    // A change while the interview is open keeps the place and the words typed.
+    app.press("id:own-what").unwrap();
+    app.type_text("id:answer-what", "Only the messages")
+        .unwrap();
+    root.changed();
+    app.wait_until("cached reads after the change", WAIT, |_| {
+        root.count("day.plan.snapshot") > 0
+    })
+    .unwrap();
+    app.wait(Duration::from_millis(200)).unwrap();
+    assert!(
+        has(&app, "id:interview"),
+        "an invalidation does not navigate"
+    );
+    assert_eq!(
+        app.screen().input_text("id:answer-what"),
+        Ok(Some("Only the messages"))
+    );
+    assert!(!app.shows(OLDER));
+
+    // Back on Today, the list names a newer revision and the page cannot be
+    // read again: the page shown is older, and says so.
+    app.press("role:button[Back to Today]").unwrap();
+    wait(&mut app, "id:plan-export");
+    let newer = PlanIdentity {
+        interview_revision: identity.interview_revision + 1,
+        ..identity.clone()
+    };
+    root.reply("day.plan.inventorySnapshot", row(newer.clone()));
+    root.refuse("day.plan.snapshot", "stale");
+    root.refuse("day.plan.read", "unavailable");
+    root.changed();
+    app.wait(Duration::from_millis(200)).unwrap();
+    app.press("id:plan-export").unwrap();
+    wait(&mut app, OLDER);
+    wait(
+        &mut app,
+        "Pilot could not read this mission's planning. What was read before stays on screen.",
+    );
+
+    // Read again at the newer revision: current, and the note is gone.
+    let mut current = page.clone();
+    current["interview"]["revision"] = json!(newer.interview_revision);
+    root.reply("day.plan.read", current);
+    app.press("role:button[Back to Today]").unwrap();
+    wait(&mut app, "id:plan-export");
+    app.press("id:plan-export").unwrap();
+    wait(&mut app, "id:interview");
+    app.wait_until("current page", WAIT, |s| !s.shows(OLDER))
+        .unwrap();
+    assert_eq!(
+        root.count("day.plan.inventory"),
+        1,
+        "navigation reads no new list"
+    );
+    drop(app);
+    let _ = std::fs::remove_dir_all(entry.parent().unwrap());
+}
+
+#[test]
+fn an_answer_saves_to_its_own_mission_after_another_is_opened_and_the_flush_waits_for_it() {
+    let entry = entry();
+    let root = FakeRoot::new();
+    let (first, identity) = export_page();
+    let interview = identity.interview_id.clone();
+    let mut second = first.clone();
+    second["missionId"] = json!("other");
+    second["title"] = json!("Another mission");
+    second["interview"]["id"] = json!("other-enrollment-1");
+    let other = PlanIdentity {
+        interview_id: "other-enrollment-1".into(),
+        ..identity.clone()
+    };
+    root.reply(
+        "day.plan.inventory",
+        inventory(vec![
+            plan_row(
+                "export",
+                "Export a chat as Markdown",
+                PlanStage::Questions,
+                identity,
+            ),
+            plan_row("other", "Another mission", PlanStage::Questions, other),
+        ]),
+    );
+    root.reply_for("day.plan.read", "export", first.clone());
+    root.reply_for("day.plan.read", "other", second);
+    root.refuse("day.plan.save", "unavailable");
+    let mut app = open_on(&entry, root.channel.clone());
+
+    // An answer in the first mission whose save is refused: its words wait.
+    wait(&mut app, "id:plan-export");
+    app.press("id:plan-export").unwrap();
+    wait(&mut app, "id:interview");
+    app.press("id:own-what").unwrap();
+    app.type_text("id:answer-what", "Only the messages")
+        .unwrap();
+    app.wait_until("the first save", WAIT, |_| root.count("day.plan.save") == 1)
+        .unwrap();
+
+    // The user opens another mission from Today.
+    app.press("role:button[Back to Today]").unwrap();
+    wait(&mut app, "id:plan-other");
+    app.press("id:plan-other").unwrap();
+    wait(&mut app, "id:interview");
+    assert!(app.shows("Another mission"));
+    assert_eq!(
+        root.args("day.plan.read"),
+        vec![json!({"missionId":"export"}), json!({"missionId":"other"})]
+    );
+
+    // A close or an update asks for every form: the waiting answer still goes
+    // to its own mission and round, and only then is the flush answered.
+    root.reply("day.plan.save", first);
+    root.flush(7);
+    app.wait_until("the flush answer", WAIT, |_| {
+        root.count("day.flush.ack") == 1
+    })
+    .unwrap();
+    let saves = root.args("day.plan.save");
+    assert_eq!(saves.len(), 2, "one refused save, one on the flush");
+    for save in &saves {
+        assert_eq!(save["missionId"], "export", "never the mission open now");
+        assert_eq!(save["intent"]["interviewId"], json!(interview));
+        assert_eq!(save["intent"]["text"], "Only the messages");
+    }
+    assert_eq!(root.args("day.flush.ack"), vec![json!({"generation":7})]);
+    drop(app);
     let _ = std::fs::remove_dir_all(entry.parent().unwrap());
 }

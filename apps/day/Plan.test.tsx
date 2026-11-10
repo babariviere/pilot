@@ -3,7 +3,8 @@
 // these prove the screens and the mock rules, not the daemon's services
 // (native/tests/plan_host.rs maps the real host's reads and writes).
 import { expect, open, test } from "nsh/test";
-import { PlanFeed } from "pilot-day/native";
+import { PlanFeed, type PlanPage, type PlanRow } from "pilot-day/native";
+import { olderThanList } from "./planCurrent";
 
 const desktop = { platform: "macos", width: 1100, height: 1400 } as const;
 const SUBMIT = "id:submit";
@@ -332,11 +333,80 @@ test("New plans a mission from the user's words, or starts one chat after a conf
 
 test("without planning, New says why and sends nothing", async () => {
 	const app = await open("./PlanOff.tsx", desktop);
+	// Today says the list cannot be read, apart from having none, and shows no rows.
+	await app.waitFor("id:planning-off");
+	expect(app.shows("Pilot cannot show missions in planning here.")).toBe(true);
+	expect(app.shows("Planning is not connected in this build.")).toBe(true);
+	expect(app.shows("This is not the same as having none.")).toBe(true);
+	// The mock feed cannot read again, so it offers no Read again.
+	expect(app.shows("Read again")).toBe(false);
 	await app.press("role:button[New]");
 	await app.waitFor("id:planning-off");
 	expect(app.shows("Planning is not connected in this build. Nothing can be sent from here.")).toBe(true);
 	expect(app.enabled("role:button[Plan a mission]")).toBe(false);
 	expect(app.enabled("role:button[Start as one chat]")).toBe(false);
+});
+
+test("Today hides Planning when none is in planning, and each row opens its own interview", async () => {
+	const none = await open("./NewMission.tsx", desktop);
+	await none.waitFor("role:button[New]");
+	expect(none.shows("id:planning")).toBe(false);
+	expect(none.shows("id:planning-off")).toBe(false);
+	const some = await open("./Wayfinder.tsx", desktop);
+	await some.waitFor("id:planning");
+	expect(some.shows("id:planning-off")).toBe(false);
+	expect(some.shows("id:plan-export")).toBe(true);
+	expect(some.shows("id:plan-linux")).toBe(true);
+	// The row opens that mission's own interview, and Escape comes back to Today
+	// with the focus on that row: Space opens it again.
+	await some.press("id:plan-export");
+	await some.waitFor("id:interview");
+	expect(some.shows("Export a chat as Markdown")).toBe(true);
+	expect(some.shows("id:planning")).toBe(false);
+	await some.keyboard.press("escape");
+	await some.waitFor("id:planning");
+	await some.keyboard.press("space");
+	await some.waitFor("id:interview");
+	expect(some.shows("Export a chat as Markdown")).toBe(true);
+});
+
+test("a planning page is older only when a later list names a newer interview", async () => {
+	const feed = new PlanFeed("interview");
+	await feed.open("export");
+	const read = feed.page("export");
+	if (!read?.interview) throw new Error("the interview is open");
+	const page: PlanPage = {
+		...read,
+		interview: { ...read.interview, id: "enrollment-2", questionSet: 2, revision: 4 },
+	};
+	const row = (interviewId: string, interviewRevision: number, needsYou = true): PlanRow => ({
+		missionId: "export",
+		title: "Export a chat as Markdown",
+		stage: needsYou ? "questions" : "planning",
+		line: "",
+		needsYou,
+		identity: { interviewId, interviewRevision, planRevision: null },
+	});
+	// The same interview: only a newer revision ages the page; one that lags does not.
+	expect(olderThanList(page, row("enrollment-2", 4))).toBe(false);
+	expect(olderThanList(page, row("enrollment-2", 5))).toBe(true);
+	expect(olderThanList(page, row("enrollment-2", 3))).toBe(false);
+	// Another round of the same enrollment: a later round ages it, an earlier one lags.
+	expect(olderThanList(page, row("enrollment-3", 1))).toBe(true);
+	expect(olderThanList(page, row("enrollment-1", 9))).toBe(false);
+	// Another enrollment, or a name that is not "<enrollment>-<round>", is never taken as current.
+	expect(olderThanList(page, row("other-2", 4))).toBe(true);
+	expect(olderThanList(page, row("nodash", 4))).toBe(true);
+	expect(olderThanList(page, row("enrollment-x", 4))).toBe(true);
+	// A mission no longer listed, or a row with no identity, says nothing about the page.
+	expect(olderThanList(page, undefined)).toBe(false);
+	expect(olderThanList(page, { ...row("enrollment-2", 9), identity: null })).toBe(false);
+	// Questions wait but the page shows none: older. Nothing waits: not older.
+	const empty: PlanPage = { ...read, interview: null };
+	expect(olderThanList(empty, row("enrollment-2", 4))).toBe(true);
+	expect(olderThanList(empty, row("enrollment-2", 4, false))).toBe(false);
+	// A page that cannot be shown is never aged.
+	expect(olderThanList({ ...page, available: false }, row("enrollment-9", 9))).toBe(false);
 });
 
 test("planning intents are typed, name what was shown, need every answer and never submit twice", async () => {

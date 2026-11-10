@@ -63,6 +63,14 @@ export const confirming = signal<string | null>(null);
 /** The last message a control intent returned, by mission. */
 export const controlMessages = signal<Record<string, string>>({});
 
+/**
+ * Where the user was on Today when they opened a mission, its planning or
+ * Changes: Today's scroll offset, and the row they opened (its test ID),
+ * which takes the keyboard focus again when Today comes back. Plain values:
+ * keeping them changes nothing on screen.
+ */
+export const todayPlace: { y: number; row: string | null } = { y: 0, row: null };
+
 /** Opens the overview of mission `id`. */
 export function openMission(id: string) {
 	confirming.set(null);

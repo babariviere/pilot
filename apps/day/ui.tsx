@@ -90,11 +90,14 @@ export function RowLink(props: {
 	testID: string;
 	title: string;
 	accessibilityLabel: string;
+	/** Hears the row's view, to give it the keyboard focus. */
+	anchor?: (node: ViewRef) => void;
 	onPress: () => void;
 	children?: JSX.Element;
 }) {
 	return (
 		<Button
+			ref={props.anchor}
 			testID={props.testID}
 			accessibilityLabel={props.accessibilityLabel}
 			onPress={props.onPress}

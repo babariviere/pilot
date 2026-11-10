@@ -30,8 +30,12 @@ export type DayFeed = Pick<
 	| "dispose"
 >;
 
-/** Planning's reads and intents, as the screens use them. */
+/**
+ * Planning's reads and intents, as the screens use them. A connected feed
+ * can also read the missions in planning again (Read again), which is
+ * passive, and says whether reading again could help.
+ */
 export type PlanningFeed = Pick<
 	PlanFeed,
 	"snapshot" | "onChange" | "page" | "open" | "plan" | "start" | "saveAnswer" | "submit" | "checkSubmit" | "dispose"
->;
+> & { readInventory?: () => Promise<void>; canReadInventory?: () => boolean };

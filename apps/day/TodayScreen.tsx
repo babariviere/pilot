@@ -2,7 +2,7 @@
 // comes next. Read-only over the Rust read model, except through intents.
 // Movement comes only from agents' reports; a mission without a current
 // report is shown as such, never as not moving.
-import { effect, type JSX, keymap, Scroll, Text, View } from "nsh";
+import { effect, type JSX, keymap, Scroll, signal, Text, View, type ViewRef } from "nsh";
 import type { Decision, MissionRow } from "pilot-day/native";
 import { ActionCard } from "./ActionCard";
 import type { Changes } from "./changeFeed";
@@ -16,7 +16,7 @@ import { stageMark, stageWord } from "./PlanScreen";
 import type { Plans } from "./planning";
 import { openNew, openPlan } from "./planView";
 import { Action, EvidenceChip, InlineAction, Mark, RowLink, SectionTitle, Track } from "./ui";
-import { dataSource, focused, focusFront, front, type Item, move, openMission, queue } from "./view";
+import { dataSource, focused, focusFront, front, type Item, move, openMission, queue, todayPlace } from "./view";
 import { freshnessLine, provenance, rowLine, stateMark, stateTone, stateWord } from "./words";
 
 function actionFor(decision: Decision | undefined): string {
@@ -46,6 +46,29 @@ function total(row: MissionRow): number {
 	return p.done + p.review + p.active + p.blocked + p.todo;
 }
 
+/**
+ * A row that opens another screen. Pressing it keeps its place, and when
+ * Today comes back the row takes the keyboard focus again. Returns the
+ * row's anchor and what its press does.
+ */
+function placeRow(testID: string, open: () => void) {
+	const node = signal<ViewRef | null>(null);
+	effect(() => {
+		const n = node();
+		if (n && todayPlace.row === testID) {
+			todayPlace.row = null;
+			n.focus();
+		}
+	});
+	return {
+		anchor: (n: ViewRef) => node.set(n),
+		press: () => {
+			todayPlace.row = testID;
+			open();
+		},
+	};
+}
+
 /** A mission's state: its mark and words. */
 export function MissionStatus(props: { row: MissionRow }) {
 	return (
@@ -67,6 +90,7 @@ export function MissionStatus(props: { row: MissionRow }) {
 
 function MissionLine(props: { day: Day; row: MissionRow }) {
 	const decision = () => props.day.today().decisions.find((d) => d.id === props.row.decisionId);
+	const place = placeRow(`mission-${props.row.id}`, () => openMission(props.row.id));
 	const meta = () => {
 		const parts = [props.row.report ? provenance(props.row.report) : "", props.row.stage];
 		return parts.filter(Boolean).join(" · ");
@@ -77,7 +101,8 @@ function MissionLine(props: { day: Day; row: MissionRow }) {
 				testID={`mission-${props.row.id}`}
 				title={props.row.title}
 				accessibilityLabel={`${props.row.title}, ${stateWord(props.row)}. Open the mission.`}
-				onPress={() => openMission(props.row.id)}
+				anchor={place.anchor}
+				onPress={place.press}
 			>
 				<MissionStatus row={props.row} />
 			</RowLink>
@@ -353,37 +378,85 @@ export function TopBar(props: { children?: JSX.Element; action?: JSX.Element }) 
 	);
 }
 
-/** Missions in planning, those waiting for the user first. Hidden when there are none. */
+/**
+ * Missions in planning, those waiting for the user first. Hidden when the
+ * list is read and empty; a list that could not be read says so and shows
+ * no rows, so it never looks like having none. Read again only reads.
+ */
 function Planning(props: { plans: Plans }) {
+	const planning = () => props.plans.planning();
+	const off = () => planning().availability === "unavailable";
 	const rows = () => {
-		const all = props.plans.planning().plans;
+		if (off()) return [];
+		const all = planning().plans;
 		return [...all.filter((p) => p.needsYou), ...all.filter((p) => !p.needsYou)];
 	};
+	const readInventory = props.plans.feed.readInventory?.bind(props.plans.feed);
+	// Not offered when reading again cannot help: the service changed, or Pilot is closing.
+	const canReadAgain = () => {
+		planning();
+		return !!readInventory && (props.plans.feed.canReadInventory?.() ?? true);
+	};
+	const reading = signal(false);
+	const readAgain = async () => {
+		if (!readInventory || reading()) return;
+		reading.set(true);
+		try {
+			await readInventory();
+		} finally {
+			reading.set(false);
+		}
+	};
 	return (
-		<If when={rows().length > 0}>
-			<View class="gap-1">
+		<If when={off() || rows().length > 0}>
+			<View testID="planning" class="gap-1">
 				<View class="pb-1">
 					<SectionTitle title="Planning" count={rows().length} />
 				</View>
-				<Each of={rows()} key={(p) => p.missionId}>
-					{(p) => (
-						<View class="gap-1 border-t border-border py-3">
-							<RowLink
-								testID={`plan-${p().missionId}`}
-								title={p().title}
-								accessibilityLabel={`${p().title}, ${stageWord(p().stage)}. Open its planning.`}
-								onPress={() => openPlan(p().missionId)}
-							>
-								<View class="flex-row items-center gap-1.5">
-									<Mark kind={stageMark(p().stage)} />
-									<Text class={p().needsYou ? "text-xs text-needs-ink" : "text-xs text-muted-foreground"}>
-										{stageWord(p().stage)}
-									</Text>
-								</View>
-							</RowLink>
-							<Text class="text-sm text-muted-foreground">{p().line}</Text>
+				<If when={off()}>
+					<View testID="planning-off" class="gap-1.5 rounded-xl bg-muted px-4 py-3">
+						<View class="flex-row items-center gap-2.5">
+							<Mark kind="unknown" />
+							<Text class="flex-1 text-sm text-foreground">Pilot cannot show missions in planning here.</Text>
 						</View>
-					)}
+						<Text class="text-sm text-muted-foreground">{planning().reason}</Text>
+						<Text class="text-xs text-faint">This is not the same as having none.</Text>
+						<If when={canReadAgain()}>
+							<View class="flex-row pt-1">
+								<Action
+									label={reading() ? "Reading…" : "Read again"}
+									disabled={reading()}
+									accessibilityLabel="Read missions in planning again. This sends nothing."
+									onPress={() => void readAgain()}
+								/>
+							</View>
+						</If>
+					</View>
+				</If>
+				<Each of={rows()} key={(p) => p.missionId}>
+					{(p) => {
+						const id = p().missionId;
+						const place = placeRow(`plan-${id}`, () => openPlan(id));
+						return (
+							<View class="gap-1 border-t border-border py-3">
+								<RowLink
+									testID={`plan-${id}`}
+									title={p().title}
+									accessibilityLabel={`${p().title}, ${stageWord(p().stage)}. Open its planning.`}
+									anchor={place.anchor}
+									onPress={place.press}
+								>
+									<View class="flex-row items-center gap-1.5">
+										<Mark kind={stageMark(p().stage)} />
+										<Text class={p().needsYou ? "text-xs text-needs-ink" : "text-xs text-muted-foreground"}>
+											{stageWord(p().stage)}
+										</Text>
+									</View>
+								</RowLink>
+								<Text class="text-sm text-muted-foreground">{p().line}</Text>
+							</View>
+						);
+					}}
 				</Each>
 			</View>
 		</If>
@@ -478,7 +551,14 @@ export function TodayScreen(props: { day: Day; plans?: Plans; changes?: Changes 
 	const plans = props.plans;
 	const changes = props.changes;
 	return (
-		<Scroll class="flex-1 bg-background">
+		<Scroll
+			class="flex-1 bg-background"
+			contentOffset={{ y: todayPlace.y }}
+			scrollEventThrottle={100}
+			onScroll={(e) => {
+				todayPlace.y = e.offset.y;
+			}}
+		>
 			<View class="w-full max-w-2xl self-center gap-12 px-6 pb-24 pt-6">
 				<TopBar
 					action={

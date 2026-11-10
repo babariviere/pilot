@@ -72,6 +72,10 @@ async function connect() {
 	const setup = await call<Setup | null>(window, "day.plan.prepare", {});
 	const today = new ConnectedToday(window, first.snapshot);
 	const planFeed = new ConnectedPlans(window, setup.ok ? (setup.snapshot ?? null) : null);
+	// Every mission in planning, read once before Today shows, so a valid empty
+	// list and one that could not be read never look alike. Later changes
+	// arrive as invalidations and read the root's cached list.
+	await planFeed.readInventory();
 	const day = mirrorDay(today);
 	const plans = mirrorPlanning(planFeed);
 	// An invalidation carries no data: read again, never poll.
@@ -85,6 +89,10 @@ async function connect() {
 		void flushForms(window, payload.generation, today, plans);
 	});
 	connection.set({ state: "open", day, plans });
+	// A change the root sent while the first reads ran, before these listeners
+	// existed, is not lost: read the cached views once more. This reads no service.
+	void today.refresh();
+	void planFeed.refresh();
 }
 
 void connect();

@@ -120,7 +120,7 @@ cd apps/day
 ./nsh.sh check && ./nsh.sh build # types against the Rust declarations, class check
 ./nsh.sh test App.test.tsx       # headless flows, boundary and sandbox (26 tests)
 ./nsh.sh test Ritual.test.tsx    # start and end of day and standup notes (9 tests)
-./nsh.sh test Plan.test.tsx      # New, interviews, maps and review, and the planning boundary (19 tests)
+./nsh.sh test Plan.test.tsx      # New, interviews, maps and review, Today's Planning, and the planning boundary (21 tests)
 ./nsh.sh test Changes.test.tsx   # Changes: list, exact reopen, Later, lost answer, unavailable, Read again, diff selection and scroll, boundary (13 tests)
 ./nsh.sh test Attention.test.tsx # agent questions, unavailable help, drafts and links that report nothing (4 tests)
 ./nsh.sh test Native.test.tsx --target macos  # native captures and input, in output/
@@ -131,7 +131,12 @@ cd apps/day
 one `Bridge` over the canonical `DayRoot`. One test needs no daemon (an unreadable selection and the
 flush answer); the journey test uses an isolated daemon with a forked faux kernel
 (`packages/daemon/src/fixtures/day-planning-enrollment.ts`, so it needs the repository's Node
-dependencies). Both are part of the native `cargo test` above.
+dependencies). After its restart, Today's Planning row opens the saved interview. Three more tests
+play the root with a scripted channel of the same exact names and its change-notice gate (no
+daemon): Today's planning list when it is empty, refused, over the limit or changed, Read again,
+invalidations that never read the service, a page older than the list, and an answer saved to its
+own mission after another mission was opened, then flushed. All are part of the native `cargo test`
+above.
 
 Script-only checks need neither Cargo nor NSH and never open a window:
 
@@ -194,6 +199,20 @@ owner opens one `NativeHost` for an explicit selection, wraps it in the canonica
 exact JSON calls to the same shapes the screens already use (`feeds.ts`): `ConnectedToday` and
 `ConnectedPlans` mirror the latest read in one signal each, read again on `day.changed` (which
 carries no data), and send each intent once. A lost reply is Unknown and only Check looks it up.
+
+Today's Planning lists every mission in planning from the root's complete, passive inventory, those
+that wait for the user first. The window reads it once (`day.plan.inventory`) before Today shows,
+and Read again reads it again. An invalidation reads only the root's cached list
+(`day.plan.inventorySnapshot`), so reading never causes another invalidation. A complete empty list
+hides the section. A list that could not be read, was over the limit, changed during the read or is
+no longer current shows no rows and says so, apart from having none. Read again is not offered when
+the service changed or Pilot is closing. A row opens that mission's saved interview and plan. A
+planning page read before a later list that names a newer interview revision or round, or one a
+change reached without a new read, says it is an older read. Saves, the submission and its check go
+to the mission whose page shows that interview, never to whichever mission is open now. Back on
+Today, the scroll offset comes back and the row that was opened takes the keyboard focus. Nothing
+here starts work.
+
 Help, link opening, direct chat start, Start, budget grants and continuation after a human action
 stay unavailable here and say so. The screen never names a profile, port, path or credential.
 Without a native root (`nsh run`, `nsh test`), the window says it is not connected instead of
