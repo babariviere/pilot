@@ -438,7 +438,7 @@ export function runKernelWorker(): void {
 					type: "lifecycle.checkpointed",
 					requestId: command.requestId,
 					operationId: command.operationId,
-					...(await session.checkpointLifecycle()),
+					...(await session.checkpointLifecycle(command.notifyUpdate ? command.operationId : undefined)),
 				});
 				await send({ type: "accepted", requestId: command.requestId });
 				break;

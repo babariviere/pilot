@@ -351,6 +351,124 @@ test("stopping a job for the user claims it and tells the agent once in a follow
 	assert.match(JSON.stringify(messages[0]), /The user stopped background job Test suite \(tests\)/);
 });
 
+test("update lifecycle notice survives reopen without starting a model turn", async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	const operationId = randomUUID();
+	const closed = await session.checkpointLifecycle(operationId);
+	assert.equal(closed.updateNoticeOperationId, operationId);
+	assert.equal(closed.jobs, 0);
+	assert.equal(closed.hasChildren, false);
+	assert.equal(f.a.state.callCount, 0);
+	const reopened = await f.open();
+	const notices = (await reopened.conversation.context(context)).messages.filter(
+		(message) => message.role === "user" && JSON.stringify(message.content).includes("software update"),
+	);
+	assert.equal(notices.length, 1);
+	assert.match(JSON.stringify(notices[0]), /Do not restart interrupted commands/);
+	assert.equal(f.a.state.callCount, 0, "a saved notice is not a continuation input");
+});
+
+test("missing legacy job history cannot turn an empty census into quiescence", async (t) => {
+	const f = await fixture(t);
+	const first = await f.open();
+	await first.close();
+	await rm(join(f.spec.storageDir, "native.session.job-history"));
+	const reopened = await f.open();
+	f.expectCloseFailure(reopened, /descendant exit is unconfirmed/);
+	await assert.rejects(reopened.checkpointLifecycle(), /descendant exit is unconfirmed/);
+	assert.equal(f.a.state.callCount, 0);
+});
+
+for (const uncertain of [false, true]) {
+	test(`lifecycle job cancellation refuses ${uncertain ? "unconfirmed leader exit" : "unconfirmed descendant exit"}`, async (t) => {
+		const actions: string[] = [];
+		const job = { id: "tests", name: "Tests", state: "running", startedAt: 1, outputPath: "/tmp/tests.log" };
+		const f = await fixture(t, [
+			(pi) => {
+				pi.registerTool({
+					name: "jobs",
+					label: "Jobs",
+					description: "Lifecycle jobs fixture",
+					parameters: Type.Object({
+						action: Type.String(),
+						id: Type.Optional(Type.String()),
+						waitMs: Type.Optional(Type.Number()),
+					}),
+					outputSchema: Type.Unknown(),
+					execute: async (_id, args) => {
+						actions.push(args.action);
+						if (args.action === "stop") job.state = "cancelled";
+						return {
+							content: [],
+							details: undefined,
+							structuredContent:
+								args.action === "list" ? [job] : { ...job, ...(!uncertain ? { endedAt: 2 } : {}) },
+						};
+					},
+				});
+			},
+		]);
+		const session = await f.open();
+		const expected = uncertain ? /job exit is unconfirmed/ : /job descendant exit is unconfirmed/;
+		f.expectCloseFailure(session, expected);
+		const checkpoint = session.checkpointLifecycle();
+		await assert.rejects(checkpoint, expected);
+		await assert.rejects(session.close(), expected, "close keeps the failed quiescence outcome");
+		assert.equal(actions.filter((action) => action === "stop").length, 1);
+		assert.equal(actions.filter((action) => action === "wait").length, 1);
+		assert.ok(actions.indexOf("stop") < actions.indexOf("wait"));
+		assert.equal(f.a.state.callCount, 0, "lifecycle stop cannot send a user-attributed follow-up");
+	});
+}
+
+test("failed lifecycle job inspection still joins other admitted waits", async (t) => {
+	const entered = deferred();
+	const release = deferred();
+	t.after(() => release.resolve());
+	const jobs = ["failed", "draining"].map((id) => ({
+		id,
+		name: id,
+		state: "running",
+		startedAt: 1,
+		outputPath: `/tmp/${id}.log`,
+	}));
+	const f = await fixture(t, [
+		(pi) => {
+			pi.registerTool({
+				name: "jobs",
+				label: "Jobs",
+				description: "Joined lifecycle jobs fixture",
+				parameters: Type.Object({
+					action: Type.String(),
+					id: Type.Optional(Type.String()),
+					waitMs: Type.Optional(Type.Number()),
+				}),
+				outputSchema: Type.Unknown(),
+				async execute(_id, args) {
+					if (args.action === "list") return { content: [], details: undefined, structuredContent: jobs };
+					if (args.action === "wait") {
+						if (args.id === "failed") throw new Error("Lost job exit reply");
+						entered.resolve();
+						await release.promise;
+					}
+					return { content: [], details: undefined, structuredContent: { endedAt: 2 } };
+				},
+			});
+		},
+	]);
+	await f.open();
+	let settled = false;
+	const draining = f.adapters[0]!.checkpointJobs().finally(() => {
+		settled = true;
+	});
+	const rejected = assert.rejects(draining, /Lost job exit reply/);
+	await entered.promise;
+	assert.equal(settled, false, "failure cannot detach another admitted wait");
+	release.resolve();
+	await rejected;
+});
+
 test("durable jobs recovery keeps its storage anchor and admits one completion across reopen", {
 	timeout: 15_000,
 }, async (t) => {
@@ -462,8 +580,13 @@ async function fixture(
 ) {
 	const root = await mkdtemp(join(tmpdir(), "pilot-model-"));
 	const sessions: KernelSession[] = [];
+	const closeFailures = new Map<KernelSession, RegExp>();
 	t.after(async () => {
-		for (const session of sessions.reverse()) await session.close();
+		for (const session of sessions.reverse()) {
+			const expected = closeFailures.get(session);
+			if (expected) await assert.rejects(session.close(), expected);
+			else await session.close();
+		}
 		await rm(root, { recursive: true, force: true });
 	});
 	t.mock.method(globalThis, "fetch", () => assert.fail("model integration must stay offline"));
@@ -597,6 +720,7 @@ async function fixture(
 		adapters,
 		spec,
 		completed: completed.promise,
+		expectCloseFailure: (session: KernelSession, expected: RegExp) => closeFailures.set(session, expected),
 	};
 }
 
@@ -708,12 +832,17 @@ test("fetch causes survive provider flattening, completion persistence and cold 
 });
 
 test("recovered fetch retries and parallel requests do not attach stale network causes", async (t) => {
+	const firstEntered = deferred();
+	const recover = deferred();
+	t.after(() => recover.resolve());
 	const f = await fixture(t);
 	const session = await f.open();
 	const adapter = f.adapters[0]!;
 	f.a.setResponses([
 		async (_messages, options) => {
 			await assert.rejects(options!.fetch!("https://example.com"));
+			firstEntered.resolve();
+			await recover.promise;
 			await options!.fetch!("https://example.com");
 			return fauxAssistantMessage("", { stopReason: "error", errorMessage: "Invalid request" });
 		},
@@ -724,10 +853,13 @@ test("recovered fetch retries and parallel requests do not attach stale network 
 		if (++calls === 1) throw Object.assign(new Error("fetch failed"), { code: "ECONNRESET" });
 		return new Response("ok");
 	};
-	const results = await Promise.all([
-		adapter.models.completeSimple(f.a.getModel(), { messages: [] }, { fetch }),
-		adapter.models.completeSimple(f.a.getModel(), { messages: [] }),
-	]);
+	// Provider preparation is asynchronous. Enter the first faux response before
+	// admitting the second, but keep their request lifetimes overlapping.
+	const retrying = adapter.models.completeSimple(f.a.getModel(), { messages: [] }, { fetch });
+	await firstEntered.promise;
+	const parallel = await adapter.models.completeSimple(f.a.getModel(), { messages: [] });
+	recover.resolve();
+	const results = [await retrying, parallel];
 	assert.match(results[0]!.errorMessage!, /Invalid request/);
 	assert.match(results[1]!.errorMessage!, /Authentication failed/);
 	for (const result of results) assert.doesNotMatch(result.errorMessage!, /ECONNRESET|Retryable/);

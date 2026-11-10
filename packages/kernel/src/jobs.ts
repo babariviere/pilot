@@ -36,6 +36,38 @@ function validText(value: unknown, limit: number): value is string {
 	return typeof value === "string" && value.length > 0 && value.length <= limit && !value.includes("\0");
 }
 
+/** Stop direct jobs and join admitted waits. Not a descendant-exit proof; never restarts commands. */
+export async function drainLifecycleJobs(
+	jobs: readonly SessionJob[],
+	execute: (action: "stop" | "wait", id: string) => Promise<{ isError?: boolean; structuredContent?: unknown }>,
+): Promise<void> {
+	for (const job of jobs) {
+		const result = await execute("stop", job.id);
+		if (result.isError) throw new Error("Lifecycle job stop is uncertain");
+	}
+	// Cancellation is saved before direct-job exit. Even a terminal endedAt is
+	// not a process-tree receipt: an orphan can escape the later child census.
+	const results = await Promise.allSettled(
+		jobs.map(async (job) => {
+			const result = await execute("wait", job.id);
+			const value = result.structuredContent as { id?: unknown; state?: unknown; endedAt?: unknown } | undefined;
+			if (
+				result.isError ||
+				value?.id !== job.id ||
+				typeof value.state !== "string" ||
+				!["done", "failed", "cancelled", "interrupted"].includes(value.state) ||
+				typeof value.endedAt !== "number" ||
+				!Number.isFinite(value.endedAt) ||
+				value.endedAt < job.startedAt ||
+				value.endedAt > 8.64e15
+			)
+				throw new Error("Lifecycle job exit is unconfirmed");
+		}),
+	);
+	const failure = results.find((result) => result.status === "rejected");
+	if (failure?.status === "rejected") throw failure.reason;
+}
+
 /** The jobs extension has no lifecycle bus. Probe only known live jobs, never idle sessions. */
 export class JobsMonitor {
 	private current: SessionJob[] = [];

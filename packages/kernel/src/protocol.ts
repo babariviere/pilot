@@ -341,7 +341,7 @@ export type KernelCommand =
 	| { type: "workspace.prepared"; callId: string; workspace?: WorkspaceContext }
 	| { type: "update.pause"; id: string }
 	| { type: "checkpointUpdate"; requestId: string }
-	| { type: "checkpointLifecycle"; requestId: string; operationId: string }
+	| { type: "checkpointLifecycle"; requestId: string; operationId: string; notifyUpdate?: true }
 	| { type: "update.resume" }
 	| { type: "telemetry.configure"; configuration: KernelTelemetryConfiguration }
 	| { type: "diagnostics.configure"; enabled: boolean }
@@ -395,6 +395,8 @@ export type KernelPacket =
 			requestId: string;
 			operationId: string;
 			conversationId: string;
+			/** Durable context write, not proof that the model read the notice. */
+			updateNoticeOperationId?: string;
 			children: KernelSubagent[];
 			jobs: number;
 			hasChildren: boolean;

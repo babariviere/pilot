@@ -64,6 +64,8 @@ impl Job {
 
 pub type Recovery = Result<Vec<(PathBuf, installer::Phase)>, Error>;
 pub struct Worker {
+    thread: Option<std::thread::JoinHandle<()>>,
+    closed: Option<Result<(), Error>>,
     sender: Option<SyncSender<Job>>,
     receiver: Option<Receiver<Completion>>,
     access: Option<Access>,
@@ -93,7 +95,7 @@ impl Worker {
         let reporter = progress.clone();
         let proposal = Arc::new(Mutex::new(None));
         let proposal_result = proposal.clone();
-        std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("desktop-updater".into())
             .spawn(move || {
                 let inspect = || {
@@ -351,6 +353,8 @@ impl Worker {
             })
             .map_err(|_| Error::Native)?;
         Ok(Self {
+            thread: Some(thread),
+            closed: None,
             sender: Some(sender),
             receiver: Some(receiver),
             access: None,
@@ -432,6 +436,28 @@ impl Worker {
     pub fn inspect_recovery(&mut self) -> Result<(), Error> {
         self.send(Job::Inspect)
     }
+
+    /// Fence work and join this updater's entered worker off the UI thread.
+    ///
+    /// Unlike `Backend::teardown`, return proves that this worker has stopped accessing
+    /// staged payloads and guards. It does not prove the post-exit helper has exited:
+    /// a committed helper must outlive the GUI for the verified handoff. Native callers
+    /// keep that transaction's ownership separate from this thread join.
+    ///
+    /// # Errors
+    /// A worker panic remains a failure on later calls; close never replays its work.
+    pub fn close(&mut self) -> Result<(), Error> {
+        if let Some(result) = self.closed {
+            return result;
+        }
+        self.teardown();
+        let result = self
+            .thread
+            .take()
+            .map_or(Ok(()), |thread| thread.join().map_err(|_| Error::Native));
+        self.closed = Some(result);
+        result
+    }
     fn send(&mut self, job: Job) -> Result<(), Error> {
         self.sender
             .as_ref()
@@ -488,5 +514,89 @@ impl Backend for Worker {
 impl Drop for Worker {
     fn drop(&mut self) {
         self.teardown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn owned_worker(thread: std::thread::JoinHandle<()>) -> Worker {
+        Worker {
+            thread: Some(thread),
+            closed: None,
+            sender: None,
+            receiver: None,
+            access: None,
+            cancellation: None,
+            stopped: Arc::new(AtomicBool::new(false)),
+            runtime: None,
+            external: None,
+            navigation: serde_json::Value::Null,
+            recovery: None,
+            progress: Shared::default(),
+            proposal_id: None,
+            proposal: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    #[test]
+    fn close_joins_entered_work_and_keeps_admission_closed() {
+        let (entered, started) = mpsc::channel();
+        let (release, gate) = mpsc::channel();
+        let completed = Arc::new(AtomicBool::new(false));
+        let observed = completed.clone();
+        let thread = std::thread::spawn(move || {
+            entered.send(()).expect("test receiver exists");
+            gate.recv().expect("test releases entered work");
+            observed.store(true, Ordering::Release);
+        });
+        let mut worker = owned_worker(thread);
+        let cancellation = Cancellation::default();
+        worker.cancellation = Some((1, cancellation.clone()));
+        started.recv().expect("worker entered");
+        worker.teardown();
+        assert_eq!(cancellation.check(), Err(Error::Cancelled));
+        assert_eq!(worker.inspect_recovery(), Err(Error::Stopped));
+        let (done, result) = mpsc::channel();
+        let closer = std::thread::spawn(move || {
+            let first = worker.close();
+            assert!(
+                completed.load(Ordering::Acquire),
+                "close must join entered work"
+            );
+            assert_eq!(worker.close(), first, "close is lookup-only after joining");
+            done.send(first).expect("test close receiver exists");
+        });
+        assert!(matches!(result.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        release.send(()).expect("worker still owns entered work");
+        assert_eq!(result.recv().expect("close result"), Ok(()));
+        closer.join().expect("close test joined");
+    }
+
+    #[test]
+    fn close_releases_a_blocked_result_sender_before_join() {
+        let (sender, receiver) = mpsc::sync_channel(0);
+        let thread = std::thread::spawn(move || {
+            assert!(
+                sender
+                    .send(Completion {
+                        operation: 1,
+                        outcome: Outcome::Current
+                    })
+                    .is_err()
+            );
+        });
+        let mut worker = owned_worker(thread);
+        worker.receiver = Some(receiver);
+        assert_eq!(worker.close(), Ok(()));
+    }
+
+    #[test]
+    fn failed_join_stays_failed_without_replay() {
+        let mut worker = owned_worker(std::thread::spawn(|| panic!("isolated worker failure")));
+        assert_eq!(worker.close(), Err(Error::Native));
+        assert_eq!(worker.close(), Err(Error::Native));
+        assert_eq!(worker.inspect_recovery(), Err(Error::Stopped));
     }
 }

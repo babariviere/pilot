@@ -718,6 +718,7 @@ export class KernelSession {
 				projectTrusted: spec.projectTrusted,
 				sessionId: spec.sessionId,
 				sessionFile: join(spec.storageDir, "native.session"),
+				jobHistoryFresh: !(await owned.storage.conversation(ROOT_CONVERSATION_ID, context)),
 				onUsageChanged: hooks.onUsageChanged,
 				performance: performanceLog,
 				toolActivity: {
@@ -1912,18 +1913,39 @@ export class KernelSession {
 	}
 
 	/** Durable close plus separate final identities and jobs/OS-child census. Not process exit proof. */
-	async checkpointLifecycle() {
+	async checkpointLifecycle(updateOperationId?: string) {
 		if (this.#closing) throw new Error("Lifecycle checkpoint cannot inspect an already closing kernel");
+		if (updateOperationId !== undefined) {
+			if (!/^[a-f0-9-]{36}$/.test(updateOperationId)) throw new Error("Invalid update operation identity");
+			const text =
+				"Pilot is pausing this agent for a software update. Existing work is being checkpointed. Owned background jobs may be stopped; their effects are not undone. Do not restart interrupted commands from this notice. Resume only existing durable work when the host releases this update's hold; user Stop and other holds still apply.";
+			// A write is durable but never starts a model turn. Pending writes retain their tool-boundary
+			// ordering across close/reopen, and the exact operation ID deduplicates the notice.
+			await this.conversation.submit(
+				{
+					type: "write",
+					requestId: `lifecycle:update:${updateOperationId}`,
+					entry: {
+						kind: "pilot.lifecycle-pause",
+						data: { operationId: updateOperationId, text },
+						model: [{ role: "user", content: text, timestamp: Date.now() }],
+					},
+				},
+				context,
+			);
+		}
 		let jobs: number | undefined;
 		await this.#close(async () => {
 			// The harness has joined tools, but the jobs registry is still attached.
 			// Never convert its later detachment into an empty jobs observation.
+			await this.adapter.checkpointJobs();
 			jobs = (await this.jobs()).length;
 		});
 		if (jobs === undefined) throw new Error("Lifecycle jobs census is unavailable");
 		if (this.subagentList.length > 256) throw new Error("Lifecycle child inventory exceeds the safe limit");
 		return {
 			conversationId: String(this.conversation.id),
+			...(updateOperationId ? { updateNoticeOperationId: updateOperationId } : {}),
 			children: this.subagentList,
 			jobs,
 			hasChildren: await this.hasChildren(),

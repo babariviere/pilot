@@ -66,6 +66,16 @@ pub(crate) struct Gate {
     pub forms_saved: bool,
     pub save_sequence: u64,
     pub native_captured: bool,
+    pub forms_requested: bool,
+    pub sealed: bool,
+    pub flush_wakeup: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+/// Native-only disposal proof. It grants neither an update nor daemon authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FlushReceipt {
+    generation: u32,
+    save_sequence: u64,
 }
 
 /// One root and one channel. Never reuse it for another window or selection.
@@ -279,11 +289,12 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
 
 impl Command {
     pub(crate) fn admit(&self, gate: &Gate) -> Result<(), Error> {
-        if gate.closed {
+        if gate.closed || gate.sealed {
             return Err(Error::Closed);
         }
         if let Self::Flush(generation, sequence) = self {
             return if gate.flushing
+                && gate.forms_requested
                 && *generation == gate.generation
                 && *sequence == gate.save_sequence
             {
@@ -356,21 +367,36 @@ impl Bridge {
                     Ok(command)
                 })();
                 match parsed {
-                    Ok(command) => host.bridge(
-                        command,
-                        state.clone(),
-                        Box::new(move |result| {
-                            let value = match result {
-                                Ok(value) => json!({"version":1,"value":value}),
-                                Err(error) => json!({"version":1,"error":code(error)}),
-                            };
-                            if serde_json::to_vec(&value).is_ok_and(|v| v.len() <= MAX_RESPONSE) {
-                                call.resolve(value);
-                            } else {
-                                call.resolve(json!({"version":1,"error":"capacity"}));
-                            }
-                        }),
-                    ),
+                    Ok(command) => {
+                        let flush = matches!(command, Command::Flush(..));
+                        let wake_gate = state.clone();
+                        host.bridge(
+                            command,
+                            state.clone(),
+                            Box::new(move |result| {
+                                if flush {
+                                    let wake = wake_gate
+                                        .lock()
+                                        .expect("bridge gate poisoned")
+                                        .flush_wakeup
+                                        .clone();
+                                    if let Some(wake) = wake {
+                                        wake();
+                                    }
+                                }
+                                let value = match result {
+                                    Ok(value) => json!({"version":1,"value":value}),
+                                    Err(error) => json!({"version":1,"error":code(error)}),
+                                };
+                                if serde_json::to_vec(&value).is_ok_and(|v| v.len() <= MAX_RESPONSE)
+                                {
+                                    call.resolve(value);
+                                } else {
+                                    call.resolve(json!({"version":1,"error":"capacity"}));
+                                }
+                            }),
+                        )
+                    }
                     Err(error) => call.resolve(json!({"version":1,"error":code(error)})),
                 }
             });
@@ -406,9 +432,17 @@ impl Bridge {
     /// Fence new effects and ask the still-live engine to save ALL form state.
     /// This is not an acknowledgement or a native preedit capture.
     pub fn request_flush(&self) -> Result<u32, Error> {
+        let generation = self.begin_capture()?;
+        self.send_form_flush(generation)?;
+        Ok(generation)
+    }
+
+    /// Fence effects without notifying the engine yet. The native owner captures
+    /// and freezes attached editors before requesting the all-form engine barrier.
+    pub fn begin_capture(&self) -> Result<u32, Error> {
         let generation = {
             let mut gate = self.gate.lock().expect("bridge gate poisoned");
-            if gate.closed {
+            if gate.closed || gate.sealed {
                 return Err(Error::Closed);
             }
             if gate.flushing {
@@ -418,22 +452,55 @@ impl Bridge {
             gate.flushing = true;
             gate.forms_saved = false;
             gate.native_captured = false;
+            gate.forms_requested = false;
             gate.generation
         };
+        Ok(generation)
+    }
+
+    /// Emit the form barrier after native capture queued every input/composition
+    /// event. The caller keeps native editing frozen until cancel or disposal.
+    pub fn request_form_flush(&self, generation: u32) -> Result<(), Error> {
+        {
+            let gate = self.gate.lock().expect("bridge gate poisoned");
+            if !gate.native_captured {
+                return Err(Error::Busy);
+            }
+        }
+        self.send_form_flush(generation)
+    }
+
+    fn send_form_flush(&self, generation: u32) -> Result<(), Error> {
+        {
+            let mut gate = self.gate.lock().expect("bridge gate poisoned");
+            if gate.closed || gate.sealed || !gate.flushing || generation != gate.generation {
+                return Err(Error::Stale);
+            }
+            if gate.forms_requested {
+                return Err(Error::Busy);
+            }
+            gate.forms_requested = true;
+        }
         self.channel
             .send(
                 "day.flush",
                 json!({"version":1,"window":self.window,"generation":generation}),
             )
             .map_err(|_| Error::Unavailable)?;
-        Ok(generation)
+        Ok(())
+    }
+
+    /// Wake the native lifecycle owner on a flush reply. Schedule main-thread
+    /// work only; this callback runs on the existing host worker and must not wait.
+    pub fn set_flush_wakeup(&self, wake: Arc<dyn Fn() + Send + Sync>) {
+        self.gate.lock().expect("bridge gate poisoned").flush_wakeup = Some(wake);
     }
 
     /// Native lifecycle owner calls this only AFTER attached inputs/preedit were
     /// captured for this generation. No released runner implements this yet.
     pub fn native_capture_finished(&self, generation: u32) -> Result<(), Error> {
         let mut gate = self.gate.lock().expect("bridge gate poisoned");
-        if gate.closed || !gate.flushing || generation != gate.generation {
+        if gate.closed || gate.sealed || !gate.flushing || generation != gate.generation {
             return Err(Error::Stale);
         }
         gate.native_captured = true;
@@ -449,18 +516,46 @@ impl Bridge {
             && generation == gate.generation
             && gate.forms_saved
             && gate.native_captured
+            && gate.forms_requested
+    }
+
+    /// Atomically pin the last saved sequence and refuse all later calls BEFORE
+    /// the native owner disposes the engine. A late save invalidates an older ACK.
+    pub fn seal_flush(&self, generation: u32) -> Result<FlushReceipt, Error> {
+        let mut gate = self.gate.lock().expect("bridge gate poisoned");
+        if gate.closed || gate.sealed || !gate.flushing || generation != gate.generation {
+            return Err(Error::Stale);
+        }
+        if !gate.forms_saved || !gate.native_captured || !gate.forms_requested {
+            return Err(Error::Busy);
+        }
+        gate.sealed = true;
+        Ok(FlushReceipt {
+            generation,
+            save_sequence: gate.save_sequence,
+        })
+    }
+
+    /// Recheck the exact sealed proof before stopping this engine.
+    pub fn sealed(&self, receipt: FlushReceipt) -> bool {
+        let gate = self.gate.lock().expect("bridge gate poisoned");
+        !gate.closed
+            && gate.sealed
+            && gate.generation == receipt.generation
+            && gate.save_sequence == receipt.save_sequence
     }
 
     /// Cancel this capture generation without stopping the engine or host.
     /// A later capture gets a new generation; old ACKs cannot settle it.
     pub fn cancel_flush(&self, generation: u32) -> Result<(), Error> {
         let mut gate = self.gate.lock().expect("bridge gate poisoned");
-        if gate.closed || !gate.flushing || generation != gate.generation {
+        if gate.closed || gate.sealed || !gate.flushing || generation != gate.generation {
             return Err(Error::Stale);
         }
         gate.flushing = false;
         gate.forms_saved = false;
         gate.native_captured = false;
+        gate.forms_requested = false;
         Ok(())
     }
 
@@ -520,6 +615,7 @@ mod tests {
             generation: 1,
             flushing: true,
             save_sequence: 7,
+            forms_requested: true,
             ..Gate::default()
         };
         let ack = Command::Flush(1, 7);

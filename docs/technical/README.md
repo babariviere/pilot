@@ -25,6 +25,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Decision help and human-action contracts (host seam)](decision-assistance.md)
 - [Upgrade readiness and blocker audit](upgrade-readiness.md)
 - [Resumable upgrade checkpoints and native host APIs](resumable-upgrades.md)
+- [Day update pipeline qualification and remaining host/package seams](day-update-pipeline.md)
 - [Tool access by role](tool-access-by-role.md)
 - [System prompts by role](system-prompts-by-role.md)
 

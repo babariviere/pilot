@@ -59,6 +59,9 @@ helper. No default points at the Swift application, its feed, credentials or key
   helper-status watcher only while a helper exists, no idle polling, no
   network/file/signature work in render/UI handlers. Completion callback only schedules
   a foreground wakeup; the host drains results and reschedules one monotonic deadline.
+  `Worker::close` fences and joins entered worker work off the UI thread. Nonblocking
+  teardown/Drop is not that proof. A committed post-exit helper has separate ownership;
+  joining the worker does not prove that helper exited.
 - `src/app_update.rs`, `src/iteration.rs`: separate external app-only pins from
   managed runtime reservations, and import explicitly selected source-pinned local
   signed full packages through the same staging/helper/native installer. UI-only

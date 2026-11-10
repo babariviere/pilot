@@ -32,6 +32,9 @@ REQUIRED = [
     "desktop-assets/AppIcon.icns",
 ]
 
+# Public UI runtime release, not the unrelated command shell or a floating main.
+NSH_RELEASE = dict(tag="v0.4.0", source="e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3")
+
 
 def subprocess_env(env=None):
     """Discovery credentials are not build or native-verification capabilities."""
@@ -289,7 +292,35 @@ def receipt(directory, expected_source, names):
             raise ValueError(f"Executable receipt mismatch: {name}")
 
 
-def assemble(runtime, executables, native, output, expected_source, updater=None, bundle_build=None, accepted_capsules=(), production=None):
+def checked_gui_resources(resources, executables, expected_source):
+    """Bind an optional NSH resource closure to the exact compiled GUI receipt.
+
+    This consumes build evidence; it does not build, install or attest the native
+    input-capture lifecycle. The existing app/helper identity stays unchanged.
+    """
+    resources = Path(resources)
+    if resources.name != "nsh" or resources.is_symlink() or not resources.is_dir():
+        raise ValueError("GUI resources require a real directory named nsh")
+    value = read_json(executables / "gui-resources.json")
+    if (value.get("schema") != 1 or value.get("kind") != "nsh-ui-resources"
+            or value.get("source") != source(expected_source)
+            or value.get("target") != "aarch64-apple-darwin"
+            or value.get("nsh_release") != NSH_RELEASE):
+        raise ValueError("GUI resource receipt source/target/release mismatch")
+    main = executables / "pilot-desktop"
+    expected = dict(name="pilot-desktop", bytes=main.stat().st_size, sha256=digest(main))
+    if value.get("executable") != expected:
+        raise ValueError("GUI resource receipt executable mismatch")
+    actual = inventory(resources)
+    if value.get("files") != actual:
+        raise ValueError("GUI resource inventory mismatch")
+    required = {"bundle.nshc", "capabilities.json", "app.json"}
+    if not required.issubset({entry["path"] for entry in actual if entry["kind"] == "file"}):
+        raise ValueError("GUI resources are incomplete")
+    return value
+
+
+def assemble(runtime, executables, native, output, expected_source, updater=None, bundle_build=None, accepted_capsules=(), production=None, *, gui_resources=None):
     if output.exists() or output.is_symlink() or output.name != "Pilot Next.app":
         raise ValueError("Use a fresh output named Pilot Next.app")
     build = validate_runtime(runtime, expected_source)
@@ -317,6 +348,9 @@ def assemble(runtime, executables, native, output, expected_source, updater=None
     elif app_config != dict(schema=1, mode="unconfigured"):
         raise ValueError("Development assembly requires explicit unconfigured app/helper input receipts")
     receipt(native, expected_source, ["PilotPower", "PilotSystemEvents"])
+    resources = checked_gui_resources(gui_resources, executables, expected_source) if gui_resources is not None else None
+    if resources is None and (executables / "gui-resources.json").exists():
+        raise ValueError("GUI resource receipt requires its explicit resource closure")
     inventory(runtime)  # Admission before any recursive copy can follow external input.
     output.mkdir(mode=0o755)
     try:
@@ -331,6 +365,13 @@ def assemble(runtime, executables, native, output, expected_source, updater=None
             shutil.copyfile(executables / name, contents / "MacOS" / name)
             (contents / "MacOS" / name).chmod(0o755)
         shutil.copytree(runtime, contents / "Resources/runtime", symlinks=True)
+        if resources is not None:
+            destination = contents / "Resources/nsh"
+            shutil.copytree(gui_resources, destination, symlinks=True)
+            # A changed input or copy is never signed as the reviewed closure.
+            if inventory(destination) != resources["files"]:
+                raise ValueError("GUI resource copy changed")
+            write_json(contents / "Resources/gui-resources.json", resources)
         shutil.copyfile(runtime / "desktop-assets/AppIcon.icns", contents / "Resources/AppIcon.icns")
         for name, directory in (("rust-inputs.json", executables), ("native-inputs.json", native)):
             value = read_json(directory / "manifest.json")

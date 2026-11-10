@@ -539,6 +539,51 @@ return await new Promise(resolve => host.on('day.flush', async event => {
 }
 
 #[test]
+fn capture_defers_form_event_then_seals_exact_generation_before_disposal() {
+    let f = Fixture::new();
+    let mut app = f.app(
+        r#"
+host.on('day.flush', async event => {
+  const ack = await call('day.flush.ack',{generation:event.generation});
+  shown.set('ack:'+JSON.stringify(ack));
+});
+shown.set('ready'); return await new Promise(()=>{});"#,
+        Fixture::caps(),
+    );
+    app.wait_for("ready").unwrap();
+    let generation = f.bridge.begin_capture().unwrap();
+    assert_eq!(
+        f.bridge.request_form_flush(generation),
+        Err(pilot_day_native::host::Error::Busy)
+    );
+    app.run_for(Duration::from_millis(20)).unwrap();
+    assert!(app.screen().shows("ready"), "no early form barrier");
+    assert_eq!(
+        f.bridge.seal_flush(generation),
+        Err(pilot_day_native::host::Error::Busy)
+    );
+    f.bridge.native_capture_finished(generation).unwrap();
+    f.bridge.request_form_flush(generation).unwrap();
+    app.wait_until("saved-form barrier", Duration::from_secs(5), |_| {
+        f.bridge.flush_ready(generation)
+    })
+    .unwrap();
+    let receipt = f.bridge.seal_flush(generation).unwrap();
+    assert!(f.bridge.sealed(receipt));
+    assert_eq!(
+        f.bridge.cancel_flush(generation),
+        Err(pilot_day_native::host::Error::Stale)
+    );
+    assert_eq!(
+        f.bridge.begin_capture(),
+        Err(pilot_day_native::host::Error::Closed)
+    );
+    drop(app);
+    assert_eq!(f.bridge.close().recv_blocking().unwrap(), Ok(()));
+    assert!(!f.bridge.sealed(receipt));
+}
+
+#[test]
 fn disposed_and_partially_loaded_engines_still_require_joined_close() {
     let f = Fixture::new();
     let channel = f.bridge.channel();

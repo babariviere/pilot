@@ -8154,7 +8154,12 @@ ${run.excerpt}`,
 				let persistenceFailure: { error: unknown } | undefined;
 				try {
 					await Promise.race([
-						worker.request({ type: "checkpointLifecycle", requestId: closing.requestId, operationId }),
+						worker.request({
+							type: "checkpointLifecycle",
+							requestId: closing.requestId,
+							operationId,
+							...(purpose === "daemon-upgrade" ? { notifyUpdate: true } : {}),
+						}),
 						new Promise<never>((_, reject) => {
 							timer = setTimeout(() => reject(new Error("Kernel lifecycle checkpoint timed out")), 10_000);
 						}),
@@ -8187,7 +8192,9 @@ ${run.excerpt}`,
 				if (persistenceFailure) throw persistenceFailure.error;
 				if (!acknowledged) throw new Error("Kernel lifecycle checkpoint was not acknowledged");
 				if (!closing.censusClear)
-					throw new Error("Kernel lifecycle child inventory or process census is unavailable or not clear");
+					throw new Error(
+						"Kernel lifecycle inventory, update notice or process census is unavailable or not clear",
+					);
 			}),
 		);
 		await Promise.all([...this.saving.values()]);
@@ -12313,7 +12320,12 @@ ${run.excerpt}`,
 				closing.checkpoint.conversationId = packet.conversationId;
 				closing.checkpoint.childrenConfirmed = true;
 				closing.checkpoint.census = { jobs: packet.jobs, hasChildren: packet.hasChildren };
-				closing.censusClear = packet.jobs === 0 && packet.hasChildren === false;
+				const noticeSaved = packet.updateNoticeOperationId === closing.checkpoint.operationId;
+				if (noticeSaved) closing.checkpoint.updateNoticeSaved = true;
+				closing.censusClear =
+					packet.jobs === 0 &&
+					packet.hasChildren === false &&
+					(closing.checkpoint.purpose !== "daemon-upgrade" || noticeSaved);
 			}
 			return;
 		}

@@ -83,7 +83,8 @@ import { createExplorationTools } from "./exploration-tools.ts";
 import { diagnosticFetch, formatFailure, safeFailureText, toolFailureStep } from "./failure.ts";
 import { INSIGHTS_BACKLOG_TOOL } from "./insights-backlog-tool.ts";
 import { INSIGHTS_HISTORY_TOOL } from "./insights-history-tool.ts";
-import { runningJobs } from "./jobs.ts";
+import { JobHistory } from "./job-history.ts";
+import { drainLifecycleJobs, runningJobs } from "./jobs.ts";
 import { MEMORY_TOOL_NAMES } from "./memory-tools.ts";
 import {
 	assertInterviewSkills,
@@ -165,6 +166,8 @@ export interface NativeAdapterOptions {
 	 * such as pi-extensions subagents anchor their own durable storage beside it.
 	 */
 	sessionFile?: string;
+	/** Only the owner of a new durable conversation may initialize missing job history. */
+	jobHistoryFresh?: boolean;
 	/** Live display data, independent from the durable transcript. */
 	onUsageChanged?: (usage: KernelUsage) => void;
 	/** Execution state, independent of optional diagnostic collection. */
@@ -294,6 +297,7 @@ export class NativeAdapter {
 	#harness?: Harness;
 	#conversationId?: ConversationId;
 	#closed = false;
+	#jobHistory!: JobHistory;
 	#reloadFailure?: Error;
 	#extensionErrors: string[] = [];
 	#afterReload?: () => void;
@@ -444,6 +448,10 @@ export class NativeAdapter {
 		if (diagnostics && insights) throw new Error("Conflicting specialist profiles");
 		const specialist = diagnostics || insights;
 		const readOnly = !!options.ask || specialist;
+		const jobHistory = await JobHistory.open(
+			!readOnly && options.sessionFile ? `${options.sessionFile}.job-history` : undefined,
+			options.jobHistoryFresh,
+		);
 		if (options.coordinatorSources && (readOnly || options.bundledExtensions === false))
 			throw new Error("Coordinator source admission requires its bundled native profile");
 		const missionInterview = options.missionInterview || options.missionPlanning;
@@ -683,6 +691,7 @@ export class NativeAdapter {
 			toolActivity,
 		);
 		adapter.#posthorse = posthorse;
+		adapter.#jobHistory = jobHistory;
 		adapter.#onToolsRunningChanged = options.onToolsRunningChanged;
 		adapter.#afterReload = () => options.subagents?.refresh();
 		// The SDK loop never runs here. Its default getter would report idle throughout
@@ -1048,7 +1057,31 @@ export class NativeAdapter {
 		if (!tool) return [];
 		const result = await tool.execute(`pilot:jobs:${randomUUID()}`, { action: "list" });
 		if (result.isError) throw new Error("Could not list running jobs");
+		// Historical terminal rows are not subtree-exit receipts, including legacy recovery.
+		if (Array.isArray(result.structuredContent) && result.structuredContent.length) await this.#jobHistory.admit();
 		return runningJobs(result.structuredContent);
+	}
+
+	/** Clean up direct jobs without model work. Cancellation cannot prove descendant exit. */
+	async checkpointJobs(): Promise<void> {
+		this.assertOpen();
+		const jobs = await this.jobs();
+		if (!jobs.length) return this.#jobHistory.assertClear();
+		const tool = this.#jobsTool();
+		if (!tool) throw new Error("Lifecycle jobs runtime is unavailable");
+		// Latch BEFORE cancellation can reparent a descendant out of the later
+		// worker census. The pinned provider supplies no descendant-exit receipt;
+		// direct endedAt/pipe disposal and an empty registry cannot clear this.
+		await this.#jobHistory.admit();
+		await drainLifecycleJobs(jobs, (action, id) =>
+			tool.execute(`pilot:lifecycle:jobs:${randomUUID()}`, {
+				action,
+				id,
+				...(action === "wait" ? { waitMs: 5_000 } : {}),
+			}),
+		);
+		if ((await this.jobs()).length) throw new Error("Lifecycle jobs remain running");
+		throw new Error("Lifecycle job descendant exit is unconfirmed");
 	}
 
 	/**
@@ -1155,6 +1188,10 @@ export class NativeAdapter {
 			const execute = definition.execute;
 			definition.execute = async (...args) => {
 				try {
+					// Shared definition covers direct Harness, nested codemode and native stop paths.
+					// Record before entering the provider, even if its reply is lost or it finishes immediately.
+					if (definition.name === "jobs" && (args[1] as { action?: unknown }).action === "start")
+						await this.#jobHistory.admit();
 					const result = await execute.apply(definition, args);
 					if (!result.isError) return result;
 					return {

@@ -87,6 +87,8 @@ export interface LifecycleCheckpoint {
 	children: { name: string; storage: string; conversationId?: string; state: string }[];
 	/** Final child inventory is distinct from independent jobs/OS-child census and close ACK. */
 	childrenConfirmed?: true;
+	/** Exact-operation durable agent context write, not proof of model consumption. */
+	updateNoticeSaved?: true;
 	census?: { jobs: number; hasChildren: boolean };
 	/** Set only after final child inventory, clear independent census, close ACK and worker exit. */
 	quiescent?: true;

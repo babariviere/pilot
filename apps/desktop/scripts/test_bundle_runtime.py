@@ -429,6 +429,35 @@ class BundleRuntimeTests(unittest.TestCase):
             self.assemble()
         self.assertFalse(self.output.exists())
 
+    def test_stock_day_bundle_name_does_not_expand_the_trusted_target(self):
+        output = self.root / "Pilot Day.app"
+        with patch.object(bundle, "run") as command, patch.object(bundle, "native_closure") as native:
+            with self.assertRaisesRegex(ValueError, "fresh output named Pilot Next.app"):
+                bundle.assemble(self.runtime, self.executables, self.native, output, self.source)
+        command.assert_not_called()
+        native.assert_not_called()
+        self.assertFalse(output.exists())
+        self.assertFalse(self.output.exists())
+
+    def test_stock_day_runner_name_cannot_replace_the_receipted_executable(self):
+        # A valid upstream NSH package is not a Pilot updater identity. Even a matching
+        # source receipt must name the fixed executable, not just any native runner.
+        runner = self.executables / "pilot-desktop"
+        original = runner.read_bytes()
+        runner.rename(self.executables / "PilotDay")
+        receipt = bundle.read_json(self.executables / "manifest.json")
+        for binary in receipt["binaries"]:
+            if binary["name"] == "pilot-desktop":
+                binary["name"] = "PilotDay"
+        bundle.write_json(self.executables / "manifest.json", receipt)
+        with patch.object(bundle, "run") as command, patch.object(bundle, "native_closure") as native:
+            with self.assertRaisesRegex(ValueError, "Executable receipt mismatch: pilot-desktop"):
+                bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source)
+        command.assert_not_called()
+        native.assert_not_called()
+        self.assertFalse(self.output.exists())
+        self.assertEqual((self.executables / "PilotDay").read_bytes(), original)
+
     def test_power_helper_missing_or_source_mismatched_is_refused(self):
         path = self.native / "PilotPower"
         original = path.read_bytes()
@@ -446,6 +475,66 @@ class BundleRuntimeTests(unittest.TestCase):
         bundle.write_json(self.native / "manifest.json", receipt)
         with self.assertRaisesRegex(ValueError, "source/target mismatch"):
             self.assemble()
+
+    def gui_resources(self):
+        resources = self.root / "nsh"
+        resources.mkdir()
+        for name in ("bundle.nshc", "capabilities.json", "app.json"):
+            (resources / name).write_text("{}")
+        main = self.executables / "pilot-desktop"
+        value = dict(schema=1, kind="nsh-ui-resources", source=self.source,
+                     target="aarch64-apple-darwin", nsh_release=bundle.NSH_RELEASE,
+                     executable=dict(name="pilot-desktop", bytes=main.stat().st_size, sha256=bundle.digest(main)),
+                     files=bundle.inventory(resources))
+        bundle.write_json(self.executables / "gui-resources.json", value)
+        return resources, value
+
+    def test_nsh_resources_keep_the_exact_native_layout_and_closed_inventory(self):
+        resources, value = self.gui_resources()
+        with patch.object(bundle, "native_closure", return_value=[]), patch.object(bundle, "run", return_value=""):
+            bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source,
+                            gui_resources=resources)
+        self.assertTrue((self.output / "Contents/MacOS/pilot-desktop").is_file())
+        self.assertFalse((self.output / "Contents/MacOS/PilotDay").exists())
+        self.assertEqual(bundle.inventory(self.output / "Contents/Resources/nsh"), value["files"])
+        bundle.verify(self.output)
+        (self.output / "Contents/Resources/nsh/bundle.nshc").write_text("changed")
+        with self.assertRaisesRegex(ValueError, "inventory"):
+            bundle.verify(self.output)
+
+    def test_nsh_resources_refuse_wrong_release_runner_source_and_changed_bytes(self):
+        resources, original = self.gui_resources()
+        for changes in (dict(source="b" * 40), dict(target="x86_64-apple-darwin"),
+                        dict(nsh_release=dict(tag="main", source="5" * 40)),
+                        dict(executable=original["executable"] | {"sha256": "b" * 64}), dict(files=[])):
+            with self.subTest(changes=changes):
+                bundle.write_json(self.executables / "gui-resources.json", original | changes)
+                with patch.object(bundle, "run") as command, self.assertRaises(ValueError):
+                    bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source,
+                                    gui_resources=resources)
+                command.assert_not_called()
+                self.assertFalse(self.output.exists())
+        bundle.write_json(self.executables / "gui-resources.json", original)
+        with self.assertRaisesRegex(ValueError, "explicit resource closure"):
+            self.assemble()
+        (resources / "bundle.nshc").write_text("changed source bytes")
+        with self.assertRaisesRegex(ValueError, "inventory mismatch"):
+            bundle.checked_gui_resources(resources, self.executables, self.source)
+
+    def test_nsh_resource_copy_tampering_is_not_signed_or_kept_as_output(self):
+        resources, _ = self.gui_resources()
+        copy = bundle.shutil.copytree
+        def tamper(src, dest, *args, **kwargs):
+            result = copy(src, dest, *args, **kwargs)
+            if Path(dest).name == "nsh":
+                (Path(dest) / "late").write_text("unreviewed")
+            return result
+        with patch.object(bundle.shutil, "copytree", side_effect=tamper), patch.object(bundle, "run") as command:
+            with self.assertRaisesRegex(ValueError, "resource copy changed"):
+                bundle.assemble(self.runtime, self.executables, self.native, self.output, self.source,
+                                gui_resources=resources)
+        command.assert_not_called()
+        self.assertFalse(self.output.exists())
 
     def test_version_helper_and_exact_runtime_policy_are_sealed_resources(self):
         self.assemble()

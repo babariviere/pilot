@@ -1,8 +1,68 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { JobsMonitor, runningJobs } from "./jobs.ts";
+import { drainLifecycleJobs, JobsMonitor, runningJobs } from "./jobs.ts";
 
 const job = { id: "job-1", name: "Tests", state: "running", startedAt: 1000, outputPath: "/tmp/tests/output.log" };
+
+test("lifecycle jobs stop every owned handle before waiting, without a new launch", async () => {
+	const jobs = runningJobs([job, { ...job, id: "second" }]);
+	const actions: string[] = [];
+	await drainLifecycleJobs(jobs, async (action, id) => {
+		actions.push(`${action}:${id}`);
+		return { structuredContent: { id, state: "cancelled", endedAt: 2000 } };
+	});
+	assert.deepEqual(actions, ["stop:job-1", "stop:second", "wait:job-1", "wait:second"]);
+});
+
+test("lifecycle exit errors still join every admitted wait", async (t) => {
+	let release!: () => void;
+	let entered!: () => void;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const waiting = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	t.after(() => release());
+	let settled = false;
+	const draining = drainLifecycleJobs(runningJobs([job, { ...job, id: "second" }]), async (action, id) => {
+		if (action === "wait") {
+			if (id === job.id) throw new Error("Lost exit reply");
+			entered();
+			await gate;
+		}
+		return { structuredContent: { id, state: "cancelled", endedAt: 2000 } };
+	}).finally(() => {
+		settled = true;
+	});
+	const rejected = assert.rejects(draining, /Lost exit reply/);
+	await waiting;
+	assert.equal(settled, false);
+	release();
+	await rejected;
+});
+
+test("lifecycle stop and exit uncertainty cannot become quiescence", async () => {
+	const jobs = runningJobs([job]);
+	await assert.rejects(
+		drainLifecycleJobs(jobs, async () => ({ isError: true })),
+		/stop is uncertain/,
+	);
+	for (const value of [
+		null,
+		{},
+		{ id: job.id, state: "cancelled" },
+		{ id: "another", state: "cancelled", endedAt: 2000 },
+		{ id: job.id, state: "running", endedAt: 2000 },
+		{ id: job.id, state: "cancelled", endedAt: NaN },
+		{ id: job.id, state: "cancelled", endedAt: 1 },
+	]) {
+		await assert.rejects(
+			drainLifecycleJobs(jobs, async (action) => ({ structuredContent: action === "wait" ? value : {} })),
+			/exit is unconfirmed/,
+		);
+	}
+});
 
 test("monitoring probes only live jobs, coalesces, detects exits and stops on close", async (t) => {
 	t.mock.timers.enable({ apis: ["setTimeout"] });

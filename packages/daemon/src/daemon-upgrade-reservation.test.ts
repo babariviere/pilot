@@ -35,6 +35,7 @@ async function fixture(t: TestContext) {
 			requestId: command.requestId,
 			operationId: command.operationId,
 			conversationId: "root",
+			...(command.notifyUpdate ? { updateNoticeOperationId: command.operationId } : {}),
 			children: [],
 			...census,
 		});
@@ -489,6 +490,30 @@ test("lost explicit checkpoint ACK remains unknown after cancellation, even with
 	assert.equal((await f.request("prepare", { operationId: randomUUID(), purpose: "daemon-upgrade" })).status, 409);
 });
 
+test("unproven job descendant exit stays durable Unknown and refuses fresh replacement", async (t) => {
+	const f = await fixture(t);
+	const input = { operationId: randomUUID(), purpose: "daemon-upgrade", interrupt: true };
+	let entered = 0;
+	f.worker.request = async (command) => {
+		if (command.type === "checkpointLifecycle") {
+			entered++;
+			throw new Error("Lifecycle job descendant exit is unconfirmed");
+		}
+	};
+	assert.equal((await f.request("prepare", input)).status, 409);
+	const checkpoint = f.sessions.lifecycleManifest(input.operationId)[0]!.checkpoint;
+	assert.equal(checkpoint.phase, "unknown");
+	assert.equal(checkpoint.quiescent, undefined);
+	assert.equal(checkpoint.childrenConfirmed, undefined);
+	const stored = JSON.parse(await readFile(join(f.home, "sessions", f.chat.id, "meta.json"), "utf8"));
+	assert.equal(stored.lifecycleCheckpoint.phase, "unknown");
+	assert.equal(stored.lifecycleCheckpoint.quiescent, undefined);
+	await f.sessions.resumeMaintenance();
+	assert.equal((await f.request("prepare", input)).status, 409, "lookup cannot retry cancelled work");
+	assert.equal((await f.request("prepare", { ...input, operationId: randomUUID() })).status, 409);
+	assert.equal(entered, 1, "empty/no worker cannot erase the held uncertainty");
+});
+
 for (const census of [
 	{ jobs: 1, hasChildren: false },
 	{ jobs: 0, hasChildren: true },
@@ -506,6 +531,24 @@ for (const census of [
 		assert.deepEqual(checkpoint.census, census);
 	});
 }
+
+test("clear census without a durable update notice never authorizes replacement", async (t) => {
+	const f = await fixture(t);
+	f.worker.request = async (command) => {
+		if (command.type === "checkpointLifecycle") {
+			assert.equal(command.notifyUpdate, true);
+			f.checkpointReply({ ...command, notifyUpdate: undefined });
+		}
+	};
+	const input = { operationId: randomUUID(), purpose: "daemon-upgrade", interrupt: true };
+	assert.equal((await f.request("prepare", input)).status, 409);
+	const checkpoint = f.sessions.lifecycleManifest(input.operationId)[0]!.checkpoint;
+	assert.equal(checkpoint.childrenConfirmed, true);
+	assert.deepEqual(checkpoint.census, { jobs: 0, hasChildren: false });
+	assert.equal(checkpoint.updateNoticeSaved, undefined);
+	assert.equal(checkpoint.quiescent, undefined);
+	assert.equal(checkpoint.phase, "unknown");
+});
 
 test("close ACK without the exact operation child inventory never proves quiescence", async (t) => {
 	const f = await fixture(t);
