@@ -4,9 +4,11 @@
 //! daemon client or storage.
 
 use nsh_core::prelude::*;
+use serde::Serialize;
 
 /// Which mock world the feed starts from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Scenario {
     /// Three short decisions wait; one mission is moving.
     #[default]
@@ -37,7 +39,8 @@ pub enum Scenario {
 }
 
 /// What a decision asks for. It decides which actions the card offers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum DecisionKind {
     /// A choice between options.
     #[default]
@@ -53,7 +56,8 @@ pub enum DecisionKind {
 }
 
 /// Where the user's answer to a decision is. Only Rust changes it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Delivery {
     /// Nothing sent yet.
     #[default]
@@ -68,7 +72,8 @@ pub enum Delivery {
 }
 
 /// How strongly a piece of evidence asks for attention.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Tone {
     /// Ordinary evidence.
     #[default]
@@ -81,7 +86,8 @@ pub enum Tone {
 
 /// What a mission row says about the mission, most pressing first: its
 /// control, then a decision it waits for, then its agents' reports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum MissionState {
     /// A current agent report says it is moving.
     #[default]
@@ -106,7 +112,8 @@ pub enum MissionState {
 }
 
 /// Whether Today shows a fresh read of the project.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum FreshnessState {
     /// The latest read is current.
     #[default]
@@ -124,7 +131,8 @@ pub enum FreshnessState {
 }
 
 /// How fresh Today's read is. Controls need a live read.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Freshness {
     /// Live, stale, offline or unreadable.
     pub state: FreshnessState,
@@ -135,7 +143,8 @@ pub struct Freshness {
 }
 
 /// Whether a report still describes its task's current owner and source.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Currentness {
     /// It describes the task as it is now.
     #[default]
@@ -147,7 +156,8 @@ pub enum Currentness {
 }
 
 /// An agent's own assessment of whether its task moves.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Movement {
     /// The agent reports the task moving.
     #[default]
@@ -159,7 +169,8 @@ pub enum Movement {
 }
 
 /// An agent's latest report on one task. Agent words, not verified proof.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReportLine {
     /// The task it reports on.
     pub task_id: String,
@@ -180,7 +191,8 @@ pub struct ReportLine {
 }
 
 /// A mission's control, as the service last reported it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ControlState {
     /// Not paused.
     #[default]
@@ -196,7 +208,8 @@ pub enum ControlState {
 }
 
 /// What a control request asks for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ControlAsk {
     /// Pause all of the mission's work.
     #[default]
@@ -206,7 +219,8 @@ pub enum ControlAsk {
 }
 
 /// Where one member chat is in the last Pause or Resume.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum MemberState {
     /// Not reached yet.
     #[default]
@@ -224,7 +238,8 @@ pub enum MemberState {
 }
 
 /// One member chat in the last Pause or Resume.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MemberLine {
     /// The chat, as the user knows it.
     pub title: String,
@@ -235,7 +250,8 @@ pub struct MemberLine {
 }
 
 /// A mission's Pause control, with the user's own request.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ControlView {
     /// The control as the service last reported it.
     pub state: ControlState,
@@ -262,7 +278,8 @@ pub struct ControlView {
 }
 
 /// What an intent did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum OutcomeStatus {
     /// Rust applied it, and the read model shows the result.
     #[default]
@@ -276,7 +293,8 @@ pub enum OutcomeStatus {
 }
 
 /// One piece of evidence: a commit, a check, a chart.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Evidence {
     /// What it is, in a few words.
     pub label: String,
@@ -285,7 +303,8 @@ pub struct Evidence {
 }
 
 /// One answer the user can give to a decision.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DecisionOption {
     /// Stable within its decision.
     pub id: String,
@@ -299,7 +318,8 @@ pub struct DecisionOption {
 
 /// Where an answer to the user's question is. Help never answers the
 /// decision itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum AnswerState {
     /// Pilot is writing the answer.
     #[default]
@@ -314,7 +334,8 @@ pub enum AnswerState {
 }
 
 /// A question the user asked about a decision, and Pilot's answer.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Answer {
     /// Stable for the question's life. A check names it.
     pub id: String,
@@ -330,7 +351,8 @@ pub struct Answer {
 }
 
 /// One bar of a decision's chart.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Bar {
     /// What it counts.
     pub label: String,
@@ -340,7 +362,8 @@ pub struct Bar {
 
 /// A picture of the facts behind a decision. It explains; it never
 /// answers.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Visual {
     /// What the picture shows, in one sentence.
     pub explanation: String,
@@ -351,7 +374,8 @@ pub struct Visual {
 }
 
 /// Something only the user can decide.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Decision {
     /// Stable for the decision's life.
     pub id: String,
@@ -407,7 +431,8 @@ pub struct Decision {
 /// What the user picked or wrote on one item and has not sent. Rust saves
 /// it for this exact revision; a draft on an earlier revision picks
 /// nothing now.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Draft {
     /// The option picked, if any. Picking is not answering.
     pub pick: Option<String>,
@@ -421,7 +446,8 @@ pub struct Draft {
 }
 
 /// A file the user needs for an action, pinned to exact bytes.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ActionFile {
     /// The file's name, such as "pilot-helper-1.4.2.zip".
     pub name: String,
@@ -432,7 +458,8 @@ pub struct ActionFile {
 }
 
 /// Where the user takes the action.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Destination {
     /// The place, as the user knows it.
     pub label: String,
@@ -444,7 +471,8 @@ pub struct Destination {
 }
 
 /// Who asked for an action.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Origin {
     /// The chat that asked.
     pub chat_title: String,
@@ -455,7 +483,8 @@ pub struct Origin {
 }
 
 /// Whether an action waits now or was put off.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ActionState {
     /// It waits for the user.
     #[default]
@@ -466,7 +495,8 @@ pub enum ActionState {
 
 /// What the user asked of an action, while it is sending, unknown or
 /// checking.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ActionAsk {
     /// Save progress.
     #[default]
@@ -479,7 +509,8 @@ pub enum ActionAsk {
 
 /// Something only the user can do outside Pilot, such as an upload. Not a
 /// decision and not an approval: Pilot waits for the user's report.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HumanAction {
     /// Stable for the action's life.
     pub id: String,
@@ -524,7 +555,8 @@ pub struct HumanAction {
 }
 
 /// How much of a mission is done, by task state.
-#[derive(Debug, Clone, Copy, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Progress {
     /// Tasks done.
     pub done: u32,
@@ -539,7 +571,8 @@ pub struct Progress {
 }
 
 /// One mission on Today.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MissionRow {
     /// Stable for the mission's life.
     pub id: String,
@@ -564,7 +597,8 @@ pub struct MissionRow {
 }
 
 /// A task of a mission, with its agent's latest report.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TaskLine {
     /// Stable for the task's life.
     pub id: String,
@@ -579,7 +613,8 @@ pub struct TaskLine {
 }
 
 /// A task's status, as the mission records it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum TaskStatus {
     /// Not started.
     #[default]
@@ -599,7 +634,8 @@ pub enum TaskStatus {
 }
 
 /// A chat working on a mission now. Supporting detail, not progress.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChatLine {
     /// Stable for the chat's life.
     pub id: String,
@@ -610,7 +646,8 @@ pub struct ChatLine {
 }
 
 /// One mission in full: its row, tasks, reports, control and chats.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MissionPage {
     /// The same row Today shows.
     pub row: MissionRow,
@@ -627,7 +664,8 @@ pub struct MissionPage {
 }
 
 /// One result since the user last looked.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DoneEntry {
     /// Stable for the entry's life.
     pub id: String,
@@ -643,7 +681,8 @@ pub struct DoneEntry {
 }
 
 /// What a result rests on. An agent's report is never read as acceptance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum DoneBasis {
     /// An agent reports it done. Pilot has not checked it.
     #[default]
@@ -656,7 +695,8 @@ pub enum DoneBasis {
 
 /// The part of the user's local day a read belongs to. Day offers the
 /// start of the day in the morning and the end of the day in the evening.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum DayPart {
     /// The read carries no local time. Day offers neither.
     #[default]
@@ -670,7 +710,8 @@ pub enum DayPart {
 }
 
 /// Whether the user looked at Day before this read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Visit {
     /// Pilot cannot tell. Day claims neither a first look nor a return.
     #[default]
@@ -682,7 +723,8 @@ pub enum Visit {
 }
 
 /// Something scheduled to happen.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Scheduled {
     /// Stable for the schedule's life.
     pub id: String,
@@ -695,7 +737,8 @@ pub struct Scheduled {
 }
 
 /// Everything the Today screen shows. Rust owns it; TSX keeps a mirror.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Today {
     /// Changes whenever anything below changes.
     pub revision: u32,
@@ -747,7 +790,8 @@ pub struct Today {
 }
 
 /// Answer a decision in the user's own words, with or without a pick.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct ReplyIntent {
     /// The decision.
@@ -762,7 +806,8 @@ pub struct ReplyIntent {
 
 /// Save what the user picked or wrote on one item, at the revision shown.
 /// Saving never sends, answers or completes anything.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct DraftIntent {
     /// The decision or action.
@@ -778,7 +823,8 @@ pub struct DraftIntent {
 }
 
 /// Answer a decision with one of its options.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct DecideIntent {
     /// The decision.
@@ -790,7 +836,8 @@ pub struct DecideIntent {
 }
 
 /// Name one decision at the revision the screen showed.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct DecisionRef {
     /// The decision.
@@ -800,7 +847,8 @@ pub struct DecisionRef {
 }
 
 /// Ask Pilot a question about a decision.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct AskIntent {
     /// The decision.
@@ -812,7 +860,8 @@ pub struct AskIntent {
 }
 
 /// Name one question about a decision.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct AnswerRef {
     /// The decision.
@@ -822,7 +871,8 @@ pub struct AnswerRef {
 }
 
 /// Name one action at the revision the screen showed.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct ActionRef {
     /// The action.
@@ -832,7 +882,8 @@ pub struct ActionRef {
 }
 
 /// Save the user's progress on an action. It does not complete it.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct ProgressIntent {
     /// The action.
@@ -844,7 +895,8 @@ pub struct ProgressIntent {
 }
 
 /// Report an action done. The user's report, not proof it worked.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct CompleteIntent {
     /// The action.
@@ -856,7 +908,8 @@ pub struct CompleteIntent {
 }
 
 /// Name one action, to check its last request.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct ActionCheck {
     /// The action.
@@ -864,7 +917,8 @@ pub struct ActionCheck {
 }
 
 /// Pause all of a mission's work.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct PauseIntent {
     /// The mission.
@@ -874,7 +928,8 @@ pub struct PauseIntent {
 }
 
 /// Resume the work one Pause paused.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct ResumeIntent {
     /// The mission.
@@ -886,7 +941,8 @@ pub struct ResumeIntent {
 }
 
 /// Name one mission.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct MissionRef {
     /// The mission.
@@ -894,7 +950,8 @@ pub struct MissionRef {
 }
 
 /// What an intent did.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct IntentOutcome {
     /// Applied, stale, refused or unknown.
     pub status: OutcomeStatus,

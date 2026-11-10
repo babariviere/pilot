@@ -7,11 +7,13 @@
 //! are separate states here, as they are in the daemon.
 
 use nsh_core::prelude::*;
+use serde::Serialize;
 
 pub use crate::model::{Delivery, OutcomeStatus};
 
 /// Which mock planning world the feed starts from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum PlanScenario {
     /// One mission interview, three of seven questions answered.
     #[default]
@@ -36,7 +38,8 @@ pub enum PlanScenario {
 }
 
 /// Whether planning can be used at all.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum PlanAvailability {
     /// Mock data in this app. Nothing reaches a daemon.
     #[default]
@@ -48,7 +51,8 @@ pub enum PlanAvailability {
 }
 
 /// The project and settings a new chat or mission would use, as shown on New.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Setup {
     /// The project, as the user knows it.
     pub project: String,
@@ -61,7 +65,8 @@ pub struct Setup {
 }
 
 /// Where a mission's planning is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum PlanStage {
     /// Questions wait for the user's answers.
     #[default]
@@ -81,7 +86,8 @@ pub enum PlanStage {
 }
 
 /// One mission in planning, as a row.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlanRow {
     /// The mission.
     pub mission_id: String,
@@ -96,7 +102,8 @@ pub struct PlanRow {
 }
 
 /// One chat started directly from New, without a mission.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StartedChat {
     /// Stable for the request's life.
     pub id: String,
@@ -107,7 +114,8 @@ pub struct StartedChat {
 }
 
 /// Everything New and Today show about planning.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Planning {
     /// Changes with every change.
     pub revision: u32,
@@ -132,7 +140,8 @@ pub struct Planning {
 }
 
 /// The part of the mission a question is about. The daemon's sections.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum QuestionSection {
     /// What the mission should achieve.
     #[default]
@@ -148,7 +157,8 @@ pub enum QuestionSection {
 }
 
 /// A suggested answer to a question.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Choice {
     /// Stable within its question.
     pub id: String,
@@ -159,7 +169,8 @@ pub struct Choice {
 }
 
 /// Whether a question has the user's answer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum QuestionState {
     /// No answer yet, or only a draft with nothing in it.
     #[default]
@@ -172,7 +183,8 @@ pub enum QuestionState {
 }
 
 /// One question of an interview, with the user's saved answer.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Question {
     /// Stable within the interview.
     pub id: String,
@@ -199,7 +211,8 @@ pub struct Question {
 }
 
 /// What an interview is for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum RoundKind {
     /// The mission's own interview.
     #[default]
@@ -211,7 +224,8 @@ pub enum RoundKind {
 }
 
 /// Where an interview's one submission is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum SubmitState {
     /// Not submitted. Answers save as drafts.
     #[default]
@@ -227,7 +241,8 @@ pub enum SubmitState {
 }
 
 /// A saved interview: the full current list of questions.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Interview {
     /// Stable for the interview's life.
     pub id: String,
@@ -262,7 +277,8 @@ pub struct Interview {
 }
 
 /// How an earlier interview round ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum RoundState {
     /// The user submitted it. Its answers are fixed history.
     #[default]
@@ -272,7 +288,8 @@ pub enum RoundState {
 }
 
 /// One answer of an earlier round, exactly as submitted.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RoundAnswer {
     /// The question, as Pilot asked it then.
     pub prompt: String,
@@ -282,7 +299,8 @@ pub struct RoundAnswer {
 
 /// One earlier interview round. Submitting a round completes that round only:
 /// it is not the mission's agreement or approval to build.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RoundLine {
     /// Stable.
     pub id: String,
@@ -297,7 +315,8 @@ pub struct RoundLine {
 }
 
 /// How a mission is planned.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum PlanRoute {
     /// One interview, then a plan.
     #[default]
@@ -307,7 +326,8 @@ pub enum PlanRoute {
 }
 
 /// What kind of exploration an item is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ExploreKind {
     /// A choice only the user makes, through an interview.
     #[default]
@@ -319,7 +339,8 @@ pub enum ExploreKind {
 }
 
 /// Where an exploration item is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum ExploreState {
     /// It waits for other items first.
     #[default]
@@ -335,7 +356,8 @@ pub enum ExploreState {
 }
 
 /// One precise question on the map.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Exploration {
     /// Stable within the map.
     pub id: String,
@@ -360,7 +382,8 @@ pub struct Exploration {
 }
 
 /// An area that is not understood well enough for precise questions yet.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FogArea {
     /// Stable within the map.
     pub id: String,
@@ -381,7 +404,8 @@ pub struct FogArea {
 }
 
 /// Whether prototypes can be made from this map.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PrototypeSupport {
     /// Whether Pilot can make prototypes here.
     pub available: bool,
@@ -390,7 +414,8 @@ pub struct PrototypeSupport {
 }
 
 /// One user story of a proposed spec.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Story {
     /// Stable within the spec. Slices name it.
     pub id: String,
@@ -399,7 +424,8 @@ pub struct Story {
 }
 
 /// A proposed spec, in full.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Spec {
     /// The problem.
     pub problem: String,
@@ -416,7 +442,8 @@ pub struct Spec {
 }
 
 /// Who builds a slice.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum SliceOwner {
     /// The UI model.
     #[default]
@@ -426,7 +453,8 @@ pub enum SliceOwner {
 }
 
 /// One proposed vertical slice, a future task.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Slice {
     /// Stable within the proposal.
     pub id: String,
@@ -445,7 +473,8 @@ pub struct Slice {
 }
 
 /// A proposed plan: spec, slices and what is still unknown.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Proposal {
     /// Changes whenever any part changes. A review names it.
     pub digest: String,
@@ -458,7 +487,8 @@ pub struct Proposal {
 }
 
 /// Where one step from answers to work is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub enum StepState {
     /// Not reached.
     #[default]
@@ -475,7 +505,8 @@ pub enum StepState {
 
 /// One step from answers to work. Each is separate: submitting is not
 /// approval, approval is not publication, publication starts no work.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Step {
     /// What it is, such as "Answers submitted".
     pub label: String,
@@ -486,7 +517,8 @@ pub struct Step {
 }
 
 /// One mission's planning, in full.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlanPage {
     /// The mission.
     pub mission_id: String,
@@ -525,7 +557,8 @@ pub struct PlanPage {
 }
 
 /// Start a mission interview, or a chat, from the user's words.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct NewIntent {
     /// What the user wants, exactly as written.
@@ -535,7 +568,8 @@ pub struct NewIntent {
 }
 
 /// Save one answer as a draft. It never submits or starts anything.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct AnswerIntent {
     /// The interview.
@@ -553,7 +587,8 @@ pub struct AnswerIntent {
 }
 
 /// Submit an interview's saved answers, once.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct SubmitIntent {
     /// The interview.
@@ -565,7 +600,8 @@ pub struct SubmitIntent {
 }
 
 /// Name one interview.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 #[prop(exact)]
 pub struct InterviewRef {
     /// The interview.
@@ -573,7 +609,8 @@ pub struct InterviewRef {
 }
 
 /// What a planning intent did.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PlanOutcome {
     /// Applied, stale, refused or unknown.
     pub status: OutcomeStatus,

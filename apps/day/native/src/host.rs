@@ -2,6 +2,7 @@
 //! Selection is explicit and immutable. Retire and join this host before replacing
 //! a profile/project; old replies can never populate the replacement's Desk.
 pub mod attention;
+mod bridge;
 mod changes;
 mod enrollment;
 mod journal;
@@ -74,7 +75,7 @@ impl std::fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 
-pub(super) fn valid_id(s: &str) -> bool {
+pub(crate) fn valid_id(s: &str) -> bool {
     !s.is_empty()
         && s.len() <= 128
         && s.bytes()
@@ -82,6 +83,7 @@ pub(super) fn valid_id(s: &str) -> bool {
 }
 
 struct Shared {
+    notices: Mutex<Vec<std::sync::Weak<dyn Fn() + Send + Sync>>>,
     ritual: Mutex<ritual::State>,
     changes: Mutex<changes::State>,
     desk: Mutex<Desk>,
@@ -109,6 +111,16 @@ impl Shared {
         listeners.retain(|tx| !tx.is_closed());
         for tx in listeners.iter() {
             let _ = tx.try_send(());
+        }
+        drop(listeners);
+        let live = {
+            let mut notices = self.notices.lock().expect("native notices poisoned");
+            let live: Vec<_> = notices.iter().filter_map(std::sync::Weak::upgrade).collect();
+            notices.retain(|notice| notice.strong_count() != 0);
+            live
+        };
+        for notice in live {
+            notice();
         }
         result
     }
@@ -139,6 +151,7 @@ impl Shared {
 }
 
 enum Work {
+    Bridge(bridge::Call),
     Ritual(ritual::Work),
     RitualResults,
     AttentionRead,
@@ -193,6 +206,26 @@ impl Drop for Handle {
 }
 
 impl NativeHost {
+    pub(crate) fn notice(&self, notice: &Arc<dyn Fn() + Send + Sync>) {
+        self.0.shared.notices.lock().expect("native notices poisoned")
+            .push(Arc::downgrade(notice));
+    }
+    pub(crate) fn bridge(
+        &self,
+        command: crate::bridge::Command,
+        gate: Arc<Mutex<crate::bridge::Gate>>,
+        reply: Box<dyn FnOnce(Result<serde_json::Value, Error>) + Send>,
+    ) {
+        let call = bridge::Call { command, gate, host: self.clone(), reply };
+        let epoch = self.0.shared.epoch.load(Ordering::SeqCst);
+        let (tx, _rx) = async_channel::bounded(1);
+        let request = Request { epoch, work: Work::Bridge(call), reply: tx };
+        if let Err(e) = self.0.requests.try_send(request)
+            && let Work::Bridge(call) = e.into_inner().work
+        {
+            (call.reply)(Err(if self.0.shared.open().is_err() { Error::Closed } else { Error::Busy }));
+        }
+    }
     /// Start only for an explicit native selection. No environment or home fallback.
     /// File/network work runs off the UI thread. The default mock app never calls this.
     pub fn open(source: Source, ledger: PathBuf) -> Result<Self, Error> {
@@ -267,6 +300,7 @@ impl NativeHost {
             return Err(Error::Identity);
         }
         let shared = Arc::new(Shared {
+            notices: Mutex::default(),
             ritual: Mutex::new(ritual::State::default()),
             changes: Mutex::new(changes::State::default()),
             desk: Mutex::new(Desk::native()),
@@ -685,6 +719,11 @@ async fn run(
                     Work::AttentionRead | Work::AttentionSend(_) | Work::AttentionCheck(_) | Work::AttentionDraft(_, _)
                 );
                 let result = match request.work {
+                    Work::Bridge(call) => {
+                        // JSON failures are isolated from unrelated Today/control reads.
+                        bridge::handle(&t, &mut journal, &shared, request.epoch, call).await;
+                        Ok(shared.outcome(OutcomeStatus::Accepted, ""))
+                    }
                     Work::Ritual(work) => ritual::handle(&t.source, day.as_ref(), &mut journal, &shared, work),
                     Work::RitualResults => ritual::read_results(&t, day.as_ref(), &mut journal, &shared, request.epoch).await,
                     work => handle(&t, &mut journal, &shared, request.epoch, work).await,
@@ -823,6 +862,7 @@ async fn handle(
         shared.current(epoch)?;
     }
     match work {
+        Work::Bridge(_) => return Err(Error::Invalid),
         Work::Ritual(_) => return Err(Error::Invalid),
         Work::RitualResults => return Err(Error::Invalid),
         work @ (Work::AttentionRead

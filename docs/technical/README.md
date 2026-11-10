@@ -155,6 +155,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Pilot Day, the upcoming Native Shell TSX app](../../apps/day/README.md)
 - [Day authenticated native host and control journal](day-native-host.md)
 - [Day Native Shell release qualification](day-nsh-release.md)
+- [Day released public JSON bridge and lifecycle limits](day-public-bridge.md)
 - [Reliability roadmap](reliability/roadmap.md) and [testing strategy](reliability/testing-strategy.md)
 - [Historical product reference](product-reference.md), preserved from the previous README
 - [Screenshot provenance](../screenshots/README.md)

@@ -3,7 +3,8 @@
 //! projected ([`project`]) from the daemon's v1 contracts ([`contract`]). TSX receives typed
 //! read models and sends typed intents through [`TodayFeed`]; it has no
 //! transport of its own, and the app's capabilities deny network, sockets,
-//! files, processes and host calls.
+//! files and processes. The isolated connected runner grants only the exact
+//! native methods in [`bridge::METHODS`]; the default mock app grants none.
 
 pub mod actions;
 mod attention_feed;
@@ -18,6 +19,10 @@ pub mod desk;
 pub mod feed;
 pub mod fixture;
 pub mod host;
+pub mod bridge;
+pub mod root;
+#[cfg(all(target_os = "macos", feature = "macos-host"))]
+pub mod macos_host;
 pub mod model;
 pub mod plan;
 pub mod plan_desk;
