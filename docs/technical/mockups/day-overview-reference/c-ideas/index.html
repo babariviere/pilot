@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Other ideas for C, Pilot prototype</title>
+<link rel="stylesheet" href="../common/tokens.css">
+<style>
+	main { max-width: 1040px; margin: 0 auto; padding: 48px 24px 120px; }
+	.back { display: inline-flex; gap: 4px; align-items: center; font-size: 12.5px; color: var(--muted); }
+	h1 { font: 600 30px/1.2 var(--display); letter-spacing: -0.02em; margin: 14px 0 8px; }
+	.lead { color: var(--muted); font-size: 15px; max-width: 640px; margin: 0; }
+	section.idea { margin-top: 64px; }
+	section.idea h2 { font: 600 21px/1.3 var(--display); margin: 0; }
+	section.idea .one { color: var(--muted); font-size: 14.5px; margin: 6px 0 18px; max-width: 680px; }
+	.frame { border: 1px solid var(--hair); border-radius: 14px; background: var(--card); padding: 22px 24px; overflow-x: auto; }
+	.notes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; margin-top: 16px; font-size: 13px; }
+	.notes h3 { font-size: 12px; color: var(--faint); font-weight: 500; margin: 0 0 4px; }
+	.notes p { margin: 0; color: var(--text); }
+	.mock-note { font-size: 12px; color: var(--faint); margin-top: 10px; }
+
+	/* Now line */
+	svg.nl { display: block; min-width: 860px; width: 100%; height: auto; font-family: var(--ui); }
+	.nl .axis text { font-size: 11px; fill: var(--faint); font-variant-numeric: tabular-nums; }
+	.nl .grid { stroke: var(--hair); stroke-width: 1; }
+	.nl .title { font-size: 13px; font-weight: 500; fill: var(--text); }
+	.nl .word { font-size: 11.5px; fill: var(--muted); }
+	.nl .word.needs { fill: var(--amber-ink); }
+	.nl .word.failed { fill: var(--red-ink); }
+	.nl .base { stroke: var(--hair-strong); stroke-width: 1; }
+	.nl .work { stroke: var(--indigo); stroke-width: 4; stroke-linecap: round; }
+	.nl .wait { stroke: var(--amber); stroke-width: 2; stroke-dasharray: 3 4; }
+	.nl .res { fill: var(--green); }
+	.nl .plan { fill: var(--card); stroke: var(--faint); stroke-width: 1.4; }
+	.nl .lbl { font-size: 11px; fill: var(--muted); }
+	.nl .now { stroke: var(--accent); stroke-width: 1.5; }
+	.nl .nowt { font-size: 11px; fill: var(--accent); font-weight: 600; }
+	.nl .pin { fill: var(--amber); }
+	.nl .pint { font-size: 11.5px; fill: var(--amber-ink); font-weight: 500; }
+
+	/* Standup grid */
+	table.sg { width: 100%; min-width: 760px; border-collapse: collapse; font-size: 13px; }
+	.sg th { text-align: left; font-size: 12px; color: var(--faint); font-weight: 500; padding: 0 16px 10px 0; }
+	.sg td { padding: 14px 16px 14px 0; border-top: 1px solid var(--hair); vertical-align: top; }
+	.sg td.m { width: 22%; }
+	.sg td.m b { font-weight: 500; display: block; }
+	.sg td .muted { font-size: 12.5px; }
+	.sg td.need { color: var(--amber-ink); }
+	.sg td.need button { margin-top: 6px; }
+	.sg tfoot td { border-top: 1px solid var(--hair-strong); color: var(--muted); }
+
+	/* Agenda */
+	.ag { display: grid; grid-template-columns: 56px minmax(0, 1fr) minmax(0, 1fr); min-width: 760px; font-size: 13px; }
+	.ag .hd { font-size: 12px; color: var(--faint); padding: 0 12px 10px; }
+	.ag .t { font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; border-top: 1px solid var(--hair); padding-top: 4px; height: 44px; }
+	.ag .lane { position: relative; border-left: 1px solid var(--hair); }
+	.ag .rule { position: absolute; left: 0; right: 0; border-top: 1px solid var(--hair); }
+	.ag .slot { position: absolute; left: 10px; right: 12px; border-radius: 9px; padding: 7px 10px; font-size: 12.5px; line-height: 1.35; overflow: hidden; }
+	.ag .slot b { font-weight: 500; display: block; }
+	.ag .you { background: var(--amber-soft); color: var(--amber-ink); }
+	.ag .you b { color: var(--text); }
+	.ag .focus { background: transparent; color: var(--faint); border: 1px dashed var(--hair-strong); }
+	.ag .pl { background: var(--wash); color: var(--muted); }
+	.ag .pl b { color: var(--text); }
+	.ag .nowline { position: absolute; left: -1px; right: 0; border-top: 1.5px solid var(--accent); }
+	.ag .nowline span { position: absolute; left: 6px; top: -9px; font-size: 11px; color: var(--accent); font-weight: 600; background: var(--card); padding: 0 4px; }
+
+	.rec { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--hair); }
+	.rec h2 { font: 600 19px/1.3 var(--display); margin: 0 0 8px; }
+	.rec p { max-width: 680px; margin: 0 0 8px; }
+	@media (max-width: 760px) { .notes { grid-template-columns: 1fr; gap: 12px; } main { padding: 28px 16px 100px; } }
+</style>
+</head>
+<body>
+<main id="main">
+	<a class="back" href="../index.html">← All proposals</a>
+	<h1>Other ideas for C</h1>
+	<p class="lead">The board felt generic. Here are three different ways to see the same work. Each is a quick sketch, not a full prototype. Same synthetic morning as the Decision scenario, 11:02.</p>
+
+	<section class="idea" aria-labelledby="i1">
+		<h2 id="i1">1 · Now line</h2>
+		<p class="one">Your day as a timeline. Left of the line is done, right is planned. Moving work is a solid line; work waiting for you turns into a dashed line that grows until you act.</p>
+		<div class="frame"><svg class="nl" id="nl" viewBox="0 0 960 330" role="img" aria-label="Timeline of four missions from 06:00 to 20:00, now at 11:02"></svg></div>
+		<div class="notes"><div><h3>Good for</h3><p>Seeing what is moving at a glance. Standups: read left to right.</p></div><div><h3>Risk</h3><p>Dense with many missions. Needs a list view on narrow windows.</p></div><div><h3>Native</h3><p>Custom canvas drawing. Times come from mission activity that exists today.</p></div></div>
+	</section>
+
+	<section class="idea" aria-labelledby="i2">
+		<h2 id="i2">2 · Standup grid</h2>
+		<p class="one">Every mission gives its standup in one row: what it finished, what it is doing, what it needs from you. The bottom row is your own standup, ready to copy.</p>
+		<div class="frame"><table class="sg">
+			<thead><tr><th>Mission</th><th>Finished</th><th>Doing now</th><th>Needs from you</th></tr></thead>
+			<tbody>
+				<tr><td class="m"><b>Native desktop app</b><span class="state needs"><i class="mark needs"></i>Waiting for you</span></td><td>Older messages load while a reply streams.<div class="chips" style="margin-top:6px"><span class="chip">38 tests passed</span></div></td><td class="muted">Paused before the macOS checks.</td><td class="need">Open a test copy of Pilot? · under a minute<br><button class="btn small primary" data-mock>Decide</button></td></tr>
+				<tr><td class="m"><b>Quieter notifications</b><span class="state needs"><i class="mark needs"></i>Waiting for you</span></td><td>Audit: 41 sent, 6 needed you.</td><td class="muted">Rules, waiting on your choice.</td><td class="need">How should finished work reach you? · about 1 min<br><button class="btn small" data-mock>Decide</button></td></tr>
+				<tr><td class="m"><b>Faster search</b><span class="state"><i class="mark working"></i>Moving</span></td><td>Index rebuilds 4x faster.</td><td>Running integration tests on Linux.</td><td class="muted">Nothing</td></tr>
+				<tr><td class="m"><b>Tidy shell setup</b><span class="state"><i class="mark done"></i>Finished</span></td><td>Shell starts in 84 ms, was 310 ms.</td><td class="muted">Nothing</td><td class="muted">Nothing</td></tr>
+			</tbody>
+			<tfoot><tr><td class="m"><b style="color:var(--text)">Your standup</b></td><td>3 results</td><td>2 missions moving</td><td>2 decisions, about 2 min <button class="btn small quiet" data-mock>Copy</button></td></tr></tfoot>
+		</table></div>
+		<div class="notes"><div><h3>Good for</h3><p>Standups and a quick daily check. Very plain to read.</p></div><div><h3>Risk</h3><p>A table can feel like work. Long text needs truncating.</p></div><div><h3>Native</h3><p>A simple grid. Same data as D's Today page.</p></div></div>
+	</section>
+
+	<section class="idea" aria-labelledby="i3">
+		<h2 id="i3">3 · Agenda with decision windows</h2>
+		<p class="one">Pilot saves non-urgent decisions for two short windows a day that you choose. The rest of your day stays free. Only failures that stop everything can break in.</p>
+		<div class="frame"><div class="ag" id="ag"></div></div>
+		<div class="notes"><div><h3>Good for</h3><p>Focus. You know when Pilot will need you, and for how long.</p></div><div><h3>Risk</h3><p>A mission can wait hours for a decision. Urgent cases need a clear rule.</p></div><div><h3>Native</h3><p>Holding notifications needs a new rule. <span class="mock-tag gap-tag">needs contract</span></p></div></div>
+	</section>
+
+	<section class="rec">
+		<h2>What I would do</h2>
+		<p>Keep D (Day) as the home. Add the <b>Now line</b> as the top of Today, so you see movement before you read anything.</p>
+		<p><b>Decision windows</b> work in any concept as a setting, so I would offer them separately. The standup grid is mostly covered by D's Standup notes.</p>
+		<p class="mock-note">Sketches with synthetic data. Buttons only show a mock notice.</p>
+	</section>
+</main>
+<script src="../common/proto.js"></script>
+<script>
+(function () {
+	"use strict";
+	// Now line
+	const x0 = 220, x1 = 940, h0 = 6, h1 = 20, X = (h) => x0 + ((h - h0) / (h1 - h0)) * (x1 - x0), t = (s) => { const [a, b] = s.split(":"); return +a + b / 60; };
+	const now = t("11:02");
+	let g = '<g class="axis">';
+	for (let h = 6; h <= 20; h += 2) g += '<line class="grid" x1="' + X(h) + '" x2="' + X(h) + '" y1="34" y2="296"/><text x="' + X(h) + '" y="22" text-anchor="middle">' + String(h).padStart(2, "0") + ":00</text>";
+	g += "</g>";
+	const rows = [
+		{ title: "Native desktop app", word: "Waiting for you", cls: "needs", res: [["06:40", "History paging"]], work: ["08:50", "10:56"], wait: "10:56", pin: "Open a test copy? · 1 min", plan: [["15:00", "Images done"]] },
+		{ title: "Quieter notifications", word: "Waiting for you", cls: "needs", res: [["08:30", "Audit"]], work: ["09:00", "10:50"], wait: "10:50", plan: [["14:00", "Rules"]] },
+		{ title: "Faster search", word: "Moving", cls: "", res: [["07:30", "Index 4x faster"]], work: ["08:00", "11:02"], plan: [["13:00", "Release PR"]] },
+		{ title: "Tidy shell setup", word: "Finished 05:30", cls: "", res: [["06:00", "Done"]] },
+	];
+	rows.forEach((r, i) => {
+		const y = 66 + i * 58;
+		g += '<text class="title" x="0" y="' + (y - 3) + '">' + r.title + '</text><text class="word ' + r.cls + '" x="0" y="' + (y + 14) + '">' + r.word + "</text>";
+		g += '<line class="base" x1="' + x0 + '" x2="' + x1 + '" y1="' + y + '" y2="' + y + '"/>';
+		if (r.work) g += '<line class="work" x1="' + X(t(r.work[0])) + '" x2="' + X(t(r.work[1])) + '" y1="' + y + '" y2="' + y + '"/>';
+		if (r.wait) g += '<line class="wait" x1="' + X(t(r.wait)) + '" x2="' + X(now) + '" y1="' + y + '" y2="' + y + '"/>';
+		(r.res || []).forEach(([w, l]) => { g += '<circle class="res" cx="' + X(t(w)) + '" cy="' + y + '" r="4.5"/><text class="lbl" x="' + X(t(w)) + '" y="' + (y - 10) + '" text-anchor="middle">' + l + "</text>"; });
+		(r.plan || []).forEach(([w, l]) => { g += '<circle class="plan" cx="' + X(t(w)) + '" cy="' + y + '" r="4.5"/><text class="lbl" x="' + X(t(w)) + '" y="' + (y - 10) + '" text-anchor="middle">' + l + "</text>"; });
+		if (r.wait) g += '<rect class="pin" x="' + (X(now) - 4.5) + '" y="' + (y - 4.5) + '" width="9" height="9" transform="rotate(45 ' + X(now) + " " + y + ')"/>' + (r.pin ? '<text class="pint" x="' + (X(now) + 12) + '" y="' + (y + 18) + '">' + r.pin + "</text>" : "");
+	});
+	const ys = 66 + 4 * 58 - 6;
+	g += '<text class="word" x="0" y="' + (ys + 4) + '">Scheduled</text><circle class="plan" cx="' + X(18) + '" cy="' + ys + '" r="4.5"/><text class="lbl" x="' + (X(18) + 10) + '" y="' + (ys + 4) + '">Daily summary</text>';
+	g += '<line class="now" x1="' + X(now) + '" x2="' + X(now) + '" y1="30" y2="300"/><text class="nowt" x="' + (X(now) + 6) + '" y="44">Now 11:02</text>';
+	document.getElementById("nl").innerHTML = g;
+
+	// Agenda
+	const HH = 44, start = 8, end = 18, Y = (s) => (t(s) - start) * HH;
+	const you = [["09:00", "10:45", "focus", "Focus time", "Pilot holds questions"], ["11:00", "11:15", "you", "Decision window", "2 decisions · about 2 min"], ["11:15", "16:00", "focus", "Focus time", "Pilot holds questions"], ["16:00", "16:20", "you", "Decision window", "Review history slice · 2 min"]];
+	const pl = [["08:00", "13:00", "Faster search", "Linux tests, then release PR"], ["08:50", "11:00", "Native desktop app", "Image zoom checks"], ["11:15", "15:00", "Native desktop app", "Images, after your OK"], ["13:00", "17:30", "Quieter notifications", "Rules, after your choice"]];
+	let times = "", L = "", R = "";
+	for (let h = start; h < end; h++) times += '<div class="t">' + String(h).padStart(2, "0") + ":00</div>";
+	const slot = (a, b, cls, title, sub, lane) => '<div class="slot ' + cls + '" style="top:' + (Y(a) + 2) + "px;height:" + (Y(b) - Y(a) - 4) + "px" + (lane ? ";left:" + (10 + lane * 48) + "%;right:" + (lane ? "12px" : "52%") : "") + '"><b>' + title + "</b>" + sub + "</div>";
+	you.forEach(([a, b, c, ti, su]) => (L += slot(a, b, c, ti, su)));
+	pl.forEach(([a, b, ti, su], i) => (R += '<div class="slot pl" style="top:' + (Y(a) + 2) + "px;height:" + (Y(b) - Y(a) - 4) + "px;left:" + (i % 2 ? "calc(50% + 4px)" : "10px") + ";right:" + (i % 2 ? "12px" : "calc(50% + 4px)") + '"><b>' + ti + "</b>" + su + "</div>"));
+	const rules = Array.from({ length: end - start }, (_, i) => '<div class="rule" style="top:' + i * HH + 'px"></div>').join("");
+	const nowL = '<div class="nowline" style="top:' + Y("11:02") + 'px"><span>11:02</span></div>';
+	document.getElementById("ag").innerHTML = '<div class="hd"></div><div class="hd">You</div><div class="hd">Pilot</div><div>' + times + '</div><div class="lane" style="height:' + (end - start) * HH + 'px">' + rules + L + nowL + '</div><div class="lane" style="height:' + (end - start) * HH + 'px">' + rules + R + nowL + "</div>";
+	document.addEventListener("click", (e) => { if (e.target.closest("[data-mock]")) window.Proto.mock("action"); });
+})();
+</script>
+</body>
+</html>
