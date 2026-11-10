@@ -102,7 +102,11 @@ import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } fr
 import type { ModelCatalog } from "./models.ts";
 import { NativeAttention } from "./native-attention.ts";
 import { MAX_NATIVE_DIAGNOSTIC_BYTES } from "./native-diagnostics.ts";
-import { isNativePlanningOperation, NativeMissionPlanning } from "./native-mission-planning.ts";
+import {
+	isNativePlanningOperation,
+	NativeMissionPlanning,
+	PlanningInventoryCapacity,
+} from "./native-mission-planning.ts";
 import { canonicalJSON, durableJSON, OperationJournal, OperationRejected, payloadHash } from "./operation-journal.ts";
 import { isAllowedOrigin } from "./origin.ts";
 import { PathCompletionReader } from "./path-completion.ts";
@@ -2011,7 +2015,18 @@ export function createDaemonServer(
 			if (req.method !== "GET") throw new HttpError(405, "Planning inventory is read-only");
 			if (!githubSetup || !nativePlanning) throw new ServiceUnavailable("Native planning unavailable");
 			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
-			return json(res, 200, await nativePlanning.inventory(parts[2]!));
+			try {
+				return json(res, 200, await nativePlanning.inventory(parts[2]!));
+			} catch (error) {
+				if (!(error instanceof PlanningInventoryCapacity)) throw error;
+				return json(res, 503, {
+					version: 1,
+					code: "planning_inventory_capacity",
+					projectId: parts[2]!,
+					limit: error.limit,
+					error: error.message,
+				});
+			}
 		}
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "planning-profile") {
 			res.setHeader("cache-control", "no-store");

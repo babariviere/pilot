@@ -1,8 +1,10 @@
 //! Complete inventory mapping and the same-worker real-daemon path, no visible app.
 use pilot_day_native::{
+    bridge::{Bridge, METHODS, restrict},
     host::{Error, NativeHost, Source},
     plan::{PlanAvailability, PlanStage},
     plan_host,
+    root::DayRoot,
 };
 use serde_json::{Value, json};
 use std::{
@@ -80,10 +82,14 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::with_native(true)
+    }
+    fn with_native(native: bool) -> Self {
         let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../../packages/daemon/src/fixtures/day-planning-inventory.ts");
         let mut child = Command::new("node")
             .arg(script)
+            .arg(if native { "available" } else { "unavailable" })
             .env_remove("NODE_TEST_CONTEXT")
             .env_remove("PILOT_HOME")
             .env_remove("PILOT_PORT")
@@ -98,10 +104,10 @@ impl Fixture {
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
                 let Ok(line) = line else { break };
-                if let Ok(value) = serde_json::from_str(&line) {
-                    if tx.send(value).is_err() {
-                        break;
-                    }
+                if let Ok(value) = serde_json::from_str(&line)
+                    && tx.send(value).is_err()
+                {
+                    break;
                 }
             }
         });
@@ -128,11 +134,112 @@ impl Fixture {
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        writeln!(self.input, "{}", json!({"action":"quit"})).unwrap();
+        self.input.flush().unwrap();
+        assert!(self.child.wait().unwrap().success());
         if let Some(home) = self.info["source"]["profile"].as_str() {
             let _ = std::fs::remove_dir_all(home);
         }
+    }
+}
+
+/// Exercise the released JSON method and cached projection, not a host-only shortcut.
+fn bridge_inventory(f: &Fixture, bridge: &Bridge) -> Value {
+    let dir = PathBuf::from(f.info["source"]["profile"].as_str().unwrap()).join("bridge-fixture");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("nsh.json"),
+        json!({"name":"Inventory fixture","id":"test.inventory","capabilities":{"host":METHODS}})
+            .to_string(),
+    )
+    .unwrap();
+    let entry = dir.join("App.tsx");
+    std::fs::write(&entry, r#"import {mount, signal, Text, host} from 'nsh';
+const result=signal('waiting');
+mount(() => <Text>{result()}</Text>);
+setTimeout(() => { (async () => {
+  const args={version:1,window:host.params.day.window,args:{}};
+  return [await host.call('day.plan.inventory',args),await host.call('day.plan.inventorySnapshot',args)];
+})().then(value => result.set('done:'+JSON.stringify(value)),error => result.set('failed:'+error.code)); },0);"#).unwrap();
+    let bundle = restrict(nsh_testing::compile_tsx(entry, &[]).unwrap()).unwrap();
+    let mut config = nsh_engine::EngineConfig::new(bundle);
+    config.host = bridge.channel();
+    let mut app = nsh_testing::Headless::start(config).unwrap();
+    app.wait_until(
+        "inventory bridge reply",
+        Duration::from_secs(25),
+        |screen| {
+            screen
+                .texts()
+                .iter()
+                .any(|s| s.starts_with("done:") || s.starts_with("failed:"))
+        },
+    )
+    .unwrap();
+    let texts = app.screen().texts();
+    let text = texts
+        .iter()
+        .find_map(|s| s.strip_prefix("done:"))
+        .unwrap_or_else(|| panic!("{texts:?}"));
+    serde_json::from_str(text).unwrap()
+}
+
+#[test]
+fn real_101_mission_route_returns_capacity_through_the_released_bridge_and_clears_cache() {
+    let mut f = Fixture::new();
+    let host = f.open();
+    let bridge = Bridge::new(DayRoot::new(host.clone()));
+    let before = bridge_inventory(&f, &bridge);
+    assert_eq!(
+        before[0]["value"]["snapshot"]["plans"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    f.cmd("overflow", false);
+    let result = bridge_inventory(&f, &bridge);
+    assert_eq!(result[0], json!({"version":1,"error":"capacity"}));
+    assert_eq!(
+        result[1]["value"]["snapshot"]["availability"],
+        "unavailable"
+    );
+    assert_eq!(result[1]["value"]["snapshot"]["plans"], json!([]));
+    assert!(
+        !result[1]["value"]["snapshot"]["reason"]
+            .as_str()
+            .unwrap()
+            .is_empty()
+    );
+    reply(bridge.close()).unwrap();
+}
+
+#[test]
+fn real_service_503_and_auth_403_remain_unavailable_through_the_released_bridge() {
+    for native in [false, true] {
+        let f = Fixture::with_native(native);
+        if native {
+            let file = PathBuf::from(f.info["source"]["profile"].as_str().unwrap())
+                .join("github-app-capability");
+            let mut capability: Value =
+                serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+            capability["token"] = json!("b".repeat(64));
+            std::fs::write(file, capability.to_string()).unwrap();
+        }
+        let host = f.open();
+        let bridge = Bridge::new(DayRoot::new(host));
+        let result = bridge_inventory(&f, &bridge);
+        assert_eq!(
+            result[0],
+            json!({"version":1,"error":"unavailable"}),
+            "native={native}"
+        );
+        assert_eq!(
+            result[1]["value"]["snapshot"]["availability"],
+            "unavailable"
+        );
+        assert_eq!(result[1]["value"]["snapshot"]["plans"], json!([]));
+        reply(bridge.close()).unwrap();
     }
 }
 fn rt() -> tokio::runtime::Runtime {

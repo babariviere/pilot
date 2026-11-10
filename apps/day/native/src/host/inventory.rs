@@ -63,12 +63,7 @@ impl NativeHost {
 pub(super) async fn read(t: &Transport, shared: &Shared, epoch: u64) -> Result<(), Error> {
     let result = async {
         t.gate(false).await?;
-        let value = t
-            .get(&format!(
-                "/api/projects/{}/planning-inventory",
-                t.source.project_id
-            ))
-            .await?;
+        let value = t.planning_inventory().await?;
         if value["projectId"] != t.source.project_id {
             return Err(Error::Identity);
         }

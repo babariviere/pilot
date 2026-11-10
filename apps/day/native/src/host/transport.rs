@@ -90,6 +90,24 @@ impl Transport {
         Ok(value)
     }
 
+    /// Only this endpoint's versioned, project-bound overflow is capacity.
+    pub async fn planning_inventory(&self) -> Result<Value, Error> {
+        let header = self.local()?;
+        let r = self
+            .client
+            .get(self.url(&format!(
+                "/api/projects/{}/planning-inventory",
+                self.source.project_id
+            )))
+            .header("x-pilot-github-capability", header)
+            .send()
+            .await
+            .map_err(|_| Error::Offline)?;
+        let result = inventory_body(r, &self.source.project_id).await;
+        self.local()?;
+        result
+    }
+
     pub async fn gate(&self, controls: bool) -> Result<(), Error> {
         let v = self.get("/api/hello").await?;
         self.controls
@@ -314,10 +332,31 @@ pub(super) fn exact(
     Ok(r)
 }
 
-pub(super) async fn body(mut r: reqwest::Response) -> Result<Value, Error> {
+pub(super) async fn body(r: reqwest::Response) -> Result<Value, Error> {
     if r.status().as_u16() != 200 {
         return Err(Error::Unavailable);
     }
+    json_body(r).await
+}
+
+async fn inventory_body(r: reqwest::Response, project_id: &str) -> Result<Value, Error> {
+    if r.status().as_u16() != 503 {
+        return body(r).await;
+    }
+    let value = json_body(r).await.map_err(|_| Error::Unavailable)?;
+    if value["version"] == 1
+        && value["code"] == "planning_inventory_capacity"
+        && value["projectId"] == project_id
+        && value["limit"] == 100
+        && value.get("items").is_none()
+        && value.get("total").is_none()
+    {
+        return Err(Error::Capacity);
+    }
+    Err(Error::Unavailable)
+}
+
+async fn json_body(mut r: reqwest::Response) -> Result<Value, Error> {
     if r.content_length().is_some_and(|n| n > MAX_BODY as u64) {
         return Err(Error::Invalid);
     }

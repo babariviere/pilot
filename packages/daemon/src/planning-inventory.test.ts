@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
+import { test } from "node:test";
 import { nativePlanningFixture } from "./native-mission-planning.fixture.ts";
 
 test("passive inventory lists several saved rounds across restart without writes or continuation", async (t) => {
@@ -142,7 +142,9 @@ test("round changes and inventory additions across the durability barrier refuse
 test("unavailable differs from a successful empty project inventory", async (t) => {
 	const f = await nativePlanningFixture({ native: false });
 	t.after(() => f.close());
-	assert.equal((await f.inventory()).status, 503);
+	const unavailable = await f.inventory();
+	assert.equal(unavailable.status, 503);
+	assert.deepEqual(await unavailable.json(), { error: "Native planning unavailable" });
 	const available = await nativePlanningFixture();
 	t.after(() => available.close());
 	available.store.update(available.missionId, { status: "archived" });
@@ -168,5 +170,15 @@ test("inventory refuses capacity overflow instead of treating a first page as su
 	await f.createPlanning("Beyond capacity");
 	const response = await f.inventory();
 	assert.equal(response.status, 503);
-	assert.match((await response.json()).error, /exceeds limit/);
+	assert.equal(response.headers.get("cache-control"), "no-store");
+	assert.deepEqual(await response.json(), {
+		version: 1,
+		code: "planning_inventory_capacity",
+		projectId: f.project.id,
+		limit: 100,
+		error: "Planning inventory exceeds limit",
+	});
+	const denied = await f.inventory("");
+	assert.equal(denied.status, 403, "overflow does not bypass authentication");
+	assert.equal((await denied.json()).code, undefined);
 });

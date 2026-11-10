@@ -173,6 +173,10 @@ mission/interview/plan records, including missions not opened by this app. Each 
 ID, title, stage, needs-you state, full current interview fence, interview revision and nullable plan
 revision. No answers, histories, credentials, receipts or action authority enter the inventory.
 The fixed 100-mission limit reads one extra sentinel; overflow is 503, never a successful first page.
+Only this authenticated route's version-1 `planning_inventory_capacity` error, with the selected
+project and limit 100, maps to the native `capacity` refusal through `day.plan.inventory`.
+Other 503s and authentication failures stay unavailable. A refused read clears the cached list;
+`day.plan.inventorySnapshot` never presents old or partial rows as a current empty inventory.
 A valid empty project returns `status: available`, `total: 0`. Missing service/authentication,
 unqualified or revoked owners, changed project/context and storage errors refuse the entire read.
 The daemon pins and rechecks every owner/project/round across durability, including the empty-list

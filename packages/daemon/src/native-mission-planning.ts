@@ -13,6 +13,14 @@ import type { WorkflowConfirmations } from "./workflow-confirmations.ts";
 
 export const isNativePlanningOperation = (kind: string) => isInterviewOperation(kind) || isPlanOperation(kind);
 const humanKinds = ["interview-save", "interview-submit"];
+/** Only the complete planning inventory limit, not general service unavailability. */
+export class PlanningInventoryCapacity extends ServiceUnavailable {
+	readonly limit: number;
+	constructor(limit: number) {
+		super("Planning inventory exceeds limit");
+		this.limit = limit;
+	}
+}
 interface Dependencies {
 	store: MissionStore;
 	journal: OperationJournal;
@@ -111,7 +119,7 @@ export class NativeMissionPlanning {
 		const snapshot = () => {
 			const project = projects.require(projectId);
 			const ids = store.planningCandidates(projectId, limit);
-			if (ids.length > limit) throw new ServiceUnavailable("Planning inventory exceeds limit");
+			if (ids.length > limit) throw new PlanningInventoryCapacity(limit);
 			const plans = new MissionPlans({
 				...this.deps,
 				authorize: (_purpose, missionId) => {

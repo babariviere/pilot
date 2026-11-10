@@ -13,6 +13,7 @@ use std::{
 
 struct State {
     inventory: Value,
+    inventory_status: u16,
     requests: usize,
     websocket: Option<TcpStream>,
 }
@@ -36,6 +37,7 @@ impl InventoryFixture {
         let f = Fixture::selected(port, true);
         let state = Arc::new(Mutex::new(State {
             inventory: inventory("First interview"),
+            inventory_status: 200,
             requests: 0,
             websocket: None,
         }));
@@ -78,6 +80,13 @@ impl InventoryFixture {
                 }
                 let mut state = data.lock().unwrap();
                 state.requests += 1;
+                let status = if request
+                    .starts_with("GET /api/projects/synthetic-project/planning-inventory ")
+                {
+                    state.inventory_status
+                } else {
+                    200
+                };
                 if request.starts_with("GET /api/ws ") {
                     let accept = tokio_tungstenite::tungstenite::handshake::derive_accept_key(
                         key.as_bytes(),
@@ -100,7 +109,7 @@ impl InventoryFixture {
                     state.inventory.clone()
                 }.to_string();
                 drop(state);
-                write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",body.len()).unwrap();
+                write!(stream,"HTTP/1.1 {status} Response\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",body.len()).unwrap();
                 stream.flush().unwrap();
             }
         });
@@ -149,6 +158,63 @@ impl InventoryFixture {
             "return await call('day.plan.inventorySnapshot');",
             Fixture::caps(),
         )
+    }
+}
+
+#[test]
+fn inventory_capacity_requires_the_exact_typed_status_project_version_and_limit() {
+    let fixture = InventoryFixture::new();
+    let capacity = json!({"version":1,"code":"planning_inventory_capacity",
+        "projectId":"synthetic-project","limit":100,"error":"Planning inventory exceeds limit"});
+    let mut cases = vec![
+        (503, capacity.clone(), "capacity"),
+        (
+            503,
+            json!({"error":"Planning inventory exceeds limit"}),
+            "unavailable",
+        ),
+        (
+            503,
+            json!({"error":"Native planning unavailable"}),
+            "unavailable",
+        ),
+        (401, capacity.clone(), "unavailable"),
+        (403, capacity.clone(), "unavailable"),
+        (409, capacity.clone(), "unavailable"),
+    ];
+    for (key, value) in [
+        ("version", json!(2)),
+        ("code", json!("capacity")),
+        ("projectId", json!("another-project")),
+        ("limit", json!(101)),
+        ("items", json!([])),
+        ("total", json!(0)),
+    ] {
+        let mut bad = capacity.clone();
+        bad[key] = value;
+        cases.push((503, bad, "unavailable"));
+    }
+    for (status, body, expected) in cases {
+        {
+            let mut state = fixture.state.lock().unwrap();
+            state.inventory_status = status;
+            state.inventory = body.clone();
+        }
+        let result = fixture.f.run(
+            "return [await call('day.plan.inventory'),await call('day.plan.inventorySnapshot')];",
+            Fixture::caps(),
+        );
+        assert_eq!(
+            result[0],
+            json!({"version":1,"error":expected}),
+            "HTTP {status}: {body}"
+        );
+        assert_eq!(
+            result[1]["value"]["snapshot"]["availability"],
+            "unavailable"
+        );
+        assert_eq!(result[1]["value"]["snapshot"]["plans"], json!([]));
+        assert_eq!(result[1]["value"]["outcome"], Value::Null);
     }
 }
 impl Drop for InventoryFixture {
