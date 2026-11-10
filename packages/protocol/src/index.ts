@@ -20,6 +20,7 @@ export type {
 } from "./agent-events.ts";
 export type * from "./automations.ts";
 export type * from "./native-attention.ts";
+export type * from "./planning-inventory.ts";
 export type * from "./chat-settings.ts";
 export type * from "./critical-review.ts";
 export type * from "./databases.ts";

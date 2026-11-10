@@ -15,9 +15,9 @@ use serde_json::{Value, json};
 
 use crate::plan::{
     AnswerIntent, Choice, Delivery, Exploration, ExploreKind, ExploreState, FogArea, Interview,
-    OutcomeStatus, PlanPage, PlanRoute, PlanRow, PlanStage, Proposal, PrototypeSupport, Question,
-    QuestionSection, QuestionState, RoundAnswer, RoundKind, RoundLine, RoundState, Slice,
-    SliceOwner, Spec, Step, StepState, Story, SubmitIntent, SubmitState,
+    OutcomeStatus, PlanIdentity, PlanPage, PlanRoute, PlanRow, PlanStage, Proposal,
+    PrototypeSupport, Question, QuestionSection, QuestionState, RoundAnswer, RoundKind, RoundLine,
+    RoundState, Slice, SliceOwner, Spec, Step, StepState, Story, SubmitIntent, SubmitState,
 };
 use crate::plan_desk::ANSWER_ROOM;
 
@@ -544,7 +544,95 @@ pub fn page(read: &Value, ops: &[Value], local: &Local) -> PlanPage {
     }
 }
 
-/// The row of a page, for Today and New.
+/// Maps only a complete authenticated inventory, rejecting missing identities and partial pages.
+pub fn inventory_rows(read: &Value) -> Result<Vec<PlanRow>, crate::host::Error> {
+    use crate::host::{Error, valid_id};
+    let items = read["items"].as_array().ok_or(Error::Invalid)?;
+    if read["version"] != 1
+        || read["status"] != "available"
+        || read["limit"] != 100
+        || read["total"].as_u64() != Some(items.len() as u64)
+        || items.len() > 100
+    {
+        return Err(Error::Invalid);
+    }
+    let mut ids = BTreeSet::new();
+    items
+        .iter()
+        .map(|item| {
+            let id = item["missionId"].as_str().ok_or(Error::Invalid)?;
+            let title = item["title"].as_str().ok_or(Error::Invalid)?;
+            let round = &item["round"];
+            if !valid_id(id)
+                || !ids.insert(id)
+                || title.is_empty()
+                || title.len() > 800
+                || round["missionId"] != id
+                || !round["ownerSessionId"].as_str().is_some_and(valid_id)
+                || !round["enrollmentId"].as_str().is_some_and(valid_id)
+                || round["questionSetRevision"].as_u64().is_none_or(|r| r == 0)
+                || round["answerRevision"].as_u64().is_none()
+                || item["interviewRevision"].as_u64().is_none_or(|r| r == 0)
+                || round["questionSetRevision"]
+                    .as_f64()
+                    .is_none_or(|r| r > 9_007_199_254_740_991.0)
+                || !item
+                    .as_object()
+                    .is_some_and(|o| o.contains_key("planRevision"))
+                || !(item["planRevision"].is_null()
+                    || item["planRevision"]
+                        .as_u64()
+                        .is_some_and(|r| r > 0 && r <= 9_007_199_254_740_991))
+            {
+                return Err(Error::Invalid);
+            }
+            let stage = match item["stage"].as_str() {
+                Some("questions") => PlanStage::Questions,
+                Some("review") => PlanStage::Review,
+                Some("planning") => PlanStage::Planning,
+                Some("submitted") => PlanStage::Submitted,
+                Some("published") => PlanStage::Published,
+                _ => return Err(Error::Invalid),
+            };
+            let needs_you = matches!(stage, PlanStage::Questions | PlanStage::Review);
+            if item["needsYou"].as_bool() != Some(needs_you) {
+                return Err(Error::Invalid);
+            }
+            let line = match stage {
+                PlanStage::Questions => "Interview answers needed",
+                PlanStage::Review => "The plan is ready for your review",
+                PlanStage::Submitted => "Submitted. Pilot cannot continue from it here yet",
+                PlanStage::Published => "Published. No work started",
+                _ => "Pilot is working on the plan",
+            };
+            Ok(PlanRow {
+                mission_id: id.into(),
+                title: title.into(),
+                stage,
+                line: line.into(),
+                needs_you,
+                identity: Some(PlanIdentity {
+                    interview_id: format!(
+                        "{}-{}",
+                        s(&round["enrollmentId"]),
+                        round["questionSetRevision"]
+                    ),
+                    interview_revision: u32::try_from(
+                        item["interviewRevision"].as_u64().ok_or(Error::Invalid)?,
+                    )
+                    .map_err(|_| Error::Invalid)?,
+                    plan_revision: item["planRevision"]
+                        .as_u64()
+                        .map(u32::try_from)
+                        .transpose()
+                        .map_err(|_| Error::Invalid)?,
+                }),
+            })
+        })
+        .collect()
+}
+
+/// The row of a selected page. Inventory uses its complete authenticated list instead.
 pub fn row(page: &PlanPage, title: &str) -> PlanRow {
     let line = match (page.stage, &page.interview) {
         (PlanStage::Questions, Some(i)) => {
@@ -565,6 +653,7 @@ pub fn row(page: &PlanPage, title: &str) -> PlanRow {
             page.stage,
             PlanStage::Questions | PlanStage::Review | PlanStage::Unknown
         ),
+        identity: None,
     }
 }
 

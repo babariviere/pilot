@@ -14,8 +14,8 @@ use crate::{
     host::{Error, NativeHost},
     model::IntentOutcome,
     plan::{
-        AnswerIntent, InterviewRef, NewIntent, OutcomeStatus, PlanAvailability, PlanOutcome,
-        PlanPage, PlanScenario, Planning, SubmitIntent,
+        AnswerIntent, InterviewRef, NewIntent, OutcomeStatus, PlanOutcome, PlanPage, PlanScenario,
+        Planning, SubmitIntent,
     },
     plan_desk::PlanDesk,
     plan_host::{self, Local},
@@ -31,8 +31,6 @@ impl Drop for Permit {
     }
 }
 
-/// Why New cannot create a mission without the native planning selection.
-const NO_CREATE: &str = "Mission planning is not configured for this selection. Nothing was sent.";
 const NO_START: &str =
     "Starting a standalone chat from Day is not connected yet. Nothing was sent.";
 
@@ -57,30 +55,9 @@ struct HostSide {
 impl HostSide {
     fn snapshot(&self) -> Planning {
         let state = self.state.borrow();
-        let plans = state
-            .mission
-            .as_ref()
-            .and_then(|m| self.page(m, &state))
-            .filter(|p| p.available)
-            .map(|p| vec![plan_host::row(&p, "")])
-            .unwrap_or_default();
-        let setup = self.host.planning_setup();
-        Planning {
-            revision: state.revision,
-            availability: PlanAvailability::Live,
-            reason: String::new(),
-            can_create: setup.is_some(),
-            create_reason: if setup.is_some() {
-                String::new()
-            } else {
-                NO_CREATE.into()
-            },
-            setup: setup.unwrap_or_default(),
-            can_start: false,
-            start_reason: NO_START.into(),
-            plans,
-            started: Vec::new(),
-        }
+        let mut planning = self.host.planning_inventory_snapshot();
+        planning.revision = state.revision;
+        planning
     }
 
     fn page(&self, mission: &str, state: &HostState) -> Option<PlanPage> {
@@ -217,9 +194,11 @@ impl PlanFeed {
         let weak = Rc::downgrade(&listeners);
         let changes = host.changes();
         let preparation = host.prepare_planning();
+        let inventory = host.read_planning_inventory();
         let source = side.clone();
         let watch_task = spawn(async move {
             let _ = preparation.recv().await;
+            let _ = inventory.recv().await;
             while changes.recv().await.is_ok() {
                 let Some(listeners) = weak.upgrade() else {
                     break;

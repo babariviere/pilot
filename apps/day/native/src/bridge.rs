@@ -25,6 +25,7 @@ pub const METHODS: &[&str] = &[
     "day.mission.check",
     "day.plan.read",
     "day.plan.snapshot",
+    "day.plan.inventory",
     "day.plan.prepare",
     "day.plan.create",
     "day.plan.save",
@@ -92,6 +93,7 @@ pub(crate) enum Command {
     ControlCheck(String),
     Plan(String),
     PlanSnapshot(String),
+    PlanningInventory,
     Prepare,
     Create(crate::plan::NewIntent),
     Save {
@@ -170,7 +172,8 @@ fn exact<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, Error> {
 fn command(name: &str, args: Value) -> Result<Command, Error> {
     use Command as C;
     Ok(match name {
-        "day.today.read" | "day.plan.prepare" | "day.attention.read" | "day.plan.checkNew" => {
+        "day.today.read" | "day.plan.prepare" | "day.attention.read" | "day.plan.checkNew"
+        | "day.plan.inventory" => {
             if args != json!({}) {
                 return Err(Error::Invalid);
             }
@@ -178,6 +181,7 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 "day.today.read" => C::Today,
                 "day.plan.prepare" => C::Prepare,
                 "day.plan.checkNew" => C::CheckNew,
+                "day.plan.inventory" => C::PlanningInventory,
                 _ => C::Attention,
             }
         }
@@ -290,6 +294,7 @@ impl Command {
                     | Self::Mission(_)
                     | Self::Plan(_)
                     | Self::PlanSnapshot(_)
+                    | Self::PlanningInventory
                     | Self::Attention
             )
         {

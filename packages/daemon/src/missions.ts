@@ -2372,6 +2372,16 @@ export class MissionStore {
 			: this.all(`${MISSION_SELECT} ORDER BY updated_at DESC`);
 		return rows.map(missionFrom);
 	}
+	/** Inventory candidates only. Read one sentinel beyond the limit; never claim a partial list is complete. */
+	planningCandidates(projectId: string, limit: number): string[] {
+		if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new Conflict("Invalid planning limit");
+		return this.all(
+			`SELECT id FROM missions WHERE project_id=? AND status='active' AND planning_version=1
+			ORDER BY updated_at DESC, id LIMIT ?`,
+			projectId,
+			limit + 1,
+		).map((row) => str(row.id!));
+	}
 
 	/** PR synchronization needs neither attention counts nor mission content. */
 	pullRequestMissions(): Array<Pick<Mission, "id" | "projectId">> {

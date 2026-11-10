@@ -542,5 +542,6 @@ function row(page: PlanPage): PlanRow {
 		stage: page.stage,
 		line,
 		needsYou: page.stage === "questions" || page.stage === "review",
+		identity: null,
 	};
 }

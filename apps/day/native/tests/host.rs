@@ -285,6 +285,43 @@ fn ws_invalidates_inflight_reads_but_does_not_confirm_an_operation() {
 }
 
 #[test]
+fn passive_detail_reread_requalifies_one_invalidation_and_never_relaxes_project_checks() {
+    let mut f = Fixture::new();
+    let host = f.open();
+    ready(&host);
+    f.cmd("detailRace", true);
+    reply(host.read_mission(f.mission())).expect("one raced passive read is requalified");
+    assert!(host.mission(&f.mission()).is_some());
+    ready(&host);
+    f.cmd("detailRace", false);
+    assert_eq!(
+        reply(host.read_mission(f.mission())),
+        Err(Error::Stale),
+        "retries are limited"
+    );
+    f.cmd("detailRaceOff", false);
+    ready(&host);
+    f.cmd("coordinator", true);
+    assert_eq!(
+        reply(host.read_mission(f.mission())),
+        Err(Error::Stale),
+        "mismatched overview/detail owner refuses the read"
+    );
+    f.cmd("coordinator", false);
+    reply(host.refresh()).unwrap();
+    ready(&host);
+    f.cmd("project", true);
+    f.cmd("detailRace", true);
+    assert_eq!(
+        reply(host.read_mission(f.mission())),
+        Err(Error::Identity),
+        "project denial is never retried away"
+    );
+    assert_eq!(f.cmd("stats", true)["posts"], 0);
+    reply(host.close()).unwrap();
+}
+
+#[test]
 fn stop_racing_resume_remains_held_and_close_joins_entered_controls() {
     let mut f = Fixture::new();
     let host = f.open();

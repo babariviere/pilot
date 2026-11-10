@@ -114,6 +114,7 @@ async fn run(
         }),
         Command::ControlCheck(id) => Some(Work::Check(id.clone())),
         Command::Plan(id) => Some(Work::ReadPlanning(id.clone())),
+        Command::PlanningInventory => Some(Work::PlanningInventory),
         Command::Prepare => Some(Work::PreparePlanning),
         Command::Create(r) => Some(Work::EnrollPlanning(r.clone())),
         Command::Save { mission, intent } => Some(planning_request(host, mission, |read| {
@@ -230,6 +231,7 @@ async fn run(
             value = planning(host, id).unwrap_or(Value::Null);
         }
         Command::Prepare => value = encode(host.planning_setup())?,
+        Command::PlanningInventory => value = encode(host.planning_inventory_snapshot())?,
         Command::PlanCheck { mission, .. } => {
             value = planning(host, mission).unwrap_or(Value::Null)
         }

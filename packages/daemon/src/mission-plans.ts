@@ -125,7 +125,7 @@ export class MissionPlans {
 	constructor(deps: Dependencies) {
 		this.deps = deps;
 	}
-	private context(missionId: string) {
+	private ownerContext(missionId: string) {
 		const { store } = this.deps;
 		const mission = store.require(missionId),
 			interview = store.interviews.latest(missionId);
@@ -148,9 +148,18 @@ export class MissionPlans {
 		const plan = store.plans.get(missionId);
 		if (plan && (plan.ownerSessionId !== owner || canonicalJSON(plan.ownerFence) !== canonicalJSON(ownerFence)))
 			throw new Conflict("Planning owner changed");
-		return { mission, owner, ownerFence, interview, plan, evidence: store.workflowConfirmationState(missionId) };
+		return { mission, owner, ownerFence, interview, plan };
 	}
-	/** Bounded native context. Decision digests and linked Knowledge locators are not new grants. */
+	private context(missionId: string) {
+		return { ...this.ownerContext(missionId), evidence: this.deps.store.workflowConfirmationState(missionId) };
+	}
+	/** Saved round and plan only. Batch readers must await durable() and recheck the snapshot before returning. */
+	summary(missionId: string) {
+		const pin = this.ownerContext(missionId);
+		this.deps.authorize("plan-read", missionId, pin.owner);
+		return { interview: pin.interview, plan: pin.plan ?? null, ownerFence: pin.ownerFence };
+	}
+	/** Full saved planning context for the selected mission only. */
 	async view(missionId: string) {
 		const pin = this.context(missionId),
 			{ store } = this.deps;

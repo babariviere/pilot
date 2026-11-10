@@ -143,6 +143,7 @@ let noControls = false,
 	dayRace = false,
 	changeCoordinator = false,
 	changeProject = false;
+let detailRace = 0;
 let gateAfterJournal = false,
 	journalInvalidation = false;
 const wss = new WebSocketServer({ noServer: true });
@@ -220,6 +221,11 @@ const proxy = createServer(async (req, res) => {
 			}
 		}
 		if (path === `/api/missions/${mission.id}`) {
+			if (detailRace !== 0) {
+				if (detailRace > 0) detailRace--;
+				invalidate();
+				await new Promise((resolve) => setTimeout(resolve, 40));
+			}
 			if (changeCoordinator) body.mission.coordinatorSessionId = randomUUID();
 			if (changeProject) body.mission.projectId = other.id;
 		}
@@ -278,6 +284,8 @@ for await (const line of createInterface({ input: process.stdin })) {
 		invalidate();
 	}
 	if (cmd.action === "dayRace") dayRace = true;
+	if (cmd.action === "detailRace") detailRace = cmd.value ? 1 : -1;
+	if (cmd.action === "detailRaceOff") detailRace = 0;
 	if (cmd.action === "coordinator") changeCoordinator = cmd.value;
 	if (cmd.action === "project") changeProject = cmd.value;
 	if (cmd.action === "gateAfterJournal") gateAfterJournal = true;

@@ -22,7 +22,7 @@ import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
 import { WorkflowConfirmations } from "./workflow-confirmations.ts";
 
-export async function nativePlanningFixture() {
+export async function nativePlanningFixture(options: { native?: boolean } = {}) {
 	const home = await mkdtemp(join(tmpdir(), "native-planning-"));
 	const projects = new ProjectStore(home);
 	await projects.load();
@@ -85,7 +85,8 @@ export async function nativePlanningFixture() {
 	await journal.execute(create, (op, entry) => interviews().admit(op, entry.firstEntry));
 	const missionId = store.interviews.lookup(create)!.fence.missionId;
 	const sessions = new SessionManager(home, projects);
-	sessions.get = (id) => (id === owner ? coordinator : undefined);
+	const extraOwners = new Map<string, SessionSummary>();
+	sessions.get = (id) => (id === owner ? coordinator : extraOwners.get(id));
 	sessions.spawn = async () => {
 		throw new Error("Fixture forbids workers");
 	};
@@ -120,7 +121,7 @@ export async function nativePlanningFixture() {
 			},
 		];
 		args[12] = hello;
-		args[17] = native;
+		if (options.native !== false) args[17] = native;
 		server = createDaemonServer(...args);
 		await server.runtimeReady;
 		server.listen(0, "127.0.0.1");
@@ -138,6 +139,7 @@ export async function nativePlanningFixture() {
 	return {
 		home,
 		project,
+		projects,
 		missionId,
 		owner,
 		hello,
@@ -158,6 +160,25 @@ export async function nativePlanningFixture() {
 		get coordinator() {
 			return coordinator;
 		},
+		async createPlanning(title: string, projectId = project.id) {
+			const ownerSessionId = randomUUID();
+			extraOwners.set(ownerSessionId, { ...coordinator!, id: ownerSessionId, projectId });
+			const op = operation(randomUUID(), {
+				purpose: "interview-create",
+				projectId,
+				title,
+				ownerSessionId,
+				questions: [question],
+			} as { purpose: string });
+			const result = await journal.execute(op, (op, entry) => interviews().admit(op, entry.firstEntry));
+			assertAccepted(result);
+			return store.interviews.lookup(op)!.fence.missionId;
+		},
+		inventory(token = capability, projectId = project.id) {
+			return fetch(`${root}/api/projects/${projectId}/planning-inventory`, {
+				headers: { "x-pilot-github-capability": token },
+			});
+		},
 		async read(token = capability, projectId = project.id) {
 			return fetch(`${root}/api/projects/${projectId}/missions/${missionId}/planning`, {
 				headers: { "x-pilot-github-capability": token },
@@ -171,8 +192,8 @@ export async function nativePlanningFixture() {
 			});
 		},
 		/** Fixture-only authorized coordinator publication, never exposed by production HTTP. */
-		async plan(request: { purpose: string }) {
-			const op = operation(missionId, request);
+		async plan(request: { purpose: string }, targetId = missionId) {
+			const op = operation(targetId, request);
 			const r = await journal.execute(op, (op, entry) => plans().admit(op, entry.firstEntry));
 			if (r.state !== "accepted") throw new Error(JSON.stringify(r));
 			return r;
@@ -192,4 +213,8 @@ export async function nativePlanningFixture() {
 			await rm(home, { recursive: true, force: true });
 		},
 	};
+}
+
+function assertAccepted(result: { state: string }): void {
+	if (result.state !== "accepted") throw new Error(JSON.stringify(result));
 }

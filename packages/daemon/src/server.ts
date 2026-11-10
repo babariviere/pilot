@@ -2006,6 +2006,13 @@ export function createDaemonServer(
 			}
 			throw new HttpError(404, "Unknown tracking operation");
 		}
+		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "planning-inventory") {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET") throw new HttpError(405, "Planning inventory is read-only");
+			if (!githubSetup || !nativePlanning) throw new ServiceUnavailable("Native planning unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			return json(res, 200, await nativePlanning.inventory(parts[2]!));
+		}
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "planning-profile") {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Planning profile is read-only");

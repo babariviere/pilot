@@ -85,6 +85,18 @@ pub enum PlanStage {
     Unknown,
 }
 
+/// Passive round and plan identity from the complete authenticated inventory.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanIdentity {
+    /// Enrollment plus question-list revision, as on the selected planning page.
+    pub interview_id: String,
+    /// Current saved interview revision. Never permission to save or submit.
+    pub interview_revision: u32,
+    /// Current plan revision, or null when no plan exists.
+    pub plan_revision: Option<u32>,
+}
+
 /// One mission in planning, as a row.
 #[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -99,6 +111,8 @@ pub struct PlanRow {
     pub line: String,
     /// Whether it waits for the user.
     pub needs_you: bool,
+    /// Current passive row identity; absent on mock and legacy single-page projections.
+    pub identity: Option<PlanIdentity>,
 }
 
 /// One chat started directly from New, without a mission.

@@ -286,6 +286,18 @@ fn deny_all_and_exact_names_are_enforced_by_the_released_runtime() {
 }
 
 #[test]
+fn inventory_is_one_exact_passive_method_with_no_selection_or_write_arguments() {
+    let f = Fixture::new();
+    let result = f.run(r#"return [await call('day.plan.inventory', {missionId:'forged'}), await call('day.today.read')];"#, Fixture::caps());
+    assert_eq!(result[0]["error"], "invalid");
+    assert!(
+        result[1]["value"]["snapshot"].is_object(),
+        "invalid inventory arguments do not poison Today"
+    );
+    assert_eq!(Fixture::new().run("try { await call('day.plan.inventory'); return 'unexpected'; } catch(e) { return e.code; }", json!({})), json!("ERR_ACCESS_DENIED"));
+}
+
+#[test]
 fn forged_roots_versions_fields_types_and_ids_are_refused_without_poisoning_reads() {
     let f = Fixture::new();
     let foreign = Fixture::new();

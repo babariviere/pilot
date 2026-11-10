@@ -5,6 +5,7 @@ pub mod attention;
 mod bridge;
 mod changes;
 mod enrollment;
+mod inventory;
 mod journal;
 mod planning;
 pub mod ritual;
@@ -94,6 +95,8 @@ struct Shared {
     detail: Mutex<Option<String>>,
     planning: Mutex<std::collections::BTreeMap<String, (u64, serde_json::Value)>>,
     planning_mission: Mutex<Option<String>>,
+    planning_inventory: Mutex<Option<(u64, serde_json::Value)>>,
+    planning_inventory_wanted: AtomicBool,
     planning_operations: Mutex<std::collections::BTreeMap<String, serde_json::Value>>,
     enrollment: Mutex<Option<enrollment::Selection>>,
     attention: Mutex<Option<serde_json::Value>>,
@@ -169,6 +172,7 @@ enum Work {
     },
     Check(String),
     ReadPlanning(String),
+    PlanningInventory,
     WriteInterview {
         mission: String,
         digest: String,
@@ -311,6 +315,8 @@ impl NativeHost {
             detail: Mutex::new(None),
             planning: Mutex::new(std::collections::BTreeMap::new()),
             planning_mission: Mutex::new(None),
+            planning_inventory: Mutex::new(None),
+            planning_inventory_wanted: AtomicBool::new(false),
             planning_operations: Mutex::new(std::collections::BTreeMap::new()),
             enrollment: Mutex::new(None),
             attention: Mutex::new(None),
@@ -713,6 +719,7 @@ async fn run(
             request = requests.recv() => {
                 let Ok(request) = request else { break; };
                 let preparing = matches!(&request.work, Work::PreparePlanning);
+                let inventory = matches!(&request.work, Work::PlanningInventory);
                 let local_ritual = matches!(&request.work, Work::Ritual(_) | Work::RitualResults);
                 let attention = matches!(
                     &request.work,
@@ -731,7 +738,7 @@ async fn run(
                 if local_ritual || (preparing && matches!(result, Err(Error::Unavailable))) {
                     // Unsupported New configuration must not disable existing Today reads.
                     shared.change(|_| ());
-                } else if attention
+                } else if (attention || inventory)
                     && matches!(result, Err(Error::Stale | Error::Invalid | Error::Unavailable | Error::Capacity))
                 {
                     // A changed card or an unsupported attention read must not
@@ -792,7 +799,18 @@ async fn refresh(
         if !valid_id(id) || !overview.dashboard.missions.items.iter().any(|m| m.id == id) {
             return Err(Error::Stale);
         }
-        details.push(t.detail(id).await?);
+        let detail = t.detail(id).await?;
+        if overview
+            .dashboard
+            .missions
+            .items
+            .iter()
+            .find(|m| m.id == id)
+            .is_none_or(|m| m.coordinator_session_id != detail.mission.coordinator_session_id)
+        {
+            return Err(Error::Stale);
+        }
+        details.push(detail);
     }
     t.gate(false).await?;
     shared.current(epoch)?;
@@ -828,6 +846,9 @@ async fn refresh(
         // advances a preparing bootstrap to the coordinator's complete round.
         let _ = read_planning(t, shared, epoch, &mission).await;
     }
+    if shared.planning_inventory_wanted.load(Ordering::SeqCst) {
+        let _ = inventory::read(t, shared, epoch).await;
+    }
     if shared.attention_wanted.load(Ordering::SeqCst) {
         // Same rule for attention: a failed read leaves the last one stale,
         // never a successful empty list.
@@ -843,6 +864,14 @@ async fn handle(
     epoch: u64,
     work: Work,
 ) -> Result<IntentOutcome, Error> {
+    // A queued passive detail read carries no displayed action authority.
+    // Start from the latest epoch; every GET and the final publication still requalify it.
+    let epoch = if matches!(&work, Work::Detail(_) | Work::PlanningInventory) {
+        shared.open()?;
+        shared.epoch.load(Ordering::SeqCst)
+    } else {
+        epoch
+    };
     // Historical exact receipt lookup is independent of WS invalidations.
     // Immutable source, local identity and project are still requalified below.
     // A draft queued before close is local only and is written during the
@@ -873,6 +902,12 @@ async fn handle(
         }
         Work::Changes(work) => return changes::handle(t, journal, shared, epoch, work).await,
         Work::PreparePlanning => return enrollment::prepare(t, journal, shared, epoch).await,
+        Work::PlanningInventory => {
+            shared
+                .planning_inventory_wanted
+                .store(true, Ordering::SeqCst);
+            inventory::read(t, shared, epoch).await?;
+        }
         Work::EnrollPlanning(intent) => {
             return enrollment::send(t, journal, shared, epoch, intent).await;
         }
@@ -957,7 +992,18 @@ async fn handle(
         }
         Work::Refresh => refresh(t, journal, shared, epoch, None).await?,
         Work::Detail(id) => {
-            refresh(t, journal, shared, epoch, Some(&id)).await?;
+            let result = refresh(t, journal, shared, epoch, Some(&id)).await;
+            let current = shared.epoch.load(Ordering::SeqCst);
+            if matches!(result, Err(Error::Stale))
+                && current != epoch
+                && shared.connected.load(Ordering::SeqCst)
+            {
+                // One fresh passive read after a concurrent invalidation, never a write retry.
+                // Further changes still fail closed. Project/owner checks are not skipped.
+                refresh(t, journal, shared, current, Some(&id)).await?;
+            } else {
+                result?;
+            }
             *shared.detail.lock().expect("native detail poisoned") = Some(id);
         }
         Work::Control {

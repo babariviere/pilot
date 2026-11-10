@@ -428,6 +428,7 @@ impl Plan {
                 stage,
                 PlanStage::Questions | PlanStage::Review | PlanStage::Unknown
             ),
+            identity: None,
         }
     }
 

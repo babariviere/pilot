@@ -1,6 +1,6 @@
 /** Authenticated native human ingress. No enrollment, model execution or worker admission. */
-import type { DurableOperation, OperationReceipt } from "@pilot/protocol";
-import { Conflict } from "./errors.ts";
+import type { DurableOperation, OperationReceipt, PlanningInventory, PlanningInventoryItem } from "@pilot/protocol";
+import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { interviewDigest } from "./mission-interview-contract.ts";
 import { isInterviewOperation, MissionInterviews } from "./mission-interviews.ts";
 import { isPlanOperation, MissionPlans } from "./mission-plans.ts";
@@ -105,6 +105,57 @@ export class NativeMissionPlanning {
 			},
 		});
 	}
+	/** Complete, limited read. Any unqualified owner refuses the read, never silently hides a mission. */
+	async inventory(projectId: string, limit = 100): Promise<PlanningInventory> {
+		const { store, projects } = this.deps;
+		const snapshot = () => {
+			const project = projects.require(projectId);
+			const ids = store.planningCandidates(projectId, limit);
+			if (ids.length > limit) throw new ServiceUnavailable("Planning inventory exceeds limit");
+			const plans = new MissionPlans({
+				...this.deps,
+				authorize: (_purpose, missionId) => {
+					this.scope(missionId, projectId);
+				},
+			});
+			return {
+				project,
+				rows: ids.map((missionId) => {
+					const { interview, plan, ownerFence } = plans.summary(missionId);
+					const submitted =
+						interview.submission?.fence.questionSetRevision === interview.fence.questionSetRevision;
+					const review = plan?.review?.questionSetRevision === interview.fence.questionSetRevision;
+					const stage: PlanningInventoryItem["stage"] =
+						interview.questions.length && !submitted
+							? review
+								? "review"
+								: "questions"
+							: plan?.publication
+								? "published"
+								: !interview.questions.length || this.deps.workers?.status(missionId).continuation === 1
+									? "planning"
+									: "submitted";
+					const item: PlanningInventoryItem = {
+						missionId,
+						title: store.require(missionId).title,
+						stage,
+						needsYou: stage === "questions" || stage === "review",
+						round: interview.fence,
+						interviewRevision: interview.revision,
+						planRevision: plan?.revision ?? null,
+					};
+					return { item, ownerFence };
+				}),
+			};
+		};
+		const pin = snapshot();
+		const identity = canonicalJSON(pin);
+		await store.durable();
+		if (canonicalJSON(snapshot()) !== identity) throw new Conflict("Planning inventory changed");
+		const items = pin.rows.map(({ item }) => item);
+		return { version: 1, projectId, status: "available", limit, total: items.length, items };
+	}
+
 	async read(projectId: string, missionId: string) {
 		const mission = this.deps.store.require(missionId);
 		this.deps.projects.require(projectId);

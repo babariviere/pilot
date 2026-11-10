@@ -98,6 +98,7 @@ intent types, not daemon request envelopes:
 | `day.mission.check` | `MissionRef` | null; exact saved lookup only |
 | `day.plan.read` | `MissionRef` | `PlanPage` |
 | `day.plan.snapshot` | `MissionRef` | cached `PlanPage`, with freshness |
+| `day.plan.inventory` | `{}` | complete passive `Planning` inventory; failures reject, never imply empty |
 | `day.plan.prepare` | `{}` | `Setup` or null; lookup only |
 | `day.plan.create` | `NewIntent` | `{missionId,page}` or null |
 | `day.plan.save` | `{missionId,intent:AnswerIntent}` | `PlanPage` |

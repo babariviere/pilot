@@ -167,6 +167,28 @@ These are transport checks, not card/native hardware, keyboard/IME or production
 
 ## Saved interviews and planning
 
+`read_planning_inventory()` uses authenticated `GET /api/projects/:project/planning-inventory`
+on the existing worker. It reads active planning-version-1 missions from the existing SQLite
+mission/interview/plan records, including missions not opened by this app. Each row has its mission
+ID, title, stage, needs-you state, full current interview fence, interview revision and nullable plan
+revision. No answers, histories, credentials, receipts or action authority enter the inventory.
+The fixed 100-mission limit reads one extra sentinel; overflow is 503, never a successful first page.
+A valid empty project returns `status: available`, `total: 0`. Missing service/authentication,
+unqualified or revoked owners, changed project/context and storage errors refuse the entire read.
+The daemon pins and rechecks every owner/project/round across durability, including the empty-list
+barrier. It writes no records, starts no worker and requests no continuation.
+
+`planning_inventory_snapshot()` maps only a current, complete read to `Planning`/`PlanRow`.
+`PlanFeed::from_host` uses it instead of listing only its selected mission. Inventory errors are
+isolated from Today controls; unavailable is not a live empty list. Once requested, WS changes
+invalidate the list and trigger a fresh authenticated GET on the same worker. Events never supply
+rows or settle effects. The released JSON boundary exposes the same passive read as
+`day.plan.inventory` with no arguments. TSX Today wiring is separate.
+
+Passive mission-detail reads also requalify once after a concurrent WS invalidation, fetching all
+gates, overview and detail again. Further races still refuse; project and overview/detail owner
+mismatches stay fail closed. Controls, saves and continuation never use this passive retry.
+
 The same `NativeHost` worker and private command ledger now carry saved interview actions.
 `read_planning(mission)` uses authenticated `GET /api/projects/:project/missions/:mission/planning`.
 It returns the existing `MissionPlans.view`, including the complete proposal spec, testing decisions,
