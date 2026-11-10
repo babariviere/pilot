@@ -33,11 +33,57 @@ the shipping desktop apps until Day passes native acceptance and cutover.
 
 ## Run and test
 
-`./nsh.sh` clones the pinned revision into `.tools/nsh` (ignored), refuses a
-modified checkout, builds the CLI and runs it. `NSH_DAY_SOURCE` may name an
-existing unmodified checkout. `nsh.sh` changes to its own directory first, so
-it works from any directory. From the repository root, `pnpm day <command>` is
-the same as `apps/day/nsh.sh <command>`.
+Verification status: script dispatch tests and the real mbx/Cargo namespace
+preflight pass. End-to-end NSH compilation through mbx, effective nested compiler
+profiles/targets and native launch have **not yet been verified** on this path.
+
+From the repository root (Rust 1.99.1 and macOS Command Line Tools installed):
+
+```sh
+bash apps/day/scripts/bootstrap.sh # once: checksum-pinned mbx 1.26.0 only
+pnpm day run                      # opens the mock Day app locally
+```
+
+mbx is a **local compiler cache and build scheduler**, not a remote Mac build
+service. Cargo still compiles cache misses on this Mac. No server address,
+credentials, `mbx setup`, shell activation or service changes are needed.
+If mbx 1.26.0 already exists in Day's `.tools/bin`, the desktop project's
+`.tools/bin` or `PATH`, bootstrap is unnecessary. `NSH_DAY_MBX` can name its
+executable explicitly. Missing or different-version mbx fails, never falls
+back to direct Cargo. Bootstrap does not install Rust or change its defaults.
+
+`nsh.sh` clones the pinned revision into `.tools/nsh` (ignored), refuses tracked
+changes, then builds the CLI **through mbx** with upstream's lock unchanged.
+`NSH_DAY_SOURCE` may name an existing unmodified checkout at the exact pin
+(relative to the calling directory or absolute). An explicit source is borrowed:
+the wrapper never clones, switches or writes build output into it. CLI output
+goes to this Day checkout's `.tools/target/nsh-<revision>`, not the borrowed
+source's `target`. The CLI runs in `apps/day`; entry paths are relative to it.
+From any directory, `apps/day/nsh.sh <command>` works by its absolute path.
+From the repository root, `pnpm day <command>` is the same entry point.
+
+All four commands keep NSH's supported `CARGO` hook pointed at
+`scripts/cargo`. This adapter uses mbx's own Cargo-shim dispatch, covering
+native check/test, metadata, generated declarations/describe runners,
+headless test runners and the macOS host, including development rebuilds.
+It does not wrap UI execution in a compiler reservation. The CLI, describe and
+test executables, TypeScript checking and native UI all run locally. This is
+not CLI-only caching and does not patch NSH or Cargo's source cache.
+
+Day uses the existing `gpui-fixture-mbx-v1` cache and CPU2/4GiB scheduler pool.
+An explicit `MBX_CACHE_DIR` remains explicit. mbx 1.26.0 is required to avoid
+cross-version cache migrations. Target adoption/views and automatic collection
+are off, so Day does not move targets or delete other worktrees' caches. Remote
+cache access and Blaze are off. Scheduler admission is an estimate, not an OS
+CPU/RSS limit. Private targets still need free disk; caching is not a speedup
+promise. Do not share a writable target with another running build.
+
+Rust defaults to Day's 1.99.1 pin for both CLI and app; explicit
+`RUSTUP_TOOLCHAIN` and real `CARGO` selections are kept. App `CARGO_TARGET_DIR`,
+profile variables and command arguments are kept. The CLI always uses its
+separate dev target. To reduce initial disk use, set
+`CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0` for the command. No global Cargo
+config is changed. Non-macOS builds and cross targets are not qualified here.
 
 ```sh
 cd apps/day
@@ -53,8 +99,30 @@ cd apps/day
 ./nsh.sh test Changes.test.tsx   # Changes: list, exact reopen, Later, lost answer, unavailable, boundary (10 tests)
 ./nsh.sh test Attention.test.tsx # agent questions, unavailable help, drafts and links that report nothing (4 tests)
 ./nsh.sh test Native.test.tsx --target macos  # native captures and input, in output/
-(cd native && cargo test)        # Rust rules and generated declarations
+(cd native && ../scripts/cargo test --locked) # Rust rules through mbx too
 ```
+
+Script-only checks need neither Cargo nor NSH and never open a window:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s apps/day/scripts -p test_nsh.py
+shellcheck -x apps/day/nsh.sh apps/day/scripts/{cargo,build-env.sh,bootstrap.sh}
+```
+
+The fake-executable tests cover dispatch, quoted arguments, source/target
+isolation, missing/wrong mbx, failures, local execution and runtime signals.
+They do not by themselves prove upstream subprocess coverage or native acceptance.
+
+Before qualifying a build path, inspect **actual owned compiler subprocesses**,
+not just the launching shell's environment or Cargo metadata. Record the parent
+Cargo command/manifest and toolchain, rustc's `--out-dir`, `-C debuginfo` and
+`-C incremental` for both the native crate and generated `.nsh/rust` runners.
+Include the CLI's separate target. NSH may select a different target from the
+one expected; a parent environment value is not proof that a child used it.
+For a debug-zero, incremental-off verification, unexpected debug/incremental
+flags or an output directory outside the approved private targets stop the
+owned build. Stop and join its children before another build or publication.
+Do not patch NSH or a dependency cache to fix a profile mismatch.
 
 ## Fixtures
 

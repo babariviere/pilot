@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# NSH's supported CARGO hook, for check/test and every generated host build.
+set -euo pipefail
+# shellcheck source=apps/day/scripts/build-env.sh
+source "$(dirname "$0")/build-env.sh"
+export CARGO="$NSH_DAY_REAL_CARGO"
+# Use Cargo's namespace (including metadata and --version), not mbx commands.
+# These are the dispatch variables used by mbx 1.26's own setup launcher.
+export MBX_CARGO_SHIM_MODE=1 MBX_CARGO_SHIM_PATH="$day/scripts/cargo"
+exec "$NSH_DAY_MBX" "$@"
