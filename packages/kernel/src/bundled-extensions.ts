@@ -35,9 +35,11 @@ export function bundledResourceLoader(
 		requiredPaths: [
 			...(profile
 				? PROFILE_PATHS.map((path) =>
-						coordinator && path.endsWith("/sandbox/index.ts")
-							? fileURLToPath(new URL("./coordinator-sandbox.ts", import.meta.url))
-							: path,
+						path.endsWith("/jobs/index.ts")
+							? fileURLToPath(new URL("./job-group-extension.ts", import.meta.url))
+							: coordinator && path.endsWith("/sandbox/index.ts")
+								? fileURLToPath(new URL("./coordinator-sandbox.ts", import.meta.url))
+								: path,
 					)
 				: []),
 			ANTHROPIC_AUTH_PATH,

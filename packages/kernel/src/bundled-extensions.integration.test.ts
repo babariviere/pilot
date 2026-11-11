@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
@@ -26,6 +26,7 @@ import type { JsonObject } from "@earendil-works/pi-durable";
 import type { UsageObservation } from "@pilot/protocol";
 import { ANTHROPIC_AUTH_PATH, CHILD_PROFILE_PATH, installBundledAnthropicAuth } from "./bundled-extensions.ts";
 import { credentialEnvironment } from "./credential-client.ts";
+import { groupAbsent } from "./job-groups.ts";
 import { NativeAdapter } from "./native-adapter.ts";
 import { startTodoBridge } from "./todo-bridge.ts";
 import { createTodoTool } from "./todo-tool.ts";
@@ -451,19 +452,20 @@ test("lifecycle job cleanup stops its leader but refuses unproven descendant exi
 	assert.equal(f.faux.state.callCount, 0);
 });
 
-for (const mode of ["checkpoint", "tool-stop", "native-stop", "natural-exit"] as const)
-	test(`lifecycle refuses historical resistant descendant after ${mode}`, {
-		timeout: 20_000,
-	}, async (t) => {
-		const f = await fixture(t);
-		let adapter = await f.open();
-		const child = join(f.root, "resistant.cjs");
-		const ready = join(f.root, "resistant.pid");
-		const heartbeat = join(f.root, "resistant.heartbeat");
-		const stop = join(f.root, "resistant.stop");
-		await writeFile(
-			child,
-			`const fs=require('node:fs');
+for (const nested of [false, true])
+	for (const mode of ["checkpoint", "tool-stop", "native-stop", "natural-exit"] as const)
+		test(`lifecycle drains same-group descendant but refuses subtree proof after ${mode} (${nested ? "nested" : "direct"})`, {
+			timeout: 20_000,
+		}, async (t) => {
+			const f = await fixture(t);
+			let adapter = await f.open();
+			const child = join(f.root, "resistant.cjs");
+			const ready = join(f.root, "resistant.pid");
+			const heartbeat = join(f.root, "resistant.heartbeat");
+			const stop = join(f.root, "resistant.stop");
+			await writeFile(
+				child,
+				`const fs=require('node:fs');
 process.on('SIGTERM',()=>{});
 fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));
 let tick=0;
@@ -472,90 +474,77 @@ const timer=setInterval(()=>{
  fs.appendFileSync(${JSON.stringify(heartbeat)},String(++tick)+'\\n');
 },20);
 `,
-		);
-		const waitFor = async (condition: () => Promise<boolean>) => {
-			const deadline = Date.now() + 5_000;
-			while (!(await condition())) {
-				assert.ok(Date.now() < deadline, "controlled descendant fixture deadline");
-				await new Promise((resolve) => setTimeout(resolve, 10));
-			}
-		};
-		const read = (path: string) =>
-			readFile(path, "utf8").catch((error) => {
-				if (error.code === "ENOENT") return "";
-				throw error;
-			});
-		let pid: number | undefined;
-		try {
-			const definition = adapter.session.getToolDefinition("jobs")!;
-			const sourceInfo = adapter.session.getAllTools().find((tool) => tool.name === "jobs")!.sourceInfo;
-			const tool = wrapRegisteredTool({ definition, sourceInfo }, adapter.session.extensionRunner);
-			const args = {
-				action: "start",
-				name: "resistant",
-				command: `${JSON.stringify(process.execPath)} ${JSON.stringify(child)} & ${mode === "natural-exit" ? `until test -f ${JSON.stringify(ready)}; do sleep 0.01; done` : "wait"}`,
+			);
+			const waitFor = async (condition: () => Promise<boolean>) => {
+				const deadline = Date.now() + 5_000;
+				while (!(await condition())) {
+					assert.ok(Date.now() < deadline, "controlled descendant fixture deadline");
+					await new Promise((resolve) => setTimeout(resolve, 10));
+				}
 			};
-			adapter.session.agent.state.messages.push(
-				fauxAssistantMessage(
-					{ type: "toolCall", id: "resistant-job", name: "jobs", arguments: args },
-					{ stopReason: "toolUse" },
-				),
-			);
-			const started = await tool.execute("resistant-job", args);
-			assert.ok(!started.isError);
-			const jobId = (started.structuredContent as { id: string }).id;
-			await waitFor(async () => {
-				const value = Number(await read(ready));
-				if (!Number.isSafeInteger(value) || value <= 0) return false;
-				pid = value;
-				return true;
-			});
-			if (mode !== "checkpoint") {
-				if (mode === "tool-stop") await tool.execute("pre-cancel", { action: "stop", id: jobId });
-				if (mode === "native-stop") await adapter.stopJob(jobId);
-				const terminal = await tool.execute("pre-finished", { action: "wait", id: jobId, waitMs: 5_000 });
-				assert.ok(!terminal.isError);
-				assert.deepEqual(await adapter.jobs(), [], "first lifecycle read is already empty");
-			}
-			let failure: unknown;
+			const read = (path: string) =>
+				readFile(path, "utf8").catch((error) => {
+					if (error.code === "ENOENT") return "";
+					throw error;
+				});
+			let pid: number | undefined;
 			try {
-				await adapter.checkpointJobs();
-			} catch (error) {
-				failure = error;
-			}
-			assert.deepEqual(await adapter.jobs(), [], "direct-job stop/wait already settled");
-			assert.equal(await adapter.hasChildren(), false, "reparented child escapes the old direct-child census");
-			const before = await read(heartbeat);
-			await waitFor(async () => (await read(heartbeat)).length > before.length);
-			assert.match(String(failure), /descendant exit is unconfirmed/, "continued owned effects forbid quiescence");
-			await assert.rejects(
-				adapter.checkpointJobs(),
-				/descendant exit is unconfirmed/,
-				"empty registry cannot clear uncertainty",
-			);
-			await adapter.close();
-			adapter = await f.open();
-			// Simulate pruned/unavailable terminal rows. Historical safety must come
-			// from pre-admission storage, not the recovered provider's current list.
-			const recoveredDefinition = adapter.session.getToolDefinition("jobs")!;
-			const recoveredExecute = recoveredDefinition.execute;
-			t.mock.method(recoveredDefinition, "execute", async (...args: Parameters<typeof recoveredExecute>) =>
-				(args[1] as { action?: string }).action === "list"
-					? { content: [], details: undefined, structuredContent: [] }
-					: recoveredExecute.apply(recoveredDefinition, args),
-			);
-			assert.deepEqual(await adapter.jobs(), []);
-			await assert.rejects(
-				adapter.checkpointJobs(),
-				/descendant exit is unconfirmed/,
-				"reopen cannot clear historical uncertainty",
-			);
-			assert.equal(f.faux.state.callCount, 0);
-		} finally {
-			// The fixture's private stop file shuts down only its exact child. Never
-			// signal a retained PID after reparenting or rely on the broken group timer.
-			await writeFile(stop, "stop");
-			if (pid)
+				const definition = adapter.session.getToolDefinition("jobs")!;
+				const sourceInfo = adapter.session.getAllTools().find((tool) => tool.name === "jobs")!.sourceInfo;
+				const tool = wrapRegisteredTool({ definition, sourceInfo }, adapter.session.extensionRunner);
+				const args = {
+					action: "start",
+					name: "resistant",
+					command: `${JSON.stringify(process.execPath)} ${JSON.stringify(child)} & ${mode === "natural-exit" ? `until test -f ${JSON.stringify(ready)}; do sleep 0.01; done` : "wait"}`,
+				};
+				adapter.session.agent.state.messages.push(
+					fauxAssistantMessage(
+						{ type: "toolCall", id: "resistant-job", name: "jobs", arguments: args },
+						{ stopReason: "toolUse" },
+					),
+				);
+				let started: Awaited<ReturnType<typeof tool.execute>>;
+				if (nested) {
+					const definition = adapter.session.getToolDefinition("codemode")!;
+					const sourceInfo = adapter.session.getAllTools().find((tool) => tool.name === "codemode")!.sourceInfo;
+					const input = { code: `text(await tools.jobs(${JSON.stringify(args)}));` };
+					adapter.session.agent.state.messages.push(
+						fauxAssistantMessage(
+							{ type: "toolCall", id: "nested-resistant", name: "codemode", arguments: input },
+							{ stopReason: "toolUse" },
+						),
+					);
+					const result = await wrapRegisteredTool(
+						{ definition, sourceInfo },
+						adapter.session.extensionRunner,
+					).execute("nested-resistant", input);
+					assert.ok(!result.isError, JSON.stringify(result));
+					const listed = await tool.execute("nested-list", { action: "list" });
+					started = { ...listed, structuredContent: (listed.structuredContent as { id: string }[])[0] };
+				} else started = await tool.execute("resistant-job", args);
+				assert.ok(!started.isError);
+				const jobId = (started.structuredContent as { id: string }).id;
+				await waitFor(async () => {
+					const value = Number(await read(ready));
+					if (!Number.isSafeInteger(value) || value <= 0) return false;
+					pid = value;
+					return true;
+				});
+				if (mode !== "checkpoint") {
+					if (mode === "tool-stop") await tool.execute("pre-cancel", { action: "stop", id: jobId });
+					if (mode === "native-stop") await adapter.stopJob(jobId);
+					const terminal = await tool.execute("pre-finished", { action: "wait", id: jobId, waitMs: 5_000 });
+					assert.ok(!terminal.isError);
+					assert.deepEqual(await adapter.jobs(), [], "first lifecycle read is already empty");
+				}
+				let failure: unknown;
+				try {
+					await adapter.checkpointJobs();
+				} catch (error) {
+					failure = error;
+				}
+				assert.deepEqual(await adapter.jobs(), [], "direct-job stop/wait already settled");
+				assert.equal(await adapter.hasChildren(), false, "direct census is still not a subtree proof");
 				await waitFor(async () => {
 					try {
 						process.kill(pid!, 0);
@@ -565,8 +554,151 @@ const timer=setInterval(()=>{
 						throw error;
 					}
 				});
+				const groups = join(f.root, "parent.jsonl.job-groups");
+				const names = await readdir(groups);
+				assert.equal(names.length, 1);
+				const evidence = JSON.parse(await readFile(join(groups, names[0]!), "utf8"));
+				assert.equal(evidence.scope, "process-group");
+				assert.equal(evidence.state, "group-empty");
+				assert.equal(evidence.jobId, jobId);
+				assert.equal(groupAbsent(evidence.pgid), true);
+				assert.match(
+					String(failure),
+					/descendant exit is unconfirmed/,
+					"group exit cannot certify unrestricted subtree exit",
+				);
+				await assert.rejects(
+					adapter.checkpointJobs(),
+					/descendant exit is unconfirmed/,
+					"empty registry cannot clear uncertainty",
+				);
+				await adapter.close();
+				adapter = await f.open();
+				// Simulate pruned/unavailable terminal rows. Historical safety must come
+				// from pre-admission storage, not the recovered provider's current list.
+				const recoveredDefinition = adapter.session.getToolDefinition("jobs")!;
+				const recoveredExecute = recoveredDefinition.execute;
+				t.mock.method(recoveredDefinition, "execute", async (...args: Parameters<typeof recoveredExecute>) =>
+					(args[1] as { action?: string }).action === "list"
+						? { content: [], details: undefined, structuredContent: [] }
+						: recoveredExecute.apply(recoveredDefinition, args),
+				);
+				assert.deepEqual(await adapter.jobs(), []);
+				await assert.rejects(
+					adapter.checkpointJobs(),
+					/descendant exit is unconfirmed/,
+					"reopen cannot clear historical uncertainty",
+				);
+				assert.equal(f.faux.state.callCount, 0);
+			} finally {
+				// The fixture's private stop file shuts down only its exact child. Never
+				// signal a retained PID after reparenting or rely on the broken group timer.
+				await writeFile(stop, "stop");
+				if (pid)
+					await waitFor(async () => {
+						try {
+							process.kill(pid!, 0);
+							return false;
+						} catch (error) {
+							if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+							throw error;
+						}
+					});
+			}
+		});
+
+test("an actual setsid escape survives group drain and keeps update checkpoint refused", {
+	timeout: 30_000,
+}, async (t) => {
+	const f = await fixture(t);
+	const adapter = await f.open();
+	const ready = join(f.root, "escaped.ready");
+	const heartbeat = join(f.root, "escaped.heartbeat");
+	const stop = join(f.root, "escaped.stop");
+	const stopped = join(f.root, "escaped.stopped");
+	const script = join(f.root, "escape.cjs");
+	const child = `const fs=require('node:fs');
+const deadline=setTimeout(()=>process.exit(2),15000);
+process.on('SIGTERM',()=>{});
+fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));
+const timer=setInterval(()=>{
+ if(fs.existsSync(${JSON.stringify(stop)})){
+  fs.writeFileSync(${JSON.stringify(stopped)},'stopped'); clearInterval(timer); clearTimeout(deadline); return;
+ }
+ fs.appendFileSync(${JSON.stringify(heartbeat)},'x');
+},10);`;
+	await writeFile(
+		script,
+		`require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(child)}],{detached:true,stdio:'ignore'}).unref();`,
+	);
+	const waitFor = async (condition: () => Promise<boolean>) => {
+		const deadline = Date.now() + 10_000;
+		while (!(await condition())) {
+			assert.ok(Date.now() < deadline, "escaped fixture deadline");
+			await new Promise((resolve) => setTimeout(resolve, 10));
 		}
-	});
+	};
+	const read = (path: string) =>
+		readFile(path, "utf8").catch((error) => {
+			if (error.code === "ENOENT") return "";
+			throw error;
+		});
+	let escaped: number | undefined;
+	try {
+		const definition = adapter.session.getToolDefinition("jobs")!;
+		const sourceInfo = adapter.session.getAllTools().find((tool) => tool.name === "jobs")!.sourceInfo;
+		const tool = wrapRegisteredTool({ definition, sourceInfo }, adapter.session.extensionRunner);
+		const args = {
+			action: "start",
+			name: "escape-fixture",
+			command: `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`,
+		};
+		adapter.session.agent.state.messages.push(
+			fauxAssistantMessage(
+				{ type: "toolCall", id: "escape-fixture", name: "jobs", arguments: args },
+				{ stopReason: "toolUse" },
+			),
+		);
+		const result = await tool.execute("escape-fixture", args);
+		assert.ok(!result.isError, JSON.stringify(result));
+		await waitFor(async () => {
+			const pid = Number(await read(ready));
+			if (!Number.isSafeInteger(pid) || pid <= 1) return false;
+			escaped = pid;
+			return true;
+		});
+		await tool.execute("escape-wait", {
+			action: "wait",
+			id: (result.structuredContent as { id: string }).id,
+			waitMs: 5000,
+		});
+		await assert.rejects(adapter.checkpointJobs(), /descendant exit is unconfirmed/);
+		const directory = join(f.root, "parent.jsonl.job-groups");
+		const names = await readdir(directory);
+		assert.equal(names.length, 1);
+		const evidence = JSON.parse(await readFile(join(directory, names[0]!), "utf8"));
+		assert.equal(evidence.scope, "process-group");
+		assert.equal(evidence.state, "group-empty");
+		assert.equal(groupAbsent(evidence.pgid), true);
+		assert.notEqual(escaped, evidence.pgid, "detached:true creates a separate session/group (setsid)");
+		assert.equal(groupAbsent(escaped!), false, "escaped subtree is outside group-only proof");
+		const before = await read(heartbeat);
+		await waitFor(async () => (await read(heartbeat)).length > before.length);
+		assert.equal(JSON.parse(await readFile(join(f.root, "parent.jsonl.job-history"), "utf8")).state, "unknown");
+		await adapter.close();
+		const reopened = await f.open();
+		await assert.rejects(reopened.checkpointJobs(), /descendant exit is unconfirmed/);
+	} finally {
+		// Private cooperative stop reaches ONLY this known escaped fixture. Never
+		// signal a saved PID/PGID after reparenting, even to repair a failing test.
+		await writeFile(stop, "stop");
+		await adapter.close();
+		if (escaped) {
+			await waitFor(async () => groupAbsent(escaped!));
+			assert.equal(await read(stopped), "stopped");
+		}
+	}
+});
 
 test("real Build subagent inherits PR delivery, required auth and safeguards without recursive orchestration", {
 	timeout: 30_000,

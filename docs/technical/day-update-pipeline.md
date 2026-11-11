@@ -57,6 +57,49 @@ Daemon replacement after any unproven job admission remains **unqualified on thi
 passed D41 case. A future qualified descendant owner/exit contract is needed to remove this safety
 refusal. Proven clean new/no-job histories and independent app-only updates remain unaffected.
 
+### Group-only cleanup hardening
+
+Pilot now wraps the unchanged pinned jobs provider with a project-owned JS group adapter
+(`job-group-extension.ts`, `job-groups.ts`, `job-group-worker.mjs`). This is **not** a
+subtree-containment mechanism and does not remove the update refusal above. The provider still
+owns handles, logs, completion claims and notifications. Its sandbox wraps the original command
+before Pilot adds supervision. No updater, service manager, dependency pin or native helper changes.
+
+Before direct or nested provider entry, the existing history latch becomes durable Unknown. A
+separate private record saves admission, kernel incarnation and tool-call identity. The adapter
+binds the returned job ID and the new anchor's process group durably **before releasing the command**.
+Records use `scope: "process-group"`, never a subtree-safe flag. They contain no command, credentials
+or control token. The provider's bounded recent-job list can finish or lose a row without erasing
+group ownership or the independent historical Unknown latch.
+
+The provider controls a client; a separate JS anchor keeps its own detached group alive. The anchor
+handles Stop and natural shell completion, sends TERM to its own group, then keeps the full three-second
+KILL escalation even after the provider leader or its pipes close. Only that still-live anchor
+self-signals the group. The kernel never kills a saved numeric PID/PGID. After the control connection
+closes, the kernel uses only a null group signal and saves `group-empty` only after actual ESRCH.
+EPERM, timeout, missing ownership and incomplete results are not exit proof. Admission fences join
+entered starts before drain. Ordinary close still joins group cleanup; lifecycle checkpoint still
+fails because group cleanup is not subtree proof.
+
+On kernel interruption, loss of the private connection makes the live anchor self-clean its group.
+That best-effort action produces no recovered exit receipt. Reopen reads records but never reconnects
+or signals their old group IDs, and never reruns commands. Unfinished, malformed, missing or legacy
+ownership remains Unknown. Proven group-only records also leave the historical latch Unknown.
+
+The remaining prerequisite is independently enforced **complete descendant containment**, with a
+matching authoritative exit contract. The audited provider/sandbox bridge supplies no such contract.
+In particular, unrestricted macOS commands can use `setsid`/`setpgid` to escape an original group;
+absence of an observed escape cannot prove that no escape occurred. Darwin's public kqueue fork
+tracking flags have been unsupported since 10.5. Linux group supervision likewise is not cgroup or
+subreaper containment. Other platforms are not qualified by this POSIX adapter.
+
+Real harmless process regressions cover resistant reparented same-group children, direct and nested
+starts, native/tool Stop, natural completion, admission races, lost results and kernel interruption.
+An actual Node `detached: true` (`setsid`) child continues writing after the original group is proven
+empty; checkpoint and reopen **still refuse**. Its private cooperative stop and exact group-exit
+join clean up the fixture. These checks prove same-group termination and continued fail-closed
+behavior, not D10/D41 jobful-update acceptance or a successful replacement.
+
 ## Trusted packaging blockers
 
 The initial audit read unmodified NSH `530b73170f61e5bf16380959de9e622f8ce130cd`, which is **not**

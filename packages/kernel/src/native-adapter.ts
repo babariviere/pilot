@@ -83,6 +83,7 @@ import { createExplorationTools } from "./exploration-tools.ts";
 import { diagnosticFetch, formatFailure, safeFailureText, toolFailureStep } from "./failure.ts";
 import { INSIGHTS_BACKLOG_TOOL } from "./insights-backlog-tool.ts";
 import { INSIGHTS_HISTORY_TOOL } from "./insights-history-tool.ts";
+import { OwnedJobGroups } from "./job-groups.ts";
 import { JobHistory } from "./job-history.ts";
 import { drainLifecycleJobs, runningJobs } from "./jobs.ts";
 import { MEMORY_TOOL_NAMES } from "./memory-tools.ts";
@@ -298,6 +299,7 @@ export class NativeAdapter {
 	#conversationId?: ConversationId;
 	#closed = false;
 	#jobHistory!: JobHistory;
+	#jobGroups?: OwnedJobGroups;
 	#reloadFailure?: Error;
 	#extensionErrors: string[] = [];
 	#afterReload?: () => void;
@@ -452,6 +454,12 @@ export class NativeAdapter {
 			!readOnly && options.sessionFile ? `${options.sessionFile}.job-history` : undefined,
 			options.jobHistoryFresh,
 		);
+		const jobGroups = !readOnly
+			? await OwnedJobGroups.open(
+					options.sessionId ?? options.sessionFile ?? "memory",
+					options.sessionFile ? `${options.sessionFile}.job-groups` : undefined,
+				)
+			: undefined;
 		if (options.coordinatorSources && (readOnly || options.bundledExtensions === false))
 			throw new Error("Coordinator source admission requires its bundled native profile");
 		const missionInterview = options.missionInterview || options.missionPlanning;
@@ -604,6 +612,7 @@ export class NativeAdapter {
 								}
 							: {}),
 						extensionFactories: [
+							...(jobGroups ? [jobGroups.native] : []),
 							...(posthorse ? [posthorse.factory] : []),
 							{
 								name: "codemode",
@@ -692,6 +701,7 @@ export class NativeAdapter {
 		);
 		adapter.#posthorse = posthorse;
 		adapter.#jobHistory = jobHistory;
+		adapter.#jobGroups = jobGroups;
 		adapter.#onToolsRunningChanged = options.onToolsRunningChanged;
 		adapter.#afterReload = () => options.subagents?.refresh();
 		// The SDK loop never runs here. Its default getter would report idle throughout
@@ -1065,8 +1075,19 @@ export class NativeAdapter {
 	/** Clean up direct jobs without model work. Cancellation cannot prove descendant exit. */
 	async checkpointJobs(): Promise<void> {
 		this.assertOpen();
+		// This drains pinned same-group descendants, not unrestricted escaped
+		// descendants. Historical JobHistory still refuses replacement below.
+		let groupFailure: unknown;
+		try {
+			await this.#jobGroups?.drain();
+		} catch (error) {
+			groupFailure = error;
+		}
 		const jobs = await this.jobs();
-		if (!jobs.length) return this.#jobHistory.assertClear();
+		if (!jobs.length) {
+			if (groupFailure) throw new Error("Lifecycle job descendant exit is unconfirmed", { cause: groupFailure });
+			return this.#jobHistory.assertClear();
+		}
 		const tool = this.#jobsTool();
 		if (!tool) throw new Error("Lifecycle jobs runtime is unavailable");
 		// Latch BEFORE cancellation can reparent a descendant out of the later
@@ -1190,9 +1211,14 @@ export class NativeAdapter {
 				try {
 					// Shared definition covers direct Harness, nested codemode and native stop paths.
 					// Record before entering the provider, even if its reply is lost or it finishes immediately.
-					if (definition.name === "jobs" && (args[1] as { action?: unknown }).action === "start")
+					const startingJob = definition.name === "jobs" && (args[1] as { action?: unknown }).action === "start";
+					if (startingJob) {
 						await this.#jobHistory.admit();
-					const result = await execute.apply(definition, args);
+					}
+					const result =
+						startingJob && this.#jobGroups
+							? await this.#jobGroups.execute(args[0], () => execute.apply(definition, args))
+							: await execute.apply(definition, args);
 					if (!result.isError) return result;
 					return {
 						...result,
@@ -1690,6 +1716,13 @@ export class NativeAdapter {
 		this.#closed = true;
 		try {
 			await this.#activity?.stop();
+			// Ordinary close is best effort, never a quiescence ACK. Failed/missing
+			// ownership remains durable Unknown; checkpointJobs propagates failures.
+			try {
+				await this.#jobGroups?.close();
+			} catch {
+				// Still detach the pinned provider and release its direct resources.
+			}
 			await this.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 		} finally {
 			this.session.dispose();
