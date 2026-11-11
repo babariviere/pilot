@@ -242,6 +242,9 @@ pub struct SavedView {
     pub update: bool,
     /// New's unsent goal, exactly as typed.
     pub goal: String,
+    /// Standalone New's project, permission and draft identity. Restoring never creates a chat.
+    #[prop(default)]
+    pub chat: Option<crate::new_chat::ChatChoice>,
     /// The Today item the user brought to the front, or empty.
     pub focused: String,
     /// The planning question the user was on in each interview, as "interview/question".
@@ -300,6 +303,7 @@ impl SavedView {
             .map(String::len)
             .sum::<usize>();
         self.goal.len()
+            + self.chat.as_ref().map_or(0, |c| c.text_bytes())
             + self.id.len()
             + self.focused.len()
             + self.ritual.len()

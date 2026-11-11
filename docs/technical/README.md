@@ -58,6 +58,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Day interview and agreement backend (host-only)](day-mission-agreements.md)
 - [Native mission planning and Fog of war (host-only)](day-mission-planning.md)
 - [Native Today intake, triage and Start receipts](day-intake.md)
+- [Project-pinned standalone New chat](day-new-chat.md)
 - [Proposed native Review and durable diff annotations](mission-native-review.md)
 - [Global optional Review request producer and read API](global-review-requests.md)
 - [Retained changes and landing observations](landed-changes.md)

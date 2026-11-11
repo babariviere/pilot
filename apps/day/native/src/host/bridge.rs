@@ -137,6 +137,12 @@ async fn run(
     shared.open()?;
     if matches!(
         call.command,
+        Command::Projects | Command::ChatSelect(_) | Command::ChatCreate(_) | Command::ChatCheck(_)
+    ) {
+        return super::new_chat::handle(t, journal, shared, epoch, &call.command, &call.gate).await;
+    }
+    if matches!(
+        call.command,
         Command::IntakeRead | Command::IntakeWrite(_) | Command::IntakeCheck(_)
     ) {
         return super::intake::handle(t, journal, shared, epoch, &call.command, &call.gate).await;
@@ -195,6 +201,12 @@ async fn run(
     let mut value = Value::Null;
     let mut enrollment = None;
     let work = match &call.command {
+        Command::Projects
+        | Command::ChatSelect(_)
+        | Command::ChatCreate(_)
+        | Command::ChatCheck(_) => {
+            unreachable!("handled standalone chat command")
+        }
         Command::IntakeRead | Command::IntakeWrite(_) | Command::IntakeCheck(_) => {
             unreachable!("handled intake command")
         }

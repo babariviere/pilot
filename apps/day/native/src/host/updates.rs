@@ -396,7 +396,7 @@ impl Record {
 }
 
 pub(crate) fn validate_view(view: &SavedView) -> Result<(), Error> {
-    if !view.offsets_valid() {
+    if !view.offsets_valid() || view.chat.as_ref().is_some_and(|c| !c.validate()) {
         Err(Error::Invalid)
     } else if view.text_bytes() > VIEW_LIMIT || view.entries() > VIEW_ENTRIES {
         Err(Error::Capacity)

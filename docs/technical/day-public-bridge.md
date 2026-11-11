@@ -55,7 +55,9 @@ for every event.
 first read shows why, never mock data. Each intent is sent once with
 `timeout: 0`: a lost reply is Unknown and only the matching check method
 looks it up. Decision Later reorders this run only. Help, link opening,
-direct chat start, budget and dependent-work continuation say they are unavailable.
+direct chat start, budget and dependent-work continuation say they are unavailable
+in those existing screen adapters. The separate project-pinned standalone host
+seam is documented in [day-new-chat.md](day-new-chat.md); its UI hookup is separate.
 Published planning uses `day.plan.startWork` with the displayed revision/digest/task/context and a
 separate confirmation. `day.plan.checkWork` reads the retained exact operation only. Both use the
 same native worker, ledger, close fence and saved-form barrier as existing planning commands.
@@ -75,8 +77,10 @@ binds a call to this root; it grants no authority. Native methods still build
 their own exact operation, authority and revision fences. The request limit
 is 64 KiB including the envelope. Complete replies are limited to 16 MiB;
 oversized containers are refused, never truncated. No raw native source,
-home, request, receipt payload, transport port, selection path or credential
-is a response. User-facing file/link provenance stays in the existing models.
+home, transport port or credential is a response. Standalone New exposes only
+canonical project IDs/roots, its saved choice and exact creation receipt, not a
+generic daemon request or a replaceable native root. User-facing file/link
+provenance stays in the existing models.
 
 Responses are discriminated envelopes:
 
@@ -95,6 +99,10 @@ intent types, not daemon request envelopes:
 
 | Name | Args | Snapshot |
 | --- | --- | --- |
+| `day.projects.read` | `{}` | complete canonical project inventory and saved standalone operations |
+| `day.chat.select` | `{projectId,contextDigest,mode}` | passive `ChatChoice`; no session starts |
+| `day.chat.create` | `{choice:ChatChoice,message}` | null; exact creation outcome and operation ID |
+| `day.chat.check` | `{operationId}` | null; exact receipt lookup, never creation |
 | `day.today.read` | `{}` | `Today` |
 | `day.mission.read` | `MissionRef` | `MissionPage` or null |
 | `day.mission.pause` | `PauseIntent` | null; inspect outcome, then read |

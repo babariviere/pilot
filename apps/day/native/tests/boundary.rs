@@ -88,6 +88,12 @@ fn the_screen_gets_typed_read_models_and_intents() {
         "export type UpdatePhase = \"running\" | \"done\" | \"stopped\" | \"unknown\" | \"checking\";",
         "export type ServiceState = \"registered\" | \"absent\" | \"offline\" | \"incompatible\" | \"unknown\";",
         "export type LandingState = \"unchecked\" | \"seen\" | \"notSeen\" | \"unclear\";",
+        "export interface ChatChoice {",
+        "  chat?: ChatChoice | null;",
+        "  draftId: string;",
+        "  projectId: string;",
+        "  projectPath: string;",
+        "  contextDigest: string;",
     ] {
         assert!(ts.contains(line), "missing {line:?} in\n{ts}");
     }
@@ -114,7 +120,11 @@ fn the_only_exports_are_the_feeds_and_they_have_no_transport() {
     );
     // Control commands are built in Rust: TSX names only the mission, the
     // revision it showed and, for Resume, the Pause it showed. It never sees
-    // a home, project, coordinator or a new operation it could forge.
+    // a home, coordinator or a new operation it could forge. Standalone New's
+    // saved ChatChoice names a canonical project only, not a daemon destination.
+    let (before, rest) = ts.split_once("export interface ChatChoice {").unwrap();
+    let (_, after) = rest.split_once("\n}").unwrap();
+    let without_choice = format!("{before}{after}");
     for word in [
         "url",
         "fetch",
@@ -124,7 +134,6 @@ fn the_only_exports_are_the_feeds_and_they_have_no_transport() {
         "token",
         "home",
         "lineage",
-        "projectid",
         "coordinatorsessionid",
         "expectedrevision",
     ] {
@@ -135,6 +144,7 @@ fn the_only_exports_are_the_feeds_and_they_have_no_transport() {
             "the boundary names {word:?}:\n{ts}"
         );
     }
+    assert!(!without_choice.to_lowercase().contains(" projectid:"));
     assert_eq!(
         pilot_day_native::registry().undocumented(),
         Vec::<String>::new()

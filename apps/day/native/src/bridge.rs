@@ -18,6 +18,10 @@ pub const MAX_REQUEST: usize = 65_536;
 pub const MAX_RESPONSE: usize = 16 * 1024 * 1024;
 /// The complete native method allowlist. No prefix or generic request method.
 pub const METHODS: &[&str] = &[
+    "day.projects.read",
+    "day.chat.select",
+    "day.chat.create",
+    "day.chat.check",
     "day.intake.read",
     "day.intake.triage",
     "day.intake.start",
@@ -157,6 +161,10 @@ struct Envelope {
 }
 
 pub(crate) enum Command {
+    Projects,
+    ChatSelect(crate::host::new_chat::Select),
+    ChatCreate(crate::host::new_chat::Create),
+    ChatCheck(String),
     IntakeRead,
     IntakeWrite(crate::host::intake::Intent),
     IntakeCheck(String),
@@ -285,6 +293,30 @@ fn exact<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, Error> {
 fn command(name: &str, args: Value) -> Result<Command, Error> {
     use Command as C;
     Ok(match name {
+        "day.projects.read" => {
+            if args != json!({}) {
+                return Err(Error::Invalid);
+            }
+            C::Projects
+        }
+        "day.chat.select" => C::ChatSelect(exact(args)?),
+        "day.chat.create" => {
+            let r: crate::host::new_chat::Create = exact(args)?;
+            if !r.validate() {
+                return Err(Error::Invalid);
+            }
+            C::ChatCreate(r)
+        }
+        "day.chat.check" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Lookup {
+                operation_id: String,
+            }
+            let r: Lookup = exact(args)?;
+            mission(&r.operation_id)?;
+            C::ChatCheck(r.operation_id)
+        }
         "day.intake.read" => {
             if args != json!({}) {
                 return Err(Error::Invalid);
@@ -504,6 +536,7 @@ impl Command {
                 Self::Save { .. }
                     | Self::Draft(_)
                     | Self::Today
+                    | Self::Projects
                     | Self::IntakeRead
                     | Self::Mission(_)
                     | Self::Plan(_)

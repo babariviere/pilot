@@ -45,6 +45,7 @@ impl PlanningRecord {
                         | "plan-start"
                         | "intake-triage"
                         | "intake-start"
+                        | "native-chat-create"
                 )
             )
             || o["payload"]
@@ -61,6 +62,9 @@ impl PlanningRecord {
         }
         if matches!(o["kind"].as_str(), Some("intake-triage" | "intake-start")) {
             super::intake::validate_record(&self.source, o)?;
+        }
+        if o["kind"] == "native-chat-create" {
+            super::new_chat::validate_record(o)?;
         }
         Ok(())
     }
@@ -96,11 +100,12 @@ pub(super) fn record(
                     | "plan-start"
                     | "intake-triage"
                     | "intake-start"
+                    | "native-chat-create"
             )
         )
         || (!matches!(
             request["purpose"].as_str(),
-            Some("plan-start" | "intake-triage" | "intake-start")
+            Some("plan-start" | "intake-triage" | "intake-start" | "native-chat-create")
         ) && request["expected"]["fence"]["missionId"] != mission)
     {
         return Err(Error::Invalid);
@@ -158,6 +163,16 @@ pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
             .map_err(|_| Error::Unknown)?;
         if r["result"]["sessionId"] != p["sessionId"]
             || r["result"]["itemId"] != op["targetId"]
+            || r["result"]["admissionId"] != op["operationId"]
+        {
+            return Err(Error::Unknown);
+        }
+    }
+    if op["kind"] == "native-chat-create" && r["state"] == "accepted" {
+        let p: Value = serde_json::from_str(op["payload"].as_str().ok_or(Error::Unknown)?)
+            .map_err(|_| Error::Unknown)?;
+        if r["result"]["sessionId"] != op["targetId"]
+            || r["result"]["projectId"] != p["projectId"]
             || r["result"]["admissionId"] != op["operationId"]
         {
             return Err(Error::Unknown);

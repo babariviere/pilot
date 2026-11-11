@@ -282,7 +282,10 @@ match the payload hash, destination, operation, enrollment and fresh owner, and 
 `PlanFeed::from_host` begins passive discovery. Its typed `prepareNew()` and `checkNew()` methods
 prepare a later New screen or check uncertain creation without resending. `plan(NewIntent)` now
 binds to native enrollment and selects the acknowledged mission. `canCreate` means mission creation
-only; separate `canStart: false` and `startReason` describe the still-absent standalone-chat adapter.
+only; separate `canStart: false` and `startReason` describe the still-unconnected
+standalone screen adapter. The separate native standalone backend now uses
+`day.projects.read` and `day.chat.*`, not mission enrollment. See
+[Project-pinned standalone New chat](day-new-chat.md).
 The native `start` method refuses independently. No TSX screen or live bootstrap is activated here.
 
 An acknowledged mission may still have `status: preparing`, `view: null` and no context digest.

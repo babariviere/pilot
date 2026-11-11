@@ -17,6 +17,7 @@ fn view() -> SavedView {
         id: "export".into(),
         update: true,
         goal: "Export chats as Markdown, exactly — 書き出し".into(),
+        chat: None,
         focused: "d-1".into(),
         questions: vec!["export-1/what".into()],
         ritual: "standup/start".into(),

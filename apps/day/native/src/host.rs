@@ -5,13 +5,14 @@ pub mod attention;
 mod bridge;
 mod changes;
 mod enrollment;
-mod inventory;
 pub(crate) mod intake;
+mod inventory;
 mod journal;
 #[cfg(target_os = "macos")]
 mod native_clock;
-mod planning;
+pub(crate) mod new_chat;
 pub(crate) mod plan_sources;
+mod planning;
 pub mod ritual;
 mod transport;
 pub mod updates;
@@ -92,6 +93,7 @@ pub(crate) fn valid_id(s: &str) -> bool {
 
 struct Shared {
     saved_window: Mutex<Option<window::SavedWindow>>,
+    chat_choice: Mutex<Option<crate::new_chat::ChatChoice>>,
     updates: Mutex<crate::update::ServiceView>,
     // Held by the root after the worker joins, through process exit. Dropping
     // a COMMIT-uncertain controller never grants a second launch or send.
@@ -359,6 +361,7 @@ impl NativeHost {
         }
         let shared = Arc::new(Shared {
             saved_window: Mutex::new(None),
+            chat_choice: Mutex::new(None),
             updates: Mutex::new(updates::State::new(None).snapshot()),
             app_controller: Mutex::new(None),
             startup_ready: AtomicBool::new(false),
@@ -665,6 +668,9 @@ impl NativeHost {
 }
 
 fn publish_planning(shared: &Shared, record: &planning::PlanningRecord) {
+    if record.operation["kind"] == "native-chat-create" {
+        return;
+    }
     shared
         .planning_operations
         .lock()
@@ -776,6 +782,15 @@ async fn run(
         .get(&window::SavedWindow::key(&t.source)?)
         .cloned();
     updates.restore(&journal, &t.source).await;
+    *shared
+        .chat_choice
+        .lock()
+        .expect("native chat choice poisoned") = shared
+        .saved_window
+        .lock()
+        .expect("native saved window poisoned")
+        .as_ref()
+        .and_then(|w| serde_json::from_value(w.view["chat"].clone()).ok());
     shared
         .startup_ready
         .store(updates.startup_ready(), Ordering::SeqCst);

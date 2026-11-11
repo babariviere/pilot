@@ -1,7 +1,7 @@
 /** Isolated native bridge fixture. No credentials, sources or providers outside its temp home. */
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { readFile } from "node:fs/promises";
+import { chmod, readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
@@ -13,7 +13,11 @@ const f = await nativeIntakeFixture(),
 	ledger = join(f.home, "commands.jsonl");
 let posts = 0,
 	lookups = 0,
-	lost = false;
+	lost = false,
+	denied = false,
+	offline = false,
+	staleProfile = false,
+	failSave = false;
 const sockets = new Set<WebSocket>(),
 	wss = new WebSocketServer({ noServer: true });
 const proxy = createServer(async (req, res) => {
@@ -21,6 +25,20 @@ const proxy = createServer(async (req, res) => {
 		const chunks = [];
 		for await (const c of req) chunks.push(c);
 		const bytes = Buffer.concat(chunks);
+		if (
+			req.url?.includes("native-projects") ||
+			req.url?.includes("chat-profile") ||
+			req.url?.includes("operations")
+		) {
+			if (offline) {
+				req.socket.destroy();
+				return;
+			}
+			if (denied) {
+				res.writeHead(403).end("{}");
+				return;
+			}
+		}
 		const writing = req.method === "POST" && req.url === "/api/operations";
 		if (writing) {
 			posts++;
@@ -44,6 +62,14 @@ const proxy = createServer(async (req, res) => {
 			...(bytes.length ? { body: bytes } : {}),
 		});
 		const body = await reply.text();
+		if (writing && failSave) {
+			failSave = false;
+			await chmod(ledger, 0o644);
+		}
+		if (staleProfile && req.url?.includes("chat-profile")) {
+			staleProfile = false;
+			await f.projects.update(f.other.id, { name: "Changed after selection reply" });
+		}
 		if (writing && lost) {
 			lost = false;
 			req.socket.destroy();
@@ -87,6 +113,18 @@ for await (const line of createInterface({ input: process.stdin })) {
 	const c = JSON.parse(line);
 	if (c.action === "quit") break;
 	if (c.action === "lost") lost = true;
+	if (c.action === "fail-save") failSave = true;
+	if (c.action === "restore-ledger") await chmod(ledger, 0o600);
+	if (c.action === "deny") denied = true;
+	if (c.action === "offline") offline = true;
+	if (c.action === "allow") {
+		denied = false;
+		offline = false;
+	}
+	if (c.action === "stale-profile") staleProfile = true;
+	if (c.action === "change-other") await f.projects.update(f.other.id, { name: "Changed other project" });
+	if (c.action === "delete-other") await f.projects.remove(f.other.id);
+	if (c.action === "delete-selected") await f.projects.remove(f.project.id);
 	console.log(JSON.stringify({ posts, lookups, ...f.stats() }));
 }
 process.stdin.destroy();
