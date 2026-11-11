@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type {
+	AgentQuestion,
 	HumanActionCommand,
 	HumanActionContent,
 	NativeAttentionRead,
@@ -54,7 +55,7 @@ export async function nativeAttentionFixture() {
 		updatedAt: 1,
 		inputGeneration: 0,
 	};
-	let question = {
+	let question: { id: number; kind: string; data: AgentQuestion } = {
 		id: 12,
 		kind: "pilot.question",
 		data: {

@@ -312,7 +312,8 @@ pub struct DecisionOption {
     pub label: String,
     /// Its consequence, in one line.
     pub detail: String,
-    /// Whether Pilot recommends it. At most one option per decision.
+    /// Whether Pilot recommends it. At most one option per decision, except
+    /// on a question that takes several, where the agent may suggest several.
     pub recommended: bool,
 }
 
@@ -418,6 +419,12 @@ pub struct Decision {
     pub delivery: Delivery,
     /// The option the user sent, while it is sending or unknown.
     pub sent_option: Option<String>,
+    /// Every option the user sent on a question that takes several, in the
+    /// order shown, while it is sending or unknown. Empty otherwise.
+    pub sent_options: Vec<String>,
+    /// Whether the user may pick several options together. An agent's
+    /// question says so; the answer then lists every option picked.
+    pub multiple: bool,
     /// Whether the user may answer in their own words, or add detail to
     /// a pick. An agent's ordinary question allows it.
     pub reply: bool,
@@ -436,11 +443,18 @@ pub struct Decision {
 pub struct Draft {
     /// The option picked, if any. Picking is not answering.
     pub pick: Option<String>,
+    /// The options picked on a question that takes several, in the order
+    /// shown. Picking is not answering.
+    pub picks: Vec<String>,
     /// The user's own words: an answer or detail on a decision, notes or a
     /// report on an action. Exactly as typed.
     pub text: String,
     /// An unsent question about a decision, exactly as typed.
     pub question: String,
+    /// Set when the user put this question off. Day saves it with the
+    /// draft and shows the question after the others; the chat still waits
+    /// for an answer and is told nothing.
+    pub later: bool,
     /// Set when saving it failed. It stays on screen.
     pub unsaved: bool,
 }
@@ -800,6 +814,9 @@ pub struct ReplyIntent {
     pub revision: u32,
     /// The option picked, if any.
     pub option_id: Option<String>,
+    /// Every option picked on a question that takes several. Empty for a
+    /// question that takes one; use `option_id` there.
+    pub option_ids: Vec<String>,
     /// The user's own words, exactly as typed. May be empty with a pick.
     pub text: String,
 }
@@ -816,10 +833,15 @@ pub struct DraftIntent {
     pub revision: u32,
     /// The option picked, if any.
     pub pick: Option<String>,
+    /// Every option picked on a question that takes several.
+    pub picks: Vec<String>,
     /// The user's own words or report, exactly as typed.
     pub text: String,
     /// An unsent question about a decision, exactly as typed.
     pub question: String,
+    /// Puts a question off: Day saves this with the draft. A draft saved
+    /// without it keeps an earlier Later; only an answer clears it.
+    pub later: bool,
 }
 
 /// Answer a decision with one of its options.

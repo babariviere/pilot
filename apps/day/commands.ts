@@ -15,6 +15,7 @@ import {
 	type Item,
 	messages,
 	pick,
+	picked,
 	picks,
 	questionText,
 	replies,
@@ -24,6 +25,7 @@ import {
 	reportText,
 	setFor,
 	setHelp,
+	toggle,
 } from "./view";
 
 function say(id: string, message: string) {
@@ -33,23 +35,33 @@ function say(id: string, message: string) {
 /**
  * Gives Rust what the user picked and wrote on `decision`, for the revision
  * shown. Rust saves it after a short pause; saving never sends or answers.
+ * `later` puts the question off; Rust keeps a Later saved before.
  */
-export function saveDecisionDraft(day: Day, decision: Decision): IntentOutcome {
+export function saveDecisionDraft(day: Day, decision: Decision, later = false): IntentOutcome {
 	const picked = picks()[decision.id];
-	const pickNow = picked
-		? picked.revision === decision.revision
-			? picked.option
-			: null
-		: (decision.draft.pick ?? null);
+	const pickNow = decision.multiple
+		? null
+		: picked
+			? picked.revision === decision.revision
+				? picked.option
+				: null
+			: (decision.draft.pick ?? null);
 	const outcome = day.feed.saveDraft({
 		itemId: decision.id,
 		revision: decision.revision,
 		pick: pickNow,
+		picks: decision.multiple ? pickedNow(decision) : [],
 		text: replyText(decision),
 		question: questionText(decision),
+		later: later || decision.draft.later,
 	});
 	if (outcome.status === "rejected") say(decision.id, outcome.message);
 	return outcome;
+}
+
+/** The options picked on `decision` that a draft keeps: never the ones already sent. */
+function pickedNow(decision: Decision): string[] {
+	return decision.sentOptions.length > 0 ? [] : picked(decision);
 }
 
 /** Gives Rust the notes or report typed on `action`, for the revision shown. Saving reports nothing. */
@@ -58,22 +70,29 @@ export function saveActionDraft(day: Day, action: HumanAction): IntentOutcome {
 		itemId: action.id,
 		revision: action.revision,
 		pick: null,
+		picks: [],
 		text: reportText(action),
 		question: "",
+		later: false,
 	});
 	if (outcome.status === "rejected") say(action.id, outcome.message);
 	return outcome;
 }
 
-/** Picks `option` on `decision` and keeps it as a draft. Picking is not answering. */
+/**
+ * Picks `option` on `decision` and keeps it as a draft. On a question that
+ * takes several, picking a picked option unpicks it. Picking is not answering.
+ */
 export function choose(day: Day, decision: Decision, option: string) {
-	pick(decision, option);
+	if (decision.multiple) toggle(decision, option);
+	else pick(decision, option);
 	saveDecisionDraft(day, decision);
 }
 
 /** Whether `decision` has an answer the user can send now: a pick or, where allowed, their own words. */
 export function canSend(decision: Decision): boolean {
-	return chosen(decision) !== "" || (decision.reply && replyText(decision).trim() !== "");
+	const anyPick = decision.multiple ? picked(decision).length > 0 : chosen(decision) !== "";
+	return anyPick || (decision.reply && replyText(decision).trim() !== "");
 }
 
 /** Whether a decision's earlier outcome must be checked before anything else. */
@@ -91,7 +110,8 @@ export function commitLabel(decision: Decision): string {
 
 /**
  * Sends the chosen option of `decision`, at the revision shown, with the
- * user's own words where the decision takes them. Help never calls this.
+ * user's own words where the decision takes them. A question that takes
+ * several sends every option picked. Help never calls this.
  */
 export async function decide(day: Day, decision: Decision) {
 	const option = chosen(decision);
@@ -102,7 +122,8 @@ export async function decide(day: Day, decision: Decision) {
 		const outcome = await day.feed.reply({
 			decisionId: decision.id,
 			revision: decision.revision,
-			optionId: option || null,
+			optionId: decision.multiple ? null : option || null,
+			optionIds: decision.multiple ? picked(decision) : [],
 			text,
 		});
 		say(decision.id, outcome.message);
@@ -125,11 +146,17 @@ export async function checkDecision(day: Day, decision: Decision) {
 	if (outcome.status === "accepted") focusFront.set(true);
 }
 
-/** Puts a decision at the end of the queue, unanswered. The next one comes forward. */
+/**
+ * Puts a decision at the end of the queue, unanswered. The next one comes
+ * forward. Its draft keeps the Later, so it stays put off after a restart;
+ * the chat still waits and is told nothing.
+ */
 export function laterDecision(day: Day, decision: Decision) {
 	const outcome = day.feed.later({ decisionId: decision.id, revision: decision.revision });
 	say(decision.id, outcome.message);
 	if (outcome.status === "accepted") {
+		saveDecisionDraft(day, decision, true);
+		day.feed.flushDrafts();
 		focused.set(null);
 		focusFront.set(true);
 	}

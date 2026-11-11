@@ -215,7 +215,7 @@ impl TodayFeed {
                 .answer(
                     &intent.decision_id,
                     intent.revision,
-                    Some(intent.option_id),
+                    vec![intent.option_id],
                     "",
                 )
                 .await;
@@ -240,18 +240,28 @@ impl TodayFeed {
     }
 
     /// Answers a decision in the user's own words, with or without one of
-    /// its options, at the revision shown. Only decisions that allow a reply
-    /// take it. Resolves once the answer is confirmed, or with `unknown`.
+    /// its options, at the revision shown. A question that takes several
+    /// options takes them all in `optionIds`. Only decisions that allow a
+    /// reply take it. Resolves once the answer is confirmed, or with `unknown`.
     pub async fn reply(this: Instance<Self>, intent: ReplyIntent) -> IntentOutcome {
         if let Some(side) = Self::side(&this) {
+            let picks = intent
+                .option_id
+                .into_iter()
+                .chain(intent.option_ids)
+                .collect();
             return side
-                .answer(
-                    &intent.decision_id,
-                    intent.revision,
-                    intent.option_id,
-                    &intent.text,
-                )
+                .answer(&intent.decision_id, intent.revision, picks, &intent.text)
                 .await;
+        }
+        if !intent.option_ids.is_empty() {
+            return this.with(|feed| IntentOutcome {
+                status: OutcomeStatus::Rejected,
+                revision: feed.desk.today().revision,
+                message:
+                    "Mock data: answers with several picks need Pilot's service. Nothing was sent."
+                        .into(),
+            });
         }
         if intent.text.trim().is_empty()
             && let Some(option_id) = intent.option_id
@@ -281,6 +291,7 @@ impl TodayFeed {
         }
         let today = self.desk.today();
         let now = today.revision;
+        let question = today.decisions.iter().any(|d| d.id == intent.item_id);
         let revision = today
             .decisions
             .iter()
@@ -304,18 +315,37 @@ impl TodayFeed {
                 "This changed. Your words stay on screen.",
             );
         }
+        // Only a question takes Later here, and a save that does not say
+        // Later keeps it.
+        let later = question
+            && (intent.later
+                || self
+                    .drafts
+                    .get(&intent.item_id)
+                    .is_some_and(|(r, d)| *r == intent.revision && d.later));
+        let put_off = later
+            && !self
+                .drafts
+                .get(&intent.item_id)
+                .is_some_and(|(r, d)| *r == intent.revision && d.later);
         self.drafts.insert(
             intent.item_id,
             (
                 intent.revision,
                 Draft {
                     pick: intent.pick,
+                    picks: intent.picks,
                     text: intent.text,
                     question: intent.question,
+                    later,
                     unsaved: false,
                 },
             ),
         );
+        if put_off {
+            // The card says it was put off; other draft saves change nothing on screen.
+            self.publish();
+        }
         outcome(OutcomeStatus::Accepted, "")
     }
 

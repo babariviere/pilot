@@ -2,8 +2,9 @@
 //! isolated production daemon: drafts that survive a safe close and a
 //! restart, the user's own Later, a replaced request, exact acknowledged
 //! completion, a lost answer that is only looked up, help that stays
-//! unavailable and a link that reports nothing. Headless with a manual
-//! clock; no provider, worker, visible window or real navigation.
+//! unavailable, a link that reports nothing, and a question that takes
+//! several answers with a saved Later. Headless with a manual clock; no
+//! provider, worker, visible window or real navigation.
 use nsh_core::prelude::*;
 use nsh_engine::{Clock, EngineConfig, Root};
 use nsh_testing::Headless;
@@ -12,7 +13,7 @@ use pilot_day_native::{
     host::{NativeHost, Source},
     model::{
         ActionRef, ActionState, AskIntent, CompleteIntent, DecideIntent, DecisionRef, Delivery,
-        DraftIntent, FreshnessState, OutcomeStatus, Today,
+        DraftIntent, FreshnessState, OutcomeStatus, ReplyIntent, Today,
     },
 };
 use serde_json::{Value, json};
@@ -132,6 +133,13 @@ fn status(outcome: pilot_day_native::model::IntentOutcome) -> OutcomeStatus {
     outcome.status
 }
 
+fn ids(ids: &[&str]) -> Vec<String> {
+    ids.iter().map(|id| (*id).to_owned()).collect()
+}
+
+/// The user's words on the question that takes several, exactly.
+const SEVERAL_WORDS: &str = "  only these 日本 💬 ";
+
 async fn run(phase: &str, source: Source, ledger: PathBuf) {
     let host = if phase == "link" {
         NativeHost::open_with_navigation(
@@ -187,8 +195,10 @@ async fn run(phase: &str, source: Source, ledger: PathBuf) {
                         item_id: item.into(),
                         revision,
                         pick: pick.map(str::to_owned),
+                        picks: Vec::new(),
                         text: text.into(),
                         question: question.into(),
+                        later: false,
                     }
                 };
             let saved = feed.with_mut(|f| f.save_draft(draft(&a.id, a.revision, None, words, "")));
@@ -349,6 +359,130 @@ async fn run(phase: &str, source: Source, ledger: PathBuf) {
             let closing = feed.with(|f| f.close()).unwrap();
             closing.recv().await.unwrap().unwrap();
         }
+        "several" => {
+            let t = live(&host, &feed, |t| t.decisions.iter().any(|d| d.multiple)).await;
+            let d = t.decisions[0].clone();
+            assert!(d.multiple && d.reply);
+            assert_eq!(d.options.len(), 3);
+            assert!(d.options[0].recommended && d.options[1].recommended);
+            // Suggestions are not picks.
+            assert!(d.draft.picks.is_empty() && d.sent_options.is_empty());
+            let save = |picks: &[&str], later: bool| DraftIntent {
+                item_id: d.id.clone(),
+                revision: d.revision,
+                pick: None,
+                picks: ids(picks),
+                text: SEVERAL_WORDS.into(),
+                question: String::new(),
+                later,
+            };
+            // Pick two, unpick one, pick another: the draft keeps exactly
+            // the last picks.
+            for picks in [
+                &["option-1", "option-3"][..],
+                &["option-3"],
+                &["option-2", "option-3"],
+            ] {
+                let saved = feed.with_mut(|f| f.save_draft(save(picks, false)));
+                assert_eq!(saved.status, OutcomeStatus::Accepted);
+            }
+            let stale = feed.with_mut(|f| {
+                f.save_draft(DraftIntent {
+                    revision: 2,
+                    ..save(&["option-1"], false)
+                })
+            });
+            assert_eq!(stale.status, OutcomeStatus::Stale);
+            let t = feed.with(|f| f.snapshot());
+            assert_eq!(t.decisions[0].draft.picks, ids(&["option-2", "option-3"]));
+            // Later is saved with the draft and sends nothing.
+            let later = feed.with_mut(|f| {
+                f.later(DecisionRef {
+                    decision_id: d.id.clone(),
+                    revision: d.revision,
+                })
+            });
+            assert_eq!(later.status, OutcomeStatus::Accepted);
+            // A later save that does not say Later keeps it.
+            let saved = feed.with_mut(|f| f.save_draft(save(&["option-2", "option-3"], false)));
+            assert_eq!(saved.status, OutcomeStatus::Accepted);
+            let t = feed.with(|f| f.snapshot());
+            assert!(t.decisions[0].draft.later);
+            assert_eq!(t.decisions[0].delivery, Delivery::Idle);
+            assert!(t.notes.is_empty());
+            let closing = feed.with(|f| f.close()).unwrap();
+            closing.recv().await.unwrap().unwrap();
+        }
+        "several-restart" => {
+            // After a restart the picks, exact words and Later are back.
+            let t = live(&host, &feed, |t| t.decisions.iter().any(|d| d.multiple)).await;
+            let d = t.decisions[0].clone();
+            assert_eq!(d.draft.picks, ids(&["option-2", "option-3"]));
+            assert_eq!(d.draft.text, SEVERAL_WORDS);
+            assert!(d.draft.later);
+            let reply = |revision: u32, option_id: Option<&str>, picks: &[&str]| ReplyIntent {
+                decision_id: d.id.clone(),
+                revision,
+                option_id: option_id.map(str::to_owned),
+                option_ids: ids(picks),
+                text: SEVERAL_WORDS.into(),
+            };
+            // An earlier revision, or a pick that names no option, sends nothing.
+            assert_eq!(
+                status(TodayFeed::reply(feed.clone(), reply(2, None, &["option-2"])).await),
+                OutcomeStatus::Stale
+            );
+            assert_eq!(
+                status(
+                    TodayFeed::reply(feed.clone(), reply(1, None, &["option-2", "option-9"])).await
+                ),
+                OutcomeStatus::Rejected
+            );
+            assert!(host.attention_operations().is_empty());
+            // Every pick goes, in the order shown, then the words exactly. The
+            // fixture cannot confirm an answer: it stays unknown.
+            assert_eq!(
+                status(
+                    TodayFeed::reply(feed.clone(), reply(1, None, &["option-3", "option-2"])).await
+                ),
+                OutcomeStatus::Unknown
+            );
+            let ops = host.attention_operations();
+            assert_eq!(ops.len(), 1);
+            assert_eq!(
+                ops[0]["request"]["message"],
+                json!(format!("- Tests\n- Lint\n\n{SEVERAL_WORDS}"))
+            );
+            let t = feed.with(|f| f.snapshot());
+            assert_eq!(t.decisions[0].delivery, Delivery::Unknown);
+            assert_eq!(t.decisions[0].sent_options, ids(&["option-2", "option-3"]));
+            // Never sent twice without a check.
+            assert_eq!(
+                status(TodayFeed::reply(feed.clone(), reply(1, None, &["option-2"])).await),
+                OutcomeStatus::Rejected
+            );
+            let closing = feed.with(|f| f.close()).unwrap();
+            closing.recv().await.unwrap().unwrap();
+        }
+        "several-check" => {
+            // Cold open: the unconfirmed answer shows what it sent; Check
+            // only looks it up.
+            let t = live(&host, &feed, |t| !t.decisions.is_empty()).await;
+            let d = t.decisions[0].clone();
+            assert_eq!(d.delivery, Delivery::Unknown);
+            assert_eq!(d.sent_options, ids(&["option-2", "option-3"]));
+            let check = DecisionRef {
+                decision_id: d.id.clone(),
+                revision: d.revision,
+            };
+            assert_eq!(
+                status(TodayFeed::check(feed.clone(), check).await),
+                OutcomeStatus::Unknown
+            );
+            assert_eq!(host.attention_operations().len(), 1);
+            let closing = feed.with(|f| f.close()).unwrap();
+            closing.recv().await.unwrap().unwrap();
+        }
         other => panic!("unknown phase {other}"),
     }
 }
@@ -405,4 +539,30 @@ fn a_link_reports_nothing_and_a_lost_completion_is_only_looked_up() {
     assert_eq!(stats["state"], "completed");
     // The link permission and one completion; the lookup is not a send.
     assert_eq!(stats["posts"], 2);
+}
+
+#[test]
+fn several_picks_and_a_saved_later_survive_restarts_and_a_lost_answer_is_only_looked_up() {
+    let mut f = Fixture::new();
+    f.cmd("multi", true);
+    f.phase("several");
+    assert_eq!(
+        f.cmd("stats", false)["posts"],
+        0,
+        "drafts and Later send nothing"
+    );
+    f.cmd("restart", false);
+    f.phase("several-restart");
+    let stats = f.cmd("stats", false);
+    assert_eq!(
+        (stats["posts"].clone(), stats["sends"].clone()),
+        (json!(1), json!(1))
+    );
+    f.cmd("restart", false);
+    f.phase("several-check");
+    let stats = f.cmd("stats", false);
+    assert_eq!(
+        (stats["posts"].clone(), stats["sends"].clone()),
+        (json!(1), json!(1))
+    );
 }

@@ -135,13 +135,25 @@ Nothing is preselected for it: a suggestion is not an answer. A human action kee
 revision. Requests are built from the latest host read and name the revision the screen showed; the
 host rechecks authority before and after its fsync, as above.
 
+A question whose `multiSelect` is set and that offers more than one option becomes a card that takes
+several picks (`Decision.multiple`). Its draft keeps every pick (`picks`) and the exact words, and the
+answer sends every picked label as `- label` lines in the order shown, then a blank line and the words,
+as the GPUI and Swift composers do. One pick is sent as its label alone. A question that takes one
+refuses several picks, and a pick that names no option refuses the whole answer; nothing is sent. An
+unconfirmed answer shows the options it sent (`sentOptions`) after a restart, read from the saved
+request; Check only looks it up.
+
 - Drafts (pick, own words, help question, action notes) go to `save_attention_draft` under the exact
   draft key. The feed saves after a short pause or on `flushDrafts`, one at a time, so the ledger
   grows slowly. `TodayFeed::close` (Rust only) queues unsaved drafts before the close fence; the host
   writes queued drafts during its joined drain. A failed save stays on screen, marked unsaved.
 - The user's own Later on an action is a new revision: the feed moves the draft to it. A revision the
   agent made leaves the old draft as read-only history (`earlierReport`), which counts only once sent.
-  Later on a question only reorders this run; nothing is sent.
+  Later on a question is saved with that question's draft (`later`) under its exact key, so the
+  question stays after the others across a restart. It is Day's own ordering: nothing is sent, the
+  daemon and the agent are not told, and the chat still waits for an answer. A draft save that does
+  not say Later keeps it; only a sent and accepted answer clears the draft. Questions put off before
+  this run come before the ones put off in it.
 - Only an acknowledged receipt is success. A question with an accepted answer leaves the cards; a
   report adds a note that says Pilot has not checked the result. A lost answer or report stays
   Unknown, including after its question leaves the read or after restart; Check only looks it up.
@@ -155,8 +167,10 @@ host rechecks authority before and after its fsync, as above.
 `native/tests/attention_feed.rs` drives the feed headlessly against the isolated daemon: drafts across
 safe close, restart and an agent's replacement, the user's Later, stale and exact completion, a lost
 completion settled only by lookup, an unconfirmed answer that is never resent, unavailable help and a
-permission-checked link that leaves the action pending. Continuation after a report and a help
-producer remain absent.
+permission-checked link that leaves the action pending. It also covers a question that takes several:
+picks changed and unpicked, a saved Later and the exact words across restarts, an earlier revision and
+an unknown option that send nothing, the exact several-pick message, and a lost answer that only a
+lookup checks. Continuation after a report and a help producer remain absent.
 
 Hidden tests exercise the real daemon/router, private native capability, SQLite, HTTP transport and
 native ledger, with synthetic current-question/input ports and no providers or real navigation.

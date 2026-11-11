@@ -18,8 +18,8 @@ use crate::{
     host::attention::DraftKey,
     model::{
         ActionAsk, ActionFile, ActionState, Answer, AnswerState, Decision, DecisionKind,
-        DecisionOption, Delivery, Destination, Draft, Freshness, FreshnessState, HumanAction,
-        Origin, OutcomeStatus,
+        DecisionOption, Delivery, Destination, Draft, DraftIntent, Freshness, FreshnessState,
+        HumanAction, Origin, OutcomeStatus,
     },
 };
 
@@ -35,8 +35,8 @@ pub const NO_HELP: &str = "Simpler words, charts and questions are not available
 /// What a request on its way asks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Sending {
-    /// An answer, with the option it carries, if any.
-    Answer(Option<String>),
+    /// An answer, with the options it carries, if any.
+    Answer(Vec<String>),
     /// An action request.
     Action(ActionAsk),
 }
@@ -51,7 +51,8 @@ pub struct Local {
     pub checking: BTreeSet<String>,
     /// Questions about a decision on their way, by decision.
     pub asking: BTreeMap<String, String>,
-    /// Decisions the user put off in this run, oldest first. Not sent.
+    /// Decisions the user put off in this run, oldest first. Not sent. The
+    /// Later itself is saved with each question's draft.
     pub later: Vec<String>,
     /// Confirmed results of the user's own requests in this run.
     pub notes: Vec<String>,
@@ -92,6 +93,10 @@ const CHANGED: Refusal = Refusal {
 const NOT_AN_OPTION: Refusal = Refusal {
     status: OutcomeStatus::Rejected,
     message: "That answer is not one of the options.",
+};
+const ONE_ONLY: Refusal = Refusal {
+    status: OutcomeStatus::Rejected,
+    message: "This question takes one answer. Pick one, or say more in your own words.",
 };
 
 /// The cards Today shows from one read.
@@ -148,6 +153,21 @@ pub fn find_question<'a>(read: &'a Value, id: &str) -> Option<&'a Value> {
         .find(|q| question_id(q).as_deref() == Some(id))
 }
 
+/// Whether a question takes several options together. The agent's ask_user
+/// tool says so only when it offers more than one.
+pub fn takes_several(question: &Value) -> bool {
+    question["question"]["multiSelect"] == true && arr(&question["question"]["options"]).len() > 1
+}
+
+/// The position of option card id "option-<n>", counted from 0.
+fn option_index(option: &str) -> Option<usize> {
+    option
+        .strip_prefix("option-")
+        .and_then(|n| n.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .map(|n| n - 1)
+}
+
 /// The action "id" in "read", with its authority digest.
 pub fn find_action<'a>(read: &'a Value, id: &str) -> Option<&'a Value> {
     arr(&read["actions"])
@@ -184,18 +204,74 @@ pub fn key_string(key: &DraftKey) -> String {
     serde_json::to_string(key).unwrap_or_default()
 }
 
-/// The saved form of a draft.
-pub fn draft_value(pick: Option<&str>, text: &str, question: &str) -> Value {
-    json!({ "pick": pick, "text": text, "question": question })
+/// The saved form of a draft. Several picks and Later are written only when
+/// set, so other drafts keep the form earlier Day versions saved.
+pub fn draft_value(draft: &Draft) -> Value {
+    let mut value = json!({ "pick": draft.pick, "text": draft.text, "question": draft.question });
+    if !draft.picks.is_empty() {
+        value["picks"] = json!(draft.picks);
+    }
+    if draft.later {
+        value["later"] = json!(true);
+    }
+    value
+}
+
+/// The draft "intent" saves under "key". A question keeps a Later saved
+/// before ("before"): only a sent answer clears it. An action takes no picks
+/// and no Later, since its own Later is a request to the daemon.
+pub fn draft_from(key: &DraftKey, intent: &DraftIntent, before: Option<&Value>) -> Draft {
+    let question = key.kind == "question";
+    Draft {
+        pick: intent.pick.clone(),
+        picks: if question {
+            intent.picks.clone()
+        } else {
+            Vec::new()
+        },
+        text: intent.text.clone(),
+        question: intent.question.clone(),
+        later: question && (intent.later || before.is_some_and(|v| v["later"] == true)),
+        unsaved: false,
+    }
 }
 
 fn draft_of(value: &Value, unsaved: bool) -> Draft {
     Draft {
         pick: value["pick"].as_str().map(str::to_owned),
+        picks: arr(&value["picks"])
+            .iter()
+            .filter_map(|p| p.as_str().map(str::to_owned))
+            .collect(),
         text: s(&value["text"]),
         question: s(&value["question"]),
+        later: value["later"] == true,
         unsaved,
     }
+}
+
+/// The options an answer's message names, the way answer_request writes
+/// them: one label, or "- label" lines on a question that takes several,
+/// before any words of the user's own. Empty when it names none.
+fn sent_picks(message: &str, options: &[DecisionOption], several: bool) -> Vec<String> {
+    let head = message.split("\n\n").next().unwrap_or_default();
+    if let Some(o) = options.iter().find(|o| o.label == head) {
+        return vec![o.id.clone()];
+    }
+    if !several {
+        return Vec::new();
+    }
+    let mut ids = Vec::new();
+    for line in head.split('\n') {
+        let found = line
+            .strip_prefix("- ")
+            .and_then(|label| options.iter().find(|o| o.label == label));
+        match found {
+            Some(o) if !ids.contains(&o.id) => ids.push(o.id.clone()),
+            _ => return Vec::new(),
+        }
+    }
+    if ids.len() < 2 { Vec::new() } else { ids }
 }
 
 /// The unsettled operation of an answer to question card "id".
@@ -408,6 +484,7 @@ pub fn project(
             continue;
         }
         let data = &q["question"];
+        let several = takes_several(q);
         let mut options: Vec<DecisionOption> = arr(&data["options"])
             .iter()
             .enumerate()
@@ -415,25 +492,27 @@ pub fn project(
                 id: format!("option-{}", n + 1),
                 label: s(&o["label"]),
                 detail: s(&o["detail"]),
-                recommended: false,
+                // A question that takes several may suggest several.
+                recommended: several && o["suggested"] == true,
             })
             .collect();
-        if let Some(n) = arr(&data["options"])
-            .iter()
-            .position(|o| o["suggested"] == true)
+        if !several
+            && let Some(n) = arr(&data["options"])
+                .iter()
+                .position(|o| o["suggested"] == true)
         {
             options[n].recommended = true;
         }
         let chat = s(&q["session"]["title"]);
-        let sent_option = match local.sending.get(&id) {
-            Some(Sending::Answer(option)) => option.clone(),
-            _ => pending.and_then(|op| {
-                let message = &op["request"]["message"];
-                options
-                    .iter()
-                    .find(|o| *message == json!(o.label))
-                    .map(|o| o.id.clone())
-            }),
+        let sent = match local.sending.get(&id) {
+            Some(Sending::Answer(picks)) => options
+                .iter()
+                .filter(|o| picks.contains(&o.id))
+                .map(|o| o.id.clone())
+                .collect(),
+            _ => pending
+                .map(|op| sent_picks(&s(&op["request"]["message"]), &options, several))
+                .unwrap_or_default(),
         };
         let delivery = if local.sending.contains_key(&id) {
             Delivery::Sending
@@ -458,7 +537,13 @@ pub fn project(
             options,
             answers: help_answers(ops, &id, local),
             delivery,
-            sent_option,
+            sent_option: if several {
+                None
+            } else {
+                sent.first().cloned()
+            },
+            sent_options: if several { sent } else { Vec::new() },
+            multiple: several,
             reply: true,
             help_unavailable: help.clone(),
             draft: draft_for(question_key(q)),
@@ -497,12 +582,11 @@ pub fn project(
             ..Decision::default()
         });
     }
-    decisions.sort_by_key(|d| {
-        local
-            .later
-            .iter()
-            .position(|id| *id == d.id)
-            .map_or(0, |n| n + 1)
+    // Questions put off go last: those saved before this run first, then
+    // this run's, oldest first. Nothing about it is sent.
+    decisions.sort_by_key(|d| match local.later.iter().position(|id| *id == d.id) {
+        Some(n) => n + 2,
+        None => usize::from(d.draft.later),
     });
 
     let chat_title = |session: &Value| {
@@ -614,33 +698,47 @@ pub fn project(
 
 /// The answer to question card "id": the picked option's label, then the
 /// user's own words, exactly as typed, the way the chat composers send it.
+/// A question that takes several lists every picked label as "- label"
+/// lines, in the order shown; one pick is sent as its label alone.
 pub fn answer_request(
     read: &Value,
     id: &str,
-    option: Option<&str>,
+    picks: &[String],
     text: &str,
 ) -> Result<Value, Refusal> {
     let q = find_question(read, id).ok_or(GONE)?;
-    let label = match option.filter(|o| !o.is_empty()) {
-        None => None,
-        Some(option) => {
-            let n: usize = option
-                .strip_prefix("option-")
-                .and_then(|n| n.parse().ok())
-                .filter(|n| *n > 0)
-                .ok_or(NOT_AN_OPTION)?;
-            Some(
-                arr(&q["question"]["options"])
-                    .get(n - 1)
-                    .and_then(|o| o["label"].as_str())
-                    .ok_or(NOT_AN_OPTION)?,
-            )
+    let options = arr(&q["question"]["options"]);
+    let mut picked: Vec<usize> = Vec::new();
+    for option in picks.iter().filter(|o| !o.is_empty()) {
+        let n = option_index(option)
+            .filter(|n| *n < options.len())
+            .ok_or(NOT_AN_OPTION)?;
+        if !picked.contains(&n) {
+            picked.push(n);
         }
+    }
+    if picked.len() > 1 && !takes_several(q) {
+        return Err(ONE_ONLY);
+    }
+    picked.sort_unstable();
+    let labels = picked
+        .iter()
+        .map(|n| options[*n]["label"].as_str().ok_or(NOT_AN_OPTION))
+        .collect::<Result<Vec<_>, _>>()?;
+    let label = match labels.as_slice() {
+        [] => None,
+        [one] => Some((*one).to_owned()),
+        many => Some(
+            many.iter()
+                .map(|l| format!("- {l}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
     };
     let own = (!text.trim().is_empty()).then_some(text);
     let message = match (label, own) {
         (Some(label), Some(own)) => format!("{label}\n\n{own}"),
-        (Some(label), None) => label.to_owned(),
+        (Some(label), None) => label,
         (None, Some(own)) => own.to_owned(),
         (None, None) => {
             return Err(Refusal {
@@ -770,6 +868,19 @@ pub fn draft_key(read: &Value, id: &str, revision: u32) -> Result<DraftKey, Refu
 mod tests {
     use super::*;
 
+    fn words(pick: Option<&str>, text: &str, question: &str) -> Value {
+        draft_value(&Draft {
+            pick: pick.map(str::to_owned),
+            text: text.into(),
+            question: question.into(),
+            ..Draft::default()
+        })
+    }
+
+    fn picks(ids: &[&str]) -> Vec<String> {
+        ids.iter().map(|id| (*id).to_owned()).collect()
+    }
+
     fn read() -> Value {
         json!({
             "version": 1, "projectId": "p", "current": true, "canOpenUrl": false,
@@ -842,11 +953,11 @@ mod tests {
         old.revision = 1;
         old.digest = "f".repeat(64);
         let saved = vec![
-            (old, draft_value(None, "Uploaded 0.9", "")),
-            (current, draft_value(None, "  exact\n日本  ", "")),
+            (old, words(None, "Uploaded 0.9", "")),
+            (current, words(None, "  exact\n日本  ", "")),
             (
                 question_key(&r["questions"][0]).unwrap(),
-                draft_value(Some("option-2"), "why", "q?"),
+                words(Some("option-2"), "why", "q?"),
             ),
         ];
         let view = project(Some(&r), &[], &saved, &[], &Local::default());
@@ -865,7 +976,7 @@ mod tests {
     #[test]
     fn unsettled_answers_stay_unknown_even_after_their_question_leaves() {
         let r = read();
-        let request = answer_request(&r, "question-s1-12", Some("option-1"), "").unwrap();
+        let request = answer_request(&r, "question-s1-12", &picks(&["option-1"]), "").unwrap();
         let ops =
             vec![json!({ "id": "op", "request": request, "receipt": null, "state": "unknown" })];
         let view = project(Some(&r), &ops, &[], &[], &Local::default());
@@ -882,7 +993,7 @@ mod tests {
     #[test]
     fn an_accepted_answer_hides_its_question_and_a_rejected_one_does_not() {
         let r = read();
-        let request = answer_request(&r, "question-s1-12", None, "Rebuild it").unwrap();
+        let request = answer_request(&r, "question-s1-12", &[], "Rebuild it").unwrap();
         let mut op = json!({ "id": "op", "request": request, "state": "acknowledged",
             "receipt": { "ok": true, "value": { "state": "accepted" } } });
         let view = project(Some(&r), &[op.clone()], &[], &[], &Local::default());
@@ -895,11 +1006,19 @@ mod tests {
     #[test]
     fn answers_are_exact_and_limited() {
         let r = read();
-        let a = answer_request(&r, "question-s1-12", Some("option-1"), "  and keep 💬  ").unwrap();
+        let a = answer_request(
+            &r,
+            "question-s1-12",
+            &picks(&["option-1"]),
+            "  and keep 💬  ",
+        )
+        .unwrap();
         assert_eq!(a["message"], "Reviewed package\n\n  and keep 💬  ");
         assert_eq!(a["scope"], r["questions"][0]["scope"]);
-        let refused =
-            |o: Option<&str>, t: &str, id: &str| answer_request(&r, id, o, t).unwrap_err().status;
+        let refused = |o: Option<&str>, t: &str, id: &str| {
+            let o: Vec<String> = o.into_iter().map(str::to_owned).collect();
+            answer_request(&r, id, &o, t).unwrap_err().status
+        };
         assert_eq!(
             refused(None, " ", "question-s1-12"),
             OutcomeStatus::Rejected
@@ -910,7 +1029,154 @@ mod tests {
         );
         assert_eq!(refused(Some("option-1"), "", "gone"), OutcomeStatus::Stale);
         let long = "x".repeat(REPLY_LIMIT + 1);
-        assert!(answer_request(&r, "question-s1-12", None, &long).is_err());
+        assert!(answer_request(&r, "question-s1-12", &[], &long).is_err());
+    }
+
+    /// The read with its question taking several of three options.
+    fn several() -> Value {
+        let mut r = read();
+        r["questions"][0]["question"] = json!({
+            "question": "Which checks run before upload?",
+            "options": [{ "label": "Typecheck", "suggested": true }, { "label": "Tests", "suggested": true },
+                { "label": "Lint" }],
+            "multiSelect": true,
+        });
+        r
+    }
+
+    #[test]
+    fn a_question_that_takes_several_sends_every_pick_in_the_order_shown() {
+        let r = several();
+        let id = "question-s1-12";
+        let view = project(Some(&r), &[], &[], &[], &Local::default());
+        let d = &view.decisions[0];
+        assert!(d.multiple);
+        assert!(d.options[0].recommended && d.options[1].recommended && !d.options[2].recommended);
+        // Picked out of order and twice: sent once each, in the order shown.
+        let a = answer_request(&r, id, &picks(&["option-3", "option-1", "option-3"]), "").unwrap();
+        assert_eq!(a["message"], "- Typecheck\n- Lint");
+        let a = answer_request(&r, id, &picks(&["option-2", "option-1"]), " also 日本 ").unwrap();
+        assert_eq!(a["message"], "- Typecheck\n- Tests\n\n also 日本 ");
+        // One pick is its label alone, as the chat composers send it.
+        let a = answer_request(&r, id, &picks(&["option-2"]), "").unwrap();
+        assert_eq!(a["message"], "Tests");
+        // A pick that names no option refuses the whole answer.
+        let refused = answer_request(&r, id, &picks(&["option-1", "option-4"]), "").unwrap_err();
+        assert_eq!(refused, NOT_AN_OPTION);
+        assert_eq!(
+            answer_request(&r, id, &picks(&["option-0"]), "").unwrap_err(),
+            NOT_AN_OPTION
+        );
+    }
+
+    #[test]
+    fn a_question_that_takes_one_refuses_several_picks() {
+        let r = read();
+        let refused = answer_request(&r, "question-s1-12", &picks(&["option-1", "option-2"]), "")
+            .unwrap_err();
+        assert_eq!(refused, ONE_ONLY);
+        let view = project(Some(&r), &[], &[], &[], &Local::default());
+        assert!(!view.decisions[0].multiple);
+        // One option alone never takes several, whatever the question says.
+        let mut one = several();
+        one["questions"][0]["question"]["options"] = json!([{ "label": "Typecheck" }]);
+        assert!(!takes_several(&one["questions"][0]));
+    }
+
+    #[test]
+    fn several_picks_and_later_are_saved_and_read_back() {
+        let r = several();
+        let key = question_key(&r["questions"][0]).unwrap();
+        let intent = DraftIntent {
+            item_id: "question-s1-12".into(),
+            revision: 1,
+            pick: None,
+            picks: picks(&["option-1", "option-3"]),
+            text: "  exact 💬 ".into(),
+            question: String::new(),
+            later: false,
+        };
+        let value = draft_value(&draft_from(&key, &intent, None));
+        assert_eq!(value["picks"], json!(["option-1", "option-3"]));
+        assert!(value.get("later").is_none());
+        let view = project(
+            Some(&r),
+            &[],
+            &[(key.clone(), value.clone())],
+            &[],
+            &Local::default(),
+        );
+        let draft = &view.decisions[0].draft;
+        assert_eq!(draft.picks, picks(&["option-1", "option-3"]));
+        assert_eq!(draft.text, "  exact 💬 ");
+        assert!(!draft.later);
+        // Later stays with the draft until an answer clears it; a later save
+        // that does not say Later keeps it.
+        let put_off = draft_value(&draft_from(
+            &key,
+            &DraftIntent {
+                later: true,
+                ..intent.clone()
+            },
+            Some(&value),
+        ));
+        assert_eq!(put_off["later"], true);
+        let unpicked = DraftIntent {
+            picks: picks(&["option-3"]),
+            ..intent.clone()
+        };
+        let kept = draft_value(&draft_from(&key, &unpicked, Some(&put_off)));
+        assert_eq!(kept["later"], true);
+        assert_eq!(kept["picks"], json!(["option-3"]));
+        // A draft saved by an earlier Day reads as one pick and no Later.
+        let legacy = json!({ "pick": "option-2", "text": "t", "question": "" });
+        let view = project(
+            Some(&r),
+            &[],
+            &[(key.clone(), legacy)],
+            &[],
+            &Local::default(),
+        );
+        assert!(view.decisions[0].draft.picks.is_empty() && !view.decisions[0].draft.later);
+        // An action takes no picks and no Later: its own Later is a request.
+        let action = action_key(&r["actions"][0]).unwrap();
+        let saved = draft_from(
+            &action,
+            &DraftIntent {
+                later: true,
+                ..intent
+            },
+            None,
+        );
+        assert!(saved.picks.is_empty() && !saved.later);
+    }
+
+    #[test]
+    fn an_unconfirmed_answer_shows_every_option_it_sent() {
+        let r = several();
+        let id = "question-s1-12";
+        let request = answer_request(&r, id, &picks(&["option-1", "option-3"]), "why").unwrap();
+        let ops =
+            vec![json!({ "id": "op", "request": request, "receipt": null, "state": "unknown" })];
+        let view = project(Some(&r), &ops, &[], &[], &Local::default());
+        let d = &view.decisions[0];
+        assert_eq!(d.delivery, Delivery::Unknown);
+        assert_eq!(d.sent_options, picks(&["option-1", "option-3"]));
+        assert_eq!(d.sent_option, None);
+        // Own words alone name no option.
+        let request = answer_request(&r, id, &[], "- Typecheck").unwrap();
+        let ops =
+            vec![json!({ "id": "op", "request": request, "receipt": null, "state": "unknown" })];
+        let view = project(Some(&r), &ops, &[], &[], &Local::default());
+        assert!(view.decisions[0].sent_options.is_empty());
+        // While it is on its way, the picks it carries show.
+        let local = Local {
+            sending: BTreeMap::from([(id.to_owned(), Sending::Answer(picks(&["option-2"])))]),
+            ..Local::default()
+        };
+        let view = project(Some(&r), &[], &[], &[], &local);
+        assert_eq!(view.decisions[0].delivery, Delivery::Sending);
+        assert_eq!(view.decisions[0].sent_options, picks(&["option-2"]));
     }
 
     #[test]
@@ -965,5 +1231,38 @@ mod tests {
         let view = project(Some(&r), &[], &[], &[], &local);
         assert_eq!(view.decisions[0].id, "question-s1-13");
         assert_eq!(view.decisions[1].id, "question-s1-12");
+    }
+
+    #[test]
+    fn a_saved_later_goes_last_after_a_restart_and_before_this_runs() {
+        let mut r = read();
+        for entry in [13, 14] {
+            let mut next = r["questions"][0].clone();
+            next["scope"]["subject"]["entryId"] = json!(entry);
+            r["questions"].as_array_mut().unwrap().push(next);
+        }
+        let key = question_key(&r["questions"][0]).unwrap();
+        let mut put_off = words(None, "", "");
+        put_off["later"] = json!(true);
+        let saved = vec![(key, put_off)];
+        // After a restart: the saved Later goes last; nothing else moved.
+        let view = project(Some(&r), &[], &saved, &[], &Local::default());
+        let order: Vec<&str> = view.decisions.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(
+            order,
+            ["question-s1-13", "question-s1-14", "question-s1-12"]
+        );
+        assert!(view.decisions[2].draft.later);
+        // A Later in this run goes after the saved one.
+        let local = Local {
+            later: vec!["question-s1-13".into()],
+            ..Local::default()
+        };
+        let view = project(Some(&r), &[], &saved, &[], &local);
+        let order: Vec<&str> = view.decisions.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(
+            order,
+            ["question-s1-14", "question-s1-12", "question-s1-13"]
+        );
     }
 }

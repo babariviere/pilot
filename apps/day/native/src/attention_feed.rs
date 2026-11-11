@@ -16,14 +16,14 @@ use std::{
 };
 
 use nsh_core::prelude::*;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{
     attention_host::{self as ah, Local, Sending},
     host::{Error, NativeHost, attention::DraftKey},
     model::{
-        ActionAsk, Decision, DecisionKind, DraftIntent, HumanAction, IntentOutcome, OutcomeStatus,
-        Today,
+        ActionAsk, Decision, DecisionKind, Draft, DraftIntent, HumanAction, IntentOutcome,
+        OutcomeStatus, Today,
     },
 };
 
@@ -317,12 +317,13 @@ impl Native {
         }
     }
 
-    /// Answers question card "id" with a pick, the user's words or both.
+    /// Answers question card "id" with its picks, the user's words or both.
+    /// Only a question that takes several takes more than one pick.
     pub async fn answer(
         &self,
         id: &str,
         revision: u32,
-        option: Option<String>,
+        picks: Vec<String>,
         text: &str,
     ) -> IntentOutcome {
         let read = match self.shown() {
@@ -349,14 +350,14 @@ impl Native {
                 "Pilot must check the earlier answer first. It never sends twice without checking.",
             );
         }
-        let build = |r: &Value| ah::answer_request(r, id, option.as_deref(), text);
+        let build = |r: &Value| ah::answer_request(r, id, &picks, text);
         let request = match build(&read) {
             Ok(request) => request,
             Err(refusal) => return self.refusal(refusal),
         };
         let key = ah::find_question(&read, id).and_then(ah::question_key);
         let (status, message) = self
-            .send(id, Some(Sending::Answer(option.clone())), request, &build)
+            .send(id, Some(Sending::Answer(picks.clone())), request, &build)
             .await;
         if status == OutcomeStatus::Accepted {
             if let Some(key) = key {
@@ -372,7 +373,9 @@ impl Native {
         self.outcome(status, message)
     }
 
-    /// Puts question card "id" off for this run. It still waits; nothing is sent.
+    /// Puts question card "id" off: it goes after the others. The Later is
+    /// saved with the question's draft, so it lasts past a restart, until
+    /// an answer is sent. The chat still waits and is told nothing.
     pub fn later(&self, id: &str, revision: u32) -> IntentOutcome {
         let Some(decision) = self.decision(id) else {
             return self.outcome(OutcomeStatus::Stale, "This decision is no longer waiting.");
@@ -388,6 +391,18 @@ impl Native {
                 OutcomeStatus::Rejected,
                 "This decision is waiting on a send or a check.",
             );
+        }
+        let key = self
+            .host
+            .attention_snapshot()
+            .and_then(|r| ah::find_question(&r, id).and_then(ah::question_key));
+        if let Some(key) = key {
+            let mut value = self
+                .current_draft(&key)
+                .unwrap_or_else(|| ah::draft_value(&Draft::default()));
+            value["later"] = json!(true);
+            self.queue_draft(key, value);
+            self.flush();
         }
         self.change(|l| {
             l.later.retain(|d| d != id);
@@ -600,8 +615,8 @@ impl Native {
         }
     }
 
-    /// The draft value for "key" now: unsaved first, then saved.
-    fn draft_now(&self, key: &DraftKey) -> Option<Value> {
+    /// The draft value for "key" now, empty or not: unsaved first, then saved.
+    fn current_draft(&self, key: &DraftKey) -> Option<Value> {
         let ks = ah::key_string(key);
         self.local
             .borrow()
@@ -609,26 +624,25 @@ impl Native {
             .get(&ks)
             .map(|(_, v)| v.clone())
             .or_else(|| self.host.attention_draft(key))
+    }
+
+    /// The draft value for "key" now, when it holds words or a pick.
+    fn draft_now(&self, key: &DraftKey) -> Option<Value> {
+        self.current_draft(key)
             .filter(|v| v["text"].as_str().is_some_and(|t| !t.is_empty()) || !v["pick"].is_null())
     }
 
-    /// Empties a saved draft once its words were sent. Writes only when
-    /// there is something to empty.
+    /// Empties a saved draft once its words were sent, Later included.
+    /// Writes only when there is something to empty.
     fn clear_draft(&self, key: DraftKey) {
-        let ks = ah::key_string(&key);
-        let value = self
-            .local
-            .borrow()
-            .dirty
-            .get(&ks)
-            .map(|(_, v)| v.clone())
-            .or_else(|| self.host.attention_draft(&key));
-        if value.is_some_and(|v| v != ah::draft_value(None, "", "")) {
-            self.queue_draft(key, ah::draft_value(None, "", ""));
+        let empty = ah::draft_value(&Draft::default());
+        if self.current_draft(&key).is_some_and(|v| v != empty) {
+            self.queue_draft(key, empty);
         }
     }
 
-    /// Keeps what the user picked or wrote, for the revision shown.
+    /// Keeps what the user picked or wrote, for the revision shown. A
+    /// question keeps a Later saved before.
     pub fn save_draft(&self, intent: &DraftIntent) -> IntentOutcome {
         let read = match self.shown() {
             Ok(read) => read,
@@ -638,7 +652,8 @@ impl Native {
             Ok(key) => key,
             Err(refusal) => return self.refusal(refusal),
         };
-        let value = ah::draft_value(intent.pick.as_deref(), &intent.text, &intent.question);
+        let before = self.current_draft(&key);
+        let value = ah::draft_value(&ah::draft_from(&key, intent, before.as_ref()));
         if serde_json::to_vec(&value).map_or(true, |v| v.len() > ah::DRAFT_LIMIT) {
             return self.outcome(
                 OutcomeStatus::Rejected,

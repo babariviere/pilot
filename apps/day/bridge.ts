@@ -238,6 +238,7 @@ export class ConnectedToday implements DayFeed {
 			decisionId: intent.decisionId,
 			revision: intent.revision,
 			optionId: intent.optionId,
+			optionIds: [],
 			text: "",
 		});
 	}
@@ -293,6 +294,7 @@ export class ConnectedToday implements DayFeed {
 		});
 	}
 
+	/** Moves a decision after the others in this window. The Later itself is saved with its draft (commands.ts). */
 	later(intent: DecisionRef): IntentOutcome {
 		this.#later = [...this.#later.filter((id) => id !== intent.decisionId), intent.decisionId];
 		this.#publish();

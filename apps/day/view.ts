@@ -15,6 +15,10 @@ export type Pick = { option: string; revision: number };
 
 /** The option the user picked, by decision. */
 export const picks = signal<Record<string, Pick>>({});
+/** Options the user picked on a question that takes several, and the revision they were picked on. */
+export type Picks = { options: string[]; revision: number };
+/** The options the user picked on questions that take several, by decision. */
+export const ticks = signal<Record<string, Picks>>({});
 /** Open help panels, by decision. */
 export const help = signal<Record<string, Help[]>>({});
 /** Unsent questions, exactly as typed, by decision. */
@@ -107,6 +111,10 @@ export function pick(decision: Decision, option: string) {
 
 /** Whether the user picked an option on an earlier revision of `decision`. That pick no longer counts. */
 export function pickChanged(decision: Decision): boolean {
+	if (decision.multiple) {
+		const ticked = ticks()[decision.id];
+		return decision.sentOptions.length === 0 && ticked !== undefined && ticked.revision !== decision.revision;
+	}
 	const picked = picks()[decision.id];
 	return !decision.sentOption && picked !== undefined && picked.revision !== decision.revision;
 }
@@ -117,8 +125,10 @@ export function pickChanged(decision: Decision): boolean {
  * recommendation. A pick on an earlier revision chooses nothing: the user
  * picks again. A decision that takes the user's own words preselects
  * nothing: an agent's suggestion is not an answer until the user picks it.
+ * A question that takes several has no one chosen option; see `picked`.
  */
 export function chosen(decision: Decision): string {
+	if (decision.multiple) return "";
 	if (decision.sentOption) return decision.sentOption;
 	const saved = decision.draft.pick;
 	const picked = picks()[decision.id] ?? (saved ? { option: saved, revision: decision.revision } : undefined);
@@ -129,6 +139,29 @@ export function chosen(decision: Decision): string {
 	if (decision.reply) return "";
 	const recommended = decision.options.find((o) => o.recommended) ?? decision.options[0];
 	return recommended ? recommended.id : "";
+}
+
+/**
+ * The options picked on `decision`, which takes several, in the order shown:
+ * what was sent, else this run's picks on this revision, else the saved
+ * draft's. Picks on an earlier revision count for nothing, and nothing is
+ * picked for the user: a suggestion is not an answer.
+ */
+export function picked(decision: Decision): string[] {
+	if (decision.sentOptions.length > 0) return decision.sentOptions;
+	const ticked = ticks()[decision.id];
+	const ids = ticked ? (ticked.revision === decision.revision ? ticked.options : []) : decision.draft.picks;
+	return decision.options.filter((o) => ids.includes(o.id)).map((o) => o.id);
+}
+
+/** Picks `option` on `decision`, which takes several, or unpicks it when it was picked. Picking is not answering. */
+export function toggle(decision: Decision, option: string) {
+	const now = picked(decision);
+	const next = now.includes(option) ? now.filter((id) => id !== option) : [...now, option];
+	setFor(ticks, decision.id, {
+		options: decision.options.filter((o) => next.includes(o.id)).map((o) => o.id),
+		revision: decision.revision,
+	});
 }
 
 /** One thing in Today's queue: a decision or an action. */

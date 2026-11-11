@@ -118,6 +118,18 @@ for await (const line of createInterface({ input: process.stdin })) {
 	if (cmd.action === "stop")
 		f.session = { ...f.session, inputGeneration: (f.session.inputGeneration ?? 0) + 1, outcome: "stopped" };
 	if (cmd.action === "restart") await f.restart();
+	if (cmd.action === "multi")
+		// A new question from the same chat that takes several answers.
+		f.question = {
+			id: 13,
+			kind: "pilot.question",
+			data: {
+				question: "Which checks run before upload?",
+				context: "Pick any that apply.",
+				options: [{ label: "Typecheck", suggested: true }, { label: "Tests", suggested: true }, { label: "Lint" }],
+				multiSelect: true,
+			},
+		};
 	if (cmd.action === "replace") {
 		// The asking agent replaces the request through the same boundary: a new revision.
 		const current = (await f.read()).actions.find((a) => a.record.id === "upload")!;

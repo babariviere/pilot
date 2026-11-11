@@ -187,9 +187,9 @@ async fn run(
             if decision.delivery != Delivery::Idle || decision.kind == DecisionKind::Unknown {
                 return Err(Error::Unknown);
             }
-            let request =
-                ah::answer_request(&read, &r.decision_id, r.option_id.as_deref(), &r.text)
-                    .map_err(|_| Error::Invalid)?;
+            let picks: Vec<String> = r.option_id.iter().chain(&r.option_ids).cloned().collect();
+            let request = ah::answer_request(&read, &r.decision_id, &picks, &r.text)
+                .map_err(|_| Error::Invalid)?;
             Some(Work::AttentionSend(request))
         }
         Command::Action { action, ask, text } => {
@@ -217,7 +217,9 @@ async fn run(
         Command::Draft(r) => {
             let read = attention_read(host)?;
             let key = ah::draft_key(&read, &r.item_id, r.revision).map_err(|_| Error::Stale)?;
-            let value = ah::draft_value(r.pick.as_deref(), &r.text, &r.question);
+            // A question keeps a Later saved before; only a sent answer clears it.
+            let before = host.attention_draft(&key);
+            let value = ah::draft_value(&ah::draft_from(&key, r, before.as_ref()));
             if serde_json::to_vec(&value)
                 .map_err(|_| Error::Invalid)?
                 .len()

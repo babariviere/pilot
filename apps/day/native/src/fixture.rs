@@ -799,12 +799,13 @@ fn quiet() -> World {
     }
 }
 
-/// The quiet world with one agent question shaped like a native card: it
-/// takes the user's own words and Pilot has no help to offer for it.
+/// The quiet world with agent questions shaped like native cards: they take
+/// the user's own words and Pilot has no help to offer for them. The second
+/// takes several answers.
 fn asks() -> World {
     let mut world = quiet();
-    world.today.headline = s("One question needs you.");
-    world.today.decisions = vec![Decision {
+    world.today.headline = s("Two questions need you.");
+    let first = Decision {
         title: s("Which package should go to the store?"),
         reason: s("Asks for your answer"),
         context: s("The reviewed zip is ready. A rebuild would change its bytes."),
@@ -818,7 +819,23 @@ fn asks() -> World {
         reply: true,
         help_unavailable: Some(s(crate::attention_host::NO_HELP)),
         ..decision("ask1", DecisionKind::Choice, "native", "Native desktop app")
-    }];
+    };
+    let second = Decision {
+        title: s("Which checks should run before the upload?"),
+        reason: first.reason.clone(),
+        context: s("Pick any that apply. Pilot runs only the checks you pick."),
+        boundary: first.boundary.clone(),
+        options: vec![
+            opt("option-1", "Typecheck", "Shared types only", true),
+            opt("option-2", "Tests", "Focused tests, about 2 min", true),
+            opt("option-3", "Lint", "", false),
+        ],
+        multiple: true,
+        reply: true,
+        help_unavailable: first.help_unavailable.clone(),
+        ..decision("ask2", DecisionKind::Choice, "native", "Native desktop app")
+    };
+    world.today.decisions = vec![first, second];
     world
 }
 

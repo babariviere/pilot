@@ -4,10 +4,12 @@
 // words, context, a chart and questions) never picks, sends or approves.
 // Help that Pilot cannot write here is said once and not offered. An
 // agent's question also takes the user's own words; picks and words are
-// kept as drafts for the revision shown.
+// kept as drafts for the revision shown. A question that takes several
+// answers shows checkboxes and sends every option picked. Later is kept
+// with the draft; the chat still waits.
 import { cleanup, effect, keymap, signal, Text, View, type ViewRef } from "nsh";
-import { Input, Radio, RadioGroup } from "nsh/base";
-import type { Answer, Decision } from "pilot-day/native";
+import { Checkbox, Input, Radio, RadioGroup } from "nsh/base";
+import type { Answer, Decision, DecisionOption } from "pilot-day/native";
 import {
 	ask,
 	canSend,
@@ -34,6 +36,7 @@ import {
 	helpOpen,
 	messages,
 	pickChanged,
+	picked,
 	questionText,
 	replies,
 	replyTarget,
@@ -100,6 +103,31 @@ function AnswerLine(props: { day: Day; decision: Decision; answer: Answer }) {
 			</If>
 		</View>
 	);
+}
+
+/** An option's label, its Suggested or Recommended mark and its one-line consequence. */
+function OptionText(props: { decision: Decision; option: DecisionOption }) {
+	const o = () => props.option;
+	return (
+		<View class="flex-1 gap-0.5">
+			<View class="flex-row flex-wrap items-baseline gap-2">
+				<Text class="text-sm font-medium text-card-foreground">{o().label}</Text>
+				<If when={o().recommended}>
+					<Text class="text-xs text-muted-foreground">{props.decision.reply ? "Suggested" : "Recommended"}</Text>
+				</If>
+			</View>
+			<If when={o().detail}>
+				<Text class="text-xs text-muted-foreground">{o().detail}</Text>
+			</If>
+		</View>
+	);
+}
+
+/** How many options are picked on a question that takes several, in a few words. */
+function pickedLine(decision: Decision): string {
+	const n = picked(decision).length;
+	if (n === 0) return "Pick any that apply.";
+	return n === 1 ? "1 picked" : `${n} picked`;
 }
 
 /** The decision `props.decision`, `props.index` of `props.count` waiting. */
@@ -183,6 +211,16 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 			.map((part) => `· ${part}`)
 			.join(" ");
 	const showOptions = () => d().options.length > (d().reply ? 0 : 1);
+	const keyHints = () =>
+		[
+			`${COMMIT_KEY} ${commitLabel(d())}`,
+			"J K next",
+			d().multiple ? "1–9 pick any" : "",
+			d().helpUnavailable ? "" : "S C Q help",
+			d().reply ? "0 own words" : "",
+		]
+			.filter(Boolean)
+			.join(" · ");
 
 	return (
 		<View testID="decision" class="gap-4 rounded-2xl border border-border-strong bg-card px-6 py-6">
@@ -204,6 +242,11 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 					</Text>
 					<Text class="text-xs text-muted-foreground">{meta()}</Text>
 					<View class="flex-1" />
+					<If when={d().draft.later}>
+						<Text testID="put-off" class="text-xs text-faint">
+							Put off. The chat still waits.
+						</Text>
+					</If>
 					<If when={props.count > 1}>
 						<Text class="text-xs text-faint">{`${props.index + 1} of ${props.count}`}</Text>
 					</If>
@@ -333,7 +376,34 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 
 			<Text class="text-xs leading-relaxed text-muted-foreground">{d().boundary}</Text>
 
-			<If when={showOptions()}>
+			<If when={showOptions() && d().multiple}>
+				<View class="gap-1">
+					<Text testID="picked" class="px-3 text-xs text-muted-foreground">
+						{pickedLine(d())}
+					</Text>
+					<Each of={d().options} key={(o) => o.id}>
+						{(o) => (
+							<Checkbox
+								ref={(node) => radios.set(o().id, node)}
+								checked={picked(d()).includes(o().id)}
+								disabled={!idle()}
+								onChange={() => choose(props.day, d(), o().id)}
+								class="flex-row gap-3 rounded-xl px-3 py-2.5 checked:bg-selection hover:bg-accent checked:hover:bg-selection disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-ring/40"
+								indicatorClass="mt-0.5 size-4 items-center justify-center rounded border border-input checked:border-primary checked:bg-primary"
+								indicator={
+									<If when={picked(d()).includes(o().id)}>
+										<View class="size-2 rounded-sm bg-primary-foreground" />
+									</If>
+								}
+							>
+								<OptionText decision={d()} option={o()} />
+							</Checkbox>
+						)}
+					</Each>
+				</View>
+			</If>
+
+			<If when={showOptions() && !d().multiple}>
 				<RadioGroup class="gap-1">
 					<Each of={d().options} key={(o) => o.id}>
 						{(o) => (
@@ -347,19 +417,7 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 								<View class="mt-0.5 size-4 items-center justify-center rounded-full border border-input group-checked:border-primary">
 									<View class="size-2 rounded-full group-checked:bg-primary" />
 								</View>
-								<View class="flex-1 gap-0.5">
-									<View class="flex-row flex-wrap items-baseline gap-2">
-										<Text class="text-sm font-medium text-card-foreground">{o().label}</Text>
-										<If when={o().recommended}>
-											<Text class="text-xs text-muted-foreground">
-												{d().reply ? "Suggested" : "Recommended"}
-											</Text>
-										</If>
-									</View>
-									<If when={o().detail}>
-										<Text class="text-xs text-muted-foreground">{o().detail}</Text>
-									</If>
-								</View>
+								<OptionText decision={d()} option={o()} />
 							</Radio>
 						)}
 					</Each>
@@ -447,9 +505,7 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 					/>
 				</If>
 				<View class="flex-1" />
-				<Text class="text-xs text-faint">
-					{`${COMMIT_KEY} ${commitLabel(d())} · J K next${d().helpUnavailable ? "" : " · S C Q help"}${d().reply ? " · 0 own words" : ""}`}
-				</Text>
+				<Text class="text-xs text-faint">{keyHints()}</Text>
 			</View>
 
 			<If when={d().evidence.length > 0}>
