@@ -175,8 +175,8 @@ def compile_snapshot(checkout, work, output, expected, tools, inherited, product
         raise ValueError("Expected installed unmodified Longbridge NSH 0.4.0")
     if bundle.digest(tools["nsh"]) != CLI_SHA256:
         raise ValueError("Installed NSH release executable checksum mismatch")
-    if execute([tools["mbx"], "--version"], cwd=checkout, env=env).strip() != "mbx 1.26.0":
-        raise ValueError("Expected installed mbx 1.26.0")
+    if not re.fullmatch(r"mbx \d+\.\d+\.\d+", execute([tools["mbx"], "--version"], cwd=checkout, env=env).strip()):
+        raise ValueError("Expected installed mise-managed mbx")
     recipe = bundle.digest(Path(__file__))
     env.update(PILOT_BUILD_SOURCE=expected, PILOT_BUILD_RECIPE=recipe,
                CARGO_TARGET_DIR=str(Path(inherited.get("CARGO_TARGET_DIR", work / "target")).resolve()))

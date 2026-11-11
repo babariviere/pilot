@@ -3,6 +3,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 desktop="$PWD/../desktop"
 export RUSTUP_HOME="$desktop/.tools/rustup" RUSTUP_TOOLCHAIN=1.98.1
+# Resolve before adding checkout tools, which may contain an obsolete mbx.
+mbx="$(command -v mbx || true)"
 export PATH="$desktop/.tools/bin:$HOME/.cargo/bin:$PATH"
 export CARGO_TARGET_DIR="$PWD/target" CARGO_BUILD_JOBS=2 MACOSX_DEPLOYMENT_TARGET=15.0
 export MBX_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/gpui-fixture-mbx-v1"
@@ -12,7 +14,7 @@ if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
   export CARGO_INCREMENTAL=0
   exec cargo "$@"
 fi
-if [[ ! -x "$desktop/.tools/bin/mbx" ]]; then
-  echo 'Bootstrap apps/desktop pinned Rust/mbx tools first.' >&2; exit 1
+if [[ -z "$mbx" ]]; then
+  echo 'Install mbx with mise and expose it on PATH.' >&2; exit 127
 fi
-exec "$desktop/.tools/bin/mbx" "$@"
+exec "$mbx" "$@"

@@ -7,12 +7,12 @@ case "$backend" in
   nsh) python3 prepare-patches.py; cargo build --locked -j 4; binary="$PWD/target/debug/nsh-chat-prototype" ;;
   gpui)
     root="$(cd ../.. && pwd)"
-    [[ -x "$root/apps/desktop/.tools/bin/mbx" ]] || bash "$root/apps/desktop/scripts/bootstrap.sh"
+    command -v mbx >/dev/null || { echo "Install mbx with mise and expose it on PATH." >&2; exit 127; }
     python3 "$root/apps/desktop/scripts/prepare-patches.py"
     export RUSTUP_HOME="$root/apps/desktop/.tools/rustup" RUSTUP_TOOLCHAIN=1.98.1
     export CARGO_TARGET_DIR="$PWD/gpui/target" CARGO_BUILD_JOBS=2 MACOSX_DEPLOYMENT_TARGET=15.0
     export MBX_CACHE_DIR="$HOME/.cache/gpui-fixture-mbx-v1" MBX_TARGET_VIEWS=0
-    "$root/apps/desktop/.tools/bin/mbx" build --locked --manifest-path gpui/Cargo.toml
+    mbx build --locked --manifest-path gpui/Cargo.toml
     binary="$PWD/gpui/target/debug/chat-gpui-comparison" ;;
   *) echo 'Usage: bash experiments/nsh-chat/run.sh [nsh|gpui] [--probe]' >&2; exit 2 ;;
 esac

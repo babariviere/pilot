@@ -127,9 +127,8 @@ sizes must not be added together as physical disk usage.
 The build-loop/cache-probe job ended **cancelled before output**. It was not
 restarted as a benchmark. No actual cross-root restore hit, warm/no-op, one-file
 edit, second GPUI worktree, repeated cold run or plain-Cargo A/B is claimed.
-Reproducible opt-in scripts remain in `scripts/measure-builds.py` and
-`scripts/cache-probe.py`; the latter is explicitly a tiny cache mechanism
-probe, **not** a representative GPUI worktree benchmark. Neither opens a GUI.
+The former build-loop and cache-probe scripts were later removed. These
+historical observations do not depend on keeping those probes in the repo.
 
 ## Unvalidated platform/UI work and next checkpoint
 

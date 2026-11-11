@@ -12,16 +12,17 @@ bash scripts/cargo.sh --blaze stop
 
 This path is **local development only**, not CI, release or a replacement for
 pinned verification. `CI`/`GITHUB_ACTIONS` refuse it. Ordinary `cargo.sh` and
-`check-scoped.py` keep mbx1.26.0/Rust1.98.1 and explicitly disable ambient
+`check-scoped.py` keep Rust1.98.1, use mise-managed mbx and disable ambient
 `MBX_BLAZE`. GitHub Actions runs plain Cargo 1.98.1 with a dependency build cache
 instead of mbx. No release profile, global Cargo config, shell shim,
 service or existing app/daemon is changed. Do not use `mbx setup` or `ra-jit enable`.
 
 ## Actual supported integration
 
-mbx1.26.0 has no Blaze setting. The separate `.tools/blaze` installation pins
-mbx**1.28.0**, whose Cargo shim supports `MBX_BLAZE=1`. Bootstrap copies that mbx
-binary under the local name `shim/cargo`, the shim dispatch upstream supports.
+mbx is managed by mise and resolved from `PATH`, just like ordinary builds.
+Bootstrap installs only the checksum-pinned Blaze engine and its Rust toolchain.
+The wrapper uses mbx's explicit Cargo-shim environment dispatch, with no copied
+mbx binary or generated shim in `.tools/blaze`.
 The shim invokes **`ra-jit cargo`**, not Bazel or a guessed mbx flag. The existing
 shared mbx store and CPU2/4GiB scheduler remain; `mbx reserve` covers the external
 Blaze command and nested cached Cargo work without nested admission deadlock.
@@ -29,8 +30,7 @@ Admission remains an estimate, not an OS CPU/RSS limit.
 
 After acquiring that existing scheduler, the child uses a separate shared store,
 `${XDG_CACHE_HOME:-$HOME/.cache}/gpui-fixture-blaze-mbx-v1`, with the same2GiB
-budget and4GiB free-space reserve. This keeps mbx1.28 metadata migration away
-from pinned1.26 cache state. Blaze worktrees share eligible outputs with each
+budget and4GiB free-space reserve. This keeps experimental build state separate from ordinary builds. Blaze worktrees share eligible outputs with each
 other, not incompatible compiler outputs from the ordinary path.
 
 The available upstream `nightly` binary archive is older than current Blaze
@@ -64,12 +64,10 @@ experimental `RA_JIT_FIRST_BUILD` mode with this installation.
 
 ## Verification and limits
 
-Script coverage exercises actual wrapper dispatch under system Bash3.2 and PATH
-Bash, default pins, private targets, resource reservation, CI/profile refusal,
-missing setup, program-argument boundaries, status/stop and scoped-check isolation:
+Use the normal build path to check compiler dispatch. There is no separate
+Python mbx wrapper-test suite. Scoped-check coverage remains separate:
 
 ```sh
-python3 -m unittest discover -s scripts -p test_blaze.py
 python3 -m unittest discover -s scripts -p test_check_scoped.py
 shellcheck scripts/{cargo,bootstrap,bootstrap-blaze}.sh
 ```
@@ -108,8 +106,8 @@ probe against the normal shared store reported discarding incremental state
 from61 older-version checkouts as its upstream hard-linked-seed safety
 migration. This was not an explicit cleanup; no active local Cargo build was
 present, no job was stopped, and no application data/source was changed. The
-final path uses the separate store above to avoid further cross-version
-metadata migrations. Do not point the experiment at the pinned cache directly.
+final path uses the separate store above to keep experimental outputs isolated.
+These observations used the older pinned tooling; they do not qualify newer mise versions.
 
 Upstream references:
 - [mbx1.28.0 release](https://github.com/jdx/mr-boxington/releases/tag/v1.28.0)

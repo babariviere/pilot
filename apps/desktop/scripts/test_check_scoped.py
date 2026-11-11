@@ -289,7 +289,7 @@ required-features=["native-probes"]
         scripts.mkdir()
         shutil.copyfile(Path(__file__).with_name("cargo.sh"), scripts / "cargo.sh")
         (scripts / "prepare-patches.py").write_text("# Preparation stub in a disposable command fixture only.\n")
-        binaries = self.root / ".tools/bin"
+        binaries = self.root / "bin"
         binaries.mkdir(parents=True)
         mbx = binaries / "mbx"
         mbx.write_text("#!" + scoped.sys.executable + "\nimport os,sys\n"
@@ -303,6 +303,9 @@ required-features=["native-probes"]
                        "assert '--lib' in sys.argv\nprint('test result: ok. 1 passed;')\n"
                        "raise SystemExit(int(os.environ.get('SCOPED_FAUX_EXIT','0')))\n")
         mbx.chmod(0o700)
+        environment = patch.dict(os.environ, PATH=str(binaries) + os.pathsep + os.environ["PATH"])
+        environment.start()
+        self.addCleanup(environment.stop)
         # Outside GitHub Actions the wrapper uses mbx; CI runs plain Cargo instead.
         ambient = {key: os.environ.pop(key) for key in ["GITHUB_ACTIONS"] if key in os.environ}
         self.addCleanup(os.environ.update, ambient)

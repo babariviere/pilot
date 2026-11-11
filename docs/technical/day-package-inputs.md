@@ -11,7 +11,7 @@ The input is a full immutable Pilot commit, not a working tree or bookmark.
 The builder extracts Git objects into a fresh private directory, then:
 
 1. Checks the native macOS arm64 host, installed Rust/Cargo 1.99.1,
-   mbx 1.26.0 and official Longbridge NSH 0.4.0. The installed CLI checksum
+   mise-managed mbx and official Longbridge NSH 0.4.0. The installed CLI checksum
    is pinned. Day's lock must select only release e626a8dd NSH crates and
    must not contain GPUI. There is no CLI-build or source-patch fallback.
 2. Builds Day's own `pilot-desktop`, with `macos-host`, and the existing
@@ -74,7 +74,7 @@ them. Use absolute qualified tool paths and private directories:
 
 ```sh
 export NSH_DAY_CLI=/absolute/installed/longbridge/nsh
-export NSH_DAY_MBX=/private/build/bin/mbx
+export NSH_DAY_MBX="$(mise which mbx)"
 export NSH_DAY_REAL_CARGO=/absolute/installed/toolchain/bin/cargo
 export RUSTC=/absolute/installed/toolchain/bin/rustc
 export CARGO_HOME=/private/build/cargo-home

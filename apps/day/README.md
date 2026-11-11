@@ -68,17 +68,16 @@ window-host compilation, live development rebuilds and packaging remain unverifi
 From the repository root (Rust 1.99.1 and macOS Command Line Tools installed):
 
 ```sh
-bash apps/day/scripts/bootstrap.sh # once: checksum-pinned mbx 1.26.0 only
+mbx --version                    # mise-managed tool on PATH
 apps/day/nsh.sh run               # opens the mock Day app locally
 ```
 
 mbx is a **local compiler cache and build scheduler**, not a remote Mac build
 service. Cargo still compiles cache misses on this Mac. No server address,
 credentials, `mbx setup`, shell activation or service changes are needed.
-If mbx 1.26.0 already exists in Day's `.tools/bin`, the desktop project's
-`.tools/bin` or `PATH`, bootstrap is unnecessary. `NSH_DAY_MBX` can name its
-executable explicitly. Missing or different-version mbx fails, never falls
-back to direct Cargo. Bootstrap does not install Rust or change its defaults.
+The wrapper uses mise-managed `mbx` on `PATH`. `NSH_DAY_MBX` can name an
+executable explicitly. Missing mbx fails, never falls back to direct Cargo.
+The repo does not download mbx or prefer old copies in `.tools/bin`.
 
 `nsh.sh` uses an **installed** CLI: `nsh` on `PATH` (including Homebrew),
 otherwise the official distribution at `~/.nsh/bin/nsh`. `NSH_DAY_CLI` can name an explicit
@@ -122,8 +121,8 @@ test executables, TypeScript checking and native UI all run locally. This is
 not CLI-only caching and does not patch NSH or Cargo's source cache.
 
 Day uses the existing `gpui-fixture-mbx-v1` cache and CPU2/4GiB scheduler pool.
-An explicit `MBX_CACHE_DIR` remains explicit. mbx 1.26.0 is required to avoid
-cross-version cache migrations. Target adoption/views and automatic collection
+An explicit `MBX_CACHE_DIR` remains explicit. Mise owns the mbx version;
+the repo does not pin or install it. Target adoption/views and automatic collection
 are off, so Day does not move targets or delete other worktrees' caches. Remote
 cache access and Blaze are off. Scheduler admission is an estimate, not an OS
 CPU/RSS limit. Private targets still need free disk; caching is not a speedup
@@ -184,14 +183,11 @@ readable synthetic HTTP/WS Today and an injected clock. No providers or Node ser
 Script-only checks need neither Cargo nor NSH and never open a window:
 
 ```sh
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s apps/day/scripts -p test_nsh.py
-shellcheck -x apps/day/nsh.sh apps/day/scripts/{cargo,build-env.sh,bootstrap.sh,typecheck.sh}
+shellcheck -x apps/day/nsh.sh apps/day/scripts/{cargo,build-env.sh,typecheck.sh}
 ```
 
-The fake-executable tests cover installed-CLI dispatch, quoted arguments,
-wrong tool/release refusal, no CLI builds/downloads, offline nested Cargo,
-missing/wrong mbx, failures, local execution and runtime signals.
-They do not by themselves prove upstream subprocess coverage or native acceptance.
+The build wrappers use the installed tools directly. There is no separate
+Python wrapper-test suite or mbx probe to run before normal builds.
 
 The historical main-snapshot checks used mbx 1.26.0, Rust 1.99.1, offline dependency resolution,
 debug info off, incremental off and one Cargo job. Owned subprocess observations

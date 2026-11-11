@@ -224,7 +224,7 @@ class RecipeTests(unittest.TestCase):
             if args == [str(self.tools["rustc"]), "-vV"]:
                 return self.compiler
             if args[-1] == "--version":
-                return {"nsh":day.CLI_VERSION, "cargo":"cargo 1.99.1 (fixture)", "mbx":"mbx 1.26.0"}[Path(args[0]).name]
+                return {"nsh":day.CLI_VERSION, "cargo":"cargo 1.99.1 (fixture)", "mbx":"mbx 1.30.0"}[Path(args[0]).name]
             if args[0] == "/usr/bin/lipo":
                 return "arm64"
             if "metadata" in args:

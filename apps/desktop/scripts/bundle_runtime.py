@@ -451,8 +451,6 @@ def snapshot_build(expected_source, output, native=False):
             snapshot_tools = checkout / "apps/desktop/.tools"
             (snapshot_tools / "bin").mkdir(parents=True)
             (snapshot_tools / "rustup").symlink_to((tools / "rustup").resolve(strict=True), target_is_directory=True)
-            if (tools / "bin/mbx").is_file():
-                (snapshot_tools / "bin/mbx").symlink_to((tools / "bin/mbx").resolve(strict=True))
             bin_path = checkout / "apps/desktop/target/native-helpers"
             subprocess.run(["/bin/bash", str(checkout / "apps/desktop/scripts/build-native-helpers.sh"), str(bin_path)], env=subprocess_env(), check=True, timeout=1200)
             bin_path = bin_path.resolve(strict=True)
@@ -517,8 +515,6 @@ def snapshot_rust(expected_source, output, production=None, *, gui="gpui"):
             tar.extractall(checkout, filter="data")
         desktop = checkout / "apps/desktop"
         (desktop / ".tools/bin").mkdir(parents=True)
-        if (tools / "bin/mbx").is_file():  # Absent on CI, where cargo.sh runs plain Cargo.
-            (desktop / ".tools/bin/mbx").symlink_to((tools / "bin/mbx").resolve(strict=True))
         (desktop / ".tools/rustup").symlink_to((tools / "rustup").resolve(strict=True), target_is_directory=True)
         env = {key: value for key, value in subprocess_env().items() if not key.startswith(("PILOT_", "PI_", "NODE_"))}
         # No trust/feed/public-key variables are inherited. Only explicit

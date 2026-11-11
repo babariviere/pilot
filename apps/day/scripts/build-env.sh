@@ -1,24 +1,15 @@
 #!/usr/bin/env bash
 # Sourced by the two Day entry points. No global setup or shell activation.
 day="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-if [[ -z "${NSH_DAY_MBX:-}" ]]; then
-	if [[ -x "$day/.tools/bin/mbx" ]]; then
-		NSH_DAY_MBX="$day/.tools/bin/mbx"
-	elif [[ -x "$day/../desktop/.tools/bin/mbx" ]]; then
-		NSH_DAY_MBX="$day/../desktop/.tools/bin/mbx"
-	else
-		NSH_DAY_MBX="$(command -v mbx || true)"
-	fi
-fi
-NSH_DAY_MBX="$(command -v "$NSH_DAY_MBX" || true)"
+NSH_DAY_MBX="$(command -v "${NSH_DAY_MBX:-mbx}" || true)"
 if [[ -z "$NSH_DAY_MBX" || ! -x "$NSH_DAY_MBX" ]]; then
-	echo 'Day requires mbx 1.26.0. Run bash apps/day/scripts/bootstrap.sh, or set NSH_DAY_MBX to its executable.' >&2
+	echo 'Day requires mise-managed mbx on PATH (or NSH_DAY_MBX).' >&2
 	exit 127
 fi
 NSH_DAY_MBX="$(cd "$(dirname "$NSH_DAY_MBX")" && pwd)/$(basename "$NSH_DAY_MBX")"
 mbx_version="$("$NSH_DAY_MBX" --version)"
-if [[ "$mbx_version" != 'mbx 1.26.0' ]]; then
-	echo 'Day requires mbx 1.26.0; other versions must not migrate the shared 1.26 cache.' >&2
+if [[ ! "$mbx_version" =~ ^mbx\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+	echo 'Expected an installed mbx executable.' >&2
 	exit 1
 fi
 if [[ -n "${MBX_SOCKET:-}" ]]; then
@@ -36,7 +27,7 @@ if [[ -z "$NSH_DAY_REAL_CARGO" || ! -x "$NSH_DAY_REAL_CARGO" || "$NSH_DAY_REAL_C
 fi
 NSH_DAY_REAL_CARGO="$(cd "$(dirname "$NSH_DAY_REAL_CARGO")" && pwd)/$(basename "$NSH_DAY_REAL_CARGO")"
 export NSH_DAY_MBX NSH_DAY_REAL_CARGO
-# Same versioned cache and admission pool as the existing desktop build path.
+# Same cache and admission pool as the existing desktop build path.
 # Targets stay private. Do not adopt targets, collect others' caches, use remote
 # credentials, or opt into Blaze through ambient configuration.
 export MBX_CACHE_DIR="${MBX_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/gpui-fixture-mbx-v1}"

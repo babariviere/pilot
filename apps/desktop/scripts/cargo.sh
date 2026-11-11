@@ -13,6 +13,8 @@ export MBX_SCHEDULER=1 MBX_SCHEDULER_CPUS=2 MBX_SCHEDULER_MEMORY=4GiB
 export MBX_GC_MAX_SIZE=2GiB MBX_REMOTE_URL=""
 export MBX_GC_MIN_FREE_SIZE=4GiB
 export MBX_TARGET_VIEWS=0
+# Resolve before adding checkout tools, which may contain an obsolete mbx.
+mbx="$(command -v mbx || true)"
 export PATH="$PWD/.tools/bin:$HOME/.cargo/bin:$PATH"
 # Ambient mbx configuration must not change verification or release compilers.
 export MBX_BLAZE=0
@@ -32,7 +34,7 @@ if [[ "${1:-}" == --blaze ]]; then
         echo 'Use the ordinary cargo.sh path for release/named profiles.' >&2; exit 1 ;;
     esac
   done
-  if [[ ! -x .tools/blaze/shim/cargo || ! -x .tools/blaze/bin/ra-jit ]]; then
+  if [[ ! -x .tools/blaze/bin/ra-jit ]]; then
     echo 'Run bash scripts/bootstrap.sh --blaze first.' >&2; exit 1
   fi
   export RUSTUP_TOOLCHAIN=1.99.0
@@ -50,11 +52,11 @@ if [[ "${1:-}" == --blaze ]]; then
   python3 scripts/prepare-patches.py
   export MBX_BLAZE=1
   # This lease covers both Blaze and nested Cargo.
-  # mbx1.28 migrates incremental metadata. Keep it away from pinned1.26 state,
-  # but acquire the existing shared scheduler before entering its shared store.
-  exec .tools/blaze/bin/mbx reserve --cpus 2 --memory 4GiB -- \
+  # Keep experimental outputs separate; use the mise-managed Cargo dispatch.
+  [[ -n "$mbx" ]] || { echo 'Install mbx with mise and expose it on PATH.' >&2; exit 127; }
+  exec "$mbx" reserve --cpus 2 --memory 4GiB -- \
     env MBX_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/gpui-fixture-blaze-mbx-v1" \
-    "$PWD/.tools/blaze/shim/cargo" "$@"
+    MBX_CARGO_SHIM_MODE=1 MBX_CARGO_SHIM_PATH="$mbx" "$mbx" "$@"
 fi
 if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
   # Runners start empty and never share an mbx store, so mbx cannot hit there.
@@ -63,8 +65,8 @@ if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
   python3 scripts/prepare-patches.py
   exec cargo "$@"
 fi
-if [[ ! -x .tools/bin/mbx ]]; then
-  echo 'Run bash scripts/bootstrap.sh first.' >&2; exit 1
+if [[ -z "$mbx" ]]; then
+  echo 'Install mbx with mise and expose it on PATH.' >&2; exit 127
 fi
 python3 scripts/prepare-patches.py
-exec .tools/bin/mbx "$@"
+exec "$mbx" "$@"

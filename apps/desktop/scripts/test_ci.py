@@ -56,7 +56,7 @@ if [[ "$*" == 'build --locked --release --workspace --bins' ]]; then
   printf 'synthetic helper' > target/dev/release/pilot-visual-worker
 fi
 ''')
-        self.write(".tools/bin/mbx", "#!/bin/sh\necho 'mbx 1.26.0'\n")
+        self.write("bin/mbx", "#!/bin/sh\necho 'mbx 1.30.0'\n")
         self.write("bin/uname", '''#!/bin/sh
 case "$1" in -s) echo "${FAKE_OS:-Darwin}";; -m) echo "${FAKE_ARCH:-arm64}";; esac
 ''')
@@ -663,7 +663,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('channel = "1.98.1"', (desktop / "rust-toolchain.toml").read_text())
         self.assertIn('toolchain install 1.98.1', SCRIPT.with_name("bootstrap.sh").read_text())
         self.assertIn('RUSTUP_TOOLCHAIN=1.98.1', SCRIPT.with_name("cargo.sh").read_text())
-        self.assertIn('mbx-1.26.0-', SCRIPT.with_name("bootstrap.sh").read_text())
+        self.assertNotIn('mr-boxington/releases', SCRIPT.with_name("bootstrap.sh").read_text())
 
 
 if __name__ == "__main__":

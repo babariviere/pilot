@@ -707,7 +707,8 @@ uses bounded reads, not GUI/smoothness instrumentation. See
 
 ## Build and launch
 
-Requires existing `rustup`, `curl`, `python3` and platform native build tools.
+Requires existing `rustup`, `curl`, `python3`, mise-managed `mbx` on `PATH`,
+and platform native build tools.
 Bootstrap downloads dependencies. Only explicit --local / --local-check or the
 opt-in private capture helper connects to the existing Local daemon.
 No sudo, global mise config, shell integration or `mbx setup` is required.
@@ -815,8 +816,9 @@ below; Blaze output is not authoritative verification.
 - `patches/` contains scoped, checksum-pinned source edits. Builds materialize
   these into ignored `.patched/`, never into Cargo's registry/cache. See
   `patches/README.md` for provenance and the selection-lifetime contract.
-- `scripts/bootstrap.sh`: **mbx 1.26.0**, platform archive SHA-256 verified.
-  Rust lives in ignored `.tools/rustup`, mbx in `.tools/bin`, not user tool config.
+- `scripts/bootstrap.sh` installs private Rust and checksum-pinned cargo-nextest.
+  Rust lives in ignored `.tools/rustup`. mbx is managed by mise and resolved
+  from `PATH`, not downloaded or selected from `.tools/bin`.
 - `scripts/cargo.sh`: private absolute `target/dev` per checkout; no shared Cargo
   target or incremental directory. Shared eligible mbx outputs live in
   `${XDG_CACHE_HOME:-$HOME/.cache}/gpui-fixture-mbx-v1`, separate from Pilot data.
@@ -860,19 +862,14 @@ visible smoothness, OS IME routing or assistive-technology correctness.
 See `evidence/initial.md` for exact commands, results, build/cache observations
 and limitations. Raw run logs/screenshots are ignored under `evidence/local/`.
 
-Reproduce the serial build-loop and tiny cache probes without opening a GUI:
+For explicit synthetic native workload observations on macOS:
 
 ```sh
-python3 scripts/measure-builds.py  # baseline, no-op, comment edit, exact restore
-python3 scripts/cache-probe.py     # tiny two-source-root cache restore, NOT GPUI
-# macOS only, explicit synthetic native workload observations:
 python3 scripts/measure-rendering.py target/dev/debug/deps/rendering-<hash>
 ```
 
-The first script temporarily edits `src/lib.rs` and restores its bytes. Run it
-without another writer in this workspace. It does not clean targets or caches.
-The second uses two temporary, private targets and removes only those probe
-directories. Neither is a repeated cold-build/second-worktree benchmark.
+Normal builds use mise-managed mbx directly. Separate build-loop and cache-probe
+scripts are not needed.
 
 For opt-in native text scaling, build `bash scripts/cargo.sh test --locked --test scaling --no-run`
 and pass that exact executable to `scripts/measure-scaling.py` with its build-time

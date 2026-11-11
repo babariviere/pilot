@@ -222,7 +222,7 @@ class NativeSnapshotTests(unittest.TestCase):
                                     str(checkout / "apps/desktop/target/native-helpers")])
             self.assertNotEqual(checkout, host)
             self.assertTrue((checkout / "apps/desktop/.tools/rustup").is_symlink())
-            self.assertTrue((checkout / "apps/desktop/.tools/bin/mbx").is_symlink())
+            self.assertFalse((checkout / "apps/desktop/.tools/bin/mbx").exists())
             if fault == "escaped-directory":
                 bin_path.parent.mkdir(parents=True)
                 bin_path.symlink_to(root, target_is_directory=True)
