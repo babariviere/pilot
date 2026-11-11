@@ -105,6 +105,7 @@ import { NativeAttention } from "./native-attention.ts";
 import { NativeChat } from "./native-chat.ts";
 import { MAX_NATIVE_DIAGNOSTIC_BYTES } from "./native-diagnostics.ts";
 import { isIntakeOperation, NativeIntake } from "./native-intake.ts";
+import { UserVerifications } from "./user-verification.ts";
 import {
 	isNativePlanningOperation,
 	NativeMissionPlanning,
@@ -763,6 +764,8 @@ export function createDaemonServer(
 			? new NativeIntake({ journal, tracking, projects, sessions, missions: missions?.store })
 			: undefined;
 	const nativeChat = journal ? new NativeChat({ journal, projects, sessions }) : undefined;
+	const userVerifications =
+		journal && missions ? new UserVerifications({ journal, store: missions.store, projects, sessions }) : undefined;
 	const nativeAttention =
 		journal && missions
 			? new NativeAttention({
@@ -882,6 +885,7 @@ export function createDaemonServer(
 				})
 			: undefined;
 	const admitOperationHeld = async (op: DurableOperation, trace?: TraceCarrier): Promise<unknown> => {
+		if (op.kind === "user-verification") throw new Error("Verification outcome is unknown; Check only");
 		if (op.kind === "attention-answer") {
 			if (!nativeAttention) throw new OperationRejected("Native attention unavailable");
 			return nativeAttention.answer(op, false);
@@ -1539,6 +1543,21 @@ export function createDaemonServer(
 					end();
 				}
 			}
+			if (operation?.kind === "user-verification") {
+				res.setHeader("cache-control", "no-store");
+				if (!githubSetup || !userVerifications) throw new ServiceUnavailable("User verification unavailable");
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
+				const saved = await userVerifications.lookup(operation);
+				if (parts[2] === "receipt") return json(res, 200, saved);
+				const end = mutations.begin({ kind: "operation", id: operation.operationId });
+				try {
+					await journal.execute(operation, (op, entry) => userVerifications.admit(op, entry.firstEntry));
+					return json(res, 200, await userVerifications.lookup(operation));
+				} finally {
+					end();
+				}
+			}
 			if (operation?.kind === "native-chat-create") {
 				res.setHeader("cache-control", "no-store");
 				if (!githubSetup || !nativeChat) throw new ServiceUnavailable("Native chat creation unavailable");
@@ -2087,6 +2106,25 @@ export function createDaemonServer(
 			if (!githubSetup || !nativeChat) throw new ServiceUnavailable("Native chat selection unavailable");
 			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
 			return json(res, 200, await nativeChat.prepare(parts[2]!, url.searchParams.get("mode") ?? ""));
+		}
+		if (
+			parts[1] === "projects" &&
+			((parts.length === 8 && parts[3] === "missions" && parts[5] === "tasks" && parts[7] === "delivered-work") ||
+				(parts.length === 6 && parts[3] === "chats" && parts[5] === "delivered-work"))
+		) {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET") throw new HttpError(405, "Delivered work read is read-only");
+			if (!githubSetup || !userVerifications) throw new ServiceUnavailable("User verification unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			return json(
+				res,
+				200,
+				await userVerifications.read(
+					parts[3] === "missions"
+						? { kind: "task", projectId: parts[2]!, missionId: parts[4]!, taskId: parts[6]! }
+						: { kind: "chat", projectId: parts[2]!, sessionId: parts[4]! },
+				),
+			);
 		}
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "intake") {
 			res.setHeader("cache-control", "no-store");

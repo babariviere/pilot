@@ -47,6 +47,7 @@ import type {
 	UpdateMissionRequest,
 } from "@pilot/protocol";
 import { ATTENTION_SCHEMA, AttentionStore } from "./attention-store.ts";
+import { USER_VERIFICATION_SCHEMA, UserVerificationStore } from "./user-verification-store.ts";
 import { CHANGE_LANDING_SCHEMA, ChangeLandingStore } from "./change-landing-store.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
@@ -748,6 +749,11 @@ export class MissionStore {
 		transaction: (work) => this.transaction(work, true),
 		durable: () => this.durable(),
 	});
+	readonly userVerifications = new UserVerificationStore({
+		one: (sql, ...params) => this.one(sql, ...params),
+		run: (sql, ...params) => this.run(sql, ...params),
+		transaction: (work) => this.transaction(work, true),
+	});
 	/** Native planning snapshots share the replica; no host/UI enrollment is installed. */
 	readonly plans = new MissionPlanStore({
 		one: (sql, ...params) => this.one(sql, ...params),
@@ -895,6 +901,7 @@ export class MissionStore {
 		this.db.exec(PLANNING_WORKER_SCHEMA);
 		this.db.exec(MISSION_PLAN_SCHEMA);
 		this.db.exec(ATTENTION_SCHEMA);
+		this.db.exec(USER_VERIFICATION_SCHEMA);
 		this.db.exec(MISSION_CONTROL_SCHEMA);
 		this.db.exec(HUMAN_REVIEW_SCHEMA);
 		this.db.exec(CHANGE_LANDING_SCHEMA);
@@ -3655,6 +3662,25 @@ export class MissionStore {
 		this.task(id, taskId);
 		const row = this.one("SELECT record FROM task_completions WHERE task_id = ?", taskId);
 		return row ? JSON.parse(str(row.record!)) : undefined;
+	}
+
+	/** Indexed task-scoped read. No whole-mission history or remote PR refresh. */
+	taskOutputs(id: string, taskId: string) {
+		this.task(id, taskId);
+		return {
+			completion: this.completion(id, taskId),
+			nonCodeDelivery: this.nonCodeDelivery(id, taskId),
+			pullRequests: this.all(
+				"SELECT * FROM resources WHERE mission_id=? AND task_id=? AND kind='github.pr' ORDER BY created_at,id",
+				id,
+				taskId,
+			).map(resourceFrom),
+			artifacts: this.all(
+				"SELECT * FROM artifact_links WHERE mission_id=? AND task_id=? ORDER BY artifact_id",
+				id,
+				taskId,
+			).map(artifactFrom),
+		};
 	}
 
 	/** Unaccepted submission only. Never changes task status or member lifecycle. */

@@ -2217,3 +2217,11 @@ export interface TaskModelResponse {
 	projectId: string;
 	task: MissionTask;
 }
+export type {
+	DeliveredWork,
+	UserVerification,
+	UserVerificationIntent,
+	UserVerificationLookup,
+	UserVerificationReceipt,
+	VerificationSubject,
+} from "./user-verification.ts";

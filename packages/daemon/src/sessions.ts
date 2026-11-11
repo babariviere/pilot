@@ -9477,6 +9477,8 @@ ${run.excerpt}`,
 			event?: import("@pilot/protocol").ChatEventSummary;
 			questionReplyId?: number;
 			inputGeneration?: number;
+			/** Synchronous owner/delivery fence immediately before durable input admission. */
+			admissionGuard?: () => void;
 		} = {},
 	): Promise<void> {
 		const end = this.updateGate.begin();
@@ -9495,6 +9497,7 @@ ${run.excerpt}`,
 				options.event,
 				options.questionReplyId,
 				options.inputGeneration,
+				options.admissionGuard,
 			);
 		} finally {
 			end();
@@ -9515,6 +9518,7 @@ ${run.excerpt}`,
 		event?: import("@pilot/protocol").ChatEventSummary,
 		questionReplyId?: number,
 		inputGeneration?: number,
+		admissionGuard?: () => void,
 	): Promise<void> {
 		const meta = this.require(id);
 		if (meta.planning) throw new Conflict("Planning chats use saved interviews, not ordinary messages");
@@ -9612,6 +9616,7 @@ ${run.excerpt}`,
 			}
 			if (meta.recoveryStopped && (report || inputOrigin(requestId)))
 				throw new CommandRejected("Chat recovery is stopped. Send a new message to continue.", "stopped");
+			admissionGuard?.();
 			if (inputGeneration === undefined || inputGeneration === (meta.inputGeneration ?? 0)) {
 				delete meta.cancelled;
 				delete meta.recoveryStopped;
