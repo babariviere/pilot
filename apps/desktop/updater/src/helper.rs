@@ -412,6 +412,42 @@ pub fn compiled_trust() -> Result<Trust, Error> {
     Ok(trust)
 }
 
+#[cfg(all(test, target_os = "macos", feature = "native-macos"))]
+mod parent_exit_tests {
+    use super::*;
+
+    struct OwnedChild(Child);
+    impl Drop for OwnedChild {
+        fn drop(&mut self) {
+            // Also reap after a failed assertion. A test failure is not exit proof.
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    #[test]
+    fn native_watch_requires_exit_of_the_exact_owned_process() {
+        let mut child = OwnedChild(
+            Command::new("/bin/cat")
+                .env_clear()
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let pid = child.0.id().try_into().unwrap();
+        assert!(matches!(
+            ParentWatch::new(pid).unwrap().wait(Duration::ZERO),
+            Err(Error::ParentStillRunning)
+        ));
+        let watch = ParentWatch::new(pid).unwrap();
+        drop(child.0.stdin.take()); // EOF, not a fabricated exit receipt.
+        watch.wait(Duration::from_secs(5)).unwrap();
+        assert!(child.0.wait().unwrap().success());
+    }
+}
+
 #[cfg(any(
     all(target_os = "macos", feature = "native-macos"),
     all(target_os = "linux", feature = "native-linux")

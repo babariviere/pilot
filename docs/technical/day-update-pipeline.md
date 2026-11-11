@@ -1,5 +1,9 @@
 # Day update pipeline qualification
 
+The tagged-runner [executable handoff audit](day-executable-handoff.md) identifies
+the remaining production bootstrap, delegate, helper and startup-ACK ownership.
+It distinguishes executed layout/native-exit checks from signed Day acceptance.
+
 Source audit at `f896e1831529b8059fc80adf1b819a8d683a0c9c`. This is not native or live update acceptance.
 Day has no production update entry or packaged release yet. The subsequently delivered
 [released JSON bridge](day-public-bridge.md) now binds the canonical native `DayRoot` through the existing
