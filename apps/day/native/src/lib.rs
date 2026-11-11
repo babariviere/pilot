@@ -9,6 +9,9 @@
 pub mod actions;
 mod attention_feed;
 pub mod attention_host;
+#[cfg(all(target_os = "macos", feature = "macos-host"))]
+pub mod bootstrap;
+pub mod bridge;
 pub mod changes;
 pub mod changes_contract;
 pub mod changes_desk;
@@ -18,17 +21,14 @@ pub mod contract;
 pub mod desk;
 pub mod feed;
 pub mod fixture;
+mod handoff;
 pub mod host;
-pub mod bridge;
-pub mod root;
-#[cfg(all(target_os = "macos", feature = "macos-host"))]
-pub mod macos_host;
 #[cfg(all(target_os = "macos", feature = "macos-host"))]
 pub mod macos_app;
 #[cfg(all(target_os = "macos", feature = "macos-host"))]
-pub mod bootstrap;
-#[cfg(all(target_os = "macos", feature = "macos-host"))]
 mod macos_capture;
+#[cfg(all(target_os = "macos", feature = "macos-host"))]
+pub mod macos_host;
 pub mod model;
 pub mod plan;
 pub mod plan_desk;
@@ -39,6 +39,7 @@ pub mod project;
 pub mod ritual;
 pub mod ritual_feed;
 mod ritual_results;
+pub mod root;
 pub mod update;
 pub mod update_feed;
 

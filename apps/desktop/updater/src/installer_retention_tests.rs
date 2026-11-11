@@ -138,6 +138,35 @@ fn transaction(target: &Path, id: u8, phase: Phase) -> PathBuf {
     root
 }
 
+#[test]
+fn startup_owner_rechecks_after_verification_before_durable_ack() {
+    let temp = Temp::new();
+    let target = target(&temp);
+    let root = transaction(&target, 100, Phase::RelaunchRequested);
+    let before = fs::read(root.join("journal.json")).unwrap();
+    assert_eq!(
+        acknowledge_startup_checked(&root, "100.1", &trust(), &FixturePlatform, &target, || Err(
+            Error::Cancelled
+        )),
+        Err(Error::Cancelled)
+    );
+    assert_eq!(fs::read(root.join("journal.json")).unwrap(), before);
+    acknowledge_startup_checked(&root, "100.1", &trust(), &FixturePlatform, &target, || {
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(recovery_phase(&root).unwrap(), Phase::StartupAcknowledged);
+    // Lookup of an exact durable ACK neither invokes dispatch nor touches rollback.
+    acknowledge_startup_checked(&root, "100.1", &trust(), &FixturePlatform, &target, || {
+        panic!("a completed startup must not dispatch again")
+    })
+    .unwrap();
+    assert!(
+        root.join("install-payload/Pilot Next.app/rollback-resource")
+            .exists()
+    );
+}
+
 #[cfg(not(all(target_os = "macos", feature = "native-macos")))]
 #[test]
 fn repeated_acknowledged_history_does_not_exhaust_staging() {

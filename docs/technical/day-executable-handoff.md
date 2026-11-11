@@ -1,8 +1,9 @@
 # Day executable self-update handoff
 
 Status: **not production-qualified**. The Day-owned executable and deferred
-close owner are now implemented below. Controller/startup and signed packaging
-remain separate gates. The original source audit on 2026-11-11 was against Pilot
+close owner, app-only controller and verified successor startup are implemented
+below. Signed packaging and real replacement acceptance remain separate gates.
+The original source audit on 2026-11-11 was against Pilot
 `7075f155c78f5da6325707539f3e67d424ec9f65` and unmodified longbridge/nsh
 `v0.4.0`, peeled commit `e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3`.
 The tagged checkout had no tracked changes. No app, service, registration,
@@ -66,24 +67,73 @@ a new selected root; there is no reload or in-place root replacement API.
 Cancel keeps captured preedit as committed text; it does not reconstruct an
 IME's private composition session. `NativeHost::saved_window` exposes the exact
 saved capture only for the same native selection, including after reopen. That
-passive native read grants no action or startup authority. Automatic UI
-restoration and updater startup acknowledgement remain the later joined
-startup task; this change does not auto-restore or auto-send on cold open.
+passive native read grants no action or startup authority. The joined successor
+path below separately owns display restore and native startup acknowledgement.
 
 `WindowOwner::seal_close` returns a non-cloneable `SealedClose` continuation.
-The later updater owner can retain it across the existing controller handoff,
-optionally enter the existing signed preparation once with `prepare_update`,
+The production updater owner keeps it across the existing controller handoff,
+entering the existing signed controller once with `prepare_update`,
 then consume the same continuation with `close_sealed`. It must await entered
 preparation before controller/close completion. `Closing` yields an opaque
 `JoinedClose`, so callers cannot synthesize a successful join for disposal.
-There is no second seal, helper launch, READY or COMMIT in this seam. The
-executable currently refuses `--updater-receipt` rather than cold-starting and
-claiming restoration; verified successor startup belongs to the next handoff.
+There is no second seal or second handshake in this continuation. The
+executable consumes `--updater-receipt` through the verified successor path
+below. It never treats that argument as permission to cold-start an unrelated
+profile or to resume agents.
 
-The audit tables below describe the original stock-runner gap. Their missing
-controller/startup and packaging stages still apply; their missing executable
-and pre-disposal close ownership are superseded by this implementation. Hidden
-attached tests are component/native-boundary evidence, not visible desktop,
+## Joined app-only handoff and successor
+
+The production owner consumes each fresh app confirmation once. It captures
+native editors and the final TSX `SavedView`, seals that exact generation and
+admitted save sequence once, and awaits the serialized native update command.
+`handoff::Controller` reopens the existing signed staged transaction under its
+target lock, prepares the external independent-daemon guard, saves the exact
+native selection/journal/capture with the existing navigation API, and calls
+the existing `PreparedExit::launch`. Only the real helper's READY permits the
+next step. The controller rechecks the seal, profile credentials and close/Stop
+fence after preparation I/O and after READY, immediately before its one COMMIT.
+The root keeps the stage, lock and helper control, including uncertain COMMIT,
+after the host worker joins and until executable exit. No daemon reservation,
+pause, stop, registration or resume is part of this app-only path.
+
+An acknowledged COMMIT still is not parent exit or replacement. The same opaque
+`SealedClose` then enters and joins `NativeHost::close`; only that joined result
+can dispose the engine/window. A failed save, stale seal, cancelled capture,
+unverified target, failed handoff or failed join never disposes the live root.
+An uncertain COMMIT stays Unknown and cannot re-launch a helper or resend COMMIT.
+Cold open and Check read retained evidence only. Recovery payloads and rollback
+evidence are not cleaned or interpreted as a verified rollback.
+After sealing, a failed/uncertain entered handoff or close keeps the current
+sealed engine for native recovery. It does not unseal a possibly committed
+operation or turn Cancel into permission to retry it.
+
+Fresh native launches still require the explicit selection above. The optional
+native-only `--update-transaction`, `--update-source` and `--update-build` must
+appear together and identify an already staged signed target; they do not
+stage, sign or grant its validity. Missing payload/trust remains unavailable.
+These paths never enter TSX. The successor accepts only `--updater-receipt`
+plus its absolute retained transaction, not mixed fresh-selection arguments.
+It verifies the running signed payload, existing startup receipt, external
+guard, manifest source/build and exact retained Day operation. Its saved native
+source, journal, window identity, generation, sequence and final view must agree.
+Managed/combined receipts remain unsupported, even if another controller could
+acknowledge them. No new updater protocol or fixture trust gate is used.
+
+The existing TSX restore shows the saved state and acknowledges display only.
+The production native owner separately observes that current window's durable
+display acknowledgement and enqueues the final native startup command. That
+command journals entry before the existing installer's startup ACK API, rechecks
+identity/authority and writes completion only after the updater's durable ACK.
+A crash after startup entry is lookup-only: an existing exact
+`StartupAcknowledged` journal may reconcile completion, but a missing ACK never
+causes another send. A new display restore, daemon hello or matching version
+alone proves neither replacement nor execution authority. Agents never resume
+from this path.
+
+The audit tables below describe the original stock-runner gaps. Controller,
+successor, executable and pre-disposal close ownership are superseded by the
+implementations above. Signed packaging and actual replacement acceptance are
+still missing. Hidden attached tests are component/native-boundary evidence, not visible desktop,
 signed distribution, whole-form production acceptance or replacement acceptance.
 
 Focused verification entry points (private dependencies/cache/target, installed
@@ -103,15 +153,32 @@ and multiline preedit plus the one-use seal/close continuation. Bridge and
 connected-update tests use headless components. None supplies a signed Day
 payload or claims successful helper handoff/startup.
 
-The focused macOS arm64 run on 2026-11-11 passed the all-targets check,
+The original close-owner macOS arm64 run on 2026-11-11 passed the all-targets check,
 99 library/boundary/Bridge/connected-update/update-host tests, the hidden
 application-owner test and attached capture probe. The hidden owner also
 checked missing-view ACK refusal, exact saved capture after reopen, a different
 profile's refusal to adopt it, and a real private-journal write refusal that
-keeps the engine/text alive. The executable builds and rejects the unsupported
-successor receipt before opening AppKit. These are isolated component and native
+keeps the engine/text alive. The original executable rejected successor receipts
+before opening AppKit; the joined startup path above replaces that refusal.
+Those original checks are isolated component and native
 boundary checks. The visible event loop, physical IME/keyboard/menu interaction,
 all production forms, signed package and successor restore are not accepted.
+
+The joined-controller run passed 102 Day library/model/boundary/Bridge/update
+tests plus the hidden production owner, all-targets check, executable build,
+scoped Clippy and 84 focused updater tests. One mounted-volume test stayed
+ignored; OS signing tests were excluded. The owner now also checks automatic
+app-confirmation capture, cancellation without resurrecting that intent, and
+missing-signed-payload refusal without losing exact bytes or closing the window.
+Controller tests cover one COMMIT after READY, a lost ACK with no second send,
+fresh safety/authority refusal, and startup-entry lookup-only recovery. Updater
+tests cover retained phases/source/build, final startup authority after payload
+verification, durable ACK discovery, EOF/COMMIT/parent exit and rollback evidence.
+The startup metadata unit test uses a test-only synthetic platform; the public
+production verifier always uses the real `NativePlatform` and its signed payload
+closure. No compiler evidence or fixture trust is accepted by production.
+These remain component/hidden-boundary checks, not a real signed Day replacement,
+successful successor launch, visible native acceptance or live update.
 
 Full `clippy::all` is blocked by unchanged large-enum warnings in host Work and
 update Command, plus two collapsible-if warnings in the existing native capture
@@ -137,9 +204,8 @@ Paths below are relative to the tagged NSH checkout.
 This is a limitation of the **stock runner**, not proof that unmodified NSH
 cannot host Day. Public `AppView::view` exposes an embeddable AppKit view. An
 application-owned AppKit window, delegate and menu can use it without patching
-NSH. That production executable and its deferred-close owner are still missing.
-The existing opt-in `macos_host::WindowOwner` is a qualification component, not
-that executable. Its hidden capture fixture does not exercise every real form.
+NSH. The production executable and deferred-close owner above now use this
+route. Its hidden capture fixture does not exercise every real form.
 
 ## Identity and verified payload closure
 
@@ -171,7 +237,11 @@ to manufacture a passing package. No signed production Day payload was available
 for this qualification. Preserving the current installed app and data takes
 priority over making an update appear available.
 
-## Existing owners and exact missing handoffs
+## Original owners and missing handoffs (historical audit)
+
+This table records the original audit, not the current implementation status.
+The joined production path above replaces its controller/startup/close gaps.
+It does not establish signed package or replacement acceptance.
 
 | Stage | Existing owner/evidence | Missing production integration |
 | --- | --- | --- |

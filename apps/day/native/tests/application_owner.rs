@@ -13,7 +13,10 @@ fn main() {
     use pilot_day_native::{
         bridge::{Bridge, METHODS},
         contract::Home,
-        host::{NativeHost, Source},
+        host::{
+            NativeHost, Options, Source,
+            updates::{AppTarget, Selection},
+        },
         macos_app::{ApplicationOwner, Phase},
         root::DayRoot,
     };
@@ -56,6 +59,9 @@ fn main() {
     }
     impl Fixture {
         fn new(main: MainThreadMarker, port: u16) -> Self {
+            Self::selected(main, port, false)
+        }
+        fn selected(main: MainThreadMarker, port: u16, app_update: bool) -> Self {
             let directory =
                 std::env::temp_dir().join(format!("day-owner-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir(&directory).unwrap();
@@ -79,6 +85,12 @@ host.on('fixture.old', async generation=>{
  const result=await call('day.flush.ack',{generation,view:view()}); observed.set('old:'+result.error);
 });
 host.on('fixture.enter', async ()=>{ await call('day.attention.read'); observed.set('entered returned'); });
+host.on('fixture.update', async ()=>{
+ const p=await call('day.update.prepare',{kind:'app',revision:1});
+ if(p.error) { observed.set('prepare:'+p.error); return; }
+ const r=await call('day.update.confirm',{confirmation:p.value.snapshot.pending.id,view:view()});
+ if(r.error) observed.set('confirm:'+r.error);
+});
 host.on('day.flush', async event=>{
  latest=event.generation;
  observed.set('captured:'+text());
@@ -98,18 +110,43 @@ host.on('day.flush', async event=>{
 mount(()=><View class="flex-1"><Input multiline value={text()} onChange={({value})=>text.set(value)}
  class="h-24 w-96"/><Text>{observed()}</Text></View>);
 "#).unwrap();
-            let host = NativeHost::open(
-                Source {
-                    profile: directory.join("profile"),
-                    port,
-                    home: Home {
-                        daemon_id: "synthetic".into(),
-                        lineage_id: "synthetic".into(),
-                    },
-                    project_id: "synthetic".into(),
-                    project_path: directory.display().to_string(),
+            let source = Source {
+                profile: directory.join("profile"),
+                port,
+                home: Home {
+                    daemon_id: "synthetic".into(),
+                    lineage_id: "synthetic".into(),
                 },
+                project_id: "synthetic".into(),
+                project_path: directory.display().to_string(),
+            };
+            let updates = app_update.then(|| {
+                use pilot_desktop_updater::{app_update::Connection, coordination::Location, manifest::Trust};
+                use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+                std::fs::create_dir(&source.profile).unwrap();
+                std::fs::set_permissions(&source.profile, std::fs::Permissions::from_mode(0o700)).unwrap();
+                std::fs::write(source.profile.join("daemon-id"), "synthetic").unwrap();
+                std::fs::write(source.profile.join("storage-lineage"), "synthetic").unwrap();
+                use std::io::Write;
+                std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600)
+                    .open(source.profile.join("github-app-capability")).unwrap()
+                    .write_all(json!({"daemonId":"synthetic","lineageId":"synthetic","token":"a".repeat(64)}).to_string().as_bytes()).unwrap();
+                let installed = directory.join("unpublished.app");
+                Selection {
+                    connection: Connection::new(Location { home: source.profile.clone(), port, policy: Default::default() }, "synthetic".into(), "synthetic".into()),
+                    trust: Trust { repository: "synthetic/offline".into(), application_id: "com.example.synthetic.day".into(), channel: "desktop-stable".into(), current_build: "1.0".into(), bundle_name: "Pilot Next.app".into(), public_key: [42;32], code_requirement: "identifier com.example.synthetic.day".into() },
+                    installed: installed.clone(), capsule: None, binding: None,
+                    app: Some(AppTarget { transaction: directory.join("missing-transaction"), target: installed, build: "2.0".into(), source: "a".repeat(40) }),
+                    restore_transaction: None,
+                }
+            });
+            let host = NativeHost::open_with_options(
+                source,
                 directory.join("journal"),
+                Options {
+                    updates,
+                    ..Default::default()
+                },
             )
             .unwrap();
             let bridge = Bridge::new(DayRoot::new(host.clone()));
@@ -362,8 +399,62 @@ mount(()=><View class="flex-1"><Input multiline value={text()} onChange={({value
     );
     assert!(f.owner.view().window().is_some());
     drop(f);
+    // The actual production owner consumes an app confirmation once, but never
+    // substitutes fixture identity for a missing signed payload.
+    let f = Fixture::selected(main, 1, true);
+    let editor = f.editor();
+    editor.setString(&NSString::from_str("final update bytes 👩🏽‍💻  "));
+    editor.didChangeText();
+    f.channel.send("fixture.update", json!(null)).unwrap();
+    pump(|| matches!(f.owner.phase(), Phase::Saving(_)));
+    f.owner.cancel_close();
+    assert_eq!(f.owner.phase(), Phase::Editing);
+    assert!(editor.isEditable());
+    assert!(
+        !std::fs::read_to_string(f.directory.join("journal"))
+            .unwrap()
+            .contains("\"state\":\"entered\"")
+    );
+    f.close(); // ordinary Close must not resurrect the consumed update intent
+    assert!(
+        !std::fs::read_to_string(f.directory.join("journal"))
+            .unwrap()
+            .contains("\"state\":\"entered\"")
+    );
+    drop(f);
+
+    let f = Fixture::selected(main, 1, true);
+    let editor = f.editor();
+    editor.setString(&NSString::from_str("kept after refused handoff 👩🏽‍💻  "));
+    editor.didChangeText();
+    f.mode("ack");
+    f.channel.send("fixture.update", json!(null)).unwrap();
+    pump(|| f.owner.phase() == Phase::DrainFailed);
+    assert!(f.owner.view().window().is_some());
+    assert_eq!(
+        editor.string().to_string(),
+        "kept after refused handoff 👩🏽‍💻  "
+    );
+    assert_eq!(
+        f.host.saved_window().unwrap().view["goal"],
+        "kept after refused handoff 👩🏽‍💻  "
+    );
+    let journal = std::fs::read_to_string(f.directory.join("journal")).unwrap();
+    assert_eq!(journal.matches("\"state\":\"entered\"").count(), 1);
+    assert!(journal.contains("\"state\":\"stopped\""));
+    assert!(!f.directory.join("missing-transaction").exists());
+    assert!(!f.directory.join("profile/.daemon-upgrade.json").exists());
+    f.owner.request_quit();
+    f.owner.cancel_close();
+    assert_eq!(f.owner.phase(), Phase::DrainFailed);
+    assert_eq!(
+        std::fs::read_to_string(f.directory.join("journal")).unwrap(),
+        journal
+    );
+    drop(f);
+
     println!(
-        "PASS hidden production owner: deferred close/Quit, exact preedit, cancel/retry, stale ACK, failed save, entered-I/O drain, one joined disposal"
+        "PASS hidden production owner: deferred close/Quit, exact preedit, cancel/retry, stale ACK, failed save, entered-I/O drain, one joined disposal, app-confirmation cancel/no replay, missing-signed-payload refusal"
     );
 }
 

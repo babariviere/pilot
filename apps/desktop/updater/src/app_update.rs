@@ -163,6 +163,43 @@ pub fn verify_prepared_target(
         manifest.manifest(),
     )
 }
+
+/// Read-only exact source/build verification of a retained post-swap payload.
+/// This neither acknowledges startup nor grants runtime/daemon authority.
+pub fn verify_startup_target(
+    transaction: &Path,
+    target: &Path,
+    trust: &Trust,
+    expected: &crate::iteration::ExpectedTarget,
+) -> Result<(), Error> {
+    verify_startup_target_with(transaction, target, trust, expected, &NativePlatform)
+}
+fn verify_startup_target_with(
+    transaction: &Path,
+    target: &Path,
+    trust: &Trust,
+    expected: &crate::iteration::ExpectedTarget,
+    platform: &impl Platform,
+) -> Result<(), Error> {
+    trust.validate()?;
+    installer::validate_target(target, trust)?;
+    let root = installer::transaction_path(transaction)?;
+    installer::validate_root(&root, target)?;
+    if !matches!(
+        installer::recovery_phase(&root)?,
+        installer::Phase::Swapped
+            | installer::Phase::RelaunchRequested
+            | installer::Phase::StartupAcknowledged
+    ) {
+        return Err(Error::RecoveryRequired);
+    }
+    let manifest = installer::signed_manifest(&root, trust)?;
+    expected.verify(manifest.manifest())?;
+    if expected.build() != trust.current_build {
+        return Err(Error::Version);
+    }
+    platform.verify_candidate(target, trust, manifest.manifest())
+}
 impl ExitGuard {
     pub fn prepare_external(
         connection: Connection,
@@ -320,6 +357,76 @@ pub fn navigation(transaction: &Path) -> Result<Value, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn retained_startup_verifies_phase_signed_source_and_running_build_without_ack() {
+        use crate::owned_tests::{Temp, archive, envelope, metadata, trust};
+        use std::{fs, os::unix::fs::PermissionsExt};
+        struct Payload;
+        impl Platform for Payload {
+            fn verify(&self, _: &Path, _: &Trust, _: &str, _: Option<&str>) -> Result<(), Error> {
+                Ok(())
+            }
+            fn verify_candidate(
+                &self,
+                _: &Path,
+                _: &Trust,
+                _: &crate::manifest::Manifest,
+            ) -> Result<(), Error> {
+                // Metadata/phase unit test only. The public production path
+                // always uses NativePlatform, including its full signed closure.
+                Ok(())
+            }
+            fn swap(&self, _: &fs::File, _: &Path, _: &Path) -> Result<(), Error> {
+                panic!("read-only")
+            }
+            fn relaunch(&self, _: &Path, _: &Path) -> Result<(), Error> {
+                panic!("read-only")
+            }
+        }
+        let temp = Temp::new();
+        let target = temp.path().join("Pilot Next.app");
+        fs::create_dir(&target).unwrap();
+        let root = temp.path().join(format!(".pilot-next-update-{:032x}", 1));
+        fs::create_dir(&root).unwrap();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut manifest = metadata(&archive());
+        manifest.source = Some("a".repeat(40));
+        installer::write_new(&root.join("manifest.json"), &envelope(&manifest)).unwrap();
+        let mut trust = trust();
+        trust.current_build = manifest.build.clone();
+        let exact = crate::iteration::ExpectedTarget::new(
+            manifest.source.clone().unwrap(),
+            manifest.build.clone(),
+        )
+        .unwrap();
+        for phase in [
+            "Ready",
+            "Committed",
+            "Swapped",
+            "RelaunchRequested",
+            "StartupAcknowledged",
+            "Aborted",
+        ] {
+            let journal = serde_json::json!({"schema":1,"phase":phase,"original_device":1,"original_inode":1}).to_string();
+            fs::write(root.join("journal.json"), &journal).unwrap();
+            let result = verify_startup_target_with(&root, &target, &trust, &exact, &Payload);
+            assert_eq!(
+                result.is_ok(),
+                ["Swapped", "RelaunchRequested", "StartupAcknowledged"].contains(&phase),
+                "{phase}: {result:?}"
+            );
+            assert_eq!(
+                fs::read_to_string(root.join("journal.json")).unwrap(),
+                journal
+            );
+        }
+        fs::write(root.join("journal.json"), serde_json::json!({"schema":1,"phase":"Swapped","original_device":1,"original_inode":1}).to_string()).unwrap();
+        let wrong =
+            crate::iteration::ExpectedTarget::new("0".repeat(40), manifest.build.clone()).unwrap();
+        assert!(verify_startup_target_with(&root, &target, &trust, &wrong, &Payload).is_err());
+        trust.current_build = "999.1".into();
+        assert!(verify_startup_target_with(&root, &target, &trust, &exact, &Payload).is_err());
+    }
     #[test]
     fn external_identity_and_protocol_are_exact() {
         let c = Connection::new(

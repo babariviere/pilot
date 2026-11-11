@@ -22,8 +22,10 @@ The native crate now also contains the Day-owned `pilot-desktop` executable
 keeps screens in TSX. Close and Quit save/seal forms and join the native root
 before stopping the engine. It requires verified packaged resources and an
 explicit native selection; it is not a new `apps/day/nsh.sh run` entry or a signed
-release. Controller handoff, verified successor startup, production packaging
-and visible acceptance remain separate. See [the executable handoff](../../docs/technical/day-executable-handoff.md).
+release. Its app-only controller now joins the existing READY/COMMIT protocol
+to that owner and verifies receipt-only successor restore/startup. Missing signed
+payloads remain unavailable. Source-matched packaging and real signed replacement
+acceptance remain separate. See [the executable handoff](../../docs/technical/day-executable-handoff.md).
 
 ## Upstream pin
 

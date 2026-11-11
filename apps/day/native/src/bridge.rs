@@ -72,6 +72,7 @@ pub fn restrict(mut bundle: nsh_engine::Bundle) -> Result<nsh_engine::Bundle, Er
 pub(crate) struct Gate {
     pub require_saved_view: bool,
     pub update_requested: Option<String>,
+    pub update_app: bool,
     pub notice_pending: bool,
     pub closed: bool,
     pub generation: u32,
@@ -658,6 +659,26 @@ impl Bridge {
             .expect("bridge gate poisoned")
             .update_requested
             .clone()
+    }
+
+    pub(crate) fn take_app_update(&self) -> Option<String> {
+        let mut gate = self.gate.lock().expect("bridge gate poisoned");
+        if !gate.update_app {
+            return None;
+        }
+        gate.update_requested.take()
+    }
+    pub(crate) fn app_update_requested(&self) -> bool {
+        let gate = self.gate.lock().expect("bridge gate poisoned");
+        gate.update_app && gate.update_requested.is_some()
+    }
+    pub(crate) fn startup_ready(&self) -> bool {
+        self.root.host().startup_ready()
+    }
+    pub(crate) fn acknowledge_startup(
+        &self,
+    ) -> async_channel::Receiver<Result<crate::model::IntentOutcome, Error>> {
+        self.root.host().acknowledge_startup()
     }
 
     /// Native lifecycle owner calls this only AFTER attached inputs/preedit were

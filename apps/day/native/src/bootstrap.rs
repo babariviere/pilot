@@ -1,9 +1,12 @@
 //! Production bootstrap. No development resource override, mock root, credential
-//! in JS, live registration or updater handshake. Missing identity refuses load.
+//! in JS or live registration. Missing signed identity refuses load.
 use crate::{
     bridge::Bridge,
     contract::Home,
-    host::{Error, NativeHost, Source},
+    host::{
+        Error, NativeHost, Options, Source,
+        updates::{AppTarget, Selection},
+    },
     macos_app::ApplicationOwner,
     root::DayRoot,
 };
@@ -18,9 +21,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Native launch selection is explicit, never inferred from a development
-/// environment or sent to the screen. Full successor restoration is not joined
-/// yet, so --updater-receipt is deliberately refused (never acknowledged).
+/// Native launch selection is explicit, never inferred from development state.
 fn selection(args: Vec<OsString>) -> Result<(Source, PathBuf), Error> {
     let mut values = BTreeMap::new();
     let mut args = args.into_iter();
@@ -103,7 +104,7 @@ fn resource_directory(executable: &Path) -> Result<PathBuf, Error> {
 }
 
 pub fn run(args: Vec<OsString>) -> Result<(), Error> {
-    let (source, journal) = selection(args)?;
+    let launch = launch(args)?;
     let executable = std::env::current_exe()
         .and_then(|p| p.canonicalize())
         .map_err(|_| Error::Identity)?;
@@ -135,7 +136,50 @@ pub fn run(args: Vec<OsString>) -> Result<(), Error> {
     // All initial filesystem/signature reads precede AppKit's event loop.
     let main = MainThreadMarker::new().ok_or(Error::Unavailable)?;
     nsh_platform_macos::set_ui_sets(vec![nsh_base::registry(), crate::__nsh_native_module()]);
-    let host = NativeHost::open(source, journal)?;
+    let (source, journal, updates) = match launch {
+        Launch::Successor(receipt) => {
+            let (source, journal, updates) =
+                crate::host::updates::successor(&receipt, root, trust.clone())?;
+            (source, journal, updates)
+        }
+        Launch::Selected(selected) => {
+            let NativeSelection {
+                source,
+                journal,
+                app,
+            } = *selected;
+            let connection = pilot_desktop_updater::app_update::Connection::new(
+                pilot_desktop_updater::coordination::Location {
+                    home: source.profile.clone(),
+                    port: source.port,
+                    policy: Default::default(),
+                },
+                source.home.daemon_id.clone(),
+                source.home.lineage_id.clone(),
+            );
+            (
+                source,
+                journal,
+                Selection {
+                    connection,
+                    trust: trust.clone(),
+                    installed: root,
+                    capsule: None,
+                    binding: None,
+                    app,
+                    restore_transaction: None,
+                },
+            )
+        }
+    };
+    let host = NativeHost::open_with_options(
+        source,
+        journal,
+        Options {
+            updates: Some(updates),
+            ..Default::default()
+        },
+    )?;
     let bridge = Bridge::new(DayRoot::new(host));
     let mut configuration = crate::macos_host::options(&bridge);
     configuration.app_id = trust.application_id.clone();
@@ -143,6 +187,83 @@ pub fn run(args: Vec<OsString>) -> Result<(), Error> {
     // No runtime-delivered modules or environment-selected chunk directory.
     configuration.chunks = None;
     ApplicationOwner::configured(main, bundle, bridge, configuration)?.run(main)
+}
+
+enum Launch {
+    Selected(Box<NativeSelection>),
+    Successor(PathBuf),
+}
+struct NativeSelection {
+    source: Source,
+    journal: PathBuf,
+    app: Option<AppTarget>,
+}
+
+fn launch(args: Vec<OsString>) -> Result<Launch, Error> {
+    if args.first().is_some_and(|s| s == "--updater-receipt") {
+        if args.len() != 2 {
+            return Err(Error::Invalid);
+        }
+        let receipt = PathBuf::from(&args[1]);
+        if !receipt.is_absolute() {
+            return Err(Error::Invalid);
+        }
+        return Ok(Launch::Successor(receipt));
+    }
+    // An exact already-staged native target, never screen-supplied paths or a
+    // signature bypass. Controller prepare reacquires its lock and verifies it.
+    let mut native = BTreeMap::new();
+    let mut selected = vec![];
+    let mut args = args.into_iter();
+    while let Some(key) = args.next() {
+        let value = args.next().ok_or(Error::Invalid)?;
+        if ["--update-transaction", "--update-source", "--update-build"]
+            .iter()
+            .any(|s| key == *s)
+        {
+            if native.insert(key, value).is_some() {
+                return Err(Error::Invalid);
+            }
+        } else {
+            selected.extend([key, value]);
+        }
+    }
+    let (source, journal) = selection(selected)?;
+    let app = if native.is_empty() {
+        None
+    } else {
+        let transaction = PathBuf::from(
+            native
+                .remove(&OsString::from("--update-transaction"))
+                .ok_or(Error::Invalid)?,
+        );
+        let source = native
+            .remove(&OsString::from("--update-source"))
+            .ok_or(Error::Invalid)?
+            .into_string()
+            .map_err(|_| Error::Invalid)?;
+        let build = native
+            .remove(&OsString::from("--update-build"))
+            .ok_or(Error::Invalid)?
+            .into_string()
+            .map_err(|_| Error::Invalid)?;
+        if !transaction.is_absolute() {
+            return Err(Error::Invalid);
+        }
+        pilot_desktop_updater::iteration::ExpectedTarget::new(source.clone(), build.clone())
+            .map_err(|_| Error::Invalid)?;
+        Some(AppTarget {
+            transaction,
+            target: pilot_desktop_updater::layout::running_root().map_err(|_| Error::Identity)?,
+            source,
+            build,
+        })
+    };
+    Ok(Launch::Selected(Box::new(NativeSelection {
+        source,
+        journal,
+        app,
+    })))
 }
 
 #[cfg(test)]
@@ -166,7 +287,21 @@ mod tests {
     }
     #[test]
     fn successor_and_development_flags_never_fall_back_to_fresh_start() {
-        for flag in ["--updater-receipt", "--app-dir", "--chunk-dir"] {
+        assert!(matches!(
+            launch(vec!["--updater-receipt".into(), "/tmp/receipt".into()]),
+            Ok(Launch::Successor(_))
+        ));
+        assert!(launch(vec!["--updater-receipt".into(), "relative".into()]).is_err());
+        assert!(
+            launch(vec![
+                "--updater-receipt".into(),
+                "/tmp/receipt".into(),
+                "--profile".into(),
+                "/tmp/profile".into()
+            ])
+            .is_err()
+        );
+        for flag in ["--app-dir", "--chunk-dir"] {
             assert!(matches!(
                 selection(vec![flag.into(), "/tmp/untrusted".into()]),
                 Err(Error::Unavailable)

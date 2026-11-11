@@ -89,6 +89,10 @@ pub(crate) fn valid_id(s: &str) -> bool {
 struct Shared {
     saved_window: Mutex<Option<window::SavedWindow>>,
     updates: Mutex<crate::update::ServiceView>,
+    // Held by the root after the worker joins, through process exit. Dropping
+    // a COMMIT-uncertain controller never grants a second launch or send.
+    app_controller: Mutex<Option<crate::handoff::Controller>>,
+    startup_ready: AtomicBool,
     notices: Mutex<Vec<std::sync::Weak<dyn Fn() + Send + Sync>>>,
     ritual: Mutex<ritual::State>,
     changes: Mutex<changes::State>,
@@ -162,6 +166,7 @@ impl Shared {
 }
 
 enum Work {
+    UpdateStartup,
     UpdateCommit {
         id: String,
         proof: crate::bridge::FlushReceipt,
@@ -351,6 +356,8 @@ impl NativeHost {
         let shared = Arc::new(Shared {
             saved_window: Mutex::new(None),
             updates: Mutex::new(updates::State::new(None).snapshot()),
+            app_controller: Mutex::new(None),
+            startup_ready: AtomicBool::new(false),
             notices: Mutex::default(),
             ritual: Mutex::new(ritual::State::default()),
             changes: Mutex::new(changes::State::default()),
@@ -416,6 +423,13 @@ impl NativeHost {
             window,
             gate,
         })
+    }
+
+    pub(crate) fn startup_ready(&self) -> bool {
+        self.0.shared.startup_ready.load(Ordering::SeqCst)
+    }
+    pub(crate) fn acknowledge_startup(&self) -> Receiver<Result<IntentOutcome, Error>> {
+        self.request(Work::UpdateStartup)
     }
 
     /// Current native projection. No transport or authority leaves Rust.
@@ -745,6 +759,9 @@ async fn run(
         .get(&window::SavedWindow::key(&t.source)?)
         .cloned();
     updates.restore(&journal, &t.source).await;
+    shared
+        .startup_ready
+        .store(updates.startup_ready(), Ordering::SeqCst);
     *shared.updates.lock().expect("native updates poisoned") = updates.snapshot();
     for record in journal.attention.values().filter(|r| r.source == t.source) {
         attention::publish(&shared, record);
@@ -821,9 +838,10 @@ async fn run(
                             !g.closed && g.sealed && g.forms_saved && g.native_captured
                                 && g.generation == generation && g.save_sequence == sequence
                         };
-                        if valid { updates::handle(&t, &mut journal, &shared, &mut updates, updates::Command::Commit(id, proof, window)).await }
+                        if valid { updates::handle(&t, &mut journal, &shared, &mut updates, updates::Command::Commit(id, proof, window, gate)).await }
                         else { Err(Error::Stale) }
                     }
+                    Work::UpdateStartup => updates::handle(&t, &mut journal, &shared, &mut updates, updates::Command::Startup).await,
                     Work::RitualResults => ritual::read_results(&t, day.as_ref(), &mut journal, &shared, request.epoch).await,
                     work => handle(&t, &mut journal, &shared, request.epoch, work).await,
                 };
@@ -994,7 +1012,7 @@ async fn handle(
     }
     match work {
         Work::Bridge(_) => return Err(Error::Invalid),
-        Work::UpdateCommit { .. } => return Err(Error::Invalid),
+        Work::UpdateCommit { .. } | Work::UpdateStartup => return Err(Error::Invalid),
         Work::Ritual(_) => return Err(Error::Invalid),
         Work::RitualResults => return Err(Error::Invalid),
         work @ (Work::AttentionRead

@@ -149,6 +149,21 @@ impl WindowOwner {
         self.bridge.window_identity()
     }
 
+    pub(crate) fn take_app_update(&self) -> Option<String> {
+        self.bridge.take_app_update()
+    }
+    pub(crate) fn app_update_requested(&self) -> bool {
+        self.bridge.app_update_requested()
+    }
+    pub(crate) fn startup_ready(&self) -> bool {
+        self.bridge.startup_ready()
+    }
+    pub(crate) fn acknowledge_startup(
+        &self,
+    ) -> async_channel::Receiver<Result<crate::model::IntentOutcome, Error>> {
+        self.bridge.acknowledge_startup()
+    }
+
     pub fn ready(&self, generation: u32) -> bool {
         self.bridge.flush_ready(generation)
     }
@@ -186,9 +201,9 @@ impl WindowOwner {
         })
     }
 
-    /// Optional one-use entry into the existing signed preparation owner.
+    /// One-use entry into the signed controller's READY/COMMIT handoff.
     /// The caller must await this receiver before consuming the continuation
-    /// with close_sealed. It must not infer READY/COMMIT from this result.
+    /// with close_sealed. Only Accepted acknowledges COMMIT, never replacement.
     pub fn prepare_update(
         &self,
         continuation: &mut SealedClose,

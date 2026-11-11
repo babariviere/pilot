@@ -42,6 +42,105 @@ pub struct AppTarget {
     pub source: String,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Navigation {
+    day: u32,
+    operation: String,
+    journal: PathBuf,
+    capture: super::window::SavedWindow,
+}
+
+/// Read the successor's exact retained native selection and saved capture.
+/// Signed running-payload verification is mandatory; this never launches or ACKs.
+pub(crate) fn successor(
+    transaction: &std::path::Path,
+    installed: PathBuf,
+    trust: Trust,
+) -> Result<(Source, PathBuf, Selection), Error> {
+    use pilot_desktop_updater::{
+        app_update,
+        installer::{self, NativePlatform, Platform},
+    };
+    trust.validate().map_err(|_| Error::Identity)?;
+    NativePlatform
+        .verify(&installed, &trust, &trust.current_build, None)
+        .map_err(|_| Error::Identity)?;
+    let phase = installer::recovery_phase(transaction).map_err(|_| Error::Identity)?;
+    if !matches!(
+        phase,
+        installer::Phase::Swapped
+            | installer::Phase::RelaunchRequested
+            | installer::Phase::StartupAcknowledged
+    ) {
+        return Err(Error::Unknown);
+    }
+    let found = installer::startup_receipt(&installed, &trust, &NativePlatform)
+        .map_err(|_| Error::Identity)?;
+    if phase != installer::Phase::StartupAcknowledged && found.as_deref() != Some(transaction) {
+        return Err(Error::Identity);
+    }
+    // Combined/managed successors are deliberately unsupported. In particular,
+    // never reach a startup API that could resume a runtime reservation.
+    if pilot_desktop_updater::coordinated::startup(transaction, &installed, &trust)
+        .map_err(|_| Error::Identity)?
+        .is_some()
+    {
+        return Err(Error::Unavailable);
+    }
+    let connection = ExitGuard::external_startup(transaction, &installed, &trust)
+        .map_err(|_| Error::Identity)?
+        .ok_or(Error::Unavailable)?;
+    let navigation: Navigation =
+        serde_json::from_value(app_update::navigation(transaction).map_err(|_| Error::Identity)?)
+            .map_err(|_| Error::Identity)?;
+    if navigation.day != 1 || !navigation.journal.is_absolute() {
+        return Err(Error::Identity);
+    }
+    navigation.capture.validate()?;
+    let journal = Journal::open(navigation.journal.clone())?;
+    let record = journal
+        .updates
+        .get(&navigation.operation)
+        .ok_or(Error::Identity)?;
+    let selection = Selection {
+        connection,
+        trust,
+        installed,
+        capsule: None,
+        binding: None,
+        app: None,
+        restore_transaction: Some(transaction.into()),
+    };
+    let expected = pilot_desktop_updater::iteration::ExpectedTarget::new(
+        record.root["app"]["source"]
+            .as_str()
+            .ok_or(Error::Identity)?
+            .into(),
+        record.target.clone(),
+    )
+    .map_err(|_| Error::Identity)?;
+    app_update::verify_startup_target(
+        transaction,
+        &selection.installed,
+        &selection.trust,
+        &expected,
+    )
+    .map_err(|_| Error::Identity)?;
+    if !selection.matches(&record.source)
+        || !selection.restores(record)
+        || !record.capture_matches(&navigation.capture)
+        || journal
+            .windows
+            .get(&super::window::SavedWindow::key(&record.source)?)
+            != Some(&navigation.capture)
+        || !["prepared", "unknown", "entered", "startup", "done"].contains(&record.state.as_str())
+    {
+        return Err(Error::Identity);
+    }
+    Ok((record.source.clone(), navigation.journal, selection))
+}
+
 struct Inspection {
     daemon: Result<bool, Failure>,
     app_ready: bool,
@@ -56,6 +155,17 @@ impl Selection {
         let Some(transaction) = &self.restore_transaction else {
             return false;
         };
+        let navigation = pilot_desktop_updater::app_update::navigation(transaction)
+            .ok()
+            .and_then(|v| serde_json::from_value::<Navigation>(v).ok());
+        if navigation.as_ref().is_none_or(|n| {
+            n.day != 1
+                || n.operation != record.id
+                || n.capture.validate().is_err()
+                || !record.capture_matches(&n.capture)
+        }) {
+            return false;
+        }
         let mut prior_trust = record.root["trust"].clone();
         prior_trust["build"] = self.trust.current_build.clone().into();
         if record.kind != "app"
@@ -86,7 +196,7 @@ impl Selection {
                 "bundle":self.trust.bundle_name,"key":self.trust.public_key.to_vec(),
                 "requirement":self.trust.code_requirement}})
     }
-    fn verify_app(&self) -> Result<(), Failure> {
+    pub(crate) fn verify_app(&self) -> Result<(), Failure> {
         let app = self.app.as_ref().ok_or(Failure::Unsupported)?;
         if app.target != self.installed {
             return Err(Failure::Unverified);
@@ -171,20 +281,9 @@ impl Selection {
                 Ok(Outcome::Current)
             }
             UpdateKind::App => {
-                let app = self.app.as_ref().ok_or(Failure::Unsupported)?;
-                self.verify_app()?;
-                // App-only does not acquire a daemon reservation or pause agents.
-                // READY/COMMIT and actual process exit remain with the native owner.
-                let guard = ExitGuard::prepare_external(
-                    self.connection.clone(),
-                    &app.target,
-                    &app.transaction,
-                    &app.build,
-                    &self.trust,
-                )
-                .map_err(|_| Failure::Unknown)?;
-                guard.verify().map_err(|_| Failure::Unknown)?;
-                Ok(Outcome::ExitPrepared)
+                // App entry must use the sealed native controller below. A
+                // standalone guard is neither READY nor permission to close.
+                Err(Failure::Unsupported)
             }
             // A pair of independent calls is NOT a joined app/daemon sequence.
             UpdateKind::Both => Err(Failure::Unsupported),
@@ -232,6 +331,12 @@ pub(super) struct Record {
     pub manifest: Option<Value>,
 }
 impl Record {
+    fn capture_matches(&self, capture: &super::window::SavedWindow) -> bool {
+        self.source == capture.source
+            && self.window == capture.window
+            && self.view == capture.view
+            && self.flush == Some((capture.generation, capture.save_sequence))
+    }
     pub fn validate(&self) -> Result<(), Error> {
         if self.order == 0
             || self.update_version != 1
@@ -241,7 +346,7 @@ impl Record {
             || self.revision == 0
             || !["register", "app", "service"].contains(&self.kind.as_str())
             || ![
-                "capture", "entered", "done", "stopped", "unknown", "prepared",
+                "capture", "entered", "done", "stopped", "unknown", "prepared", "startup",
             ]
             .contains(&self.state.as_str())
             || self.root.as_object().is_none()
@@ -274,8 +379,17 @@ impl Record {
             && (old.flush.is_none() || self.flush == old.flush)
             && match old.state.as_str() {
                 "capture" => ["capture", "entered"].contains(&self.state.as_str()),
-                "entered" => ["entered", "done", "stopped", "unknown", "prepared"]
-                    .contains(&self.state.as_str()),
+                "entered" => {
+                    ["entered", "done", "stopped", "unknown", "prepared"]
+                        .contains(&self.state.as_str())
+                        || old.kind == "app" && self.restored && self.state == "startup"
+                }
+                "prepared" | "unknown" if old.kind == "app" && self.restored => {
+                    self.state == old.state || self.state == "startup"
+                }
+                "startup" if old.kind == "app" && self.restored => {
+                    self.state == "startup" || self.state == "done"
+                }
                 _ => self.state == old.state,
             }
     }
@@ -299,8 +413,23 @@ pub(super) struct State {
     authority: Option<(String, String)>,
     cold_restore: bool,
     restore_verified: bool,
+    restore_displayed: bool,
+    startup_attempted: bool,
 }
 impl State {
+    pub(super) fn startup_ready(&self) -> bool {
+        self.restore_verified
+            && self.restore_displayed
+            && self.latest.as_ref().is_some_and(|r| {
+                r.kind == "app"
+                    && r.restored
+                    && ["entered", "prepared", "unknown", "startup"].contains(&r.state.as_str())
+            })
+            && self
+                .selection
+                .as_ref()
+                .is_some_and(|s| s.restore_transaction.is_some())
+    }
     pub fn new(selection: Option<Selection>) -> Self {
         Self {
             selection,
@@ -309,6 +438,8 @@ impl State {
             authority: None,
             cold_restore: false,
             restore_verified: false,
+            restore_displayed: false,
+            startup_attempted: false,
             view: ServiceView {
                 revision: 1,
                 state: ServiceState::Unknown,
@@ -357,7 +488,15 @@ impl State {
             self.view.agents = manifest_agents(r);
             // Restore is display-only, even across a different current selection.
             // It must still be this exact profile and updater transaction.
-            if self.cold_restore && self.restore_verified && !r.restored {
+            if self.cold_restore
+                && self.restore_verified
+                && !self.restore_displayed
+                && (!r.restored
+                    || self
+                        .selection
+                        .as_ref()
+                        .is_some_and(|s| s.restore_transaction.is_some()))
+            {
                 self.view.restore =
                     nsh_core::element::from_json(&r.view)
                         .ok()
@@ -466,7 +605,13 @@ pub(crate) enum Command {
     Cancel(UpdateRef),
     Check,
     Restored(UpdateRef),
-    Commit(String, FlushReceipt, String),
+    Commit(
+        String,
+        FlushReceipt,
+        String,
+        std::sync::Arc<std::sync::Mutex<crate::bridge::Gate>>,
+    ),
+    Startup,
 }
 
 fn digest(value: &impl AsRef<[u8]>) -> String {
@@ -512,7 +657,7 @@ fn authority_for(source: &Source, kind: UpdateKind) -> Result<String, Error> {
 pub(super) async fn handle(
     t: &super::Transport,
     journal: &mut Journal,
-    shared: &super::Shared,
+    shared: &std::sync::Arc<super::Shared>,
     state: &mut State,
     command: Command,
 ) -> Result<IntentOutcome, Error> {
@@ -708,7 +853,7 @@ pub(super) async fn handle(
                 "Waiting for the native save barrier. Nothing was updated.",
             ))
         }
-        Command::Commit(id, proof, window) => {
+        Command::Commit(id, proof, window, gate) => {
             let mut record = state
                 .latest
                 .clone()
@@ -723,6 +868,18 @@ pub(super) async fn handle(
                 || authority(t, kind(&record.kind))? != record.auth
             {
                 return Err(Error::Identity);
+            }
+            let saved = journal
+                .windows
+                .get(&super::window::SavedWindow::key(&t.source)?)
+                .filter(|s| {
+                    s.window == record.window
+                        && (s.generation, s.save_sequence) == proof.parts()
+                        && s.view == record.view
+                })
+                .cloned();
+            if record.kind == "app" && saved.is_none() {
+                return Err(Error::Stale);
             }
             record.flush = Some(proof.parts());
             record.state = "entered".into();
@@ -740,11 +897,66 @@ pub(super) async fn handle(
             let cancel = shared.closed.clone();
             let source = t.source.clone();
             let auth = record.auth.clone();
+            let navigation =
+                json!({"day":1,"operation":record.id,"journal":journal.path(),"capture":saved});
+            let shared = shared.clone();
             let result = tokio::task::spawn_blocking(move || {
                 // Final synchronous authority check on the actual native
                 // dispatch thread, not before an await/scheduler gap.
                 if !authority_for(&source, k).is_ok_and(|current| current == auth) {
                     return (Err(Failure::Unverified), None);
+                }
+                if k == UpdateKind::App {
+                    let current = || {
+                        if !authority_for(&source, k).is_ok_and(|current| current == auth) {
+                            return Err(pilot_desktop_updater::Error::Identity);
+                        }
+                        let g = gate.lock().expect("bridge gate poisoned");
+                        let (generation, sequence) = proof.parts();
+                        if cancel.load(Ordering::SeqCst)
+                            || g.closed
+                            || !g.sealed
+                            || !g.forms_saved
+                            || !g.native_captured
+                            || g.generation != generation
+                            || g.save_sequence != sequence
+                        {
+                            return Err(pilot_desktop_updater::Error::Identity);
+                        }
+                        Ok(())
+                    };
+                    let safety = crate::handoff::safety(proof.parts().0, proof.parts().1);
+                    let result = (|| {
+                        let mut slot = shared
+                            .app_controller
+                            .lock()
+                            .expect("app controller poisoned");
+                        if slot.is_some() {
+                            return Err(Failure::Unknown);
+                        }
+                        let controller = crate::handoff::Controller::prepare(
+                            &selection,
+                            &navigation,
+                            safety,
+                            current,
+                        )
+                        .map_err(|_| Failure::Unverified)?;
+                        *slot = Some(controller);
+                        let controller = slot.as_mut().ok_or(Failure::Unknown)?;
+                        let result = controller.commit(safety, current);
+                        let entered = controller.commit_entered();
+                        if result.is_err() && !entered {
+                            *slot = None;
+                        } // EOF aborts the uncommitted helper
+                        result.map_err(|_| {
+                            if entered {
+                                Failure::Unknown
+                            } else {
+                                Failure::Unverified
+                            }
+                        })
+                    })();
+                    return (result.map(|()| Outcome::ExitCommitted), None);
                 }
                 selection.enter_observed(k, &cancel)
             })
@@ -764,7 +976,7 @@ pub(super) async fn handle(
             journal.save_update(record)?;
             state.changed();
             Ok(outcome(
-                if phase == "done" {
+                if phase == "done" || phase == "prepared" {
                     OutcomeStatus::Accepted
                 } else if phase == "stopped" {
                     OutcomeStatus::Rejected
@@ -782,7 +994,7 @@ pub(super) async fn handle(
             let mut record = state
                 .latest
                 .clone()
-                .filter(|r| r.id == intent.id && !r.restored)
+                .filter(|r| r.id == intent.id && !state.restore_displayed)
                 .ok_or(Error::Stale)?;
             // A restore ACK is display-only, NEVER permission to resume, launch,
             // register, COMMIT, or replay an interrupted operation.
@@ -794,15 +1006,103 @@ pub(super) async fn handle(
             {
                 return Err(Error::Identity);
             }
-            record.restored = true;
-            record.revision += 1;
-            journal.save_update(record.clone())?;
+            if !record.restored {
+                record.restored = true;
+                record.revision += 1;
+                journal.save_update(record.clone())?;
+            }
             state.latest = Some(record);
+            state.restore_displayed = true;
+            shared
+                .startup_ready
+                .store(state.startup_ready(), Ordering::SeqCst);
             state.changed();
             Ok(outcome(
                 OutcomeStatus::Accepted,
                 state.view.revision,
                 "View restored. No execution was resumed.",
+            ))
+        }
+        Command::Startup => {
+            if state.startup_attempted || !state.restore_verified {
+                return Err(Error::Stale);
+            }
+            let selection = state.selection.clone().ok_or(Error::Unavailable)?;
+            let transaction = selection.restore_transaction.clone().ok_or(Error::Stale)?;
+            let mut record = state
+                .latest
+                .clone()
+                .filter(|r| r.kind == "app" && r.restored)
+                .ok_or(Error::Busy)?;
+            if !selection.matches(&t.source) {
+                return Err(Error::Identity);
+            }
+            state.startup_attempted = true;
+            shared.startup_ready.store(false, Ordering::SeqCst);
+            let source = t.source.clone();
+            let auth = authority_for(&source, UpdateKind::App)?;
+            let previously_entered = record.state == "startup";
+            record.state = "startup".into();
+            record.revision += 1;
+            record.message =
+                "Native startup acknowledgement entered. Recovery is lookup-only.".into();
+            journal.save_update(record.clone())?;
+            state.latest = Some(record.clone());
+            let shared = shared.clone();
+            let retained = record.clone();
+            tokio::task::spawn_blocking(move || {
+                // Only external app receipts are admitted. Managed receipts may
+                // resume a runtime; a restored Day view never has that authority.
+                if ExitGuard::external_startup(&transaction, &selection.installed, &selection.trust)
+                    .map_err(|_| Error::Identity)?
+                    .is_none()
+                {
+                    return Err(Error::Identity);
+                }
+                if !selection.restores(&retained) {
+                    return Err(Error::Identity);
+                }
+                shared.open()?;
+                if authority_for(&source, UpdateKind::App)? != auth {
+                    return Err(Error::Identity);
+                }
+                let phase = pilot_desktop_updater::installer::recovery_phase(&transaction)
+                    .map_err(|_| Error::Unknown)?;
+                if !crate::handoff::startup_ack_needed(phase, previously_entered)
+                    .map_err(|_| Error::Unknown)?
+                {
+                    return Ok(()); // exact durable ACK already exists; never send it again
+                }
+                pilot_desktop_updater::installer::acknowledge_startup_checked(
+                    &transaction,
+                    &selection.trust.current_build,
+                    &selection.trust,
+                    &pilot_desktop_updater::installer::NativePlatform,
+                    &selection.installed,
+                    || {
+                        if !authority_for(&source, UpdateKind::App)
+                            .is_ok_and(|current| current == auth)
+                            || shared.open().is_err()
+                        {
+                            return Err(pilot_desktop_updater::Error::Identity);
+                        }
+                        Ok(())
+                    },
+                )
+                .map_err(|_| Error::Unknown)
+            })
+            .await
+            .map_err(|_| Error::Unknown)??;
+            record.state = "done".into();
+            record.revision += 1;
+            record.message = "The native successor durably acknowledged its verified app payload. No agents were resumed.".into();
+            state.latest = Some(record.clone());
+            journal.save_update(record)?;
+            state.changed();
+            Ok(outcome(
+                OutcomeStatus::Accepted,
+                state.view.revision,
+                "Native startup acknowledged.",
             ))
         }
     }
@@ -814,9 +1114,9 @@ fn completion(result: Result<Outcome, Failure>) -> (&'static str, &'static str) 
             "done",
             "The native controller verified the service operation.",
         ),
-        Ok(Outcome::ExitPrepared) => (
+        Ok(Outcome::ExitCommitted) => (
             "prepared",
-            "The external app guard is prepared. The app has not been replaced; native handoff is still required.",
+            "The helper acknowledged COMMIT. Joined native close and actual parent exit are still required.",
         ),
         Ok(_) | Err(Failure::Unknown) => ("unknown", failure_message(Failure::Unknown)),
         Err(f) => ("stopped", failure_message(f)),
@@ -891,6 +1191,47 @@ mod tests {
         );
         assert_eq!(state.snapshot().run.unwrap().phase, UpdatePhase::Unknown);
         assert_eq!(state.latest.as_ref().unwrap().flush, Some((7, 3)));
+        let record = state.latest.as_ref().unwrap();
+        let capture = super::super::window::SavedWindow {
+            kind: "window-capture".into(),
+            version: 1,
+            source: source.clone(),
+            window: record.window.clone(),
+            generation: 7,
+            save_sequence: 3,
+            view: record.view.clone(),
+        };
+        assert!(record.capture_matches(&capture));
+        for mismatch in 0..5 {
+            let mut stale = capture.clone();
+            match mismatch {
+                0 => stale.generation += 1,
+                1 => stale.save_sequence += 1,
+                2 => stale.window = uuid::Uuid::new_v4().to_string(),
+                3 => stale.source.profile = path.join("other-profile"),
+                _ => stale.view["goal"] = "newer unsaved bytes".into(),
+            }
+            assert!(!record.capture_matches(&stale), "stale capture {mismatch}");
+        }
+        let mut app = record.clone();
+        app.kind = "app".into();
+        app.restored = true;
+        let mut startup = app.clone();
+        startup.state = "startup".into();
+        startup.revision += 1;
+        assert!(startup.follows(&app));
+        let mut done = startup.clone();
+        done.state = "done".into();
+        done.revision += 1;
+        assert!(done.follows(&startup));
+        assert!(
+            !done.follows(&app),
+            "UI restore cannot directly declare replacement done"
+        );
+        assert!(
+            !state.startup_ready(),
+            "cached/unknown state grants no startup ACK"
+        );
         assert!(
             state.authority.is_none(),
             "restart cannot restore execution authority"

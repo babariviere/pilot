@@ -87,6 +87,9 @@ fn private(file: &File) -> Result<(), Error> {
 }
 
 impl Journal {
+    pub(super) fn path(&self) -> &Path {
+        &self.path
+    }
     pub fn is_failed(&self) -> bool {
         self.failed
     }

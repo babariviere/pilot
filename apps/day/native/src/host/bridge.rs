@@ -73,7 +73,7 @@ fn attention_read(host: &NativeHost) -> Result<Value, Error> {
 pub(super) async fn handle(
     t: &Transport,
     journal: &mut Journal,
-    shared: &Shared,
+    shared: &std::sync::Arc<Shared>,
     updates: &mut super::updates::State,
     day: Option<&super::ritual::DaySource>,
     epoch: u64,
@@ -126,7 +126,7 @@ async fn ritual(
 async fn run(
     t: &Transport,
     journal: &mut Journal,
-    shared: &Shared,
+    shared: &std::sync::Arc<Shared>,
     updates: &mut super::updates::State,
     day: Option<&super::ritual::DaySource>,
     epoch: u64,
@@ -154,8 +154,24 @@ async fn run(
             let wake = {
                 let mut gate = call.gate.lock().expect("bridge gate poisoned");
                 gate.update_requested = Some(r.confirmation.clone());
+                gate.update_app = updates
+                    .snapshot()
+                    .run
+                    .as_ref()
+                    .is_some_and(|r| r.kind == crate::update::UpdateKind::App);
                 gate.flush_wakeup.clone()
             };
+            if let Some(wake) = wake {
+                wake();
+            }
+        }
+        if matches!(&call.command, Command::UpdateRestored(_)) {
+            let wake = call
+                .gate
+                .lock()
+                .expect("bridge gate poisoned")
+                .flush_wakeup
+                .clone();
             if let Some(wake) = wake {
                 wake();
             }

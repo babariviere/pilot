@@ -32,6 +32,7 @@ const SAVE_DEADLINE: Duration = Duration::from_secs(30);
 pub enum Phase {
     Editing,
     Saving(u32),
+    Preparing(u32),
     Draining(u32),
     Closed,
     DrainFailed,
@@ -46,6 +47,8 @@ struct State {
     shield: Retained<CaptureShield>,
     deadline: Option<Retained<NSTimer>>,
     fallback_focus: Option<Retained<NSResponder>>,
+    update: Option<String>,
+    startup_attempted: bool,
 }
 
 thread_local! {
@@ -74,6 +77,7 @@ fn begin(id: &str) {
             return;
         }
         state.fallback_focus = state.window.firstResponder();
+        let update = state.owner.take_app_update();
         match state.owner.begin_close(main) {
             Ok(generation) => {
                 let content = state.window.contentView().expect("owned content view");
@@ -86,6 +90,7 @@ fn begin(id: &str) {
                     return;
                 }
                 state.error = None;
+                state.update = update;
                 state.phase = Phase::Saving(generation);
                 generation
             }
@@ -157,6 +162,39 @@ fn cancel(id: &str, generation: u32, error: Option<Error>) {
 
 fn advance(state: &Rc<RefCell<State>>) {
     let mut s = state.borrow_mut();
+    if s.phase == Phase::Editing {
+        if s.owner.startup_ready() && !s.startup_attempted {
+            s.startup_attempted = true;
+            let result = s.owner.acknowledge_startup();
+            let id = s.owner.identity().to_owned();
+            if std::thread::Builder::new()
+                .name("day-startup-ack".into())
+                .spawn(move || {
+                    let result = result.recv_blocking().unwrap_or(Err(Error::Unknown));
+                    DispatchQueue::main().exec_async(move || {
+                        if let Some(state) = find(&id)
+                            && let Err(error) = result
+                        {
+                            state.borrow_mut().error = Some(error);
+                        }
+                    });
+                })
+                .is_err()
+            {
+                s.error = Some(Error::Unavailable);
+            }
+        }
+        // Only a fresh app confirmation triggers capture. A consumed/cancelled
+        // request is never re-created from a retained Unknown operation.
+        if s.owner.app_update_requested() {
+            // Put the exact intent into this attempt, not into a later root.
+            // begin() performs native capture before any effect enters.
+            let id = s.owner.identity().to_owned();
+            drop(s);
+            begin(&id);
+            return;
+        }
+    }
     let Phase::Saving(generation) = s.phase else {
         return;
     };
@@ -181,6 +219,59 @@ fn advance(state: &Rc<RefCell<State>>) {
     if let Some(timer) = s.deadline.take() {
         timer.invalidate();
     }
+    if let Some(id) = s.update.take() {
+        let mut sealed = sealed;
+        let preparation = match s.owner.prepare_update(&mut sealed, id) {
+            Ok(result) => result,
+            Err(error) => {
+                s.phase = Phase::DrainFailed;
+                s.error = Some(error);
+                return;
+            }
+        };
+        s.phase = Phase::Preparing(generation);
+        let id = s.owner.identity().to_owned();
+        if std::thread::Builder::new()
+            .name("day-app-handoff".into())
+            .spawn(move || {
+                let result = preparation.recv_blocking().unwrap_or(Err(Error::Unknown));
+                DispatchQueue::main().exec_async(move || prepared(&id, generation, sealed, result));
+            })
+            .is_err()
+        {
+            s.phase = Phase::DrainFailed;
+            s.error = Some(Error::Unavailable);
+        }
+        return;
+    }
+    close_sealed(&mut s, generation, sealed);
+}
+
+fn prepared(
+    id: &str,
+    generation: u32,
+    sealed: crate::macos_host::SealedClose,
+    result: Result<crate::model::IntentOutcome, Error>,
+) {
+    let Some(state) = find(id) else {
+        return;
+    };
+    let mut s = state.borrow_mut();
+    if s.phase != Phase::Preparing(generation) {
+        return;
+    }
+    match result {
+        Ok(outcome) if outcome.status == crate::model::OutcomeStatus::Accepted => {
+            close_sealed(&mut s, generation, sealed)
+        }
+        result => {
+            s.phase = Phase::DrainFailed;
+            s.error = Some(result.err().unwrap_or(Error::Unknown));
+        }
+    }
+}
+
+fn close_sealed(s: &mut State, generation: u32, sealed: crate::macos_host::SealedClose) {
     let joined = match s.owner.close_sealed(sealed) {
         Ok(joined) => joined,
         Err(error) => {
@@ -388,8 +479,16 @@ impl ApplicationOwner {
             shield,
             deadline: None,
             fallback_focus: None,
+            update: None,
+            startup_attempted: false,
         }));
-        OWNERS.with(|owners| owners.borrow_mut().insert(id, Rc::downgrade(&state)));
+        OWNERS.with(|owners| {
+            owners
+                .borrow_mut()
+                .insert(id.clone(), Rc::downgrade(&state))
+        });
+        // An initial receipt restore may finish before the callback was bound.
+        wake(id);
         Ok(Self { state, delegate })
     }
     pub fn phase(&self) -> Phase {

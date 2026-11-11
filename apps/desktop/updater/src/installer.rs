@@ -1152,6 +1152,19 @@ pub fn acknowledge_startup(
     platform: &impl Platform,
     target: &Path,
 ) -> Result<(), Error> {
+    acknowledge_startup_checked(root, active_build, trust, platform, target, || Ok(()))
+}
+
+/// The native owner rechecks its current authority after payload verification,
+/// immediately before the durable ACK. The callback must not reenter this journal.
+pub fn acknowledge_startup_checked(
+    root: &Path,
+    active_build: &str,
+    trust: &Trust,
+    platform: &impl Platform,
+    target: &Path,
+    current: impl FnOnce() -> Result<(), Error>,
+) -> Result<(), Error> {
     validate_target(target, trust)?;
     let located = transaction_path(root)?;
     let root = located.as_path();
@@ -1179,6 +1192,7 @@ pub fn acknowledge_startup(
     if !matches!(journal.phase, Phase::Swapped | Phase::RelaunchRequested) {
         return Err(Error::RecoveryRequired);
     }
+    current()?;
     journal.phase = Phase::StartupAcknowledged;
     write_journal(root, &journal)
 }
