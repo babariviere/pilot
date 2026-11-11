@@ -99,6 +99,23 @@ test("Escape leaves a ritual unmarked, and Decide now only brings the first deci
 	expect(app.shows("id:start-day")).toBe(false);
 });
 
+test("a start of day resumes at the step the user left, and Escape marks nothing", async () => {
+	const app = await open("./App.tsx", desktop);
+	await app.press("id:start-day");
+	await app.press("role:button[Next]");
+	await app.waitFor("Step 2 of 3 · Needs you");
+	await app.keyboard.press("escape");
+	await app.waitFor("id:start-day");
+	await app.press("id:start-day");
+	await app.waitFor("Step 2 of 3 · Needs you");
+	await app.press("role:button[Back]");
+	await app.waitFor("Step 1 of 3 · Since you looked");
+	await app.keyboard.press("escape");
+	await app.press("id:start-day");
+	await app.waitFor("Step 1 of 3 · Since you looked");
+	expect(app.shows("id:ritual-note")).toBe(false);
+});
+
 test("a read that is not live says so in the ritual and in the standup notes", async () => {
 	const app = await open("./Offline.tsx", desktop);
 	const offline = "Offline. Pilot's service is not answering. Showing what Pilot read 6 min ago.";

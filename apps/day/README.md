@@ -140,7 +140,7 @@ cd apps/day
 ./nsh.sh run Connected.tsx       # the connected entry: without a native root it says it is not connected
 ./nsh.sh check && ./nsh.sh build # types against the Rust declarations, class check
 ./nsh.sh test App.test.tsx       # headless flows, boundary and sandbox (26 tests)
-./nsh.sh test Ritual.test.tsx    # start and end of day and standup notes (9 tests)
+./nsh.sh test Ritual.test.tsx    # start and end of day and standup notes (10 tests)
 ./nsh.sh test Plan.test.tsx      # New, interviews, maps and review, Today's Planning, and the planning boundary (21 tests)
 ./nsh.sh test Changes.test.tsx   # Changes: list, exact reopen, Later, lost answer, unavailable, Read again, diff selection and scroll, boundary (13 tests)
 ./nsh.sh test Update.test.tsx    # updates and registration: save, pause, restore (help, ritual, question), selective resume, stale, lost answer, refusals, boundary (10 tests)
@@ -165,6 +165,12 @@ values (no daemon or updater): uncounted agents say Unknown, a prepared app guar
 unavailable prepare are never "Updated", a flush carries the exact saved view and answers only the
 newest generation, a refused save answers no flush, and a cold restore shows its view once and
 sends nothing else.
+
+`native/tests/connected_ritual.rs` sends the ritual calls through one real `Bridge` over a root
+with a test clock (reads write nothing; exact context and revision; another day, zone or user is
+refused; a lost write is Unknown and not replayed after a cold reopen; saves wait during a flush),
+then plays the root for `Connected.tsx`: one visit after Today shows, steps resumed after a
+reopen, Done and Skip saved, Escape saving nothing, a lost save never resent and no clock said.
 
 Script-only checks need neither Cargo nor NSH and never open a window:
 
@@ -347,13 +353,15 @@ report, a landing Pilot saw, or the user's acceptance: `DoneEntry.basis`, an
 agent report unless known), every plan its report's age and currentness, and a
 read that is not live says so. Rituals read Today only and send no intent:
 skipping, leaving or closing one answers, approves and starts nothing. "Skip for
-today" and finishing a ritual stop Today offering it for that date; Escape
-leaves it unmarked. These marks are screen state for this run of the app, not
-saved across restarts, and no schedule is created or turned on.
-The native host now has a separate [saved ritual progress seam](../../docs/technical/day-ritual-progress.md):
-`RitualFeed` reads per-profile/user/date/zone marks, explicit visits and qualified
-kept-change evidence from the existing ledger. Production ritual UI wiring is
-still separate; the mock screens do not use or migrate those records.
+today" and finishing a ritual stop Today offering it for that date once the
+mark is saved; Escape leaves it unmarked. Next and Back save the step, so the
+start of day resumes there. No schedule is created or turned on.
+The connected window saves these marks, the step and Today's visits through
+the root's [saved ritual progress](../../docs/technical/day-ritual-progress.md)
+(per profile, user, date and time zone, in the existing ledger). A lost save is
+never resent: Today says it is not confirmed until Read again confirms it.
+Without a native clock the window says rituals are not available. Mock entries
+keep marks in memory for the run and save nothing.
 
 Missions come only from agent reports. A current report that says moving puts
 a mission under Moving; one that says not moving, or a Pause, under Not

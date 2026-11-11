@@ -45,6 +45,11 @@ pub const METHODS: &[&str] = &[
     "day.update.cancel",
     "day.update.check",
     "day.update.restored",
+    "day.ritual.read",
+    "day.ritual.snapshot",
+    "day.ritual.results",
+    "day.ritual.visit",
+    "day.ritual.save",
 ];
 
 /// Intersect a bundle's declaration with the native exact-name grant.
@@ -187,6 +192,30 @@ pub(crate) enum Command {
     UpdateCancel(crate::update::UpdateRef),
     UpdateCheck,
     UpdateRestored(crate::update::UpdateRef),
+    /// Passive local read with a fresh native clock sample. Writes nothing.
+    RitualRead,
+    /// The root's last ritual read. No I/O, no clock sample, no notice.
+    RitualSnapshot,
+    /// Passive read of kept-change evidence for the recap.
+    RitualResults,
+    /// The user saw Today. Exact context and revision.
+    RitualVisit(crate::ritual::RitualVisit),
+    /// One explicit step, Done or Skip. Exact context and revision.
+    RitualSave(crate::ritual::RitualWrite),
+}
+
+impl Command {
+    /// Ritual progress is local: its refusals never mark the service read failed.
+    pub(crate) fn is_ritual(&self) -> bool {
+        matches!(
+            self,
+            Self::RitualRead
+                | Self::RitualSnapshot
+                | Self::RitualResults
+                | Self::RitualVisit(_)
+                | Self::RitualSave(_)
+        )
+    }
 }
 
 #[derive(Deserialize)]
@@ -270,7 +299,10 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
         | "day.attention.read"
         | "day.plan.checkNew"
         | "day.plan.inventory"
-        | "day.plan.inventorySnapshot" => {
+        | "day.plan.inventorySnapshot"
+        | "day.ritual.read"
+        | "day.ritual.snapshot"
+        | "day.ritual.results" => {
             if args != json!({}) {
                 return Err(Error::Invalid);
             }
@@ -280,8 +312,24 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 "day.plan.checkNew" => C::CheckNew,
                 "day.plan.inventory" => C::PlanningInventory,
                 "day.plan.inventorySnapshot" => C::PlanningInventorySnapshot,
+                "day.ritual.read" => C::RitualRead,
+                "day.ritual.snapshot" => C::RitualSnapshot,
+                "day.ritual.results" => C::RitualResults,
                 _ => C::Attention,
             }
+        }
+        "day.ritual.visit" => {
+            let r: crate::ritual::RitualVisit = decode(&args)?;
+            id(&r.context)?;
+            C::RitualVisit(r)
+        }
+        "day.ritual.save" => {
+            let r: crate::ritual::RitualWrite = decode(&args)?;
+            id(&r.context)?;
+            if r.step > 32 {
+                return Err(Error::Invalid);
+            }
+            C::RitualSave(r)
         }
         "day.mission.read" | "day.mission.check" | "day.plan.read" | "day.plan.snapshot" => {
             let r: crate::model::MissionRef = decode(&args)?;
@@ -399,6 +447,9 @@ impl Command {
                     | Self::PlanningInventory
                     | Self::PlanningInventorySnapshot
                     | Self::Attention
+                    | Self::RitualRead
+                    | Self::RitualSnapshot
+                    | Self::RitualResults
             )
         {
             return Err(Error::Busy);

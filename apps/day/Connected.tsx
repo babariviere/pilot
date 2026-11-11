@@ -38,6 +38,7 @@ function Connected() {
 					<DayScreen
 						day={(c() as Open).day}
 						plans={(c() as Open).plans}
+						rituals={(c() as Open).rituals}
 						update={(c() as Open).update ?? undefined}
 					/>
 				)}

@@ -1,13 +1,14 @@
-// The start and end of the day, and the standup notes. Short, calm and
-// read-only: they only read Today's read model and send no intent. Skipping
-// or leaving a ritual changes nothing in Pilot; decisions stay on Today.
+// The start and end of the day, and the standup notes. Short and calm: they
+// read Today's read model and the ritual's saved progress, and send no work
+// intent. Next, Back, Done and Skip save only the ritual's own progress for
+// the day it opened on; Escape and Back to Today save nothing. Decisions stay
+// on Today.
 import { effect, keymap, Scroll, signal, Text, View, type ViewRef } from "nsh";
 import type { DoneEntry, MissionRow } from "pilot-day/native";
 import { decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
 import { keepScroll } from "./kept";
 import {
-	basisWord,
 	greeting,
 	itemEffort,
 	itemTitle,
@@ -15,28 +16,21 @@ import {
 	moreResults,
 	nextLine,
 	recapResults,
+	resultSource,
 	resultsLine,
 	sinceLine,
 	standup,
 	things,
 	waitingLine,
 } from "./ritual";
-import {
-	backFromStandup,
-	closeRitual,
-	mark,
-	markOf,
-	openStandup,
-	type RitualMark,
-	ritualRoute,
-	startStep,
-} from "./ritualView";
+import type { Rituals } from "./ritualFeed";
+import { backFromStandup, closeRitual, openStandup, ritualRoute, START_STEPS, startStep } from "./ritualView";
 import { FreshnessNote, MissionStatus, TopBar } from "./TodayScreen";
 import { Action, Mark, type MarkKind, SectionTitle } from "./ui";
 import { focused, focusFront, type Item, queue } from "./view";
 import { freshnessLine, provenance } from "./words";
 
-const STEPS = ["Since you looked", "Needs you", "Coming up today"];
+const STEPS = ["Since you looked", "Needs you", "Coming up today"].slice(0, START_STEPS);
 
 /** The command that runs the screen's one next step, as the platform writes it. */
 const NEXT_KEY = keymap.label("mod+enter");
@@ -65,16 +59,20 @@ function Title(props: { text: string; lead: string }) {
 	);
 }
 
-/** Results since the user looked, each with what it rests on. */
-function Results(props: { day: Day; title: string }) {
-	const today = () => props.day.today();
-	const shown = () => recapResults(today());
+/** Results since the user looked, each with what it rests on. Results that could not be read are never "none". */
+function Results(props: { day: Day; rituals: Rituals; title: string }) {
+	const recap = () => props.rituals.recap(props.day.today());
+	const shown = () => recapResults(recap());
+	const none = () =>
+		recap().state === "off"
+			? "Pilot could not read results here. This is not the same as none."
+			: "No results since then.";
 	return (
 		<View testID="results" class="gap-1">
 			<View class="pb-1">
 				<SectionTitle title={props.title} />
 			</View>
-			<If when={shown().length > 0} else={<Text class="text-sm text-muted-foreground">No results since then.</Text>}>
+			<If when={shown().length > 0} else={<Text class="text-sm text-muted-foreground">{none()}</Text>}>
 				<Each of={shown()} key={(d) => d.id}>
 					{(d) => (
 						<View class="flex-row gap-3 py-2">
@@ -83,14 +81,17 @@ function Results(props: { day: Day; title: string }) {
 							</View>
 							<View class="flex-1 gap-0.5">
 								<Text class="text-sm text-foreground">{d().text}</Text>
-								<Text class="text-xs text-faint">{`${d().missionTitle} · ${basisWord(d().basis)}`}</Text>
+								<Text class="text-xs text-faint">{resultSource(d())}</Text>
 							</View>
 						</View>
 					)}
 				</Each>
 			</If>
-			<If when={moreResults(today()) > 0}>
-				<Text class="pt-1 text-xs text-faint">{`${moreResults(today())} more not listed here.`}</Text>
+			<If when={moreResults(recap()) > 0}>
+				<Text class="pt-1 text-xs text-faint">{`${moreResults(recap())} more not listed here.`}</Text>
+			</If>
+			<If when={recap().state === "live" && (recap() as { limited: boolean }).limited}>
+				<Text class="pt-1 text-xs text-faint">Only the newest kept changes were read.</Text>
 			</If>
 			<If when={shown().some((d) => d.basis === "reported")}>
 				<Text class="pt-1 text-xs text-faint">
@@ -201,35 +202,75 @@ function Back(props: { label?: string; onPress: () => void }) {
 }
 
 /**
+ * What the ritual's saved progress says beside its commands: a refusal, a
+ * save Pilot could not confirm (with Read again, which only reads), or a
+ * day that changed since the ritual opened. Nothing here sends again.
+ */
+function SavedNote(props: { rituals: Rituals; context: string }) {
+	const r = props.rituals;
+	const moved = () => {
+		const now = r.progress();
+		return now.availability === "available" && now.context !== props.context;
+	};
+	const line = () =>
+		moved()
+			? "The day changed since you opened this, so Pilot saves nothing here. Back to Today shows the new day."
+			: r.message();
+	return (
+		<If when={line()}>
+			<View testID="ritual-note" class="flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">
+				<Mark kind={r.uncertain() ? "unknown" : "still"} />
+				<Text class="flex-1 text-sm text-foreground">{line()}</Text>
+				<If when={r.uncertain()}>
+					<Action label="Read again" testID="ritual-read" onPress={() => void r.refresh()} />
+				</If>
+			</View>
+		</If>
+	);
+}
+
+/**
  * The start of the day in three short steps: what happened since the user
  * looked, what needs them, and what comes up today. Each step can be
- * skipped; skipping marks only this ritual for the day.
+ * skipped; skipping marks only this ritual for the day. Next and Back save
+ * where the user is, so the ritual resumes there; a saved step is not Done.
  */
-function StartDay(props: { day: Day }) {
+function StartDay(props: { day: Day; rituals: Rituals }) {
 	const today = () => props.day.today();
+	const r = props.rituals;
+	// Every save names the day this ritual opened on; a later day refuses it.
+	const context = r.progress().context;
 	const step = () => startStep();
 	const items = () => queue(today());
 	const first = () => items()[0];
 	const anchor = primaryFocus();
 
-	const finish = (how: RitualMark) => {
-		mark(today(), "start", how);
-		closeRitual();
+	/** Saves Done or Skip, and leaves only once it is saved. */
+	const finish = async (how: "done" | "skipped") => {
+		if (r.saving()) return false;
+		const saved = await r.save("start", how, step(), context);
+		if (saved) closeRitual();
+		return saved;
 	};
-	const next = () => startStep.set(Math.min(STEPS.length - 1, step() + 1));
-	const back = () => startStep.set(Math.max(0, step() - 1));
+	/** Shows `to` and saves it as the step to resume at. */
+	const go = (to: number) => {
+		if (to === step()) return;
+		startStep.set(to);
+		void r.save("start", "unmarked", to, context);
+	};
+	const next = () => go(Math.min(STEPS.length - 1, step() + 1));
+	const back = () => go(Math.max(0, step() - 1));
 	// Brings Today's first item to the front with the keyboard focus. It
 	// answers nothing: the user decides on Today's card.
-	const decideNow = () => {
-		mark(today(), "start", "done");
-		closeRitual();
+	const decideNow = async () => {
+		if (!(await finish("done"))) return;
 		focused.set(null);
 		focusFront.set(true);
 	};
 	const primary = () => {
-		if (step() === 1 && first()) decideNow();
+		if (step() === 1 && first()) void decideNow();
 		else if (step() < STEPS.length - 1) next();
-		else finish("done");
+		else void finish("done");
 	};
 	const primaryLabel = () => {
 		if (step() === 1 && first()) return first()?.kind === "decision" ? "Decide now" : "Open it";
@@ -249,7 +290,7 @@ function StartDay(props: { day: Day }) {
 					</View>
 					<LeftOff day={props.day} />
 					<If when={today().visit !== "first"}>
-						<Results day={props.day} title="Results" />
+						<Results day={props.day} rituals={r} title="Results" />
 					</If>
 				</View>
 			</If>
@@ -280,6 +321,7 @@ function StartDay(props: { day: Day }) {
 					<Scheduled day={props.day} />
 				</View>
 			</If>
+			<SavedNote rituals={r} context={context} />
 			<View class="flex-row flex-wrap items-center gap-2 border-t border-border pt-5">
 				<Action primary label={primaryLabel()} shortcut={NEXT_KEY} anchor={anchor} onPress={primary} />
 				<If when={step() === 1 && items().length > 0}>
@@ -292,7 +334,7 @@ function StartDay(props: { day: Day }) {
 					<Action label="Back" onPress={back} />
 				</If>
 				<View class="flex-1" />
-				<Action label="Skip for today" onPress={() => finish("skipped")} />
+				<Action label="Skip for today" onPress={() => void finish("skipped")} />
 			</View>
 		</View>
 	);
@@ -323,15 +365,28 @@ function Closed(props: { day: Day; anchor: (node: ViewRef) => void }) {
 /**
  * The end of the day on one page: results since the user looked, what still
  * waits, missions that are not moving and what comes up. Closing the day
- * changes nothing in Pilot.
+ * saves only that the user closed it; it changes nothing else in Pilot.
  */
-function EndDay(props: { day: Day }) {
+function EndDay(props: { day: Day; rituals: Rituals }) {
 	const today = () => props.day.today();
+	const r = props.rituals;
+	// Every save names the day this ritual opened on; a later day refuses it.
+	const context = r.progress().context;
 	const items = () => queue(today());
-	const closed = () => markOf(today(), "end") === "done";
+	// Only the saved mark closes the day, never the press itself.
+	const closed = () => {
+		const now = r.progress();
+		return now.context === context && now.end.mark === "done";
+	};
 	const stopped = () => [...today().notMoving, ...today().unreported];
 	const anchor = primaryFocus();
-	const close = () => mark(today(), "end", "done");
+	const close = () => {
+		if (!r.saving()) void r.save("end", "done", 0, context);
+	};
+	const skip = async () => {
+		if (r.saving()) return;
+		if (await r.save("end", "skipped", 0, context)) closeRitual();
+	};
 	keymap.bind({ escape: closeRitual, "mod+enter": () => (closed() ? closeRitual() : close()) });
 
 	return (
@@ -340,10 +395,13 @@ function EndDay(props: { day: Day }) {
 			<If when={!closed()} else={<Closed day={props.day} anchor={anchor} />}>
 				<View class="gap-10">
 					<View class="gap-3">
-						<Title text="Wrapping up." lead={`${resultsLine(today())} ${waitingLine(today())}`} />
+						<Title
+							text="Wrapping up."
+							lead={`${resultsLine(today(), r.recap(today()))} ${waitingLine(today())}`}
+						/>
 						<FreshnessNote day={props.day} />
 					</View>
-					<Results day={props.day} title="Done since you looked" />
+					<Results day={props.day} rituals={r} title="Done since you looked" />
 					<If when={items().length > 0}>
 						<View class="gap-1">
 							<SectionTitle title="Still waiting" count={items().length} />
@@ -372,17 +430,12 @@ function EndDay(props: { day: Day }) {
 						</View>
 					</If>
 					<Scheduled day={props.day} />
+					<SavedNote rituals={r} context={context} />
 					<View class="flex-row flex-wrap items-center gap-2 border-t border-border pt-5">
 						<Action primary label="Close the day" shortcut={NEXT_KEY} anchor={anchor} onPress={close} />
 						<Action label="Standup notes" onPress={() => openStandup("end")} />
 						<View class="flex-1" />
-						<Action
-							label="Skip for today"
-							onPress={() => {
-								mark(today(), "end", "skipped");
-								closeRitual();
-							}}
-						/>
+						<Action label="Skip for today" onPress={() => void skip()} />
 					</View>
 				</View>
 			</If>
@@ -390,8 +443,8 @@ function EndDay(props: { day: Day }) {
 	);
 }
 
-/** Standup notes from Today's read: done, next and waiting. Select the text to copy it. */
-function Standup(props: { day: Day }) {
+/** Standup notes from Today's read and the recap's results: done, next and waiting. Select the text to copy it. */
+function Standup(props: { day: Day; rituals: Rituals }) {
 	const today = () => props.day.today();
 	const note = () => freshnessLine(today().freshness);
 	const from = () => {
@@ -407,7 +460,7 @@ function Standup(props: { day: Day }) {
 				<If when={note()}>
 					<Text class="text-sm text-muted-foreground">{note()}</Text>
 				</If>
-				<Each of={standup(today())} key={(part) => part.title}>
+				<Each of={standup(today(), props.rituals.recap(today()))} key={(part) => part.title}>
 					{(part) => (
 						<View class="gap-1">
 							<Text class="text-sm font-semibold text-card-foreground">{part().title}</Text>
@@ -431,7 +484,7 @@ function Standup(props: { day: Day }) {
 }
 
 /** The ritual or standup notes the user opened. */
-export function RitualScreen(props: { day: Day }) {
+export function RitualScreen(props: { day: Day; rituals: Rituals }) {
 	const at = () => ritualRoute();
 	const readable = () => props.day.today().freshness.state !== "unreadable";
 	const scroll = keepScroll("ritual");
@@ -457,13 +510,13 @@ export function RitualScreen(props: { day: Day }) {
 					}
 				>
 					<If when={at()?.kind === "start"}>
-						<StartDay day={props.day} />
+						<StartDay day={props.day} rituals={props.rituals} />
 					</If>
 					<If when={at()?.kind === "end"}>
-						<EndDay day={props.day} />
+						<EndDay day={props.day} rituals={props.rituals} />
 					</If>
 					<If when={at()?.kind === "standup"}>
-						<Standup day={props.day} />
+						<Standup day={props.day} rituals={props.rituals} />
 					</If>
 				</If>
 			</View>

@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::model::{DayPart, DoneEntry, Visit};
 
 /// Whether the native source can confirm this read.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PropEnum)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PropEnum, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RitualAvailability {
     /// No qualified source, or a read cannot be made.
     #[default]
@@ -45,7 +46,9 @@ pub struct RitualProgress {
 }
 
 /// Narrow read model. Identity and clock authority stay in Rust.
-#[derive(Debug, Clone, Default, PartialEq, JsObject)]
+/// The connected window's JSON calls carry the same fields (camel case).
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RitualSnapshot {
     pub availability: RitualAvailability,
     /// Opaque native selection token. Changes on date, zone or profile changes.

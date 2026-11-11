@@ -119,6 +119,11 @@ intent types, not daemon request envelopes:
 | `day.update.check` | `{}` | `ServiceView`; lookup only, never a retry |
 | `day.update.restored` | `UpdateRef` | `ServiceView`; display ACK only, no execution authority |
 | `day.flush.ack` | `{generation,view?:SavedView}` | `{generation}`; an update capture requires the final view |
+| `day.ritual.read` | `{}` | `RitualSnapshot`; samples the root's clock, writes nothing |
+| `day.ritual.snapshot` | `{}` | cached `RitualSnapshot`, `outcome: null`; no clock sample, I/O or notice |
+| `day.ritual.results` | `{}` | `RitualSnapshot` with kept-change results or results unavailable |
+| `day.ritual.visit` | `RitualVisit` | `RitualSnapshot`; exact context and revision |
+| `day.ritual.save` | `RitualWrite` | `RitualSnapshot`; one explicit step, Done or Skip |
 
 Mutation delivery and returned view freshness are separate. A timeout,
 aborted consumer, disconnected engine or lost reply is not a refusal and
@@ -138,6 +143,17 @@ Cached row identities and displayed capability fields are not live permission
 to save, submit, approve or start work. Existing native currentness and intent
 checks still apply. Like other passive snapshots, this read is allowed during
 form flushing but not after the bridge closes; it does not acknowledge a flush.
+
+The ritual calls share the native `RitualFeed`'s rules
+([saved ritual progress](day-ritual-progress.md)). Use `day.ritual.read` at
+open, on focus and on Read again; on `day.changed` use `day.ritual.snapshot`,
+because a fresh read samples the clock and emits another change. A visit or
+save needs the last confirmed context and revision; another day, time zone,
+profile or user answers `stale` or `identity`. `unknown` means the write may
+have entered the journal: do not resend it. The reads are allowed during form
+flushing; a visit or save answers `busy` then. Ritual refusals stay with the
+ritual and never mark Today's service read failed. A root opened without a
+native clock answers `unavailable`.
 
 ## Lifecycle seam, not update acceptance
 

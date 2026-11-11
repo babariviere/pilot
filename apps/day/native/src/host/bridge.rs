@@ -75,28 +75,69 @@ pub(super) async fn handle(
     journal: &mut Journal,
     shared: &Shared,
     updates: &mut super::updates::State,
+    day: Option<&super::ritual::DaySource>,
     epoch: u64,
     call: Call,
 ) {
-    let result = run(t, journal, shared, updates, epoch, &call).await;
-    if let Err(error @ (Error::Identity | Error::Offline | Error::Storage)) = result {
+    let result = run(t, journal, shared, updates, day, epoch, &call).await;
+    // Ritual progress is local, as on the native feed: its refusals stay
+    // with the ritual and never mark the service read or controls failed.
+    if !call.command.is_ritual()
+        && let Err(error @ (Error::Identity | Error::Offline | Error::Storage)) = result
+    {
         // A bad item stays isolated; losing the source or journal invalidates
         // source-wide authority just as it does for native feed requests.
         super::fail(shared, error);
     }
     (call.reply)(result);
 }
+/// Ritual calls share the native feed's rules: reads sample the root's clock
+/// and write nothing, a visit or save needs the exact context and revision,
+/// and an uncertain write is Unknown, never resent. The reply carries the
+/// root's last confirmed ritual view.
+async fn ritual(
+    t: &Transport,
+    journal: &mut Journal,
+    shared: &Shared,
+    day: Option<&super::ritual::DaySource>,
+    epoch: u64,
+    call: &Call,
+) -> Result<Value, Error> {
+    use super::ritual::Work as R;
+    let work = match &call.command {
+        Command::RitualSnapshot | Command::RitualResults => None,
+        Command::RitualRead => Some(R::Read),
+        Command::RitualVisit(v) => Some(R::Visit(v.clone())),
+        Command::RitualSave(w) => Some(R::Write(w.clone())),
+        _ => return Err(Error::Invalid),
+    };
+    let outcome = match work {
+        Some(work) => Some(super::ritual::handle(
+            &t.source, day, journal, shared, work,
+        )?),
+        None if matches!(call.command, Command::RitualResults) => {
+            Some(super::ritual::read_results(t, day, journal, shared, epoch).await?)
+        }
+        None => None,
+    };
+    let view = encode(call.host.ritual_snapshot())?;
+    Ok(json!({"snapshot":view,"outcome":outcome.map(encode).transpose()?}))
+}
 async fn run(
     t: &Transport,
     journal: &mut Journal,
     shared: &Shared,
     updates: &mut super::updates::State,
+    day: Option<&super::ritual::DaySource>,
     epoch: u64,
     call: &Call,
 ) -> Result<Value, Error> {
     call.command
         .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
     shared.open()?;
+    if call.command.is_ritual() {
+        return ritual(t, journal, shared, day, epoch, call).await;
+    }
     use super::updates::Command as U;
     let update = match &call.command {
         Command::UpdateRead => Some(U::Read),
@@ -272,6 +313,11 @@ async fn run(
         | Command::UpdateCancel(_)
         | Command::UpdateCheck
         | Command::UpdateRestored(_) => unreachable!("handled update command"),
+        Command::RitualRead
+        | Command::RitualSnapshot
+        | Command::RitualResults
+        | Command::RitualVisit(_)
+        | Command::RitualSave(_) => unreachable!("handled ritual command"),
     };
     let outcome = if let Some(work) = work {
         Some(super::handle(t, journal, shared, epoch, work).await?)

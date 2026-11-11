@@ -2,6 +2,7 @@
 // planning, Changes, or the start or end of the day. No sidebar; every
 // other screen has a way back, and Escape goes back too.
 
+import { effect, lifecycle, untracked } from "nsh";
 import { ChangesScreen } from "./ChangesScreen";
 import type { Changes } from "./changeFeed";
 import { changesRoute } from "./changesView";
@@ -13,10 +14,11 @@ import { PlanScreen } from "./PlanScreen";
 import type { Plans } from "./planning";
 import { planRoute } from "./planView";
 import { RitualScreen } from "./RitualScreen";
-import { ritualRoute } from "./ritualView";
+import { mockRituals, type Rituals } from "./ritualFeed";
+import { ritualEntry, ritualRoute } from "./ritualView";
 import { TodayScreen } from "./TodayScreen";
-import type { Update } from "./updateFeed";
 import { bindRestore, UpdateScreen } from "./UpdateScreen";
+import type { Update } from "./updateFeed";
 import { updateEntry, updateOpen } from "./updateView";
 import { route } from "./view";
 
@@ -48,16 +50,33 @@ function Planning(props: { day: Day; plans: Plans }) {
 	);
 }
 
-/** Today, or the mission, planning, Changes, ritual or update page the user opened. */
-export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; update?: Update }) {
+/**
+ * Today, or the mission, planning, Changes, ritual or update page the user
+ * opened. Without `rituals` (the mock entries), ritual progress is an
+ * in-memory mock that saves nothing anywhere.
+ */
+export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; update?: Update; rituals?: Rituals }) {
 	updateEntry.set(props.update ?? null);
 	if (props.update) bindRestore(props.update, props.changes, props.day);
+	const rituals = props.rituals ?? mockRituals(props.day);
+	ritualEntry.set(rituals);
+	// Coming back to the window reads the saved progress again, with a fresh
+	// clock sample, so a new day or time zone shows. It writes nothing.
+	let was = untracked(lifecycle);
+	effect(() => {
+		const now = lifecycle();
+		if (now === "active" && was !== "active") untracked(() => void rituals.refresh());
+		was = now;
+	});
 	return (
 		<If
 			when={props.update && updateOpen()}
 			else={
-				<If when={ritualRoute()} else={<Screens day={props.day} plans={props.plans} changes={props.changes} />}>
-					<RitualScreen day={props.day} />
+				<If
+					when={ritualRoute()}
+					else={<Screens day={props.day} rituals={rituals} plans={props.plans} changes={props.changes} />}
+				>
+					<RitualScreen day={props.day} rituals={rituals} />
 				</If>
 			}
 		>
@@ -68,7 +87,7 @@ export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; u
 	);
 }
 
-function Screens(props: { day: Day; plans?: Plans; changes?: Changes }) {
+function Screens(props: { day: Day; rituals: Rituals; plans?: Plans; changes?: Changes }) {
 	return (
 		<If
 			when={props.changes && changesRoute()}
@@ -80,7 +99,12 @@ function Screens(props: { day: Day; plans?: Plans; changes?: Changes }) {
 							when={route()}
 							else={
 								<Arrive class="flex-1">
-									<TodayScreen day={props.day} plans={props.plans} changes={props.changes} />
+									<TodayScreen
+										day={props.day}
+										rituals={props.rituals}
+										plans={props.plans}
+										changes={props.changes}
+									/>
 								</Arrive>
 							}
 						>

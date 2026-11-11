@@ -29,12 +29,16 @@ import type {
 	ProgressIntent,
 	ReplyIntent,
 	ResumeIntent,
+	RitualSnapshot,
+	RitualVisit,
+	RitualWrite,
 	Setup,
 	SubmitIntent,
 	Today,
 } from "pilot-day/native";
 import type { DayFeed, PlanningFeed } from "./feeds";
 import { olderThanList } from "./planCurrent";
+import { NO_PROGRESS, type RitualSource } from "./ritualFeed";
 
 /** Why the root refused a call, or "lost" when no reply came. */
 export type Refusal =
@@ -362,6 +366,80 @@ export class ConnectedToday implements DayFeed {
 }
 
 const NO_SETUP: Setup = { project: "", model: "", access: "", digest: "" };
+
+/**
+ * The start and end of day's saved progress over the root. Reads sample the
+ * root's clock and write nothing; a visit or save sends the exact context and
+ * revision once. After any refusal the root's last confirmed view is read
+ * again from its cache, which samples, writes and invalidates nothing.
+ */
+export class ConnectedRituals implements RitualSource {
+	#window: string;
+	#view: RitualSnapshot;
+	#listeners = new Map<number, (view: RitualSnapshot) => void>();
+	#next = 0;
+
+	constructor(window: string, first: RitualSnapshot | null) {
+		this.#window = window;
+		this.#view = first ?? NO_PROGRESS;
+	}
+
+	snapshot(): RitualSnapshot {
+		return this.#view;
+	}
+
+	onChange(listener: (view: RitualSnapshot) => void): () => void {
+		const id = this.#next++;
+		this.#listeners.set(id, listener);
+		return () => {
+			this.#listeners.delete(id);
+		};
+	}
+
+	#take(view: RitualSnapshot | null | undefined) {
+		if (view && typeof view === "object") this.#view = view;
+		for (const listener of this.#listeners.values()) listener(this.#view);
+	}
+
+	/** The root's last confirmed view, from its cache. Run after an invalidation. */
+	async sync(): Promise<void> {
+		const r = await call<RitualSnapshot>(this.#window, "day.ritual.snapshot", {});
+		if (r.ok) this.#take(r.snapshot);
+	}
+
+	async #call(name: string, args: unknown, write: boolean): Promise<IntentOutcome> {
+		const r = await call<RitualSnapshot>(this.#window, name, args);
+		if (r.ok) {
+			this.#take(r.snapshot);
+			return r.outcome ?? { status: "accepted", revision: this.#view.revision, message: "" };
+		}
+		await this.sync();
+		// A read that got no answer changed nothing; only a write's lost answer is Unknown.
+		if (!write && r.refusal === "lost") return refusalOutcome("unavailable", this.#view.revision);
+		return refusalOutcome(r.refusal, this.#view.revision);
+	}
+
+	refresh(): Promise<IntentOutcome> {
+		return this.#call("day.ritual.read", {}, false);
+	}
+
+	refreshResults(): Promise<IntentOutcome> {
+		return this.#call("day.ritual.results", {}, false);
+	}
+
+	visit(intent: RitualVisit): Promise<IntentOutcome> {
+		return this.#call("day.ritual.visit", { context: intent.context, revision: intent.revision }, true);
+	}
+
+	save(intent: RitualWrite): Promise<IntentOutcome> {
+		const { context, revision, ritual, mark, step } = intent;
+		return this.#call("day.ritual.save", { context, revision, ritual, mark, step }, true);
+	}
+
+	dispose(): void {
+		this.#listeners.clear();
+	}
+}
 
 /** Says a planning page is older than the latest read, as Rust says it for its own pages. */
 const OLDER = "This is an older read. Pilot checks again before it saves anything.";

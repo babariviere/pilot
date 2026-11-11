@@ -810,7 +810,7 @@ async fn run(
                 let result = match request.work {
                     Work::Bridge(call) => {
                         // JSON failures are isolated from unrelated Today/control reads.
-                        bridge::handle(&t, &mut journal, &shared, &mut updates, request.epoch, call).await;
+                        bridge::handle(&t, &mut journal, &shared, &mut updates, day.as_ref(), request.epoch, call).await;
                         Ok(shared.outcome(OutcomeStatus::Accepted, ""))
                     }
                     Work::Ritual(work) => ritual::handle(&t.source, day.as_ref(), &mut journal, &shared, work),

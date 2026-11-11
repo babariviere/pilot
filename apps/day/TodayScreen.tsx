@@ -16,6 +16,7 @@ import { Arrive } from "./motion";
 import { stageMark, stageWord } from "./PlanScreen";
 import type { Plans } from "./planning";
 import { openNew, openPlan } from "./planView";
+import type { Rituals } from "./ritualFeed";
 import { Action, EvidenceChip, InlineAction, Mark, RowLink, SectionTitle, Track } from "./ui";
 import { updateLabel } from "./UpdateScreen";
 import { showUpdate, updateEntry, updateOpen } from "./updateView";
@@ -556,7 +557,7 @@ function ChangesButton(props: { changes: Changes }) {
 }
 
 /** The whole Today screen for `props.day`. */
-export function TodayScreen(props: { day: Day; plans?: Plans; changes?: Changes }) {
+export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans; changes?: Changes }) {
 	const today = () => props.day.today();
 	bindTriage(props.day, props.plans);
 	const plans = props.plans;
@@ -596,7 +597,7 @@ export function TodayScreen(props: { day: Day; plans?: Plans; changes?: Changes 
 				<If when={today().freshness.state !== "unreadable"} else={<Unreadable day={props.day} />}>
 					<View class="gap-12">
 						<View class="gap-3 pt-6">
-							<DayLine day={props.day} />
+							<DayLine day={props.day} rituals={props.rituals} />
 							<Text role="header" class="text-2xl font-semibold leading-tight tracking-tight text-foreground">
 								{headline(props.day)}
 							</Text>

@@ -175,6 +175,8 @@ impl Root {
             .filter(|n| {
                 !n.ends_with(".read")
                     && !n.ends_with("Snapshot")
+                    && !n.ends_with(".snapshot")
+                    && n != "day.ritual.results"
                     && !n.ends_with(".inventory")
                     && n != "day.plan.prepare"
                     && n != "day.update.check"

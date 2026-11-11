@@ -4,13 +4,14 @@
 // Kept in its own module, like session.ts, so edits to the screens never
 // reopen the feeds.
 import { host, signal } from "nsh";
-import type { Setup, Today } from "pilot-day/native";
-import { ConnectedPlans, ConnectedToday, call, type Refusal, windowId } from "./bridge";
+import type { RitualSnapshot, Setup, Today } from "pilot-day/native";
+import { ConnectedPlans, ConnectedRituals, ConnectedToday, call, type Refusal, windowId } from "./bridge";
 import { connectedUpdates } from "./connectedUpdates";
 import { type Day, mirrorDay } from "./day";
 import { flushAll } from "./planCommands";
 import { mirrorPlanning, type Plans } from "./planning";
 import { answerDrafts, answerPicks } from "./planView";
+import { mirrorRituals, type Rituals, rootRecap } from "./ritualFeed";
 import type { Update } from "./updateFeed";
 import { captureView, saveForms } from "./updateView";
 
@@ -18,7 +19,7 @@ import { captureView, saveForms } from "./updateView";
 export type Connection =
 	| { state: "opening" }
 	| { state: "none"; reason: string }
-	| { state: "open"; day: Day; plans: Plans; update: Update | null };
+	| { state: "open"; day: Day; plans: Plans; rituals: Rituals; update: Update | null };
 
 /** The window's connection. Only `connect` sets it. */
 export const connection = signal<Connection>({ state: "opening" });
@@ -74,6 +75,12 @@ async function connect() {
 	}
 	// Asks the root to include what needs the user in its reads; it sends nothing.
 	await call(window, "day.attention.read", {});
+	// The start and end of day's saved progress, with the root's clock sample,
+	// before Today shows its part of day. Passive: it records no visit. When
+	// the root has no clock, its cached view says unavailable.
+	const progress = await call<RitualSnapshot>(window, "day.ritual.read", {});
+	const ritualFeed = new ConnectedRituals(window, progress.ok ? progress.snapshot : null);
+	if (!progress.ok) await ritualFeed.sync();
 	const first = await call<Today>(window, "day.today.read", {});
 	if (!first.ok) {
 		connection.set({ state: "none", reason: unreadable(first.refusal) });
@@ -88,12 +95,16 @@ async function connect() {
 	await planFeed.readInventory();
 	const day = mirrorDay(today);
 	const plans = mirrorPlanning(planFeed);
+	const rituals = mirrorRituals(ritualFeed, rootRecap);
 	const update = await connectedUpdates(window);
 	// An invalidation carries no data: read again, never poll.
 	host.on("day.changed", (payload) => {
 		if (!forWindow(payload, window)) return;
 		void today.refresh();
 		void planFeed.refresh();
+		// The root's cached ritual view only: a fresh read samples the clock and
+		// would invalidate again.
+		void ritualFeed.sync();
 	});
 	host.on("day.flush", (payload) => {
 		if (!forWindow(payload, window) || typeof payload.generation !== "number") return;
@@ -103,11 +114,12 @@ async function connect() {
 			console.error("Day could not save its forms before a close or an update:", error);
 		});
 	});
-	connection.set({ state: "open", day, plans, update });
+	connection.set({ state: "open", day, plans, rituals, update });
 	// A change the root sent while the first reads ran, before these listeners
 	// existed, is not lost: read the cached views once more. This reads no service.
 	void today.refresh();
 	void planFeed.refresh();
+	void ritualFeed.sync();
 }
 
 void connect();

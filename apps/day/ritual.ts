@@ -1,13 +1,12 @@
 // What the start and end of day and the standup notes say, from Today's
-// read model only. Nothing here guesses: results keep what they rest on
-// (an agent's report, a landing or the user's acceptance), plans are the
-// agents' own next steps, and a read that is not live says so.
+// read model and the recap's results. Nothing here guesses: results keep
+// what they rest on (an agent's report, a landing or the user's
+// acceptance), results that could not be read are never "none", plans are
+// the agents' own next steps, and a read that is not live says so.
 import type { DoneBasis, DoneEntry, MissionRow, Today } from "pilot-day/native";
+import type { Recap } from "./ritualFeed";
 import { type Item, queue } from "./view";
 import { provenance, rowLine, stateWord } from "./words";
-
-/** How many results a ritual lists. Today lists the rest. */
-export const RECAP_LIMIT = 5;
 
 const WORDS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
 
@@ -41,19 +40,25 @@ export function sinceLine(today: Today): string {
 	return "Here is what Pilot has read.";
 }
 
-/** The results a ritual lists, newest first. */
-export function recapResults(today: Today): DoneEntry[] {
-	return today.done.slice(0, RECAP_LIMIT);
+/** The results a ritual lists, newest first. None when they could not be read. */
+export function recapResults(recap: Recap): DoneEntry[] {
+	return recap.state === "live" ? recap.entries : [];
 }
 
 /** How many results a ritual does not list. */
-export function moreResults(today: Today): number {
-	return Math.max(0, today.done.length - RECAP_LIMIT) + today.doneHidden;
+export function moreResults(recap: Recap): number {
+	return recap.state === "live" ? recap.more : 0;
+}
+
+/** Where a result belongs and what it rests on: "Faster search · Landed", or the basis alone. */
+export function resultSource(entry: DoneEntry): string {
+	return entry.missionTitle ? `${entry.missionTitle} · ${basisWord(entry.basis)}` : basisWord(entry.basis);
 }
 
 /** How many results came in since the user looked, in a sentence. */
-export function resultsLine(today: Today): string {
-	const n = today.done.length + today.doneHidden;
+export function resultsLine(today: Today, recap: Recap): string {
+	if (recap.state === "off") return "Pilot could not read results.";
+	const n = recap.entries.length + recap.more;
 	const count = n === 0 ? "No results" : n === 1 ? "One result" : `${WORDS[n] ?? String(n)} results`;
 	return today.lastLooked ? `${count} since you looked ${today.lastLooked}.` : `${count} so far.`;
 }
@@ -111,10 +116,16 @@ function said(row: MissionRow): string {
  * The standup notes, in the user's own voice: what is done, what comes
  * next and what waits. Each line keeps what it rests on.
  */
-export function standup(today: Today): StandupPart[] {
-	const done = recapResults(today).map((d) => `${d.text} (${basisWord(d.basis).toLowerCase()}, ${d.missionTitle})`);
-	const more = moreResults(today);
+export function standup(today: Today, recap: Recap): StandupPart[] {
+	const done = recapResults(recap).map((d) =>
+		d.missionTitle
+			? `${d.text} (${basisWord(d.basis).toLowerCase()}, ${d.missionTitle})`
+			: `${d.text} (${basisWord(d.basis).toLowerCase()})`,
+	);
+	const more = moreResults(recap);
 	if (more > 0) done.push(`And ${more} more ${more === 1 ? "result" : "results"}.`);
+	if (recap.state === "off") done.push("Results could not be read here, which is not the same as none.");
+	else if (recap.limited) done.push("Only the newest kept changes were read.");
 	const next = today.moving.map((row) => `${row.title}: ${row.report?.nextStep || nextLine(row)} (${said(row)})`);
 	const waiting = [
 		...queue(today).map((item) =>

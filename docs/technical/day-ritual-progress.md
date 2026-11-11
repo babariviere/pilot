@@ -91,6 +91,33 @@ no DoneEntry. Unavailable sources are not downgraded to Reported. Mission titles
 are left empty when the source does not provide them. Evidence keeps the exact
 snapshot and commit, rather than inventing a mission association.
 
-The backend seam is ready for separate Opus ritual UI integration. Existing
-view-local `ritualView.ts` marks are not silently migrated or treated as saved.
-No live activation, visible tests, app restart or native acceptance is implied.
+## Connected screens
+
+The connected window reaches the same rules through the exact JSON calls
+`day.ritual.read`, `day.ritual.snapshot`, `day.ritual.results`,
+`day.ritual.visit` and `day.ritual.save`
+([released bridge](day-public-bridge.md)). `ritualFeed.ts` mirrors the last
+confirmed view and is the only TSX path that saves:
+
+- The window reads progress once before Today shows, again when it becomes
+  active, and on Read again. `day.changed` reads only the cached view.
+- Today records a visit once per day context, only while Today is readable,
+  on screen and the window is active.
+- Next and Back save the start of day's step; opening it resumes there.
+  Finish and Done save `done`, Skip saves `skipped`. A ritual leaves only once
+  its mark is saved. Escape and Back to Today save nothing.
+- Each write waits for the one before it and sends the last confirmed
+  revision with the context the ritual opened on. A later day is refused and
+  said on the ritual.
+- A lost or Unknown write is never resent. Today offers no ritual and says
+  the last save is not confirmed until a confirmed read (Read again).
+- No clock, another user or an unreadable source shows "not available" on
+  Today and offers no ritual. Results that could not be read are never "none".
+
+Mock entries use an in-memory stand-in with the same rules that saves
+nothing anywhere. The old view-local marks were removed, not migrated.
+`tests/connected_ritual.rs` covers the calls on a real root and the screens on
+a played root, headless. The production root still has no audited clock and
+time-zone binding, so a real window shows rituals as not available until that
+lands. No live activation, visible tests, app restart or native acceptance is
+implied.
