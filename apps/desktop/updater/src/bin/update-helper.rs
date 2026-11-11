@@ -1,4 +1,10 @@
 fn main() {
+    if pilot_desktop_updater::build_input::requested() {
+        if pilot_desktop_updater::build_input::write().is_err() {
+            std::process::exit(2);
+        }
+        return;
+    }
     #[cfg(any(
         all(target_os = "macos", feature = "native-macos"),
         all(target_os = "linux", feature = "native-linux")

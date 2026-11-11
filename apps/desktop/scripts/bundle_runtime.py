@@ -490,8 +490,13 @@ def snapshot_build(expected_source, output, native=False):
             validate_runtime(output, expected_source)
 
 
-def snapshot_rust(expected_source, output, production=None):
+def snapshot_rust(expected_source, output, production=None, *, gui="gpui"):
     """Build all three Rust inputs from immutable objects; production is explicit only."""
+    if gui == "day":
+        from day_build_inputs import snapshot_day
+        return snapshot_day(expected_source, output, production)
+    if gui != "gpui":
+        raise ValueError("Unknown GUI input builder")
     source(expected_source)
     if sys.platform != "darwin" or run("/usr/bin/uname", "-m") != "arm64":
         raise ValueError("Rust bundle inputs require native arm64 macOS")
@@ -552,6 +557,8 @@ def main():
         command = commands.add_parser(name)
         command.add_argument("--source", required=True)
         command.add_argument("--output", type=Path, required=True)
+        if name == "rust":
+            command.add_argument("--gui", choices=("gpui", "day"), default="gpui")
     bundle = commands.add_parser("bundle")
     for name in ("runtime", "executables", "native", "output"):
         bundle.add_argument("--" + name, type=Path, required=True)
@@ -559,15 +566,16 @@ def main():
     bundle.add_argument("--updater", type=Path)
     bundle.add_argument("--bundle-build")
     bundle.add_argument("--accepted-capsule", action="append", default=[])
+    bundle.add_argument("--gui-resources", type=Path)
     check = commands.add_parser("verify")
     check.add_argument("output", type=Path)
     args = parser.parse_args()
     if args.action == "rust":
-        snapshot_rust(args.source, args.output.absolute())
+        snapshot_rust(args.source, args.output.absolute(), gui=args.gui)
     elif args.action in ("runtime", "native"):
         snapshot_build(args.source, args.output.absolute(), args.action == "native")
     elif args.action == "bundle":
-        assemble(args.runtime, args.executables, args.native, args.output, args.source, args.updater, args.bundle_build, args.accepted_capsule)
+        assemble(args.runtime, args.executables, args.native, args.output, args.source, args.updater, args.bundle_build, args.accepted_capsule, gui_resources=args.gui_resources)
     else:
         verify(args.output)
 

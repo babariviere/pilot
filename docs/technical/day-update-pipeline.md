@@ -114,7 +114,7 @@ does not assemble Pilot's daemon capsule, updater helper, compiled trust or sour
 The existing verifier expects `Pilot Next.app/Contents/MacOS/pilot-desktop`, a separately compiled helper,
 matching app/helper trust, the signed desktop manifest and the bundled runtime inventory. `Trust::validate`,
 `layout::running_root`, helper self-verification and installer verification all participate. Existing
-`bundle_runtime.py` additionally requires the GPUI visual-worker receipt. Renaming a binary alone does not
+`bundle_runtime.py` additionally requires the existing visual-worker receipt. Renaming a binary alone does not
 qualify the package. Do not weaken any verifier to accept an arbitrary NSH runner.
 
 The minimal packaging route is an app-owned assembly adapter around the generated, unmodified native host:
@@ -134,6 +134,13 @@ source/arm64 target, the exact tagged NSH release, and the compiled `pilot-deskt
 snapshot, not a later reread. Both resources and receipt enter the existing signed bundle inventory.
 This closes resource assembly, not generation of trustworthy compiler evidence, GUI startup/capture,
 signature acceptance or production update qualification. A stock `PilotDay` runner is still refused.
+
+The [Day input builder](day-package-inputs.md) now compiles the Day-owned
+bootstrap and separate helper from immutable source, reads their real compiled
+evidence, builds the existing visual worker without GPUI, and generates the
+exact released connected resource closure. It does not run the signing
+assembler or supply a signed production payload. Unconfigured inputs remain
+unavailable for real updates.
 
 ## Typed host contract for UI integration
 
