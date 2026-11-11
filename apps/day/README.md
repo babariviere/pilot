@@ -410,11 +410,9 @@ how many rows it does not show; it never looks complete when it is not. A
 source that needs sign-in or failed says so and keeps what Pilot read before.
 Without any source set up, New is hidden. A row opens in place (press it, or
 Space on the focused row) to show what the source and Pilot's sorting say it
-is and its link as text. Opening it records nothing. Start, Later and Discard
-are not built here yet: they need saved, receipted intents, and the user is
-pointed to Pilot's Inbox instead. Delivered work, its outputs and the user's
-own Done or Send back follow the same reviewed layout once their backend
-records exist.
+is and its link as text. Opening it records nothing. Day offers no Start,
+Later or Discard control until those intents are saved with receipts; the
+row points to Pilot's Inbox instead.
 
 A mission's task also lists what its agents linked to it, from the mission
 record: pull requests with the last GitHub state Pilot saw, artifacts with

@@ -47,9 +47,7 @@ function RequestRow(props: { request: Request }) {
 						<If when={r().link}>
 							<Text class="text-xs text-faint">{r().link}</Text>
 						</If>
-						<Text class="text-sm text-muted-foreground">
-							Pilot Day cannot start, defer or discard requests yet. Start it from the Inbox in Pilot.
-						</Text>
+						<Text class="text-sm text-muted-foreground">To start work on it, use the Inbox in Pilot.</Text>
 					</View>
 				</View>
 			}
