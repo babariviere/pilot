@@ -712,6 +712,19 @@ async fn qualify_planning(
     request: &serde_json::Value,
 ) -> Result<(), Error> {
     let read = read_planning(t, shared, epoch, mission).await?;
+    if request["purpose"] == "plan-start" {
+        let start = &read["start"];
+        if start["available"] != true
+            || read["capabilities"]["admission"] != 1
+            || start["contextDigest"] != digest
+            || start["revision"] != request["expectedRevision"]
+            || start["digest"] != request["planDigest"]
+            || start["taskId"] != request["taskId"]
+        {
+            return Err(Error::Stale);
+        }
+        return Ok(());
+    }
     let interview = &read["view"]["interview"];
     if read["contextDigest"] != digest
         || request["expected"]["fence"] != interview["fence"]
@@ -1043,7 +1056,17 @@ async fn handle(
             return enrollment::send(t, journal, shared, epoch, intent).await;
         }
         Work::ReadPlanning(mission) => {
-            read_planning(t, shared, epoch, &mission).await?;
+            let result = read_planning(t, shared, epoch, &mission).await;
+            let current = shared.epoch.load(Ordering::SeqCst);
+            if matches!(result, Err(Error::Stale))
+                && current != epoch
+                && shared.connected.load(Ordering::SeqCst)
+            {
+                // As with mission detail: retry one raced passive read, never a write.
+                read_planning(t, shared, current, &mission).await?;
+            } else {
+                result?;
+            }
         }
         Work::WriteInterview {
             mission,
@@ -1089,9 +1112,9 @@ async fn handle(
                     if shared.open().is_ok() {
                         let _ = read_planning(t, shared, next, &mission).await;
                     }
-                    return Ok(
-                        shared.outcome(status, "Saved planning action. This does not start work.")
-                    );
+                    return Ok(shared.outcome(status, if request["purpose"] == "plan-start" {
+                        "Start recorded. Admission is separate from progress; read the agent report."
+                    } else { "Saved planning action. This does not start work." }));
                 }
                 Err(_) => {
                     return Ok(shared.outcome(
@@ -1115,6 +1138,10 @@ async fn handle(
                 record.receipt = Some(t.planning_operation(&record.operation, true).await?);
                 journal.save_planning(record.clone())?;
                 publish_planning(shared, &record);
+            }
+            let next = shared.epoch.load(Ordering::SeqCst);
+            if shared.open().is_ok() {
+                let _ = read_planning(t, shared, next, record.mission()).await;
             }
             return Ok(shared.outcome(
                 planning_status(&record),

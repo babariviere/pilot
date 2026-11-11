@@ -1,5 +1,11 @@
 # Missions
 
+In the upcoming native desktop preview, approving and publishing a plan do not start implementation.
+After publication, **Start work** asks you to confirm one ready task and its model. **Start task**
+admits one background worker under existing project permissions and limits. Other tasks do not start
+automatically. If the acknowledgement is lost, use **Check Start**, not another Start. Admission is not
+progress or acceptance. Read the agent's report in the mission overview. The current app is unchanged.
+
 Use a mission when one goal needs several chats. Its **brief** describes the goal,
 **decisions** record agreed choices, and **tasks** track ownership and progress.
 

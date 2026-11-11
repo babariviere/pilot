@@ -7,9 +7,11 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { TestContext } from "node:test";
+import { mock, type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { type KernelSpec, PLANNING_PROFILE, workerEntry } from "@pilot/kernel";
 import type { DurableOperation, InterviewWrite } from "@pilot/protocol";
 import { GitHubSetupService } from "./github-setup.ts";
@@ -24,7 +26,10 @@ import { SessionManager, Worker } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
 
 const exec = promisify(execFile);
-export async function planningWorkerFixture(t?: TestContext, options: { followup?: boolean } = {}) {
+export async function planningWorkerFixture(
+	t?: TestContext,
+	options: { followup?: boolean; publishedPlan?: boolean } = {},
+) {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "planning-worker-")));
 	const home = join(root, "home"),
 		repo = join(root, "repo"),
@@ -62,6 +67,37 @@ return await tools.mission_plan({action:"questions",request:{purpose:"interview-
 			})),
 		),
 	);
+	const proposal = {
+		purpose: "plan-propose",
+		expectedRevision: 1,
+		spec: {
+			problem: "Check importer",
+			solution: "One offline task",
+			stories: [{ id: "one", text: "Receive a report" }],
+			implementation: ["Existing worker"],
+			testing: ["Offline report"],
+			exclusions: ["No live effects"],
+		},
+		slices: [
+			{
+				id: "one",
+				title: "Check importer",
+				outcome: "Report offline results",
+				acceptance: ["Saved report"],
+				storyIds: ["one"],
+				dependsOn: [],
+				owners: ["sol-backend"],
+			},
+		],
+	};
+	const proposalCode = `await tools.mission_plan({action:"write",request:{purpose:"plan-map",expectedRevision:0,destination:"Importer",sources:[],questions:[],fog:[]}}); await tools.mission_plan({action:"write",request:${JSON.stringify(proposal)}}); return await tools.mission_plan({action:"write",request:{purpose:"plan-review",expectedRevision:2}});`;
+	const publishCode = `return await tools.mission_plan({action:"write",request:{purpose:"plan-publish",expectedRevision:3}});`;
+	const reportCode = `function decode(x) { if(typeof x === "string") { try { return decode(JSON.parse(x)); } catch { return x; } } if(x?.content) return decode(x.content.map(p=>p.text??"").join("")); return x; }
+const m=decode(await tools.mission({action:"get"}));
+const tasks=decode(await tools.mission({action:"tasks",mine:true}));
+const task=(tasks.tasks??tasks)[0];
+const source=decode(await tools.mission({action:"report",taskId:String(task.number)}));
+return await tools.mission({action:"report",report:{version:1,reportId:"offline-result",taskId:source.taskId,source:source.source,expectedPreviousId:source.expectedPreviousId,movement:"moving",summary:"Offline background worker reported",nextStep:"User checks results",evidence:["Faux provider, no network"]}});`;
 	await writeFile(
 		extension,
 		`
@@ -69,24 +105,38 @@ import { appendFileSync } from 'node:fs';
 import { fauxProvider, fauxAssistantMessage } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai/providers/faux"))};
 export default pi => {
  const faux=fauxProvider(); let n=0;
- const respond = (text) => async transcript => { appendFileSync(${JSON.stringify(requests)},JSON.stringify({request:++n})+'\\n'); if(n===1 && JSON.stringify(transcript.messages).includes('Continue planning from this exact submitted interview')) return fauxAssistantMessage('Recovered planning continuation, no build.'); return text; };
+ const respond = (text) => async transcript => { appendFileSync(${JSON.stringify(requests)},JSON.stringify({request:++n})+'\\n'); if(!${options.publishedPlan} && n===1 && JSON.stringify(transcript.messages).includes('Continue planning from this exact submitted interview')) return fauxAssistantMessage('Recovered planning continuation, no build.'); if(${options.publishedPlan} && n===1 && JSON.stringify(transcript.messages).includes('Work on mission task')) return fauxAssistantMessage({type:'toolCall',id:'background-report',name:'codemode',arguments:{code:${JSON.stringify(reportCode)}}},{stopReason:'toolUse'}); if(${options.publishedPlan} && n>1 && JSON.stringify(transcript.messages).includes('Work on mission task')) return fauxAssistantMessage('Offline background task report saved.'); return text; };
  faux.setResponses([
-  respond(fauxAssistantMessage({type:'toolCall',id:'saved-round',name:'codemode',arguments:{code:${JSON.stringify(code)}}},{stopReason:'toolUse'})),
+  respond(fauxAssistantMessage({type:'toolCall',id:'saved-round',name:'codemode',arguments:{code:${JSON.stringify(options.publishedPlan ? proposalCode : code)}}},{stopReason:'toolUse'})),
+  ${options.publishedPlan ? `respond(fauxAssistantMessage({type:'toolCall',id:'publish-plan',name:'codemode',arguments:{code:${JSON.stringify(publishCode)}}},{stopReason:'toolUse'})),` : ""}
   ${options.followup ? `respond(fauxAssistantMessage({type:'toolCall',id:'followup-round',name:'codemode',arguments:{code:${JSON.stringify(followupCode)}}},{stopReason:'toolUse'})),` : ""}
   respond(fauxAssistantMessage('Planning continuation completed, no build started.'))
  ]);
- pi.registerProvider(faux.provider);
+	pi.registerProvider(faux.provider);
 };`,
 	);
 	await writeFile(
 		join(agent, "settings.json"),
 		JSON.stringify({
+			enabledModels: ["faux/faux-1"],
 			extensions: [extension],
 			defaultProvider: "faux",
 			defaultModel: "faux-1",
 			defaultTools: ["+codemode"],
 			codemode: { mode: "only" },
 		}),
+	);
+	// Register faux only in this process's real catalog. The forked kernel loads its normal extension.
+	const createRuntime = ModelRuntime.create.bind(ModelRuntime);
+	const catalogRuntime = mock.method(
+		ModelRuntime,
+		"create",
+		async (...args: Parameters<typeof ModelRuntime.create>) => {
+			const runtime = await createRuntime(...args);
+			runtime.registerNativeProvider(fauxProvider().provider);
+			await runtime.setRuntimeApiKey("faux", "offline-fixture");
+			return runtime;
+		},
 	);
 	const offline = join(root, "offline.mjs");
 	await writeFile(
@@ -141,6 +191,8 @@ export default pi => {
 					const worker = new Worker(
 						spec,
 						(packet) => {
+							if (options.publishedPlan && JSON.stringify(packet).includes("tool_execution_end"))
+								logs = (logs + JSON.stringify(packet)).slice(-32768);
 							onPacket(packet);
 							changes.emit("packet");
 						},
@@ -253,6 +305,7 @@ export default pi => {
 		if (closed) return;
 		closed = true;
 		await stop();
+		catalogRuntime.mock.restore();
 		await exec("/bin/chmod", ["-R", "u+w", root]);
 		await rm(root, { recursive: true, force: true });
 	};
@@ -322,7 +375,11 @@ export default pi => {
 				};
 				const timeout = setTimeout(() => {
 					off();
-					reject(new Error(`Fixture state did not settle: ${logs}`));
+					reject(
+						new Error(
+							`Fixture state did not settle: ${logs} ${JSON.stringify(sessions.list().map((s) => ({ id: s.id, state: s.state, outcome: s.outcome, reason: s.outcomeReason })))}`,
+						),
+					);
 				}, 15000);
 				const changed = () => {
 					if (check()) {

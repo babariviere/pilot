@@ -206,6 +206,7 @@ export interface KernelTelemetryConfiguration {
 
 export type KernelCommand =
 	| { type: "planning.input"; requestId: string; input: import("./planning-worker.ts").PlanningInput }
+	| { type: "plan.start"; requestId: string; content: string }
 	| {
 			type: "planning.result";
 			callId: string;

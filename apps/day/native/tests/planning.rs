@@ -24,11 +24,21 @@ impl Fixture {
     fn script(name: &str) -> Self {
         let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../../packages/daemon/src/fixtures")
-            .join(name);
+            .join(if name == "day-published-plan.ts" {
+                "day-planning-worker.ts"
+            } else {
+                name
+            });
         let mut child = Command::new("node")
             .arg(script)
+            .args(if name == "day-published-plan.ts" {
+                vec!["--published-plan"]
+            } else {
+                vec![]
+            })
             .env_remove("PILOT_HOME")
             .env_remove("PILOT_PORT")
+            .env_remove("NODE_TEST_CONTEXT")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -125,6 +135,92 @@ fn real_planning_worker_yields_then_continues_once_after_every_answer() {
         "fixture joins its real kernel and exits cleanly"
     );
 }
+
+#[test]
+fn published_plan_explicit_native_start_real_worker_and_visible_report() {
+    let mut f = Fixture::script("day-published-plan.ts");
+    let host = f.open();
+    ready(&host);
+    let view = read_current(&host, f.mission());
+    assert_eq!(f.cmd("stats", false)["workers"], 1);
+    assert_eq!(
+        reply(write(
+            &host,
+            f.mission(),
+            &view,
+            false,
+            "Agree to this plan"
+        ))
+        .unwrap()
+        .status,
+        OutcomeStatus::Accepted
+    );
+    let view = read_current(&host, f.mission());
+    assert_eq!(
+        reply(write(&host, f.mission(), &view, true, ""))
+            .unwrap()
+            .status,
+        OutcomeStatus::Accepted
+    );
+    assert_eq!(
+        f.cmd("idle", false)["workers"],
+        1,
+        "Submitting and publishing start no builder"
+    );
+    let view = read_current(&host, f.mission());
+    let start = &view["start"];
+    assert_eq!(start["available"], true, "{view}");
+    let shown = json!({"revision": start["revision"], "digest": start["digest"], "taskId":start["taskId"], "context":start["contextDigest"]});
+    let (digest, request) = pilot_day_native::plan_host::start_request(&view, &shown).unwrap();
+    let mut stale = shown.clone();
+    stale["revision"] = json!(0);
+    assert!(pilot_day_native::plan_host::start_request(&view, &stale).is_err());
+    f.cmd("lost", true);
+    assert_eq!(
+        reply(host.write_interview(f.mission().into(), digest.clone(), request.clone()))
+            .unwrap()
+            .status,
+        OutcomeStatus::Unknown
+    );
+    assert_eq!(f.cmd("reported", false)["workers"], 2);
+    reply(host.read_mission(f.mission().into())).unwrap();
+    let page = host.mission(f.mission()).unwrap();
+    assert_eq!(
+        page.tasks[0].report.as_ref().unwrap().summary,
+        "Offline background worker reported"
+    );
+    let requests = f.cmd("stats", false)["requests"].clone();
+    assert!(
+        reply(host.write_interview(f.mission().into(), digest, request)).is_err(),
+        "A second fresh Start is not an exact receipt lookup"
+    );
+    assert_eq!(f.cmd("stats", false)["requests"], requests);
+    reply(host.close()).unwrap();
+    let host = f.open();
+    ready(&host);
+    let pending = host
+        .planning_operations(f.mission())
+        .into_iter()
+        .find(|r| r["kind"] == "plan-start")
+        .unwrap();
+    assert_eq!(pending["state"], "unknown");
+    assert_eq!(
+        reply(host.check_planning(pending["operationId"].as_str().unwrap().into()))
+            .unwrap()
+            .status,
+        OutcomeStatus::Accepted,
+        "Reopen checks the exact saved Start, never resends it"
+    );
+    assert_eq!(
+        read_current(&host, f.mission())["start"]["state"],
+        "admitted"
+    );
+    assert_eq!(f.cmd("stats", false)["workers"], 2, "Cold-open is passive");
+    assert_eq!(f.cmd("stats", false)["requests"], requests);
+    reply(host.close()).unwrap();
+    assert_eq!(f.cmd("close", false)["closed"], true);
+    assert!(f.child.wait().unwrap().success());
+}
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = self.child.kill();
@@ -164,6 +260,19 @@ fn read(host: &NativeHost, mission: &str) -> Value {
     reply(host.read_planning(mission.into())).unwrap();
     host.planning(mission).unwrap()
 }
+// Real worker transitions can send several invalidations after a fixture barrier.
+// Retry only passive reads. Never retry save, submit, Start or any entered effect.
+fn read_current(host: &NativeHost, mission: &str) -> Value {
+    for _ in 0..4 {
+        match reply(host.read_planning(mission.into())) {
+            Ok(_) => return host.planning(mission).unwrap(),
+            Err(Error::Stale) => continue,
+            Err(error) => panic!("Planning read failed: {error:?}"),
+        }
+    }
+    panic!("Planning read kept changing");
+}
+
 fn write(
     host: &NativeHost,
     mission: &str,

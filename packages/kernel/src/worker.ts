@@ -297,6 +297,10 @@ export function runKernelWorker(): void {
 		await initialization;
 		if (!session) throw new Error("Kernel has not started");
 		switch (command.type) {
+			case "plan.start":
+				await session.submitPlanStart(command.requestId, command.content);
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
 			case "planning.input":
 				await session.submitPlanning(command.input);
 				await send({ type: "accepted", requestId: command.requestId });

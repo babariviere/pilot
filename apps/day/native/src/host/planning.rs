@@ -38,7 +38,7 @@ impl PlanningRecord {
             || o["destination"] != home(&self.source, "daemon")
             || !matches!(
                 o["kind"].as_str(),
-                Some("interview-save" | "interview-submit" | "planning-enroll")
+                Some("interview-save" | "interview-submit" | "planning-enroll" | "plan-start")
             )
             || o["payload"]
                 .as_str()
@@ -80,9 +80,10 @@ pub(super) fn record(
         || !digest.bytes().all(|b| b.is_ascii_hexdigit())
         || !matches!(
             request["purpose"].as_str(),
-            Some("interview-save" | "interview-submit")
+            Some("interview-save" | "interview-submit" | "plan-start")
         )
-        || request["expected"]["fence"]["missionId"] != mission
+        || (request["purpose"] != "plan-start"
+            && request["expected"]["fence"]["missionId"] != mission)
     {
         return Err(Error::Invalid);
     }
@@ -125,6 +126,15 @@ pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
             return Err(Error::Unknown);
         }
     }
+    if op["kind"] == "plan-start"
+        && r["state"] == "accepted"
+        && (r["result"]["admissionId"] != op["operationId"]
+            || r["result"]["sessionId"]
+                .as_str()
+                .is_none_or(|s| !valid_id(s)))
+    {
+        return Err(Error::Unknown);
+    }
     Ok(r)
 }
 
@@ -148,4 +158,24 @@ pub(super) fn enrollment_record(
     };
     r.validate()?;
     Ok(r)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn start_ack_requires_exact_kernel_admission_and_worker_identity() {
+        let op = json!({"kind":"plan-start", "operationId":"start", "payloadHash":"digest", "destination":{"home":"one"}, "targetId":"mission"});
+        let receipt = json!({"operationId":"start", "payloadHash":"digest", "destination":{"home":"one"}, "targetId":"mission", "state":"accepted", "result":{"admissionId":"start","sessionId":"worker"}});
+        assert!(exact(receipt.clone(), &op).is_ok());
+        for result in [
+            json!({}),
+            json!({"admissionId":"other","sessionId":"worker"}),
+            json!({"admissionId":"start","sessionId":"invalid/id"}),
+        ] {
+            let mut wrong = receipt.clone();
+            wrong["result"] = result;
+            assert!(matches!(exact(wrong, &op), Err(Error::Unknown)));
+        }
+    }
 }

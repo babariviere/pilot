@@ -566,8 +566,40 @@ pub struct PlanPage {
     pub proposal: Option<Proposal>,
     /// From answers to work, each step separate.
     pub steps: Vec<Step>,
+    /// Explicit Start for the exact published plan. Absent in unsupported/mock flows.
+    pub work: Option<PlanWork>,
     /// One notice about a change, such as a plan that changed during review.
     pub note: String,
+}
+
+/// Native Start read model. No host, credentials, operation IDs or new grants.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanWork {
+    /// Whether this exact task can be started.
+    pub can_start: bool,
+    /// Whether an uncertain Start has a saved receipt to check.
+    pub can_check: bool,
+    /// Exact published revision shown.
+    pub revision: u64,
+    /// Exact published digest shown.
+    pub digest: String,
+    /// Exact ready task shown.
+    pub task_id: String,
+    /// The task's title.
+    pub title: String,
+    /// Existing-policy model selection, not a spending grant.
+    pub model: String,
+    /// Project named by the native owner.
+    pub project: String,
+    /// Existing permission ceiling. Start never increases it.
+    pub access: String,
+    /// Resolved thinking setting.
+    pub thinking: String,
+    /// Opaque currentness identity. The host supplies authority separately.
+    pub context: String,
+    /// What is known, separately from task execution or acceptance.
+    pub line: String,
 }
 
 /// Start a mission interview, or a chat, from the user's words.

@@ -18,6 +18,7 @@ import type {
 import type { Day } from "./day";
 import { InterviewDoc } from "./InterviewDoc";
 import { keepScroll } from "./kept";
+import { flush, unsavedCount } from "./planCommands";
 import type { Plans } from "./planning";
 import { closePlanning, fogOpen, put, roundOpen } from "./planView";
 import { TopBar } from "./TodayScreen";
@@ -321,6 +322,90 @@ function Steps(props: { steps: Step[] }) {
 	);
 }
 
+/** Same planning layout and action controls. Confirmation pins what the user saw. */
+export function StartWork(props: { plans: Plans; page: PlanPage }) {
+	const shown = signal<NonNullable<PlanPage["work"]> | null>(null);
+	const busy = signal(false);
+	const note = signal("");
+	const uncertain = signal(false);
+	const work = () => props.page.work;
+	const current = () => !uncertain() && shown()?.context === work()?.context && work()?.canStart === true;
+	async function send(check = false) {
+		if (busy()) return;
+		const pin = shown();
+		if (!check && (!pin || !current())) {
+			shown.set(null);
+			return;
+		}
+		// Navigation while drafts save cannot redirect this confirmed intent.
+		const missionId = props.page.missionId;
+		const interview = props.page.interview;
+		busy.set(true);
+		try {
+			if (interview) {
+				await flush(props.plans, interview);
+				const saved = props.plans.feed.page(missionId)?.interview;
+				if (saved && unsavedCount(saved) > 0) {
+					note.set("Save the answers before starting work.");
+					return;
+				}
+			}
+			const result = check
+				? await props.plans.feed.checkWork?.(missionId)
+				: await props.plans.feed.startWork?.(missionId, {
+						revision: pin!.revision,
+						digest: pin!.digest,
+						taskId: pin!.taskId,
+						context: pin!.context,
+					});
+			note.set(result?.message ?? "Start is unavailable here.");
+			uncertain.set(result?.status === "unknown");
+			shown.set(null);
+		} catch {
+			uncertain.set(true);
+			note.set("Start is not confirmed. Check only; do not start again.");
+			shown.set(null);
+		} finally {
+			busy.set(false);
+		}
+	}
+	return (
+		<If when={work()}>
+			<View class="gap-2">
+				<If when={work()?.canStart && !shown() && !uncertain()}>
+					<Action
+						label="Start work"
+						primary
+						disabled={busy() || !props.plans.feed.startWork}
+						onPress={() => shown.set(work() ?? null)}
+					/>
+				</If>
+				<If when={shown()}>
+					<Text class="text-sm text-foreground">{`Start “${shown()?.title}” as one background Build task?`}</Text>
+					<Text class="text-xs text-faint">{`${shown()?.project} · ${shown()?.model} · ${shown()?.thinking}. Access: ${shown()?.access}. Existing limits apply. Other tasks do not start.`}</Text>
+					<View class="flex-row gap-2">
+						<Action
+							label={busy() ? "Starting…" : "Start task"}
+							primary
+							disabled={busy() || !current()}
+							onPress={() => void send()}
+						/>
+						<Action label="Cancel" disabled={busy()} onPress={() => shown.set(null)} />
+					</View>
+				</If>
+				<If when={work()?.canCheck || uncertain()}>
+					<Action label="Check Start" disabled={busy()} onPress={() => void send(true)} />
+				</If>
+				<If when={note()}>
+					<Text role="alert" class="text-xs text-muted-foreground">
+						{note()}
+					</Text>
+				</If>
+			</View>
+		</If>
+	);
+}
+
 /** Earlier interview rounds: each one's own completion and answers, apart from the plan's approval. */
 function Rounds(props: { page: PlanPage }) {
 	const p = () => props.page;
@@ -441,6 +526,7 @@ function Body(props: { plans: Plans; page: PlanPage; title: string }) {
 			</If>
 			<If when={p().available}>
 				<Steps steps={p().steps} />
+				<StartWork plans={props.plans} page={p()} />
 			</If>
 			<Rounds page={p()} />
 		</View>

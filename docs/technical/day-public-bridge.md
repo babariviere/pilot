@@ -55,7 +55,10 @@ for every event.
 first read shows why, never mock data. Each intent is sent once with
 `timeout: 0`: a lost reply is Unknown and only the matching check method
 looks it up. Decision Later reorders this run only. Help, link opening,
-direct chat start, Start, budget and continuation say they are unavailable.
+direct chat start, budget and dependent-work continuation say they are unavailable.
+Published planning uses `day.plan.startWork` with the displayed revision/digest/task/context and a
+separate confirmation. `day.plan.checkWork` reads the retained exact operation only. Both use the
+same native worker, ledger, close fence and saved-form barrier as existing planning commands.
 On `day.flush` the adapter saves every waiting answer and Today draft, and
 acknowledges only when each save was answered and none was refused.
 `native/tests/connected.rs` runs the entry on a real `Bridge`. The default

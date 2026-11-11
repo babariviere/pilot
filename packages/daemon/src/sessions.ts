@@ -1303,6 +1303,68 @@ export class SessionManager {
 		)
 			throw new Conflict("Planning worker is stopped, held or unavailable");
 	}
+	/** Creation-only native Start. No queued opening input exists to replay after a crash. */
+	async admitPublishedTask(
+		request: SpawnRequest,
+		identity: { sessionId: string; operationId: string; taskId: string; ownerSessionId: string },
+		guard: (claimed: boolean) => void,
+	): Promise<{ admissionId: string; sessionId: string }> {
+		const end = this.updateGate.begin();
+		const id = identity.sessionId;
+		let worker: SessionWorker | undefined;
+		const check = () => {
+			guard(true);
+			this.assertPlanningOpen(id);
+			const meta = this.require(id);
+			if (
+				(meta.inputGeneration ?? 0) !== 0 ||
+				meta.pending?.length ||
+				meta.createOperationId !== identity.operationId ||
+				(worker && this.workers.get(id) !== worker)
+			)
+				throw new Conflict("Published task admission changed");
+		};
+		try {
+			guard(false);
+			await this.spawnAdmitted(
+				request,
+				false,
+				identity.taskId,
+				{ targetId: id, operationId: identity.operationId },
+				{ role: "builder" },
+				undefined,
+				undefined,
+				false,
+				undefined,
+				undefined,
+				() => guard(false),
+				{ permission: this.require(identity.ownerSessionId).executionPermission },
+			);
+			check();
+			// Reuse normal workspace preparation, initialization and lifecycle gates, with no input outbox.
+			const errors = await this.start(id, true);
+			if (errors.size) throw errors.values().next().value;
+			check();
+			worker = await this.ensureWorker(id);
+			await worker.ready;
+			check();
+			this.planningGuards.set(identity.operationId, { worker, guard: check });
+			await worker.request({ type: "plan.start", requestId: identity.operationId, content: request.message });
+			return { admissionId: identity.operationId, sessionId: id };
+		} finally {
+			this.planningGuards.delete(identity.operationId);
+			end();
+		}
+	}
+	/** Passive exact receipt only. Never creates metadata, opens a worker or sends an input. */
+	async lookupPublishedTask(sessionId: string, operationId: string): Promise<boolean> {
+		const meta = this.metas.get(sessionId);
+		return (
+			!!meta &&
+			meta.createOperationId === operationId &&
+			(await this.coldReader.readAcceptedInput(join(this.dir(sessionId), "durable"), operationId))
+		);
+	}
 	/** Only this host method mints metadata, before the first worker or input exists. */
 	async createPlanningWorker(
 		binding: import("@pilot/kernel").PlanningWorkerBinding,
@@ -8795,6 +8857,7 @@ ${run.excerpt}`,
 		ownerExecution?: Pick<import("./insights-owner-store.ts").InsightsOwnerExecution, "authority" | "binding">,
 		planning?: import("@pilot/kernel").PlanningWorkerBinding,
 		planningGuard?: () => void,
+		publishedStart?: { permission?: ExecutionPermission },
 	): Promise<SessionSummary> {
 		if (admission) this.insightsBacklog?.replacements.assertNotRetired(admission.targetId);
 		if (deferInsightsInput && ((!insightsGrant && !ownerExecution) || request.role !== "insights"))
@@ -8999,6 +9062,7 @@ ${run.excerpt}`,
 			cwd = join(this.dir(id), "workspace");
 		}
 		const meta: SessionMeta = {
+			...(publishedStart?.permission ? { executionPermission: structuredClone(publishedStart.permission) } : {}),
 			...(planning ? { planning: structuredClone(planning) } : {}),
 			...(flowAdmission
 				? { flowRootId: flowAdmission.rootId, ...(flowAdmission.flow ? { flow: flowAdmission.flow } : {}) }
@@ -9033,9 +9097,9 @@ ${run.excerpt}`,
 			...(preparing && mode === "build" && request.missionId && !request.role && !coordinator
 				? { retainedMissionCreation: true as const }
 				: {}),
-			...(deferInsightsInput || planning ? {} : { initializing: true as const }),
+			...(deferInsightsInput || planning || publishedStart ? {} : { initializing: true as const }),
 			pending:
-				deferInsightsInput || planning
+				deferInsightsInput || planning || publishedStart
 					? []
 					: [
 							{
@@ -9063,6 +9127,7 @@ ${run.excerpt}`,
 			if (request.diagnosticRepair) await this.repairProject.validateCurrent(request.diagnosticRepair.binding);
 			this.assertDiagnosticRepairAdmission(request);
 			if (request.missionId !== undefined) {
+				planningGuard?.();
 				this.missions!.joinSpawn(id, request.missionId, coordinator, taskId, missionAdmission);
 				// The new chat may act on its membership as soon as it starts.
 				await this.missions!.whenDurable?.();
@@ -9109,7 +9174,7 @@ ${run.excerpt}`,
 		}
 		const summary = this.summary(meta);
 		this.emit(meta);
-		if (!deferInsightsInput && !planning) void this.start(id, true);
+		if (!deferInsightsInput && !planning && !publishedStart) void this.start(id, true);
 		return summary;
 	}
 

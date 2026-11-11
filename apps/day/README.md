@@ -422,7 +422,9 @@ stories, how it is built and tested, what is left out, its tasks with their
 order and owners, and what is still unknown) above the review question. A plan
 that changes during review closes that review. "From answers to work" keeps
 submission, continuation, approval, publication and starting work as separate
-steps; starting work is never on this page.
+steps. In the connected entry, a published plan offers a separate Start work confirmation.
+It names one ready task and the resolved model. Only Start task admits that background worker;
+approval, publication, opening the page and cancelling start nothing. Other tasks do not auto-start.
 
 `PlanFeed::from_host` (Rust only) binds the planning screens to the native
 host's saved interview reads, saves, submission and exact receipt checks
@@ -430,8 +432,12 @@ host's saved interview reads, saves, submission and exact receipt checks
 Native New can create an interview; standalone chat start stays unavailable.
 The default entry remains mock-only.
 "Pilot continues planning" follows a bound planning worker's phase and says it is
-not connected otherwise; "Work started" stays unavailable (no agreement or build
-admission). Earlier rounds show every submitted round and its saved answers in order,
+not connected otherwise. Native Start binds the exact published revision, digest, task and current
+project/owner. "Work admitted" is not running, progress or acceptance: the existing mission overview
+shows the agent's report. A lost acknowledgement offers Check Start only, including after reopen.
+Stopped/reconfigured owners, paused missions and unavailable authority cannot Start. This reuses
+the existing Build/model/price-cap/lifecycle policy; it adds no Build spending cap or grant.
+The CLI mock does not start a real worker. Earlier rounds show every submitted round and its saved answers in order,
 including after reopening. They are read-only, not current answers or approval.
 A mission without a saved interview says so instead of
 showing an empty plan.

@@ -19,6 +19,8 @@ export interface PlanningWorkerState {
 	hold: PlanningRound | null;
 	pendingHold: { operationId: string; authority: string } | null;
 	continuation: { operation: DurableOperation; entered: boolean } | null;
+	/** Entered Start is lookup-only across restart, even when no kernel receipt can be found. */
+	start?: { operation: DurableOperation; sessionId: string; taskId: string; admitted: boolean };
 }
 interface Port {
 	one(sql: string, ...params: SQLInputValue[]): Record<string, SQLInputValue> | undefined;

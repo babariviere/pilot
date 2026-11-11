@@ -1488,6 +1488,25 @@ export class KernelSession {
 		}
 	}
 
+	/** One explicit native Start. Ordinary input hooks and existing model/tool policy still apply. */
+	async submitPlanStart(requestId: string, content: string): Promise<void> {
+		if (this.planningBinding || !this.planningGuard || this.#closing || this.#changingModel || this.#moving)
+			throw new Error("Published plan admission unavailable");
+		this.#admissions++;
+		try {
+			await this.serializeInput(async () => {
+				if (await findInputReceipt(this.#storage, requestId, context)) return;
+				await this.planningGuard!(requestId);
+				const prepared = await this.adapter.prepareInput(content);
+				await submitIdleInput(this.harness, this.conversation, requestId, prepared, context, undefined, () =>
+					this.planningGuard!(requestId),
+				);
+			});
+		} finally {
+			this.#admissions--;
+		}
+	}
+
 	/** Durable admission. Retrying the same requestId returns the existing submission. */
 	async submitPlanning(input: PlanningInput): Promise<void> {
 		if (

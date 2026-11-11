@@ -4,7 +4,18 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { planningWorkerFixture } from "../planning-workers.fixture.ts";
 
-const f = await planningWorkerFixture();
+const f = await planningWorkerFixture(undefined, { publishedPlan: process.argv.includes("--published-plan") });
+let loseNext = false;
+f.server.prependListener("request", (request, response) => {
+	if (loseNext && request.method === "POST" && request.url === "/api/operations") {
+		loseNext = false;
+		// Drop only the ACK, after the real handler has completed its durable work.
+		response.end = () => {
+			response.destroy();
+			return response;
+		};
+	}
+});
 try {
 	const enrolled = await f.post(f.enrollment);
 	assert.equal(enrolled.state, "accepted", JSON.stringify(enrolled) + f.logs());
@@ -28,6 +39,7 @@ try {
 	);
 	for await (const line of createInterface({ input: process.stdin })) {
 		const command = JSON.parse(line);
+		if (command.action === "lost") loseNext = command.value === true;
 		if (command.action === "idle")
 			await f.changed(
 				() => f.store.planningWorkers.get(mission)?.phase === "active" && f.sessions.get(owner)?.state === "idle",
@@ -37,8 +49,18 @@ try {
 			console.log(JSON.stringify({ closed: true, workers: f.kernels.length }));
 			break;
 		}
+		if (command.action === "reported")
+			await f.changed(
+				() =>
+					f.service.reports.latest(mission).length === 1 &&
+					f.sessions.get(f.store.planningWorkers.get(mission)?.start?.sessionId ?? "")?.state === "idle",
+			);
 		console.log(
-			JSON.stringify({ requests: await f.requestCount(), phase: f.store.planningWorkers.get(mission)?.phase }),
+			JSON.stringify({
+				requests: await f.requestCount(),
+				phase: f.store.planningWorkers.get(mission)?.phase,
+				workers: f.specs.length,
+			}),
 		);
 	}
 } finally {

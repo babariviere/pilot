@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 
 use crate::plan::{
     AnswerIntent, Choice, Delivery, Exploration, ExploreKind, ExploreState, FogArea, Interview,
-    OutcomeStatus, PlanIdentity, PlanPage, PlanRoute, PlanRow, PlanStage, Proposal,
+    OutcomeStatus, PlanIdentity, PlanPage, PlanRoute, PlanRow, PlanStage, PlanWork, Proposal,
     PrototypeSupport, Question, QuestionSection, QuestionState, RoundAnswer, RoundKind, RoundLine,
     RoundState, Slice, SliceOwner, Spec, Step, StepState, Story, SubmitIntent, SubmitState,
 };
@@ -418,7 +418,7 @@ pub fn page(read: &Value, ops: &[Value], local: &Local) -> PlanPage {
     let publication = &plan["publication"];
     let published = publication.is_object();
     let tasks = arr(&publication["tasks"]).len();
-    let published_line = format!("Published as {tasks} tasks. No work started.");
+    let published_line = format!("Published as {tasks} tasks. Publication did not start work.");
     let steps = vec![
         step(
             "Pilot continues planning",
@@ -452,9 +452,31 @@ pub fn page(read: &Value, ops: &[Value], local: &Local) -> PlanPage {
             },
         ),
         step(
-            "Work started",
-            StepState::Unavailable,
-            "Starting work needs its own confirmation. Nothing here starts it.",
+            if read["start"]["available"] == true
+                || matches!(
+                    read["start"]["state"].as_str(),
+                    Some("admitted" | "unknown")
+                )
+            {
+                "Work admitted"
+            } else {
+                "Work started"
+            },
+            if read["start"]["state"] == "admitted" {
+                StepState::Done
+            } else if read["start"]["state"] == "unknown"
+                || unsettled(ops).any(|o| o["kind"] == "plan-start")
+            {
+                StepState::Unknown
+            } else if read["start"]["available"] == true {
+                StepState::Waiting
+            } else {
+                StepState::Unavailable
+            },
+            read["start"]["reason"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("Starting work needs its own confirmation. Nothing here starts it."),
         ),
     ];
     let stage = match &interview {
@@ -536,12 +558,51 @@ pub fn page(read: &Value, ops: &[Value], local: &Local) -> PlanPage {
         fog: arr(&plan["fog"]).iter().map(|f| fog(view, f)).collect(),
         proposal: proposal(plan),
         steps,
+        work: read["start"].is_object().then(|| PlanWork {
+            can_start: fresh
+                && read["start"]["available"] == true
+                && unsettled_operation(ops).is_none(),
+            can_check: unsettled(ops).any(|o| o["kind"] == "plan-start"),
+            revision: read["start"]["revision"].as_u64().unwrap_or(0),
+            digest: s(&read["start"]["digest"]),
+            task_id: s(&read["start"]["taskId"]),
+            title: s(&read["start"]["title"]),
+            model: s(&read["start"]["model"]),
+            project: s(&read["start"]["project"]),
+            access: s(&read["start"]["access"]),
+            thinking: s(&read["start"]["thinking"]),
+            context: s(&read["start"]["contextDigest"]),
+            line: s(&read["start"]["reason"]),
+        }),
         note: if fresh {
             String::new()
         } else {
             "This is an older read. Pilot checks again before it saves anything.".into()
         },
     }
+}
+
+/// Only a press on the exact displayed published plan may prepare Start.
+pub fn start_request(read: &Value, shown: &Value) -> Result<(String, Value), Refusal> {
+    let start = &read["start"];
+    if read["fresh"] != true
+        || start["available"] != true
+        || read["capabilities"]["admission"] != 1
+        || shown["revision"] != start["revision"]
+        || shown["digest"] != start["digest"]
+        || shown["taskId"] != start["taskId"]
+        || shown["context"] != start["contextDigest"]
+    {
+        return Err((
+            OutcomeStatus::Stale,
+            "The published plan changed. Read it again.",
+        ));
+    }
+    Ok((
+        s(&start["contextDigest"]),
+        json!({"purpose":"plan-start", "expectedRevision":start["revision"],
+        "planDigest":start["digest"], "taskId":start["taskId"]}),
+    ))
 }
 
 /// Maps only a complete authenticated inventory, rejecting missing identities and partial pages.
@@ -602,7 +663,7 @@ pub fn inventory_rows(read: &Value) -> Result<Vec<PlanRow>, crate::host::Error> 
                 PlanStage::Questions => "Interview answers needed",
                 PlanStage::Review => "The plan is ready for your review",
                 PlanStage::Submitted => "Submitted. Pilot cannot continue from it here yet",
-                PlanStage::Published => "Published. No work started",
+                PlanStage::Published => "Published as tasks. Work admission is separate",
                 _ => "Pilot is working on the plan",
             };
             Ok(PlanRow {
@@ -641,7 +702,7 @@ pub fn row(page: &PlanPage, title: &str) -> PlanRow {
         (PlanStage::Review, _) => "The plan is ready for your review".into(),
         (PlanStage::Unknown, _) => "Not confirmed".into(),
         (PlanStage::Submitted, _) => "Submitted. Pilot cannot continue from it here yet".into(),
-        (PlanStage::Published, _) => "Published. No work started".into(),
+        (PlanStage::Published, _) => "Published as tasks. Work admission is separate".into(),
         _ => "Pilot is working on the plan".into(),
     };
     PlanRow {

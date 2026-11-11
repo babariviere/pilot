@@ -306,8 +306,16 @@ host close covers entered enrollment HTTP and ledger work without stopping the d
   reports `coordinatorProfile: 1`, `continuation: 1` and its saved phase/continuation operation ID.
   Stop, pause or unavailable authority leaves those capabilities unavailable. No generic send fallback
   is used. An empty bootstrap reports `preparing` and cannot be answered or submitted.
-- Agreement/build and small-ask admission adapters remain absent. Submission cannot bypass their
-  independent approval, assignment, permission/model, review, budget or lifecycle gates.
+- Small-ask and the generic workflow-agreement admission adapters remain absent. Native `plan-start`
+  is a narrow explicit-user path for one ready task from the exact published plan, not automation or
+  a new Build grant/budget. The server binds plan revision/digest, unchanged task definition,
+  project, coordinator/enrollment/owner fence, model selection and Stop/Pause controls. It saves
+  the Start identity before SessionManager creates a fresh builder using existing task-model and
+  workspace/lifecycle policy. No ordinary opening-input outbox can replay it. The kernel runs normal
+  input preparation, then commits one idle input and final host guard atomically; held input stays held.
+  Admission and running are separate facts. Agent reports use the existing Today/mission read models.
+  Missing/uncertain receipts stay Unknown, including after reopen. Check reconciles the exact kernel
+  receipt only; it never creates a worker or resends input. Host close joins entered Start work.
 - Trusted coordinator map/proposal/publication writes are not human native operations. Published-task
   amendments remain refused by the existing service; no amendment adapter is added.
 

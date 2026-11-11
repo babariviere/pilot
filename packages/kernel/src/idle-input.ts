@@ -9,6 +9,7 @@ import {
 	LiveDoc,
 	UserEntry,
 } from "@earendil-works/pi-durable";
+import { HeldInputsDoc } from "./held-inputs-doc.ts";
 
 export async function submitIdleInput(
 	harness: Harness,
@@ -17,6 +18,7 @@ export async function submitIdleInput(
 	content: string,
 	context: Context,
 	event?: import("@pilot/protocol").ChatEventSummary,
+	guard?: () => Promise<void>,
 ): Promise<void> {
 	await conversation.commit(async (tx) => {
 		const existing = await tx.submissionByRequest(conversation.id, requestId);
@@ -27,6 +29,11 @@ export async function submitIdleInput(
 		}
 		const live = await tx.doc(LiveDoc, conversation.id);
 		const inbox = await tx.doc(InboxDoc, conversation.id);
+		if (guard) {
+			const held = await tx.doc(HeldInputsDoc, conversation.id);
+			if (held.stopped || held.paused || held.planning || held.questionPending || held.items.length)
+				throw new ConversationBusy(conversation.id);
+		}
 		if (live.run || live.compactions?.length || inbox.items.length) throw new ConversationBusy(conversation.id);
 		// These are pi-durable's idle input placement and startRun operations in the SAME commit as the guard.
 		// The Harness still owns scheduling, generation, settlement and recovery; no native model loop is started.
@@ -51,6 +58,8 @@ export async function submitIdleInput(
 			),
 			inputs: [submission.id],
 		};
+		// Native Start pins authority after all asynchronous preparation, inside this commit.
+		await guard?.();
 	}, context);
 	harness.resume();
 }

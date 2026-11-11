@@ -532,6 +532,8 @@ export class ConnectedPlans implements PlanningFeed {
 		const planning = this.snapshot();
 		for (const listener of this.#listeners.values()) listener(planning);
 	}
+	#starting = new Set<string>();
+	#unknownStarts = new Set<string>();
 
 	#take(missionId: string, page: PlanPage | null | undefined) {
 		if (page && typeof page === "object") {
@@ -601,9 +603,22 @@ export class ConnectedPlans implements PlanningFeed {
 		const read = this.#pages.get(missionId);
 		if (!read) return null;
 		// The older-read words come first, so a page with its own note still says it is older.
-		const page = this.#current(missionId, read)
+		let page = this.#current(missionId, read)
 			? read
 			: { ...read, fresh: false, note: read.note ? `${OLDER} ${read.note}` : OLDER };
+		if (page.work)
+			page = {
+				...page,
+				work: {
+					...page.work,
+					canStart:
+						page.fresh &&
+						page.work.canStart &&
+						!this.#starting.has(missionId) &&
+						!this.#unknownStarts.has(missionId),
+					canCheck: page.work.canCheck || this.#unknownStarts.has(missionId),
+				},
+			};
 		const iv = page.interview;
 		if (!iv || this.#saving.size === 0) return page;
 		const questions = iv.questions.map((q) =>
@@ -725,6 +740,33 @@ export class ConnectedPlans implements PlanningFeed {
 			this.#publish();
 			return this.#refused(r.refusal, missionId);
 		}
+		this.#take(missionId, r.snapshot);
+		return this.#outcome(r.outcome, missionId);
+	}
+
+	async startWork(
+		missionId: string,
+		intent: Pick<NonNullable<PlanPage["work"]>, "revision" | "digest" | "taskId" | "context">,
+	): Promise<PlanOutcome> {
+		if (this.#starting.has(missionId) || this.#unknownStarts.has(missionId))
+			return this.#refused("unknown", missionId);
+		this.#starting.add(missionId);
+		this.#publish();
+		const r = await call<PlanPage | null>(this.#window, "day.plan.startWork", { missionId, intent });
+		this.#starting.delete(missionId);
+		if (!r.ok) {
+			if (r.refusal === "lost" || r.refusal === "unknown") this.#unknownStarts.add(missionId);
+			this.#publish();
+			return this.#refused(r.refusal, missionId);
+		}
+		this.#take(missionId, r.snapshot);
+		return this.#outcome(r.outcome, missionId);
+	}
+
+	async checkWork(missionId: string): Promise<PlanOutcome> {
+		const r = await call<PlanPage | null>(this.#window, "day.plan.checkWork", { missionId });
+		if (!r.ok) return this.#refused(r.refusal, missionId);
+		if (r.outcome?.status === "accepted" || r.outcome?.status === "rejected") this.#unknownStarts.delete(missionId);
 		this.#take(missionId, r.snapshot);
 		return this.#outcome(r.outcome, missionId);
 	}

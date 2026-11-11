@@ -207,6 +207,19 @@ async fn run(
         Command::Submit { mission, intent } => Some(planning_request(host, mission, |read| {
             plan_host::submit_request(read, intent)
         })?),
+        Command::StartWork { mission, shown } => Some(planning_request(host, mission, |read| {
+            plan_host::start_request(read, shown)
+        })?),
+        Command::CheckWork(mission) => {
+            let id = host
+                .planning_operations(mission)
+                .iter()
+                .find(|r| r["kind"] == "plan-start")
+                .and_then(|r| r["operationId"].as_str())
+                .ok_or(Error::Unknown)?
+                .to_owned();
+            Some(Work::CheckPlanning(id))
+        }
         Command::PlanCheck { mission, interview } => {
             let read = host.planning(mission).ok_or(Error::Stale)?;
             if plan_host::interview_id(&read).as_deref() != Some(interview) {
@@ -350,7 +363,10 @@ async fn run(
         | Command::Draft(_) => value = encode(today(host))?,
         Command::Mission(id) => value = encode(host.mission(id))?,
         Command::Plan(id) | Command::PlanSnapshot(id) => value = planning(host, id)?,
-        Command::Save { mission: id, .. } | Command::Submit { mission: id, .. } => {
+        Command::Save { mission: id, .. }
+        | Command::Submit { mission: id, .. }
+        | Command::StartWork { mission: id, .. }
+        | Command::CheckWork(id) => {
             // Losing a newer read cannot erase an entered write's exact outcome.
             value = planning(host, id).unwrap_or(Value::Null);
         }

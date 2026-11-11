@@ -1,4 +1,4 @@
-/** Authenticated native human ingress. No enrollment, model execution or worker admission. */
+/** Authenticated native human ingress. Interviews never admit builders; explicit Start is separate. */
 import type { DurableOperation, OperationReceipt, PlanningInventory, PlanningInventoryItem } from "@pilot/protocol";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { interviewDigest } from "./mission-interview-contract.ts";
@@ -11,8 +11,9 @@ import type { ProjectStore } from "./projects.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { WorkflowConfirmations } from "./workflow-confirmations.ts";
 
-export const isNativePlanningOperation = (kind: string) => isInterviewOperation(kind) || isPlanOperation(kind);
-const humanKinds = ["interview-save", "interview-submit"];
+export const isNativePlanningOperation = (kind: string) =>
+	isInterviewOperation(kind) || isPlanOperation(kind) || kind === "plan-start";
+const humanKinds = ["interview-save", "interview-submit", "plan-start"];
 /** Only the complete planning inventory limit, not general service unavailability. */
 export class PlanningInventoryCapacity extends ServiceUnavailable {
 	readonly limit: number;
@@ -202,6 +203,7 @@ export class NativeMissionPlanning {
 		};
 		const plans = new MissionPlans({ ...this.deps, authorize: check });
 		const view = await plans.view(missionId);
+		const start = await this.deps.workers?.startView(missionId);
 		check();
 		return {
 			version: 1,
@@ -210,6 +212,7 @@ export class NativeMissionPlanning {
 			status: view.interview.questions.length ? "available" : "preparing",
 			contextDigest: view.interview.questions.length ? contextDigest : null,
 			questionDigests: Object.fromEntries(view.interview.questions.map((q) => [q.id, interviewDigest(q)])),
+			start: start ?? { available: false, state: "unavailable", reason: "Start authority unavailable" },
 			view: view.interview.questions.length ? view : null,
 			capabilities: {
 				answers: worker && worker.phase !== "held" ? "unavailable" : 1,
@@ -218,7 +221,7 @@ export class NativeMissionPlanning {
 					coordinatorProfile: "not-configured",
 					continuation: "unavailable",
 				}),
-				admission: "unavailable",
+				admission: start?.available ? 1 : "unavailable",
 				prototype: "unavailable",
 			},
 		};
@@ -245,6 +248,7 @@ export class NativeMissionPlanning {
 		const expected = (
 			request as { expected?: { fence?: { ownerSessionId?: string; enrollmentId?: string; missionId?: string } } }
 		)?.expected?.fence;
+		if (op.kind === "plan-start") return;
 		if (
 			expected?.missionId !== op.targetId ||
 			expected.ownerSessionId !== pin.interview.fence.ownerSessionId ||
@@ -252,15 +256,24 @@ export class NativeMissionPlanning {
 		)
 			throw new OperationRejected("Native interview owner or enrollment changed");
 	}
-	/** Called only after the native capability has authenticated. Status never executes a handler. */
+	/** Authenticated status. Start can reconcile an exact saved kernel receipt, never send work. */
 	async lookup(op: DurableOperation): Promise<OperationReceipt | undefined> {
 		this.envelope(op);
-		const receipt = await this.deps.journal.lookup(op);
+		let receipt = await this.deps.journal.lookup(op);
+		if (op.kind === "plan-start" && receipt?.state === "pending" && this.deps.workers) {
+			// This handler can only inspect the exact kernel input receipt. It cannot create or send.
+			receipt = await this.deps.journal.execute(op, () => this.deps.workers!.start(op, false));
+		}
 		this.envelope(op);
 		return receipt;
 	}
 	/** Journal recovery is exact saved-effect lookup, never new authority or model dispatch. */
 	async admit(op: DurableOperation, firstEntry = false): Promise<unknown> {
+		if (op.kind === "plan-start") {
+			if (!this.deps.workers) throw new OperationRejected("Start authority unavailable");
+			if (firstEntry) this.envelope(op);
+			return this.deps.workers.start(op, firstEntry);
+		}
 		if (!firstEntry) {
 			if (isPlanOperation(op.kind)) return new MissionPlans({ ...this.deps, authorize: () => {} }).admit(op, false);
 			return this.interviews(() => {}).admit(op, false);

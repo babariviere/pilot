@@ -1,7 +1,7 @@
 // What the screens need from a feed, and nothing more. The mock feeds
 // (TodayFeed, PlanFeed) and the connected adapters (bridge.ts) both fit
 // these shapes, so the screens never know which one they talk to.
-import type { PlanFeed, TodayFeed } from "pilot-day/native";
+import type { PlanFeed, PlanOutcome, PlanPage, TodayFeed } from "pilot-day/native";
 
 /** Today's reads and intents, as the screens use them. */
 export type DayFeed = Pick<
@@ -38,4 +38,12 @@ export type DayFeed = Pick<
 export type PlanningFeed = Pick<
 	PlanFeed,
 	"snapshot" | "onChange" | "page" | "open" | "plan" | "start" | "saveAnswer" | "submit" | "checkSubmit" | "dispose"
-> & { readInventory?: () => Promise<void>; canReadInventory?: () => boolean };
+> & {
+	readInventory?: () => Promise<void>;
+	canReadInventory?: () => boolean;
+	startWork?: (
+		missionId: string,
+		shown: Pick<NonNullable<PlanPage["work"]>, "revision" | "digest" | "taskId" | "context">,
+	) => Promise<PlanOutcome>;
+	checkWork?: (missionId: string) => Promise<PlanOutcome>;
+};

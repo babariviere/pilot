@@ -84,7 +84,7 @@ export function draftMessage(title: string): string {
 	].join("\n");
 }
 
-function taskMessage(
+export function taskMessage(
 	tasks: MissionTask[],
 	extra?: string,
 	artifacts: MissionArtifactLink[] = [],

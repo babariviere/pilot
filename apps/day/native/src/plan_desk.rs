@@ -488,6 +488,7 @@ impl Plan {
             fog: self.fog.clone(),
             proposal: self.proposal.clone(),
             steps: self.steps(),
+            work: None,
             note: self.note.clone(),
         }
     }

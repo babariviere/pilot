@@ -14,6 +14,7 @@ import { Conflict } from "./errors.ts";
 import { interviewExact, interviewId, interviewText } from "./mission-interview-contract.ts";
 import { MissionInterviews } from "./mission-interviews.ts";
 import { isPlanOperation, MissionPlans } from "./mission-plans.ts";
+import { taskMessage } from "./mission-service.ts";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash, sameHost } from "./operation-journal.ts";
 import type { PlanningWorkerState } from "./planning-worker-store.ts";
@@ -371,12 +372,14 @@ export class PlanningWorkers {
 			};
 		this.deps.store.planningWorkers.retain(binding.missionId, request.toolCallId, op);
 		const opensRound = ["interview-questions", "plan-ask", "plan-review"].includes(op.kind);
-		if (opensRound)
-			state = this.deps.store.planningWorkers.change(binding.missionId, state.revision, (s) => {
+		// Every retained call consumes a producer sequence, not only calls opening an interview.
+		state = this.deps.store.planningWorkers.change(binding.missionId, state.revision, (s) => {
+			if (opensRound) {
 				s.phase = "holding";
 				s.pendingHold = { operationId: op.operationId, authority };
 				s.continuation = null;
-			});
+			}
+		});
 		await this.deps.store.durable();
 		guard();
 		const receipt = await this.deps.journal.execute(op, (operation, entry) =>
@@ -577,6 +580,219 @@ export class PlanningWorkers {
 		} catch {
 			return { coordinatorProfile: "unavailable", continuation: "unavailable" };
 		}
+	}
+	/** Start uses the existing task model selection and Build policy, not a new budget or grant. */
+	private startPin(missionId: string) {
+		const { store, sessions, projects } = this.deps;
+		const state = store.planningWorkers.get(missionId);
+		if (!state) throw new Conflict("Trusted planning owner unavailable");
+		this.scope(state.binding);
+		sessions.assertPlanningOpen(state.binding.ownerSessionId);
+		const control = store.controls.fenceCurrent(missionId),
+			plan = store.plans.get(missionId);
+		if (
+			control.held ||
+			!plan?.publication ||
+			plan.publication.briefRevision !== store.brief(missionId)?.revision ||
+			plan.publication.submissionDigest !== store.interviews.latest(missionId)?.submission?.digest
+		)
+			throw new Conflict("Current published agreement required; mission may be held");
+		const identity = sessions.planningIdentity(state.binding.ownerSessionId) as {
+			inputGeneration: number;
+			permission?: { level: string };
+		};
+		if (identity.inputGeneration !== 0)
+			throw new Conflict("Planning owner was stopped or reconfigured; Start unavailable");
+		const permission = identity.permission;
+		if (permission?.level === "investigate") throw new Conflict("Build permission unavailable");
+		const { updatedAt: _updated, ...mission } = store.require(missionId);
+		return {
+			binding: state.binding,
+			project: projects.require(state.binding.projectId),
+			owner: sessions.planningIdentity(state.binding.ownerSessionId),
+			mission,
+			ownerFence: store.interviewOwnerFence(missionId, state.binding.ownerSessionId),
+			interview: store.interviews.latest(missionId),
+			plan,
+			brief: store.brief(missionId),
+			control,
+			tasks: store.tasks(missionId),
+			decisions: store.workflowConfirmationState(missionId).decisions,
+		};
+	}
+	async startView(missionId: string) {
+		const state = this.deps.store.planningWorkers.get(missionId);
+		const worker = state?.start ? this.deps.sessions.get(state.start.sessionId) : undefined;
+		if (state?.start)
+			return {
+				available: false as const,
+				state: state.start.admitted ? "admitted" : "unknown",
+				execution: worker?.working ? "working" : worker ? "not-running" : "unavailable",
+				operationId: state.start.operation.operationId,
+				sessionId: state.start.sessionId,
+				taskId: state.start.taskId,
+				reason: state.start.admitted
+					? worker?.working
+						? "One background task admitted and working. Reports show its progress."
+						: "One background task admitted, not running now. Read its report."
+					: "Start is not confirmed. Check only; do not start again.",
+			};
+		try {
+			const pin = this.startPin(missionId);
+			const task = pin.plan
+				.publication!.tasks.map(({ taskId }) => pin.tasks.find((t) => t.id === taskId)!)
+				.find(
+					(t) =>
+						t?.status === "todo" &&
+						!t.sessionId &&
+						!(t.dependsOn ?? []).some((id) => pin.tasks.find((d) => d.id === id)?.status !== "done"),
+				);
+			if (!task) throw new Conflict("No published task is ready");
+			const slice = pin.plan.slices.find((s) =>
+				pin.plan.publication!.tasks.some((p) => p.sliceId === s.id && p.taskId === task.id),
+			)!;
+			const body = `${slice.outcome}\n\nSpec revision: ${pin.plan.publication!.briefRevision}\nStories: ${slice.storyIds.join(", ")}\nOwnership: ${slice.owners.join(", ")}\n\nAcceptance:\n${slice.acceptance.map((s) => `- ${s}`).join("\n")}`;
+			const dependencies = slice.dependsOn.map(
+				(id) => pin.plan.publication!.tasks.find((p) => p.sliceId === id)!.taskId,
+			);
+			if (
+				task.title !== slice.title ||
+				task.body !== body ||
+				canonicalJSON(task.dependsOn ?? []) !== canonicalJSON(dependencies) ||
+				task.assignment ||
+				task.decisionIds?.length
+			)
+				throw new Conflict("Task scope changed since publication; no Start authority");
+			this.deps.store.prepareTaskStart(missionId, [task.id]);
+			const selection = await this.deps.sessions.selectTaskModel(
+				pin.project.path,
+				task.preferredModel,
+				task.preferredThinking,
+			);
+			if (hash(this.startPin(missionId)) !== hash(pin)) throw new Conflict("Start context changed");
+			return {
+				available: true as const,
+				state: "ready",
+				revision: pin.plan.revision,
+				digest: pin.plan.publication!.digest,
+				taskId: task.id,
+				title: task.title,
+				project: pin.project.name,
+				access: (pin.owner as { permission?: { level: string } }).permission?.level ?? "build",
+				...selection,
+				contextDigest: hash({ pin, selection }),
+				reason: "",
+			};
+		} catch (e) {
+			return {
+				available: false as const,
+				state: "unavailable",
+				reason: e instanceof Error ? e.message : "Start authority unavailable",
+			};
+		}
+	}
+	/** Only an authenticated, explicit native Start enters this method. No submission calls it. */
+	start(op: DurableOperation, firstEntry: boolean): Promise<unknown> {
+		if (this.closing.signal.aborted) return Promise.reject(new Error("Planning host is closing; lookup unavailable"));
+		const work = this.startEntered(op, firstEntry);
+		this.tasks.add(work);
+		void work.finally(() => this.tasks.delete(work)).catch(() => {});
+		return work;
+	}
+	private async startEntered(op: DurableOperation, firstEntry: boolean): Promise<unknown> {
+		if (!firstEntry) return this.recoverStart(op);
+		const { store, sessions } = this.deps;
+		let pin: ReturnType<PlanningWorkers["startPin"]>, selection: { model: string; thinking: string }, taskId: string;
+		try {
+			const request = JSON.parse(op.payload);
+			interviewExact(request, ["purpose", "expectedRevision", "planDigest", "taskId"]);
+			const view = await this.startView(op.targetId);
+			if (
+				!view.available ||
+				op.kind !== "plan-start" ||
+				request.purpose !== op.kind ||
+				request.expectedRevision !== view.revision ||
+				request.planDigest !== view.digest ||
+				request.taskId !== view.taskId ||
+				op.bindingId !== view.contextDigest ||
+				op.bindingGeneration !== 1 ||
+				op.origin.hostId !== "local" ||
+				!sameHost(op.origin, this.deps.journal.destination) ||
+				!sameHost(op.destination, this.deps.journal.destination)
+			)
+				throw new Conflict("Exact published Start context changed or unavailable");
+			pin = this.startPin(op.targetId);
+			selection = { model: view.model!, thinking: view.thinking! };
+			taskId = view.taskId!;
+			if (hash({ pin, selection }) !== op.bindingId) throw new Conflict("Start context changed");
+		} catch (e) {
+			throw new OperationRejected(e instanceof Error ? e.message : "Invalid Start");
+		}
+		const sessionId = randomUUID(),
+			task = pin.tasks.find((t) => t.id === taskId)!;
+		const check = (claimed: boolean) => {
+			const current = this.startPin(op.targetId);
+			if (claimed) {
+				const actual = current.tasks.find((t) => t.id === taskId);
+				if (!actual || actual.sessionId !== sessionId || actual.status !== "in_progress")
+					throw new Conflict("Start assignment changed");
+				// Only this admission's exact claim may differ from the approved task snapshot.
+				current.tasks = current.tasks.map((t) =>
+					t.id !== taskId
+						? t
+						: { ...t, sessionId: task.sessionId, status: task.status, updatedAt: task.updatedAt },
+				);
+			}
+			if (hash(current) !== hash(pin)) throw new Conflict("Published plan, owner, project or controls changed");
+		};
+		try {
+			check(false);
+			await this.deps.journal.checkpoint(op, { stage: "plan-start-entered", payloadHash: op.payloadHash });
+			check(false);
+			const state = store.planningWorkers.get(op.targetId)!;
+			if (state.start) throw new Conflict("Start already entered; check only");
+			store.planningWorkers.change(op.targetId, state.revision, (s) => {
+				s.start = { operation: op, sessionId, taskId, admitted: false };
+			});
+		} catch (e) {
+			throw new OperationRejected(e instanceof Error ? e.message : "Start refused");
+		}
+		await store.durable(); // Reservation and immutable identity precede every worker effect.
+		check(false);
+		const result = await sessions.admitPublishedTask(
+			{
+				projectId: pin.project.id,
+				missionId: op.targetId,
+				message: taskMessage([task]),
+				title: task.title,
+				mode: "build",
+				...selection,
+			},
+			{ sessionId, taskId, operationId: op.operationId, ownerSessionId: pin.binding.ownerSessionId },
+			check,
+		);
+		const state = store.planningWorkers.get(op.targetId)!;
+		store.planningWorkers.change(op.targetId, state.revision, (s) => {
+			s.start!.admitted = true;
+		});
+		await store.durable();
+		return result;
+	}
+	private async recoverStart(op: DurableOperation) {
+		const start = this.deps.store.planningWorkers.get(op.targetId)?.start;
+		if (
+			!start ||
+			canonicalJSON(start.operation) !== canonicalJSON(op) ||
+			!(await this.deps.sessions.lookupPublishedTask(start.sessionId, op.operationId))
+		)
+			throw new Error("Unknown Start admission; exact lookup only, no replay");
+		const state = this.deps.store.planningWorkers.get(op.targetId)!;
+		if (!state.start!.admitted)
+			this.deps.store.planningWorkers.change(op.targetId, state.revision, (s) => {
+				s.start!.admitted = true;
+			});
+		await this.deps.store.durable();
+		return { admissionId: op.operationId, sessionId: start.sessionId };
 	}
 	close(): Promise<void> {
 		if (this.closed) return this.closed;

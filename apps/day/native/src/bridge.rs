@@ -31,6 +31,8 @@ pub const METHODS: &[&str] = &[
     "day.plan.create",
     "day.plan.save",
     "day.plan.submit",
+    "day.plan.startWork",
+    "day.plan.checkWork",
     "day.plan.check",
     "day.plan.checkNew",
     "day.attention.read",
@@ -169,6 +171,11 @@ pub(crate) enum Command {
         mission: String,
         intent: crate::plan::SubmitIntent,
     },
+    StartWork {
+        mission: String,
+        shown: Value,
+    },
+    CheckWork(String),
     PlanCheck {
         mission: String,
         interview: String,
@@ -332,13 +339,15 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             }
             C::RitualSave(r)
         }
-        "day.mission.read" | "day.mission.check" | "day.plan.read" | "day.plan.snapshot" => {
+        "day.mission.read" | "day.mission.check" | "day.plan.read" | "day.plan.snapshot"
+        | "day.plan.checkWork" => {
             let r: crate::model::MissionRef = decode(&args)?;
             mission(&r.mission_id)?;
             match name {
                 "day.mission.read" => C::Mission(r.mission_id),
                 "day.mission.check" => C::ControlCheck(r.mission_id),
                 "day.plan.snapshot" => C::PlanSnapshot(r.mission_id),
+                "day.plan.checkWork" => C::CheckWork(r.mission_id),
                 _ => C::Plan(r.mission_id),
             }
         }
@@ -354,6 +363,24 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             C::Resume(r)
         }
         "day.plan.create" => C::Create(decode(&args)?),
+        "day.plan.startWork" => {
+            let r: PlanWrite = exact(args)?;
+            mission(&r.mission_id)?;
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Shown {
+                revision: u64,
+                digest: String,
+                task_id: String,
+                context: String,
+            }
+            let shown: Shown = exact(r.intent)?;
+            C::StartWork {
+                mission: r.mission_id,
+                shown: serde_json::json!({"revision": shown.revision,
+                "digest":shown.digest, "taskId":shown.task_id,"context":shown.context}),
+            }
+        }
         "day.plan.save" | "day.plan.submit" => {
             let r: PlanWrite = exact(args)?;
             mission(&r.mission_id)?;

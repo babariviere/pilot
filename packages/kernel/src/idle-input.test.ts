@@ -11,6 +11,7 @@ import {
 	MemoryStorage,
 	UserEntry,
 } from "@earendil-works/pi-durable";
+import { HeldInputsDoc } from "./held-inputs-doc.ts";
 import { submitIdleInput } from "./idle-input.ts";
 
 async function fixture(t: TestContext) {
@@ -116,4 +117,30 @@ test("failed idle admission rolls back its entry and submission if generation cr
 	assert.equal((await conversation.entries({}, 100, undefined, context)).items.length, 0);
 	assert.equal((await harness.snapshot(LiveDoc, conversation.id, context))?.run, undefined);
 	assert.equal(resume.mock.callCount(), 0);
+});
+
+test("native Start final guard rolls back all input effects, and cannot release Stop or Pause", async (t) => {
+	const { storage, harness, conversation, resume } = await fixture(t);
+	let entered = 0;
+	await assert.rejects(
+		submitIdleInput(harness, conversation, "start", "Exact plan", context, undefined, async () => {
+			entered++;
+			throw new Error("Plan authority changed");
+		}),
+		/Plan authority changed/,
+	);
+	assert.equal(entered, 1);
+	assert.equal(await storage.submissionByRequest(conversation.id, "start", context), undefined);
+	assert.equal((await conversation.entries({}, 100, undefined, context)).items.length, 0);
+	assert.equal(resume.mock.callCount(), 0);
+	for (const hold of ["stopped", "paused"] as const) {
+		await conversation.commit(async (tx) => {
+			(await tx.doc(HeldInputsDoc, conversation.id))[hold] = true;
+		}, context);
+		await assert.rejects(
+			submitIdleInput(harness, conversation, hold, "Cannot resume", context, undefined, async () => {}),
+			ConversationBusy,
+		);
+		assert.equal((await harness.snapshot(HeldInputsDoc, conversation.id, context))?.[hold], true);
+	}
 });
