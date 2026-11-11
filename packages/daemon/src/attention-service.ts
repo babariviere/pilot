@@ -168,6 +168,14 @@ export interface AttentionDependencies {
 	subject(subject: AssistanceSubject): { scope: AssistanceScope; source: string };
 	/** Optional configured producer. No replay after entered, and no tool/approval capability is passed. */
 	generate?(request: AssistanceRequest, source: string): Promise<AssistanceOutput>;
+	/** Qualified producers return saved provenance. Legacy callbacks above grant no native capability. */
+	produce?(
+		request: AssistanceRequest,
+		source: string,
+	): Promise<{
+		output: AssistanceOutput;
+		producer: NonNullable<AssistanceRecord["producer"]>;
+	}>;
 	/** Must read exact immutable bytes and digest; latest revision is not a substitute. */
 	verifyArtifact?(ref: ImmutableArtifactReference): Promise<boolean>;
 	/** Authenticated host identity, not a UI-provided actor flag. Must check origin/membership/current home.
@@ -232,12 +240,22 @@ export class AttentionService {
 			if (this.deps.store.assistance(req.requestId)) fail("conflict", "Request already entered; use exact lookup");
 			if (!this.deps.store.capacity())
 				fail("unavailable", "Attention record capacity reached (4096); no records were evicted");
-			if (!this.deps.generate) fail("unavailable", "No assistance producer configured");
+			if (!this.deps.generate && !this.deps.produce) fail("unavailable", "No assistance producer configured");
 			this.deps.store.enter(req);
 			await this.deps.store.durable();
 			try {
 				this.current(req.scope);
-				const output = structuredClone(await this.deps.generate(structuredClone(req), source));
+				const produced = this.deps.produce
+					? structuredClone(await this.deps.produce(structuredClone(req), source))
+					: { output: structuredClone(await this.deps.generate!(structuredClone(req), source)) };
+				const { output } = produced;
+				if ("producer" in produced) {
+					object(produced.producer, ["provider", "model", "configurationDigest", "reservationId"]);
+					text(produced.producer.provider, 256);
+					text(produced.producer.model, 256);
+					if (!hash(produced.producer.configurationDigest) || !identifier(produced.producer.reservationId))
+						fail("invalid", "Invalid assistance provenance");
+				}
 				if (output.kind !== req.kind) fail("invalid", "Assistance result kind changed");
 				if (output.kind === "visual") {
 					object(output, ["kind", "explanation", "artifact"]);
@@ -254,7 +272,12 @@ export class AttentionService {
 					text(output.text);
 				}
 				this.current(req.scope);
-				const record: AssistanceRecord = { request: req, state: "ready", output };
+				const record: AssistanceRecord = {
+					request: req,
+					state: "ready",
+					output,
+					...("producer" in produced ? { producer: produced.producer } : {}),
+				};
 				this.deps.store.settle(record);
 				await this.deps.store.durable();
 				this.current(req.scope);

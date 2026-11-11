@@ -38,6 +38,13 @@ export interface AssistanceRecord {
 	request: AssistanceRequest;
 	state: "entered" | "ready" | "stale" | "failed";
 	output?: AssistanceOutput;
+	/** Exact configured producer, not an approval or claim of factual correctness. */
+	producer?: {
+		provider: string;
+		model: string;
+		configurationDigest: string;
+		reservationId: string;
+	};
 }
 
 export type AttentionErrorCode =

@@ -17,7 +17,8 @@ import type {
 } from "@pilot/protocol";
 import { assistanceSource, nativeQuestionAssistance } from "./assistance-source.ts";
 import { attentionURL, verifyAttentionResources } from "./attention-resources.ts";
-import { type AttentionDependencies, AttentionError, AttentionService } from "./attention-service.ts";
+import { ReadOnlyAttentionExecutor } from "./attention-executor.ts";
+import { AttentionError, AttentionService } from "./attention-service.ts";
 import { attentionDigest } from "./attention-store.ts";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON, type OperationJournal, OperationRejected, sameHost } from "./operation-journal.ts";
@@ -30,8 +31,8 @@ interface Dependencies {
 	projects: ProjectStore;
 	sessions: SessionManager;
 	journal: OperationJournal;
-	/** Installed only by a separately qualified read-only, budgeted producer. */
-	generate?: AttentionDependencies["generate"];
+	/** No callback, UI flag or default model can qualify help. Not installed by daemon startup. */
+	executor?: ReadOnlyAttentionExecutor;
 }
 const equal = (a: unknown, b: unknown) => canonicalJSON(a) === canonicalJSON(b);
 const id = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9_-]{1,128}$/u.test(v);
@@ -70,8 +71,16 @@ const value = <T>(r: AttentionResult<T>): T => {
 
 export class NativeAttention {
 	private readonly deps: Dependencies;
+	private closed = false;
+	private readonly pending = new Set<Promise<AttentionResult<unknown>>>();
 	constructor(deps: Dependencies) {
 		this.deps = deps;
+	}
+	/** Join admission, provider, accounting and final attention durability, not only a cancel ACK. */
+	async close(): Promise<void> {
+		this.closed = true;
+		await this.deps.executor?.close();
+		await Promise.allSettled([...this.pending]);
 	}
 	/** Authentication is performed by the caller before this exact home/project check. */
 	envelope(input: NativeAttentionEnvelope) {
@@ -112,6 +121,9 @@ export class NativeAttention {
 		const { project, session: s, member } = this.session(projectId, sessionId);
 		return attentionDigest({
 			home: this.deps.home,
+			...(this.deps.executor instanceof ReadOnlyAttentionExecutor
+				? { helpConfiguration: this.deps.executor.configurationDigest(projectId) }
+				: {}),
 			project,
 			member: member ?? null,
 			session: {
@@ -182,7 +194,10 @@ export class NativeAttention {
 		return new AttentionService({
 			store: this.deps.store.attention,
 			subject,
-			generate: this.deps.generate,
+			produce:
+				this.deps.executor instanceof ReadOnlyAttentionExecutor
+					? (request, source) => this.produce(projectId, request, source)
+					: undefined,
 			authorize: (content) => ({ digest: this.authorize(projectId, content), actor: "user" }),
 			verifyArtifact: (ref) => this.artifact(projectId, ref),
 			verifyAction: async (content) => {
@@ -192,6 +207,57 @@ export class NativeAttention {
 				return valid && pin === this.authorize(projectId, content);
 			},
 		});
+	}
+	private async produce(projectId: string, request: AssistanceRequest, source: string) {
+		const controller = new AbortController();
+		const check = () => this.executionAuthority(projectId, request);
+		const changed = () => {
+			try {
+				check();
+			} catch {
+				controller.abort();
+			}
+		};
+		const stops = [
+			this.deps.sessions.onChange(changed),
+			this.deps.projects.onChange(changed),
+			this.deps.store.onChange(changed),
+		];
+		try {
+			return await this.deps.executor!.produce(request, source, {
+				signal: controller.signal,
+				assertCurrent: check,
+				revalidate: async () => {
+					check();
+					const current = await this.currentQuestion(projectId, request.scope.subject);
+					if (current && !equal(current.scope, request.scope)) fail("stale", "Help question changed");
+					const now = this.service(projectId, current).prepare(request.scope.subject);
+					if (!equal(value(now), request.scope)) fail("stale", "Help source changed");
+				},
+			});
+		} finally {
+			for (const stop of stops) stop();
+		}
+	}
+	private executionAuthority(projectId: string, request: AssistanceRequest): void {
+		const subject = request.scope.subject;
+		const owner =
+			subject.kind === "question"
+				? subject.sessionId
+				: this.deps.store.require(subject.missionId).coordinatorSessionId;
+		if (!owner || request.scope.projectId !== projectId) fail("forbidden", "Current help owner required");
+		if (this.authority(projectId, owner) !== request.scope.authorityDigest) fail("stale", "Help actor changed");
+		const { session } = this.session(projectId, owner);
+		if (
+			session.outcome === "stopped" ||
+			session.sleepPaused ||
+			session.offlinePaused ||
+			session.subscriptionPause ||
+			(session.missionId && this.deps.store.controls.fenceCurrent(session.missionId).held)
+		)
+			fail("forbidden", "Attention work is stopped or paused");
+		if (subject.kind !== "question" && !equal(value(this.service(projectId).prepare(subject)), request.scope))
+			fail("stale", "Help decision or proposal changed");
 	}
 	private async question(projectId: string, sessionId: string): Promise<NativeAttentionQuestion | undefined> {
 		const { session: s } = this.session(projectId, sessionId),
@@ -276,11 +342,25 @@ export class NativeAttention {
 			projectId,
 			questions,
 			actions,
-			capabilities: { help: this.deps.generate ? 1 : "unavailable", continuation: "unavailable" },
+			capabilities: {
+				help:
+					this.deps.executor instanceof ReadOnlyAttentionExecutor && this.deps.executor.available(projectId)
+						? 1
+						: "unavailable",
+				continuation: "unavailable",
+			},
 		};
 	}
 	/** Receipt mode is lookup-only, including a request that never reached the daemon. */
 	dispatch(input: NativeAttentionRequest, lookup = false): Promise<AttentionResult<unknown>> {
+		if (this.closed)
+			return Promise.resolve({ ok: false, error: { code: "unavailable", message: "Attention is closed" } });
+		const pending = this.dispatchEntered(input, lookup);
+		this.pending.add(pending);
+		void pending.finally(() => this.pending.delete(pending)).catch(() => {});
+		return pending;
+	}
+	private dispatchEntered(input: NativeAttentionRequest, lookup: boolean): Promise<AttentionResult<unknown>> {
 		return result(async () => {
 			this.envelope(input);
 			const base = ["version", "home", "projectId", "kind"];

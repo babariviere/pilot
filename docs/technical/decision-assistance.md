@@ -3,9 +3,9 @@
 These are backend contracts, not a live feature activation. `AttentionService` owns help and
 human-action receipts in the existing `missions.sqlite`. `NativeAttention` now supplies authenticated
 daemon ingress and the Rust host has a shared-ledger attention transport
-([native boundary](day-native-host.md#attention-transport)). The Day cards remain mock-only until
-their feed adapter is connected. No qualified help executor or dependent-work consumer is installed:
-both capabilities are explicitly unavailable. Transport tests do not qualify those absent adapters.
+([native boundary](day-native-host.md#attention-transport)). See that guide for the connected card
+feed. No production help executor or dependent-work consumer is installed: both capabilities remain
+explicitly unavailable. The offline executor qualification below does not enable either capability.
 
 ## Reuse audit
 
@@ -40,9 +40,51 @@ fields. An entered request without a settled receipt is Unknown, including after
 do not generate again automatically. Changing text and then reverting it still invalidates help
 because the source event identity changed.
 
-The producer receives only copied request data and source text. Its implementation must separately
-enforce provider admission, spending limits, cancellation and read-only generation. This module
-does not grant provider access or claim to sandbox an arbitrary callback.
+`ReadOnlyAttentionExecutor` supplies the typed execution path. Native capability discovery no longer
+treats a truthy generation callback as qualification. The executor uses the existing SDK credential
+resolver and concrete provider, a fresh tool-free transcript, explicit configured model/output/time
+limits and a mandatory reserve-before-send admission port. It constructs no agent, session, tool,
+extension, package, MCP client or continuation. Simpler text, supplied context and inline answers are
+commentary only. Missing facts must remain missing; there is no placeholder answer or source fallback.
+
+Native ingress pins the executor configuration digest alongside the current project, owner,
+membership, mission controls and question/decision scope. It re-reads the actual pending question
+after budget and credential I/O. Final synchronous permission/lifecycle/budget checks immediately
+precede concrete provider dispatch. Configured revision replacement invalidates prior help scopes,
+including receipt reads. Ready records keep provider/model, configuration digest and reservation ID
+with the exact request and output in the original attention store.
+
+Origin/project/mission notifications cancel revoked or held execution. Stop and close keep the
+actual provider and accounting promise admitted even if the provider ignores cancellation. Native
+close also joins final attention writes. The executor's maintenance contributor participates in
+daemon update admission when explicitly supplied to the server. Neither cancellation nor an empty
+consumer queue proves provider exit.
+
+### Qualification limit: production stays unavailable
+
+Only the **offline SDK faux transport** is admitted by this implementation. This verifies the real
+native/HTTP admission path without contacting a provider. No production executor is constructed by
+daemon startup. Visual generation is unsupported. Existing immutable visual receipts remain readable
+under their original resource and scope checks.
+
+Live enablement still needs these explicit, separately qualified inputs:
+
+- An attention-specific configured provider/model and permission revision. Chat defaults, first
+  authenticated models, reviewer choices and classifier models are not assistance policy.
+- An enforcing assistance budget owner: scope, window, included work, pricing, durable worst-case
+  reservations, revocation and lookup-only recovery after lost ACKs. `AIUsageBudget` is informational;
+  reviewer allowances do not authorize attention calls. No budget grant/store is invented here.
+- A production transport proof for exact auth shaping, physical sends, token limits, retries and
+  cancellation. A `maxRetries: 0` or `maxTokens` option alone is not that proof. The faux fixture does
+  not establish paid-provider limits or live correctness.
+- Wiring the configured owner into mission Stop/Pause checkpoint/drain. The typed reservation's
+  synchronous fence and cancellation must come from current authority, not request JSON. Event
+  cancellation alone does not make mission Pause acknowledged or establish quiescence.
+
+The admission port is a trusted integration contract, not itself a budget service or a sandbox for
+an arbitrary callback. Missing configuration or an unsupported transport refuses honestly. Nothing
+here activates a model, grants spending authority, starts work or changes the stopped continuation
+and budget-request implementations.
 
 ## Human actions
 
@@ -92,6 +134,12 @@ help modes, async staleness, invalid authority fields, immutable visuals, restar
 files, changed origins, explicit user completion, exact duplicate/lost ACK lookup and durability
 races. These fixtures do not claim native UI acceptance, production provider/resource-reader
 qualification, external store verification or live scheduler execution.
+
+`attention-executor.test.ts` exercises native admission with the real SDK faux provider, authenticated
+HTTP help, exact text-only outputs and provenance, absent/unsupported configuration, forbidden tools,
+changed question/actor/configuration, Stop/Pause fences after I/O, stale credentials, lost entry,
+reservation, usage and result ACKs, restart lookup and provider-ignores-cancellation close/drain.
+The reservation owner in these fixtures is synthetic, not a new product budget policy.
 
 ## Pilot Day cards (mock)
 

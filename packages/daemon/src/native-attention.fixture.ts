@@ -15,6 +15,7 @@ import type {
 	SessionSummary,
 } from "@pilot/protocol";
 import { attentionDigest } from "./attention-store.ts";
+import type { ReadOnlyAttentionExecutor } from "./attention-executor.ts";
 import { GitHubSetupService } from "./github-setup.ts";
 import { daemonHello } from "./hello.ts";
 import { MissionControls } from "./mission-controls.ts";
@@ -99,7 +100,9 @@ export async function nativeAttentionFixture() {
 		native: GitHubSetupService,
 		capability = "",
 		root = "";
-	const adapter = () => new NativeAttention({ home: host, store, projects, sessions, journal });
+	let executor: ReadOnlyAttentionExecutor | undefined;
+	const adapter = (executor?: ReadOnlyAttentionExecutor) =>
+		new NativeAttention({ home: host, store, projects, sessions, journal, executor });
 	const start = async () => {
 		native = new GitHubSetupService(home, { ...host, hostId: "local" }, { userHome: home, env: {} });
 		await native.status();
@@ -127,6 +130,7 @@ export async function nativeAttentionFixture() {
 		];
 		args[12] = hello;
 		args[17] = native;
+		args[25] = executor;
 		server = createDaemonServer(...args);
 		await server.runtimeReady;
 		server.listen(0, "127.0.0.1");
@@ -227,6 +231,11 @@ export async function nativeAttentionFixture() {
 			store.close();
 			store = new MissionStore(join(home, "missions.sqlite"));
 			journal = new OperationJournal(join(home, "operations"), host);
+			await start();
+		},
+		async installExecutor(configured: ReadOnlyAttentionExecutor) {
+			await stop();
+			executor = configured;
 			await start();
 		},
 		async close() {

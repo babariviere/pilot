@@ -101,6 +101,7 @@ import type { MissionStore } from "./missions.ts";
 import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } from "./model-scope.ts";
 import type { ModelCatalog } from "./models.ts";
 import { NativeAttention } from "./native-attention.ts";
+import type { ReadOnlyAttentionExecutor } from "./attention-executor.ts";
 import { MAX_NATIVE_DIAGNOSTIC_BYTES } from "./native-diagnostics.ts";
 import {
 	isNativePlanningOperation,
@@ -390,6 +391,7 @@ export function createDaemonServer(
 	subscriptions?: import("./subscription-refresh.ts").SubscriptionRefresh,
 	chatSettings?: ChatSettingsService,
 	liveUpdate?: RuntimeUpdateIntegration,
+	attentionExecutor?: ReadOnlyAttentionExecutor,
 ): Server & {
 	runtimeResources: RuntimeResources;
 	runtimeReady: Promise<void>;
@@ -534,6 +536,7 @@ export function createDaemonServer(
 		...(githubSetup ? [githubSetup] : []),
 		...(githubImport ? [githubImport] : []),
 		...(setup ? [setup] : []),
+		...(attentionExecutor ? [attentionExecutor.maintenance] : []),
 	];
 	const runtimeResources = new RuntimeResources([...runtimeSources, ...(liveUpdate?.contributors ?? [])]);
 	if (bootstrap)
@@ -761,7 +764,8 @@ export function createDaemonServer(
 					projects,
 					sessions,
 					journal,
-					// Qualified read-only help and dependent-work consumers are separate adapters.
+					executor: attentionExecutor,
+					// Startup supplies no executor. Dependent-work consumers remain separate adapters.
 				})
 			: undefined;
 	const insightsWorkspace =
@@ -3985,7 +3989,9 @@ export function createDaemonServer(
 		runtimeResources,
 		runtimeReady,
 		recoverOperations,
-		closePlanning: () => planningWorkers?.close() ?? Promise.resolve(),
+		closePlanning: async () => {
+			await Promise.all([planningWorkers?.close(), nativeAttention?.close()]);
+		},
 	});
 }
 /** Mission routes under /api/missions and /api/sessions/:id/mission. Returns false when nothing matched. */
