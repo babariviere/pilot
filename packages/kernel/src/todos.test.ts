@@ -16,6 +16,7 @@ import { ModelRuntime, SettingsManager, wrapRegisteredTool } from "@earendil-wor
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import type { AgentEvent } from "@pilot/protocol";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
+import { PosthorseDoc } from "./posthorse.ts";
 import { KernelSession } from "./session.ts";
 import { readSessionSnapshot, readSessionTodoCount } from "./snapshot.ts";
 import { openSessionStorage } from "./storage.ts";
@@ -157,6 +158,7 @@ test("parent tools and concurrent child writes share a durable list, events and 
 	const counts: number[] = [];
 	const spec = { sessionId: "parent", storageDir, cwd };
 	session = await KernelSession.open(spec, { onWorking: () => {}, onTodosChanged: (count) => counts.push(count) });
+	assert.equal(await session.harness.snapshot(PosthorseDoc, session.conversation.id, context), undefined);
 	const events: AgentEvent[] = [];
 	await session.watch("todos", (batch) => {
 		events.push(...batch);
@@ -179,6 +181,14 @@ test("parent tools and concurrent child writes share a durable list, events and 
 	]);
 	await session.submit("input", "Create a todo", "followUp");
 	await session.harness.waitForIdle(context);
+	const posthorse = await session.harness.snapshot(PosthorseDoc, session.conversation.id, context);
+	assert.ok(posthorse?.header);
+	const scope = posthorse.entries.find((entry) => entry.customType === "posthorse-notes-scope");
+	assert.ok(scope?.data && typeof scope.data === "object" && !Array.isArray(scope.data));
+	assert.deepEqual(scope.data.owner, posthorse.header);
+	assert.equal(scope.data.kind, "project");
+	assert.equal(scope.data.scope, "");
+	assert.equal(posthorse.entries.filter((entry) => entry.customType === "posthorse-notes-scope").length, 1);
 	assert.equal(session.openTodoCount, 1);
 	const children = (await Promise.all(
 		Array.from({ length: 4 }, (_, i) => callParentTodo({ action: "create", title: `Child ${i}` }, `child-${i}`)),
@@ -201,6 +211,12 @@ test("parent tools and concurrent child writes share a durable list, events and 
 	await mkdir(cwd);
 	assert.equal(await readSessionTodoCount(storageDir), 4);
 	session = await KernelSession.open(spec, { onWorking: () => {} });
+	const reopenedPosthorse = await session.harness.snapshot(PosthorseDoc, session.conversation.id, context);
+	assert.deepEqual(reopenedPosthorse?.header, posthorse.header);
+	assert.deepEqual(
+		reopenedPosthorse?.entries.find((entry) => entry.customType === "posthorse-notes-scope"),
+		scope,
+	);
 	assert.equal(session.openTodoCount, 4);
 	assert.equal((await session.harness.snapshot(TodosDoc, context))?.items[0].body, "Durable");
 	assert.deepEqual(

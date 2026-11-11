@@ -18,6 +18,7 @@ import { createCodemodeExtension, ModelRuntime, SettingsManager } from "@earendi
 import { createMissionTool, MISSION_TOOL } from "./mission-tools.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import type { MissionContext } from "./policy.ts";
+import { PosthorseDoc } from "./posthorse.ts";
 import { KernelSession } from "./session.ts";
 
 test("only coordinator start schema exposes worker roles, never coordinator self-selection", () => {
@@ -1307,35 +1308,7 @@ for (const ask of [false, true]) {
 				assert.equal("order" in schema.properties, coordinator);
 				assert.equal(!!schema.properties.model, coordinator);
 				assert.equal(!!schema.properties.thinking, coordinator);
-				const codemode = adapter.session.agent.state.tools.find((tool) => tool.name === "codemode")!;
-				adapter.session.agent.state.messages.push(
-					fauxAssistantMessage(
-						{ type: "toolCall", id: `todo-${requests}`, name: "codemode", arguments: {} },
-						{ stopReason: "toolUse" },
-					),
-				);
-				const todoResult = await codemode.execute(
-					`todo-${requests}`,
-					{ code: 'text(await describeTool("todo")); text(await tools.todo({action: "list"}));' },
-					undefined,
-				);
-				assert.equal(!!todoResult.isError, !todoAvailable, JSON.stringify(todoResult.content));
-				const result = await codemode.execute(
-					`describe-${requests}`,
-					{ code: 'text(await describeTool("mission"));' },
-					undefined,
-				);
-				const description = result.content
-					.flatMap((block) => (block.type === "text" ? [block.text] : []))
-					.join("\n");
-				if (role !== undefined) {
-					assert.ok(!result.isError, description);
-					// Activity kinds can share names with privileged actions (for example status).
-					const actions = description.match(/\baction: ([^;]+);/)?.[1];
-					assert.ok(actions, description);
-					for (const action of ["delete", "group", "start", "send", "status", "bindPr", "unbindPr"])
-						assert.equal(actions.includes(`"${action}"`), coordinator, description);
-				} else assert.doesNotMatch(description, /- start \(coordinator only\)/);
+				// Direct SDK calls bypass Harness hooks. Initialize each role through a real turn first.
 				let requestChecked = false;
 				let requestFailure: unknown;
 				f.faux.setResponses([
@@ -1373,6 +1346,44 @@ for (const ask of [false, true]) {
 				await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
 				assert.ifError(requestFailure);
 				assert.equal(requestChecked, true);
+				if (todoAvailable) {
+					const saved = await session.harness.snapshot(PosthorseDoc, session.conversation.id, BACKGROUND_CONTEXT);
+					assert.ok(saved?.header);
+					const scope = saved.entries.find((entry) => entry.customType === "posthorse-notes-scope");
+					assert.ok(scope?.data && typeof scope.data === "object" && !Array.isArray(scope.data));
+					assert.deepEqual(scope.data.owner, saved.header);
+					assert.equal(scope.data.kind, "project");
+					assert.equal(scope.data.scope, "");
+				}
+				const codemode = adapter.session.agent.state.tools.find((tool) => tool.name === "codemode")!;
+				adapter.session.agent.state.messages.push(
+					fauxAssistantMessage(
+						{ type: "toolCall", id: `todo-${requests}`, name: "codemode", arguments: {} },
+						{ stopReason: "toolUse" },
+					),
+				);
+				const todoResult = await codemode.execute(
+					`todo-${requests}`,
+					{ code: 'text(await describeTool("todo")); text(await tools.todo({action: "list"}));' },
+					undefined,
+				);
+				assert.equal(!!todoResult.isError, !todoAvailable, JSON.stringify(todoResult.content));
+				const result = await codemode.execute(
+					`describe-${requests}`,
+					{ code: 'text(await describeTool("mission"));' },
+					undefined,
+				);
+				const description = result.content
+					.flatMap((block) => (block.type === "text" ? [block.text] : []))
+					.join("\n");
+				if (role !== undefined) {
+					assert.ok(!result.isError, description);
+					// Activity kinds can share names with privileged actions (for example status).
+					const actions = description.match(/\baction: ([^;]+);/)?.[1];
+					assert.ok(actions, description);
+					for (const action of ["delete", "group", "start", "send", "status", "bindPr", "unbindPr"])
+						assert.equal(actions.includes(`"${action}"`), coordinator, description);
+				} else assert.doesNotMatch(description, /- start \(coordinator only\)/);
 				const before = admitted;
 				const invocation = await codemode.execute(
 					`invoke-${requests}`,
