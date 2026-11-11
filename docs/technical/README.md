@@ -30,6 +30,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Source-matched Day executable and package inputs](day-package-inputs.md)
 - [Tool access by role](tool-access-by-role.md)
 - [System prompts by role](system-prompts-by-role.md)
+- [Skill and prompt review index](skill-prompt-review.md)
 
 ## Chats, context, and source tools
 
