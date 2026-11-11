@@ -624,6 +624,41 @@ pub struct TaskLine {
     pub status: TaskStatus,
     /// Its agent's latest report, if any.
     pub report: Option<ReportLine>,
+    /// What its agents linked to it: pull requests first, then artifacts,
+    /// then other links. Linked is not checked or accepted.
+    pub outputs: Vec<Output>,
+}
+
+/// What an output is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OutputKind {
+    /// A page, issue or thread.
+    #[default]
+    Link,
+    /// A pull request, with the last GitHub state Pilot saw.
+    PullRequest,
+    /// An artifact an agent saved.
+    Artifact,
+}
+
+/// One output of a task, as its record says. Merged is never released,
+/// and nothing here is the user's check.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Output {
+    /// Stable for the output's life.
+    pub id: String,
+    /// What it is.
+    pub kind: OutputKind,
+    /// Its name, such as "PR #482 · Stream CSV exports".
+    pub label: String,
+    /// Its state in a few words, such as "Merged 2 h ago".
+    pub state: String,
+    /// Whether the record says it merged. Release is never inferred.
+    pub merged: bool,
+    /// Its link, as text. Empty when there is none.
+    pub link: String,
 }
 
 /// A task's status, as the mission records it.
@@ -750,6 +785,65 @@ pub struct Scheduled {
     pub note: Option<String>,
 }
 
+/// Where a request came in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, PropEnum, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RequestSource {
+    /// A source this build does not know by kind. Its label still shows.
+    #[default]
+    Other,
+    /// A Slack message Pilot watches.
+    Slack,
+    /// A Linear issue assigned to the user.
+    Linear,
+}
+
+/// A request that came in and nobody started in Pilot yet. Its words come
+/// from outside Pilot and are shown as text only.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Request {
+    /// Stable for the request's life in Pilot.
+    pub id: String,
+    /// Where it came in.
+    pub source: RequestSource,
+    /// The source's name, such as "Slack".
+    pub source_label: String,
+    /// What it asks for, in one line.
+    pub title: String,
+    /// Where in the source, such as "#client-northwind" or "BIL-231".
+    /// Empty when unknown.
+    pub place: String,
+    /// What the source or Pilot's sorting says it is, such as "Bug, high"
+    /// or "To do". Empty when unknown.
+    pub kind: String,
+    /// When it last changed, such as "12 min ago". Empty when unknown.
+    pub age: String,
+    /// The source's own link, as text. Empty when there is none.
+    pub link: String,
+}
+
+/// New requests from the project's request sources (Slack, Linear) that
+/// nobody started. Read only: nothing here starts, defers or discards.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Intake {
+    /// Whether the read says any request source is set up. Without one,
+    /// Today shows no New section.
+    pub watched: bool,
+    /// The names of the sources set up, in the read's order.
+    pub sources: Vec<String>,
+    /// New requests, newest first.
+    pub requests: Vec<Request>,
+    /// A source that cannot be read now, one plain sentence each. What it
+    /// showed before stays.
+    pub trouble: Vec<String>,
+    /// How many rows the read holds for a source but does not show, one
+    /// plain sentence. Empty when none: the list is never presented as
+    /// complete when it is not.
+    pub more: String,
+}
+
 /// Everything the Today screen shows. Rust owns it; TSX keeps a mirror.
 #[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -801,6 +895,8 @@ pub struct Today {
     /// How fresh the read of decisions and actions is. It can differ from
     /// the missions' read. Nothing here is guessed when it is not live.
     pub attention: Freshness,
+    /// New requests from Slack and Linear, from the missions' read.
+    pub intake: Intake,
 }
 
 /// Answer a decision in the user's own words, with or without a pick.

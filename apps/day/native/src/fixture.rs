@@ -7,9 +7,10 @@
 use crate::{
     actions::{self, Actions, Content},
     contract::{
-        Control, ControlState, Currentness, Dashboard, DashboardMission, DayOverview, Home,
-        MissionDetail, MissionHead, Movement, Phase, Provenance, Report, ReportView, ReportWrite,
-        Section, Task, TaskStatus, WorkingItem,
+        ArtifactLink, Control, ControlState, Currentness, Dashboard, DashboardMission, DayOverview,
+        Home, MissionDetail, MissionHead, Movement, Phase, Provenance, PullRequest,
+        PullRequestState, Report, ReportView, ReportWrite, Resource, Section, SlackTriage,
+        SourceStatus, Task, TaskStatus, TrackedItem, TrackedSource, WorkingItem,
     },
     model::{
         Bar, DayPart, Decision, DecisionKind, DecisionOption, Delivery, DoneBasis, DoneEntry,
@@ -284,10 +285,113 @@ fn overview(
                 total: working.len() as u32,
                 items: working,
             },
+            tracked: Vec::new(),
         },
         reports,
         controls,
     }
+}
+
+fn slack_request(
+    id: &str,
+    title: &str,
+    channel: &str,
+    kind: &str,
+    severity: &str,
+    minutes_ago: u64,
+) -> TrackedItem {
+    let mut metadata = serde_json::Map::new();
+    metadata.insert("channelName".into(), channel.into());
+    TrackedItem {
+        id: s(id),
+        title: s(title),
+        url: Some(format!("https://example.slack.com/archives/C0MOCK/p{id}")),
+        status: Some(s("open")),
+        updated_at: Some(NOW - minutes_ago * MINUTE),
+        external_id: Some(format!("C0MOCK:{id}")),
+        metadata,
+        slack: Some(SlackTriage {
+            kind: s(kind),
+            label: None,
+            severity: s(severity),
+            status: s("open"),
+        }),
+        ..TrackedItem::default()
+    }
+}
+
+/// The project's request sources: three new Slack messages, one started
+/// one, and a Linear issue. The dashboard holds only a preview, so one
+/// Slack message is counted but not held. `slack` is Slack's health.
+fn requests(slack: SourceStatus) -> Vec<TrackedSource> {
+    let mut started = slack_request(
+        "sl-pdf",
+        "Invoice PDF footer overlaps totals",
+        "client-acme",
+        "bug",
+        "medium",
+        26 * 60,
+    );
+    started.session_id = Some(s("w-pdf"));
+    let mut issue = TrackedItem {
+        id: s("ln-231"),
+        title: s("CSV export times out for large accounts"),
+        url: Some(s("https://linear.app/mock/issue/BIL-231")),
+        status: Some(s("Todo")),
+        updated_at: Some(NOW - 3 * 60 * MINUTE),
+        external_id: Some(s("mock-issue-231")),
+        ..TrackedItem::default()
+    };
+    issue.metadata.insert("identifier".into(), "BIL-231".into());
+    issue
+        .metadata
+        .insert("statusType".into(), "unstarted".into());
+    vec![
+        TrackedSource {
+            source: s("slack"),
+            label: s("Slack"),
+            status: slack,
+            error: None,
+            total: 5,
+            items: vec![
+                slack_request(
+                    "sl-northwind",
+                    "Northwind can't export invoices to CSV",
+                    "client-northwind",
+                    "bug",
+                    "high",
+                    20,
+                ),
+                slack_request(
+                    "sl-stripe",
+                    "Update the Stripe SDK to v15",
+                    "eng-billing",
+                    "request",
+                    "medium",
+                    47,
+                ),
+                slack_request(
+                    "sl-staging",
+                    "Staging database restarts at 14:00",
+                    "eng",
+                    "question",
+                    "low",
+                    64,
+                ),
+                started,
+            ],
+            done: None,
+        },
+        TrackedSource {
+            source: s("linear"),
+            label: s("Linear"),
+            status: SourceStatus::Ok,
+            error: None,
+            total: 1,
+            items: vec![issue],
+            done: Some(Section::default()),
+        },
+    ]
 }
 
 fn task(id: &str, number: u32, title: &str, status: TaskStatus, session: Option<&str>) -> Task {
@@ -321,6 +425,8 @@ fn detail(
             }),
         },
         tasks,
+        artifacts: Vec::new(),
+        resources: Vec::new(),
     }
 }
 
@@ -358,7 +464,7 @@ fn search_detail() -> MissionDetail {
 }
 
 fn native_detail() -> MissionDetail {
-    detail(
+    let mut detail = detail(
         "native",
         "Native desktop app",
         "Replace the desktop app with a native one that keeps every chat and draft.",
@@ -383,7 +489,49 @@ fn native_detail() -> MissionDetail {
             ),
             task("native-6", 6, "Find in chat", TaskStatus::Todo, None),
         ],
-    )
+    );
+    // The chat view merged; the history slice's PR is open and it saved a
+    // capture. Linked outputs, not the user's check.
+    detail.resources = vec![
+        Resource {
+            id: s("res-pr-chat"),
+            task_id: Some(s("native-2")),
+            url: s("https://github.com/mock/pilot/pull/412"),
+            title: None,
+            kind: s("github.pr"),
+            external_id: Some(s("mock/pilot#412")),
+            pull_request: Some(PullRequest {
+                number: 412,
+                title: s("Native chat view"),
+                state: PullRequestState::Merged,
+                merged_at: Some(NOW - 26 * 60 * MINUTE),
+                checked_at: NOW - 5 * MINUTE,
+            }),
+        },
+        Resource {
+            id: s("res-pr-history"),
+            task_id: Some(s("native-4")),
+            url: s("https://github.com/mock/pilot/pull/431"),
+            title: None,
+            kind: s("github.pr"),
+            external_id: Some(s("mock/pilot#431")),
+            pull_request: Some(PullRequest {
+                number: 431,
+                title: s("Load older messages while streaming"),
+                state: PullRequestState::Open,
+                merged_at: None,
+                checked_at: NOW - 5 * MINUTE,
+            }),
+        },
+    ];
+    detail.artifacts = vec![ArtifactLink {
+        task_id: Some(s("native-4")),
+        artifact_id: s("art-history"),
+        title: s("Scroll position, 12 capture runs"),
+        kind: s("visual"),
+        revision: Some(2),
+    }];
+    detail
 }
 
 fn search_moving() -> ReportView {
@@ -694,6 +842,8 @@ fn decisions() -> World {
             running("docs"),
         ],
     );
+    let mut overview = overview;
+    overview.dashboard.tracked = requests(SourceStatus::Idle);
     World {
         today,
         overview: Some(overview),
@@ -1011,6 +1161,8 @@ fn trouble() -> World {
             running("release"),
         ],
     );
+    let mut overview = overview;
+    overview.dashboard.tracked = requests(SourceStatus::SignInRequired);
     World {
         today,
         overview: Some(overview),

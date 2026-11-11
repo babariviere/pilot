@@ -11,6 +11,7 @@ import { commit, later, pickNth, toggleHelp, writeReply } from "./commands";
 import { DayLine } from "./DayLine";
 import { DecisionCard, decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
+import { Incoming } from "./Incoming";
 import { todayScrollTo } from "./kept";
 import { Arrive } from "./motion";
 import { stageMark, stageWord } from "./PlanScreen";
@@ -608,6 +609,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans; 
 							<FreshnessNote day={props.day} />
 						</View>
 
+						<Incoming today={today()} />
 						<NeedsYou day={props.day} />
 						<If when={plans}>
 							<Planning plans={plans as Plans} />

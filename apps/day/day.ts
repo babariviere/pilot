@@ -48,5 +48,6 @@ function shape(t: Today): string {
 		t.moving.map((m) => m.id).join(","),
 		t.notMoving.map((m) => m.id).join(","),
 		t.unreported.map((m) => m.id).join(","),
+		t.intake.requests.map((r) => r.id).join(","),
 	].join("|");
 }

@@ -401,6 +401,26 @@ The production macOS root now binds the OS wall clock and system timezone,
 not a screen date or development override. It refreshes on focus and a local
 30-second worker tick (including after wake); unavailable time stays unavailable.
 
+New (on Today, above Needs you) lists requests from the project's Slack and
+Linear sources that nobody started in Pilot: a Slack message whose status is
+open, or an open Linear issue, with no chat or mission linked. Rows come from
+the request sources in the same `DayOverview` read (`dashboard.tracked`),
+newest first. That read holds only a short preview per source, so New says
+how many rows it does not show; it never looks complete when it is not. A
+source that needs sign-in or failed says so and keeps what Pilot read before.
+Without any source set up, New is hidden. A row opens in place (press it, or
+Space on the focused row) to show what the source and Pilot's sorting say it
+is and its link as text. Opening it records nothing. Start, Later and Discard
+are not built here yet: they need saved, receipted intents, and the user is
+pointed to Pilot's Inbox instead. Delivered work, its outputs and the user's
+own Done or Send back follow the same reviewed layout once their backend
+records exist.
+
+A mission's task also lists what its agents linked to it, from the mission
+record: pull requests with the last GitHub state Pilot saw, artifacts with
+their pinned revision, and other links. Merged is never shown as released
+(Pilot has no release signal), and a linked output is not the user's check.
+
 Missions come only from agent reports. A current report that says moving puts
 a mission under Moving; one that says not moving, or a Pause, under Not
 moving. A mission with no current report (none yet, an old one, or one that

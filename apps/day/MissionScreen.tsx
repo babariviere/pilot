@@ -164,6 +164,22 @@ function Task(props: { task: TaskLine }) {
 					<Text class="text-xs text-faint">{props.task.report ? provenance(props.task.report) : ""}</Text>
 				</View>
 			</If>
+			<If when={props.task.outputs.length > 0}>
+				<View testID={`outputs-${props.task.id}`} class="gap-1 pl-10 pt-1">
+					<Text class="text-xs text-faint">Outputs, as linked by its agents</Text>
+					<Each of={props.task.outputs} key={(o) => o.id}>
+						{(o) => (
+							<View class="flex-row items-baseline gap-3">
+								<Text class="flex-1 text-sm text-foreground">{o().label}</Text>
+								<Text class="text-xs text-muted-foreground">{o().state}</Text>
+							</View>
+						)}
+					</Each>
+					<If when={props.task.outputs.some((o) => o.merged)}>
+						<Text class="text-xs text-faint">Merged is not released. Pilot does not track releases.</Text>
+					</If>
+				</View>
+			</If>
 		</View>
 	);
 }

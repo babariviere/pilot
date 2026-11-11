@@ -23,6 +23,7 @@ pub mod feed;
 pub mod fixture;
 mod handoff;
 pub mod host;
+pub mod intake;
 #[cfg(all(target_os = "macos", feature = "macos-host"))]
 pub mod macos_app;
 #[cfg(all(target_os = "macos", feature = "macos-host"))]

@@ -39,6 +39,107 @@ pub struct Dashboard {
     pub missions: Section<DashboardMission>,
     /// Chats working now.
     pub working: Section<WorkingItem>,
+    /// One group per configured request source (Slack, Linear). Each holds
+    /// only a preview of its rows; `total` counts them all.
+    #[serde(default)]
+    pub tracked: Vec<TrackedSource>,
+}
+
+/// `DashboardTrackedSource`: a configured request source and the rows the
+/// dashboard previews. Not complete: `items` is a short preview.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackedSource {
+    /// "slack" or "linear". Other values are shown by their label only.
+    pub source: String,
+    /// The source's display name.
+    pub label: String,
+    /// Its health.
+    pub status: SourceStatus,
+    /// A short, sanitized reason when it failed.
+    pub error: Option<String>,
+    /// Every active row of the source, more than the preview holds.
+    pub total: u32,
+    /// The preview, newest first (Linear: open issues first).
+    #[serde(default)]
+    pub items: Vec<TrackedItem>,
+    /// Linear only: finished and canceled issues, counted in `total`.
+    pub done: Option<Section<TrackedItem>>,
+}
+
+/// `SourceStatus` of a request source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceStatus {
+    NotConfigured,
+    Idle,
+    Ok,
+    Syncing,
+    SignInRequired,
+    Error,
+    /// Also any value this build does not know.
+    #[default]
+    #[serde(other)]
+    Unknown,
+}
+
+/// `DashboardTrackedItem`: one request as the source and Pilot's triage
+/// saw it. External text is untrusted and shown as text only.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackedItem {
+    pub id: String,
+    pub title: String,
+    pub url: Option<String>,
+    /// A Linear state name, or a local Slack status.
+    pub status: Option<String>,
+    /// Epoch ms.
+    pub updated_at: Option<u64>,
+    pub external_id: Option<String>,
+    /// Source-specific fields, such as a Slack channel name or a Linear
+    /// identifier. Read by name; anything else is ignored.
+    #[serde(default)]
+    pub metadata: serde_json::Map<String, serde_json::Value>,
+    pub slack: Option<SlackTriage>,
+    /// The latest chat and mission started from or linked to it.
+    pub session_id: Option<String>,
+    pub mission_id: Option<String>,
+    #[serde(default)]
+    pub session_ids: Vec<String>,
+    #[serde(default)]
+    pub mission_ids: Vec<String>,
+}
+
+impl TrackedItem {
+    /// Whether any chat or mission was started from or linked to it.
+    pub fn linked(&self) -> bool {
+        self.session_id.is_some()
+            || self.mission_id.is_some()
+            || !self.session_ids.is_empty()
+            || !self.mission_ids.is_empty()
+    }
+
+    /// A metadata field as text, when it is text and not empty.
+    pub fn text(&self, key: &str) -> Option<&str> {
+        self.metadata
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .filter(|v| !v.trim().is_empty())
+    }
+}
+
+/// `SlackTriage`: Slack's effective values after the user's overrides.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackTriage {
+    #[serde(rename = "type", default)]
+    pub kind: String,
+    pub label: Option<String>,
+    #[serde(default)]
+    pub severity: String,
+    /// open, in_progress, waiting, done or dismissed.
+    #[serde(default)]
+    pub status: String,
 }
 
 /// A dashboard section: rows and the full count.
@@ -275,6 +376,75 @@ pub enum MemberState {
 pub struct MissionDetail {
     pub mission: MissionHead,
     pub tasks: Vec<Task>,
+    /// Artifacts linked to the mission or one of its tasks.
+    #[serde(default)]
+    pub artifacts: Vec<ArtifactLink>,
+    /// Links (PRs, issues, threads, pages) on the mission or its tasks.
+    #[serde(default)]
+    pub resources: Vec<Resource>,
+}
+
+/// `MissionArtifactLink`: an artifact an agent linked. Linking is not
+/// acceptance.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactLink {
+    /// Omitted for mission-level links.
+    pub task_id: Option<String>,
+    pub artifact_id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub kind: String,
+    /// The pinned revision; omitted opens the latest.
+    pub revision: Option<u32>,
+}
+
+/// `MissionResource`: a link on the mission or one task.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Resource {
+    pub id: String,
+    /// Omitted for mission-level links.
+    pub task_id: Option<String>,
+    pub url: String,
+    pub title: Option<String>,
+    /// github.pr, github.issue, linear.issue, linear.project, slack.thread
+    /// or url. Others are shown as links.
+    #[serde(default)]
+    pub kind: String,
+    pub external_id: Option<String>,
+    /// The last GitHub state Pilot saw, for pull requests.
+    pub pull_request: Option<PullRequest>,
+}
+
+/// The parts of `SessionPullRequest` an output shows.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequest {
+    pub number: u32,
+    #[serde(default)]
+    pub title: String,
+    pub state: PullRequestState,
+    /// GitHub's merge time, epoch ms.
+    pub merged_at: Option<u64>,
+    /// Pilot's last successful look, epoch ms.
+    #[serde(default)]
+    pub checked_at: u64,
+}
+
+/// A pull request's GitHub state. Merged is not released.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PullRequestState {
+    Draft,
+    Open,
+    Merged,
+    Closed,
+    /// Also any value this build does not know.
+    #[default]
+    #[serde(other)]
+    Unknown,
 }
 
 /// The parts of `Mission` the overview reads.

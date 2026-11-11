@@ -10,7 +10,7 @@ use crate::{
     model::{
         ChatLine, ControlAsk, ControlState, ControlView, Currentness, Decision, DecisionKind,
         Delivery, Freshness, FreshnessState, MemberLine, MemberState, MissionPage, MissionRow,
-        MissionState, Movement, Progress, ReportLine, TaskLine, TaskStatus,
+        MissionState, Movement, Output, OutputKind, Progress, ReportLine, TaskLine, TaskStatus,
     },
 };
 
@@ -365,6 +365,112 @@ fn task_status(status: c::TaskStatus) -> Option<TaskStatus> {
     })
 }
 
+fn pull_request_state(pr: Option<&c::PullRequest>, now: u64) -> String {
+    let Some(pr) = pr else {
+        return "Pilot has not checked it yet".to_owned();
+    };
+    match pr.state {
+        c::PullRequestState::Draft => "Draft, not merged".to_owned(),
+        c::PullRequestState::Open => "Open, not merged".to_owned(),
+        c::PullRequestState::Merged => pr.merged_at.map_or_else(
+            || "Merged".to_owned(),
+            |at| format!("Merged {}", ago(now, at)),
+        ),
+        c::PullRequestState::Closed => "Closed without merging".to_owned(),
+        c::PullRequestState::Unknown => "Pilot cannot tell its state".to_owned(),
+    }
+}
+
+fn link_word(kind: &str) -> &'static str {
+    match kind {
+        "github.issue" => "GitHub issue",
+        "linear.issue" => "Linear issue",
+        "linear.project" => "Linear project",
+        "slack.thread" => "Slack thread",
+        _ => "Link",
+    }
+}
+
+fn https(url: &str) -> String {
+    if url.starts_with("https://") {
+        url.to_owned()
+    } else {
+        String::new()
+    }
+}
+
+/// What the mission record links to `task_id`: pull requests first, then
+/// artifacts, then other links, each in the record's order.
+pub fn outputs(detail: &c::MissionDetail, task_id: &str, now: u64) -> Vec<Output> {
+    let mine = |t: &Option<String>| t.as_deref() == Some(task_id);
+    let resources = detail.resources.iter().filter(|r| mine(&r.task_id));
+    let prs = resources
+        .clone()
+        .filter(|r| r.kind == "github.pr")
+        .map(|r| {
+            let pr = r.pull_request.as_ref();
+            let number = pr.map(|p| p.number).filter(|n| *n > 0);
+            let title = pr
+                .map(|p| p.title.as_str())
+                .filter(|t| !t.is_empty())
+                .or(r.title.as_deref())
+                .unwrap_or_default();
+            let name = number.map_or_else(
+                || {
+                    r.external_id
+                        .clone()
+                        .unwrap_or_else(|| "Pull request".to_owned())
+                },
+                |n| format!("PR #{n}"),
+            );
+            Output {
+                id: r.id.clone(),
+                kind: OutputKind::PullRequest,
+                label: if title.is_empty() {
+                    name
+                } else {
+                    format!("{name} · {title}")
+                },
+                state: pull_request_state(pr, now),
+                merged: pr.is_some_and(|p| p.state == c::PullRequestState::Merged),
+                link: https(&r.url),
+            }
+        });
+    let artifacts = detail
+        .artifacts
+        .iter()
+        .filter(|a| mine(&a.task_id))
+        .map(|a| Output {
+            id: a.artifact_id.clone(),
+            kind: OutputKind::Artifact,
+            label: if a.title.is_empty() {
+                "Artifact".to_owned()
+            } else {
+                a.title.clone()
+            },
+            state: a.revision.map_or_else(
+                || "Artifact, latest revision".to_owned(),
+                |r| format!("Artifact, revision {r}"),
+            ),
+            merged: false,
+            link: String::new(),
+        });
+    let links = resources.filter(|r| r.kind != "github.pr").map(|r| Output {
+        id: r.id.clone(),
+        kind: OutputKind::Link,
+        label: r
+            .title
+            .clone()
+            .filter(|t| !t.trim().is_empty())
+            .or_else(|| r.external_id.clone())
+            .unwrap_or_else(|| r.url.clone()),
+        state: link_word(&r.kind).to_owned(),
+        merged: false,
+        link: https(&r.url),
+    });
+    prs.chain(artifacts).chain(links).collect()
+}
+
 /// The mission overview for `mission_id`, or None when it is not active
 /// in the read.
 pub fn page(inputs: &Inputs, mission_id: &str, freshness: Freshness) -> Option<MissionPage> {
@@ -397,6 +503,7 @@ pub fn page(inputs: &Inputs, mission_id: &str, freshness: Freshness) -> Option<M
                 title: task.title.clone(),
                 status,
                 report,
+                outputs: detail.map_or_else(Vec::new, |d| outputs(d, &task.id, inputs.now)),
             })
         })
         .collect();
@@ -454,5 +561,46 @@ mod tests {
         assert_eq!(ago(now, now - 1500 * MINUTE), "yesterday");
         assert_eq!(ago(now, now - 3 * 1440 * MINUTE), "3 days ago");
         assert_eq!(ago(now, now + MINUTE), "just now");
+    }
+
+    #[test]
+    fn outputs_keep_merged_apart_from_released_and_belong_to_their_task() {
+        let json = r#"{
+            "mission": { "id": "m1", "title": "Billing", "goal": "", "coordinatorSessionId": null, "currentPhase": null },
+            "tasks": [],
+            "artifacts": [
+                { "taskId": "t1", "artifactId": "a1", "sessionId": "s1", "title": "Before and after", "kind": "image", "revision": 2, "linkedAt": 1 },
+                { "artifactId": "a2", "sessionId": "s1", "title": "Mission chart", "kind": "visual", "linkedAt": 1 }
+            ],
+            "resources": [
+                { "id": "r3", "taskId": "t1", "url": "https://linear.app/x/issue/BIL-224", "kind": "linear.issue", "externalId": "BIL-224", "relationship": "reference", "createdAt": 1 },
+                { "id": "r1", "taskId": "t1", "url": "https://github.com/x/y/pull/476", "kind": "github.pr", "relationship": "ownership", "createdAt": 1,
+                  "pullRequest": { "number": 476, "url": "https://github.com/x/y/pull/476", "title": "Fix PDF footer layout", "state": "merged", "mergedAt": 1000, "checkedAt": 2000 } },
+                { "id": "r2", "taskId": "t2", "url": "https://github.com/x/y/pull/479", "kind": "github.pr", "relationship": "ownership", "createdAt": 1 },
+                { "id": "r4", "taskId": "t2", "url": "http://plain.example/doc", "kind": "url", "title": "Runbook", "relationship": "reference", "createdAt": 1,
+                  "pullRequest": null }
+            ]
+        }"#;
+        let detail: c::MissionDetail = serde_json::from_str(json).unwrap();
+        let now = 1000 + 125 * MINUTE;
+        let t1 = outputs(&detail, "t1", now);
+        let shown: Vec<(&str, &str, bool)> = t1
+            .iter()
+            .map(|o| (o.label.as_str(), o.state.as_str(), o.merged))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                ("PR #476 · Fix PDF footer layout", "Merged 2 h ago", true),
+                ("Before and after", "Artifact, revision 2", false),
+                ("BIL-224", "Linear issue", false),
+            ]
+        );
+        let t2 = outputs(&detail, "t2", now);
+        assert_eq!(t2[0].label, "Pull request");
+        assert_eq!(t2[0].state, "Pilot has not checked it yet");
+        assert!(!t2[0].merged);
+        assert_eq!((t2[1].label.as_str(), t2[1].link.as_str()), ("Runbook", ""));
+        assert!(outputs(&detail, "t3", now).is_empty());
     }
 }

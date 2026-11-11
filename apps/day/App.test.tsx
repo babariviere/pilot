@@ -438,3 +438,74 @@ test("the screen's sandbox refuses network, sockets, files and processes", async
 		expect(app.shows(`text:${line}`)).toBe(true);
 	}
 });
+
+test("New lists requests nobody started, newest first, and counts what it does not show", async () => {
+	const app = await open("./App.tsx", desktop);
+	await app.waitFor("id:incoming");
+	for (const text of [
+		"From Slack and Linear",
+		"Northwind can't export invoices to CSV",
+		"Slack · #client-northwind · 20 min ago",
+		"Update the Stripe SDK to v15",
+		"CSV export times out for large accounts",
+		"Linear · BIL-231 · 3 h ago",
+		"1 more Slack message is not shown here.",
+	]) {
+		expect(app.shows(text)).toBe(true);
+	}
+	// A request someone already started is not new.
+	expect(app.shows("Invoice PDF footer overlaps totals")).toBe(false);
+});
+
+test("a request opens in place, says where it came from and sends nothing", async () => {
+	const app = await open("./App.tsx", desktop);
+	await app.waitFor("id:incoming");
+	expect(app.shows("id:request-detail-sl-northwind")).toBe(false);
+	await app.press("id:request-sl-northwind");
+	await app.waitFor("id:request-detail-sl-northwind");
+	expect(app.shows("Bug, high")).toBe(true);
+	expect(app.shows("text:https://example.slack.com/archives/C0MOCK/psl-northwind")).toBe(true);
+	expect(app.shows("Pilot Day cannot start, defer or discard requests yet. Start it from the Inbox in Pilot.")).toBe(
+		true,
+	);
+	// One open at a time; the keyboard focus stays on the pressed row, so Space closes it.
+	await app.press("id:request-sl-stripe");
+	await app.waitFor("id:request-detail-sl-stripe");
+	expect(app.shows("id:request-detail-sl-northwind")).toBe(false);
+	await app.keyboard.press("space");
+	expect(app.shows("id:request-detail-sl-stripe")).toBe(false);
+	// Opening a request answered, started and recorded nothing.
+	expect(app.shows("Three short things need you.")).toBe(true);
+	expect(app.shows("1 of 3")).toBe(true);
+	expect(app.shows("Northwind can't export invoices to CSV")).toBe(true);
+});
+
+test("a request source that needs sign-in says so and keeps what Pilot read before", async () => {
+	const app = await open("./Trouble.tsx", desktop);
+	await app.waitFor("id:incoming");
+	expect(app.shows("Slack needs you to sign in again. These are the requests Pilot read before.")).toBe(true);
+	expect(app.shows("Northwind can't export invoices to CSV")).toBe(true);
+});
+
+test("without a request source Today shows no New section", async () => {
+	const app = await open("./Quiet.tsx", desktop);
+	await app.waitFor("Coming up");
+	expect(app.shows("id:incoming")).toBe(false);
+});
+
+test("a mission's tasks show what their agents linked, and merged is not released", async () => {
+	const app = await open("./App.tsx", desktop);
+	await app.press("id:mission-native");
+	await app.waitFor("id:outputs-native-4");
+	for (const text of [
+		"PR #431 · Load older messages while streaming",
+		"Open, not merged",
+		"Scroll position, 12 capture runs",
+		"Artifact, revision 2",
+		"PR #412 · Native chat view",
+		"Merged yesterday",
+		"Merged is not released. Pilot does not track releases.",
+	]) {
+		expect(app.shows(text)).toBe(true);
+	}
+});

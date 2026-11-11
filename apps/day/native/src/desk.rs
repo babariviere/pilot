@@ -181,6 +181,11 @@ impl Desk {
         self.today.moving = groups.moving;
         self.today.not_moving = groups.not_moving;
         self.today.unreported = groups.unreported;
+        self.today.intake = self
+            .overview
+            .as_ref()
+            .map(|o| crate::intake::intake(&o.dashboard.tracked, self.now))
+            .unwrap_or_default();
     }
 
     /// Whether the read is live. Controls need it.

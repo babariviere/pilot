@@ -5,7 +5,17 @@ import { Button, type DiffFile, DiffView, type DiffViewClasses, type DiffViewRef
 import type { Bar, Evidence, Progress } from "pilot-day/native";
 
 /** A still state mark. Words beside it carry the meaning. */
-export type MarkKind = "needs" | "failed" | "ready" | "unknown" | "moving" | "still" | "paused" | "unreported" | "done";
+export type MarkKind =
+	| "needs"
+	| "failed"
+	| "ready"
+	| "unknown"
+	| "moving"
+	| "still"
+	| "paused"
+	| "unreported"
+	| "done"
+	| "new";
 
 const MARKS: Record<MarkKind, string> = {
 	needs: "bg-needs",
@@ -17,6 +27,8 @@ const MARKS: Record<MarkKind, string> = {
 	still: "bg-faint",
 	paused: "bg-faint",
 	unreported: "border border-dashed border-faint",
+	// A request that came in and nobody started: present, not urgent.
+	new: "bg-muted-foreground",
 };
 
 /** A small round mark for a state. */
