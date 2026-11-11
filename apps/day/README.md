@@ -1,9 +1,9 @@
-# Pilot Day
+# Pilot
 
 The source of the upcoming Pilot desktop app, written in Native Shell (NSH)
 TSX, with its read model and rules in a Rust crate (`native/`). It started as
-the Today spike in `experiments/nsh-day` and now lives here as the only Day
-app source.
+the Today spike in `experiments/nsh-day` and now lives here as the only
+NSH app source.
 
 Status: Today still runs on **mock data**. Its missions, agent reports and
 Pause controls arrive as the daemon's v1 contracts
@@ -15,7 +15,7 @@ and the same durable command ledger, with exact receipt recovery. Native selecti
 mock constructor remain separate; no live creation profile is enabled.
 The default entry still connects to no daemon, account or user data. It is not the default app, it is not packaged or released,
 and it does not change the GPUI or Swift apps or their build. Those apps stay
-the shipping desktop apps until Day passes native acceptance and cutover.
+the shipping desktop apps until the NSH app passes native acceptance and cutover.
 
 The native crate now also contains the Day-owned `pilot-desktop` executable
 (`macos-host` feature). It embeds the unchanged release's public AppView and
@@ -26,6 +26,11 @@ release. Its app-only controller now joins the existing READY/COMMIT protocol
 to that owner and verifies receipt-only successor restore/startup. Missing signed
 payloads remain unavailable. Source-matched packaging and real signed replacement
 acceptance remain separate. See [the executable handoff](../../docs/technical/day-executable-handoff.md).
+
+The `apps/day` path, `pilot-day/native` module, `dev.pilot.day` bundle ID,
+and existing update, storage, profile and receipt identities remain unchanged
+for compatibility. Today is a view, not a separate product. Historical fixtures
+and evidence keep their original names.
 
 ## Upstream pin
 

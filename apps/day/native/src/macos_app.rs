@@ -441,7 +441,7 @@ impl ApplicationOwner {
         unsafe {
             window.setReleasedWhenClosed(false);
         }
-        window.setTitle(&NSString::from_str("Pilot Day"));
+        window.setTitle(&NSString::from_str("Pilot"));
         let content = NSView::initWithFrame(NSView::alloc(main), window.frame());
         let surface = owner.view();
         surface.setFrame(content.bounds());
@@ -589,9 +589,9 @@ fn menu(main: MainThreadMarker, delegate: &Delegate) -> Retained<NSMenu> {
         item(&bar, name, None, "").setSubmenu(Some(&menu));
         menu
     };
-    let app = sub("Pilot Day");
-    item(&app, "Hide Pilot Day", Some(sel!(hide:)), "h");
-    item(&app, "Quit Pilot Day", Some(sel!(terminate:)), "q");
+    let app = sub("Pilot");
+    item(&app, "Hide Pilot", Some(sel!(hide:)), "h");
+    item(&app, "Quit Pilot", Some(sel!(terminate:)), "q");
     let cancel = item(&app, "Cancel Close", Some(sel!(cancelClose:)), "");
     unsafe {
         cancel.setTarget(Some(delegate));

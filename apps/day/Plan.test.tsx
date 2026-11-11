@@ -280,7 +280,7 @@ test("a Wayfinder map shows what is open, waiting, settled and in fog, each with
 	await app.press("id:plan-linux");
 	await app.waitFor("id:map");
 	for (const text of [
-		"Where it should end up: Pilot Day runs on Linux with the same Today and planning as on macOS.",
+		"Where it should end up: Pilot runs on Linux with the same Today and planning as on macOS.",
 		"Revision 6",
 		"3 settled · 4 open now · 1 waiting · 2 in fog",
 		"Open now  4",

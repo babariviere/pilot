@@ -606,9 +606,9 @@ fn linux(current: bool) -> Plan {
     let mut plan = Plan::new(
         "linux",
         "Pilot on Linux desktops",
-        "Make Pilot Day work on Linux desktops.",
+        "Make Pilot work on Linux desktops.",
         PlanRoute::Wayfinder,
-        "Pilot Day runs on Linux with the same Today and planning as on macOS.",
+        "Pilot runs on Linux with the same Today and planning as on macOS.",
     );
     plan.script = Script::LinuxTopic;
     plan.submitted = StepState::Done;

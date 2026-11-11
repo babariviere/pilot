@@ -44,7 +44,7 @@ fn entry() -> PathBuf {
     }
     std::fs::write(
         dir.join("nsh.json"),
-        json!({"name":"Pilot Day","id":"dev.pilot.day","theme":"theme.json","capabilities":{"host":METHODS}})
+        json!({"name":"Pilot","id":"dev.pilot.day","theme":"theme.json","capabilities":{"host":METHODS}})
             .to_string(),
     )
     .unwrap();

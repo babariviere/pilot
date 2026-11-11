@@ -263,7 +263,7 @@ impl WindowOwner {
 /// Native selection, credentials and paths are not launch parameters.
 pub fn options(bridge: &Bridge) -> AppOptions {
     AppOptions {
-        title: "Pilot Day".into(),
+        title: "Pilot".into(),
         size: (1100, 820),
         host: bridge.channel(),
         ..AppOptions::default()
