@@ -173,6 +173,8 @@ with a test clock (reads write nothing; exact context and revision; another day,
 refused; a lost write is Unknown and not replayed after a cold reopen; saves wait during a flush),
 then plays the root for `Connected.tsx`: one visit after Today shows, steps resumed after a
 reopen, Done and Skip saved, Escape saving nothing, a lost save never resent and no clock said.
+The joined fixture also runs Connected.tsx on the real Bridge, NativeHost and journal with
+readable synthetic HTTP/WS Today and an injected clock. No providers or Node services run.
 
 Script-only checks need neither Cargo nor NSH and never open a window:
 
@@ -364,6 +366,9 @@ the root's [saved ritual progress](../../docs/technical/day-ritual-progress.md)
 never resent: Today says it is not confirmed until Read again confirms it.
 Without a native clock the window says rituals are not available. Mock entries
 keep marks in memory for the run and save nothing.
+The production macOS root now binds the OS wall clock and system timezone,
+not a screen date or development override. It refreshes on focus and a local
+30-second worker tick (including after wake); unavailable time stays unavailable.
 
 Missions come only from agent reports. A current report that says moving puts
 a mission under Moving; one that says not moving, or a Pause, under Not

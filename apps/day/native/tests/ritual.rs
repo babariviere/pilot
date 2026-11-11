@@ -164,6 +164,12 @@ fn date_zone_profile_and_user_transitions_are_fenced() {
     assert_eq!(h.ritual_snapshot().start.mark, RitualMark::Unmarked);
     assert_eq!(h.ritual_snapshot().visit, Visit::Unknown);
     reply(h.close()).unwrap();
+    f.source.home.lineage_id = "another-lineage".into();
+    let h = f.open();
+    reply(h.read_ritual()).unwrap();
+    assert_eq!(h.ritual_snapshot().start.mark, RitualMark::Unmarked);
+    assert_eq!(h.ritual_snapshot().visit, Visit::Unknown);
+    reply(h.close()).unwrap();
     let h = f.open_user(unsafe { libc::geteuid() }.wrapping_add(1));
     assert_eq!(reply(h.read_ritual()), Err(Error::Identity));
     assert_eq!(
@@ -246,4 +252,57 @@ fn an_admitted_local_save_drains_before_safe_close() {
     );
     reply(h.close()).unwrap();
     assert_eq!(reply(h.read_ritual()), Err(Error::Closed));
+}
+
+#[test]
+fn root_clock_tick_refreshes_an_idle_host_without_a_visit_or_write() {
+    let f = Fixture::new();
+    let h = f.open();
+    // Wait for the initial automatic tick, not a request that could race it.
+    let changes = h.changes();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while h.ritual_snapshot().availability != RitualAvailability::Available {
+                    changes.recv().await.unwrap();
+                }
+            })
+            .await
+            .unwrap();
+        });
+    let context = h.ritual_snapshot().context;
+    *f.clock.lock().unwrap() = Ok(LocalDay {
+        date: "2026-11-11".into(),
+        time_zone: "America/New_York".into(),
+        hour: 19,
+        unix_ms: 90_000_000,
+    });
+    let changes = h.changes();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            tokio::time::timeout(Duration::from_secs(40), async {
+                while h.ritual_snapshot().context == context {
+                    changes.recv().await.unwrap();
+                }
+            })
+            .await
+            .expect("native clock tick refreshes even without VM reads or focus events");
+        });
+    let now = h.ritual_snapshot();
+    assert_eq!(now.date, "2026-11-11");
+    assert_eq!(now.time_zone, "America/New_York");
+    assert_eq!(now.part, DayPart::Evening);
+    assert_eq!(
+        std::fs::metadata(f.root.join("native.ledger"))
+            .unwrap()
+            .len(),
+        0
+    );
+    reply(h.close()).unwrap();
 }

@@ -31,6 +31,7 @@ macos-host = []
 
 [target.'cfg(target_os = "macos")'.dependencies]
 dispatch2 = "=0.3.1"
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSCalendar", "NSDate", "NSString", "NSTimeZone"] }
 pilot-desktop-updater = { path = "../../desktop/updater", features = ["native-macos"] }
 nsh-platform-macos = { git = "https://github.com/longbridge/nsh", rev = "e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3" }
 

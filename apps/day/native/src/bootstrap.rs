@@ -177,6 +177,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), Error> {
         journal,
         Options {
             updates: Some(updates),
+            day: Some(crate::host::ritual::DaySource::system()),
             ..Default::default()
         },
     )?;

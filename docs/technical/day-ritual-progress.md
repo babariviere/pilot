@@ -16,9 +16,14 @@ No calendar/clock authority is exported to TSX. Without this source, day part,
 visit and ritual availability remain unknown/unavailable. The mock constructor
 and live app selection do not change.
 
-The production native bootstrap still needs to bind its audited native clock/time-zone source and supply
-`RitualFeed::from_host` under its root owner. This change does not pretend that
-the currently mock-only bootstrap already has a native clock provider.
+The production macOS bootstrap binds `DaySource::system()` on the same host
+as the updater, including receipt-only successor startup. It samples
+`SystemTime` and reads the OS-managed `/etc/localtime` zoneinfo link on the
+host worker. Foundation converts that exact instant in the explicit named
+zone using a Gregorian calendar. It does not use TZ, process-default zones,
+TSX dates, locale calendars or development environment overrides. A missing,
+unsupported or changing zone, or invalid time, stays unavailable, never UTC
+or a guessed day. There is no Linux production bootstrap binding yet.
 
 Identity is the exact profile path, OS user ID, daemon ID and storage lineage.
 Progress keys additionally contain the local date and zone. Project switches
@@ -44,7 +49,13 @@ bindings on that one host, rather than opening competing ledger writers.
 
 Mirror the snapshot and subscribe with `onChange`. On focus/day-context
 refresh, call `refresh()` to sample the current native clock and read progress.
-It writes nothing. The root does not poll or auto-start a ritual.
+It writes nothing. A worker-owned 30-second local clock tick also refreshes
+day/zone/part while the window stays open, including an overdue tick after
+suspend. Missed ticks collapse; only changed snapshots notify the window.
+This does not read the daemon, write progress, record a visit or auto-start a
+ritual. The existing active-window lifecycle refresh samples again on focus.
+Every mutation samples again before checking context and revision, so a tick
+delay cannot authorize an old-day save. Close joins this worker and its timer.
 
 After Today is actually presented, `visit({ context, revision })` explicitly
 records that visit. Background reads, opening the host, and WS activity do not.
@@ -117,7 +128,11 @@ confirmed view and is the only TSX path that saves:
 Mock entries use an in-memory stand-in with the same rules that saves
 nothing anywhere. The old view-local marks were removed, not migrated.
 `tests/connected_ritual.rs` covers the calls on a real root and the screens on
-a played root, headless. The production root still has no audited clock and
-time-zone binding, so a real window shows rituals as not available until that
-lands. No live activation, visible tests, app restart or native acceptance is
-implied.
+a played root. Its joined fixture also runs actual Connected.tsx, Bridge,
+NativeHost and journal against synthetic HTTP/WS with readable Today and an
+injected deterministic clock, without Node or providers. It checks focused
+displayed visits, cold step resume, explicit Done/Skip versus Escape,
+day/zone/profile changes, project replacement, unavailable clock and uncertain
+saves without replay. Native clock tests exercise explicit zone conversion,
+system sampling and refusal of process zone overrides. These hidden boundary
+checks are not visible native acceptance, live activation or an app restart.

@@ -13,6 +13,8 @@
 //! step to resume at, Done and Skip saved, Escape saving nothing, a lost save
 //! never resent, a day that changed under an open ritual, and progress that
 //! cannot be read said as such.
+//! `support/ritual_joined.rs` joins those two sides over a readable synthetic
+//! HTTP/WS service: real Connected.tsx, Bridge, host clock and durable journal.
 use nsh_core::{platform::Lifecycle, prelude::*};
 use nsh_engine::{EngineConfig, HostCall, HostChannel};
 use nsh_testing::{Headless, compile_tsx};
@@ -36,6 +38,9 @@ use std::{
 };
 
 const WAIT: Duration = Duration::from_secs(60);
+
+#[path = "support/ritual_joined.rs"]
+mod joined;
 
 // The real root: exact JSON calls on a NativeHost with a test clock.
 

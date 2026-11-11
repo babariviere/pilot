@@ -22,7 +22,7 @@ pub struct LocalDay {
     pub unix_ms: u64,
 }
 impl LocalDay {
-    fn validate(&self) -> Result<(), Error> {
+    pub(super) fn validate(&self) -> Result<(), Error> {
         let p: Vec<_> = self.date.split('-').collect();
         let valid_date = if self.date.bytes().enumerate().all(|(i, b)| {
             if i == 4 || i == 7 {
@@ -91,6 +91,19 @@ impl LocalDay {
 pub struct DaySource {
     pub user_id: u32,
     pub clock: Arc<dyn Fn() -> Result<LocalDay, Error> + Send + Sync>,
+}
+
+impl DaySource {
+    /// The OS user's current wall clock and system zone. No VM or environment
+    /// date/zone is used. A missing system zone stays unavailable.
+    #[cfg(target_os = "macos")]
+    pub fn system() -> Self {
+        Self {
+            // SAFETY: geteuid has no preconditions.
+            user_id: unsafe { libc::geteuid() },
+            clock: Arc::new(super::native_clock::sample),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -232,6 +245,32 @@ pub(super) fn handle(
     let result = apply(source, day, journal, shared, work);
     shared.change(|_| ());
     result
+}
+
+/// Refresh local time without writing or broadcasting unchanged snapshots.
+/// The worker owns this timer, so close joins it with the journal writer.
+pub(super) fn refresh_clock(
+    source: &Source,
+    day: &DaySource,
+    journal: &mut Journal,
+    shared: &Shared,
+) {
+    let before = shared
+        .ritual
+        .lock()
+        .expect("ritual state poisoned")
+        .view
+        .clone();
+    let _ = apply(source, Some(day), journal, shared, Work::Read);
+    let after = shared
+        .ritual
+        .lock()
+        .expect("ritual state poisoned")
+        .view
+        .clone();
+    if before != after {
+        shared.change(|_| ());
+    }
 }
 
 fn apply(

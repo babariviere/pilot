@@ -3691,6 +3691,7 @@ dependencies = [
  "nsh-engine",
  "nsh-platform-macos",
  "nsh-testing",
+ "objc2-foundation",
  "pilot-desktop-updater",
  "reqwest",
  "serde",

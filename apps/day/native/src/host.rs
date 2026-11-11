@@ -7,6 +7,8 @@ mod changes;
 mod enrollment;
 mod inventory;
 mod journal;
+#[cfg(target_os = "macos")]
+mod native_clock;
 mod planning;
 pub mod ritual;
 mod transport;
@@ -812,6 +814,10 @@ async fn run(
     let (invalidated, events) = async_channel::bounded(1);
     let ws = tokio::spawn(watch(t.source.clone(), shared.clone(), invalidated));
     let mut events_open = true;
+    // Local clock refresh only. No daemon GET, visit, mark or automatic ritual.
+    // An overdue tick runs after wake; missed ticks never build up a queue.
+    let mut clock = tokio::time::interval(Duration::from_secs(30));
+    clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             biased;
@@ -871,6 +877,10 @@ async fn run(
                 if shared.closed.load(Ordering::SeqCst) { break; }
                 let epoch = shared.epoch.load(Ordering::SeqCst);
                 if shared.connected.load(Ordering::SeqCst) && let Err(e) = refresh(&t, &journal, &shared, epoch, None).await { fail(&shared, e); }
+            }
+            _ = clock.tick(), if day.is_some() => {
+                if shared.closed.load(Ordering::SeqCst) { break; }
+                ritual::refresh_clock(&t.source, day.as_ref().expect("clock is bound"), &mut journal, &shared);
             }
         }
     }
