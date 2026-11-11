@@ -1,5 +1,70 @@
 # Changelog
 
+## [1.124.0](https://github.com/babariviere/pilot/compare/v1.123.0...v1.124.0) (2026-11-11)
+
+
+### Features
+
+* **attention:** add fail-closed read-only execution admission ([11f69b1](https://github.com/babariviere/pilot/commit/11f69b19f83731570c01db2371a709d576765a74))
+* **attention:** add scoped help and durable human actions ([41d7013](https://github.com/babariviere/pilot/commit/41d7013923e8d9993998f95061dcca133f5294b9))
+* **daemon:** add retained changes and landing observations ([48f6be1](https://github.com/babariviere/pilot/commit/48f6be15d7fbe713c00c38723167637d810f04a4))
+* **daemon:** add scoped pause controls and versioned reports ([5aabffc](https://github.com/babariviere/pilot/commit/5aabffc6b2b2c0c954e95a4c515df7295d98a08c))
+* **day:** add an isolated local development preview ([a49c295](https://github.com/babariviere/pilot/commit/a49c295fef16e87fb8800c54c274cfaa5bc4ccac))
+* **day:** add authenticated native host and durable controls ([05b39de](https://github.com/babariviere/pilot/commit/05b39decfd40f880813c91593973618be393efef))
+* **day:** add authenticated saved planning ingress ([c2ca28c](https://github.com/babariviere/pilot/commit/c2ca28c729ecc81d958587a375563c0ac2731f90))
+* **day:** add Changes review, reopen and later ([409b7a0](https://github.com/babariviere/pilot/commit/409b7a0c01c271de4eb03bf54521c1381bb03ddf))
+* **day:** add decision help, human-action cards and keyboard triage ([62eb280](https://github.com/babariviere/pilot/commit/62eb2802ba8c49b7f01edcd7728b7175053ba913))
+* **day:** add New, one-question interviews and plan review ([478afff](https://github.com/babariviere/pilot/commit/478afff92fa477e588f6379344bb3f58c5d3ff37))
+* **day:** add revision-fenced interview agreement contracts ([e46ad5c](https://github.com/babariviere/pilot/commit/e46ad5c780e82f1e64fcddaa19cbc369635cab52))
+* **day:** add service registration and update controls ([ba67d02](https://github.com/babariviere/pilot/commit/ba67d02a48e78482cd1f657ecf550d8c04aa4e33))
+* **day:** add start and end of day and standup notes ([5ae7b0c](https://github.com/babariviere/pilot/commit/5ae7b0cbe781f080e8f82c432d6e6d78dec6eba3))
+* **day:** add trusted attention transport ([3521eb6](https://github.com/babariviere/pilot/commit/3521eb6510728497ad58bbe15addf90f1a41a042))
+* **day:** bind native interview creation ([3056272](https://github.com/babariviere/pilot/commit/3056272ddb0ce58f01db850971b306d718459b96))
+* **day:** bind retained Changes to the native host ([55cfaf2](https://github.com/babariviere/pilot/commit/55cfaf2e72d5bc06c5656f248521dc5bbdd7808a))
+* **day:** connect the Day screens through the native bridge and add calm motion ([9f5e95f](https://github.com/babariviere/pilot/commit/9f5e95f8b8e8f85c6429ee8c28a9fbf897450f70))
+* **day:** connect update controls to native lifecycle ([7075f15](https://github.com/babariviere/pilot/commit/7075f155c78f5da6325707539f3e67d424ec9f65))
+* **day:** expose a passive planning inventory ([4170dfe](https://github.com/babariviere/pilot/commit/4170dfe3dbb8bfe042a822de215909ae714ad0a8))
+* **day:** honest update states and full saved-view restore ([0e78aa1](https://github.com/babariviere/pilot/commit/0e78aa12882c83d11d62dfbdd17f6e231264cd10))
+* **day:** integrate the Changes diff into the page and add Read again ([871623c](https://github.com/babariviere/pilot/commit/871623caf35c9dc0bd29ff8d679c6acb02c263e7))
+* **day:** join native update handoff and successor startup ([abed3fb](https://github.com/babariviere/pilot/commit/abed3fb2cc95a54f8a0a8e8c4f65ce9ad6d777c4))
+* **day:** keep several answers and a saved Later on questions ([141c2c6](https://github.com/babariviere/pilot/commit/141c2c63276c68ea3aa1f820ee3d1f582c004d39))
+* **day:** number-key interview card and read-only round history ([27ff275](https://github.com/babariviere/pilot/commit/27ff2751d15fa99145fcc8c87f0965157925e63e))
+* **day:** own native bootstrap and deferred close ([348b9ab](https://github.com/babariviere/pilot/commit/348b9abca743ee82f5cf826925e402eab3257238))
+* **day:** persist explicit native ritual progress ([7a072ea](https://github.com/babariviere/pilot/commit/7a072eae4783e945ed1e832b8c8fa525ca5bc8fd))
+* **day:** project Today from v1 reports and add pause controls ([8de8f8a](https://github.com/babariviere/pilot/commit/8de8f8a30b4bb3e6895d8a64c76ab8d8377feabc))
+* **day:** promote the Native Shell TSX Day app to apps/day ([45c45fd](https://github.com/babariviere/pilot/commit/45c45fd00c95cdb5530e1758765b12c659e5bd7f))
+* **day:** qualify the released native host bridge ([9a23f42](https://github.com/babariviere/pilot/commit/9a23f42c37399c7e8bdfb940071c0464a81e94f6))
+* **day:** save start and end of day progress through the native root ([7dfa730](https://github.com/babariviere/pilot/commit/7dfa73066a1fe4edfca1e31056e16e740ffc59a3))
+* **day:** show saved planning missions in Today ([c890563](https://github.com/babariviere/pilot/commit/c8905633aec1456769bb5170ac6ad6be76f5a3a5))
+* **day:** start a published task explicitly ([3846411](https://github.com/babariviere/pilot/commit/384641191dc3f7ad0c5a7817cd217a404d0a2ed6))
+* **day:** wire decision and action cards to the native attention host ([ed1d3b3](https://github.com/babariviere/pilot/commit/ed1d3b39e7b8607ddae84483e706ec9ca497afaf))
+* **experiments:** add mock Today screen on Native Shell TSX ([41bd4a2](https://github.com/babariviere/pilot/commit/41bd4a22b26d3e6a58b6f01c0ee3015b1be784b8))
+* **experiments:** add Rust-native Today fixture with a shared update workload ([ba2fc1b](https://github.com/babariviere/pilot/commit/ba2fc1bbadcb5c86c0f4d6d340adb124d7685d82))
+* **kernel:** route decision notices by current task relevance ([db39b3b](https://github.com/babariviere/pilot/commit/db39b3bc18e860c8743902184a25312d388502d7))
+* **lifecycle:** checkpoint and resume upgrade-owned sessions ([fe95ec5](https://github.com/babariviere/pilot/commit/fe95ec50fced72c3141b49839836b23b0d722572))
+* **planning:** add typed prototype exploration ([31041c7](https://github.com/babariviere/pilot/commit/31041c795b5cad0e2ccef40b62c2544760a17a72))
+* **planning:** bind worker interview lifecycle ([54ba3b3](https://github.com/babariviere/pilot/commit/54ba3b3d4b1a6a5360931c604b28909012e7e792))
+* **planning:** integrate trusted native planning skills ([d438108](https://github.com/babariviere/pilot/commit/d438108790fe325c8b857d36aa9ca27833543e63))
+* **planning:** share one mission map between the planning page and agents ([e4ed7c0](https://github.com/babariviere/pilot/commit/e4ed7c07ec1ce1f4f47f8ceb86223369ed713d37))
+
+
+### Bug Fixes
+
+* **day:** bind trusted native clock to ritual progress ([fb2f68c](https://github.com/babariviere/pilot/commit/fb2f68c093a50fbab4951634739d655cc6c5e238))
+* **day:** create the ignored output/ folder before nsh tests ([d7c0a8b](https://github.com/babariviere/pilot/commit/d7c0a8b4264ee9914d0eba19538fa11151bdefc3))
+* **day:** expose a passive inventory snapshot ([e247bbc](https://github.com/babariviere/pilot/commit/e247bbce652054b71aa59a5fbda87e5ee4ca889f))
+* **day:** never show or submit a planning round without questions ([157734a](https://github.com/babariviere/pilot/commit/157734ae7dd40ce52ab21f42864951d47f6a2ce1))
+* **day:** prevent check tool auto-installs ([9913e24](https://github.com/babariviere/pilot/commit/9913e24eda78fc98f78f51320804012a59e4eec0))
+* **day:** propagate planning inventory capacity refusals ([d13229f](https://github.com/babariviere/pilot/commit/d13229fd22d66a9409b641651b359f93665e4ff7))
+* **deps:** sync the lockfile and keep pi-posthorse at 0.10.10 ([09fae77](https://github.com/babariviere/pilot/commit/09fae77bcb2f7f860a5af37bf7520d2438ab2c5b))
+* **deps:** update npm runtime dependencies ([fe34b69](https://github.com/babariviere/pilot/commit/fe34b6936e7786908a44916a0ba5e7afc09a6f7d))
+* **kernel:** drain owned job groups without subtree claims ([619590f](https://github.com/babariviere/pilot/commit/619590faa821b54a635a46658c811d36f24c53f3))
+* **kernel:** preserve failed input replay receipt reasons ([c533d7f](https://github.com/babariviere/pilot/commit/c533d7f31f6e11fbb7af0f045bd573e351824b50))
+* **lifecycle:** harden native capture and job ownership ([a1d15f5](https://github.com/babariviere/pilot/commit/a1d15f5f72f706e2788559773999f6302647c1fc))
+* **planning:** expose complete submitted interview history ([3567817](https://github.com/babariviere/pilot/commit/35678178a514f1d8925b269293133799fb4e666e))
+* **review:** drain managed change captures across lifecycle batches ([e6d0b72](https://github.com/babariviere/pilot/commit/e6d0b72ad72529d1befd2b0e331c807ca0b5a326))
+* **storage:** guide temporary output to TMPDIR and prune stale writes ([215ded8](https://github.com/babariviere/pilot/commit/215ded84a78ebf6b391d6555e92296a44bee26c4))
+
 ## [1.123.0](https://github.com/babariviere/pilot/compare/v1.122.0...v1.123.0) (2026-11-06)
 
 
