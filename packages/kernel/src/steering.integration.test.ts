@@ -387,40 +387,82 @@ test("paused steers survive recovery and cannot bypass an input-control revision
 	assert.ok((await Promise.all(ids.map((id) => f.record(id)))).every((record) => record.status === "done"));
 });
 
-test("model failure after batch placement keeps exact per-message failure evidence across recovery", {
-	timeout: 15_000,
-}, async (t) => {
-	const f = await fixture(t);
-	const first = blocked(t);
-	let received: unknown[] | undefined;
-	f.faux.setResponses([
-		first.respond,
-		(transcript) => {
-			received = users(transcript);
-			return fauxAssistantMessage("", { stopReason: "error", errorMessage: "Invalid request" });
-		},
-	]);
-	await f.session.submit("start", "Start", "steer");
-	await first.started;
-	for (const id of ["a", "b"]) await f.session.submit(id, id, "steer");
-	first.release();
-	await f.session.harness.waitForIdle(context);
-	assert.deepEqual(received, ["Start", "a", "b"]);
-	const records = await Promise.all(["a", "b"].map((id) => f.record(id)));
-	for (const record of records) {
-		assert.equal(record.status, "unanswered");
-		if (record.status === "unanswered") assert.equal(record.reason, "model_error");
-		assert.ok(record.entry, "failed input keeps its original placed entry");
-	}
-	assert.notEqual(records[0]!.entry, records[1]!.entry);
-	await f.reopen();
-	assert.deepEqual(await f.session.submit("a", "No replay", "steer", false, true), {
-		delivery: "not_started",
-		reason: "failed",
+for (const stop of [false, true]) {
+	test(`${stop ? "Stop" : "model failure"} after batch placement keeps exact per-message receipt evidence across recovery`, {
+		timeout: 15_000,
+	}, async (t) => {
+		const f = await fixture(t);
+		const first = blocked(t);
+		const second = blocked(t, fauxAssistantMessage("", { stopReason: "error", errorMessage: "Invalid request" }));
+		let received: unknown[] | undefined;
+		f.faux.setResponses([
+			first.respond,
+			(transcript, options) => {
+				received = users(transcript);
+				return second.respond(transcript, options);
+			},
+		]);
+		await f.session.submit("start", "Start", "steer");
+		await first.started;
+		for (const id of ["a", "b"]) await f.session.submit(id, id, "steer");
+		first.release();
+		await second.started;
+		for (const id of ["a", "b"]) assert.equal((await f.record(id)).status, "placed");
+		if (stop) await f.session.abort();
+		else second.release();
+		await f.session.harness.waitForIdle(context);
+		assert.deepEqual(received, ["Start", "a", "b"]);
+		const records = await Promise.all(["a", "b"].map((id) => f.record(id)));
+		for (const record of records) {
+			assert.equal(record.status, "unanswered");
+			if (record.status === "unanswered") assert.equal(record.reason, stop ? "aborted" : "model_error");
+			assert.ok(record.entry, "settled input keeps its original placed entry");
+		}
+		assert.notEqual(records[0]!.entry, records[1]!.entry);
+		t.mock.method(NativeAdapter.prototype, "prepareInput", () =>
+			assert.fail("Receipt lookup must not rerun input hooks"),
+		);
+		for (const reopen of [false, true]) {
+			if (reopen) await f.reopen();
+			for (const id of ["a", "b"]) {
+				assert.equal(await f.session.submit(id, "No replay", "followUp"), undefined);
+				for (const dedupeOnly of [false, true])
+					assert.deepEqual(
+						await f.session.submit(
+							id,
+							"No replay",
+							"steer",
+							false,
+							true,
+							undefined,
+							undefined,
+							false,
+							undefined,
+							undefined,
+							dedupeOnly,
+						),
+						{ delivery: "not_started", reason: stop ? "stopped" : "failed" },
+					);
+			}
+			const reader = await openSessionReader(f.storageDir);
+			assert.ok(reader);
+			try {
+				assert.deepEqual(
+					await Promise.all(
+						["a", "b"].map((id) => reader.submissionByRequest(f.session.conversation.id, id, context)),
+					),
+					records,
+					"read-only lookup preserves the exact committed IDs, entries, reasons, details and timestamps",
+				);
+			} finally {
+				await reader.close(context);
+			}
+			assert.deepEqual(await Promise.all(["a", "b"].map((id) => f.record(id))), records);
+			await f.session.harness.waitForIdle(context);
+			assert.equal(f.faux.state.callCount, 2, "lookup and reopen never retry a settled effect");
+		}
 	});
-	assert.deepEqual(await Promise.all(["a", "b"].map((id) => f.record(id))), records);
-	assert.equal(f.faux.state.callCount, 2);
-});
+}
 
 test("all-mode automatic steers cannot answer a pending question at publication or after reopen", {
 	timeout: 15_000,

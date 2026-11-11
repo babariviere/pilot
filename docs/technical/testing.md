@@ -187,6 +187,16 @@ matrix covers arrivals during drain, duplicate request IDs, captured-row edits/r
 follow-ups, model failure, Stop, SQLite reopen, held-input revisions and pending questions. Queue
 controls cannot answer a question; only an explicit user reply releases its deferred automatic input.
 
+The replay receipt shortcut previously reported every `unanswered` submission as `stopped`, even when
+the saved reason was `model_error`. That mismatch exists in pre-planning source `c2ca28c7` and reproduces
+on `fb2f68c0`; it was not introduced by planning continuation. Fresh admission and completion already
+classify `aborted`/`reset` as stopped and other unanswered reasons as failed. Replay now uses that same
+mapping without changing the saved receipt or admitting work. The batch-placement regression covers
+model failure and explicit Stop, before and after SQLite reopen, ordinary and dedupe-only retries,
+no repeated input hooks/provider calls, and exact read-only receipt equality. Against the original
+shortcut, failure reports stopped incorrectly while the explicit Stop case passes. With the fix, both
+pass. This changes only the delivery report, not recovery, queue admission or Unknown/no-replay rules.
+
 The pinned `pi-durable@1.5.0` patch keeps final/reset boundaries steer-first like pi: follow-ups
 wait until no steer is selected, then retain their own one-at-a-time/all setting. It changes only
 selection, leaving atomic placement, individual submission ACKs and question holding unchanged.

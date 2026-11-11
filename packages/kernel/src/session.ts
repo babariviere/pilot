@@ -1554,8 +1554,12 @@ export class KernelSession {
 			const existing = await findInputReceipt(this.#storage, requestId, context);
 			if (existing) {
 				if (!reportDelivery) return;
+				// Classify the saved reason exactly as fresh admission does; unanswered is not always Stop.
 				return existing.status === "unanswered"
-					? { delivery: "not_started", reason: "stopped" }
+					? {
+							delivery: "not_started",
+							reason: existing.reason === "aborted" || existing.reason === "reset" ? "stopped" : "failed",
+						}
 					: { delivery: existing.status === "queued" ? "queued" : "delivered" };
 			}
 			const prepared = dedupeOnly ? content : await this.adapter.prepareInput(content);
