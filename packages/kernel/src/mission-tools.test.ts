@@ -1392,6 +1392,14 @@ for (const ask of [false, true]) {
 				);
 				assert.equal(!!invocation.isError, !coordinator, JSON.stringify(invocation.content));
 				assert.equal(admitted, before + (coordinator ? 1 : 0), "nested calls validate the current schema");
+				const beforeMap = admitted;
+				const map = await codemode.execute(
+					`map-${requests}`,
+					{ code: 'text(await tools.mission({action: "map"}));' },
+					undefined,
+				);
+				assert.equal(!!map.isError, role === undefined, JSON.stringify(map.content));
+				assert.equal(admitted, beforeMap + (role === undefined ? 0 : 1));
 			};
 			await check(initialRole);
 			for (const role of ["self", "other", "user", undefined, "self", undefined, "other"] as const) {

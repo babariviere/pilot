@@ -9,6 +9,7 @@ export const MISSION_TOOL = "mission";
 
 const MEMBER_ACTIONS = [
 	"get",
+	"map",
 	"brief",
 	"update",
 	"tasks",
@@ -68,6 +69,7 @@ Actions:
 Write limits (Unicode code points, including whitespace): decision text ${MISSION_WRITE_LIMITS.decision}, task title ${MISSION_WRITE_LIMITS.title}/body ${MISSION_WRITE_LIMITS.body}, brief ${MISSION_WRITE_LIMITS.brief}. Summarize and link supporting material. Only supplied write fields must fit; legacy reads are unchanged.
 When get reports planningVersion 1, only the coordinator/user plans or assigns work. Workers report their own execution status and log evidence; in_review is for PR review, not generic submission. Propose planning changes with comment. Workers cannot complete, claim/release, edit task definitions/criteria, briefs or decisions. Coordinator/user marks done separately; this is not review or merge approval.
 - get: without id, compact goal/status/brief revision, tasks grouped by phase with progress, your open tasks and references, other open tasks as [number,title,status,dependsOn?], and counts. Coordinator also gets member states, needs-you, PRs in review and pending/recent decision proposals. No history. Read before work and handoff. With id (task ID or number), one full task: body, completion record if delivered, dependency/dependent numbers, assignee chat, links with kind/PR state, artifacts and 15 recent events (pass activityCursor as activity cursor with taskId for older events). Prefer this targeted read to scanning lists.
+- map: read the canonical Wayfinder overview for this chat's current mission, with source currentness and interview history. No arguments. Same map as the native planning page; no edits, grants or execution authority. Unavailable planning context refuses, never means an empty map.
 - links, artifacts: references, filtered by taskId and filter open (default), done or all.
 - decisions: decisions not already in your prompt. Changes arrive as short notices; re-read, as current decisions supersede old prompt text.
 - comments: read open questions and feedback; check for an existing discussion before posting.

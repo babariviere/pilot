@@ -140,6 +140,7 @@ export async function nativePlanningFixture(options: { native?: boolean } = {}) 
 		home,
 		project,
 		projects,
+		sessions,
 		missionId,
 		owner,
 		hello,
@@ -192,6 +193,15 @@ export async function nativePlanningFixture(options: { native?: boolean } = {}) 
 			});
 		},
 		/** Fixture-only authorized coordinator publication, never exposed by production HTTP. */
+		async questions(questions: InterviewQuestion[]) {
+			const current = store.interviews.latest(missionId)!;
+			const op = operation(missionId, {
+				purpose: "interview-questions",
+				expected: { fence: current.fence, revision: current.revision },
+				questions,
+			} as { purpose: string });
+			assertAccepted(await journal.execute(op, (op, entry) => interviews().admit(op, entry.firstEntry)));
+		},
 		async plan(request: { purpose: string }, targetId = missionId) {
 			const op = operation(targetId, request);
 			const r = await journal.execute(op, (op, entry) => plans().admit(op, entry.firstEntry));

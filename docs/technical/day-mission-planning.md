@@ -266,8 +266,16 @@ agreement. Both see the same object.
 - `agreement` reports proposed, in-review or published, the brief revision and the published tasks
   with current number, title and status. Publication started no work.
 
-Gaps: other mission members (explorers, builders) have no map read yet; only the planning coordinator
-and the native page read it. Pilot's native app has no Decision or Knowledge detail screen, so those sources show as
+Current members, including read-only explorers, use `mission({action: "map"})` without arguments.
+It returns `{map}`, the exact same canonical projection. The read-only `MissionPlanReader`
+has no journal or mutation port. The daemon derives the mission from the supervised chat,
+requires an active same-project member and current enrolled planning owner, waits for durability,
+and rechecks membership events (including leave/rejoin), project configuration and canonical context.
+Nonmembers, archived chats, changed context and unavailable enrollment refuse rather than returning
+an empty map. This adds no planning writes, grants, model starts or execution.
+Historical settlements remain references to saved submitted rounds, not new answers.
+
+Gaps: Pilot's native app has no Decision or Knowledge detail screen, so those sources show as
 labels with their currentness, not links. Legacy missions without a saved interview have no map.
 
 ## Focused verification

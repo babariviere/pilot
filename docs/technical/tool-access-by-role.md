@@ -89,9 +89,13 @@ listed here because they depend on the user's servers, trust decisions and expos
 
 Ordinary members, including an Ask member, get these actions. Restricted specialist profiles do not:
 
-`get`, `brief`, `update`, `tasks`, `task`, `claim`, `release`, `decide`,
+`get`, `map`, `brief`, `update`, `tasks`, `task`, `claim`, `release`, `decide`,
 `decisions`, `links`, `artifacts`, `comments`, `activity`, `comment`, `resolve`,
 `attach`, `link`, `unlink`, `log`, `ticket`, `prGuidance`.
+
+`map` is read-only and takes no arguments. It reads the same canonical Wayfinder projection
+as the native planning page, after current membership/project checks and a durability barrier.
+It never grants planning ownership or execution. See [shared map](day-mission-planning.md).
 
 The coordinator additionally gets:
 

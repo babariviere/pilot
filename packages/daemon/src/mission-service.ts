@@ -39,6 +39,7 @@ import { type LinearClosingGuard, linearPrGuidance, unavailableClosingGuard } fr
 import type { NonCodeAcceptanceState } from "./mission-non-code-acceptance.ts";
 import { parseNonCodeDelivery } from "./mission-non-code-delivery.ts";
 import { MissionNotices } from "./mission-notices.ts";
+import { MissionPlanReader } from "./mission-plans.ts";
 import { MissionReports } from "./mission-reports.ts";
 import {
 	evaluateMissionReview,
@@ -51,6 +52,7 @@ import { parseTaskRefs } from "./mission-task-refs.ts";
 import { MissionTicketReader } from "./mission-ticket-context.ts";
 import { splitTicket } from "./mission-ticket-work.ts";
 import { type MissionActivityQuery, type MissionActor, type MissionStore, normalizeResourceWrite } from "./missions.ts";
+import { canonicalJSON } from "./operation-journal.ts";
 import type { ProjectStore } from "./projects.ts";
 import {
 	captureRetainedArtifact,
@@ -1772,6 +1774,39 @@ export class MissionService {
 		const who = (id: string | undefined) => (id === undefined ? "user" : id === sessionId ? "you" : id);
 		const str = (key: string) => (typeof args[key] === "string" ? (args[key] as string) : undefined);
 		switch (action) {
+			case "map": {
+				if (Object.keys(args).length) throw new Conflict("map takes no arguments");
+				const scope = () => {
+					const current = this.store.require(missionId);
+					const member = this.store.membership(sessionId);
+					const session = this.session(sessionId);
+					const project = this.projects.require(current.projectId);
+					const owner = current.coordinatorSessionId ? this.session(current.coordinatorSessionId) : undefined;
+					if (
+						!member?.active ||
+						member.missionId !== missionId ||
+						session.projectId !== project.id ||
+						session.archivedAt ||
+						!owner ||
+						owner.projectId !== project.id ||
+						owner.archivedAt ||
+						owner.mode === "ask" ||
+						owner.role ||
+						owner.control ||
+						this.sharing?.membership(sessionId)
+					)
+						throw new Conflict("Current same-project mission member and planning owner required");
+					return canonicalJSON({ member, project, context: this.store.allocationContextFence(missionId) });
+				};
+				const pin = scope();
+				const reader = new MissionPlanReader({
+					store: this.store,
+					authorize: () => {
+						if (scope() !== pin) throw new Conflict("Mission map access context changed");
+					},
+				});
+				return { map: (await reader.view(missionId)).map };
+			}
 			case "report": {
 				if (args.report !== undefined) return this.reports.write(missionId, sessionId, args.report);
 				const task = this.store.resolveTask(missionId, args.taskId ?? args.id);

@@ -136,9 +136,10 @@ export function planMarkdown(plan: MissionPlan): string {
 	].join("\n\n");
 }
 
-export class MissionPlans {
-	private readonly deps: Dependencies;
-	constructor(deps: Dependencies) {
+/** Canonical read projection. This reader has no journal or mutation port. */
+export class MissionPlanReader {
+	protected readonly deps: Pick<Dependencies, "store" | "authorize">;
+	constructor(deps: Pick<Dependencies, "store" | "authorize">) {
 		this.deps = deps;
 	}
 	private ownerContext(missionId: string) {
@@ -166,7 +167,7 @@ export class MissionPlans {
 			throw new Conflict("Planning owner changed");
 		return { mission, owner, ownerFence, interview, plan };
 	}
-	private context(missionId: string) {
+	protected context(missionId: string) {
 		return { ...this.ownerContext(missionId), evidence: this.deps.store.workflowConfirmationState(missionId) };
 	}
 	/** Saved round and plan only. Batch readers must await durable() and recheck the snapshot before returning. */
@@ -269,7 +270,7 @@ export class MissionPlans {
 		check();
 		return result;
 	}
-	private sources(missionId: string, sources: PlanSource[]): void {
+	protected sources(missionId: string, sources: PlanSource[]): void {
 		const { store } = this.deps;
 		for (const s of list(sources)) {
 			id(s.id);
@@ -292,6 +293,28 @@ export class MissionPlans {
 					throw new Conflict("Linked Knowledge revision unavailable");
 			} else throw new Conflict("Unsupported planning source");
 		}
+	}
+	protected prototypeCurrent(plan: MissionPlan, q: PlanQuestion): boolean {
+		const r = q.prototypeResult;
+		return (
+			!!r &&
+			r.questionDigest === planQuestionDigest(q) &&
+			r.contextDigest === prototypeContextDigest(plan) &&
+			this.deps.store
+				.artifactReferences(plan.missionId, r.artifact.artifactId)
+				.some((link) => link.sessionId === r.artifact.sessionId && link.revision === r.artifact.revision)
+		);
+	}
+}
+
+/** Coordinator writes remain separate from the member's read-only reader. */
+export class MissionPlans extends MissionPlanReader {
+	private readonly journal: OperationJournal;
+	private readonly validateRound?: Dependencies["validateRound"];
+	constructor(deps: Dependencies) {
+		super(deps);
+		this.journal = deps.journal;
+		this.validateRound = deps.validateRound;
 	}
 	private validate(plan: MissionPlan): void {
 		text(plan.destination, 2000);
@@ -389,7 +412,7 @@ export class MissionPlans {
 	async admit(op: DurableOperation, firstEntry = false): Promise<unknown> {
 		if (!isPlanOperation(op.kind)) throw new OperationRejected("Unsupported planning operation");
 		if (!firstEntry) {
-			if (canonicalJSON((await this.deps.journal.lookup(op))?.result) !== canonicalJSON(this.marker(op)))
+			if (canonicalJSON((await this.journal.lookup(op))?.result) !== canonicalJSON(this.marker(op)))
 				throw new Error("Unknown planning entry; no replay");
 			const prior = this.deps.store.plans.lookup(op);
 			if (!prior) throw new Error("Unknown planning effect; lookup only");
@@ -424,7 +447,7 @@ export class MissionPlans {
 				if ((pin.plan?.revision ?? 0) !== request.expectedRevision) throw new Conflict("Planning revision changed");
 			};
 			check();
-			await this.deps.journal.checkpoint(op, this.marker(op));
+			await this.journal.checkpoint(op, this.marker(op));
 			const result = this.deps.store.plans.write(op, request.expectedRevision, (state) => {
 				check();
 				const plan: MissionPlan = state ?? {
@@ -535,7 +558,7 @@ export class MissionPlans {
 						throw new Conflict("Unblocked grilling topic or current prototype evidence required");
 					const questions = request.questions;
 					validateQuestions(questions);
-					this.deps.validateRound?.(questions);
+					this.validateRound?.(questions);
 					const i = pin.interview;
 					const updated = this.deps.store.interviews.write(
 						op,
@@ -567,7 +590,7 @@ export class MissionPlans {
 					];
 					const i = pin.interview;
 					// Same transaction: no round without its native proposal binding. Prior answers stay saved.
-					this.deps.validateRound?.(questions);
+					this.validateRound?.(questions);
 					const updated = this.deps.store.interviews.write(
 						op,
 						{ purpose: "interview-questions", expected: { fence: i.fence, revision: i.revision }, questions },
@@ -607,17 +630,6 @@ export class MissionPlans {
 				throw new OperationRejected(error.message);
 			throw error;
 		}
-	}
-	private prototypeCurrent(plan: MissionPlan, q: PlanQuestion): boolean {
-		const r = q.prototypeResult;
-		return (
-			!!r &&
-			r.questionDigest === planQuestionDigest(q) &&
-			r.contextDigest === prototypeContextDigest(plan) &&
-			this.deps.store
-				.artifactReferences(plan.missionId, r.artifact.artifactId)
-				.some((link) => link.sessionId === r.artifact.sessionId && link.revision === r.artifact.revision)
-		);
 	}
 	private prototypeResult(plan: MissionPlan, questionId: string, result: PlanPrototypeResult): void {
 		const q = plan.questions.find((q) => q.id === questionId);
