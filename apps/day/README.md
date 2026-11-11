@@ -244,6 +244,11 @@ point, script or build uses it, and `tsconfig.json` excludes it.
   browsing. Design review only, not approved for production.
   [fixtures/prototype-work/README.md](fixtures/prototype-work/README.md) has
   the review steps.
+- `fixtures/prototype-wayfinder/`: a throwaway browser prototype (one HTML file)
+  comparing a visual Wayfinder map with a structured outline of the same mission.
+  Design review only, not approved for production.
+  [fixtures/prototype-wayfinder/README.md](fixtures/prototype-wayfinder/README.md)
+  has the review steps.
 
 ## What it shows
 

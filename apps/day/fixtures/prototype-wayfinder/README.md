@@ -1,0 +1,47 @@
+# Wayfinder map prototype (throwaway)
+
+A disposable browser prototype for design review. It is not Pilot app code and is not
+how Pilot is built: the app stays native (NSH). Nothing here is approved for production.
+Open `index.html` in a browser (double-click it). No server, install or network is needed.
+
+Question: how should a mission's Wayfinder map show what is settled, what is still
+unknown and what happens next, and let you check where each answer came from?
+
+- `?variant=A` **Map**: columns from Settled, through Open now and Waiting, to Fog of war and
+  the Destination. Lines show what waits for what and what fog became. Select a card to
+  inspect it; hover to trace its path.
+- `?variant=B` **Outline**: a document. What happens next comes first, then Unanswered
+  (grouped as interview, research and prototype), Settled with how each was settled,
+  Fog of war and Build tasks. Open a row to inspect it.
+- The bottom bar and the left/right arrow keys switch variants. The bottom bar's Panel holds
+  walkthroughs, free play, the current state, a side-by-side comparison and About.
+  Reset or reload starts over.
+- Both variants show the same mission, "Pilot on Linux desktops", taken from the Day mock
+  planning world (`apps/day/native/src/plan_world.rs`). They use the native map's records and
+  words: questions with a kind and a state, fog of war, original Decision and Knowledge
+  sources, interview rounds, agreement and tasks. No new contract or tracker.
+  Choosing a variant is feedback, not approval to build it.
+- Both variants use the visual language of the work prototype's variant A
+  (`../prototype-work`, inline on Today): the same page header, sections, rows, inline detail,
+  banners and evidence rows. Only the map-versus-outline structure differs.
+
+## Review in ten minutes
+
+1. Open the Panel, then Walkthroughs, then "What is settled, and why?". Press each step.
+   Open the original Decision 4 and interview round 1 records, then come back.
+2. Press → to switch to B and run the same walkthrough. Compare where your eye goes.
+3. Run "What needs me next?" in both variants: answer the interview, watch the map settle
+   it, and watch fog turn into a precise research question.
+4. Run "Research and a prototype report back" and "From map to build tasks". Check that
+   research, prototype findings, interviews, fog and build tasks read as different things,
+   and that nothing starts by itself.
+5. Free play: click around. Keys: ↑ ↓ move, Return opens, Esc closes or goes back,
+   ← → switch variant. In the interview: 1–9 pick, 0 opens "why", ← → move, ⌘Return submits.
+
+Feedback that helps most: which variant (or which mix) makes "settled, unknown, next" clearest,
+whether sources are easy enough to check, and what feels like too much.
+
+Shape follows the upstream `prototype` skill (UI.md and LOGIC.md) from mattpocock/skills at
+`4ae2317ddb22b046e26455e4f9c9b3aaaf62212d` (MIT, Copyright 2026 Matt Pocock), vendored in
+[`packages/kernel/skills/mission-planning/upstream/prototype`](../../../../packages/kernel/skills/mission-planning/upstream/prototype).
+Map words follow the vendored `wayfinder` skill in the same folder and Pilot's native map.
