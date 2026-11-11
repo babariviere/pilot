@@ -250,7 +250,7 @@ Close aborts idle waiters, joins entered tools/admissions and drains writes befo
 `planMap` in `mission-plan-map.ts` from the same pinned read: saved plan, active decisions, linked
 Knowledge, submitted interview history and published tasks. It is rebuilt on every read and never
 stored, so it cannot drift from the canonical records. The planning coordinator receives it through
-`mission_plan` `read`; Day's planning page maps only `view.map` for its questions, fog and
+`mission_plan` `read`; Pilot's native planning page maps only `view.map` for its questions, fog and
 agreement. Both see the same object.
 
 - Items keep question identity, kind, `waitingOn` (unsettled prerequisites), claims, `fromFog` and
@@ -267,7 +267,7 @@ agreement. Both see the same object.
   with current number, title and status. Publication started no work.
 
 Gaps: other mission members (explorers, builders) have no map read yet; only the planning coordinator
-and the native page read it. Day has no Decision or Knowledge detail screen, so those sources show as
+and the native page read it. Pilot's native app has no Decision or Knowledge detail screen, so those sources show as
 labels with their currentness, not links. Legacy missions without a saved interview have no map.
 
 ## Focused verification
