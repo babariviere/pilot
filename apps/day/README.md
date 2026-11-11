@@ -123,7 +123,7 @@ cd apps/day
 ./nsh.sh test Ritual.test.tsx    # start and end of day and standup notes (9 tests)
 ./nsh.sh test Plan.test.tsx      # New, interviews, maps and review, Today's Planning, and the planning boundary (21 tests)
 ./nsh.sh test Changes.test.tsx   # Changes: list, exact reopen, Later, lost answer, unavailable, Read again, diff selection and scroll, boundary (13 tests)
-./nsh.sh test Update.test.tsx    # updates and registration: save, pause, restore, selective resume, stale, lost answer, refusals, boundary (9 tests)
+./nsh.sh test Update.test.tsx    # updates and registration: save, pause, restore (help, ritual, question), selective resume, stale, lost answer, refusals, boundary (10 tests)
 ./nsh.sh test Attention.test.tsx # agent questions, unavailable help, drafts and links that report nothing (4 tests)
 ./nsh.sh test Native.test.tsx --target macos  # native captures and input, in output/
 (cd native && ../scripts/cargo test --locked) # Rust rules through mbx too
@@ -139,6 +139,12 @@ daemon): Today's planning list when it is empty, refused, over the limit or chan
 invalidations that never read the service, a page older than the list, and an answer saved to its
 own mission after another mission was opened, then flushed. All are part of the native `cargo test`
 above.
+
+`native/tests/connected_update.rs` plays the same root for updates with native-shaped `ServiceView`
+values (no daemon or updater): uncounted agents say Unknown, a prepared app guard and a refused or
+unavailable prepare are never "Updated", a flush carries the exact saved view and answers only the
+newest generation, a refused save answers no flush, and a cold restore shows its view once and
+sends nothing else.
 
 Script-only checks need neither Cargo nor NSH and never open a window:
 
@@ -447,14 +453,20 @@ whether the service is registered and answering, this app's and the
 service's versions, the offered update and the agents it touches. "Update…"
 asks Rust for a one-use confirmation that names the exact versions, how
 many working agents pause and how many paused by the user stay as they are.
-Confirming first saves every form to its own store (Today's drafts and
+A count Rust could not take says so ("Pilot cannot count them yet"), never
+zero. Confirming first saves every form to its own store (Today's drafts and
 interview answers); a refused save stops there and keeps the text. Then
 Rust gets one exact `SavedView`: the screen under the page, New's unsent
-goal, the item in front and each interview's question. After the restart
-the window starts fresh, shows that view again without sending anything
-and acknowledges it once; only then do the agents this update paused
-resume. A lost answer shows "Update not confirmed" and offers only Check
-again, which reads. A stopped run says what was not changed and what to do.
+goal, the item in front, open help, each interview's question and See all,
+the ritual on screen and its step, scroll offsets and the last focused
+field with its selection. After the restart the window starts fresh, shows
+that view again without sending anything and acknowledges it once. The
+acknowledgement only says the view was shown: the service resumes the agents
+it paused on its own, and a ritual comes back only on the same date. A lost
+answer shows "Update not confirmed" and offers only Check again, which reads.
+A refusal before anything started says so and leaves nothing unconfirmed. A
+stopped run says what was not changed and what to do. Restoration limits
+(preedit, late-loading screens) are listed in the update pipeline.
 Registration is explicit and its lost answer is only looked up. The default entry runs
 mock rules (`native/src/update.rs`). The connected entry now reaches the independent
 native updater through exact HostChannel methods and the existing root worker/journal.

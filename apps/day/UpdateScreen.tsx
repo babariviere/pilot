@@ -5,7 +5,7 @@
 // where the user is. A lost answer says so and offers only Check again,
 // which reads and sends nothing. A finished update is said only once Rust
 // reports the new version running.
-import { effect, keymap, Scroll, Text, View } from "nsh";
+import { effect, keymap, Scroll, signal, Text, View } from "nsh";
 import type {
 	AgentLine,
 	AgentState,
@@ -152,7 +152,11 @@ const AGENT_MARKS: Record<AgentState, MarkKind> = {
 	unknown: "needs",
 };
 
-/** What a confirmed update will do, line by line, from Rust's exact confirmation. */
+/**
+ * What a confirmed update will do, line by line, from Rust's exact
+ * confirmation. A count Rust could not take is said as unknown, never as
+ * none.
+ */
 function confirmLines(c: Confirmation): string[] {
 	if (c.kind === "register") {
 		return [
@@ -161,14 +165,20 @@ function confirmLines(c: Confirmation): string[] {
 		];
 	}
 	const lines = ["Saves your drafts and where you are first."];
-	if (c.pauses > 0) {
-		lines.push(`Pauses ${agents(c.pauses)} at a safe point, then resumes only ${c.pauses === 1 ? "it" : "them"}.`);
+	const pauses = c.pauses;
+	const keeps = c.keeps;
+	if (pauses === null || pauses === undefined) {
+		lines.push("Pauses working agents at a safe point. Pilot cannot count them yet.");
+	} else if (pauses > 0) {
+		lines.push(`Pauses ${agents(pauses)} at a safe point, then resumes only ${pauses === 1 ? "it" : "them"}.`);
 	} else if (c.kind === "app") {
 		lines.push("Agents keep working; only this app restarts.");
 	}
-	if (c.keeps > 0)
+	if (keeps === null || keeps === undefined) {
+		if (c.kind !== "app") lines.push("Agents you paused stay as you left them.");
+	} else if (keeps > 0)
 		lines.push(
-			`${sentence(agents(c.keeps))} you paused ${c.keeps === 1 ? "stays" : "stay"} as you left ${c.keeps === 1 ? "it" : "them"}.`,
+			`${sentence(agents(keeps))} you paused ${keeps === 1 ? "stays" : "stay"} as you left ${keeps === 1 ? "it" : "them"}.`,
 		);
 	if (c.restarts) lines.push("Day restarts and comes back to this page.");
 	return lines;
@@ -178,14 +188,32 @@ function say(message: string) {
 	updateMessage.set(message);
 }
 
+/**
+ * The offer the service refused to prepare, by revision and kind. It stays
+ * unavailable, with its reason, until Pilot reads the service again.
+ */
+const refusedOffer = signal("");
+
+function offerKey(service: ServiceView): string {
+	return service.offer ? `${service.revision}/${service.offer.kind}` : "";
+}
+
 /** Asks Rust for a one-use confirmation of the offer shown. It starts nothing. */
-function prepare(update: Update) {
+async function prepare(update: Update) {
 	const service = update.service();
 	const offer = service.offer;
 	if (!offer || updateBusy()) return;
+	updateBusy.set(true);
+	say("");
 	glide();
-	const prepared = update.feed.prepare({ kind: offer.kind, revision: service.revision });
-	say(prepared.status === "accepted" ? "" : prepared.message);
+	try {
+		const prepared = await update.feed.prepare({ kind: offer.kind, revision: service.revision });
+		if (prepared.status === "accepted") return;
+		say(prepared.message);
+		if (prepared.status === "rejected") refusedOffer.set(offerKey(service));
+	} finally {
+		updateBusy.set(false);
+	}
 }
 
 /** Drops the confirmation shown. Nothing was started. */
@@ -193,7 +221,7 @@ function cancel(update: Update) {
 	const pending = update.service().pending;
 	if (!pending || updateBusy()) return;
 	glide();
-	update.feed.cancel({ id: pending.id });
+	void update.feed.cancel({ id: pending.id });
 	say("");
 }
 
@@ -211,12 +239,12 @@ async function confirm(update: Update, day: Day, plans?: Plans) {
 		if (pending.kind !== "register") {
 			const forms = await saveForms(day, plans);
 			if (!forms.saved) {
-				update.feed.cancel({ id: pending.id });
+				void update.feed.cancel({ id: pending.id });
 				say(forms.message);
 				return;
 			}
 		}
-		const outcome = await update.feed.confirm({ confirmation: pending.id, view: captureView() });
+		const outcome = await update.feed.confirm({ confirmation: pending.id, view: captureView(day.today()) });
 		const run = update.service().run;
 		if (outcome.status !== "accepted" && outcome.message !== run?.message) say(outcome.message);
 	} finally {
@@ -229,6 +257,7 @@ async function check(update: Update) {
 	if (updateBusy()) return;
 	updateBusy.set(true);
 	say("");
+	refusedOffer.set("");
 	try {
 		const outcome = await update.feed.check();
 		if (outcome.message !== update.service().run?.message) say(outcome.message);
@@ -240,17 +269,18 @@ async function check(update: Update) {
 /**
  * After an update restarts the window, shows the saved view once, as a
  * new window: starts fresh, shows the place again, and tells Rust it was
- * shown so it resumes only the agents this update paused. Nothing the
- * view holds is sent.
+ * shown. That acknowledgement only says the view was shown: it resumes,
+ * starts, answers and confirms nothing, and nothing the view holds is sent.
+ * A lost or refused acknowledgement is not sent again.
  */
-export function bindRestore(update: Update, changes?: Changes) {
+export function bindRestore(update: Update, changes?: Changes, day?: Day) {
 	const shown = new Set<string>();
 	effect(() => {
 		const restore = update.service().restore;
 		if (!restore || shown.has(restore.id)) return;
 		shown.add(restore.id);
 		startFresh();
-		restoreView(restore.view, changes);
+		restoreView(restore.view, changes, day?.today());
 		void update.feed.restored({ id: restore.id });
 	});
 }
@@ -278,6 +308,7 @@ function ServiceLine(props: { service: ServiceView }) {
 function Offer(props: { update: Update }) {
 	const service = () => props.update.service();
 	const offer = () => service().offer;
+	const refused = () => refusedOffer() !== "" && refusedOffer() === offerKey(service());
 	const title = () => {
 		const o = offer();
 		if (!o) return "";
@@ -297,8 +328,8 @@ function Offer(props: { update: Update }) {
 					primary
 					testID="update-prepare"
 					label={offer()?.kind === "register" ? "Register…" : "Update…"}
-					disabled={!!service().blocked || updateBusy()}
-					onPress={() => prepare(props.update)}
+					disabled={!!service().blocked || updateBusy() || refused()}
+					onPress={() => void prepare(props.update)}
 				/>
 			</View>
 		</View>

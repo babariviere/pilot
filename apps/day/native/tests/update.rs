@@ -19,6 +19,18 @@ fn view() -> SavedView {
         goal: "Export chats as Markdown, exactly — 書き出し".into(),
         focused: "d-1".into(),
         questions: vec!["export-1/what".into()],
+        ritual: "standup/start".into(),
+        date: "2026-11-11".into(),
+        step: 2,
+        help: vec!["d-1/simpler".into()],
+        see_all: vec!["export-1".into()],
+        tab: String::new(),
+        today_y: 412.5,
+        today_row: "plan-export".into(),
+        y: 96.0,
+        input: "answer:export-1/what".into(),
+        start: 3,
+        end: 7,
     }
 }
 
@@ -59,7 +71,7 @@ fn states(desk: &UpdateDesk) -> Vec<AgentState> {
 }
 
 #[test]
-fn an_update_pauses_only_working_agents_and_restores_the_exact_view_once() {
+fn an_update_pauses_only_working_agents_and_restores_the_exact_view_once_without_resuming() {
     let mut desk = UpdateDesk::new(UpdateScenario::Available);
     let before = states(&desk);
     assert_eq!(
@@ -84,7 +96,8 @@ fn an_update_pauses_only_working_agents_and_restores_the_exact_view_once() {
     }
     assert!(paused);
     assert_eq!(ended.unwrap().status, OutcomeStatus::Accepted);
-    // Waiting for the new window: not finished, nothing resumed yet.
+    // Waiting for the new window: not finished. The service resumed the
+    // agents it paused on its own, before and apart from the window.
     let run = desk.view().run.clone().unwrap();
     assert_eq!(run.phase, UpdatePhase::Running);
     let restore = desk
@@ -93,13 +106,18 @@ fn an_update_pauses_only_working_agents_and_restores_the_exact_view_once() {
         .clone()
         .expect("a saved view to restore");
     assert_eq!(restore.view, view());
-    assert_eq!(states(&desk)[..2], [AgentState::Paused, AgentState::Paused]);
+    assert_eq!(
+        states(&desk),
+        [AgentState::Resumed, AgentState::Resumed, AgentState::Held]
+    );
 
     let id = UpdateRef {
         id: restore.id.clone(),
     };
-    assert_eq!(desk.restored(&id), Ok(true));
+    let agents = states(&desk);
+    assert_eq!(desk.restored(&id), Ok(()));
     assert!(desk.view().restore.is_none());
+    assert_eq!(states(&desk), agents, "the acknowledgement resumes nothing");
     // Used once: a second acknowledgement is refused, a forged one is stale.
     assert_eq!(
         desk.restored(&id).unwrap_err().status,
@@ -113,14 +131,6 @@ fn an_update_pauses_only_working_agents_and_restores_the_exact_view_once() {
         OutcomeStatus::Stale
     );
 
-    assert_eq!(
-        desk.apply(Stage::Resume).unwrap().status,
-        OutcomeStatus::Accepted
-    );
-    assert_eq!(
-        states(&desk),
-        [AgentState::Resumed, AgentState::Resumed, AgentState::Held]
-    );
     let run = desk.view().run.clone().unwrap();
     assert_eq!(run.phase, UpdatePhase::Done);
     assert!(run.steps.iter().all(|s| s.state == UpdateStepState::Done));
@@ -172,6 +182,15 @@ fn an_oversized_view_is_refused_whole_before_anything_pauses() {
     let mut big = view();
     big.goal = "x".repeat(VIEW_LIMIT + 1);
     assert_eq!(start(&mut desk, big), Err(OutcomeStatus::Rejected));
+    // Every text field counts, not only the goal; offsets must be plain.
+    let mut desk = UpdateDesk::new(UpdateScenario::Available);
+    let mut big = view();
+    big.help = vec!["x".repeat(VIEW_LIMIT / 2), "y".repeat(VIEW_LIMIT / 2)];
+    assert_eq!(start(&mut desk, big), Err(OutcomeStatus::Rejected));
+    let mut desk = UpdateDesk::new(UpdateScenario::Available);
+    let mut odd = view();
+    odd.today_y = f64::NAN;
+    assert_eq!(start(&mut desk, odd), Err(OutcomeStatus::Rejected));
     assert!(desk.view().run.is_none());
     assert!(desk.view().restore.is_none());
     assert_eq!(
@@ -321,7 +340,7 @@ fn offline_holds_updates_and_newer_takes_an_app_only_update() {
         [AgentState::Working, AgentState::Working, AgentState::Held]
     );
     let restore = newer.view().restore.clone().unwrap();
-    assert_eq!(newer.restored(&UpdateRef { id: restore.id }), Ok(false));
+    assert_eq!(newer.restored(&UpdateRef { id: restore.id }), Ok(()));
     assert_eq!(newer.view().run.as_ref().unwrap().phase, UpdatePhase::Done);
     assert_eq!(newer.view().state, ServiceState::Registered);
     assert_eq!(newer.view().app, "0.12.0");

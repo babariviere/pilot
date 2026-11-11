@@ -51,7 +51,7 @@ function Planning(props: { day: Day; plans: Plans }) {
 /** Today, or the mission, planning, Changes, ritual or update page the user opened. */
 export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; update?: Update }) {
 	updateEntry.set(props.update ?? null);
-	if (props.update) bindRestore(props.update, props.changes);
+	if (props.update) bindRestore(props.update, props.changes, props.day);
 	return (
 		<If
 			when={props.update && updateOpen()}

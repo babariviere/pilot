@@ -5,6 +5,7 @@ import { effect, keymap, Scroll, signal, Text, View, type ViewRef } from "nsh";
 import type { DoneEntry, MissionRow } from "pilot-day/native";
 import { decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
+import { keepScroll } from "./kept";
 import {
 	basisWord,
 	greeting,
@@ -433,8 +434,14 @@ function Standup(props: { day: Day }) {
 export function RitualScreen(props: { day: Day }) {
 	const at = () => ritualRoute();
 	const readable = () => props.day.today().freshness.state !== "unreadable";
+	const scroll = keepScroll("ritual");
 	return (
-		<Scroll class="flex-1 bg-background">
+		<Scroll
+			class="flex-1 bg-background"
+			contentOffset={scroll.contentOffset}
+			scrollEventThrottle={100}
+			onScroll={scroll.onScroll}
+		>
 			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-6">
 				<TopBar />
 				<If

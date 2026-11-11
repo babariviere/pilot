@@ -19,6 +19,7 @@ import {
 } from "./commands";
 import { COMMIT_KEY } from "./DecisionCard";
 import type { Day } from "./day";
+import { keepField } from "./kept";
 import { Action, InlineAction, Mark } from "./ui";
 import { anchors, focusFront, focusInput, messages, reports, reportText, setFor } from "./view";
 
@@ -61,6 +62,13 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 	const idle = () => a().delivery === "idle";
 	const text = () => reportText(a());
 	const input = signal<ViewRef | null>(null);
+	// The report keeps its focus and selection for an update's saved view.
+	const reportField = keepField(
+		`report:${id}`,
+		() => "today",
+		text,
+		(node) => input.set(node),
+	);
 	let stopEscape: (() => void) | null = null;
 
 	let laterButton: ViewRef | undefined;
@@ -181,16 +189,18 @@ export function ActionCard(props: { day: Day; action: HumanAction; index: number
 				</Text>
 				<Input
 					testID="report"
-					ref={(node) => input.set(node)}
+					ref={reportField.ref}
 					value={text()}
 					onChange={({ value }) => {
 						setFor(reports, id, value);
 						saveActionDraft(props.day, a());
 					}}
 					onFocus={() => {
+						reportField.focus();
 						stopEscape?.();
 						stopEscape = keymap.bind("escape", leave, { when: "always" });
 					}}
+					onSelectionChange={reportField.select}
 					onBlur={() => {
 						stopEscape?.();
 						stopEscape = null;

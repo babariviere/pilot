@@ -1,9 +1,36 @@
-// Transport adapter only. Keeps the existing Opus update screen and VM types.
+// Transport adapter only. Keeps the existing update screen and VM types.
 // Unknown writes are never repeated; the only recovery call is Check.
+// A definite refusal is said as it is: nothing was prepared, confirmed or
+// sent, and the screen goes back to what it showed. Only a lost or unknown
+// answer leaves the run Unknown and Check-only.
 import { signal } from "nsh";
 import type { ConfirmIntent, IntentOutcome, Prepared, PrepareIntent, ServiceView, UpdateRef } from "pilot-day/native";
-import { call, refusalOutcome } from "./bridge";
+import { call, type Refusal, refusalOutcome } from "./bridge";
 import type { Update } from "./updateFeed";
+
+/** Refusals after which the root may have entered the effect: Unknown, Check only. */
+const UNCERTAIN = new Set<Refusal>(["unknown", "lost", "storage", "invalid"]);
+
+/** What a refused prepare means: it never starts anything. */
+function prepareRefusal(refusal: Refusal, revision: number): Prepared {
+	const refused = (status: Prepared["status"], message: string): Prepared => ({ status, message, confirmation: null });
+	switch (refusal) {
+		case "unavailable":
+		case "denied":
+			return refused("rejected", "This update is not available here. Nothing was prepared or changed.");
+		case "unknown":
+			return refused(
+				"rejected",
+				"The last update or registration is not confirmed yet. Check again first; nothing was prepared.",
+			);
+		case "stale":
+			return refused("stale", "This changed since you read it. Check again; nothing was prepared.");
+		case "lost":
+			return refused("rejected", "Pilot did not hear back, so nothing is shown to confirm. Check again reads it.");
+		default:
+			return { ...refusalOutcome(refusal, revision), confirmation: null };
+	}
+}
 
 /** The exact native root's update projection, never mock data. */
 export async function connectedUpdates(window: string): Promise<Update | null> {
@@ -19,17 +46,20 @@ export async function connectedUpdates(window: string): Promise<Update | null> {
 		service.set(view);
 		for (const listener of listeners) listener(view);
 	};
-	const send = async (method: string, args: unknown): Promise<IntentOutcome> => {
+	/** One exact call. A reply's snapshot is published unless it is older than the run awaited. */
+	const send = async (method: string, args: unknown) => {
 		const result = await call<ServiceView>(window, method, args);
 		if (result.ok) {
 			if (!awaiting || result.snapshot.operation === awaiting) publish(result.snapshot);
 			if (result.snapshot.operation === awaiting && result.snapshot.run?.phase !== "unknown") awaiting = null;
-			return result.outcome ?? { status: "accepted", revision: service().revision, message: "" };
 		}
-		const outcome = refusalOutcome(result.refusal, service().revision);
-		// No retry, refresh mutation, manufactured success or inferred receipt.
-		return outcome;
+		return result;
 	};
+	const outcomeOf = (result: Awaited<ReturnType<typeof send>>): IntentOutcome =>
+		result.ok
+			? (result.outcome ?? { status: "accepted", revision: service().revision, message: "" })
+			: // No retry, refresh mutation, manufactured success or inferred receipt.
+				refusalOutcome(result.refusal, service().revision);
 	return {
 		service,
 		feed: {
@@ -40,23 +70,24 @@ export async function connectedUpdates(window: string): Promise<Update | null> {
 					listeners.delete(listener);
 				};
 			},
-			prepare(intent: PrepareIntent): Prepared {
-				void send("day.update.prepare", intent);
-				return { status: "accepted", message: "", confirmation: null };
+			async prepare(intent: PrepareIntent): Promise<Prepared> {
+				const result = await send("day.update.prepare", intent);
+				if (!result.ok) return prepareRefusal(result.refusal, service().revision);
+				const outcome = outcomeOf(result);
+				return { status: outcome.status, message: outcome.message, confirmation: result.snapshot.pending ?? null };
 			},
-			cancel(intent: UpdateRef): IntentOutcome {
-				void send("day.update.cancel", intent);
-				return { status: "accepted", revision: service().revision, message: "" };
+			async cancel(intent: UpdateRef): Promise<IntentOutcome> {
+				return outcomeOf(await send("day.update.cancel", intent));
 			},
-			confirm: (intent: ConfirmIntent) => {
+			confirm: async (intent: ConfirmIntent) => {
 				const current = service();
 				const pending = current.pending;
 				if (awaiting || consumed.has(intent.confirmation) || pending?.id !== intent.confirmation) {
-					return Promise.resolve({
+					return {
 						status: "stale",
 						revision: current.revision,
 						message: "This confirmation is no longer available. Check only.",
-					});
+					};
 				}
 				consumed.add(intent.confirmation);
 				awaiting = intent.confirmation;
@@ -73,10 +104,25 @@ export async function connectedUpdates(window: string): Promise<Update | null> {
 						next: "Check only; nothing will be resent.",
 					},
 				});
-				return send("day.update.confirm", intent);
+				const result = await send("day.update.confirm", intent);
+				if (!result.ok && !UNCERTAIN.has(result.refusal) && awaiting === intent.confirmation) {
+					// Refused before anything was entered: the screen shows what it
+					// showed, without the used confirmation. It is never sent again.
+					awaiting = null;
+					publish({ ...current, pending: null });
+					if (result.refusal === "capacity") {
+						return {
+							status: "rejected",
+							revision: current.revision,
+							message:
+								"Where you are is too large to save, so nothing was paused or updated. Your drafts stay as they are.",
+						};
+					}
+				}
+				return outcomeOf(result);
 			},
-			check: () => send("day.update.check", {}),
-			restored: (intent: UpdateRef) => send("day.update.restored", intent),
+			check: async () => outcomeOf(await send("day.update.check", {})),
+			restored: async (intent: UpdateRef) => outcomeOf(await send("day.update.restored", intent)),
 		},
 		close() {
 			closed = true;

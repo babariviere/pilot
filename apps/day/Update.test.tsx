@@ -68,6 +68,8 @@ test("an update saves every form, pauses only working agents, restores the windo
 	// read from its own store, not from this run's screen state.
 	await app.press("role:button[Back]");
 	await app.waitFor("Question 2 of 7 · 4 answered");
+	// The answer field had the keyboard focus, and has it again: Escape leaves it first.
+	await app.keyboard.press("escape");
 	await app.keyboard.press("escape");
 	await app.waitFor("Needs you");
 	// Up to date now: the top bar offers nothing.
@@ -110,6 +112,35 @@ test("a stale confirmation updates nothing, and a lost answer stays unconfirmed 
 	expect(app.shows("Resumed")).toBe(true);
 	expect(app.shows("Resume asked, not confirmed yet")).toBe(true);
 	expect(app.shows("Left as you paused it")).toBe(true);
+});
+
+test("the restored window shows the standup notes and open help again, and sends nothing", async () => {
+	const app = await open("./Update.tsx", desktop);
+	await app.waitFor("1 of 3");
+	await app.press("Say it simpler");
+	await app.waitFor("Pilot sends too many notifications. Choose when it should tell you about finished work.");
+	await app.press("Ask a question");
+	await app.waitFor("id:question");
+	await app.press("id:standup");
+	await app.waitFor("id:standup-notes");
+
+	await app.press("role:button[Update ready]");
+	await confirm(app, "Update from 0.9.2 to 0.9.3?");
+	await app.waitFor("Updated to 0.9.3");
+	// The service resumed the agents it paused; showing the view resumed nothing.
+	expect(app.shows("Resumed")).toBe(true);
+	await app.press("role:button[Back]");
+	// The ritual on screen came back, on the same date.
+	await app.waitFor("id:standup-notes");
+	await app.press("role:button[Back to Today]");
+	// Open help came back, the question field with it; nothing was asked or answered.
+	// (The question's own words come back from its draft store: the connected
+	// window's tests check that, since this mock does not restart Today.)
+	await app.waitFor("Pilot sends too many notifications. Choose when it should tell you about finished work.");
+	expect(app.shows("id:question")).toBe(true);
+	expect(app.shows("Asking…")).toBe(false);
+	expect(app.shows("has your answer")).toBe(false);
+	expect(app.shows("1 of 3")).toBe(true);
 });
 
 test("a failed save and an unproven job exit stop the update before anything is replaced", async () => {

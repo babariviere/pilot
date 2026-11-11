@@ -282,11 +282,9 @@ impl Record {
 }
 
 pub(crate) fn validate_view(view: &SavedView) -> Result<(), Error> {
-    let bytes = view.goal.len()
-        + view.id.len()
-        + view.focused.len()
-        + view.questions.iter().map(String::len).sum::<usize>();
-    if bytes > VIEW_LIMIT || view.questions.len() > 1024 {
+    if !view.offsets_valid() {
+        Err(Error::Invalid)
+    } else if view.text_bytes() > VIEW_LIMIT || view.entries() > VIEW_ENTRIES {
         Err(Error::Capacity)
     } else {
         Ok(())
@@ -639,8 +637,11 @@ pub(super) async fn handle(
                             .unwrap_or("")
                             .to_owned()
                     }),
-                pauses: 0,
-                keeps: 0,
+                // Native prepare does not count affected agents: Unknown,
+                // never zero. App-only enters no daemon reservation and
+                // pauses no agent by construction.
+                pauses: (intent.kind == UpdateKind::App).then_some(0),
+                keeps: None,
                 restarts: intent.kind == UpdateKind::App,
             };
             state.pending = Some((confirmation, selection.pin(), auth, window));

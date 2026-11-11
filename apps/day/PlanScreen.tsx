@@ -17,6 +17,7 @@ import type {
 } from "pilot-day/native";
 import type { Day } from "./day";
 import { InterviewDoc } from "./InterviewDoc";
+import { keepScroll } from "./kept";
 import type { Plans } from "./planning";
 import { closePlanning, fogOpen, put, roundOpen } from "./planView";
 import { TopBar } from "./TodayScreen";
@@ -474,8 +475,14 @@ export function PlanScreen(props: { day?: Day; plans: Plans; missionId: string; 
 		message.set(outcome.message);
 	});
 	keymap.bind("escape", closePlanning);
+	const scroll = keepScroll(`plan/${id}`);
 	return (
-		<Scroll class="flex-1 bg-background">
+		<Scroll
+			class="flex-1 bg-background"
+			contentOffset={scroll.contentOffset}
+			scrollEventThrottle={100}
+			onScroll={scroll.onScroll}
+		>
 			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-6">
 				<TopBar />
 				<View class="flex-row items-center gap-2">

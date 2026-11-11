@@ -6,6 +6,7 @@
 import { computed, keymap, Scroll, signal, Text, View } from "nsh";
 import type { MissionPage, MissionRow, PlanRow, ReportLine, TaskLine } from "pilot-day/native";
 import type { Day } from "./day";
+import { keepScroll } from "./kept";
 import { glide } from "./motion";
 import { stageMark, stageWord } from "./PlanScreen";
 import type { Plans } from "./planning";
@@ -290,8 +291,14 @@ export function MissionScreen(props: { day: Day; plans?: Plans; missionId: strin
 		if (confirming()) confirming.set(null);
 		else closeMission();
 	});
+	const scroll = keepScroll(`mission/${props.missionId}`);
 	return (
-		<Scroll class="flex-1 bg-background">
+		<Scroll
+			class="flex-1 bg-background"
+			contentOffset={scroll.contentOffset}
+			scrollEventThrottle={100}
+			onScroll={scroll.onScroll}
+		>
 			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-6">
 				<TopBar />
 				<View class="flex-row">

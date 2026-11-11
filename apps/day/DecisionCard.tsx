@@ -22,6 +22,7 @@ import {
 	toggleHelp,
 } from "./commands";
 import type { Day } from "./day";
+import { keepField } from "./kept";
 import { Action, Bars, EvidenceChip, HelpChip, InlineAction, Mark, type MarkKind } from "./ui";
 import {
 	anchors,
@@ -112,6 +113,19 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 	let commitButton: ViewRef | undefined;
 	const input = signal<ViewRef | null>(null);
 	const replyInput = signal<ViewRef | null>(null);
+	// The question and own-words fields keep their focus and selection for an update's saved view.
+	const questionField = keepField(
+		`question:${id}`,
+		() => "today",
+		() => questionText(d()),
+		(node) => input.set(node),
+	);
+	const replyField = keepField(
+		`reply:${id}`,
+		() => "today",
+		() => replyText(d()),
+		(node) => replyInput.set(node),
+	);
 	let stopEscape: (() => void) | null = null;
 
 	// The keyboard focus lands on the chosen option, else on the first help,
@@ -282,14 +296,18 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 					<View class="flex-row items-center gap-2">
 						<Input
 							testID="question"
-							ref={(node) => input.set(node)}
+							ref={questionField.ref}
 							value={questionText(d())}
 							onChange={({ value }) => {
 								setFor(drafts, id, value);
 								saveDecisionDraft(props.day, d());
 							}}
 							onSubmit={() => void ask(props.day, d())}
-							onFocus={bindEscape}
+							onFocus={() => {
+								questionField.focus();
+								bindEscape();
+							}}
+							onSelectionChange={questionField.select}
 							onBlur={unbindEscape}
 							submitBehavior="submit"
 							placeholder="Ask about this decision"
@@ -351,14 +369,18 @@ export function DecisionCard(props: { day: Day; decision: Decision; index: numbe
 			<If when={d().reply}>
 				<Input
 					testID="reply"
-					ref={(node) => replyInput.set(node)}
+					ref={replyField.ref}
 					value={replyText(d())}
 					disabled={!idle()}
 					onChange={({ value }) => {
 						setFor(replies, id, value);
 						saveDecisionDraft(props.day, d());
 					}}
-					onFocus={bindEscape}
+					onFocus={() => {
+						replyField.focus();
+						bindEscape();
+					}}
+					onSelectionChange={replyField.select}
 					onBlur={unbindEscape}
 					placeholder={d().options.length > 0 ? "Add detail, or answer in your own words" : "Your answer"}
 					class="min-h-8 rounded-lg border border-input bg-background px-3 py-1.5 text-sm text-foreground focus:border-primary"

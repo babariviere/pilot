@@ -28,6 +28,7 @@ import {
 	landingShort,
 	requestLine,
 } from "./changeWords";
+import { keepScroll } from "./kept";
 import { TopBar } from "./TodayScreen";
 import { Action, InlineAction, Mark, PatchDiff, RowLink, SectionTitle, TabItem, TabRow } from "./ui";
 import { setFor } from "./view";
@@ -160,8 +161,14 @@ function ChangeList(props: { changes: Changes }) {
 	const total = () => list().waiting.length + list().later.length + list().earlier.length;
 	keymap.bind("escape", backFromChanges);
 	const more = () => listMessage.set(props.changes.feed.more().message);
+	const scroll = keepScroll("changes");
 	return (
-		<Scroll class="flex-1 bg-background">
+		<Scroll
+			class="flex-1 bg-background"
+			contentOffset={scroll.contentOffset}
+			scrollEventThrottle={100}
+			onScroll={scroll.onScroll}
+		>
 			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-6">
 				<TopBar />
 				<View class="flex-row items-center">

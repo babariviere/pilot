@@ -225,27 +225,25 @@ impl UpdateFeed {
         })
     }
 
-    /// Says the new window showed its saved view. Native acknowledgement is
-    /// display-only; the daemon owns exact selective execution recovery.
-    /// Only the mock scenario plays a simulated resume stage here.
+    /// Says the new window showed its saved view. It is display-only, in
+    /// the mock rules too: it never resumes, starts or sends anything. The
+    /// service owns exact selective execution recovery.
     pub async fn restored(this: Instance<Self>, intent: UpdateRef) -> IntentOutcome {
         if let Some(window) = this.with(|f| f.native_window.clone()) {
             return Self::native_result(window, crate::bridge::Command::UpdateRestored(intent))
                 .await;
         }
-        let resumes = this.with_mut(|feed| {
-            let resumes = feed.desk.restored(&intent);
+        this.with_mut(|feed| {
+            let restored = feed.desk.restored(&intent);
             feed.publish();
-            resumes
-        });
-        match resumes {
-            Ok(true) => Self::play(&this, vec![Stage::Resume]).await,
-            Ok(false) => this.with(|feed| IntentOutcome {
-                status: OutcomeStatus::Accepted,
-                revision: feed.desk.view().revision,
-                message: String::new(),
-            }),
-            Err(outcome) => outcome,
-        }
+            restored.map_or_else(
+                |outcome| outcome,
+                |()| IntentOutcome {
+                    status: OutcomeStatus::Accepted,
+                    revision: feed.desk.view().revision,
+                    message: String::new(),
+                },
+            )
+        })
     }
 }

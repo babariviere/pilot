@@ -43,10 +43,15 @@ function forWindow(payload: unknown, window: string): payload is { version: 1; w
 	return !!p && p.version === 1 && p.window === window;
 }
 
+/** The newest flush generation the root asked for. An older one is not answered. */
+let latestFlush = -1;
+
 /**
  * Saves every form, then tells the root they are saved for `generation`.
  * Without an answer for every save, it says nothing: the root's lifecycle
  * owner then never sees the forms as saved, and nothing is closed on a guess.
+ * A request the root replaced while the saves ran is not answered either: its
+ * answer would be stale, and the newer request answers for the same forms.
  */
 async function flushForms(window: string, generation: number, today: ConnectedToday, plans: Plans, day: Day) {
 	const forms = await saveForms(day, plans);
@@ -54,8 +59,8 @@ async function flushForms(window: string, generation: number, today: ConnectedTo
 	const drafts = await today.saveDrafts();
 	await flushAll(plans);
 	const waiting = Object.keys(answerDrafts()).length + Object.keys(answerPicks()).length;
-	if (!drafts || waiting > 0) return;
-	await call(window, "day.flush.ack", { generation, view: captureView() });
+	if (!drafts || waiting > 0 || generation !== latestFlush) return;
+	await call(window, "day.flush.ack", { generation, view: captureView(day.today()) });
 }
 
 async function connect() {
@@ -92,7 +97,11 @@ async function connect() {
 	});
 	host.on("day.flush", (payload) => {
 		if (!forWindow(payload, window) || typeof payload.generation !== "number") return;
-		void flushForms(window, payload.generation, today, plans, day);
+		latestFlush = payload.generation;
+		// A failure sends no answer, so nothing closes on a guess; it is still said.
+		flushForms(window, payload.generation, today, plans, day).catch((error: unknown) => {
+			console.error("Day could not save its forms before a close or an update:", error);
+		});
 	});
 	connection.set({ state: "open", day, plans, update });
 	// A change the root sent while the first reads ran, before these listeners

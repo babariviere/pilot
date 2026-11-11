@@ -2,7 +2,7 @@
 // comes next. Read-only over the Rust read model, except through intents.
 // Movement comes only from agents' reports; a mission without a current
 // report is shown as such, never as not moving.
-import { effect, type JSX, keymap, Scroll, signal, Text, View, type ViewRef } from "nsh";
+import { effect, type JSX, keymap, Scroll, type ScrollRef, signal, Text, View, type ViewRef } from "nsh";
 import type { Decision, MissionRow } from "pilot-day/native";
 import { ActionCard } from "./ActionCard";
 import type { Changes } from "./changeFeed";
@@ -11,6 +11,7 @@ import { commit, later, pickNth, toggleHelp, writeReply } from "./commands";
 import { DayLine } from "./DayLine";
 import { DecisionCard, decisionMark } from "./DecisionCard";
 import type { Day } from "./day";
+import { todayScrollTo } from "./kept";
 import { Arrive } from "./motion";
 import { stageMark, stageWord } from "./PlanScreen";
 import type { Plans } from "./planning";
@@ -560,8 +561,18 @@ export function TodayScreen(props: { day: Day; plans?: Plans; changes?: Changes 
 	bindTriage(props.day, props.plans);
 	const plans = props.plans;
 	const changes = props.changes;
+	// A restored offset for a Today already on screen: scrolled to once, without animation.
+	const scroller = signal<ScrollRef | null>(null);
+	effect(() => {
+		const y = todayScrollTo();
+		const node = scroller();
+		if (y === null || !node) return;
+		todayScrollTo.set(null);
+		node.scrollTo({ y, animated: false });
+	});
 	return (
 		<Scroll
+			ref={(node) => scroller.set(node)}
 			class="flex-1 bg-background"
 			contentOffset={{ y: todayPlace.y }}
 			scrollEventThrottle={100}

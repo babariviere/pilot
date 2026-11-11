@@ -187,14 +187,21 @@ uses mock rules; the connected native path is described below. `UpdateFeed`
   incompatible, unknown), app and service versions, the offer, why it cannot start, the agents an
   update touches, the waiting confirmation, the latest run and a pending restore.
 - `prepare({kind, revision})` returns a one-use `Confirmation` with exact versions, pause and keep
-  counts and whether the app restarts. `confirm({confirmation, view})` uses it once. A forged,
-  reused or stale confirmation starts nothing. `cancel` drops it. `check()` only reads.
-- `SavedView` is exact (`#[prop(exact)]`) and limited to 64 KiB of text, refused whole when larger.
-  It holds what has no store of its own: the screen under the update page, New's unsent goal, the
-  Today item in front and each interview's question. Today's drafts and interview answers are
-  saved to their own stores first (`updateView.saveForms`); a refused save stops before any pause.
-- `restored({id})` acknowledges a restore once. Only then do upgrade-paused agents resume; agents
-  the user paused stay held. An app-only update pauses nothing.
+  counts and whether the app restarts. A count is `null` when it was not taken: the native root
+  never counts affected agents, so the page says Pilot cannot count them, never zero. An app-only
+  native confirmation pauses 0 by construction. `confirm({confirmation, view})` uses it once. A
+  forged, reused or stale confirmation starts nothing. `cancel` drops it. `check()` only reads.
+- `SavedView` is exact (`#[prop(exact)]`), limited to 64 KiB of text and 1024 list entries, and
+  refused whole when larger. It holds what has no store of its own: the screen under the update
+  page, New's unsent goal, the Today item in front, each interview's question and See all, open help
+  on Today's cards, the ritual on screen (with its date and the start of day's step), the open
+  change's tab, Today's scroll offset and the row that opened the screen, that screen's own scroll
+  offset, and the last focused text field with its UTF-16 selection. Fields after `questions` are
+  optional, so views saved before them still read. Today's drafts and interview answers are saved to
+  their own stores first (`updateView.saveForms`); a refused save stops before any pause.
+- `restored({id})` acknowledges a restore once. It only says the view was shown, in the mock rules
+  too: the mock service resumes the agents it paused as its own step before the window restarts.
+  A lost or refused acknowledgement is not sent again. An app-only update pauses nothing.
 
 The mock worlds cover: up to date; app and service update with drafts, working and user-held agents;
 stale target; lost answer settled only by Check; failed save; unproven job exit (durable refusal,
@@ -208,6 +215,13 @@ The connected entry now uses `connectedUpdates.ts`, not the mock feed. The indep
 and uses the same capture gate and notification as JSON confirmation. Root-only
 `host::updates::Selection` supplies the profile, trust, immutable capsule/proposal and existing
 app transaction. There is no usable production default or VM-selected path, credential or PID.
+
+`connectedUpdates.ts` answers `prepare` and `cancel` asynchronously with the root's real result. A
+refused prepare says why and starts nothing; a combined update the root reports unavailable stays
+unavailable until Check reads the service again. A confirmation refused before entry (stale,
+identity, capacity, busy, closed, offline) shows the page as it was, without the used confirmation;
+only a lost, unknown, storage or malformed answer leaves the run Unknown and Check-only. A flush
+request replaced by a newer generation while its saves run is not answered.
 
 The exact public methods are `day.update.read`, `prepare`, `confirm`, `cancel`, `check` and
 `restored` (each with the `day.update.` prefix). Each needs its own declared capability;
@@ -243,8 +257,17 @@ startup guard, but does not acknowledge startup or recover execution here. The l
 does not consume its own pending restore. `ServiceView.operation` prevents a previous run's
 success from settling a lost confirmation. Failed form saves keep the old engine alive.
 
+Restoration limits, from upstream NSH 0.4.0: scroll offsets come back through `contentOffset` when a
+screen mounts or `scrollTo` for a Today already on screen, so a screen whose content arrives after
+its first read can start nearer the top. Selection comes back through `setSelection` and focus;
+headless tests check the captured selection, not the restored one. An input method's unfinished
+composition (preedit) is not kept: NSH reports it but cannot set it again, so the native owner must
+commit or cancel it before the flush. The update page's own scroll, collapsed sections (fog of war,
+earlier rounds, snapshot details), a ritual's done/skipped marks and the Changes diff's scroll are
+not kept. Pause and start confirmations are never restored.
+
 Still unqualified: signed production Day identity/packaging, app delegate/menu lifecycle,
-native READY/COMMIT ownership, complete ritual/scroll/help restoration and joined GUI/daemon
+native READY/COMMIT ownership, visible native restoration and joined GUI/daemon
 update/rollback acceptance. Those remain the self-update/joined acceptance work. No live
 registration, update, restart, visible test, release or default switch is enabled by this seam.
 

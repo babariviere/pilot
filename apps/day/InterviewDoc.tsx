@@ -8,6 +8,7 @@
 import { cleanup, computed, effect, keymap, signal, Text, View, type ViewRef } from "nsh";
 import { Button, Input, Toggle } from "nsh/base";
 import type { Interview, PlanPage, Question, QuestionSection } from "pilot-day/native";
+import { keepField } from "./kept";
 import { Arrive, glide } from "./motion";
 import {
 	answerText,
@@ -152,6 +153,13 @@ function QuestionView(props: {
 	};
 	const toggles: ViewRef[] = [];
 	const field = signal<ViewRef | null>(null);
+	// The field keeps its focus and selection for an update's saved view.
+	const kept = keepField(
+		`answer:${key}`,
+		() => `plan/${props.page.missionId}`,
+		text,
+		(node) => field.set(node),
+	);
 	let stopEscape: (() => void) | null = null;
 	cleanup(() => stopEscape?.());
 	effect(() => {
@@ -248,7 +256,7 @@ function QuestionView(props: {
 						</View>
 						<View class="gap-1 pl-8">
 							<Input
-								ref={(node) => field.set(node)}
+								ref={kept.ref}
 								testID={`answer-${q().id}`}
 								accessibilityLabel={`Your answer to: ${q().prompt}`}
 								multiline
@@ -260,7 +268,9 @@ function QuestionView(props: {
 									editAnswer(props.plans, props.page.missionId, iv(), q(), value);
 								}}
 								onCompositionChange={({ composing }) => composeAnswer(props.plans, iv(), q(), composing)}
+								onSelectionChange={kept.select}
 								onFocus={() => {
+									kept.focus();
 									stopEscape?.();
 									stopEscape = keymap.bind("escape", leaveField, { when: "always" });
 								}}

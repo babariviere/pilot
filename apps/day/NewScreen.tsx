@@ -4,6 +4,7 @@
 // confirms the exact words, project and settings.
 import { keymap, Scroll, signal, Text, View } from "nsh";
 import { Input } from "nsh/base";
+import { keepField, keepScroll } from "./kept";
 import { glide } from "./motion";
 import { planMission, startChat } from "./planCommands";
 import type { Plans } from "./planning";
@@ -45,6 +46,9 @@ export function NewScreen(props: { plans: Plans }) {
 	const empty = () => goalDraft().trim() === "";
 	// The setup the user saw when they asked to start: the start names it.
 	const shownSetup = signal("");
+	// New's place: its scroll, and the goal field's focus and selection.
+	const scroll = keepScroll("new");
+	const goal = keepField("goal", () => "new", goalDraft);
 	// Escape works from the goal field too: the draft stays.
 	keymap.bind(
 		"escape",
@@ -55,7 +59,12 @@ export function NewScreen(props: { plans: Plans }) {
 		{ when: "always" },
 	);
 	return (
-		<Scroll class="flex-1 bg-background">
+		<Scroll
+			class="flex-1 bg-background"
+			contentOffset={scroll.contentOffset}
+			scrollEventThrottle={100}
+			onScroll={scroll.onScroll}
+		>
 			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-6">
 				<TopBar />
 				<View class="flex-row">
@@ -70,6 +79,7 @@ export function NewScreen(props: { plans: Plans }) {
 					</Text>
 					<Input
 						testID="goal"
+						ref={goal.ref}
 						accessibilityLabel="What you want done"
 						multiline
 						autoFocus
@@ -79,6 +89,8 @@ export function NewScreen(props: { plans: Plans }) {
 							goalDraft.set(value);
 							confirmingStart.set(false);
 						}}
+						onFocus={goal.focus}
+						onSelectionChange={goal.select}
 						placeholder="For example: let people export a chat as Markdown"
 						class="min-h-20 rounded-xl border border-input bg-background px-3.5 py-2.5 text-base text-foreground focus:border-primary"
 					/>

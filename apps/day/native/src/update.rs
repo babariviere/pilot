@@ -179,10 +179,12 @@ pub struct Confirmation {
     pub from: String,
     /// The version it installs.
     pub to: String,
-    /// Agents it will pause at a safe point, then resume.
-    pub pauses: u32,
-    /// Agents the user paused or stopped. It leaves them as they are.
-    pub keeps: u32,
+    /// Working agents it will pause at a safe point. None when Pilot could
+    /// not count them: the screen says Unknown, never zero.
+    pub pauses: Option<u32>,
+    /// Agents the user paused or stopped, which it leaves as they are. None
+    /// when Pilot could not count them.
+    pub keeps: Option<u32>,
     /// Whether this app restarts.
     pub restarts: bool,
 }
@@ -226,7 +228,8 @@ pub enum PlaceKind {
 
 /// Where the user was, and what they typed that has no other store.
 /// Answers and drafts are saved to their own stores first; this keeps the
-/// rest. Showing it again sends nothing.
+/// rest. Showing it again sends nothing. Every field after `questions` is
+/// optional, so a view saved before it existed still reads.
 #[derive(Debug, Clone, Default, PartialEq, JsObject, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 #[prop(exact)]
@@ -243,6 +246,82 @@ pub struct SavedView {
     pub focused: String,
     /// The planning question the user was on in each interview, as "interview/question".
     pub questions: Vec<String>,
+    /// The ritual on screen: "start", "end", "standup", or "standup/start"
+    /// and "standup/end" for notes opened from a ritual. Empty for none.
+    #[prop(default)]
+    pub ritual: String,
+    /// The local date the ritual was for, as Today read it. A ritual is
+    /// shown again only on the same date.
+    #[prop(default)]
+    pub date: String,
+    /// The start of day's step, from 0.
+    #[prop(default)]
+    pub step: u32,
+    /// Open help on Today's cards, as "item/kind".
+    #[prop(default)]
+    pub help: Vec<String>,
+    /// Interviews that showed all their questions at once.
+    #[prop(default)]
+    pub see_all: Vec<String>,
+    /// The tab of the kept change on screen: "diff", "history" or empty.
+    #[prop(default)]
+    pub tab: String,
+    /// Today's scroll offset, in points.
+    #[prop(default)]
+    pub today_y: f64,
+    /// The Today row that opened the screen under the update page, which
+    /// takes the keyboard focus when Today comes back. Empty for none.
+    #[prop(default)]
+    pub today_row: String,
+    /// The scroll offset of the screen under the update page when it is
+    /// not Today, in points.
+    #[prop(default)]
+    pub y: f64,
+    /// The text field that had the keyboard focus, by the screen's own
+    /// key, or empty.
+    #[prop(default)]
+    pub input: String,
+    /// Its selection start, in UTF-16 units.
+    #[prop(default)]
+    pub start: u32,
+    /// Its selection end, in UTF-16 units (equal to `start` for a caret).
+    #[prop(default)]
+    pub end: u32,
+}
+
+impl SavedView {
+    /// The bytes of text it holds, counted against [`VIEW_LIMIT`].
+    pub fn text_bytes(&self) -> usize {
+        let lists = self
+            .questions
+            .iter()
+            .chain(&self.help)
+            .chain(&self.see_all)
+            .map(String::len)
+            .sum::<usize>();
+        self.goal.len()
+            + self.id.len()
+            + self.focused.len()
+            + self.ritual.len()
+            + self.date.len()
+            + self.tab.len()
+            + self.today_row.len()
+            + self.input.len()
+            + lists
+    }
+
+    /// The entries in its lists, counted against [`VIEW_ENTRIES`].
+    pub fn entries(&self) -> usize {
+        self.questions.len() + self.help.len() + self.see_all.len()
+    }
+
+    /// Whether its offsets are plain, non-negative numbers.
+    pub fn offsets_valid(&self) -> bool {
+        [self.today_y, self.y]
+            .iter()
+            .all(|y| y.is_finite() && *y >= 0.0 && *y <= 10_000_000.0)
+            && self.start <= self.end
+    }
 }
 
 /// A saved view for a window that just started, used once.
@@ -333,6 +412,9 @@ pub struct Prepared {
 /// refused, never cut.
 pub const VIEW_LIMIT: usize = 64 * 1024;
 
+/// The most list entries a saved view keeps. More are refused, never cut.
+pub const VIEW_ENTRIES: usize = 1024;
+
 /// A mock run's stages. Each moves one step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Stage {
@@ -411,8 +493,8 @@ fn labels(kind: UpdateKind) -> &'static [&'static str] {
             "Pause agents at a safe point",
             "Update the app and the service",
             "Start them and check them",
-            "Restore where you were",
             "Resume the agents it paused",
+            "Restore where you were",
         ],
     }
 }
@@ -431,8 +513,8 @@ fn step_of(kind: UpdateKind, stage: Stage) -> Option<usize> {
         (_, Pause | Stop(Stopped::Jobs)) => 2,
         (_, Replace) => 3,
         (_, Start) => 4,
-        (K::Both, Restore) => 5,
-        (K::Both, Resume) => 6,
+        (K::Both, Resume) => 5,
+        (K::Both, Restore) => 6,
         (K::Service, Resume) => 5,
         _ => return None,
     })
@@ -592,14 +674,14 @@ impl UpdateDesk {
         }
     }
 
-    fn counts(&self, kind: UpdateKind) -> (u32, u32) {
+    fn counts(&self, kind: UpdateKind) -> (Option<u32>, Option<u32>) {
         let count = |state| self.view.agents.iter().filter(|a| a.state == state).count() as u32;
         let pauses = if matches!(kind, UpdateKind::Service | UpdateKind::Both) {
             count(AgentState::Working)
         } else {
             0
         };
-        (pauses, count(AgentState::Held))
+        (Some(pauses), Some(count(AgentState::Held)))
     }
 
     /// Prepares a one-use confirmation for the kind and revision shown.
@@ -687,11 +769,8 @@ impl UpdateDesk {
             ));
         }
         let view = &intent.view;
-        let size = view.goal.len()
-            + view.id.len()
-            + view.focused.len()
-            + view.questions.iter().map(String::len).sum::<usize>();
-        if size > VIEW_LIMIT {
+        if view.text_bytes() > VIEW_LIMIT || view.entries() > VIEW_ENTRIES || !view.offsets_valid()
+        {
             self.bump();
             return Err(outcome(
                 OutcomeStatus::Rejected,
@@ -726,7 +805,9 @@ impl UpdateDesk {
             (UpdateScenario::Trouble, _, _) => vec![Verify, Save, Pause, Replace, Lose],
             (_, UpdateKind::App, _) => vec![Verify, Save, Replace, Restore],
             (_, UpdateKind::Service, _) => vec![Verify, Save, Pause, Replace, Start, Resume],
-            (_, UpdateKind::Both, _) => vec![Verify, Save, Pause, Replace, Start, Restore],
+            // The service resumes the agents it paused on its own; the new
+            // window's acknowledgement only says its view was shown.
+            (_, UpdateKind::Both, _) => vec![Verify, Save, Pause, Replace, Start, Resume, Restore],
         };
         self.before = self.view.agents.iter().map(|a| a.state).collect();
         self.saved = Some(intent.view.clone());
@@ -865,6 +946,12 @@ impl UpdateDesk {
                     if agent.state == AgentState::Paused {
                         agent.state = AgentState::Resumed;
                     }
+                }
+                if kind != UpdateKind::Service {
+                    // The window still restarts; the run ends once it shows its view.
+                    self.mark(at, UpdateStepState::Done);
+                    self.bump();
+                    return None;
                 }
                 self.all_done();
                 self.view.offer = None;
@@ -1016,9 +1103,9 @@ impl UpdateDesk {
         outcome(OutcomeStatus::Accepted, self.view.revision, &message)
     }
 
-    /// The new window showed the saved view: it is used once. Returns
-    /// whether agents this update paused wait to resume.
-    pub fn restored(&mut self, intent: &UpdateRef) -> Result<bool, IntentOutcome> {
+    /// The new window showed the saved view: it is used once. It only
+    /// says the view was shown; it never resumes, starts or sends anything.
+    pub fn restored(&mut self, intent: &UpdateRef) -> Result<(), IntentOutcome> {
         let current = self
             .view
             .restore
@@ -1035,22 +1122,21 @@ impl UpdateDesk {
         self.restored.push(intent.id.clone());
         self.view.restore = None;
         let kind = self.view.run.as_ref().map(|r| r.kind).unwrap_or_default();
-        self.mark(step_of(kind, Stage::Restore), UpdateStepState::Done);
-        let resumes = self
-            .view
-            .agents
-            .iter()
-            .any(|a| a.state == AgentState::Paused);
-        if !resumes {
-            self.all_done();
-            let message = format!(
+        self.all_done();
+        let message = if kind == UpdateKind::App {
+            format!(
                 "Updated to {}. Pilot checked that the new version is the one running. Agents kept working.",
                 self.view.app
-            );
-            self.finish(UpdatePhase::Done, &message, "");
-            self.saved = None;
-        }
+            )
+        } else {
+            format!(
+                "Updated to {}. Pilot checked that the new version is the one running, and the service resumed only the agents it paused.",
+                self.view.app
+            )
+        };
+        self.finish(UpdatePhase::Done, &message, "");
+        self.saved = None;
         self.bump();
-        Ok(resumes)
+        Ok(())
     }
 }
