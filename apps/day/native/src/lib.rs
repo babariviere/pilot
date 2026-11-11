@@ -24,6 +24,10 @@ pub mod root;
 #[cfg(all(target_os = "macos", feature = "macos-host"))]
 pub mod macos_host;
 #[cfg(all(target_os = "macos", feature = "macos-host"))]
+pub mod macos_app;
+#[cfg(all(target_os = "macos", feature = "macos-host"))]
+pub mod bootstrap;
+#[cfg(all(target_os = "macos", feature = "macos-host"))]
 mod macos_capture;
 pub mod model;
 pub mod plan;

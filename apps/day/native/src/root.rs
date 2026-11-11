@@ -8,10 +8,11 @@
 //!
 //! The root owns the host's lifetime. Before disposal, the lifecycle owner
 //! must capture native inputs/preedit and await every form's saved ACK. Drop
-//! is not that capture. Then the owner stops the engine and awaits
+//! is not that capture. The production owner awaits
 //! [`DayRoot::close`], which fences new intents and joins entered HTTP, the
 //! WS task, queued drafts, the journal and the worker. Replacing the
-//! selection means doing exactly that, then opening a new root.
+//! selection means doing exactly that before disposing the engine, then opening
+//! a new root. Emergency/headless engine loss still joins all entered work.
 
 use async_channel::Receiver;
 use nsh_core::element::{EngineContext, engine_context};
@@ -43,8 +44,8 @@ impl DayRoot {
     }
 
     /// Fences new intents at once, then joins every entered request, the
-    /// queued drafts, the journal and the worker. Await it after the engine
-    /// stopped and before quitting or replacing the selection. Closing never
+    /// queued drafts, the journal and the worker. The production owner awaits it
+    /// before engine disposal, quitting or replacing the selection. Closing never
     /// stops, pauses or resumes agents, and never resends anything.
     pub fn close(&self) -> Receiver<Result<(), Error>> {
         self.host.close()

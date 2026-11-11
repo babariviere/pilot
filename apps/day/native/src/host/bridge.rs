@@ -229,9 +229,35 @@ async fn run(
             }
             Some(Work::AttentionDraft(key, value))
         }
-        Command::Flush(generation, _, view) => {
+        Command::Flush(generation, sequence, view) => {
             // FIFO barrier after the consumer awaited every form save. This
             // never proves native preedit capture or that every form registered.
+            if call
+                .gate
+                .lock()
+                .expect("bridge gate poisoned")
+                .require_saved_view
+                && view.is_none()
+            {
+                return Err(Error::Busy);
+            }
+            if let Some(view) = view {
+                super::updates::validate_view(view)?;
+                let record = super::window::SavedWindow {
+                    kind: "window-capture".into(),
+                    version: 1,
+                    source: t.source.clone(),
+                    window: call.window.clone(),
+                    generation: *generation,
+                    save_sequence: *sequence,
+                    view: serde_json::to_value(view).map_err(|_| Error::Invalid)?,
+                };
+                journal.save_window(record.clone())?;
+                *shared
+                    .saved_window
+                    .lock()
+                    .expect("native saved window poisoned") = Some(record);
+            }
             updates.save_capture(journal, &call.window, view.as_ref())?;
             journal.finish()?;
             let mut gate = call.gate.lock().expect("bridge gate poisoned");

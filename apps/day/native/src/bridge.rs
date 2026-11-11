@@ -65,6 +65,7 @@ pub fn restrict(mut bundle: nsh_engine::Bundle) -> Result<nsh_engine::Bundle, Er
 
 #[derive(Default)]
 pub(crate) struct Gate {
+    pub require_saved_view: bool,
     pub update_requested: Option<String>,
     pub notice_pending: bool,
     pub closed: bool,
@@ -407,6 +408,12 @@ impl Command {
 }
 
 impl Bridge {
+    pub(crate) fn require_saved_view(&self) {
+        self.gate
+            .lock()
+            .expect("bridge gate poisoned")
+            .require_saved_view = true;
+    }
     /// Bind an explicitly selected native root. Creating a bridge starts no work.
     pub fn new(root: DayRoot) -> Self {
         let channel = HostChannel::new();
@@ -689,8 +696,9 @@ impl Bridge {
         Ok(())
     }
 
-    /// Stop the engine first. Await this receiver before replacement or exit,
-    /// including partial-load failure. Does not stop or resume agents.
+    /// Fence admission and join the root. The production owner awaits this
+    /// before engine disposal/replacement/exit, including partial-load failure.
+    /// Emergency engine loss does not skip the join. Never stops/resumes agents.
     pub fn close(&self) -> async_channel::Receiver<Result<(), Error>> {
         self.retire();
         self.root.close()

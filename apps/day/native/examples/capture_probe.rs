@@ -57,7 +57,8 @@ import {Input} from 'nsh/base';
 const text=signal(''), line=signal(''), saved=signal('waiting');
 host.on('day.flush',async event=>{
   saved.set('captured:'+text()+'|'+line());
-  await host.call('day.flush.ack',{version:1,window:host.params.day.window,args:{generation:event.generation}},{timeout:0});
+  await host.call('day.flush.ack',{version:1,window:host.params.day.window,args:{generation:event.generation,
+    view:{place:'today',id:'',update:false,goal:text()+'|'+line(),focused:'',questions:[]}}},{timeout:0});
 });
 mount(()=><View class="flex-1"><Input multiline testID="editor" value={text()} onChange={({value})=>text.set(value)} class="h-24 w-96"/><Input testID="line" value={line()} onChange={({value})=>line.set(value)} class="h-8 w-96"/><Text testID="saved">{saved()}</Text></View>);
 "#).unwrap();
@@ -179,20 +180,31 @@ mount(()=><View class="flex-1"><Input multiline testID="editor" value={text()} o
     let deadline = Instant::now() + Duration::from_secs(10);
     let joined = loop {
         assert!(Instant::now() < deadline, "worker flush ACK deadline");
-        match owner.finish_close(final_generation) {
-            Ok(joined) => break joined,
+        match owner.seal_close(final_generation) {
+            Ok(sealed) => break sealed,
             Err(pilot_day_native::host::Error::Busy) => NSRunLoop::currentRunLoop()
                 .runUntilDate(&NSDate::dateWithTimeIntervalSinceNow(0.01)),
             Err(e) => panic!("close refused: {e:?}"),
         }
     };
-    assert_eq!(joined.recv_blocking().unwrap(), Ok(()));
+    assert!(matches!(
+        owner.seal_close(final_generation),
+        Err(pilot_day_native::host::Error::Stale)
+    ));
+    let joined = owner.close_sealed(joined).unwrap();
+    assert!(matches!(
+        owner.finish_close(final_generation),
+        Err(pilot_day_native::host::Error::Stale)
+    ));
+    let result = joined.recv_blocking().unwrap();
+    assert_eq!(result.result(), Ok(()));
+    owner.dispose_joined(result).unwrap();
     window.setContentView(None);
     drop(owner);
     drop(window);
     std::fs::remove_dir_all(directory).unwrap();
     println!(
-        "PASS hidden attached native preedit -> all-form barrier -> sealed stop -> joined root close"
+        "PASS hidden attached native preedit -> all-form barrier -> seal -> joined root close -> stop"
     );
 }
 

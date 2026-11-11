@@ -31,6 +31,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use transport::Transport;
+pub mod window;
 
 /// Native selection captured by the app, never inferred from a cached mission.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,6 +87,7 @@ pub(crate) fn valid_id(s: &str) -> bool {
 }
 
 struct Shared {
+    saved_window: Mutex<Option<window::SavedWindow>>,
     updates: Mutex<crate::update::ServiceView>,
     notices: Mutex<Vec<std::sync::Weak<dyn Fn() + Send + Sync>>>,
     ritual: Mutex<ritual::State>,
@@ -222,6 +224,16 @@ impl Drop for Handle {
 }
 
 impl NativeHost {
+    /// Passive exact-source capture, including New's unsent text. Reading it
+    /// restores, acknowledges, replays and resumes nothing.
+    pub fn saved_window(&self) -> Option<window::SavedWindow> {
+        self.0
+            .shared
+            .saved_window
+            .lock()
+            .expect("native saved window poisoned")
+            .clone()
+    }
     pub(crate) fn notice(&self, notice: &Arc<dyn Fn() + Send + Sync>) {
         self.0
             .shared
@@ -337,6 +349,7 @@ impl NativeHost {
             return Err(Error::Identity);
         }
         let shared = Arc::new(Shared {
+            saved_window: Mutex::new(None),
             updates: Mutex::new(updates::State::new(None).snapshot()),
             notices: Mutex::default(),
             ritual: Mutex::new(ritual::State::default()),
@@ -724,6 +737,13 @@ async fn run(
     selection: Option<updates::Selection>,
 ) -> Result<(), Error> {
     let mut updates = updates::State::new(selection);
+    *shared
+        .saved_window
+        .lock()
+        .expect("native saved window poisoned") = journal
+        .windows
+        .get(&window::SavedWindow::key(&t.source)?)
+        .cloned();
     updates.restore(&journal, &t.source).await;
     *shared.updates.lock().expect("native updates poisoned") = updates.snapshot();
     for record in journal.attention.values().filter(|r| r.source == t.source) {

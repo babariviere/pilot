@@ -3419,6 +3419,7 @@ name = "pilot-day-native"
 version = "0.1.0"
 dependencies = [
  "async-channel",
+ "dispatch2",
  "futures-util",
  "libc",
  "nsh-base",

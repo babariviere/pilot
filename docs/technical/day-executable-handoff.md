@@ -1,11 +1,126 @@
 # Day executable self-update handoff
 
-Status: **not production-qualified**. Source audit on 2026-11-11, against Pilot
+Status: **not production-qualified**. The Day-owned executable and deferred
+close owner are now implemented below. Controller/startup and signed packaging
+remain separate gates. The original source audit on 2026-11-11 was against Pilot
 `7075f155c78f5da6325707539f3e67d424ec9f65` and unmodified longbridge/nsh
 `v0.4.0`, peeled commit `e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3`.
 The tagged checkout had no tracked changes. No app, service, registration,
 signature or release was changed. This audit does not qualify the joined update
 sequence in [Day update pipeline](day-update-pipeline.md).
+
+## Implemented Day-owned bootstrap and close
+
+`apps/day/native/src/main.rs` is the `pilot-desktop` binary (feature
+`macos-host`). It uses `bootstrap.rs`, `macos_app::ApplicationOwner` and the
+same `macos_host::WindowOwner`, `Bridge` and sole `DayRoot` as the native
+fixtures. It does not call stock `run_app`. All application screens remain TSX.
+
+Bootstrap requires an explicit native selection: `--profile`, `--port`,
+`--daemon-id`, `--lineage-id`, `--project-id`, `--project-path` and `--journal`.
+These are native launch arguments, not screen inputs or credentials. There is
+no inferred profile or live registration. The production path first checks the
+fixed executable layout, compiled trust and existing `NativePlatform` signature,
+version and payload verification. Only then does it read the package's
+`Contents/Resources/nsh/bundle.nshc` through NSH's trusted reader and bind the
+host. It never uses `NSH_APP_DIR` or `NSH_CHUNK_DIR`; runtime-delivered chunks
+are disabled. A signed resource closure must contain the connected TSX entry
+with its exact declared host methods. The default mock bundle is not that
+closure. Missing compiled identity or signed payload refuses startup. No
+development bypass, mock fallback or compiler/signature receipt was added.
+
+The application owns its AppKit window, delegate and standard menus. Both the
+window's Close and application's Quit begin one deferred attempt:
+
+1. Fence new effects, commit current native preedit through NSH's ordinary
+   text events, record exact attached bytes and UTF-16 selection, and freeze
+   native editors. A transparent app-owned sibling intercepts window input
+   and keeps keyboard focus outside the NSH surface while saving. It is not
+   a replacement screen. Independent daemon work and Stop are unchanged.
+2. Ask the live TSX entry to save every form. The existing FIFO worker's ACK
+   follows admitted form saves and journal durability. Native windows require
+   the final `SavedView`, including New's unsent goal. The worker appends an
+   exact-source `window-capture` record to the existing private journal even
+   when no update is pending, then saves any update-specific capture. The
+   journal keeps the latest capture per source (256-source limit, included in
+   the existing global record and byte limits), with window identity,
+   generation and admitted save sequence. Missing view or failed persistence
+   cannot ACK. Native readiness and that exact generation's ACK are both
+   required. No timer fabricates an ACK.
+3. Recheck attached bytes and seal the generation plus last admitted save
+   sequence exactly once. Start `NativeHost::close` and await its entered I/O,
+   journal, WS and worker join off the AppKit thread, with engine/window alive.
+4. Consume the opaque joined result for that same seal. Only a successful
+   result permits engine stop and window disposal. Then the application loop
+   returns to the executable. Duplicate close/Quit callbacks do not join again.
+
+Escape or the app menu's Cancel Close cancels an unsealed attempt. A missing
+or failed form ACK reaches a 30-second deadline, cancels that exact attempt
+and restores native editing, focus and selection in the same engine. Old
+generation ACKs/deadlines and old root identities cannot close a newer attempt
+or root. Failed native capture also restores editing. A failed entered host
+close keeps the engine/window alive but does not pretend the sealed, closed
+host is editable or safe to replay; it remains a native recovery failure.
+Selection/profile replacement must close this owner completely before opening
+a new selected root; there is no reload or in-place root replacement API.
+Cancel keeps captured preedit as committed text; it does not reconstruct an
+IME's private composition session. `NativeHost::saved_window` exposes the exact
+saved capture only for the same native selection, including after reopen. That
+passive native read grants no action or startup authority. Automatic UI
+restoration and updater startup acknowledgement remain the later joined
+startup task; this change does not auto-restore or auto-send on cold open.
+
+`WindowOwner::seal_close` returns a non-cloneable `SealedClose` continuation.
+The later updater owner can retain it across the existing controller handoff,
+optionally enter the existing signed preparation once with `prepare_update`,
+then consume the same continuation with `close_sealed`. It must await entered
+preparation before controller/close completion. `Closing` yields an opaque
+`JoinedClose`, so callers cannot synthesize a successful join for disposal.
+There is no second seal, helper launch, READY or COMMIT in this seam. The
+executable currently refuses `--updater-receipt` rather than cold-starting and
+claiming restoration; verified successor startup belongs to the next handoff.
+
+The audit tables below describe the original stock-runner gap. Their missing
+controller/startup and packaging stages still apply; their missing executable
+and pre-disposal close ownership are superseded by this implementation. Hidden
+attached tests are component/native-boundary evidence, not visible desktop,
+signed distribution, whole-form production acceptance or replacement acceptance.
+
+Focused verification entry points (private dependencies/cache/target, installed
+Rust 1.99.1, `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_INCREMENTAL=0`, one Cargo job):
+
+```sh
+apps/day/scripts/cargo check --locked --offline --manifest-path apps/day/native/Cargo.toml --features macos-host --all-targets -j1
+apps/day/scripts/cargo test --locked --offline --manifest-path apps/day/native/Cargo.toml --features macos-host --test application_owner -j1
+apps/day/scripts/cargo run --locked --offline --manifest-path apps/day/native/Cargo.toml --features macos-host --example capture_probe -j1
+apps/day/scripts/cargo test --locked --offline --manifest-path apps/day/native/Cargo.toml --features macos-host --lib --test public_bridge --test connected_update --test boundary -j1
+```
+
+`application_owner` is a main-thread, `harness=false` hidden AppKit test. It
+constructs the production owner but never orders a window front or runs the
+visible application loop. `capture_probe` separately exercises attached field
+and multiline preedit plus the one-use seal/close continuation. Bridge and
+connected-update tests use headless components. None supplies a signed Day
+payload or claims successful helper handoff/startup.
+
+The focused macOS arm64 run on 2026-11-11 passed the all-targets check,
+99 library/boundary/Bridge/connected-update/update-host tests, the hidden
+application-owner test and attached capture probe. The hidden owner also
+checked missing-view ACK refusal, exact saved capture after reopen, a different
+profile's refusal to adopt it, and a real private-journal write refusal that
+keeps the engine/text alive. The executable builds and rejects the unsupported
+successor receipt before opening AppKit. These are isolated component and native
+boundary checks. The visible event loop, physical IME/keyboard/menu interaction,
+all production forms, signed package and successor restore are not accepted.
+
+Full `clippy::all` is blocked by unchanged large-enum warnings in host Work and
+update Command, plus two collapsible-if warnings in the existing native capture
+module. The all-targets scoped lint passes with only those existing lint classes
+and the previously reported items-after-test-module class allowed on the command
+line. No source lint suppression or unrelated enum refactor was added. Installed
+toolchain warnings about `rust-objcopy`'s missing `libLLVM.dylib` and the debug
+linker's large unwind section remain; checks still exit successfully. No shared
+toolchain/cache repair was attempted.
 
 ## What the released bootstrap actually supports
 

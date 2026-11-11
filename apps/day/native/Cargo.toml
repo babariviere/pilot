@@ -12,13 +12,25 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
+[[bin]]
+name = "pilot-desktop"
+path = "src/main.rs"
+required-features = ["macos-host"]
+
+[[test]]
+name = "application_owner"
+path = "tests/application_owner.rs"
+harness = false
+required-features = ["macos-host"]
+
 [features]
-# Gates the opt-in qualification runner module only. The platform crate is a
+# Gates the Day-owned executable and native embedding. The platform crate is a
 # plain (macOS-only) dependency: the NSH CLI resolves every nsh crate's
 # source from Cargo's resolve, which leaves an inactive optional one out.
 macos-host = []
 
 [target.'cfg(target_os = "macos")'.dependencies]
+dispatch2 = "=0.3.1"
 pilot-desktop-updater = { path = "../../desktop/updater", features = ["native-macos"] }
 nsh-platform-macos = { git = "https://github.com/longbridge/nsh", rev = "e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3" }
 

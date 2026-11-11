@@ -17,6 +17,14 @@ The default entry still connects to no daemon, account or user data. It is not t
 and it does not change the GPUI or Swift apps or their build. Those apps stay
 the shipping desktop apps until Day passes native acceptance and cutover.
 
+The native crate now also contains the Day-owned `pilot-desktop` executable
+(`macos-host` feature). It embeds the unchanged release's public AppView and
+keeps screens in TSX. Close and Quit save/seal forms and join the native root
+before stopping the engine. It requires verified packaged resources and an
+explicit native selection; it is not a new `pnpm day run` entry or a signed
+release. Controller handoff, verified successor startup, production packaging
+and visible acceptance remain separate. See [the executable handoff](../../docs/technical/day-executable-handoff.md).
+
 ## Upstream pin
 
 - NSH **v0.4.0**, peeled release commit
@@ -472,7 +480,7 @@ mock rules (`native/src/update.rs`). The connected entry now reaches the indepen
 native updater through exact HostChannel methods and the existing root worker/journal.
 A confirmation saves a capture request; only the native owner can seal the final form-save
 generation and enter the trusted controller. App guard preparation is not replacement,
-and a restore ACK resumes nothing. Production signed Day packaging, app-delegate handoff
+and a restore ACK resumes nothing. Production signed Day packaging, controller/startup handoff
 and joined update acceptance remain unavailable (see
 [the update pipeline](../../docs/technical/day-update-pipeline.md#day-update-controls)).
 

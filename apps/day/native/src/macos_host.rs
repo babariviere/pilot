@@ -1,9 +1,6 @@
-//! Public release-supported macOS wiring, for isolated qualification only.
-//!
-//! This is not the production close/update owner: stock `run_app` cannot
-//! capture native preedit and every form before its close/Quit stops the VM.
-//! No default entry point calls this module. Native/visible acceptance and
-//! live activation remain separate gates.
+//! Day's AppView lifetime. The application delegate uses this same owner.
+//! Capture/save failures never dispose the engine. Host close joins BEFORE
+//! engine disposal. No stock runner participates in the production path.
 use nsh_engine::Bundle;
 use nsh_platform_macos::{AppOptions, AppSource, run_app};
 
@@ -15,24 +12,80 @@ use crate::{
 /// App-owned public AppView boundary, separate from the stock runner's immediate
 /// close/Quit behavior. The embedding window routes EVERY close/reload/selection
 /// replacement here and fences its own commands while a generation is pending.
-/// This is opt-in qualification code, not a default entry point or live update.
+/// Used by Day's executable and isolated native fixtures. Not a live update.
 pub struct WindowOwner {
     view: std::rc::Rc<nsh_platform_macos::AppView>,
     bridge: Bridge,
     capture: Option<(u32, crate::macos_capture::Capture)>,
     loaded: bool,
+    sealed: Option<crate::bridge::FlushReceipt>,
+    closing: bool,
+    stopped: bool,
+}
+
+/// One-use continuation from the exact native/form seal to joined close.
+/// Hold it across the existing updater controller's preparation/COMMIT wait.
+/// It is not an update permit, READY, COMMIT or successful replacement.
+#[must_use]
+pub struct SealedClose {
+    receipt: crate::bridge::FlushReceipt,
+    update_entered: bool,
+}
+
+/// The entered host-close receiver, bound to the seal that started it.
+#[must_use]
+pub struct Closing {
+    receipt: crate::bridge::FlushReceipt,
+    joined: async_channel::Receiver<Result<(), Error>>,
+}
+
+/// Opaque joined result. Only Closing can construct it, never the VM/caller.
+#[must_use]
+pub struct JoinedClose {
+    receipt: crate::bridge::FlushReceipt,
+    result: Result<(), Error>,
+}
+impl Closing {
+    /// Wait off the AppKit thread. There is no retry or second close here.
+    pub fn recv_blocking(self) -> Result<JoinedClose, Error> {
+        let result = self.joined.recv_blocking().map_err(|_| Error::Unknown)?;
+        Ok(JoinedClose {
+            receipt: self.receipt,
+            result,
+        })
+    }
+}
+impl JoinedClose {
+    pub fn result(&self) -> Result<(), Error> {
+        self.result
+    }
 }
 
 impl WindowOwner {
     /// Own exactly the view created with this bridge's AppOptions. A second
     /// engine or stock run_app must never share this channel.
     pub fn new(main: nsh_platform_macos::objc2::MainThreadMarker, bridge: Bridge) -> Self {
-        let view = nsh_platform_macos::AppView::new(main, options(&bridge));
+        let configuration = options(&bridge);
+        Self::configured(main, bridge, configuration)
+    }
+
+    pub(crate) fn configured(
+        main: nsh_platform_macos::objc2::MainThreadMarker,
+        bridge: Bridge,
+        mut configuration: AppOptions,
+    ) -> Self {
+        // A caller may configure resources, never a second host channel.
+        bridge.require_saved_view();
+        configuration.host = bridge.channel();
+        let view = nsh_platform_macos::AppView::new(main, configuration);
         Self {
             view,
             bridge,
             capture: None,
             loaded: false,
+            sealed: None,
+            closing: false,
+            stopped: false,
         }
     }
 
@@ -54,13 +107,22 @@ impl WindowOwner {
         Ok(())
     }
 
+    pub(crate) fn close_unloaded(&mut self) -> Result<(), Error> {
+        if self.loaded {
+            return Err(Error::Busy);
+        }
+        // No engine or form was loaded. NativeHost retains itself during join.
+        let _joined = self.bridge.close();
+        Ok(())
+    }
+
     /// Capture actual attached text/preedit, freeze editors and THEN queue the
     /// engine's all-form barrier. A failure restores editing in the same engine.
     pub fn begin_close(
         &mut self,
         main: nsh_platform_macos::objc2::MainThreadMarker,
     ) -> Result<u32, Error> {
-        if self.capture.is_some() {
+        if self.capture.is_some() || self.closing || self.stopped {
             return Err(Error::Busy);
         }
         let generation = self.bridge.begin_capture()?;
@@ -83,6 +145,14 @@ impl WindowOwner {
         self.bridge.set_flush_wakeup(wake);
     }
 
+    pub fn identity(&self) -> &str {
+        self.bridge.window_identity()
+    }
+
+    pub fn ready(&self, generation: u32) -> bool {
+        self.bridge.flush_ready(generation)
+    }
+
     /// Cancel without replacing the root or replaying any native effect.
     pub fn cancel_close(&mut self, generation: u32) -> Result<(), Error> {
         if self
@@ -97,13 +167,9 @@ impl WindowOwner {
         Ok(())
     }
 
-    /// Recheck attached native bytes, atomically seal generation/save sequence,
-    /// stop the same engine, then return the JOINED root-close receiver. Await it
-    /// off the UI thread before replacement/quit. No upgrade is performed here.
-    pub fn finish_close(
-        &mut self,
-        generation: u32,
-    ) -> Result<async_channel::Receiver<Result<(), Error>>, Error> {
+    /// Recheck native bytes and atomically seal the final admitted save sequence.
+    /// This seals exactly once. No close or update has entered yet.
+    pub fn seal_close(&mut self, generation: u32) -> Result<SealedClose, Error> {
         let (current, capture) = self.capture.as_mut().ok_or(Error::Stale)?;
         if *current != generation {
             return Err(Error::Stale);
@@ -113,9 +179,68 @@ impl WindowOwner {
         if !self.bridge.sealed(receipt) {
             return Err(Error::Stale);
         }
+        self.sealed = Some(receipt);
+        Ok(SealedClose {
+            receipt,
+            update_entered: false,
+        })
+    }
+
+    /// Optional one-use entry into the existing signed preparation owner.
+    /// The caller must await this receiver before consuming the continuation
+    /// with close_sealed. It must not infer READY/COMMIT from this result.
+    pub fn prepare_update(
+        &self,
+        continuation: &mut SealedClose,
+        id: String,
+    ) -> Result<async_channel::Receiver<Result<crate::model::IntentOutcome, Error>>, Error> {
+        if self.sealed != Some(continuation.receipt) || continuation.update_entered {
+            return Err(Error::Stale);
+        }
+        continuation.update_entered = true; // uncertain entry is never replayed
+        self.bridge.commit_update(id, continuation.receipt)
+    }
+
+    /// Consume the same seal, without attempting a second seal. NativeHost
+    /// fences admission and joins entered work while the VM/window stay alive.
+    pub fn close_sealed(&mut self, continuation: SealedClose) -> Result<Closing, Error> {
+        if self.closing
+            || self.sealed != Some(continuation.receipt)
+            || !self.bridge.sealed(continuation.receipt)
+        {
+            return Err(Error::Stale);
+        }
+        self.closing = true;
+        Ok(Closing {
+            receipt: continuation.receipt,
+            joined: self.bridge.close(),
+        })
+    }
+
+    /// Called only with the successful joined-close result, on the main thread.
+    /// This is deliberately separate from starting the asynchronous drain.
+    pub fn dispose_joined(&mut self, joined: JoinedClose) -> Result<(), Error> {
+        if !self.closing || self.stopped || self.sealed != Some(joined.receipt) {
+            return Err(Error::Stale);
+        }
+        joined.result?;
+        // Entered work may have delivered an older view update while the host
+        // joined. Recheck before disposal as well, never lose changed bytes.
+        let (_, capture) = self.capture.as_ref().ok_or(Error::Stale)?;
+        capture.check()?;
         self.view.stop();
-        capture.engine_stopped();
-        Ok(self.bridge.close())
+        if let Some((_, capture)) = self.capture.as_mut() {
+            capture.engine_stopped();
+        }
+        self.stopped = true;
+        Ok(())
+    }
+
+    /// Compatibility for qualification callers. Still requires dispose_joined
+    /// after receiving the result; this never stops an unjoined root.
+    pub fn finish_close(&mut self, generation: u32) -> Result<Closing, Error> {
+        let continuation = self.seal_close(generation)?;
+        self.close_sealed(continuation)
     }
 }
 
@@ -123,7 +248,7 @@ impl WindowOwner {
 /// Native selection, credentials and paths are not launch parameters.
 pub fn options(bridge: &Bridge) -> AppOptions {
     AppOptions {
-        title: "Pilot Day qualification".into(),
+        title: "Pilot Day".into(),
         size: (1100, 820),
         host: bridge.channel(),
         ..AppOptions::default()
