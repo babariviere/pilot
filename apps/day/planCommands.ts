@@ -292,6 +292,22 @@ export async function planMission(plans: Plans) {
 	}
 }
 
+/** Looks up one saved creation outcome. It never resends or clears an unsent goal. */
+export async function checkCreation(plans: Plans) {
+	if (newBusy() || !plans.feed.checkNew) return;
+	newBusy.set(true);
+	newMessage.set("");
+	try {
+		const outcome = await plans.feed.checkNew();
+		newMessage.set(outcome.message);
+		if (outcome.status === "accepted" && outcome.missionId) openPlan(outcome.missionId);
+	} catch {
+		newMessage.set("Mission creation is not confirmed. Check again; nothing was sent again.");
+	} finally {
+		newBusy.set(false);
+	}
+}
+
 /** Starts one chat with exactly the goal, after the user confirmed it. */
 export async function startChat(plans: Plans, setup: string) {
 	if (newBusy()) return;

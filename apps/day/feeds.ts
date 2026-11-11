@@ -44,6 +44,9 @@ export type PlanningFeed = Pick<
 	/** Passive canonical source read. Missing support is unavailable, never an empty record. */
 	readSource?: (request: MapSourceRequest) => Promise<MapSourceRead>;
 	canReadInventory?: () => boolean;
+	prepareNew?: () => Promise<PlanOutcome>;
+	checkNew?: () => Promise<PlanOutcome>;
+	canCheckNew?: () => boolean;
 	startWork?: (
 		missionId: string,
 		shown: Pick<NonNullable<PlanPage["work"]>, "revision" | "digest" | "taskId" | "context">,

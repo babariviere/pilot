@@ -386,31 +386,31 @@ async fn run(
             value = planning(host, mission).unwrap_or(Value::Null)
         }
         Command::Create(_) | Command::CheckNew => {
-            if let Some(id) = enrollment {
-                let record = host
-                    .planning_enrollments()
-                    .into_iter()
-                    .find(|r| r["operationId"] == id);
-                if let Some(mission) = record
-                    .as_ref()
-                    .filter(|r| r["state"] == "accepted")
-                    .and_then(|r| r["missionId"].as_str())
-                {
-                    // Lookup ACK and current read are separate; failed refresh cannot erase the ACK.
+            let record = host
+                .planning_enrollments()
+                .into_iter()
+                .find(|r| match &call.command {
+                    Command::Create(intent) => r["setupDigest"] == intent.setup,
+                    Command::CheckNew => enrollment
+                        .as_ref()
+                        .is_some_and(|id| r["operationId"] == *id),
+                    _ => false,
+                });
+            // An older selected page is never the result of another creation.
+            if let Some(mission) = record
+                .as_ref()
+                .filter(|r| r["state"] == "accepted")
+                .and_then(|r| r["missionId"].as_str())
+            {
+                // Create already read its mission after the ACK. CheckNew
+                // must select the receipt's mission, not its enrollment ID.
+                // A confirmed receipt survives a failed passive refresh.
+                if matches!(&call.command, Command::CheckNew) {
                     let current = shared.epoch.load(Ordering::SeqCst);
                     let _ = super::read_planning(t, shared, current, mission).await;
                 }
+                value = json!({"missionId":mission,"page":planning(host, mission).ok()});
             }
-            // Only safe UI fields. The host keeps exact receipts and payloads.
-            let selected = shared
-                .planning_mission
-                .lock()
-                .expect("planning selection poisoned")
-                .clone();
-            value = match selected {
-                Some(id) => json!({"missionId":id,"page":planning(host, &id).ok()}),
-                None => Value::Null,
-            };
         }
         _ => {}
     }

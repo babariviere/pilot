@@ -13,6 +13,11 @@ import type { PlanPage, PlanRow } from "pilot-day/native";
 export function olderThanList(page: PlanPage, row: PlanRow | undefined): boolean {
 	const identity = row?.identity;
 	if (!page.available || !row || !identity) return false;
+	// Plan changes can leave the interview untouched. Both values already
+	// come from canonical plan reads, not a second currentness contract.
+	const revision = page.map?.revision ?? page.work?.revision;
+	if (typeof identity.planRevision === "number" && revision !== undefined && identity.planRevision > revision)
+		return true;
 	const iv = page.interview;
 	if (!iv) return row.needsYou;
 	if (iv.id === identity.interviewId) return identity.interviewRevision > iv.revision;

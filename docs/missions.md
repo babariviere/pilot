@@ -1,10 +1,21 @@
 # Missions
 
-In the upcoming native desktop preview, approving and publishing a plan do not start implementation.
+The upcoming connected native path starts with **New → Plan a mission**. Pilot saves the complete
+interview up front. Answer one question at a time, or choose **See all**; skipped questions still need
+answers before the final submission. Back-navigation keeps drafts. After a read failure, **Read again**
+keeps the earlier page visibly stale until a fresh read succeeds. If creation is not confirmed,
+**Check creation** looks up its saved receipt, including after reopening. It never creates it again.
+
+Approving and publishing a plan do not start implementation.
 After publication, **Start work** asks you to confirm one ready task and its model. **Start task**
 admits one background worker under existing project permissions and limits. Other tasks do not start
 automatically. If the acknowledgement is lost, use **Check Start**, not another Start. Admission is not
-progress or acceptance. Read the agent's report in the mission overview. The current app is unchanged.
+progress or acceptance. Read the agent's report in the mission overview. This connected path is
+qualified with an isolated daemon and faux workers, not enabled against your live profile. The installed
+[development Preview](development-preview.md) remains demo-only. The current app is unchanged.
+
+Direct chat creation, automatic continuation after human actions and budget increases are not supported
+by this connected path. Unavailable controls do not grant permission or start work.
 
 Use a mission when one goal needs several chats. Its **brief** describes the goal,
 **decisions** record agreed choices, and **tasks** track ownership and progress.

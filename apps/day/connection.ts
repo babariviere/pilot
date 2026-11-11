@@ -88,7 +88,11 @@ async function connect() {
 	}
 	const setup = await call<Setup | null>(window, "day.plan.prepare", {});
 	const today = new ConnectedToday(window, first.snapshot);
-	const planFeed = new ConnectedPlans(window, setup.ok ? (setup.snapshot ?? null) : null);
+	const planFeed = new ConnectedPlans(
+		window,
+		setup.ok ? (setup.snapshot ?? null) : null,
+		setup.ok ? null : setup.refusal,
+	);
 	// Every mission in planning, read once before Today shows, so a valid empty
 	// list and one that could not be read never look alike. Later changes
 	// arrive as invalidations and read the root's cached list.

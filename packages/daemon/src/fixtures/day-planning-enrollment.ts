@@ -11,7 +11,7 @@ import type { DurableOperation } from "@pilot/protocol";
 import { WebSocket, WebSocketServer } from "ws";
 import { planningWorkerFixture } from "../planning-workers.fixture.ts";
 
-const f = await planningWorkerFixture();
+const f = await planningWorkerFixture(undefined, { journey: process.argv.includes("--journey") });
 // Hold the actual first provider response, not a fabricated admission receipt.
 const releaseFile = join(f.root, "release-generation");
 const extension = join(f.root, "agent", "offline.ts");
@@ -32,7 +32,7 @@ await writeFile(
 	waitCode +
 		(await readFile(extension, "utf8"))
 			.replace("async transcript =>", "async (transcript, options) =>")
-			.replace("if(n===1 &&", "if(n===1) await waitForGeneration(options?.signal); if(n===1 &&"),
+			.replace("{ appendFileSync(", "{ if(n===0) await waitForGeneration(options?.signal); appendFileSync("),
 );
 const ledger = join(f.home, "commands.jsonl");
 let posts = 0,
@@ -45,12 +45,15 @@ let lost = false,
 	wrongProject = false;
 let dropBefore = false;
 let changeAfterJournal = false,
-	blockPost = false;
+	blockPost = false,
+	blockPlanRead = false;
 let release: (() => void) | undefined, entered: (() => void) | undefined;
 let enrollment: DurableOperation | undefined;
 let missionId: string | undefined;
 const sockets = new Set<WebSocket>();
 let forwardEvents = true;
+let holdEvents = false;
+const retainedEvents: Array<{ client: WebSocket; body: string }> = [];
 const wss = new WebSocketServer({ noServer: true });
 const proxy = createServer(async (req, res) => {
 	try {
@@ -119,8 +122,9 @@ const proxy = createServer(async (req, res) => {
 		if (writing && body.state === "accepted" && enrollment?.operationId === body.operationId)
 			missionId = body.result.missionId;
 		if (wrongProject && req.url === `/api/projects/${f.project.id}`) body.path = `${body.path}/different`;
-		if (writing && blockPost) {
+		if ((writing && blockPost) || (blockPlanRead && req.method === "GET" && req.url?.endsWith("/planning"))) {
 			blockPost = false;
+			blockPlanRead = false;
 			await new Promise<void>((r) => {
 				release = r;
 				entered?.();
@@ -147,6 +151,11 @@ proxy.on("upgrade", (req, socket, head) => {
 		const upstream = new WebSocket(`${f.base.replace("http:", "ws:")}${req.url}`);
 		sockets.add(upstream);
 		upstream.on("message", (bytes) => {
+			if (holdEvents) {
+				assert.ok(retainedEvents.length < 128, "bounded terminal WS ordering fixture");
+				retainedEvents.push({ client, body: bytes.toString() });
+				return;
+			}
 			if (forwardEvents && client.readyState === WebSocket.OPEN) client.send(bytes.toString());
 		});
 		client.on("close", () => {
@@ -175,6 +184,13 @@ try {
 		const command = JSON.parse(line);
 		if (command.action === "lost") lost = command.value;
 		if (command.action === "quiet") forwardEvents = !command.value;
+		if (command.action === "hold-events") {
+			holdEvents = command.value;
+			if (!holdEvents)
+				for (const event of retainedEvents.splice(0)) {
+					if (event.client.readyState === WebSocket.OPEN) event.client.send(event.body);
+				}
+		}
 		if (command.action === "drop-before") dropBefore = command.value;
 		if (command.action === "missing") missing = command.value;
 		if (command.action === "mismatch") mismatch = command.value ? (command.detail ?? "hash") : "";
@@ -183,6 +199,7 @@ try {
 		if (command.action === "change-after-journal") changeAfterJournal = command.value;
 		if (command.action === "configuration") await f.projectUpdate();
 		if (command.action === "block") blockPost = command.value;
+		if (command.action === "block-plan-read") blockPlanRead = command.value;
 		if (command.action === "entered" && !release)
 			await new Promise<void>((r) => {
 				entered = r;
@@ -197,6 +214,18 @@ try {
 		if (command.action === "held")
 			await f.changed(
 				() => !!id && f.store.planningWorkers.get(id)?.phase === "held" && f.sessions.get(owner!)?.state === "idle",
+			);
+		if (command.action === "published")
+			await f.changed(
+				() =>
+					!!id && f.store.planningWorkers.get(id)?.phase === "active" && f.sessions.get(owner!)?.state === "idle",
+			);
+		if (command.action === "reported")
+			await f.changed(
+				() =>
+					!!id &&
+					f.service.reports.latest(id).length === 1 &&
+					f.sessions.get(f.store.planningWorkers.get(id)?.start?.sessionId ?? "")?.state === "idle",
 			);
 		if (command.action === "owner" && id) f.store.update(id, { coordinatorSessionId: null });
 		if (command.action === "stop" && owner) await f.sessions.stop(owner);
@@ -225,6 +254,7 @@ try {
 				lookups,
 				profiles,
 				held: !!release,
+				heldEvents: retainedEvents.length,
 				requests: await f.requestCount(),
 				mission: id,
 				owner,

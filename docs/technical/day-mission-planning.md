@@ -3,8 +3,11 @@
 Backend and trusted kernel profile, with authenticated native saved-state reads and human answer
 ingress through the [Day host](day-native-host.md#saved-interviews-and-planning). Creation-only enrollment,
 worker-profile IPC and planning-only continuation are implemented for explicitly enrolled new flows.
-Desktop New/bootstrap, build admission, automatic research dispatch and live activation remain
-unavailable. Existing missions and running work are not enrolled, restarted or changed.
+Desktop New/bootstrap and explicit one-task admission now use the existing native host and durable
+operation ledger. Connected screen qualification runs with an isolated daemon and faux workers;
+the installed Preview remains demo-only. Automatic research dispatch, attention-driven continuation,
+budget increases and live activation remain unavailable. Existing missions and running work are not
+enrolled, restarted or changed.
 Transport fixtures are not native screen acceptance.
 
 ## Audit and reuse

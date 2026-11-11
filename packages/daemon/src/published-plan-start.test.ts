@@ -6,8 +6,8 @@ import { canonicalJSON, OperationJournal, payloadHash } from "./operation-journa
 import { planningWorkerFixture } from "./planning-workers.fixture.ts";
 import { Worker } from "./sessions.ts";
 
-async function published(t: Parameters<typeof planningWorkerFixture>[0]) {
-	const f = await planningWorkerFixture(t, { publishedPlan: true });
+async function published(t: Parameters<typeof planningWorkerFixture>[0], journey = false) {
+	const f = await planningWorkerFixture(t, journey ? { journey: true } : { publishedPlan: true });
 	const enrollment = await f.post(f.enrollment);
 	assert.equal(enrollment.state, "accepted", JSON.stringify(enrollment));
 	const missionId = enrollment.result.missionId as string;
@@ -15,6 +15,38 @@ async function published(t: Parameters<typeof planningWorkerFixture>[0]) {
 	await f.changed(
 		() => f.store.planningWorkers.get(missionId)?.phase === "held" && f.sessions.get(owner)?.state === "idle",
 	);
+	if (journey) {
+		const round = f.store.interviews.latest(missionId)!;
+		assert.equal(round.questions.length, 2);
+		const saved = await f.human(missionId, {
+			purpose: "interview-save",
+			expected: { fence: round.fence, revision: round.revision },
+			answers: round.questions.map((q) => ({
+				questionId: q.id,
+				questionDigest: interviewDigest(q),
+				selectedOption: q.options[0]!,
+				text: "Clarified exactly",
+			})),
+		});
+		assert.equal(saved.receipt.state, "accepted");
+		const answered = f.store.interviews.latest(missionId)!;
+		assert.equal(
+			(
+				await f.human(missionId, {
+					purpose: "interview-submit",
+					expected: { fence: answered.fence, revision: answered.revision },
+				})
+			).receipt.state,
+			"accepted",
+		);
+		await f.changed(
+			() =>
+				f.store.planningWorkers.get(missionId)?.phase === "held" &&
+				f.store.interviews.latest(missionId)!.fence.questionSetRevision > round.fence.questionSetRevision &&
+				f.sessions.get(owner)?.state === "idle",
+		);
+		assert.equal(f.store.tasks(missionId).length, 0, "Clarification submission admits no Build");
+	}
 	const i = f.store.interviews.latest(missionId)!;
 	assert.equal(i.questions.length, 1, f.logs());
 	assert.equal(
@@ -59,10 +91,10 @@ async function published(t: Parameters<typeof planningWorkerFixture>[0]) {
 	return Object.assign(f, { missionId, owner, op });
 }
 
-test("published agreement -> explicit Start -> real offline worker -> saved visible report; duplicate and reopen never create again", {
+test("clarification -> separate agreement -> explicit Start -> offline report; duplicate and reopen never create again", {
 	timeout: 90000,
 }, async (t) => {
-	const f = await published(t);
+	const f = await published(t, true);
 	const receipt = await f.post(f.op);
 	assert.equal(receipt.state, "accepted", JSON.stringify(receipt) + f.logs());
 	await f.changed(() => f.service.reports.latest(f.missionId).length === 1);

@@ -481,6 +481,8 @@ function inventoryRows(planning: Planning | null | undefined): PlanRow[] | null 
 export class ConnectedPlans implements PlanningFeed {
 	#window: string;
 	#setup: Setup | null;
+	#setupRead = 0;
+	#newUnknown = false;
 	#selected: string | null = null;
 	#pages = new Map<string, PlanPage>();
 	/** When each page was read, in this window's read order. */
@@ -490,6 +492,7 @@ export class ConnectedPlans implements PlanningFeed {
 	#inventory: Inventory = { state: "off", refusal: "unavailable" };
 	#inventoryReading: Promise<void> | null = null;
 	#refreshing: Promise<void> | null = null;
+	#refreshVersion = 0;
 	#again = false;
 	#reads = 0;
 	#saving = new Set<string>();
@@ -497,9 +500,10 @@ export class ConnectedPlans implements PlanningFeed {
 	#listeners = new Map<number, (planning: Planning) => void>();
 	#next = 0;
 
-	constructor(window: string, setup: Setup | null) {
+	constructor(window: string, setup: Setup | null, refusal: Refusal | null = null) {
 		this.#window = window;
 		this.#setup = setup;
+		this.#newUnknown = refusal === "unknown";
 	}
 
 	snapshot(): Planning {
@@ -510,8 +514,12 @@ export class ConnectedPlans implements PlanningFeed {
 			availability: inventory.state === "live" ? "live" : "unavailable",
 			reason: inventory.state === "live" ? "" : inventoryReason(inventory.refusal),
 			setup: setup ?? NO_SETUP,
-			canCreate: setup !== null,
-			createReason: setup ? "" : "This Pilot service has no planning setup for new missions here.",
+			canCreate: setup !== null && !this.#newUnknown,
+			createReason: this.#newUnknown
+				? "Mission creation is not confirmed. Check its saved receipt; do not create it again."
+				: setup
+					? ""
+					: "This Pilot service has no planning setup for new missions here.",
 			canStart: false,
 			startReason: "Starting one chat directly is not available here yet.",
 			plans: inventory.state === "live" ? inventory.rows : [],
@@ -629,11 +637,45 @@ export class ConnectedPlans implements PlanningFeed {
 
 	/** Reads the setup for New again: passive, it creates nothing. */
 	async prepare(): Promise<void> {
+		await this.prepareNew();
+	}
+
+	/** Reads setup only. Pending creation stays lookup-only, including after reopen. */
+	async prepareNew(): Promise<PlanOutcome> {
+		const version = ++this.#setupRead;
+		this.#setup = null;
+		this.#publish();
 		const r = await call<Setup | null>(this.#window, "day.plan.prepare", {});
+		if (version !== this.#setupRead) return this.#refused("stale", null);
 		if (r.ok) {
 			this.#setup = r.snapshot ?? null;
-			this.#publish();
+			this.#newUnknown = false;
+		} else {
+			this.#setup = null;
+			// A lost passive setup read cannot itself have created a mission.
+			if (r.refusal === "unknown") this.#newUnknown = true;
 		}
+		this.#publish();
+		return r.ok ? this.#outcome(r.outcome, null) : this.#refused(r.refusal, null);
+	}
+
+	canCheckNew(): boolean {
+		return this.#newUnknown;
+	}
+
+	/** Checks the root's exact saved enrollment. Never resends the goal. */
+	async checkNew(): Promise<PlanOutcome> {
+		const r = await call<{ missionId: string; page: PlanPage | null } | null>(this.#window, "day.plan.checkNew", {});
+		if (!r.ok) return this.#refused(r.refusal, null);
+		if (r.outcome?.status === "accepted" || r.outcome?.status === "rejected") this.#newUnknown = false;
+		const made = r.snapshot;
+		if (r.outcome?.status === "accepted" && made) {
+			this.#selected = made.missionId;
+			this.#take(made.missionId, made.page);
+		}
+		this.#publish();
+		void this.prepare();
+		return this.#outcome(r.outcome, r.outcome?.status === "accepted" ? (made?.missionId ?? null) : null);
 	}
 
 	/**
@@ -643,6 +685,11 @@ export class ConnectedPlans implements PlanningFeed {
 	 * collapse into one more read.
 	 */
 	refresh(): Promise<void> {
+		// The notice already invalidated the shown read. Do not leave answer
+		// controls live while cached snapshot calls wait behind a native read.
+		this.#refreshVersion += 1;
+		for (const missionId of this.#pages.keys()) this.#older.add(missionId);
+		this.#publish();
 		if (this.#refreshing) {
 			this.#again = true;
 			return this.#refreshing;
@@ -659,12 +706,15 @@ export class ConnectedPlans implements PlanningFeed {
 	}
 
 	async #readCached(): Promise<void> {
+		const version = this.#refreshVersion;
 		const id = this.#selected;
 		for (const missionId of this.#pages.keys()) if (missionId !== id) this.#older.add(missionId);
-		this.#takeInventory(await call<Planning>(this.#window, "day.plan.inventorySnapshot", {}));
+		const inventory = await call<Planning>(this.#window, "day.plan.inventorySnapshot", {});
+		if (version !== this.#refreshVersion) return;
+		this.#takeInventory(inventory);
 		if (!id) return;
 		const r = await call<PlanPage>(this.#window, "day.plan.snapshot", { missionId: id });
-		if (this.#selected !== id) return;
+		if (this.#selected !== id || version !== this.#refreshVersion) return;
 		if (r.ok) this.#take(id, r.snapshot);
 		else {
 			this.#older.add(id);
@@ -695,6 +745,9 @@ export class ConnectedPlans implements PlanningFeed {
 
 	async open(missionId: string): Promise<PlanOutcome> {
 		this.#selected = missionId;
+		// Navigation does not renew a cached page. Until this read succeeds,
+		// its answers and Start must not look current even without a notice.
+		this.#older.add(missionId);
 		this.#publish();
 		const r = await call<PlanPage>(this.#window, "day.plan.read", { missionId });
 		if (!r.ok) {
@@ -715,11 +768,16 @@ export class ConnectedPlans implements PlanningFeed {
 			"day.plan.create",
 			intent,
 		);
+		if ((!r.ok && (r.refusal === "unknown" || r.refusal === "lost")) || (r.ok && r.outcome?.status === "unknown")) {
+			this.#newUnknown = true;
+			this.#setup = null;
+			this.#publish();
+		}
 		// One shown setup is used once; read the next one, which creates nothing.
 		void this.prepare();
 		if (!r.ok) return this.#refused(r.refusal, null);
 		const made = r.snapshot;
-		if (!made) return this.#outcome(r.outcome, null);
+		if (!made || r.outcome?.status !== "accepted") return this.#outcome(r.outcome, null);
 		this.#selected = made.missionId;
 		this.#take(made.missionId, made.page);
 		return this.#outcome(r.outcome, made.missionId);
@@ -758,6 +816,7 @@ export class ConnectedPlans implements PlanningFeed {
 		if (this.#starting.has(missionId) || this.#unknownStarts.has(missionId))
 			return this.#refused("unknown", missionId);
 		this.#starting.add(missionId);
+		this.#older.add(missionId);
 		this.#publish();
 		const r = await call<PlanPage | null>(this.#window, "day.plan.startWork", { missionId, intent });
 		this.#starting.delete(missionId);
@@ -766,11 +825,13 @@ export class ConnectedPlans implements PlanningFeed {
 			this.#publish();
 			return this.#refused(r.refusal, missionId);
 		}
+		if (r.outcome?.status === "unknown") this.#unknownStarts.add(missionId);
 		this.#take(missionId, r.snapshot);
 		return this.#outcome(r.outcome, missionId);
 	}
 
 	async checkWork(missionId: string): Promise<PlanOutcome> {
+		this.#older.add(missionId);
 		const r = await call<PlanPage | null>(this.#window, "day.plan.checkWork", { missionId });
 		if (!r.ok) return this.#refused(r.refusal, missionId);
 		if (r.outcome?.status === "accepted" || r.outcome?.status === "rejected") this.#unknownStarts.delete(missionId);

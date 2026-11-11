@@ -28,7 +28,7 @@ import { TerminalManager } from "./terminals.ts";
 const exec = promisify(execFile);
 export async function planningWorkerFixture(
 	t?: TestContext,
-	options: { followup?: boolean; publishedPlan?: boolean } = {},
+	options: { followup?: boolean; publishedPlan?: boolean; journey?: boolean } = {},
 ) {
 	const root = await realpath(await mkdtemp(join(tmpdir(), "planning-worker-")));
 	const home = join(root, "home"),
@@ -98,6 +98,7 @@ const tasks=decode(await tools.mission({action:"tasks",mine:true}));
 const task=(tasks.tasks??tasks)[0];
 const source=decode(await tools.mission({action:"report",taskId:String(task.number)}));
 return await tools.mission({action:"report",report:{version:1,reportId:"offline-result",taskId:source.taskId,source:source.source,expectedPreviousId:source.expectedPreviousId,movement:"moving",summary:"Offline background worker reported",nextStep:"User checks results",evidence:["Faux provider, no network"]}});`;
+	const builds = options.publishedPlan || options.journey || false;
 	await writeFile(
 		extension,
 		`
@@ -105,10 +106,11 @@ import { appendFileSync } from 'node:fs';
 import { fauxProvider, fauxAssistantMessage } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai/providers/faux"))};
 export default pi => {
  const faux=fauxProvider(); let n=0;
- const respond = (text) => async transcript => { appendFileSync(${JSON.stringify(requests)},JSON.stringify({request:++n})+'\\n'); if(!${options.publishedPlan} && n===1 && JSON.stringify(transcript.messages).includes('Continue planning from this exact submitted interview')) return fauxAssistantMessage('Recovered planning continuation, no build.'); if(${options.publishedPlan} && n===1 && JSON.stringify(transcript.messages).includes('Work on mission task')) return fauxAssistantMessage({type:'toolCall',id:'background-report',name:'codemode',arguments:{code:${JSON.stringify(reportCode)}}},{stopReason:'toolUse'}); if(${options.publishedPlan} && n>1 && JSON.stringify(transcript.messages).includes('Work on mission task')) return fauxAssistantMessage('Offline background task report saved.'); return text; };
+ const respond = (text) => async transcript => { appendFileSync(${JSON.stringify(requests)},JSON.stringify({request:++n})+'\\n'); if(!${builds} && n===1 && JSON.stringify(transcript.messages).includes('Continue planning from this exact submitted interview')) return fauxAssistantMessage('Recovered planning continuation, no build.'); if(${builds} && n===1 && JSON.stringify(transcript.messages).includes('Work on mission task')) return fauxAssistantMessage({type:'toolCall',id:'background-report',name:'codemode',arguments:{code:${JSON.stringify(reportCode)}}},{stopReason:'toolUse'}); if(${builds} && n>1 && JSON.stringify(transcript.messages).includes('Work on mission task')) return fauxAssistantMessage('Offline background task report saved.'); return text; };
  faux.setResponses([
   respond(fauxAssistantMessage({type:'toolCall',id:'saved-round',name:'codemode',arguments:{code:${JSON.stringify(options.publishedPlan ? proposalCode : code)}}},{stopReason:'toolUse'})),
-  ${options.publishedPlan ? `respond(fauxAssistantMessage({type:'toolCall',id:'publish-plan',name:'codemode',arguments:{code:${JSON.stringify(publishCode)}}},{stopReason:'toolUse'})),` : ""}
+  ${options.journey ? `respond(fauxAssistantMessage({type:'toolCall',id:'propose-plan',name:'codemode',arguments:{code:${JSON.stringify(proposalCode)}}},{stopReason:'toolUse'})),` : ""}
+  ${builds ? `respond(fauxAssistantMessage({type:'toolCall',id:'publish-plan',name:'codemode',arguments:{code:${JSON.stringify(publishCode)}}},{stopReason:'toolUse'})),` : ""}
   ${options.followup ? `respond(fauxAssistantMessage({type:'toolCall',id:'followup-round',name:'codemode',arguments:{code:${JSON.stringify(followupCode)}}},{stopReason:'toolUse'})),` : ""}
   respond(fauxAssistantMessage('Planning continuation completed, no build started.'))
  ]);

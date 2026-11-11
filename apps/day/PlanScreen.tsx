@@ -1,7 +1,7 @@
 // One mission's planning: where it should end up, the open interview, the
 // map of what is still unknown, the proposed plan in full, and each step
 // from answers to work. Submitting, approving, publishing and starting work
-// are separate steps, and this page only ever takes the first two.
+// are separate steps. Only the exact-plan confirmation starts one task.
 import { computed, keymap, Scroll, signal, Text, View } from "nsh";
 import { Collapsible } from "nsh/base";
 import type {
@@ -731,10 +731,18 @@ export function PlanScreen(props: { day?: Day; plans: Plans; missionId: string; 
 	const reading = signal<"reading" | "read" | "failed">("reading");
 	const message = signal("");
 	const id = props.missionId;
-	void props.plans.feed.open(id).then((outcome) => {
-		reading.set(outcome.status === "accepted" ? "read" : "failed");
-		message.set(outcome.message);
-	});
+	async function read() {
+		reading.set("reading");
+		try {
+			const outcome = await props.plans.feed.open(id);
+			reading.set(outcome.status === "accepted" ? "read" : "failed");
+			message.set(outcome.message);
+		} catch {
+			reading.set("failed");
+			message.set("Pilot could not read this mission's planning. Your drafts stay here. Read again.");
+		}
+	}
+	void read();
 	keymap.bind("escape", closePlanning);
 	const scroll = keepScroll(`plan/${id}`);
 	return (
@@ -755,6 +763,9 @@ export function PlanScreen(props: { day?: Day; plans: Plans; missionId: string; 
 							accessibilityLabel="Open this mission's overview"
 							onPress={toOverview}
 						/>
+					</If>
+					<If when={reading() === "failed" || (page() && (!page()?.fresh || page()?.stage === "planning"))}>
+						<Action label="Read again" disabled={reading() === "reading"} onPress={() => void read()} />
 					</If>
 				</View>
 				<If when={message() && page()}>
@@ -777,7 +788,9 @@ export function PlanScreen(props: { day?: Day; plans: Plans; missionId: string; 
 							<Body
 								plans={props.plans}
 								page={p()}
-								title={props.title ?? ""}
+								title={
+									props.title || props.plans.planning().plans.find((row) => row.missionId === id)?.title || ""
+								}
 								onOpenTasks={inToday() ? toOverview : undefined}
 							/>
 						)}

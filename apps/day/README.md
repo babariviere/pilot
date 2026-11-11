@@ -164,12 +164,20 @@ cd apps/day
 one `Bridge` over the canonical `DayRoot`. One test needs no daemon (an unreadable selection and the
 flush answer); the journey test uses an isolated daemon with a forked faux kernel
 (`packages/daemon/src/fixtures/day-planning-enrollment.ts`, so it needs the repository's Node
-dependencies). After its restart, Today's Planning row opens the saved interview. Three more tests
-play the root with a scripted channel of the same exact names and its change-notice gate (no
+dependencies). The joined core journey covers New, saved exact text and suggestions, complete
+clarification and separate review rounds, native tasks, explicit exact-plan Start, a background
+report, daemon/native reopen, lookup-only lost ACKs and a kept Mission Pause. The fixture holds and
+releases actual terminal held/idle WS frames, not a sleep: stale keyboard input sends nothing;
+after refresh, the explicit first answer sends exactly once. Another real fixture checks uncertain
+New creation after a prior mission and a cold reopen, without recreating or adopting the prior one.
+
+Scripted tests play the root with the same exact names and its change-notice gate (no
 daemon): Today's planning list when it is empty, refused, over the limit or changed, Read again,
 invalidations that never read the service, a page older than the list, and an answer saved to its
-own mission after another mission was opened, then flushed. All are part of the native `cargo test`
-above.
+own mission after another mission was opened, then flushed. They also hold an older cached reply
+across a newer invalidation (it cannot renew the interview), and keep an Unknown Start with no
+new page Check-only across navigation. All are part of the native `cargo test` above. These are
+behavior checks, not visible native acceptance or permission to activate a live profile.
 
 `native/tests/connected_update.rs` plays the same root for updates with native-shaped `ServiceView`
 values (no daemon or updater): uncounted agents say Unknown, a prepared app guard and a refused or
@@ -257,7 +265,7 @@ to the mission whose page shows that interview, never to whichever mission is op
 Today, the scroll offset comes back and the row that was opened takes the keyboard focus. Nothing
 here starts work.
 
-Help, link opening, direct chat start, Start, budget grants and continuation after a human action
+Help, link opening, direct chat start, budget grants and continuation after a human action
 stay unavailable here and say so. The screen never names a profile, port, path or credential.
 Without a native root (`nsh run`, `nsh test`), the window says it is not connected instead of
 showing examples; a first read that fails says why. "Mock data" shows only on mock entries.
@@ -276,6 +284,13 @@ The mission path runs through four screens without a sidebar: Today, New, the mi
 planning, and the planning's "Mission overview" goes back once Today's read has the mission. A
 mission without a saved interview says so on its planning page. Opening an overview asks Rust to
 read that mission's detail again (`TodayFeed.openMission`); it sends and settles nothing.
+
+New exposes the native owner's existing **Check creation** when enrollment is uncertain. Cold reopen
+discovers that state through the passive setup read; only Check looks up the exact saved receipt.
+It never re-enrolls, clears the unsent goal or adopts the previously selected mission. Reopening a
+planning page marks the cached read older until the read succeeds. **Read again** retries only that
+passive read, keeping drafts and place. A later inventory also ages a page when its map/Start plan
+revision changed, even if its interview did not.
 
 ### Motion
 

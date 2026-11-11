@@ -413,6 +413,26 @@ test("a planning page is older only when a later list names a newer interview", 
 	expect(olderThanList(page, row("enrollment-2", 4))).toBe(false);
 	expect(olderThanList(page, row("enrollment-2", 5))).toBe(true);
 	expect(olderThanList(page, row("enrollment-2", 3))).toBe(false);
+	// A changed plan with the same interview also ages an earlier map/Start.
+	const mapped = { ...page, map: { revision: 3 } as NonNullable<PlanPage["map"]> };
+	expect(
+		olderThanList(mapped, {
+			...row("enrollment-2", 4),
+			identity: { ...row("enrollment-2", 4).identity!, planRevision: 4 },
+		}),
+	).toBe(true);
+	expect(
+		olderThanList(mapped, {
+			...row("enrollment-2", 4),
+			identity: { ...row("enrollment-2", 4).identity!, planRevision: 3 },
+		}),
+	).toBe(false);
+	expect(
+		olderThanList(mapped, {
+			...row("enrollment-2", 4),
+			identity: { interviewId: "enrollment-2", interviewRevision: 4 },
+		}),
+	).toBe(false);
 	// Another round of the same enrollment: a later round ages it, an earlier one lags.
 	expect(olderThanList(page, row("enrollment-3", 1))).toBe(true);
 	expect(olderThanList(page, row("enrollment-1", 9))).toBe(false);

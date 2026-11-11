@@ -1,17 +1,17 @@
 // New: the user says what they want, then picks how it starts. A mission
-// starts with Pilot's questions on one page; nothing builds until the user
-// submits them. A small ask starts one chat directly, after the user
+// starts with a complete saved interview; build work needs a separate
+// exact-plan Start. A supported small ask starts one chat after the user
 // confirms the exact words, project and settings.
-import { keymap, Scroll, signal, Text, View } from "nsh";
+import { effect, keymap, Scroll, signal, Text, View } from "nsh";
 import { Input } from "nsh/base";
 import { keepField, keepScroll } from "./kept";
 import { glide } from "./motion";
-import { planMission, startChat } from "./planCommands";
+import { stageMark, stageWord } from "./PlanScreen";
+import { checkCreation, planMission, startChat } from "./planCommands";
 import type { Plans } from "./planning";
 import { closePlanning, confirmingStart, goalDraft, newBusy, newMessage, openPlan } from "./planView";
 import { TopBar } from "./TodayScreen";
 import { Action, Mark, RowLink, SectionTitle } from "./ui";
-import { stageMark, stageWord } from "./PlanScreen";
 
 /** The confirmation of a direct start: exactly what starts, and where. */
 function ConfirmStart(props: { plans: Plans; setup: string }) {
@@ -44,6 +44,14 @@ export function NewScreen(props: { plans: Plans }) {
 	const planning = () => props.plans.planning();
 	const off = () => !planning().canCreate;
 	const empty = () => goalDraft().trim() === "";
+	const canCheck = () => {
+		planning();
+		return props.plans.feed.canCheckNew?.() === true;
+	};
+	// Reopening New renews setup, not execution authority or a pending send.
+	effect(() => {
+		void props.plans.feed.prepareNew?.();
+	});
 	// The setup the user saw when they asked to start: the start names it.
 	const shownSetup = signal("");
 	// New's place: its scroll, and the goal field's focus and selection.
@@ -75,7 +83,7 @@ export function NewScreen(props: { plans: Plans }) {
 						What do you want done?
 					</Text>
 					<Text class="text-sm leading-relaxed text-muted-foreground">
-						Say it in your own words. A mission starts with Pilot's questions; a small ask starts one chat now.
+						Say it in your own words. A mission starts with questions to clarify what you want.
 					</Text>
 					<Input
 						testID="goal"
@@ -104,6 +112,12 @@ export function NewScreen(props: { plans: Plans }) {
 						<Text class="flex-1 text-sm text-foreground">{`${planning().createReason} Nothing can be sent from here.`}</Text>
 					</View>
 				</If>
+				<If when={canCheck()}>
+					<Action label="Check creation" disabled={newBusy()} onPress={() => void checkCreation(props.plans)} />
+				</If>
+				<If when={off() && !canCheck() && props.plans.feed.prepareNew}>
+					<Action label="Read again" disabled={newBusy()} onPress={() => void props.plans.feed.prepareNew?.()} />
+				</If>
 				<If when={!confirmingStart()}>
 					<View class="gap-3">
 						<View class="flex-row flex-wrap items-center gap-2">
@@ -115,7 +129,7 @@ export function NewScreen(props: { plans: Plans }) {
 							/>
 							<Action
 								label="Start as one chat"
-								disabled={off() || empty() || newBusy()}
+								disabled={off() || !planning().canStart || empty() || newBusy()}
 								onPress={() => {
 									shownSetup.set(planning().setup.digest);
 									newMessage.set("");
@@ -125,9 +139,12 @@ export function NewScreen(props: { plans: Plans }) {
 							/>
 						</View>
 						<Text class="text-xs leading-relaxed text-faint">
-							Plan a mission: Pilot asks all its questions on one page. You answer in any order; nothing builds
-							until you submit.
+							Answer one question at a time, or use See all. Submit only when every question is answered. Review
+							and agree to the plan next; building needs a separate Start work confirmation.
 						</Text>
+						<If when={!planning().canStart && planning().startReason}>
+							<Text class="text-xs text-muted-foreground">{planning().startReason}</Text>
+						</If>
 					</View>
 				</If>
 				<If when={confirmingStart()}>

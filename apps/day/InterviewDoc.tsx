@@ -135,7 +135,7 @@ function QuestionView(props: {
 	const key = answerKey(props.interview, props.question);
 	const choice = computed(() => shownChoice(iv(), q()));
 	const text = computed(() => answerText(iv(), q()));
-	const locked = () => fixed(iv());
+	const locked = () => fixed(iv()) || !props.page.fresh;
 	const picked = () => typeof choice() === "string";
 	// The text field opens on 0, for own words or detail, and stays open while it holds text.
 	const open = () => props.compact === true || writing()[key] === true || text().trim() !== "";
@@ -338,7 +338,7 @@ function Answers(props: { plans: Plans; page: PlanPage; interview: Interview }) 
 	const left = () => iv().questions.length - iv().answered;
 	const busy = () => submitting()[iv().id] === true;
 	const review = () => iv().kind === "review";
-	const ready = () => iv().current && iv().submit === "open" && !iv().unconfirmed && left() === 0 && !busy();
+	const ready = () => props.page.fresh && iv().current && !fixed(iv()) && left() === 0 && !busy();
 	const groups = computed(() =>
 		SECTIONS.map((section) => ({ section, questions: iv().questions.filter((q) => q.section === section) })).filter(
 			(g) => g.questions.length > 0,
@@ -462,7 +462,7 @@ function Answers(props: { plans: Plans; page: PlanPage; interview: Interview }) 
  * too. Letters and digits type into the field while it has the focus.
  * See all turns these keys off.
  */
-function bindKeys(plans: Plans, missionId: string, interview: () => Interview) {
+function bindKeys(plans: Plans, missionId: string, interview: () => Interview, fresh: () => boolean) {
 	const current = () => {
 		const iv = interview();
 		if (seeAll()[iv.id] === true) return undefined;
@@ -473,7 +473,7 @@ function bindKeys(plans: Plans, missionId: string, interview: () => Interview) {
 	};
 	const answer = (q: Question, choice: string | null) => {
 		const iv = interview();
-		if (fixed(iv)) return;
+		if (fixed(iv) || !fresh()) return;
 		put(atQuestion, iv.id, q.id);
 		pickAnswer(plans, missionId, iv, q, choice);
 	};
@@ -487,7 +487,7 @@ function bindKeys(plans: Plans, missionId: string, interview: () => Interview) {
 		},
 		"0": () => {
 			const q = current();
-			if (!q || fixed(interview())) return;
+			if (!q || fixed(interview()) || !fresh()) return;
 			put(atQuestion, interview().id, q.id);
 			put(writing, answerKey(interview(), q), true);
 			focusField.set(answerKey(interview(), q));
@@ -512,7 +512,7 @@ export function InterviewDoc(props: { plans: Plans; page: PlanPage; interview: I
 	const number = () => iv().questions.findIndex((q) => q.id === at()) + 1;
 	const current = () => iv().questions.find((q) => q.id === at());
 	const review = () => iv().kind === "review";
-	bindKeys(props.plans, props.page.missionId, iv);
+	bindKeys(props.plans, props.page.missionId, iv, () => props.page.fresh);
 	const heading = () => {
 		if (review()) return "Your review";
 		if (iv().kind === "topic") return `Questions about “${iv().topic}”`;

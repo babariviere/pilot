@@ -168,12 +168,17 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::with_args(&[])
+    }
+    fn with_args(args: &[&str]) -> Self {
         let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../../packages/daemon/src/fixtures/day-planning-enrollment.ts");
         let mut child = Command::new("node")
             .arg(script)
+            .args(args)
             .env_remove("PILOT_HOME")
             .env_remove("PILOT_PORT")
+            .env_remove("NODE_TEST_CONTEXT")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -270,7 +275,7 @@ fn new_mission_questions_saved_progress_one_submit_and_the_way_back() {
     f.cmd("generate", true);
     f.cmd("held", false);
     wait(&mut app, "id:interview");
-    assert!(!has(&app, "id:submit"));
+    assert!(!app.screen().enabled("id:submit").unwrap_or(false));
 
     // One answer by key, saved before the window closes.
     app.press_key("1").unwrap();
@@ -362,6 +367,244 @@ fn new_mission_questions_saved_progress_one_submit_and_the_way_back() {
     let _ = std::fs::remove_dir_all(entry.parent().unwrap());
 }
 
+/// One supported mission, from an unsent goal through both complete interviews,
+/// exact-plan Start and a background report. All presses use the connected UI;
+/// the fixture supplies only faux responses and explicit completion barriers.
+#[test]
+fn core_journey_from_new_to_agreement_start_and_report_survives_reopen() {
+    let mut f = Fixture::with_args(&["--journey"]);
+    let entry = entry();
+    let (host, bridge) = f.bridge();
+    let mut app = open(&entry, &bridge);
+    wait(&mut app, "role:button[New]");
+    app.press("role:button[New]").unwrap();
+    wait(&mut app, "id:goal");
+    app.type_text("id:goal", "Check the importer without live effects")
+        .unwrap();
+    app.press("role:button[Back to Today]").unwrap();
+    app.press("role:button[New]").unwrap();
+    assert_eq!(
+        app.screen().input_text("id:goal"),
+        Ok(Some("Check the importer without live effects"))
+    );
+    assert_eq!(f.cmd("stats", false)["posts"], 0);
+    app.wait_until("creation ready", WAIT, |s| {
+        s.enabled("role:button[Plan a mission]").unwrap_or(false)
+    })
+    .unwrap();
+    app.press("role:button[Plan a mission]").unwrap();
+    wait(&mut app, "Pilot is planning");
+    let mission = host.planning_enrollments()[0]["missionId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // Keep the actual terminal hold/idle events until the user has read
+    // the complete held round. No sleeps or manufactured worker states.
+    f.cmd("hold-events", true);
+    f.cmd("generate", true);
+    let held = f.cmd("held", false);
+    assert!(held["heldEvents"].as_u64().unwrap() > 0);
+    wait(&mut app, "role:button[Read again]");
+    app.press("role:button[Read again]").unwrap();
+    wait(&mut app, "Question 1 of 2 · 0 answered");
+    app.wait_until("held round read", WAIT, |s| {
+        s.enabled("id:choice-outcome-yes").unwrap_or(false)
+    })
+    .unwrap();
+    let before_answer = f.cmd("stats", false)["posts"].clone();
+    f.cmd("block-plan-read", true);
+    f.cmd("hold-events", false);
+    f.cmd("entered", false);
+    wait(&mut app, OLDER);
+    assert!(!app.screen().enabled("id:choice-outcome-yes").unwrap());
+    app.press_key("1").unwrap();
+    assert_eq!(
+        f.cmd("stats", false)["posts"],
+        before_answer,
+        "Stale keyboard input sends nothing"
+    );
+    f.cmd("release", false);
+    app.wait_until("fresh after terminal notices", WAIT, |s| {
+        !s.shows(OLDER) && s.enabled("id:choice-outcome-yes").unwrap_or(false)
+    })
+    .unwrap();
+    app.press("id:see-all").unwrap();
+    wait(&mut app, "id:all-questions");
+    app.wait_until("round accepts answers", WAIT, |s| {
+        s.enabled("id:choice-outcome-yes").unwrap_or(false)
+    })
+    .unwrap();
+    assert!(!app.screen().enabled("id:submit").unwrap());
+    app.type_text("id:answer-outcome", " Exact detail\nkept byte for byte ")
+        .unwrap();
+    app.press("id:choice-outcome-yes").unwrap();
+    wait(&mut app, "1 of 2 answered");
+    assert_eq!(
+        f.cmd("stats", false)["posts"].as_u64(),
+        Some(before_answer.as_u64().unwrap() + 1),
+        "One fresh explicit answer, never a write retry"
+    );
+    app.press("id:see-all").unwrap();
+    app.press("role:button[Back to Today]").unwrap();
+    close(app, bridge);
+
+    // A cold native window reads saved progress, and admits no new work.
+    let before = f.cmd("stats", false);
+    let (_, bridge) = f.bridge();
+    let mut app = open(&entry, &bridge);
+    wait(&mut app, &format!("id:plan-{mission}"));
+    app.press(&format!("id:plan-{mission}")).unwrap();
+    wait(&mut app, "Question 2 of 2 · 1 answered");
+    assert_eq!(f.cmd("stats", false)["posts"], before["posts"]);
+    app.press("id:see-all").unwrap();
+    wait(&mut app, "id:all-questions");
+    assert_eq!(
+        app.screen().input_text("id:answer-outcome"),
+        Ok(Some(" Exact detail\nkept byte for byte "))
+    );
+    app.press("id:see-all").unwrap();
+    app.press_key("1").unwrap();
+    wait(&mut app, "Question 2 of 2 · 2 answered");
+    app.press("role:button[Check answers]").unwrap();
+    app.wait_until("all answers saved", WAIT, |s| {
+        s.enabled("id:submit").unwrap_or(false)
+    })
+    .unwrap();
+    app.press("id:submit").unwrap();
+
+    // The real coordinator proposes the agreement in a NEW complete review.
+    wait(&mut app, "The proposed plan");
+    wait(&mut app, "Your review");
+    f.cmd("held", false);
+    assert_eq!(f.cmd("stats", false)["workers"], 1);
+    app.press_key("1").unwrap();
+    app.press("role:button[Check answers]").unwrap();
+    app.wait_until("agreement saved", WAIT, |s| {
+        s.enabled("id:submit").unwrap_or(false)
+    })
+    .unwrap();
+    app.press("id:submit").unwrap();
+    f.cmd("published", false);
+    wait(
+        &mut app,
+        "Published as 1 tasks. Publication did not start work.",
+    );
+    assert_eq!(f.cmd("stats", false)["workers"], 1);
+    wait(&mut app, "role:button[Start work]");
+    app.press("role:button[Start work]").unwrap();
+    wait(
+        &mut app,
+        "Start “Check importer” as one background Build task?",
+    );
+    f.cmd("lost", true);
+    app.press("role:button[Start task]").unwrap();
+    wait(&mut app, "role:button[Check Start]");
+    assert_eq!(f.cmd("reported", false)["workers"], 2);
+    close(app, bridge);
+
+    // Lost ACK stays lookup-only across reopen, despite an existing report.
+    let before = f.cmd("stats", false);
+    f.cmd("restart", true);
+    let (_, bridge) = f.bridge();
+    let mut app = open(&entry, &bridge);
+    wait(&mut app, &format!("id:mission-{mission}"));
+    app.press(&format!("id:mission-{mission}")).unwrap();
+    wait(&mut app, "Offline background worker reported");
+    wait(&mut app, "id:open-plan");
+    app.press("id:open-plan").unwrap();
+    wait(&mut app, "role:button[Check Start]");
+    assert!(!has(&app, "role:button[Start work]"));
+    assert_eq!(f.cmd("stats", false)["posts"], before["posts"]);
+    app.press("role:button[Check Start]").unwrap();
+    wait(&mut app, "Work admitted: Done");
+    let after = f.cmd("stats", false);
+    assert_eq!(after["posts"], before["posts"], "Check never resends Start");
+    assert_eq!(after["workers"], 2);
+    app.press("id:open-overview").unwrap();
+    wait(&mut app, "Offline background worker reported");
+    wait(&mut app, "role:button[Pause mission]");
+    app.press("role:button[Pause mission]").unwrap();
+    app.press("role:button[Pause]").unwrap();
+    wait(&mut app, "Paused. Nothing in it runs until you resume it.");
+    let paused = f.cmd("stats", false);
+    close(app, bridge);
+    let (_, bridge) = f.bridge();
+    let mut app = open(&entry, &bridge);
+    wait(&mut app, &format!("id:mission-{mission}"));
+    app.press(&format!("id:mission-{mission}")).unwrap();
+    wait(&mut app, "Paused. Nothing in it runs until you resume it.");
+    assert_eq!(
+        f.cmd("stats", false)["posts"],
+        paused["posts"],
+        "Reopen never resumes work"
+    );
+    assert_eq!(f.cmd("stats", false)["workers"], 2);
+    close(app, bridge);
+    f.cmd("close", false);
+    assert!(f.child.wait().unwrap().success());
+    let _ = std::fs::remove_dir_all(entry.parent().unwrap());
+}
+
+#[test]
+fn a_lost_new_creation_is_checked_after_reopen_and_never_adopts_the_previous_mission() {
+    let mut f = Fixture::new();
+    let entry = entry();
+    let (_, bridge) = f.bridge();
+    let mut app = open(&entry, &bridge);
+    wait(&mut app, "role:button[New]");
+    app.press("role:button[New]").unwrap();
+    app.type_text("id:goal", "First mission").unwrap();
+    app.wait_until("setup", WAIT, |s| {
+        s.enabled("role:button[Plan a mission]").unwrap_or(false)
+    })
+    .unwrap();
+    assert!(
+        !app.screen()
+            .enabled("role:button[Start as one chat]")
+            .unwrap()
+    );
+    app.press("role:button[Plan a mission]").unwrap();
+    wait(&mut app, "Pilot is planning");
+    f.cmd("generate", true);
+    f.cmd("held", false);
+    wait(&mut app, "id:interview");
+    let first = f.cmd("stats", false)["mission"].clone();
+    app.press("role:button[Back to Today]").unwrap();
+    app.press("role:button[New]").unwrap();
+    app.type_text("id:goal", "A different exact goal").unwrap();
+    app.wait_until("next setup", WAIT, |s| {
+        s.enabled("role:button[Plan a mission]").unwrap_or(false)
+    })
+    .unwrap();
+    f.cmd("lost", true);
+    app.press("role:button[Plan a mission]").unwrap();
+    wait(&mut app, "role:button[Check creation]");
+    assert!(!app.screen().enabled("role:button[Plan a mission]").unwrap());
+    let before = f.cmd("held", false);
+    let second = before["mission"].as_str().unwrap().to_owned();
+    assert_ne!(first, second);
+    assert_eq!(before["workers"], 2);
+    close(app, bridge);
+
+    let (_, bridge) = f.bridge();
+    let mut app = open(&entry, &bridge);
+    wait(&mut app, "role:button[New]");
+    app.press("role:button[New]").unwrap();
+    wait(&mut app, "role:button[Check creation]");
+    assert!(!app.screen().enabled("role:button[Plan a mission]").unwrap());
+    assert_eq!(f.cmd("stats", false)["posts"], before["posts"]);
+    app.press("role:button[Check creation]").unwrap();
+    wait(&mut app, "id:interview");
+    wait(&mut app, "A different exact goal");
+    let after = f.cmd("stats", false);
+    assert_eq!(after["posts"], before["posts"]);
+    assert_eq!(after["workers"], 2);
+    close(app, bridge);
+    f.cmd("close", false);
+    assert!(f.child.wait().unwrap().success());
+    let _ = std::fs::remove_dir_all(entry.parent().unwrap());
+}
+
 /// The fake root's window ID, as a native root would pass it.
 const FAKE_WINDOW: &str = "inventory-window";
 /// What the connected adapter says over a planning page older than the latest reads.
@@ -379,6 +622,8 @@ struct FakeRoot {
     replies: Arc<Mutex<BTreeMap<String, Value>>>,
     by_mission: Arc<Mutex<BTreeMap<(String, String), Value>>>,
     pending: Arc<Mutex<bool>>,
+    hold_snapshot: Arc<Mutex<bool>>,
+    held_snapshot: Arc<Mutex<Option<(HostCall, Value)>>>,
 }
 fn answer(snapshot: Value) -> Value {
     json!({"version":1,"value":{"snapshot":snapshot,"outcome":null}})
@@ -393,6 +638,8 @@ impl FakeRoot {
         let replies: Arc<Mutex<BTreeMap<String, Value>>> = Arc::default();
         let by_mission: Arc<Mutex<BTreeMap<(String, String), Value>>> = Arc::default();
         let pending: Arc<Mutex<bool>> = Arc::default();
+        let hold_snapshot: Arc<Mutex<bool>> = Arc::default();
+        let held_snapshot: Arc<Mutex<Option<(HostCall, Value)>>> = Arc::default();
         for &name in METHODS {
             let (calls, replies, by_mission, pending, events) = (
                 calls.clone(),
@@ -401,6 +648,7 @@ impl FakeRoot {
                 pending.clone(),
                 channel.clone(),
             );
+            let (hold_snapshot, held_snapshot) = (hold_snapshot.clone(), held_snapshot.clone());
             channel.handle(name, move |call: HostCall| {
                 let data = call.data().clone();
                 calls.lock().unwrap().push((name.to_owned(), data.clone()));
@@ -437,7 +685,13 @@ impl FakeRoot {
                             .unwrap();
                     }
                 }
-                call.resolve(reply);
+                if name == "day.plan.snapshot"
+                    && std::mem::take(&mut *hold_snapshot.lock().unwrap())
+                {
+                    *held_snapshot.lock().unwrap() = Some((call, reply));
+                } else {
+                    call.resolve(reply);
+                }
             });
         }
         let root = Self {
@@ -446,6 +700,8 @@ impl FakeRoot {
             replies,
             by_mission,
             pending,
+            hold_snapshot,
+            held_snapshot,
         };
         root.reply(
             "day.today.read",
@@ -768,6 +1024,25 @@ fn a_planning_row_opens_its_exact_interview_and_a_page_older_than_the_list_says_
     );
     assert!(!app.shows(OLDER));
 
+    // A failed reopen is stale even without any invalidation or newer row.
+    app.press("role:button[Back to Today]").unwrap();
+    root.refuse("day.plan.read", "unavailable");
+    app.press("id:plan-export").unwrap();
+    wait(&mut app, OLDER);
+    wait(&mut app, "role:button[Read again]");
+    assert!(has(&app, "id:choice-what-messages"));
+    assert!(
+        !app.screen()
+            .enabled("id:choice-what-messages")
+            .unwrap_or(false)
+    );
+    root.reply("day.plan.read", page.clone());
+    app.press("role:button[Read again]").unwrap();
+    app.wait_until("fresh read without navigating away", WAIT, |s| {
+        !s.shows(OLDER)
+    })
+    .unwrap();
+
     // Back on Today, the list names a newer revision and the page cannot be
     // read again: the page shown is older, and says so.
     app.press("role:button[Back to Today]").unwrap();
@@ -803,6 +1078,116 @@ fn a_planning_row_opens_its_exact_interview_and_a_page_older_than_the_list_says_
         1,
         "navigation reads no new list"
     );
+    drop(app);
+    let _ = std::fs::remove_dir_all(entry.parent().unwrap());
+}
+
+#[test]
+fn a_cached_snapshot_from_before_a_later_notice_cannot_renew_the_interview() {
+    let entry = entry();
+    let root = FakeRoot::new();
+    let (page, identity) = export_page();
+    root.reply(
+        "day.plan.inventory",
+        inventory(vec![plan_row(
+            "export",
+            "Export",
+            PlanStage::Questions,
+            identity.clone(),
+        )]),
+    );
+    root.reply(
+        "day.plan.inventorySnapshot",
+        inventory(vec![plan_row(
+            "export",
+            "Export",
+            PlanStage::Questions,
+            identity,
+        )]),
+    );
+    root.reply("day.plan.read", page.clone());
+    root.reply("day.plan.snapshot", page.clone());
+    let mut app = open_on(&entry, root.channel.clone());
+    wait(&mut app, "id:plan-export");
+    app.press("id:plan-export").unwrap();
+    wait(&mut app, "id:interview");
+    *root.hold_snapshot.lock().unwrap() = true;
+    root.changed();
+    let deadline = std::time::Instant::now() + WAIT;
+    while root.held_snapshot.lock().unwrap().is_none() {
+        assert!(std::time::Instant::now() < deadline);
+        app.wait(Duration::from_millis(50)).unwrap();
+    }
+    let calls = root.count("day.plan.snapshot");
+    root.refuse("day.plan.snapshot", "stale");
+    root.changed();
+    wait(&mut app, OLDER);
+    let (call, old_reply) = root.held_snapshot.lock().unwrap().take().unwrap();
+    call.resolve(old_reply);
+    while root.count("day.plan.snapshot") <= calls {
+        assert!(std::time::Instant::now() < deadline);
+        app.wait(Duration::from_millis(50)).unwrap();
+    }
+    assert!(app.shows(OLDER));
+    assert!(!app.screen().enabled("id:choice-what-messages").unwrap());
+    app.press_key("1").unwrap();
+    assert_eq!(root.count("day.plan.save"), 0);
+    root.reply("day.plan.snapshot", page);
+    root.changed();
+    app.wait_until("fresh read restores answering", WAIT, |s| {
+        !s.shows(OLDER) && s.enabled("id:choice-what-messages").unwrap_or(false)
+    })
+    .unwrap();
+    app.press_key("1").unwrap();
+    while root.count("day.plan.save") == 0 {
+        assert!(std::time::Instant::now() < deadline);
+        app.wait(Duration::from_millis(50)).unwrap();
+    }
+    assert_eq!(root.count("day.plan.save"), 1);
+    drop(app);
+    let _ = std::fs::remove_dir_all(entry.parent().unwrap());
+}
+
+#[test]
+fn an_unknown_start_without_a_new_page_stays_check_only_after_navigation() {
+    let entry = entry();
+    let root = FakeRoot::new();
+    let (mut page, identity) = export_page();
+    page["interview"] = Value::Null;
+    page["work"] = json!({"canStart":true,"canCheck":false,"revision":4,"digest":"published","taskId":"task","title":"Check importer","model":"faux/faux-1","project":"Fixture","access":"build","thinking":"off","context":"context","line":""});
+    root.reply(
+        "day.plan.inventory",
+        inventory(vec![plan_row(
+            "export",
+            "Export",
+            PlanStage::Published,
+            identity.clone(),
+        )]),
+    );
+    root.reply(
+        "day.plan.inventorySnapshot",
+        inventory(vec![plan_row(
+            "export",
+            "Export",
+            PlanStage::Published,
+            identity,
+        )]),
+    );
+    root.reply("day.plan.read", page.clone());
+    root.reply("day.plan.snapshot", page);
+    root.replies.lock().unwrap().insert("day.plan.startWork".into(), json!({"version":1,"value":{"snapshot":null,"outcome":{"status":"unknown","revision":1,"message":"Start receipt unavailable"}}}));
+    let mut app = open_on(&entry, root.channel.clone());
+    wait(&mut app, "id:plan-export");
+    app.press("id:plan-export").unwrap();
+    wait(&mut app, "role:button[Start work]");
+    app.press("role:button[Start work]").unwrap();
+    app.press("role:button[Start task]").unwrap();
+    wait(&mut app, "role:button[Check Start]");
+    app.press("role:button[Back to Today]").unwrap();
+    app.press("id:plan-export").unwrap();
+    wait(&mut app, "role:button[Check Start]");
+    assert!(!has(&app, "role:button[Start work]"));
+    assert_eq!(root.count("day.plan.startWork"), 1);
     drop(app);
     let _ = std::fs::remove_dir_all(entry.parent().unwrap());
 }
