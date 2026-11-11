@@ -28,6 +28,21 @@ reference, to-spec, to-tickets, research, prototype and prototype references are
 Required grilling/domain-modeling resources remain in the existing interview bundle at that commit.
 No setup skill, global installation or personal skill overwrite is needed.
 
+### Prototype skill and prompt review trail
+
+| Review target | Canonical source and use |
+| --- | --- |
+| Imported content | Repo [SKILL.md](../../packages/kernel/skills/mission-planning/upstream/prototype/SKILL.md), [LOGIC.md](../../packages/kernel/skills/mission-planning/upstream/prototype/LOGIC.md), [UI.md](../../packages/kernel/skills/mission-planning/upstream/prototype/UI.md). Upstream [prototype directory at the pinned commit](https://github.com/mattpocock/skills/tree/4ae2317ddb22b046e26455e4f9c9b3aaaf62212d/skills/engineering/prototype). |
+| Source/version/license | [UPSTREAM.md](../../packages/kernel/skills/mission-planning/UPSTREAM.md), [MIT license](../../packages/kernel/skills/mission-planning/upstream/LICENSE), Copyright 2026 Matt Pocock. No second vendor copy. |
+| Pilot adaptation template | `PLANNING_SKILL_ADAPTATION` in [mission-planning-skills.ts](../../packages/kernel/src/mission-planning-skills.ts). Its source interpolates runtime skill paths; it is not a saved complete session prompt. |
+| Loading and assembly | [native-adapter.ts](../../packages/kernel/src/native-adapter.ts) adds the trusted paths to `DefaultResourceLoader`, refuses shadowed/missing skills and appends the adaptation for `missionPlanning` only. The SDK composes the final runtime prompt with other loaded context. [coordinator-skill-resources.ts](../../packages/kernel/src/coordinator-skill-resources.ts) captures the read allowlist for skill-relative resources. |
+| Native records and tool | [mission-plan-tool.ts](../../packages/kernel/src/mission-plan-tool.ts) provides the typed output schema; [mission-plans.ts](../../packages/daemon/src/mission-plans.ts) validates and saves it. [planning-workers.ts](../../packages/daemon/src/planning-workers.ts) binds the trusted coordinator and exact call envelopes. |
+| Validation and gaps | [mission-planning-skills.test.ts](../../packages/kernel/src/mission-planning-skills.test.ts) checks exact source hashes, attribution, real loader/resource reads and denied effects. [mission-plans.test.ts](../../packages/daemon/src/mission-plans.test.ts) checks persisted outputs/authority. Native preview execution and its sandbox remain a separate unavailable integration, not proven by these tests. |
+
+This is the scoped prototype review trail, not an audit of every repository prompt. It contains no
+session content or dynamically assembled prompt copy. The repository-wide skill/prompt review index
+is separate documentation work.
+
 `NativeAdapterOptions.missionPlanning` is a trusted `NativePlanningPort`, not a model flag.
 It requires the existing non-read-only coordinator source profile, loads the real resources,
 refuses missing/shadowed entries, installs `mission_plan` and appends an explicit native adapter.
@@ -52,7 +67,8 @@ versioned private worker IPC. The native human ingress cannot impersonate this c
 - Use Wayfinder for unclear multi-session routes. Bounded work uses the existing grill-with-docs route.
 - `plan-map` saves destination, source locators, precise planning questions and coarse in-scope fog.
   Questions have human/research types, real dependency edges, saved choices/recommendations and claims.
-  The view exposes Needs grilling and Needs research separately. These are not implementation tasks.
+  The view exposes Needs grilling, Needs research and Needs prototype separately. These are not
+  implementation tasks. Prototypes can reduce uncertainty during agreement, before any spec/tickets.
 - Existing active decisions are reused by exact record digest, without asking the user again or
   creating another decision. Resolved questions cannot be rewritten or silently removed.
 - `plan-claim` uses exact CAS and current mission membership. The frontier is unresolved, unclaimed
@@ -72,6 +88,11 @@ versioned private worker IPC. The native human ingress cannot impersonate this c
   choices. Research uses linked, revision-pinned Knowledge and cannot resolve a human choice. A saved
   recommendation is never an answer. Knowledge readers preserve provenance and checked/unchecked status;
   a linked research result is not independent verification of its claims.
+- `plan-prototype-result` saves observations against an exact prototype question/context and input plan
+  revision. It requires an existing revision-pinned mission artifact link. It neither runs artifact code
+  nor resolves the question. `plan-ask` can then open a prototype-feedback interview; only its exact
+  complete human submission (or an explicitly linked user-authored settled decision) resolves that topic. A supported
+  verdict, viewing a variant or passing checks never accepts a preference or grants production authority.
 - `plan-propose` saves upstream to-spec sections and to-tickets vertical slices. Slices need acceptance
   criteria, story traceability, real acyclic dependencies and explicit Opus UI/Sol backend ownership.
   This validates structure, not the truth of a model's claimed agreement or verticality.
@@ -101,6 +122,55 @@ Entered recovery is exact lookup only, including restart. Missing snapshots/chec
 durability remain pending (Unknown), never replay. Lost publication ACKs cannot create duplicate tasks.
 Fresh publication operations refuse after the first committed task publication, even after a new proposal;
 reviewed amendments to already-published tasks need a separate update adapter, not duplicate creation.
+
+## Prototype exploration contract
+
+Reuse `PlanQuestion` and append-only `mission_plans`, not build tasks or a second tracker. A prototype
+question has `kind: "prototype"` and required `prototype` metadata:
+
+```ts
+{ context, experimentType: "logic-state" | "ui", smallestExperiment, maxMinutes, maxCostUsd }
+```
+
+The question keeps its normal identity, exact wording, dependencies and provenance sources. The time
+bound is 1–480 minutes; the cost bound is $0–$10. These are declared experiment bounds, not an enforced
+spend service or permission to start work. Fog promotion accepts the same question input, atomically
+keeps its source fog/history and adds no build task. Research-only dispatchers must use
+`planResearchFrontier`, which filters the mixed frontier to `kind === "research"`. Prototype claims
+are record ownership only, never worker admission. Automatic prototype execution is not implemented.
+
+`MissionPlans.view` and the authenticated native planning read share the canonical records. Open
+`exploration` rows expose `needs-prototype`, `ready`, `questionDigest`, `contextDigest` and
+`evidence: "missing" | "current" | "stale"`. `plan.questions[].prototypeResult` keeps the input
+`planRevision`, both digests, `artifact: {sessionId, artifactId, revision}`, `observations`,
+`verdict: "supported" | "not-supported" | "inconclusive"` and `unresolvedQuestions`. Capture uses
+`plan-prototype-result` with the current `expectedRevision` and this complete result. At most 12
+observations and 12 unresolved questions fit within the existing 48 KiB snapshot limit.
+
+The host checks question/context/revision, resolved dependencies, owner/permission and the exact linked
+artifact pin, including after journal I/O. Artifact linking uses the existing verified artifact reader;
+capture checks the saved link, not artifact bytes, rendering safety or source availability forever.
+"Current" means map context and link still match, not that Pilot verified the observations. Map edits
+keep older findings but mark mismatched context stale. A new capture keeps the prior result in snapshot
+history and clears any pending feedback round. Missing/changed artifact links prevent new feedback or
+resolution. Old artifacts and readers remain unchanged. Findings alone do not unblock dependent work;
+explicit human feedback resolves the exploration. Agent-authored decisions cannot substitute for this
+feedback, even when linked; without a user-authored decision, use the saved interview. Production and
+native-input acceptance remain separate.
+
+The trusted adapter reads the already-vendored byte-exact `prototype/SKILL.md`, `LOGIC.md` and `UI.md`
+with their existing MIT attribution. HTML/browser/search-param instructions map to isolated unmodified
+NSH TSX fixtures/previews: a pure logic/state module with free play and guided scenarios, or mock-context
+UI variants with a local switcher. Opus owns substantive preview UI. Use in-memory state; a persistence
+experiment may use scratch state only with separate explicit permission. No real mutations, daemon
+credentials, privileged host access or inherited app capability. No throwaway branch/publication,
+external issues, shadow markdown trackers or automatic promotion. Upstream skip-tests guidance does not
+exempt integration/safety checks or normal production tests. Keep experiments small and optional; bring
+evidence and explicit user feedback back into the Wayfinder map/interview until agreement.
+
+This is a metadata/output adapter, not a preview execution engine. The planning profile still denies
+shell/file writes and artifact execution. Interactive agent-authored NSH TSX execution depends on the
+separate untrusted artifact runtime (#27); no runtime or native UI is duplicated here.
 
 ## Worker enrollment and return boundary
 

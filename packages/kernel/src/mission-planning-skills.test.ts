@@ -91,6 +91,15 @@ test("upstream content, required references and license stay byte-exact and attr
 	assert.match(attribution, /MIT, Copyright 2026 Matt Pocock/);
 	assert.match(PLANNING_SKILL_ADAPTATION, /overrides upstream publishing and execution/);
 	assert.match(PLANNING_SKILL_ADAPTATION, /Notes.*cannot grant execution/);
+	for (const boundary of [
+		/inside the iterative Wayfinder agreement loop/,
+		/unmodified NSH TSX fixtures\/previews/,
+		/No real mutations, daemon credentials, privileged host access/,
+		/skip-tests advice never exempts integration\/safety tests/,
+		/only as needed until agreement/,
+		/never accept a preference/,
+	])
+		assert.match(PLANNING_SKILL_ADAPTATION, boundary);
 });
 
 test("planning skill paths follow a relocated runtime", async (t) => {
@@ -133,13 +142,25 @@ test("native planning tool has no human-answer, external-publishing or execution
 		),
 		/pending/,
 	);
-	for (const purpose of ["interview-save", "interview-submit", "agreement-start", "github-create-issue", "write-file"])
+	for (const purpose of [
+		"interview-save",
+		"interview-submit",
+		"agreement-start",
+		"github-create-issue",
+		"write-file",
+		"prototype-execute",
+		"prototype-promote",
+		"prototype-accept",
+		"research-start",
+	])
 		await assert.rejects(
 			tool.execute("never", { action: "write", request: { purpose } } as never, undefined, undefined, {} as never),
 			/Unsupported/,
 		);
 	assert.equal(calls.length, 1);
 	assert.match(JSON.stringify(tool.parameters), /storyIds/);
+	assert.match(JSON.stringify(tool.parameters), /plan-prototype-result/);
+	assert.match(JSON.stringify(tool.parameters), /smallestExperiment/);
 });
 
 test("actual NativeAdapter planning profile reads upstream but blocks direct and nested external effects", async (t) => {
@@ -200,7 +221,11 @@ test("actual NativeAdapter planning profile reads upstream but blocks direct and
 	assertPlanningSkills(adapter.session.resourceLoader.getSkills().skills);
 	assertInterviewSkills(adapter.session.resourceLoader.getSkills().skills);
 	assert.ok(adapter.session.resourceLoader.getAppendSystemPrompt().includes(PLANNING_SKILL_ADAPTATION));
-	for (const path of PLANNING_SKILL_PATHS) {
+	for (const path of [
+		...PLANNING_SKILL_PATHS,
+		join(dirname(PLANNING_SKILL_PATHS[4]!), "LOGIC.md"),
+		join(dirname(PLANNING_SKILL_PATHS[4]!), "UI.md"),
+	]) {
 		const definition = adapter.session.getToolDefinition("read")!,
 			sourceInfo = adapter.session.getAllTools().find((t) => t.name === "read")!.sourceInfo;
 		const result = await wrapRegisteredTool({ definition, sourceInfo }, adapter.session.extensionRunner).execute(

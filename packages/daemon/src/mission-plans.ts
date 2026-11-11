@@ -3,6 +3,7 @@ import type {
 	DurableOperation,
 	InterviewQuestion,
 	MissionPlan,
+	PlanPrototypeResult,
 	PlanQuestion,
 	PlanSource,
 	PlanWrite,
@@ -31,6 +32,7 @@ const kinds = [
 	"plan-promote",
 	"plan-claim",
 	"plan-resolve",
+	"plan-prototype-result",
 	"plan-propose",
 	"plan-ask",
 	"plan-review",
@@ -48,6 +50,13 @@ export const planFrontier = (plan: MissionPlan): PlanQuestion[] =>
 			q.dependsOn.every((key) => !!plan.questions.find((p) => p.id === key)?.resolution),
 	);
 export const activeFog = (plan: MissionPlan) => plan.fog.filter((f) => !f.promotedTo.length);
+/** Research-only dispatchers must use this filter, never the mixed planning frontier. */
+export const planResearchFrontier = (plan: MissionPlan): PlanQuestion[] =>
+	planFrontier(plan).filter((q) => q.kind === "research");
+export const planQuestionDigest = (q: PlanQuestion): string => {
+	const { resolution: _r, claimedBy: _c, prototypeResult: _p, ...input } = q;
+	return digest(input);
+};
 export const planDigest = (plan: MissionPlan): string =>
 	digest({
 		destination: plan.destination,
@@ -65,6 +74,12 @@ const questionContextDigest = (plan: MissionPlan): string =>
 		fog: plan.fog,
 		spec: plan.spec,
 		slices: plan.slices,
+	});
+/** Results bind the surrounding map as well as the exact question, but not their own output. */
+export const prototypeContextDigest = (plan: MissionPlan): string =>
+	questionContextDigest({
+		...plan,
+		questions: plan.questions.map(({ prototypeResult: _p, ...q }) => q),
 	});
 
 function list<T>(value: T[], max = 40): T[] {
@@ -181,8 +196,24 @@ export class MissionPlans {
 						.filter((q) => !q.resolution)
 						.map((q) => ({
 							questionId: q.id,
-							status: q.kind === "research" ? "needs-research" : "needs-grilling",
+							status:
+								q.kind === "prototype"
+									? "needs-prototype"
+									: q.kind === "research"
+										? "needs-research"
+										: "needs-grilling",
 							ready: planFrontier(pin.plan!).some((p) => p.id === q.id),
+							...(q.kind === "prototype"
+								? {
+										questionDigest: planQuestionDigest(q),
+										contextDigest: prototypeContextDigest(pin.plan!),
+										evidence: !q.prototypeResult
+											? "missing"
+											: this.prototypeCurrent(pin.plan!, q)
+												? "current"
+												: "stale",
+									}
+								: {}),
 						}))
 				: [],
 		};
@@ -263,11 +294,30 @@ export class MissionPlans {
 				"claimedBy",
 				"sources",
 				"resolution",
+				...(Object.hasOwn(q, "prototype") ? ["prototype"] : []),
+				...(Object.hasOwn(q, "prototypeResult") ? ["prototypeResult"] : []),
 			]);
 			validateQuestions([this.interviewQuestion(q)]);
 			text(q.title, 200);
 			text(q.question, 2000);
-			if (!["human", "research"].includes(q.kind)) throw new Conflict("Invalid question type");
+			if (!["human", "research", "prototype"].includes(q.kind)) throw new Conflict("Invalid question type");
+			if (q.kind === "prototype") {
+				const p = q.prototype;
+				exact(p, ["context", "experimentType", "smallestExperiment", "maxMinutes", "maxCostUsd"]);
+				text(p.context, 2000);
+				text(p.smallestExperiment, 2000);
+				if (
+					!["logic-state", "ui"].includes(p.experimentType) ||
+					!Number.isSafeInteger(p.maxMinutes) ||
+					p.maxMinutes < 1 ||
+					p.maxMinutes > 480 ||
+					!Number.isFinite(p.maxCostUsd) ||
+					p.maxCostUsd < 0 ||
+					p.maxCostUsd > 10
+				)
+					throw new Conflict("Prototype needs an experiment type and small time/cost bounds");
+			} else if (Object.hasOwn(q, "prototype") || Object.hasOwn(q, "prototypeResult"))
+				throw new Conflict("Prototype fields require a prototype question");
 			this.sources(plan.missionId, q.sources);
 		}
 		graph(plan.questions);
@@ -345,6 +395,7 @@ export class MissionPlans {
 				"plan-promote": ["fogId", "questions"],
 				"plan-claim": ["questionId", "claimedBy"],
 				"plan-resolve": ["questionId", "resolution"],
+				"plan-prototype-result": ["questionId", "result"],
 				"plan-propose": ["spec", "slices"],
 				"plan-review": [],
 				"plan-ask": ["topicId", "questions"],
@@ -389,16 +440,28 @@ export class MissionPlans {
 							"recommendedOptionId",
 							"dependsOn",
 							"sources",
+							...(Object.hasOwn(q, "prototype") ? ["prototype"] : []),
 						]);
 						const previous = plan.questions.find((p) => p.id === q.id);
 						if (previous?.resolution) {
-							const { resolution: _r, claimedBy: _c, ...rest } = previous;
+							const { resolution: _r, claimedBy: _c, prototypeResult: _p, ...rest } = previous;
 							if (canonicalJSON(q) !== canonicalJSON(rest))
 								throw new Conflict("Settled question cannot be rewritten");
 						}
-						return { ...q, resolution: previous?.resolution ?? null, claimedBy: previous?.claimedBy ?? null };
+						if (previous?.prototypeResult && q.kind !== "prototype")
+							throw new Conflict("Keep prototype evidence and its question identity");
+						return {
+							...q,
+							resolution: previous?.resolution ?? null,
+							claimedBy: previous?.claimedBy ?? null,
+							...(previous?.prototypeResult ? { prototypeResult: previous.prototypeResult } : {}),
+						};
 					});
-					if (plan.questions.some((q) => q.resolution && !questions.some((n) => n.id === q.id)))
+					if (
+						plan.questions.some(
+							(q) => (q.resolution || q.prototypeResult) && !questions.some((n) => n.id === q.id),
+						)
+					)
 						throw new Conflict("Keep settled decisions");
 					const fog = list(request.fog).map((f) => {
 						exact(f, ["id", "area", "why", "readyWhen", "dependsOn", "sources"]);
@@ -424,6 +487,7 @@ export class MissionPlans {
 							"recommendedOptionId",
 							"dependsOn",
 							"sources",
+							...(Object.hasOwn(q, "prototype") ? ["prototype"] : []),
 						]);
 						plan.questions.push({ ...q, claimedBy: null, resolution: null });
 					}
@@ -440,6 +504,8 @@ export class MissionPlans {
 					}
 					q.claimedBy = request.claimedBy;
 				} else if (request.purpose === "plan-resolve") this.resolve(plan, request.questionId, request.resolution);
+				else if (request.purpose === "plan-prototype-result")
+					this.prototypeResult(plan, request.questionId, request.result);
 				else if (request.purpose === "plan-propose") {
 					if (!request.spec) throw new Conflict("Spec proposal required");
 					plan.spec = request.spec;
@@ -447,11 +513,12 @@ export class MissionPlans {
 				} else if (request.purpose === "plan-ask") {
 					const topic = plan.questions.find((q) => q.id === request.topicId);
 					if (
-						topic?.kind !== "human" ||
+						(topic?.kind !== "human" && topic?.kind !== "prototype") ||
 						topic.resolution ||
+						(topic.kind === "prototype" && !this.prototypeCurrent(plan, topic)) ||
 						topic.dependsOn.some((key) => !plan.questions.find((q) => q.id === key)?.resolution)
 					)
-						throw new Conflict("Unblocked Needs grilling topic required");
+						throw new Conflict("Unblocked grilling topic or current prototype evidence required");
 					const questions = request.questions;
 					validateQuestions(questions);
 					this.deps.validateRound?.(questions);
@@ -502,7 +569,11 @@ export class MissionPlans {
 					plan.review = null;
 					plan.publication = null;
 				}
-				if (["plan-map", "plan-promote", "plan-propose", "plan-review"].includes(request.purpose))
+				if (
+					["plan-map", "plan-promote", "plan-propose", "plan-review", "plan-prototype-result"].includes(
+						request.purpose,
+					)
+				)
 					plan.round = null;
 				this.validate(plan);
 				return plan;
@@ -523,14 +594,77 @@ export class MissionPlans {
 			throw error;
 		}
 	}
+	private prototypeCurrent(plan: MissionPlan, q: PlanQuestion): boolean {
+		const r = q.prototypeResult;
+		return (
+			!!r &&
+			r.questionDigest === planQuestionDigest(q) &&
+			r.contextDigest === prototypeContextDigest(plan) &&
+			this.deps.store
+				.artifactReferences(plan.missionId, r.artifact.artifactId)
+				.some((link) => link.sessionId === r.artifact.sessionId && link.revision === r.artifact.revision)
+		);
+	}
+	private prototypeResult(plan: MissionPlan, questionId: string, result: PlanPrototypeResult): void {
+		const q = plan.questions.find((q) => q.id === questionId);
+		if (
+			q?.kind !== "prototype" ||
+			q.resolution ||
+			q.dependsOn.some((key) => !plan.questions.find((p) => p.id === key)?.resolution)
+		)
+			throw new Conflict("Open unblocked prototype question required");
+		exact(result, [
+			"planRevision",
+			"questionDigest",
+			"contextDigest",
+			"artifact",
+			"observations",
+			"verdict",
+			"unresolvedQuestions",
+		]);
+		exact(result.artifact, ["sessionId", "artifactId", "revision"]);
+		id(result.artifact.sessionId);
+		id(result.artifact.artifactId);
+		if (
+			!Number.isSafeInteger(result.artifact.revision) ||
+			result.artifact.revision < 1 ||
+			result.planRevision !== plan.revision ||
+			result.questionDigest !== planQuestionDigest(q) ||
+			result.contextDigest !== prototypeContextDigest(plan)
+		)
+			throw new Conflict("Exact prototype question/context/revision required");
+		strings(result.observations, 12);
+		strings(result.unresolvedQuestions, 12);
+		if (!result.observations.length || !["supported", "not-supported", "inconclusive"].includes(result.verdict))
+			throw new Conflict("Prototype observations and verdict required");
+		if (
+			!this.deps.store
+				.artifactReferences(plan.missionId, result.artifact.artifactId)
+				.some((link) => link.sessionId === result.artifact.sessionId && link.revision === result.artifact.revision)
+		)
+			throw new Conflict("Exact revision-pinned mission artifact link required");
+		// Metadata only. Never load or execute artifact code, promote production code, or answer for a user.
+		q.prototypeResult = result;
+		q.claimedBy = null;
+	}
 	private resolve(plan: MissionPlan, questionId: string, resolution: NonNullable<PlanQuestion["resolution"]>): void {
 		exact(resolution, ["kind", "id", "digest"]);
 		id(resolution.id);
 		const q = plan.questions.find((q) => q.id === questionId);
 		if (!q || q.resolution || q.dependsOn.some((key) => !plan.questions.find((p) => p.id === key)?.resolution))
 			throw new Conflict("Open unblocked question required");
-		if (resolution.kind === "decision" && q.kind === "human") {
+		if (q.kind === "prototype" && !this.prototypeCurrent(plan, q))
+			throw new Conflict("Current prototype evidence required before human feedback");
+		if (resolution.kind === "decision" && (q.kind === "human" || q.kind === "prototype")) {
 			this.sources(plan.missionId, [{ kind: "decision", id: resolution.id, digest: resolution.digest }]);
+			if (
+				q.kind === "prototype" &&
+				this.deps.store.workflowConfirmationState(plan.missionId).decisions.find((d) => d.id === resolution.id)
+					?.authorSessionId
+			)
+				throw new Conflict(
+					"Prototype preferences require a user-authored decision or explicit interview submission",
+				);
 			if (!q.sources.some((s) => s.kind === "decision" && s.id === resolution.id && s.digest === resolution.digest))
 				throw new Conflict("Reuse an explicitly linked settled decision only");
 		} else if (resolution.kind === "knowledge" && q.kind === "research") {
@@ -538,7 +672,7 @@ export class MissionPlans {
 			if (!source || digest(source) !== resolution.digest)
 				throw new Conflict("Exact linked research evidence required");
 			this.sources(plan.missionId, [source]);
-		} else if (resolution.kind === "interview" && q.kind === "human") {
+		} else if (resolution.kind === "interview" && (q.kind === "human" || q.kind === "prototype")) {
 			const i = this.context(plan.missionId).interview,
 				s = i.submission;
 			if (

@@ -2,11 +2,33 @@
 export type PlanSource =
 	| { kind: "decision"; id: string; digest: string }
 	| { kind: "knowledge"; id: string; revision: number; linkRevision: number };
+/** A disposable experiment in the agreement loop, never an execution grant. */
+export interface PlanPrototype {
+	context: string;
+	experimentType: "logic-state" | "ui";
+	smallestExperiment: string;
+	maxMinutes: number;
+	maxCostUsd: number;
+}
+export interface PlanPrototypeResult {
+	/** Exact input snapshot. Later map changes make this evidence stale, not deleted. */
+	planRevision: number;
+	questionDigest: string;
+	contextDigest: string;
+	artifact: { sessionId: string; artifactId: string; revision: number };
+	observations: string[];
+	verdict: "supported" | "not-supported" | "inconclusive";
+	unresolvedQuestions: string[];
+}
 export interface PlanQuestion {
 	id: string;
 	title: string;
 	question: string;
-	kind: "human" | "research";
+	kind: "human" | "research" | "prototype";
+	/** Required only for prototype questions. Omitted on legacy records. */
+	prototype?: PlanPrototype;
+	/** Written through plan-prototype-result only; never accepted as a map input. */
+	prototypeResult?: PlanPrototypeResult;
 	options: import("./mission-interview.ts").InterviewOption[];
 	recommendedOptionId: string | null;
 	dependsOn: string[];
@@ -14,6 +36,7 @@ export interface PlanQuestion {
 	sources: PlanSource[];
 	resolution: null | { kind: "decision" | "knowledge" | "interview"; id: string; digest: string };
 }
+export type PlanQuestionInput = Omit<PlanQuestion, "resolution" | "claimedBy" | "prototypeResult">;
 export interface MissionFog {
 	id: string;
 	area: string;
@@ -70,14 +93,20 @@ export type PlanWrite =
 			expectedRevision: number;
 			destination: string;
 			sources: PlanSource[];
-			questions: Omit<PlanQuestion, "resolution" | "claimedBy">[];
+			questions: PlanQuestionInput[];
 			fog: Omit<MissionFog, "promotedTo">[];
 	  }
 	| {
 			purpose: "plan-promote";
 			expectedRevision: number;
 			fogId: string;
-			questions: Omit<PlanQuestion, "resolution" | "claimedBy">[];
+			questions: PlanQuestionInput[];
+	  }
+	| {
+			purpose: "plan-prototype-result";
+			expectedRevision: number;
+			questionId: string;
+			result: PlanPrototypeResult;
 	  }
 	| { purpose: "plan-claim"; expectedRevision: number; questionId: string; claimedBy: string | null }
 	| {

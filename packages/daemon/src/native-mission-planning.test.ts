@@ -33,14 +33,80 @@ test("native capability, exact project/home/owner and purpose are required for r
 		"agreement-start",
 		"plan-map",
 		"plan-publish",
+		"plan-prototype-result",
 		"small-ask-start",
 	]) {
 		const denied = f.operation(f.missionId, { purpose }, read.contextDigest);
 		assert.equal((await f.post(denied)).status, 400, purpose);
 	}
+	const unavailable = f.operation(f.missionId, { purpose: "prototype-execute" }, read.contextDigest);
+	assert.equal((await (await f.post(unavailable)).json()).state, "rejected");
+	assert.equal(f.store.tasks(f.missionId).length, 0);
 	f.coordinator = { ...f.coordinator!, mode: "ask" };
 	assert.equal((await f.read()).status, 409);
 	assert.equal((await f.post(op, true)).status, 409);
+});
+
+test("native and agent reads share prototype records without enabling preview execution", async (t) => {
+	const f = await nativePlanningFixture();
+	t.after(() => f.close());
+	await f.plan({
+		purpose: "plan-map",
+		expectedRevision: 0,
+		destination: "Resolve one design uncertainty",
+		sources: [],
+		fog: [],
+		questions: [
+			{
+				id: "preview",
+				title: "Draft navigation",
+				question: "Does this navigation keep context?",
+				kind: "prototype",
+				options: [],
+				recommendedOptionId: null,
+				dependsOn: [],
+				sources: [],
+				prototype: {
+					context: "Moving between interview steps",
+					experimentType: "ui",
+					smallestExperiment: "Two mock native variants",
+					maxMinutes: 15,
+					maxCostUsd: 1,
+				},
+			},
+		],
+	} as { purpose: string });
+	let read = await (await f.read()).json();
+	assert.equal(read.capabilities.prototype, "unavailable");
+	assert.deepEqual(read.view.plan, f.store.plans.get(f.missionId));
+	assert.equal(read.view.exploration[0].status, "needs-prototype");
+	assert.equal(read.view.exploration[0].evidence, "missing");
+	f.store.linkArtifact(f.missionId, {
+		sessionId: f.owner,
+		artifactId: "preview",
+		revision: 3,
+		title: "Historical native preview",
+		kind: "visual",
+	});
+	const result = {
+		planRevision: read.view.plan.revision,
+		questionDigest: read.view.exploration[0].questionDigest,
+		contextDigest: read.view.exploration[0].contextDigest,
+		artifact: { sessionId: f.owner, artifactId: "preview", revision: 3 },
+		observations: ["Both mock variants keep context"],
+		verdict: "inconclusive",
+		unresolvedQuestions: ["Which does the user prefer?"],
+	};
+	await f.plan({ purpose: "plan-prototype-result", expectedRevision: 1, questionId: "preview", result } as {
+		purpose: string;
+	});
+	await f.restart();
+	read = await (await f.read()).json();
+	assert.deepEqual(read.view.plan.questions[0].prototypeResult, result);
+	assert.equal(read.view.exploration[0].evidence, "current");
+	assert.equal(read.view.plan.questions[0].resolution, null);
+	assert.equal(read.capabilities.prototype, "unavailable");
+	assert.equal(f.store.tasks(f.missionId).length, 0);
 });
 
 test("exact choices/text survive daemon restart; complete submission is separate and never dispatches", async (t) => {

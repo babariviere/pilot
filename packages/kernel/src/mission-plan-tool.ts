@@ -37,12 +37,23 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 		{ maxItems: 40 },
 	);
 	const option = Type.Object({ id: key, meaning: Type.String() }, { additionalProperties: false });
+	const prototype = Type.Object(
+		{
+			context: Type.String(),
+			experimentType: Type.Union([Type.Literal("logic-state"), Type.Literal("ui")]),
+			smallestExperiment: Type.String(),
+			maxMinutes: Type.Integer({ minimum: 1, maximum: 480 }),
+			maxCostUsd: Type.Number({ minimum: 0, maximum: 10 }),
+		},
+		{ additionalProperties: false },
+	);
 	const question = Type.Object(
 		{
 			id: key,
 			title: Type.String(),
 			question: Type.String(),
-			kind: Type.Union([Type.Literal("human"), Type.Literal("research")]),
+			kind: Type.Union([Type.Literal("human"), Type.Literal("research"), Type.Literal("prototype")]),
+			prototype: Type.Optional(prototype),
 			options: Type.Array(option),
 			recommendedOptionId: Type.Union([key, Type.Null()]),
 			dependsOn: Type.Array(key),
@@ -86,6 +97,33 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 	);
 	const expectedRevision = Type.Integer({ minimum: 0 });
 	const request = Type.Union([
+		Type.Object(
+			{
+				purpose: Type.Literal("plan-prototype-result"),
+				expectedRevision,
+				questionId: key,
+				result: Type.Object(
+					{
+						planRevision: Type.Integer({ minimum: 1 }),
+						questionDigest: key,
+						contextDigest: key,
+						artifact: Type.Object(
+							{ sessionId: key, artifactId: key, revision: Type.Integer({ minimum: 1 }) },
+							{ additionalProperties: false },
+						),
+						observations: Type.Array(Type.String(), { minItems: 1, maxItems: 12 }),
+						verdict: Type.Union([
+							Type.Literal("supported"),
+							Type.Literal("not-supported"),
+							Type.Literal("inconclusive"),
+						]),
+						unresolvedQuestions: Type.Array(Type.String(), { maxItems: 12 }),
+					},
+					{ additionalProperties: false },
+				),
+			},
+			{ additionalProperties: false },
+		),
 		Type.Object(
 			{
 				purpose: Type.Literal("plan-map"),
@@ -164,7 +202,7 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 		name: "mission_plan",
 		label: "Mission planning",
 		description:
-			"Read native mission planning or propose a revision-bound map, fog promotion, question claim/resolution, complete human round, spec and vertical slices. Human answers/submission use native UI, never this tool. Publication creates only reviewed native records, not workers or external issues. Unknown writes require exact receipt lookup, never a new attempt.",
+			"Read native mission planning or save a revision-bound map, fog promotion, question claim, prototype findings, human round, spec or slices. Prototype findings need exact read digests and a pinned mission artifact; they never run code or accept a preference. Human answers/submission use native UI, never this tool. Publication creates reviewed native records, not workers or external issues. Unknown writes require exact receipt lookup, never a new attempt.",
 		parameters: Type.Union([
 			Type.Object(
 				{
@@ -230,6 +268,7 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 						"plan-promote",
 						"plan-claim",
 						"plan-resolve",
+						"plan-prototype-result",
 						"plan-propose",
 						"plan-ask",
 						"plan-review",

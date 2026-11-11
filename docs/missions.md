@@ -35,6 +35,12 @@ reconcile when reopened. These notices do not start work, answer questions, or p
 an agent applied the guidance. Full decisions and history remain available on demand.
 See [decision routing](technical/mission-decision-routing.md) for the exact rules and limits.
 
+Day's saved Wayfinder planning records distinguish **Needs research**, **Needs grilling** and
+**Needs prototype**. A prototype is a small disposable experiment for a named uncertainty during
+agreement, not a required step or build task. Its linked artifact, findings and open questions stay
+with the mission. Findings are evidence, not your acceptance or permission to build. Interactive
+prototype execution remains unavailable; see [native planning](technical/day-mission-planning.md).
+
 Coordinators can record an already-authorized decision replacement with
 `mission({action: "supersede", decisionId: "D7", replacementDecisionId: "D9"})`.
 Both decisions must belong to this mission. The old text, history and task pins stay

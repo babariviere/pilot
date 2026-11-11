@@ -4,11 +4,27 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
-import type { DurableOperation, InterviewAnswer, PlanQuestion, PlanSlice, PlanSpec, PlanWrite } from "@pilot/protocol";
+import type {
+	DurableOperation,
+	InterviewAnswer,
+	PlanPrototypeResult,
+	PlanQuestion,
+	PlanSlice,
+	PlanSpec,
+	PlanWrite,
+} from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import { interviewDigest as digest } from "./mission-interview-contract.ts";
 import { MissionInterviews } from "./mission-interviews.ts";
-import { activeFog, MissionPlans, planFrontier, planningRoute } from "./mission-plans.ts";
+import {
+	activeFog,
+	MissionPlans,
+	planFrontier,
+	planningRoute,
+	planQuestionDigest,
+	planResearchFrontier,
+	prototypeContextDigest,
+} from "./mission-plans.ts";
 import { MissionStore } from "./missions.ts";
 import { OperationJournal, payloadHash } from "./operation-journal.ts";
 import { WorkflowConfirmations } from "./workflow-confirmations.ts";
@@ -49,6 +65,17 @@ const fog = () => ({
 	readyWhen: "Sample is available",
 	dependsOn: [],
 	sources: [],
+});
+const prototype = (key = "experiment", dependsOn: string[] = []): ReturnType<typeof question> => ({
+	...question(key, dependsOn),
+	kind: "prototype",
+	prototype: {
+		context: "Would a saved draft survive moving between steps?",
+		experimentType: "logic-state",
+		smallestExperiment: "One pure reducer and three guided scenarios with mock answers",
+		maxMinutes: 20,
+		maxCostUsd: 1,
+	},
 });
 const ask = (topicId = "choice", ids = [topicId]) => ({
 	purpose: "plan-ask",
@@ -156,6 +183,21 @@ async function fixture(t: TestContext, disk = false) {
 		get plan() {
 			return store.plans.get(missionId)!;
 		},
+		prototypeResult(questionId = "experiment", link = true): PlanPrototypeResult {
+			const plan = store.plans.get(missionId)!;
+			const artifact = { sessionId: plan.ownerSessionId, artifactId: "prototype-preview", revision: 1 };
+			if (link)
+				store.linkArtifact(missionId, { ...artifact, title: "Disposable native state preview", kind: "visual" });
+			return {
+				planRevision: plan.revision,
+				questionDigest: planQuestionDigest(plan.questions.find((q) => q.id === questionId)!),
+				contextDigest: prototypeContextDigest(plan),
+				artifact,
+				observations: ["Moving backward kept the mock draft; invalid transition was refused"],
+				verdict: "supported",
+				unresolvedQuestions: ["Does this match the user's preference?"],
+			};
+		},
 		async write(
 			request: Omit<PlanWrite, "expectedRevision"> | object,
 			expectedRevision = store.plans.get(missionId)?.revision ?? 0,
@@ -221,6 +263,267 @@ test("route selects actual Wayfinder only for unclear multi-session work", () =>
 		[false, true],
 	])
 		assert.equal(planningRoute(unclear!, multi!), "grill-with-docs");
+});
+
+test("prototype fog promotion restores typed bounded exploration, never research dispatch", async (t) => {
+	const f = await fixture(t, true);
+	await f.map([{ ...question("fact"), kind: "research" }]);
+	const old = f.plan;
+	assert.equal(
+		(await f.write({ purpose: "plan-promote", fogId: "later", questions: [prototype()] })).receipt.state,
+		"accepted",
+	);
+	assert.equal(activeFog(f.plan).length, 0);
+	assert.deepEqual(f.plan.fog[0]!.promotedTo, ["experiment"]);
+	assert.deepEqual(
+		planResearchFrontier(f.plan).map((q) => q.id),
+		["fact"],
+	);
+	const view = await f.service().view(f.missionId);
+	assert.deepEqual(
+		view.exploration.map((e) => e.status),
+		["needs-research", "needs-prototype"],
+	);
+	assert.equal(view.exploration[1]!.evidence, "missing");
+	const saved = f.plan;
+	await f.restart();
+	assert.deepEqual(f.plan, saved);
+	assert.equal((await f.service().read(f.missionId, old.revision))!.fog[0]!.promotedTo.length, 0);
+	assert.equal(f.store.tasks(f.missionId).length, 0);
+	assert.equal(f.plan.spec, null); // Experiments belong in agreement, not only after spec/tickets.
+});
+
+test("prototype bounds and safe output intents refuse missing or privileged fields", async (t) => {
+	const f = await fixture(t);
+	const p = prototype();
+	for (const q of [
+		{ ...p, prototype: undefined },
+		{ ...p, prototype: { ...p.prototype, maxMinutes: 0 } },
+		{ ...p, prototype: { ...p.prototype, maxCostUsd: -1 } },
+		{ ...p, prototype: { ...p.prototype, experimentType: "browser" } },
+		{ ...p, prototype: { ...p.prototype, daemonCredentials: true } },
+		{ ...p, prototypeResult: {} },
+		{ ...p, kind: "research" },
+	]) {
+		assert.equal(
+			(await f.write({ purpose: "plan-map", destination: "Safe", sources: [], questions: [q], fog: [] })).receipt
+				.state,
+			"rejected",
+		);
+	}
+	assert.equal(f.store.plans.get(f.missionId), undefined);
+	await f.map([p]);
+	const result = f.prototypeResult();
+	for (const extra of [{ execute: true }, { branch: "throwaway" }, { productionAccepted: true }])
+		assert.equal(
+			(await f.write({ purpose: "plan-prototype-result", questionId: p.id, result: { ...result, ...extra } }))
+				.receipt.state,
+			"rejected",
+		);
+	assert.equal(f.plan.questions[0]!.prototypeResult, undefined);
+	assert.equal(f.store.tasks(f.missionId).length, 0);
+});
+
+test("prototype findings require exact linked artifact and question/context/revision", async (t) => {
+	const f = await fixture(t);
+	await f.map([prototype()]);
+	const result = f.prototypeResult("experiment", false);
+	const capture = (r: PlanPrototypeResult) =>
+		f.write({ purpose: "plan-prototype-result", questionId: "experiment", result: r });
+	assert.equal((await capture(result)).receipt.state, "rejected");
+	f.prototypeResult();
+	for (const bad of [
+		{ ...result, planRevision: 0 },
+		{ ...result, questionDigest: "wrong" },
+		{ ...result, contextDigest: "wrong" },
+		{ ...result, artifact: { ...result.artifact, revision: 2 } },
+		{ ...result, artifact: { ...result.artifact, sessionId: "other" } },
+		{ ...result, observations: [] },
+	])
+		assert.equal((await capture(bad)).receipt.state, "rejected");
+	f.allowed = false;
+	assert.equal((await capture(result)).receipt.state, "rejected");
+	f.allowed = true;
+	assert.equal((await capture(result)).receipt.state, "accepted");
+	assert.deepEqual(f.plan.questions[0]!.prototypeResult, result);
+	assert.equal((await f.service().view(f.missionId)).exploration[0]!.evidence, "current");
+	assert.equal(f.plan.questions[0]!.resolution, null);
+	assert.equal((await f.write({ purpose: "plan-review" })).receipt.state, "rejected");
+});
+
+test("successful prototype is evidence, only explicit complete human feedback resolves it", async (t) => {
+	const f = await fixture(t, true);
+	await f.map([prototype(), question("follow-up", ["experiment"])]);
+	assert.equal((await f.write(ask("experiment"))).receipt.state, "rejected");
+	const result = f.prototypeResult();
+	assert.equal(
+		(await f.write({ purpose: "plan-prototype-result", questionId: "experiment", result })).receipt.state,
+		"accepted",
+	);
+	assert.equal(f.plan.questions[0]!.resolution, null);
+	assert.equal(
+		planFrontier(f.plan).some((q) => q.id === "follow-up"),
+		false,
+	);
+	assert.equal(
+		(
+			await f.write({
+				purpose: "plan-resolve",
+				questionId: "experiment",
+				resolution: { kind: "knowledge", id: "facts", digest: "guess" },
+			})
+		).receipt.state,
+		"rejected",
+	);
+	assert.equal((await f.write(ask("experiment", ["prototype-feedback"]))).receipt.state, "accepted");
+	await f.answer(false, "yes", "I like this behavior");
+	assert.equal(f.plan.questions[0]!.resolution, null);
+	assert.equal((await f.answer(true, "yes", "I like this behavior")).state, "accepted");
+	const submission = f.store.interviews.latest(f.missionId)!.submission!;
+	const resolution = { kind: "interview", id: submission.operationId, digest: submission.digest };
+	assert.equal(
+		(await f.write({ purpose: "plan-resolve", questionId: "experiment", resolution })).receipt.state,
+		"accepted",
+	);
+	assert.equal(
+		(await f.write({ purpose: "plan-resolve", questionId: "follow-up", resolution })).receipt.state,
+		"rejected",
+	);
+	assert.deepEqual(
+		planFrontier(f.plan).map((q) => q.id),
+		["follow-up"],
+	);
+	await f.restart();
+	assert.deepEqual(f.plan.questions[0]!.prototypeResult, result);
+	assert.equal(f.store.tasks(f.missionId).length, 0);
+});
+
+test("changed prototype map retains evidence as stale and refuses old result or feedback", async (t) => {
+	const f = await fixture(t);
+	await f.map([prototype()]);
+	const result = f.prototypeResult();
+	await f.write({ purpose: "plan-prototype-result", questionId: "experiment", result });
+	await f.write(ask("experiment", ["feedback"]));
+	await f.answer();
+	const submission = f.store.interviews.latest(f.missionId)!.submission!;
+	const before = f.plan.revision;
+	await f.map([{ ...prototype(), prototype: { ...prototype().prototype!, context: "New user context" } }]);
+	assert.deepEqual(f.plan.questions[0]!.prototypeResult, result);
+	assert.equal((await f.service().view(f.missionId)).exploration[0]!.evidence, "stale");
+	assert.equal(
+		(await f.write({ purpose: "plan-prototype-result", questionId: "experiment", result })).receipt.state,
+		"rejected",
+	);
+	assert.equal(
+		(
+			await f.write({
+				purpose: "plan-resolve",
+				questionId: "experiment",
+				resolution: { kind: "interview", id: submission.operationId, digest: submission.digest },
+			})
+		).receipt.state,
+		"rejected",
+	);
+	assert.deepEqual((await f.service().read(f.missionId, before))!.questions[0]!.prototypeResult, result);
+	const revised = f.prototypeResult();
+	assert.equal(
+		(await f.write({ purpose: "plan-prototype-result", questionId: "experiment", result: revised })).receipt.state,
+		"accepted",
+	);
+	f.store.unlinkArtifact(f.missionId, revised.artifact.artifactId);
+	assert.equal((await f.service().view(f.missionId)).exploration[0]!.evidence, "stale");
+	assert.equal((await f.write(ask("experiment"))).receipt.state, "rejected");
+});
+
+test("prototype decision reuse requires explicit user origin, not an agent preference", async (t) => {
+	const f = await fixture(t);
+	await f.map([]);
+	const agent = f.store.addDecision(f.missionId, "Agent prefers A", { sessionId: f.plan.ownerSessionId }, "all");
+	const user = f.store.addDecision(f.missionId, "I choose B", undefined, "all");
+	const sources = [agent, user].map((d) => ({ kind: "decision" as const, id: d.id, digest: digest(d) }));
+	await f.map([{ ...prototype(), sources }]);
+	await f.write({ purpose: "plan-prototype-result", questionId: "experiment", result: f.prototypeResult() });
+	assert.equal(
+		(
+			await f.write({
+				purpose: "plan-resolve",
+				questionId: "experiment",
+				resolution: { kind: "decision", id: agent.id, digest: digest(agent) },
+			})
+		).receipt.state,
+		"rejected",
+	);
+	assert.equal(
+		(
+			await f.write({
+				purpose: "plan-resolve",
+				questionId: "experiment",
+				resolution: { kind: "decision", id: user.id, digest: digest(user) },
+			})
+		).receipt.state,
+		"accepted",
+	);
+});
+
+test("prototype dependencies and permission changes at checkpoint fence evidence capture", async (t) => {
+	const f = await fixture(t);
+	await f.map([question("first"), prototype("experiment", ["first"])]);
+	assert.equal(
+		(await f.write({ purpose: "plan-prototype-result", questionId: "experiment", result: f.prototypeResult() }))
+			.receipt.state,
+		"rejected",
+	);
+	await f.map([prototype()]);
+	const result = f.prototypeResult();
+	const checkpoint = f.journal.checkpoint.bind(f.journal);
+	f.journal.checkpoint = async (op, marker) => {
+		await checkpoint(op, marker);
+		f.allowed = false;
+	};
+	assert.equal(
+		(await f.write({ purpose: "plan-prototype-result", questionId: "experiment", result })).receipt.state,
+		"rejected",
+	);
+	assert.equal(f.plan.questions[0]!.prototypeResult, undefined);
+});
+
+test("prototype result lost ACK is lookup-only after restart, entered absence stays Unknown", async (t) => {
+	const f = await fixture(t, true);
+	await f.map([prototype()]);
+	const result = f.prototypeResult();
+	const op = operation(f.missionId, {
+		purpose: "plan-prototype-result",
+		expectedRevision: f.plan.revision,
+		questionId: "experiment",
+		result,
+	} as PlanWrite);
+	assert.equal(
+		(
+			await f.journal.execute(op, async (o, e) => {
+				await f.service().admit(o, e.firstEntry);
+				throw new Error("lost ACK");
+			})
+		).state,
+		"pending",
+	);
+	const saved = f.plan;
+	await f.restart();
+	assert.equal((await f.run(op)).state, "accepted");
+	assert.deepEqual(f.plan, saved);
+	const absent = operation(f.missionId, {
+		purpose: "plan-prototype-result",
+		expectedRevision: saved.revision,
+		questionId: "experiment",
+		result: f.prototypeResult(),
+	} as PlanWrite);
+	await f.journal.reserve(absent);
+	await f.journal.checkpoint(absent, {
+		stage: "planning-entered",
+		purpose: absent.kind,
+		payloadHash: absent.payloadHash,
+	});
+	assert.equal((await f.run(absent)).state, "pending");
+	assert.deepEqual(f.plan, saved);
 });
 
 test("native fog promotion is atomic, revision-fenced, historical and restored", async (t) => {
