@@ -239,6 +239,11 @@ point, script or build uses it, and `tsconfig.json` excludes it.
   shares the `Desk::pulse` update workload. It is its own Cargo workspace.
   [fixtures/rust-today/README.md](fixtures/rust-today/README.md) has its
   parity matrix, hooks and commands.
+- `fixtures/prototype-work/`: a throwaway browser prototype (one HTML file)
+  for reviewing where incoming work lives, coordinator threads and Linear
+  browsing. Design review only, not approved for production.
+  [fixtures/prototype-work/README.md](fixtures/prototype-work/README.md) has
+  the review steps.
 
 ## What it shows
 

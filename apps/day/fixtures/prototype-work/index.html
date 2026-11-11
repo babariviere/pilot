@@ -1,0 +1,1785 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pilot prototype</title>
+<!--
+PROTOTYPE. Throw away. Not Pilot app code; the app stays native (NSH).
+
+Question: where should incoming work (Slack, Linear) live, and does one work item keep four things
+apart: the agent reporting finished, the PR merging, production release and the user's Done?
+
+Three variants on one page, switched with ?variant=A|B|C and the bottom bar (or the arrow keys):
+  A  Inline on Today      new requests at the top of Today, triaged in place
+  B  Triage from Today    one line on Today opens a focused one-at-a-time triage pass
+  C  Separate Inbox       untriaged requests in their own destination; started work moves to Today
+
+Shape follows the upstream "prototype" skill (UI.md: radically different variants on one route,
+floating switcher, ?variant=; LOGIC.md: pure reducer in its own script block, visible state panel,
+free play and guided walkthroughs). Source: mattpocock/skills at
+4ae2317ddb22b046e26455e4f9c9b3aaaf62212d, MIT, Copyright 2026 Matt Pocock, vendored unmodified in
+packages/kernel/skills/mission-planning/upstream/prototype. Adapted to one self-contained file that
+opens in a browser, because the user asked to review it there.
+
+Mock data only, in memory. No network, no credentials, no Slack/Linear/GitHub calls.
+-->
+<style>
+:root{
+	--bg:#ffffff;--fg:#1f2633;--card:#ffffff;--muted:#f1f4f8;--mfg:#5f6b7d;--faint:#8b95a4;
+	--border:#e3e8ef;--border2:#d3dae4;--primary:#2f6fc6;--onprimary:#ffffff;--sel:#eaf1f9;--track:#edeeef;
+	--needs:#c98a00;--needs-ink:#8a5a00;--needs-soft:#fbf3e0;--ok:#2f8f5b;--ok-ink:#22744a;--ok-soft:#eaf4ef;
+	--failed:#c93c37;--failed-ink:#a8302b;--failed-soft:#fbeceb;--progress:#5b6ad0;--hl:rgba(31,38,51,.045);
+	--shadow:0 1px 2px rgba(20,30,50,.06),0 8px 24px rgba(20,30,50,.08);
+	--proto:#1d2129;--proto-fg:#eef1f6;--proto-faint:#9aa3b2;
+	color-scheme:light dark;
+}
+@media (prefers-color-scheme:dark){:root{
+	--bg:#23262c;--fg:#d6dbe3;--card:#2c3037;--muted:#2a2e35;--mfg:#a3acba;--faint:#7f8998;
+	--border:#353a43;--border2:#434955;--primary:#7db9e8;--onprimary:#13202f;--sel:#404d5b;--track:#33363c;
+	--needs:#e6b450;--needs-ink:#f0c56d;--needs-soft:#3a3324;--ok:#6cc58f;--ok-ink:#84d3a3;--ok-soft:#2c3938;
+	--failed:#f07a72;--failed-ink:#f59a93;--failed-soft:#3f2a2b;--progress:#8f9bf0;--hl:rgba(255,255,255,.05);
+	--shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+	--proto:#0f1115;--proto-fg:#eef1f6;--proto-faint:#8b93a1;
+}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg)}
+body{font:15px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+button,input,textarea{font:inherit;color:inherit}
+p{margin:0}
+:focus{outline:none}
+:focus-visible{outline:2px solid color-mix(in srgb,var(--primary) 45%,transparent);outline-offset:2px;border-radius:6px}
+@media (prefers-reduced-motion:no-preference){.enter{animation:enter .18s ease-out}@keyframes enter{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}}
+
+/* window chrome */
+.top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:6px;height:48px;padding:0 16px;background:var(--bg);border-bottom:1px solid var(--border)}
+.top .back{width:30px;height:30px;border-radius:7px;border:0;background:none;cursor:pointer;color:var(--mfg);font-size:20px;line-height:1}
+.top .back:hover{background:var(--hl)}
+.top .back[hidden]{display:block;visibility:hidden}
+.crumb{font-size:13.5px;color:var(--mfg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
+.crumb b{color:var(--fg);font-weight:600}
+.nav{display:flex;gap:2px}
+.nav button{border:0;background:none;padding:5px 10px;border-radius:7px;cursor:pointer;color:var(--mfg);font-size:13.5px;display:flex;align-items:center;gap:6px}
+.nav button:hover{background:var(--hl)}
+.nav button.on{color:var(--fg);background:var(--hl);font-weight:500}
+.count{font-size:11.5px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--needs-soft);color:var(--needs-ink);display:inline-grid;place-items:center;font-weight:600}
+
+/* page */
+.page{max-width:720px;margin:0 auto;padding:40px 24px 170px}
+.page.wide{max-width:1120px}
+.date{font-size:13px;color:var(--faint)}
+h1{font-size:28px;line-height:1.2;font-weight:600;letter-spacing:-.012em;margin:6px 0 8px}
+h2{font-size:17px;font-weight:600;margin:0 0 4px}
+h3{font-size:15px;font-weight:600;margin:0}
+.sub{color:var(--mfg);max-width:62ch}
+.meta{font-size:13px;color:var(--mfg)}
+.faint{color:var(--faint)}
+.small{font-size:13px}
+.sec{margin-top:36px}
+.sec-title{display:flex;align-items:baseline;gap:8px;font-size:12.5px;color:var(--faint);padding-bottom:6px}
+.sec-title .n{color:var(--faint)}
+.sec-title .grow{flex:1}
+.quiet-line{padding:12px 0;border-top:1px solid var(--border);color:var(--faint);font-size:13.5px}
+
+/* rows */
+.row{display:grid;grid-template-columns:16px minmax(0,1fr) auto;column-gap:10px;align-items:center;padding:12px 10px;margin:0 -10px;border-top:1px solid var(--border);cursor:pointer;border-radius:0}
+.row:hover,.row.hl{background:var(--hl);border-radius:8px;border-top-color:transparent}
+.row:hover+.row,.row.hl+.row{border-top-color:transparent}
+.row .t{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .s{font-size:12.5px;white-space:nowrap}
+.row .m{grid-column:2/4;font-size:13px;color:var(--mfg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row.open{background:var(--hl);border-radius:10px 10px 0 0;border-top-color:transparent}
+.tone-needs{color:var(--needs-ink)}.tone-failed{color:var(--failed-ink)}.tone-ok{color:var(--ok-ink)}.tone-quiet{color:var(--mfg)}.tone-faint{color:var(--faint)}
+.expand{margin:0 -10px;padding:4px 10px 16px 36px;background:var(--hl);border-radius:0 0 10px 10px}
+
+/* marks */
+.mk{width:16px;height:16px;display:block}
+
+/* controls */
+.btn{height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--border2);background:var(--card);cursor:pointer;font-size:13.5px;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{background:var(--muted)}
+.btn.primary{background:var(--primary);border-color:var(--primary);color:var(--onprimary);font-weight:500}
+.btn.primary:hover{filter:brightness(1.06)}
+.btn:disabled{opacity:.45;cursor:default;filter:none}
+.btn.danger{color:var(--failed-ink)}
+.link{border:0;background:none;padding:0;color:var(--primary);cursor:pointer;font-size:inherit}
+.link:hover{text-decoration:underline}
+.link:disabled{color:var(--faint);cursor:default;text-decoration:none}
+.actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:14px}
+.kbd{font-size:11px;color:var(--faint);border:1px solid var(--border2);border-radius:4px;padding:0 4px;margin-left:2px}
+textarea,input[type=text]{width:100%;border:1px solid var(--border2);background:var(--card);border-radius:8px;padding:9px 11px;resize:vertical;min-height:40px;line-height:1.45}
+textarea:focus,input[type=text]:focus{border-color:var(--primary);outline:none}
+
+/* panels */
+.panel{border:1px solid var(--border);border-radius:12px;padding:18px 20px;margin-top:20px;background:var(--card)}
+.panel.soft{background:var(--muted);border-color:transparent}
+.panel.needs{background:var(--needs-soft);border-color:transparent}
+.panel.failed{background:var(--failed-soft);border-color:transparent}
+.quote{background:var(--muted);border-radius:10px;padding:14px 16px;margin-top:18px;white-space:pre-wrap}
+.quote .who{font-size:13px;color:var(--mfg);margin-bottom:4px}
+.banner{display:flex;gap:10px;align-items:flex-start;font-size:13.5px;color:var(--mfg);padding:10px 12px;border-radius:9px;background:var(--muted);margin-top:16px}
+.banner .mk{margin-top:2px;flex:none}
+.choice{display:grid;grid-template-columns:22px 1fr;gap:2px 10px;width:100%;text-align:left;border:1px solid var(--border);background:var(--card);border-radius:10px;padding:10px 12px;margin-top:8px;cursor:pointer}
+.choice:hover{border-color:var(--border2)}
+.choice.on{border-color:var(--primary);background:var(--sel)}
+.choice .n{grid-row:1/3;width:20px;height:20px;border-radius:5px;border:1px solid var(--border2);display:grid;place-items:center;font-size:11.5px;color:var(--mfg);margin-top:1px}
+.choice.on .n{background:var(--primary);border-color:var(--primary);color:var(--onprimary)}
+.choice .l{font-weight:500}
+.choice .d{font-size:13px;color:var(--mfg)}
+.rec{font-size:11.5px;font-weight:500;color:var(--ok-ink);background:var(--ok-soft);border-radius:5px;padding:1px 6px;margin-left:6px;vertical-align:1px}
+details summary{cursor:pointer;color:var(--mfg);font-size:13.5px}
+.why{font-size:13.5px;color:var(--mfg);margin-top:6px}
+.stands{display:grid;grid-template-columns:110px 1fr;gap:10px 16px;margin-top:6px}
+.stands .k{font-size:13px;color:var(--faint);padding-top:1px}
+.stands .v{font-size:14px}
+.stands .v .meta{display:block}
+.steps{list-style:none;margin:8px 0 0;padding:0}
+.steps li{display:grid;grid-template-columns:44px 1fr;gap:10px;padding:5px 0;font-size:14px}
+.steps li .at{color:var(--faint);font-size:12.5px;padding-top:1px;font-variant-numeric:tabular-nums}
+.steps li.live{color:var(--fg)}
+.ev{display:grid;grid-template-columns:16px 1fr auto;gap:10px;align-items:center;padding:10px 0;border-top:1px solid var(--border);cursor:pointer}
+.ev:first-child{border-top:0}
+.ev:hover .l{text-decoration:underline}
+.ev .r{font-size:12.5px}
+.check{display:flex;gap:10px;align-items:center;padding:4px 0;font-size:14px;cursor:pointer}
+.check input{width:15px;height:15px;accent-color:var(--primary)}
+.dots{display:inline-flex;gap:3px;vertical-align:middle;margin-left:6px}
+.dots i{width:4px;height:4px;border-radius:50%;background:var(--faint);display:block}
+@media (prefers-reduced-motion:no-preference){.dots i{animation:dot 1.2s infinite ease-in-out}.dots i:nth-child(2){animation-delay:.15s}.dots i:nth-child(3){animation-delay:.3s}@keyframes dot{0%,60%,100%{opacity:.35;transform:none}30%{opacity:1;transform:translateY(-2px);background:var(--progress)}}}
+.chip{font-size:12px;border-radius:5px;padding:1px 6px;background:var(--muted);color:var(--mfg);white-space:nowrap}
+
+/* triage (B) */
+.triage{max-width:640px;margin:0 auto;padding:36px 24px 170px}
+.progressline{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--mfg)}
+.pips{display:flex;gap:4px}
+.pips i{width:22px;height:4px;border-radius:2px;background:var(--track);display:block}
+.pips i.done{background:var(--faint)}
+.pips i.cur{background:var(--primary)}
+
+/* inbox (C) */
+.split{display:grid;grid-template-columns:340px minmax(0,1fr);min-height:calc(100vh - 48px)}
+.split .list{border-right:1px solid var(--border);padding:20px 16px 160px}
+.split .list .row{margin:0;padding:11px 10px}
+.split .detail{padding:32px 40px 170px;max-width:760px}
+.row.sel{background:var(--sel);border-radius:8px;border-top-color:transparent}
+
+/* thread */
+.thread{display:grid;grid-template-columns:minmax(0,1fr);gap:40px;max-width:1120px;margin:0 auto;padding:32px 24px 120px}
+.thread:not(.map){max-width:728px}
+.thread.map{grid-template-columns:minmax(0,1fr) 360px}
+.msgs{max-width:680px}
+.msg{margin-top:18px}
+.msg .who{font-size:12.5px;color:var(--faint);margin-bottom:3px}
+.msg.you{display:flex;flex-direction:column;align-items:flex-end}
+.msg.you .body{background:var(--muted);border-radius:12px;padding:9px 13px;max-width:80%}
+.composer{position:sticky;bottom:72px;margin-top:28px;z-index:4}
+.composer .in{max-width:680px;background:var(--muted);border-radius:14px;padding:8px;box-shadow:var(--shadow)}
+.thread aside{position:sticky;top:64px;align-self:start}
+.composer textarea{border:0;background:var(--card);min-height:38px}
+.composer .row2{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
+.composer .row2 .grow{flex:1}
+.ended{font-size:13.5px;color:var(--mfg);background:var(--muted);border-radius:10px;padding:12px 14px;margin-top:22px;display:flex;align-items:center;gap:10px}
+.map h3{font-size:12.5px;color:var(--faint);font-weight:400;margin:18px 0 6px}
+.map .dest{font-size:15px;font-weight:500}
+.map ul{list-style:none;margin:0;padding:0}
+.map li{padding:7px 0;border-top:1px solid var(--border);font-size:14px}
+.map li .meta{display:block;font-size:12.5px}
+
+/* linear */
+.tabs{display:flex;gap:4px;margin-top:18px}
+.tabs button{border:0;background:none;padding:6px 10px;border-radius:7px;cursor:pointer;color:var(--mfg);font-size:13.5px}
+.tabs button.on{background:var(--hl);color:var(--fg);font-weight:500}
+.bar{height:4px;border-radius:2px;background:var(--track);overflow:hidden;margin-top:8px;max-width:280px}
+.bar i{display:block;height:100%;background:var(--faint)}
+.key{font-size:12.5px;color:var(--faint);font-variant-numeric:tabular-nums;margin-right:6px}
+
+/* modal */
+.scrim{position:fixed;inset:0;background:rgba(15,20,30,.28);display:grid;place-items:center;z-index:20;padding:24px}
+.modal{background:var(--card);border-radius:14px;box-shadow:var(--shadow);width:min(560px,100%);max-height:84vh;overflow:auto;padding:22px 24px}
+.modal .actions{justify-content:flex-end}
+
+/* prototype chrome: deliberately not Pilot's look */
+.pbar{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:30;display:flex;align-items:center;gap:4px;background:var(--proto);color:var(--proto-fg);border-radius:999px;padding:5px;box-shadow:0 6px 24px rgba(0,0,0,.25);font-size:13px}
+.pbar button{border:0;background:none;color:inherit;cursor:pointer;border-radius:999px;padding:6px 10px;font-size:13px}
+.pbar button:hover{background:rgba(255,255,255,.1)}
+.pbar .lbl{padding:0 8px;min-width:230px;text-align:center;white-space:nowrap}
+.pbar .lbl small{color:var(--proto-faint)}
+.pbar .sep{width:1px;height:18px;background:rgba(255,255,255,.18);margin:0 4px}
+.pbar .tag{color:var(--proto-faint);padding:0 8px 0 10px}
+.drawer{position:fixed;top:0;right:0;bottom:0;width:400px;max-width:100vw;z-index:25;background:var(--proto);color:var(--proto-fg);overflow:auto;padding:18px 18px 90px;font-size:13.5px;box-shadow:-10px 0 30px rgba(0,0,0,.2)}
+.drawer h2{font-size:15px;color:#fff}
+.drawer p{color:#c6ccd6;margin-top:6px}
+.drawer .ptabs{display:flex;flex-wrap:wrap;gap:4px;margin:14px 0 10px}
+.drawer .ptabs button,.drawer .pbtn{border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.04);color:#e8ecf2;border-radius:7px;padding:5px 9px;cursor:pointer;font-size:12.5px;text-align:left}
+.drawer .ptabs button.on{background:#e8ecf2;color:#111}
+.drawer .pbtn:hover{background:rgba(255,255,255,.1)}
+.drawer .pbtn:disabled{opacity:.35;cursor:default}
+.drawer .pbtn.next{border-color:#8fb4ff;background:rgba(143,180,255,.16)}
+.drawer .grid{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.drawer .st{display:grid;grid-template-columns:118px 1fr;gap:4px 10px;margin-top:10px}
+.drawer .st .k{color:var(--proto-faint)}
+.drawer .st .v.chg{color:#ffd479}
+.drawer .wt-steps{display:grid;gap:6px;margin-top:10px}
+.drawer table{border-collapse:collapse;width:100%;margin-top:10px;font-size:12.5px}
+.drawer td,.drawer th{border-top:1px solid rgba(255,255,255,.1);padding:6px 4px;text-align:left;vertical-align:top}
+.drawer th{color:var(--proto-faint);font-weight:400}
+.drawer .log{margin-top:10px;font-size:12.5px;color:#c6ccd6}
+.drawer .log div{padding:3px 0;border-top:1px solid rgba(255,255,255,.07)}
+.drawer label{display:flex;gap:8px;align-items:center;margin-top:8px;color:#e8ecf2}
+.drawer a{color:#8fb4ff}
+@media (max-width:760px){.split{grid-template-columns:1fr}.split .detail{padding:24px}.thread.map{grid-template-columns:1fr}.pbar .lbl{min-width:0}.nav button span.word{display:none}}
+
+#toast{position:fixed;top:58px;left:50%;transform:translateX(-50%);z-index:15}
+.toast{background:var(--fg);color:var(--bg);border-radius:9px;padding:8px 14px;font-size:13.5px;box-shadow:var(--shadow);white-space:nowrap}
+.toast .link{color:var(--bg);text-decoration:underline;margin-left:6px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toast"></div>
+<div id="drawer"></div>
+<div id="modal"></div>
+<div id="bar"></div>
+<script>
+
+/* ==========================================================================
+   Pure model. No DOM. Liftable: (state, action) => state, plus selectors.
+   ========================================================================== */
+const Model = (() => {
+	const START_MIN = 10 * 60 + 46;
+	const clock = (m) => Math.floor(m / 60) + ":" + String(m % 60).padStart(2, "0");
+
+	const HERO_QUESTION = {
+		text: "How should I fix it?",
+		why: "Both code fixes work for Northwind today. They differ in effort and in what happens as accounts grow. The third option changes the product, so it needs your call.",
+		options: [
+			{ label: "Stream the file as rows are read", detail: "Fixes the cause. About two hours. Touches the export service only.", recommended: true },
+			{ label: "Raise the gateway limit to 120 s", detail: "Ten minutes. Fails again above about 8,000 invoices." },
+			{ label: "Email the file when it is ready", detail: "Changes export for every client. Needs a product decision first." },
+		],
+	};
+	const REPORTS = [
+		"The export now streams rows instead of building the whole file first. On a copy of Northwind's data, 6,214 invoices export in 7 s (before: 94 s, cut off at 60 s).",
+		"The gateway limit for exports is now 120 s. Northwind's 6,214 invoices export in 94 s. Accounts above about 8,000 invoices will still fail.",
+		"I did not change code. I wrote a short proposal for emailed exports: what changes for clients, effort and open questions. It needs your product call.",
+	];
+	const SCRIPTS = {
+		first: [
+			{ kind: "step", text: "Read the Slack thread and Northwind's export settings" },
+			{ kind: "step", text: "Reproduced it: 6,214 invoices take 94 s, and the gateway stops at 60 s" },
+			{ kind: "question" },
+			{ kind: "step", text: "Wrote the fix; 41 tests pass", proposal: "Wrote the proposal: docs/billing/emailed-exports.md" },
+			{ kind: "pr", state: "checks_running" },
+			{ kind: "pr", state: "checks_passed" },
+			{ kind: "report" },
+		],
+		rework: [
+			{ kind: "step", text: "Read your note" },
+			{ kind: "step", text: "Updated PR #482 for your note", proposal: "Updated the proposal for your note" },
+			{ kind: "pr", state: "checks_running" },
+			{ kind: "pr", state: "checks_passed" },
+			{ kind: "report" },
+		],
+	};
+
+	function item(p) {
+		return Object.assign(
+			{
+				triage: "new", route: null, start: "idle", truth: null, startedAt: null,
+				agent: { phase: "none", steps: [], script: null, pos: 0 },
+				question: null, answer: null, plan: null, pr: null, report: null,
+				verify: { checks: {}, state: "open", at: null },
+				scope: null, linear: null, notice: null, round: 1, note: null, failure: null, taskN: null, thread: null,
+			},
+			p,
+		);
+	}
+
+	const Q1 = {
+		text: "For billing-api, what tells you a change is in production?",
+		options: [
+			{ label: "The deploy workflow finished on main", detail: "GitHub Actions deploy-prod. Pilot can read this today.", recommended: true },
+			{ label: "A version tag was pushed", detail: "Tags exist, but not every tag is deployed." },
+			{ label: "Not sure. It differs per repo", detail: "billing-api, billing-web and legacy-admin deploy in different ways." },
+		],
+	};
+	const Q2 = {
+		text: "Should agents wait for that signal before they report finished?",
+		options: [
+			{ label: "No. Report on merge, show release on its own line", detail: "You can check sooner. Release stays visible and honest.", recommended: true },
+			{ label: "Yes. Wait for release, up to one day", detail: "Fewer surprises. Reports come later." },
+		],
+	};
+	const BIG = {
+		text: "Map it out?",
+		options: [
+			{ label: "Start a Wayfinder map", detail: "We explore in small steps. You answer only what needs you.", recommended: true },
+			{ label: "Keep it small: billing-api only", detail: "Other repos go to Later." },
+		],
+	};
+	const SCOPE_Q = {
+		text: "Northwind asked about CSV. What should this fix cover?",
+		options: [
+			{ label: "CSV only. Fix what broke", detail: "Smallest change. Ships fastest.", recommended: true },
+			{ label: "CSV and the XLSX export", detail: "XLSX uses the same code path and will hit the same limit." },
+			{ label: "Also email very large exports", detail: "Product change. Better as its own request." },
+		],
+	};
+
+	function initial() {
+		return {
+			t: START_MIN,
+			sim: { lostAck: "off", slackOffline: false, linearOffline: false },
+			seq: { task: 12, decision: 5 },
+			order: ["northwind", "stripe", "staging", "currency", "pdf", "webhooks", "sentry", "flaky"],
+			items: {
+				northwind: item({
+					id: "northwind", title: "Northwind can't export invoices to CSV", repo: "billing-api",
+					source: { app: "Slack", where: "#client-northwind", who: "Dana Ruiz", org: "Northwind", at: "10:42",
+						text: "Hi team! Since Monday our finance folks can't export invoices to CSV. The button spins, then nothing happens. We close the month on Friday, so this is a bit urgent. Account: northwind-eu" },
+					suggest: { primary: "start", mission: "billing", why: "Looks like a bug in invoice export. Billing reliability covers exports." },
+					agent: { phase: "none", steps: [], script: "first", pos: 0 },
+				}),
+				stripe: item({
+					id: "stripe", title: "Update the Stripe SDK to v15", repo: "billing-api",
+					source: { app: "Slack", where: "#eng-billing", who: "Marco Bianchi", at: "10:15",
+						text: "Dependabot's Stripe SDK bump (v14 to v15) conflicts with our webhook types. Can someone pick it up this week?" },
+					suggest: { primary: "start", mission: "billing", why: "Dependency update in billing-api. Billing reliability has a task for it (#11)." },
+				}),
+				staging: item({
+					id: "staging", title: "Staging database restarts at 14:00",
+					source: { app: "Slack", where: "Direct message", who: "Priya Shah", at: "09:58",
+						text: "Heads up: the staging database restarts at 14:00 for about ten minutes. Nothing to do on your side." },
+					suggest: { primary: "discard", mission: null, why: "Information only. No work needed." },
+				}),
+				currency: item({
+					id: "currency", title: "Default currency for new workspaces", triage: "started", route: "onboarding", start: "acked",
+					source: { app: "Mission", where: "Workspace onboarding", at: "09:30" },
+					agent: { phase: "question", steps: [{ at: "09:12", text: "Started" }, { at: "09:30", text: "Found three places that assume EUR" }], script: null, pos: 0 },
+					question: {
+						text: "Which currency should new workspaces use by default?",
+						why: "Every workspace starts in EUR today. Two new clients bill in GBP and had to change it by hand.",
+						options: [
+							{ label: "Ask during sign-up", detail: "One extra step. Always right.", recommended: true },
+							{ label: "Guess from the billing country", detail: "No extra step. Wrong for some clients." },
+							{ label: "Keep EUR", detail: "No change." },
+						],
+					},
+					taskN: 3,
+				}),
+				pdf: item({
+					id: "pdf", title: "Invoice PDF footer overlaps totals", triage: "started", route: "billing", start: "acked", repo: "billing-api",
+					source: { app: "Slack", where: "#client-acme", who: "Lee Park", org: "Acme", at: "Yesterday",
+						text: "On invoices with lots of lines, the footer sits on top of the totals. Clients are asking." },
+					agent: { phase: "reported", steps: [{ at: "08:51", text: "Started" }, { at: "09:20", text: "Reproduced on Acme's three longest invoices" }, { at: "09:35", text: "Opened PR #476; checks passed" }, { at: "09:40", text: "Reported finished" }], script: null, pos: 0 },
+					pr: { n: 476, title: "Fix PDF footer layout", state: "merged", mergedAt: "09:58" },
+					report: { at: "09:40", summary: "The footer now moves below the totals when an invoice has more than 12 lines. Checked against Acme's three longest invoices.",
+						evidence: [{ kind: "pr" }, { kind: "artifact", id: "pdfshots", label: "Before and after, page 2" }] },
+					taskN: 7, linear: "BIL-224",
+				}),
+				webhooks: item({
+					id: "webhooks", title: "Retry failed webhooks with backoff", triage: "started", route: "billing", start: "acked", repo: "billing-api",
+					source: { app: "Linear", where: "BIL-219", at: "Monday" },
+					agent: { phase: "working", steps: [{ at: "09:05", text: "Started" }, { at: "10:12", text: "Added a retry schedule: five tries over 24 hours" }, { at: "10:31", text: "Opened PR #479" }], script: null, pos: 0 },
+					pr: { n: 479, title: "Retry webhooks with backoff", state: "checks_running" },
+					taskN: 5, linear: "BIL-219",
+				}),
+				sentry: item({
+					id: "sentry", title: "Rotate the Sentry DSN", triage: "started", start: "acked",
+					source: { app: "Slack", where: "#security", who: "Ana Costa", at: "08:40" },
+					agent: { phase: "reported", steps: [{ at: "08:44", text: "Started" }, { at: "09:10", text: "Reported finished" }], script: null, pos: 0 },
+					report: { at: "09:10", summary: "New DSN set in all three services. The old one is revoked.", evidence: [] },
+					verify: { checks: {}, state: "done", at: "09:20" },
+				}),
+				flaky: item({
+					id: "flaky", title: "Flaky checkout e2e test", triage: "later",
+					source: { app: "Slack", where: "#eng", who: "Sam Lee", at: "Yesterday", text: "checkout.spec fails about 1 in 10 runs on CI. Not urgent." },
+					suggest: { primary: "start", mission: null, why: "Small and standalone. Not tied to a mission." },
+				}),
+			},
+			missions: {
+				billing: {
+					id: "billing", title: "Billing reliability", goal: "Exports, webhooks and invoices work for every client size.",
+					tasks: [
+						{ n: 5, title: "Retry failed webhooks with backoff", item: "webhooks", linear: "BIL-219" },
+						{ n: 7, title: "Invoice PDF footer overlaps totals", item: "pdf", linear: "BIL-224" },
+						{ n: 9, title: "Show tax ID on credit notes", status: "todo", linear: "BIL-226" },
+						{ n: 11, title: "Update the Stripe SDK to v15", status: "todo" },
+					],
+					decisions: [{ n: 4, text: "Retry failed webhooks five times over 24 hours.", from: "How many webhook retries?" }],
+					outputs: [
+						{ kind: "doc", label: "Webhook retries runbook", note: "docs/billing/webhooks.md" },
+						{ kind: "artifact", label: "Retry backoff over 24 hours", note: "Chart" },
+						{ kind: "report", label: "Weekly report, 10 November", note: "Agent's assessment" },
+					],
+					threads: ["release", "retries"], explore: [], fog: [],
+					linear: { parent: "BIL-200", publishing: false },
+				},
+				onboarding: {
+					id: "onboarding", title: "Workspace onboarding", goal: "New clients set up a workspace without help.",
+					tasks: [
+						{ n: 2, title: "Shorter sign-up form", status: "done" },
+						{ n: 3, title: "Default currency for new workspaces", item: "currency" },
+						{ n: 4, title: "Welcome checklist", status: "todo" },
+					],
+					decisions: [], outputs: [{ kind: "pr", label: "PR #301 · Shorter sign-up form", note: "Merged · release not tracked" }],
+					threads: [], explore: [], fog: [], linear: null,
+				},
+			},
+			threads: {
+				release: {
+					id: "release", mission: "billing", title: "When is a change in production?", item: null,
+					origin: "Started from Invoice PDF footer overlaps totals", state: "open", mode: "grill", step: "q1",
+					msgs: [{ who: "coord", at: "10:20", text: "PR #476 merged this morning, but nothing tells Pilot when it reached production. Before agents rely on that, let's agree what released means. One question at a time." }],
+					ask: Q1, proposal: null, map: null, pending: null, result: null,
+				},
+				retries: {
+					id: "retries", mission: "billing", title: "How many webhook retries?", item: null, origin: "Started by you", state: "decision", mode: "grill", step: "end",
+					msgs: [
+						{ who: "coord", at: "Mon", text: "Stripe retries for three days; our consumers time out after one. How many retries do we want?" },
+						{ who: "you", at: "Mon", text: "Five over 24 hours. After that it should need me." },
+						{ who: "coord", at: "Mon", text: "Recorded as a decision. Task #5 uses it." },
+					],
+					ask: null, proposal: null, map: null, pending: null, result: "Decision 4 recorded.",
+				},
+			},
+			linear: {
+				team: "Billing", synced: "10:43",
+				cycles: [
+					{ n: 41, dates: "20 Oct – 2 Nov", state: "Done" },
+					{ n: 42, dates: "3 – 16 Nov", state: "Current" },
+					{ n: 43, dates: "17 – 30 Nov", state: "Upcoming" },
+				],
+				tickets: [
+					{ key: "BIL-219", title: "Retry failed webhooks with backoff", status: "in_progress", cycle: 42, who: "Agent via Pilot", desc: "Failed webhooks are dropped today. Retry them with backoff." },
+					{ key: "BIL-224", title: "Invoice PDF footer overlaps totals", status: "in_review", cycle: 42, who: "Agent via Pilot", desc: "Long invoices draw the footer over the totals." },
+					{ key: "BIL-228", title: "Update dunning email copy", status: "in_progress", cycle: 42, who: "Sam Lee", desc: "New wording from the support team." },
+					{ key: "BIL-231", title: "CSV export times out for large accounts", status: "todo", cycle: 42, who: "Unassigned", desc: "Exports above about 5,000 invoices never finish. Reported by Northwind and one other client." },
+					{ key: "BIL-226", title: "Show tax ID on credit notes", status: "todo", cycle: 42, who: "Unassigned", desc: "Required for EU clients from January." },
+					{ key: "BIL-227", title: "Refund webhook is missing the currency", status: "done", cycle: 42, who: "Marco Bianchi" },
+					{ key: "BIL-221", title: "Proration rounds one cent off", status: "done", cycle: 42, who: "Agent via Pilot" },
+					{ key: "BIL-222", title: "Credit note numbering per entity", status: "done", cycle: 42, who: "Ana Costa" },
+					{ key: "BIL-232", title: "Update the Stripe SDK to v15", status: "todo", cycle: 43, who: "Unassigned" },
+					{ key: "BIL-233", title: "Invoice numbering per entity", status: "todo", cycle: 43, who: "Unassigned" },
+					{ key: "BIL-234", title: "Usage-based pricing preview", status: "todo", cycle: 43, who: "Unassigned" },
+					{ key: "BIL-210", title: "Move invoices to the new storage bucket", status: "done", cycle: 41, who: "Agent via Pilot" },
+					{ key: "BIL-211", title: "Retry PDF rendering once on timeout", status: "done", cycle: 41, who: "Sam Lee" },
+					{ key: "BIL-214", title: "Remove the legacy invoice API", status: "in_progress", cycle: 41, who: "Marco Bianchi", desc: "Carried over to cycle 42 in Linear." },
+				],
+			},
+			log: [],
+		};
+	}
+
+	/* ---------- selectors ---------- */
+	function stage(it) {
+		if (it.triage === "discarded") return "discarded";
+		if (it.triage === "new") return "new";
+		if (it.triage === "later") return "later";
+		if (it.start === "unknown" || it.start === "checking") return "needs";
+		if (it.verify.state === "done") return "done";
+		if (it.agent.phase === "question" || it.agent.phase === "failed") return "needs";
+		if (it.agent.phase === "reported") return "verify";
+		return "moving";
+	}
+	const PLACES = {
+		A: { new: "Today, New", later: "Today, Later", needs: "Today, Needs you", verify: "Today, To check", moving: "Today, Moving", done: "Today, Done today", discarded: "Today, Discarded (undo)" },
+		B: { new: "Triage (one line on Today)", later: "Triage, Later", needs: "Today, Needs you", verify: "Today, To check", moving: "Today, Moving", done: "Today, Done today", discarded: "Triage, Discarded (undo)" },
+		C: { new: "Inbox", later: "Inbox, Later", needs: "Today, Needs you", verify: "Today, To check", moving: "Today, Moving", done: "Today, Done today", discarded: "Inbox, Discarded (undo)" },
+	};
+	function place(it, variant) { return PLACES[variant][stage(it)]; }
+
+	function agentWords(it) {
+		const p = it.agent.phase;
+		if (it.triage !== "started") return "Not started";
+		if (it.start === "sending") return "Starting";
+		if (it.start === "unknown") return "Start not confirmed";
+		if (it.start === "checking") return "Checking whether it started";
+		if (p === "working") { const last = it.agent.steps[it.agent.steps.length - 1]; return "Working" + (last ? ": " + last.text : ""); }
+		if (p === "question") return "Asks you: " + it.question.text;
+		if (p === "answer_sending") return "Sending your answer";
+		if (p === "failed") return "Failed: " + it.failure;
+		if (p === "reported") return "Reports finished at " + it.report.at;
+		return "Not started";
+	}
+	function prWords(it) {
+		const pr = it.pr;
+		if (!pr) return it.plan === "proposal" ? "None. This result is a proposal" : "None yet";
+		const m = { checks_running: "open, checks running", checks_failed: "open, checks failed", checks_passed: "open, checks passed", merged: "merged at " + pr.mergedAt };
+		return "#" + pr.n + " " + m[pr.state];
+	}
+	function prodWords(it) {
+		if (!it.pr || it.pr.state !== "merged") return it.pr ? "Not released. The PR is not merged" : "Nothing to release yet";
+		return "Unknown. Pilot has no release signal for " + (it.repo || "this repo");
+	}
+	function checkWords(it) {
+		if (it.verify.state === "done") return "Done at " + it.verify.at + ", by you";
+		if (it.agent.phase === "reported") return "Waiting for you";
+		return "Not yet";
+	}
+	function reason(it) {
+		const st = stage(it);
+		if (st === "new") return it.suggest && it.suggest.primary === "discard" ? "Info only" : "New";
+		if (st === "later") return "Later";
+		if (st === "done") return "Done " + it.verify.at;
+		if (it.start === "unknown") return "Start not confirmed";
+		if (it.start === "checking") return "Checking";
+		if (it.start === "sending") return "Starting";
+		if (it.agent.phase === "question") return "Asks: " + it.question.text;
+		if (it.agent.phase === "failed") return "Failed: " + it.failure;
+		if (it.agent.phase === "answer_sending") return "Sending answer";
+		if (st === "verify") return "Finished, check it" + (it.pr && it.pr.state === "merged" ? " · PR merged" : "");
+		const last = it.agent.steps[it.agent.steps.length - 1];
+		return last ? last.text : "Working";
+	}
+	function summary(s, id, variant) {
+		const it = s.items[id];
+		if (!it) return [];
+		return [
+			["Where it lives", place(it, variant)],
+			["Triage", { new: "New, not started", later: "Later", discarded: "Discarded", started: "Started by you" }[it.triage]],
+			["Start delivery", { idle: "Not sent", sending: "Sending", acked: "Confirmed", unknown: "Unknown (no reply)", checking: "Checking" }[it.start]],
+			["Agent", agentWords(it)],
+			["Pull request", prWords(it)],
+			["Production", prodWords(it)],
+			["Your check", checkWords(it)],
+		];
+	}
+
+	/* ---------- reducer ---------- */
+	function reduce(s0, a) {
+		const s = structuredClone(s0);
+		const it = a.id ? s.items[a.id] : null;
+		const now = () => clock(s.t);
+		const log = (text) => s.log.unshift({ at: now(), text });
+		const step = (text) => it.agent.steps.push({ at: now(), text });
+		const mission = (id) => s.missions[id];
+		switch (a.type) {
+			case "start": {
+				if (!it || (it.triage !== "new" && it.triage !== "later")) return s0;
+				s.t += 1;
+				it.triage = "started"; it.route = a.route || null; it.start = "sending"; it.startedAt = now(); it.notice = null;
+				it.truth = s.sim.lostAck === "off" ? "acked" : s.sim.lostAck;
+				s.sim.lostAck = "off";
+				log("You started: " + it.title);
+				return s;
+			}
+			case "start/settle": {
+				if (!it || it.start !== "sending") return s0;
+				if (it.truth === "acked") return startOk(s, it, now, "Started");
+				it.start = "unknown";
+				log("No reply to the start of: " + it.title + ". Pilot will not resend.");
+				return s;
+			}
+			case "start/check": {
+				if (!it || it.start !== "unknown") return s0;
+				it.start = "checking"; return s;
+			}
+			case "start/checkResult": {
+				if (!it || it.start !== "checking") return s0;
+				s.t += 1;
+				if (it.truth === "started") {
+					startOk(s, it, now, "Started at " + it.startedAt + ". Found by your check; nothing was sent twice");
+					return s;
+				}
+				it.triage = "new"; it.start = "idle"; it.route = null; it.truth = null;
+				it.notice = "Pilot checked: the start never arrived, so nothing ran. Starting again is safe.";
+				log("Check found no start for: " + it.title);
+				return s;
+			}
+			case "later": if (!it || it.triage !== "new") return s0; it.triage = "later"; log("Later: " + it.title); return s;
+			case "discard": if (!it || (it.triage !== "new" && it.triage !== "later")) return s0; it.prev = it.triage; it.triage = "discarded"; log("Discarded: " + it.title); return s;
+			case "restore": if (!it || (it.triage !== "later" && it.triage !== "discarded")) return s0; it.triage = "new"; return s;
+			case "agent/next": {
+				if (!it || it.agent.phase !== "working" || !it.agent.script) return s0;
+				s.t += 2;
+				if (it.pr && it.pr.state === "checks_failed") { step("Fixed a failing timezone test"); it.pr.state = "checks_running"; return s; }
+				const script = SCRIPTS[it.agent.script];
+				let ev = script[it.agent.pos];
+				while (ev && ev.kind === "pr" && it.plan === "proposal") { it.agent.pos++; ev = script[it.agent.pos]; }
+				if (!ev) return s0;
+				it.agent.pos++;
+				if (ev.kind === "step") step(it.plan === "proposal" && ev.proposal ? ev.proposal : ev.text);
+				if (ev.kind === "question") { it.question = HERO_QUESTION; it.agent.phase = "question"; step("Asked how to fix it"); }
+				if (ev.kind === "pr") {
+					if (!it.pr) { it.pr = { n: 482, title: it.plan === "limit" ? "Raise export gateway limit to 120 s" : "Stream invoice CSV export", state: ev.state }; step("Opened PR #482; checks running"); }
+					else { it.pr.state = ev.state; step(ev.state === "checks_passed" ? "Checks passed on PR #482" : "Pushed to PR #482; checks running"); }
+				}
+				if (ev.kind === "report") {
+					it.agent.phase = "reported";
+					const choice = it.answer ? it.answer.choice : 0;
+					const evidence = [];
+					if (it.pr) evidence.push({ kind: "pr" });
+					evidence.push(it.plan === "proposal"
+						? { kind: "doc", id: "proposal", label: "docs/billing/emailed-exports.md", note: "New proposal" }
+						: { kind: "doc", id: "exportsdoc", label: "docs/billing/exports.md", note: "Limits section updated" });
+					if (it.plan !== "proposal") evidence.push({ kind: "artifact", id: "timing", label: "Export time, before and after" });
+					evidence.push({ kind: "reply", id: "reply", label: "Draft reply to Dana", note: "Not sent" });
+					it.report = { at: now(), round: it.round, summary: (it.round > 1 ? "Second pass, after your note. " : "") + REPORTS[choice >= 0 ? choice : 0], evidence };
+					step("Reported finished");
+					log("Agent reports finished: " + it.title);
+				}
+				return s;
+			}
+			case "answer": {
+				if (!it || it.agent.phase !== "question") return s0;
+				if (a.choice == null && !(a.text || "").trim()) return s0;
+				it.answer = { choice: a.choice == null ? -1 : a.choice, text: (a.text || "").trim() };
+				it.agent.phase = "answer_sending";
+				return s;
+			}
+			case "answer/settle": {
+				if (!it || it.agent.phase !== "answer_sending") return s0;
+				s.t += 1;
+				const q = it.question, ans = it.answer;
+				const label = ans.choice >= 0 ? q.options[ans.choice].label : "“" + ans.text + "”";
+				if (it.id === "northwind") it.plan = ans.choice === 1 ? "limit" : ans.choice === 2 ? "proposal" : "stream";
+				step("You answered: " + label + (ans.choice >= 0 && ans.text ? " (“" + ans.text + "”)" : ""));
+				it.agent.phase = "working";
+				if (!it.agent.script) { it.agent.steps.push({ at: now(), text: "Continues with your answer (no simulation beyond this point)" }); }
+				return s;
+			}
+			case "agent/fail": if (!it || it.agent.phase !== "working") return s0; it.agent.phase = "failed"; it.failure = "tests could not run; the test database did not start"; step("Failed: tests could not run"); return s;
+			case "agent/retry": if (!it || it.agent.phase !== "failed") return s0; it.agent.phase = "working"; it.failure = null; step("You asked it to retry"); return s;
+			case "pr/fail": if (!it || !it.pr || it.pr.state !== "checks_running" || it.agent.phase !== "working") return s0; it.pr.state = "checks_failed"; step("Checks failed on PR #482"); return s;
+			case "pr/merge": {
+				if (!it || !it.pr || it.pr.state !== "checks_passed") return s0;
+				s.t += 1; it.pr.state = "merged"; it.pr.mergedAt = now();
+				log("PR #" + it.pr.n + " merged on GitHub (simulated; Pilot never merges)");
+				return s;
+			}
+			case "verify/check": if (!it) return s0; it.verify.checks[a.key] = !it.verify.checks[a.key]; return s;
+			case "verify/done": if (!it || it.agent.phase !== "reported" || it.verify.state === "done") return s0; s.t += 1; it.verify.state = "done"; it.verify.at = now(); log("You marked done: " + it.title); return s;
+			case "verify/reopen": if (!it || it.verify.state !== "done") return s0; it.verify.state = "open"; it.verify.at = null; return s;
+			case "verify/sendBack": {
+				if (!it || it.agent.phase !== "reported" || it.verify.state === "done" || !(a.note || "").trim()) return s0;
+				s.t += 1;
+				it.round += 1; it.note = a.note.trim(); it.agent.phase = "working"; it.agent.script = "rework"; it.agent.pos = 0; it.verify.checks = {};
+				it.prevReport = it.report; it.report = null;
+				if (it.pr && it.pr.state === "merged") { it.pr = Object.assign({}, it.pr, { n: 485, title: "Follow-up to #482", state: "checks_running" }); }
+				step("You sent it back: “" + it.note + "”");
+				return s;
+			}
+			case "sim": s.sim[a.key] = a.value; return s;
+			case "linear/link": {
+				if (!it) return s0; it.linear = a.key; log("Linked " + a.key + " to: " + it.title + " (read only; no Linear write)"); return s;
+			}
+			case "linear/intake": {
+				const tk = s.linear.tickets.find((x) => x.key === a.key);
+				if (!tk || s.items["lin-" + a.key]) return s0;
+				s.items["lin-" + a.key] = item({ id: "lin-" + a.key, title: tk.title, linear: a.key,
+					source: { app: "Linear", where: a.key, at: now(), text: tk.desc || tk.title },
+					suggest: { primary: "start", mission: "billing", why: "Billing team ticket. Billing reliability fits." } });
+				s.order.unshift("lin-" + a.key);
+				log("Brought " + a.key + " to triage");
+				return s;
+			}
+			case "thread/fromItem": {
+				if (!it) return s0;
+				const tid = "scope-" + it.id;
+				if (!s.threads[tid]) {
+					const m = mission(it.suggest && it.suggest.mission ? it.suggest.mission : "billing");
+					s.threads[tid] = { id: tid, mission: m.id, title: it.id === "northwind" ? "Northwind export: what's in scope?" : "Scope: " + it.title, item: it.id,
+						origin: "Started from " + it.title, state: "open", mode: "grill", step: "q1",
+						msgs: [{ who: "coord", at: now(), text: it.id === "northwind" ? "Before an agent starts, one quick scope question. I'll keep it short." : "What would you like to settle before this starts?" }],
+						ask: it.id === "northwind" ? SCOPE_Q : null, proposal: null, map: null, pending: null, result: null };
+					m.threads.unshift(tid);
+				}
+				it.thread = tid;
+				return s;
+			}
+			case "thread/new": {
+				const m = mission(a.mission); const tid = "t" + Date.now().toString(36);
+				s.threads[tid] = { id: tid, mission: m.id, title: "New thread", item: null, origin: "Started by you", state: "open", mode: "grill", step: "free",
+					msgs: [{ who: "coord", at: now(), text: "What would you like to talk through? One subject per thread keeps it easy to finish." }], ask: null, proposal: null, map: null, pending: null, result: null };
+				m.threads.unshift(tid);
+				s.lastThread = tid;
+				return s;
+			}
+			case "thread/answer": {
+				const th = s.threads[a.thread];
+				if (!th || th.state !== "open" || th.pending) return s0;
+				const text = (a.text || "").trim();
+				if (a.choice == null && !text) return s0;
+				const label = a.choice != null && th.ask ? th.ask.options[a.choice].label : null;
+				th.msgs.push({ who: "you", at: now(), text: label ? label + (text ? ". " + text : "") : text });
+				if (th.title === "New thread" && text) th.title = text.length > 48 ? text.slice(0, 47) + "…" : text;
+				th.pending = { choice: a.choice == null ? null : a.choice, text };
+				th.ask = null;
+				return s;
+			}
+			case "thread/settle": {
+				const th = s.threads[a.thread];
+				if (!th || !th.pending) return s0;
+				s.t += 1;
+				threadStep(s, th, now);
+				th.pending = null;
+				return s;
+			}
+			case "thread/outcome": {
+				const th = s.threads[a.thread];
+				if (!th || th.state !== "open" || th.pending) return s0;
+				const m = mission(th.mission);
+				if (a.kind === "task") {
+					const n = s.seq.task++;
+					const title = (a.title || (th.proposal && th.proposal.task) || th.title).trim();
+					m.tasks.push({ n, title, status: "todo", from: th.title });
+					th.state = "task"; th.result = "Task #" + n + " added to " + m.title + ". Not started.";
+				} else if (a.kind === "decision") {
+					const n = s.seq.decision++;
+					const text = (a.text || (th.proposal && th.proposal.decision) || th.title).trim();
+					m.decisions.push({ n, text, from: th.title });
+					th.state = "decision"; th.result = "Decision " + n + " recorded in " + m.title + ".";
+					if (th.item && s.items[th.item] && th.proposal && th.proposal.scope) s.items[th.item].scope = th.proposal.scope;
+				} else if (a.kind === "map") {
+					if (!th.map) return s0;
+					m.explore = th.map.frontier.slice(); m.fog = th.map.fog.slice(); m.destination = th.map.destination;
+					th.state = "map"; th.result = "Map saved to " + m.title + ". Research is ready, but nothing runs until you start it.";
+				} else if (a.kind === "later") { th.state = "later"; th.result = "Saved for later. Nothing was decided."; }
+				else if (a.kind === "discard") { th.state = "discarded"; th.result = "Discarded. Nothing was decided."; }
+				else return s0;
+				log("Thread ended: " + th.title + " (" + a.kind + ")");
+				return s;
+			}
+			case "thread/reopen": { const th = s.threads[a.thread]; if (!th || th.state === "open" || th.state === "task" || th.state === "decision" || th.state === "map") return s0; th.state = "open"; th.result = null; return s; }
+			default: return s0;
+		}
+	}
+
+	function startOk(s, it, now, text) {
+		it.start = "acked"; it.agent.phase = "working";
+		it.agent.steps.push({ at: now(), text: text + (it.route ? " in " + s.missions[it.route].title : " as standalone work") });
+		if (it.route && !it.taskN) {
+			it.taskN = s.seq.task++;
+			s.missions[it.route].tasks.push({ n: it.taskN, title: it.title, item: it.id, linear: it.linear });
+		}
+		return s;
+	}
+
+	function threadStep(s, th, now) {
+		const p = th.pending;
+		const say = (text) => th.msgs.push({ who: "coord", at: now(), text });
+		const label = (q) => (p.choice != null ? q.options[p.choice].label : p.text);
+		if (th.id === "release") {
+			if (th.step === "q1") {
+				const unsure = p.choice === 2 || (p.choice == null && /not sure|don.?t know|depends|differs/i.test(p.text));
+				if (unsure) {
+					th.step = "big"; th.ask = BIG;
+					say("That's bigger than one thread. Three repos deploy three ways, and someone has to say who confirms a client-facing release. I suggest a Wayfinder map: we explore it in small steps and you answer only what needs you.");
+				} else {
+					th.step = "q2"; th.ask = Q2; th.signal = label(Q1);
+					say("Noted: for billing-api, “" + th.signal + "” means released.");
+				}
+				return;
+			}
+			if (th.step === "big") {
+				if (p.choice === 0 || (p.choice == null && /map|wayfinder|yes/i.test(p.text))) {
+					th.step = "map"; th.mode = "wayfinder"; th.ask = null;
+					th.map = {
+						destination: "Pilot shows when a change reaches production, for every billing repo.",
+						settled: ["Merged is not released. Pilot shows release on its own line."],
+						fog: [
+							{ t: "legacy-admin has no deploy workflow", why: "Ready to explore once we know who deploys it." },
+							{ t: "Does a revert un-release a change?", why: "Matters for what Done means later. Not yet precise." },
+						],
+						frontier: [
+							{ kind: "Research", t: "How does each billing repo deploy today?", state: "Ready. Runs only when you start it" },
+							{ kind: "Grilling", t: "Who confirms a client-facing release?", state: "Waits for an interview with you" },
+							{ kind: "Prototype", t: "A release line on each work item", state: "Answered by this prototype" },
+						],
+						out: ["Deploying from Pilot"],
+					};
+					th.proposal = { map: true };
+					say("Map started. It's beside this thread: what we know, what's foggy, and the next questions. Saving it adds it to the mission; nothing runs until you start it.");
+				} else {
+					th.step = "q2"; th.ask = Q2; th.signal = "The deploy workflow finished on main";
+					say("OK, billing-api only. I'll assume its deploy workflow is the signal; the other repos go to Later.");
+				}
+				return;
+			}
+			if (th.step === "q2") {
+				th.step = "end"; th.ask = null;
+				const wait = p.choice === 1;
+				th.proposal = {
+					task: "Show deploy-prod as the release signal for billing-api",
+					decision: "Merged is not released. For billing-api, “" + (th.signal || "the deploy workflow") + "” means released. Agents " + (wait ? "wait for it, up to one day, before reporting." : "report on merge; release shows on its own line."),
+				};
+				say("Here's where we landed. " + th.proposal.decision + " I suggest one task: “" + th.proposal.task + "”. You can record the decision, add the task, or both. Nothing starts until you start it.");
+				return;
+			}
+		}
+		if (th.id.startsWith("scope-") && th.step === "q1") {
+			th.step = "end"; th.ask = null;
+			const l = label(SCOPE_Q);
+			th.proposal = { decision: "Scope for this request: " + l + ".", scope: l };
+			say("Got it: " + l + ". Record it as a decision and I'll attach it to the request before it starts.");
+			return;
+		}
+		say("Noted. (Prototype: this thread has no script beyond here; a real coordinator would reply.)");
+	}
+
+	/** Run actions synchronously, settling pending ones. For walkthrough setup only. */
+	function play(s, actions) {
+		for (const a of actions) {
+			s = reduce(s, a);
+			if (a.type === "start") s = reduce(s, { type: "start/settle", id: a.id });
+			if (a.type === "answer") s = reduce(s, { type: "answer/settle", id: a.id });
+			if (a.type === "thread/answer") s = reduce(s, { type: "thread/settle", thread: a.thread });
+		}
+		return s;
+	}
+
+	function hasNext(it) {
+		if (it.agent.phase !== "working" || !it.agent.script || it.start !== "acked") return false;
+		if (it.pr && it.pr.state === "checks_failed") return true;
+		return it.agent.pos < SCRIPTS[it.agent.script].length;
+	}
+
+	return { hasNext, initial, reduce, stage, place, reason, summary, agentWords, prWords, prodWords, checkWords, play, clock, PLACES };
+})();
+
+</script>
+<script>
+
+/* ==========================================================================
+   Page shell. Throwaway. Renders the model and turns clicks into actions.
+   ========================================================================== */
+const VARIANTS = {
+	A: { name: "Inline on Today", what: "New requests sit at the top of Today. You triage them in place. No Inbox." },
+	B: { name: "Triage from Today", what: "Today shows one line: new requests waiting. Triage opens a focused one-at-a-time pass, then returns to Today." },
+	C: { name: "Separate Inbox", what: "Untriaged requests live in their own Inbox destination (list and preview). Started work moves to Today." },
+};
+const params = new URLSearchParams(location.search);
+let state = Model.initial();
+const ui = freshUi(VARIANTS[params.get("variant")] ? params.get("variant") : "A");
+
+function freshUi(variant) {
+	return {
+		variant, route: parse(location.hash), stack: [location.hash || "#/today"], scroll: {},
+		hl: {}, kbd: false, expanded: null, route2: {}, choice: {}, why: {}, drafts: {},
+		sendBack: null, confirmDone: null, tIdx: 0, tAll: false, inboxSel: null, allSteps: {}, showAgents: false,
+		showLater: false, showDone: false, modal: null, drawer: false, dtab: "walk", auto: true, wt: null, changed: [], toast: null, cycle: 42,
+	};
+}
+
+/* ---------- small helpers ---------- */
+const esc = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const attr = (o) => Object.entries(o).filter(([, v]) => v != null && v !== false).map(([k, v]) => (v === true ? k : k + '="' + esc(v) + '"')).join(" ");
+const btn = (label, a, cls = "", extra = {}) => "<button " + attr(Object.assign({ class: "btn " + cls, "data-act": a.act, "data-id": a.id, "data-arg": a.arg }, extra)) + ">" + label + "</button>";
+const lnk = (label, a, extra = {}) => "<button " + attr(Object.assign({ class: "link", "data-act": a.act, "data-id": a.id, "data-arg": a.arg }, extra)) + ">" + label + "</button>";
+const WORDS = ["Nothing", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
+const word = (n) => WORDS[n] || String(n);
+const items = () => state.order.map((id) => state.items[id]).filter(Boolean);
+const byStage = (st) => items().filter((it) => Model.stage(it) === st);
+const missionOf = (it) => (it.route ? state.missions[it.route] : null);
+const dots = '<span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>';
+
+/* ---------- marks (still; words always carry the state) ---------- */
+function mark(kind, label) {
+	const L = label ? ' role="img" aria-label="' + esc(label) + '"' : ' aria-hidden="true"';
+	const svg = (inner) => '<svg class="mk" viewBox="0 0 16 16"' + L + ">" + inner + "</svg>";
+	switch (kind) {
+		case "working": return svg('<circle cx="8" cy="8" r="4.75" fill="none" stroke="var(--faint)" stroke-width="1.5"/>');
+		case "pending": return svg('<circle cx="8" cy="8" r="4.75" fill="none" stroke="var(--faint)" stroke-width="1.5" stroke-dasharray="2.5 2.5"/>');
+		case "needs": return svg('<circle cx="8" cy="8" r="4" fill="var(--needs)"/>');
+		case "failed": return svg('<path d="M8 2.8 13.6 12.6H2.4Z" fill="var(--failed)"/>');
+		case "done": return svg('<path d="M4.2 8.4 6.8 11 11.8 5.4" fill="none" stroke="var(--faint)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>');
+		case "new": return svg('<circle cx="8" cy="8" r="3.5" fill="var(--mfg)"/>');
+		case "later": return svg('<circle cx="8" cy="8" r="4.75" fill="none" stroke="var(--faint)" stroke-width="1.3" stroke-dasharray="1.2 2.2"/>');
+		case "pr": return svg('<g fill="none" stroke="var(--ok)" stroke-width="1.4"><circle cx="4.5" cy="4" r="1.6"/><circle cx="4.5" cy="12" r="1.6"/><circle cx="11.5" cy="12" r="1.6"/><path d="M4.5 5.6v4.8M11.5 10.4V7.2c0-1.4-.8-2.2-2.2-2.2H7.6"/></g>');
+		case "prq": return svg('<g fill="none" stroke="var(--mfg)" stroke-width="1.4"><circle cx="4.5" cy="4" r="1.6"/><circle cx="4.5" cy="12" r="1.6"/><circle cx="11.5" cy="12" r="1.6"/><path d="M4.5 5.6v4.8M11.5 10.4V7.2c0-1.4-.8-2.2-2.2-2.2H7.6"/></g>');
+		case "doc": return svg('<g fill="none" stroke="var(--mfg)" stroke-width="1.3"><path d="M4 2.5h5.5L12 5v8.5H4Z"/><path d="M6 8h4M6 10.5h4"/></g>');
+		case "artifact": return svg('<g fill="none" stroke="var(--mfg)" stroke-width="1.3"><rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="M5 10.5V8M8 10.5V6M11 10.5V7.5"/></g>');
+		case "reply": return svg('<g fill="none" stroke="var(--mfg)" stroke-width="1.3"><path d="M3 4h10v6.5H7.5L4.5 13v-2.5H3Z"/></g>');
+		case "report": return svg('<g fill="none" stroke="var(--mfg)" stroke-width="1.3"><path d="M3.5 12.5V3.5h9v9Z"/><path d="M5.5 10V8M8 10V6M10.5 10V7"/></g>');
+		case "thread": return svg('<g fill="none" stroke="var(--mfg)" stroke-width="1.3"><path d="M2.8 3.5h10.4v7H8l-3 2.5v-2.5H2.8Z"/></g>');
+		default: return svg("");
+	}
+}
+function pie(status, label) {
+	const f = { todo: 0, in_progress: 1 / 3, in_review: 2 / 3, done: 1 }[status] || 0;
+	let wedge = "";
+	if (f >= 1) wedge = '<circle cx="8" cy="8" r="4.5" fill="var(--faint)"/>';
+	else if (f > 0) {
+		const a = f * 2 * Math.PI, x = 8 + 4.5 * Math.sin(a), y = 8 - 4.5 * Math.cos(a);
+		wedge = '<path d="M8 8V3.5A4.5 4.5 0 ' + (f > 0.5 ? 1 : 0) + " 1 " + x.toFixed(2) + " " + y.toFixed(2) + 'Z" fill="var(--faint)"/>';
+	}
+	return '<svg class="mk" viewBox="0 0 16 16" role="img" aria-label="' + esc(label || status) + '"><circle cx="8" cy="8" r="6" fill="none" stroke="var(--faint)" stroke-width="1.3"/>' + wedge + "</svg>";
+}
+const STATUS_WORDS = { todo: "To do", in_progress: "In progress", in_review: "In review", done: "Done" };
+function taskStatus(t) {
+	if (!t.item || !state.items[t.item]) return t.status || "todo";
+	const st = Model.stage(state.items[t.item]);
+	return { new: "todo", later: "todo", discarded: "todo", moving: "in_progress", needs: "in_progress", verify: "in_review", done: "done" }[st];
+}
+
+/* ---------- item vocabulary ---------- */
+function itemLook(it) {
+	const st = Model.stage(it);
+	if (st === "new") return it.suggest && it.suggest.primary === "discard" ? ["new", "Info only", "quiet"] : ["new", "New", "quiet"];
+	if (st === "later") return ["later", "Later", "faint"];
+	if (st === "discarded") return ["later", "Discarded", "faint"];
+	if (st === "done") return ["done", "Done", "faint"];
+	if (st === "verify") return ["needs", "To check", "needs"];
+	if (it.start === "unknown") return ["needs", "Not confirmed", "needs"];
+	if (it.start === "checking") return ["pending", "Checking", "quiet"];
+	if (it.start === "sending") return ["pending", "Starting", "quiet"];
+	if (it.agent.phase === "failed") return ["failed", "Failed", "failed"];
+	if (it.agent.phase === "question") return ["needs", "Needs you", "needs"];
+	if (it.agent.phase === "answer_sending") return ["pending", "Sending", "quiet"];
+	return ["working", "Working", "quiet"];
+}
+function sourceLine(it) {
+	const s = it.source;
+	return [s.app, s.where, s.who ? s.who + (s.org ? ", " + s.org : "") : null].filter(Boolean).join(" · ");
+}
+function rowMeta(it) {
+	const st = Model.stage(it);
+	if (st === "new" || st === "later" || st === "discarded") return sourceLine(it) + " · " + it.source.at;
+	const m = missionOf(it);
+	return [m ? m.title : "Standalone", Model.reason(it)].join(" · ");
+}
+function row(it, opts = {}) {
+	const [mk, w, tone] = itemLook(it);
+	const cls = ["row", opts.cls || ""].join(" ");
+	return '<div class="' + cls + '" data-row data-act="' + (opts.act || "open") + '" data-id="' + it.id + '" role="button" tabindex="-1" aria-label="' + esc(it.title + ", " + w + ". " + rowMeta(it)) + '">' +
+		mark(mk) + '<div class="t">' + esc(it.title) + '</div><div class="s tone-' + tone + '">' + esc(w) + "</div>" +
+		'<div class="m">' + esc(rowMeta(it)) + "</div></div>";
+}
+function section(title, rows, extra = "") {
+	return '<section class="sec enter"><div class="sec-title"><span>' + esc(title) + '</span><span class="n">' + (rows.count != null ? rows.count : "") + '</span><span class="grow"></span>' + extra + "</div>" + rows.html + "</section>";
+}
+function rowsOf(list, opts) { return { count: list.length, html: list.map((it) => row(it, opts)).join("") }; }
+
+/* ---------- start / triage controls (shared by every variant) ---------- */
+function routeOf(it) {
+	if (ui.route2[it.id] !== undefined) return ui.route2[it.id];
+	return it.suggest && it.suggest.mission ? it.suggest.mission : null;
+}
+function routePills(it) {
+	const cur = routeOf(it);
+	const opts = [["billing", "Billing reliability"], ["onboarding", "Workspace onboarding"], [null, "Standalone"]];
+	return '<div class="actions" role="radiogroup" aria-label="Where should this work go?" style="margin-top:10px">' +
+		opts.map(([v, l]) => {
+			const on = cur === v;
+			const sug = it.suggest && it.suggest.mission === v && it.suggest.primary === "start";
+			return "<button " + attr({ class: "btn" + (on ? " on" : ""), role: "radio", "aria-checked": on ? "true" : "false", "data-act": "route", "data-id": it.id, "data-arg": v || "", style: on ? "border-color:var(--primary);background:var(--sel)" : null }) + ">" + esc(l) + (sug ? ' <span class="faint small">suggested</span>' : "") + "</button>";
+		}).join("") + "</div>";
+}
+function startControls(it, compact) {
+	const cur = routeOf(it);
+	const discardFirst = it.suggest && it.suggest.primary === "discard";
+	const where = cur ? state.missions[cur].title : "standalone work";
+	const th = it.thread ? state.threads[it.thread] : null;
+	return (
+		'<p class="meta" style="margin-top:' + (compact ? 10 : 2) + 'px"><span class="faint">Pilot\'s read:</span> ' + esc(it.suggest ? it.suggest.why : "") + "</p>" +
+		(it.scope ? '<p class="meta" style="margin-top:6px"><span class="faint">Scope you set:</span> ' + esc(it.scope) + "</p>" : "") +
+		(th && th.state === "open" ? '<p class="meta" style="margin-top:6px">' + lnk("Thread open: " + esc(th.title), { act: "go", arg: "#/thread/" + th.id }) + "</p>" : "") +
+		routePills(it) +
+		(compact ? "" : '<p class="small faint" style="margin-top:12px">The agent reads the request, reproduces the problem and proposes a fix. It asks before choosing between fixes. It never replies in Slack or writes to Linear.</p>') +
+		'<div class="actions">' +
+		btn("Start work in " + esc(where), { act: "start", id: it.id }, discardFirst ? "" : "primary") +
+		btn("Discuss first", { act: "threadFromItem", id: it.id }) +
+		(it.triage === "later" ? btn("Back to new", { act: "restore", id: it.id }) : btn("Later", { act: "later", id: it.id })) +
+		btn(discardFirst ? "Nothing to do" : "Discard", { act: "discard", id: it.id }, discardFirst ? "primary" : "") +
+		"</div>"
+	);
+}
+
+/* ---------- question card ---------- */
+function choiceList(key, q, disabled) {
+	return q.options.map((o, i) => {
+		const on = ui.choice[key] === i;
+		return "<button " + attr({ class: "choice" + (on ? " on" : ""), "data-act": "choose", "data-id": key, "data-arg": i, "aria-pressed": on ? "true" : "false", disabled }) +
+			'><span class="n">' + (i + 1) + '</span><span class="l">' + esc(o.label) + (o.recommended ? '<span class="rec">Recommended</span>' : "") + '</span><span class="d">' + esc(o.detail || "") + "</span></button>";
+	}).join("");
+}
+function questionCard(it) {
+	const q = it.question, sending = it.agent.phase === "answer_sending";
+	const draft = ui.drafts["ans:" + it.id] || "";
+	const can = ui.choice[it.id] != null || draft.trim();
+	return '<section class="panel enter" id="question"><p class="meta">The agent asks</p><h2 style="margin-top:4px">' + esc(q.text) + "</h2>" +
+		'<details data-why="' + it.id + '"' + (ui.why[it.id] ? " open" : "") + ' style="margin-top:6px"><summary>Why it\'s asking <span class="kbd">0</span></summary><p class="why">' + esc(q.why) + "</p></details>" +
+		choiceList(it.id, q, sending) +
+		'<div style="margin-top:12px"><textarea rows="2" data-input="ans:' + it.id + '" data-fk="ans:' + it.id + '" placeholder="Or write your own answer, or add detail" ' + (sending ? "disabled" : "") + ">" + esc(draft) + "</textarea></div>" +
+		'<div class="actions">' + (sending ? '<span class="meta">Sending your answer' + dots + "</span>" :
+			btn("Send answer", { act: "answer", id: it.id }, "primary", { disabled: !can }) + '<span class="small faint">Picking an option doesn\'t send it. <span class="kbd">1</span>–<span class="kbd">' + q.options.length + "</span> pick, <span class=\"kbd\">⌘↩</span> sends</span>") +
+		"</div></section>";
+}
+
+/* ---------- report, evidence, verification ---------- */
+function prLook(pr) {
+	if (!pr) return ["prq", "", "quiet"];
+	return { checks_running: ["prq", "Open · checks running", "quiet"], checks_failed: ["failed", "Open · checks failed", "failed"], checks_passed: ["pr", "Open · checks passed", "ok"], merged: ["prq", "Merged " + pr.mergedAt, "quiet"] }[pr.state];
+}
+function evidenceRow(it, ev) {
+	if (ev.kind === "pr") {
+		const [mk, w, tone] = prLook(it.pr);
+		return '<div class="ev" data-act="evidence" data-id="' + it.id + '" data-arg="pr" role="button" tabindex="0">' + mark(mk) + '<span class="l">PR #' + it.pr.n + " · " + esc(it.pr.title) + ' <span class="faint small">' + esc(it.repo || "") + '</span></span><span class="r tone-' + tone + '">' + esc(w) + "</span></div>";
+	}
+	return '<div class="ev" data-act="evidence" data-id="' + it.id + '" data-arg="' + ev.id + '" role="button" tabindex="0">' + mark(ev.kind) + '<span class="l">' + esc(ev.label) + '</span><span class="r faint">' + esc(ev.note || (ev.kind === "artifact" ? "Artifact" : "")) + "</span></div>";
+}
+function reportCard(it) {
+	const r = it.report;
+	return '<section class="panel enter"><p class="meta">The agent reports, ' + esc(r.at) + '</p><h2 style="margin-top:4px">Finished' + (r.round > 1 ? ", second pass" : "") + "</h2>" +
+		'<p style="margin-top:8px;max-width:62ch">' + esc(r.summary) + "</p>" +
+		(r.evidence.length ? '<div style="margin-top:14px">' + r.evidence.map((e) => evidenceRow(it, e)).join("") + "</div>" : "") +
+		'<p class="small faint" style="margin-top:10px">This is the agent\'s account. It is not done until you say so.</p></section>';
+}
+function verifyPanel(it) {
+	if (it.verify.state === "done") {
+		return '<section class="panel soft enter"><h2>Done</h2><p class="meta" style="margin-top:4px">You marked this done at ' + esc(it.verify.at) + ". That means you accept the result. It doesn't merge, release or reply to anyone.</p>" +
+			'<div class="actions">' + btn("Reopen", { act: "reopen", id: it.id }) + "</div></section>";
+	}
+	const checks = [["summary", "Read the summary"]];
+	if (it.pr) checks.push(["pr", "Looked at PR #" + it.pr.n]);
+	const art = it.report.evidence.find((e) => e.kind === "artifact") || it.report.evidence.find((e) => e.kind === "doc");
+	if (art) checks.push(["art", "Opened " + art.label]);
+	const unmerged = it.pr && it.pr.state !== "merged";
+	let tail;
+	if (ui.sendBack === it.id) {
+		const d = ui.drafts["back:" + it.id] || "";
+		tail = '<div style="margin-top:12px"><textarea rows="3" data-input="back:' + it.id + '" data-fk="back:' + it.id + '" placeholder="What should change? The agent gets this note.">' + esc(d) + "</textarea></div>" +
+			'<div class="actions">' + btn("Send back", { act: "sendBack", id: it.id }, "primary", { disabled: !d.trim() }) + btn("Cancel", { act: "sendBackCancel", id: it.id }) + "</div>";
+	} else if (ui.confirmDone === it.id) {
+		tail = '<p class="meta" style="margin-top:12px">PR #' + it.pr.n + " is still open. Done means you accept the result now. Pilot won't merge it, and it won't count as released.</p>" +
+			'<div class="actions">' + btn("Mark done anyway", { act: "done", id: it.id }, "primary") + btn("Cancel", { act: "doneCancel", id: it.id }) + "</div>";
+	} else {
+		tail = '<div class="actions">' + btn("Mark done", { act: unmerged ? "doneAsk" : "done", id: it.id }, "primary") + btn("Send back…", { act: "sendBackOpen", id: it.id }) + "</div>";
+	}
+	return '<section class="panel soft enter"><h2>Your check</h2><p class="small faint" style="margin-top:2px">Reminders only. You decide when it is done.</p><div style="margin-top:8px">' +
+		checks.map(([k, l]) => '<label class="check"><input type="checkbox" data-act="check" data-id="' + it.id + '" data-arg="' + k + '"' + (it.verify.checks[k] ? " checked" : "") + "> " + esc(l) + "</label>").join("") +
+		"</div>" + tail + "</section>";
+}
+function stands(it) {
+	const merged = it.pr && it.pr.state === "merged";
+	const prw = Model.prWords(it);
+	return '<section class="sec"><div class="sec-title">Where this stands</div><div class="stands">' +
+		'<div class="k">Agent</div><div class="v">' + esc(Model.agentWords(it)) + (it.agent.phase === "working" ? dots : "") + "</div>" +
+		'<div class="k">Pull request</div><div class="v">' + (it.pr ? lnk(esc(prw), { act: "evidence", id: it.id, arg: "pr" }) : esc(prw)) + "</div>" +
+		'<div class="k">Production</div><div class="v' + (merged ? " tone-needs" : "") + '">' + esc(Model.prodWords(it)) +
+		(merged ? '<span class="meta">Merged is not released. ' + lnk("Talk about release tracking", { act: "go", arg: "#/thread/release" }) + "</span>" : "") + "</div>" +
+		'<div class="k">Your check</div><div class="v">' + esc(Model.checkWords(it)) + "</div>" +
+		"</div></section>";
+}
+function activity(it) {
+	const steps = it.agent.steps.slice().reverse();
+	const all = ui.allSteps[it.id];
+	const shown = all ? steps : steps.slice(0, 4);
+	return '<section class="sec"><div class="sec-title"><span>Activity</span><span class="grow"></span>' +
+		(steps.length > 4 ? lnk(all ? "Show fewer" : "Show all " + steps.length, { act: "allSteps", id: it.id }) : "") + "</div>" +
+		'<ul class="steps">' + shown.map((s, i) => '<li><span class="at">' + esc(s.at) + "</span><span>" + esc(s.text) + (i === 0 && it.agent.phase === "working" ? dots : "") + "</span></li>").join("") + "</ul>" +
+		'<p class="small faint" style="margin-top:10px">One agent worked on this. Its chat stays out of the way; ' + lnk("ask the coordinator", { act: "threadFromItem", id: it.id }) + " if you want to discuss it.</p></section>";
+}
+
+
+/* ---------- views ---------- */
+function parse(h) {
+	const p = (h || "#/today").replace(/^#\/?/, "").split("/");
+	return { name: p[0] || "today", id: p[1] ? decodeURIComponent(p[1]) : null };
+}
+function routeTitle(r) {
+	const it = r.id && state.items[r.id];
+	switch (r.name) {
+		case "today": return "<b>Today</b>";
+		case "triage": return "Today › <b>Triage</b>";
+		case "inbox": return "<b>Inbox</b>";
+		case "item": return (it ? esc(Model.stage(it) === "new" || Model.stage(it) === "later" ? (ui.variant === "C" ? "Inbox" : "Today") : missionOf(it) ? missionOf(it).title : "Today") + " › <b>" + esc(it.title) + "</b>" : "Not found");
+		case "missions": return "<b>Missions</b>";
+		case "mission": return "Missions › <b>" + esc(state.missions[r.id] ? state.missions[r.id].title : "?") + "</b>";
+		case "thread": { const th = state.threads[r.id]; return th ? esc(state.missions[th.mission].title) + " › <b>" + esc(th.title) + "</b>" : "Not found"; }
+		case "linear": return "<b>Linear</b>";
+		case "ticket": return "Linear › <b>" + esc(r.id) + "</b>";
+		default: return "";
+	}
+}
+function parentOf(r) {
+	if (r.name === "item") { const it = state.items[r.id]; return it && ui.variant === "C" && ["new", "later"].includes(Model.stage(it)) ? "#/inbox" : "#/today"; }
+	if (r.name === "thread") { const th = state.threads[r.id]; return th ? "#/mission/" + th.mission : "#/missions"; }
+	if (r.name === "mission") return "#/missions";
+	if (r.name === "ticket") return "#/linear";
+	if (r.name === "triage") return "#/today";
+	return null;
+}
+function topbar() {
+	const r = ui.route, root = ["today", "inbox", "missions", "linear"].includes(r.name);
+	const needs = byStage("needs").length + byStage("verify").length;
+	const fresh = byStage("new").length;
+	const navs = [["today", "Today", needs, "needs"]];
+	if (ui.variant === "C") navs.push(["inbox", "Inbox", fresh, "neutral"]);
+	navs.push(["missions", "Missions", 0], ["linear", "Linear", 0]);
+	const on = (n) => r.name === n || (n === "today" && (r.name === "triage" || (r.name === "item" && parentOf(r) === "#/today"))) || (n === "inbox" && r.name === "item" && parentOf(r) === "#/inbox") || (n === "missions" && (r.name === "mission" || r.name === "thread")) || (n === "linear" && r.name === "ticket");
+	return '<header class="top"><button class="back" data-act="back" aria-label="Back (Esc)" title="Back (Esc)"' + (root ? " hidden" : "") + ">‹</button>" +
+		'<div class="crumb">' + routeTitle(r) + '</div><nav class="nav" aria-label="Places">' +
+		navs.map(([n, l, c, tone]) => "<button " + attr({ class: on(n) ? "on" : "", "data-act": "go", "data-arg": "#/" + n, "aria-current": on(n) ? "page" : null }) + '><span class="word">' + l + "</span>" + (c ? '<span class="count"' + (tone === "neutral" ? ' style="background:var(--muted);color:var(--mfg)"' : "") + ">" + c + "</span>" : "") + "</button>").join("") +
+		"</nav></header>";
+}
+
+function todayHead() {
+	const needs = byStage("needs").length + byStage("verify").length;
+	const fresh = byStage("new").length;
+	let h;
+	if (ui.variant === "A") {
+		if (!needs && !fresh) h = "Nothing needs you. Pilot is on it.";
+		else if (!fresh) h = word(needs) + (needs === 1 ? " thing needs" : " things need") + " you.";
+		else if (!needs) h = word(fresh) + " new " + (fresh === 1 ? "request" : "requests") + " to look at.";
+		else h = word(needs) + (needs === 1 ? " thing needs" : " things need") + " you, and " + word(fresh).toLowerCase() + " new " + (fresh === 1 ? "request." : "requests.");
+	} else {
+		h = needs ? word(needs) + (needs === 1 ? " thing needs" : " things need") + " you." : "Nothing needs you. Pilot is on it.";
+	}
+	return '<p class="date">Wednesday, 11 November · ' + Model.clock(state.t) + '</p><h1>' + esc(h) + "</h1>" +
+		'<p class="sub">Billing reliability is moving: the PDF fix merged and webhook retries have a PR open. Workspace onboarding waits on one decision.</p>' +
+		'<p class="small faint" style="margin-top:6px">Summary written by the coordinators at 10:40.</p>';
+}
+function laterAndDone(showNewLater) {
+	let out = "";
+	const later = byStage("later"), done = byStage("done"), disc = byStage("discarded");
+	if (showNewLater && later.length) out += section("Later", ui.showLater ? rowsOf(later) : { count: later.length, html: "" }, lnk(ui.showLater ? "Hide" : "Show", { act: "toggle", arg: "showLater" }));
+	if (done.length) out += section("Done today", ui.showDone ? rowsOf(done) : { count: done.length, html: "" }, lnk(ui.showDone ? "Hide" : "Show", { act: "toggle", arg: "showDone" }));
+	if (showNewLater && disc.length) out += '<p class="small faint" style="margin-top:20px">' + word(disc.length) + " discarded today. " + disc.map((d) => lnk("Undo " + esc(d.title), { act: "restore", id: d.id })).join(" · ") + "</p>";
+	return out;
+}
+function workSections() {
+	const needs = byStage("needs"), verify = byStage("verify"), moving = byStage("moving");
+	let out = "";
+	if (needs.length) out += section("Needs you", rowsOf(needs));
+	if (verify.length) out += section("To check", rowsOf(verify));
+	out += moving.length ? section("Moving", rowsOf(moving)) : section("Moving", { count: 0, html: '<p class="quiet-line">Nothing is running.</p>' });
+	return out;
+}
+function todayA() {
+	const fresh = byStage("new");
+	let newHtml = fresh.map((it) => {
+		const open = ui.expanded === it.id;
+		return row(it, { act: "expand", cls: open ? "open" : "" }) + (open ? '<div class="expand enter">' + (it.source.text ? '<p style="max-width:60ch">' + esc(it.source.text) + "</p>" : "") + startControls(it, true) + '<p class="small" style="margin-top:10px">' + lnk("Open the request", { act: "open", id: it.id }) + "</p></div>" : "");
+	}).join("");
+	if (!fresh.length) newHtml = '<p class="quiet-line">No new requests. Slack and Linear are quiet.</p>';
+	return '<main class="page">' + todayHead() +
+		section("New", { count: fresh.length, html: newHtml }, '<span class="small faint">From Slack and Linear</span>') +
+		workSections() + laterAndDone(true) + "</main>";
+}
+function todayB() {
+	const fresh = byStage("new"), later = byStage("later");
+	const line = fresh.length
+		? '<section class="panel soft enter" style="margin-top:28px;display:flex;align-items:center;gap:16px"><div style="flex:1;min-width:0"><h3>' + word(fresh.length) + " new " + (fresh.length === 1 ? "request" : "requests") + '</h3><p class="meta" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(fresh.map((i) => i.title).join(" · ")) + "</p></div>" + btn("Triage", { act: "go", arg: "#/triage" }, "primary") + "</section>"
+		: '<p class="quiet-line" style="margin-top:28px;border-top:0">No new requests.' + (later.length ? " " + lnk(word(later.length) + " saved for later", { act: "go", arg: "#/triage" }) : "") + "</p>";
+	return '<main class="page">' + todayHead() + line + workSections() + laterAndDone(false) + "</main>";
+}
+function todayC() {
+	const fresh = byStage("new");
+	const note = fresh.length ? '<p class="small faint" style="margin-top:14px">' + lnk(word(fresh.length) + " new in the Inbox", { act: "go", arg: "#/inbox" }) + "</p>" : "";
+	return '<main class="page">' + todayHead() + note + workSections() + laterAndDone(false) + "</main>";
+}
+
+function triageView() {
+	const fresh = byStage("new"), later = byStage("later");
+	if (ui.tAll || !fresh.length) {
+		return '<main class="triage enter"><div class="progressline"><span>' + (fresh.length ? word(fresh.length) + " new" : "All triaged") + '</span><span style="flex:1"></span>' + (fresh.length ? lnk("One at a time", { act: "toggle", arg: "tAll" }) : "") + "</div>" +
+			(fresh.length ? section("New", rowsOf(fresh, { act: "triagePick" })) : '<h1 style="margin-top:18px">Nothing new to triage.</h1><p class="sub">Started work is on Today. ' + lnk("Back to Today", { act: "go", arg: "#/today" }) + "</p>") +
+			(later.length ? section("Later", rowsOf(later, { act: "open" })) : "") + laterAndDoneDiscarded() + "</main>";
+	}
+	ui.tIdx = Math.max(0, Math.min(ui.tIdx, fresh.length - 1));
+	const it = fresh[ui.tIdx];
+	return '<main class="triage enter" data-key="' + it.id + '">' +
+		'<div class="progressline"><span>' + (ui.tIdx + 1) + " of " + fresh.length + '</span><span class="pips">' + fresh.map((_, i) => '<i class="' + (i === ui.tIdx ? "cur" : "") + '"></i>').join("") + '</span><span style="flex:1"></span>' + lnk("See all", { act: "toggle", arg: "tAll" }) + " · " + lnk("Done for now", { act: "go", arg: "#/today" }) + "</div>" +
+		'<p class="meta" style="margin-top:28px">' + esc(sourceLine(it)) + " · " + esc(it.source.at) + "</p><h1>" + esc(it.title) + "</h1>" +
+		(it.notice ? '<div class="banner">' + mark("needs") + "<span>" + esc(it.notice) + "</span></div>" : "") +
+		slackBanner(it) + (it.source.text ? '<div class="quote">' + esc(it.source.text) + "</div>" : "") +
+		'<div style="margin-top:18px">' + startControls(it, false) + "</div>" +
+		'<div class="actions" style="margin-top:22px">' + btn("↑ Previous", { act: "triageNav", arg: "-1" }, "", { disabled: ui.tIdx === 0 }) + btn("Skip ↓", { act: "triageNav", arg: "1" }, "", { disabled: ui.tIdx >= fresh.length - 1 }) + "</div>" +
+		laterAndDoneDiscarded() + "</main>";
+}
+function laterAndDoneDiscarded() {
+	const disc = byStage("discarded");
+	return disc.length ? '<p class="small faint" style="margin-top:24px">' + disc.map((d) => "Discarded " + esc(d.title) + ". " + lnk("Undo", { act: "restore", id: d.id })).join("<br>") + "</p>" : "";
+}
+
+function inboxView() {
+	const fresh = byStage("new"), later = byStage("later"), disc = byStage("discarded");
+	const all = fresh.concat(later);
+	if (!ui.inboxSel || !state.items[ui.inboxSel]) ui.inboxSel = all[0] ? all[0].id : null;
+	const sel = ui.inboxSel ? state.items[ui.inboxSel] : null;
+	const list = (title, arr) => section(title, { count: arr.length, html: arr.length ? arr.map((it) => row(it, { act: "inboxSel", cls: sel && sel.id === it.id ? "sel" : "" })).join("") : '<p class="quiet-line">Empty.</p>' });
+	let detail;
+	if (!sel) detail = '<h1>Inbox zero.</h1><p class="sub">New Slack and Linear requests land here until you start, defer or discard them.</p>';
+	else {
+		const st = Model.stage(sel);
+		detail = (st === "new" || st === "later" || st === "discarded") ? itemBody(sel, true)
+			: '<p class="meta">' + esc(sourceLine(sel)) + "</p><h1>" + esc(sel.title) + '</h1><div class="banner">' + mark(itemLook(sel)[0]) + "<span>" + (st === "discarded" ? "Discarded." : "Started. It left the Inbox and now lives on Today, under " + esc(Model.place(sel, "C").replace("Today, ", "")) + ".") + "</span></div>" +
+				'<div class="actions">' + btn("Open it", { act: "open", id: sel.id }, "primary") + btn("Next in Inbox", { act: "inboxNext" }) + "</div>";
+	}
+	return '<div class="split"><aside class="list">' + list("New", fresh) + (later.length ? list("Later", later) : "") +
+		(disc.length ? '<p class="small faint" style="margin-top:18px">' + disc.map((d) => "Discarded " + esc(d.title) + ". " + lnk("Undo", { act: "restore", id: d.id })).join("<br>") + "</p>" : "") +
+		'</aside><main class="detail enter" data-key="' + (sel ? sel.id : "") + '">' + detail + "</main></div>";
+}
+
+function slackBanner(it) {
+	if (!(state.sim.slackOffline && it.source.app === "Slack")) return "";
+	return '<div class="banner">' + mark("failed") + "<span>Slack can't be reached. This is the message as Pilot saw it at " + esc(it.source.at) + ". Replies since then are unknown. " + lnk("Retry", { act: "sim", arg: "slackOffline:false" }) + "</span></div>";
+}
+function itemBody(it, inInbox) {
+	const st = Model.stage(it);
+	const [mk, w, tone] = itemLook(it);
+	const m = missionOf(it);
+	let h = '<p class="meta">' + esc(sourceLine(it)) + " · " + esc(it.source.at) + (it.linear ? " · " + lnk(esc(it.linear), { act: "go", arg: "#/ticket/" + it.linear }) : "") + "</p>" +
+		"<h1>" + esc(it.title) + "</h1>" +
+		'<p style="display:flex;gap:8px;align-items:center">' + mark(mk) + '<span class="tone-' + tone + '">' + esc(w) + "</span>" + (m ? '<span class="faint">· ' + lnk(esc(m.title), { act: "go", arg: "#/mission/" + m.id }) + (it.taskN ? ", task #" + it.taskN : "") + "</span>" : st === "moving" || st === "needs" || st === "verify" || st === "done" ? '<span class="faint">· Standalone</span>' : "") + "</p>";
+	h += slackBanner(it);
+	if (it.notice) h += '<div class="banner">' + mark("needs") + "<span>" + esc(it.notice) + "</span></div>";
+	if (it.source.text) h += '<div class="quote"><div class="who">' + esc(it.source.who || it.source.app) + "</div>" + esc(it.source.text) + "</div>";
+	if (st === "new" || st === "later") return h + '<section class="panel enter"><h2>Start work</h2>' + startControls(it, false) + "</section>";
+	if (st === "discarded") return h + '<section class="panel soft"><p>Discarded. Nothing ran.</p><div class="actions">' + btn("Undo", { act: "restore", id: it.id }) + "</div></section>";
+	if (it.start === "unknown") {
+		h += '<section class="panel needs enter"><h2>Start not confirmed</h2><p style="margin-top:6px;max-width:60ch">Pilot sent the start at ' + esc(it.startedAt) + " but got no reply. The agent may or may not be running. Pilot won't send it again on its own, so nothing runs twice.</p>" +
+			'<div class="actions">' + btn("Check status", { act: "startCheck", id: it.id }, "primary") + "</div></section>";
+	}
+	if (it.start === "checking") h += '<section class="panel soft enter"><h2>Checking' + dots + '</h2><p class="meta" style="margin-top:6px">Pilot is looking for the start it sent at ' + esc(it.startedAt) + ". It only reads; it does not resend.</p></section>";
+	if (it.start === "sending") h += '<section class="panel soft enter"><h2>Starting' + dots + '</h2><p class="meta" style="margin-top:6px">Waiting for Pilot to confirm the agent started.</p></section>';
+	if (it.agent.phase === "question" || it.agent.phase === "answer_sending") h += questionCard(it);
+	if (it.agent.phase === "failed") h += '<section class="panel failed enter"><h2>Failed</h2><p style="margin-top:6px">The agent stopped: ' + esc(it.failure) + '. Its work so far is kept.</p><div class="actions">' + btn("Retry", { act: "retry", id: it.id }, "primary") + btn("Discuss with the coordinator", { act: "threadFromItem", id: it.id }) + "</div></section>";
+	if (it.report) h += reportCard(it) + verifyPanel(it);
+	if (it.prevReport && !it.report) h += '<details class="panel soft" style="margin-top:20px"><summary>First report, ' + esc(it.prevReport.at) + ' (you sent it back)</summary><p class="meta" style="margin-top:8px">' + esc(it.prevReport.summary) + '</p><p class="meta" style="margin-top:6px">Your note: “' + esc(it.note) + "”</p></details>";
+	h += stands(it);
+	h += activity(it);
+	return h;
+}
+function itemView(id) {
+	const it = state.items[id];
+	if (!it) return '<main class="page"><h1>Not found</h1><p class="sub">This item isn\'t in the prototype data. ' + lnk("Back to Today", { act: "go", arg: "#/today" }) + "</p></main>";
+	return '<main class="page enter" data-key="' + id + '">' + itemBody(it, false) + "</main>";
+}
+
+function missionsView() {
+	const rows = Object.values(state.missions).map((m) => {
+		const its = Object.values(state.items).filter((i) => i.route === m.id);
+		const needs = its.filter((i) => ["needs", "verify"].includes(Model.stage(i))).length;
+		const working = its.filter((i) => Model.stage(i) === "moving").length;
+		const words = needs ? "Needs you" : working ? "Moving" : "Quiet";
+		return '<div class="row" data-row data-act="go" data-arg="#/mission/' + m.id + '" role="button" tabindex="-1">' + mark(needs ? "needs" : working ? "working" : "done") + '<div class="t">' + esc(m.title) + '</div><div class="s tone-' + (needs ? "needs" : "quiet") + '">' + words + '</div><div class="m">' + esc(m.goal) + "</div></div>";
+	}).join("");
+	return '<main class="page enter"><h1>Missions</h1><p class="sub">Each mission has a coordinator you can talk to in focused threads. Agents work in the background.</p>' + section("Active", { count: Object.keys(state.missions).length, html: rows }) + "</main>";
+}
+function threadLook(th) {
+	if (th.state === "open") return th.pending ? ["pending", "Coordinator replying", "quiet"] : th.ask || th.proposal ? ["needs", "Waiting for you", "needs"] : ["working", "Open", "quiet"];
+	return { task: ["done", "Task added", "faint"], decision: ["done", "Decided", "faint"], map: ["done", "Map saved", "faint"], later: ["later", "Later", "faint"], discarded: ["later", "Discarded", "faint"] }[th.state];
+}
+function missionView(id) {
+	const m = state.missions[id];
+	if (!m) return '<main class="page"><h1>Not found</h1></main>';
+	const its = Object.values(state.items).filter((i) => i.route === m.id && i.triage === "started");
+	const agents = its.filter((i) => ["moving", "needs"].includes(Model.stage(i)));
+	const threads = m.threads.map((t) => state.threads[t]).filter(Boolean);
+	const thRows = threads.map((th) => { const [mk, w, tone] = threadLook(th); return '<div class="row" data-row data-act="go" data-arg="#/thread/' + th.id + '" role="button" tabindex="-1">' + mark(mk) + '<div class="t">' + esc(th.title) + '</div><div class="s tone-' + tone + '">' + w + '</div><div class="m">' + esc(th.result || th.origin) + "</div></div>"; }).join("");
+	const outs = [];
+	its.forEach((it) => {
+		if (it.pr) { const [mk, w, tone] = prLook(it.pr); outs.push('<div class="row" data-row data-act="evidence" data-id="' + it.id + '" data-arg="pr" role="button" tabindex="-1">' + mark(mk) + '<div class="t">PR #' + it.pr.n + " · " + esc(it.pr.title) + '</div><div class="s tone-' + tone + '">' + esc(w) + '</div><div class="m">' + esc(it.title) + (it.pr.state === "merged" ? " · Release unknown (not tracked)" : "") + "</div></div>"); }
+		if (it.report) it.report.evidence.filter((e) => e.kind === "doc" || e.kind === "artifact").forEach((e) => void outs.push('<div class="row" data-row data-act="evidence" data-id="' + it.id + '" data-arg="' + e.id + '" role="button" tabindex="-1">' + mark(e.kind) + '<div class="t">' + esc(e.label) + '</div><div class="s tone-faint">' + (e.kind === "doc" ? "Doc" : "Artifact") + '</div><div class="m">' + esc(it.title) + "</div></div>"));
+	});
+	m.outputs.forEach((o) => void outs.push('<div class="row" data-row data-act="output" role="button" tabindex="-1">' + mark(o.kind === "pr" ? "prq" : o.kind) + '<div class="t">' + esc(o.label) + '</div><div class="s tone-faint">' + { pr: "PR", doc: "Doc", artifact: "Artifact", report: "Report" }[o.kind] + '</div><div class="m">' + esc(o.note || "") + "</div></div>"));
+	const tasks = m.tasks.map((t) => { const s = taskStatus(t); return '<div class="row" data-row data-act="' + (t.item ? "open" : "noop") + '" data-id="' + (t.item || "") + '" role="button" tabindex="-1">' + pie(s, STATUS_WORDS[s]) + '<div class="t"><span class="key">#' + t.n + "</span>" + esc(t.title) + '</div><div class="s tone-faint">' + STATUS_WORDS[s] + '</div><div class="m">' + (t.linear ? "Linear " + esc(t.linear) + " (reference)" : t.from ? "From thread: " + esc(t.from) : "No Linear ticket") + "</div></div>"; }).join("");
+	const map = m.destination ? section("Wayfinder map", { count: "", html: '<div class="map panel soft" style="margin-top:4px"><p class="dest">' + esc(m.destination) + "</p><h3>Next questions</h3><ul>" + m.explore.map((f) => "<li>" + esc(f.t) + '<span class="meta">' + esc(f.kind) + " · " + esc(f.state) + "</span></li>").join("") + "</ul><h3>Not yet specified</h3><ul>" + m.fog.map((f) => "<li>" + esc(f.t) + '<span class="meta">' + esc(f.why) + "</span></li>").join("") + "</ul></div>" }) : "";
+	return '<main class="page enter"><p class="date">Mission</p><h1>' + esc(m.title) + '</h1><p class="sub">' + esc(m.goal) + "</p>" +
+		section("Threads with the coordinator", { count: threads.length, html: thRows || '<p class="quiet-line">No threads yet.</p>' }, lnk("New thread", { act: "threadNew", id: m.id })) +
+		section("Outputs", { count: outs.length, html: outs.join("") }) +
+		map +
+		section("Tasks", { count: m.tasks.length, html: tasks }, '<span class="small faint">The plan. Linear tickets are references.</span>') +
+		(m.decisions.length ? section("Decisions", { count: m.decisions.length, html: m.decisions.map((d) => '<div class="row" style="cursor:default">' + mark("done") + '<div class="t" style="white-space:normal">' + esc(d.text) + '</div><div class="s tone-faint">D' + d.n + '</div><div class="m">From thread: ' + esc(d.from) + "</div></div>").join("") }) : "") +
+		(m.linear ? section("Linear", { count: "", html: '<p class="quiet-line" style="color:var(--mfg)">Parent issue ' + esc(m.linear.parent) + ". Pilot reads Linear here; it doesn't write. Publishing tasks as sub-issues is off for this project. " + lnk("Preview what it would create", { act: "publishPreview", id: m.id }) + "</p>" }) : "") +
+		'<section class="sec"><p class="small faint">' + (agents.length ? word(agents.length) + (agents.length === 1 ? " agent is" : " agents are") + " working on this mission. Their chats stay out of the way; their work shows on each item. " : "No agents are working right now. ") + lnk(ui.showAgents ? "Hide agents" : "Show agents", { act: "toggle", arg: "showAgents" }) + "</p>" +
+		(ui.showAgents ? '<div style="margin-top:8px">' + its.map((i) => '<div class="row" style="cursor:default">' + mark(itemLook(i)[0]) + '<div class="t">Agent on ' + esc(i.title) + '</div><div class="s tone-faint">' + esc(itemLook(i)[1]) + '</div><div class="m">Chat available read-only in the full app (not in this prototype)</div></div>').join("") + "</div>" : "") + "</section></main>";
+}
+
+function threadView(id) {
+	const th = state.threads[id];
+	if (!th) return '<main class="page"><h1>Not found</h1></main>';
+	const m = state.missions[th.mission];
+	const key = "th:" + id;
+	let msgs = th.msgs.map((x) => '<div class="msg ' + (x.who === "you" ? "you" : "") + '"><div class="who">' + (x.who === "you" ? "You" : "Coordinator") + " · " + esc(x.at) + '</div><div class="body">' + esc(x.text) + "</div></div>").join("");
+	if (th.pending) msgs += '<div class="msg"><div class="who">Coordinator</div><div class="body meta">Writing' + dots + "</div></div>";
+	if (th.ask && th.state === "open" && !th.pending) msgs += '<section class="panel enter" style="max-width:680px"><h3>' + esc(th.ask.text) + "</h3>" + choiceList(key, th.ask, false) + '<p class="small faint" style="margin-top:8px">Pick one, or write your own below. <span class="kbd">1</span>–<span class="kbd">' + th.ask.options.length + "</span></p></section>";
+	if (th.state !== "open") msgs += '<div class="ended">' + mark("done") + '<span style="flex:1">' + esc(th.result) + "</span>" + (th.state === "later" || th.state === "discarded" ? btn("Reopen", { act: "threadReopen", id }) : lnk("Open the mission", { act: "go", arg: "#/mission/" + th.mission })) + "</div>";
+	const mapAside = th.map ? '<aside class="map enter"><div class="panel soft" style="margin-top:0"><p class="small faint">Wayfinder map · draft until saved</p><h3>Destination</h3><p class="dest">' + esc(th.map.destination) + "</p>" +
+		"<h3>Decided so far</h3><ul>" + th.map.settled.map((x) => "<li>" + esc(x) + "</li>").join("") + "</ul>" +
+		"<h3>Next questions</h3><ul>" + th.map.frontier.map((f) => "<li>" + esc(f.t) + '<span class="meta">' + esc(f.kind) + " · " + esc(f.state) + "</span></li>").join("") + "</ul>" +
+		"<h3>Not yet specified (fog)</h3><ul>" + th.map.fog.map((f) => "<li>" + esc(f.t) + '<span class="meta">' + esc(f.why) + "</span></li>").join("") + "</ul>" +
+		"<h3>Out of scope</h3><ul>" + th.map.out.map((x) => "<li>" + esc(x) + "</li>").join("") + "</ul></div></aside>" : "";
+	const draft = ui.drafts[key] || "";
+	const canSend = ui.choice[key] != null || draft.trim();
+	const p = th.proposal || {};
+	const composer = th.state === "open" ? '<div class="composer"><div class="in"><textarea rows="2" data-input="' + key + '" data-fk="' + key + '" placeholder="Reply to the coordinator" ' + (th.pending ? "disabled" : "") + ">" + esc(draft) + "</textarea>" +
+		'<div class="row2">' + btn("Send", { act: "threadSend", id }, canSend && !p.task && !p.decision && !p.map ? "primary" : "", { disabled: !canSend || !!th.pending }) +
+		'<span class="grow"></span><span class="small faint">End with:</span>' +
+		btn("Add a task", { act: "outcomeAsk", id, arg: "task" }, p.task && !canSend ? "primary" : "", { disabled: !!th.pending }) +
+		btn("Record decision", { act: "outcomeAsk", id, arg: "decision" }, p.decision && !p.task && !canSend ? "primary" : "", { disabled: !!th.pending }) +
+		(th.map ? btn("Save map", { act: "outcome", id, arg: "map" }, !canSend ? "primary" : "", { disabled: !!th.pending }) : "") +
+		btn("Later", { act: "outcome", id, arg: "later" }, "", { disabled: !!th.pending }) + btn("Discard", { act: "outcome", id, arg: "discard" }, "", { disabled: !!th.pending }) +
+		"</div></div></div>" : "";
+	return '<div class="thread ' + (th.map ? "map" : "") + ' enter" data-key="' + id + '"><div class="msgs"><p class="date">' + esc(m.title) + " · thread with the coordinator</p><h1>" + esc(th.title) + '</h1><p class="meta">' + esc(th.origin) + ". One subject. Talking here never starts work.</p>" + msgs + composer + "</div>" + mapAside + "</div>";
+}
+
+function linkedFor(key) {
+	for (const m of Object.values(state.missions)) { const t = m.tasks.find((x) => x.linear === key); if (t) return { m, t }; }
+	const it = Object.values(state.items).find((i) => i.linear === key && i.triage !== "discarded");
+	return it ? { it } : null;
+}
+function linearView() {
+	const L = state.linear, cyc = L.cycles.find((c) => c.n === ui.cycle);
+	const tk = L.tickets.filter((t) => t.cycle === ui.cycle);
+	const done = tk.filter((t) => t.status === "done").length;
+	const groups = [["in_progress", "In progress"], ["in_review", "In review"], ["todo", "To do"], ["done", "Done"]];
+	const offline = state.sim.linearOffline;
+	return '<main class="page enter"><p class="date">' + esc(L.team) + " team · read only</p><h1>Linear</h1>" +
+		(offline ? '<div class="banner">' + mark("failed") + "<span>Can't reach Linear. Showing tickets as they were at 10:31. " + lnk("Retry", { act: "sim", arg: "linearOffline:false" }) + "</span></div>" : '<p class="meta">Synced at ' + L.synced + ". Mission tasks stay the plan; tickets here are for browsing and linking.</p>") +
+		'<div class="tabs" role="tablist">' + L.cycles.map((c) => "<button " + attr({ role: "tab", class: c.n === ui.cycle ? "on" : "", "aria-selected": c.n === ui.cycle ? "true" : "false", "data-act": "cycle", "data-arg": c.n }) + ">Cycle " + c.n + (c.state === "Current" ? " · current" : "") + "</button>").join("") + "</div>" +
+		'<p class="meta" style="margin-top:12px">' + esc(cyc.dates) + " · " + esc(cyc.state) + " · " + done + " of " + tk.length + ' done</p><div class="bar"><i style="width:' + (tk.length ? (done / tk.length) * 100 : 0) + '%"></i></div>' +
+		groups.map(([s, l]) => { const g = tk.filter((t) => t.status === s); return g.length ? section(l, { count: g.length, html: g.map((t) => { const ln = linkedFor(t.key); return '<div class="row" data-row data-act="go" data-arg="#/ticket/' + t.key + '" role="button" tabindex="-1">' + pie(t.status, STATUS_WORDS[t.status]) + '<div class="t"><span class="key">' + t.key + "</span>" + esc(t.title) + '</div><div class="s tone-faint">' + (ln ? (ln.t ? "Task #" + ln.t.n : "In triage") : "") + '</div><div class="m">' + esc(t.who) + "</div></div>"; }).join("") }) : ""; }).join("") +
+		"</main>";
+}
+function ticketView(key) {
+	const t = state.linear.tickets.find((x) => x.key === key);
+	if (!t) return '<main class="page"><h1>Not found</h1></main>';
+	const ln = linkedFor(key);
+	let inPilot;
+	if (ln && ln.t) inPilot = '<div class="row" data-row data-act="go" data-arg="#/mission/' + ln.m.id + '" role="button" tabindex="-1">' + pie(taskStatus(ln.t)) + '<div class="t">Task #' + ln.t.n + " · " + esc(ln.t.title) + '</div><div class="s tone-faint">' + STATUS_WORDS[taskStatus(ln.t)] + '</div><div class="m">' + esc(ln.m.title) + ". The task is the plan; this ticket is a reference.</div></div>";
+	else if (ln && ln.it) inPilot = row(ln.it);
+	else inPilot = '<p class="quiet-line" style="color:var(--mfg)">Not in Pilot. ' + lnk("Bring it to triage", { act: "intake", arg: key }) + "</p>";
+	return '<main class="page enter"><p class="meta">Linear · ' + esc(state.linear.team) + " · Cycle " + t.cycle + "</p><h1>" + esc(t.title) + '</h1><p style="display:flex;gap:8px;align-items:center">' + pie(t.status) + "<span>" + STATUS_WORDS[t.status] + '</span><span class="faint">· ' + esc(key) + " · " + esc(t.who) + "</span></p>" +
+		(t.desc ? '<div class="quote">' + esc(t.desc) + "</div>" : "") +
+		section("In Pilot", { count: "", html: inPilot }) +
+		'<p class="small faint" style="margin-top:24px">Read only. Pilot never changes Linear from this view. Publishing mission tasks as sub-issues is a separate, optional per-project setting.</p></main>';
+}
+
+function view() {
+	const r = ui.route;
+	switch (r.name) {
+		case "today": return ui.variant === "A" ? todayA() : ui.variant === "B" ? todayB() : todayC();
+		case "triage": return triageView();
+		case "inbox": return inboxView();
+		case "item": return itemView(r.id);
+		case "missions": return missionsView();
+		case "mission": return missionView(r.id);
+		case "thread": return threadView(r.id);
+		case "linear": return linearView();
+		case "ticket": return ticketView(r.id);
+		default: return todayA();
+	}
+}
+
+
+/* ---------- modals ---------- */
+function chart() {
+	const W = 460, H = 150, max = 100, x0 = 120, bw = (v) => ((W - x0 - 20) * v) / max;
+	const bar = (y, v, lbl, fill, note) => '<text x="0" y="' + (y + 15) + '" font-size="13" fill="var(--mfg)">' + lbl + '</text><rect x="' + x0 + '" y="' + y + '" width="' + bw(v) + '" height="22" rx="4" fill="' + fill + '"/><text x="' + (x0 + bw(v) + 6) + '" y="' + (y + 15) + '" font-size="12.5" fill="var(--fg)">' + note + "</text>";
+	const cut = x0 + bw(60);
+	return '<svg viewBox="0 0 ' + W + " " + H + '" width="100%" role="img" aria-label="Export time for 6,214 invoices: before 94 seconds, cut off at 60; after 7 seconds">' +
+		'<line x1="' + cut + '" y1="8" x2="' + cut + '" y2="104" stroke="var(--failed)" stroke-dasharray="3 3"/><text x="' + (cut + 4) + '" y="16" font-size="11.5" fill="var(--failed-ink)">gateway limit 60 s</text>' +
+		bar(30, 94, "Before", "var(--track)", "94 s, never arrives") + bar(68, 7, "After", "var(--progress)", "7 s") +
+		'<text x="' + x0 + '" y="135" font-size="11.5" fill="var(--faint)">6,214 invoices · copy of northwind-eu data · local run</text></svg>';
+}
+function modalView() {
+	const md = ui.modal;
+	if (!md) return "";
+	let body = "";
+	const close = btn("Close", { act: "modalClose" }, "primary");
+	if (md.kind === "evidence") {
+		const it = state.items[md.id];
+		if (md.arg === "pr") {
+			const [, w] = prLook(it.pr);
+			const files = it.id === "northwind" ? [["src/export/csv.ts", "+84 −31"], ["src/export/csv.test.ts", "+56"], ["docs/billing/exports.md", "+6 −2"]] : [["src/pdf/footer.ts", "+22 −9"], ["src/pdf/footer.test.ts", "+31"]];
+			body = '<p class="meta">' + esc(it.repo || "") + " · mock pull request</p><h2>PR #" + it.pr.n + " · " + esc(it.pr.title) + '</h2><p class="meta" style="margin-top:4px">' + esc(w) + "</p>" +
+				'<div style="margin-top:14px">' + files.map(([f, d]) => '<div class="ev" style="cursor:default">' + mark("doc") + '<span class="l">' + esc(f) + '</span><span class="r faint">' + d + "</span></div>").join("") + "</div>" +
+				'<p class="small faint" style="margin-top:12px">On a real item this opens GitHub. Pilot never merges; merging happens there. ' + (it.pr.state === "merged" ? "Merged does not mean released." : "") + '</p><div class="actions">' + close + "</div>";
+		} else if (md.arg === "timing") {
+			body = '<p class="meta">Artifact · made by the agent</p><h2>Export time, before and after</h2><div style="margin-top:14px">' + chart() + '</div><p class="small faint" style="margin-top:8px">Measured by the agent on a local copy. It is evidence, not proof that production is fast.</p><div class="actions">' + close + "</div>";
+		} else if (md.arg === "pdfshots") {
+			const page = (ok) => '<svg viewBox="0 0 120 160" width="140" role="img" aria-label="' + (ok ? "After: footer below totals" : "Before: footer over totals") + '"><rect x="1" y="1" width="118" height="158" rx="4" fill="var(--card)" stroke="var(--border2)"/>' + [20, 30, 40, 50, 60, 70, 80, 90].map((y) => '<rect x="12" y="' + y + '" width="96" height="4" rx="2" fill="var(--track)"/>').join("") + '<rect x="60" y="104" width="48" height="8" rx="2" fill="var(--mfg)"/><rect x="12" y="' + (ok ? 138 : 100) + '" width="96" height="10" rx="2" fill="' + (ok ? "var(--faint)" : "var(--failed)") + '" opacity=".7"/></svg>';
+			body = '<p class="meta">Artifact · made by the agent</p><h2>Before and after, page 2</h2><div style="display:flex;gap:24px;margin-top:16px"><div>' + page(false) + '<p class="small faint">Before</p></div><div>' + page(true) + '<p class="small faint">After</p></div></div><div class="actions">' + close + "</div>";
+		} else if (md.arg === "reply") {
+			const txt = "Hi Dana, we found it: large exports hit a 60-second limit. A fix is in review now. I'll confirm here once it's live for northwind-eu.";
+			body = '<p class="meta">Draft · written by the agent · not sent</p><h2>Reply to Dana in #client-northwind</h2><div class="quote">' + esc(txt) + '</div><p class="small faint" style="margin-top:10px">Pilot never posts to Slack. Copy it and send it yourself. Note “once it\'s live”: Pilot can\'t tell you when that is yet, because release isn\'t tracked.</p><div class="actions">' + btn("Copy text", { act: "copy", arg: txt }) + close + "</div>";
+		} else {
+			const ev = it.report.evidence.find((e) => e.id === md.arg) || {};
+			const text = md.arg === "proposal" ? "## Emailed exports (proposal)\n\nWhen an export has more than 5,000 rows, Pilot's export service builds the file in the background and emails a link.\n\nOpen questions: link lifetime, who can open it, and whether small exports change too." : "## Limits\n\nExports stream rows as they are read. There is no row limit. A 6,214-invoice export takes about 7 s.\n\nThe gateway limit (60 s) still applies to the first byte only.";
+			body = '<p class="meta">Doc · changed by the agent</p><h2>' + esc(ev.label || "Doc") + '</h2><div class="quote" style="font-size:14px">' + esc(text) + '</div><div class="actions">' + close + "</div>";
+		}
+	} else if (md.kind === "outcome") {
+		const th = state.threads[md.thread], p = th.proposal || {};
+		const isTask = md.outcome === "task";
+		const key = "out:" + md.thread + ":" + md.outcome;
+		if (ui.drafts[key] == null) ui.drafts[key] = isTask ? p.task || "" : p.decision || "";
+		body = '<p class="meta">' + esc(state.missions[th.mission].title) + "</p><h2>" + (isTask ? "Add a task" : "Record a decision") + '</h2><p class="small faint" style="margin-top:4px">' + (isTask ? "The task joins the mission plan as To do. It does not start an agent." : "Decisions guide later work. You can replace one later; history is kept.") + '</p><div style="margin-top:12px"><textarea rows="3" data-input="' + key + '" data-fk="' + key + '">' + esc(ui.drafts[key]) + "</textarea></div>" +
+			'<div class="actions">' + btn("Cancel", { act: "modalClose" }) + btn(isTask ? "Add task" : "Record decision", { act: "outcomeConfirm", id: md.thread, arg: md.outcome }, "primary") + "</div>";
+	} else if (md.kind === "publish") {
+		const m = state.missions[md.id];
+		const open = m.tasks.filter((t) => !t.linear && taskStatus(t) !== "done");
+		body = '<p class="meta">Preview only</p><h2>Publish tasks as Linear sub-issues</h2><p class="meta" style="margin-top:6px">Under ' + esc(m.linear.parent) + ", Pilot would create:</p>" +
+			'<div style="margin-top:8px">' + (open.length ? open.map((t) => '<div class="ev" style="cursor:default">' + pie("todo") + '<span class="l">#' + t.n + " " + esc(t.title) + '</span><span class="r faint">new sub-issue</span></div>').join("") : '<p class="meta">Nothing: every open task already has a ticket.</p>') + "</div>" +
+			'<p class="small faint" style="margin-top:12px">Publishing is off for this project. Turning it on is a per-project setting with its own confirmation. Mission tasks stay the plan either way. This prototype never writes to Linear.</p><div class="actions">' + btn("Publish", { act: "noop" }, "", { disabled: true, title: "Off for this project" }) + close + "</div>";
+	} else if (md.kind === "dup") {
+		const hero = state.items.northwind;
+		body = '<p class="meta">Possible duplicate</p><h2>This looks like a request you already have</h2><p style="margin-top:8px">' + esc(md.key) + " sounds like <b>" + esc(hero.title) + "</b> (from Slack, " + esc(Model.place(hero, ui.variant)) + ").</p>" +
+			'<p class="small faint" style="margin-top:8px">Linking keeps one item and shows the ticket on it. Pilot doesn\'t change the ticket.</p>' +
+			'<div class="actions">' + btn("Add separately", { act: "dupAdd", arg: md.key }) + btn("Link to that request", { act: "dupLink", arg: md.key }, "primary") + "</div>";
+	} else if (md.kind === "output") {
+		body = "<h2>Mock output</h2><p class=\"meta\" style=\"margin-top:6px\">A real output opens its source: the doc, the artifact or the report. This prototype only shows the list.</p><div class=\"actions\">" + close + "</div>";
+	}
+	return '<div class="scrim" data-act="scrim"><div class="modal enter" role="dialog" aria-modal="true">' + body + "</div></div>";
+}
+
+/* ---------- prototype chrome ---------- */
+function barView() {
+	const v = VARIANTS[ui.variant];
+	return '<div class="pbar" role="toolbar" aria-label="Prototype controls"><span class="tag">Prototype · mock</span>' +
+		'<button data-act="variant" data-arg="-1" aria-label="Previous variant (←)" title="Previous variant (←)">←</button><span class="lbl">' + ui.variant + " · " + esc(v.name) + ' <small>(' + (Object.keys(VARIANTS).indexOf(ui.variant) + 1) + "/3)</small></span>" +
+		'<button data-act="variant" data-arg="1" aria-label="Next variant (→)" title="Next variant (→)">→</button><span class="sep"></span>' +
+		'<button data-act="drawer">' + (ui.drawer ? "Hide panel" : "Panel") + '</button><button data-act="reset" title="Back to the starting data">Reset</button></div>';
+}
+function focusId() {
+	const r = ui.route;
+	if (r.name === "item" && state.items[r.id]) return r.id;
+	if (r.name === "inbox" && ui.inboxSel) return ui.inboxSel;
+	return "northwind";
+}
+function drawerView() {
+	if (!ui.drawer) return "";
+	const tabs = [["walk", "Walkthroughs"], ["play", "Free play"], ["state", "State"], ["where", "Where things live"], ["about", "About"]];
+	let body = "";
+	if (ui.dtab === "walk") {
+		body = '<div class="grid">' + WALKS.map((w, i) => '<button class="pbtn" data-act="wtStart" data-arg="' + i + '">' + esc(w.name) + "</button>").join("") + "</div>";
+		if (ui.wt) {
+			const w = WALKS[ui.wt.i];
+			const busy = timers.length > 0;
+			body += '<h2 style="margin-top:18px">' + esc(w.name) + "</h2><p>" + esc(w.desc) + '</p><div class="wt-steps">' +
+				w.steps.map((s, j) => '<button class="pbtn' + (j === ui.wt.step ? " next" : "") + '" data-act="wtStep" data-arg="' + j + '"' + (j !== ui.wt.step || busy ? " disabled" : "") + ">" + (j < ui.wt.step ? "✓ " : j + 1 + ". ") + esc(s[0]) + "</button>").join("") + "</div>" +
+				(ui.wt.step >= w.steps.length ? '<p style="margin-top:10px">Walkthrough finished. Free play is back on. ' + '<button class="pbtn" data-act="wtEnd">Close walkthrough</button></p>' : '<p class="small" style="margin-top:8px;color:var(--proto-faint)">' + (busy ? "Waiting for a pending reply…" : "Press the highlighted step.") + " The agent's automatic progress is paused during walkthroughs.</p>");
+		} else body += "<p>Each walkthrough resets the data, then steps through one case. The variant stays as you set it, so you can replay the same Northwind request in A, B and C and compare them.</p>";
+	} else if (ui.dtab === "play") {
+		const id = focusId(), it = state.items[id];
+		const b = (label, act, ok) => '<button class="pbtn" data-act="sim" data-arg="' + act + '"' + (ok ? "" : " disabled") + ">" + esc(label) + "</button>";
+		body = "<p>Simulate what agents and services do. Item actions apply to: <b>" + esc(it.title) + "</b>.</p>" +
+			'<label><input type="checkbox" data-act="auto"' + (ui.auto ? " checked" : "") + "> Agent progresses by itself (every few seconds)</label>" +
+			'<div class="grid">' + b("Next agent event", "next", Model.hasNext(it)) + b("Agent fails", "fail", it.agent.phase === "working") + b("PR checks fail", "prfail", it.pr && it.pr.state === "checks_running" && it.agent.phase === "working") + b("PR merged on GitHub", "merge", it.pr && it.pr.state === "checks_passed") + "</div>" +
+			'<h2 style="margin-top:16px">Next start</h2><div class="grid">' + [["off", "Confirmed normally"], ["started", "Reply lost; it did start"], ["never", "Reply lost; it never arrived"]].map(([v, l]) => '<button class="pbtn' + (state.sim.lostAck === v ? " next" : "") + '" data-act="sim" data-arg="lostAck:' + v + '">' + l + "</button>").join("") + "</div>" +
+			'<h2 style="margin-top:16px">Services</h2><label><input type="checkbox" data-act="sim" data-arg="slackOffline:toggle"' + (state.sim.slackOffline ? " checked" : "") + '> Slack unreachable</label><label><input type="checkbox" data-act="sim" data-arg="linearOffline:toggle"' + (state.sim.linearOffline ? " checked" : "") + "> Linear unreachable</label>";
+	} else if (ui.dtab === "state") {
+		const id = focusId();
+		body = "<p>The full state of <b>" + esc(state.items[id].title) + "</b>. Yellow means the last action changed it.</p>" +
+			'<div class="st">' + Model.summary(state, id, ui.variant).map(([k, v]) => '<span class="k">' + esc(k) + '</span><span class="v' + (ui.changed.includes(k) ? " chg" : "") + '">' + esc(v) + "</span>").join("") + "</div>" +
+			'<h2 style="margin-top:16px">Log</h2><div class="log">' + (state.log.length ? state.log.slice(0, 14).map((l) => "<div>" + esc(l.at) + " · " + esc(l.text) + "</div>").join("") : "<div>Nothing yet.</div>") + "</div>";
+	} else if (ui.dtab === "where") {
+		const rows = [["new", "New request"], ["later", "Saved for later"], ["needs", "Question, failure, Unknown"], ["moving", "Working"], ["verify", "Agent finished, your check"], ["done", "You marked done"], ["discarded", "Discarded"]];
+		body = "<p>Each item has exactly one home per variant. There is no second queue to keep in sync.</p><table><tr><th>State</th><th>A</th><th>B</th><th>C</th></tr>" +
+			rows.map(([k, l]) => "<tr><td>" + l + "</td>" + ["A", "B", "C"].map((v) => "<td" + (v === ui.variant ? ' style="color:#fff"' : ' style="color:var(--proto-faint)"') + ">" + esc(Model.PLACES[v][k]) + "</td>").join("") + "</tr>").join("") + "</table>" +
+			"<p style=\"margin-top:12px\">" + esc(VARIANTS[ui.variant].what) + "</p>";
+	} else {
+		body = "<p><b>Question.</b> Where should incoming work live: inline on Today, a triage pass from Today, or a separate Inbox? And does one work item keep four things apart: the agent finishing, the PR merging, production release and your Done?</p>" +
+			"<p><b>Choosing a variant is feedback, not approval.</b> Mixing parts (say, B's triage pass with C's list) is a good answer too. Nothing gets built from a pick without a separate agreement.</p>" +
+			"<p><b>Not real.</b> Mock data in memory only. Nothing is sent to Slack, Linear, GitHub or any agent. Reload or Reset starts over. This is a throwaway design prototype, not how Pilot is built: the app stays native (NSH).</p>" +
+			"<p><b>Keys.</b> ↑ ↓ move, Return opens, Esc goes back, ← → switch variant, 1–9 pick an answer, 0 opens “why”, ⌘Return sends.</p>" +
+			"<p><b>Source.</b> Shaped by the upstream <i>prototype</i> skill (UI.md variants with a bottom bar and ?variant=, LOGIC.md pure reducer, state panel and walkthroughs) from mattpocock/skills at 4ae2317, MIT, © 2026 Matt Pocock, vendored in packages/kernel/skills/mission-planning/upstream/prototype. Adapted: one self-contained file opened in your browser instead of an app route.</p>";
+	}
+	return '<aside class="drawer" aria-label="Prototype panel"><h2>Prototype panel</h2><div class="ptabs">' + tabs.map(([k, l]) => '<button class="' + (ui.dtab === k ? "on" : "") + '" data-act="dtab" data-arg="' + k + '">' + l + "</button>").join("") + "</div>" + body + "</aside>";
+}
+
+/* ---------- walkthroughs ---------- */
+const nextEv = (label) => [label, () => dispatch({ type: "agent/next", id: "northwind" })];
+const openHero = ["Open the Slack request", () => openRequest("northwind")];
+const startHero = ["Start it in Billing reliability", () => { ui.route2.northwind = "billing"; dispatch({ type: "start", id: "northwind", route: "billing" }); }];
+const viewHero = ["Open the work item", () => go("#/item/northwind")];
+const reported = (s) => Model.play(s, [
+	{ type: "start", id: "northwind", route: "billing" }, { type: "agent/next", id: "northwind" }, { type: "agent/next", id: "northwind" }, { type: "agent/next", id: "northwind" },
+	{ type: "answer", id: "northwind", choice: 0 }, { type: "agent/next", id: "northwind" }, { type: "agent/next", id: "northwind" }, { type: "agent/next", id: "northwind" }, { type: "agent/next", id: "northwind" },
+]);
+const WALKS = [
+	{ name: "Northwind, end to end", desc: "A client asks in Slack. You start the work, answer one question, get a result with evidence and mark it done. Watch the four lines under “Where this stands”: the agent finishing, the PR merging, production and your check never collapse into one.",
+		steps: [openHero, startHero, viewHero, nextEv("Agent reads the thread"), nextEv("Agent reproduces the bug"), nextEv("Agent asks how to fix it"),
+			["Pick the recommended fix and send", () => { ui.choice.northwind = 0; dispatch({ type: "answer", id: "northwind", choice: 0 }); }],
+			nextEv("Agent writes the fix"), nextEv("Agent opens PR #482"), nextEv("Checks pass"), nextEv("Agent reports finished"),
+			["Open the timing chart", () => openModal({ kind: "evidence", id: "northwind", arg: "timing" })],
+			["PR #482 merges on GitHub", () => { ui.modal = null; dispatch({ type: "pr/merge", id: "northwind" }); }],
+			["You mark it done", () => dispatch({ type: "verify/done", id: "northwind" })],
+			["Back to Today", () => go("#/today")]] },
+	{ name: "Start not confirmed", desc: "The start goes out but no reply comes back. Pilot can't know whether the agent runs, so it says so and never resends by itself. You ask it to check; the check finds the agent did start.",
+		setup: (s) => Model.reduce(s, { type: "sim", key: "lostAck", value: "started" }),
+		steps: [openHero, startHero, viewHero, ["Check status", () => dispatch({ type: "start/check", id: "northwind" })], nextEv("Agent carries on")] },
+	{ name: "Check finds nothing", desc: "Same lost reply, but the start never arrived. The check proves nothing ran, so the request goes back to New and starting again is safe.",
+		setup: (s) => Model.reduce(s, { type: "sim", key: "lostAck", value: "never" }),
+		steps: [openHero, startHero, viewHero, ["Check status", () => dispatch({ type: "start/check", id: "northwind" })], ["Start again", () => dispatch({ type: "start", id: "northwind", route: "billing" })]] },
+	{ name: "Send it back", desc: "The agent reports finished, but you want a change. Your note reopens the work. The first report stays readable, and Done waits for you.",
+		setup: reported,
+		steps: [viewHero, ["Send it back with a note", () => { ui.sendBack = null; dispatch({ type: "verify/sendBack", id: "northwind", note: "The button still shows nothing while it works. Add a “Preparing file” label." }); }],
+			nextEv("Agent reads your note"), nextEv("Agent updates the PR"), nextEv("Checks run"), nextEv("Checks pass"), nextEv("Agent reports again"),
+			["Mark done while the PR is open", () => { ui.confirmDone = "northwind"; render(); }], ["Mark done anyway", () => dispatch({ type: "verify/done", id: "northwind" })]] },
+	{ name: "Merged is not released", desc: "The PDF fix merged this morning, but Pilot has no release signal, so Production says Unknown. You settle what released means in a short coordinator thread.",
+		steps: [["Open the PDF footer item", () => go("#/item/pdf")], ["Talk about release tracking", () => go("#/thread/release")],
+			["Answer: the deploy workflow", () => threadAnswer("release", 0)], ["Answer: report on merge", () => threadAnswer("release", 0)],
+			["Record the decision", () => dispatch({ type: "thread/outcome", thread: "release", kind: "decision" })], ["See it on the mission", () => go("#/mission/billing")]] },
+	{ name: "Bigger than a thread", desc: "If the answer is “not sure”, the coordinator suggests a Wayfinder map instead of guessing. Saving the map adds next questions and fog to the mission. Nothing runs.",
+		steps: [["Open the release thread", () => go("#/thread/release")], ["Answer: not sure", () => threadAnswer("release", 2)], ["Start a Wayfinder map", () => threadAnswer("release", 0)],
+			["Save the map", () => dispatch({ type: "thread/outcome", thread: "release", kind: "map" })], ["See it on the mission", () => go("#/mission/billing")]] },
+	{ name: "Same bug from Linear", desc: "Linear has a ticket for the Northwind bug. Bringing it in offers to link it to the Slack request instead of making a second item.",
+		steps: [["Open Linear", () => go("#/linear")], ["Open BIL-231", () => go("#/ticket/BIL-231")], ["Bring it to triage", () => intake("BIL-231")],
+			["Link it to the Slack request", () => { ui.modal = null; dispatch({ type: "linear/link", id: "northwind", key: "BIL-231" }); }], ["Open the request", () => openRequest("northwind")]] },
+];
+function threadAnswer(id, choice) { ui.choice["th:" + id] = null; dispatch({ type: "thread/answer", thread: id, choice, text: "" }); }
+
+/* ---------- navigation ---------- */
+function go(h, replace) {
+	if (location.hash === h) { ui.route = parse(h); render(); return; }
+	ui.scroll[location.hash] = window.scrollY;
+	if (replace) history.replaceState(null, "", location.pathname + location.search + h);
+	else location.hash = h;
+	if (replace) onHash();
+}
+function onHash() {
+	const h = location.hash || "#/today";
+	const back = ui.stack.length > 1 && ui.stack[ui.stack.length - 2] === h;
+	if (back) ui.stack.pop(); else if (ui.stack[ui.stack.length - 1] !== h) ui.stack.push(h);
+	ui.route = parse(h);
+	if (ui.route.name === "triage" && ui.variant !== "B") return go("#/today", true);
+	if (ui.route.name === "inbox" && ui.variant !== "C") return go("#/today", true);
+	ui.sendBack = null; ui.confirmDone = null;
+	render();
+	window.scrollTo(0, back ? ui.scroll[h] || 0 : 0);
+}
+function goBack() {
+	if (ui.stack.length > 1) history.back();
+	else { const p = parentOf(ui.route); if (p) go(p); }
+}
+function openRequest(id) {
+	const it = state.items[id];
+	if (ui.variant === "B" && ["new"].includes(Model.stage(it))) { ui.tAll = false; ui.tIdx = byStage("new").indexOf(it); go("#/triage"); }
+	else if (ui.variant === "C" && ["new", "later"].includes(Model.stage(it))) { ui.inboxSel = id; go("#/inbox"); render(); }
+	else if (ui.variant === "A" && Model.stage(it) === "new" && ui.route.name === "today") { ui.expanded = id; render(); }
+	else if (ui.variant === "A" && Model.stage(it) === "new") { ui.expanded = id; go("#/today"); }
+	else go("#/item/" + id);
+}
+function intake(key) {
+	const hero = state.items.northwind;
+	if (key === "BIL-231" && hero.triage !== "discarded" && hero.linear !== key) { openModal({ kind: "dup", key }); return; }
+	dispatch({ type: "linear/intake", key });
+	toast("Brought " + key + " to triage.", "lin-" + key);
+}
+function openModal(md) { ui.modal = md; render(); const f = document.querySelector(".modal textarea, .modal .btn.primary"); if (f) f.focus(); }
+function toast(text, id) { ui.toast = { text, id }; clearTimeout(toast.t); toast.t = setTimeout(() => { ui.toast = null; render(); }, 4000); }
+
+/* ---------- dispatch, timers, auto agent ---------- */
+let timers = [], autoTimer = null;
+function after(ms, fn) { const t = setTimeout(() => { timers = timers.filter((x) => x !== t); fn(); }, ms); timers.push(t); }
+function clearTimers() { timers.forEach(clearTimeout); timers = []; clearTimeout(autoTimer); autoTimer = null; }
+function dispatch(a) {
+	const id = focusId();
+	const before = Model.summary(state, id, ui.variant);
+	const prev = state;
+	state = Model.reduce(state, a);
+	if (state === prev) { render(); return false; }
+	const now = Model.summary(state, id, ui.variant);
+	ui.changed = now.filter(([k, v], i) => before[i] && before[i][1] !== v).map(([k]) => k);
+	if (a.type === "start") after(900, () => dispatch({ type: "start/settle", id: a.id }));
+	if (a.type === "start/check") after(1200, () => dispatch({ type: "start/checkResult", id: a.id }));
+	if (a.type === "answer") after(800, () => dispatch({ type: "answer/settle", id: a.id }));
+	if (a.type === "thread/answer") after(1100, () => dispatch({ type: "thread/settle", thread: a.thread }));
+	scheduleAuto();
+	render();
+	return true;
+}
+function scheduleAuto() {
+	if (autoTimer || !ui.auto || ui.wt) return;
+	const it = Object.values(state.items).find((i) => Model.hasNext(i));
+	if (!it) return;
+	autoTimer = setTimeout(() => { autoTimer = null; dispatch({ type: "agent/next", id: it.id }); }, 2600);
+}
+function reset(setup) {
+	clearTimers();
+	state = Model.initial();
+	if (setup) state = setup(state);
+	const keep = { variant: ui.variant, drawer: ui.drawer, dtab: ui.dtab, auto: ui.auto, stack: ui.stack, scroll: ui.scroll };
+	Object.assign(ui, freshUi(ui.variant), keep);
+	ui.stack = [location.hash || "#/today"];
+}
+
+
+/* ---------- render ---------- */
+const $app = document.getElementById("app"), $bar = document.getElementById("bar"), $drawer = document.getElementById("drawer"), $modal = document.getElementById("modal"), $toast = document.getElementById("toast");
+let lastKey = "";
+function render() {
+	const a = document.activeElement;
+	const fk = a && a !== document.body ? a.dataset.fk || [a.dataset.act, a.dataset.id, a.dataset.arg].join("|") : null;
+	const sel = a && "selectionStart" in a ? [a.selectionStart, a.selectionEnd] : null;
+	const html = topbar() + view();
+	const key = location.hash + "|" + ui.variant;
+	$app.innerHTML = html;
+	if (key === lastKey) for (const e of $app.querySelectorAll(".enter")) e.classList.remove("enter");
+	lastKey = key;
+	$bar.innerHTML = barView();
+	$drawer.innerHTML = drawerView();
+	$modal.innerHTML = modalView();
+	$toast.innerHTML = ui.toast ? '<div class="toast" role="status">' + esc(ui.toast.text) + (ui.toast.id ? " " + lnk("Open", { act: "open", id: ui.toast.id }) : "") + "</div>" : "";
+	document.title = "Pilot prototype · " + routeTitle(ui.route).replace(/<[^>]+>/g, "") + " · " + ui.variant;
+	if (fk) {
+		const el = [...document.querySelectorAll("[data-fk],[data-act]")].find((e) => (e.dataset.fk || [e.dataset.act, e.dataset.id, e.dataset.arg].join("|")) === fk);
+		if (el) { el.focus({ preventScroll: true }); if (sel && "setSelectionRange" in el) try { el.setSelectionRange(sel[0], sel[1]); } catch {} }
+	}
+	paintHl();
+}
+function rows() { return [...$app.querySelectorAll("[data-row]")]; }
+function hlKey() { return location.hash + "|" + ui.variant; }
+function paintHl() {
+	const rs = rows(); for (const r of rs) r.classList.remove("hl");
+	if (!ui.kbd) return;
+	const i = ui.hl[hlKey()];
+	if (i != null && rs[Math.min(i, rs.length - 1)]) rs[Math.min(i, rs.length - 1)].classList.add("hl");
+}
+
+/* ---------- actions from clicks ---------- */
+function act(el, ev) {
+	const { act: a, id, arg } = el.dataset;
+	switch (a) {
+		case "go": go(arg); break;
+		case "back": goBack(); break;
+		case "open": { const it = state.items[id]; if (!it) break; if (["new", "later"].includes(Model.stage(it)) && ui.variant !== "A") openRequest(id); else go("#/item/" + id); break; }
+		case "expand": ui.expanded = ui.expanded === id ? null : id; render(); break;
+		case "route": ui.route2[id] = arg || null; render(); break;
+		case "start": { const ok = dispatch({ type: "start", id, route: routeOf(state.items[id]) }); if (ok && ui.route.name !== "item") { ui.expanded = null; toast("Started. It's on Today, under Moving.", id); render(); } break; }
+		case "later": dispatch({ type: "later", id }); if (ui.route.name !== "item") toast("Saved for later.", null); break;
+		case "discard": dispatch({ type: "discard", id }); toast("Discarded. Undo is on the page.", null); break;
+		case "restore": dispatch({ type: "restore", id }); break;
+		case "threadFromItem": dispatch({ type: "thread/fromItem", id }); go("#/thread/" + state.items[id].thread); break;
+		case "choose": ui.choice[id] = ui.choice[id] === +arg ? null : +arg; render(); break;
+		case "answer": { const d = ui.drafts["ans:" + id] || ""; if (dispatch({ type: "answer", id, choice: ui.choice[id], text: d })) { ui.drafts["ans:" + id] = ""; ui.choice[id] = null; } break; }
+		case "startCheck": dispatch({ type: "start/check", id }); break;
+		case "retry": dispatch({ type: "agent/retry", id }); break;
+		case "check": dispatch({ type: "verify/check", id, key: arg }); break;
+		case "doneAsk": ui.confirmDone = id; render(); break;
+		case "doneCancel": ui.confirmDone = null; render(); break;
+		case "done": ui.confirmDone = null; dispatch({ type: "verify/done", id }); break;
+		case "reopen": dispatch({ type: "verify/reopen", id }); break;
+		case "sendBackOpen": { ui.sendBack = id; render(); const t = document.querySelector('[data-fk="back:' + id + '"]'); if (t) t.focus(); break; }
+		case "sendBackCancel": ui.sendBack = null; render(); break;
+		case "sendBack": { const n = ui.drafts["back:" + id] || ""; if (dispatch({ type: "verify/sendBack", id, note: n })) { ui.sendBack = null; ui.drafts["back:" + id] = ""; render(); } break; }
+		case "evidence": openModal({ kind: "evidence", id, arg }); break;
+		case "output": openModal({ kind: "output" }); break;
+		case "modalClose": ui.modal = null; render(); break;
+		case "scrim": if (ev.target === el) { ui.modal = null; render(); } break;
+		case "copy": navigator.clipboard && navigator.clipboard.writeText(arg).then(() => toast("Copied. Pilot didn't send anything.", null), () => toast("Couldn't copy. Select the text instead.", null)); break;
+		case "allSteps": ui.allSteps[id] = !ui.allSteps[id]; render(); break;
+		case "toggle": ui[arg] = !ui[arg]; render(); break;
+		case "triagePick": ui.tAll = false; ui.tIdx = byStage("new").findIndex((i) => i.id === id); render(); break;
+		case "triageNav": ui.tIdx += +arg; render(); break;
+		case "inboxSel": ui.inboxSel = id; render(); break;
+		case "inboxNext": { const n = byStage("new")[0]; ui.inboxSel = n ? n.id : null; render(); break; }
+		case "threadNew": dispatch({ type: "thread/new", mission: id }); go("#/thread/" + state.lastThread); break;
+		case "threadSend": { const k = "th:" + id; const d = ui.drafts[k] || ""; if (dispatch({ type: "thread/answer", thread: id, choice: ui.choice[k], text: d })) { ui.drafts[k] = ""; ui.choice[k] = null; render(); } break; }
+		case "outcomeAsk": openModal({ kind: "outcome", thread: id, outcome: arg }); break;
+		case "outcomeConfirm": { const k = "out:" + id + ":" + arg; const v = ui.drafts[k] || ""; ui.modal = null; dispatch(arg === "task" ? { type: "thread/outcome", thread: id, kind: "task", title: v } : { type: "thread/outcome", thread: id, kind: "decision", text: v }); delete ui.drafts[k]; break; }
+		case "outcome": dispatch({ type: "thread/outcome", thread: id, kind: arg }); break;
+		case "threadReopen": dispatch({ type: "thread/reopen", thread: id }); break;
+		case "cycle": ui.cycle = +arg; render(); break;
+		case "intake": intake(arg); break;
+		case "dupLink": ui.modal = null; dispatch({ type: "linear/link", id: "northwind", key: arg }); toast("Linked " + arg + " to the Slack request. Linear was not changed.", "northwind"); render(); break;
+		case "dupAdd": ui.modal = null; dispatch({ type: "linear/intake", key: arg }); toast("Added " + arg + " as its own request.", "lin-" + arg); render(); break;
+		case "publishPreview": openModal({ kind: "publish", id }); break;
+		case "variant": switchVariant(+arg); break;
+		case "drawer": ui.drawer = !ui.drawer; render(); break;
+		case "dtab": ui.dtab = arg; render(); break;
+		case "reset": reset(); go("#/today"); render(); toast("Reset to the starting data.", null); break;
+		case "auto": ui.auto = !ui.auto; scheduleAuto(); render(); break;
+		case "sim": simAct(arg); break;
+		case "wtStart": { const w = WALKS[+arg]; reset(w.setup); ui.wt = { i: +arg, step: 0 }; ui.drawer = true; ui.dtab = "walk"; go("#/today"); render(); break; }
+		case "wtStep": { const w = WALKS[ui.wt.i], s = w.steps[+arg]; ui.wt.step++; s[1](); if (ui.wt && ui.wt.step >= w.steps.length) { ui.wt.done = true; } render(); break; }
+		case "wtEnd": ui.wt = null; scheduleAuto(); render(); break;
+		case "noop": break;
+	}
+}
+function simAct(arg) {
+	const id = focusId();
+	if (arg === "next") dispatch({ type: "agent/next", id });
+	else if (arg === "fail") dispatch({ type: "agent/fail", id });
+	else if (arg === "prfail") dispatch({ type: "pr/fail", id });
+	else if (arg === "merge") dispatch({ type: "pr/merge", id });
+	else {
+		const [k, v] = arg.split(":");
+		dispatch({ type: "sim", key: k, value: v === "toggle" ? !state.sim[k] : v === "false" ? false : v });
+	}
+}
+function switchVariant(d) {
+	const keys = Object.keys(VARIANTS);
+	ui.variant = keys[(keys.indexOf(ui.variant) + d + keys.length) % keys.length];
+	const p = new URLSearchParams(location.search); p.set("variant", ui.variant);
+	history.replaceState(null, "", location.pathname + "?" + p + location.hash);
+	if ((ui.route.name === "triage" && ui.variant !== "B") || (ui.route.name === "inbox" && ui.variant !== "C")) go("#/today", true);
+	else render();
+}
+
+document.addEventListener("click", (ev) => {
+	const el = ev.target.closest("[data-act]");
+	if (!el || el.disabled) return;
+	if (el.tagName === "INPUT") return; // checkboxes use change
+	if (el.closest("details") && el.tagName === "SUMMARY") return;
+	act(el, ev);
+});
+document.addEventListener("change", (ev) => { const el = ev.target; if (el.tagName === "INPUT" && el.dataset.act) act(el, ev); });
+document.addEventListener("input", (ev) => {
+	const el = ev.target; const k = el.dataset.input; if (!k) return;
+	const was = (ui.drafts[k] || "").trim().length > 0;
+	ui.drafts[k] = el.value;
+	if (was !== el.value.trim().length > 0) render(); // only re-render to enable/disable Send
+});
+document.addEventListener("toggle", (ev) => { const d = ev.target; if (d.dataset && d.dataset.why) ui.why[d.dataset.why] = d.open; }, true);
+document.addEventListener("mousedown", () => { if (ui.kbd) { ui.kbd = false; paintHl(); } });
+
+/* ---------- keyboard ---------- */
+function inText(e) { const t = e.target; return t && (t.tagName === "TEXTAREA" || (t.tagName === "INPUT" && t.type === "text") || t.isContentEditable); }
+document.addEventListener("keydown", (e) => {
+	if (e.key === "Escape") {
+		if (ui.modal) { ui.modal = null; render(); e.preventDefault(); return; }
+		if (inText(e)) { e.target.blur(); ui.kbd = true; return; }
+		if (ui.sendBack || ui.confirmDone) { ui.sendBack = null; ui.confirmDone = null; render(); return; }
+		if (ui.expanded) { ui.expanded = null; render(); return; }
+		goBack(); e.preventDefault(); return;
+	}
+	if (inText(e)) {
+		if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+			const k = e.target.dataset.input || "";
+			const [kind, id] = [k.split(":")[0], k.split(":").slice(1).join(":")];
+			if (kind === "ans") act({ dataset: { act: "answer", id } }, e);
+			if (kind === "th") act({ dataset: { act: "threadSend", id } }, e);
+			if (kind === "back") act({ dataset: { act: "sendBack", id } }, e);
+			e.preventDefault();
+		}
+		return;
+	}
+	if (e.metaKey || e.ctrlKey || e.altKey) return;
+	if (ui.modal) return;
+	if (e.key === "ArrowLeft" || e.key === "ArrowRight") { switchVariant(e.key === "ArrowLeft" ? -1 : 1); e.preventDefault(); return; }
+	if (ui.route.name === "triage" && !ui.tAll && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+		const n = byStage("new").length; ui.tIdx = Math.max(0, Math.min(n - 1, ui.tIdx + (e.key === "ArrowUp" ? -1 : 1))); render(); e.preventDefault(); return;
+	}
+	if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+		const rs = rows(); if (!rs.length) return;
+		const k = hlKey(); const cur = ui.kbd && ui.hl[k] != null ? ui.hl[k] : -1;
+		ui.hl[k] = Math.max(0, Math.min(rs.length - 1, cur + (e.key === "ArrowDown" ? 1 : cur < 0 ? 0 : -1)));
+		ui.kbd = true; paintHl();
+		const r = rows()[ui.hl[k]]; if (r) r.scrollIntoView({ block: "nearest" });
+		e.preventDefault(); return;
+	}
+	if (e.key === "Enter" && ui.kbd && (document.activeElement === document.body || !document.activeElement || document.activeElement.classList.contains("row"))) {
+		const r = rows()[ui.hl[hlKey()]]; if (r) { act(r, e); e.preventDefault(); } return;
+	}
+	if (/^[0-9]$/.test(e.key)) {
+		const n = +e.key;
+		const q = $app.querySelector(".choice") ? $app.querySelector(".choice").dataset.id : null;
+		if (n === 0) { const d = $app.querySelector("details[data-why]"); if (d) { d.open = !d.open; ui.why[d.dataset.why] = d.open; } return; }
+		if (q != null && $app.querySelectorAll('.choice[data-id="' + q + '"]').length >= n) act({ dataset: { act: "choose", id: q, arg: String(n - 1) } }, e);
+	}
+});
+
+window.addEventListener("hashchange", onHash);
+if (!location.hash) history.replaceState(null, "", location.pathname + location.search + "#/today");
+ui.route = parse(location.hash); ui.stack = [location.hash];
+if ((ui.route.name === "triage" && ui.variant !== "B") || (ui.route.name === "inbox" && ui.variant !== "C")) history.replaceState(null, "", location.pathname + location.search + "#/today"), (ui.route = parse("#/today"));
+render();
+
+</script>
+</body>
+</html>
