@@ -24,7 +24,8 @@ with open(os.environ["TRACE"], "a") as out:
         "CARGO_PROFILE_DEV_DEBUG", "CARGO_INCREMENTAL", "MBX_CARGO_SHIM_MODE",
         "MBX_CARGO_SHIM_PATH", "MBX_CACHE_DIR", "MBX_SCHEDULER_CPUS",
         "MBX_SCHEDULER_MEMORY", "MBX_TARGET_VIEWS", "MBX_GC_AUTO", "MBX_REMOTE_URL",
-        "MBX_BLAZE", "MBX_DISABLE", "CARGO_NET_OFFLINE"]})) + "\\n")
+        "MBX_BLAZE", "MBX_DISABLE", "CARGO_NET_OFFLINE", "npm_config_manage_package_manager_versions",
+        "npm_config_ignore_scripts", "COREPACK_ENABLE_AUTO_PIN", "COREPACK_ENABLE_NETWORK", "NSH_TSC"]})) + "\\n")
 if kind == "mbx":
     if args == ["--version"]:
         print(os.environ.get("FAKE_MBX_VERSION", "mbx 1.26.0"))
@@ -95,13 +96,17 @@ class Dispatch(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="day dispatch ", dir=os.environ.get("TMPDIR"))
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.day = self.root / "app with spaces"
+        self.day = self.root / "repo with spaces/apps/day"
         self.bin = self.root / "fake tools"
         self.bin.mkdir()
-        self.day.mkdir()
+        self.day.mkdir(parents=True)
         shutil.copytree(DAY / "scripts", self.day / "scripts", ignore=shutil.ignore_patterns("__pycache__"))
         shutil.copy2(DAY / "nsh.sh", self.day / "nsh.sh")
         shutil.copy2(DAY / "runner.Cargo.lock", self.day / "runner.Cargo.lock")
+        compiler = self.day / "../../node_modules/.bin/tsgo"
+        compiler.parent.mkdir(parents=True, exist_ok=True)
+        compiler.write_text('#!/bin/sh\nexit 0\n')
+        compiler.chmod(0o755)
         for name in ("mbx", "real-cargo", "nsh"):
             (self.bin / name).write_text(FAKE)
             (self.bin / name).chmod(0o755)
@@ -139,6 +144,12 @@ class Dispatch(unittest.TestCase):
                 runtime = next(e for e in events if e["kind"] == "nsh" and e["args"] != ["--version"])
                 self.assertEqual(runtime["args"], args)
                 self.assertIsNone(runtime["env"]["MBX_CARGO_SHIM_MODE"])
+                if command == "check":
+                    self.assertEqual(runtime["env"]["NSH_TSC"], str(self.day / "../../node_modules/.bin/tsgo"))
+                for name, value in {"npm_config_manage_package_manager_versions": "false",
+                                    "npm_config_ignore_scripts": "true", "COREPACK_ENABLE_AUTO_PIN": "0",
+                                    "COREPACK_ENABLE_NETWORK": "0"}.items():
+                    self.assertEqual(runtime["env"][name], value)
                 self.assertEqual((self.bin / "nsh").read_bytes(), installed)
                 self.assertFalse((self.day / ".tools").exists())
 
@@ -151,6 +162,47 @@ class Dispatch(unittest.TestCase):
         self.assertEqual(self.run_day("check", env={"NSH_VERSION_EXIT": "39"}).returncode, 39)
         self.assertFalse(any(e["kind"] == "real-cargo" for e in self.trace()))
         self.assertFalse((self.day / ".tools").exists())
+
+    def test_package_manager_settings_override_inherited_values(self):
+        result = self.run_day("check", env={"npm_config_manage_package_manager_versions": "true",
+            "npm_config_ignore_scripts": "false", "COREPACK_ENABLE_NETWORK": "1", "COREPACK_ENABLE_AUTO_PIN": "1"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        runtime = next(e for e in self.trace() if e["kind"] == "nsh" and e["args"] != ["--version"])
+        self.assertEqual([runtime["env"][k] for k in ("npm_config_manage_package_manager_versions",
+            "npm_config_ignore_scripts", "COREPACK_ENABLE_NETWORK", "COREPACK_ENABLE_AUTO_PIN")],
+            ["false", "true", "0", "0"])
+
+    def test_check_refuses_missing_compiler_and_override(self):
+        compiler = self.day / "../../node_modules/.bin/tsgo"
+        for flag in ("--tsc", "--tsc=other"):
+            result = self.run_day("check", flag)
+            self.assertEqual(result.returncode, 2)
+        compiler.unlink()
+        result = self.run_day("check")
+        self.assertEqual(result.returncode, 127)
+        self.assertIn("tsgo is missing", result.stderr)
+        self.assertFalse(any(e["kind"] == "nsh" and e["args"] != ["--version"] for e in self.trace()))
+
+    def test_typecheck_requires_and_executes_only_workspace_compiler(self):
+        repo = self.root / "repo"
+        scripts = repo / "apps/day/scripts"
+        scripts.mkdir(parents=True)
+        shutil.copy2(DAY / "scripts/typecheck.sh", scripts / "typecheck.sh")
+        cmd = ["/bin/bash", str(scripts / "typecheck.sh"), "--noEmit"]
+        env = self.env | {"PATH": f"{self.bin}:/usr/bin:/bin"}
+        for name in ("pnpm", "npm", "npx", "corepack"):
+            (self.bin / name).write_text('#!/bin/sh\necho forbidden >&2\nexit 91\n')
+            (self.bin / name).chmod(0o755)
+        missing = subprocess.run(cmd, env=env, text=True, capture_output=True, timeout=10)
+        self.assertEqual(missing.returncode, 127)
+        self.assertIn("workspace node_modules/.bin/tsgo is missing", missing.stderr)
+        compiler = repo / "node_modules/.bin/tsgo"
+        compiler.parent.mkdir(parents=True)
+        compiler.write_text('#!/bin/sh\nprintf "%s\\n" "$PWD" "$@"\n')
+        compiler.chmod(0o755)
+        result = subprocess.run(cmd, env=env, text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), [str(repo), "-p", "tsconfig.json", "--noEmit"])
 
     def test_path_and_official_install_keep_distribution_in_place(self):
         result = self.run_day("check", env={"NSH_DAY_CLI": "", "PATH": f"{self.bin}:{os.environ['PATH']}"})

@@ -21,7 +21,7 @@ The native crate now also contains the Day-owned `pilot-desktop` executable
 (`macos-host` feature). It embeds the unchanged release's public AppView and
 keeps screens in TSX. Close and Quit save/seal forms and join the native root
 before stopping the engine. It requires verified packaged resources and an
-explicit native selection; it is not a new `pnpm day run` entry or a signed
+explicit native selection; it is not a new `apps/day/nsh.sh run` entry or a signed
 release. Controller handoff, verified successor startup, production packaging
 and visible acceptance remain separate. See [the executable handoff](../../docs/technical/day-executable-handoff.md).
 
@@ -62,7 +62,7 @@ From the repository root (Rust 1.99.1 and macOS Command Line Tools installed):
 
 ```sh
 bash apps/day/scripts/bootstrap.sh # once: checksum-pinned mbx 1.26.0 only
-pnpm day run                      # opens the mock Day app locally
+apps/day/nsh.sh run               # opens the mock Day app locally
 ```
 
 mbx is a **local compiler cache and build scheduler**, not a remote Mac build
@@ -88,11 +88,23 @@ This keeps upstream's locked, now-yanked crypto dependency usable without
 editing NSH or the registry index.
 
 The v0.4.0 config does not support the newer `window` key. For an isolated
-preview at the former size, use `pnpm day run --window-size 1100x820`.
+preview at the former size, use `apps/day/nsh.sh run --window-size 1100x820`.
 Minimum-size and custom window-title configuration remain a native host gap;
 no visible preview is run by checks.
 From any directory, `apps/day/nsh.sh <command>` works by its absolute path.
-From the repository root, `pnpm day <command>` is the same entry point.
+Avoid `pnpm day`: pnpm can switch versions before the wrapper starts.
+For the repository TypeScript check, run `apps/day/scripts/typecheck.sh`.
+It requires the existing workspace compiler and never installs dependencies.
+For `nsh.sh check`, the wrapper passes that compiler as `NSH_TSC` and refuses
+`--tsc` overrides. NSH 0.4.0 otherwise downloads TypeScript from npm itself.
+The NSH wrapper disables package-manager version management, lifecycle scripts,
+and Corepack network access for children. These settings do not control tools
+launched before the wrapper or arbitrary downloads by other programs.
+
+A prior `pnpm typecheck` switched to pnpm 12.18 and ran node-pty and
+protobufjs lifecycle scripts in workspace-private node_modules despite the
+ignore-scripts-only authorization. This does not establish shared-system impact
+or prove cleanup.
 
 All four commands keep NSH's supported `CARGO` hook pointed at
 `scripts/cargo`. This adapter uses mbx's own Cargo-shim dispatch, covering
@@ -158,7 +170,7 @@ Script-only checks need neither Cargo nor NSH and never open a window:
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s apps/day/scripts -p test_nsh.py
-shellcheck -x apps/day/nsh.sh apps/day/scripts/{cargo,build-env.sh,bootstrap.sh}
+shellcheck -x apps/day/nsh.sh apps/day/scripts/{cargo,build-env.sh,bootstrap.sh,typecheck.sh}
 ```
 
 The fake-executable tests cover installed-CLI dispatch, quoted arguments,
