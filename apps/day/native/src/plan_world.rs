@@ -650,6 +650,11 @@ fn linux(current: bool) -> Plan {
     );
     wayland.result = s("Settled by Decision 4. It changed since.");
     wayland.sources = strings(&["Decision 4 (changed since)"]);
+    wayland.source_refs = vec![crate::plan::MapSource {
+        kind: s("decision"),
+        id: s("d4"),
+        label: s("Decision 4 (changed since)"),
+    }];
     wayland.changed = strings(&["Decision 4 changed after Pilot cited it."]);
     let mut scope = item(
         "scope",
@@ -683,6 +688,11 @@ fn linux(current: bool) -> Plan {
         ExploreState::Resolved,
     );
     keyring.sources = strings(&["Knowledge: Linux keyring access, revision 3"]);
+    keyring.source_refs = vec![crate::plan::MapSource {
+        kind: s("knowledge"),
+        id: s("keyring"),
+        label: s("Knowledge: Linux keyring access, revision 3"),
+    }];
     keyring.from_fog = s("Where credentials live");
     keyring.result =
         s("Answered by Knowledge: Linux keyring access, revision 3. Not checked by Pilot.");
@@ -716,6 +726,7 @@ fn linux(current: bool) -> Plan {
             ready_when: s("Once the desktops are chosen."),
             after: strings(&["Which desktops count"]),
             sources: strings(&["Brief, revision 1"]),
+            source_refs: Vec::new(),
             active: true,
             became: Vec::new(),
         },
@@ -726,6 +737,7 @@ fn linux(current: bool) -> Plan {
             ready_when: s("Once the packaging formats are known."),
             after: strings(&["Packaging formats"]),
             sources: strings(&["Round 1, question 4"]),
+            source_refs: Vec::new(),
             active: true,
             became: Vec::new(),
         },
@@ -736,6 +748,7 @@ fn linux(current: bool) -> Plan {
             ready_when: s("Ready: it became a research question."),
             after: Vec::new(),
             sources: strings(&["Brief, revision 1"]),
+            source_refs: Vec::new(),
             active: false,
             became: strings(&["Keyring access"]),
         },

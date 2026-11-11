@@ -2,6 +2,7 @@
 // (TodayFeed, PlanFeed) and the connected adapters (bridge.ts) both fit
 // these shapes, so the screens never know which one they talk to.
 import type { PlanFeed, PlanOutcome, PlanPage, TodayFeed } from "pilot-day/native";
+import type { MapSourceRead, MapSourceRequest } from "./mapSourceContract";
 
 /** Today's reads and intents, as the screens use them. */
 export type DayFeed = Pick<
@@ -40,6 +41,8 @@ export type PlanningFeed = Pick<
 	"snapshot" | "onChange" | "page" | "open" | "plan" | "start" | "saveAnswer" | "submit" | "checkSubmit" | "dispose"
 > & {
 	readInventory?: () => Promise<void>;
+	/** Passive canonical source read. Missing support is unavailable, never an empty record. */
+	readSource?: (request: MapSourceRequest) => Promise<MapSourceRead>;
 	canReadInventory?: () => boolean;
 	startWork?: (
 		missionId: string,

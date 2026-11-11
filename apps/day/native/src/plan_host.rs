@@ -101,6 +101,31 @@ fn sources(list: &Value) -> Vec<String> {
     arr(list).iter().map(source).collect()
 }
 
+fn source_refs(list: &Value, settled: &Value) -> Vec<crate::plan::MapSource> {
+    let mut refs = Vec::new();
+    for src in arr(list)
+        .iter()
+        .chain(settled.is_object().then_some(settled))
+    {
+        if matches!(src["kind"].as_str(), Some("decision" | "knowledge"))
+            && !refs.iter().any(|r: &crate::plan::MapSource| {
+                r.kind == s(&src["kind"]) && r.id == s(&src["id"])
+            })
+        {
+            refs.push(crate::plan::MapSource {
+                kind: s(&src["kind"]),
+                id: s(&src["id"]),
+                label: if src["state"] == "changed" {
+                    format!("{} (changed since)", s(&src["label"]))
+                } else {
+                    s(&src["label"])
+                },
+            });
+        }
+    }
+    refs
+}
+
 /// Why a cited record no longer backs a claim, or None while it does.
 fn changed(src: &Value) -> Option<String> {
     let label = s(&src["label"]);
@@ -338,6 +363,7 @@ fn exploration(map: &Value, item: &Value) -> Exploration {
         },
         result: settled(by),
         sources: sources(&item["sources"]),
+        source_refs: source_refs(&item["sources"], by),
         from_fog: arr(&map["fog"])
             .iter()
             .find(|f| f["id"] == item["fromFog"])
@@ -375,6 +401,7 @@ fn fog(map: &Value, f: &Value) -> FogArea {
         ready_when: s(&f["readyWhen"]),
         after: map_titles(map, &f["dependsOn"]),
         sources: sources(&f["sources"]),
+        source_refs: source_refs(&f["sources"], &Value::Null),
         active: became.is_empty(),
         became,
     }

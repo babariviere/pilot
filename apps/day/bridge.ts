@@ -686,6 +686,13 @@ export class ConnectedPlans implements PlanningFeed {
 		return { status: o.status, revision: this.#revision, message: o.message, missionId };
 	}
 
+	async readSource(
+		request: import("./mapSourceContract").MapSourceRequest,
+	): Promise<import("./mapSourceContract").MapSourceRead> {
+		const r = await call<import("./mapSourceContract").MapSourceDetail>(this.#window, "day.plan.source", request);
+		return r.ok ? { status: "available", detail: r.snapshot } : { status: "unavailable" };
+	}
+
 	async open(missionId: string): Promise<PlanOutcome> {
 		this.#selected = missionId;
 		this.#publish();

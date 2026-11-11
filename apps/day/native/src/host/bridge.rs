@@ -138,6 +138,13 @@ async fn run(
     if call.command.is_ritual() {
         return ritual(t, journal, shared, day, epoch, call).await;
     }
+    if let Command::PlanSource(request) = &call.command {
+        let snapshot = super::plan_sources::read(t, request).await?;
+        shared.current(epoch)?;
+        call.command
+            .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
+        return Ok(json!({"snapshot":snapshot,"outcome":null}));
+    }
     use super::updates::Command as U;
     let update = match &call.command {
         Command::UpdateRead => Some(U::Read),
@@ -183,6 +190,7 @@ async fn run(
     let mut enrollment = None;
     let work = match &call.command {
         Command::Today | Command::PlanSnapshot(_) | Command::PlanningInventorySnapshot => None,
+        Command::PlanSource(_) => unreachable!("handled passive source read"),
         Command::Mission(id) => Some(Work::Detail(id.clone())),
         Command::Pause(r) => Some(Work::Control {
             mission: r.mission_id.clone(),

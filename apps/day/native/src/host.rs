@@ -10,6 +10,7 @@ mod journal;
 #[cfg(target_os = "macos")]
 mod native_clock;
 mod planning;
+pub(crate) mod plan_sources;
 pub mod ritual;
 mod transport;
 pub mod updates;

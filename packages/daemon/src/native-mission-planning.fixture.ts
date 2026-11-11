@@ -16,6 +16,7 @@ import type { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { OperationJournal, payloadHash } from "./operation-journal.ts";
+import { KnowledgeService } from "./project-knowledge.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
@@ -107,6 +108,7 @@ export async function nativePlanningFixture(options: { native?: boolean } = {}) 
 			terminals,
 			{
 				store,
+				knowledge: new KnowledgeService(store, projects, sessions),
 				service: {
 					reports: new MissionReports(store),
 					controls: new MissionControls(store, {

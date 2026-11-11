@@ -369,6 +369,18 @@ pub enum ExploreState {
     Resolved,
 }
 
+/// A canonical Decision or Knowledge reference, not a copy of its content.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MapSource {
+    /// The canonical kind: decision or knowledge.
+    pub kind: String,
+    /// Exact canonical identity.
+    pub id: String,
+    /// Display label including cited revision/currentness.
+    pub label: String,
+}
+
 /// One precise question on the map.
 #[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -391,6 +403,8 @@ pub struct Exploration {
     pub result: String,
     /// Where it came from, such as a decision or Knowledge entry.
     pub sources: Vec<String>,
+    /// Openable original records, including the record that settled this question.
+    pub source_refs: Vec<MapSource>,
     /// The fog area it came from, if any.
     pub from_fog: String,
     /// For a question settled in an interview: that earlier round's id, to show its answers.
@@ -423,6 +437,8 @@ pub struct FogArea {
     pub after: Vec<String>,
     /// Where it came from.
     pub sources: Vec<String>,
+    /// Openable original records cited by this fog area.
+    pub source_refs: Vec<MapSource>,
     /// Whether it is still fog. Promoted areas stay as history.
     pub active: bool,
     /// Titles of the precise questions it became.

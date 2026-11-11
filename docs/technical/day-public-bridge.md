@@ -102,6 +102,7 @@ intent types, not daemon request envelopes:
 | `day.mission.check` | `MissionRef` | null; exact saved lookup only |
 | `day.plan.read` | `MissionRef` | `PlanPage` |
 | `day.plan.snapshot` | `MissionRef` | cached `PlanPage`, with freshness |
+| `day.plan.source` | `{missionId,planRevision,area,recordId,kind,id}` | passive canonical source detail; unavailable/changed scope rejects without content |
 | `day.plan.inventory` | `{}` | complete passive `Planning` inventory; failures reject, never imply empty |
 | `day.plan.inventorySnapshot` | `{}` | cached `Planning` inventory, using the same `PlanRow` identities and availability |
 | `day.plan.prepare` | `{}` | `Setup` or null; lookup only |
@@ -146,6 +147,17 @@ Cached row identities and displayed capability fields are not live permission
 to save, submit, approve or start work. Existing native currentness and intent
 checks still apply. Like other passive snapshots, this read is allowed during
 form flushing but not after the bridge closes; it does not acknowledge a flush.
+
+`day.plan.source` resolves only a Decision or Knowledge reference on the named
+saved map revision, question or fog area. It reuses authenticated planning reads
+before and after the canonical source read, and refuses changed membership,
+project, owner or source context. Decisions come from existing mission detail,
+including replaced/withdrawn history. Knowledge uses its exact cited revision.
+No source body is cached on disk, copied into a tracker, observed, checked or
+accepted. The inline detail keeps surrounding native views mounted; Back to map
+and Escape close only that detail and restore its trigger's focus. A newer
+planning read hides earlier source content until an explicit read succeeds.
+Cold reopen returns to canonical reads, not a cached source-body grant.
 
 The ritual calls share the native `RitualFeed`'s rules
 ([saved ritual progress](day-ritual-progress.md)). Use `day.ritual.read` at

@@ -19,6 +19,7 @@ import type {
 import type { Day } from "./day";
 import { InterviewDoc } from "./InterviewDoc";
 import { keepScroll } from "./kept";
+import { MapSources } from "./MapSources";
 import { flush, unsavedCount } from "./planCommands";
 import type { Plans } from "./planning";
 import { closePlanning, fogOpen, mapOpen, put, roundOpen, settledOpen } from "./planView";
@@ -215,7 +216,7 @@ function Detail(props: { title: string; lines: string[] }) {
  * One question on the map: a calm row that opens to its full saved record.
  * Opening it reads nothing and changes nothing.
  */
-function MapItem(props: { page: PlanPage; item: Exploration }) {
+function MapItem(props: { plans: Plans; page: PlanPage; item: Exploration }) {
 	const e = () => props.item;
 	const key = () => `${props.page.missionId}/${e().id}`;
 	const open = () => mapOpen()[key()] === true;
@@ -250,6 +251,7 @@ function MapItem(props: { page: PlanPage; item: Exploration }) {
 							</Each>
 						</View>
 					</If>
+					<MapSources plans={props.plans} page={props.page} area="item" recordId={e().id} refs={e().sourceRefs} />
 					<If when={origin()}>
 						<Text class="text-xs text-faint">{origin()}</Text>
 					</If>
@@ -296,20 +298,20 @@ export function mapSummary(page: PlanPage): string {
 }
 
 /** A titled group of map questions, shown only when it has any. */
-function MapGroup(props: { testID: string; title: string; items: Exploration[]; page: PlanPage }) {
+function MapGroup(props: { testID: string; title: string; items: Exploration[]; page: PlanPage; plans: Plans }) {
 	return (
 		<If when={props.items.length > 0}>
 			<View testID={props.testID}>
 				<Text class="pb-1 text-xs text-faint">{`${props.title}  ${props.items.length}`}</Text>
 				<Each of={props.items} key={(e) => e.id}>
-					{(e) => <MapItem page={props.page} item={e()} />}
+					{(e) => <MapItem plans={props.plans} page={props.page} item={e()} />}
 				</Each>
 			</View>
 		</If>
 	);
 }
 
-function FogRow(props: { fog: FogArea }) {
+function FogRow(props: { plans: Plans; page: PlanPage; fog: FogArea }) {
 	const f = () => props.fog;
 	return (
 		<View testID={`fog-${f().id}`} class="gap-1 border-t border-border py-3">
@@ -318,6 +320,7 @@ function FogRow(props: { fog: FogArea }) {
 			<Text class="text-xs text-foreground">
 				{f().active ? `Ready when: ${f().readyWhen}` : `Became: ${f().became.join(", ")}`}
 			</Text>
+			<MapSources plans={props.plans} page={props.page} area="fog" recordId={f().id} refs={f().sourceRefs} />
 			<Text class="text-xs text-faint">
 				{[
 					f().after.length > 0 ? `After: ${f().after.join(", ")}` : "",
@@ -377,7 +380,7 @@ function Agreement(props: { info: MapInfo; onOpenTasks?: () => void }) {
  * open now, what waits, what is settled, the fog of war and the agreement.
  * Reading it answers, approves and starts nothing.
  */
-function MapView(props: { page: PlanPage; onOpenTasks?: () => void }) {
+function MapView(props: { plans: Plans; page: PlanPage; onOpenTasks?: () => void }) {
 	const items = () => props.page.explorations;
 	const now = () => openNow(props.page);
 	const waiting = () => items().filter((e) => e.state === "waiting");
@@ -407,8 +410,8 @@ function MapView(props: { page: PlanPage; onOpenTasks?: () => void }) {
 					</Text>
 				</If>
 			</View>
-			<MapGroup testID="map-now" title="Open now" items={now()} page={props.page} />
-			<MapGroup testID="map-waiting" title="Waiting" items={waiting()} page={props.page} />
+			<MapGroup plans={props.plans} testID="map-now" title="Open now" items={now()} page={props.page} />
+			<MapGroup plans={props.plans} testID="map-waiting" title="Waiting" items={waiting()} page={props.page} />
 			<If when={!props.page.prototypes.available && items().some((e) => e.kind === "prototype")}>
 				<Text class="text-xs text-faint">{props.page.prototypes.line}</Text>
 			</If>
@@ -422,7 +425,7 @@ function MapView(props: { page: PlanPage; onOpenTasks?: () => void }) {
 								Settled questions are not asked again. Open one to see what settled it.
 							</Text>
 							<Each of={settled()} key={(e) => e.id}>
-								{(e) => <MapItem page={props.page} item={e()} />}
+								{(e) => <MapItem plans={props.plans} page={props.page} item={e()} />}
 							</Each>
 						</View>
 					}
@@ -445,12 +448,12 @@ function MapView(props: { page: PlanPage; onOpenTasks?: () => void }) {
 							problem and blocks nothing.
 						</Text>
 						<Each of={active()} key={(f) => f.id}>
-							{(f) => <FogRow fog={f()} />}
+							{(f) => <FogRow plans={props.plans} page={props.page} fog={f()} />}
 						</Each>
 						<If when={explored().length > 0}>
 							<Text class="pt-3 text-xs text-faint">Explored</Text>
 							<Each of={explored()} key={(f) => f.id}>
-								{(f) => <FogRow fog={f()} />}
+								{(f) => <FogRow plans={props.plans} page={props.page} fog={f()} />}
 							</Each>
 						</If>
 					</View>
@@ -684,7 +687,7 @@ function Body(props: { plans: Plans; page: PlanPage; title: string; onOpenTasks?
 				</Each>
 			</If>
 			<If when={p().available && p().route === "wayfinder"}>
-				<MapView page={p()} onOpenTasks={props.onOpenTasks} />
+				<MapView plans={props.plans} page={p()} onOpenTasks={props.onOpenTasks} />
 			</If>
 			<If when={p().proposal}>
 				<Each of={p().proposal ? [p().proposal as Proposal] : []} key={(x) => x.digest}>

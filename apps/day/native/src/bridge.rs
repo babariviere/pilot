@@ -25,6 +25,7 @@ pub const METHODS: &[&str] = &[
     "day.mission.check",
     "day.plan.read",
     "day.plan.snapshot",
+    "day.plan.source",
     "day.plan.inventory",
     "day.plan.inventorySnapshot",
     "day.plan.prepare",
@@ -159,6 +160,7 @@ pub(crate) enum Command {
     ControlCheck(String),
     Plan(String),
     PlanSnapshot(String),
+    PlanSource(crate::host::plan_sources::Request),
     PlanningInventory,
     PlanningInventorySnapshot,
     Prepare,
@@ -338,6 +340,11 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 return Err(Error::Invalid);
             }
             C::RitualSave(r)
+        }
+        "day.plan.source" => {
+            let r: crate::host::plan_sources::Request = exact(args)?;
+            r.validate()?;
+            C::PlanSource(r)
         }
         "day.mission.read" | "day.mission.check" | "day.plan.read" | "day.plan.snapshot"
         | "day.plan.checkWork" => {

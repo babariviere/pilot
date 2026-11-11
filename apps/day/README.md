@@ -431,7 +431,16 @@ that changed or went away since Pilot mapped it says so; Pilot updates the map,
 and nothing on the page answers, approves or starts anything. The rows read the
 daemon's shared `view.map` projection, the same object the planning
 coordinator reads (`native/tests/plan_map.rs`). A Wayfinder mission's overview
-shows the map in one line. Making prototypes stays unavailable. A topic interview
+shows the map in one line. Making prototypes stays unavailable. The map
+can open its cited Decision and Knowledge records in place. The original text,
+exact identity, source/provenance and currentness sit beside the map record;
+Back to map (or Escape) closes only that detail and returns focus to its link.
+Knowledge opens the exact cited revision, not a silently substituted latest body.
+Replaced decisions stay historical. Unavailable sources and changed access hide
+earlier content instead of showing an empty or accepted record. Reads do not
+answer, approve, check Knowledge or start work. Details are read again after a
+cold reopen; they are not another saved tracker (`native/tests/plan_sources.rs`).
+A topic interview
 answers only its topic. A proposed plan shows in full (problem, solution,
 stories, how it is built and tested, what is left out, its tasks with their
 order and owners, and what is still unknown) above the review question. A plan
