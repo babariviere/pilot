@@ -114,6 +114,27 @@ export class TrackedItemStore {
 	list(query: TrackedQuery): Promise<TrackedItemList> {
 		return this.rpc("list", query);
 	}
+	intake(
+		projectId: string,
+	): Promise<
+		Array<
+			Pick<
+				import("@pilot/protocol").TodayIntake["sources"][number],
+				"kind" | "limit" | "total" | "complete" | "items"
+			>
+		>
+	> {
+		return this.rpc("intake", { projectId });
+	}
+	intakeWrite(
+		projectId: string,
+		id: string,
+		revision: number,
+		state?: TrackedItem["triageState"],
+		operationId?: string,
+	): Promise<TrackedItem> {
+		return this.rpc("intakeWrite", { projectId, id, revision, state, operationId });
+	}
 	inbox(query: InboxQuery): Promise<InboxTracked> {
 		return this.rpc("inbox", query);
 	}
@@ -292,8 +313,8 @@ export class TrackedItemStore {
 	slackDoneResult(id: string, outcome: "reacted" | "skipped" | "error"): Promise<void> {
 		return this.rpc("slackDoneResult", { id, outcome });
 	}
-	patch(id: string, patch: TrackedItemPatch): Promise<TrackedItem> {
-		return this.rpc("patch", { id, patch });
+	patch(id: string, patch: TrackedItemPatch, intakeOperationId?: string): Promise<TrackedItem> {
+		return this.rpc("patch", { id, patch, intakeOperationId });
 	}
 	observeSlackPullRequests(observation: SlackPullRequestObservation): Promise<void> {
 		return this.rpc("observeSlackPullRequests", observation);

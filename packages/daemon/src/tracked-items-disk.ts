@@ -111,6 +111,9 @@ export interface SourceCheckpoint {
 	linear?: LinearSourceSummary;
 }
 type Row = {
+	intake_revision: number;
+	intake_state: TrackedItem["triageState"];
+	intake_start: string | null;
 	active: number;
 	id: string;
 	project_id: string;
@@ -168,6 +171,10 @@ export interface InboxTracked {
 const LINEAR_OPEN =
 	"kind = 'linear' AND active = 1 AND dismissed = 0 AND coalesce(json_extract(metadata, '$.statusType'), '') NOT IN ('completed', 'canceled')";
 const SLACK_OPEN = "kind = 'slack' AND active = 1 AND dismissed = 0 AND slack_status IN ('open', 'in_progress')";
+const INTAKE_OPEN = `active=1 AND dismissed=0 AND session_id IS NULL AND mission_id IS NULL
+	AND NOT EXISTS (SELECT 1 FROM tracked_item_links l WHERE l.item_id=tracked_items.id)
+	AND ((kind='slack' AND slack_status='open') OR
+	(kind='linear' AND coalesce(json_extract(metadata, '$.statusType'), '') NOT IN ('completed','canceled')))`;
 /** Statuses whose work is unfinished: a ✅ in Slack, a merged PR or a completed mission marks them Done. */
 const SLACK_UNFINISHED = ["open", "in_progress", "waiting"];
 /** The effective label: a user override (an explicit null clears it) wins over the classifier's. */
@@ -210,6 +217,23 @@ export class TrackedItemDisk {
 			CREATE TABLE IF NOT EXISTS slack_budget (day TEXT PRIMARY KEY, used INTEGER NOT NULL);
 			CREATE TABLE IF NOT EXISTS slack_groups (handle TEXT PRIMARY KEY, id TEXT, checked_at INTEGER NOT NULL);
 		`);
+		for (const [name, definition] of [
+			["intake_revision", "INTEGER NOT NULL DEFAULT 1"],
+			["intake_state", "TEXT NOT NULL DEFAULT 'new'"],
+			["intake_start", "TEXT"],
+		]) {
+			if (
+				!this.db
+					.prepare("PRAGMA table_info(tracked_items)")
+					.all()
+					.some((c) => c.name === name)
+			)
+				this.db.exec(`ALTER TABLE tracked_items ADD COLUMN ${name} ${definition}`);
+		}
+		// All writers, including source sync and legacy PATCH, invalidate native CAS.
+		this.db.exec(`CREATE TRIGGER IF NOT EXISTS tracked_intake_revision AFTER UPDATE ON tracked_items
+			WHEN NEW.intake_revision = OLD.intake_revision BEGIN
+			UPDATE tracked_items SET intake_revision=OLD.intake_revision+1 WHERE id=NEW.id; END;`);
 		if (
 			!this.db
 				.prepare("PRAGMA table_info(tracked_items)")
@@ -603,6 +627,46 @@ export class TrackedItemDisk {
 				.all(...args, limit, offset) as Row[]
 		).map(decode);
 		return { total, items };
+	}
+	/** One worker turn gives counts and rows the same SQLite snapshot. Local reads only. */
+	intake(projectId: string) {
+		const limit = 100;
+		return (["slack", "linear"] as const).map((kind) => {
+			const filter = `project_id=? AND kind=? AND ${INTAKE_OPEN}`;
+			const total = Number(
+				this.db.prepare(`SELECT COUNT(*) AS n FROM tracked_items WHERE ${filter}`).get(projectId, kind)!.n,
+			);
+			const items = (
+				this.db
+					.prepare(`SELECT * FROM tracked_items WHERE ${filter} ORDER BY updated_at DESC, id LIMIT ?`)
+					.all(projectId, kind, limit) as Row[]
+			).map(decode);
+			return { kind, limit, total, complete: total <= limit, items };
+		});
+	}
+	/** CAS and the durable Start claim run together, before creating any chat. */
+	intakeWrite(
+		projectId: string,
+		id: string,
+		revision: number,
+		state: TrackedItem["triageState"] | undefined,
+		operationId?: string,
+	): TrackedItem {
+		if (
+			!Number.isSafeInteger(revision) ||
+			revision < 1 ||
+			(state !== undefined && !["new", "later", "discarded"].includes(state)) ||
+			(state === undefined) === (operationId === undefined)
+		)
+			throw new Error("Invalid intake intent");
+		const result = this.db
+			.prepare(`UPDATE tracked_items SET ${operationId ? "intake_start=?" : "intake_state=?"}
+			WHERE project_id=? AND id=? AND intake_revision=? AND intake_start IS NULL AND ${INTAKE_OPEN}
+			${operationId ? "AND intake_state='new'" : ""}`)
+			.run(operationId ?? state!, projectId, id, revision);
+		if (result.changes !== 1) throw new Error("Intake changed; refresh before acting");
+		this.emit(projectId);
+		return this.require(id);
 	}
 	checkpoint(id: string): SourceCheckpoint | undefined {
 		const row = this.db.prepare("SELECT value FROM source_checkpoints WHERE id = ?").get(id);
@@ -1254,9 +1318,19 @@ export class TrackedItemDisk {
 		return changed;
 	}
 
-	patch(id: string, patch: TrackedItemPatch): TrackedItem {
+	patch(id: string, patch: TrackedItemPatch, intakeOperationId?: string): TrackedItem {
 		validatePatch(patch);
 		const item = this.require(id);
+		if (
+			item.startOperationId &&
+			!item.sessionIds?.length &&
+			!item.missionIds?.length &&
+			!item.sessionId &&
+			!item.missionId &&
+			(patch.start || patch.sessionId !== undefined || patch.missionId !== undefined) &&
+			item.startOperationId !== intakeOperationId
+		)
+			throw new Error("Intake Start is pending; Check its saved operation");
 		if (patch.slack && item.kind !== "slack") throw new Error("Slack overrides require a Slack item");
 		if (patch.linearSize !== undefined) {
 			if (item.kind !== "linear") throw new Error("Size overrides require a Linear item");
@@ -1454,6 +1528,9 @@ function decode(row: Row): TrackedItem {
 			: undefined;
 	return {
 		id: row.id,
+		revision: row.intake_revision,
+		triageState: row.intake_state,
+		...(row.intake_start ? { startOperationId: row.intake_start } : {}),
 		projectId: row.project_id,
 		kind: row.kind,
 		externalId: row.external_id,

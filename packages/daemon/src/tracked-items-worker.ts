@@ -67,6 +67,13 @@ parentPort!.on("message", ({ id, method, args }) => {
 			case "list":
 				value = disk.list(args);
 				break;
+			case "intake":
+				value = disk.intake(args.projectId);
+				break;
+			case "intakeWrite":
+				value = disk.intakeWrite(args.projectId, args.id, args.revision, args.state, args.operationId);
+				projectId = args.projectId;
+				break;
 			case "inbox":
 				value = disk.inbox(args);
 				break;
@@ -163,7 +170,7 @@ parentPort!.on("message", ({ id, method, args }) => {
 				projectId = disk.require(args.id).projectId;
 				break;
 			case "patch":
-				value = disk.patch(args.id, args.patch);
+				value = disk.patch(args.id, args.patch, args.intakeOperationId);
 				projectId = disk.require(args.id).projectId;
 				break;
 			case "observeSlackPullRequests":

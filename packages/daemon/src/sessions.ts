@@ -7797,7 +7797,13 @@ ${run.excerpt}`,
 	private readonly newSessionAdmissions = new Set<string>();
 
 	/** Called only after durable operation reservation. Crash recovery uses this exact target/input ID. */
-	async spawnDurable(request: SpawnRequest, targetId: string, operationId: string): Promise<SessionSummary> {
+	async spawnDurable(
+		request: SpawnRequest,
+		targetId: string,
+		operationId: string,
+		guard?: () => void,
+	): Promise<SessionSummary> {
+		guard?.();
 		this.insightsBacklog?.replacements.assertNotRetired(targetId);
 		if (request.role === "insights") throw new Conflict("Insights requires trusted native admission");
 		this.sharing?.assertCreate(targetId, operationId);
@@ -7827,7 +7833,19 @@ ${run.excerpt}`,
 				return this.summary(existing);
 			}
 			if (!request.diagnosticRepair)
-				return await this.spawnAdmitted(request, false, undefined, { targetId, operationId });
+				return await this.spawnAdmitted(
+					request,
+					false,
+					undefined,
+					{ targetId, operationId },
+					undefined,
+					undefined,
+					undefined,
+					false,
+					undefined,
+					undefined,
+					guard,
+				);
 			return this.repairProject.withBinding(request.diagnosticRepair.binding, async () => {
 				this.assertDiagnosticRepairAdmission(request);
 				const source = this.require(request.diagnosticRepair!.specialistSessionId);

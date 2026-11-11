@@ -18,6 +18,10 @@ pub const MAX_REQUEST: usize = 65_536;
 pub const MAX_RESPONSE: usize = 16 * 1024 * 1024;
 /// The complete native method allowlist. No prefix or generic request method.
 pub const METHODS: &[&str] = &[
+    "day.intake.read",
+    "day.intake.triage",
+    "day.intake.start",
+    "day.intake.check",
     "day.today.read",
     "day.mission.read",
     "day.mission.pause",
@@ -153,6 +157,9 @@ struct Envelope {
 }
 
 pub(crate) enum Command {
+    IntakeRead,
+    IntakeWrite(crate::host::intake::Intent),
+    IntakeCheck(String),
     Today,
     Mission(String),
     Pause(crate::model::PauseIntent),
@@ -278,6 +285,27 @@ fn exact<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, Error> {
 fn command(name: &str, args: Value) -> Result<Command, Error> {
     use Command as C;
     Ok(match name {
+        "day.intake.read" => {
+            if args != json!({}) {
+                return Err(Error::Invalid);
+            }
+            C::IntakeRead
+        }
+        "day.intake.triage" | "day.intake.start" => {
+            let r: crate::host::intake::Intent = exact(args)?;
+            r.validate(name == "day.intake.start")?;
+            C::IntakeWrite(r)
+        }
+        "day.intake.check" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Lookup {
+                operation_id: String,
+            }
+            let r: Lookup = exact(args)?;
+            mission(&r.operation_id)?;
+            C::IntakeCheck(r.operation_id)
+        }
         "day.update.read" | "day.update.check" => {
             if args != json!({}) {
                 return Err(Error::Invalid);
@@ -476,6 +504,7 @@ impl Command {
                 Self::Save { .. }
                     | Self::Draft(_)
                     | Self::Today
+                    | Self::IntakeRead
                     | Self::Mission(_)
                     | Self::Plan(_)
                     | Self::PlanSnapshot(_)

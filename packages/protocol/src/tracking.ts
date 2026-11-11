@@ -132,6 +132,11 @@ export interface LinearWorkflowStateOption extends LinearWorkflowState {
 	type: string;
 }
 export interface TrackedItem {
+	/** Local intake CAS, independent of source timestamps and Slack status. */
+	revision: number;
+	triageState: "new" | "later" | "discarded";
+	/** An entered Start cannot be started again, even without a link/receipt. */
+	startOperationId?: string;
 	caseId?: string;
 	id: string;
 	projectId: string;
@@ -188,6 +193,35 @@ export interface TrackedItemPatch {
 export interface TrackedItemList {
 	items: TrackedItem[];
 	total: number;
+}
+
+/** Complete counts with a limited first page per source, never the dashboard preview. */
+export interface TodayIntake {
+	version: 1;
+	projectId: string;
+	contextDigest: string;
+	sources: Array<{
+		kind: TrackedKind;
+		source: TrackedKind;
+		label: string;
+		status: SourceStatus;
+		error?: string;
+		limit: number;
+		total: number;
+		complete: boolean;
+		items: TrackedItem[];
+	}>;
+}
+export interface IntakeIntent {
+	projectId: string;
+	itemId: string;
+	revision: number;
+	contextDigest: string;
+	purpose: "intake-triage" | "intake-start";
+	state?: TrackedItem["triageState"];
+	/** Start creates exactly this Build chat, optionally in the selected mission. */
+	sessionId?: string;
+	missionId?: string;
 }
 export type SourceStatus = "not_configured" | "idle" | "ok" | "syncing" | "sign_in_required" | "error";
 /** Browser sign-in to the dedicated MCP server of a kind, run by pilotd through pi's MCP OAuth flow.

@@ -66,6 +66,7 @@ import type {
 import { nodeTelemetry, type TraceCarrier, traceCarrier } from "@pilot/telemetry";
 import { type WebSocket, WebSocketServer } from "ws";
 import { AttachmentStore } from "./attachment-store.ts";
+import type { ReadOnlyAttentionExecutor } from "./attention-executor.ts";
 import { createSocketSender } from "./backpressure.ts";
 import { RepositoryChanges } from "./changes.ts";
 import { type ChatSettingsService, InvalidChatSettings } from "./chat-settings.ts";
@@ -101,8 +102,8 @@ import type { MissionStore } from "./missions.ts";
 import { ModelScopeConflictError, ModelScopeSettingsError, modelScopeUpdate } from "./model-scope.ts";
 import type { ModelCatalog } from "./models.ts";
 import { NativeAttention } from "./native-attention.ts";
-import type { ReadOnlyAttentionExecutor } from "./attention-executor.ts";
 import { MAX_NATIVE_DIAGNOSTIC_BYTES } from "./native-diagnostics.ts";
+import { isIntakeOperation, NativeIntake } from "./native-intake.ts";
 import {
 	isNativePlanningOperation,
 	NativeMissionPlanning,
@@ -756,6 +757,10 @@ export function createDaemonServer(
 					workers: planningWorkers,
 				})
 			: undefined;
+	const nativeIntake =
+		journal && tracking
+			? new NativeIntake({ journal, tracking, projects, sessions, missions: missions?.store })
+			: undefined;
 	const nativeAttention =
 		journal && missions
 			? new NativeAttention({
@@ -880,6 +885,10 @@ export function createDaemonServer(
 			return nativeAttention.answer(op, false);
 		}
 		if (planningWorkers?.owns(op)) return planningWorkers.recover(op);
+		if (isIntakeOperation(op.kind)) {
+			// Recovery is lookup-only; pending intake effects never enter again.
+			throw new Error("Intake outcome is unknown; check its saved receipt");
+		}
 		if (isNativePlanningOperation(op.kind)) {
 			if (!nativePlanning) throw new OperationRejected("Native planning unavailable");
 			return nativePlanning.admit(op, false);
@@ -1525,6 +1534,24 @@ export function createDaemonServer(
 					end();
 				}
 			}
+			if (isIntakeOperation(operation?.kind)) {
+				res.setHeader("cache-control", "no-store");
+				if (!githubSetup || !nativeIntake) throw new ServiceUnavailable("Native intake unavailable");
+				await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+				if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
+				const saved = await nativeIntake.lookup(operation);
+				if (parts[2] === "receipt") return json(res, 200, saved ?? { state: "unknown" });
+				const end = mutations.begin({ kind: "operation", id: operation.operationId });
+				try {
+					return json(
+						res,
+						200,
+						await journal.execute(operation, (op, entry) => nativeIntake.admit(op, entry.firstEntry)),
+					);
+				} finally {
+					end();
+				}
+			}
 			if (isNativePlanningOperation(operation?.kind)) {
 				res.setHeader("cache-control", "no-store");
 				if (!githubSetup || !nativePlanning) throw new ServiceUnavailable("Native planning unavailable");
@@ -2023,6 +2050,13 @@ export function createDaemonServer(
 				}
 			}
 			throw new HttpError(404, "Unknown tracking operation");
+		}
+		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "intake") {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET") throw new HttpError(405, "Intake read is read-only");
+			if (!githubSetup || !nativeIntake) throw new ServiceUnavailable("Native intake unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			return json(res, 200, await nativeIntake.read(parts[2]!));
 		}
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "planning-inventory") {
 			res.setHeader("cache-control", "no-store");

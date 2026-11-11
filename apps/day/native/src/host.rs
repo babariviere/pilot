@@ -6,6 +6,7 @@ mod bridge;
 mod changes;
 mod enrollment;
 mod inventory;
+pub(crate) mod intake;
 mod journal;
 #[cfg(target_os = "macos")]
 mod native_clock;

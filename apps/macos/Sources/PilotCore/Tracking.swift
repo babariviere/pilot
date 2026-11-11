@@ -409,6 +409,10 @@ public struct LinearStateMapping: Codable, Equatable, Hashable, Sendable {
     }
 }
 public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
+    /// Local Today triage, separate from Slack status. Absent on older daemons.
+    public let revision: Int?
+    public let triageState: String?
+    public let startOperationId: String?
     public let caseId: String?
     public let linearSize: LinearSize?
     public let linearSizeOverride: LinearSize?
@@ -440,7 +444,9 @@ public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
                 sessionId: String? = nil, missionId: String? = nil, sessionIds: [String]? = nil,
                 missionIds: [String]? = nil, slack: SlackTriage? = nil, linearParent: LinearParentHeader? = nil,
                 linearSize: LinearSize? = nil, linearSizeOverride: LinearSize? = nil, caseId: String? = nil,
-                createdAt: Double, updatedAt: Double) {
+                createdAt: Double, updatedAt: Double, revision: Int? = nil,
+                triageState: String? = nil, startOperationId: String? = nil) {
+        self.revision = revision; self.triageState = triageState; self.startOperationId = startOperationId
         self.caseId = caseId
         self.linearSize = linearSize; self.linearSizeOverride = linearSizeOverride
         self.id = id; self.projectId = projectId; self.kind = kind; self.externalId = externalId

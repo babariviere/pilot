@@ -17,6 +17,12 @@ The default entry still connects to no daemon, account or user data. It is not t
 and it does not change the GPUI or Swift apps or their build. Those apps stay
 the shipping desktop apps until the NSH app passes native acceptance and cutover.
 
+The [native intake seam](../../docs/technical/day-intake.md) now reads limited,
+explicitly complete/incomplete tracked-request pages and saves Later/Discard/Start
+intents with exact receipt lookup. It stays pinned to the native root's selected
+project. This backend seam does not yet replace Today's read-only preview with
+interactive intake controls, and enables no live source or provider.
+
 The native crate now also contains the Day-owned `pilot-desktop` executable
 (`macos-host` feature). It embeds the unchanged release's public AppView and
 keeps screens in TSX. Close and Quit save/seal forms and join the native root

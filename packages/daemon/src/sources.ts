@@ -851,6 +851,28 @@ export class SourceRegistry {
 			return { cases: [], windowDays: 30, windowLimit: 200, truncated: false };
 		return this.items.commonCases(projectId);
 	}
+	/** Current configuration only; never expose rows left over from another team/channel setup. */
+	assertIntakeSource(projectId: string, kind: TrackedKind): void {
+		if (!this.synced(this.projects.require(projectId), kind)) throw new Conflict("Sync this request source first");
+	}
+	async intakeSources(projectId: string): Promise<import("@pilot/protocol").TodayIntake["sources"]> {
+		const project = structuredClone(this.projects.require(projectId));
+		const rows = await this.items.intake(projectId);
+		if (JSON.stringify(this.projects.require(projectId)) !== JSON.stringify(project))
+			throw new Conflict("Intake project changed");
+		return rows.map((page) => {
+			const health = this.require(`${projectId}:${page.kind}`);
+			const current = this.synced(project, page.kind);
+			return {
+				...page,
+				source: page.kind,
+				label: page.kind === "slack" ? "Slack" : "Linear",
+				status: !health.configured ? "not_configured" : !current ? "idle" : health.status,
+				...(health.error ? { error: health.error } : {}),
+				...(!current ? { items: [], total: 0, complete: true } : {}),
+			};
+		});
+	}
 	async listItems(query: TrackedQuery): Promise<import("@pilot/protocol").TrackedItemList> {
 		// A team setting change must not leak rows from the previously attached team.
 		const kinds = (query.kind ? [query.kind] : (["linear", "slack"] as const)).filter((kind) => {
@@ -1152,9 +1174,9 @@ export class SourceRegistry {
 		return promise;
 	}
 	/** Binding is local and completes before any remote work. A normal link never writes. */
-	async patch(itemId: string, patch: TrackedItemPatch): Promise<TrackedItem> {
+	async patch(itemId: string, patch: TrackedItemPatch, intakeOperationId?: string): Promise<TrackedItem> {
 		const before = await this.items.require(itemId);
-		const item = await this.items.patch(itemId, patch);
+		const item = await this.items.patch(itemId, patch, intakeOperationId);
 		if (item.kind === "slack" && item.slack?.status !== "done") {
 			const run = this.doneRuns.get(item.projectId);
 			if (run?.itemId() === item.id) run.controller.abort(new Error("Slack item reopened"));

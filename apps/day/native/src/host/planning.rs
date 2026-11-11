@@ -38,7 +38,14 @@ impl PlanningRecord {
             || o["destination"] != home(&self.source, "daemon")
             || !matches!(
                 o["kind"].as_str(),
-                Some("interview-save" | "interview-submit" | "planning-enroll" | "plan-start")
+                Some(
+                    "interview-save"
+                        | "interview-submit"
+                        | "planning-enroll"
+                        | "plan-start"
+                        | "intake-triage"
+                        | "intake-start"
+                )
             )
             || o["payload"]
                 .as_str()
@@ -51,6 +58,9 @@ impl PlanningRecord {
         }
         if o["kind"] == "planning-enroll" {
             super::enrollment::validate_record(&self.source, o, self.setup_digest.as_deref())?;
+        }
+        if matches!(o["kind"].as_str(), Some("intake-triage" | "intake-start")) {
+            super::intake::validate_record(&self.source, o)?;
         }
         Ok(())
     }
@@ -80,10 +90,18 @@ pub(super) fn record(
         || !digest.bytes().all(|b| b.is_ascii_hexdigit())
         || !matches!(
             request["purpose"].as_str(),
-            Some("interview-save" | "interview-submit" | "plan-start")
+            Some(
+                "interview-save"
+                    | "interview-submit"
+                    | "plan-start"
+                    | "intake-triage"
+                    | "intake-start"
+            )
         )
-        || (request["purpose"] != "plan-start"
-            && request["expected"]["fence"]["missionId"] != mission)
+        || (!matches!(
+            request["purpose"].as_str(),
+            Some("plan-start" | "intake-triage" | "intake-start")
+        ) && request["expected"]["fence"]["missionId"] != mission)
     {
         return Err(Error::Invalid);
     }
@@ -134,6 +152,16 @@ pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
                 .is_none_or(|s| !valid_id(s)))
     {
         return Err(Error::Unknown);
+    }
+    if op["kind"] == "intake-start" && r["state"] == "accepted" {
+        let p: Value = serde_json::from_str(op["payload"].as_str().ok_or(Error::Unknown)?)
+            .map_err(|_| Error::Unknown)?;
+        if r["result"]["sessionId"] != p["sessionId"]
+            || r["result"]["itemId"] != op["targetId"]
+            || r["result"]["admissionId"] != op["operationId"]
+        {
+            return Err(Error::Unknown);
+        }
     }
     Ok(r)
 }

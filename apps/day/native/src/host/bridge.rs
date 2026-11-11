@@ -135,6 +135,12 @@ async fn run(
     call.command
         .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
     shared.open()?;
+    if matches!(
+        call.command,
+        Command::IntakeRead | Command::IntakeWrite(_) | Command::IntakeCheck(_)
+    ) {
+        return super::intake::handle(t, journal, shared, epoch, &call.command, &call.gate).await;
+    }
     if call.command.is_ritual() {
         return ritual(t, journal, shared, day, epoch, call).await;
     }
@@ -189,6 +195,9 @@ async fn run(
     let mut value = Value::Null;
     let mut enrollment = None;
     let work = match &call.command {
+        Command::IntakeRead | Command::IntakeWrite(_) | Command::IntakeCheck(_) => {
+            unreachable!("handled intake command")
+        }
         Command::Today | Command::PlanSnapshot(_) | Command::PlanningInventorySnapshot => None,
         Command::PlanSource(_) => unreachable!("handled passive source read"),
         Command::Mission(id) => Some(Work::Detail(id.clone())),
