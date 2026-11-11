@@ -46,7 +46,7 @@ if [[ "${1:-}" = check ]]; then
 fi
 cd "$here"
 case "${1:-}" in
-	check|build|test|run)
+	check|build|test|run|package)
 		# Keep the release's locked transitive selections in fresh generated
 		# workspaces. Never overwrite a workspace Cargo already resolved.
 		for app in "$here" "$here/fixtures/rust-today"; do

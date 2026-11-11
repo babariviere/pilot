@@ -2,6 +2,8 @@
 
 Short guides for the desktop app. Start with [installation and setup](getting-started.md).
 
+For the upcoming interface, [launch the separate local development preview](development-preview.md).
+
 | Feature                                         | Guide                                         |
 | ----------------------------------------------- | --------------------------------------------- |
 | Projects, Home, and Inbox                       | [Find and organize work](projects.md)         |

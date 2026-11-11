@@ -169,6 +169,19 @@ export function editAnswer(plans: Plans, missionId: string, interview: Interview
 	schedule(plans, key);
 }
 
+/** Stages an exact saved draft without sending it. Only a later explicit save or submit sends it. */
+export function restoreAnswerDraft(
+	missionId: string,
+	interview: Interview,
+	question: Question,
+	text: string,
+	choice: string | null,
+) {
+	const key = remember(missionId, interview, question);
+	put(answerDrafts, key, text);
+	put(answerPicks, key, choice);
+}
+
 /** An input method's composition started or ended. Nothing saves mid-composition. */
 export function composeAnswer(plans: Plans, interview: Interview, question: Question, active: boolean) {
 	const key = answerKey(interview, question);

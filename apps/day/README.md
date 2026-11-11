@@ -45,6 +45,11 @@ acceptance remain separate. See [the executable handoff](../../docs/technical/da
 
 ## Run and test
 
+For a user-launchable, separate demo installation, see
+[Local Pilot Preview](../../docs/development-preview.md). Its builder uses
+the installed NSH packager and `Preview.tsx`, not the production bootstrap.
+It never opens a visible window during its checks.
+
 Verified on macOS arm64 with the installed v0.4.0 CLI (2026-11-10): `check`,
 `build`, App (26), Plan (19) and Attention (4) headless tests, plus 49 native
 library/boundary tests. The native crate checks all targets. All ran offline

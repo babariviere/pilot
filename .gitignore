@@ -1,4 +1,5 @@
 node_modules/
+.preview-deps/
 dist/
 .build/
 .swiftpm/
