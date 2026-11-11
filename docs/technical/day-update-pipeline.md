@@ -100,6 +100,207 @@ empty; checkpoint and reopen **still refuse**. Its private cooperative stop and 
 join clean up the fixture. These checks prove same-group termination and continued fail-closed
 behavior, not D10/D41 jobful-update acceptance or a successful replacement.
 
+### Descendant-containment design (research, not implemented)
+
+Read-only audit on 2026-11-11, against Pilot `619590faa821b54a635a46658c811d36f24c53f3`
+and the locked extensions source below. **No drop-in, documented macOS host-shell containment
+facility was established.** The smallest enforceable route identified is a restricted execution
+realm, not stronger group bookkeeping. This proposal needs a user scope decision before any
+implementation. It does not clear the self-update or joined-update acceptance blockers.
+
+#### What the existing boundaries actually provide
+
+- `packages/kernel/src/native-adapter.ts` shares the jobs definition across direct, codemode-nested
+  and native calls. `JobHistory.admit()` runs before start; `checkpointJobs()` still refuses historical
+  uncertainty. `job-groups.ts` binds admission/job/incarnation before releasing the shell. Neither
+  schema has a complete-subtree receipt. Close/reopen must not reinterpret those records as one.
+- Locked [pi-extensions `46eddf8a`][containment-extensions] uses `sandboxWrapCommand` before
+  `JobsProvider.invoke` starts `bash -c` with `detached: true`. Its sandbox controller returns the
+  command unchanged in non-enforcing modes. Enforcing modes use macOS Seatbelt; initialization failure
+  refuses execution. `seatbelt/base.sbpl` allows fork/exec and inherits filesystem restrictions;
+  `seatbelt-profile.ts` deliberately allows network access. This is filesystem policy, not membership,
+  revocation or exit accounting. A shell wrapped by Seatbelt can still change session/group.
+- The same dependency's `sandbox/supervised-spawn.ts` uses group signalling for ordinary shell/argv
+  execution. Its comments claiming whole-tree cleanup are not an OS guarantee. A job-only adapter
+  cannot certify a session if ordinary bash, custom extensions, subagents or other spawn paths can
+  leave work outside it. Admission coverage is part of the eventual qualification, not assumed here.
+- `packages/daemon/src/linux-coordinator.ts::argumentsFor` already uses bubblewrap user/PID/IPC
+  namespaces, dropped capabilities, `--disable-userns`, `--new-session` and `--die-with-parent`.
+  This is a **coordinator-worker** boundary, not a per-job executor or durable exit protocol for all
+  Build workers. Linux service generation in `pilot-service-journal.ts` uses `KillMode=mixed` but
+  does not request cgroup delegation. Stopping the whole service is too late to prove the prior
+  per-session checkpoint, and cannot implement selective mission/job Stop.
+- macOS `apps/desktop/updater/src/daemon_upgrade_macos.rs` manages one launch agent and verifies the
+  daemon identity/profile lease. No per-job lifetime enclosure is supplied. launchd's documented
+  `AbandonProcessGroup` default kills remaining **same-PGID** processes, not escaped descendants.
+  A daemon exit watch or profile-lease release is not their exit receipt.
+
+#### Options and platform costs
+
+| Option | Enforcement and exit claim | Compatibility, permission and delivery cost | Verdict |
+| --- | --- | --- | --- |
+| More group/census tracking, PID handles, launchd/XPC or coalition ownership | Groups are mutable; handles name individual processes; observations are not closed membership. launchd group cleanup does not cover `setsid`. No documented coalition-wide job enclosure/drain contract was established. | Ordinary shells work; a user launch agent needs no new root helper. Better cleanup does not solve this prerequisite. | Keep current cleanup, never promote it to subtree proof. |
+| Tighten Seatbelt/App Sandbox, deny fork, interpose `setsid` | Inherited resource restrictions are useful, but do not supply a documented kill-all-and-join primitive. Denying fork breaks normal shell/build execution; library interposition does not constrain arbitrary executables/direct syscalls. | App Sandbox changes filesystem/service entitlements and host-tool access. `sandbox-exec` is deprecated. A shell-text allowlist is not syscall enforcement. | Not an arbitrary-job lifetime solution. |
+| Endpoint Security custody on macOS 27+ | `es_new_descendants_client` observes recursive descendants, with auth for supported operations. Fork/exit are notifications, with possible drops. Fail-closed AUTH_EXEC does not stop a running process from forking without exec. No kernel-owned final-owner-loss termination or atomic subtree-empty receipt is documented. | Preserves host toolchains better, but needs Apple's restricted ES entitlement and a new signed custody component. The 27+ descendant client needs **neither root nor TCC approval**, unlike a full system-wide client. Its non-root setuid/setgid execution restriction changes compatibility. A full client adds root/Full Disk Access and broader monitoring authority. | A conditional monitoring/custody design, not qualified containment. Do not request entitlement/privileges as this task's side effect. |
+| Linux per-job PID namespace plus cgroup v2 | Namespace init exit causes kernel termination of namespace processes, including detached sessions. A protected cgroup inherits descendants; `cgroup.kill` handles concurrent forks/migrations, then `cgroup.events: populated=0` reports no live subtree processes. Neither a kill write nor freezer ACK alone is final exit. | Native Linux shell/toolchain support, but background daemons cannot outlive the job. Requires usable namespaces and a supervisor-owned cgroup subtree. Existing bubblewrap is reusable on Linux only; per-job ownership/receipts are new. User-service delegation can avoid a root host helper where supported, but jobs must not inherit its control authority. | Feasible Linux adapter, not shipped/qualified by current coordinator isolation. |
+| macOS VM execution realm (Linux guest, or separately scoped macOS guest) | Put all payload processes inside an OS boundary they cannot leave. Linux guest can use the same per-job namespace/cgroup owner. Successful **actual VM stop completion**, followed by host broker/I/O drain, is an outer fallback for that VM, not proof of command success. `requestStop`, pause, saved VM state or owner disappearance are not stop receipts. | Virtualization.framework requires a signed executable with `com.apple.security.virtualization`, not a system-wide ES/root helper. Linux guest changes OS paths/toolchains; host Xcode/Keychain/GUI tools do not transfer. macOS guest is Apple-silicon-only in Apple's documented path, with OS image/provisioning, licensing and larger resource costs. Both need explicit file/network/credential grants and new package/update support. | Documented enforceable route on Mac, but a material product/execution change requiring approval. |
+
+Apple DTS explicitly distinguishes ES custody from a kernel-owned lifetime boundary in the
+[current platform discussion][containment-dts]. Its suggested two-level custodians improve a live
+owner's protection; they do not create enforcement after loss of every custodian. This is platform
+guidance, not a Pilot experiment or proof that an ES-based alternative can never be developed.
+The audited SDK also exposes audit-token signalling and `proc_terminate_all_rsr`; neither is a
+job-subtree enclosure. XNU's latter implementation iterates processes marked `P_RSR`, not descendants
+of a job. Private coalition/task APIs, DTrace/SIP changes and privileged kernel extensions are not a
+supported small fix. See the source/API references below.
+
+#### Recommendation and explicit scope question
+
+**Recommend a project-owned execution-realm owner with Linux namespace/cgroup enforcement, using
+a dedicated Linux VM per session on macOS if the user approves guest execution.** This is the
+smallest identified design with documented enforcement, not the smallest code diff. A per-session
+outer VM avoids killing unrelated sessions when a guest owner fails; jobs inside it retain separate
+cgroups for individual Stop. VM memory/boot/disk costs may make this unacceptable. Measure before
+choosing pooling; a shared VM fallback must never stop work outside the exact operation's ownership.
+Do not build a privileged host scanner or claim an ES monitor is equivalent.
+
+Scope question for the user: **May update-qualified work on macOS run in an explicitly granted VM
+execution environment (Linux first), accepting guest toolchain/path differences and a new signed
+realm owner, or must it keep unchanged unrestricted macOS host-shell behavior?** If host-native
+macOS tools are required, separately scope a macOS guest and its provisioning/resource costs, or
+return for a different architecture decision. Do not silently convert existing sessions or treat
+continued host-mode refusal as D10/D41 acceptance. Host-mode historical Unknown remains unresolved;
+a new realm cannot retroactively prove that an old escaped process exited.
+
+Approval must define which work moves: jobs alone cannot close the session-wide proof gap. At minimum,
+all agent-controlled process creation (bash/argv, nested jobs, descendant agents and custom executable
+tools) must enter an owned realm or be explicitly unavailable in qualified mode. In-process extensions
+with unrestricted host spawn authority are outside that mode until isolated. Keep model/daemon/NSH
+credentials outside payloads. Preserve read/write policy; do not replace it with broader VM shares.
+No implicit SSH-agent, Keychain, Docker socket, launchd/systemd bus, host-exec RPC or host home mount.
+Such brokers can create work outside the realm. Remote/HTTP effects remain separately permissioned
+and possibly Unknown even after every local process exits; containment is not rollback.
+
+#### Minimum owner and receipt contract (proposal)
+
+1. Keep the owner outside the disposable kernel worker and TSX VM. Bind a private authenticated
+   channel to profile/session, kernel and realm incarnations, admission/tool-call/job IDs, enforced
+   policy/image identity and operation generation. Persist intent before entering any launch. The
+   payload cannot modify the owner journal, signal/control the owner, access its cgroup descriptors,
+   ptrace it or ask a host broker to spawn elsewhere. Same host UID or a writable delegated cgroup
+   alone is not this separation.
+2. Create an empty per-job boundary, durably bind it, then release the first payload instruction
+   **inside** it. On Linux use `clone3(CLONE_INTO_CGROUP)` where supported or a trusted gated launcher
+   moved before payload exec, with no earlier untrusted code/fork. Hide writable cgroupfs, ancestor
+   namespace handles, user-manager sockets and inherited control FDs; drop privilege gains. Payloads
+   cannot migrate out or create work via an external service. Linux policy must enforce those
+   exclusions, not just rely on a cgroup name. Namespace/cgroup absence means unavailable, not fallback.
+3. Preserve provider job IDs, output paths, logs, notifications and command-result semantics. Keep
+   **shell result** separate from **realm drained**. The current provider has a command-string wrap,
+   not a pluggable executor/receipt API. A host `sandbox-exec` string cannot be sent to Linux unchanged:
+   a future project-owned adapter must translate the resolved permission policy before launch and
+   bind its real result. This needs a scoped integration design; no dependency update is approved.
+4. Stop/Pause/update fence new direct/nested admissions synchronously, await admitted starts, mark
+   draining durably, then terminate all owned processes with bounded grace/escalation. Natural shell
+   completion must also settle descendants before final drain, even after provider pruning. For Linux,
+   keep the exact cgroup object under exclusive owner control, disallow repopulation, join namespace
+   init and final recursive empty state, then drain outputs/broker operations and persist the receipt.
+   Never signal a recovered numeric PID/PGID or infer emptiness from a missing directory/unit.
+5. On Mac, a lost guest channel cannot certify individual jobs. Where the operation owns the entire
+   session realm, the still-live native owner can stop that exact VM and await the documented callback,
+   then join host-side work and persist an incarnation-bound outer-exit receipt. Guest commands may
+   remain interrupted/Unknown. No VM reboot, snapshot resume or command retry follows an uncertain
+   launch/stop. Loss of the native owner/receipt is Unknown until exact retained authority can settle
+   it; framework disposal or a missing process is not recovery proof.
+6. Ordinary worker close/reopen must retain unresolved realm ownership, not delete it with provider
+   rows. Reopen looks up existing receipts through the independently owned authority only. A missing
+   or replaced owner, OS boot mismatch, storage failure or lost reply never authorizes a resend.
+   Introduce a versioned per-admission ledger; do not clear or reinterpret the old monotonic
+   `JobHistory` latch. Migration/recovery for legacy host histories requires its own explicit design.
+7. Feed a durable aggregate of every affected admission into the existing checkpoint before its
+   close ACK; keep final registry census, kernel exit, daemon exit and profile lease as separate gates.
+   A realm receipt says local execution ended, not that its side effects succeeded. Resume only the
+   agents owned by the update/Pause operation, preserving later Stop/holds; never restart killed jobs.
+   App-only updates do not stop realms or pause daemon work. GUI close must not discard owner state.
+
+The native owner/guest image, policy compiler and receipt schema become trusted package inputs. They
+need immutable source/image digests, licensing/attribution, verified signatures/entitlements, existing
+signed inventory coverage, protocol compatibility across daemon upgrades and rollback, and their own
+safe update/exit policy. The owner must not be replaced before its receipts are durable. Keep NSH
+at unmodified tagged `v0.4.0`; the typed host bridge reports sanitized status only, never executable
+paths, cgroup names, VM controls or new capabilities to TSX. Linux needs its own signed capsule and
+delegation/preflight qualification; macOS arm64 packaging evidence does not qualify Linux or Intel.
+
+#### Isolated verification plan (not run or authorized here)
+
+After scope approval, first prove the OS boundary in a disposable, credential-free environment,
+then integrate the provider and finally run the existing joined-update matrix:
+
+- Admission races: direct/nested starts, queued work, instant shell exit and provider row pruning;
+  fail storage before intent/bind/release and prove no unowned first instruction. Hold a fork barrier
+  during drain and test `setsid`, `setpgid`, double-fork, `posix_spawn`, closed/inherited stdio and
+  TERM-resistant children. Assert actual boundary drain plus stopped fixture writes, not writes alone.
+- Escape/security: attempt cgroup migration, namespace escape, inherited-FD/control-socket access,
+  owner signalling/ptrace and host service delegation. Denial must precede outside execution. Exercise
+  unsupported kernels, disabled user namespaces, denied delegation/entitlement and VM start/stop errors.
+  A denied capability must never select unsupervised host execution.
+- Custody/recovery: interrupt worker, guest supervisor and native realm owner separately at every
+  journal stage; also lose all owners, output channel and receipt ACKs. Reopen reads only; no launch,
+  stop resend or snapshot resume. Missing authority stays Unknown. Reused IDs/paths and prior OS boots
+  cannot satisfy another admission. Prove unrelated sessions and user-held work remain untouched.
+- Semantics/package: ordinary shell pipelines, Node/Python subprocesses, Git/build tools, cwd/env,
+  exact logs/status/notification delivery, policy grants and denied host integrations; measure guest
+  startup, idle RSS/disk and output backpressure. Test exact signed owner/image/protocol versions and
+  rollback compatibility, without weakening package trust. macOS guest/Intel/Linux are separate lanes.
+- Lifecycle: open drafts, active/already-paused/stopped agents, jobs finished before checkpoint, Stop
+  and mission Pause races, worker close/reopen, daemon-only, app-only and joined updates. Inject lost
+  receipts and teardown failures; require automatic save/selective agent resume, no replay and actual
+  target-version/startup receipts. Realm drain alone cannot pass signed replacement/GUI acceptance.
+
+This task only checked source, platform documentation and the document diff/links. It ran no native
+build, install, sandbox/VM experiment, job payload or live service action. Implementation, privileges,
+guest provisioning, native tests, signing/release and activation need their existing approvals.
+
+#### Source and platform references
+
+Accessed 2026-11-11. SDK statements were cross-checked against installed
+`MacOSX27.2.sdk/usr/include/{EndpointSecurity,libproc.h,sys/event.h}` and shipped
+`launchd.plist(5)` / `sandbox-exec(1)` manuals, without executing their APIs.
+
+- [Locked extensions source][containment-extensions]: `extensions/jobs/{index.ts,jobs-provider.ts}`,
+  `extensions/sandbox/{controller.ts,manager.ts,supervised-spawn.ts,seatbelt-profile.ts,seatbelt/base.sbpl}`.
+- [cgroup v2][containment-cgroups]: Process migration, Delegation containment, Unpopulated Notification,
+  `cgroup.freeze` and `cgroup.kill`. [clone(2)][containment-clone] documents `CLONE_INTO_CGROUP`;
+  [pid_namespaces(7)][containment-pidns] documents namespace-init death and SIGKILL of members.
+  [systemd resource control][containment-systemd] documents delegation, not a pre-existing Pilot grant.
+- [ES descendant client][containment-es], [restricted entitlement][containment-es-entitlement],
+  [message loss sequence][containment-es-loss] and [Apple DTS response][containment-dts]. The installed
+  SDK's `ESClient.h:799-852` supplies the macOS 27 availability, root/TCC and fail-closed distinctions.
+- [App Sandbox][containment-app-sandbox] specifies resource access, not an all-descendant exit API.
+  Public XNU snapshot [`f6217f89`][containment-xnu] implements `setsid`/`setpgid` in
+  `bsd/kern/kern_prot.c` and `proc_terminate_all_rsr` in `bsd/kern/proc_info.c`; it is source evidence,
+  not qualification of the installed kernel. SDK `sys/event.h:357` marks fork-following
+  `NOTE_TRACK`/`NOTE_CHILD` unsupported since 10.5.
+- [Virtualization.framework][containment-vz], [virtualization entitlement][containment-vz-entitlement],
+  [actual stop completion][containment-vz-stop] and [macOS guest requirements][containment-macos-guest].
+  No claim is made that owner crash automatically yields a durable stop receipt.
+
+[containment-extensions]: https://github.com/babariviere/pi-extensions/tree/46eddf8ac376a395b3534af70fa5c7ec8eb0ee6f
+[containment-cgroups]: https://docs.kernel.org/admin-guide/cgroup-v2.html
+[containment-clone]: https://man7.org/linux/man-pages/man2/clone3.2.html
+[containment-pidns]: https://man7.org/linux/man-pages/man7/pid_namespaces.7.html
+[containment-systemd]: https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html
+[containment-es]: https://developer.apple.com/documentation/endpointsecurity/es_new_descendants_client(_:_:)
+[containment-es-entitlement]: https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.endpoint-security.client
+[containment-es-loss]: https://developer.apple.com/documentation/endpointsecurity/es_message_t/global_seq_num
+[containment-dts]: https://developer.apple.com/forums/thread/851230
+[containment-app-sandbox]: https://developer.apple.com/documentation/security/app-sandbox
+[containment-xnu]: https://github.com/apple-oss-distributions/xnu/tree/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea
+[containment-vz]: https://developer.apple.com/documentation/virtualization
+[containment-vz-entitlement]: https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.virtualization
+[containment-vz-stop]: https://developer.apple.com/documentation/virtualization/vzvirtualmachine/stop(completionhandler:)
+[containment-macos-guest]: https://developer.apple.com/documentation/virtualization/running-macos-in-a-virtual-machine-on-apple-silicon
+
 ## Trusted packaging blockers
 
 The initial audit read unmodified NSH `530b73170f61e5bf16380959de9e622f8ce130cd`, which is **not**

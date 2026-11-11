@@ -275,8 +275,9 @@ and exact selective recovery. Do not emulate it with two unrelated calls.
    durable startup ACK. A pending journal refuses interpretation as success.
 
 Unconfirmed historical job descendants remain a **refusal**, not a successful
-jobful update. See the pinned-provider limit in the pipeline document. Nothing in
-this executable audit clears that independent acceptance blocker.
+jobful update. See the [containment options and open scope question](day-update-pipeline.md#descendant-containment-design-research-not-implemented)
+in the pipeline document. VM-backed execution is a proposal requiring user approval,
+not an implemented host-shell fix. Neither audit clears that independent acceptance blocker.
 
 ## Offline evidence and limits
 
