@@ -1,5 +1,4 @@
 /** One durable pi session: a Harness root conversation driven by the native Pi kernel. */
-import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { ToolDrain } from "@babariviere/pi-extensions/tool-drain";
 import type { Context } from "@earendil-works/chord";
@@ -66,7 +65,6 @@ import { detectGhStack } from "./gh-stack.ts";
 import { appendGitHubAction, GitHubActionsDoc, githubActions } from "./github-actions.ts";
 import {
 	admitWithHeld,
-	deferQuestionWrite,
 	discardHeld,
 	finishQuestionReply,
 	HeldInputsDoc,
@@ -90,7 +88,8 @@ import { createLiveUpdateTools } from "./live-update-tool.ts";
 import { createManualCompaction, queueDuringCompaction } from "./manual-compaction.ts";
 import { mcpActivity } from "./mcp-activity.ts";
 import { createMemoryTools, type MemoryCall } from "./memory-tools.ts";
-import { type AcknowledgedDecision, decisionNotice } from "./mission-decisions.ts";
+import { DecisionInbox } from "./mission-decision-inbox.ts";
+import type { AcknowledgedDecision } from "./mission-decisions.ts";
 import { createMissionTool, MISSION_TOOL, type MissionCall } from "./mission-tools.ts";
 import { continueModelInPlace } from "./model-continuation.ts";
 import { rebuildContext } from "./model-rebuild.ts";
@@ -239,7 +238,8 @@ export class KernelSession {
 	readonly #automaticSince = new Map<number, number>();
 	/** Shared with the prompt section and deliverable guard, which read it per request and per tool call. */
 	readonly #mission: { current?: MissionContext };
-	#latestMission?: MissionContext;
+	#decisionInbox?: DecisionInbox;
+	#decisionTimer?: ReturnType<typeof setTimeout>;
 	#decisionWrites = 0;
 	#deferredMissions: Array<MissionContext | undefined> = [];
 	#ownDecisionAdditions = new Map<string, AcknowledgedDecision>();
@@ -1086,6 +1086,8 @@ export class KernelSession {
 			// Extension messages that start a turn (subagent answers) become durable follow-ups.
 			session.onSystemMessageState = hooks.onSystemMessageState;
 			await session.publishSystemMessageStates();
+			session.#decisionInbox = new DecisionInbox(harness, conversation);
+			await session.recordDecisions(spec.mission, new Map());
 			adapter.onExtensionInput = (input) => {
 				void session
 					.serializeInput(async () => {
@@ -1406,29 +1408,10 @@ export class KernelSession {
 		);
 		const coordinatorChanged = (this.#mission.current?.coordinator === "self") !== (context?.coordinator === "self");
 		const previous = this.#mission.current;
-		const latest = this.#latestMission ?? previous;
-		let noticeWrite: Promise<void> | undefined;
-		this.#latestMission = context;
+		const own = new Map(this.#ownDecisionAdditions);
+		const noticeWrite = this.recordDecisions(context, own);
 		if (previous && context && previous.id === context.id && !coordinatorChanged) {
-			const notice =
-				latest && previous.decisionVersion !== context.decisionVersion
-					? decisionNotice(latest, context, this.#ownDecisionAdditions)
-					: undefined;
 			for (const decision of context.decisionState ?? []) this.#ownDecisionAdditions.delete(decision.id);
-			if (notice) {
-				const text = notice.detail;
-				const requestId = `mission-decisions:${randomUUID()}`;
-				const entry = {
-					kind: "pilot.activity",
-					data: { text, event: { kind: "mission_decisions_changed", text: notice.summary } },
-					model: [{ role: "user" as const, content: text, timestamp: Date.now() }],
-				};
-				noticeWrite = this.serializeInput(async () => {
-					if (await deferQuestionWrite(this.harness, this.conversation.id, requestId, entry, BACKGROUND_CONTEXT))
-						return;
-					await this.conversation.submit({ type: "write", requestId, entry }, BACKGROUND_CONTEXT);
-				}).catch((error: unknown) => console.warn("pilot: could not place decision notice", error));
-			}
 			// Keep the stable prompt, except explicitly retired guidance must stop being binding.
 			const retired = new Map(
 				(context.decisionState ?? []).filter((d) => d.replacement || d.withdrawn).map((d) => [d.id, d.number]),
@@ -1454,6 +1437,40 @@ export class KernelSession {
 			console.warn("pilot: could not update the mission tool", error);
 		}
 		return noticeWrite;
+	}
+
+	private recordDecisions(
+		current: MissionContext | undefined,
+		own: ReadonlyMap<string, AcknowledgedDecision>,
+	): Promise<void> {
+		return this.serializeInput(async () => {
+			try {
+				await this.#decisionInbox?.observe(current, own);
+				await this.#decisionInbox?.flush();
+			} finally {
+				await this.scheduleDecisions();
+			}
+		}).catch((error: unknown) => console.warn("pilot: could not place decision notice", error));
+	}
+
+	private async scheduleDecisions(): Promise<void> {
+		clearTimeout(this.#decisionTimer);
+		if (this.#closing) return;
+		const at = await this.#decisionInbox?.deadline();
+		if (at === undefined) return;
+		this.#decisionTimer = setTimeout(
+			() => {
+				void this.serializeInput(async () => {
+					try {
+						await this.#decisionInbox?.flush();
+					} finally {
+						await this.scheduleDecisions();
+					}
+				}).catch((error: unknown) => console.warn("pilot: could not flush decision notices", error));
+			},
+			Math.max(1_000, at - Date.now()),
+		);
+		this.#decisionTimer.unref();
 	}
 
 	get subagentList(): KernelSubagent[] {
@@ -2079,6 +2096,8 @@ export class KernelSession {
 
 	#close(beforeAdapterClose?: () => Promise<void>): Promise<void> {
 		this.#closing ??= (async () => {
+			clearTimeout(this.#decisionTimer);
+			await this.inputOperations;
 			this.#modelChangeAbort?.abort(new Error("Session is closing"));
 			await this.jobsMonitor?.close();
 			for (const id of [...this.#watches.keys()]) await this.unwatch(id).catch(() => undefined);

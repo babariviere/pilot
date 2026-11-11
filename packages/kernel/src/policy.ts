@@ -94,6 +94,8 @@ export interface MissionContext {
 	tickets?: Array<{ resourceId: string; url: string; role: "reference" | "managed" | "contribution"; task?: number }>;
 	/** All decision content/audiences and task pins, for live notices only. */
 	decisionVersion?: string;
+	/** Notice routing only. Missing preserves legacy delivery; never changes read access or grants. */
+	decisionRoutes?: Record<string, "relevant" | "unknown" | "unrelated">;
 	/** Latest decision state for specific live notices, separate from the frozen prompt selection. */
 	decisionState?: Array<
 		Pick<MissionDecision, "id" | "number" | "text" | "audience" | "replacement" | "withdrawn"> & { selected: boolean }

@@ -2605,6 +2605,18 @@ export class MissionStore {
 	}
 
 	/** Prompt inputs only. Context fan-out must not reread every member's task bodies and artifact history. */
+	assignedDecisionIds(id: string): Set<string> {
+		return new Set(
+			this.all(
+				`SELECT DISTINCT pin.value FROM tasks t, json_each(t.decision_ids) pin
+				WHERE t.mission_id = ? AND t.status NOT IN ('done', 'dropped')
+				AND EXISTS (SELECT 1 FROM members m WHERE m.mission_id = t.mission_id AND m.session_id = t.session_id)`,
+				id,
+			).map((row) => str(row.value!)),
+		);
+	}
+
+	/** Prompt inputs only. Context fan-out must not reread every member's task bodies and artifact history. */
 	memberContext(sessionId: string) {
 		const id = this.missionOf(sessionId);
 		const mission = id ? this.get(id) : undefined;
@@ -5321,7 +5333,6 @@ export class MissionStore {
 			this.knowledge.invalidateMission(id, "decisionId", before.id);
 			this.event(id, "decision", `Decision D${before.number} replaced by D${replacement.number}`, actor, {
 				at,
-				wake: true,
 			});
 		});
 		this.changed(id, this.members(id));
@@ -5359,7 +5370,7 @@ export class MissionStore {
 				"decision",
 				`Decision D${before.number} changed${proposalAttribution(actor)}: ${decisionText}`,
 				actor,
-				{ at: now, wake: true },
+				{ at: now },
 			);
 		});
 		this.changed(id, this.members(id));
@@ -5388,7 +5399,7 @@ export class MissionStore {
 				"decision",
 				`Decision D${before.number} removed${proposalAttribution(actor)}: ${before.text}`,
 				actor,
-				{ wake: true },
+				{},
 			);
 		});
 		this.changed(id, this.members(id));
@@ -5629,7 +5640,7 @@ export class MissionStore {
 							"decision",
 							`Decision D${decision.number} withdrawn${proposalAttribution(user)}: ${proposal.reason}`,
 							user,
-							{ at, wake: true },
+							{ at },
 						);
 					} else if (proposal.kind === "remove") this.removeDecision(id, decision.id, user);
 					else {

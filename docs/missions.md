@@ -27,6 +27,14 @@ contracts only; the current desktop app has not gained those controls yet.
 Coordinators can answer ordinary member questions within the approved mission scope.
 Replies are attributed to the coordinator. Database-access approvals remain yours.
 
+Decision updates follow the current task's decision pins. Decisions marked for everyone
+remain mission-wide rules. Unassociated guidance goes to the coordinator for routing,
+not every worker. Routine additions are grouped for up to 30 seconds; changed guidance
+and shared rules reach affected live chats immediately as passive context. Offline chats
+reconcile when reopened. These notices do not start work, answer questions, or prove that
+an agent applied the guidance. Full decisions and history remain available on demand.
+See [decision routing](technical/mission-decision-routing.md) for the exact rules and limits.
+
 Coordinators can record an already-authorized decision replacement with
 `mission({action: "supersede", decisionId: "D7", replacementDecisionId: "D9"})`.
 Both decisions must belong to this mission. The old text, history and task pins stay

@@ -1241,6 +1241,24 @@ export class MissionService {
 				.map((task) => [task.id, task.number]),
 		);
 		const selectedIds = new Set(selected.map((decision) => decision.id));
+		const associated =
+			mission.coordinatorSessionId === sessionId ? this.store.assignedDecisionIds(mission.id) : undefined;
+		const decisionRoutes: NonNullable<MissionContext["decisionRoutes"]> = Object.fromEntries(
+			detail.decisions.map((decision) => [
+				decision.id,
+				decision.audience === "all" ||
+				pins.has(decision.id) ||
+				(decision.audience === "coordinator" && mission.coordinatorSessionId === sessionId)
+					? "relevant"
+					: associated &&
+							decision.audience === "reference" &&
+							!decision.replacement &&
+							!decision.withdrawn &&
+							!associated.has(decision.id)
+						? "unknown"
+						: "unrelated",
+			]),
+		);
 		const role = this.store.membership(sessionId)?.role;
 		return {
 			id: mission.id,
@@ -1278,6 +1296,7 @@ export class MissionService {
 					}
 				: {}),
 			decisionEntries: selected.map(({ id, text }) => ({ id, text })),
+			decisionRoutes,
 			decisionState: detail.decisions.map(({ id, number, text, audience, replacement, withdrawn }) => ({
 				id,
 				number,
@@ -1312,7 +1331,9 @@ export class MissionService {
 								? [id, text, audience, replacement]
 								: [id, text, audience],
 					),
-				) + JSON.stringify([...pins]),
+				) +
+				JSON.stringify([...pins]) +
+				JSON.stringify(decisionRoutes),
 		};
 	}
 

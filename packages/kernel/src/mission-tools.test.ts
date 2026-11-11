@@ -371,6 +371,73 @@ for (const busy of [false, true]) {
 	});
 }
 
+test("routine decision routing reaches the live passive channel at its fixed deadline", async (t) => {
+	const f = await fixture(t);
+	const open = NativeAdapter.open;
+	t.mock.method(NativeAdapter, "open", (options: NativeAdapterOptions) =>
+		open.call(NativeAdapter, {
+			...options,
+			...f.options,
+			sessionOptions: { ...options.sessionOptions, ...f.options.sessionOptions },
+		}),
+	);
+	let providerCalls = 0;
+	f.faux.setResponses([
+		() => {
+			providerCalls++;
+			return fauxAssistantMessage("Must not run");
+		},
+	]);
+	const mission: MissionContext = {
+		id: "shared",
+		title: "Shared",
+		goal: "Ship",
+		status: "active",
+		coordinator: "self",
+		tasks: [],
+		decisions: [],
+		decisionState: [],
+		decisionRoutes: {},
+	};
+	const session = await KernelSession.open(
+		{ sessionId: "lead", cwd: f.root, storageDir: join(f.root, "durable"), mission },
+		{ onWorking: () => {}, callMission: async () => ({}) },
+	);
+	f.cleanup.push(() => session.close());
+	t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1_000 });
+	const submit = session.conversation.submit.bind(session.conversation);
+	let delivered!: () => void;
+	const placed = new Promise<void>((resolve) => {
+		delivered = resolve;
+	});
+	t.mock.method(session.conversation, "submit", async (...args: Parameters<typeof submit>) => {
+		const result = await submit(...args);
+		delivered();
+		return result;
+	});
+	const first = {
+		id: "one",
+		number: 1,
+		text: "Unassociated guidance",
+		audience: "reference" as const,
+		selected: false,
+	};
+	await session.setMission({ ...mission, decisionState: [first], decisionRoutes: { one: "unknown" } });
+	t.mock.timers.tick(10_000);
+	await session.setMission({
+		...mission,
+		decisionState: [first, { ...first, id: "two", number: 2, text: "Related addition" }],
+		decisionRoutes: { one: "unknown", two: "unknown" },
+	});
+	assert.equal((await session.conversation.entries({}, 100, undefined, BACKGROUND_CONTEXT)).items.length, 0);
+	t.mock.timers.tick(20_000);
+	await placed;
+	const entries = (await session.conversation.entries({}, 100, undefined, BACKGROUND_CONTEXT)).items;
+	assert.equal(entries.length, 1);
+	assert.match(JSON.stringify(entries[0]!.data), /2 grouped updates/);
+	assert.equal(providerCalls, 0, "a routing notice never invokes a provider");
+});
+
 test("coordinator decision acknowledgements suppress only exact own additions", async (t) => {
 	const f = await fixture(t);
 	const open = NativeAdapter.open;

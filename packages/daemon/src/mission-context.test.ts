@@ -1,8 +1,80 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { MissionContext } from "@pilot/kernel";
+import { decisionNotice } from "../../kernel/src/mission-decisions.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import { missionContextFixture } from "./testing/mission-context.ts";
+
+test("decision routing uses current owned pins, explicit invariants and coordinator uncertainty", (t) => {
+	const f = missionContextFixture(3, 4);
+	t.after(() => f.store.close());
+	const [lead, worker, other, idle] = f.members as [string, string, string, string];
+	const scoped = f.store.addDecision(f.id, "Scoped rule");
+	const unknown = f.store.addDecision(f.id, "Unassociated guidance");
+	const global = f.store.addDecision(f.id, "Safety invariant", {}, "all");
+	const coordinator = f.store.addDecision(f.id, "Coordination only", {}, "coordinator");
+	const unassigned = f.service.context(worker)!;
+	f.store.updateTask(f.id, "1", { sessionId: worker, decisionIds: [scoped.id] });
+	const before = f.service.context(worker)!;
+	assert.equal(decisionNotice(unassigned, before)?.urgent, true, "a live new assignment gets its current pins");
+	assert.equal(before.decisionRoutes?.[scoped.id], "relevant");
+	assert.equal(f.service.context(other)?.decisionRoutes?.[scoped.id], "unrelated");
+	assert.equal(f.service.context(lead)?.decisionRoutes?.[scoped.id], "unrelated");
+	assert.equal(f.service.context(lead)?.decisionRoutes?.[unknown.id], "unknown");
+	assert.equal(f.service.context(idle)?.decisionRoutes?.[unknown.id], "unrelated");
+	assert.equal(f.service.context(idle)?.decisionRoutes?.[global.id], "relevant");
+	assert.equal(f.service.context(worker)?.decisionRoutes?.[coordinator.id], "unrelated");
+	const unrelatedBefore = f.service.context(other)!;
+	f.store.updateDecision(f.id, scoped.id, "Changed current rule");
+	assert.deepEqual(
+		f.store.noticeDeadlines(Date.now()),
+		[],
+		"routed context must not also wake a classifier/coordinator",
+	);
+	assert.equal(decisionNotice(before, f.service.context(worker)!)?.urgent, true);
+	assert.equal(decisionNotice(unrelatedBefore, f.service.context(other)!), undefined);
+	// New assignment/reassignment derives context from the current owner, not historical membership.
+	const newOwnerBefore = f.service.context(other)!;
+	f.store.updateTask(f.id, "1", { sessionId: other });
+	assert.equal(f.service.context(worker)?.decisionRoutes?.[scoped.id], "unrelated");
+	assert.equal(f.service.context(other)?.decisionRoutes?.[scoped.id], "relevant");
+	assert.match(decisionNotice(newOwnerBefore, f.service.context(other)!)!.detail, /Changed current rule/);
+	const assigned = f.service.context(other)!;
+	f.store.updateTask(f.id, "1", { sessionId: worker });
+	assert.equal(
+		decisionNotice(assigned, f.service.context(other)!),
+		undefined,
+		"releasing a task sends no old guidance",
+	);
+	f.store.leave(worker);
+	assert.equal(f.service.context(worker), undefined);
+	assert.equal(f.service.context(lead)?.decisionRoutes?.[scoped.id], "unknown");
+});
+
+test("replacement and withdrawal notify pinned current owners without repinning or changing history", (t) => {
+	const f = missionContextFixture(2, 3);
+	t.after(() => f.store.close());
+	const worker = f.members[1]!;
+	const old = f.store.addDecision(f.id, "Old guidance");
+	const next = f.store.addDecision(f.id, "Scoped successor", {}, "coordinator");
+	f.store.updateTask(f.id, "1", { sessionId: worker, decisionIds: [old.id] });
+	const before = f.service.context(worker)!;
+	f.store.supersedeDecision(f.id, old.id, next.id);
+	const after = f.service.context(worker)!;
+	assert.equal(decisionNotice(before, after)?.urgent, true);
+	assert.match(decisionNotice(before, after)!.detail, /no longer binding/);
+	assert.doesNotMatch(decisionNotice(before, after)!.detail, /Scoped successor/);
+	assert.deepEqual(f.store.resolveTask(f.id, "1").decisionIds, [old.id]);
+	assert.equal(f.store.detail(f.id).decisions.find((d) => d.id === old.id)?.text, "Old guidance");
+	const active = f.store.addDecision(f.id, "Withdraw this");
+	f.store.updateTask(f.id, "2", { sessionId: worker, decisionIds: [active.id] });
+	const prior = f.service.context(worker)!;
+	const proposal = f.store.proposeWithdrawal(f.id, active.id, "Obsolete", "withdraw-one", { sessionId: f.members[0] });
+	f.store.resolveProposal(f.id, proposal.id, true);
+	assert.match(decisionNotice(prior, f.service.context(worker)!)!.detail, /Withdrawn/);
+	assert.deepEqual(f.store.resolveTask(f.id, "2").decisionIds, [active.id]);
+	assert.equal(f.store.detail(f.id).decisions.find((d) => d.id === active.id)?.text, "Withdraw this");
+});
 
 test("mission change context publication never materializes unrelated task bodies or detail", (t) => {
 	const f = missionContextFixture(48, 40);

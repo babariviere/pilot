@@ -132,3 +132,13 @@ test("summary is bounded while disclosure keeps the full decision", () => {
 test("older contexts still instruct the agent to fetch decisions", () => {
 	assert.match(decisionNotice(context(undefined), context([decision]))!.detail, /Read mission/);
 });
+
+test("legacy contexts deduplicate unchanged decisions across unrelated context updates", () => {
+	const before = context(undefined);
+	assert.equal(
+		decisionNotice(before, { ...before, tasks: [{ number: 1, title: "New assignment", status: "todo" }] }),
+		undefined,
+	);
+	assert.match(decisionNotice(before, { ...before, decisions: ["New guidance"] })!.detail, /Read mission/);
+	assert.match(decisionNotice(before, { ...before, decisionVersion: "changed" })!.detail, /Read mission/);
+});
