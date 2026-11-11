@@ -8,11 +8,11 @@
 //! trusted native host binds them behind the same read model.
 
 use crate::plan::{
-    AnswerIntent, Choice, Delivery, Exploration, FogArea, Interview, InterviewRef, NewIntent,
-    OutcomeStatus, PlanAvailability, PlanOutcome, PlanPage, PlanRoute, PlanRow, PlanScenario,
-    PlanStage, Planning, Proposal, PrototypeSupport, Question, QuestionSection, QuestionState,
-    RoundAnswer, RoundKind, RoundLine, RoundState, Setup, StartedChat, Step, StepState,
-    SubmitIntent, SubmitState,
+    AnswerIntent, Choice, Delivery, Exploration, FogArea, Interview, InterviewRef, MapInfo,
+    NewIntent, OutcomeStatus, PlanAvailability, PlanOutcome, PlanPage, PlanRoute, PlanRow,
+    PlanScenario, PlanStage, Planning, Proposal, PrototypeSupport, Question, QuestionSection,
+    QuestionState, RoundAnswer, RoundKind, RoundLine, RoundState, Setup, StartedChat, Step,
+    StepState, SubmitIntent, SubmitState,
 };
 use crate::plan_world;
 
@@ -325,6 +325,7 @@ pub(crate) struct Plan {
     pub explorations: Vec<Exploration>,
     pub prototypes: PrototypeSupport,
     pub fog: Vec<FogArea>,
+    pub map: Option<MapInfo>,
     pub proposal: Option<Proposal>,
     pub submitted: StepState,
     pub continued: StepState,
@@ -366,6 +367,7 @@ impl Plan {
                 line: "Prototypes are not available yet. Pilot does not make or guess one.".into(),
             },
             fog: Vec::new(),
+            map: None,
             proposal: None,
             submitted: StepState::Waiting,
             continued: StepState::Waiting,
@@ -486,6 +488,7 @@ impl Plan {
             explorations: self.explorations.clone(),
             prototypes: self.prototypes.clone(),
             fog: self.fog.clone(),
+            map: self.map.clone(),
             proposal: self.proposal.clone(),
             steps: self.steps(),
             work: None,

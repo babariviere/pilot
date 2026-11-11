@@ -15,9 +15,10 @@ use serde_json::{Value, json};
 
 use crate::plan::{
     AnswerIntent, Choice, Delivery, Exploration, ExploreKind, ExploreState, FogArea, Interview,
-    OutcomeStatus, PlanIdentity, PlanPage, PlanRoute, PlanRow, PlanStage, PlanWork, Proposal,
-    PrototypeSupport, Question, QuestionSection, QuestionState, RoundAnswer, RoundKind, RoundLine,
-    RoundState, Slice, SliceOwner, Spec, Step, StepState, Story, SubmitIntent, SubmitState,
+    MapInfo, MapTask, OutcomeStatus, PlanIdentity, PlanPage, PlanRoute, PlanRow, PlanStage,
+    PlanWork, Proposal, PrototypeSupport, Question, QuestionSection, QuestionState, RoundAnswer,
+    RoundKind, RoundLine, RoundState, Slice, SliceOwner, Spec, Step, StepState, Story,
+    SubmitIntent, SubmitState,
 };
 use crate::plan_desk::ANSWER_ROOM;
 
@@ -86,32 +87,28 @@ fn titles(plan: &Value, ids: &Value) -> Vec<String> {
         .collect()
 }
 
-fn sources(view: &Value, list: &Value) -> Vec<String> {
-    arr(list)
-        .iter()
-        .map(|src| match src["kind"].as_str() {
-            Some("decision") => arr(&view["decisions"])
-                .iter()
-                .find(|d| d["decision"]["id"] == src["id"])
-                .and_then(|d| d["decision"]["number"].as_u64())
-                .map_or_else(|| "A decision".to_owned(), |n| format!("Decision {n}")),
-            Some("knowledge") => {
-                let entries = if view["knowledge"].is_array() {
-                    &view["knowledge"]
-                } else {
-                    &view["knowledge"]["items"]
-                };
-                let title = arr(entries)
-                    .iter()
-                    .find(|k| k["id"] == src["id"])
-                    .map(|k| s(&k["title"]))
-                    .filter(|t| !t.is_empty())
-                    .unwrap_or_else(|| "Knowledge".to_owned());
-                format!("Knowledge: {title}, revision {}", src["revision"])
-            }
-            _ => "A saved source".to_owned(),
-        })
-        .collect()
+/// The label of one cited record on the shared map, saying when it is not current.
+fn source(src: &Value) -> String {
+    let label = s(&src["label"]);
+    match src["state"].as_str() {
+        Some("current") => label,
+        Some("changed") => format!("{label} (changed since)"),
+        _ => format!("{label} (no longer available)"),
+    }
+}
+
+fn sources(list: &Value) -> Vec<String> {
+    arr(list).iter().map(source).collect()
+}
+
+/// Why a cited record no longer backs a claim, or None while it does.
+fn changed(src: &Value) -> Option<String> {
+    let label = s(&src["label"]);
+    match src["state"].as_str() {
+        Some("current") => None,
+        Some("changed") => Some(format!("{label} changed after Pilot cited it.")),
+        _ => Some(format!("{label} is no longer available.")),
+    }
 }
 
 fn question(read: &Value, q: &Value, local: &Local) -> Question {
@@ -250,66 +247,180 @@ fn interview(read: &Value, ops: &[Value], local: &Local) -> Option<Interview> {
     })
 }
 
-fn exploration(view: &Value, q: &Value) -> Exploration {
-    let plan = &view["plan"];
-    let id = q["id"].clone();
-    let resolution = &q["resolution"];
-    let state = if resolution.is_object() {
-        ExploreState::Resolved
-    } else if !q["claimedBy"].is_null() {
-        ExploreState::Running
-    } else if plan["round"]["topicId"] == id {
-        ExploreState::Asking
-    } else if arr(&view["frontier"]).iter().any(|f| f["id"] == id) {
-        ExploreState::Ready
+/// How a settled question was settled, in words.
+fn settled(by: &Value) -> String {
+    let label = s(&by["label"]);
+    let line = match by["kind"].as_str() {
+        Some("interview") => {
+            let mut chars = label.chars();
+            let lower = chars
+                .next()
+                .map(|c| c.to_lowercase().chain(chars).collect::<String>())
+                .unwrap_or_default();
+            format!("Answered in {lower}")
+        }
+        Some("decision") => format!("Settled by {label}"),
+        Some("knowledge") if by["checked"] == "checked" => {
+            format!("Answered by {label}. Checked by Pilot; a check is not proof.")
+        }
+        Some("knowledge") => format!("Answered by {label}. Not checked by Pilot."),
+        _ => return String::new(),
+    };
+    let note = match by["state"].as_str() {
+        Some("current") => return line,
+        Some("changed") => "It changed since.",
+        _ => "It is no longer available.",
+    };
+    if line.ends_with('.') {
+        format!("{line} {note}")
     } else {
-        ExploreState::Waiting
+        format!("{line}. {note}")
+    }
+}
+
+/// The titles of map questions, by id. An id the map does not know stays as it is.
+fn map_titles(map: &Value, ids: &Value) -> Vec<String> {
+    arr(ids)
+        .iter()
+        .map(|id| {
+            arr(&map["items"])
+                .iter()
+                .find(|i| i["id"] == *id)
+                .map_or_else(|| s(id), |i| s(&i["title"]))
+        })
+        .collect()
+}
+
+/// A prototype finding in words, with whether it still matches the map.
+fn finding(evidence: &Value) -> String {
+    let verdict = match evidence["verdict"].as_str() {
+        Some("supported") => "supported",
+        Some("not-supported") => "not supported",
+        Some("inconclusive") => "inconclusive",
+        _ => return "No finding yet.".into(),
     };
-    let result = match resolution["kind"].as_str() {
-        Some("decision") => "Settled by a decision",
-        Some("knowledge") => "Answered by linked Knowledge. Not checked by Pilot.",
-        Some("interview") => "Answered in your interview",
-        _ => "",
+    match evidence["state"].as_str() {
+        Some("current") => format!("Finding: {verdict}. It matches this map."),
+        _ => format!(
+            "Finding: {verdict}, from map revision {}. The map changed since, so it is kept as history.",
+            evidence["planRevision"]
+        ),
+    }
+}
+
+/// One question of the shared map (`view.map.items`), as the screen shows it.
+fn exploration(map: &Value, item: &Value) -> Exploration {
+    let title_of = |ids: &Value| map_titles(map, ids);
+    let state = match item["state"].as_str() {
+        Some("settled") => ExploreState::Resolved,
+        Some("asking") => ExploreState::Asking,
+        Some("claimed") => ExploreState::Running,
+        Some("ready") => ExploreState::Ready,
+        _ => ExploreState::Waiting,
     };
+    let by = &item["settledBy"];
+    let evidence = &item["evidence"];
     Exploration {
-        id: s(&id),
-        title: s(&q["title"]),
-        question: s(&q["question"]),
-        kind: if q["kind"] == "research" {
-            ExploreKind::Research
-        } else {
-            ExploreKind::Grilling
+        id: s(&item["id"]),
+        title: s(&item["title"]),
+        question: s(&item["question"]),
+        kind: match item["kind"].as_str() {
+            Some("research") => ExploreKind::Research,
+            Some("prototype") => ExploreKind::Prototype,
+            _ => ExploreKind::Grilling,
         },
         state,
-        after: titles(plan, &q["dependsOn"]),
+        after: title_of(&item["waitingOn"]),
         by: if state == ExploreState::Running {
             "An agent is on it".into()
         } else {
             String::new()
         },
-        result: result.into(),
-        sources: sources(view, &q["sources"]),
-        from_fog: arr(&plan["fog"])
+        result: settled(by),
+        sources: sources(&item["sources"]),
+        from_fog: arr(&map["fog"])
             .iter()
-            .find(|f| arr(&f["promotedTo"]).contains(&id))
+            .find(|f| f["id"] == item["fromFog"])
             .map(|f| s(&f["area"]))
             .unwrap_or_default(),
+        round: if by["kind"] == "interview" {
+            s(&by["id"])
+        } else {
+            String::new()
+        },
+        evidence: if evidence.is_object() {
+            finding(evidence)
+        } else {
+            String::new()
+        },
+        observations: arr(&evidence["observations"]).iter().map(s).collect(),
+        unresolved: arr(&evidence["unresolvedQuestions"])
+            .iter()
+            .map(s)
+            .collect(),
+        changed: arr(&item["sources"])
+            .iter()
+            .chain(by.is_object().then_some(by))
+            .filter_map(changed)
+            .collect(),
     }
 }
 
-fn fog(view: &Value, f: &Value) -> FogArea {
-    let plan = &view["plan"];
-    let became = titles(plan, &f["promotedTo"]);
+fn fog(map: &Value, f: &Value) -> FogArea {
+    let became = map_titles(map, &f["promotedTo"]);
     FogArea {
         id: s(&f["id"]),
         area: s(&f["area"]),
         why: s(&f["why"]),
         ready_when: s(&f["readyWhen"]),
-        after: titles(plan, &f["dependsOn"]),
-        sources: sources(view, &f["sources"]),
+        after: map_titles(map, &f["dependsOn"]),
+        sources: sources(&f["sources"]),
         active: became.is_empty(),
         became,
     }
+}
+
+fn task_word(status: &Value) -> &'static str {
+    match status.as_str() {
+        Some("todo") => "To do",
+        Some("in_progress") => "In progress",
+        Some("blocked") => "Blocked",
+        Some("in_review") => "In review",
+        Some("done") => "Done",
+        Some("dropped") => "Dropped",
+        Some("delegated") => "Delegated",
+        _ => "Not in this read",
+    }
+}
+
+/// The shared map's revision and agreement, or None before a map exists.
+fn map_info(map: &Value) -> Option<MapInfo> {
+    let revision = map["planRevision"].as_u64()?;
+    let agreement = &map["agreement"];
+    let tasks: Vec<MapTask> = arr(&agreement["tasks"])
+        .iter()
+        .map(|t| MapTask {
+            id: s(&t["taskId"]),
+            number: t["number"].as_u64().unwrap_or(0) as u32,
+            title: s(&t["title"]),
+            status: task_word(&t["status"]).into(),
+        })
+        .collect();
+    let line = match agreement["state"].as_str() {
+        Some("proposed") => "Pilot proposed a plan. It is not in your review yet.".to_owned(),
+        Some("in-review") => "The proposed plan waits for your review.".to_owned(),
+        Some("published") => format!(
+            "Published as spec revision {}, with {} tasks. Publishing started no work.",
+            agreement["briefRevision"],
+            tasks.len()
+        ),
+        _ => String::new(),
+    };
+    Some(MapInfo {
+        revision: revision as u32,
+        agreement: line,
+        tasks,
+    })
 }
 
 fn proposal(plan: &Value) -> Option<Proposal> {
@@ -547,15 +658,20 @@ pub fn page(read: &Value, ops: &[Value], local: &Local) -> PlanPage {
         destination: s(&view["destination"]),
         interview,
         rounds,
-        explorations: arr(&plan["questions"])
+        // The shared map is the one projection people and agents read.
+        explorations: arr(&view["map"]["items"])
             .iter()
-            .map(|q| exploration(view, q))
+            .map(|item| exploration(&view["map"], item))
             .collect(),
         prototypes: PrototypeSupport {
             available: false,
             line: "Prototypes are not available yet. Pilot does not make or guess one.".into(),
         },
-        fog: arr(&plan["fog"]).iter().map(|f| fog(view, f)).collect(),
+        fog: arr(&view["map"]["fog"])
+            .iter()
+            .map(|f| fog(&view["map"], f))
+            .collect(),
+        map: map_info(&view["map"]),
         proposal: proposal(plan),
         steps,
         work: read["start"].is_object().then(|| PlanWork {

@@ -10,6 +10,7 @@ import type {
 	PlanPrototypeResult,
 	PlanQuestion,
 	PlanSlice,
+	PlanSource,
 	PlanSpec,
 	PlanWrite,
 } from "@pilot/protocol";
@@ -64,7 +65,7 @@ const fog = () => ({
 	why: "Needs real samples",
 	readyWhen: "Sample is available",
 	dependsOn: [],
-	sources: [],
+	sources: [] as PlanSource[],
 });
 const prototype = (key = "experiment", dependsOn: string[] = []): ReturnType<typeof question> => ({
 	...question(key, dependsOn),
@@ -950,4 +951,127 @@ test("publication retains unresolved fog without turning it into blockers or adm
 	assert.equal(activeFog(f.plan).length, 1);
 	assert.equal(f.store.tasks(f.missionId).filter((t) => t.dependsOn?.length).length, 1);
 	assert.ok(f.store.tasks(f.missionId).every((t) => t.status === "todo" && !t.sessionId));
+});
+
+test("shared map projects one saved record set: reopen, graduation, staleness and dependencies, no authority", async (t) => {
+	const f = await fixture(t, true);
+	const d = f.store.addDecision(f.missionId, "Keep native storage", undefined, "all");
+	const k = f.store.knowledge.write("project", undefined, {
+		operationId: randomUUID(),
+		requestHash: "hash",
+		expectedRevision: 0,
+		kind: "investigation",
+		title: "Storage facts",
+		synopsis: "Primary sources",
+		body: "Observed evidence",
+		sources: [],
+		author: { type: "user" },
+	});
+	f.store.knowledge.setLink(f.missionId, k.entry.id, 0, { linked: true }, { type: "user" });
+	const decision = { kind: "decision" as const, id: d.id, digest: digest(d) };
+	const knowledge = { kind: "knowledge" as const, id: k.entry.id, revision: 1, linkRevision: 1 };
+	await f.map(
+		[
+			{ ...question("fact"), kind: "research", sources: [knowledge] },
+			{ ...question("choice", ["fact"]), sources: [decision] },
+			prototype("feel", ["fact"]),
+		],
+		[{ ...fog(), sources: [decision] }],
+	);
+	const first = (await f.service().view(f.missionId)).map;
+	assert.equal(first.planRevision, 1);
+	assert.equal(first.destination, "A safe plan");
+	assert.deepEqual(
+		first.items.map((i) => [i.id, i.kind, i.state, i.waitingOn]),
+		[
+			["fact", "research", "ready", []],
+			["choice", "human", "waiting", ["fact"]],
+			["feel", "prototype", "waiting", ["fact"]],
+		],
+	);
+	assert.deepEqual(first.items[0]!.sources, [
+		{
+			kind: "knowledge",
+			id: k.entry.id,
+			label: "Knowledge: Storage facts, revision 1",
+			state: "current",
+			checked: "not_checked",
+		},
+	]);
+	assert.equal(first.items[1]!.sources[0]!.label, `Decision ${d.number}`);
+	assert.deepEqual(first.items[2]!.evidence, { state: "missing", observations: [], unresolvedQuestions: [] });
+	assert.equal(first.counts.notCurrent, 0);
+	assert.equal(first.agreement, null);
+
+	// Reopen: the same records give the same map, for people and agents alike.
+	await f.restart();
+	assert.deepEqual((await f.service().view(f.missionId)).map, first);
+
+	// Settling research moves dependents to the frontier; the cited record stays linked.
+	const resolution = { kind: "knowledge" as const, id: k.entry.id, digest: digest(knowledge) };
+	assert.equal((await f.write({ purpose: "plan-resolve", questionId: "fact", resolution })).receipt.state, "accepted");
+	// Graduation keeps the fog as history and links the new question to it.
+	assert.equal(
+		(await f.write({ purpose: "plan-promote", fogId: "later", questions: [question("shape")] })).receipt.state,
+		"accepted",
+	);
+	const second = (await f.service().view(f.missionId)).map;
+	assert.deepEqual(
+		second.items.map((i) => [i.id, i.state, i.waitingOn]),
+		[
+			["fact", "settled", []],
+			["choice", "ready", []],
+			["feel", "ready", []],
+			["shape", "ready", []],
+		],
+	);
+	assert.equal(second.items[0]!.settledBy?.label, "Knowledge: Storage facts, revision 1");
+	assert.equal(second.items[3]!.fromFog, "later");
+	assert.deepEqual(second.fog[0]!.promotedTo, ["shape"]);
+	assert.equal(second.counts.activeFog, 0);
+
+	// Records change after mapping: claims say so instead of staying silently current.
+	f.store.updateDecision(f.missionId, d.id, "Keep native storage, now with a size limit");
+	f.store.knowledge.write("project", k.entry.id, {
+		operationId: randomUUID(),
+		requestHash: "hash-2",
+		expectedRevision: 1,
+		kind: "investigation",
+		title: "Storage facts",
+		synopsis: "Primary sources",
+		body: "Newer evidence",
+		sources: [],
+		author: { type: "user" },
+	});
+	const third = (await f.service().view(f.missionId)).map;
+	assert.equal(third.items[0]!.settledBy?.state, "changed");
+	assert.equal(third.items[0]!.settledBy?.checked, undefined);
+	assert.equal(third.items[1]!.sources[0]!.state, "changed");
+	assert.equal(third.counts.notCurrent, 3);
+	// Reading changed nothing and admitted nothing.
+	assert.equal(f.plan.revision, 3);
+	assert.equal(f.store.tasks(f.missionId).length, 0);
+	assert.equal(third.items[1]!.settledBy, null);
+});
+
+test("shared map links agreement tasks without inventing completion", async (t) => {
+	const f = await fixture(t);
+	await f.proposal();
+	assert.deepEqual((await f.service().view(f.missionId)).map.agreement, {
+		state: "in-review",
+		briefRevision: null,
+		tasks: [],
+	});
+	await f.answer(true, "approve");
+	assert.equal((await f.write({ purpose: "plan-publish" })).receipt.state, "accepted");
+	const map = (await f.service().view(f.missionId)).map;
+	assert.equal(map.agreement?.state, "published");
+	assert.equal(map.agreement?.briefRevision, f.store.brief(f.missionId)!.revision);
+	assert.deepEqual(
+		map.agreement?.tasks.map((x) => [x.sliceId, x.title, x.status, typeof x.number]),
+		[
+			["save", "Save a plan", "todo", "number"],
+			["resume", "Resume a plan", "todo", "number"],
+		],
+	);
 });

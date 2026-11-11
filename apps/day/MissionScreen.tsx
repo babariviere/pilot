@@ -4,11 +4,11 @@
 // intents: Rust builds and fences the command; this screen names only the
 // mission, the revision it showed and, for Resume, the Pause it showed.
 import { computed, keymap, Scroll, signal, Text, View } from "nsh";
-import type { MissionPage, MissionRow, PlanRow, ReportLine, TaskLine } from "pilot-day/native";
+import type { MissionPage, MissionRow, PlanPage, PlanRow, ReportLine, TaskLine } from "pilot-day/native";
 import type { Day } from "./day";
 import { keepScroll } from "./kept";
 import { glide } from "./motion";
-import { stageMark, stageWord } from "./PlanScreen";
+import { mapSummary, stageMark, stageWord } from "./PlanScreen";
 import type { Plans } from "./planning";
 import { openPlan } from "./planView";
 import { FreshnessNote, MissionStatus, TopBar } from "./TodayScreen";
@@ -172,20 +172,29 @@ function Task(props: { task: TaskLine }) {
  * Where the mission's agreement lives: its saved interview, the plan it
  * agreed and the tasks it became. A link, not a copy: the planning page
  * says what it can read, including a mission that has no saved interview.
+ * A Wayfinder mission also shows its map in one line, from the same read.
  */
 function PlanLink(props: { plans: Plans; missionId: string }) {
 	const row = (): PlanRow | null => props.plans.planning().plans.find((p) => p.missionId === props.missionId) ?? null;
+	const page = () => {
+		props.plans.planning();
+		const p = props.plans.feed.page(props.missionId);
+		return p?.available && p.route === "wayfinder" ? p : null;
+	};
+	// Reading the saved plan answers, saves and starts nothing.
+	if (row()) void props.plans.feed.open(props.missionId);
 	const stage = () => {
 		const r = row();
 		return r ? stageWord(r.stage) : "";
 	};
+	const title = () => (page() ? "Map, interview and plan" : "Interview and plan");
 	return (
 		<View testID="mission-plan" class="gap-2">
 			<SectionTitle title="Plan" />
 			<RowLink
 				testID="open-plan"
-				title="Interview and plan"
-				accessibilityLabel={stage() ? `Interview and plan, ${stage()}. Open it.` : "Interview and plan. Open it."}
+				title={title()}
+				accessibilityLabel={stage() ? `${title()}, ${stage()}. Open it.` : `${title()}. Open it.`}
 				onPress={() => openPlan(props.missionId)}
 			>
 				<If when={row()}>
@@ -200,6 +209,11 @@ function PlanLink(props: { plans: Plans; missionId: string }) {
 			<Text class="text-sm text-muted-foreground">
 				{row()?.line || "What you answered, the plan Pilot proposed and the tasks it became."}
 			</Text>
+			<If when={page()}>
+				<Text testID="mission-map" class="text-sm text-muted-foreground">
+					{page() ? `Map: ${mapSummary(page() as PlanPage)}` : ""}
+				</Text>
+			</If>
 		</View>
 	);
 }

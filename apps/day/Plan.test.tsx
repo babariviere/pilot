@@ -275,23 +275,43 @@ test("a 40-question interview shows one at a time, and all of them on See all", 
 	expect(app.enabled(SUBMIT)).toBe(false);
 });
 
-test("a Wayfinder map shows its questions, research, unavailable prototypes and calm fog", async () => {
+test("a Wayfinder map shows what is open, waiting, settled and in fog, each with its record", async () => {
 	const app = await open("./Wayfinder.tsx", desktop);
 	await app.press("id:plan-linux");
 	await app.waitFor("id:map");
 	for (const text of [
 		"Where it should end up: Pilot Day runs on Linux with the same Today and planning as on macOS.",
-		"Needs your answers  3",
-		"Needs research  3",
+		"Revision 6",
+		"3 settled · 4 open now · 1 waiting · 2 in fog",
+		"Open now  4",
+		"Waiting  1",
 		"Running · A research chat, started 12 min ago",
 		"Waits for: Packaging formats",
-		"From Knowledge: Linux keyring access, revision 3 · Was fog: Where credentials live",
+		"Needs a prototype",
 		"Prototypes are not available yet. Pilot does not make or guess one.",
+		"1 question cites a record that changed. Pilot updates the map from it; nothing here needs you.",
+		"Settled · 3",
 		"Fog of war · 2",
 		"Questions about “Which desktops count”",
 	]) {
 		expect(app.shows(text)).toBe(true);
 	}
+	// Settled questions stay closed until asked for, and each opens to what settled it.
+	expect(app.shows("Wayland or X11")).toBe(false);
+	await app.press("id:settled-toggle");
+	await app.waitFor("Wayland or X11");
+	expect(app.shows("Settled by Decision 4. It changed since.")).toBe(true);
+	expect(app.shows("Decision 4 changed after Pilot cited it.")).toBe(true);
+	await app.press("id:explore-scope");
+	await app.waitFor("id:settled-round-scope");
+	expect(app.shows("Round 1 · your answers, as submitted")).toBe(true);
+	await app.press("id:explore-keyring");
+	await app.waitFor("From Knowledge: Linux keyring access, revision 3 · Was fog: Where credentials live");
+	// A prototype's finding is evidence, shown with what it left open; it answers nothing.
+	await app.press("id:explore-status-line");
+	await app.waitFor("Finding: supported. It matches this map.");
+	expect(app.shows("• Is a status line enough for you, or do you also want a notification?")).toBe(true);
+	expect(app.shows("A status line instead of a tray")).toBe(true);
 	expect(app.shows("Accessibility on Linux")).toBe(false);
 	await app.press("id:fog-toggle");
 	await app.waitFor("Accessibility on Linux");
@@ -303,7 +323,9 @@ test("a Wayfinder map shows its questions, research, unavailable prototypes and 
 	await app.press("id:question-packages >> No. One portable package");
 	await app.waitFor("3 of 3 answered");
 	await app.press(SUBMIT);
-	await app.waitFor("Answered in round 2");
+	await app.waitFor("Answered in interview round 2");
+	expect(app.shows("Revision 7")).toBe(true);
+	expect(app.shows("4 settled · 3 open now · 1 waiting · 2 in fog")).toBe(true);
 	expect(app.shows("Ready when: Ready to explore: the desktops are chosen.")).toBe(true);
 });
 

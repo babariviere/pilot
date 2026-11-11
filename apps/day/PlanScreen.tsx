@@ -8,6 +8,7 @@ import type {
 	Exploration,
 	ExploreKind,
 	FogArea,
+	MapInfo,
 	PlanPage,
 	PlanStage,
 	Proposal,
@@ -20,7 +21,7 @@ import { InterviewDoc } from "./InterviewDoc";
 import { keepScroll } from "./kept";
 import { flush, unsavedCount } from "./planCommands";
 import type { Plans } from "./planning";
-import { closePlanning, fogOpen, put, roundOpen } from "./planView";
+import { closePlanning, fogOpen, mapOpen, put, roundOpen, settledOpen } from "./planView";
 import { TopBar } from "./TodayScreen";
 import { Action, Mark, type MarkKind, SectionTitle } from "./ui";
 import { openMission } from "./view";
@@ -163,7 +164,7 @@ function exploreLine(e: Exploration): string {
 		case "running":
 			return e.by ? `Running · ${e.by}` : "Running";
 		case "asking":
-			return "Your answers are needed below.";
+			return "Its questions for you are open above.";
 		case "resolved":
 			return e.result || "Resolved";
 	}
@@ -184,35 +185,124 @@ function exploreMark(e: Exploration): MarkKind {
 	}
 }
 
-function ExploreRow(props: { item: Exploration }) {
+/** What kind of uncertainty a question is, in the words the map uses. */
+function kindWord(kind: ExploreKind): string {
+	switch (kind) {
+		case "grilling":
+			return "Needs your answers";
+		case "research":
+			return "Needs research";
+		case "prototype":
+			return "Needs a prototype";
+	}
+}
+
+/** A short list under a quiet label, inside a map record. */
+function Detail(props: { title: string; lines: string[] }) {
+	return (
+		<If when={props.lines.length > 0}>
+			<View class="gap-0.5">
+				<Text class="text-xs text-faint">{props.title}</Text>
+				<Each of={props.lines} key={(l) => l}>
+					{(l) => <Text class="text-sm leading-relaxed text-foreground">{`• ${l()}`}</Text>}
+				</Each>
+			</View>
+		</If>
+	);
+}
+
+/**
+ * One question on the map: a calm row that opens to its full saved record.
+ * Opening it reads nothing and changes nothing.
+ */
+function MapItem(props: { page: PlanPage; item: Exploration }) {
 	const e = () => props.item;
-	const meta = () =>
+	const key = () => `${props.page.missionId}/${e().id}`;
+	const open = () => mapOpen()[key()] === true;
+	// A question settled in an interview shows that round's answers, as submitted.
+	const round = () => (e().round ? (props.page.rounds.find((r) => r.id === e().round) ?? null) : null);
+	const origin = () =>
 		[e().sources.length > 0 ? `From ${e().sources.join(", ")}` : "", e().fromFog ? `Was fog: ${e().fromFog}` : ""]
 			.filter(Boolean)
 			.join(" · ");
 	return (
-		<View testID={`explore-${e().id}`} class="gap-1 border-t border-border py-3">
-			<View class="flex-row items-center gap-2">
-				<Mark kind={exploreMark(e())} />
-				<Text class="flex-1 text-sm font-medium text-foreground">{e().title}</Text>
+		<Collapsible
+			open={open()}
+			class="border-t border-border py-3"
+			content={
+				<View testID={`record-${e().id}`} class="gap-3 pl-4 pt-3">
+					<Text class="text-sm leading-relaxed text-foreground">{e().question}</Text>
+					<If when={e().evidence}>
+						<Text class="text-sm text-foreground">{e().evidence}</Text>
+					</If>
+					<Detail title="What the prototype showed" lines={e().observations} />
+					<Detail title="What it left open" lines={e().unresolved} />
+					<If when={round()}>
+						<View testID={`settled-round-${e().id}`} class="gap-2">
+							<Text class="text-xs text-faint">{`${round()?.title ?? ""} · your answers, as submitted`}</Text>
+							<Each of={round()?.answers ?? []} key={(a) => a.prompt}>
+								{(a) => (
+									<View class="gap-0.5">
+										<Text class="text-xs text-muted-foreground">{a().prompt}</Text>
+										<Text class="text-sm text-foreground">{a().answer || "No answer"}</Text>
+									</View>
+								)}
+							</Each>
+						</View>
+					</If>
+					<If when={origin()}>
+						<Text class="text-xs text-faint">{origin()}</Text>
+					</If>
+				</View>
+			}
+		>
+			<View
+				testID={`explore-${e().id}`}
+				role="button"
+				accessibilityState={{ expanded: open() }}
+				onPress={() => put(mapOpen, key(), !open())}
+				class="gap-1 rounded-md focus-visible:ring-2 focus-visible:ring-ring/40"
+			>
+				<View class="flex-row items-center gap-2">
+					<Mark kind={exploreMark(e())} />
+					<Text class="flex-1 text-sm font-medium text-foreground">{e().title}</Text>
+					<Text class="text-xs text-faint">{kindWord(e().kind)}</Text>
+				</View>
+				<Text class="pl-4 text-xs text-foreground">{exploreLine(e())}</Text>
+				<Each of={e().changed} key={(c) => c}>
+					{(c) => <Text class="pl-4 text-xs text-needs-ink">{c()}</Text>}
+				</Each>
 			</View>
-			<Text class="pl-4 text-sm text-muted-foreground">{e().question}</Text>
-			<Text class="pl-4 text-xs text-foreground">{exploreLine(e())}</Text>
-			<If when={meta()}>
-				<Text class="pl-4 text-xs text-faint">{meta()}</Text>
-			</If>
-		</View>
+		</Collapsible>
 	);
 }
 
-function ExploreGroup(props: { title: string; kind: ExploreKind; page: PlanPage }) {
-	const items = () => props.page.explorations.filter((e) => e.kind === props.kind);
+/** The map's questions that can move now: asked, ready or being worked on. */
+function openNow(page: PlanPage): Exploration[] {
+	return page.explorations.filter((e) => e.state === "asking" || e.state === "ready" || e.state === "running");
+}
+
+/** The map in one line, such as "3 settled · 2 open now · 1 waiting · 2 in fog". */
+export function mapSummary(page: PlanPage): string {
+	const count = (state: Exploration["state"]) => page.explorations.filter((e) => e.state === state).length;
+	return [
+		`${count("resolved")} settled`,
+		`${openNow(page).length} open now`,
+		count("waiting") > 0 ? `${count("waiting")} waiting` : "",
+		`${page.fog.filter((f) => f.active).length} in fog`,
+	]
+		.filter(Boolean)
+		.join(" · ");
+}
+
+/** A titled group of map questions, shown only when it has any. */
+function MapGroup(props: { testID: string; title: string; items: Exploration[]; page: PlanPage }) {
 	return (
-		<If when={items().length > 0}>
-			<View>
-				<Text class="pb-1 text-xs text-faint">{`${props.title}  ${items().length}`}</Text>
-				<Each of={items()} key={(e) => e.id}>
-					{(e) => <ExploreRow item={e()} />}
+		<If when={props.items.length > 0}>
+			<View testID={props.testID}>
+				<Text class="pb-1 text-xs text-faint">{`${props.title}  ${props.items.length}`}</Text>
+				<Each of={props.items} key={(e) => e.id}>
+					{(e) => <MapItem page={props.page} item={e()} />}
 				</Each>
 			</View>
 		</If>
@@ -240,30 +330,113 @@ function FogRow(props: { fog: FogArea }) {
 	);
 }
 
-/** The Wayfinder map: questions for the user, research, prototypes, and the fog of war. */
-function MapView(props: { page: PlanPage }) {
-	const active = () => props.page.fog.filter((f) => f.active);
-	const explored = () => props.page.fog.filter((f) => !f.active);
-	const frontier = () => props.page.explorations.filter((e) => e.state === "ready" || e.state === "asking");
-	const open = () => fogOpen()[props.page.missionId] === true;
+/** A disclosure line that opens a quiet section, such as the fog of war. */
+function Disclosure(props: { testID: string; label: string; open: boolean; onToggle: () => void }) {
 	return (
-		<View testID="map" class="gap-5">
-			<SectionTitle title="What is still open">
-				<Text class="text-xs text-muted-foreground">
-					{frontier().length === 1 ? "1 ready now" : `${frontier().length} ready now`}
-				</Text>
-			</SectionTitle>
-			<ExploreGroup title="Needs your answers" kind="grilling" page={props.page} />
-			<ExploreGroup title="Needs research" kind="research" page={props.page} />
-			<View testID="prototypes" class="gap-1">
-				<Text class="text-xs text-faint">Needs a prototype</Text>
-				<ExploreGroup title="Prototypes" kind="prototype" page={props.page} />
-				<If when={!props.page.prototypes.available}>
-					<Text class="text-sm text-muted-foreground">{props.page.prototypes.line}</Text>
+		<View
+			testID={props.testID}
+			role="button"
+			accessibilityState={{ expanded: props.open }}
+			onPress={props.onToggle}
+			class="flex-row items-baseline gap-2 rounded-md focus-visible:ring-2 focus-visible:ring-ring/40"
+		>
+			<Text class="text-sm text-muted-foreground">{props.open ? "▾" : "▸"}</Text>
+			<Text class="text-sm text-muted-foreground">{props.label}</Text>
+		</View>
+	);
+}
+
+/** The agreement and the tasks it became. Opening a task shows the mission overview; it starts nothing. */
+function Agreement(props: { info: MapInfo; onOpenTasks?: () => void }) {
+	return (
+		<If when={props.info.agreement || props.info.tasks.length > 0}>
+			<View testID="map-agreement" class="gap-1">
+				<Text class="text-xs text-faint">Agreement</Text>
+				<Text class="text-sm text-foreground">{props.info.agreement}</Text>
+				<Each of={props.info.tasks} key={(t) => t.id}>
+					{(t) => (
+						<View class="flex-row items-baseline gap-3 py-1">
+							<Text class="w-7 text-xs text-faint">{t().number > 0 ? `#${t().number}` : ""}</Text>
+							<Text class="flex-1 text-sm text-foreground">{t().title}</Text>
+							<Text class="text-xs text-muted-foreground">{t().status}</Text>
+						</View>
+					)}
+				</Each>
+				<If when={props.info.tasks.length > 0 && props.onOpenTasks}>
+					<View class="flex-row">
+						<Action label="Open the tasks" onPress={() => props.onOpenTasks?.()} />
+					</View>
 				</If>
 			</View>
+		</If>
+	);
+}
+
+/**
+ * The Wayfinder map: the same saved records the coordinator reads. What is
+ * open now, what waits, what is settled, the fog of war and the agreement.
+ * Reading it answers, approves and starts nothing.
+ */
+function MapView(props: { page: PlanPage; onOpenTasks?: () => void }) {
+	const items = () => props.page.explorations;
+	const now = () => openNow(props.page);
+	const waiting = () => items().filter((e) => e.state === "waiting");
+	const settled = () => items().filter((e) => e.state === "resolved");
+	const active = () => props.page.fog.filter((f) => f.active);
+	const explored = () => props.page.fog.filter((f) => !f.active);
+	const changed = () => items().filter((e) => e.changed.length > 0).length;
+	const id = () => props.page.missionId;
+	const fog = () => fogOpen()[id()] === true;
+	const done = () => settledOpen()[id()] === true;
+	return (
+		<View testID="map" class="gap-5">
+			<View class="gap-1">
+				<SectionTitle title="Map">
+					<If when={props.page.map}>
+						<Text class="text-xs text-faint">{`Revision ${props.page.map?.revision ?? 0}`}</Text>
+					</If>
+				</SectionTitle>
+				<Text testID="map-summary" class="text-sm text-muted-foreground">
+					{mapSummary(props.page)}
+				</Text>
+				<If when={changed() > 0}>
+					<Text testID="map-changed" class="text-xs leading-relaxed text-needs-ink">
+						{changed() === 1
+							? "1 question cites a record that changed. Pilot updates the map from it; nothing here needs you."
+							: `${changed()} questions cite records that changed. Pilot updates the map from them; nothing here needs you.`}
+					</Text>
+				</If>
+			</View>
+			<MapGroup testID="map-now" title="Open now" items={now()} page={props.page} />
+			<MapGroup testID="map-waiting" title="Waiting" items={waiting()} page={props.page} />
+			<If when={!props.page.prototypes.available && items().some((e) => e.kind === "prototype")}>
+				<Text class="text-xs text-faint">{props.page.prototypes.line}</Text>
+			</If>
+			<If when={settled().length > 0}>
+				<Collapsible
+					open={done()}
+					class="gap-1"
+					content={
+						<View testID="map-settled" class="gap-0">
+							<Text class="pb-2 text-xs leading-relaxed text-muted-foreground">
+								Settled questions are not asked again. Open one to see what settled it.
+							</Text>
+							<Each of={settled()} key={(e) => e.id}>
+								{(e) => <MapItem page={props.page} item={e()} />}
+							</Each>
+						</View>
+					}
+				>
+					<Disclosure
+						testID="settled-toggle"
+						label={`Settled · ${settled().length}`}
+						open={done()}
+						onToggle={() => put(settledOpen, id(), !done())}
+					/>
+				</Collapsible>
+			</If>
 			<Collapsible
-				open={open()}
+				open={fog()}
 				class="gap-1"
 				content={
 					<View class="gap-0">
@@ -283,17 +456,16 @@ function MapView(props: { page: PlanPage }) {
 					</View>
 				}
 			>
-				<View
+				<Disclosure
 					testID="fog-toggle"
-					role="button"
-					accessibilityState={{ expanded: open() }}
-					onPress={() => put(fogOpen, props.page.missionId, !open())}
-					class="flex-row items-baseline gap-2 rounded-md focus-visible:ring-2 focus-visible:ring-ring/40"
-				>
-					<Text class="text-sm text-muted-foreground">{open() ? "▾" : "▸"}</Text>
-					<Text class="text-sm text-muted-foreground">{`Fog of war · ${active().length}`}</Text>
-				</View>
+					label={`Fog of war · ${active().length}`}
+					open={fog()}
+					onToggle={() => put(fogOpen, id(), !fog())}
+				/>
 			</Collapsible>
+			<If when={props.page.map}>
+				<Agreement info={props.page.map as MapInfo} onOpenTasks={props.onOpenTasks} />
+			</If>
 		</View>
 	);
 }
@@ -462,7 +634,7 @@ function Rounds(props: { page: PlanPage }) {
 	);
 }
 
-function Body(props: { plans: Plans; page: PlanPage; title: string }) {
+function Body(props: { plans: Plans; page: PlanPage; title: string; onOpenTasks?: () => void }) {
 	const p = () => props.page;
 	const asking = () => (p().interview && p().interview?.kind !== "review" ? p().interview : null);
 	const review = () => (p().interview?.kind === "review" ? p().interview : null);
@@ -512,7 +684,7 @@ function Body(props: { plans: Plans; page: PlanPage; title: string }) {
 				</Each>
 			</If>
 			<If when={p().available && p().route === "wayfinder"}>
-				<MapView page={p()} />
+				<MapView page={p()} onOpenTasks={props.onOpenTasks} />
 			</If>
 			<If when={p().proposal}>
 				<Each of={p().proposal ? [p().proposal as Proposal] : []} key={(x) => x.digest}>
@@ -598,7 +770,14 @@ export function PlanScreen(props: { day?: Day; plans: Plans; missionId: string; 
 					}
 				>
 					<Each of={page() ? [page() as PlanPage] : []} key={(p) => p.missionId}>
-						{(p) => <Body plans={props.plans} page={p()} title={props.title ?? ""} />}
+						{(p) => (
+							<Body
+								plans={props.plans}
+								page={p()}
+								title={props.title ?? ""}
+								onOpenTasks={inToday() ? toOverview : undefined}
+							/>
+						)}
 					</Each>
 				</If>
 			</View>

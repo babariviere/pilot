@@ -202,7 +202,7 @@ export function createMissionPlanTool(port: NativePlanningPort): ToolDefinition 
 		name: "mission_plan",
 		label: "Mission planning",
 		description:
-			"Read native mission planning or save a revision-bound map, fog promotion, question claim, prototype findings, human round, spec or slices. Prototype findings need exact read digests and a pinned mission artifact; they never run code or accept a preference. Human answers/submission use native UI, never this tool. Publication creates reviewed native records, not workers or external issues. Unknown writes require exact receipt lookup, never a new attempt.",
+			"Read native mission planning or save a revision-bound map, fog promotion, question claim, prototype findings, human round, spec or slices. read returns the saved records plus map, the same overview people see; update the map from evidence when a claim there is changed or missing, never by guessing. Prototype findings need exact read digests and a pinned mission artifact; they never run code or accept a preference. Human answers/submission use native UI, never this tool. Publication creates reviewed native records, not workers or external issues. Unknown writes require exact receipt lookup, never a new attempt.",
 		parameters: Type.Union([
 			Type.Object(
 				{

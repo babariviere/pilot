@@ -418,10 +418,19 @@ room (12 KiB, the daemon's limit); a quiet note shows when it runs low, and a
 save past it is refused with the text kept. One round holds at most 40
 questions (`Long.tsx`).
 
-A Wayfinder mission also shows where it should end up, questions that need the
-user's answers, research with its state and sources, prototypes as not
-available (until the prototype contract exists), and a folded Fog of war with
-why each area matters, when it is ready and what it became. A topic interview
+A Wayfinder mission also shows its map: where it should end up, the saved map
+revision, a one-line count, what is open now, what waits and for what, folded
+settled questions, a folded Fog of war (why each area matters, when it is ready
+and what it became) and the agreement with its published tasks. Each question
+names its kind (Needs your answers, Needs research, Needs a prototype) and opens
+to its record: the exact question, its sources, the fog it came from, a
+prototype's finding with what it left open, and, for a question settled in an
+interview, that round's submitted answers. A cited decision or Knowledge entry
+that changed or went away since Pilot mapped it says so; Pilot updates the map,
+and nothing on the page answers, approves or starts anything. The rows read the
+daemon's shared `view.map` projection, the same object the planning
+coordinator reads (`native/tests/plan_map.rs`). A Wayfinder mission's overview
+shows the map in one line. Making prototypes stays unavailable. A topic interview
 answers only its topic. A proposed plan shows in full (problem, solution,
 stories, how it is built and tested, what is left out, its tasks with their
 order and owners, and what is still unknown) above the review question. A plan

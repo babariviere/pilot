@@ -16,6 +16,7 @@ import {
 	interviewText as text,
 	validateQuestions,
 } from "./mission-interview-contract.ts";
+import { planMap } from "./mission-plan-map.ts";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON, type OperationJournal, OperationRejected } from "./operation-journal.ts";
 
@@ -179,17 +180,23 @@ export class MissionPlans {
 		const pin = this.context(missionId),
 			{ store } = this.deps;
 		const knowledge = store.knowledge.list(pin.mission.projectId, { missionId }, undefined, 40);
+		const interviewHistory = store.interviews.history(missionId);
+		const frontier = pin.plan ? planFrontier(pin.plan) : [];
+		const destination = pin.plan?.destination ?? pin.mission.goal;
+		const evidence = (q: PlanQuestion): "missing" | "current" | "stale" =>
+			!q.prototypeResult ? "missing" : this.prototypeCurrent(pin.plan!, q) ? "current" : "stale";
+		const tasks = pin.plan?.publication ? store.tasks(missionId) : [];
 		const result = {
 			plan: pin.plan ?? null,
-			destination: pin.plan?.destination ?? pin.mission.goal,
+			destination,
 			decisions: pin.evidence.decisions.map((d) => ({
 				decision: d,
 				source: { kind: "decision", id: d.id, digest: digest(d) },
 			})),
 			knowledge,
 			interview: pin.interview,
-			interviewHistory: store.interviews.history(missionId),
-			frontier: pin.plan ? planFrontier(pin.plan) : [],
+			interviewHistory,
+			frontier,
 			activeFog: pin.plan ? activeFog(pin.plan) : [],
 			exploration: pin.plan
 				? pin.plan.questions
@@ -207,15 +214,22 @@ export class MissionPlans {
 								? {
 										questionDigest: planQuestionDigest(q),
 										contextDigest: prototypeContextDigest(pin.plan!),
-										evidence: !q.prototypeResult
-											? "missing"
-											: this.prototypeCurrent(pin.plan!, q)
-												? "current"
-												: "stale",
+										evidence: evidence(q),
 									}
 								: {}),
 						}))
 				: [],
+			// The shared map: the same projection the native page shows. Derived, never stored.
+			map: planMap({
+				plan: pin.plan ?? null,
+				destination,
+				decisions: pin.evidence.decisions,
+				knowledge: knowledge.entries,
+				history: interviewHistory,
+				frontier,
+				evidence,
+				task: (taskId) => tasks.find((t) => t.id === taskId),
+			}),
 		};
 		this.deps.authorize("plan-read", missionId, pin.owner);
 		await store.durable();

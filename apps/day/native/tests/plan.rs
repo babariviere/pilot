@@ -256,7 +256,11 @@ fn a_topic_interview_answers_only_its_topic() {
         .iter()
         .find(|e| e.id == "desktops")
         .unwrap();
-    assert_eq!(item.result, "Answered in round 2");
+    assert_eq!(item.result, "Answered in interview round 2");
+    // The settled question links the round that settled it, and the map's revision moves on.
+    assert_eq!(item.round, "linux-desktops-2");
+    assert!(page.rounds.iter().any(|r| r.id == item.round));
+    assert_eq!(page.map.as_ref().map(|m| m.revision), Some(7));
     // Fog stays fog; it is never a blocker of its own.
     assert!(page.fog.iter().any(|f| f.active && f.after.is_empty()));
     assert!(!page.prototypes.available);

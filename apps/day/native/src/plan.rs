@@ -393,6 +393,18 @@ pub struct Exploration {
     pub sources: Vec<String>,
     /// The fog area it came from, if any.
     pub from_fog: String,
+    /// For a question settled in an interview: that earlier round's id, to show its answers.
+    pub round: String,
+    /// For a prototype: its latest finding in words, and whether it still matches the map.
+    /// Empty otherwise. A finding is evidence, never acceptance or permission to build.
+    pub evidence: String,
+    /// The prototype finding's observations, as saved.
+    pub observations: Vec<String>,
+    /// What the prototype left open, as saved.
+    pub unresolved: Vec<String>,
+    /// Cited records that changed or went away since Pilot mapped this, in words.
+    /// Pilot updates the map; nothing here changes it.
+    pub changed: Vec<String>,
 }
 
 /// An area that is not understood well enough for precise questions yet.
@@ -415,6 +427,33 @@ pub struct FogArea {
     pub active: bool,
     /// Titles of the precise questions it became.
     pub became: Vec<String>,
+}
+
+/// One build task the agreed plan became.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MapTask {
+    /// The task.
+    pub id: String,
+    /// Its number in the mission, or 0 when this read does not have it.
+    pub number: u32,
+    /// Its title.
+    pub title: String,
+    /// Where it is, in words. Publication starts no task.
+    pub status: String,
+}
+
+/// What the shared map says beyond its questions and fog: its saved revision
+/// and where the agreement is. The same records agents read.
+#[derive(Debug, Clone, Default, PartialEq, JsObject, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MapInfo {
+    /// The saved map's revision. Every map change makes a new one.
+    pub revision: u32,
+    /// Where the agreement is, in words. Empty before Pilot proposes a plan.
+    pub agreement: String,
+    /// The tasks the published plan became, in order.
+    pub tasks: Vec<MapTask>,
 }
 
 /// Whether prototypes can be made from this map.
@@ -562,6 +601,8 @@ pub struct PlanPage {
     pub prototypes: PrototypeSupport,
     /// Fog of war, active and promoted.
     pub fog: Vec<FogArea>,
+    /// The map's revision and agreement, on a Wayfinder map. Absent otherwise.
+    pub map: Option<MapInfo>,
     /// The proposed plan, once there is one.
     pub proposal: Option<Proposal>,
     /// From answers to work, each step separate.

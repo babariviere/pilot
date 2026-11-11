@@ -47,6 +47,11 @@ agreement, not a required step or build task. Its linked artifact, findings and 
 with the mission. Findings are evidence, not your acceptance or permission to build. Interactive
 prototype execution remains unavailable; see [native planning](technical/day-mission-planning.md).
 
+These records form the mission's **map**, one shared overview for you and the planning agent:
+what is open now, what waits, what is settled (never asked again), the Fog of war and the agreed
+tasks. When a cited decision or Knowledge entry changes, the map says so until the agent updates it.
+Viewing the map answers, approves and starts nothing.
+
 Coordinators can record an already-authorized decision replacement with
 `mission({action: "supersede", decisionId: "D7", replacementDecisionId: "D9"})`.
 Both decisions must belong to this mission. The old text, history and task pins stay

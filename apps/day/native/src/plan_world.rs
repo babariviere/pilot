@@ -3,9 +3,9 @@
 //! for the real coordinator, which uses the trusted upstream planning skills.
 
 use crate::plan::{
-    Exploration, ExploreKind, ExploreState, FogArea, PlanAvailability, PlanRoute, PlanScenario,
-    Proposal, QuestionSection as S, RoundKind, RoundLine, RoundState, Setup, Slice, SliceOwner,
-    Spec, StepState, Story,
+    Exploration, ExploreKind, ExploreState, FogArea, MapInfo, PlanAvailability, PlanRoute,
+    PlanScenario, Proposal, QuestionSection as S, RoundKind, RoundLine, RoundState, Setup, Slice,
+    SliceOwner, Spec, StepState, Story,
 };
 use crate::plan_desk::{Ask, Plan, PlanWorld, Round, Script, SubmitAck, digest};
 
@@ -596,11 +596,7 @@ fn item(
         question: s(question),
         kind,
         state,
-        after: Vec::new(),
-        by: String::new(),
-        result: String::new(),
-        sources: Vec::new(),
-        from_fog: String::new(),
+        ..Exploration::default()
     }
 }
 
@@ -652,8 +648,18 @@ fn linux(current: bool) -> Plan {
         ExploreKind::Grilling,
         ExploreState::Resolved,
     );
-    wayland.result = s("Decided: Wayland first, X11 later");
-    wayland.sources = strings(&["Decision 4"]);
+    wayland.result = s("Settled by Decision 4. It changed since.");
+    wayland.sources = strings(&["Decision 4 (changed since)"]);
+    wayland.changed = strings(&["Decision 4 changed after Pilot cited it."]);
+    let mut scope = item(
+        "scope",
+        "A port, not a new app",
+        "Is Linux the same app on a new platform, or a separate app?",
+        ExploreKind::Grilling,
+        ExploreState::Resolved,
+    );
+    scope.result = s("Answered in interview round 1");
+    scope.round = s("linux-1");
     let mut tray = item(
         "tray",
         "Status without a tray",
@@ -676,10 +682,32 @@ fn linux(current: bool) -> Plan {
         ExploreKind::Research,
         ExploreState::Resolved,
     );
-    keyring.result = s("Knowledge: Linux keyring access, revision 3. Not checked by Pilot.");
     keyring.sources = strings(&["Knowledge: Linux keyring access, revision 3"]);
     keyring.from_fog = s("Where credentials live");
-    plan.explorations = vec![desktops, updates, wayland, tray, packaging, keyring];
+    keyring.result =
+        s("Answered by Knowledge: Linux keyring access, revision 3. Not checked by Pilot.");
+    let mut status = item(
+        "status-line",
+        "A status line instead of a tray",
+        "Is a status line in the window enough when there is no tray?",
+        ExploreKind::Prototype,
+        ExploreState::Ready,
+    );
+    status.evidence = s("Finding: supported. It matches this map.");
+    status.observations = strings(&[
+        "In two of three mock layouts the status stayed readable after the window lost focus.",
+    ]);
+    status.unresolved =
+        strings(&["Is a status line enough for you, or do you also want a notification?"]);
+    status.after = Vec::new();
+    plan.explorations = vec![
+        desktops, updates, wayland, scope, tray, packaging, keyring, status,
+    ];
+    plan.map = Some(MapInfo {
+        revision: 6,
+        agreement: String::new(),
+        tasks: Vec::new(),
+    });
     plan.fog = vec![
         FogArea {
             id: s("a11y"),
@@ -816,7 +844,11 @@ pub(crate) fn advance(plan: &mut Plan, round: Round) {
                 .find(|e| e.id == round.topic_item)
             {
                 item.state = ExploreState::Resolved;
-                item.result = format!("Answered in round {}", round.round);
+                item.result = format!("Answered in interview round {}", round.round);
+                item.round = round.id.clone();
+            }
+            if let Some(map) = plan.map.as_mut() {
+                map.revision += 1;
             }
             if let Some(fog) = plan.fog.iter_mut().find(|f| f.id == "a11y") {
                 fog.ready_when = s("Ready to explore: the desktops are chosen.");

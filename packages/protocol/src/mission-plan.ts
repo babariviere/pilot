@@ -124,3 +124,90 @@ export type PlanWrite =
 			questions: import("./mission-interview.ts").InterviewQuestion[];
 	  }
 	| { purpose: "plan-publish"; expectedRevision: number };
+
+/**
+ * Whether a claim the map cites still matches its record at this read.
+ * current: unchanged. changed: the record has a newer or different version.
+ * missing: replaced, withdrawn, unlinked, or not in this read.
+ */
+export type PlanClaimState = "current" | "changed" | "missing";
+/** One cited record, as the map shows it. */
+export interface PlanMapSource {
+	kind: "decision" | "knowledge" | "interview";
+	id: string;
+	/** Such as "Decision 4", "Knowledge: Title, revision 3" or "Interview round 2". */
+	label: string;
+	state: PlanClaimState;
+	/** Knowledge only: whether its current revision was checked. A check is not proof of the claim. */
+	checked?: "checked" | "not_checked" | "needs_check";
+}
+/** One precise question on the map, derived from its saved `PlanQuestion`. */
+export interface PlanMapItem {
+	id: string;
+	title: string;
+	question: string;
+	kind: PlanQuestion["kind"];
+	/**
+	 * settled: resolved by an explicit record. asking: its topic interview is open.
+	 * claimed: a member holds it (record ownership, never admission). ready: on the frontier.
+	 * waiting: unsettled prerequisites first.
+	 */
+	state: "settled" | "asking" | "claimed" | "ready" | "waiting";
+	dependsOn: string[];
+	/** Unsettled prerequisites, by question ID. */
+	waitingOn: string[];
+	claimedBy: string | null;
+	/** The fog area this question came from, by fog ID. */
+	fromFog: string | null;
+	sources: PlanMapSource[];
+	settledBy: PlanMapSource | null;
+	/** Prototype questions only. Findings are evidence, never acceptance or build authority. */
+	evidence?: {
+		state: "missing" | "current" | "stale";
+		verdict?: PlanPrototypeResult["verdict"];
+		planRevision?: number;
+		artifact?: PlanPrototypeResult["artifact"];
+		observations: string[];
+		unresolvedQuestions: string[];
+	};
+}
+export interface PlanMapFog {
+	id: string;
+	area: string;
+	why: string;
+	readyWhen: string;
+	dependsOn: string[];
+	sources: PlanMapSource[];
+	/** Question IDs it became. Empty while still fog. */
+	promotedTo: string[];
+}
+/**
+ * The shared Wayfinder map: one projection of the saved plan, decisions, Knowledge links,
+ * interview history and published tasks, rebuilt on every read and never stored. People see it
+ * in the native planning page; the planning coordinator reads the same object. Reading or
+ * showing it grants no execution, approval or admission.
+ */
+export interface MissionPlanMap {
+	version: 1;
+	/** Saved plan revision, or null before the first map. */
+	planRevision: number | null;
+	destination: string;
+	items: PlanMapItem[];
+	fog: PlanMapFog[];
+	counts: {
+		settled: number;
+		asking: number;
+		claimed: number;
+		ready: number;
+		waiting: number;
+		activeFog: number;
+		/** Cited records or prototype findings that are not current at this read. */
+		notCurrent: number;
+	};
+	/** The agreement and its build tasks. Publication creates todo tasks only; it starts nothing. */
+	agreement: null | {
+		state: "proposed" | "in-review" | "published";
+		briefRevision: number | null;
+		tasks: { sliceId: string; taskId: string; number: number | null; title: string; status: string | null }[];
+	};
+}

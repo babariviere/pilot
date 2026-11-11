@@ -244,6 +244,32 @@ Close aborts idle waiters, joins entered tools/admissions and drains writes befo
 - This does not rename Brief to Spec in UI/API/storage, write a glossary, change settled decisions,
   deploy, restart, release, cut over or remove legacy apps.
 
+## Shared map
+
+`MissionPlans.view` adds `map` (`MissionPlanMap` in `mission-plan.ts`), built by the pure
+`planMap` in `mission-plan-map.ts` from the same pinned read: saved plan, active decisions, linked
+Knowledge, submitted interview history and published tasks. It is rebuilt on every read and never
+stored, so it cannot drift from the canonical records. The planning coordinator receives it through
+`mission_plan` `read`; Day's planning page maps only `view.map` for its questions, fog and
+agreement. Both see the same object.
+
+- Items keep question identity, kind, `waitingOn` (unsettled prerequisites), claims, `fromFog` and
+  `settledBy`. State is `settled`, `asking`, `claimed`, `ready` or `waiting`. Claims are record
+  ownership, never admission.
+- Every cited source and settlement has `current`, `changed` (a different decision digest, a newer
+  Knowledge revision or link) or `missing` (no longer active, unlinked or outside the 40 listed
+  Knowledge entries). Knowledge `checked` describes only the cited revision when it is current.
+  `counts.notCurrent` adds stale prototype evidence. The map shows these; the coordinator updates
+  the map from evidence. Reading or showing the map never rewrites a record.
+- Interview settlements name their submitted round, so the native page can show those exact answers.
+  Settled questions are shown once and never asked again.
+- `agreement` reports proposed, in-review or published, the brief revision and the published tasks
+  with current number, title and status. Publication started no work.
+
+Gaps: other mission members (explorers, builders) have no map read yet; only the planning coordinator
+and the native page read it. Day has no Decision or Knowledge detail screen, so those sources show as
+labels with their currentness, not links. Legacy missions without a saved interview have no map.
+
 ## Focused verification
 
 `mission-planning-skills.test.ts` exercises the normal loader, trusted reader, exact upstream hashes,
@@ -251,4 +277,6 @@ relocation, collision refusal, native port surface and direct/nested external-wr
 `mission-plans.test.ts` covers persistence/restore, fog promotion races/history, frontier/dependency
 changes, settled-decision reuse, explicit human versus research evidence, saved choices/text, stale
 rounds/revisions, traced publication, spec invalidation, permissions, owner ABA and Unknown/no replay.
+Its `shared map` tests cover reopen, the same object across reads, fog graduation, dependency moves,
+changed decision/Knowledge claims and published task links without authority.
 Existing interview, workflow, journal and coordinator source suites remain the regression gates.
