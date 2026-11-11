@@ -18,10 +18,10 @@ import { captureView, saveForms } from "./updateView";
 /** Whether this window has its feeds yet, and which. */
 export type Connection =
 	| { state: "opening" }
-	| { state: "none"; reason: string }
+	| { state: "none"; reason: string; canRead: boolean }
 	| { state: "open"; day: Day; plans: Plans; rituals: Rituals; update: Update | null };
 
-/** The window's connection. Only `connect` sets it. */
+/** The window's connection. Recovery never replaces an open set of feeds. */
 export const connection = signal<Connection>({ state: "opening" });
 
 /** Why the first read failed, in one calm sentence. */
@@ -32,7 +32,11 @@ function unreadable(refusal: Refusal): string {
 		case "denied":
 			return "This window may not read Pilot's service. Nothing is shown rather than examples.";
 		case "identity":
-			return "The Pilot service this window was opened for changed. Open Day again.";
+			return "The Pilot service this window was opened for changed. Open Pilot again.";
+		case "closed":
+			return "This Pilot window is closing. Nothing more was read.";
+		case "busy":
+			return "Pilot is saving this window before a close or an update. Nothing more was read.";
 		default:
 			return "Pilot could not read its service. Nothing is shown rather than a guess.";
 	}
@@ -60,70 +64,138 @@ async function flushForms(window: string, generation: number, today: ConnectedTo
 	const drafts = await today.saveDrafts();
 	await flushAll(plans);
 	const waiting = Object.keys(answerDrafts()).length + Object.keys(answerPicks()).length;
-	if (!drafts || waiting > 0 || generation !== latestFlush) return;
+	if (!drafts || waiting > 0 || generation !== latestFlush || windowId() !== window) return;
 	await call(window, "day.flush.ack", { generation, view: captureView(day.today()) });
 }
 
+// Pinned once. Read again never chooses another root, reopens feeds, or repeats
+// startup calls. The native bridge checks this same identity on every call too.
+const window = windowId();
+let opening: Promise<void> | null = null;
+let began = false;
+let ritualFeed: ConnectedRituals | null = null;
+let todayFeed: ConnectedToday | null = null;
+let planFeed: ConnectedPlans | null = null;
+let pendingFlush: number | null = null;
+
+function current(): boolean {
+	if (window && windowId() === window) return true;
+	connection.set({ state: "none", reason: unreadable("identity"), canRead: false });
+	return false;
+}
+
+function refresh() {
+	if (connection().state !== "open" || !current()) return;
+	// These are cached native projections, not service/provider startup.
+	void Promise.all([todayFeed?.refresh(), planFeed?.refresh(), ritualFeed?.sync()]).catch((error: unknown) => {
+		console.error("Pilot could not read this window again:", error);
+	});
+}
+
+function flushPending() {
+	const open = connection();
+	if (!window || !todayFeed || open.state !== "open" || pendingFlush === null || !current()) return;
+	const generation = pendingFlush;
+	pendingFlush = null;
+	flushForms(window, generation, todayFeed, open.plans, open.day).catch((error: unknown) => {
+		console.error("Day could not save its forms before a close or an update:", error);
+	});
+}
+
+// Install exactly once, BEFORE any read can yield. Opening has no saved-view
+// proof yet: keep the newest flush until the feeds/forms exist, never ACK empty.
+if (window) {
+	host.on("day.changed", (payload) => {
+		if (forWindow(payload, window)) refresh();
+	});
+	host.on("day.flush", (payload) => {
+		if (!forWindow(payload, window) || typeof payload.generation !== "number") return;
+		if (!Number.isSafeInteger(payload.generation) || payload.generation <= latestFlush) return;
+		latestFlush = payload.generation;
+		pendingFlush = payload.generation;
+		flushPending();
+	});
+}
+
 async function connect() {
-	const window = windowId();
 	if (!window) {
 		connection.set({
 			state: "none",
 			reason: "This window was not opened for a Pilot service, so it shows nothing rather than examples.",
+			canRead: false,
 		});
 		return;
 	}
-	// Asks the root to include what needs the user in its reads; it sends nothing.
-	await call(window, "day.attention.read", {});
-	// The start and end of day's saved progress, with the root's clock sample,
-	// before Today shows its part of day. Passive: it records no visit. When
-	// the root has no clock, its cached view says unavailable.
-	const progress = await call<RitualSnapshot>(window, "day.ritual.read", {});
-	const ritualFeed = new ConnectedRituals(window, progress.ok ? progress.snapshot : null);
-	if (!progress.ok) await ritualFeed.sync();
+	if (!current()) return;
+	if (!began) {
+		began = true;
+		// Asks the root to include what needs the user in its reads; it sends nothing.
+		await call(window, "day.attention.read", {});
+		if (!current()) return;
+		// The start and end of day's saved progress, with the root's clock sample,
+		// before Today shows its part of day. Passive: it records no visit. When
+		// the root has no clock, its cached view says unavailable.
+		const progress = await call<RitualSnapshot>(window, "day.ritual.read", {});
+		if (!current()) return;
+		ritualFeed = new ConnectedRituals(window, progress.ok ? progress.snapshot : null);
+		if (!progress.ok) await ritualFeed.sync();
+	}
+	if (!current()) return;
+	if (!ritualFeed) throw new Error("Missing window ritual feed");
 	const first = await call<Today>(window, "day.today.read", {});
+	if (!current()) return;
 	if (!first.ok) {
-		connection.set({ state: "none", reason: unreadable(first.refusal) });
+		connection.set({
+			state: "none",
+			reason: unreadable(first.refusal),
+			canRead: !["denied", "identity", "closed", "busy"].includes(first.refusal),
+		});
 		return;
 	}
 	const setup = await call<Setup | null>(window, "day.plan.prepare", {});
+	if (!current()) return;
 	const today = new ConnectedToday(window, first.snapshot);
-	const planFeed = new ConnectedPlans(
-		window,
-		setup.ok ? (setup.snapshot ?? null) : null,
-		setup.ok ? null : setup.refusal,
-	);
+	todayFeed = today;
+	planFeed = new ConnectedPlans(window, setup.ok ? (setup.snapshot ?? null) : null, setup.ok ? null : setup.refusal);
 	// Every mission in planning, read once before Today shows, so a valid empty
 	// list and one that could not be read never look alike. Later changes
 	// arrive as invalidations and read the root's cached list.
 	await planFeed.readInventory();
+	if (!current()) return;
 	const day = mirrorDay(today);
 	const plans = mirrorPlanning(planFeed);
 	const rituals = mirrorRituals(ritualFeed, rootRecap);
 	const update = await connectedUpdates(window);
-	// An invalidation carries no data: read again, never poll.
-	host.on("day.changed", (payload) => {
-		if (!forWindow(payload, window)) return;
-		void today.refresh();
-		void planFeed.refresh();
-		// The root's cached ritual view only: a fresh read samples the clock and
-		// would invalidate again.
-		void ritualFeed.sync();
-	});
-	host.on("day.flush", (payload) => {
-		if (!forWindow(payload, window) || typeof payload.generation !== "number") return;
-		latestFlush = payload.generation;
-		// A failure sends no answer, so nothing closes on a guess; it is still said.
-		flushForms(window, payload.generation, today, plans, day).catch((error: unknown) => {
-			console.error("Day could not save its forms before a close or an update:", error);
-		});
-	});
+	if (!current()) return;
 	connection.set({ state: "open", day, plans, rituals, update });
-	// A change the root sent while the first reads ran, before these listeners
-	// existed, is not lost: read the cached views once more. This reads no service.
-	void today.refresh();
-	void planFeed.refresh();
-	void ritualFeed.sync();
+	flushPending();
+	// Changes received while opening are not lost: read the cached views once
+	// more after the feeds exist. This reads no service.
+	refresh();
 }
 
-void connect();
+function read(): Promise<void> {
+	if (opening) return opening;
+	connection.set({ state: "opening" });
+	opening = connect()
+		.catch(() => {
+			// An unexpected startup failure is not permission to run setup again.
+			connection.set({
+				state: "none",
+				reason: "Pilot could not open this window. Open Pilot again.",
+				canRead: false,
+			});
+		})
+		.finally(() => {
+			opening = null;
+		});
+	return opening;
+}
+
+/** Explicit recovery of the failed first cached read, not a startup retry. */
+export function readAgain(): Promise<void> {
+	const now = connection();
+	return now.state === "none" && now.canRead ? read() : (opening ?? Promise.resolve());
+}
+
+void read();

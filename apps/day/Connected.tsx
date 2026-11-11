@@ -3,9 +3,9 @@
 // it is not connected and shows nothing else. The default entry (App.tsx)
 // stays on mock data.
 import { mount, Text, View } from "nsh";
-import { type Connection, connection } from "./connection";
+import { type Connection, connection, readAgain } from "./connection";
 import { DayScreen } from "./DayScreen";
-import { Mark } from "./ui";
+import { Action, Mark } from "./ui";
 import { dataSource } from "./view";
 
 dataSource.set("pilot");
@@ -21,6 +21,10 @@ function Connected() {
 		const now = connection();
 		return now.state === "none" ? now.reason : "Opening Pilot…";
 	};
+	const canRead = () => {
+		const now = connection();
+		return now.state === "none" && now.canRead;
+	};
 	return (
 		<If
 			when={open().length > 0}
@@ -29,6 +33,15 @@ function Connected() {
 					<View class="w-full max-w-md flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">
 						<Mark kind={connection().state === "none" ? "unknown" : "still"} />
 						<Text class="flex-1 text-sm text-foreground">{note()}</Text>
+						<If when={canRead()}>
+							<Action
+								label="Read again"
+								testID="connection-read"
+								onPress={() => {
+									void readAgain();
+								}}
+							/>
+						</If>
 					</View>
 				</View>
 			}

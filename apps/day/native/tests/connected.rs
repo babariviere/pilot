@@ -40,6 +40,9 @@ use std::{
     time::Duration,
 };
 
+#[path = "support/connection_recovery.rs"]
+mod connection_recovery;
+
 const WAIT: Duration = Duration::from_secs(60);
 
 /// A copy of the app's sources whose `nsh.json` declares the bridge's exact
