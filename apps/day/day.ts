@@ -4,6 +4,7 @@
 import { type Signal, signal } from "nsh";
 import { type Scenario, type Today, TodayFeed } from "pilot-day/native";
 import type { DayFeed } from "./feeds";
+import type { IntakeMirror } from "./intakeFeed";
 import { glide } from "./motion";
 
 /** Today's read model as Rust last published it, and the feed to change it. */
@@ -12,6 +13,11 @@ export type Day = {
 	feed: DayFeed;
 	/** A mirror of Rust's read model. Only the feed's listener sets it. */
 	today: Signal<Today>;
+	/**
+	 * The New section's requests and their Later, Discard and Start. Only the
+	 * connected window has them; the mock window shows Today's example rows.
+	 */
+	intake?: IntakeMirror;
 	/** Stops listening and frees the feed. */
 	close: () => void;
 };
@@ -21,8 +27,8 @@ export function openDay(scenario?: Scenario): Day {
 	return mirrorDay(new TodayFeed(scenario));
 }
 
-/** Mirrors `feed`'s read model, mock or connected. Closing stops listening and frees the feed. */
-export function mirrorDay(feed: DayFeed): Day {
+/** Mirrors `feed`'s read model, mock or connected. Closing stops listening and frees the feeds. */
+export function mirrorDay(feed: DayFeed, intake?: IntakeMirror): Day {
 	const today = signal(feed.snapshot());
 	const stop = feed.onChange((next) => {
 		// Items that arrive or leave, and missions that change group, glide to
@@ -33,9 +39,11 @@ export function mirrorDay(feed: DayFeed): Day {
 	return {
 		feed,
 		today,
+		intake,
 		close: () => {
 			stop();
 			feed.dispose();
+			intake?.close();
 		},
 	};
 }

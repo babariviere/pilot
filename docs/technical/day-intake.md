@@ -2,8 +2,8 @@
 
 Today intake uses canonical tracked items, not the dashboard's five-row preview.
 No source sync, sign-in, model call or external write runs during a read or Check.
-This is a native backend seam. The existing Today preview remains read-only until
-its controls consume these methods.
+The connected window's New section consumes these methods (apps/day/README.md).
+The mock window keeps Today's read-only example rows.
 
 ## Read
 
@@ -29,12 +29,26 @@ The authenticated daemon read is `GET /api/projects/:projectId/intake`:
 The native response also includes `snapshot.intake`, produced by the existing
 Today projection, with only new, unclaimed rows. `Request.id` is the tracked
 item ID. Its `more` text is conservative when a source page is incomplete.
+The same projection also fills `snapshot.later`, `snapshot.discarded` and
+`snapshot.claimed` (rows an entered Start owns); only `intake` counts unshown
+rows. The screen takes each row's revision from `snapshot.sources`.
 `operations` lists saved native intake operations for this exact root source,
 including operations restored from the private command ledger after reopening.
+Each names its `itemId`, `kind`, a triage's requested state (`asked`) and a
+Start's `missionId`.
+
+The screen reads again after opening, on Read again, after a write whose reply
+held no fresh read, and when the root's cached Today preview of requests
+changes. An invalidation alone does not read the service.
 
 ## Explicit intents
 
 All methods use the existing version/window envelope and exact-name host grant.
+The host does not fence intake calls on its general read epoch: every dashboard
+or session notice bumps it, including the notice an earlier intake write causes,
+so the next quick action would be refused as stale. The host only requires that
+it is open and the window's gate admits the call; the daemon's CAS on the pinned
+revision and project configuration decides.
 
 ```
 day.intake.triage {itemId, revision, contextDigest, state}
@@ -92,6 +106,14 @@ change without its outer receipt stays Unknown, never auto-replayed.
   durable session metadata, with fake sources/model selection and no workers.
 - `native/tests/intake.rs`: released NSH host channel, native ledger-before-send,
   real isolated daemon, all four triage actions, lost Start reply and cold Check.
+- `native/tests/intake_today.rs`: `Connected.tsx` headless on the same daemon:
+  Later, Bring back, Discard and Undo each send once, a lost Start stays
+  not confirmed across a native reopen and Check reads it once.
+- `apps/day/Intake.test.tsx`: the New section's controls on a scripted source:
+  stale writes, changed requests and projects, rapid presses and focus.
+
+After a reopen, a Start whose request is already linked to its chat shows as "a
+request": the read no longer holds the item, and the saved operation has no title.
 
 These checks do not enable a live provider, integration, subscription or preview
 window, and do not qualify native visual acceptance or live update/cutover.

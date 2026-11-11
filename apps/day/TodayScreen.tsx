@@ -609,7 +609,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans; 
 							<FreshnessNote day={props.day} />
 						</View>
 
-						<Incoming today={today()} />
+						<Incoming day={props.day} />
 						<NeedsYou day={props.day} />
 						<If when={plans}>
 							<Planning plans={plans as Plans} />

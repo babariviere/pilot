@@ -8,6 +8,7 @@ import type { RitualSnapshot, Setup, Today } from "pilot-day/native";
 import { ConnectedPlans, ConnectedRituals, ConnectedToday, call, type Refusal, windowId } from "./bridge";
 import { connectedUpdates } from "./connectedUpdates";
 import { type Day, mirrorDay } from "./day";
+import { ConnectedIntake, mirrorIntake } from "./intakeFeed";
 import { flushAll } from "./planCommands";
 import { mirrorPlanning, type Plans } from "./planning";
 import { answerDrafts, answerPicks } from "./planView";
@@ -162,7 +163,21 @@ async function connect() {
 	// arrive as invalidations and read the root's cached list.
 	await planFeed.readInventory();
 	if (!current()) return;
-	const day = mirrorDay(today);
+	// The selected project's requests, read once before Today shows, so an
+	// unreadable page and having none never look alike. Rust picks the project.
+	const intakeFeed = new ConnectedIntake(window);
+	await intakeFeed.read();
+	if (!current()) return;
+	// Invalidations read only the root's cached Today. When its request
+	// preview changed, the request pages are read once more; nothing is sent.
+	let requests = JSON.stringify(first.snapshot.intake);
+	today.onChange((next) => {
+		const now = JSON.stringify(next.intake);
+		if (now === requests) return;
+		requests = now;
+		void intakeFeed.read();
+	});
+	const day = mirrorDay(today, mirrorIntake(intakeFeed));
 	const plans = mirrorPlanning(planFeed);
 	const rituals = mirrorRituals(ritualFeed, rootRecap);
 	const update = await connectedUpdates(window);

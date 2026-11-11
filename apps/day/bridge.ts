@@ -55,7 +55,10 @@ export type Refusal =
 	| "denied"
 	| "lost";
 
-type Reply<T> = { ok: true; snapshot: T; outcome: IntentOutcome | null } | { ok: false; refusal: Refusal };
+/** `value` is the root's whole answer, for calls whose answer holds more than a snapshot and an outcome. */
+export type Reply<T> =
+	| { ok: true; snapshot: T; outcome: IntentOutcome | null; value: Record<string, unknown> }
+	| { ok: false; refusal: Refusal };
 
 const REFUSALS = new Set<string>([
 	"identity",
@@ -95,7 +98,12 @@ export async function call<T>(window: string, name: string, args: unknown): Prom
 	}
 	const r = reply as { version?: unknown; value?: { snapshot?: unknown; outcome?: unknown }; error?: unknown } | null;
 	if (r && r.version === 1 && r.value && typeof r.value === "object") {
-		return { ok: true, snapshot: r.value.snapshot as T, outcome: (r.value.outcome ?? null) as IntentOutcome | null };
+		return {
+			ok: true,
+			snapshot: r.value.snapshot as T,
+			outcome: (r.value.outcome ?? null) as IntentOutcome | null,
+			value: r.value as Record<string, unknown>,
+		};
 	}
 	if (r && r.version === 1 && typeof r.error === "string" && REFUSALS.has(r.error)) {
 		return { ok: false, refusal: r.error as Refusal };

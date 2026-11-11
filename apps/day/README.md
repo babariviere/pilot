@@ -17,11 +17,11 @@ The default entry still connects to no daemon, account or user data. It is not t
 and it does not change the GPUI or Swift apps or their build. Those apps stay
 the shipping desktop apps until the NSH app passes native acceptance and cutover.
 
-The [native intake seam](../../docs/technical/day-intake.md) now reads limited,
+The [native intake seam](../../docs/technical/day-intake.md) reads limited,
 explicitly complete/incomplete tracked-request pages and saves Later/Discard/Start
 intents with exact receipt lookup. It stays pinned to the native root's selected
-project. This backend seam does not yet replace Today's read-only preview with
-interactive intake controls, and enables no live source or provider.
+project. The connected window's New section uses it (see below); it enables no
+live source or provider.
 
 The native crate now also contains the Day-owned `pilot-desktop` executable
 (`macos-host` feature). It embeds the unchanged release's public AppView and
@@ -162,6 +162,7 @@ cd apps/day
 ./nsh.sh test Changes.test.tsx   # Changes: list, exact reopen, Later, lost answer, unavailable, Read again, diff selection and scroll, boundary (13 tests)
 ./nsh.sh test Update.test.tsx    # updates and registration: save, pause, restore (help, ritual, question), selective resume, stale, lost answer, refusals, boundary (10 tests)
 ./nsh.sh test Attention.test.tsx # agent questions, unavailable help, drafts and links that report nothing (4 tests)
+./nsh.sh test Intake.test.tsx    # New: Start, Later, Discard, Undo, stale, lost answer, rapid presses, focus (8 tests)
 ./nsh.sh test Native.test.tsx --target macos  # native captures and input, in output/
 (cd native && ../scripts/cargo test --locked) # Rust rules through mbx too
 ```
@@ -409,16 +410,30 @@ not a screen date or development override. It refreshes on focus and a local
 
 New (on Today, above Needs you) lists requests from the project's Slack and
 Linear sources that nobody started in Pilot: a Slack message whose status is
-open, or an open Linear issue, with no chat or mission linked. Rows come from
-the request sources in the same `DayOverview` read (`dashboard.tracked`),
-newest first. That read holds only a short preview per source, so New says
+open, or an open Linear issue, with no chat or mission linked, newest first.
+In the connected window, rows come from `day.intake.read`: up to 100 per
+source for the native root's selected project. A page over that limit says
 how many rows it does not show; it never looks complete when it is not. A
-source that needs sign-in or failed says so and keeps what Pilot read before.
-Without any source set up, New is hidden. A row opens in place (press it, or
-Space on the focused row) to show what the source and Pilot's sorting say it
-is and its link as text. Opening it records nothing. Day offers no Start,
-Later or Discard control until those intents are saved with receipts; the
-row points to Pilot's Inbox instead.
+source that needs sign-in or failed says so. A read that fails shows no rows
+and says this is not the same as having none; Read again only reads.
+Without any source set up, New is hidden.
+
+A row opens in place (press it, or Space on the focused row) to show what the
+source says it is, its link as text, where work should go (standalone work, or
+a running mission of this project) and Start work…, Later and Discard. Opening
+a row or choosing where work goes records nothing. Start work… asks once more
+and names the request and place; only Start sends `day.intake.start` with the
+exact request, revision and project context shown. A newer revision, another
+project configuration or a mission that stopped running closes it instead.
+Later and Discard send `day.intake.triage` once; the folded Later and Discarded
+lists offer Bring back and Undo, and a Discard just made offers Undo in place.
+A write whose answer is lost shows "not confirmed" until Check, which reads
+that exact saved receipt (`day.intake.check`) and sends nothing; it stays
+after reopening. A confirmed Start says one Build chat was created, not that
+work progressed. Nothing here cancels or undoes started work. The mock window
+shows Today's example rows and offers no writes. `Intake.test.tsx` plays the
+controls on a scripted source (`IntakeFixture.tsx`); `native/tests/intake_today.rs`
+runs `Connected.tsx` against the isolated daemon.
 
 A mission's task also lists what its agents linked to it, from the mission
 record: pull requests with the last GitHub state Pilot saw, artifacts with

@@ -465,7 +465,7 @@ test("a request opens in place, says where it came from and sends nothing", asyn
 	await app.waitFor("id:request-detail-sl-northwind");
 	expect(app.shows("Bug, high")).toBe(true);
 	expect(app.shows("text:https://example.slack.com/archives/C0MOCK/psl-northwind")).toBe(true);
-	expect(app.shows("To start work on it, use the Inbox in Pilot.")).toBe(true);
+	expect(app.shows("This window shows examples, so nothing here can start, put off or discard a request.")).toBe(true);
 	expect(app.shows("role:button[Start]")).toBe(false);
 	// One open at a time; the keyboard focus stays on the pressed row, so Space closes it.
 	await app.press("id:request-sl-stripe");

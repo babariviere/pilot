@@ -867,7 +867,7 @@ fn planning_inventory_is_read_once_and_never_shown_as_empty_when_it_is_not() {
         root.refuse("day.plan.inventory", error);
         let before = root.count("day.plan.inventory");
         let cached = root.count("day.plan.inventorySnapshot");
-        app.press("Read again").unwrap();
+        app.press("id:planning-off >> Read again").unwrap();
         wait(&mut app, reason);
         app.wait(Duration::from_millis(300)).unwrap();
         assert_eq!(root.count("day.plan.inventory"), before + 1);
@@ -898,7 +898,7 @@ fn planning_inventory_is_read_once_and_never_shown_as_empty_when_it_is_not() {
             ),
         ]),
     );
-    app.press("Read again").unwrap();
+    app.press("id:planning-off >> Read again").unwrap();
     wait(&mut app, "id:plan-export");
     assert!(!has(&app, "id:planning-off"));
     let texts = app
@@ -973,7 +973,7 @@ fn planning_inventory_is_read_once_and_never_shown_as_empty_when_it_is_not() {
         "The Pilot service changed. Open Day again to see them.",
     );
     assert!(has(&app, "id:planning-off"));
-    assert!(!app.shows("Read again"));
+    assert!(!has(&app, "id:planning-off >> Read again"));
     drop(app);
     let _ = std::fs::remove_dir_all(entry.parent().unwrap());
 }

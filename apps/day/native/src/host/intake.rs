@@ -80,7 +80,9 @@ fn summaries(t: &Transport, journal: &Journal) -> Vec<Value> {
         .map(|r| {
             let p: Value = serde_json::from_str(r.operation["payload"].as_str().unwrap_or(""))
                 .unwrap_or(Value::Null);
+            // `asked` is a triage's requested state; `missionId` a Start's chosen mission.
             json!({"operationId":r.id(), "itemId":r.mission(), "revision":p["revision"],
+            "asked":p["state"], "missionId":p["missionId"],
             "kind":r.operation["kind"], "state":if r.not_sent {"not-sent"} else {
                 r.receipt.as_ref().and_then(|r| r["state"].as_str()).unwrap_or("unknown")},
             "receipt":r.receipt})
@@ -127,29 +129,49 @@ async fn read(t: &Transport) -> Result<Value, Error> {
             return Err(Error::Invalid);
         }
     }
-    // Reuse Today's presentation projection, not a second domain model.
-    let mut projected = sources.clone();
-    for source in &mut projected {
-        let held = source["items"].as_array().ok_or(Error::Invalid)?.len();
-        source["items"]
-            .as_array_mut()
-            .ok_or(Error::Invalid)?
-            .retain(|i| i["triageState"] == "new" && i["startOperationId"].is_null());
-        let shown = source["items"].as_array().ok_or(Error::Invalid)?.len();
-        source["total"] =
-            json!(source["total"].as_u64().ok_or(Error::Invalid)? - (held - shown) as u64);
-    }
-    let projected: Vec<TrackedSource> =
-        serde_json::from_value(json!(projected)).map_err(|_| Error::Invalid)?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| Error::Invalid)?
         .as_millis();
-    v["intake"] = serde_json::to_value(crate::intake::intake(
-        &projected,
-        u64::try_from(now).map_err(|_| Error::Invalid)?,
-    ))
-    .map_err(|_| Error::Invalid)?;
+    let now = u64::try_from(now).map_err(|_| Error::Invalid)?;
+    // Reuse Today's presentation projection, not a second domain model. `intake`
+    // holds the new, unclaimed rows; `later` and `discarded` the user's triage;
+    // `claimed` the rows an entered Start owns. Only `intake` counts unshown rows.
+    let project = |keep: &dyn Fn(&Value) -> bool| -> Result<Value, Error> {
+        let mut projected = sources.clone();
+        for source in &mut projected {
+            let held = source["items"].as_array().ok_or(Error::Invalid)?.len();
+            source["items"]
+                .as_array_mut()
+                .ok_or(Error::Invalid)?
+                .retain(|i| keep(i));
+            let shown = source["items"].as_array().ok_or(Error::Invalid)?.len();
+            source["total"] =
+                json!(source["total"].as_u64().ok_or(Error::Invalid)? - (held - shown) as u64);
+        }
+        let projected: Vec<TrackedSource> =
+            serde_json::from_value(json!(projected)).map_err(|_| Error::Invalid)?;
+        serde_json::to_value(crate::intake::intake(&projected, now)).map_err(|_| Error::Invalid)
+    };
+    let unclaimed = |i: &Value| i["startOperationId"].is_null();
+    let projected = [
+        (
+            "intake",
+            project(&|i| i["triageState"] == "new" && unclaimed(i))?,
+        ),
+        (
+            "later",
+            project(&|i| i["triageState"] == "later" && unclaimed(i))?,
+        ),
+        (
+            "discarded",
+            project(&|i| i["triageState"] == "discarded" && unclaimed(i))?,
+        ),
+        ("claimed", project(&|i| !unclaimed(i))?),
+    ];
+    for (key, value) in projected {
+        v[key] = value;
+    }
     Ok(v)
 }
 
@@ -161,8 +183,13 @@ pub(super) async fn handle(
     command: &Command,
     gate: &Arc<Mutex<Gate>>,
 ) -> Result<Value, Error> {
+    // Not `shared.current(epoch)`: every dashboard or session notice, including
+    // the one an earlier intake write causes, bumps the epoch. The daemon's CAS
+    // on the pinned revision and project configuration is the authority here;
+    // the host only has to be open and the window's gate still admitting.
+    let _ = epoch;
     let check = || {
-        shared.current(epoch)?;
+        shared.open()?;
         command.admit(&gate.lock().expect("bridge gate poisoned"))
     };
     let mut outcome = Value::Null;
