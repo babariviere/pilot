@@ -6279,6 +6279,11 @@ ${run.excerpt}`,
 		return this.artifactStore(id).readStoredRevision(artifactId, revision, signal);
 	}
 
+	/** Bounded captured bytes only, including legacy code. No preview preparation or execution. */
+	async readCapturedArtifactRevision(id: string, artifactId: string, revision: number) {
+		return this.artifactStore(id).readCapturedRevision(artifactId, revision);
+	}
+
 	/** Resolve an artifact:// ID across parked and archived owners, only when a link is opened.
 	 * Probe one small latest pointer per owner, with bounded I/O and no transcript/body reads. */
 	async resolveArtifact(artifactId: string): Promise<ArtifactSummary> {

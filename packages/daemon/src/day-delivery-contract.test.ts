@@ -26,3 +26,11 @@ test("Day wire view keeps canonical identities, assessments and receipt pairs", 
 	assert.equal(typeof view, "function");
 	assert.equal(typeof canonicalFields, "function");
 });
+
+import type { DeliveredArtifact, DeliveredArtifactRequest } from "@pilot/protocol";
+import type { ArtifactSelection, CapturedArtifact } from "../../../apps/day/deliveryArtifactContract.ts";
+
+const artifactSelectionCompatible: (v: ArtifactSelection) => DeliveredArtifactRequest = (v) => v;
+const capturedArtifactCompatible: (v: DeliveredArtifact) => CapturedArtifact = (v) => v;
+void artifactSelectionCompatible;
+void capturedArtifactCompatible;

@@ -73,6 +73,7 @@ import { type ChatSettingsService, InvalidChatSettings } from "./chat-settings.t
 import { ChatStreams } from "./chat-streams.ts";
 import type { DaemonConfig } from "./config.ts";
 import { DatabaseSettingsError } from "./databases.ts";
+import { DeliveredArtifacts } from "./delivered-artifact.ts";
 import { awaitDiagnosticRead, diagnosticContextResponse } from "./diagnostic-context.ts";
 import { EnvironmentApprovalRequired } from "./environment-profile.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
@@ -766,6 +767,10 @@ export function createDaemonServer(
 	const nativeChat = journal ? new NativeChat({ journal, projects, sessions }) : undefined;
 	const userVerifications =
 		journal && missions ? new UserVerifications({ journal, store: missions.store, projects, sessions }) : undefined;
+	const deliveredArtifacts =
+		userVerifications && missions
+			? new DeliveredArtifacts({ store: missions.store, projects, sessions, verifications: userVerifications })
+			: undefined;
 	const nativeAttention =
 		journal && missions
 			? new NativeAttention({
@@ -2106,6 +2111,43 @@ export function createDaemonServer(
 			if (!githubSetup || !nativeChat) throw new ServiceUnavailable("Native chat selection unavailable");
 			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
 			return json(res, 200, await nativeChat.prepare(parts[2]!, url.searchParams.get("mode") ?? ""));
+		}
+		if (
+			parts[1] === "projects" &&
+			parts.length === 9 &&
+			parts[3] === "missions" &&
+			parts[5] === "tasks" &&
+			parts[7] === "delivered-work" &&
+			parts[8] === "artifact"
+		) {
+			res.setHeader("cache-control", "no-store");
+			if (req.method !== "GET") throw new HttpError(405, "Delivered artifact is read-only");
+			if (!githubSetup || !deliveredArtifacts) throw new ServiceUnavailable("Delivered artifact unavailable");
+			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
+			const fields = ["targetId", "deliveryId", "ownerSessionId", "sourceSessionId", "artifactId", "revision"];
+			if (
+				[...url.searchParams.keys()].length !== fields.length ||
+				fields.some((k) => url.searchParams.getAll(k).length !== 1)
+			)
+				throw new OperationRejected("Exact delivered artifact fields required");
+			const p = Object.fromEntries(url.searchParams);
+			if (!/^[1-9][0-9]*$/.test(p.revision!)) throw new OperationRejected("Explicit artifact revision required");
+			return json(
+				res,
+				200,
+				await deliveredArtifacts.read(
+					{
+						subject: { kind: "task", projectId: parts[2]!, missionId: parts[4]!, taskId: parts[6]! },
+						targetId: p.targetId!,
+						deliveryId: p.deliveryId!,
+						ownerSessionId: p.ownerSessionId || null,
+						sourceSessionId: p.sourceSessionId!,
+						artifactId: p.artifactId!,
+						revision: Number(p.revision),
+					},
+					[String(req.headers["x-pilot-github-capability"])],
+				),
+			);
 		}
 		if (
 			parts[1] === "projects" &&

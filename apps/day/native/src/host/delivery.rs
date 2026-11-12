@@ -46,7 +46,7 @@ impl Subject {
             Self::Task { project, .. } | Self::Chat { project, .. } => project,
         }
     }
-    fn path(&self) -> String {
+    pub(super) fn path(&self) -> String {
         match self {
             Self::Task {
                 project,
@@ -89,7 +89,7 @@ impl Write {
         Ok(())
     }
 }
-fn digest(s: &str) -> bool {
+pub(super) fn digest(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 fn valid_note(action: &str, note: &str) -> bool {
@@ -287,7 +287,7 @@ fn operations(t: &Transport, journal: &Journal) -> Vec<Value> {
         .map(summary)
         .collect()
 }
-async fn read(t: &Transport, s: &Subject) -> Result<Value, Error> {
+pub(super) async fn read(t: &Transport, s: &Subject) -> Result<Value, Error> {
     s.validate()?;
     if s.project() != t.source.project_id {
         return Err(Error::Identity);

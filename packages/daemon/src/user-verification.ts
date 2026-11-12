@@ -39,7 +39,7 @@ export class UserVerifications {
 			throw new OperationRejected("Exact task or standalone chat subject required");
 	}
 	/** Caller crosses the shared durability barrier before this synchronous, indexed projection. */
-	private readNow(subject: VerificationSubject): DeliveredWork {
+	readNow(subject: VerificationSubject): DeliveredWork {
 		this.subject(subject);
 		this.deps.projects.require(subject.projectId);
 		let ownerSessionId: string | null = null;

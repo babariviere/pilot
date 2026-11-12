@@ -2217,6 +2217,7 @@ export interface TaskModelResponse {
 	projectId: string;
 	task: MissionTask;
 }
+export type { DeliveredArtifact, DeliveredArtifactRequest } from "./delivered-artifact.ts";
 export type {
 	DeliveredWork,
 	UserVerification,

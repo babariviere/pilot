@@ -8,6 +8,15 @@ export interface StoredVisualRevision {
 	bytes: Uint8Array;
 	artifact: ArtifactRevision & { kind: "visual" };
 }
+export interface StoredArtifactRevision {
+	bytes: Uint8Array;
+	artifact: ArtifactRevision;
+}
+export class StoredArtifactTooLarge extends Error {
+	constructor() {
+		super("Unsupported stored artifact size");
+	}
+}
 
 /** Bound reads before allocation, decoding or JSON hydration. Never follow a final symlink. */
 export async function readStoredFile(path: string, maxBytes: number, signal?: AbortSignal): Promise<Uint8Array> {
@@ -18,7 +27,7 @@ export async function readStoredFile(path: string, maxBytes: number, signal?: Ab
 		const info = await file.stat();
 		if (!info.isFile() || before.isSymbolicLink() || before.dev !== info.dev || before.ino !== info.ino)
 			throw new Error("Unsafe stored artifact file");
-		if (info.size > maxBytes) throw new Error("Unsupported stored artifact size");
+		if (info.size > maxBytes) throw new StoredArtifactTooLarge();
 		const bytes = Buffer.alloc(info.size + 1);
 		let length = 0;
 		while (length < bytes.length) {
@@ -45,11 +54,11 @@ export async function readStoredFile(path: string, maxBytes: number, signal?: Ab
 }
 
 /** Derivation only. The returned fields are NOT original submission bytes. The container stays exact. */
-export function parseStoredVisualRevision(
+export function parseStoredArtifactRevision(
 	bytes: Uint8Array,
 	expected: { id: string; revision: number; sessionId: string; projectId?: string },
-): StoredVisualRevision {
-	if (bytes.byteLength > STORED_REVISION_LIMITS.containerBytes) throw new Error("Unsupported stored artifact size");
+): StoredArtifactRevision {
+	if (bytes.byteLength > STORED_REVISION_LIMITS.containerBytes) throw new StoredArtifactTooLarge();
 	let artifact: ArtifactRevision;
 	try {
 		artifact = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as ArtifactRevision;
@@ -65,7 +74,8 @@ export function parseStoredVisualRevision(
 		artifact.projectId !== expected.projectId
 	)
 		throw new Error("Stored artifact identity or revision mismatch");
-	if (artifact.kind !== "visual") throw new Error("Unsupported stored artifact kind");
+	if (!["html", "react", "image", "swiftui", "shader", "visual"].includes(artifact.kind))
+		throw new Error("Unsupported stored artifact kind");
 	if (
 		typeof artifact.source !== "string" ||
 		typeof artifact.html !== "string" ||
@@ -73,7 +83,20 @@ export function parseStoredVisualRevision(
 		artifact.title.length > 160 ||
 		!Number.isSafeInteger(artifact.createdAt) ||
 		!Number.isSafeInteger(artifact.updatedAt) ||
-		!Array.isArray(artifact.libraries) ||
+		!Array.isArray(artifact.libraries)
+	)
+		throw new Error("Unsupported stored artifact representation");
+	return { bytes, artifact };
+}
+
+/** Review validation accepts only the existing visual representation. Never render on acquisition. */
+export function parseStoredVisualRevision(
+	bytes: Uint8Array,
+	expected: { id: string; revision: number; sessionId: string; projectId?: string },
+): StoredVisualRevision {
+	const { artifact } = parseStoredArtifactRevision(bytes, expected);
+	if (artifact.kind !== "visual") throw new Error("Unsupported stored artifact kind");
+	if (
 		artifact.libraries.length ||
 		artifact.visual?.api !== 1 ||
 		typeof artifact.visual.engine !== "string" ||

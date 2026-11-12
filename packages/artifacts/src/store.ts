@@ -4,7 +4,12 @@ import { mkdir, open, readdir, readFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import type { ArtifactRevision, ArtifactSummary, ArtifactWrite } from "@pilot/protocol";
 import { assertArtifactWriteKind, prepareArtifact, prepareArtifactWrite } from "./render.ts";
-import { parseStoredVisualRevision, readStoredFile, STORED_REVISION_LIMITS } from "./stored-revision.ts";
+import {
+	parseStoredArtifactRevision,
+	parseStoredVisualRevision,
+	readStoredFile,
+	STORED_REVISION_LIMITS,
+} from "./stored-revision.ts";
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -128,6 +133,12 @@ export class ArtifactStore {
 	/** Host-only exact visual acquisition. An explicit revision must be below the committed ceiling.
 	 * No rendering, latest fallback, worker wake, or changes to the revision write path. */
 	async readStoredRevision(id: string, revision: number, signal?: AbortSignal) {
+		const stored = await this.readCapturedRevision(id, revision, signal);
+		return parseStoredVisualRevision(stored.bytes, { ...this.identity, id, revision });
+	}
+
+	/** Passive numbered container read for text inspection. Never prepares HTML, images or callbacks. */
+	async readCapturedRevision(id: string, revision: number, signal?: AbortSignal) {
 		if (!ID.test(id) || !Number.isSafeInteger(revision) || revision < 1)
 			throw new Error("Invalid explicit artifact revision");
 		try {
@@ -151,7 +162,7 @@ export class ArtifactStore {
 				signal,
 			);
 			signal?.throwIfAborted();
-			return parseStoredVisualRevision(bytes, { ...this.identity, id, revision });
+			return parseStoredArtifactRevision(bytes, { ...this.identity, id, revision });
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code === "ENOENT")
 				throw new ArtifactNotFound("Unknown artifact revision");

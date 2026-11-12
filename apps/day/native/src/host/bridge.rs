@@ -153,6 +153,13 @@ async fn run(
     if call.command.is_ritual() {
         return ritual(t, journal, shared, day, epoch, call).await;
     }
+    if let Command::DeliveryArtifact(request) = &call.command {
+        let snapshot = super::delivery_artifact::read(t, request).await?;
+        shared.open()?;
+        call.command
+            .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
+        return Ok(json!({"snapshot":snapshot,"outcome":null}));
+    }
     if matches!(
         call.command,
         Command::DeliveryRead(_)
@@ -214,6 +221,7 @@ async fn run(
     let mut value = Value::Null;
     let mut enrollment = None;
     let work = match &call.command {
+        Command::DeliveryArtifact(_) => unreachable!("handled captured artifact read"),
         Command::DeliveryRead(_)
         | Command::DeliverySaved
         | Command::DeliveryOpen(_)
