@@ -430,6 +430,8 @@ details summary{cursor:pointer;color:var(--mfg);font-size:13.5px;margin-top:8px}
 .bw-tabs .grow{flex:1}
 .bw-tabs .lbl{font-size:12.5px;color:var(--faint);margin:0 4px 0 10px}
 .bview{position:relative;overflow:hidden;color:var(--ch-ink);font-size:13.5px;line-height:1.25}
+.bview{cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none}
+.bview.grabbing,.bview.grabbing *{cursor:grabbing}
 .bworld{position:absolute;left:0;top:0;width:2260px;height:1000px;transform-origin:0 0;will-change:transform}
 .bworld>svg{position:absolute;left:0;top:0;width:2260px;height:1000px;overflow:visible}
 .bworld .xtr,.bworld .xroute,.bworld .xroute-b,.bworld .xring,.bworld .xreg,.bworld .xdep,.bworld .xlane,.bworld .xgrat{vector-effect:non-scaling-stroke}
@@ -474,7 +476,12 @@ details summary{cursor:pointer;color:var(--mfg);font-size:13.5px;margin-top:8px}
 .bw-comp svg{display:block}
 .bw-comp .cap{font:italic 12.5px/1.2 var(--ch-serif);color:var(--ch-faint);text-align:center;margin-top:2px;text-shadow:0 0 3px var(--ch-paper)}
 .bw-comp .xp-comp{left:50px;top:50px;width:96px;height:96px}
-.bw-out{position:absolute;right:12px;top:12px;z-index:3}
+.bw-out{position:absolute;right:12px;top:12px;z-index:3;display:flex;gap:6px;align-items:center}
+.bw-zoom{display:flex;border-radius:9px;background:var(--ch-paper);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--ch-ink) 30%,transparent)}
+.bw-zb{width:32px;height:30px;border:0;background:none;color:var(--ch-ink);font:500 18px/1 var(--ch-serif);cursor:pointer;border-radius:9px}
+.bw-zb:hover{background:color-mix(in srgb,var(--ch-ink) 8%,transparent)}
+.bw-zb:disabled{opacity:.35;cursor:default;background:none}
+.bw-zb+.bw-zb{box-shadow:-1px 0 0 color-mix(in srgb,var(--ch-ink) 22%,transparent)}
 .bworld.tracing .bw-in,.bworld.tracing .xp-fog,.bworld.tracing .xp-camp{opacity:.3}
 .bworld.tracing .rel{opacity:1}
 .bworld.tracing .xtr{opacity:.12}
@@ -941,7 +948,7 @@ const ui = freshUi(VARIANTS[params.get("variant")] ? params.get("variant") : "A"
 function freshUi(variant) {
 	return { variant, route: parse(location.hash), stack: [location.hash || "#/map"], scroll: {}, hl: {}, kbd: false,
 		sel: null, selChip: null, seenPasses: null, seenLines: null, open: {}, kind: null, modal: null, iv: { idx: 0, all: false }, ans: {}, drawer: false, dtab: "walk", wt: null, changed: [], toast: null, cx: 0, xp: null, fx: null,
-		mission: params.get("mission") === "big" ? "big" : "small", bz: null, rt: "recent", bigW: null, bigT: null, zoomFx: null, bigNA: null, bigNF: null };
+		mission: params.get("mission") === "big" ? "big" : "small", bz: null, cam: null, rt: "recent", bigW: null, bigT: null, zoomFx: null, bigNA: null, bigNF: null };
 }
 
 /* ---------- helpers ---------- */
@@ -2136,15 +2143,21 @@ function bigPos(id) {
 	if (id.indexOf("out:") === 0) { const r = passOut(id); return r ? bigPos(r.o.about) || bigHarbor(passRegion(r.p)) : null; }
 	return BP[id] || null;
 }
-/* Overview fits the whole sheet; a region fills the view with room for labels. Narrow windows scroll sideways. */
+/* Overview fits the whole sheet; a region fills the view with room for labels. Narrow windows scroll sideways.
+   After you drag, scroll or zoom, the chart keeps your own view (ui.cam) until you choose a region or the whole chart. */
 function bigFrame() {
 	const cw = ui.bigW || 1240, H = Math.round(Math.max(440, cw * 0.52));
 	const s0 = Math.min(cw / BW_W, H / BW_H);
+	if (ui.cam && ui.bz) ui.cam = null;
+	if (ui.cam) return { s: ui.cam.s, tx: ui.cam.tx, ty: ui.cam.ty, H, cw, s0 };
 	const R = ui.bz && bigRegion(ui.bz);
-	if (!R) return { s: s0, tx: (cw - BW_W * s0) / 2, ty: (H - BW_H * s0) / 2, H, cw };
+	if (!R) return { s: s0, tx: (cw - BW_W * s0) / 2, ty: (H - BW_H * s0) / 2, H, cw, s0 };
 	const s = Math.min(cw / (R.w + 140), H / (R.h + 90));
-	return { s, tx: cw / 2 - (R.x + R.w / 2) * s, ty: H / 2 - (R.y + R.h / 2) * s, H, cw };
+	return { s, tx: cw / 2 - (R.x + R.w / 2) * s, ty: H / 2 - (R.y + R.h / 2) * s, H, cw, s0 };
 }
+/* Labels show once the land is big enough to read them: always in a chosen region, and past a zoom level in your own view. */
+const bigLabelS = (F) => Math.max(0.8, F.s0 * 1.4);
+const bigLabels = (F) => (ui.cam ? F.s >= bigLabelS(F) : !!ui.bz);
 const bigTf = (F) => "translate(" + r1(F.tx) + "px," + r1(F.ty) + "px) scale(" + F.s.toFixed(4) + ")";
 function bigTrails() {
 	const out = [];
@@ -2338,14 +2351,18 @@ function bigView() {
 	const trails = bigTrails();
 	lastEdges = trails;
 	const route = bigRoute();
-	const deps = ui.bz ? [] : bigDeps(trails);
-	const links = ui.bz ? bigLinks(trails, ui.bz) : {};
+	const lab = bigLabels(F);
+	const deps = lab ? [] : bigDeps(trails);
+	let links = {};
+	if (lab && ui.bz) links = bigLinks(trails, ui.bz);
+	else if (lab) for (const r of state.meta.regions) Object.assign(links, bigLinks(trails, r.id));
 	const target = xpTarget();
 	const R = state.meta.regions;
 	let side = "r";
 	if (ui.sel && exists(ui.sel)) { const p = bigPos(ui.sel); if (p && p[0] * F.s + F.tx > F.cw / 2) side = "l"; }
 	const notes = ui.sel && exists(ui.sel) ? xpNotes(ui.sel, side) : "";
-	const tab = (id, label, n) => '<button class="chipbtn' + ((ui.bz || "") === id ? " on" : "") + '" data-row data-act="bigZoom" data-arg="' + id + '" aria-pressed="' + ((ui.bz || "") === id) + '">' + esc(label) + (n ? '<span class="count">' + n + "</span>" : "") + "</button>";
+	const on = (id) => !ui.cam && (ui.bz || "") === id;
+	const tab = (id, label, n) => '<button class="chipbtn' + (on(id) ? " on" : "") + '" data-row data-act="bigZoom" data-arg="' + id + '" aria-pressed="' + on(id) + '">' + esc(label) + (n ? '<span class="count">' + n + "</span>" : "") + "</button>";
 	const rbtn = (id, label) => '<button class="chipbtn' + (ui.rt === id ? " on" : "") + '" data-row data-act="route" data-arg="' + id + '" aria-pressed="' + (ui.rt === id) + '">' + label + "</button>";
 	const tabs = '<div class="bw-tabs enter" role="group" aria-label="Regions">' + tab("", "Whole chart", 0) + R.map((r) => tab(r.id, r.name, bigCounts(r.id).needs)).join("") +
 		'<span class="grow"></span><span class="lbl">Route</span>' + rbtn("recent", "Recent legs") + rbtn("all", "All legs") + "</div>";
@@ -2355,11 +2372,13 @@ function bigView() {
 	const counts = route.bund.filter((b) => b.n > 1).map((b) => { const m = bigMid(b.pts); return '<div class="bw-m" style="' + bwAt(m[0], m[1]) + '"><span class="bw-cnt" title="Pilot sailed this leg ' + b.n + ' times">\u00d7' + b.n + "</span></div>"; }).join("") +
 		deps.map((d) => '<div class="bw-m" style="' + bwAt(d.mid[0], d.mid[1]) + '"><span class="bw-cnt dep" title="Questions in ' + esc(bigRegion(d.b).name) + " that wait for " + esc(bigRegion(d.a).name) + '">' + d.n + " waiting</span></div>").join("");
 	return '<div class="page wide">' + header() + tabs +
-		'<div class="xpwrap enter"><div class="xpframe" id="xpframe"><div class="bview ' + (ui.bz ? "rz" : "ov") + '" id="bview" style="width:' + F.cw + "px;height:" + F.H + 'px">' +
+		'<div class="xpwrap enter"><div class="xpframe" id="xpframe"><div class="bview ' + (lab ? "rz" : "ov") + '" id="bview" style="width:' + F.cw + "px;height:" + F.H + 'px">' +
 		'<div class="bworld" id="bworld" style="transform:' + bigTf(F) + ";--inv:" + (1 / F.s).toFixed(4) + '">' + bigSvg(trails, route, deps, fx) +
 		R.map(bigRegionLabel).join("") + ex().map((e) => bigMarker(e, links)).join("") + state.fog.map(bigFog).join("") + home + dest + counts + bigHarbors(route, fx) + "</div>" +
-		bigCompass(F, target) + (ui.bz ? '<div class="bw-out">' + btn("Whole chart", { act: "bigZoom", arg: "" }, "sm") + "</div>" : "") + "</div></div>" + notes + "</div>" +
-		'<p class="small faint" style="margin-top:10px">' + (ui.bz ? "Select a place for its field notes. A chip on a place links to another region; follow it to move there. Esc goes back to the whole chart." : "Choose a region to zoom in. Wide lanes are legs Pilot sailed more than once; only the latest legs stay strong. Reading the chart answers, approves and starts nothing.") + "</p>" +
+		bigCompass(F, target) + '<div class="bw-out">' + (ui.bz || ui.cam ? btn("Whole chart", { act: "bigZoom", arg: "" }, "sm") : "") +
+		'<div class="bw-zoom" role="group" aria-label="Zoom"><button ' + attr({ class: "bw-zb", "data-act": "bigStep", "data-arg": "-1", "aria-label": "Zoom out", title: "Zoom out (\u2212)", disabled: F.s <= F.s0 * 0.86 ? true : null }) + ">\u2212</button><button " +
+		attr({ class: "bw-zb", "data-act": "bigStep", "data-arg": "1", "aria-label": "Zoom in", title: "Zoom in (+)", disabled: F.s >= BIG_SMAX - 0.01 ? true : null }) + ">+</button></div></div></div></div>" + notes + "</div>" +
+		'<p class="small faint" style="margin-top:10px">' + (lab ? "Select a place for its field notes. A chip on a place links to another region; follow it to move there. Drag or scroll to look around; Esc goes back to the whole chart." : "Drag or scroll to look around. Pinch, \u2318-scroll or + and \u2212 zoom; choose a region to zoom straight to it. Wide lanes are legs Pilot sailed more than once; only the latest legs stay strong. Reading the chart answers, approves and starts nothing.") + "</p>" +
 		xpBelow() + "</div>";
 }
 /* After drawing: measure the frame, and move between overview and region zoom smoothly (the move continues across re-renders). */
@@ -2377,6 +2396,99 @@ function bigAfter() {
 		if (el < 650) w.animate([{ transform: bigTf(z.from), "--inv": 1 / z.from.s }, { transform: bigTf(now), "--inv": 1 / now.s }], { duration: 650, delay: -el, easing: "cubic-bezier(.3,.7,.2,1)" });
 	}
 }
+/* Your own view: drag or scroll moves the chart, pinch or ⌘-scroll zooms at the pointer, + and − zoom at the middle.
+   During a gesture only the transform changes; the chart draws again when the gesture ends. */
+const BIG_SMAX = 2.4;
+function bigNow() {
+	const w = document.getElementById("bworld");
+	if (!w) return null;
+	const m = new DOMMatrixReadOnly(getComputedStyle(w).transform);
+	for (const a of w.getAnimations()) a.cancel();
+	ui.zoomFx = null;
+	return { s: m.a, tx: m.e, ty: m.f };
+}
+function bigClamp(c, F) {
+	const s = Math.min(BIG_SMAX, Math.max(F.s0 * 0.85, c.s));
+	const lim = (t, view, size) => { const sl = view * 0.3, mid = (view - size) / 2; return Math.min(Math.max(sl, mid), Math.max(Math.min(view - size - sl, mid), t)); };
+	return { s, tx: lim(c.tx, F.cw, BW_W * s), ty: lim(c.ty, F.H, BW_H * s) };
+}
+function bigZoomAt(c, k, px, py, F) {
+	const s = Math.min(BIG_SMAX, Math.max(F.s0 * 0.85, c.s * k)), r = s / c.s;
+	return bigClamp({ s, tx: px - (px - c.tx) * r, ty: py - (py - c.ty) * r }, F);
+}
+let bigSettleT = 0;
+function bigApply(c, F) {
+	const v = document.getElementById("bview"), w = document.getElementById("bworld");
+	ui.cam = c; ui.bigT = c; ui.bz = null;
+	w.style.transform = bigTf(c);
+	w.style.setProperty("--inv", (1 / c.s).toFixed(4));
+	const lab = c.s >= bigLabelS(F);
+	v.classList.toggle("rz", lab); v.classList.toggle("ov", !lab);
+	for (const m of w.querySelectorAll(".bw-m.far")) m.classList.remove("far");
+}
+function bigSettle(ms) { clearTimeout(bigSettleT); bigSettleT = setTimeout(() => { if (document.getElementById("bview")) render(); }, ms); }
+function bigStep(dir) {
+	// Step from where the chart is heading, so quick presses add up; the move starts from where it is now.
+	const F = bigFrame(), now = bigNow();
+	if (!now) return;
+	ui.bigT = now; ui.bz = null;
+	ui.cam = bigZoomAt({ s: F.s, tx: F.tx, ty: F.ty }, dir > 0 ? 1.45 : 1 / 1.45, F.cw / 2, F.H / 2, F);
+	render();
+}
+let bigDrag = null, bigDragged = false;
+document.addEventListener("pointerdown", (e) => {
+	bigDragged = false;
+	const v = e.button === 0 && e.target.closest && e.target.closest("#bview");
+	if (!v || e.target.closest(".bw-out")) return;
+	bigDrag = { id: e.pointerId, x: e.clientX, y: e.clientY, on: false, c: null };
+});
+document.addEventListener("pointermove", (e) => {
+	const d = bigDrag, v = document.getElementById("bview");
+	if (!d || d.id !== e.pointerId || !v) return;
+	const dx = e.clientX - d.x, dy = e.clientY - d.y;
+	if (!d.on) {
+		if (Math.hypot(dx, dy) < 5) return;
+		d.on = true; d.c = bigNow(); v.classList.add("grabbing");
+		try { v.setPointerCapture(e.pointerId); } catch {}
+	}
+	const F = bigFrame();
+	bigApply(bigClamp({ s: d.c.s, tx: d.c.tx + dx, ty: d.c.ty + dy }, F), F);
+});
+function bigDrop(e) {
+	const d = bigDrag;
+	if (!d || d.id !== e.pointerId) return;
+	bigDrag = null;
+	if (!d.on) return;
+	bigDragged = true;
+	const v = document.getElementById("bview");
+	if (v) v.classList.remove("grabbing");
+	bigSettle(0);
+}
+document.addEventListener("pointerup", bigDrop);
+document.addEventListener("pointercancel", bigDrop);
+// A drag must not also select the place it started on.
+document.addEventListener("click", (e) => { if (bigDragged) { bigDragged = false; e.stopPropagation(); e.preventDefault(); } }, true);
+document.addEventListener("wheel", (e) => {
+	const v = e.target.closest && e.target.closest("#bview");
+	if (!v) return;
+	const F = bigFrame(), w = document.getElementById("bworld"), m = new DOMMatrixReadOnly(getComputedStyle(w).transform), c = { s: m.a, tx: m.e, ty: m.f };
+	let n;
+	if (e.ctrlKey || e.metaKey) {
+		const r = v.getBoundingClientRect();
+		n = bigZoomAt(c, Math.exp(-Math.max(-50, Math.min(50, e.deltaY * (e.deltaMode ? 16 : 1))) * 0.01), e.clientX - r.left, e.clientY - r.top, F);
+	} else {
+		const k = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? F.H : 1;
+		let dx = e.deltaX * k, dy = e.deltaY * k;
+		if (e.shiftKey && !dx) { dx = dy; dy = 0; }
+		n = bigClamp({ s: c.s, tx: c.tx - dx, ty: c.ty - dy }, F);
+	}
+	// At the edge of the chart a plain scroll goes on to the page.
+	if (Math.abs(n.tx - c.tx) < 0.1 && Math.abs(n.ty - c.ty) < 0.1 && Math.abs(n.s - c.s) < 1e-4 && !(e.ctrlKey || e.metaKey)) return;
+	e.preventDefault();
+	bigNow();
+	bigApply(n, F);
+	bigSettle(180);
+}, { passive: false });
 function traceBig(id) {
 	const w = document.getElementById("bworld");
 	if (!w) return;
@@ -2390,6 +2502,7 @@ function traceBig(id) {
 }
 function setMission(m) {
 	ui.mission = m;
+	ui.cam = null;
 	const p = new URLSearchParams(location.search);
 	if (m === "big") p.set("mission", "big"); else p.delete("mission");
 	history.replaceState(null, "", location.pathname + "?" + p + location.hash);
@@ -2683,7 +2796,7 @@ function reveal(id) {
 	if (!exists(id)) return;
 	// Following a link opens just that record, so the outline does not fill up with open rows.
 	ui.sel = id; ui.selChip = null; ui.open = {}; ui.open[id] = true; ui.kind = null;
-	if (state.meta) { const rg = regionOf(id); ui.bz = rg && bigRegion(rg) ? rg : null; }
+	if (state.meta) { const rg = regionOf(id); ui.bz = rg && bigRegion(rg) ? rg : null; ui.cam = null; }
 	if (ui.route.name !== "map") go("#/map"); else render();
 	scrollToSel();
 }
@@ -2837,7 +2950,8 @@ function act(el, ev) {
 		case "variant": switchVariant(+arg); break;
 		case "drawer": ui.drawer = !ui.drawer; render(); break;
 		case "dtab": ui.dtab = arg; render(); break;
-		case "bigZoom": ui.bz = arg || null; if (ui.sel && (!ui.bz || regionOf(ui.sel) !== ui.bz)) ui.sel = null; render(); break;
+		case "bigZoom": ui.bz = arg || null; ui.cam = null; if (ui.sel && (!ui.bz || regionOf(ui.sel) !== ui.bz)) ui.sel = null; render(); break;
+		case "bigStep": bigStep(+arg); break;
 		case "route": ui.rt = arg; render(); break;
 		case "mission": setMission(ui.mission === "big" ? "small" : "big"); reset(); ui.wt = null; go("#/map"); render(); toast(ui.mission === "big" ? "Showing the big mock mission." : "Showing the small mission."); break;
 		case "reset": reset(); ui.wt = null; go("#/map"); render(); toast("Reset to the starting data."); break;
@@ -2902,11 +3016,12 @@ document.addEventListener("keydown", (e) => {
 		if (ui.modal) { ui.modal = null; render(); e.preventDefault(); return; }
 		if (ui.kind) { ui.kind = null; render(); return; }
 		if (ui.sel && ui.route.name === "map") { ui.open[ui.sel] = false; ui.sel = null; render(); return; }
-		if (state.meta && ui.variant === "D" && ui.bz && ui.route.name === "map") { ui.bz = null; render(); return; }
+		if (state.meta && ui.variant === "D" && (ui.bz || ui.cam) && ui.route.name === "map") { ui.bz = null; ui.cam = null; render(); return; }
 		goBack(); e.preventDefault(); return;
 	}
 	if (inText(e)) return;
 	if (e.metaKey || e.ctrlKey || e.altKey) return;
+	if (!ui.modal && state.meta && ui.variant === "D" && ui.route.name === "map" && document.getElementById("bview") && "+=-_".indexOf(e.key) >= 0) { bigStep(e.key === "+" || e.key === "=" ? 1 : -1); e.preventDefault(); return; }
 	if (ui.modal) {
 		if (ui.modal.kind !== "interview") return;
 		const r = Model.openRound(state);

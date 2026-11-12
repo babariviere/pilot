@@ -33,6 +33,10 @@ unknown and what happens next, and let you check where each answer came from?
     open, waiting, fog) and places as plain markers. Choose a region (on the chart or in the
     tabs above it) to zoom in and see labels. Markers keep their screen size while the land
     zooms. Esc or "Whole chart" zooms out.
+  - **Look around freely.** Drag the chart or scroll (trackpad or mouse wheel; Shift for
+    sideways) to move it. Pinch, ⌘/Ctrl-scroll, the − + buttons or the − and + keys zoom.
+    Labels and the chips between regions appear once you are close enough. At the edge of
+    the chart a scroll goes on to the page. A drag never selects the place it started on.
   - **No route spaghetti.** Rounds in a row that explore the same region become one stay.
     The route only runs between fixed harbors on each region's coast, along one channel
     between the rows, so it never crosses places. Legs between the same two harbors share
