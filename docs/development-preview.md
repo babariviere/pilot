@@ -29,6 +29,8 @@ New's project list shows two invented demo projects; starting a chat there only
 counts a demo chat.
 Today's To check shows three demo results. Mark done, Send back and Reopen
 change only the demo; nothing reaches an agent.
+New's "Your Linear issues" opens a read-only page of demo Linear issues and a
+demo cycle. It reads nothing from Linear.
 
 New's goal, Today text drafts and interview text/picks are kept separately in:
 

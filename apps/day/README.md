@@ -164,6 +164,7 @@ cd apps/day
 ./nsh.sh test Attention.test.tsx # agent questions, unavailable help, drafts and links that report nothing (4 tests)
 ./nsh.sh test Intake.test.tsx    # New: Start, Later, Discard, Undo, stale, lost answer, rapid presses, focus (8 tests)
 ./nsh.sh test Delivery.test.tsx  # To check and a result's page: Done, Send back, Reopen, stale, lost answer, kept notes (7 tests)
+./nsh.sh test Linear.test.tsx    # the read-only Linear page: scope, cycle, exact links, unshown count, trouble, Escape (9 tests)
 ./nsh.sh test Native.test.tsx --target macos  # native captures and input, in output/
 (cd native && ../scripts/cargo test --locked) # Rust rules through mbx too
 ```
@@ -449,6 +450,21 @@ work progressed. Nothing here cancels or undoes started work. The mock window
 shows Today's example rows and offers no writes. `Intake.test.tsx` plays the
 controls on a scripted source (`IntakeFixture.tsx`); `native/tests/intake_today.rs`
 runs `Connected.tsx` against the isolated daemon.
+
+When Linear is one of the project's sources, New offers **Your Linear issues**.
+It opens a read-only page of the user's own issues that Pilot saved for the
+native root's selected project (`day.linear.read`), not the team's issues or
+other cycles. It shows the cycle Pilot's last sync read with the user's own
+progress and when Pilot saved it; it is not a live view of Linear. Rows group by
+Linear state and name their place in Pilot from saved IDs only: a mission (open
+it when it is on Today), a chat, New, Later or Discarded. A matching title never
+links an issue to work. "Show it in New" goes back to the request on Today;
+triage stays there. Up to 100 rows show, and the rest are counted. Source
+trouble keeps the saved rows and says so; a checkpoint for other settings shows
+none and says that is not the same as having none. Read again reads Pilot's saved
+copy and asks Linear nothing. A close or update returns to Today. The mock window
+shows demo issues (`linearDemo.ts`). `Linear.test.tsx` plays it (`LinearFixture.tsx`);
+`native/tests/linear_today.rs` runs `Connected.tsx` against the isolated daemon.
 
 A mission's task also lists what its agents linked to it, from the mission
 record: pull requests with the last GitHub state Pilot saw, artifacts with

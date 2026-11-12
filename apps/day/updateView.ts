@@ -22,6 +22,7 @@ import {
 	reminders,
 } from "./deliveryView";
 import { forgetPlaces, lastField, restoreField, restoreScroll, scrollOf, todayScrollTo } from "./kept";
+import { linearOpen, openIssue } from "./linearView";
 import { flushAll } from "./planCommands";
 import type { Plans } from "./planning";
 import {
@@ -265,6 +266,9 @@ export function startFresh() {
 	doneAsk.set(null);
 	reminders.set({});
 	deliveryMessages.set({});
+	// The Linear page has no saved place: a restored window shows Today, with its entry focused.
+	linearOpen.set(false);
+	openIssue.set(null);
 	todayPlace.y = 0;
 	todayPlace.row = null;
 	forgetPlaces();

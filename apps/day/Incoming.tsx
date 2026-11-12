@@ -11,8 +11,10 @@ import { Button, Collapsible, Radio, RadioGroup } from "nsh/base";
 import type { MissionRow, Request, Today } from "pilot-day/native";
 import type { Day } from "./day";
 import type { IntakeMirror, IntakeOp, IntakeResult, IntakeRow, IntakeView, Triage } from "./intakeFeed";
+import { openLinear } from "./linearView";
 import { glide } from "./motion";
 import { Action, InlineAction, Mark, SectionTitle } from "./ui";
+import { placeRow } from "./view";
 
 /** The request open in place, by ID. One at a time; it closes when the request leaves. */
 export const openRequest = signal<string | null>(null);
@@ -133,6 +135,24 @@ function Origin(props: { request: Request }) {
 				<Text class="text-xs text-faint">{props.request.link}</Text>
 			</If>
 		</View>
+	);
+}
+
+/** The read-only Linear page's entry, offered where Linear's requests already show. Opening it changes nothing. */
+function LinearEntry(props: { day: Day; sources: string[] }) {
+	const place = placeRow("linear-open", openLinear);
+	const shown = () =>
+		!!props.day.linear && (props.sources.includes("Linear") || !!props.day.linear.view().read?.source.configured);
+	return (
+		<If when={shown()}>
+			<Action
+				label="Your Linear issues"
+				testID="linear-open"
+				accessibilityLabel="Your Linear issues. Opens Pilot's saved copy; it changes nothing."
+				anchor={place.anchor}
+				onPress={place.press}
+			/>
+		</If>
 	);
 }
 
@@ -495,6 +515,7 @@ function LiveIncoming(props: { day: Day; mirror: IntakeMirror }) {
 						<If when={v().intake.sources.length > 0}>
 							<Text class="text-xs text-faint">{`From ${joined(v().intake.sources)}`}</Text>
 						</If>
+						<LinearEntry day={props.day} sources={v().intake.sources} />
 					</SectionTitle>
 				</View>
 				<If when={v().reason}>
@@ -609,8 +630,8 @@ function ExampleRow(props: { request: Request }) {
 }
 
 /** The mock window's New section: Today's example rows, read only. */
-function ExampleIncoming(props: { today: Today }) {
-	const intake = () => props.today.intake;
+function ExampleIncoming(props: { day: Day }) {
+	const intake = () => props.day.today().intake;
 	effect(() => {
 		const id = openRequest();
 		if (id && !intake().requests.some((r) => r.id === id)) openRequest.set(null);
@@ -626,6 +647,7 @@ function ExampleIncoming(props: { today: Today }) {
 				<View class="pb-1">
 					<SectionTitle title="New" count={shown().length}>
 						<Text class="text-xs text-faint">{`From ${joined(intake().sources)}`}</Text>
+						<LinearEntry day={props.day} sources={intake().sources} />
 					</SectionTitle>
 				</View>
 				<Each of={intake().trouble} key={(t) => t}>
@@ -660,5 +682,5 @@ function ExampleIncoming(props: { today: Today }) {
  */
 export function Incoming(props: { day: Day }) {
 	const mirror = props.day.intake;
-	return mirror ? <LiveIncoming day={props.day} mirror={mirror} /> : <ExampleIncoming today={props.day.today()} />;
+	return mirror ? <LiveIncoming day={props.day} mirror={mirror} /> : <ExampleIncoming day={props.day} />;
 }

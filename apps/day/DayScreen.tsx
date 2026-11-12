@@ -9,6 +9,8 @@ import { changesRoute } from "./changesView";
 import { DeliveryScreen } from "./DeliveryScreen";
 import type { Day } from "./day";
 import { type DeliveryPlace, deliveryRoute } from "./deliveryView";
+import { LinearScreen } from "./LinearScreen";
+import { linearOpen } from "./linearView";
 import { MissionScreen } from "./MissionScreen";
 import { Arrive } from "./motion";
 import { NewScreen } from "./NewScreen";
@@ -99,7 +101,16 @@ function Screens(props: { day: Day; rituals: Rituals; plans?: Plans; changes?: C
 	return (
 		<If
 			when={props.day.delivery && deliveryRoute()}
-			else={<Places day={props.day} rituals={props.rituals} plans={props.plans} changes={props.changes} />}
+			else={
+				<If
+					when={props.day.linear && linearOpen()}
+					else={<Places day={props.day} rituals={props.rituals} plans={props.plans} changes={props.changes} />}
+				>
+					<Arrive class="flex-1">
+						<LinearScreen day={props.day} />
+					</Arrive>
+				</If>
+			}
 		>
 			<Each of={deliveryRoute() ? [deliveryRoute() as DeliveryPlace] : []} key={(p) => p.key}>
 				{(p) => (

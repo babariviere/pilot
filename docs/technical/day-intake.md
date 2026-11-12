@@ -85,6 +85,33 @@ hidden `native/tests/linear.rs` exercises the real authenticated daemon through
 the public host channel, including grant denial, offline/malformed replies and
 deleted selected project. These checks do not qualify a new UI or live source.
 
+### The Linear page
+
+Day's connected window shows this read on a read-only Linear page, opened from
+"Your Linear issues" in New on Today when Linear is one of the project's sources.
+`linearFeed.ts` reads only when the page opens, on Read again and when Today's
+requests change while it is open; the window's startup does not call it.
+
+- Title and scope: "Your issues in cycle N" (or "Your open Linear issues" for
+  `no_active_cycle`), and always "Not your team's other issues or other cycles".
+- The saved cycle with the user's own counts, and "Saved by Pilot at …" from
+  `lastPolledAt`, never a live claim. Source trouble keeps the saved rows and says so.
+- A missing or replaced checkpoint, or no Linear source, shows no rows and says
+  this is not the same as having none. A failed first read shows nothing guessed;
+  a failed later read keeps the last one and says so.
+- Rows group by Linear state type. A row's place comes from `missionId`/`sessionId`
+  and `triageState` only, plus whether New on Today lists its exact ID. Earlier
+  links are counted from `missionIds`/`sessionIds`. The page offers only "Open the
+  mission" (a mission on Today) and "Show it in New"; triage stays in New.
+- `more > 0` always shows how many saved rows are not shown; there is no paging.
+- A close or update does not save the page; the restored window shows Today with
+  the page's entry focused.
+
+Checks: `Linear.test.tsx` plays the page on a scripted read (`LinearFixture.tsx`).
+`native/tests/linear_today.rs` runs `Connected.tsx` headless against the isolated
+daemon: exact links, the unshown count, a sign-in failure, a lost read and a
+replaced checkpoint, with no poll, post, lookup, session or external write.
+
 ## Explicit intents
 
 All methods use the existing version/window envelope and exact-name host grant.
