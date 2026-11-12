@@ -41,6 +41,50 @@ The screen reads again after opening, on Read again, after a write whose reply
 held no fresh read, and when the root's cached Today preview of requests
 changes. An invalidation alone does not read the service.
 
+## Saved Linear browsing read
+
+`day.linear.read {}` uses the same selected-project native owner and authenticated
+read seam. Day's typed adapter is `apps/day/linearRead.ts`; its contract imports
+only the canonical Node-free `tracking.ts` leaf. It returns `{snapshot, outcome:null}`
+from `GET /api/projects/:projectId/saved-linear`, with no command ledger entry.
+The HTTP route requires the native capability and refuses non-GET methods.
+
+The intake query is not sufficient for browsing: it excludes linked/completed
+issues and omits the saved cycle summary. The browsing read reuses the existing
+tracked-items worker's list query, not a new store, source or live integration:
+
+- `scope:saved-own-issues`, `version:1`, selected `projectId`, `contextDigest`.
+- Active, non-dismissed saved Linear rows, including linked/completed issues.
+  Exact `sessionId`/`missionId` and plural link history pass through unchanged.
+  Matching titles, URLs or other metadata never infer or merge associations.
+- `limit:100`, `total`, `complete`, numeric `more` count the eligible saved rows
+  in one worker turn. There is no claim to list all team tickets or all cycles.
+  This first page has no paging control; `more > 0` must stay visible to callers.
+- `configurationCurrent` means a saved source checkpoint matches the current
+  project's Linear settings. Missing/mismatched checkpoints hide rows and cycle
+  data; their empty page is not evidence that the external source has no issues.
+- `source` carries the canonical status, sanitized error, `lastPolledAt` and
+  saved `linear` summary. `cycleStatus:current` is the cycle actually read by the
+  last successful sync, with personal progress, not team progress. It is not
+  proof that the cycle is still current now. Always show its saved timestamp and
+  source trouble; `no_active_cycle` is a source result, not a fabricated cycle.
+  A failed refresh keeps the prior successful saved data and timestamp.
+
+Project configuration and source checkpoint are checked again after the worker
+read; a race refuses the read, never retries it. The native boundary also checks
+selected project identity/path before and after the read, source/row scope,
+page counts and completeness. VM arguments cannot select a project or host.
+Reads do not poll MCP, subscribe, authenticate a source, call a provider, start
+work, write profiles/source settings or publish Linear issues. The default app's
+deny-all capabilities are unchanged.
+
+Checks: `saved-linear.test.ts` covers canonical wire types, HTTP permission,
+exact links, same-title non-association, personal cycle, overflow, empty/missing/
+replaced checkpoint, source errors and project/checkpoint races. Released NSH's
+hidden `native/tests/linear.rs` exercises the real authenticated daemon through
+the public host channel, including grant denial, offline/malformed replies and
+deleted selected project. These checks do not qualify a new UI or live source.
+
 ## Explicit intents
 
 All methods use the existing version/window envelope and exact-name host grant.

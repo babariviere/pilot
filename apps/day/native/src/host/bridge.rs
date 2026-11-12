@@ -143,7 +143,10 @@ async fn run(
     }
     if matches!(
         call.command,
-        Command::IntakeRead | Command::IntakeWrite(_) | Command::IntakeCheck(_)
+        Command::IntakeRead
+            | Command::LinearRead
+            | Command::IntakeWrite(_)
+            | Command::IntakeCheck(_)
     ) {
         return super::intake::handle(t, journal, shared, epoch, &call.command, &call.gate).await;
     }
@@ -222,7 +225,10 @@ async fn run(
         | Command::ChatCheck(_) => {
             unreachable!("handled standalone chat command")
         }
-        Command::IntakeRead | Command::IntakeWrite(_) | Command::IntakeCheck(_) => {
+        Command::IntakeRead
+        | Command::LinearRead
+        | Command::IntakeWrite(_)
+        | Command::IntakeCheck(_) => {
             unreachable!("handled intake command")
         }
         Command::Today | Command::PlanSnapshot(_) | Command::PlanningInventorySnapshot => None,

@@ -1,5 +1,5 @@
 /** Native-only local intake. An entered effect is never retried by Check or recovery. */
-import type { DurableOperation, IntakeIntent, TodayIntake, TrackedItem } from "@pilot/protocol";
+import type { DurableOperation, IntakeIntent, SavedLinearRead, TodayIntake, TrackedItem } from "@pilot/protocol";
 import type { MissionStore } from "./missions.ts";
 import { canonicalJSON, type OperationJournal, OperationRejected, payloadHash, sameHost } from "./operation-journal.ts";
 import type { ProjectStore } from "./projects.ts";
@@ -11,7 +11,7 @@ const id = (v: unknown): v is string => typeof v === "string" && /^[A-Za-z0-9_-]
 interface Dependencies {
 	journal: OperationJournal;
 	projects: Pick<ProjectStore, "require">;
-	tracking: Pick<SourceRegistry, "items" | "patch" | "intakeSources" | "assertIntakeSource">;
+	tracking: Pick<SourceRegistry, "items" | "patch" | "intakeSources" | "assertIntakeSource" | "savedLinear">;
 	sessions: Pick<SessionManager, "spawnDurable" | "selectTaskModel">;
 	missions?: Pick<MissionStore, "require" | "list">;
 }
@@ -29,6 +29,12 @@ export class NativeIntake {
 		const sources = await this.deps.tracking.intakeSources(projectId);
 		if (this.digest(projectId) !== contextDigest) throw new Error("Intake project changed");
 		return { version: 1, projectId, contextDigest, sources };
+	}
+	async readLinear(projectId: string): Promise<SavedLinearRead> {
+		const contextDigest = this.digest(projectId);
+		const page = await this.deps.tracking.savedLinear(projectId);
+		if (this.digest(projectId) !== contextDigest) throw new Error("Linear project changed");
+		return { version: 1, projectId, contextDigest, ...page };
 	}
 	private request(op: DurableOperation): IntakeIntent {
 		let p: IntakeIntent;

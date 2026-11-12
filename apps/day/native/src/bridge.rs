@@ -23,6 +23,7 @@ pub const METHODS: &[&str] = &[
     "day.chat.create",
     "day.chat.check",
     "day.intake.read",
+    "day.linear.read",
     "day.intake.triage",
     "day.intake.start",
     "day.intake.check",
@@ -172,6 +173,7 @@ pub(crate) enum Command {
     ChatCreate(crate::host::new_chat::Create),
     ChatCheck(String),
     IntakeRead,
+    LinearRead,
     IntakeWrite(crate::host::intake::Intent),
     IntakeCheck(String),
     DeliveryRead(crate::host::delivery::Subject),
@@ -332,6 +334,12 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 return Err(Error::Invalid);
             }
             C::IntakeRead
+        }
+        "day.linear.read" => {
+            if args != json!({}) {
+                return Err(Error::Invalid);
+            }
+            C::LinearRead
         }
         "day.delivery.read" => {
             let s: crate::host::delivery::Subject = exact(args)?;
@@ -580,6 +588,7 @@ impl Command {
                     | Self::Today
                     | Self::Projects
                     | Self::IntakeRead
+                    | Self::LinearRead
                     | Self::DeliveryRead(_)
                     | Self::DeliverySaved
                     | Self::Mission(_)

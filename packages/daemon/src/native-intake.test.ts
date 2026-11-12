@@ -53,6 +53,9 @@ async function fixture(t: TestContext) {
 			},
 			tracking: {
 				items,
+				savedLinear: async () => {
+					throw new Error("Not used by intake tests");
+				},
 				assertIntakeSource: () => {},
 				intakeSources: async (project) =>
 					(await items.intake(project)).map((s) => ({ ...s, source: s.kind, label: s.kind, status: "ok" })),

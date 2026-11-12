@@ -89,6 +89,53 @@ fn summaries(t: &Transport, journal: &Journal) -> Vec<Value> {
         })
         .collect()
 }
+async fn read_linear(t: &Transport) -> Result<Value, Error> {
+    t.gate(false).await?;
+    let v = t
+        .get(&format!(
+            "/api/projects/{}/saved-linear",
+            t.source.project_id
+        ))
+        .await?;
+    let items = v["items"].as_array().ok_or(Error::Invalid)?;
+    let total = v["total"].as_u64().ok_or(Error::Invalid)?;
+    let current = v["configurationCurrent"].as_bool().ok_or(Error::Invalid)?;
+    if v["version"] != 1
+        || v["projectId"] != t.source.project_id
+        || v["scope"] != "saved-own-issues"
+        || v["contextDigest"]
+            .as_str()
+            .is_none_or(|s| s.len() != 64 || !s.bytes().all(|c| c.is_ascii_hexdigit()))
+        || v["source"]["projectId"] != t.source.project_id
+        || v["source"]["kind"] != "linear"
+        || v["source"]["id"] != format!("{}:linear", t.source.project_id)
+        || v["source"]["configured"].as_bool().is_none()
+        || !matches!(
+            v["source"]["status"].as_str(),
+            Some("not_configured" | "idle" | "ok" | "syncing" | "sign_in_required" | "error")
+        )
+        || (current
+            && (v["source"]["configured"] != true
+                || v["source"]["lastPolledAt"].as_u64().is_none()))
+        || v["limit"] != 100
+        || items.len() > 100
+        || total < items.len() as u64
+        || v["complete"] != (total == items.len() as u64)
+        || v["more"] != total - items.len() as u64
+        || (!current && (total != 0 || !v["source"]["linear"].is_null()))
+        || items.iter().any(|i| {
+            i["projectId"] != t.source.project_id
+                || i["kind"] != "linear"
+                || i["id"].as_str().is_none_or(|s| !valid_id(s))
+        })
+    {
+        return Err(Error::Invalid);
+    }
+    // A changed project/path or native identity during the read cannot publish old rows.
+    t.gate(false).await?;
+    Ok(v)
+}
+
 async fn read(t: &Transport) -> Result<Value, Error> {
     t.gate(false).await?;
     let mut v = t
@@ -194,6 +241,11 @@ pub(super) async fn handle(
     };
     let mut outcome = Value::Null;
     match command {
+        Command::LinearRead => {
+            let snapshot = read_linear(t).await?;
+            check()?;
+            return Ok(json!({"snapshot":snapshot,"outcome":null}));
+        }
         Command::IntakeRead => {}
         Command::IntakeWrite(intent) => {
             if journal.planning.values().any(|r| {

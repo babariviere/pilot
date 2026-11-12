@@ -105,7 +105,6 @@ import { NativeAttention } from "./native-attention.ts";
 import { NativeChat } from "./native-chat.ts";
 import { MAX_NATIVE_DIAGNOSTIC_BYTES } from "./native-diagnostics.ts";
 import { isIntakeOperation, NativeIntake } from "./native-intake.ts";
-import { UserVerifications } from "./user-verification.ts";
 import {
 	isNativePlanningOperation,
 	NativeMissionPlanning,
@@ -140,6 +139,7 @@ import { validatePatch } from "./tracked-items.ts";
 import { type ReservationReceipt, UpdateReservation } from "./update-reservation.ts";
 import { UsageQueryCapacityError } from "./usage-history.ts";
 import { usageAnalyticsQuery } from "./usage-history-validation.ts";
+import { UserVerifications } from "./user-verification.ts";
 import { isWorkflowOperation, WorkflowConfirmations } from "./workflow-confirmations.ts";
 
 /** Native host capability authenticates locally verified updater checkpoints, not agent assertions.
@@ -2126,12 +2126,16 @@ export function createDaemonServer(
 				),
 			);
 		}
-		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "intake") {
+		if (parts[1] === "projects" && parts.length === 4 && (parts[3] === "intake" || parts[3] === "saved-linear")) {
 			res.setHeader("cache-control", "no-store");
 			if (req.method !== "GET") throw new HttpError(405, "Intake read is read-only");
 			if (!githubSetup || !nativeIntake) throw new ServiceUnavailable("Native intake unavailable");
 			await githubSetup.authenticate(req.headers["x-pilot-github-capability"]);
-			return json(res, 200, await nativeIntake.read(parts[2]!));
+			return json(
+				res,
+				200,
+				parts[3] === "saved-linear" ? await nativeIntake.readLinear(parts[2]!) : await nativeIntake.read(parts[2]!),
+			);
 		}
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "planning-inventory") {
 			res.setHeader("cache-control", "no-store");

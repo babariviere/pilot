@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { WebSocket, WebSocketServer } from "ws";
 import { nativeIntakeFixture } from "../native-intake.fixture.ts";
+import { SourceSignInRequired } from "../source-tool-rules.ts";
 
 const f = await nativeIntakeFixture(),
 	ledger = join(f.home, "commands.jsonl");
@@ -18,6 +19,39 @@ let posts = 0,
 	offline = false,
 	staleProfile = false,
 	failSave = false;
+let linearMode = "issues",
+	linearReads = 0,
+	malformedLinear = "";
+f.tracking.register("linear", async () => {
+	linearReads++;
+	if (linearMode === "error") throw new SourceSignInRequired();
+	if (linearMode === "empty") return { items: [], activeIds: [], linear: { cycleStatus: "no_active_cycle" } };
+	return {
+		items: Array.from({ length: 102 }, (_, i) => ({
+			externalId: `saved-${i}`,
+			title: "Same title",
+			url: `https://example.invalid/${i}`,
+			status: i === 0 ? "Done" : "Todo",
+			metadata: { statusType: i === 0 ? "completed" : "unstarted" },
+			updatedAt: 1000 - i,
+		})),
+		activeIds: Array.from({ length: 102 }, (_, i) => `saved-${i}`),
+		linear: {
+			cycleStatus: "current",
+			currentCycle: {
+				id: "saved-cycle",
+				number: 12,
+				startsAt: "2026-11-09T00:00:00Z",
+				endsAt: "2026-11-23T00:00:00Z",
+				progress: 0.5,
+				total: 2,
+				done: 1,
+				inProgress: 1,
+				todo: 0,
+			},
+		},
+	};
+});
 const sockets = new Set<WebSocket>(),
 	wss = new WebSocketServer({ noServer: true });
 const proxy = createServer(async (req, res) => {
@@ -28,6 +62,7 @@ const proxy = createServer(async (req, res) => {
 		if (
 			req.url?.includes("native-projects") ||
 			req.url?.includes("chat-profile") ||
+			req.url?.includes("saved-linear") ||
 			req.url?.includes("operations")
 		) {
 			if (offline) {
@@ -61,7 +96,13 @@ const proxy = createServer(async (req, res) => {
 			},
 			...(bytes.length ? { body: bytes } : {}),
 		});
-		const body = await reply.text();
+		let body = await reply.text();
+		if (req.url?.includes("saved-linear") && malformedLinear) {
+			const v = JSON.parse(body);
+			if (malformedLinear === "project") v.projectId = f.other.id;
+			if (malformedLinear === "count") v.more = 0;
+			body = JSON.stringify(v);
+		}
 		if (writing && failSave) {
 			failSave = false;
 			await chmod(ledger, 0o644);
@@ -120,12 +161,26 @@ for await (const line of createInterface({ input: process.stdin })) {
 	if (c.action === "allow") {
 		denied = false;
 		offline = false;
+		malformedLinear = "";
 	}
+	if (c.action === "saved-linear" || c.action === "linear-empty" || c.action === "linear-error") {
+		linearMode = c.action === "linear-empty" ? "empty" : c.action === "linear-error" ? "error" : "issues";
+		await f.tracking.poll(`${f.project.id}:linear`);
+		if (c.action === "saved-linear") {
+			const first = (await f.items.list({ projectId: f.project.id, kind: "linear" })).items[0]!;
+			await f.items.patch(first.id, { missionId: "mission-A", sessionId: "chat-A" });
+			await f.items.patch(first.id, { missionId: "mission-B", sessionId: "chat-B" });
+		}
+	}
+	if (c.action === "linear-stale")
+		await f.projects.update(f.project.id, { tracking: { linearTeam: "REPLACED", slackChannels: [] } });
+	if (c.action === "linear-bad-project") malformedLinear = "project";
+	if (c.action === "linear-bad-count") malformedLinear = "count";
 	if (c.action === "stale-profile") staleProfile = true;
 	if (c.action === "change-other") await f.projects.update(f.other.id, { name: "Changed other project" });
 	if (c.action === "delete-other") await f.projects.remove(f.other.id);
 	if (c.action === "delete-selected") await f.projects.remove(f.project.id);
-	console.log(JSON.stringify({ posts, lookups, ...f.stats() }));
+	console.log(JSON.stringify({ posts, lookups, linearReads, ...f.stats() }));
 }
 process.stdin.destroy();
 for (const s of sockets) s.close();

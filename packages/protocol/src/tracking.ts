@@ -212,6 +212,25 @@ export interface TodayIntake {
 		items: TrackedItem[];
 	}>;
 }
+/** Passive first page of saved own Linear issues, not all team tickets or all cycles. */
+export interface SavedLinearRead {
+	version: 1;
+	projectId: string;
+	contextDigest: string;
+	scope: "saved-own-issues";
+	/** True only for a saved checkpoint matching the selected project's source settings. */
+	configurationCurrent: boolean;
+	source: Pick<
+		TrackingSource,
+		"id" | "projectId" | "kind" | "label" | "configured" | "status" | "lastPolledAt" | "error" | "linear"
+	>;
+	/** Active, non-dismissed saved rows, including linked and completed issues. */
+	items: TrackedItem[];
+	limit: 100;
+	total: number;
+	complete: boolean;
+	more: number;
+}
 export interface IntakeIntent {
 	projectId: string;
 	itemId: string;

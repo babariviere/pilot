@@ -884,6 +884,35 @@ export class SourceRegistry {
 		const list = await this.items.list({ ...rest, kinds });
 		return { ...list, items: this.withParents(list.items, (item) => item.projectId) };
 	}
+	/** Saved data only. No polling, source/profile writes or inferred associations. */
+	async savedLinear(
+		projectId: string,
+	): Promise<Omit<import("@pilot/protocol").SavedLinearRead, "version" | "projectId" | "contextDigest">> {
+		const project = structuredClone(this.projects.require(projectId));
+		const sourceId = `${projectId}:linear`;
+		const checkpoint = this.items.checkpoint(sourceId);
+		const configurationCurrent =
+			isConfigured(project, "linear") && checkpoint?.configKey === configKey(project, "linear");
+		const page = configurationCurrent
+			? await this.items.list({ projectId, kind: "linear", limit: 100 })
+			: { items: [], total: 0 };
+		if (
+			JSON.stringify(this.projects.require(projectId)) !== JSON.stringify(project) ||
+			JSON.stringify(this.items.checkpoint(sourceId)) !== JSON.stringify(checkpoint)
+		)
+			throw new Conflict("Linear source changed; read again");
+		const { id, kind, label, configured, status, lastPolledAt, error, linear } = this.require(sourceId);
+		return {
+			scope: "saved-own-issues",
+			configurationCurrent,
+			source: { id, projectId, kind, label, configured, status, lastPolledAt, error, linear },
+			items: this.withParents(page.items, () => projectId),
+			limit: 100,
+			total: page.total,
+			complete: page.total === page.items.length,
+			more: page.total - page.items.length,
+		};
+	}
 	/** Slack messages in triage, of one project or every project that tracks Slack, matching every word of a query
 	 * in their title, channel or thread text, or the thread of a pasted Slack link. Latest first, done and dismissed
 	 * included. Local only: no Slack reads. */
