@@ -32,16 +32,18 @@ class RecipeTests(unittest.TestCase):
         bundle.write_json(built / "app.json", {"id":bundle.APP_ID})
         return built
 
-    def test_environment_is_private_offline_and_drops_ambient_authority(self):
-        inherited = dict(PATH="/usr/bin:/bin", PILOT_NEXT_UPDATER_PUBLIC_KEY="fixture",
+    def test_environment_uses_global_mbx_defaults_and_drops_ambient_authority(self):
+        inherited = dict(PATH="/usr/bin:/bin", HOME=str(self.root / "user"), PILOT_NEXT_UPDATER_PUBLIC_KEY="fixture",
                          GH_TOKEN="never-forward", NODE_OPTIONS="--import hostile", RUSTFLAGS="bad",
                          MBX_SOCKET="bad", RUSTC_WRAPPER="bad", NSH_APP_DIR="bad",
-                         npm_config_ignore_scripts="false")
+                         npm_config_ignore_scripts="false", CARGO_TARGET_DIR="bad", CARGO_HOME="bad",
+                         CARGO_BUILD_JOBS="bad", CARGO_PROFILE_DEV_DEBUG="bad")
         env = day.environment(self.root, self.tools, inherited, None)
-        for key in inherited.keys() - {"PATH", "npm_config_ignore_scripts"}:
+        for key in inherited.keys() - {"PATH", "HOME", "npm_config_ignore_scripts"}:
             self.assertNotIn(key, env)
-        for key in ("HOME", "CARGO_HOME"):
-            self.assertTrue(Path(env[key]).is_relative_to(self.root))
+        self.assertEqual(env["HOME"], inherited["HOME"])
+        self.assertNotIn("CARGO_HOME", env)
+        self.assertNotIn("CARGO_TARGET_DIR", env)
         self.assertNotIn("CARGO_INCREMENTAL", env)
         self.assertFalse(any(key.startswith("MBX_") for key in env))
         self.assertEqual(env["CARGO_NET_OFFLINE"], "true")
@@ -172,8 +174,9 @@ class RecipeTests(unittest.TestCase):
         target.mkdir()
         binary = target / "pilot-desktop"
         binary.write_bytes(b"faux")
+        binary.chmod(0o755)
         raw = json.dumps(dict(reason="compiler-artifact", target=dict(name="pilot-desktop"), executable=str(binary)))
-        env = dict(CARGO_TARGET_DIR=str(target))
+        env = {}
         with patch.object(day, "execute", side_effect=[raw, "arm64"]) as execute:
             actual = day.build_artifact(self.root, self.root / "native/Cargo.toml", "pilot-desktop", "macos-host",
                                         env, "debug", self.root / "cargo.jsonl")
@@ -242,11 +245,14 @@ class RecipeTests(unittest.TestCase):
             if args[-1] == "--build-input-receipt":
                 return json.dumps(compiled)
             if "--message-format=json-render-diagnostics" in args:
-                target = Path(env["CARGO_TARGET_DIR"])
+                self.assertNotIn("CARGO_TARGET_DIR", env)
+                self.assertNotIn("CARGO_HOME", env)
+                target = self.root / "global-mbx-target"
                 target.mkdir(exist_ok=True)
                 name = args[args.index("--bin") + 1]
                 path = target / name
                 path.write_bytes(("faux:" + name).encode())
+                path.chmod(0o755)
                 return json.dumps(dict(reason="compiler-artifact", target=dict(name=name), executable=str(path)))
             if "Connected.tsx" in args:
                 built = Path(args[-1])

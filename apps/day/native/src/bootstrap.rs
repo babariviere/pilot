@@ -114,9 +114,20 @@ pub fn run(args: Vec<OsString>) -> Result<(), Error> {
     trust.validate().map_err(|_| Error::Identity)?;
     // This includes the existing signature, version and payload inventory checks.
     // A stock/ad-hoc runner, path match or helper file cannot replace this gate.
-    NativePlatform
-        .verify(&root, &trust, &trust.current_build, None)
-        .map_err(|_| Error::Identity)?;
+    // Security.framework's native verifier refuses the AppKit main thread.
+    // Wait before creating the engine, without weakening any signature gate.
+    let verified_root = root.clone();
+    let verified_trust = trust.clone();
+    before_appkit(move || {
+        NativePlatform
+            .verify(
+                &verified_root,
+                &verified_trust,
+                &verified_trust.current_build,
+                None,
+            )
+            .map_err(|_| Error::Identity)
+    })?;
     let canonical = resources.canonicalize().map_err(|_| Error::Unavailable)?;
     if canonical != resources {
         return Err(Error::Identity);
@@ -136,17 +147,20 @@ pub fn run(args: Vec<OsString>) -> Result<(), Error> {
     // All initial filesystem/signature reads precede AppKit's event loop.
     let main = MainThreadMarker::new().ok_or(Error::Unavailable)?;
     nsh_platform_macos::set_ui_sets(vec![nsh_base::registry(), crate::__nsh_native_module()]);
-    let (source, journal, updates) = match launch {
+    let (source, journal, updates, planning_model) = match launch {
         Launch::Successor(receipt) => {
-            let (source, journal, updates) =
-                crate::host::updates::successor(&receipt, root, trust.clone())?;
-            (source, journal, updates)
+            let successor_trust = trust.clone();
+            let (source, journal, updates) = before_appkit(move || {
+                crate::host::updates::successor(&receipt, root, successor_trust)
+            })?;
+            (source, journal, updates, None)
         }
         Launch::Selected(selected) => {
             let NativeSelection {
                 source,
                 journal,
                 app,
+                planning_model,
             } = *selected;
             let connection = pilot_desktop_updater::app_update::Connection::new(
                 pilot_desktop_updater::coordination::Location {
@@ -169,6 +183,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), Error> {
                     app,
                     restore_transaction: None,
                 },
+                planning_model,
             )
         }
     };
@@ -176,10 +191,10 @@ pub fn run(args: Vec<OsString>) -> Result<(), Error> {
         source,
         journal,
         Options {
+            planning_model,
             url_opener: Some(std::sync::Arc::new(crate::host::navigation::macos)),
             updates: Some(updates),
             day: Some(crate::host::ritual::DaySource::system()),
-            ..Default::default()
         },
     )?;
     let bridge = Bridge::new(DayRoot::new(host));
@@ -191,6 +206,17 @@ pub fn run(args: Vec<OsString>) -> Result<(), Error> {
     ApplicationOwner::configured(main, bundle, bridge, configuration)?.run(main)
 }
 
+fn before_appkit<T: Send + 'static>(
+    prepare: impl FnOnce() -> Result<T, Error> + Send + 'static,
+) -> Result<T, Error> {
+    std::thread::Builder::new()
+        .name("day-bootstrap".into())
+        .spawn(prepare)
+        .map_err(|_| Error::Unavailable)?
+        .join()
+        .map_err(|_| Error::Unknown)?
+}
+
 enum Launch {
     Selected(Box<NativeSelection>),
     Successor(PathBuf),
@@ -199,6 +225,7 @@ struct NativeSelection {
     source: Source,
     journal: PathBuf,
     app: Option<AppTarget>,
+    planning_model: Option<String>,
 }
 
 fn launch(args: Vec<OsString>) -> Result<Launch, Error> {
@@ -219,9 +246,14 @@ fn launch(args: Vec<OsString>) -> Result<Launch, Error> {
     let mut args = args.into_iter();
     while let Some(key) = args.next() {
         let value = args.next().ok_or(Error::Invalid)?;
-        if ["--update-transaction", "--update-source", "--update-build"]
-            .iter()
-            .any(|s| key == *s)
+        if [
+            "--update-transaction",
+            "--update-source",
+            "--update-build",
+            "--planning-model",
+        ]
+        .iter()
+        .any(|s| key == *s)
         {
             if native.insert(key, value).is_some() {
                 return Err(Error::Invalid);
@@ -231,6 +263,18 @@ fn launch(args: Vec<OsString>) -> Result<Launch, Error> {
         }
     }
     let (source, journal) = selection(selected)?;
+    // Optional, exact native model selection. No ambient/profile default and no
+    // provider call here. The existing enrollment confirmation still gates New.
+    let planning_model = native
+        .remove(&OsString::from("--planning-model"))
+        .map(|value| value.into_string().map_err(|_| Error::Invalid))
+        .transpose()?;
+    if planning_model
+        .as_ref()
+        .is_some_and(|model| model.trim().is_empty() || model.len() > 256)
+    {
+        return Err(Error::Invalid);
+    }
     let app = if native.is_empty() {
         None
     } else {
@@ -265,12 +309,25 @@ fn launch(args: Vec<OsString>) -> Result<Launch, Error> {
         source,
         journal,
         app,
+        planning_model,
     })))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signature_preparation_runs_off_appkit_and_keeps_refusals() {
+        assert_eq!(
+            before_appkit(|| Ok(MainThreadMarker::new().is_none())),
+            Ok(true)
+        );
+        assert_eq!(
+            before_appkit(|| Err::<(), _>(Error::Identity)),
+            Err(Error::Identity)
+        );
+    }
     #[test]
     fn packaged_resource_identity_has_no_development_fallback() {
         assert_eq!(
@@ -310,5 +367,54 @@ mod tests {
             ));
         }
         assert!(selection(vec![]).is_err());
+    }
+
+    fn selected_args() -> Vec<OsString> {
+        [
+            "--profile",
+            "/tmp/profile",
+            "--port",
+            "1234",
+            "--daemon-id",
+            "daemon",
+            "--lineage-id",
+            "lineage",
+            "--project-id",
+            "project",
+            "--project-path",
+            "/tmp/project",
+            "--journal",
+            "/tmp/window-journal",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect()
+    }
+
+    #[test]
+    fn planning_model_is_explicit_native_selection_not_a_default() {
+        let Launch::Selected(selected) = launch(selected_args()).unwrap() else {
+            panic!("selected launch")
+        };
+        assert_eq!(selected.planning_model, None);
+        let mut args = selected_args();
+        args.extend(["--planning-model".into(), "faux/faux-1".into()]);
+        let Launch::Selected(selected) = launch(args.clone()).unwrap() else {
+            panic!("selected launch")
+        };
+        assert_eq!(selected.planning_model.as_deref(), Some("faux/faux-1"));
+        args.extend(["--planning-model".into(), "other/model".into()]);
+        assert!(launch(args).is_err(), "duplicate authority must refuse");
+        for model in ["".to_owned(), " ".to_owned(), "x".repeat(257)] {
+            let mut args = selected_args();
+            args.extend(["--planning-model".into(), model.into()]);
+            assert!(
+                launch(args).is_err(),
+                "invalid model must refuse before opening"
+            );
+        }
+        let mut args = selected_args();
+        args.extend(["--model".into(), "faux/faux-1".into()]);
+        assert!(launch(args).is_err(), "no alternate model flag");
     }
 }

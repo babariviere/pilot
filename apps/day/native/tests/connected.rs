@@ -24,7 +24,7 @@ use pilot_day_native::{
     bridge::{Bridge, METHODS, restrict},
     contract::Home,
     desk::Desk,
-    host::{Error, NativeHost, Source},
+    host::{Error, NativeHost, Options, Source},
     model::Scenario,
     plan::{PlanAvailability, PlanIdentity, PlanRow, PlanScenario, PlanStage, Planning},
     plan_desk::PlanDesk,
@@ -218,7 +218,18 @@ impl Fixture {
     fn bridge(&self) -> (NativeHost, Bridge) {
         let source: Source = serde_json::from_value(self.info["source"].clone()).unwrap();
         let ledger = self.info["ledger"].as_str().unwrap().into();
-        let host = NativeHost::open_planning(source, ledger, "faux/faux-1".into()).unwrap();
+        // Same composed host path as the production bootstrap. In particular,
+        // New must keep its explicit model when URL/day/update options coexist.
+        let host = NativeHost::open_with_options(
+            source,
+            ledger,
+            Options {
+                planning_model: Some("faux/faux-1".into()),
+                day: Some(pilot_day_native::host::ritual::DaySource::system()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
         (host.clone(), Bridge::new(DayRoot::new(host)))
     }
 }
@@ -275,8 +286,14 @@ fn new_mission_questions_saved_progress_one_submit_and_the_way_back() {
         .as_str()
         .unwrap()
         .to_owned();
+    // This save/reopen test reads after the fixture's durable idle barrier.
+    // Keep late terminal notices from racing its first keypress. The joined
+    // journey below separately exercises that real stale-event refusal.
+    f.cmd("quiet", true);
     f.cmd("generate", true);
     f.cmd("held", false);
+    wait(&mut app, "role:button[Read again]");
+    app.press("role:button[Read again]").unwrap();
     wait(&mut app, "id:interview");
     assert!(!app.screen().enabled("id:submit").unwrap_or(false));
 

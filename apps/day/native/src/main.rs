@@ -9,9 +9,13 @@ fn main() -> std::process::ExitCode {
         };
     }
     #[cfg(target_os = "macos")]
-    if pilot_day_native::bootstrap::run(std::env::args_os().skip(1).collect()).is_ok() {
-        return std::process::ExitCode::SUCCESS;
+    match pilot_day_native::bootstrap::run(std::env::args_os().skip(1).collect()) {
+        Ok(()) => return std::process::ExitCode::SUCCESS,
+        Err(error) => eprintln!(
+            "Pilot could not open its verified package and explicit native selection: {error}"
+        ),
     }
-    eprintln!("Day could not open its verified package and explicit native selection.");
+    #[cfg(not(target_os = "macos"))]
+    eprintln!("Pilot's connected native executable requires macOS.");
     std::process::ExitCode::FAILURE
 }

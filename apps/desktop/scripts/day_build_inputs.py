@@ -47,16 +47,8 @@ def tool(path):
 
 
 def environment(work, tools, inherited, production):
-    """Private writable state; no ambient trust, package hooks or compiler flags."""
-    env = {name: inherited[name] for name in ("PATH", "TMPDIR", "LANG", "SDKROOT") if name in inherited}
-    for name, leaf in (("HOME", "home"), ("CARGO_HOME", "cargo-home")):
-        # An explicitly prepared private dependency cache may be reused. It is
-        # never defaulted to ~/.cargo or a sibling workspace's writable cache.
-        path = Path(inherited[name]) if name != "HOME" and name in inherited else work / leaf
-        if not path.is_absolute():
-            raise ValueError("Private build directories must be absolute")
-        path.mkdir(parents=True, exist_ok=True)
-        env[name] = str(path)
+    """Global MBX defaults; no ambient trust, package hooks or Cargo tuning."""
+    env = {name: inherited[name] for name in ("PATH", "HOME", "TMPDIR", "LANG", "SDKROOT") if name in inherited}
     env.update(NSH_DAY_CLI=str(tools["nsh"]), NSH_DAY_MBX=str(tools["mbx"]),
                NSH_DAY_REAL_CARGO=str(tools["cargo"]), RUSTC=str(tools["rustc"]),
                RUSTDOC=str(tools["rustc"].with_name("rustdoc")),
@@ -129,8 +121,10 @@ def build_artifact(checkout, manifest, name, features, env, profile, log):
     if len(paths) != 1:
         raise ValueError("Expected one genuine Cargo executable artifact: " + name)
     path = paths[0].resolve(strict=True)
-    if not path.is_relative_to(Path(env["CARGO_TARGET_DIR"]).resolve(strict=True)) or not path.is_file():
-        raise ValueError("Cargo artifact escapes private target")
+    # MBX owns the target/cache location. Consume Cargo's exact executable
+    # artifact, not an assumed task-local target or a guessed runner filename.
+    if not path.is_file() or not os.access(path, os.X_OK):
+        raise ValueError("Cargo artifact must be an executable file")
     if execute(["/usr/bin/lipo", "-archs", path], cwd=checkout, env=env).strip() != "arm64":
         raise ValueError("Day input architecture mismatch")
     return path
@@ -189,8 +183,7 @@ def compile_snapshot(checkout, work, output, expected, tools, inherited, product
     if not re.fullmatch(r"mbx \d+\.\d+\.\d+", execute([tools["mbx"], "--version"], cwd=checkout, env=env).strip()):
         raise ValueError("Expected installed mise-managed mbx")
     recipe = bundle.digest(Path(__file__))
-    env.update(PILOT_BUILD_SOURCE=expected, PILOT_BUILD_RECIPE=recipe,
-               CARGO_TARGET_DIR=str(Path(inherited.get("CARGO_TARGET_DIR", work / "target")).resolve()))
+    env.update(PILOT_BUILD_SOURCE=expected, PILOT_BUILD_RECIPE=recipe)
     profile = "release" if production is not None else "debug"
     config = production or dict(schema=1, mode="unconfigured")
     names = host_methods(day)

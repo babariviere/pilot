@@ -36,11 +36,12 @@ The builder extracts Git objects into a fresh private directory, then:
    disables runtime-delivered chunks. `gui-resources.json` binds the full
    inventory to the executable digest, immutable source, target and release.
 
-Cargo is offline, with one job, no incremental compilation and no debug
-information. All writable targets and caches must be private and drained
-before reuse. Ambient trust, provider/discovery credentials, compiler wrappers,
+Cargo is offline and runs through the current Day MBX dispatcher. The builder
+keeps the real HOME so global MBX settings and shared caches apply. It does not
+set Cargo cache/target paths, job counts, debug or incremental settings.
+Ambient trust, provider/discovery credentials, compiler wrappers, Cargo tuning,
 NSH resource overrides and package-manager configuration are not inherited.
-Missing dependencies fail, rather than installing or repairing shared state.
+Missing dependencies fail, rather than bootstrapping or repairing shared state.
 
 ## Receipts and trust
 
@@ -69,17 +70,14 @@ not a successful update.
 
 ## Entry points
 
-Prepare private dependencies/tools separately. The builder never bootstraps
-them. Use absolute qualified tool paths and private directories:
+Prepare dependencies/tools separately. The builder never bootstraps them.
+Use absolute qualified tool paths, global MBX defaults and a fresh output:
 
 ```sh
 export NSH_DAY_CLI=/absolute/installed/longbridge/nsh
 export NSH_DAY_MBX="$(mise which mbx)"
 export NSH_DAY_REAL_CARGO=/absolute/installed/toolchain/bin/cargo
 export RUSTC=/absolute/installed/toolchain/bin/rustc
-export CARGO_HOME=/private/build/cargo-home
-export CARGO_TARGET_DIR=/private/build/target
-export MBX_CACHE_DIR=/private/build/mbx-cache
 export PILOT_DAY_QUICKJS_ARCHIVE=/private/build/quickjs-ng-0.17.0.tar.gz
 python3 apps/desktop/scripts/bundle_runtime.py rust --gui day \
   --source FULL_COMMIT --output /private/build/day-inputs
@@ -92,6 +90,49 @@ fixed app/helper layout. Assembly signs its output, so it is a **separately
 authorized** action, not part of input verification here. App/helper trust
 equality, visual-worker, runtime/native-helper receipts, NativePlatform,
 signature and ExpectedTarget checks remain required.
+
+## Connected launch
+
+Only an authorized, fully assembled and verified distribution can run the
+production bootstrap. Unsigned build inputs and `nsh run Connected.tsx` are
+not connected launch substitutes. Preserve the shipping app and use a separate
+candidate directory, still with the required `Pilot Next.app` bundle name.
+
+```sh
+"$candidate/Pilot Next.app/Contents/MacOS/pilot-desktop" \
+  --profile "$profile" --port "$port" \
+  --daemon-id "$daemon_id" --lineage-id "$lineage_id" \
+  --project-id "$project_id" --project-path "$project_path" \
+  --journal "$candidate/window-journal" \
+  --planning-model "$explicit_model_id"
+```
+
+Every value is an explicit native selection, not a TSX field or credential.
+Keep the same journal for close/reopen. `--planning-model` is optional for
+reading existing work; omitting it leaves new mission planning unavailable.
+Selecting a model does not invoke it. New, final interview submission and
+Start retain their separate confirmation, permission and durable-operation gates.
+Successor/update launch does not infer a new planning model.
+
+Bootstrap verifies the native code seal on a joined worker before loading
+trusted bytecode. The native verifier refuses AppKit's main thread. It never
+falls back to mocks or a weaker signature check.
+
+The selected existing daemon must advertise `dayOverview: 1`, and its exact
+daemon/lineage/project/path must match. Mission controls, planning, intake and
+verification also require their existing versioned contracts. A daemon without
+these capabilities is unavailable, not an empty Today. Do not start a second
+daemon or bypass that check. A compatible daemon update requires separate
+authorization and the existing verified runtime, checkpoint/drain, signed
+reservation, exact-owner exit and new-boot handoff. See
+[Daemon upgrades](../../apps/desktop/docs/daemon-upgrades.md). A pause ACK is
+not a drain proof, and an uncertain handoff cannot be retried.
+
+The demo Preview's incoming rows are examples with no Start actions. The
+connected `Incoming.tsx` route uses `LiveIncoming` and `NewControls`: opening
+a new Slack or Linear request offers Start work, Later and Discard. Start
+then confirms one Build chat and its exact destination. Merely viewing those
+controls sends nothing; testing a real Start needs execution approval.
 
 ## Supported lanes and evidence limits
 
