@@ -93,9 +93,11 @@ signature and ExpectedTarget checks remain required.
 
 ## Connected launch
 
-Only an authorized, fully assembled and verified distribution can run the
-production bootstrap. Unsigned build inputs and `nsh run Connected.tsx` are
-not connected launch substitutes. Preserve the shipping app and use a separate
+The production bootstrap requires a verified, code-sealed native bundle.
+Unsigned build inputs and `nsh run Connected.tsx` are not connected launch
+substitutes. The [connected candidate recipe](day-connected-candidate.md) makes
+that minimal bundle without requiring a second bundled daemon. It is not an
+update/release distribution. Preserve the shipping app and use a separate
 candidate directory, still with the required `Pilot Next.app` bundle name.
 
 ```sh

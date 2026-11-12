@@ -9,6 +9,8 @@ uses the production native host through a separately verified distribution.
 Its [connected launch requirements](../../docs/technical/day-package-inputs.md#connected-launch)
 include explicit native selection and a compatible existing daemon. Build inputs
 or a demo Preview are not a connected daily-driver candidate.
+Use the [connected candidate recipe](../../docs/technical/day-connected-candidate.md)
+to prepare the real native app without installing or updating it.
 
 ## Run
 
