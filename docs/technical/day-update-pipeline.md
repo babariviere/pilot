@@ -1,5 +1,12 @@
 # Day update pipeline qualification
 
+**Current direction:** [Global update preparation](day-global-updates.md) supersedes
+the historical app-only/agents-running and parallel-installer recommendations below.
+Every update now requires global pause-first preparation and official tagged NSH
+app-update machinery. Broken-chat interruption is host-owned and bounded; genuine
+save, signature, storage and process-exit failures remain separate actionable errors.
+The implemented backend increment is not complete native update acceptance.
+
 The tagged-runner [executable handoff audit](day-executable-handoff.md) identifies
 the remaining production bootstrap, delegate, helper and startup-ACK ownership.
 It distinguishes executed layout/native-exit checks from signed Day acceptance.

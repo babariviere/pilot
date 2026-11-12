@@ -260,6 +260,32 @@ test("upgrade release cannot thaw sleep; a later wake may resume its matching ch
 	assert.equal(f.opened.length, 1);
 });
 
+for (const prior of ["updatePaused", "sleepPaused", "inputsPaused", "subscriptionPaused"] as const) {
+	test(`app-update recovery preserves preexisting ${prior} even after current flags change`, async (t) => {
+		const record = checkpoint({ purpose: "app-update" });
+		record.prior[prior] = true;
+		const f = await fixture(t, [{ checkpoint: record }]);
+		assert.equal(f.opened.length, 0);
+		assert.equal((await f.meta()).lifecycleCheckpoint.phase, "checkpointed");
+	});
+}
+
+test("host-confirmed root exit never replays interrupted/Unknown app work on reopen", async (t) => {
+	const f = await fixture(t, [
+		{
+			checkpoint: checkpoint({
+				purpose: "app-update",
+				phase: "unknown",
+				interrupted: true,
+				hostExited: true,
+				quiescent: undefined,
+			}),
+		},
+	]);
+	assert.equal(f.opened.length, 0);
+	assert.equal((await f.meta()).lifecycleCheckpoint.interrupted, true);
+});
+
 test("replacement identity is exact, structural and independent of JSON key order", () => {
 	assert.equal(validLifecycleRuntime(target), true);
 	assert.equal(validLifecycleRuntime({ ...target, runtimeRoot: "/retained/../candidate" }), false);

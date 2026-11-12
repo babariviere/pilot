@@ -80,6 +80,7 @@ import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import type { GitHubImportService } from "./github-import.ts";
 import type { GitHubSetupService } from "./github-setup.ts";
+import { GlobalUpdatePreparation } from "./global-update-preparation.ts";
 import { dispositionTarget, HumanReviews } from "./human-reviews.ts";
 import { InsightsApply } from "./insights-apply.ts";
 import { insightsSetupDefaults } from "./insights-defaults.ts";
@@ -550,7 +551,19 @@ export function createDaemonServer(
 		});
 	liveUpdate?.service.attach(runtimeResources);
 	// Freeze synchronously before loading retained maintenance, before any recovery is admitted.
-	const runtimeReady = liveUpdate?.service.load() ?? Promise.resolve();
+	const globalUpdate =
+		bootstrap && hello?.lineageId
+			? new GlobalUpdatePreparation(
+					new OperationJournal(join(_config.home, "global-update-operations"), {
+						hostId: "daemon",
+						daemonId: hello.daemonId,
+						lineageId: hello.lineageId,
+					}),
+					runtimeResources,
+					sessions,
+				)
+			: undefined;
+	const runtimeReady = Promise.all([liveUpdate?.service.load(), globalUpdate?.load()]).then(() => undefined);
 	let lifecycleInterrupted = false;
 	const reservations = new UpdateReservation(
 		new RuntimeResources(
@@ -625,6 +638,16 @@ export function createDaemonServer(
 	bootstrap?.updates(async (action, value) => {
 		await runtimeReady;
 		if (!value || typeof value !== "object") throw new Error("update_receipt_invalid");
+		if ("globalUpdate" in value) {
+			// Existing native owner proof only. Never an agent/session or TSX route.
+			// A preparation receipt is not signature/process/replacement authority.
+			if (!globalUpdate || Object.keys(value).join() !== "globalUpdate") throw new Conflict("Invalid global update");
+			const operation = value.globalUpdate as DurableOperation;
+			if (action === "inspect") return (await globalUpdate.lookup(operation)) ?? null;
+			if (action === "prepare") return globalUpdate.prepare(operation);
+			throw new Conflict("Native verified global update release is not configured");
+		}
+		if (globalUpdate?.frozen) throw new Conflict("Global update owns admissions; inspect the original operation");
 		const receipt = value as ReservationReceipt & {
 			liveUpdate?: LiveUpdateTarget & { id: string; guiBuild: string };
 		};
@@ -1019,7 +1042,7 @@ export function createDaemonServer(
 	// Only registered idempotent handlers resume. An interrupted handler always retains the same target.
 	let operationRecovery: Promise<void> | undefined;
 	const recoverOperations = () => {
-		if (journal && !operationRecovery && !legacyAdmissionFrozen && !liveUpdate?.service.frozen)
+		if (journal && !operationRecovery && !legacyAdmissionFrozen && !liveUpdate?.service.frozen && !globalUpdate?.frozen)
 			operationRecovery = journal
 				.recover(admitOperation, (op) => !isRetiredDevboxOperation(op.kind))
 				.catch((error) => console.warn("pilotd: operation recovery", error))

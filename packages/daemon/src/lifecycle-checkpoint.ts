@@ -66,7 +66,7 @@ export function matchingRuntime(left: LifecycleRuntime, right: LifecycleRuntime)
 export interface LifecycleCheckpoint {
 	schema: 1;
 	operationId: string;
-	purpose: "daemon-upgrade" | "daemon-stop" | "daemon-restart" | "mission-pause";
+	purpose: "app-update" | "daemon-upgrade" | "daemon-stop" | "daemon-restart" | "mission-pause";
 	incarnation: string;
 	conversationId?: string;
 	originBoot?: string;
@@ -89,6 +89,11 @@ export interface LifecycleCheckpoint {
 	childrenConfirmed?: true;
 	/** Exact-operation durable agent context write, not proof of model consumption. */
 	updateNoticeSaved?: true;
+	/** Host joined the exact kernel's exit, even if its checkpoint reply was lost.
+	 * This is not a descendant-exit or durable kernel-close acknowledgement. */
+	hostExited?: true;
+	/** No cooperative checkpoint. Keep effects Unknown and never auto-resume this run. */
+	interrupted?: true;
 	census?: { jobs: number; hasChildren: boolean };
 	/** Set only after final child inventory, clear independent census, close ACK and worker exit. */
 	quiescent?: true;

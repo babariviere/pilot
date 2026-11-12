@@ -9,6 +9,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { KernelCommand, KernelPacket } from "@pilot/kernel";
 import { daemonHello } from "./hello.ts";
 import { ModelCatalog } from "./models.ts";
+import { canonicalJSON, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { ownRuntime } from "./runtime-owner.ts";
 import { createDaemonServer } from "./server.ts";
@@ -83,7 +84,7 @@ async function fixture(t: TestContext) {
 	];
 	args[12] = hello;
 	args[21] = owner;
-	createDaemonServer(...args);
+	const server = createDaemonServer(...args);
 	owner.ready(hello);
 	t.after(async () => {
 		await owner.close();
@@ -91,6 +92,7 @@ async function fixture(t: TestContext) {
 		await terminals.shutdown();
 		await rm(root, { recursive: true, force: true });
 	});
+	await server.runtimeReady;
 	await sessions.load();
 	const chat = await sessions.spawn({ cwd: home, message: "synthetic initial input" });
 	const deadline = Date.now() + 3_000;
@@ -132,6 +134,47 @@ async function fixture(t: TestContext) {
 		hello,
 	};
 }
+
+test("native global preparation binds original target/capture and exposes lookup only", async (t) => {
+	const f = await fixture(t);
+	const host = { hostId: "daemon", daemonId: f.hello.daemonId, lineageId: f.hello.lineageId! };
+	const payload = canonicalJSON({ captureHash: "c".repeat(64), app: { source: "a".repeat(40), build: "1000.1" } });
+	const op = {
+		schemaVersion: 1,
+		operationId: randomUUID(),
+		producerId: randomUUID(),
+		sequence: 1,
+		origin: host,
+		destination: host,
+		targetId: "global-update",
+		kind: "global-update-prepare",
+		payload,
+		payloadHash: payloadHash(payload),
+	};
+	const prepared = await f.request("prepare", { globalUpdate: op });
+	assert.equal(prepared.status, 200);
+	assert.equal(prepared.receipt.state, "accepted");
+	const commands = f.commands.length;
+	assert.deepEqual((await f.request("inspect", { globalUpdate: op })).receipt, prepared.receipt);
+	assert.deepEqual((await f.request("prepare", { globalUpdate: op })).receipt, prepared.receipt);
+	assert.equal(f.commands.length, commands, "lookup/repeated prepare never re-enters pause/cancel");
+	assert.equal(
+		(await f.request("prepare", { globalUpdate: { ...op, operationId: randomUUID(), producerId: randomUUID() } }))
+			.status,
+		409,
+	);
+	assert.equal(
+		(await f.request("prepare", { operationId: randomUUID() })).status,
+		409,
+		"legacy updater cannot supersede the global hold",
+	);
+	assert.equal((await f.request("cancel", { globalUpdate: op })).status, 409, "no unverified release authority");
+	assert.equal(
+		(await f.request("verify", { globalUpdate: op })).status,
+		409,
+		"pause receipt is not installation proof",
+	);
+});
 
 test("update blocker GET pins identity and only observes work", async (t) => {
 	const f = await fixture(t);

@@ -7918,6 +7918,7 @@ ${run.excerpt}`,
 	}
 
 	private lifecycleCheckpoint?: Promise<void>;
+	private globalUpdatePreparing = false;
 	/** Flow reviewer chats are owned work, not invented mission memberships. */
 	missionWorkOwner(id: string): string {
 		if (this.missions?.membership(id)) return id;
@@ -8116,9 +8117,10 @@ ${run.excerpt}`,
 	/** Explicit managed lifecycle only. Save recovery before interrupting any kernel. */
 	checkpointLifecycle(
 		operationId: string,
-		purpose: "daemon-upgrade" | "daemon-stop" | "daemon-restart",
+		purpose: "app-update" | "daemon-upgrade" | "daemon-stop" | "daemon-restart",
 		replacement?: LifecycleRuntime,
 	): Promise<void> {
+		if (this.closing) return Promise.reject(new Conflict("Lifecycle preparation cannot enter during shutdown"));
 		// Stop/restart retains this runtime. Legacy callers cannot silently authorize
 		// recovery under an unspecified new runtime after the original boot exits.
 		if (!replacement && this.lifecycleRuntime?.runtimeRoot && this.lifecycleRuntime.build)
@@ -8140,17 +8142,19 @@ ${run.excerpt}`,
 
 	private async checkpointLifecycleWorkers(
 		operationId: string,
-		purpose: "daemon-upgrade" | "daemon-stop" | "daemon-restart" | "mission-pause",
+		purpose: "app-update" | "daemon-upgrade" | "daemon-stop" | "daemon-restart" | "mission-pause",
 		replacement?: LifecycleRuntime,
 		selected?: Set<string>,
 	): Promise<void> {
 		if (!selected) {
 			if (!this.updateGate.frozen) throw new Error("Lifecycle checkpoint requires frozen admissions");
+			if (purpose === "app-update") this.globalUpdatePreparing = true;
 			this.updateGate.pause();
 			this.actionRunner?.setUpdatePaused(true);
 		}
 		for (const [id, setup] of this.workspaceSetups) if (!selected || selected.has(id)) setup.controller.abort();
 		let preparationTimer: ReturnType<typeof setTimeout> | undefined;
+		let preparationTimedOut = false;
 		try {
 			await Promise.race([
 				Promise.all(
@@ -8172,11 +8176,19 @@ ${run.excerpt}`,
 				),
 				new Promise<never>((_, reject) => {
 					preparationTimer = setTimeout(
-						() => reject(new Error("Lifecycle preparation checkpoint timed out")),
-						120_000,
+						() => {
+							preparationTimedOut = true;
+							reject(new Error("Lifecycle preparation checkpoint timed out"));
+						},
+						purpose === "app-update" ? 1_000 : 120_000,
 					);
 				}),
 			]);
+		} catch (error) {
+			if (purpose !== "app-update" || !preparationTimedOut) throw error;
+			// Do not wait on a broken startup/ready promise. The global fence also
+			// guards late startup/dispatch below. Outstanding process admissions
+			// remain separate blockers, never an invented empty census.
 		} finally {
 			clearTimeout(preparationTimer);
 		}
@@ -8243,26 +8255,46 @@ ${run.excerpt}`,
 							type: "checkpointLifecycle",
 							requestId: closing.requestId,
 							operationId,
-							...(purpose === "daemon-upgrade" ? { notifyUpdate: true } : {}),
+							...(purpose === "daemon-upgrade" || purpose === "app-update" ? { notifyUpdate: true } : {}),
 						}),
 						new Promise<never>((_, reject) => {
-							timer = setTimeout(() => reject(new Error("Kernel lifecycle checkpoint timed out")), 10_000);
+							timer = setTimeout(
+								() => reject(new Error("Kernel lifecycle checkpoint timed out")),
+								purpose === "app-update" ? 1_000 : 10_000,
+							);
 						}),
 					]);
 					acknowledged = true;
+				} catch (error) {
+					// NSH preparation is host-owned. A broken chat/IPC channel cannot
+					// veto its pause. Exit/storage failures below remain real failures;
+					// missing checkpoint/descendant evidence remains explicitly Unknown.
+					if (purpose !== "app-update") throw error;
+					checkpoint.interrupted = true;
 				} finally {
 					clearTimeout(timer);
 					// Join confirmed exit even on a failed ACK. Never overlap storage owners.
 					try {
-						await worker.close();
+						if (purpose === "app-update") {
+							await Promise.race([
+								worker.close(),
+								new Promise<never>((_, reject) => {
+									timer = setTimeout(() => reject(new Error("Kernel process exit timed out")), 12_000);
+								}),
+							]);
+						} else await worker.close();
 						exited = true;
 					} catch (error) {
 						persistenceFailure = { error };
 					}
+					clearTimeout(timer);
 					this.lifecycleClosing.delete(worker);
 					if (exited && this.workers.get(id) === worker) this.workers.delete(id);
 					if (exited) this.lastUse.delete(id);
 					if (meta.lifecycleCheckpoint === checkpoint) {
+						if (exited) checkpoint.hostExited = true;
+						if (purpose === "app-update" && (!acknowledged || !closing.censusClear))
+							checkpoint.interrupted = true;
 						if (acknowledged && closing.censusClear && exited) checkpoint.quiescent = true;
 						if (checkpoint.phase !== "stopped")
 							checkpoint.phase = checkpoint.quiescent ? "checkpointed" : "unknown";
@@ -8275,6 +8307,7 @@ ${run.excerpt}`,
 					}
 				}
 				if (persistenceFailure) throw persistenceFailure.error;
+				if (purpose === "app-update") return;
 				if (!acknowledged) throw new Error("Kernel lifecycle checkpoint was not acknowledged");
 				if (!closing.censusClear)
 					throw new Error(
@@ -8570,6 +8603,7 @@ ${run.excerpt}`,
 	/** Called only after a maintenance owner has released its own admission hold. */
 	async resumeMaintenance(): Promise<void> {
 		if (this.updateGate.frozen) return;
+		this.globalUpdatePreparing = false;
 		if (this.maintenanceLoaded) {
 			// The maintenance owner has released its freeze. Clear the legacy tool-pause
 			// lease before admitting recovery, not any independent owner's freeze.
@@ -8655,6 +8689,17 @@ ${run.excerpt}`,
 		// Parked Stop persists an abort. Reopening after release delivers that abort with
 		// stopOnOpen, never resumes the previously interrupted model or children first.
 		if (checkpoint.phase === "stopped") return meta.pending?.[0]?.type === "abort";
+		// A global app preparation owns only the pauses it introduced. An idle
+		// kernel may already have a tool/update hold even without a current user
+		// input hold. Never clear it just because the app update ended.
+		if (
+			checkpoint.purpose === "app-update" &&
+			(checkpoint.prior.updatePaused ||
+				checkpoint.prior.sleepPaused ||
+				checkpoint.prior.inputsPaused ||
+				checkpoint.prior.subscriptionPaused)
+		)
+			return false;
 		return (
 			checkpoint.phase === "checkpointed" &&
 			this.missionAllowsUpgradeResume(meta.id, checkpoint) &&
@@ -11620,6 +11665,7 @@ ${run.excerpt}`,
 		// Stop is intentionally admitted under an upgrade fence. Join its entire
 		// operation before the final save barrier and profile-lease release.
 		await Promise.allSettled([...this.stoppingInputs]);
+		await this.lifecycleCheckpoint?.catch(() => undefined);
 		await Promise.all([...this.saving.values()]);
 		await this.aiUsage.close();
 		await this.legacyUsageMigration;
@@ -11782,9 +11828,10 @@ ${run.excerpt}`,
 						return;
 					}
 				}
+				if (this.globalUpdatePreparing) return;
 				const worker = await this.ensureWorker(id);
 				await worker.ready;
-				if (this.closing || this.sleepPause) return;
+				if (this.closing || this.sleepPause || this.globalUpdatePreparing) return;
 				if (this.workers.get(id) !== worker) throw new WorkerUnavailable("Kernel exited during startup");
 				if (checkpoint?.phase === "resume-admitted" && meta.lifecycleCheckpoint === checkpoint) {
 					checkpoint.phase = "resume-acknowledged";
@@ -11818,7 +11865,7 @@ ${run.excerpt}`,
 							await this.refreshMainWorkspace(id);
 						}
 						await this.save(meta);
-						if (this.closing || this.sleepPause) return;
+						if (this.closing || this.sleepPause || this.globalUpdatePreparing) return;
 						// Stop can replace the queue while this write is in flight.
 						if (meta.pending[0] !== command) continue;
 						// User work arriving during persistence wins over an automatic notification.
@@ -12132,6 +12179,7 @@ ${run.excerpt}`,
 				})()
 			: undefined;
 		// Only the factory's synchronous prefix. Awaited isolation/readiness is not main-thread CPU work.
+		if (this.globalUpdatePreparing) throw new ServiceUnavailable("Global update preparation fenced worker admission");
 		if (meta.pending?.[0]?.type !== "abort") this.assertMissionWorkOpen(id);
 		if (checkpoint?.phase === "resume-admitted" && !this.missionAllowsUpgradeResume(id, checkpoint))
 			throw new Conflict("Mission controls changed before worker admission");
@@ -12418,7 +12466,7 @@ ${run.excerpt}`,
 				closing.censusClear =
 					packet.jobs === 0 &&
 					packet.hasChildren === false &&
-					(closing.checkpoint.purpose !== "daemon-upgrade" || noticeSaved);
+					(!["daemon-upgrade", "app-update"].includes(closing.checkpoint.purpose) || noticeSaved);
 			}
 			return;
 		}
