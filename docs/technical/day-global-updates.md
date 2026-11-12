@@ -50,6 +50,14 @@ not another installer or service manager.
   checkpoint/exit, with prior uncertain ownership saved first. Current-operation
   unproven shutdown, independent jobs/children and other resource blockers remain
   blockers. State reconciliation never supplies the missing process proof.
+- Normal recovery also handles recognized old updater lifecycle records without
+  a provider error string. It preserves the exact checkpoint and queued intent,
+  records `persisted-lifecycle` provenance, clears stale working/setup flags, and
+  keeps uncertain work held through cold reopen and release. It does not require
+  Force or a model response. Current-operation uncertainty, mismatched session
+  or host identity and mission-owned checkpoints are not relabeled this way.
+  Unreadable/truncated storage and failed writes remain real failures. Force
+  cannot waive them or authorize manual repair/deletion of durable history.
 
 The daemon exposes prepare/lookup/fresh verification through its authenticated native
 runtime-owner channel (`/__pilot_runtime_update/v1`, `receipt.globalUpdate`).

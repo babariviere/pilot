@@ -479,3 +479,260 @@ test("an uncertain native release cannot be resent or replaced by a fresh operat
 	assert.equal(checks, 1);
 	assert.equal(f.starts(), 4);
 });
+
+test("normal update quarantines stale persisted lifecycle bookkeeping without requiring an error string or Force", async (t) => {
+	const f = await fixture(t);
+	await f.sessions.shutdown();
+	const prior = new Map<string, Record<string, unknown>>();
+	for (const [index, chat] of f.chats.entries()) {
+		const path = join(f.home, "sessions", chat.id, "meta.json");
+		const meta = JSON.parse(await readFile(path, "utf8"));
+		delete meta.failure;
+		delete meta.inputError;
+		meta.working = true;
+		meta.initializing = true;
+		meta.inputsPaused = index === 0;
+		meta.pending = [{ type: "input", requestId: randomUUID(), content: draft, mode: "followUp" }];
+		meta.lifecycleCheckpoint = {
+			schema: 1,
+			operationId: randomUUID(),
+			purpose: "app-update",
+			incarnation: "old-database-runtime:1",
+			sessionCreatedAt: meta.createdAt,
+			inputGeneration: meta.inputGeneration ?? 0,
+			inputControlRevision: meta.inputControlRevision ?? 0,
+			prior: {
+				working: true,
+				updatePaused: false,
+				sleepPaused: false,
+				inputsPaused: index === 0,
+				subscriptionPaused: false,
+			},
+			children: [],
+			phase: ["checkpointing", "resume-admitted", "unknown", "stopped"][index],
+		};
+		await writeFile(path, JSON.stringify(meta));
+		prior.set(chat.id, meta);
+	}
+	let starts = 0;
+	const cold = new SessionManager(f.home, new ProjectStore(f.home), undefined, {
+		title: async () => undefined,
+		worker: () => {
+			starts++;
+			throw new Error("stale database bookkeeping is not a fresh execution");
+		},
+	});
+	f.managers.push(cold);
+	const independent = new RuntimeAdmission();
+	const job = independent.begin({ kind: "job", id: "actual-owned-job" });
+	t.after(job);
+	const resources = new RuntimeResources([cold, independent]);
+	const hold = resources.freezeAdmissions();
+	t.after(hold);
+	const preparation = new GlobalUpdatePreparation(
+		new OperationJournal(join(f.home, "operations"), host),
+		resources,
+		cold,
+	);
+	await preparation.load();
+	await cold.load(true);
+	const op = operation();
+	const receipt = await preparation.prepare(op);
+	assert.equal(receipt.state, "accepted");
+	assert.deepEqual(
+		(await preparation.verify(op)).blockers,
+		[{ kind: "job", id: "actual-owned-job" }],
+		"real process evidence is not bookkeeping",
+	);
+	job();
+	assert.deepEqual((await preparation.verify(op)).blockers, []);
+	for (const chat of f.chats) {
+		const meta = JSON.parse(await readFile(join(f.home, "sessions", chat.id, "meta.json"), "utf8"));
+		assert.equal(meta.updateRecovery.kind, "persisted-lifecycle");
+		assert.deepEqual(meta.lifecycleCheckpoint, prior.get(chat.id)!.lifecycleCheckpoint);
+		assert.deepEqual(meta.pending, prior.get(chat.id)!.pending);
+		assert.equal(meta.inputsPaused, prior.get(chat.id)!.inputsPaused);
+		assert.equal(meta.working, false);
+		assert.equal(meta.initializing, undefined);
+		assert.equal(meta.failure, undefined, "recovery does not manufacture a provider/storage failure");
+	}
+	await cold.shutdown();
+	const inconsistentPath = join(f.home, "sessions", f.chats[3]!.id, "meta.json");
+	const inconsistent = JSON.parse(await readFile(inconsistentPath, "utf8"));
+	delete inconsistent.lifecycleCheckpoint;
+	await writeFile(inconsistentPath, JSON.stringify(inconsistent));
+	const again = new SessionManager(f.home, new ProjectStore(f.home), undefined, {
+		title: async () => undefined,
+		worker: () => {
+			starts++;
+			throw new Error("persisted lifecycle recovery must not restart after reopen");
+		},
+	});
+	f.managers.push(again);
+	const retained = new GlobalUpdatePreparation(
+		new OperationJournal(join(f.home, "operations"), host),
+		new RuntimeResources([again]),
+		again,
+	);
+	await retained.load();
+	await again.load(true);
+	const recoveredInconsistent = JSON.parse(await readFile(inconsistentPath, "utf8"));
+	assert.deepEqual(recoveredInconsistent.updateRecovery.prior.lifecycleCheckpoints, [
+		prior.get(f.chats[3]!.id)!.lifecycleCheckpoint,
+	]);
+	assert.deepEqual(
+		await retained.prepare(op),
+		receipt,
+		"reopen reads the original normal-operation receipt, not a new pause",
+	);
+	hold();
+	await retained.release(
+		operation("global-update-release", { prepareId: op.operationId, prepareHash: op.payloadHash }),
+		op,
+		async () => {},
+	);
+	assert.equal(starts, 0, "normal update never replays uncertain persisted work");
+	assert.equal(await readFile(join(f.home, "saved-native-capture"), "utf8"), draft);
+});
+
+test("normal recovery never relabels current-operation, mismatched-identity or mission ownership as stale bookkeeping", async (t) => {
+	const f = await fixture(t);
+	await f.sessions.shutdown();
+	const op = operation();
+	for (const [index, chat] of f.chats.entries()) {
+		const path = join(f.home, "sessions", chat.id, "meta.json");
+		const meta = JSON.parse(await readFile(path, "utf8"));
+		delete meta.failure;
+		delete meta.inputError;
+		meta.lifecycleCheckpoint = {
+			schema: 1,
+			operationId: index === 0 ? op.operationId : randomUUID(),
+			purpose: index === 2 ? "mission-pause" : "app-update",
+			incarnation: "old-runtime:1",
+			...(index === 3 ? { host: { daemonId: "another-daemon", lineageId: "another-lineage" } } : {}),
+			sessionCreatedAt: meta.createdAt + (index === 1 ? 1 : 0),
+			inputGeneration: meta.inputGeneration ?? 0,
+			inputControlRevision: meta.inputControlRevision ?? 0,
+			prior: {
+				working: true,
+				updatePaused: false,
+				sleepPaused: false,
+				inputsPaused: false,
+				subscriptionPaused: false,
+			},
+			children: [],
+			phase: "unknown",
+		};
+		await writeFile(path, JSON.stringify(meta));
+	}
+	const cold = new SessionManager(f.home, new ProjectStore(f.home), undefined, {
+		title: async () => undefined,
+		worker: () => {
+			throw new Error("lookup/recovery must not create an executor");
+		},
+	});
+	f.managers.push(cold);
+	const resources = new RuntimeResources([cold]);
+	const hold = resources.freezeAdmissions();
+	t.after(hold);
+	const preparation = new GlobalUpdatePreparation(
+		new OperationJournal(join(f.home, "operations"), host),
+		resources,
+		cold,
+	);
+	await preparation.load();
+	await cold.load(true);
+	assert.equal((await preparation.prepare(op)).state, "accepted");
+	const blockers = (await preparation.verify(op)).blockers;
+	for (const chat of f.chats) {
+		assert.ok(blockers.some((b) => b.id === `lifecycle:${chat.id}`));
+		const meta = JSON.parse(await readFile(join(f.home, "sessions", chat.id, "meta.json"), "utf8"));
+		assert.equal(meta.updateRecovery, undefined);
+	}
+});
+
+test("normal preparation checkpoints a live peer with stale database ownership without replaying its uncertain prior work", async (t) => {
+	const f = await fixture(t);
+	const meta = (
+		f.sessions as unknown as {
+			metas: Map<
+				string,
+				{
+					createdAt: number;
+					inputGeneration?: number;
+					inputControlRevision?: number;
+					lifecycleCheckpoint?: LifecycleCheckpoint;
+					updateRecovery?: { kind: string; prior: { lifecycleCheckpoints?: LifecycleCheckpoint[] } };
+				}
+			>;
+		}
+	).metas.get(f.chats[0]!.id)!;
+	const prior: LifecycleCheckpoint = {
+		schema: 1,
+		operationId: randomUUID(),
+		purpose: "app-update",
+		incarnation: "old-persisted-owner:1",
+		sessionCreatedAt: meta.createdAt,
+		inputGeneration: meta.inputGeneration ?? 0,
+		inputControlRevision: meta.inputControlRevision ?? 0,
+		prior: { working: true, updatePaused: false, sleepPaused: false, inputsPaused: false, subscriptionPaused: false },
+		children: [],
+		phase: "resume-admitted",
+	};
+	meta.lifecycleCheckpoint = prior;
+	const op = operation();
+	assert.equal((await f.preparation.prepare(op)).state, "accepted");
+	assert.equal(meta.updateRecovery?.kind, "persisted-lifecycle");
+	assert.deepEqual(meta.updateRecovery.prior.lifecycleCheckpoints, [prior]);
+	assert.equal(meta.lifecycleCheckpoint.operationId, op.operationId);
+	assert.equal(meta.lifecycleCheckpoint.hostExited, true);
+	assert.equal(
+		meta.lifecycleCheckpoint.quiescent,
+		true,
+		"fresh acknowledged checkpoint still needs independent process inspection",
+	);
+	await f.preparation.release(
+		operation("global-update-release", { prepareId: op.operationId, prepareHash: op.payloadHash }),
+		op,
+		async () => {},
+	);
+	await f.settle();
+	assert.equal(f.starts(), 4, "normal maintenance does not retry uncertain work from old persisted ownership");
+});
+
+for (const damage of ["truncated", "identity"]) {
+	test(`normal update cannot waive ${damage} retained storage`, async (t) => {
+		const f = await fixture(t);
+		await f.sessions.shutdown();
+		const path = join(f.home, "sessions", f.chats[0]!.id, "meta.json");
+		const original = await readFile(path, "utf8");
+		const damaged = damage === "truncated" ? '{"id":' : JSON.stringify({ ...JSON.parse(original), id: randomUUID() });
+		await writeFile(path, damaged);
+		let starts = 0;
+		const cold = new SessionManager(f.home, new ProjectStore(f.home), undefined, {
+			title: async () => undefined,
+			worker: () => {
+				starts++;
+				throw new Error("damaged storage must not open a model");
+			},
+		});
+		f.managers.push(cold);
+		const resources = new RuntimeResources([cold]);
+		const hold = resources.freezeAdmissions();
+		t.after(hold);
+		const preparation = new GlobalUpdatePreparation(
+			new OperationJournal(join(f.home, "operations"), host),
+			resources,
+			cold,
+		);
+		await preparation.load();
+		await cold.load(true);
+		const op = operation();
+		const receipt = await preparation.prepare(op);
+		assert.equal(receipt.state, "pending", "actual unreadable/identity damage is not stale bookkeeping");
+		assert.match(JSON.stringify(receipt.result), /readable retained chat state/);
+		assert.equal(await readFile(path, "utf8"), damaged, "no history deletion or live database repair");
+		assert.equal(starts, 0);
+		assert.deepEqual(await preparation.prepare(op), receipt, "no recovery effect replay after storage failure");
+	});
+}

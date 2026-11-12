@@ -33,7 +33,10 @@ function operation(): DurableOperation {
 	};
 }
 
-async function fixture(t: TestContext, failure: "provider-refusal" | "provider-error" | "missing-workspace") {
+async function fixture(
+	t: TestContext,
+	failure: "provider-refusal" | "provider-error" | "missing-workspace" | "stale-lifecycle",
+) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-bundled-recovery-"));
 	const id = randomUUID();
 	const directory = join(home, "sessions", id);
@@ -64,7 +67,9 @@ async function fixture(t: TestContext, failure: "provider-refusal" | "provider-e
 		updatePaused: true,
 		inputGeneration: 4,
 		inputControlRevision: 2,
-		inputError: failure === "provider-refusal" ? history : `${failure}: saved failure`,
+		...(failure !== "stale-lifecycle"
+			? { inputError: failure === "provider-refusal" ? history : `${failure}: saved failure` }
+			: {}),
 		...(failure === "missing-workspace" ? { failure: `${failure}: saved failure` } : {}),
 		lifecycleCheckpoint: checkpoint,
 	};
@@ -81,7 +86,7 @@ async function fixture(t: TestContext, failure: "provider-refusal" | "provider-e
 	const children: ChildProcess[] = [];
 	const opened: string[] = [];
 	function manager() {
-		return new SessionManager(home, new ProjectStore(home), undefined, {
+		const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
 			title: async () => undefined,
 			worker: (spec, receive, exit) => {
 				opened.push(spec.sessionId);
@@ -94,6 +99,12 @@ async function fixture(t: TestContext, failure: "provider-refusal" | "provider-e
 				return new Worker(spec, receive, exit, undefined, { child });
 			},
 		});
+		sessions.bindLifecycleRuntime({
+			boot: "new-boot",
+			host: { daemonId: identity.daemonId, lineageId: identity.lineageId },
+			build: null,
+		});
+		return sessions;
 	}
 	const managers: SessionManager[] = [];
 	t.after(async () => {
@@ -152,7 +163,7 @@ async function fixture(t: TestContext, failure: "provider-refusal" | "provider-e
 	};
 }
 
-for (const failure of ["provider-refusal", "provider-error", "missing-workspace"] as const) {
+for (const failure of ["provider-refusal", "provider-error", "missing-workspace", "stale-lifecycle"] as const) {
 	test(`normal update owns persisted ${failure} recovery beside healthy work and cold reopen`, async (t) => {
 		const f = await fixture(t, failure);
 		const op = operation();
@@ -170,7 +181,10 @@ for (const failure of ["provider-refusal", "provider-error", "missing-workspace"
 			op.operationId,
 			"update recovery must durably own the cold persisted failure, not silently skip it",
 		);
-		assert.equal(recovered.updateRecovery.kind, "persisted-failure");
+		assert.equal(
+			recovered.updateRecovery.kind,
+			failure === "stale-lifecycle" ? "persisted-lifecycle" : "persisted-failure",
+		);
 		assert.equal(recovered.updateRecovery.prior.working, true);
 		assert.equal(recovered.working, false, "failed work is interrupted, not restarted or claimed complete");
 		assert.deepEqual(
@@ -178,7 +192,14 @@ for (const failure of ["provider-refusal", "provider-error", "missing-workspace"
 			f.checkpoint,
 			"original uncertainty/provenance must not be erased",
 		);
-		assert.ok(recovered.inputError, "provider refusal/error remains inspectable");
+		if (failure === "stale-lifecycle")
+			assert.equal(recovered.inputError, undefined, "recovery does not invent a provider error");
+		else assert.ok(recovered.inputError, "provider refusal/error remains inspectable");
+		assert.deepEqual(
+			(await f.preparation.verify(op)).blockers,
+			[],
+			"historical bookkeeping is not a permanent update veto",
+		);
 		assert.equal(f.opened.includes(f.id), false);
 		await f.assertSaved();
 		const opened = [...f.opened];

@@ -1,19 +1,18 @@
 import assert from "node:assert/strict";
-import childProcess, { type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mock, test } from "node:test";
+import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { KernelCommand, KernelPacket } from "@pilot/kernel";
 import type { AgentEvent } from "@pilot/protocol";
 import { ServiceUnavailable } from "./errors.ts";
 import { ProjectStore } from "./projects.ts";
 import type { SessionWorker } from "./sessions.ts";
-import { SessionManager } from "./sessions.ts";
+import { SessionManager, Worker } from "./sessions.ts";
 
 test("update reservation accepts idle or drained sessions and never drains workers itself", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-idle-update-"));
@@ -144,13 +143,15 @@ test("real Worker blocks accepted-before-working and queued inbox gaps until a f
 			return true;
 		},
 	});
-	const fork = mock.method(childProcess, "fork", () => child as unknown as ChildProcess);
-	syncBuiltinESMExports();
-	const sessions = new SessionManager(home, new ProjectStore(home), undefined, { title: async () => undefined });
+	// Inject this one transport. A process-wide fork mock can also catch the
+	// unrelated spare-worker timer under load and manufacture a second owner.
+	const sessions = new SessionManager(home, new ProjectStore(home), undefined, {
+		title: async () => undefined,
+		worker: (spec, receive, exit) =>
+			new Worker(spec, receive, exit, undefined, { child: child as unknown as ChildProcess }),
+	});
 	t.after(async () => {
 		await sessions.shutdown();
-		fork.mock.restore();
-		syncBuiltinESMExports();
 		await rm(home, { recursive: true, force: true });
 	});
 	await sessions.load();

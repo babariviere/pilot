@@ -599,10 +599,12 @@ interface SessionMeta extends OutcomeMeta {
 	updateRecovery?: {
 		operationId: string;
 		at: number;
-		kind: "persisted-failure";
+		kind: "persisted-failure" | "persisted-lifecycle";
 		prior: {
 			working: boolean;
 			initializing: boolean;
+			/** Explicit Stop/model recovery advances this fence; missing checkpoints do not. */
+			inputGeneration?: number;
 			preparing?: { source: string; baseBranch?: string };
 			lifecycleCheckpoints?: import("./lifecycle-checkpoint.ts").LifecycleCheckpoint[];
 		};
@@ -1894,7 +1896,7 @@ export class SessionManager {
 	private insightsTransitionStore?: import("./insights-transition-store.ts").InsightsTransitionStore;
 	private readonly insightsOwnerConfigurationWorkers = new WeakSet<SessionWorker>();
 	private readonly insightsOwnerReady = new WeakMap<SessionWorker, Promise<void>>();
-	private insightsInventoryQualified = false;
+	private sessionInventoryQualified = false;
 	private insightsBacklogCalls = 0;
 	private readonly insightsBacklogPending = new Map<string, Set<Promise<void>>>();
 	private readonly insightsStopEpochs = new Map<string, number>();
@@ -2170,7 +2172,7 @@ export class SessionManager {
 		const identity = this.insightsLegacyIdentity(id, projectId, missionId),
 			meta = this.require(id);
 		if (
-			!this.insightsInventoryQualified ||
+			!this.sessionInventoryQualified ||
 			this.closing ||
 			identity.enabled ||
 			meta.working ||
@@ -2346,7 +2348,7 @@ export class SessionManager {
 	}
 	/** Boolean refusal fence only. No summaries, source reads, startup or grant repair. */
 	assertNoLegacyInsights(): void {
-		if (!this.insightsInventoryQualified || this.closing) throw new Conflict("session_inventory_unavailable");
+		if (!this.sessionInventoryQualified || this.closing) throw new Conflict("session_inventory_unavailable");
 		for (const meta of this.metas.values())
 			if ((meta.role === "insights" && !meta.insightsOwner) || meta.insightsGrant)
 				throw new Conflict("legacy_transition_required");
@@ -2355,7 +2357,7 @@ export class SessionManager {
 	}
 	/** A committed transfer denies the old identity; it does not authorize another old executor. */
 	assertOnlyTransferredLegacy(selector: import("@pilot/protocol").InsightsLegacySelector): void {
-		if (!this.insightsInventoryQualified || this.closing) throw new Conflict("session_inventory_unavailable");
+		if (!this.sessionInventoryQualified || this.closing) throw new Conflict("session_inventory_unavailable");
 		for (const meta of this.metas.values()) {
 			if (!((meta.role === "insights" && !meta.insightsOwner) || meta.insightsGrant)) continue;
 			if (meta.id !== selector.reportSessionId)
@@ -2953,6 +2955,7 @@ export class SessionManager {
 	}
 
 	private runFinishedPaused(meta: SessionMeta): boolean {
+		if (this.heldUpdateRecovery(meta)) return true;
 		const subscription = this.subscriptionPause(meta);
 		return !!(
 			this.missionWorkHeld(meta.id) ||
@@ -3410,7 +3413,7 @@ export class SessionManager {
 
 	private startWorkspaceSetup(meta: SessionMeta, ready = Promise.resolve()): Promise<void> {
 		if (this.missionWorkHeld(meta.id)) return Promise.resolve();
-		if (this.failedUpdateRecovery(meta)) return Promise.resolve();
+		if (this.heldUpdateRecovery(meta)) return Promise.resolve();
 		const active = this.workspaceSetups.get(meta.id);
 		if (active) return active.done;
 		const setup = meta.automation?.setup;
@@ -3776,7 +3779,7 @@ ${run.excerpt}`,
 	}
 
 	private async loadAdmitted(): Promise<void> {
-		this.insightsInventoryQualified = false;
+		this.sessionInventoryQualified = false;
 		let inventoryQualified = true;
 		await mkdir(this.sessionsDir, { recursive: true, mode: 0o700 });
 		try {
@@ -3864,7 +3867,7 @@ ${run.excerpt}`,
 				console.warn(`pilotd: skipping unreadable session ${id}: ${error}`);
 			}
 		}
-		this.insightsInventoryQualified = inventoryQualified;
+		this.sessionInventoryQualified = inventoryQualified;
 		for (const meta of this.metas.values())
 			for (const url of meta.boundPullRequests ?? [])
 				if (!this.excludedPullRequest(meta, url)) this.boundPullRequestOwners.set(url.toLowerCase(), meta.id);
@@ -3892,7 +3895,7 @@ ${run.excerpt}`,
 		}
 		if (this.globalUpdateRecoveryOwner) {
 			if (!inventoryQualified) throw new ServiceUnavailable("Update recovery requires readable retained chat state");
-			await this.reconcileFailedUpdateState(this.globalUpdateRecoveryOwner);
+			await this.reconcileUpdateBookkeeping(this.globalUpdateRecoveryOwner);
 		}
 		if (this.updateGate.frozen) {
 			this.maintenanceLoaded = true;
@@ -3921,11 +3924,7 @@ ${run.excerpt}`,
 		// A daemon restart invalidates the credential endpoint its workers were given. A session whose
 		// worker failed to start for that reason must not stay broken: this daemon has its own broker.
 		for (const meta of this.metas.values())
-			if (
-				meta.failure !== undefined &&
-				!this.failedUpdateRecovery(meta) &&
-				credentialEndpointFailure(meta.failure)
-			) {
+			if (meta.failure !== undefined && !this.heldUpdateRecovery(meta) && credentialEndpointFailure(meta.failure)) {
 				delete meta.failure;
 				delete meta.inputError;
 				clearOutcome(meta);
@@ -3936,7 +3935,7 @@ ${run.excerpt}`,
 			if (
 				meta.archivedAt === undefined &&
 				!meta.failure &&
-				!this.failedUpdateRecovery(meta) &&
+				!this.heldUpdateRecovery(meta) &&
 				!meta.recoveryStopped &&
 				(meta.initializing ||
 					meta.pending?.length ||
@@ -3948,7 +3947,7 @@ ${run.excerpt}`,
 			)
 				void this.start(meta.id, true);
 		for (const meta of this.metas.values()) {
-			if (this.failedUpdateRecovery(meta)) continue;
+			if (this.heldUpdateRecovery(meta)) continue;
 			void this.startWorkspaceSetup(meta);
 			this.startPostRun(meta);
 		}
@@ -8158,12 +8157,18 @@ ${run.excerpt}`,
 		purpose: "app-update" | "daemon-upgrade" | "daemon-stop" | "daemon-restart",
 		replacement?: LifecycleRuntime,
 	): Promise<void> {
+		if (purpose === "app-update" && !this.sessionInventoryQualified)
+			return Promise.reject(new ServiceUnavailable("Update recovery requires readable retained chat state"));
 		if (this.closing) return Promise.reject(new Conflict("Lifecycle preparation cannot enter during shutdown"));
 		// Stop/restart retains this runtime. Legacy callers cannot silently authorize
 		// recovery under an unspecified new runtime after the original boot exits.
 		if (!replacement && this.lifecycleRuntime?.runtimeRoot && this.lifecycleRuntime.build)
 			replacement = { runtimeRoot: this.lifecycleRuntime.runtimeRoot, build: this.lifecycleRuntime.build };
-		const owner = canonicalJSON({ operationId, purpose, replacement: replacement ?? null });
+		const owner = canonicalJSON({
+			operationId,
+			purpose,
+			replacement: replacement ?? null,
+		});
 		if (this.lifecycleCheckpoint && this.lifecycleCheckpointOwner !== owner)
 			return Promise.reject(new Conflict("Another lifecycle operation owns the checkpoint"));
 		this.lifecycleCheckpointOwner = owner;
@@ -8178,13 +8183,42 @@ ${run.excerpt}`,
 		return this.lifecycleCheckpoint;
 	}
 
-	private failedUpdateRecovery(meta: SessionMeta): boolean {
+	private heldUpdateRecovery(meta: SessionMeta): boolean {
+		if (meta.updateRecovery?.kind === "persisted-lifecycle")
+			return (
+				(meta.updateRecovery.prior.inputGeneration === undefined ||
+					meta.updateRecovery.prior.inputGeneration === (meta.inputGeneration ?? 0)) &&
+				!(meta.lifecycleCheckpoint?.phase === "stopped" && meta.pending?.[0]?.type === "abort")
+			);
 		return !!(meta.failure || meta.inputError) && meta.updateRecovery?.kind === "persisted-failure";
 	}
-	private failedUpdateSnapshot(
+	/** Historical work uncertainty is not a current process census. The exact
+	 * old record remains held; mismatched identity/current-operation records
+	 * and actual executors/resources are never classified as stale metadata. */
+	private staleUpdateBookkeeping(meta: SessionMeta, operationId: string): boolean {
+		const c = meta.lifecycleCheckpoint;
+		return (
+			!!c &&
+			c.schema === 1 &&
+			c.sessionCreatedAt === meta.createdAt &&
+			c.operationId !== operationId &&
+			typeof c.operationId === "string" &&
+			c.operationId.length > 0 &&
+			typeof c.incarnation === "string" &&
+			c.incarnation.length > 0 &&
+			(!c.host ||
+				(!!this.lifecycleRuntime?.host &&
+					c.host.daemonId === this.lifecycleRuntime.host.daemonId &&
+					c.host.lineageId === this.lifecycleRuntime.host.lineageId)) &&
+			["app-update", "daemon-upgrade", "daemon-stop", "daemon-restart"].includes(c.purpose) &&
+			checkpointRecoveryHeld(c)
+		);
+	}
+	private updateRecoverySnapshot(
 		meta: SessionMeta,
 		operationId: string,
 		checkpoint?: import("./lifecycle-checkpoint.ts").LifecycleCheckpoint,
+		kind: NonNullable<SessionMeta["updateRecovery"]>["kind"] = "persisted-failure",
 	): NonNullable<SessionMeta["updateRecovery"]> {
 		const same = meta.updateRecovery?.operationId === operationId ? meta.updateRecovery : undefined;
 		const preparing = meta.preparing ?? meta.updateRecovery?.prior.preparing;
@@ -8199,20 +8233,23 @@ ${run.excerpt}`,
 		return {
 			operationId,
 			at: same?.at ?? Date.now(),
-			kind: "persisted-failure",
+			kind,
 			prior: {
 				working: same?.prior.working ?? !!meta.working,
 				initializing: same?.prior.initializing ?? !!meta.initializing,
+				...(kind === "persisted-lifecycle"
+					? { inputGeneration: same?.prior.inputGeneration ?? meta.inputGeneration ?? 0 }
+					: {}),
 				...(preparing ? { preparing: structuredClone(preparing) } : {}),
 				...(checkpoints.length ? { lifecycleCheckpoints: checkpoints } : {}),
 			},
 		};
 	}
 
-	/** Repair only failed, executor-free bookkeeping during an admitted update.
+	/** Reconcile failed or stale executor-free bookkeeping during an admitted update.
 	 * Failure text/history, pending commands, all holds and uncertain checkpoints
 	 * stay intact. No provider request, workspace creation, input or job replay. */
-	private async reconcileFailedUpdateState(operationId: string): Promise<void> {
+	private async reconcileUpdateBookkeeping(operationId: string): Promise<void> {
 		if (!this.globalUpdatePreparing || !this.updateGate.frozen || !this.updateGate.paused)
 			throw new Conflict("Update recovery requires the global hold");
 		// A timed-out preparation can still own real work. Its admissions remain
@@ -8220,7 +8257,7 @@ ${run.excerpt}`,
 		if (this.preparations.size) return;
 		for (const [id, meta] of this.metas) {
 			if (
-				!(meta.failure || meta.inputError) ||
+				!(meta.failure || meta.inputError || this.staleUpdateBookkeeping(meta, operationId)) ||
 				this.workers.has(id) ||
 				this.starting.has(id) ||
 				this.parking.has(id) ||
@@ -8236,7 +8273,13 @@ ${run.excerpt}`,
 				(!meta.working && !meta.initializing && !meta.preparing && meta.updateRecovery?.operationId === operationId)
 			)
 				continue;
-			meta.updateRecovery = this.failedUpdateSnapshot(meta, operationId);
+			const lifecycleOnly = !meta.failure && !meta.inputError;
+			meta.updateRecovery = this.updateRecoverySnapshot(
+				meta,
+				operationId,
+				lifecycleOnly ? meta.lifecycleCheckpoint : undefined,
+				lifecycleOnly ? "persisted-lifecycle" : "persisted-failure",
+			);
 			meta.working = false;
 			delete meta.initializing;
 			delete meta.preparing;
@@ -8245,12 +8288,12 @@ ${run.excerpt}`,
 		}
 	}
 
-	/** An old failed lifecycle phase is work uncertainty, not a live process
+	/** An old reconciled lifecycle phase is work uncertainty, not a live process
 	 * census. Recovery never erases it or grants resume. Current-operation or
 	 * live executor uncertainty and independent job/service evidence still block. */
-	private recoveredFailedBookkeeping(meta: SessionMeta): boolean {
+	private recoveredUpdateBookkeeping(meta: SessionMeta): boolean {
 		return (
-			this.failedUpdateRecovery(meta) &&
+			this.heldUpdateRecovery(meta) &&
 			meta.updateRecovery?.operationId === this.globalUpdateRecoveryOwner &&
 			this.globalUpdateRecoveryOwner !== undefined &&
 			meta.lifecycleCheckpoint?.operationId !== this.globalUpdateRecoveryOwner &&
@@ -8315,7 +8358,7 @@ ${run.excerpt}`,
 		} finally {
 			clearTimeout(preparationTimer);
 		}
-		if (purpose === "app-update" && !selected) await this.reconcileFailedUpdateState(operationId);
+		if (purpose === "app-update" && !selected) await this.reconcileUpdateBookkeeping(operationId);
 		const workers = [...this.workers].filter(([id]) => !selected || selected.has(id));
 		if (workers.length > 128 || workers.some(([id]) => (this.require(id).subagents?.length ?? 0) > 256))
 			throw new ServiceUnavailable("Lifecycle checkpoint inventory exceeds the safe limit");
@@ -8326,14 +8369,19 @@ ${run.excerpt}`,
 				const failed = !!meta.failure || (!!meta.inputError && !worker.busy && worker.state !== "working");
 				const previous = meta.lifecycleCheckpoint;
 				if (previous && checkpointRecoveryHeld(previous)) {
-					if (purpose !== "app-update" || !failed)
+					if (purpose !== "app-update" || (!failed && !this.staleUpdateBookkeeping(meta, operationId)))
 						throw new Conflict("An uncertain lifecycle checkpoint requires inspection");
 					// D73 permits interrupting this failed executor, not replaying its
 					// unknown work. Keep exact prior ownership before recording a new
 					// host-owned checkpoint; independent shutdown evidence is still new.
-					meta.updateRecovery = this.failedUpdateSnapshot(meta, operationId, previous);
+					meta.updateRecovery = this.updateRecoverySnapshot(
+						meta,
+						operationId,
+						previous,
+						failed ? "persisted-failure" : "persisted-lifecycle",
+					);
 				} else if (purpose === "app-update" && failed) {
-					meta.updateRecovery = this.failedUpdateSnapshot(meta, operationId);
+					meta.updateRecovery = this.updateRecoverySnapshot(meta, operationId);
 				}
 				const mission = this.missionUpgradeFence(id);
 				meta.lifecycleCheckpoint = {
@@ -8452,7 +8500,7 @@ ${run.excerpt}`,
 		await Promise.all([...this.saving.values()]);
 		const failure = results.find((result) => result.status === "rejected");
 		if (failure?.status === "rejected") throw failure.reason;
-		if (purpose === "app-update" && !selected) await this.reconcileFailedUpdateState(operationId);
+		if (purpose === "app-update" && !selected) await this.reconcileUpdateBookkeeping(operationId);
 	}
 
 	/** Host-local manifest only. Child storage identities must not be exposed as display summaries. */
@@ -8485,7 +8533,7 @@ ${run.excerpt}`,
 			if (
 				meta.lifecycleCheckpoint &&
 				checkpointRecoveryHeld(meta.lifecycleCheckpoint) &&
-				!this.recoveredFailedBookkeeping(meta)
+				!this.recoveredUpdateBookkeeping(meta)
 			)
 				add({ kind: "unknown-process", id: `lifecycle:${id}`, sessionId: id });
 			if (
@@ -8567,7 +8615,7 @@ ${run.excerpt}`,
 			if (
 				meta.lifecycleCheckpoint &&
 				checkpointRecoveryHeld(meta.lifecycleCheckpoint) &&
-				!this.recoveredFailedBookkeeping(meta)
+				!this.recoveredUpdateBookkeeping(meta)
 			)
 				blockers.push({ kind: "unknown-process", id: `lifecycle:${id}`, sessionId: id });
 		for (const id of this.workspaceSetups.keys())
@@ -8791,7 +8839,7 @@ ${run.excerpt}`,
 		this.resumeFlows();
 		if (this.sleepPause) return;
 		for (const meta of this.metas.values()) {
-			if (this.failedUpdateRecovery(meta)) continue;
+			if (this.heldUpdateRecovery(meta)) continue;
 			void this.startWorkspaceSetup(meta);
 			this.observeRunFinished(meta, this.summary(meta));
 			this.startPostRun(meta);
@@ -11871,7 +11919,7 @@ ${run.excerpt}`,
 			return Promise.resolve(new Map());
 		if (meta.continuedTo || meta.continuationPending || (!admitted && this.changingModels.has(id)))
 			return Promise.resolve(new Map());
-		if (this.closing || this.sleepPause || meta.failure || this.failedUpdateRecovery(meta) || meta.recoveryStopped)
+		if (this.closing || this.sleepPause || meta.failure || this.heldUpdateRecovery(meta) || meta.recoveryStopped)
 			return Promise.resolve(new Map());
 		// An existing drain owns its admission. Do not recheck its gate after any await.
 		if (!admitted && !this.workers.has(id)) this.updateGate.assertOpen();
