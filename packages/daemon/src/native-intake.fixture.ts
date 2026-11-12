@@ -18,7 +18,7 @@ import { SourceRegistry } from "./sources.ts";
 import { TerminalManager } from "./terminals.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 
-export async function nativeIntakeFixture() {
+export async function nativeIntakeFixture(options: { tracking?: boolean; nativeAuth?: boolean } = {}) {
 	const home = await mkdtemp(join(tmpdir(), "native-intake-http-"));
 	const projects = new ProjectStore(home);
 	await projects.load();
@@ -89,9 +89,9 @@ export async function nativeIntakeFixture() {
 			}),
 		} as MissionService,
 	};
-	args[9] = tracking;
+	args[9] = options.tracking === false ? undefined : tracking;
 	args[12] = hello;
-	args[17] = native;
+	args[17] = options.nativeAuth === false ? undefined : native;
 	const server = createDaemonServer(...args);
 	await server.runtimeReady;
 	server.listen(0, "127.0.0.1");

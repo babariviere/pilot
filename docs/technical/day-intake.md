@@ -85,6 +85,60 @@ hidden `native/tests/linear.rs` exercises the real authenticated daemon through
 the public host channel, including grant denial, offline/malformed replies and
 deleted selected project. These checks do not qualify a new UI or live source.
 
+### Connected route compatibility
+
+Both production host requests live in `apps/day/native/src/host/intake.rs`.
+`Transport::get` sends GET directly to the selected loopback port with
+`x-pilot-github-capability`, without a query, redirect, proxy or retry. The
+project ID comes from the selected native source. `server.ts` matches four
+path segments (`api/projects/:projectId/intake` or `saved-linear`) before the
+ordinary project handlers. A query cannot select another project.
+
+The shared native capability authenticates the local app, not one project.
+An existing other project returns only that project's saved rows; a missing
+project returns 404 `Unknown project: …`. Missing/invalid capability and browser
+Origin return 403. Missing native intake dependencies return 503 `Native intake
+unavailable`; unsupported paths return 404 `Not found`; non-GET returns 405.
+Unconfigured sources are **200**, with `not_configured` and no rows. Read/storage
+errors keep their raw HTTP status and error body, not a synthetic empty page or
+an assertion that the route is missing. The native generic transport currently
+maps non-200 replies to `Unavailable`, so that UI result alone cannot diagnose
+which of these cases occurred.
+
+Source history explains the old 944.1 report:
+
+- Runtime 1.124.0 source `d0de096fd5da8c3aeafd24d14a822e3e585a8175`
+  has neither route. Day/planning support does not imply intake support.
+- Intake first appears at `59a15ba867d1a7a577c68184a1b2078b3ad440d3`.
+- The earliest source supporting **both** reads is
+  `ec21d05433de30b2f2e82f6f7f3c26d5400b7fdc` (saved Linear).
+- A passive check on 2026-11-12 pinned the current owner PID 56325, boot
+  `181e653c8325142c0160dddc74ca46b741cfba4a3194e1998ad934fa962b66c6`,
+  runtime 1.125.0, source `bf005fd7d6ee1d0c1c5feabd102a9a6296b6d0dd`.
+  Installed `server.ts` and `native-intake.ts` matched that committed source.
+  Owner bytes stayed unchanged before/after authenticated reads. The exact
+  selected-project intake and saved-Linear paths both returned 200, as did
+  Day/planning inventory. Both sources were honestly `not_configured`.
+  No live update, restart, source poll, subscription or external write ran.
+
+Reproduce offline with Node 24 and frozen workspace dependencies:
+
+```sh
+node --test --test-timeout=120000 --test-concurrency=2 \
+  packages/daemon/src/connected-intake-routes.test.ts \
+  packages/daemon/src/saved-linear.test.ts
+```
+
+`connected-intake-routes.test.ts` extracts the URI templates and auth header
+from the production host source, then sends those requests over real HTTP to
+`createDaemonServer`, with real project/SQLite/source stores in TMPDIR. It
+covers nonempty selected/other-project reads, query isolation, auth/Origin,
+missing projects, methods, unsupported paths, configuration, service absence
+and raw storage errors. Its only source refresh uses a synthetic offline
+provider, with zero external calls or sessions. It does not launch another
+daemon process, compile/execute the Rust client, qualify a native window or
+prove access to live Linear/Slack. No alternate routes or stores are needed.
+
 ### The Linear page
 
 Day's connected window shows this read on a read-only Linear page, opened from
