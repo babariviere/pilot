@@ -439,6 +439,8 @@ details summary{cursor:pointer;color:var(--mfg);font-size:13.5px;margin-top:8px}
 .xlane{fill:none;stroke:var(--ch-contour);stroke-width:1.2;stroke-dasharray:2 7}
 .xroute-b{fill:none;stroke:var(--ch-route);opacity:.3;stroke-linecap:round;stroke-linejoin:round}
 .xroute-b.all{opacity:.8}
+.bworld .xroute{stroke-dasharray:none;stroke-width:2.6;stroke-linejoin:round}
+.bworld .xroute.prev{opacity:.4}
 .xdep{fill:none;stroke:var(--ch-ink);stroke-width:2.2;stroke-dasharray:.5 6;stroke-linecap:round;opacity:.65;marker-end:url(#xp-ar)}
 .bw-m{position:absolute;width:0;height:0;transform:scale(var(--inv));transform-origin:0 0;z-index:2}
 .bw-in{position:absolute;left:-11px;top:-11px;display:flex;align-items:flex-start;gap:7px;width:max-content;max-width:200px;border:0;background:none;padding:0;color:inherit;text-align:left;cursor:pointer;--g:22px;transition:opacity .18s}
@@ -469,6 +471,7 @@ details summary{cursor:pointer;color:var(--mfg);font-size:13.5px;margin-top:8px}
 .bw-link{border:1px solid color-mix(in srgb,var(--ch-ink) 25%,transparent);background:var(--ch-paper);border-radius:999px;padding:0 8px;font-size:11.5px;line-height:18px;color:var(--ch-faint);cursor:pointer;white-space:nowrap}
 .bw-link:hover{color:var(--ch-ink);border-color:var(--ch-ink)}
 .bview .xp-camp{--c:24px;font-size:12.5px}
+.bview .xp-camp.hb{width:auto;padding:0 8px;border-radius:12px;white-space:nowrap;font-size:12px}
 .bview .xp-dest{width:210px}
 .bview .xp-tk{--g:18px}
 .bview .xp-fog{width:max-content;max-width:190px}
@@ -1838,9 +1841,9 @@ function xpBelow() {
 		[sw('<path d="M1 10C8 2 16 12 25 4" fill="none" stroke="var(--ch-route)" stroke-width="2.2" stroke-dasharray="5 4" stroke-linecap="round"/>'), "Pilot\u2019s route. Each numbered camp is a planning round; older legs fade."],
 		['<span class="xgw">' + xpGlyph("crate") + "</span>", "A build task, after you approve the plan. It starts only when you start it."],
 	];
-	if (state.meta) key.push([sw('<path d="M1 7H25" fill="none" stroke="var(--ch-route)" stroke-width="5" stroke-linecap="round" opacity=".35"/>'), "A wide lane: a leg Pilot sailed more than once (\u00d7N). Only the latest legs stay strong."],
-		['<span class="xp-camp" style="position:static;transform:none;--c:22px">3</span>', "A harbor: how many planning rounds Pilot spent in that region."],
-		[sw('<path d="M2 3V10H24V4" fill="none" stroke="var(--ch-ink)" stroke-width="2.2" stroke-dasharray=".5 5" stroke-linecap="round"/>'), "Between regions: how many questions wait for another region."]);
+	if (state.meta) key.push([sw('<path d="M1 7H25" fill="none" stroke="var(--ch-route)" stroke-width="5" stroke-linecap="round" opacity=".35"/>'), "The channel: thicker where Pilot sailed more often. Only the latest legs stay strong."],
+		['<span class="xp-camp hb" style="position:static;transform:none;--c:22px">3 rounds</span>', "A harbor: the planning rounds Pilot spent in that region."],
+		[sw('<path d="M2 11Q13 -1 24 11" fill="none" stroke="var(--ch-ink)" stroke-width="2.2" stroke-dasharray=".5 5" stroke-linecap="round"/>'), "Between regions: how many questions wait for another region."]);
 	const keyHtml = '<section class="sec enter"><div class="sec-title"><span>Key to the chart</span></div><ul class="xkey">' + key.map(([g, t]) => "<li>" + g + "<span>" + esc(t) + "</span></li>").join("") + "</ul></section>";
 	return '<div class="xpbelow">' + next + log + keyHtml + "</div>";
 }
@@ -2172,29 +2175,28 @@ function bigTrails() {
 }
 /* The fix for route spaghetti: one stay per run of rounds in a region, legs between fixed harbors along one channel,
    one lane per pair of harbors (its width grows with each trip), and only the last legs drawn strong. */
-const BW_OFFS = [0, -8, 8, -16, 16];
-function bigLegPts(a, b, off) {
+/* The route runs along one channel. Each harbor has a short pier to it. A stretch Pilot sailed more often is drawn
+   thicker, so repeated trips never become parallel lanes. */
+const BW_STOPS = [70, 450, 1010, 1570, 2040];
+function bigLegPts(a, b) {
 	const A = bigHarbor(a), B = bigHarbor(b);
 	if (Math.abs(A[0] - B[0]) < 1) return [A, B];
-	return [A, [A[0], BW_LANE + off], [B[0], BW_LANE + off], B];
+	return [A, [A[0], BW_LANE], [B[0], BW_LANE], B];
 }
 function bigRoute() {
 	const st = [];
 	for (const p of state.passes) { const r = passRegion(p), l = st[st.length - 1]; if (l && l.r === r) l.ns.push(p.n); else st.push({ r, ns: [p.n] }); }
 	const legs = [];
 	let prev = "home";
-	for (const s of st) { if (s.r !== prev) legs.push({ a: prev, b: s.r, n: s.ns[0] }); prev = s.r; }
-	const by = {}, bund = [];
+	for (const s of st) { if (s.r !== prev) legs.push({ a: prev, b: s.r, n: s.ns[0], pts: bigLegPts(prev, s.r) }); prev = s.r; }
+	const seg = {}, pier = {};
 	for (const l of legs) {
-		const k = [l.a, l.b].sort().join("|");
-		if (!by[k]) { by[k] = { k, a: l.a, b: l.b, n: 0, off: BW_OFFS[bund.length % BW_OFFS.length] }; bund.push(by[k]); }
-		by[k].n++;
-		l.k = k;
+		for (const r of [l.a, l.b]) if (r !== "home" && r !== "dest") pier[r] = (pier[r] || 0) + 1;
+		const xa = bigHarbor(l.a)[0], xb = bigHarbor(l.b)[0], lo = Math.min(xa, xb), hi = Math.max(xa, xb);
+		for (let i = 0; i < BW_STOPS.length - 1; i++) if (BW_STOPS[i] >= lo - 1 && BW_STOPS[i + 1] <= hi + 1) seg[i] = (seg[i] || 0) + 1;
 	}
-	for (const b of bund) b.pts = bigLegPts(b.a, b.b, b.off);
-	return { st, legs, bund, by };
+	return { st, legs, seg, pier };
 }
-const bigMid = (pts) => (pts.length === 4 ? [(pts[1][0] + pts[2][0]) / 2, pts[1][1]] : [(pts[0][0] + pts[1][0]) / 2, (pts[0][1] + pts[1][1]) / 2]);
 /* Between regions, the overview shows one arrow per pair of regions with a count, not one line per question. */
 function bigDeps(trails) {
 	const m = {}, out = [];
@@ -2204,15 +2206,48 @@ function bigDeps(trails) {
 		if (!m[k]) { m[k] = { a: t.ra, b: t.rb, n: 0 }; out.push(m[k]); }
 		m[k].n++;
 	}
-	const side = { top: 0, bottom: 0 };
+	// Arcs between regions stay out of the channel: over the gap for neighbours, outside the row for far ones,
+	// and across the channel away from the harbors for the other row.
+	const cen = (R) => [R.x + R.w / 2, R.y + R.h / 2];
+	const edge = (R, c, o, inset) => {
+		const dx = o[0] - c[0], dy = o[1] - c[1];
+		const t = Math.min(dx ? (R.w / 2 - inset) / Math.abs(dx) : 1e9, dy ? (R.h / 2 - inset) / Math.abs(dy) : 1e9);
+		return [c[0] + dx * t, c[1] + dy * t];
+	};
+	const q = (S, C, E, t) => [(1 - t) * (1 - t) * S[0] + 2 * (1 - t) * t * C[0] + t * t * E[0], (1 - t) * (1 - t) * S[1] + 2 * (1 - t) * t * C[1] + t * t * E[1]];
 	for (const d of out) {
-		const A = bigRegion(d.a), B = bigRegion(d.b);
-		const k = A.row ? side.bottom++ : side.top++;
-		const sx = A.x + A.w / 2 + 110 + k * 14, sy = A.row ? A.y : A.y + A.h, ex_ = B.x + B.w / 2 - 110 - k * 14, ey = B.row ? B.y : B.y + B.h, ly = A.row ? 548 - k * 12 : 452 + k * 12;
-		d.pts = [[sx, sy], [sx, ly], [ex_, ly], [ex_, ey]];
-		const hx = state.meta.regions.map((r) => r.x + r.w / 2);
-		const lx = [0.5, 0.3, 0.7, 0.2, 0.8].map((f) => sx + (ex_ - sx) * f).find((x) => hx.every((h) => Math.abs(x - h) > 80));
-		d.mid = [lx == null ? (sx + ex_) / 2 : lx, ly];
+		const A = bigRegion(d.a), B = bigRegion(d.b), ca = cen(A), cb = cen(B);
+		let S, E, C;
+		if (A.row === B.row && Math.abs(A.x - B.x) > A.w + 100) {
+			const dir = A.row ? 1 : -1, ey = A.row ? A.y + A.h : A.y, sg = Math.sign(cb[0] - ca[0]);
+			S = [ca[0] + sg * 150, ey]; E = [cb[0] - sg * 150, ey]; C = [(S[0] + E[0]) / 2, ey + dir * 100];
+		} else {
+			const same = A.row === B.row, inset = same ? 100 : 110;
+			S = edge(A, ca, cb, inset); E = edge(B, cb, ca, inset);
+			const m = [(S[0] + E[0]) / 2, (S[1] + E[1]) / 2], len = Math.hypot(E[0] - S[0], E[1] - S[1]), n = [-(E[1] - S[1]) / len, (E[0] - S[0]) / len];
+			// a deeper bend for the other row moves the crossing off the middle harbor
+			const bend = Math.max(18, len * (same ? 0.16 : 0.35));
+			const pick = (sg) => [m[0] + n[0] * bend * sg, m[1] + n[1] * bend * sg];
+			if (A.row === B.row) C = pick(Math.sign(n[1]) === (A.row ? 1 : -1) ? 1 : -1);
+			else {
+				// bend the way that crosses fewer region names and stays clear of the harbor piers
+				const cost = (Cc) => {
+					let k = 0, cx = 0, cy = 1e9;
+					for (let i = 0; i <= 40; i++) {
+						const p = q(S, Cc, E, i / 40);
+						if (state.meta.regions.some((R) => p[0] > R.x - 10 && p[0] < R.x + 470 && p[1] > R.y - 10 && p[1] < R.y + 80)) k++;
+						if (Math.abs(p[1] - BW_LANE) < cy) { cy = Math.abs(p[1] - BW_LANE); cx = p[0]; }
+					}
+					return k * 10 - Math.min(...BW_STOPS.map((x) => Math.abs(cx - x)));
+				};
+				C = cost(pick(1)) <= cost(pick(-1)) ? pick(1) : pick(-1);
+			}
+		}
+		// the count sits on the arc, clear of region names and the channel
+		const clear = (p) => Math.abs(p[1] - BW_LANE) > 85 && state.meta.regions.every((R) => !(p[0] > R.x - 40 && p[0] < R.x + 480 && p[1] > R.y - 10 && p[1] < R.y + 80)) &&
+			state.fog.every((f) => !FPOS[f.id] || Math.abs(p[0] - FPOS[f.id][0]) > 110 || Math.abs(p[1] - FPOS[f.id][1]) > 45);
+		const t = [0.5, 0.4, 0.6, 0.3, 0.7, 0.25, 0.75].find((x) => clear(q(S, C, E, x)));
+		d.S = S; d.C = C; d.E = E; d.mid = q(S, C, E, t == null ? 0.5 : t);
 	}
 	return out;
 }
@@ -2253,11 +2288,14 @@ function bigSvg(trails, route, deps, fx) {
 	const regs = state.meta.regions.map((R) => '<rect class="xreg" x="' + R.x + '" y="' + R.y + '" width="' + R.w + '" height="' + R.h + '" rx="22"/>').join("");
 	const z = ui.bz;
 	const tr = trails.filter((t) => !t.hidden && t.ra === t.rb).map((t) => '<path class="xtr xtr-' + t.cls + '" data-from="' + esc(t.from) + '" data-to="' + esc(t.to) + '" d="' + xpCurve(t.a, t.b, 16, t.cls === "fog" ? 52 : 18, xpHash(t.from + ">" + t.to)) + '"/>').join("") +
-		deps.map((d) => '<path class="xdep" d="' + roundPath(d.pts, 8) + '"/>').join("");
+		deps.map((d) => '<path class="xdep" d="M' + d.S.map(r1) + "Q" + d.C.map(r1) + " " + d.E.map(r1) + '"/>').join("");
 	const recent = route.legs.slice(ui.rt === "all" ? -1 : -3);
 	const lastLeg = route.legs[route.legs.length - 1];
-	const rt = route.bund.map((b) => '<path class="xroute-b' + (ui.rt === "all" ? " all" : "") + '" style="stroke-width:' + Math.min(8, 1.8 + (b.n - 1) * 1.6) + 'px" d="' + roundPath(b.pts, 10) + '"/>').join("") +
-		recent.map((l) => { const fresh = !!fx && fx.camp && l === lastLeg; return '<path class="xroute' + (fresh ? " fresh" : "") + '"' + (fresh ? ' style="' + delay(0, "camp") + '"' : "") + ' d="' + roundPath(route.by[l.k].pts, 10) + '"/>'; }).join("");
+	const wt = (n) => "stroke-width:" + Math.min(7, 1.6 + (n - 1) * 1.1).toFixed(1) + "px";
+	const bc = "xroute-b" + (ui.rt === "all" ? " all" : "");
+	const rt = Object.keys(route.seg).map((i) => '<path class="' + bc + '" style="' + wt(route.seg[i]) + '" d="M' + BW_STOPS[i] + " " + BW_LANE + "H" + BW_STOPS[+i + 1] + '"/>').join("") +
+		Object.keys(route.pier).map((r) => { const h = bigHarbor(r); return '<path class="' + bc + '" style="' + wt(route.pier[r]) + '" d="M' + h[0] + " " + h[1] + "V" + BW_LANE + '"/>'; }).join("") +
+		recent.map((l) => { const fresh = !!fx && fx.camp && l === lastLeg; return '<path class="xroute' + (l !== lastLeg ? " prev" : "") + (fresh ? " fresh" : "") + '"' + (fresh ? ' style="' + delay(0, "camp") + '"' : "") + ' d="' + roundPath(l.pts, 10) + '"/>'; }).join("");
 	let grat = "";
 	for (let x = 100; x < BW_W; x += 100) grat += "M" + x + " 0V" + BW_H;
 	for (let y = 100; y < BW_H; y += 100) grat += "M0 " + y + "H" + BW_W;
@@ -2313,15 +2351,20 @@ function bigHarbors(route, fx) {
 		const pos = r === "home" ? [h[0], h[1] - 36] : r === "dest" ? [h[0] - 44, h[1]] : h;
 		const fresh = !!fx && !!fx.camp && here;
 		const far = !!ui.bz && r !== ui.bz && r !== "home" && r !== "dest";
-		return '<div class="bw-m' + (far ? " far" : "") + '" style="' + bwAt(pos[0], pos[1]) + '"><button ' + attr({ class: "xp-camp" + (here ? " now" : "") + (ui.sel === id ? " sel" : "") + (fresh ? " fresh" : ""), "data-row": true, "data-node": id, "data-act": "pick", "data-id": id, tabindex: "-1",
+		const hb = r !== "home" && r !== "dest";
+		return '<div class="bw-m' + (far ? " far" : "") + '" style="' + bwAt(pos[0], pos[1]) + '"><button ' + attr({ class: "xp-camp" + (hb ? " hb" : "") + (here ? " now" : "") + (ui.sel === id ? " sel" : "") + (fresh ? " fresh" : ""), "data-row": true, "data-node": id, "data-act": "pick", "data-id": id, tabindex: "-1",
 			style: fresh ? "animation-delay:" + (250 - fx.dt.camp) + "ms" : null, title: "Planning rounds here: " + ns.join(", "), "aria-label": ns.length + (ns.length === 1 ? " planning round" : " planning rounds") + " here: " + ns.join(", ") + (here ? ". Pilot is here." : "") }) +
-			">" + ns.length + (here ? '<span class="here">Pilot is here, round ' + lastN + "</span>" : "") + "</button></div>";
+			">" + (hb ? ns.length + (ns.length === 1 ? " round" : " rounds") : ns[ns.length - 1]) + (here ? '<span class="here">Pilot is here, round ' + lastN + "</span>" : "") + "</button></div>";
 	}).join("");
 }
-function bigCompass(F, target) {
+/* The needle points from the compass to what needs you, as the chart sits now. */
+function bigNeedle(F, target) {
 	const T = bigPos(target ? target.id : "dest") || [2040, BW_LANE];
-	const cx = 64, cy = F.H - 86;
-	const to = Math.round((Math.atan2(T[1] * F.s + F.ty - cy, T[0] * F.s + F.tx - cx) * 180) / Math.PI);
+	return Math.round((Math.atan2(T[1] * F.s + F.ty - (F.H - 86), T[0] * F.s + F.tx - 64) * 180) / Math.PI);
+}
+function bigCompass(F, target) {
+	const cy = F.H - 86;
+	const to = bigNeedle(F, target);
 	if (ui.bigNA != null && ui.bigNA !== to && !reduced()) ui.bigNF = { from: ui.bigNA, to, t: performance.now() };
 	ui.bigNA = to;
 	const nf = ui.bigNF && ui.bigNF.to === to && performance.now() - ui.bigNF.t < 1000 ? ui.bigNF : null;
@@ -2369,8 +2412,7 @@ function bigView() {
 	const home = '<div class="bw-m" style="' + bwAt(70, BW_LANE) + '"><button ' + attr({ class: "bw-in done keep" + (ui.sel === "home" ? " sel" : ""), "data-row": true, "data-node": "home", "data-act": "sel", "data-id": "home", tabindex: "-1", "aria-label": "Home port: your brief" }) +
 		'><span class="xgw">' + xpGlyph("anchor") + '</span><span class="xtx"><span class="xt">Home port</span><span class="xs">Your brief, Nov 1</span></span></button></div>';
 	const dest = '<div class="bw-m" style="' + bwAt(2040, 520) + '">' + xpDest("left:0;top:0") + "</div>";
-	const counts = route.bund.filter((b) => b.n > 1).map((b) => { const m = bigMid(b.pts); return '<div class="bw-m" style="' + bwAt(m[0], m[1]) + '"><span class="bw-cnt" title="Pilot sailed this leg ' + b.n + ' times">\u00d7' + b.n + "</span></div>"; }).join("") +
-		deps.map((d) => '<div class="bw-m" style="' + bwAt(d.mid[0], d.mid[1]) + '"><span class="bw-cnt dep" title="Questions in ' + esc(bigRegion(d.b).name) + " that wait for " + esc(bigRegion(d.a).name) + '">' + d.n + " waiting</span></div>").join("");
+	const counts = deps.map((d) => '<div class="bw-m" style="' + bwAt(d.mid[0], d.mid[1]) + '"><span class="bw-cnt dep" title="Questions in ' + esc(bigRegion(d.b).name) + " that wait for " + esc(bigRegion(d.a).name) + '">' + d.n + " waiting</span></div>").join("");
 	return '<div class="page wide">' + header() + tabs +
 		'<div class="xpwrap enter"><div class="xpframe" id="xpframe"><div class="bview ' + (lab ? "rz" : "ov") + '" id="bview" style="width:' + F.cw + "px;height:" + F.H + 'px">' +
 		'<div class="bworld" id="bworld" style="transform:' + bigTf(F) + ";--inv:" + (1 / F.s).toFixed(4) + '">' + bigSvg(trails, route, deps, fx) +
@@ -2378,7 +2420,7 @@ function bigView() {
 		bigCompass(F, target) + '<div class="bw-out">' + (ui.bz || ui.cam ? btn("Whole chart", { act: "bigZoom", arg: "" }, "sm") : "") +
 		'<div class="bw-zoom" role="group" aria-label="Zoom"><button ' + attr({ class: "bw-zb", "data-act": "bigStep", "data-arg": "-1", "aria-label": "Zoom out", title: "Zoom out (\u2212)", disabled: F.s <= F.s0 * 0.86 ? true : null }) + ">\u2212</button><button " +
 		attr({ class: "bw-zb", "data-act": "bigStep", "data-arg": "1", "aria-label": "Zoom in", title: "Zoom in (+)", disabled: F.s >= BIG_SMAX - 0.01 ? true : null }) + ">+</button></div></div></div></div>" + notes + "</div>" +
-		'<p class="small faint" style="margin-top:10px">' + (lab ? "Select a place for its field notes. A chip on a place links to another region; follow it to move there. Drag or scroll to look around; Esc goes back to the whole chart." : "Drag or scroll to look around. Pinch, \u2318-scroll or + and \u2212 zoom; choose a region to zoom straight to it. Wide lanes are legs Pilot sailed more than once; only the latest legs stay strong. Reading the chart answers, approves and starts nothing.") + "</p>" +
+		'<p class="small faint" style="margin-top:10px">' + (lab ? "Select a place for its field notes. A chip on a place links to another region; follow it to move there. Drag or scroll to look around; Esc goes back to the whole chart." : "Drag or scroll to look around. Pinch, \u2318-scroll or + and \u2212 zoom; choose a region to zoom straight to it. The channel is thicker where Pilot sailed more often; only the latest legs stay strong. Reading the chart answers, approves and starts nothing.") + "</p>" +
 		xpBelow() + "</div>";
 }
 /* After drawing: measure the frame, and move between overview and region zoom smoothly (the move continues across re-renders). */
@@ -2425,6 +2467,13 @@ function bigApply(c, F) {
 	const lab = c.s >= bigLabelS(F);
 	v.classList.toggle("rz", lab); v.classList.toggle("ov", !lab);
 	for (const m of w.querySelectorAll(".bw-m.far")) m.classList.remove("far");
+	const nd = v.querySelector(".bw-comp .needle");
+	if (nd) {
+		const to = bigNeedle({ s: c.s, tx: c.tx, ty: c.ty, H: F.H }, xpTarget());
+		nd.classList.remove("swing");
+		nd.style.transform = "rotate(" + to + "deg)";
+		ui.bigNA = to; ui.bigNF = null;
+	}
 }
 function bigSettle(ms) { clearTimeout(bigSettleT); bigSettleT = setTimeout(() => { if (document.getElementById("bview")) render(); }, ms); }
 function bigStep(dir) {

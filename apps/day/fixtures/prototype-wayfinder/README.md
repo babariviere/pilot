@@ -38,13 +38,16 @@ unknown and what happens next, and let you check where each answer came from?
     Labels and the chips between regions appear once you are close enough. At the edge of
     the chart a scroll goes on to the page. A drag never selects the place it started on.
   - **No route spaghetti.** Rounds in a row that explore the same region become one stay.
-    The route only runs between fixed harbors on each region's coast, along one channel
-    between the rows, so it never crosses places. Legs between the same two harbors share
-    one lane that gets wider with each trip (×N). Only the last three legs stay strong; "All
-    legs" shows the full history. A harbor badge says how many rounds Pilot spent there.
+    The route only runs along one channel between the rows, with a short pier to each
+    region's harbor, so it never crosses places. There are no parallel lanes: a stretch
+    Pilot sailed more often is drawn thicker. Only the last three legs stay strong; "All
+    legs" shows the full history. Each harbor says how many rounds Pilot spent there.
   - **Links between regions.** The overview shows one counted arrow per pair of regions
-    ("2 waiting") instead of a line per question. Zoomed in, a link to another region is a
-    small chip on the place ("from Accounts and sign-in ↗") that moves you there.
+    ("2 waiting") instead of a line per question. The arrows arc over the land and stay
+    out of the channel. Zoomed in, a link to another region is a small chip on the place
+    ("from Accounts and sign-in ↗") that moves you there.
+  - **The compass follows you.** While you drag or zoom, the needle keeps pointing at what
+    needs you.
   - The small chart also fades legs older than the last five.
   The regions are mock data. In Pilot the coordinator would need to keep them.
 - The bottom bar and the left/right arrow keys switch variants. The bottom bar's Panel holds
