@@ -10,7 +10,7 @@ PROTOTYPE. Throw away. Not Pilot app code; the app stays native (NSH).
 Question: how should a mission's Wayfinder map be shown so you see at a glance what is settled,
 what is still unknown and what happens next, and can check where each answer came from?
 
-Three variants on one page, switched with ?variant=A|B|C and the bottom bar (or the arrow keys):
+Four variants on one page, switched with ?variant=A|B|C|D and the bottom bar (or the arrow keys):
   A  Map       a visual map: settled, open now, waiting, fog of war and the destination as columns,
                with lines for "waits for" and "became". Select a card to inspect it.
   B  Outline   a structured document: what happens next, unanswered questions by kind, settled
@@ -18,6 +18,10 @@ Three variants on one page, switched with ?variant=A|B|C and the bottom bar (or 
   C  Rounds    an optional, lighter map read top to bottom: one row per planning round, with what
                it explored, what it produced and the next steps it set up. Lines join a next step
                to the later round that took it up. Select an output to see its source and what changed.
+  D  Expedition  a playful last experiment: the same records drawn as an expedition chart. Settled answers
+               are inked islands, open questions sit on blank ground, fog of war is fog, trails show what
+               waits for what and each planning round is a camp on Pilot's route. The compass points at
+               what needs you. Select a place for field notes with its real sources.
 
 All variants show the same mission ("Pilot on Linux desktops", from the Day mock planning world in
 apps/day/native/src/plan_world.rs) with the same records the native map reads: questions with their
@@ -322,6 +326,103 @@ details summary{cursor:pointer;color:var(--mfg);font-size:13.5px;margin-top:8px}
 	.rg,.rtop,.rdbody{grid-column:auto;margin-bottom:0}
 	.rcol::before{display:block}
 }
+
+/* expedition (D): the same map drawn as an expedition chart. Its own look stays inside the chart. */
+:root{--ch-paper:#e9ede0;--ch-ink:#2d3943;--ch-faint:#71807b;--ch-land:#d0d9b8;--ch-hatch:rgba(45,57,67,.2);--ch-contour:#9fb4ad;--ch-fog:#f7f8f2;--ch-route:#ad432a;--ch-serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif}
+@media (prefers-color-scheme:dark){:root{--ch-paper:#1c2325;--ch-ink:#cbd4ca;--ch-faint:#87958f;--ch-land:#2d3a31;--ch-hatch:rgba(203,212,202,.14);--ch-contour:#3a4d4b;--ch-fog:#333b3e;--ch-route:#e3825f}}
+.xpwrap{position:relative;margin-top:20px}
+.xpframe{overflow-x:auto;overflow-y:hidden;border-radius:14px;background:var(--ch-paper);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--ch-ink) 22%,transparent)}
+.xpchart{position:relative;width:100%;min-width:860px;aspect-ratio:12/7;container-type:inline-size;color:var(--ch-ink);font-size:clamp(11px,1.1cqw,14px);line-height:1.25}
+.xpsvg{position:absolute;inset:0;width:100%;height:100%;display:block;overflow:hidden}
+.xpsvg text{paint-order:stroke;stroke:var(--ch-paper);stroke-width:3px;stroke-linejoin:round}
+.xpsvg .ct1{font:500 23px var(--ch-serif);fill:var(--ch-ink)}
+.xpsvg .ct2{font:italic 15px var(--ch-serif);fill:var(--ch-ink)}
+.xpsvg .ct3{font:italic 13.5px var(--ch-serif);fill:var(--ch-faint)}
+.xpsvg .xcap{font:italic 14px var(--ch-serif);fill:var(--ch-faint)}
+.xpsvg .xz{font:italic 600 12px var(--ch-serif);fill:var(--ch-faint);stroke:none}
+.xgrat{fill:none;stroke:var(--ch-contour);stroke-width:.6;opacity:.5}
+.xring{fill:none;stroke:var(--ch-faint);stroke-width:1.5;stroke-dasharray:1.5 6;stroke-linecap:round}
+.xtr{fill:none;stroke:var(--ch-ink);stroke-width:1.6;opacity:.6;marker-end:url(#xp-ar);transition:opacity .18s,stroke .18s}
+.xtr-wait,.xtr-fog{stroke-dasharray:.5 6;stroke-linecap:round;stroke-width:2.3;opacity:.75}
+.xtr-fog{stroke:var(--ch-faint)}
+.xroute{fill:none;stroke:var(--ch-route);stroke-width:2.4;stroke-dasharray:8 6;stroke-linecap:round;opacity:.9}
+.needle{transform-box:fill-box;transform-origin:center}
+.xp-pl,.xp-fog,.xp-camp,.xp-db,.xp-tk{transition:opacity .18s}
+.xpchart.tracing .xtr{opacity:.12}
+.xpchart.tracing .xtr.rel{opacity:1;stroke:var(--primary);marker-end:url(#xp-ar-rel)}
+.xpchart.tracing .xp-pl,.xpchart.tracing .xp-fog,.xpchart.tracing .xp-camp,.xpchart.tracing .xp-db,.xpchart.tracing .xp-tk{opacity:.3}
+.xpchart.tracing .rel{opacity:1}
+.xp-pl{--g:clamp(18px,1.9cqw,24px);position:absolute;z-index:2;display:flex;align-items:center;gap:.45em;transform:translate(calc(var(--g) / -2),-50%);max-width:16cqw;border:0;background:none;padding:2px 6px 2px 0;border-radius:999px 9px 9px 999px;color:inherit;text-align:left;cursor:pointer}
+.xgw{width:var(--g);height:var(--g);flex:none;display:grid;place-items:center;border-radius:50%;background:var(--ch-paper);border:1px solid color-mix(in srgb,var(--ch-ink) 40%,transparent)}
+.xg{width:78%;height:78%;display:block}
+.xtx{min-width:0;display:grid;text-shadow:0 0 2px var(--ch-paper),0 0 3px var(--ch-paper),0 0 6px var(--ch-paper)}
+.xt{font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.xs{font-size:.86em;color:var(--ch-faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.xs.tone-needs{color:var(--needs-ink);font-weight:500}
+.xp-pl.done .xgw{background:var(--ch-land)}
+.xp-pl.done .xt{font-weight:500}
+.xp-pl.needs .xgw{background:var(--needs-soft);border-color:var(--needs);box-shadow:0 0 0 5px color-mix(in srgb,var(--needs) 22%,transparent)}
+.xp-pl.run .xgw{border-color:var(--progress)}
+.xp-pl.wait .xgw{border-style:dashed}
+.xp-pl.wait .xt{font-weight:500;color:var(--ch-faint)}
+.xp-pl:hover .xt,.xp-db:hover .dk,.xp-tk:hover .tt,.xp-fog:hover .ft,.xp-fog.gone:hover .fk{text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px}
+.xp-pl.sel .xgw,.xp-camp.sel,.xp-tk.sel .xgw{outline:2px solid var(--primary);outline-offset:2px}
+.xp-pl.sel .xt,.xp-fog.sel .ft,.xp-fog.gone.sel .fk,.xp-db.sel .dk,.xp-tk.sel .tt{color:var(--primary)}
+.xpchart .hl{outline:2px solid color-mix(in srgb,var(--primary) 45%,transparent);outline-offset:3px}
+.xp-fog{position:absolute;z-index:2;transform:translate(-50%,-50%);display:grid;justify-items:center;max-width:15cqw;border:0;background:none;padding:4px 8px;border-radius:12px;color:var(--ch-ink);text-align:center;cursor:pointer;font-family:var(--ch-serif);text-shadow:0 0 3px var(--ch-fog),0 0 6px var(--ch-fog)}
+.xp-fog .fk{font-size:.84em;font-style:italic;color:var(--ch-faint)}
+.xp-fog .ft{font-size:1.2em;font-style:italic;line-height:1.15}
+.xp-fog .fs{font:.84em/1.3 -apple-system,BlinkMacSystemFont,system-ui,sans-serif;color:var(--ch-faint);margin-top:2px}
+.xp-fog.gone{max-width:22cqw;text-shadow:0 0 3px var(--ch-paper),0 0 6px var(--ch-paper)}
+.xp-fog.gone .fk{font-size:.92em;white-space:nowrap}
+.xp-camp{--c:clamp(19px,2cqw,26px);position:absolute;z-index:3;transform:translate(-50%,-50%);width:var(--c);height:var(--c);padding:0;border-radius:50%;border:1.6px solid var(--ch-route);background:var(--ch-paper);color:var(--ch-route);font:600 .92em/1 var(--ch-serif);display:grid;place-items:center;cursor:pointer}
+.xp-camp.now{background:var(--ch-route);color:var(--ch-paper)}
+.xp-camp .here{position:absolute;left:calc(100% + 5px);top:50%;transform:translateY(-50%);white-space:nowrap;font:italic 500 1em var(--ch-serif);color:var(--ch-route);text-shadow:0 0 2px var(--ch-paper),0 0 4px var(--ch-paper)}
+.xp-camp.lft .here{left:auto;right:calc(100% + 5px)}
+.xp-comp{position:absolute;z-index:2;transform:translate(-50%,-50%);width:8cqw;height:8cqw;border-radius:50%;border:0;background:none;cursor:pointer;padding:0}
+.xp-dest{position:absolute;z-index:2;transform:translateX(-50%);width:17cqw;display:grid;gap:.6em;justify-items:start}
+.xp-db{display:grid;gap:.25em;border:0;background:none;padding:5px 7px;margin:-5px -7px;border-radius:9px;color:inherit;text-align:left;cursor:pointer;text-shadow:0 0 3px var(--ch-paper)}
+.xp-db .dk{font:italic 1.25em var(--ch-serif)}
+.xp-db .dd{font-size:.95em}
+.xp-db .dg,.xp-tasks .dg{font-size:.86em;color:var(--ch-faint)}
+.xp-tasks{display:grid;gap:1px;width:100%;border-top:1px solid color-mix(in srgb,var(--ch-ink) 25%,transparent);padding-top:.5em}
+.xp-tasks .tk-h{font:italic 1em var(--ch-serif);color:var(--ch-faint);margin-bottom:.2em}
+.xp-tk{--g:clamp(16px,1.6cqw,20px);display:grid;grid-template-columns:var(--g) minmax(0,1fr);gap:.5em;align-items:center;border:0;background:none;padding:3px 5px;margin:0 -5px;border-radius:7px;color:inherit;text-align:left;cursor:pointer}
+.xp-tk .xgw{border:0;background:none}
+.xp-tk .tt{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:.92em}
+.xp-tk .ts{display:block;font-size:.8em;color:var(--ch-faint)}
+.xpncol{position:absolute;top:14px;bottom:14px;width:344px;z-index:4;pointer-events:none}
+.xpncol.r{right:14px}
+.xpncol.l{left:14px}
+.xpnotes{top:62px;max-height:calc(100vh - 150px);background:var(--card);box-shadow:var(--shadow);pointer-events:auto}
+.xpnotes h2{font:500 20px/1.25 var(--ch-serif)}
+.xphint{display:none;font-size:12.5px;color:var(--faint);margin-top:8px}
+.xpbelow{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr) minmax(0,.85fr);gap:0 36px}
+.lgn{width:18px;height:18px;border-radius:50%;border:1.4px solid var(--ch-route);color:var(--ch-route);font:600 11px/1 var(--ch-serif);display:grid;place-items:center;margin-left:-1px}
+.lgn.now{background:var(--ch-route);color:var(--ch-paper)}
+.xkey{list-style:none;margin:0;padding:6px 0 0;display:grid;gap:9px;font-size:13px;color:var(--mfg)}
+.xkey li{--g:22px;display:grid;grid-template-columns:26px minmax(0,1fr);gap:10px;align-items:center}
+.xkey .xgw{background:var(--ch-paper)}
+.xkey svg.sw{width:26px;height:14px;display:block}
+.drawer .cmp{border-top:1px solid rgba(255,255,255,.1);padding:8px 0 6px;margin-top:6px}
+.drawer .cq{color:#fff;margin-bottom:3px}
+.drawer .ca{color:var(--proto-faint);font-size:12.5px;padding:1px 0}
+.drawer .ca b{font-weight:500}
+.drawer .ca.on{color:#fff}
+@media (prefers-reduced-motion:no-preference){
+	.isl.grow{transform-box:fill-box;transform-origin:center;animation:xgrow .9s cubic-bezier(.2,.7,.2,1) both}
+	@keyframes xgrow{from{transform:scale(.25);opacity:0}to{transform:none;opacity:1}}
+	.fogc.lift{transform-box:fill-box;transform-origin:center;animation:xlift 1.1s ease-out both}
+	@keyframes xlift{from{opacity:1;transform:none}to{opacity:0;transform:translateY(-16px) scale(1.2)}}
+	.xroute.fresh{animation:xfade .8s ease-out both}
+	@keyframes xfade{from{opacity:0}}
+	.xp-camp.fresh{animation:xpop .45s cubic-bezier(.2,.8,.3,1) both}
+	@keyframes xpop{from{opacity:0;transform:translate(-50%,-50%) scale(.3)}}
+	.needle.swing{animation:xswing 1s cubic-bezier(.3,.7,.2,1) both}
+	@keyframes xswing{from{transform:rotate(var(--from))}to{transform:rotate(var(--to))}}
+}
+@media (max-width:980px){.xpbelow{grid-template-columns:minmax(0,1fr)}}
+@media (max-width:900px){.xpncol{position:static;width:auto;margin-top:14px;pointer-events:auto}.xpnotes{max-height:none}.xphint{display:block}}
 
 /* prototype chrome: deliberately not Pilot's look */
 .pbar{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:30;display:flex;align-items:center;gap:4px;background:var(--proto);color:var(--proto-fg);border-radius:999px;padding:5px;box-shadow:0 6px 24px rgba(0,0,0,.25);font-size:13px}
@@ -772,6 +873,7 @@ const VARIANTS = {
 	A: { name: "Map", what: "A visual map. Columns run from settled, through open now and waiting, to fog of war and the destination. Lines show what waits for what, and what fog became. Select a card to inspect it." },
 	B: { name: "Outline", what: "A structured document. What happens next comes first, then unanswered questions by kind, settled choices with their sources, fog of war and build tasks. Open a row to inspect it." },
 	C: { name: "Rounds", what: "An optional, lighter map, read top to bottom. One row per planning round: what Pilot explored, what that produced and the next steps it set up. Lines join a next step to the later round that took it up. Select an output to see its source and what it changed." },
+	D: { name: "Expedition", what: "A playful last experiment with the same records, drawn as an expedition chart. Settled answers are inked islands, open questions sit on blank ground, fog of war is fog, trails show what waits for what and each planning round is a camp on Pilot\u2019s route. The compass points at what needs you. Select a place for its field notes." },
 };
 const params = new URLSearchParams(location.search);
 let state = Model.initial();
@@ -779,7 +881,7 @@ const ui = freshUi(VARIANTS[params.get("variant")] ? params.get("variant") : "A"
 
 function freshUi(variant) {
 	return { variant, route: parse(location.hash), stack: [location.hash || "#/map"], scroll: {}, hl: {}, kbd: false,
-		sel: null, selChip: null, seenPasses: null, seenLines: null, open: {}, kind: null, modal: null, iv: { idx: 0, all: false }, ans: {}, drawer: false, dtab: "walk", wt: null, changed: [], toast: null, cx: 0 };
+		sel: null, selChip: null, seenPasses: null, seenLines: null, open: {}, kind: null, modal: null, iv: { idx: 0, all: false }, ans: {}, drawer: false, dtab: "walk", wt: null, changed: [], toast: null, cx: 0, xp: null, fx: null };
 }
 
 /* ---------- helpers ---------- */
@@ -882,6 +984,8 @@ function srcChip(id) {
 /* ---------- the record: what a selected card (A) or opened row (B) shows ---------- */
 function recordBody(id) {
 	if (id === "dest") return destBody();
+	if (id === "home") return homeBody();
+	if (id.indexOf("camp:") === 0) return campBody(+id.slice(5));
 	if (id.indexOf("out:") === 0) return outBody(id);
 	if (id.indexOf("fog:") === 0) return fogBody(fogOf(id.slice(4)));
 	if (id.indexOf("task:") === 0) return taskBody(taskOf(id.slice(5)));
@@ -912,7 +1016,7 @@ function recordBody(id) {
 		h += '<div class="blk"><div class="k">Interview round ' + r.n + " \u00b7 your answers, as submitted" + (r.at ? " \u00b7 " + esc(r.at) : "") + '</div><div class="ans">' +
 			r.asks.filter((q) => q.item === e.id).map((q) => '<div><div class="p">' + esc(q.prompt) + "</div><div>" + esc(Model.answerWords(r, q)) + "</div></div>").join("") + "</div></div>";
 	}
-	if (ui.variant === "C") h += historyBlock(e.id);
+	if (ui.variant === "C" || ui.variant === "D") h += historyBlock(e.id);
 	if (e.refs.length) h += '<div class="blk"><div class="k">Sources</div>' + e.refs.map(srcChip).join("") + "</div>";
 	h += '<p class="what">' + icon(e.kind) + "<span><b>" + K[e.kind].name + ".</b> " + esc(K[e.kind].what) + "</span></p>";
 	return h + "</div>";
@@ -925,7 +1029,7 @@ function fogBody(f) {
 		if (f.after.length) h += '<span class="k">After</span><span>' + pickLinks(f.after) + "</span>";
 	} else h += '<span class="k">Became</span><span>' + pickLinks(f.became) + "</span>";
 	h += "</div>";
-	if (ui.variant === "C") h += historyBlock("fog:" + f.id);
+	if (ui.variant === "C" || ui.variant === "D") h += historyBlock("fog:" + f.id);
 	if (f.refs.length) h += '<div class="blk"><div class="k">Sources</div>' + f.refs.map(srcChip).join("") + "</div>";
 	h += '<p class="what">' + icon("fog") + "<span><b>Fog of war.</b> An area Pilot does not understand well enough to ask precise questions about yet. Fog is not a problem and blocks nothing. " + (f.active ? "When it is ready, Pilot turns it into precise questions." : "It is kept as history.") + "</span></p></div>";
 	return h;
@@ -944,6 +1048,8 @@ function destBody() {
 }
 function recordTitle(id) {
 	if (id === "dest") return ["dest", "Destination", "Pilot on Linux desktops"];
+	if (id === "home") return ["brief", "Home port", "Your brief"];
+	if (id.indexOf("camp:") === 0) { const p = state.passes.find((x) => "camp:" + x.n === id); return ["round", "Planning round " + p.n + ", a camp on the route", p.title]; }
 	if (id.indexOf("out:") === 0) { const r = passOut(id); return [outKindIcon(r.o), OUTKIND[r.o.kind][1] + " \u00b7 planning round " + r.p.n, r.o.label]; }
 	if (id.indexOf("fog:") === 0) { const f = fogOf(id.slice(4)); return ["fog", f.active ? "Fog of war" : "Fog of war, explored", f.area]; }
 	if (id.indexOf("task:") === 0) { const t = taskOf(id.slice(5)); return ["task", "Build task #" + t.number, t.title]; }
@@ -952,7 +1058,8 @@ function recordTitle(id) {
 }
 function exists(id) {
 	if (!id) return false;
-	if (id === "dest") return true;
+	if (id === "dest" || id === "home") return true;
+	if (id.indexOf("camp:") === 0) return state.passes.some((p) => "camp:" + p.n === id);
 	if (id.indexOf("out:") === 0) return !!passOut(id);
 	if (id.indexOf("fog:") === 0) return !!fogOf(id.slice(4));
 	if (id.indexOf("task:") === 0) return !!taskOf(id.slice(5));
@@ -1351,6 +1458,350 @@ function historyBlock(id) {
 	return rows ? '<div class="blk"><div class="k">In planning rounds</div>' + rows + "</div>" : "";
 }
 
+/* ---------- D: the expedition chart ---------- */
+/* A playful last experiment: the same records drawn as an expedition chart on a 1200 x 700 sheet. Places keep their
+   spot and only change state. Settled answers are inked islands, open questions sit on blank ground, fog of war is
+   fog, trails show what waits for what, and each planning round is a camp on Pilot's route. Nothing is a score. */
+const XP = { home: [64, 360], scope: [200, 205], wayland: [190, 500], keyring: [420, 618], desktops: [430, 330], "screen-reader": [560, 150],
+	packaging: [575, 478], tray: [700, 285], "offline-install": [735, 592], updates: [790, 440], "status-line": [855, 215], "status-choice": [985, 110], dest: [1088, 240] };
+const XPF = { a11y: { c: [600, 150], r: 92 }, offline: { c: [775, 600], r: 84 }, credentials: { c: [420, 618], r: 70 } };
+const XP_COMPASS = [92, 606];
+const XP_BLOCKS = [[0, 0, 350, 135], [30, 552, 160, 700], [1030, 160, 1150, 262], [975, 262, 1200, 700]];
+const xpAt = (x, y) => "left:" + (x / 12).toFixed(3) + "%;top:" + (y / 7).toFixed(3) + "%";
+const r1 = (v) => Math.round(v * 10) / 10;
+function xpHash(s) {
+	let h = 2166136261;
+	for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+	return h >>> 0;
+}
+/* A few overlapping circles around a point. Drawn together they make one irregular island or cloud. */
+function xpPuffs(key, x, y, r, n) {
+	let h = xpHash(key) || 1;
+	const rnd = () => { h ^= h << 13; h ^= h >>> 17; h ^= h << 5; return ((h >>> 0) % 1000) / 1000; };
+	const out = [[x, y, r]];
+	for (let i = 0; i < n; i++) {
+		const a = (i / n) * Math.PI * 2 + rnd() * 1.1, d = r * (0.55 + rnd() * 0.35);
+		out.push([r1(x + Math.cos(a) * d), r1(y + Math.sin(a) * d * 0.78), r1(r * (0.42 + rnd() * 0.26))]);
+	}
+	return out;
+}
+function xpPos(id) {
+	if (!id) return null;
+	if (id === "home" || id.indexOf("src:") === 0) return XP.home;
+	if (id === "dest" || id.indexOf("task:") === 0) return XP.dest;
+	if (id.indexOf("fog:") === 0) { const z = XPF[id.slice(4)]; return z ? z.c : null; }
+	if (id.indexOf("camp:") === 0) { const c = xpCamps().find((x) => "camp:" + x.p.n === id); return c ? [c.x, c.y] : null; }
+	if (id.indexOf("out:") === 0) { const r = passOut(id); return r ? xpPos(r.o.about) || xpPos("camp:" + r.p.n) : null; }
+	return XP[id] || null;
+}
+function xpFree(x, y, placed) {
+	if (x < 34 || x > 1166 || y < 34 || y > 666) return false;
+	for (const k in XP) { const [px, py] = XP[k]; if (k !== "dest" && x > px - 40 && x < px + 190 && y > py - 34 && y < py + 34) return false; }
+	for (const k in XPF) { const z = XPF[k]; if (Math.hypot(x - z.c[0], y - z.c[1]) < z.r * 0.6) return false; }
+	for (const b of XP_BLOCKS) if (x > b[0] && x < b[2] && y > b[1] && y < b[3]) return false;
+	for (const c of placed) if (Math.hypot(x - c.x, y - c.y) < 46) return false;
+	return true;
+}
+/* Each planning round makes camp near what it explored, on free ground. */
+function xpCamps() {
+	const placed = [];
+	for (const p of state.passes) {
+		const pts = p.explored.map(xpPos).filter(Boolean);
+		const cx = pts.length ? pts.reduce((a, q) => a + q[0], 0) / pts.length : XP.home[0];
+		const cy = pts.length ? pts.reduce((a, q) => a + q[1], 0) / pts.length : XP.home[1];
+		let spot = null;
+		for (const r of [0, 30, 50, 70, 95, 120, 150, 190, 240]) {
+			for (const a of [90, 270, 0, 180, 45, 135, 225, 315]) {
+				const x = cx + Math.cos((a * Math.PI) / 180) * r, y = cy + Math.sin((a * Math.PI) / 180) * r;
+				if (xpFree(x, y, placed)) { spot = [x, y]; break; }
+			}
+			if (spot) break;
+		}
+		spot = spot || [cx, cy];
+		placed.push({ p, x: Math.round(spot[0]), y: Math.round(spot[1]) });
+	}
+	return placed;
+}
+/* The compass points at what needs you, or ahead to the destination when nothing does. */
+function xpTarget() {
+	const st = Model.nextSteps(state).find((x) => x.you && !x.later);
+	return st ? { id: st.id || "dest", title: st.title } : null;
+}
+function xpAngle(t) {
+	const T = xpPos(t ? t.id : "dest") || XP.dest;
+	return Math.round((Math.atan2(T[1] - XP_COMPASS[1], T[0] - XP_COMPASS[0]) * 180) / Math.PI);
+}
+/* What changed since the chart was last drawn, so only that moves, once. Nothing moves by itself. */
+function xpFx() {
+	const now = { settled: ex().filter((e) => e.state === "resolved").map((e) => e.id), fog: state.fog.filter((f) => f.active).map((f) => f.id), camps: state.passes.length, needle: xpAngle(xpTarget()) };
+	const was = ui.xp;
+	ui.xp = now;
+	if (was && !reduced()) {
+		// Each kind of change keeps its own start time, so a second change does not cut the first one short.
+		const t = performance.now(), f = ui.fx || {};
+		const grow = now.settled.filter((id) => was.settled.indexOf(id) < 0);
+		const lift = was.fog.filter((id) => now.fog.indexOf(id) < 0);
+		if (grow.length) f.grow = { v: grow, t };
+		if (lift.length) f.lift = { v: lift, t };
+		if (now.camps > was.camps) f.camp = { v: now.camps, t };
+		if (was.needle !== now.needle) f.needle = { v: was.needle, t };
+		ui.fx = f;
+	}
+	if (!ui.fx || reduced()) return null;
+	const at = performance.now(), out = { grow: [], lift: [], camp: 0, needle: null, dt: {} };
+	let any = false;
+	for (const k of ["grow", "lift", "camp", "needle"]) {
+		const x = ui.fx[k];
+		if (!x || at - x.t >= 1300) continue;
+		out[k] = x.v; out.dt[k] = Math.round(at - x.t); any = true;
+	}
+	return any ? out : null;
+}
+function xpKind(e) {
+	if (e.state === "resolved") return e.changed.length ? "flag-changed" : "flag";
+	if (e.state === "asking") return "signpost";
+	if (e.state === "waiting") return "gate";
+	if (e.kind === "grilling") return "signpost-ready";
+	if (e.kind === "research") return e.state === "running" ? "tent" : "trig";
+	return e.state === "running" ? "flask-run" : "flask";
+}
+function xpGlyph(k) {
+	const I = "var(--ch-ink)";
+	const s = (inner) => '<svg class="xg" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke-linecap="round" stroke-linejoin="round">' + inner + "</svg>";
+	switch (k) {
+		case "flag":
+		case "flag-changed": return s('<path d="M7 21V3.5" stroke="' + I + '" stroke-width="1.8"/><path d="M7.6 4h10.6l-2.9 3.7 2.9 3.7H7.6Z" fill="' + (k === "flag" ? I : "var(--needs)") + '"/>');
+		case "signpost":
+		case "signpost-ready": {
+			const f = k === "signpost" ? "var(--needs)" : "none";
+			return s('<path d="M12 21.5V3" stroke="' + I + '" stroke-width="1.7"/><path d="M12.6 4.5h6.4l2.4 2.6-2.4 2.6h-6.4Z" fill="' + f + '" stroke="' + I + '" stroke-width="1.3"/><path d="M11.4 11.5H5l-2.4 2.6L5 16.7h6.4Z" fill="' + f + '" stroke="' + I + '" stroke-width="1.3"/>');
+		}
+		case "trig": return s('<path d="M12 3.5 20.5 19.5h-17Z" stroke="' + I + '" stroke-width="1.6"/><circle cx="12" cy="14" r="1.8" fill="' + I + '"/>');
+		case "tent": return s('<path d="M12 6.5 3 20h18Z" fill="var(--progress)" fill-opacity=".22" stroke="var(--progress)" stroke-width="1.6"/><path d="M12 12.5 9.8 20h4.4Z" fill="var(--progress)"/><path d="M12 6.5V2.5l3.4 1.3L12 5.1" stroke="var(--progress)" stroke-width="1.4"/>');
+		case "flask":
+		case "flask-run": return s((k === "flask-run" ? '<path d="M7.2 15h9.6l1.9 3.4a1.3 1.3 0 0 1-1.2 1.9H6.5a1.3 1.3 0 0 1-1.2-1.9Z" fill="var(--progress)"/>' : "") + '<path d="M9.3 3.5h5.4M10.4 3.5v5.2L5.3 18.4a1.3 1.3 0 0 0 1.2 1.9h11a1.3 1.3 0 0 0 1.2-1.9L13.6 8.7V3.5" stroke="' + (k === "flask-run" ? "var(--progress)" : I) + '" stroke-width="1.6"/>');
+		case "gate": return s('<path d="M5 5v15M19 5v15M5 9.5h14M5 14.5h14" stroke="var(--ch-faint)" stroke-width="1.7"/>');
+		case "anchor": return s('<circle cx="12" cy="5" r="2" stroke="' + I + '" stroke-width="1.6"/><path d="M12 7v13.5M8 10.5h8M4.5 14a7.5 7 0 0 0 15 0M4.5 14l-1.3 1.8M4.5 14l2 .9M19.5 14l1.3 1.8M19.5 14l-2 .9" stroke="' + I + '" stroke-width="1.6"/>');
+		case "crate": return s('<rect x="4" y="6" width="16" height="13" rx="1.2" stroke="' + I + '" stroke-width="1.5"/><path d="M4 6l16 13M20 6 4 19" stroke="' + I + '" stroke-width="1.1" opacity=".6"/>');
+		case "fog": return s('<path d="M6 17.5h11a3.6 3.6 0 0 0 .4-7.2A5 5 0 0 0 7.8 9.4 4.1 4.1 0 0 0 6 17.5Z" fill="var(--ch-fog)" stroke="var(--ch-faint)" stroke-width="1.4"/>');
+	}
+	return s("");
+}
+/* Trails are the "waits for" links. Fog that became a question is kept for tracing but drawn as a lifted ring. */
+function xpTrails() {
+	const out = [];
+	for (const e of ex()) for (const a of e.after) { const A = xpPos(a), B = xpPos(e.id); if (A && B) out.push({ from: a, to: e.id, cls: Model.resolved(state, a) ? "open" : "wait", a: A, b: B, s0: 20, s1: 21 }); }
+	for (const f of state.fog) {
+		const z = XPF[f.id];
+		if (!z) continue;
+		if (f.active) for (const a of f.after) { const A = xpPos(a); if (A) out.push({ from: a, to: "fog:" + f.id, cls: "fog", a: A, b: z.c, s0: 20, s1: z.r * 1.02 }); }
+		else for (const b of f.became) out.push({ from: "fog:" + f.id, to: b, hidden: true });
+	}
+	return out;
+}
+function xpCurve(a, b, s0, s1, k) {
+	const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L;
+	const s = [a[0] + ux * s0, a[1] + uy * s0], e = [b[0] - ux * s1, b[1] - uy * s1];
+	const bend = (k % 2 ? 1 : -1) * Math.min(48, L * 0.14);
+	const c = [(s[0] + e[0]) / 2 - uy * bend, (s[1] + e[1]) / 2 + ux * bend];
+	return "M" + r1(s[0]) + " " + r1(s[1]) + " Q" + r1(c[0]) + " " + r1(c[1]) + " " + r1(e[0]) + " " + r1(e[1]);
+}
+function xpSerpent(x, y) {
+	return '<g transform="translate(' + r1(x) + " " + r1(y) + ')"><title>A sea serpent, asleep. Fog of war is not danger, and it blocks nothing.</title>' +
+		'<path d="M-6 3q2 4 6 5q5-11 10 0q5-11 10 0q5-11 10 0" fill="none" stroke="var(--ch-ink)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>' +
+		'<ellipse cx="36" cy="5" rx="6.6" ry="4.6" fill="var(--ch-fog)" stroke="var(--ch-ink)" stroke-width="1.5"/><path d="M36.6 4.2q1.7 1.6 3.4 0" fill="none" stroke="var(--ch-ink)" stroke-width="1.2" stroke-linecap="round"/>' +
+		'<text class="xz" x="46" y="-3">z</text><text class="xz" x="53" y="-11" style="font-size:9px">z</text></g>';
+}
+function xpSvg(trails, camps, target, fx) {
+	const delay = (base, k) => (fx ? "animation-delay:" + (base - (fx.dt[k] || 0)) + "ms" : "");
+	const circles = (pts, pad) => pts.map(([x, y, r]) => '<circle cx="' + x + '" cy="' + y + '" r="' + r1(r + pad) + '"/>').join("");
+	// Settled ground: one island per settled question, plus the home port. Stacked layers make shared coastlines.
+	const isl = [{ id: "home", x: XP.home[0], y: XP.home[1], r: 58 }].concat(ex().filter((e) => e.state === "resolved" && XP[e.id]).map((e) => ({ id: e.id, x: XP[e.id][0], y: XP[e.id][1], r: 50 })));
+	for (const i of isl) i.pts = xpPuffs(i.id, i.x, i.y, i.r, 4);
+	const layer = (pad, paint) => '<g fill="' + paint + '">' + isl.map((i) => {
+		const g = !!fx && fx.grow.indexOf(i.id) >= 0;
+		return '<g class="isl' + (g ? " grow" : "") + '"' + (g ? ' style="' + delay(0, "grow") + '"' : "") + ">" + circles(i.pts, pad) + "</g>";
+	}).join("") + "</g>";
+	const land = '<g filter="url(#xp-wob)">' + layer(36, "var(--ch-contour)") + layer(34.6, "var(--ch-paper)") + layer(19, "var(--ch-contour)") + layer(17.6, "var(--ch-paper)") +
+		layer(2.4, "var(--ch-ink)") + layer(0, "var(--ch-land)") + layer(0, "url(#xp-hatch)") + "</g>";
+	let fog = "", rings = "", serp = "";
+	for (const f of state.fog) {
+		const z = XPF[f.id];
+		if (!z) continue;
+		const lifting = !f.active && !!fx && fx.lift.indexOf(f.id) >= 0;
+		if (!f.active) rings += '<circle class="xring" cx="' + z.c[0] + '" cy="' + z.c[1] + '" r="' + r1(z.r * 0.75) + '"/>';
+		if (!f.active && !lifting) continue;
+		const pts = xpPuffs("fog-" + f.id, z.c[0], z.c[1], z.r * 0.86, 7);
+		fog += '<g class="fogc' + (lifting ? " lift" : "") + '"' + (lifting ? ' style="' + delay(0, "lift") + '"' : "") + '><g fill="var(--ch-faint)" opacity=".55">' + circles(pts, 1.8) + '</g><g fill="var(--ch-fog)">' + circles(pts, 0) + '</g><g fill="url(#xp-stip)">' + circles(pts, 0) + "</g></g>";
+		if (f.active && !serp) serp = xpSerpent(z.c[0] - 30, z.c[1] + z.r * 0.56);
+	}
+	const tr = trails.filter((t) => !t.hidden).map((t) => '<path class="xtr xtr-' + t.cls + '" data-from="' + esc(t.from) + '" data-to="' + esc(t.to) + '" d="' + xpCurve(t.a, t.b, t.s0, t.s1, xpHash(t.from + ">" + t.to)) + '"/>').join("");
+	let route = "";
+	const Q = camps.map((c) => [c.x, c.y]);
+	for (let i = 0; i < Q.length - 1; i++) {
+		const p0 = Q[i - 1] || Q[i], p1 = Q[i], p2 = Q[i + 1], p3 = Q[i + 2] || Q[i + 1];
+		const c1 = [r1(p1[0] + (p2[0] - p0[0]) / 6), r1(p1[1] + (p2[1] - p0[1]) / 6)], c2 = [r1(p2[0] - (p3[0] - p1[0]) / 6), r1(p2[1] - (p3[1] - p1[1]) / 6)];
+		const fresh = !!fx && fx.camp === i + 2;
+		route += '<path class="xroute' + (fresh ? " fresh" : "") + '"' + (fresh ? ' style="' + delay(0, "camp") + '"' : "") + ' d="M' + p1.join(" ") + " C" + c1.join(" ") + " " + c2.join(" ") + " " + p2.join(" ") + '"/>';
+	}
+	let grat = "";
+	for (let x = 100; x < 1200; x += 100) grat += "M" + x + " 0V700";
+	for (let y = 100; y < 700; y += 100) grat += "M0 " + y + "H1200";
+	const to = xpAngle(target);
+	let from = fx && fx.needle != null ? fx.needle : null;
+	if (from != null) { while (from - to > 180) from -= 360; while (to - from > 180) from += 360; }
+	const needle = '<g class="needle' + (from != null ? " swing" : "") + '" style="--to:' + to + "deg;transform:rotate(" + to + "deg)" + (from != null ? ";--from:" + from + "deg;" + delay(0, "needle") : "") + '"><path d="M0 -4.6 36 0 0 4.6Z" fill="var(--ch-route)"/><path d="M0 -4.6 -36 0 0 4.6Z" fill="var(--ch-ink)"/></g>';
+	const [kx, ky] = XP_COMPASS;
+	const compass = '<g transform="translate(' + kx + " " + ky + ')"><circle r="46" fill="var(--ch-paper)" stroke="var(--ch-ink)" stroke-opacity=".55"/><circle r="39" fill="none" stroke="var(--ch-ink)" stroke-opacity=".35" stroke-dasharray="1 4" stroke-linecap="round"/>' +
+		'<path d="M0 -40 4.5 -4.5 40 0 4.5 4.5 0 40 -4.5 4.5 -40 0 -4.5 -4.5Z" fill="var(--ch-contour)" opacity=".7"/>' + needle + '<circle r="3.2" fill="var(--ch-paper)" stroke="var(--ch-ink)" stroke-width="1.2"/></g>' +
+		'<text class="xcap" x="' + kx + '" y="672" text-anchor="middle">' + (target ? "points at what needs you" : "nothing needs you, so") + "</text>" + (target ? "" : '<text class="xcap" x="' + kx + '" y="689" text-anchor="middle">it points ahead</text>');
+	const [mx, my] = XP.dest;
+	const mtn = '<g transform="translate(' + mx + " " + my + ')"><path d="M-52 10 -20 -32 -6 -15 12 -44 52 10Z" fill="var(--ch-paper)" stroke="var(--ch-ink)" stroke-width="1.5" stroke-linejoin="round"/>' +
+		'<path d="M16 -36 24 -18M21 -28 33 -6M27 -16 39 4M-17 -26 -12 -12M-14 -20 -6 -2" stroke="var(--ch-ink)" stroke-width="1" opacity=".5" fill="none"/>' +
+		'<path d="M12 -44V-70" stroke="var(--ch-ink)" stroke-width="1.6"/><path d="M12.6 -70h19l-5 6 5 6h-19Z" fill="var(--ch-route)"/></g>';
+	const cart = '<g><rect x="22" y="20" width="324" height="106" rx="3" fill="var(--ch-paper)" stroke="var(--ch-ink)" stroke-opacity=".7"/><rect x="27.5" y="25.5" width="313" height="95" rx="2" fill="none" stroke="var(--ch-ink)" stroke-opacity=".3"/>' +
+		'<text class="ct1" x="184" y="60" text-anchor="middle">A chart of what is known</text><text class="ct2" x="184" y="84" text-anchor="middle">Surveyed by Pilot, map revision ' + state.revision + "</text>" +
+		'<text class="ct3" x="184" y="106" text-anchor="middle">Not to scale: trails mean \u201cwaits for\u201d.</text></g>';
+	const defs = '<defs><pattern id="xp-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><path d="M0 0V6" stroke="var(--ch-hatch)" stroke-width="1.3"/></pattern>' +
+		'<pattern id="xp-stip" width="10" height="10" patternUnits="userSpaceOnUse"><circle cx="2.5" cy="2.5" r=".95" fill="var(--ch-faint)" opacity=".45"/><circle cx="7.5" cy="7.5" r=".75" fill="var(--ch-faint)" opacity=".35"/></pattern>' +
+		'<filter id="xp-wob" x="-10%" y="-10%" width="120%" height="120%"><feTurbulence type="fractalNoise" baseFrequency="0.028" numOctaves="2" seed="4"/><feDisplacementMap in="SourceGraphic" scale="10" xChannelSelector="R" yChannelSelector="G"/></filter>' +
+		'<filter id="xp-wob2" x="-15%" y="-15%" width="130%" height="130%"><feTurbulence type="fractalNoise" baseFrequency="0.02" numOctaves="2" seed="11"/><feDisplacementMap in="SourceGraphic" scale="18" xChannelSelector="R" yChannelSelector="G"/></filter>' +
+		[["xp-ar", "var(--ch-ink)"], ["xp-ar-rel", "var(--primary)"]].map(([id, c]) => '<marker id="' + id + '" viewBox="0 0 10 10" refX="7" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto-start-reverse"><path d="M1.5 1.5 7.5 5 1.5 8.5" fill="none" stroke="' + c + '" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>').join("") + "</defs>";
+	return '<svg class="xpsvg" viewBox="0 0 1200 700" preserveAspectRatio="none" aria-hidden="true">' + defs + '<path class="xgrat" d="' + grat + '"/><rect x="8" y="8" width="1184" height="684" rx="8" fill="none" stroke="var(--ch-ink)" stroke-opacity=".3"/>' +
+		land + rings + '<g filter="url(#xp-wob2)">' + fog + "</g>" + serp + tr + route + mtn + cart + compass + "</svg>";
+}
+function xpPlace(e) {
+	const [x, y] = XP[e.id];
+	const sub = e.state === "resolved" ? (e.changed.length ? "Its source changed" : settledHow(e)) : exLine(e);
+	const cls = "xp-pl" + (e.state === "resolved" ? " done" : "") + (e.state === "asking" ? " needs" : "") + (e.state === "running" ? " run" : "") + (e.state === "waiting" ? " wait" : "") + (ui.sel === e.id ? " sel" : "");
+	return "<button " + attr({ class: cls, "data-row": true, "data-node": e.id, "data-flip": e.id, "data-act": "sel", "data-id": e.id, tabindex: "-1", style: xpAt(x, y), "aria-label": K[e.kind].name + ": " + e.title + ". " + sub }) +
+		'><span class="xgw">' + xpGlyph(xpKind(e)) + '</span><span class="xtx"><span class="xt">' + esc(e.title) + '</span><span class="xs' + (e.state === "asking" || e.changed.length ? " tone-needs" : "") + '">' + esc(sub) + "</span></span></button>";
+}
+function xpHome() {
+	return "<button " + attr({ class: "xp-pl done" + (ui.sel === "home" ? " sel" : ""), "data-row": true, "data-node": "home", "data-act": "sel", "data-id": "home", tabindex: "-1", style: xpAt(XP.home[0], XP.home[1]), "aria-label": "Home port: your brief, revision 1" }) +
+		'><span class="xgw">' + xpGlyph("anchor") + '</span><span class="xtx"><span class="xt">Home port</span><span class="xs">Your brief, Nov 8</span></span></button>';
+}
+function xpFogLabel(f) {
+	const z = XPF[f.id];
+	if (!z) return "";
+	const id = "fog:" + f.id, sel = ui.sel === id ? " sel" : "";
+	if (!f.active) return "<button " + attr({ class: "xp-fog gone" + sel, "data-row": true, "data-node": id, "data-flip": id, "data-act": "sel", "data-id": id, tabindex: "-1", style: xpAt(z.c[0], z.c[1] - z.r * 0.75 - 2), "aria-label": "Fog lifted: " + f.area + ". It became " + Model.titles(state, f.became) }) +
+		'><span class="fk">Fog lifted: ' + esc(f.area) + "</span></button>";
+	const line = f.after.length ? "After " + Model.titles(state, f.after) : "Ready to explore";
+	return "<button " + attr({ class: "xp-fog" + sel, "data-row": true, "data-node": id, "data-flip": id, "data-act": "sel", "data-id": id, tabindex: "-1", style: xpAt(z.c[0], z.c[1] - 6), "aria-label": "Fog of war: " + f.area + ". " + line }) +
+		'><span class="fk">Fog of war</span><span class="ft">' + esc(f.area) + '</span><span class="fs">' + esc(line) + "</span></button>";
+}
+function xpDest() {
+	const t = tasks(), review = state.plan && state.plan.state === "review";
+	return '<div class="xp-dest" style="' + xpAt(XP.dest[0], XP.dest[1] + 30) + '">' +
+		"<button " + attr({ class: "xp-db" + (ui.sel === "dest" ? " sel" : ""), "data-row": true, "data-node": "dest", "data-flip": "dest", "data-act": "sel", "data-id": "dest", tabindex: "-1", "aria-label": "Destination: " + Model.DESTINATION + " " + Model.stageWord(state) }) +
+		'><span class="dk">Destination</span><span class="dd">' + esc(Model.DESTINATION) + '</span><span class="dg">' + esc(Model.stageWord(state)) + "</span></button>" +
+		(review ? btn("Read the plan", { act: "review" }, "primary sm") : "") +
+		'<div class="xp-tasks"><span class="tk-h">Build tasks</span>' +
+		(t.length ? t.map((x) => "<button " + attr({ class: "xp-tk" + (ui.sel === "task:" + x.id ? " sel" : ""), "data-row": true, "data-node": "task:" + x.id, "data-act": "sel", "data-id": "task:" + x.id, tabindex: "-1" }) +
+			'><span class="xgw">' + xpGlyph("crate") + '</span><span style="min-width:0"><span class="tt">#' + x.number + " " + esc(x.title) + '</span><span class="ts">' + esc(x.status) + "</span></span></button>").join("")
+			: '<span class="dg">None yet. They come from the plan you approve, and start only when you start them.</span>') + "</div></div>";
+}
+function xpCamp(c, last, fx) {
+	const p = c.p, id = "camp:" + p.n, fresh = !!fx && fx.camp === p.n;
+	return "<button " + attr({ class: "xp-camp" + (last ? " now" : "") + (c.x > 1040 ? " lft" : "") + (ui.sel === id ? " sel" : "") + (fresh ? " fresh" : ""), "data-row": true, "data-node": id, "data-act": "sel", "data-id": id, tabindex: "-1",
+		style: xpAt(c.x, c.y) + (fresh ? ";animation-delay:" + (250 - fx.dt.camp) + "ms" : ""), "aria-label": "Planning round " + p.n + ", " + p.at + ": " + p.title + (last ? ". Pilot is here." : "") }) +
+		">" + p.n + (last ? '<span class="here">Pilot is here</span>' : "") + "</button>";
+}
+function xpCompassBtn(target) {
+	const label = target ? "Compass. It points at what needs you: " + target.title : "Compass. Nothing needs you, so it points ahead to the destination.";
+	return "<button " + attr({ class: "xp-comp", "data-row": true, "data-act": "pick", "data-id": target ? target.id : "dest", tabindex: "-1", style: xpAt(XP_COMPASS[0], XP_COMPASS[1]), "aria-label": label, title: target ? "Points at what needs you" : "Nothing needs you" }) + "></button>";
+}
+/* Field notes: the same record the other variants show, pinned on the side of the chart away from the place. */
+function xpNotes(id) {
+	const [k, kl, t] = recordTitle(id);
+	const p = xpPos(id) || XP.dest;
+	return '<div class="xpncol ' + (p[0] > 640 ? "l" : "r") + '"><aside class="insp xpnotes enter" aria-label="Field notes">' +
+		'<button class="x" data-act="sel" data-id="' + esc(id) + '" aria-label="Close (Esc)" title="Close (Esc)">\u00d7</button>' +
+		'<div class="kl">' + icon(k) + esc(kl) + "</div><h2>" + esc(t) + "</h2>" + recordBody(id) + "</aside></div>";
+}
+function homeBody() {
+	const b = state.sources["brief-1"];
+	return '<div class="rec"><div class="body">' + b.body.map((p) => "<p>" + esc(p) + "</p>").join("") + '</div><div class="blk"><div class="k">The original record</div>' + srcChip("brief-1") + "</div>" +
+		'<p class="what">' + icon("brief") + "<span><b>Home port.</b> Where the mission set out: your brief, as you wrote it. Pilot reads it and never changes it.</span></p></div>";
+}
+function campBody(n) {
+	const p = state.passes.find((x) => x.n === n);
+	if (!p) return "";
+	const live = p === livePass();
+	let h = '<div class="rec"><div class="kv"><span class="k">When</span><span>' + esc(p.at) + ", map revision " + p.rev + '</span><span class="k">Explored</span><span>' +
+		p.explored.map((id) => (id.indexOf("src:") === 0 ? lnk(esc(itemName(id)), { act: "source", arg: id.slice(4) }) : lnk(esc(itemName(id)), { act: "pick", id }))).join(", ") + "</span></div>";
+	h += '<div class="blk"><div class="k">What it produced</div>' + (p.out.length ? p.out.map((o) => '<div class="ev" data-act="pick" data-id="out:' + esc(o.k) + '" role="button" tabindex="0">' + icon(outKindIcon(o)) + '<span class="l">' + esc(o.label) + '</span><span class="r faint">' + esc(OUTKIND[o.kind][1]) + "</span></div>").join("") : '<p class="small faint">Nothing yet.</p>') + "</div>";
+	const ns = stepsOf(p);
+	h += '<div class="blk"><div class="k">' + (live ? "Next steps from here" : "Next steps, as they were then") + "</div>" + (ns.length ? ns.map((st) => '<div class="hrow"><span class="faint">' + esc(st.who) + "</span><span>" + esc(st.title) + "</span></div>").join("") : '<p class="small faint">None.</p>') + "</div>";
+	return h + '<p class="what">' + icon("round") + "<span><b>Planning round, a camp on the route.</b> Each time Pilot updates the map from something new, it makes camp and notes what it explored, what that produced and where to go next. Older camps are history. Reading them answers, approves and starts nothing.</span></p></div>";
+}
+function xpBelow() {
+	const steps = Model.nextSteps(state);
+	const next = '<section class="sec enter"><div class="sec-title"><span>Next on the route</span><span>' + steps.length + '</span><span class="grow"></span><span>In order</span></div>' + steps.map((st) => {
+		const a = st.act === "interview" || st.act === "review" ? st.act : st.id ? "pick" : null;
+		const mk = st.you ? "needs" : st.running ? "running" : st.later ? "waiting" : "ready";
+		return '<div class="row' + (a ? "" : " static") + '"' + (a ? ' data-row data-act="' + a + '" data-id="' + esc(st.id || "") + '" role="button" tabindex="-1"' : "") + ">" + mark(mk) +
+			'<div class="t">' + esc(st.title) + '</div><div class="s tone-' + (st.you ? "needs" : st.later ? "faint" : "quiet") + '">' + esc(st.who) + '</div><div class="m"><span>' + esc(st.detail) + "</span></div></div>";
+	}).join("") + "</section>";
+	const P = state.passes;
+	const log = '<section class="sec enter"><div class="sec-title"><span>Expedition log</span><span>' + P.length + '</span><span class="grow"></span><span>Oldest first</span></div>' + P.map((p) => {
+		const live = p === livePass();
+		return '<div class="row" data-row data-act="pick" data-id="camp:' + p.n + '" role="button" tabindex="-1"><span class="lgn' + (live ? " now" : "") + '">' + p.n + '</span><div class="t">' + esc(p.title) + '</div><div class="s faint">' + esc(p.at) + "</div>" +
+			'<div class="m"><span>' + esc(p.out.length ? p.out.map((o) => o.label).join(", ") : "Nothing produced yet") + "</span></div></div>";
+	}).join("") + "</section>";
+	const sw = (inner) => '<svg class="sw" viewBox="0 0 26 14" aria-hidden="true">' + inner + "</svg>";
+	const key = [
+		['<span class="xgw" style="background:var(--ch-land)">' + xpGlyph("flag") + "</span>", "Settled. Inked ground: answered by you, a decision or Knowledge."],
+		['<span class="xgw" style="background:var(--needs-soft);border-color:var(--needs)">' + xpGlyph("signpost") + "</span>", "A fork only you choose. Pilot waits for your answers."],
+		['<span class="xgw">' + xpGlyph("trig") + "</span>", "A survey point: ready for research."],
+		['<span class="xgw" style="border-color:var(--progress)">' + xpGlyph("tent") + "</span>", "A research chat at work. Nothing saved yet."],
+		['<span class="xgw">' + xpGlyph("flask") + "</span>", "A prototype. Its finding is evidence, not acceptance."],
+		['<span class="xgw" style="border-style:dashed">' + xpGlyph("gate") + "</span>", "Waits for something else first."],
+		[sw('<path d="M2 11Q13 1 24 11" fill="none" stroke="var(--ch-ink)" stroke-width="2.2" stroke-dasharray=".5 5" stroke-linecap="round"/>'), "A trail: what waits for what. Dotted until the first is settled."],
+		['<span class="xgw" style="border-color:var(--ch-faint)">' + xpGlyph("fog") + "</span>", "Fog of war: not clear enough to ask about yet. It blocks nothing; the serpent is asleep."],
+		[sw('<path d="M1 10C8 2 16 12 25 4" fill="none" stroke="var(--ch-route)" stroke-width="2.2" stroke-dasharray="5 4" stroke-linecap="round"/>'), "Pilot\u2019s route. Each numbered camp is a planning round."],
+		['<span class="xgw">' + xpGlyph("crate") + "</span>", "A build task, after you approve the plan. It starts only when you start it."],
+	];
+	const keyHtml = '<section class="sec enter"><div class="sec-title"><span>Key to the chart</span></div><ul class="xkey">' + key.map(([g, t]) => "<li>" + g + "<span>" + esc(t) + "</span></li>").join("") + "</ul></section>";
+	return '<div class="xpbelow">' + next + log + keyHtml + "</div>";
+}
+function expeditionView() {
+	const fx = xpFx();
+	const trails = xpTrails();
+	lastEdges = trails;
+	const camps = xpCamps();
+	const target = xpTarget();
+	const notes = ui.sel && exists(ui.sel) ? xpNotes(ui.sel) : "";
+	const places = ex().filter((e) => XP[e.id]).sort((a, b) => XP[a.id][0] - XP[b.id][0]);
+	return '<div class="page wide">' + header() +
+		'<div class="xpwrap enter"><div class="xpframe" id="xpframe"><div class="xpchart" id="xpchart">' + xpSvg(trails, camps, target, fx) +
+		xpCompassBtn(target) + xpHome() + places.map(xpPlace).join("") + state.fog.map(xpFogLabel).join("") + xpDest() +
+		camps.map((c, i) => xpCamp(c, i === camps.length - 1, fx)).join("") + "</div></div>" + notes + "</div>" +
+		'<p class="xphint">Scroll the chart sideways. Everything on it is also listed below.</p>' +
+		'<p class="small faint" style="margin-top:10px">Select a place for its field notes: how it was settled, its sources and what it waits for. Hover to follow its trails. Reading the chart answers, approves and starts nothing.</p>' +
+		xpBelow() + "</div>";
+}
+/* Following one place: what it waits for and unblocks, and the camps that explored it. */
+function traceD(id) {
+	const c = document.getElementById("xpchart");
+	if (!c) return;
+	let set = null;
+	if (id && id.indexOf("camp:") === 0) {
+		const p = state.passes.find((x) => "camp:" + x.n === id);
+		if (p) set = new Set([id].concat(p.explored.map((x) => (x.indexOf("src:") === 0 ? "home" : x))));
+	} else if (id && id.indexOf("out:") === 0) {
+		const r = passOut(id);
+		if (r) set = new Set(outIds(r.o).concat(["camp:" + r.p.n]));
+	} else if (id && id !== "dest" && id !== "home" && exists(id)) {
+		set = related(id);
+		for (const p of state.passes) if (p.explored.indexOf(id) >= 0) set.add("camp:" + p.n);
+	}
+	c.classList.toggle("tracing", !!set);
+	for (const el of c.querySelectorAll("[data-node]")) el.classList.toggle("rel", !!set && set.has(el.dataset.node));
+	for (const el of c.querySelectorAll(".xtr")) el.classList.toggle("rel", !!set && set.has(el.dataset.from) && set.has(el.dataset.to));
+}
+
 /* ---------- source page: the original record ---------- */
 function citedBy(id) {
 	return ex().filter((e) => e.refs.indexOf(id) >= 0).map((e) => e.id).concat(state.fog.filter((f) => f.refs.indexOf(id) >= 0).map((f) => "fog:" + f.id));
@@ -1428,7 +1879,8 @@ function view() {
 	const r = ui.route;
 	if (r.name === "today") return todayView();
 	if (r.name === "source") return sourceView(r.id);
-	return ui.variant === "A" ? mapView() : ui.variant === "B" ? outlineView() : roundsView();
+	if (ui.variant !== "D") ui.xp = null;
+	return ui.variant === "A" ? mapView() : ui.variant === "B" ? outlineView() : ui.variant === "C" ? roundsView() : expeditionView();
 }
 
 /* ---------- modals: interview and plan review ---------- */
@@ -1509,7 +1961,7 @@ function drawerView() {
 			body += '<h2 style="margin-top:18px">' + esc(w.name) + "</h2><p>" + esc(w.desc) + '</p><div class="wt-steps">' +
 				w.steps.map((s, j) => '<button class="pbtn' + (j === ui.wt.step ? " next" : "") + '" data-act="wtStep" data-arg="' + j + '"' + (j !== ui.wt.step ? " disabled" : "") + ">" + (j < ui.wt.step ? "\u2713 " : j + 1 + ". ") + esc(s[0]) + "</button>").join("") + "</div>" +
 				(ui.wt.step >= w.steps.length ? '<p style="margin-top:10px">Walkthrough finished. Switch variant (\u2190 \u2192) and run it again to compare. <button class="pbtn" data-act="wtEnd">Close walkthrough</button></p>' : '<p class="small" style="margin-top:8px;color:var(--proto-faint)">Press the highlighted step. Pilot waits for each step during walkthroughs.</p>');
-		} else body += "<p>Each walkthrough resets the data, then steps through one case. The variant stays as you set it, so you can run the same case in A, B and C and compare. The last one opens C.</p>";
+		} else body += "<p>Each walkthrough resets the data, then steps through one case. The variant stays as you set it, so you can run the same case in each variant and compare. The last two open C and D.</p>";
 	} else if (ui.dtab === "play") {
 		const r = Model.openRound(state);
 		body = "<p>Simulate what Pilot and its agents do. Only actions that make sense now are enabled.</p><h3>Pilot and agents</h3><div class=\"grid\">" +
@@ -1519,15 +1971,25 @@ function drawerView() {
 		body = "<p>The whole map, as saved. Yellow means the last action changed it.</p><div class=\"st\">" + Model.summary(state).map(([k, v]) => '<span class="k">' + esc(k) + '</span><span class="v' + (ui.changed.indexOf(k) >= 0 ? " chg" : "") + '">' + esc(v) + "</span>").join("") + "</div>" +
 			'<h3>Log</h3><div class="log">' + (state.log.length ? state.log.slice(0, 16).map((l) => "<div>" + esc(l.at) + " \u00b7 " + esc(l.who) + ": " + esc(l.text) + "</div>").join("") : "<div>Nothing yet. Pilot\u2019s earlier work is already on the map.</div>") + "</div>";
 	} else if (ui.dtab === "compare") {
-		const rows = [["What is settled?", "Left column, quiet cards", "\u201cSettled\u201d, each with how it was settled", "Answers, decisions and Knowledge, in the round that produced them"], ["What is still unknown?", "Open now, Waiting and Fog columns", "\u201cUnanswered\u201d grouped by kind, then \u201cFog of war\u201d", "The last round\u2019s next steps; fog at the destination"], ["What happens next?", "Open now column; follow the arrows", "Numbered list at the top, with who acts", "The last row\u2019s Next steps"], ["Where did an answer come from?", "Select a card; the side panel lists sources", "Open a row; sources show inside it", "Select an output: its source, and what it changed"], ["How do things connect?", "Lines: waits for, fog became; hover traces a path", "Words: waits for, unblocks, was fog", "Lines from a next step down to the round that took it up"], ["How did we get here?", "Not shown", "Not shown", "One row per planning round, kept as history"], ["Build tasks", "Under the destination", "Their own section at the end", "At the destination, after the last round"]];
-		const col = Object.keys(VARIANTS).indexOf(ui.variant) + 1;
-		body = "<p>All variants show the same records. They differ in what you see first and how you follow connections.</p><table><tr><th>You want to know</th><th>A Map</th><th>B Outline</th><th>C Rounds</th></tr>" +
-			rows.map((r) => "<tr><td>" + esc(r[0]) + "</td>" + [1, 2, 3].map((j) => "<td" + (j === col ? ' style="color:#fff"' : ' style="color:var(--proto-faint)"') + ">" + esc(r[j]) + "</td>").join("") + "</tr>").join("") + "</table><p style=\"margin-top:12px\">" + esc(VARIANTS[ui.variant].what) + "</p>" +
-			"<p>Feedback so far: B Outline is the practical one. C is a lighter, optional view you might open now and then to see how the plan got here. It is not needed for daily work.</p>";
+		const rows = [
+			["What is settled?", "Left column, quiet cards", "\u201cSettled\u201d, each with how it was settled", "Answers, decisions and Knowledge, in the round that produced them", "Inked islands; each flag says how it was settled"],
+			["What is still unknown?", "Open now, Waiting and Fog columns", "\u201cUnanswered\u201d grouped by kind, then \u201cFog of war\u201d", "The last round\u2019s next steps; fog at the destination", "Places on blank ground, and fog of war drawn as fog"],
+			["What happens next?", "Open now column; follow the arrows", "Numbered list at the top, with who acts", "The last row\u2019s Next steps", "The compass points at what needs you; \u201cNext on the route\u201d lists the rest"],
+			["Where did an answer come from?", "Select a card; the side panel lists sources", "Open a row; sources show inside it", "Select an output: its source, and what it changed", "Select a place: its field notes list the sources"],
+			["How do things connect?", "Lines: waits for, fog became; hover traces a path", "Words: waits for, unblocks, was fog", "Lines from a next step down to the round that took it up", "Trails, dotted until what they wait for is settled; hover follows them"],
+			["How did we get here?", "Not shown", "Not shown", "One row per planning round, kept as history", "Pilot\u2019s route: one camp per planning round, and the log"],
+			["Build tasks", "Under the destination", "Their own section at the end", "At the destination, after the last round", "At the destination, after you approve the plan"],
+		];
+		const keys = Object.keys(VARIANTS);
+		body = "<p>All variants show the same records. They differ in what you see first and how you follow connections. The one you are looking at is white.</p>" +
+			rows.map((r) => '<div class="cmp"><div class="cq">' + esc(r[0]) + "</div>" + keys.map((k, j) => '<div class="ca' + (k === ui.variant ? " on" : "") + '"><b>' + k + " " + esc(VARIANTS[k].name) + ".</b> " + esc(r[j + 1]) + "</div>").join("") + "</div>").join("") +
+			'<p style="margin-top:12px">' + esc(VARIANTS[ui.variant].what) + "</p>" +
+			"<p>Feedback so far: B Outline is the practical one. C is a lighter, optional view you might open now and then to see how the plan got here. D is a playful last experiment with the same records; it is not meant to replace the outline.</p>";
 	} else {
 		body = "<p><b>Question.</b> How should a mission\u2019s Wayfinder map show what is settled, what is still unknown and what happens next, and let you check where each answer came from? A visual map, or a structured outline?</p>" +
 			"<p><b>Choosing a variant is feedback, not approval.</b> A mix is a good answer too. Nothing gets built from a pick without your separate design review and agreement.</p>" +
 			"<p><b>C Rounds is optional.</b> You said the outline is more practical and the map may not be used often. C tries a lighter map read top to bottom: each planning round adds one row with what it explored, what it produced and its next steps. It sits beside the outline; it does not replace it. A planning round is each time Pilot updates the map from something new (your answers, research, a prototype finding, a changed decision). Interview rounds are one kind of input to it.</p>" +
+			"<p><b>D Expedition is a playful last experiment.</b> The same map drawn as an expedition chart. Settled answers are inked islands, open questions sit on blank ground beyond them, fog of war is drawn as fog, trails show what waits for what, and each planning round is a camp on Pilot\u2019s red route. The compass points at whatever needs you. Places keep their spot, so answers ink new ground and fog lifts in place. It is not a game: no points, no progress bar, nothing to collect, and nothing moves by itself. Select a place for field notes with the real sources.</p>" +
 			"<p><b>Not real.</b> Mock data in memory only, from the Day mock mission \u201cPilot on Linux desktops\u201d. Nothing is sent anywhere. Reload or Reset starts over. This is a throwaway design prototype, not how Pilot is built: the app stays native (NSH).</p>" +
 			"<p><b>Words.</b> Interview: questions only you answer. Research: an agent looks for evidence. Prototype: a throwaway experiment whose finding is evidence. Fog of war: areas not yet clear enough to ask about. Build task: implementation work from the approved plan.</p>" +
 			"<p><b>Keys.</b> \u2191 \u2193 move, Return opens, Esc closes or goes back, \u2190 \u2192 switch variant. In the interview: 1\u20139 pick an answer, 0 opens \u201cwhy\u201d, \u2190 \u2192 move between questions, \u2318Return submits.</p>" +
@@ -1577,6 +2039,15 @@ const WALKS = [
 			["Answer interview round 2 with the recommended answers", () => { const r = openRoundNow(); dispatch({ type: "interview/submit", round: r.id, answers: REC(r) }); toast("Submitted. Pilot updates the map from your answers."); }],
 			sim("Pilot reads your answers (new round)", { type: "pilot/absorb", round: "r2" }), pick("See what your answers changed", "out:o5-0"),
 			sim("Pilot turns the fog into a question", { type: "fog/graduate", id: "a11y" }), pick("Follow that fog back to round 1", "fog:a11y")] },
+	{ name: "Read the chart (D)", variant: "D", desc: "Opens D Expedition, the playful one. Settled answers are inked islands, open questions sit on blank ground, fog of war is fog and the red route shows Pilot\u2019s planning rounds. Follow the compass to what needs you, check where an answer came from, then watch research and your answers ink new ground and lift the fog.",
+		steps: [["Follow the compass to what needs you", () => { const t = xpTarget(); reveal(t ? t.id : "dest"); }], pick("Open the home port: your brief", "home"),
+			pick("Open camp 2 in the log", "camp:2"), pick("Check how \u201cWayland or X11\u201d was settled", "wayland"),
+			["Open Decision 4, the original record", () => go("#/source/d4")], ["Back to the chart", () => goBack()],
+			sim("Research finishes: Status without a tray (new camp)", { type: "research/finish", id: "tray" }),
+			["Answer interview round 2 with the recommended answers", () => { const r = openRoundNow(); dispatch({ type: "interview/submit", round: r.id, answers: REC(r) }); toast("Submitted. Pilot updates the map from your answers."); }],
+			sim("Pilot reads your answers (new camp)", { type: "pilot/absorb", round: "r2" }),
+			sim("Pilot turns the fog into a question", { type: "fog/graduate", id: "a11y" }),
+			["Follow the compass again", () => { const t = xpTarget(); reveal(t ? t.id : "dest"); }]] },
 ];
 
 /* ---------- navigation ---------- */
@@ -1709,6 +2180,7 @@ function render() {
 	trace(ui.sel);
 	markSel();
 	traceC(ui.sel);
+	traceD(ui.sel);
 	paintHl();
 }
 function rows() { return [...$app.querySelectorAll("[data-row]")]; }
@@ -1766,6 +2238,7 @@ function switchVariant(dir) {
 }
 function setVariant(v) {
 	ui.variant = v;
+	if (v !== "D" && ui.sel && (ui.sel === "home" || ui.sel.indexOf("camp:") === 0)) ui.sel = null;
 	if (ui.sel) ui.open[ui.sel] = true;
 	const p = new URLSearchParams(location.search); p.set("variant", ui.variant);
 	history.replaceState(null, "", location.pathname + "?" + p + location.hash);
@@ -1790,12 +2263,14 @@ document.addEventListener("input", (ev) => {
 document.addEventListener("mousedown", () => { if (ui.kbd) { ui.kbd = false; paintHl(); } });
 document.addEventListener("mouseover", (ev) => {
 	if (ui.variant === "C" && ui.route.name === "map") { const c = ev.target.closest && ev.target.closest("#rounds [data-chip]"); if (c) traceC(c.dataset.node); return; }
+	if (ui.variant === "D" && ui.route.name === "map") { const n = ev.target.closest && ev.target.closest("#xpchart [data-node]"); if (n) traceD(n.dataset.node); return; }
 	if (ui.variant !== "A" || ui.route.name !== "map") return;
 	const n = ev.target.closest && ev.target.closest("#canvas [data-node]");
 	if (n) trace(n.dataset.node);
 });
 document.addEventListener("mouseout", (ev) => {
 	if (ui.variant === "C" && ui.route.name === "map") { const c = ev.target.closest && ev.target.closest("#rounds [data-chip]"); if (c && !(ev.relatedTarget && c.contains(ev.relatedTarget))) traceC(ui.sel); return; }
+	if (ui.variant === "D" && ui.route.name === "map") { const n = ev.target.closest && ev.target.closest("#xpchart [data-node]"); if (n && !(ev.relatedTarget && n.contains(ev.relatedTarget))) traceD(ui.sel); return; }
 	if (ui.variant !== "A" || ui.route.name !== "map") return;
 	const n = ev.target.closest && ev.target.closest("#canvas [data-node]");
 	if (n && !(ev.relatedTarget && n.contains(ev.relatedTarget))) trace(ui.sel);
@@ -1835,7 +2310,7 @@ document.addEventListener("keydown", (e) => {
 		const k = hlKey(); const cur = ui.kbd && ui.hl[k] != null ? ui.hl[k] : -1;
 		ui.hl[k] = Math.max(0, Math.min(rs.length - 1, cur + (e.key === "ArrowDown" ? 1 : cur < 0 ? 0 : -1)));
 		ui.kbd = true; paintHl();
-		const r = rows()[ui.hl[k]]; if (r) { r.scrollIntoView({ block: "nearest", inline: "nearest" }); if (r.dataset.node && ui.variant === "A") trace(r.dataset.node); if (r.dataset.chip && ui.variant === "C") traceC(r.dataset.node); }
+		const r = rows()[ui.hl[k]]; if (r) { r.scrollIntoView({ block: "nearest", inline: "nearest" }); if (r.dataset.node && ui.variant === "A") trace(r.dataset.node); if (r.dataset.chip && ui.variant === "C") traceC(r.dataset.node); if (r.dataset.node && ui.variant === "D") traceD(r.dataset.node); }
 		e.preventDefault(); return;
 	}
 	if (e.key === "Enter" && ui.kbd && (document.activeElement === document.body || !document.activeElement || document.activeElement.hasAttribute("data-row"))) {

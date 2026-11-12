@@ -19,6 +19,12 @@ unknown and what happens next, and let you check where each answer came from?
   later round that took it up. Select an output to see its source record and what it changed.
   Older rows stay as history. A planning round is each time Pilot updates the map from something
   new; interview rounds are one kind of input to it.
+- `?variant=D` **Expedition** (a playful last experiment): the same records drawn as an expedition
+  chart. Settled answers are inked islands, open questions sit on blank ground, fog of war is
+  drawn as fog, trails show what waits for what, and each planning round is a numbered camp on
+  Pilot's red route. The compass points at what needs you. Places keep their spot, so answers
+  ink new ground and fog lifts in place. Select a place for field notes with its real sources.
+  No points, progress bar or perpetual motion; it moves only when something changes.
 - The bottom bar and the left/right arrow keys switch variants. The bottom bar's Panel holds
   walkthroughs, free play, the current state, a side-by-side comparison and About.
   Reset or reload starts over.
@@ -30,9 +36,14 @@ unknown and what happens next, and let you check where each answer came from?
 - All variants use the visual language of the work prototype's variant A
   (`../prototype-work`, inline on Today): the same page header, sections, rows, inline detail,
   banners and evidence rows. Only the map-versus-outline structure differs.
+  D leaves that look on purpose inside the chart only; the page around it is the same.
 
 ## Review in ten minutes
 
+0. Open `?variant=D`, then the Panel, Walkthroughs, "Read the chart (D)". Press each step.
+   Follow the compass, open camp 2 and the Decision 4 record, then watch research and your
+   answers ink new ground and lift the fog. Is it fun enough for an occasional look beside B,
+   and do the field notes still tell you what is settled, unknown and next?
 1. Open `?variant=C`, then the Panel, Walkthroughs, "How did we get here? (C)". Press each step.
    Open round 2's decision and its original record, follow "Keyring access" across rounds,
    then watch research and your answers add new rows. Compare with B: is C worth an
@@ -50,11 +61,14 @@ unknown and what happens next, and let you check where each answer came from?
 
 C is laid out in columns when the page is wide enough. With the Panel and a selected item open
 on a narrow window it stacks the columns and hides the lines; hide the Panel to get them back.
+D's chart keeps its shape: on a narrow window it scrolls sideways, and everything on it is also
+listed below it (Next on the route, Expedition log, Key).
 
 Feedback that helps most: which variant (or which mix) makes "settled, unknown, next" clearest,
 whether sources are easy enough to check, and what feels like too much. Earlier feedback: B is
 the practical one and A is attractive but rarely needed; C tests a lighter, optional history
-view beside B. Liking C is not approval to build it.
+view beside B. D is the last, playful experiment; B Outline stays the baseline. Liking C or D
+is not approval to build it.
 
 Shape follows the upstream `prototype` skill (UI.md and LOGIC.md) from mattpocock/skills at
 `4ae2317ddb22b046e26455e4f9c9b3aaaf62212d` (MIT, Copyright 2026 Matt Pocock), vendored in
