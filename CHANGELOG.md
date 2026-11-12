@@ -1,5 +1,45 @@
 # Changelog
 
+## [1.125.0](https://github.com/babariviere/pilot/compare/v1.124.0...v1.125.0) (2026-11-12)
+
+
+### Features
+
+* **daemon:** record explicit user delivery verification ([351801e](https://github.com/babariviere/pilot/commit/351801ecf9275a3957de4d3f948ac137a3eb886b))
+* **day:** add durable intake triage and Start receipts ([59a15ba](https://github.com/babariviere/pilot/commit/59a15ba867d1a7a577c68184a1b2078b3ad440d3))
+* **day:** add expedition chart variant to Wayfinder prototype ([39d3e05](https://github.com/babariviere/pilot/commit/39d3e05b3a371c8c6308a7b49b40bc0a9776c906))
+* **day:** add pinned web output navigation ([c321be9](https://github.com/babariviere/pilot/commit/c321be922f331e4bf2e2c335815dbf0e3f837253))
+* **day:** add planning-rounds view to Wayfinder prototype ([8bc7a02](https://github.com/babariviere/pilot/commit/8bc7a020ed6891315e730016e1ba7ed62ce9e6cc))
+* **day:** add project-pinned standalone chat creation ([8b0cec5](https://github.com/babariviere/pilot/commit/8b0cec5b5086a2bff6278e74e9dfea13aa9cfcdc))
+* **day:** bridge explicit user delivery verification ([7265232](https://github.com/babariviere/pilot/commit/7265232c7a0e83b1331a1ec1d0104070756fecc1))
+* **day:** browse saved Linear issues and cycle from Today ([2699f0a](https://github.com/babariviere/pilot/commit/2699f0ae278d2a8b5de72a7ef80c5ffa6f0e4ef2))
+* **day:** check delivered results from Today ([333a654](https://github.com/babariviere/pilot/commit/333a65465b9d45d1fc22466a98bf0d9946e309ed))
+* **day:** choose the project when starting a new chat ([373a9db](https://github.com/babariviere/pilot/commit/373a9db0012012289e63e496abe91f20d2ca0f58))
+* **day:** draw the small Wayfinder mission on the region chart ([d6b68ca](https://github.com/babariviere/pilot/commit/d6b68ca09c6b8b09aec722bcdaac9bb5fecebc68))
+* **day:** expose saved Linear issue and cycle reads ([ec21d05](https://github.com/babariviere/pilot/commit/ec21d05433de30b2f2e82f6f7f3c26d5400b7fdc))
+* **day:** inspect saved artifact source on the result page ([543eb61](https://github.com/babariviere/pilot/commit/543eb61fb3eda4f45bf0659f75b6ba29470ad4ee))
+* **day:** keep the Linear page through close and update ([782f514](https://github.com/babariviere/pilot/commit/782f5144a28b7fcce123c2993a6d13b7bf1a3af6))
+* **day:** let the Wayfinder expedition chart pan and zoom freely ([c1ad44f](https://github.com/babariviere/pilot/commit/c1ad44f55fd1ca238c7b468a09acbb45f95a0686))
+* **day:** open original map source records ([fb03bf2](https://github.com/babariviere/pilot/commit/fb03bf261f59b02cbf5bd835408a963f6a984126))
+* **day:** open pull request outputs on press and keep reminder checklist ticks ([fd9d579](https://github.com/babariviere/pilot/commit/fd9d579dd87162b7d7ed88cd91e80bebff32cbef))
+* **day:** read immutable captured result artifact source ([dd2f9d0](https://github.com/babariviere/pilot/commit/dd2f9d0ba219fbfeeb983b6f96fb4961c6f48cd8))
+* **day:** show new requests and task outputs on Today ([1cbb302](https://github.com/babariviere/pilot/commit/1cbb302945496a608c22ea95c43686b3dde9791f))
+* **day:** show the Wayfinder expedition chart at big-mission scale ([88955b7](https://github.com/babariviere/pilot/commit/88955b747c9327c8751354fc517242e9c09c6790))
+* **day:** start, put off and discard new requests on Today ([d767e43](https://github.com/babariviere/pilot/commit/d767e4344d0f15f01854dc213fb5decaa85956c7))
+
+
+### Bug Fixes
+
+* **day:** complete the connected planning journey ([1db61f0](https://github.com/babariviere/pilot/commit/1db61f0e293e15302329b3acdef0afa7888e1940))
+* **day:** point new requests to the Inbox without naming missing actions ([d5c29e8](https://github.com/babariviere/pilot/commit/d5c29e8acbf19bdef0f1ef7a5a7bf56bc1a26b85))
+* **day:** recover failed connected startup reads ([6895412](https://github.com/babariviere/pilot/commit/68954125bd44fbda886f1c8f770bb70715d6a32c))
+* **day:** respect global mbx Blaze configuration ([db3250d](https://github.com/babariviere/pilot/commit/db3250ddda7e72e04e592186ab7b01e5122aceaa))
+* **day:** restore saved navigation on ordinary startup ([7599f29](https://github.com/babariviere/pilot/commit/7599f296d81614625ab4a51f45c2410a6b32194d))
+* **day:** unblock verified native bootstrap ([d895a5d](https://github.com/babariviere/pilot/commit/d895a5d861d2fc907e71463ffeb730350fefcca4))
+* **day:** untangle the Wayfinder expedition channel ([0281b42](https://github.com/babariviere/pilot/commit/0281b42e3e15bbd479f8c645908aa9acd35d6d47))
+* **linux:** use installed pnpm for runtime packaging ([7597e05](https://github.com/babariviere/pilot/commit/7597e0520109fba7dbad2ab37a9fa4d6871cc40e))
+* **prompts:** separate choices from routine instructions ([ddf20d6](https://github.com/babariviere/pilot/commit/ddf20d6a2127eae481387ab306937c840430be5a))
+
 ## [1.124.0](https://github.com/babariviere/pilot/compare/v1.123.0...v1.124.0) (2026-11-11)
 
 
