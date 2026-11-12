@@ -1,8 +1,11 @@
 """Isolated candidate assembly rules. Mocked code seals are NOT native acceptance."""
 import json
 import base64
+import contextlib
+import io
 from pathlib import Path
 import plistlib
+import shlex
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -68,6 +71,36 @@ class CandidateTests(unittest.TestCase):
             self.assertEqual(candidate.prepare(self.source, self.root / "existing", output), output)
             build.assert_called_once_with(self.source, output, production=self.config)
             checked.assert_called_once_with(output)
+
+    def test_prepare_cli_prints_next_local_stage_without_an_extra_approval_hold(self):
+        output = self.root / "prepared"
+        stdout = io.StringIO()
+        args = ["candidate.py", "prepare", "--source", self.source, "--trust-from", str(self.root / "existing"),
+                "--output", str(output)]
+        with patch.object(candidate.sys, "argv", args), \
+                patch.object(candidate, "prepare", return_value=output) as prepare, \
+                patch.object(candidate, "assemble", side_effect=AssertionError("prepare must not assemble")), \
+                contextlib.redirect_stdout(stdout):
+            candidate.main()
+        prepare.assert_called_once_with(self.source, self.root / "existing", output)
+        text = stdout.getvalue()
+        self.assertIn("temporary development app", text)
+        self.assertIn("No install, replacement or live update", text)
+        self.assertNotIn("approval", text.lower())
+        self.assertEqual(shlex.split(text.splitlines()[-1]),
+                         [candidate.sys.executable, str(Path(candidate.__file__).resolve()), "assemble",
+                          "--inputs", str(output), "--output", str(output.parent / "Pilot Next.app")])
+
+    def test_cli_help_describes_local_assembly_without_granting_install_or_launch(self):
+        stdout = io.StringIO()
+        with patch.object(candidate.sys, "argv", ["candidate.py", "--help"]), \
+                patch.object(candidate, "assemble", side_effect=AssertionError("help must not assemble")), \
+                contextlib.redirect_stdout(stdout), self.assertRaises(SystemExit) as exit:
+            candidate.main()
+        self.assertEqual(exit.exception.code, 0)
+        text = " ".join(stdout.getvalue().split())
+        self.assertIn("temporary development app; no install or launch", text)
+        self.assertNotIn("Separately authorized", text)
 
     def existing(self):
         app = self.root / "Existing/Pilot Next.app"

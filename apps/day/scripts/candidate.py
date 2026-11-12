@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare a connected native candidate; assemble/sign only as a separate action.
+"""Prepare or assemble a temporary connected development candidate.
 
 No install, launch, service registration, update, profile read or provider call.
 This is not a release/update distribution. It connects to an existing daemon.
@@ -107,7 +107,7 @@ def prepare(source, app, output):
 
 
 def assemble(inputs, output):
-    """Explicit local assembly/signing boundary. Never called by prepare."""
+    """Local development assembly and code sealing. Never called by prepare."""
     output = temporary_output(output)
     if output.name != "Pilot Next.app":
         raise ValueError("The production bootstrap requires the preserved bundle name")
@@ -188,7 +188,7 @@ def main():
     p.add_argument("--source", required=True)
     p.add_argument("--trust-from", required=True, type=Path)
     p.add_argument("--output", required=True, type=Path)
-    p = commands.add_parser("assemble", help="Separately authorized same-identity local assembly and signing")
+    p = commands.add_parser("assemble", help="Create and code-seal a temporary development app; no install or launch")
     p.add_argument("--inputs", required=True, type=Path)
     p.add_argument("--output", required=True, type=Path)
     p = commands.add_parser("verify", help="Read-only candidate verification; no launch")
@@ -196,7 +196,8 @@ def main():
     args = parser.parse_args()
     if args.action == "prepare":
         output = prepare(args.source, args.trust_from, args.output)
-        print("Prepared inputs only. After separate assembly/signing approval:")
+        print("Prepared inputs only. Assemble the temporary development app with:")
+        print("No install, replacement or live update is included.")
         print(shlex.join([sys.executable, str(Path(__file__).resolve()), "assemble", "--inputs", str(output),
                           "--output", str(output.parent / "Pilot Next.app")]))
     elif args.action == "assemble":

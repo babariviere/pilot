@@ -26,9 +26,13 @@ not generate keys, reuse a private key, change policy or select a profile/model.
 It builds configured source-matched native inputs and the exact connected NSH
 resource closure. It prints the one separate assembly/signing command.
 
-## Explicit local assembly/signing boundary
+## Local development assembly
 
-Only after approval for this action:
+A request for a locally launchable development candidate covers routine assembly
+and ad-hoc code sealing in a fresh task-owned temporary directory, using the
+unchanged existing trust policy. Preparation and assembly are separate build
+stages, not a second approval hold. They do not authorize installation,
+replacement, registration, live updates/restarts or provider/domain writes.
 
 ```sh
 python3 apps/day/scripts/candidate.py assemble \
@@ -46,6 +50,9 @@ No existing output can be overwritten. Verify again with:
 ```sh
 python3 apps/day/scripts/candidate.py verify "$candidate_dir/Pilot Next.app"
 ```
+
+If genuine platform or trust verification refuses the candidate, report the
+precise error. Do not weaken verification or create a new trusted key.
 
 Ordinary connected bootstrap requires its genuine native executable, compiled
 trust, correct bundle layout/code seal and trusted NSH resources. It does **not**
