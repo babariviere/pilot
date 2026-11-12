@@ -392,6 +392,19 @@ mod tests {
     }
 
     #[test]
+    fn raw_daemon_paths_and_bindings_are_not_a_trusted_input_supplier() {
+        for (flag, value) in [
+            ("--daemon-capsule", "/tmp/Pilot Next.app"),
+            ("--daemon-binding", r#"{"id":"invented-proposal"}"#),
+            ("--daemon-update-receipt", "/tmp/invented-receipt"),
+        ] {
+            let mut args = selected_args();
+            args.extend([flag.into(), value.into()]);
+            assert!(matches!(launch(args), Err(Error::Unavailable)));
+        }
+    }
+
+    #[test]
     fn planning_model_is_explicit_native_selection_not_a_default() {
         let Launch::Selected(selected) = launch(selected_args()).unwrap() else {
             panic!("selected launch")

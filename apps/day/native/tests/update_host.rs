@@ -317,6 +317,36 @@ fn update_methods_are_exact_capabilities_not_paths_or_grants() {
 }
 
 #[test]
+fn missing_daemon_inputs_never_offer_or_prepare_a_service_update() {
+    for (capsule, binding) in [(false, false), (true, false), (false, true)] {
+        let mut f = Fixture::new(false);
+        if !capsule {
+            f.selection.capsule = None;
+        }
+        if !binding {
+            f.selection.binding = None;
+        }
+        // An app target is not a daemon target or proposal. The fixture app is
+        // deliberately unverified; no successful production signature is faked.
+        f.reopen();
+        let result = f.run(
+            "const r=await call('day.update.check');return [r,await call('day.update.prepare',{kind:'service',revision:r.value.snapshot.revision})];",
+        );
+        assert!(result[0]["value"]["snapshot"]["offer"].is_null());
+        assert_eq!(result[1]["error"], "unavailable");
+        assert!(f.bridge.pending_update().is_none());
+        assert_eq!(std::fs::metadata(f.path.join("journal")).unwrap().len(), 0);
+        assert!(!f.source.profile.join(".daemon-upgrade.json").exists());
+        assert!(!f.source.profile.join(".daemon-lifecycle.json").exists());
+        f.reopen();
+        let result = f.run("return await call('day.update.check');");
+        assert!(result["value"]["snapshot"]["offer"].is_null());
+        assert!(result["value"]["snapshot"]["pending"].is_null());
+        assert_eq!(result["value"]["snapshot"]["operation"], "");
+    }
+}
+
+#[test]
 fn fresh_profile_registration_is_explicit_and_confirmation_is_one_use() {
     let f = Fixture::new(true);
     let r=f.run(&format!("const read=await call('day.update.read');const p=await call('day.update.prepare',{{kind:'register',revision:read.value.snapshot.revision}});const id=p.value.snapshot.pending.id;return [read,await call('day.update.confirm',{{confirmation:id,view:{VIEW}}}),await call('day.update.confirm',{{confirmation:id,view:{VIEW}}})];"));

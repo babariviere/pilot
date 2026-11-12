@@ -386,6 +386,92 @@ exact released connected resource closure. It does not run the signing
 assembler or supply a signed production payload. Unconfigured inputs remain
 unavailable for real updates.
 
+### Production daemon input supply audit (2026-11-12)
+
+Day's ordinary native bootstrap selects the profile/daemon/lineage and compiled
+trust, but supplies `Selection.capsule = None` and `Selection.binding = None`.
+This is a missing trusted supplier, not permission to construct a target from a
+path, a runtime version, `/api/hello`, an unsigned compiler receipt or a user
+clicking Confirm. Missing either input leaves service update unavailable,
+including after reopening the native journal.
+
+| Input or operation | Existing owner and constraint |
+| --- | --- |
+| Source-matched app/helper/runtime inputs | `day_build_inputs.py`; even configured output has `installable_update: false`. It neither assembles nor signs a distribution. |
+| Verified immutable service capsule | `runtime::publish_service`; verifies the signed source and complete inventory before publishing into the private service store. A GUI root is not a published service root. |
+| Proposal-bound capsule receipt | `coordinated::prepare`, reached through staged `iteration::ExpectedTarget` verification. Its private `coordinated-update.json` records the exact source, GUI build, runtime stamp and published capsule. Callers must not write a replacement receipt. |
+| Read-only post-swap receipt verification | `coordinated::startup`; checks transaction phase, installed target, compiled configuration, signed manifest, exact source/build, capsule stamp and complete capsule identity. It is not a service-only target supplier or execution grant. |
+| Fresh coordinated daemon handoff | Existing native proposal controller in `coordinated_update.rs`: verifies the exact receipt/proposal, then freshly arms the daemon phase. Retained `daemon-installing` intent is completion-only, never permission to launch another handoff. |
+| Service replacement | `DaemonLifecycle::upgrade_coordinated_report` and `daemon_upgrade::execute`. The signed reservation rechecks the daemon's exact durable proposal target and phase. |
+
+The user updated the installed app/daemon during this audit. The earlier
+build `834.1` capability and capsule observations are stale and must not justify
+another upgrade. Newly installed public inputs name build `944.1`, source
+`d0de096fd5da8c3aeafd24d14a822e3e585a8175`, runtime `1.124.0`. Those file reads
+are not fresh native signature/ownership qualification or a capability check.
+Recheck the current exact connection before proposing any service operation;
+if it is compatible, no daemon update is needed for connected acceptance.
+The refreshed selected connection advertised Day/planning/mission capabilities
+and served Day/planning inventory version 1, but the selected project's intake
+and saved-Linear routes still returned 404. That is partial compatibility, not
+the old blanket absence of Day APIs or permission for another live update.
+No fresh native proposal-bound target was supplied to Day by this audit, and
+none was manufactured or activated.
+
+**Exact supply prerequisite:** separately authorize and supply a fully assembled,
+verified, source-matched distribution with the existing app/helper trust and
+runtime inventory. For release staging, supply its independently authenticated
+signed update envelope and matching archive. Existing staging/publication must
+produce the capsule and proposal receipt, not new JSON written by Day. The
+native proposal owner must deliver a fresh, exact handoff from that receipt to
+Day's selection/controller, with its profile/owner/boot pinned. Day currently
+rejects coordinated successors; plugging in `coordinated::startup` alone would
+not implement the missing fresh proposal transition or safe joined continuation.
+Do not add raw capsule/binding launch flags or accept a recovered
+`daemon-installing` phase as a shortcut. This supply gap remains open.
+
+No lifecycle safety step changes: fence admissions, checkpoint and drain through
+the signed interrupt reservation, revalidate the exact owner and reservation,
+journal before stop, independently prove the watched process exited and the
+permanent profile lease was released, start once, and verify the exact successor
+boot/runtime/source/profile. A pause ACK is not quiescence. Uncertain descendant
+or checkpoint histories still refuse; lost acknowledgements and entered native
+intent remain Unknown and lookup-only. Supplying a payload does not authorize a
+live update/restart or establish daily-driver acceptance.
+
+### Upstream NSH 0.5.0 updater relevance
+
+Read-only research of tagged `v0.5.0`, peeled commit
+`f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1`, found genuine full-app update
+support in [`nsh/updater`](https://github.com/longbridge/nsh/blob/v0.5.0/website/docs/app-updates.md).
+Its [`nsh-updater`](https://github.com/longbridge/nsh/blob/v0.5.0/crates/nsh-updater/src/lib.rs)
+checks the configured manifest, optional pinned signature, app ID, newer semver
+and download size/hash. Custom hosts require a public key; GitHub configuration
+does not require one unless explicitly configured. Its
+[`Installation::install`](https://github.com/longbridge/nsh/blob/v0.5.0/crates/nsh-updater/src/install.rs)
+checks the packaged app ID/executable and macOS code seal, swaps the whole app,
+then the caller requests normal NSH quit/restart. The source rolls back a failed
+rename, not an unverified successor startup. This is a useful future app-update
+primitive, not equivalent evidence for Pilot's complete lifecycle contract.
+
+The release's [`Application.quit/restart` and `on_app_quit`](https://github.com/longbridge/nsh/blob/v0.5.0/website/modules/nsh-desktop.md#quitting)
+are also useful integration points. The documented cleanup cannot veto quit and
+awaits all returned promises for at most 200 ms. It cannot replace Day's durable
+draft capture/flush and joined close barrier: finish that work before requesting
+quit/restart. The stock install path swaps before requesting quit, so reuse must
+also preserve Day's pre-swap save/seal and exact successor acknowledgement.
+
+The upstream [`flow`](https://github.com/longbridge/nsh/blob/v0.5.0/docs/dev/updater.md)
+does not provide Pilot daemon service ownership, profile/boot/proposal binding,
+admission fencing, checkpoint/drain, signed reservation, exact-process exit and
+profile lease proof, selective agent resume, or retained Unknown reconciliation.
+Its OTA path changes TSX/assets, not Rust code or the daemon. Neither path
+supplies the missing daemon capsule/proposal. Assess reuse before adding any
+future app updater, but do not replace the existing daemon handoff with a generic
+app swap. Research changed no dependencies, CLI, trust, package format or
+runtime. Day remains pinned to unmodified NSH `0.4.0`; migration needs separate
+authorization and qualification of the release's breaking lifecycle APIs.
+
 ## Typed host contract for UI integration
 
 Keep native registration/update authority out of the VM. Reuse native `Connection`, `Trust`,

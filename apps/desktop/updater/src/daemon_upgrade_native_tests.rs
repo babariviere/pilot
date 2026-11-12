@@ -1039,7 +1039,11 @@ fn native_launchd_handoff_preserves_external_profile_and_service() {
     );
     host.lock.take();
     fs::write(profile.join("lost-prepare"), "1").unwrap();
-    assert_eq!(execute(&mut host, &cancel), Err(Failure::Unverified));
+    assert_eq!(
+        execute(&mut host, &cancel),
+        Err(Failure::Unknown),
+        "the daemon may have checkpointed before its prepare ACK was lost"
+    );
     assert!(
         !profile.join(JOURNAL).exists(),
         "lost prepare ACK forbids stop"
