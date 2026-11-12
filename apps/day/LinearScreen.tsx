@@ -38,7 +38,6 @@ import {
 	troubleLine,
 } from "./linearView";
 import { glide } from "./motion";
-import { TopBar } from "./TodayScreen";
 import { Action, InlineAction, Mark, type MarkKind, SectionTitle } from "./ui";
 import { openMission } from "./view";
 
@@ -355,14 +354,10 @@ export function LinearScreen(props: { day: Day }) {
 				if (waiting === null) scroll.onScroll(e);
 			}}
 		>
-			<View testID="linear" class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-6">
-				<TopBar />
-				<View class="flex-row">
-					<Action label="‹ Today" accessibilityLabel="Back to Today" onPress={closeLinear} />
-				</View>
+			<View testID="linear" class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
 				<View class="gap-2">
 					<Text class="text-xs text-faint">Linear · read only</Text>
-					<Text role="header" class="text-2xl font-semibold leading-tight tracking-tight text-foreground">
+					<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
 						{linearTitle(read())}
 					</Text>
 					<Text class="text-base leading-relaxed text-muted-foreground">
@@ -376,6 +371,7 @@ export function LinearScreen(props: { day: Day }) {
 						</If>
 						<Action
 							label={v().reading ? "Reading…" : "Read again"}
+							icon="refresh"
 							testID="linear-read"
 							disabled={v().reading}
 							accessibilityLabel="Read Pilot's saved Linear issues again. This sends nothing and does not ask Linear."

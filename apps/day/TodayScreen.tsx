@@ -2,11 +2,9 @@
 // comes next. Read-only over the Rust read model, except through intents.
 // Movement comes only from agents' reports; a mission without a current
 // report is shown as such, never as not moving.
-import { effect, type JSX, keymap, Scroll, type ScrollRef, signal, Text, View } from "nsh";
+import { effect, keymap, Scroll, type ScrollRef, signal, Text, View } from "nsh";
 import type { Decision, MissionRow } from "pilot-day/native";
 import { ActionCard } from "./ActionCard";
-import type { Changes } from "./changeFeed";
-import { showChanges } from "./changesView";
 import { commit, later, pickNth, toggleHelp, writeReply } from "./commands";
 import { DayLine } from "./DayLine";
 import { DecisionCard, decisionMark } from "./DecisionCard";
@@ -16,24 +14,11 @@ import { todayScrollTo } from "./kept";
 import { Arrive } from "./motion";
 import { stageMark, stageWord } from "./PlanScreen";
 import type { Plans } from "./planning";
-import { openNew, openPlan } from "./planView";
+import { openPlan } from "./planView";
 import type { Rituals } from "./ritualFeed";
 import { ToCheck } from "./ToCheck";
-import { updateLabel } from "./UpdateScreen";
 import { Action, EvidenceChip, InlineAction, Mark, RowLink, SectionTitle, Track } from "./ui";
-import { showUpdate, updateEntry, updateOpen } from "./updateView";
-import {
-	dataSource,
-	focused,
-	focusFront,
-	front,
-	type Item,
-	move,
-	openMission,
-	placeRow,
-	queue,
-	todayPlace,
-} from "./view";
+import { focused, focusFront, front, type Item, move, openMission, placeRow, queue, todayPlace } from "./view";
 import { freshnessLine, provenance, rowLine, stateMark, stateTone, stateWord } from "./words";
 
 function actionFor(decision: Decision | undefined): string {
@@ -44,9 +29,6 @@ function actionFor(decision: Decision | undefined): string {
 }
 
 const WORDS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
-
-/** The keystroke that opens New, as the platform writes it. */
-const keymapLabel = keymap.label("mod+n");
 
 /** The headline: the coordinators' summary, until the user starts answering. */
 function headline(day: Day): string {
@@ -249,9 +231,10 @@ function NeedsYou(props: { day: Day }) {
  * Keyboard triage while Today shows: J and K bring the next or previous item
  * forward, 1 to 9 pick an option, S, C, V and Q open help, L puts the item
  * off and Command-Return takes its one next action. Letters and digits never
- * fire while a text field has the focus; help keys never pick or send.
+ * fire while a text field has the focus; help keys never pick or send. New
+ * (Command-N) belongs to the header, which every screen shares.
  */
-function bindTriage(day: Day, plans: Plans | undefined) {
+function bindTriage(day: Day) {
 	const decision = (): Decision | undefined => {
 		const item = front(day.today());
 		return item?.kind === "decision" ? item.decision : undefined;
@@ -261,9 +244,6 @@ function bindTriage(day: Day, plans: Plans | undefined) {
 		k: () => move(day.today(), -1),
 		l: () => later(day, front(day.today())),
 		"mod+enter": () => commit(day, front(day.today())),
-		"mod+n": () => {
-			if (plans) openNew();
-		},
 		s: () => {
 			const d = decision();
 			if (d) toggleHelp(d, "simpler");
@@ -356,30 +336,6 @@ function Unreadable(props: { day: Day }) {
 	);
 }
 
-/** Pilot's mark and name, with the mock data note when the window shows mock data. */
-export function TopBar(props: { children?: JSX.Element; action?: JSX.Element }) {
-	// Pilot's service, only when it needs the user: an update, a registration, a lost answer.
-	const update = () => {
-		const entry = updateEntry();
-		return entry && !updateOpen() ? updateLabel(entry.service()) : "";
-	};
-	return (
-		<View class="flex-row items-center gap-2">
-			{props.children}
-			<View class="size-4 rounded-md bg-primary" />
-			<Text class="text-sm font-semibold text-foreground">Pilot</Text>
-			<View class="flex-1" />
-			<If when={update()}>
-				<Action label={update()} testID="update-open" onPress={showUpdate} />
-			</If>
-			{props.action}
-			<If when={dataSource() === "mock"}>
-				<Text class="text-xs text-faint">Mock data</Text>
-			</If>
-		</View>
-	);
-}
-
 /**
  * Missions in planning, those waiting for the user first. Hidden when the
  * list is read and empty; a list that could not be read says so and shows
@@ -427,6 +383,7 @@ function Planning(props: { plans: Plans }) {
 							<View class="flex-row pt-1">
 								<Action
 									label={reading() ? "Reading…" : "Read again"}
+									icon="refresh"
 									disabled={reading()}
 									accessibilityLabel="Read missions in planning again. This sends nothing."
 									onPress={() => void readAgain()}
@@ -534,24 +491,11 @@ function ComingUp(props: { day: Day }) {
 	);
 }
 
-/** The Changes button: how many reviews wait, said to screen readers too. */
-function ChangesButton(props: { changes: Changes }) {
-	const waiting = () => props.changes.list().waiting.length;
-	return (
-		<Action
-			label="Changes"
-			accessibilityLabel={waiting() > 0 ? `Changes, ${waiting()} to review` : "Changes"}
-			onPress={showChanges}
-		/>
-	);
-}
-
 /** The whole Today screen for `props.day`. */
-export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans; changes?: Changes }) {
+export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }) {
 	const today = () => props.day.today();
-	bindTriage(props.day, props.plans);
+	bindTriage(props.day);
 	const plans = props.plans;
-	const changes = props.changes;
 	// A restored offset for a Today already on screen: scrolled to once, without animation.
 	const scroller = signal<ScrollRef | null>(null);
 	effect(() => {
@@ -571,24 +515,12 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans; 
 				todayPlace.y = e.offset.y;
 			}}
 		>
-			<View class="w-full max-w-2xl self-center gap-12 px-6 pb-24 pt-6">
-				<TopBar
-					action={
-						<View class="flex-row items-center gap-1">
-							<If when={changes}>
-								<ChangesButton changes={changes as Changes} />
-							</If>
-							<If when={plans}>
-								<Action label="New" shortcut={keymapLabel} onPress={openNew} />
-							</If>
-						</View>
-					}
-				/>
+			<View class="w-full max-w-2xl self-center gap-12 px-6 pb-24 pt-10">
 				<If when={today().freshness.state !== "unreadable"} else={<Unreadable day={props.day} />}>
 					<View class="gap-12">
-						<View class="gap-3 pt-6">
+						<View class="gap-3">
 							<DayLine day={props.day} rituals={props.rituals} />
-							<Text role="header" class="text-2xl font-semibold leading-tight tracking-tight text-foreground">
+							<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
 								{headline(props.day)}
 							</Text>
 							<Text class="text-base leading-relaxed text-muted-foreground">{today().summary}</Text>

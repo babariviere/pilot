@@ -2,7 +2,7 @@
 // map of what is still unknown, the proposed plan in full, and each step
 // from answers to work. Submitting, approving, publishing and starting work
 // are separate steps. Only the exact-plan confirmation starts one task.
-import { computed, keymap, Scroll, signal, Text, View } from "nsh";
+import { computed, type JSX, keymap, Scroll, signal, Text, View } from "nsh";
 import { Collapsible } from "nsh/base";
 import type {
 	Exploration,
@@ -20,12 +20,11 @@ import type { Day } from "./day";
 import { InterviewDoc } from "./InterviewDoc";
 import { keepScroll } from "./kept";
 import { MapSources } from "./MapSources";
+import { planBack } from "./nav";
 import { flush, unsavedCount } from "./planCommands";
 import type { Plans } from "./planning";
-import { closePlanning, fogOpen, mapOpen, put, roundOpen, settledOpen } from "./planView";
-import { TopBar } from "./TodayScreen";
+import { fogOpen, mapOpen, put, roundOpen, settledOpen } from "./planView";
 import { Action, Mark, type MarkKind, SectionTitle } from "./ui";
-import { openMission } from "./view";
 
 /** The words beside a plan's mark. */
 export function stageWord(stage: PlanStage): string {
@@ -637,33 +636,44 @@ function Rounds(props: { page: PlanPage }) {
 	);
 }
 
-function Body(props: { plans: Plans; page: PlanPage; title: string; onOpenTasks?: () => void }) {
+function Body(props: {
+	plans: Plans;
+	page: PlanPage;
+	title: string;
+	onOpenTasks?: () => void;
+	/** A command beside the title, such as Read again. */
+	action?: JSX.Element;
+}) {
 	const p = () => props.page;
 	const asking = () => (p().interview && p().interview?.kind !== "review" ? p().interview : null);
 	const review = () => (p().interview?.kind === "review" ? p().interview : null);
 	return (
 		<View class="gap-10">
-			<View class="gap-2">
-				<Text role="header" class="text-2xl font-semibold leading-tight tracking-tight text-foreground">
-					{p().title || props.title || "Mission planning"}
-				</Text>
+			<View class="gap-3">
+				<View class="flex-row items-start gap-4">
+					<View class="flex-1 gap-2">
+						<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
+							{p().title || props.title || "Mission planning"}
+						</Text>
+						<If when={p().available}>
+							<View class="flex-row flex-wrap items-center gap-1.5">
+								<Text class="text-xs text-muted-foreground">Interview and plan</Text>
+								<Text class="text-xs text-faint">·</Text>
+								<Mark kind={stageMark(p().stage)} />
+								<Text class="text-xs text-muted-foreground">
+									{p().route === "wayfinder"
+										? `${stageWord(p().stage)} · Mapped across sessions`
+										: stageWord(p().stage)}
+								</Text>
+							</View>
+						</If>
+					</View>
+					<View class="pt-1">{props.action}</View>
+				</View>
 				<If when={!p().available}>
-					<View
-						testID="planning-unavailable"
-						class="mt-2 flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3"
-					>
+					<View testID="planning-unavailable" class="flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">
 						<Mark kind="unknown" />
 						<Text class="flex-1 text-sm text-foreground">{p().reason}</Text>
-					</View>
-				</If>
-				<If when={p().available}>
-					<View class="flex-row items-center gap-1.5">
-						<Mark kind={stageMark(p().stage)} />
-						<Text class="text-xs text-muted-foreground">
-							{p().route === "wayfinder"
-								? `${stageWord(p().stage)} · Mapped across sessions`
-								: stageWord(p().stage)}
-						</Text>
 					</View>
 				</If>
 				<If when={p().goal}>
@@ -718,16 +728,12 @@ export function PlanScreen(props: { day?: Day; plans: Plans; missionId: string; 
 		props.plans.planning();
 		return props.plans.feed.page(props.missionId) ?? null;
 	});
-	// The mission's overview, once Today's read has the mission: its agents'
-	// reports, Pause and the chats working now.
-	const inToday = () => {
-		const t = props.day?.today();
-		return !!t && [...t.moving, ...t.notMoving, ...t.unreported].some((m) => m.id === props.missionId);
-	};
-	const toOverview = () => {
-		closePlanning();
-		openMission(props.missionId);
-	};
+	// One level up: the mission's overview, once Today's read has the
+	// mission (its agents' reports, Pause and the chats working now), else
+	// Today. The header's Back and Escape both go there.
+	const back = () => planBack(props.day, props.missionId);
+	const inToday = () => back().label === "Mission overview";
+	const toOverview = () => back().go();
 	const reading = signal<"reading" | "read" | "failed">("reading");
 	const message = signal("");
 	const id = props.missionId;
@@ -743,8 +749,19 @@ export function PlanScreen(props: { day?: Day; plans: Plans; missionId: string; 
 		}
 	}
 	void read();
-	keymap.bind("escape", closePlanning);
+	keymap.bind("escape", () => back().go());
 	const scroll = keepScroll(`plan/${id}`);
+	const readAgain = () => (
+		<If when={reading() === "failed" || (page() && (!page()?.fresh || page()?.stage === "planning"))}>
+			<Action
+				label={reading() === "reading" ? "Reading…" : "Read again"}
+				icon="refresh"
+				accessibilityLabel="Read this mission's planning again. This sends nothing."
+				disabled={reading() === "reading"}
+				onPress={() => void read()}
+			/>
+		</If>
+	);
 	return (
 		<Scroll
 			class="flex-1 bg-background"
@@ -752,22 +769,7 @@ export function PlanScreen(props: { day?: Day; plans: Plans; missionId: string; 
 			scrollEventThrottle={100}
 			onScroll={scroll.onScroll}
 		>
-			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-6">
-				<TopBar />
-				<View class="flex-row items-center gap-2">
-					<Action label="‹ Today" accessibilityLabel="Back to Today" onPress={closePlanning} />
-					<If when={inToday()}>
-						<Action
-							testID="open-overview"
-							label="Mission overview"
-							accessibilityLabel="Open this mission's overview"
-							onPress={toOverview}
-						/>
-					</If>
-					<If when={reading() === "failed" || (page() && (!page()?.fresh || page()?.stage === "planning"))}>
-						<Action label="Read again" disabled={reading() === "reading"} onPress={() => void read()} />
-					</If>
-				</View>
+			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
 				<If when={message() && page()}>
 					<Text role="alert" class="text-sm text-needs-ink">
 						{message()}
@@ -776,11 +778,14 @@ export function PlanScreen(props: { day?: Day; plans: Plans; missionId: string; 
 				<If
 					when={page()}
 					else={
-						<Text class="text-base text-muted-foreground">
-							{reading() === "reading"
-								? "Reading this mission's planning…"
-								: message() || "This mission is not in planning any more."}
-						</Text>
+						<View class="flex-row items-start gap-4">
+							<Text class="flex-1 text-base text-muted-foreground">
+								{reading() === "reading"
+									? "Reading this mission's planning…"
+									: message() || "This mission is not in planning any more."}
+							</Text>
+							{readAgain()}
+						</View>
 					}
 				>
 					<Each of={page() ? [page() as PlanPage] : []} key={(p) => p.missionId}>
@@ -792,6 +797,7 @@ export function PlanScreen(props: { day?: Day; plans: Plans; missionId: string; 
 									props.title || props.plans.planning().plans.find((row) => row.missionId === id)?.title || ""
 								}
 								onOpenTasks={inToday() ? toOverview : undefined}
+								action={readAgain()}
 							/>
 						)}
 					</Each>

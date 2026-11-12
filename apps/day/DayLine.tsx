@@ -40,19 +40,19 @@ export function DayLine(props: { day: Day; rituals: Rituals }) {
 			<View class="flex-row flex-wrap items-center gap-x-2 gap-y-1">
 				<Text class="pr-1 text-xs text-muted-foreground">{today().dateLine}</Text>
 				<If when={ritual() === "start"}>
-					<Action label="Start the day" testID="start-day" onPress={() => openRitual("start")} />
+					<Action label="Start the day" icon="sun" testID="start-day" onPress={() => openRitual("start")} />
 				</If>
 				<If when={ritual() === "end"}>
-					<Action label="End the day" testID="end-day" onPress={() => openRitual("end")} />
+					<Action label="End the day" icon="moon" testID="end-day" onPress={() => openRitual("end")} />
 				</If>
-				<Action label="Standup notes" testID="standup" onPress={() => openStandup(null)} />
+				<Action label="Standup notes" icon="notes" testID="standup" onPress={() => openStandup(null)} />
 			</View>
 			<If when={note()}>
 				<View testID="ritual-progress" class="flex-row flex-wrap items-center gap-x-2 gap-y-1">
 					<Mark kind="unknown" />
 					<Text class="text-xs text-muted-foreground">{note()}</Text>
 					<If when={r.uncertain() || r.progress().availability === "unknown"}>
-						<Action label="Read again" testID="ritual-read" onPress={() => void r.refresh()} />
+						<Action label="Read again" icon="refresh" testID="ritual-read" onPress={() => void r.refresh()} />
 					</If>
 				</View>
 			</If>

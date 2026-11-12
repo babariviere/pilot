@@ -19,7 +19,6 @@ import type { Changes } from "./changeFeed";
 import type { Day } from "./day";
 import { Arrive, glide } from "./motion";
 import type { Plans } from "./planning";
-import { TopBar } from "./TodayScreen";
 import { Action, Mark, type MarkKind, SectionTitle } from "./ui";
 import type { Update } from "./updateFeed";
 import { captureView, closeUpdate, restoreView, saveForms, startFresh, updateBusy, updateMessage } from "./updateView";
@@ -445,11 +444,7 @@ export function UpdateScreen(props: { update: Update; day: Day; plans?: Plans })
 	});
 	return (
 		<Scroll class="flex-1 bg-background">
-			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-6">
-				<TopBar />
-				<View class="flex-row">
-					<Action label="‹ Back" accessibilityLabel="Back" onPress={closeUpdate} />
-				</View>
+			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
 				<ServiceLine service={service()} />
 				<If when={updateMessage()}>
 					<Text role="alert" class="text-sm text-needs-ink">
@@ -484,6 +479,7 @@ export function UpdateScreen(props: { update: Update; day: Day; plans?: Plans })
 					<View class="flex-row">
 						<Action
 							label="Check again"
+							icon="refresh"
 							testID="update-read"
 							disabled={updateBusy()}
 							onPress={() => void check(props.update)}

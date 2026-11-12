@@ -60,9 +60,8 @@ import {
 } from "./deliveryView";
 import { keepField, keepScroll } from "./kept";
 import { glide } from "./motion";
-import { TopBar } from "./TodayScreen";
 import { Action, Mark, RowLink, SectionTitle } from "./ui";
-import { route, setFor } from "./view";
+import { setFor } from "./view";
 
 /** The most UTF-8 bytes a Send back note holds. */
 const NOTE_LIMIT = 8000;
@@ -677,10 +676,6 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace }) {
 	const work = () => entry()?.snapshot ?? null;
 	const reading = signal(true);
 	void mirror.source.read(props.place.subject).then(() => reading.set(false));
-	const mission = () => {
-		const id = route();
-		return id ? (props.day.feed.mission(id)?.row.title ?? "") : "";
-	};
 	const missionTitle = () => {
 		const s = props.place.subject;
 		if (s.kind !== "task") return undefined;
@@ -727,17 +722,9 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace }) {
 			scrollEventThrottle={100}
 			onScroll={scroll.onScroll}
 		>
-			<View testID="delivery" class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-6">
-				<TopBar />
-				<View class="flex-row">
-					<Action
-						label={mission() ? `‹ ${mission()}` : "‹ Today"}
-						accessibilityLabel={mission() ? `Back to ${mission()}` : "Back to Today"}
-						onPress={closeDelivery}
-					/>
-				</View>
+			<View testID="delivery" class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
 				<View class="gap-2">
-					<Text role="header" class="text-2xl font-semibold leading-tight tracking-tight text-foreground">
+					<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
 						{title()}
 					</Text>
 					<Text class="text-sm text-muted-foreground">{origin()}</Text>

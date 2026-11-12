@@ -1,9 +1,11 @@
 // The app's one window: Today, one mission's overview, New, one mission's
-// planning, Changes, or the start or end of the day. No sidebar; every
-// other screen has a way back, and Escape goes back too.
+// planning, Changes, or the start or end of the day. No sidebar. One header
+// stays over every screen: Pilot goes to Today, Back goes up one level,
+// and Escape goes back too.
 
-import { effect, lifecycle, untracked } from "nsh";
+import { effect, lifecycle, untracked, View } from "nsh";
 import { ChangesScreen } from "./ChangesScreen";
+import { AppHeader } from "./Chrome";
 import type { Changes } from "./changeFeed";
 import { changesRoute } from "./changesView";
 import { DeliveryScreen } from "./DeliveryScreen";
@@ -79,21 +81,28 @@ export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; u
 		was = now;
 	});
 	return (
-		<If
-			when={props.update && updateOpen()}
-			else={
+		<View class="flex-1 bg-background">
+			<AppHeader day={props.day} plans={props.plans} changes={props.changes} />
+			<View class="min-h-0 flex-1">
 				<If
-					when={ritualRoute()}
-					else={<Screens day={props.day} rituals={rituals} plans={props.plans} changes={props.changes} />}
+					when={props.update && updateOpen()}
+					else={
+						<If
+							when={ritualRoute()}
+							else={<Screens day={props.day} rituals={rituals} plans={props.plans} changes={props.changes} />}
+						>
+							<Arrive class="flex-1">
+								<RitualScreen day={props.day} rituals={rituals} />
+							</Arrive>
+						</If>
+					}
 				>
-					<RitualScreen day={props.day} rituals={rituals} />
+					<Arrive class="flex-1">
+						<UpdateScreen update={props.update as Update} day={props.day} plans={props.plans} />
+					</Arrive>
 				</If>
-			}
-		>
-			<Arrive class="flex-1">
-				<UpdateScreen update={props.update as Update} day={props.day} plans={props.plans} />
-			</Arrive>
-		</If>
+			</View>
+		</View>
 	);
 }
 
@@ -135,12 +144,7 @@ function Places(props: { day: Day; rituals: Rituals; plans?: Plans; changes?: Ch
 							when={route()}
 							else={
 								<Arrive class="flex-1">
-									<TodayScreen
-										day={props.day}
-										rituals={props.rituals}
-										plans={props.plans}
-										changes={props.changes}
-									/>
+									<TodayScreen day={props.day} rituals={props.rituals} plans={props.plans} />
 								</Arrive>
 							}
 						>

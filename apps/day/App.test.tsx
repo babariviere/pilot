@@ -8,8 +8,8 @@ const desktop = { platform: "macos", width: 1100, height: 900 } as const;
 const DECIDE = "id:decision >> role:button[Decide]";
 /** The confirmation's Pause, not the "Pause mission" that opens it. */
 const PAUSE = "id:pause >> role:button[Pause]";
-const RUNNING =
-	"Running. Pause stops every agent, schedule and job in this mission at a safe point. You can resume it later.";
+/** A mission that runs normally offers Pause at its top and shows no control panel. */
+const RUNNING = "role:button[Pause mission]";
 
 test("Today shows decisions first, then moving and waiting missions", async () => {
 	const app = await open("./App.tsx", desktop);
@@ -276,8 +276,8 @@ test("a mission's overview leads to its interview and plan, which says when ther
 	expect(app.shows("Interview and plan")).toBe(true);
 	await app.press("id:open-plan");
 	await app.waitFor("This mission is not in planning.");
-	// The mission is on Today, so its overview is one step back.
-	await app.press("id:open-overview");
+	// The mission is on Today, so its overview is the one step back.
+	await app.press("role:button[Back to Mission overview]");
 	await app.waitFor("id:mission-plan");
 	await app.keyboard.press("escape");
 	await app.waitFor("Three short things need you.");

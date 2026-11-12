@@ -1,6 +1,6 @@
 // The Day screen's styled controls, drawn from nsh/base behavior and the
 // theme's tokens. Pages compose these; they do not restyle base controls.
-import { type JSX, Text, View, type ViewRef } from "nsh";
+import { Image, type JSX, Text, View, type ViewRef } from "nsh";
 import {
 	Button,
 	type DiffFile,
@@ -15,6 +15,37 @@ import {
 	Toggle,
 } from "nsh/base";
 import type { Bar, Evidence, Progress } from "pilot-day/native";
+import back from "./icons/back.svg";
+import changes from "./icons/changes.svg";
+import moon from "./icons/moon.svg";
+import notes from "./icons/notes.svg";
+import pause from "./icons/pause.svg";
+import play from "./icons/play.svg";
+import plus from "./icons/plus.svg";
+import refresh from "./icons/refresh.svg";
+import sun from "./icons/sun.svg";
+import update from "./icons/update.svg";
+
+// One small family of line icons, drawn on a 16-point grid with the same
+// stroke. They are template images: the class's tint colors them. They
+// stand beside words, never in place of a label the user must guess.
+const ICONS = { back, changes, moon, notes, pause, play, plus, refresh, sun, update } as const;
+
+/** The name of one of the app's icons. */
+export type IconName = keyof typeof ICONS;
+
+/** A 16-point icon beside a label. Screen readers skip it: the label says what it means. */
+export function Icon(props: { name: IconName; tint?: string }) {
+	return (
+		<Image
+			src={ICONS[props.name]}
+			fadeDuration={0}
+			accessible={false}
+			accessibilityElementsHidden
+			class={`size-4 ${props.tint ?? "tint-muted-foreground"}`}
+		/>
+	);
+}
 
 /** A still state mark. Words beside it carry the meaning. */
 export type MarkKind =
@@ -75,10 +106,18 @@ export function KeyHint(props: { keys: string; label: string }) {
 	);
 }
 
-/** A command. `primary` marks the decision's one default commit. */
+/**
+ * A command. `primary` marks the screen's one default commit; `outline`
+ * gives a standing command, such as New, a quiet frame. An `icon` goes
+ * before the words.
+ */
 export function Action(props: {
 	label: string;
 	primary?: boolean;
+	outline?: boolean;
+	icon?: IconName;
+	/** Shows only the icon; the label still names it for screen readers and the tooltip. */
+	iconOnly?: boolean;
 	disabled?: boolean;
 	accessibilityLabel?: string;
 	/** The keyboard shortcut, shown as a tooltip, such as "⌘↩". */
@@ -88,23 +127,42 @@ export function Action(props: {
 	anchor?: (node: ViewRef) => void;
 	onPress: () => void;
 }) {
+	const frame = () => {
+		if (props.primary) return "bg-primary px-3.5 active:opacity-90";
+		if (props.outline) return "border border-border-strong bg-background px-3 hover:bg-accent active:bg-accent";
+		if (props.iconOnly) return "min-w-8 justify-center px-2 hover:bg-accent active:bg-accent";
+		return "px-3 hover:bg-accent active:bg-accent";
+	};
+	const words = () => {
+		if (props.primary) return "text-sm font-medium text-primary-foreground";
+		if (props.outline) return "text-sm font-medium text-foreground";
+		return "text-sm text-muted-foreground";
+	};
 	return (
 		<Button
 			ref={props.anchor}
 			testID={props.testID}
 			disabled={props.disabled}
-			accessibilityLabel={props.accessibilityLabel ?? null}
-			tooltip={props.shortcut ? `${props.label}  ${props.shortcut}` : undefined}
+			accessibilityLabel={props.accessibilityLabel ?? (props.iconOnly ? props.label : null)}
+			tooltip={props.shortcut ? `${props.label}  ${props.shortcut}` : props.iconOnly ? props.label : undefined}
 			onPress={props.onPress}
-			class={
-				props.primary
-					? "min-h-8 flex-row items-center rounded-lg bg-primary px-3.5 py-1 transition duration-150 active:opacity-90 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring/40"
-					: "min-h-8 flex-row items-center rounded-lg px-3 py-1 transition duration-150 hover:bg-accent active:bg-accent disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring/40"
-			}
+			class={`min-h-8 flex-row items-center gap-1.5 rounded-lg py-1 transition duration-150 disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-ring/40 ${frame()}`}
 		>
-			<Text class={props.primary ? "text-sm font-medium text-primary-foreground" : "text-sm text-muted-foreground"}>
-				{props.label}
-			</Text>
+			<If when={props.icon}>
+				<Icon
+					name={props.icon as IconName}
+					tint={
+						props.primary
+							? "tint-primary-foreground"
+							: props.outline
+								? "tint-foreground"
+								: "tint-muted-foreground"
+					}
+				/>
+			</If>
+			<If when={!props.iconOnly}>
+				<Text class={words()}>{props.label}</Text>
+			</If>
 		</Button>
 	);
 }

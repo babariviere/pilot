@@ -534,6 +534,7 @@ function LiveIncoming(props: { day: Day; mirror: IntakeMirror }) {
 						<View class="flex-row pt-1">
 							<Action
 								label={reading() ? "Reading…" : "Read again"}
+								icon="refresh"
 								testID="incoming-read"
 								disabled={reading()}
 								accessibilityLabel="Read new requests again. This sends nothing."

@@ -25,7 +25,7 @@ import {
 } from "./ritual";
 import type { Rituals } from "./ritualFeed";
 import { backFromStandup, closeRitual, openStandup, ritualRoute, START_STEPS, startStep } from "./ritualView";
-import { FreshnessNote, MissionStatus, TopBar } from "./TodayScreen";
+import { FreshnessNote, MissionStatus } from "./TodayScreen";
 import { Action, Mark, type MarkKind, SectionTitle } from "./ui";
 import { focused, focusFront, type Item, queue } from "./view";
 import { freshnessLine, provenance } from "./words";
@@ -189,18 +189,6 @@ function Scheduled(props: { day: Day }) {
 	);
 }
 
-function Back(props: { label?: string; onPress: () => void }) {
-	return (
-		<View class="flex-row">
-			<Action
-				label={`‹ ${props.label ?? "Today"}`}
-				accessibilityLabel={`Back to ${props.label ?? "Today"}`}
-				onPress={props.onPress}
-			/>
-		</View>
-	);
-}
-
 /**
  * What the ritual's saved progress says beside its commands: a refusal, a
  * save Pilot could not confirm (with Read again, which only reads), or a
@@ -222,7 +210,7 @@ function SavedNote(props: { rituals: Rituals; context: string }) {
 				<Mark kind={r.uncertain() ? "unknown" : "still"} />
 				<Text class="flex-1 text-sm text-foreground">{line()}</Text>
 				<If when={r.uncertain()}>
-					<Action label="Read again" testID="ritual-read" onPress={() => void r.refresh()} />
+					<Action label="Read again" icon="refresh" testID="ritual-read" onPress={() => void r.refresh()} />
 				</If>
 			</View>
 		</If>
@@ -280,7 +268,6 @@ function StartDay(props: { day: Day; rituals: Rituals }) {
 
 	return (
 		<View testID="start-of-day" class="gap-8">
-			<Back onPress={closeRitual} />
 			<Text class="text-xs text-muted-foreground">{`Step ${step() + 1} of ${STEPS.length} · ${STEPS[step()]}`}</Text>
 			<If when={step() === 0}>
 				<View class="gap-8">
@@ -391,7 +378,6 @@ function EndDay(props: { day: Day; rituals: Rituals }) {
 
 	return (
 		<View testID="end-of-day" class="gap-8">
-			<Back onPress={closeRitual} />
 			<If when={!closed()} else={<Closed day={props.day} anchor={anchor} />}>
 				<View class="gap-10">
 					<View class="gap-3">
@@ -447,14 +433,9 @@ function EndDay(props: { day: Day; rituals: Rituals }) {
 function Standup(props: { day: Day; rituals: Rituals }) {
 	const today = () => props.day.today();
 	const note = () => freshnessLine(today().freshness);
-	const from = () => {
-		const at = ritualRoute();
-		return at?.kind === "standup" ? at.from : null;
-	};
 	keymap.bind("escape", backFromStandup);
 	return (
 		<View testID="standup-notes" class="gap-6">
-			<Back label={from() ? "Back" : "Today"} onPress={backFromStandup} />
 			<Title text="Standup notes" lead="Written from Pilot's latest read. Select the text to copy it." />
 			<View selectable class="gap-5 rounded-2xl border border-border bg-card px-6 py-5">
 				<If when={note()}>
@@ -495,13 +476,11 @@ export function RitualScreen(props: { day: Day; rituals: Rituals }) {
 			scrollEventThrottle={100}
 			onScroll={scroll.onScroll}
 		>
-			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-6">
-				<TopBar />
+			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
 				<If
 					when={readable()}
 					else={
 						<View class="gap-6">
-							<Back onPress={closeRitual} />
 							<Title
 								text="Nothing to recap."
 								lead="Pilot could not read Today, so it shows no recap. Nothing here is guessed."

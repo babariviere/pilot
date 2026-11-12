@@ -26,7 +26,6 @@ import {
 	openPlan,
 	projectsOpen,
 } from "./planView";
-import { TopBar } from "./TodayScreen";
 import { Action, Mark, Picker, RadioRow, RowLink, SectionTitle } from "./ui";
 
 const MODES: { mode: ChatMode; label: string }[] = [
@@ -220,13 +219,9 @@ export function NewScreen(props: { plans: Plans }) {
 			scrollEventThrottle={100}
 			onScroll={scroll.onScroll}
 		>
-			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-6">
-				<TopBar />
-				<View class="flex-row">
-					<Action label="‹ Today" accessibilityLabel="Back to Today" onPress={closePlanning} />
-				</View>
+			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
 				<View class="gap-3">
-					<Text role="header" class="text-2xl font-semibold leading-tight tracking-tight text-foreground">
+					<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
 						What do you want done?
 					</Text>
 					<Text class="text-sm leading-relaxed text-muted-foreground">

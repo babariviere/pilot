@@ -29,7 +29,6 @@ import {
 	requestLine,
 } from "./changeWords";
 import { keepScroll } from "./kept";
-import { TopBar } from "./TodayScreen";
 import { Action, InlineAction, Mark, PatchDiff, RowLink, SectionTitle, TabItem, TabRow } from "./ui";
 import { setFor } from "./view";
 
@@ -169,23 +168,26 @@ function ChangeList(props: { changes: Changes }) {
 			scrollEventThrottle={100}
 			onScroll={scroll.onScroll}
 		>
-			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-6">
-				<TopBar />
-				<View class="flex-row items-center">
-					<Action label="‹ Today" accessibilityLabel="Back to Today" onPress={backFromChanges} />
-					<View class="flex-1" />
-					<If when={list().availability === "available"}>
-						<Action
-							label="Read again"
-							accessibilityLabel="Read kept changes again. This sends nothing."
-							onPress={() => readAgain(props.changes)}
-						/>
-					</If>
-				</View>
+			<View class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
 				<View class="gap-2">
-					<Text role="header" class="text-2xl font-semibold leading-tight tracking-tight text-foreground">
-						Changes
-					</Text>
+					<View class="flex-row items-start gap-4">
+						<Text
+							role="header"
+							class="flex-1 text-3xl font-semibold leading-tight tracking-tight text-foreground"
+						>
+							Changes
+						</Text>
+						<If when={list().availability === "available"}>
+							<View class="pt-1">
+								<Action
+									label="Read again"
+									icon="refresh"
+									accessibilityLabel="Read kept changes again. This sends nothing."
+									onPress={() => readAgain(props.changes)}
+								/>
+							</View>
+						</If>
+					</View>
 					<Text class="text-base leading-relaxed text-muted-foreground">
 						Finished work Pilot kept a snapshot of. Review it now or later, or reopen it to see what was said and
 						whether it landed.
@@ -552,11 +554,7 @@ function ChangeScreen(props: { changes: Changes; snapshotId: string }) {
 	});
 	return (
 		<View class="flex-1 bg-background">
-			<View class="min-h-0 w-full max-w-5xl flex-1 self-center gap-5 px-6 pb-6 pt-6">
-				<TopBar />
-				<View class="flex-row">
-					<Action label="‹ Changes" accessibilityLabel="Back to Changes" onPress={backFromChanges} />
-				</View>
+			<View class="min-h-0 w-full max-w-5xl flex-1 self-center gap-5 px-6 pb-6 pt-8">
 				<If when={page()} else={<NotShown changes={props.changes} snapshotId={props.snapshotId} />}>
 					<Each of={page() ? [page() as ChangePage] : []} key={(p) => p.identity.snapshotId}>
 						{(p) => <Body changes={props.changes} page={p()} />}
