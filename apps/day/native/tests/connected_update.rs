@@ -566,3 +566,57 @@ fn a_cold_restore_shows_the_saved_view_once_and_sends_nothing_else() {
     drop(app);
     let _ = std::fs::remove_dir_all(entry.parent().unwrap());
 }
+
+/// A saved Linear read for `project`, as `day.linear.read` answers: one own issue.
+fn saved_linear(project: &str) -> Value {
+    json!({
+        "version": 1, "projectId": project, "contextDigest": "a".repeat(64),
+        "scope": "saved-own-issues", "configurationCurrent": true,
+        "source": {"id": format!("{project}:linear"), "projectId": project, "kind": "linear",
+            "label": "Linear", "configured": true, "status": "ok", "lastPolledAt": 1_700_000_000_000u64},
+        "items": [{"revision": 1, "triageState": "new", "id": "ln-1", "projectId": project,
+            "kind": "linear", "externalId": "x-1", "title": "Kept issue", "url": "https://linear.app/x/issue/X-1",
+            "status": "Todo", "metadata": {"identifier": "X-1", "statusType": "unstarted"},
+            "dismissed": false, "createdAt": 1, "updatedAt": 1}],
+        "limit": 100, "total": 1, "complete": true, "more": 0
+    })
+}
+
+#[test]
+fn a_cold_restore_shows_the_linear_page_on_its_project_and_only_reads() {
+    let entry = entry();
+    for (read_project, shows) in [
+        ("proj-a", "id:linear-detail-ln-1"),
+        // The root reads another project now: nothing of it shows in the page's place.
+        ("proj-b", "id:linear-other-project"),
+    ] {
+        let root = Root::new(Scenario::Quiet);
+        let mut cold = ran(UpdateKind::App, UpdatePhase::Unknown, "Not confirmed.");
+        cold.restore = Some(Restore {
+            id: "op-1".into(),
+            view: SavedView {
+                today_row: "linear-open".into(),
+                y: 40.0,
+                linear: "proj-a/ln-1".into(),
+                ..SavedView::default()
+            },
+        });
+        root.service("day.update.read", &cold);
+        root.reply("day.linear.read", saved_linear(read_project));
+        let mut app = open_on(&entry, root.channel.clone());
+        wait(&mut app, "id:linear");
+        wait(&mut app, shows);
+        if read_project == "proj-b" {
+            assert!(!has(&app, "id:linear-issue-ln-1"));
+        }
+        until(&mut app, &root, "the acknowledgement", |r| {
+            r.count("day.update.restored") == 1
+        });
+        app.wait(Duration::from_millis(300)).unwrap();
+        // Showing the page again read the saved copy once; it sent and triaged nothing.
+        assert_eq!(root.args("day.linear.read"), vec![json!({})]);
+        assert!(root.effects().is_empty(), "{:?}", root.effects());
+        drop(app);
+    }
+    let _ = std::fs::remove_dir_all(entry.parent().unwrap());
+}

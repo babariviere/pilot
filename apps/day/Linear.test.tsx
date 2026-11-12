@@ -135,3 +135,70 @@ test("the mock window offers the page with demo issues and points back to its ex
 	await app.waitFor("id:request-detail-ln-231");
 	expect(app.shows("id:linear")).toBe(false);
 });
+
+test("a close or an update keeps the page, its project and the open issue; showing it again only reads", async () => {
+	const app = await page();
+	await app.press("id:linear-issue-ln-224");
+	await app.waitFor("id:linear-detail-ln-224");
+	await app.press("Save and reopen");
+	await app.waitFor("Kept: [mock-project/ln-224]");
+	await app.waitFor("id:linear-detail-ln-224");
+	expect(app.shows("id:linear")).toBe(true);
+	expect(app.shows("Your issues in cycle 42")).toBe(true);
+	expect(app.shows("id:linear-issue-gone")).toBe(false);
+	// The restored issue has the keyboard focus, so Space closes it.
+	await app.keyboard.press("space");
+	expect(app.shows("id:linear-detail-ln-224")).toBe(false);
+	// Without an open issue the page keeps only its project.
+	await app.press("Save and reopen");
+	await app.waitFor("Kept: [mock-project]");
+	expect(app.shows("id:linear")).toBe(true);
+	// Back on Today, nothing is kept for the page.
+	await app.keyboard.press("escape");
+	await app.waitFor("id:incoming");
+	await app.press("Save and reopen");
+	await app.waitFor("Kept: []");
+	expect(app.shows("id:linear")).toBe(false);
+	expect(app.shows("id:incoming")).toBe(true);
+});
+
+test("a restored page never shows another project's issues in its place", async () => {
+	const app = await page();
+	await app.press("id:linear-issue-ln-219");
+	await app.press("Save and reopen");
+	await app.waitFor("Kept: [mock-project/ln-219]");
+	await app.press("role:button[Mode other project]");
+	await app.press("id:linear-read");
+	await app.waitFor("id:linear-other-project");
+	expect(app.shows("Nothing is shown. This is not the same as having none.")).toBe(true);
+	expect(app.shows("id:linear-issue-ln-219")).toBe(false);
+	expect(app.shows("id:linear-saved")).toBe(false);
+	expect(app.shows("Your Linear issues")).toBe(true);
+	// It stays pinned: another save keeps the project it showed, not the new one.
+	await app.press("Save and reopen");
+	await app.waitFor("Kept: [mock-project/ln-219]");
+	// Opening the page again from Today shows the project Pilot reads now.
+	await app.press("role:button[Back to Today]");
+	await app.waitFor("id:incoming");
+	await app.press("id:linear-open");
+	await app.waitFor("id:linear-issue-ln-219");
+	expect(app.shows("id:linear-other-project")).toBe(false);
+});
+
+test("a restored issue that is no longer shown says so and opens nothing else", async () => {
+	const app = await page();
+	await app.press("id:linear-issue-ln-231");
+	await app.press("Save and reopen");
+	await app.waitFor("Kept: [mock-project/ln-231]");
+	await app.press("role:button[Mode overflow]");
+	await app.press("id:linear-read");
+	await app.waitFor("The issue you had open is not among the issues shown here.");
+	await app.press("role:button[Mode saved]");
+	await app.press("id:linear-read");
+	await app.waitFor("id:linear-detail-ln-231");
+	expect(app.shows("id:linear-issue-gone")).toBe(false);
+	await app.press("id:linear-issue-ln-226");
+	await app.press("role:button[Mode no cycle]");
+	await app.press("id:linear-read");
+	await app.waitFor("The issue you had open is not in Pilot's saved copy now.");
+});

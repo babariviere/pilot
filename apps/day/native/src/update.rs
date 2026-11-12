@@ -303,6 +303,11 @@ pub struct SavedView {
     /// and are never the user's check.
     #[prop(default)]
     pub reminders: Vec<String>,
+    /// The read-only Linear page on screen, as "<project>" or, with an issue
+    /// open in place, "<project>/<tracked item>". Empty for none. Showing it
+    /// again only reads, and shows nothing for another project.
+    #[prop(default)]
+    pub linear: String,
 }
 
 impl SavedView {
@@ -327,6 +332,7 @@ impl SavedView {
             + self.today_row.len()
             + self.input.len()
             + self.delivery.len()
+            + self.linear.len()
             + lists
     }
 
@@ -345,6 +351,21 @@ impl SavedView {
             .iter()
             .all(|y| y.is_finite() && *y >= 0.0 && *y <= 10_000_000.0)
             && self.start <= self.end
+    }
+
+    /// Whether `linear` is empty, or names one project and at most one issue by their IDs.
+    pub fn linear_valid(&self) -> bool {
+        let id = |s: &str| {
+            !s.is_empty()
+                && s.len() <= 128
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        };
+        let mut parts = self.linear.split('/');
+        self.linear.is_empty()
+            || (parts.next().is_some_and(id)
+                && parts.next().is_none_or(id)
+                && parts.next().is_none())
     }
 }
 
@@ -793,7 +814,10 @@ impl UpdateDesk {
             ));
         }
         let view = &intent.view;
-        if view.text_bytes() > VIEW_LIMIT || view.entries() > VIEW_ENTRIES || !view.offsets_valid()
+        if view.text_bytes() > VIEW_LIMIT
+            || view.entries() > VIEW_ENTRIES
+            || !view.offsets_valid()
+            || !view.linear_valid()
         {
             self.bump();
             return Err(outcome(

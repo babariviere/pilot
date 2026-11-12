@@ -280,7 +280,7 @@ export function bindRestore(update: Update, changes?: Changes, day?: Day) {
 		if (!restore || shown.has(restore.id)) return;
 		shown.add(restore.id);
 		startFresh();
-		restoreView(restore.view, changes, day?.today());
+		restoreView(restore.view, changes, day?.today(), !!day?.linear);
 		void update.feed.restored({ id: restore.id });
 	});
 }

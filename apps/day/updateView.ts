@@ -25,7 +25,7 @@ import {
 	savedReminders,
 } from "./deliveryView";
 import { forgetPlaces, lastField, restoreField, restoreScroll, scrollOf, todayScrollTo } from "./kept";
-import { linearOpen, openIssue } from "./linearView";
+import { focusIssue, linearOpen, linearProject, openIssue, restoreLinear, savedLinear } from "./linearView";
 import { flushAll } from "./planCommands";
 import type { Plans } from "./planning";
 import {
@@ -107,6 +107,7 @@ export function shownKey(): string {
 	if (ritualRoute()) return "ritual";
 	const delivery = deliveryRoute();
 	if (delivery) return `delivery/${delivery.key}`;
+	if (linearOpen()) return "linear";
 	const at = place();
 	return at.id ? `${at.place}/${at.id}` : at.place;
 }
@@ -175,6 +176,8 @@ export function captureView(today?: Today): SavedView {
 			.map(([key, note]) => `${key}\n${note}`),
 		// Ticked reminders on delivered results. They send nothing and are never a check.
 		reminders: savedReminders(),
+		// The Linear page, its project and open issue. Showing it again only reads.
+		linear: savedLinear(),
 	};
 }
 
@@ -272,9 +275,10 @@ export function startFresh() {
 	reminders.set({});
 	deliveryMessages.set({});
 	outputMessages.set({});
-	// The Linear page has no saved place: a restored window shows Today, with its entry focused.
 	linearOpen.set(false);
 	openIssue.set(null);
+	linearProject.set(null);
+	focusIssue.set(null);
 	todayPlace.y = 0;
 	todayPlace.row = null;
 	forgetPlaces();
@@ -285,8 +289,10 @@ export function startFresh() {
 /**
  * Shows a saved view again. It only reads: nothing is sent, saved, answered
  * or started. A ritual comes back only on the date it was for (`today`).
+ * The Linear page comes back only in a window that has it (`linear`), on
+ * the project it showed: a read for another project shows nothing.
  */
-export function restoreView(view: SavedView, changes?: Changes, today?: Today) {
+export function restoreView(view: SavedView, changes?: Changes, today?: Today, linear = false) {
 	route.set(view.place === "mission" ? view.id : null);
 	planRoute.set(
 		view.place === "new" ? { kind: "new" } : view.place === "plan" ? { kind: "plan", missionId: view.id } : null,
@@ -334,6 +340,11 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today) {
 	backNotes.set(notes);
 	backOpen.set(Object.fromEntries(Object.keys(notes).map((key) => [key, true])));
 	reminders.set(remindersOf(view.reminders ?? []));
+	linearOpen.set(false);
+	openIssue.set(null);
+	linearProject.set(null);
+	focusIssue.set(null);
+	if (linear && view.linear) restoreLinear(view.linear);
 	todayPlace.y = Math.max(0, view.todayY ?? 0);
 	todayPlace.row = view.todayRow || null;
 	const key = shownKey();

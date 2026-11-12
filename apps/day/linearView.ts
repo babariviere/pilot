@@ -11,18 +11,60 @@ import { glide } from "./motion";
 export const linearOpen = signal(false);
 /** The issue open in place on the Linear page, by tracked-item ID. */
 export const openIssue = signal<string | null>(null);
+/**
+ * The project whose saved issues the page shows. The page's first read sets
+ * it; a restored window sets it to the project the page showed before. A
+ * read of another project is never shown in its place.
+ */
+export const linearProject = signal<string | null>(null);
+/** Set by a restored window: this issue's row takes the keyboard focus once. */
+export const focusIssue = signal<string | null>(null);
 
 /** Opens the Linear page. Opening it only reads. */
 export function openLinear() {
 	glide();
 	openIssue.set(null);
+	linearProject.set(null);
+	focusIssue.set(null);
 	linearOpen.set(true);
 }
 
 /** Back to Today. */
 export function closeLinear() {
 	openIssue.set(null);
+	linearProject.set(null);
+	focusIssue.set(null);
 	linearOpen.set(false);
+}
+
+/** A project or tracked-item ID as the native root saves it. */
+const ID = /^[A-Za-z0-9_-]{1,128}$/;
+
+/**
+ * The Linear page as a saved window keeps it: "<project>", or
+ * "<project>/<issue>" with the issue open in place. "" when the page is not
+ * open or has shown no project yet; the window then comes back on Today.
+ */
+export function savedLinear(): string {
+	const project = linearProject();
+	if (!linearOpen() || !project || !ID.test(project)) return "";
+	const issue = openIssue();
+	return issue && ID.test(issue) ? `${project}/${issue}` : project;
+}
+
+/**
+ * Shows the Linear page a saved window kept, pinned to its project, with its
+ * issue open. It only reads, as opening the page does. Returns false, and
+ * opens nothing, when the saved place is not valid.
+ */
+export function restoreLinear(saved: string): boolean {
+	const [project = "", issue, ...rest] = saved.split("/");
+	if (!ID.test(project) || rest.length > 0 || (issue !== undefined && !ID.test(issue))) return false;
+	linearProject.set(project);
+	openIssue.set(issue ?? null);
+	focusIssue.set(issue ?? null);
+	linearOpen.set(true);
+	return true;
 }
 
 /** A Linear state group, in the order the page shows them. */

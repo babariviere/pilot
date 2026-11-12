@@ -162,3 +162,75 @@ fn linear_page_shows_saved_issues_with_exact_links_and_never_polls_or_sends() {
     close(bridge);
     let _ = std::fs::remove_dir_all(entry.parent().unwrap());
 }
+
+/// Asks the window to save its forms and view, as a close does, and waits for its answer.
+fn flush(app: &mut Headless, bridge: &Bridge) {
+    let generation = bridge.request_flush().unwrap();
+    let deadline = std::time::Instant::now() + WAIT;
+    while !bridge.flush_ready(generation) {
+        assert!(
+            bridge.native_capture_finished(generation).is_ok(),
+            "flush generation lost"
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "UI never acknowledged its saved forms"
+        );
+        app.wait(Duration::from_millis(50)).unwrap();
+    }
+}
+
+#[test]
+fn a_close_saves_the_linear_page_its_project_and_open_issue_and_sends_nothing() {
+    let mut f = Fixture::new();
+    f.stats("saved-linear");
+    let entry = entry();
+    let bridge = f.bridge();
+    let mut app = open(&entry, &bridge);
+    wait(&mut app, "id:linear-open");
+    app.press("id:linear-open").unwrap();
+    wait(&mut app, "Your issues in cycle 12");
+    let linked = "label:/^Same title, Done\\. In a mission\\./";
+    app.press(linked).unwrap();
+    wait(
+        &mut app,
+        "Linked to a mission that is not on Today. A chat is linked to it too.",
+    );
+    flush(&mut app, &bridge);
+    drop(app);
+    close(bridge);
+    // Read the saved window, then join that host so it lets go of the journal.
+    let host = f.host();
+    let saved = host.saved_window().unwrap();
+    assert_eq!(host.close().recv_blocking().unwrap(), Ok(()));
+    assert_eq!(saved.view["place"], "today");
+    assert_eq!(saved.view["todayRow"], "linear-open");
+    // The exact project and the issue open in place, by their saved IDs.
+    let bridge = f.bridge();
+    let read = f.call(&bridge, "day.linear.read", json!({}))["value"]["snapshot"].clone();
+    close(bridge);
+    let issue = read["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["title"] == "Same title" && i["metadata"]["statusType"] == "completed")
+        .unwrap();
+    assert_eq!(
+        saved.view["linear"],
+        json!(format!(
+            "{}/{}",
+            read["projectId"].as_str().unwrap(),
+            issue["id"].as_str().unwrap()
+        ))
+    );
+    let stats = f.stats("stats");
+    assert_eq!(
+        stats["linearReads"], 1,
+        "saving the page never polls Linear"
+    );
+    assert_eq!(stats["posts"], 0);
+    assert_eq!(stats["lookups"], 0);
+    assert_eq!(stats["external"], 0);
+    assert_eq!(stats["sessions"], 0);
+    let _ = std::fs::remove_dir_all(entry.parent().unwrap());
+}

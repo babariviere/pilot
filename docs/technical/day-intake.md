@@ -104,13 +104,24 @@ requests change while it is open; the window's startup does not call it.
   links are counted from `missionIds`/`sessionIds`. The page offers only "Open the
   mission" (a mission on Today) and "Show it in New"; triage stays in New.
 - `more > 0` always shows how many saved rows are not shown; there is no paging.
-- A close or update does not save the page; the restored window shows Today with
-  the page's entry focused.
+- A close or update saves the page in the window's `SavedView.linear`, as
+  `<project>` or `<project>/<tracked item>` with the issue open in place, plus
+  its scroll offset (`y`). Rust refuses any other shape. A restored window shows
+  the page only in a window that has it, reads it again as opening it does, opens
+  the saved issue and gives its row the keyboard focus. A read for another project
+  shows nothing in its place ("Its saved copy is now for another project"), and a
+  saved issue that is no longer shown says so; neither opens anything else. A page
+  that showed no read yet saves nothing, so the window comes back on Today with
+  the page's entry focused. There is no cycle choice to save: the page shows the
+  one cycle Pilot's last sync read.
 
 Checks: `Linear.test.tsx` plays the page on a scripted read (`LinearFixture.tsx`).
 `native/tests/linear_today.rs` runs `Connected.tsx` headless against the isolated
 daemon: exact links, the unshown count, a sign-in failure, a lost read and a
-replaced checkpoint, with no poll, post, lookup, session or external write.
+replaced checkpoint, with no poll, post, lookup, session or external write, and
+a close that saves the page's project and open issue. `connected_update.rs`
+restores the page from a cold update restore on the same and another project,
+with one read and no other call.
 
 ## Explicit intents
 

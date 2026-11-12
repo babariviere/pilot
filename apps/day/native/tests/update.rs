@@ -35,6 +35,7 @@ fn view() -> SavedView {
         delivery: "task/project/export/t1".into(),
         notes: vec!["task/project/export/t1\n  Exact note 👩🏽‍💻\n".into()],
         reminders: vec![format!("task/project/export/t1#{}\nreport", "a".repeat(64))],
+        linear: "project/ln-219".into(),
     }
 }
 
@@ -200,6 +201,23 @@ fn an_oversized_view_is_refused_whole_before_anything_pauses() {
     let mut odd = view();
     odd.today_y = f64::NAN;
     assert_eq!(start(&mut desk, odd), Err(OutcomeStatus::Rejected));
+    // The Linear page names one project and at most one issue, by their IDs.
+    for linear in [
+        "project/",
+        "/ln-1",
+        "project/ln-1/more",
+        "pro ject",
+        "project/ln 1",
+    ] {
+        let mut desk = UpdateDesk::new(UpdateScenario::Available);
+        let mut odd = view();
+        odd.linear = linear.into();
+        assert_eq!(
+            start(&mut desk, odd),
+            Err(OutcomeStatus::Rejected),
+            "{linear}"
+        );
+    }
     assert!(desk.view().run.is_none());
     assert!(desk.view().restore.is_none());
     assert_eq!(

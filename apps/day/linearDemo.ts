@@ -56,7 +56,15 @@ const ISSUES: TrackedItem[] = [
 ];
 
 /** What the next read returns. */
-export type LinearDemoMode = "saved" | "trouble" | "notCurrent" | "unset" | "unreadable" | "overflow" | "noCycle";
+export type LinearDemoMode =
+	| "saved"
+	| "trouble"
+	| "notCurrent"
+	| "unset"
+	| "unreadable"
+	| "overflow"
+	| "noCycle"
+	| "otherProject";
 
 function overflow(): TrackedItem[] {
 	return Array.from({ length: 100 }, (_, i) =>
@@ -66,18 +74,22 @@ function overflow(): TrackedItem[] {
 
 function snapshot(m: LinearDemoMode): SavedLinearRead | null {
 	if (m === "unreadable") return null;
+	// The root's selected project changed: the same issues, saved for another project.
+	const project = m === "otherProject" ? "other-project" : PROJECT;
 	const current = m !== "notCurrent" && m !== "unset";
-	const items = !current ? [] : m === "overflow" ? overflow() : m === "noCycle" ? ISSUES.slice(0, 3) : ISSUES;
+	const items = (!current ? [] : m === "overflow" ? overflow() : m === "noCycle" ? ISSUES.slice(0, 3) : ISSUES).map(
+		(i) => ({ ...i, projectId: project }),
+	);
 	const total = m === "overflow" ? 130 : items.length;
 	return {
 		version: 1,
-		projectId: PROJECT,
+		projectId: project,
 		contextDigest: "a".repeat(64),
 		scope: "saved-own-issues",
 		configurationCurrent: current,
 		source: {
-			id: `${PROJECT}:linear`,
-			projectId: PROJECT,
+			id: `${project}:linear`,
+			projectId: project,
 			kind: "linear",
 			label: "Linear",
 			configured: m !== "unset",

@@ -5,7 +5,10 @@
 // saved IDs, never from a matching title or link. The page says when the
 // copy was saved, says when it is not complete and never claims to show
 // the team's issues or other cycles.
-import { effect, keymap, Scroll, signal, Text, View, type ViewRef } from "nsh";
+// A close or an update keeps the page, its project, the open issue and the
+// scroll offset (updateView.ts). The restored page reads again, as opening
+// it does, and shows nothing when the read is for another project.
+import { effect, keymap, Scroll, type ScrollRef, signal, Text, View, type ViewRef } from "nsh";
 import { Button, Collapsible } from "nsh/base";
 import type { MissionRow } from "pilot-day/native";
 import type { Day } from "./day";
@@ -18,10 +21,12 @@ import {
 	countLine,
 	cycleLine,
 	earlierLine,
+	focusIssue,
 	GROUPS,
 	type GroupKey,
 	groupOf,
 	identifierOf,
+	linearProject,
 	linearTitle,
 	openIssue,
 	type Place,
@@ -130,6 +135,14 @@ function Issue(props: { item: TrackedItem; group: GroupKey; place: Place }) {
 	const open = () => openIssue() === i().id;
 	const key = () => identifierOf(i());
 	const node = signal<ViewRef | null>(null);
+	// A restored window's open issue takes the keyboard focus once.
+	effect(() => {
+		const n = node();
+		if (n && focusIssue() === i().id) {
+			focusIssue.set(null);
+			n.focus();
+		}
+	});
 	return (
 		<Collapsible
 			open={open()}
@@ -196,8 +209,23 @@ function Issues(props: { day: Day; read: SavedLinearRead }) {
 				.map((item) => ({ item, place: placeOf(item, missions, ids) })),
 		})).filter((g) => g.rows.length > 0);
 	};
+	// The open issue is no longer among the rows shown: say so, never open another.
+	const lost = () => {
+		const id = openIssue();
+		return !!id && !props.read.items.some((item) => item.id === id);
+	};
 	return (
 		<View class="gap-8">
+			<If when={lost()}>
+				<Note
+					testID="linear-issue-gone"
+					text={
+						props.read.complete
+							? "The issue you had open is not in Pilot's saved copy now."
+							: "The issue you had open is not among the issues shown here."
+					}
+				/>
+			</If>
 			<If when={props.read.items.length === 0}>
 				<Text testID="linear-empty" class="text-base text-muted-foreground">
 					{props.read.total === 0 ? "Pilot saved no issues of yours here." : ""}
@@ -292,13 +320,40 @@ export function LinearScreen(props: { day: Day }) {
 		{ when: "always" },
 	);
 	const scroll = keepScroll("linear");
-	const read = () => v().read;
+	// The page's project: its first read names it, unless a restored window already did.
+	effect(() => {
+		const r = v().read;
+		if (r && linearProject() === null) linearProject.set(r.projectId);
+	});
+	/** The newest read, when it is for the page's project. */
+	const read = () => {
+		const r = v().read;
+		return r && r.projectId === linearProject() ? r : null;
+	};
+	/** A read for another project than the one the page showed before. */
+	const other = () => {
+		const r = v().read;
+		return !!r && linearProject() !== null && r.projectId !== linearProject();
+	};
+	// A restored offset waits for the rows it scrolled through; until then the kept offset stays.
+	let waiting = scroll.contentOffset.y > 0 ? scroll.contentOffset.y : null;
+	const scroller = signal<ScrollRef | null>(null);
+	effect(() => {
+		const node = scroller();
+		if (waiting === null || !node || !read()) return;
+		const y = waiting;
+		waiting = null;
+		node.scrollTo({ y, animated: false });
+	});
 	return (
 		<Scroll
+			ref={(node) => scroller.set(node)}
 			class="flex-1 bg-background"
 			contentOffset={scroll.contentOffset}
 			scrollEventThrottle={100}
-			onScroll={scroll.onScroll}
+			onScroll={(e) => {
+				if (waiting === null) scroll.onScroll(e);
+			}}
 		>
 			<View testID="linear" class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-6">
 				<TopBar />
@@ -328,7 +383,14 @@ export function LinearScreen(props: { day: Day }) {
 						/>
 					</View>
 				</View>
-				<If when={v().reason}>
+				<If when={other()}>
+					<Note
+						testID="linear-other-project"
+						text="Pilot cannot show the issues this page showed before. Its saved copy is now for another project."
+						detail="Nothing is shown. This is not the same as having none."
+					/>
+				</If>
+				<If when={v().reason && !other()}>
 					<Note
 						testID="linear-off"
 						text={read() ? v().reason : `Pilot cannot show your Linear issues here. ${v().reason}`}
@@ -338,7 +400,7 @@ export function LinearScreen(props: { day: Day }) {
 				<If
 					when={read()}
 					else={
-						<If when={!v().reason}>
+						<If when={!v().reason && !other()}>
 							<Text class="text-base text-muted-foreground">Reading your saved Linear issues…</Text>
 						</If>
 					}
