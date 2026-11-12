@@ -78,7 +78,7 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(command, [str(tools / "cargo"), "build", "--locked", "--release", "--manifest-path", str(checkout / "apps/power/Cargo.toml")])
             self.assertEqual(env["RUSTC"], str(tools / "rustc"))
             self.assertEqual(env["CARGO_HOME"], str(checkout.parent / "power-cargo"))
-            self.assertEqual(env["CARGO_BUILD_JOBS"], "2")
+            self.assertNotIn("CARGO_BUILD_JOBS", env)
             helper = checkout / "apps/power/target/release/PilotPower"
             helper.parent.mkdir(parents=True)
             helper.write_bytes(b"archived-source power helper")

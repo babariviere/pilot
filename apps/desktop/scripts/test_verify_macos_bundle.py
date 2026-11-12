@@ -69,8 +69,8 @@ class MacosBundleRouteTests(unittest.TestCase):
         self.assertEqual(commands[-1], [str(moved / "Contents/MacOS/pilot-desktop"), "--help"])
         for _, options in self.commands:
             env = options["env"]
-            self.assertEqual(env["PILOT_SWIFT_JOBS"], "2")
-            self.assertEqual(env["CARGO_BUILD_JOBS"], "2")
+            self.assertNotIn("PILOT_SWIFT_JOBS", env)
+            self.assertEqual(env.get("CARGO_BUILD_JOBS"), os.environ.get("CARGO_BUILD_JOBS"))
             self.assertEqual(env["HOME"], str(self.output / "home"))
             self.assertTrue(env["TMPDIR"].startswith(str(self.output)))
             for key in self.environment:

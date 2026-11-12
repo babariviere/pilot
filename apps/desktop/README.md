@@ -820,15 +820,7 @@ below; Blaze output is not authoritative verification.
   Rust lives in ignored `.tools/rustup`. mbx is managed by mise and resolved
   from `PATH`, not downloaded or selected from `.tools/bin`.
 - `scripts/cargo.sh`: private absolute `target/dev` per checkout; no shared Cargo
-  target or incremental directory. Shared eligible mbx outputs live in
-  `${XDG_CACHE_HOME:-$HOME/.cache}/gpui-fixture-mbx-v1`, separate from Pilot data.
-  Managed mbx target views are disabled. Remote cache URL is explicitly empty.
-- Cargo has two build jobs. The shared fixture mbx scheduler has two CPU shares
-  and a 4 GiB **admission estimate**, not an OS memory limit. Action-store budget
-  is 2 GiB, with a 4 GiB free-disk reserve; private Cargo targets are separate and need disk headroom. Tests run
-  sequentially. Existing Swift verification scripts/slots are unchanged.
-- No machine-wide cache cleanup is run. Inspect with
-  `bash scripts/cargo.sh cache stats` or `bash scripts/cargo.sh gc --dry-run`.
+  target or incremental directory. mbx uses the user's shared configuration.
 
 **Bootstrap incident:** the first installation, before `--no-self-update` was
 added, let rustup automatically update its existing manager from 1.29.1 to

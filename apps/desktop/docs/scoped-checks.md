@@ -14,8 +14,9 @@ python3 scripts/check-scoped.py --unit chat_models --native-probes
 ```
 
 Cargo goes through `scripts/cargo.sh`, including checksum verification, the pinned toolchain,
-two build jobs, mbx CPU2/4GiB admission and this worktree's private target and
-incremental files. No cache is cleaned or shared target installed. Development
+this worktree's private target and incremental files. mbx uses the user's
+shared configuration. This command does not request cache cleanup or target
+adoption. Development
 and test already default to opt-level0 with debug0; this command does not claim
 to disable previously enabled optimizations or change any profile/flags.
 
@@ -83,9 +84,8 @@ local gate only for a concrete cross-cutting risk or an explicitly requested
 integration check, not as the default after every isolated fix.
 
 The separate [local Blaze edit loop](blaze-dev.md) does not use this queue and
-does not replace these checks. Scoped subprocesses explicitly set `MBX_BLAZE=0`;
-they retain Rust1.98.1 and the existing shared verification admission, regardless
-of ambient mbx settings. Blaze is never enabled in CI.
+does not replace these checks. Scoped subprocesses keep the caller's mbx
+configuration. The wrapper retains Rust 1.98.1; CI uses Cargo directly.
 
 ## Initial measured observation
 

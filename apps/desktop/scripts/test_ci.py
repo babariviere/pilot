@@ -608,12 +608,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("ci.sh updater-mac-tests", jobs["rust-macos-native"])
         self.assertNotIn("ci.sh updater-check", jobs["rust-macos-native"])
         self.assertNotIn("ci.sh updater-", jobs["rust-macos-release"])
-        # Still use the bounded project wrapper (plain Cargo on CI), never a
+        # Still use the project wrapper (plain Cargo on CI), never a
         # copied miniature crate that could pass while production is untested.
         self.assertIn('cargo() { bash scripts/cargo.sh "$@"; }', SCRIPT.read_text())
         wrapper = SCRIPT.with_name("cargo.sh").read_text()
-        for required in ["CARGO_BUILD_JOBS=2", "MBX_SCHEDULER_CPUS=2", "MBX_SCHEDULER_MEMORY=4GiB",
-                         'CARGO_TARGET_DIR="$PWD/target/dev"', 'GITHUB_ACTIONS:-}" == true', 'exec cargo "$@"']:
+        for required in ['CARGO_TARGET_DIR="$PWD/target/dev"', 'GITHUB_ACTIONS:-}" == true', 'exec cargo "$@"']:
             self.assertIn(required, wrapper)
 
     def test_mac_only_filter_inventory_uses_real_source_definitions(self):

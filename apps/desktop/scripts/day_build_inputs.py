@@ -49,8 +49,7 @@ def tool(path):
 def environment(work, tools, inherited, production):
     """Private writable state; no ambient trust, package hooks or compiler flags."""
     env = {name: inherited[name] for name in ("PATH", "TMPDIR", "LANG", "SDKROOT") if name in inherited}
-    for name, leaf in (("HOME", "home"), ("CARGO_HOME", "cargo-home"),
-                       ("MBX_CACHE_DIR", "mbx-cache")):
+    for name, leaf in (("HOME", "home"), ("CARGO_HOME", "cargo-home")):
         # An explicitly prepared private dependency cache may be reused. It is
         # never defaulted to ~/.cargo or a sibling workspace's writable cache.
         path = Path(inherited[name]) if name != "HOME" and name in inherited else work / leaf
@@ -62,10 +61,7 @@ def environment(work, tools, inherited, production):
                NSH_DAY_REAL_CARGO=str(tools["cargo"]), RUSTC=str(tools["rustc"]),
                RUSTDOC=str(tools["rustc"].with_name("rustdoc")),
                RUSTUP_TOOLCHAIN="1.99.1", RUSTUP_AUTO_INSTALL="0",
-               CARGO_NET_OFFLINE="true", CARGO_BUILD_JOBS="1", CARGO_INCREMENTAL="0",
-               CARGO_PROFILE_DEV_DEBUG="0", CARGO_PROFILE_RELEASE_DEBUG="0",
-               CARGO_PROFILE_TEST_DEBUG="0", MBX_LEARNED_INCREMENTAL="0",
-               MBX_EAGER_INCREMENTAL="0", MBX_SEED_INCREMENTAL="0", MBX_INCREMENTAL="0",
+               CARGO_NET_OFFLINE="true",
                MACOSX_DEPLOYMENT_TARGET="15.0", npm_config_ignore_scripts="true",
                npm_config_manage_package_manager_versions="false",
                COREPACK_ENABLE_NETWORK="0", COREPACK_ENABLE_AUTO_PIN="0")

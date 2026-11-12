@@ -40,12 +40,13 @@ class RecipeTests(unittest.TestCase):
         env = day.environment(self.root, self.tools, inherited, None)
         for key in inherited.keys() - {"PATH", "npm_config_ignore_scripts"}:
             self.assertNotIn(key, env)
-        for key in ("HOME", "CARGO_HOME", "MBX_CACHE_DIR"):
+        for key in ("HOME", "CARGO_HOME"):
             self.assertTrue(Path(env[key]).is_relative_to(self.root))
-        for key in ("CARGO_INCREMENTAL", "MBX_LEARNED_INCREMENTAL", "MBX_EAGER_INCREMENTAL", "MBX_SEED_INCREMENTAL"):
-            self.assertEqual(env[key], "0")
+        self.assertNotIn("CARGO_INCREMENTAL", env)
+        self.assertFalse(any(key.startswith("MBX_") for key in env))
         self.assertEqual(env["CARGO_NET_OFFLINE"], "true")
-        self.assertEqual(env["CARGO_BUILD_JOBS"], "1")
+        self.assertNotIn("CARGO_BUILD_JOBS", env)
+        self.assertFalse(any(key.startswith("CARGO_PROFILE_") for key in env))
         self.assertEqual(env["npm_config_ignore_scripts"], "true")
         self.assertEqual(env["RUSTUP_AUTO_INSTALL"], "0")
 

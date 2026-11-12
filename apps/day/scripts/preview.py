@@ -159,10 +159,7 @@ def build(args):
                 config.update(name=f"Pilot Preview {source[:8]}", id=IDENTITY)
                 (day / "nsh.json").write_text(json.dumps(config))
                 (day / "previewBuild.ts").write_text(f"export const previewSource = {json.dumps(source)};\n")
-                env = dict(os.environ, CARGO_PROFILE_DEV_DEBUG="0", CARGO_INCREMENTAL="0",
-                           MBX_LEARNED_INCREMENTAL="0", MBX_EAGER="0", MBX_SEED="0", TMPDIR=str(stage),
-                           CARGO_PROFILE_RELEASE_DEBUG="0", CARGO_PROFILE_RELEASE_OPT_LEVEL="0",
-                           CARGO_PROFILE_RELEASE_LTO="false")
+                env = dict(os.environ, TMPDIR=str(stage))
                 wrapper = day / "nsh.sh"
                 run([sys.executable, day / "scripts/test_preview.py"], env=env)
                 run([wrapper, "check", "Preview.tsx"], env=env)

@@ -12,8 +12,8 @@ bash scripts/cargo.sh --blaze stop
 
 This path is **local development only**, not CI, release or a replacement for
 pinned verification. `CI`/`GITHUB_ACTIONS` refuse it. Ordinary `cargo.sh` and
-`check-scoped.py` keep Rust1.98.1, use mise-managed mbx and disable ambient
-`MBX_BLAZE`. GitHub Actions runs plain Cargo 1.98.1 with a dependency build cache
+`check-scoped.py` keep Rust 1.98.1 and use mise-managed mbx with the caller's
+configuration. GitHub Actions runs plain Cargo 1.98.1 with a dependency build cache
 instead of mbx. No release profile, global Cargo config, shell shim,
 service or existing app/daemon is changed. Do not use `mbx setup` or `ra-jit enable`.
 
@@ -23,15 +23,10 @@ mbx is managed by mise and resolved from `PATH`, just like ordinary builds.
 Bootstrap installs only the checksum-pinned Blaze engine and its Rust toolchain.
 The wrapper uses mbx's explicit Cargo-shim environment dispatch, with no copied
 mbx binary or generated shim in `.tools/blaze`.
-The shim invokes **`ra-jit cargo`**, not Bazel or a guessed mbx flag. The existing
-shared mbx store and CPU2/4GiB scheduler remain; `mbx reserve` covers the external
-Blaze command and nested cached Cargo work without nested admission deadlock.
-Admission remains an estimate, not an OS CPU/RSS limit.
-
-After acquiring that existing scheduler, the child uses a separate shared store,
-`${XDG_CACHE_HOME:-$HOME/.cache}/gpui-fixture-blaze-mbx-v1`, with the same2GiB
-budget and4GiB free-space reserve. This keeps experimental build state separate from ordinary builds. Blaze worktrees share eligible outputs with each
-other, not incompatible compiler outputs from the ordinary path.
+The shim invokes **`ra-jit cargo`**, not Bazel or a guessed mbx flag. The explicit
+`--blaze` option enables Blaze for that command. Cache location, scheduling and
+cache policy come from the user's mbx configuration. Cargo targets remain
+separate from ordinary builds.
 
 The available upstream `nightly` binary archive is older than current Blaze
 documentation: it is from **8b15e4b406f010f98eb456ec867e16e0a9ebb0d5**,

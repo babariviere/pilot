@@ -4,20 +4,10 @@ cd "$(dirname "$0")/.."
 export RUSTUP_HOME="$PWD/.tools/rustup"
 export RUSTUP_TOOLCHAIN=1.98.1
 export CARGO_TARGET_DIR="$PWD/target/dev"
-export CARGO_BUILD_JOBS=2
 export MACOSX_DEPLOYMENT_TARGET=15.0
-# Separate from production state. Eligible outputs and scheduler are shared across
-# fixture worktrees. Never share Cargo target/incremental directories.
-export MBX_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/gpui-fixture-mbx-v1"
-export MBX_SCHEDULER=1 MBX_SCHEDULER_CPUS=2 MBX_SCHEDULER_MEMORY=4GiB
-export MBX_GC_MAX_SIZE=2GiB MBX_REMOTE_URL=""
-export MBX_GC_MIN_FREE_SIZE=4GiB
-export MBX_TARGET_VIEWS=0
 # Resolve before adding checkout tools, which may contain an obsolete mbx.
 mbx="$(command -v mbx || true)"
 export PATH="$PWD/.tools/bin:$HOME/.cargo/bin:$PATH"
-# Ambient mbx configuration must not change verification or release compilers.
-export MBX_BLAZE=0
 if [[ "${1:-}" == --blaze ]]; then
   shift
   if [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; then
@@ -51,17 +41,14 @@ if [[ "${1:-}" == --blaze ]]; then
   fi
   python3 scripts/prepare-patches.py
   export MBX_BLAZE=1
-  # This lease covers both Blaze and nested Cargo.
   # Keep experimental outputs separate; use the mise-managed Cargo dispatch.
   [[ -n "$mbx" ]] || { echo 'Install mbx with mise and expose it on PATH.' >&2; exit 127; }
-  exec "$mbx" reserve --cpus 2 --memory 4GiB -- \
-    env MBX_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/gpui-fixture-blaze-mbx-v1" \
-    MBX_CARGO_SHIM_MODE=1 MBX_CARGO_SHIM_PATH="$mbx" "$mbx" "$@"
+  export MBX_CARGO_SHIM_MODE=1 MBX_CARGO_SHIM_PATH="$mbx"
+  exec "$mbx" "$@"
 fi
 if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
   # Runners start empty and never share an mbx store, so mbx cannot hit there.
-  # Same toolchain, target and job bound; tests.yaml caches dependency outputs.
-  export CARGO_INCREMENTAL=0
+  # Keep the same toolchain and target; tests.yaml caches dependency outputs.
   python3 scripts/prepare-patches.py
   exec cargo "$@"
 fi

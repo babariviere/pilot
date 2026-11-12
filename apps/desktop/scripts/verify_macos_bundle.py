@@ -31,7 +31,6 @@ def qualify(expected_source, output):
         path = output / name
         path.mkdir(mode=0o700)
         env[key] = str(path)
-    env.update(PILOT_SWIFT_JOBS="2", CARGO_BUILD_JOBS="2", MAKEFLAGS="-j2", CMAKE_BUILD_PARALLEL_LEVEL="2")
     report = dict(schema=1, kind="non-release-macos-bundle-smoke", source=expected_source,
                   host=platform.mac_ver()[0], arch="arm64", passed=False, full_acceptance=False,
                   gui_startup_executed=False, steps=[])

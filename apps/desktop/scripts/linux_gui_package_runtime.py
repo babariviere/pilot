@@ -25,7 +25,7 @@ def stage_power(checkout, runtime, expected, env):
     # Use that same pinned toolchain directly, with private writable Cargo state.
     build_env = dict(env, PATH=str(toolchain) + os.pathsep + env.get("PATH", "/usr/bin:/bin"),
                      RUSTC=str(toolchain / "rustc"), CARGO_HOME=str(checkout.parent / "power-cargo"),
-                     CARGO_TARGET_DIR=str(checkout / "apps/power/target"), CARGO_BUILD_JOBS="2")
+                     CARGO_TARGET_DIR=str(checkout / "apps/power/target"))
     run_builder([str(toolchain / "cargo"), "build", "--locked", "--release",
                  "--manifest-path", str(checkout / "apps/power/Cargo.toml")],
                 cwd=checkout, env=build_env)

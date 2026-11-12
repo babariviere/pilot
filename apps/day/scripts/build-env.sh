@@ -12,10 +12,6 @@ if [[ ! "$mbx_version" =~ ^mbx\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 	echo 'Expected an installed mbx executable.' >&2
 	exit 1
 fi
-if [[ -n "${MBX_SOCKET:-}" ]]; then
-	echo 'Start Day outside an existing mbx build session.' >&2
-	exit 1
-fi
 # Match Day's checked-in toolchain, also when compiling the upstream CLI.
 # An explicit caller selection remains explicit, as with ordinary Cargo.
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-1.99.1}"
@@ -27,10 +23,3 @@ if [[ -z "$NSH_DAY_REAL_CARGO" || ! -x "$NSH_DAY_REAL_CARGO" || "$NSH_DAY_REAL_C
 fi
 NSH_DAY_REAL_CARGO="$(cd "$(dirname "$NSH_DAY_REAL_CARGO")" && pwd)/$(basename "$NSH_DAY_REAL_CARGO")"
 export NSH_DAY_MBX NSH_DAY_REAL_CARGO
-# Same cache and admission pool as the existing desktop build path.
-# Targets stay private. Do not adopt targets, collect others' caches, or use remote
-# credentials. Blaze follows mbx's global config or an explicit MBX_BLAZE value.
-export MBX_CACHE_DIR="${MBX_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/gpui-fixture-mbx-v1}"
-export MBX_SCHEDULER=1 MBX_SCHEDULER_CPUS=2 MBX_SCHEDULER_MEMORY=4GiB
-export MBX_TARGET_VIEWS=0 MBX_GC_AUTO=0 MBX_REMOTE_URL="" MBX_DISABLE=0
-export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-2}"
