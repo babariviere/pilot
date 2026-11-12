@@ -25,6 +25,8 @@ shows the exact source commit. Today, mission detail, New, the saved interview,
 Changes and rituals use the existing mock feeds. Buttons change the demo only.
 No real agent starts, provider request, Linear write, registration or update
 takes place. Chat windows and live mission work are not connected in this preview.
+New's project list shows two invented demo projects; starting a chat there only
+counts a demo chat.
 
 New's goal, Today text drafts and interview text/picks are kept separately in:
 

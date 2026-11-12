@@ -561,11 +561,6 @@ fn a_lost_new_creation_is_checked_after_reopen_and_never_adopts_the_previous_mis
         s.enabled("role:button[Plan a mission]").unwrap_or(false)
     })
     .unwrap();
-    assert!(
-        !app.screen()
-            .enabled("role:button[Start as one chat]")
-            .unwrap()
-    );
     app.press("role:button[Plan a mission]").unwrap();
     wait(&mut app, "Pilot is planning");
     f.cmd("generate", true);

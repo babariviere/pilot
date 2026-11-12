@@ -133,15 +133,23 @@ pub(super) async fn handle(
     command: &Command,
     gate: &Arc<Mutex<Gate>>,
 ) -> Result<Value, Error> {
+    // Not `shared.current(epoch)`: every dashboard or session notice bumps the
+    // epoch, including the one an earlier creation causes. The re-read
+    // inventory and chat profile (and the daemon's own recheck) fence the
+    // project here; the host only has to be open and the window's gate admitting.
+    let _ = epoch;
     let check = || {
-        shared.current(epoch)?;
+        shared.open()?;
         command.admit(&gate.lock().expect("bridge gate poisoned"))
     };
     match command {
         Command::Projects => {
             let snapshot = inventory(t).await?;
             check()?;
-            Ok(json!({"snapshot":snapshot,"operations":operations(t,journal),"outcome":null}))
+            // `current` is this window's own project (Today's and new missions'),
+            // so New can default to it. It is not a selection.
+            Ok(json!({"snapshot":snapshot,"current":t.source.project_id,
+                "operations":operations(t,journal),"outcome":null}))
         }
         Command::ChatSelect(request) => {
             *shared

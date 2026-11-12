@@ -19,6 +19,10 @@ import {
 	answerMessages,
 	answerPicks,
 	atQuestion,
+	chatChoice,
+	chatNote,
+	chatPick,
+	chatSelecting,
 	confirmingStart,
 	fogOpen,
 	goalDraft,
@@ -26,12 +30,15 @@ import {
 	newMessage,
 	planMessages,
 	planRoute,
+	projectsOpen,
+	restoredDraft,
 	roundOpen,
 	seeAll,
 	submitting,
 	writing,
 } from "./planView";
 import { type RitualRoute, ritualRoute, startStep } from "./ritualView";
+import type { Update } from "./updateFeed";
 import {
 	asking,
 	confirming,
@@ -47,7 +54,6 @@ import {
 	route,
 	todayPlace,
 } from "./view";
-import type { Update } from "./updateFeed";
 
 /** The window's update feed, when it has one. The window sets it once; the top bar reads it. */
 export const updateEntry = signal<Update | null>(null);
@@ -128,6 +134,8 @@ export function captureView(today?: Today): SavedView {
 		...at,
 		update: updateOpen(),
 		goal: goalDraft(),
+		// The project and access New shows, as Pilot last selected them. Never a sent chat.
+		chat: chatChoice(),
 		focused: focused() ?? "",
 		questions: Object.entries(atQuestion()).map(([interview, question]) => `${interview}/${question}`),
 		ritual,
@@ -223,6 +231,12 @@ export function startFresh() {
 	confirmingStart.set(false);
 	newMessage.set("");
 	newBusy.set(false);
+	chatPick.set(null);
+	chatChoice.set(null);
+	chatSelecting.set(false);
+	chatNote.set("");
+	projectsOpen.set(false);
+	restoredDraft.set(null);
 	changesRoute.set(null);
 	listMessage.set("");
 	ritualRoute.set(null);
@@ -251,6 +265,12 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today) {
 		changesRoute.set(view.place === "changes" && changes ? { kind: "list" } : null);
 	}
 	goalDraft.set(view.goal);
+	// The chosen project and access come back as a choice to select again,
+	// never as a selection: New reads them again and sends nothing.
+	const chat = view.chat;
+	chatPick.set(chat ? { projectId: chat.projectId, mode: chat.mode === "ask" ? "ask" : "build" } : null);
+	chatChoice.set(null);
+	restoredDraft.set(chat?.draftId ?? null);
 	focused.set(view.focused || null);
 	const shown: Record<string, string> = {};
 	for (const entry of view.questions) {

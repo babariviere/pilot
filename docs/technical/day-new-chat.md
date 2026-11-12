@@ -31,7 +31,9 @@ profile mutation, provider request, source sync or authentication recovery.
   project ID, root, configuration digest and explicit mode. Project changes
   during catalog I/O refuse the selection. No worker opens.
 * `day.projects.read {}` exposes the complete inventory and saved creation
-  operation summaries through the existing root channel.
+  operation summaries through the existing root channel. Its `current` field
+  names the window's own project ID (Today's and new missions'), so New can
+  default to it. It is not a selection.
 * `day.chat.select {projectId,contextDigest,mode}` re-reads that selection and
   returns `ChatChoice`, adding a native UUID `draftId`. Selection creates no
   session. Ask means read-only; Build uses the project's existing workspace and
@@ -43,6 +45,12 @@ also discard superseded read replies. A stale or missing project,
 denied capability or offline service never selects another project automatically.
 The root's original Today project stays immutable. Choosing New's project does
 not change existing chats, Today, mission Pause or another profile.
+
+These commands do not use the shared read epoch as a fence: every dashboard or
+session notice bumps it, including the one a creation causes, so it would refuse
+quick follow-up choices as stale. The host re-reads the inventory and chat
+profile right before saving, and the daemon rechecks the full configuration.
+The host only requires an open root and an admitting window gate.
 
 ## Explicit creation and recovery
 
@@ -100,7 +108,21 @@ It also checks capability denial before dispatch and a local receipt-save failur
 after an exact daemon ACK, followed by cold lookup with no duplicate.
 Existing intake, host, planning, control and saved-view suites remain the regression gates.
 
-The UI still needs to consume this seam and include `chat` in its saved view.
-The current mission-only New controls are not relabeled as connected standalone
-creation. No native window, real provider, production profile or running app is
+## Screen
+
+New (`NewScreen.tsx`, `chatFeed.ts`, `chatCommands.ts`) consumes this seam.
+Opening New reads the projects and selects the user's earlier choice, else
+`current`. A pick whose project is gone stays unchosen. The screen drops answers
+to older selections, and Start chat sends only the newest accepted choice with
+the exact words. After an accepted creation it selects again, so the next chat
+gets a new draft ID. A stale creation selects again and sends nothing. While
+any creation is Unknown, New shows it with Check and refuses another. Plan a
+mission stays pinned to the window's own project. Close and update save
+`SavedView.chat`; restore turns it into a choice to select again.
+
+`Chat.test.tsx` covers the screen rules on a scripted source (`chatDemo.ts`).
+`native/tests/new_chat_today.rs` runs `Connected.tsx` on the isolated daemon:
+default project, explicit other project and Ask, a lost creation ACK across a
+cold reopen, one Check lookup, no second send, and the saved chat in the chosen
+project. No native window, real provider, production profile or running app is
 used by these tests.

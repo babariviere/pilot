@@ -1,7 +1,19 @@
 // The Day screen's styled controls, drawn from nsh/base behavior and the
 // theme's tokens. Pages compose these; they do not restyle base controls.
 import { type JSX, Text, View, type ViewRef } from "nsh";
-import { Button, type DiffFile, DiffView, type DiffViewClasses, type DiffViewRef, Tab, Tabs, Toggle } from "nsh/base";
+import {
+	Button,
+	type DiffFile,
+	DiffView,
+	type DiffViewClasses,
+	type DiffViewRef,
+	Radio,
+	Select,
+	type SelectItem,
+	Tab,
+	Tabs,
+	Toggle,
+} from "nsh/base";
 import type { Bar, Evidence, Progress } from "pilot-day/native";
 
 /** A still state mark. Words beside it carry the meaning. */
@@ -154,6 +166,91 @@ export function HelpChip(props: {
 		>
 			<Text class="text-xs text-muted-foreground group-aria-pressed:text-foreground">{props.label}</Text>
 		</Toggle>
+	);
+}
+
+/**
+ * One value chosen from a list, such as a project: a quiet trigger naming
+ * the choice, and a popup list with a second line per item (`detail`).
+ * `searchable` adds a filter field for long lists. Choosing only reports
+ * the value; the caller decides what that does.
+ */
+export function Picker(props: {
+	testID?: string;
+	/** What the choice is about, for screen readers. */
+	label: string;
+	items: SelectItem[];
+	value: string | null;
+	/** What the trigger says while nothing listed is chosen. */
+	placeholder: string;
+	disabled?: boolean;
+	searchable?: boolean;
+	searchPlaceholder?: string;
+	/** A quiet second line for an item, by value. */
+	detail?: (value: string) => string;
+	onChange: (value: string) => void;
+	onOpenChange?: (open: boolean) => void;
+}) {
+	const title = () => props.items.find((i) => i.value === props.value)?.title ?? props.placeholder;
+	return (
+		<Select
+			testID={props.testID}
+			items={props.items}
+			value={props.value}
+			disabled={props.disabled}
+			searchable={props.searchable}
+			searchPlaceholder={props.searchPlaceholder ?? null}
+			searchAccessibilityLabel={props.searchPlaceholder ?? null}
+			accessibilityLabel={props.label}
+			offset={4}
+			onChange={({ value }) => {
+				if (value !== null) props.onChange(value);
+			}}
+			onOpenChange={({ open }) => props.onOpenChange?.(open)}
+			class="rounded-lg focus-visible:ring-2 focus-visible:ring-ring/40 disabled:opacity-50"
+			popupClass="min-w-56 rounded-xl border border-border bg-popover p-1 shadow-md"
+			listClass="max-h-72"
+			itemClass="group rounded-lg px-2.5 py-1.5 focus:bg-accent selected:bg-selection disabled:opacity-50"
+			searchClass="mb-1 rounded-lg border border-input bg-background px-2.5 py-1.5 text-sm text-foreground"
+			renderItem={(item) => (
+				<View class="gap-0.5">
+					<Text class="text-sm text-popover-foreground group-selected:font-medium">{item.title}</Text>
+					<If when={props.detail?.(item.value)}>
+						<Text class="text-xs text-faint">{props.detail?.(item.value) ?? ""}</Text>
+					</If>
+				</View>
+			)}
+			trigger={
+				<View class="min-h-8 flex-row items-center gap-2 rounded-lg border border-input px-3 py-1 hover:bg-accent">
+					<Text class="text-sm text-foreground">{title()}</Text>
+					<Text class="text-xs text-faint">▾</Text>
+				</View>
+			}
+		/>
+	);
+}
+
+/** One choice of a `RadioGroup`: a ring, then its words. */
+export function RadioRow(props: {
+	testID?: string;
+	label: string;
+	checked: boolean;
+	disabled?: boolean;
+	onChange: () => void;
+}) {
+	return (
+		<Radio
+			testID={props.testID}
+			checked={props.checked}
+			disabled={props.disabled}
+			onChange={props.onChange}
+			class="group flex-row items-center gap-2.5 rounded-lg px-2 py-1.5 checked:bg-selection hover:bg-accent checked:hover:bg-selection disabled:opacity-70 focus-visible:ring-2 focus-visible:ring-ring/40"
+		>
+			<View class="size-3.5 items-center justify-center rounded-full border border-input group-checked:border-primary">
+				<View class="size-1.5 rounded-full group-checked:bg-primary" />
+			</View>
+			<Text class="text-sm text-foreground">{props.label}</Text>
+		</Radio>
 	);
 }
 

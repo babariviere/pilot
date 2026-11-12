@@ -2,7 +2,8 @@
 // typing, before an intent carries it to Rust. Keyed by interview and
 // question, so it survives reordering, new rounds and hot updates.
 import { type Signal, signal } from "nsh";
-import type { Interview, Question } from "pilot-day/native";
+import type { ChatChoice, Interview, Question } from "pilot-day/native";
+import type { ChatMode } from "./chatFeed";
 import { closeMission } from "./view";
 
 /** New, or one mission's planning, or null for Today and missions. */
@@ -19,6 +20,23 @@ export const confirmingStart = signal(false);
 export const newMessage = signal("");
 /** Whether New sent something and waits for its answer. */
 export const newBusy = signal(false);
+
+/**
+ * The project and access the user chose for a new chat on New. Null until
+ * New chooses this window's own project for them. A choice stays while the
+ * window is open; it never changes an existing chat.
+ */
+export const chatPick = signal<{ projectId: string; mode: ChatMode } | null>(null);
+/** Pilot's passive selection for that choice: what a new chat names, and what a close saves. */
+export const chatChoice = signal<ChatChoice | null>(null);
+/** Whether Pilot is reading the chosen project's setup. */
+export const chatSelecting = signal(false);
+/** Why the chosen project cannot be used now, or "". */
+export const chatNote = signal("");
+/** Whether the project list is open: Escape closes it, not New. */
+export const projectsOpen = signal(false);
+/** The draft a restored window had chosen. If Pilot saved its creation, New shows how it ended. */
+export const restoredDraft = signal<string | null>(null);
 
 /** Unsaved answer text, exactly as typed, by answer key. */
 export const answerDrafts = signal<Record<string, string>>({});

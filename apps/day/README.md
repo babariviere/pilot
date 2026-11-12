@@ -282,8 +282,8 @@ to the mission whose page shows that interview, never to whichever mission is op
 Today, the scroll offset comes back and the row that was opened takes the keyboard focus. Nothing
 here starts work.
 
-Help, link opening, direct chat start, budget grants and continuation after a human action
-stay unavailable here and say so. The screen never names a profile, port, path or credential.
+Help, link opening, budget grants and continuation after a human action
+stay unavailable here and say so. The screen never names a profile, port or credential.
 Without a native root (`nsh run`, `nsh test`), the window says it is not connected instead of
 showing examples; a first read that fails says why. "Mock data" shows only on mock entries.
 
@@ -308,6 +308,20 @@ It never re-enrolls, clears the unsent goal or adopts the previously selected mi
 planning page marks the cached read older until the read succeeds. **Read again** retries only that
 passive read, keeping drafts and place. A later inventory also ages a page when its map/Start plan
 revision changed, even if its interview did not.
+
+New also starts **one standalone chat** in a project the user chooses
+([contract](../../docs/technical/day-new-chat.md)). Opening New reads the profile's projects
+(`day.projects.read`) and selects this window's own project by default; choosing another project
+or Ask/Build only asks the root for that project's setup (`day.chat.select`). Neither creates a
+chat, and the typed words stay. Only **Start chat** sends (`day.chat.create`), naming the exact
+selection shown and the exact words, once. An answer to an older choice is dropped. A changed
+project setup is refused and read again; a removed project is never swapped for another. A creation
+whose answer is lost shows "not confirmed" on New, also after a cold reopen, blocks another
+creation, and **Check** reads only its saved receipt. Missions still start in the window's own
+project, so **Plan a mission** says so while another project is chosen. A close or update saves
+the choice in `SavedView.chat`; reopening selects it again and sends nothing. Choosing a project
+here changes no existing chat, Today, mission or permission. App-wide project filtering is not part
+of this. The mock entries use invented demo projects (`chatDemo.ts`).
 
 ### Motion
 

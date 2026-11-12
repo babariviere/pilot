@@ -9,7 +9,6 @@ import {
 	answerKey,
 	answerMessages,
 	answerPicks,
-	confirmingStart,
 	drop,
 	goalDraft,
 	newBusy,
@@ -303,24 +302,6 @@ export async function checkCreation(plans: Plans) {
 		if (outcome.status === "accepted" && outcome.missionId) openPlan(outcome.missionId);
 	} catch {
 		newMessage.set("Mission creation is not confirmed. Check again; nothing was sent again.");
-	} finally {
-		newBusy.set(false);
-	}
-}
-
-/** Starts one chat with exactly the goal, after the user confirmed it. */
-export async function startChat(plans: Plans, setup: string) {
-	if (newBusy()) return;
-	newBusy.set(true);
-	newMessage.set("");
-	const goal = goalDraft();
-	try {
-		const outcome = await plans.feed.start({ goal, setup });
-		newMessage.set(outcome.message);
-		if (outcome.status === "accepted") {
-			confirmingStart.set(false);
-			if (goalDraft() === goal) goalDraft.set("");
-		}
 	} finally {
 		newBusy.set(false);
 	}

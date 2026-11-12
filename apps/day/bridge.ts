@@ -529,7 +529,8 @@ export class ConnectedPlans implements PlanningFeed {
 					? ""
 					: "This Pilot service has no planning setup for new missions here.",
 			canStart: false,
-			startReason: "Starting one chat directly is not available here yet.",
+			// Standalone chats start through New's project choice (chatFeed.ts), not this feed.
+			startReason: "",
 			plans: inventory.state === "live" ? inventory.rows : [],
 			started: [],
 		};

@@ -337,13 +337,16 @@ test("New plans a mission from the user's words, or starts one chat after a conf
 	await app.type("id:goal", "Fix the flaky upload test");
 	await app.press("role:button[Start as one chat]");
 	await app.waitFor("Start one chat with exactly these words?");
-	expect(app.shows("pilot · Default model · Build: edits files in its own workspace")).toBe(true);
+	await app.waitFor("pilot · Default model · medium thinking");
+	expect(app.shows("Build: edits files in its own workspace")).toBe(true);
 	await app.keyboard.press("escape");
 	expect(app.shows("Start one chat with exactly these words?")).toBe(false);
 	await app.press("role:button[Start as one chat]");
 	await app.press("role:button[Start chat]");
-	await app.waitFor("Started a new Build chat with your words.");
-	expect(app.shows("Started. It works on its own and is not part of a mission.")).toBe(true);
+	await app.waitFor(
+		"Started one Build chat in pilot with your words. It works on its own; that is not progress or a result yet.",
+	);
+	expect(app.shows("A chat in pilot")).toBe(true);
 	expect(app.shows("Missions in planning")).toBe(false);
 	await app.type("id:goal", "Let people export a chat as Markdown");
 	await app.press("role:button[Plan a mission]");

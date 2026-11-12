@@ -6,6 +6,7 @@
 import { host, signal } from "nsh";
 import type { RitualSnapshot, Setup, Today } from "pilot-day/native";
 import { ConnectedPlans, ConnectedRituals, ConnectedToday, call, type Refusal, windowId } from "./bridge";
+import { ConnectedChats, mirrorChats } from "./chatFeed";
 import { connectedUpdates } from "./connectedUpdates";
 import { type Day, mirrorDay } from "./day";
 import { ConnectedIntake, mirrorIntake } from "./intakeFeed";
@@ -178,7 +179,8 @@ async function connect() {
 		void intakeFeed.read();
 	});
 	const day = mirrorDay(today, mirrorIntake(intakeFeed));
-	const plans = mirrorPlanning(planFeed);
+	// New's projects are read when New opens; reading sends nothing.
+	const plans = mirrorPlanning(planFeed, mirrorChats(new ConnectedChats(window)));
 	const rituals = mirrorRituals(ritualFeed, rootRecap);
 	const update = await connectedUpdates(window);
 	if (!current()) return;
