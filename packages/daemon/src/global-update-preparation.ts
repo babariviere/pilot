@@ -78,6 +78,7 @@ export class GlobalUpdatePreparation {
 		});
 		if (outstanding.length > 1) throw new Conflict("Multiple retained global update owners");
 		this.active = outstanding[0]?.operationId;
+		if (this.active) this.sessions.holdGlobalUpdateRecovery(this.active);
 		this.loaded = true;
 		if (!this.active) this.thaw();
 	}
@@ -153,6 +154,29 @@ export class GlobalUpdatePreparation {
 		if (![PREPARE, RELEASE].includes(op.kind) || op.targetId !== GLOBAL_UPDATE_TARGET)
 			throw new Conflict("Invalid global update lookup");
 		return this.journal.lookup(op);
+	}
+	/** Fresh process/resource observation under the original durable hold. No
+	 * checkpoint, cancellation, install or release is retried by verification. */
+	async verify(operation: DurableOperation): Promise<{ receipt: OperationReceipt; blockers: RuntimeBlocker[] }> {
+		const op = structuredClone(operation);
+		this.assertOperation(op, PREPARE);
+		const receipt = await this.journal.lookup(op);
+		if (this.active !== op.operationId || receipt?.state !== "accepted")
+			throw new Conflict("Original preparation is not acknowledged");
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			const blockers = await Promise.race([
+				this.resources.blockers(),
+				new Promise<never>((_, reject) => {
+					timer = setTimeout(() => reject(new Error("Global resource inspection timed out")), 5_000);
+				}),
+			]);
+			this.assertOperation(op, PREPARE);
+			if (this.active !== op.operationId) throw new Conflict("Global preparation owner changed");
+			return { receipt, blockers };
+		} finally {
+			clearTimeout(timer);
+		}
 	}
 
 	/** A separate native-owned operation releases only this preparation. The verifier

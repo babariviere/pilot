@@ -21,7 +21,7 @@ impl SavedWindow {
             Sha256::digest(serde_json::to_vec(source).map_err(|_| Error::Storage)?)
         ))
     }
-    pub(super) fn validate(&self) -> Result<(), Error> {
+    pub(crate) fn validate(&self) -> Result<(), Error> {
         if self.kind != "window-capture"
             || self.version != 1
             || self.generation == 0

@@ -745,6 +745,10 @@ impl Bridge {
         &self.window
     }
 
+    pub(crate) fn saved_capture(&self) -> Option<crate::host::window::SavedWindow> {
+        self.root.host().saved_window()
+    }
+
     pub fn update_window(&self) -> UpdateWindow {
         UpdateWindow {
             host: self.root.host().clone(),

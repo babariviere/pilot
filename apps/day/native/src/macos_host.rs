@@ -61,6 +61,17 @@ impl JoinedClose {
     }
 }
 
+/// Exact native capture after seal, host join and engine disposal. Only the
+/// owning WindowOwner can construct this, never a VM reply or stored hint.
+pub struct ClosedWindow {
+    capture: crate::host::window::SavedWindow,
+}
+impl ClosedWindow {
+    pub(crate) fn capture(&self) -> &crate::host::window::SavedWindow {
+        &self.capture
+    }
+}
+
 impl WindowOwner {
     /// Own exactly the view created with this bridge's AppOptions. A second
     /// engine or stock run_app must never share this channel.
@@ -249,6 +260,20 @@ impl WindowOwner {
         }
         self.stopped = true;
         Ok(())
+    }
+
+    /// Native official-update continuation. Not an exit hook: all capture and
+    /// native host work have finished before this can authorize installer entry.
+    pub fn close_for_update(&mut self, joined: JoinedClose) -> Result<ClosedWindow, Error> {
+        let capture = self.bridge.saved_capture().ok_or(Error::Storage)?;
+        capture.validate()?;
+        if capture.window != self.identity()
+            || (capture.generation, capture.save_sequence) != joined.receipt.parts()
+        {
+            return Err(Error::Stale);
+        }
+        self.dispose_joined(joined)?;
+        Ok(ClosedWindow { capture })
     }
 
     /// Compatibility for qualification callers. Still requires dispose_joined

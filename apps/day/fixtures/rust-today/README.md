@@ -7,8 +7,8 @@ script or workspace build uses it. It runs no JS VM and connects to no daemon,
 account or user data. The GPUI and Swift apps, their build and
 `apps/desktop/nsh`'s pin do not change.
 
-It uses the same upstream NSH **v0.4.0** release as the TSX app
-(`e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3`), with no patches, forks, Cargo
+Its dependencies now pin the same upstream NSH **v0.5.0** release as the TSX app
+(`f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1`), with no patches, forks, Cargo
 cache edits or WebViews. Use the matching installed CLI through `nsh.sh`;
 never build `nsh-cli` locally. Its lock must be resolved for that release,
 not relabeled from the former main snapshot. See the
@@ -28,6 +28,10 @@ and Not moving groups: the TSX app's "No current report" group, report
 provenance, mission overview and Pause controls are not mirrored here.
 
 ## Parity matrix
+
+This matrix records the original 0.4.0 comparison, not fresh 0.5.0 visual
+acceptance. The optional fixture remains frozen apart from matching dependency
+pins; production Day is the TSX app.
 
 | Aspect             | TSX (`apps/day`)                                                           | Rust (`fixtures/rust-today`)                                                                  | Status                                                           |
 | ------------------ | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |

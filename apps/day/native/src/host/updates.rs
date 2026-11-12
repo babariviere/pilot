@@ -197,22 +197,10 @@ impl Selection {
                 "requirement":self.trust.code_requirement}})
     }
     pub(crate) fn verify_app(&self) -> Result<(), Failure> {
-        let app = self.app.as_ref().ok_or(Failure::Unsupported)?;
-        if app.target != self.installed {
-            return Err(Failure::Unverified);
-        }
-        let expected = pilot_desktop_updater::iteration::ExpectedTarget::new(
-            app.source.clone(),
-            app.build.clone(),
-        )
-        .map_err(|_| Failure::Unverified)?;
-        pilot_desktop_updater::app_update::verify_prepared_target(
-            &app.transaction,
-            &app.target,
-            &self.trust,
-            &expected,
-        )
-        .map_err(|_| Failure::Unverified)
+        // Retained staged transactions still have their exact read-only
+        // successor recovery above. Fresh NSH app effects must not enter the
+        // legacy helper/orchestration; official_update owns the new boundary.
+        Err(Failure::Unsupported)
     }
     fn inspect(&self) -> Inspection {
         use pilot_desktop_updater::installer::{NativePlatform, Platform};
@@ -223,7 +211,10 @@ impl Selection {
                 app_verified: false,
             };
         }
-        let app_ready = self.verify_app().is_ok() && self.connection.verify().is_ok();
+        // Legacy staged helper inputs remain readable for exact recovery, but
+        // cannot offer a new NSH app update. New installs use official_update
+        // only after the global preparation and native joined-close boundary.
+        let app_ready = false;
         let app_verified = app_ready
             || NativePlatform
                 .verify(
@@ -785,10 +776,9 @@ pub(super) async fn handle(
                             .unwrap_or("")
                             .to_owned()
                     }),
-                // Native prepare does not count affected agents: Unknown,
-                // never zero. App-only enters no daemon reservation and
-                // pauses no agent by construction.
-                pauses: (intent.kind == UpdateKind::App).then_some(0),
+                // The global preparation owns the all-chat inventory. A local
+                // legacy capture cannot report a trustworthy count, never zero.
+                pauses: None,
                 keeps: None,
                 restarts: intent.kind == UpdateKind::App,
             };

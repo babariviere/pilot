@@ -7,9 +7,10 @@ import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import type { DurableOperation } from "@pilot/protocol";
 import { GLOBAL_UPDATE_TARGET, GlobalUpdatePreparation } from "./global-update-preparation.ts";
+import type { LifecycleCheckpoint } from "./lifecycle-checkpoint.ts";
 import { canonicalJSON, OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
-import { RuntimeResources } from "./runtime-admission.ts";
+import { RuntimeAdmission, RuntimeResources } from "./runtime-admission.ts";
 import { SessionManager, Worker } from "./sessions.ts";
 
 const host = { hostId: "local", daemonId: "daemon", lineageId: "lineage" };
@@ -55,6 +56,7 @@ async function fixture(t: TestContext) {
 		},
 	});
 	const journal = new OperationJournal(join(home, "operations"), host);
+	const managers = [sessions];
 	const resources = new RuntimeResources([sessions]);
 	const preparation = new GlobalUpdatePreparation(journal, resources, sessions);
 	await preparation.load();
@@ -66,7 +68,7 @@ async function fixture(t: TestContext) {
 	await Promise.all(internal.starting.values());
 	await writeFile(join(home, "saved-native-capture"), draft);
 	t.after(async () => {
-		await sessions.shutdown();
+		for (const manager of managers.toReversed()) await manager.shutdown();
 		await Promise.all(
 			children
 				.filter((c) => c.exitCode === null && c.signalCode === null)
@@ -83,6 +85,7 @@ async function fixture(t: TestContext) {
 	return {
 		home,
 		sessions,
+		managers,
 		chats,
 		journal,
 		resources,
@@ -96,6 +99,10 @@ async function fixture(t: TestContext) {
 
 test("global preparation interrupts broken real IPC peers alongside healthy work, without replay", async (t) => {
 	const f = await fixture(t);
+	const live = (
+		f.sessions as unknown as { metas: Map<string, { failure?: string; updateRecovery?: { operationId: string } }> }
+	).metas.get(f.chats[0]!.id)!;
+	live.failure = "provider failure while an executor still exists";
 	const op = operation();
 	const before = Date.now();
 	const result = await f.preparation.prepare(op);
@@ -109,12 +116,17 @@ test("global preparation interrupts broken real IPC peers alongside healthy work
 	const manifest = f.sessions.lifecycleManifest(op.operationId);
 	assert.equal(manifest.length, 4);
 	assert.equal(manifest[0]?.checkpoint.phase, "checkpointed");
+	assert.equal(live.updateRecovery?.operationId, op.operationId, "reconciliation follows actual executor close");
 	for (const entry of manifest.slice(1)) {
 		assert.equal(entry.checkpoint.phase, "unknown");
 		assert.equal(entry.checkpoint.interrupted, true);
 		assert.equal(entry.checkpoint.hostExited, true);
 		assert.equal(entry.checkpoint.quiescent, undefined, "root exit never claims descendant proof");
 	}
+	assert.ok(
+		(result.result as { blockers: { kind: string }[] }).blockers.some((b) => b.kind === "unknown-process"),
+		"current interrupted shutdown uncertainty is not bookkeeping",
+	);
 	assert.equal(await readFile(join(f.home, "saved-native-capture"), "utf8"), f.draft);
 	await assert.rejects(f.sessions.spawn({ cwd: f.home, message: "fenced" }), /update/);
 	assert.deepEqual(await f.preparation.lookup(op), result);
@@ -129,6 +141,154 @@ test("global preparation interrupts broken real IPC peers alongside healthy work
 	await reopened.load();
 	assert.deepEqual(await reopened.lookup(op), result);
 	assert.equal(f.starts(), 4, "reopen/lookup never repeats pause, cancellation or sends");
+});
+
+test("normal update recovery reconciles failed persisted bookkeeping without restarting or losing queued work", async (t) => {
+	const f = await fixture(t);
+	await f.sessions.shutdown(); // Real IPC peers exit before the cold recovery scenario.
+	const before = new Map<string, Record<string, unknown>>();
+	for (const [index, chat] of f.chats.entries()) {
+		const path = join(f.home, "sessions", chat.id, "meta.json");
+		const meta = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+		const failure = [
+			"Anthropic request refused",
+			"OpenAI request refused",
+			"Workspace is missing",
+			"Kernel initialization failed",
+		][index];
+		if (index < 2) {
+			delete meta.failure;
+			meta.inputError = failure;
+		} else meta.failure = failure;
+		meta.working = true;
+		meta.initializing = true;
+		meta.preparing = { source: join(f.home, "missing-source"), baseBranch: "kept-branch" };
+		if (index === 2) meta.cwd = join(f.home, "missing-workspace");
+		meta.inputsPaused = true;
+		meta.pending = [{ type: "input", requestId: randomUUID(), content: draft, mode: "followUp" }];
+		meta.recoveryStopped = index >= 2;
+		meta.lifecycleCheckpoint = {
+			schema: 1,
+			operationId: randomUUID(),
+			purpose: "app-update",
+			incarnation: "previous-runtime:1",
+			sessionCreatedAt: meta.createdAt,
+			inputGeneration: meta.inputGeneration ?? 0,
+			inputControlRevision: meta.inputControlRevision ?? 0,
+			prior: {
+				working: true,
+				updatePaused: false,
+				sleepPaused: false,
+				inputsPaused: true,
+				subscriptionPaused: false,
+			},
+			children: [],
+			phase: "resume-admitted",
+		};
+		await writeFile(path, JSON.stringify(meta));
+		before.set(chat.id, meta);
+	}
+	let starts = 0;
+	const cold = new SessionManager(f.home, new ProjectStore(f.home), undefined, {
+		title: async () => undefined,
+		worker: () => {
+			starts++;
+			throw new Error("failed work must not start during update recovery");
+		},
+	});
+	f.managers.push(cold);
+	const independent = new RuntimeAdmission();
+	const releaseJob = independent.begin({ kind: "job", id: "independent-owned-process" });
+	t.after(releaseJob);
+	const resources = new RuntimeResources([cold, independent]);
+	const initialHold = resources.freezeAdmissions();
+	t.after(initialHold);
+	const preparation = new GlobalUpdatePreparation(
+		new OperationJournal(join(f.home, "operations"), host),
+		resources,
+		cold,
+	);
+	await preparation.load();
+	await cold.load(true);
+	const op = operation();
+	const receipt = await preparation.prepare(op);
+	assert.equal(receipt.state, "accepted");
+	assert.deepEqual(
+		(await preparation.verify(op)).blockers,
+		[{ kind: "job", id: "independent-owned-process" }],
+		"bookkeeping recovery never waives independent process evidence",
+	);
+	releaseJob();
+	assert.deepEqual(
+		(await preparation.verify(op)).blockers,
+		[],
+		"historical failed bookkeeping is not a process census",
+	);
+	initialHold(); // The accepted preparation still owns its global admission hold.
+	for (const chat of f.chats) {
+		const prior = before.get(chat.id)!;
+		const saved = JSON.parse(await readFile(join(f.home, "sessions", chat.id, "meta.json"), "utf8"));
+		assert.equal(saved.failure, prior.failure, "no provider safeguard or original failure is bypassed");
+		assert.equal(saved.inputError, prior.inputError);
+		assert.deepEqual(
+			saved.lifecycleCheckpoint,
+			prior.lifecycleCheckpoint,
+			"original uncertain ownership is kept exactly",
+		);
+		assert.equal(saved.working, false);
+		assert.equal(saved.initializing, undefined);
+		assert.equal(saved.preparing, undefined);
+		assert.equal(saved.inputsPaused, true);
+		assert.equal(saved.recoveryStopped, prior.recoveryStopped);
+		assert.deepEqual(saved.pending, prior.pending, "durable queued intent is preserved, not sent");
+		assert.equal(saved.updateRecovery.operationId, op.operationId);
+		assert.deepEqual(
+			saved.updateRecovery.prior.preparing,
+			prior.preparing,
+			"clone recipe stays data, not an automatic retry",
+		);
+	}
+	// A retained operation owns cold recovery before any startup dispatch. Only
+	// bookkeeping is reconciled; no checkpoint/cancel/install effect is re-entered.
+	await cold.shutdown();
+	for (const chat of f.chats) {
+		const path = join(f.home, "sessions", chat.id, "meta.json");
+		const meta = JSON.parse(await readFile(path, "utf8"));
+		meta.working = true;
+		meta.initializing = true;
+		await writeFile(path, JSON.stringify(meta));
+	}
+	const recovered = new SessionManager(f.home, new ProjectStore(f.home), undefined, {
+		title: async () => undefined,
+		worker: () => {
+			starts++;
+			throw new Error("cold update recovery must not restart failed work");
+		},
+	});
+	f.managers.push(recovered);
+	const reopened = new GlobalUpdatePreparation(
+		new OperationJournal(join(f.home, "operations"), host),
+		new RuntimeResources([recovered]),
+		recovered,
+	);
+	await reopened.load();
+	await recovered.load(true);
+	assert.deepEqual(await reopened.prepare(op), receipt, "original operation receipt is not rewritten or replayed");
+	assert.deepEqual((await reopened.verify(op)).blockers, []);
+	for (const chat of f.chats) {
+		const meta = JSON.parse(await readFile(join(f.home, "sessions", chat.id, "meta.json"), "utf8"));
+		assert.equal(meta.working, false);
+		assert.equal(meta.initializing, undefined);
+		assert.equal(meta.failure, before.get(chat.id)!.failure);
+		assert.equal(meta.inputError, before.get(chat.id)!.inputError);
+		assert.deepEqual(meta.lifecycleCheckpoint, before.get(chat.id)!.lifecycleCheckpoint);
+		assert.deepEqual(meta.updateRecovery.prior.preparing, before.get(chat.id)!.preparing);
+	}
+	const release = operation("global-update-release", { prepareId: op.operationId, prepareHash: op.payloadHash });
+	await reopened.release(release, op, async () => {}); // Fake native authority, not production startup proof.
+	assert.equal(starts, 0);
+	await assert.rejects(readFile(join(f.home, "missing-workspace")), /ENOENT/);
+	assert.equal(await readFile(join(f.home, "saved-native-capture"), "utf8"), draft);
 });
 
 test("an interrupted preparation remains lookup-only after durable reopen", async (t) => {
@@ -176,6 +336,66 @@ test("native release verifies the pinned target, then selectively recovers only 
 		result,
 	);
 	assert.equal(f.starts(), 5, "only healthy acknowledged work resumes; broken effects stay Unknown");
+});
+
+test("a failed live executor keeps its previous uncertain checkpoint before a fresh host-owned stop", async (t) => {
+	const f = await fixture(t);
+	const internals = f.sessions as unknown as {
+		start(id: string, admitted?: boolean): Promise<Map<string, Error>>;
+		metas: Map<
+			string,
+			{
+				createdAt: number;
+				inputGeneration?: number;
+				inputControlRevision?: number;
+				inputError?: string;
+				lifecycleCheckpoint?: LifecycleCheckpoint;
+				updateRecovery?: { prior: { lifecycleCheckpoints?: LifecycleCheckpoint[] } };
+			}
+		>;
+	};
+	const meta = internals.metas.get(f.chats[0]!.id)!;
+	f.children[0]!.emit("message", { type: "working", working: false }); // Terminal faux-provider state, not process exit.
+	meta.inputError = "Anthropic request refused";
+	const previous: LifecycleCheckpoint = {
+		schema: 1,
+		operationId: randomUUID(),
+		purpose: "app-update",
+		incarnation: "previous-runtime:1",
+		sessionCreatedAt: meta.createdAt,
+		inputGeneration: meta.inputGeneration ?? 0,
+		inputControlRevision: meta.inputControlRevision ?? 0,
+		prior: { working: true, updatePaused: false, sleepPaused: false, inputsPaused: false, subscriptionPaused: false },
+		children: [],
+		phase: "resume-admitted",
+	};
+	meta.lifecycleCheckpoint = previous;
+	const op = operation();
+	assert.equal((await f.preparation.prepare(op)).state, "accepted");
+	assert.deepEqual(meta.updateRecovery?.prior.lifecycleCheckpoints, [previous]);
+	assert.equal(meta.lifecycleCheckpoint.operationId, op.operationId);
+	assert.equal(meta.lifecycleCheckpoint.hostExited, true);
+	assert.equal(f.children[0]!.exitCode, 0, "actual executor exit still had to join");
+	const release = operation("global-update-release", { prepareId: op.operationId, prepareHash: op.payloadHash });
+	await f.preparation.release(release, op, async () => {}); // Fake native verifier, not production shutdown proof.
+	await f.settle();
+	await internals.start(f.chats[0]!.id, true); // A late host wake is not fresh user retry authority.
+	assert.equal(f.starts(), 4, "provider refusal is preserved, never retried by update recovery");
+});
+
+test("an old admission error does not discard healthy active work's update-owned resume", async (t) => {
+	const f = await fixture(t);
+	const meta = (
+		f.sessions as unknown as { metas: Map<string, { inputError?: string; updateRecovery?: unknown }> }
+	).metas.get(f.chats[0]!.id)!;
+	meta.inputError = "An earlier queue edit was not accepted";
+	const op = operation();
+	await f.preparation.prepare(op);
+	assert.equal(meta.updateRecovery, undefined, "a healthy active executor is not a failed run");
+	const release = operation("global-update-release", { prepareId: op.operationId, prepareHash: op.payloadHash });
+	await f.preparation.release(release, op, async () => {});
+	await f.settle();
+	assert.equal(f.starts(), 5);
 });
 
 test("a genuine ownership-save failure is pending/actionable, not a broken-chat success", async (t) => {

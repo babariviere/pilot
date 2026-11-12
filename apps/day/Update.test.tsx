@@ -217,17 +217,17 @@ test("an offline service holds updates, and Check again only reads", async () =>
 	expect(app.enabled("id:update-prepare")).toBe(false);
 });
 
-test("a newer service takes an app-only update that leaves every agent working", async () => {
+test("an app-only update pauses working chats and preserves earlier holds", async () => {
 	const app = await open("./ServiceNewer.tsx", desktop);
 	await app.waitFor("Pilot's service does not match this app");
 	expect(app.shows("This app 0.9.2 · Service 0.12.0")).toBe(true);
-	await confirm(app, "Update from 0.9.2 to 0.12.0?", ["Agents keep working; only this app restarts."]);
+	await confirm(app, "Update from 0.9.2 to 0.12.0?", ["Pauses two agents at a safe point, then resumes only them."]);
 	await app.waitFor("Updated to 0.12.0");
 	expect(app.shows("This app 0.12.0 · Service 0.12.0")).toBe(true);
 	expect(app.shows("Pilot's service is running")).toBe(true);
 	expect(app.shows("Paused for the update")).toBe(false);
-	expect(app.shows("Resumed")).toBe(false);
-	expect(app.shows("Working")).toBe(true);
+	expect(app.shows("Resumed")).toBe(true);
+	expect(app.shows("Left as you paused it")).toBe(true);
 });
 
 test("confirmations are one-use and exact; an oversized view is refused before anything pauses", async () => {

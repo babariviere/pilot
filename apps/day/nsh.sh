@@ -16,13 +16,13 @@ if [[ -z "$cli" && -x "$HOME/.nsh/bin/nsh" ]]; then
 	cli="$HOME/.nsh/bin/nsh"
 fi
 if [[ ! -x "$cli" ]]; then
-	echo 'nsh.sh: longbridge/nsh 0.4.0 is missing; set NSH_DAY_CLI to its installed executable' >&2
+	echo 'nsh.sh: longbridge/nsh 0.5.0 is missing; set NSH_DAY_CLI to its installed executable' >&2
 	exit 127
 fi
 cli="$(cd "$(dirname "$cli")" && pwd)/$(basename "$cli")"
 version="$("$cli" --version)"
-if [[ "$version" != 'nsh 0.4.0 (e626a8d)' ]]; then
-	echo 'nsh.sh: expected longbridge/nsh 0.4.0 (e626a8d); qualify another release before use' >&2
+if [[ "$version" != 'nsh 0.5.0 (f4d68f7)' ]]; then
+	echo 'nsh.sh: expected longbridge/nsh 0.5.0 (f4d68f7); qualify another release before use' >&2
 	exit 1
 fi
 export CARGO="$here/scripts/cargo"

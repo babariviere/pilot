@@ -33,7 +33,7 @@ REQUIRED = [
 ]
 
 # Public UI runtime release, not the unrelated command shell or a floating main.
-NSH_RELEASE = dict(tag="v0.4.0", source="e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3")
+NSH_RELEASE = dict(tag="v0.5.0", source="f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1")
 
 
 def subprocess_env(env=None):

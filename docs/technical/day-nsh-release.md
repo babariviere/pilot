@@ -1,5 +1,37 @@
 # Day Native Shell release qualification
 
+## Current release migration
+
+The app is moving as one closure to unmodified `longbridge/nsh` **v0.5.0**
+for its official app-update APIs. This is a source/tooling migration, not a
+release, installation, visible native acceptance or live update.
+
+- Annotated tag object: `729ea4c6810112160e890684e8a8d34528ec6da9`.
+- Peeled commit: `f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1`.
+- Official macOS arm64 archive SHA-256:
+  `e6722427b391b00cf7ec13137db9366e78d1e7a045f2933cf00b340365309d9d`.
+- Extracted CLI: `nsh 0.5.0 (f4d68f7)`, executable SHA-256
+  `694ab2f1e4b97871e42399ae55a916f4fb528df8319eb2c0965f9c68331ebdb8`.
+  Verification used an OS-temporary official distribution, not a CLI rebuild,
+  Homebrew/global replacement, source patch or dependency-cache edit.
+- Native, optional fixture, generated runner, engine, testing and platform
+  dependencies move together to `=0.5.0`. Published archive checksums live in
+  `apps/desktop/scripts/day_build_inputs.py`. Every used NSH archive was hashed
+  and its `.cargo_vcs_info.json` checked against the peeled tag above, including
+  new `nsh-updater`, `nsh-i18n` and `nsh-platform-apple` crates.
+
+The native macOS-host/all-target compatibility check and actual 0.5 CLI
+declaration/TSX check pass through global MBX. Native lifecycle/runtime tests
+and final source-matched package checks qualify their own scope separately.
+See [global updates](day-global-updates.md) for operation, process-evidence and
+signed/distribution gates. Upstream install swaps before quit and removes the
+old app after a successful swap. Its quit callbacks have only 200 ms total and
+cannot veto. They are not a save/drain or verified-successor rollback boundary.
+
+## Historical 0.4 release qualification
+
+The remainder records the earlier 0.4 evidence, not the current dependency pin.
+
 ## Release identity
 
 Checked 2026-11-10 against `longbridge/nsh`, not the unrelated `nuta/nsh`

@@ -360,11 +360,12 @@ fn offline_holds_updates_and_newer_takes_an_app_only_update() {
     let mut newer = UpdateDesk::new(UpdateScenario::Newer);
     assert_eq!(newer.view().state, ServiceState::Incompatible);
     let stages = start(&mut newer, view()).unwrap();
-    assert!(!stages.contains(&Stage::Pause));
+    assert!(stages.contains(&Stage::Pause));
+    assert!(stages.contains(&Stage::Resume));
     assert_eq!(play(&mut newer, stages), OutcomeStatus::Accepted);
     assert_eq!(
         states(&newer),
-        [AgentState::Working, AgentState::Working, AgentState::Held]
+        [AgentState::Resumed, AgentState::Resumed, AgentState::Held]
     );
     let restore = newer.view().restore.clone().unwrap();
     assert_eq!(newer.restored(&UpdateRef { id: restore.id }), Ok(()));

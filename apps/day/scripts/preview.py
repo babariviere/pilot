@@ -178,7 +178,7 @@ def build(args):
                 shutil.copytree(output, staged)
                 validate(staged / APP)
                 (staged / "preview.py").write_bytes(manager)
-                receipt = {"source": source, "data": "isolated-demo", "runtime": "nsh 0.4.0 (e626a8d)",
+                receipt = {"source": source, "data": "isolated-demo", "runtime": "nsh 0.5.0 (f4d68f7)",
                            "executable_sha256": hashlib.sha256(executable(staged / APP).read_bytes()).hexdigest()}
                 atomic_text(staged / "build.json", json.dumps(receipt, indent=2) + "\n")
                 staged.rename(destination)

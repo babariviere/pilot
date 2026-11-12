@@ -14,23 +14,26 @@ import tomllib
 import bundle_runtime as bundle
 
 TARGET = "aarch64-apple-darwin"
-CLI_VERSION = "nsh 0.4.0 (e626a8d)"
-CLI_SHA256 = "cc9676f7d8f763e6903e1b4b1d8f4f21376689e16381a6fe77e68861da106416"
+CLI_VERSION = "nsh 0.5.0 (f4d68f7)"
+CLI_SHA256 = "694ab2f1e4b97871e42399ae55a916f4fb528df8319eb2c0965f9c68331ebdb8"
 TRUST_FIELDS = ("public_key", "repository", "application_id", "build", "code_requirement")
 REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
-# crates.io 0.4.0 archive SHA-256s. Each archive's .cargo_vcs_info.json names
+# crates.io 0.5.0 archive SHA-256s. Each archive's .cargo_vcs_info.json names
 # the peeled release commit bundle.NSH_RELEASE["source"].
 NSH_CHECKSUMS = {
-    "nsh-base": "5298bbdc8874c2b5a1e6b99588cb120253d905d82628aed42ba799fecc5859bc",
-    "nsh-bundler": "da1cbeaddd09fe6a30a46c4caa957708ed7d2dae24e1c92f248800986dca3972",
-    "nsh-core": "171f17b402bedb0cead975d3abcefbf0e7963583fbdbf1dbcb03ef73ba11191d",
-    "nsh-dev": "838f6e989c192376e931b32e58a132352cee34aece15fc63421d477948ca9d36",
-    "nsh-engine": "a22f5b30bd9501790a6e487d07593e626117ce9b063fbf8ebdc7f44d1bd829c4",
-    "nsh-js": "79e175909211c71b49591e2c56d255802d7a8a61ea7a948f46c265c5e6fad291",
-    "nsh-macros": "08e449212388f9e8352235b45c1b07a9acc192e86a375e19643a6c0849d56580",
-    "nsh-package": "ad1562533ba286bad9a13f8790bc6a4c9ca6acc3977151bc513b5f6940909c11",
-    "nsh-platform-macos": "6e6f8b7c6e28d04c50c89c0d14482f66890d54edfed46418e2a7ba8c6d6786d6",
-    "nsh-testing": "aa9f8c137cbd4bb5ef50d25c9ce38c88e470713c0b1f2fce6a0283b44a6a457e",
+    "nsh-base": "c7bae08ed29b11f2595cf5b4ce406430b14493d24f07f2f4a9f068188fb35079",
+    "nsh-bundler": "b50ea11808a4253e9a821b287b06665b23deee9d2d5da8477bcce2258753817a",
+    "nsh-core": "6f93e2fa3cc4e18b393b7935d5551deba8330968f69f2a1b2ff1928cb125782a",
+    "nsh-dev": "fc746247e56b895185300d03794e5e0f5b2e8a9cc956f320fe97c5006725aaa6",
+    "nsh-engine": "4c0dda64a09a18ae35ba04be534f140d6f3cbcdb30a81b1926dc4718fefaefd2",
+    "nsh-i18n": "b4570770dee21d88d2c364e091aa64a53af38480a39d75ee0feec0811a2c0dec",
+    "nsh-js": "fda1d0dd5fff1c92ce576cae439317a0d30116a3d260c862eeeccb1dd6a3e713",
+    "nsh-macros": "eefb6467662ffb652997c7c252919488aa4723807e3a0f17fff3a8c01c29b22f",
+    "nsh-package": "0e292d17debb97b13445c7861dbeb8d39ea424d82426a1b11f60b2703f49b261",
+    "nsh-platform-apple": "c21f951bd6b8b53be180f15c9405bd4a952c9ff731d5776a754871e9169de1cf",
+    "nsh-platform-macos": "552bfc935c49f1f3fa72f7ad264f5794f65f73c972d943ec28eaa7d824a653ad",
+    "nsh-testing": "54ac8c9e9d8205b03748bf3485689b3ea3bd1f8f1b8fbc0b6f66ff19c67d655f",
+    "nsh-updater": "8b6df81dce14aadfd08fd2aaf9d6754e922e8537d360bc69dcb28a6e478921bd",
 }
 
 
@@ -82,7 +85,7 @@ def host_methods(day):
 def release_lock(path):
     packages = tomllib.loads(path.read_text())["package"]
     nsh = [item for item in packages if item["name"].startswith("nsh-")]
-    if not nsh or any(item["version"] != "0.4.0" or item.get("source") != REGISTRY
+    if not nsh or any(item["version"] != "0.5.0" or item.get("source") != REGISTRY
                       or item.get("checksum") != NSH_CHECKSUMS.get(item["name"]) for item in nsh):
         raise ValueError("Day lock must use only the exact unmodified NSH release")
     if any(item["name"].startswith("gpui") for item in packages):
@@ -142,7 +145,7 @@ def compiled_receipt(binary, expected, recipe, compiler, config, profile, env, c
 
 
 def compiled_capabilities(names):
-    # Exact NSH 0.4.0 Capabilities::to_json form. Explicit empty/false defaults
+    # Exact NSH 0.5.0 Capabilities::to_json form. Explicit empty/false defaults
     # are denials, not additional authority. Unknown keys still fail equality.
     return dict(host=names, network=dict(hosts=[], http=[]),
                 process=dict(execute=[], exit=False, env=[]), fs=dict(read=[], write=[]),
@@ -177,7 +180,7 @@ def compile_snapshot(checkout, work, output, expected, tools, inherited, product
     if execute([tools["cargo"], "--version"], cwd=checkout, env=env).split()[1] != "1.99.1":
         raise ValueError("Expected installed Cargo 1.99.1")
     if execute([tools["nsh"], "--version"], cwd=checkout, env=env).strip() != CLI_VERSION:
-        raise ValueError("Expected installed unmodified Longbridge NSH 0.4.0")
+        raise ValueError("Expected installed unmodified Longbridge NSH 0.5.0")
     if bundle.digest(tools["nsh"]) != CLI_SHA256:
         raise ValueError("Installed NSH release executable checksum mismatch")
     if not re.fullmatch(r"mbx \d+\.\d+\.\d+", execute([tools["mbx"], "--version"], cwd=checkout, env=env).strip()):

@@ -6,7 +6,7 @@
   coverage as production or packaging acceptance.
 - Use `./nsh.sh` and `scripts/cargo` for NSH and Rust commands.
   Use `scripts/typecheck.sh` for the workspace TypeScript check, not `pnpm day`.
-- Use the installed NSH 0.4.0 (`e626a8d`) distribution. Keep NSH dependencies
+- Use the verified NSH 0.5.0 (`f4d68f7`) distribution (`NSH_DAY_CLI` can select a local copy). Keep NSH dependencies
   on the pinned release and preserve Cargo locks. Do not rebuild or patch NSH,
   edit shared dependency caches, or install tools to work around a setup failure.
 - Keep entries beside `nsh.json`, which supplies their theme and capabilities.

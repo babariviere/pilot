@@ -167,14 +167,14 @@ function confirmLines(c: Confirmation): string[] {
 	const pauses = c.pauses;
 	const keeps = c.keeps;
 	if (pauses === null || pauses === undefined) {
-		lines.push("Pauses working agents at a safe point. Pilot cannot count them yet.");
+		lines.push("Pauses all chats. Pilot cannot count working agents yet.");
 	} else if (pauses > 0) {
 		lines.push(`Pauses ${agents(pauses)} at a safe point, then resumes only ${pauses === 1 ? "it" : "them"}.`);
-	} else if (c.kind === "app") {
-		lines.push("Agents keep working; only this app restarts.");
+	} else {
+		lines.push("Pauses all chats. No working agents need to resume.");
 	}
 	if (keeps === null || keeps === undefined) {
-		if (c.kind !== "app") lines.push("Agents you paused stay as you left them.");
+		lines.push("Agents you paused stay as you left them.");
 	} else if (keeps > 0)
 		lines.push(
 			`${sentence(agents(keeps))} you paused ${keeps === 1 ? "stays" : "stay"} as you left ${keeps === 1 ? "it" : "them"}.`,

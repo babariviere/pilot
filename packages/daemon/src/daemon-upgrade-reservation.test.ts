@@ -169,11 +169,11 @@ test("native global preparation binds original target/capture and exposes lookup
 		"legacy updater cannot supersede the global hold",
 	);
 	assert.equal((await f.request("cancel", { globalUpdate: op })).status, 409, "no unverified release authority");
-	assert.equal(
-		(await f.request("verify", { globalUpdate: op })).status,
-		409,
-		"pause receipt is not installation proof",
-	);
+	const verified = await f.request("verify", { globalUpdate: op });
+	assert.equal(verified.status, 200);
+	assert.deepEqual(verified.receipt.receipt, prepared.receipt);
+	assert.deepEqual(verified.receipt.blockers, []);
+	assert.equal(f.commands.length, commands, "fresh verification never re-enters checkpoint/cancellation");
 });
 
 test("update blocker GET pins identity and only observes work", async (t) => {

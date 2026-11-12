@@ -833,6 +833,41 @@ pub(crate) fn random_operation() -> Result<String, Error> {
     ))
 }
 
+/// The three preparation-only operations available to a verified native root.
+#[derive(Clone, Copy, Debug)]
+pub enum GlobalUpdateAction {
+    Prepare,
+    Inspect,
+    Verify,
+}
+
+/// Existing private boot-bound transport, not service management or install
+/// authority. The caller journals the exact operation before Prepare; Inspect
+/// and Verify never resend a retained effect. No retries or credential recovery.
+pub fn global_update(
+    location: &Location,
+    operation: &Value,
+    action: GlobalUpdateAction,
+) -> Result<Value, Error> {
+    if operation["kind"] != "global-update-prepare" || operation["targetId"] != "global-update" {
+        return Err(Error::Identity);
+    }
+    let owner = record(location)?;
+    if !owner["runtimeRoot"].is_string() || !owner["build"].is_object() {
+        return Err(Error::RuntimeUnverified);
+    }
+    signed_update(
+        location,
+        &owner,
+        &json!({"globalUpdate":operation}),
+        match action {
+            GlobalUpdateAction::Prepare => "prepare",
+            GlobalUpdateAction::Inspect => "inspect",
+            GlobalUpdateAction::Verify => "verify",
+        },
+    )
+}
+
 // Shared private boot-bound channel. Callers separately prove native service ownership.
 pub(crate) fn signed_update(
     location: &Location,
@@ -866,6 +901,8 @@ pub(crate) fn signed_update(
         .timeout(Duration::from_secs(
             if action == "prepare" && receipt["interrupt"] == true {
                 165
+            } else if action == "prepare" && receipt.get("globalUpdate").is_some() {
+                35
             } else {
                 15
             },
@@ -889,8 +926,20 @@ pub(crate) fn signed_update(
     }
     // The POST may already have checkpointed work. Nothing after this point
     // can turn a lost or unauthenticated ACK into a pre-effect refusal.
-    signed_response(response, &key, location, expected, &r, &nonce)
-        .map_err(|_| Error::CommitUncertain)
+    signed_response(
+        response,
+        &key,
+        location,
+        expected,
+        &r,
+        &nonce,
+        if receipt.get("globalUpdate").is_some() {
+            256 * 1024
+        } else {
+            16_384
+        },
+    )
+    .map_err(|_| Error::CommitUncertain)
 }
 
 fn signed_response(
@@ -900,15 +949,16 @@ fn signed_response(
     expected: &Value,
     r: &Value,
     nonce: &str,
+    limit: u64,
 ) -> Result<Value, Error> {
     use ring::hmac;
     let mut bytes = Vec::new();
     response
         .by_ref()
-        .take(16_385)
+        .take(limit + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| Error::RuntimeUnverified)?;
-    if bytes.len() > 16_384 {
+    if bytes.len() as u64 > limit {
         return Err(Error::RuntimeUnverified);
     }
     let envelope: Value = serde_json::from_slice(&bytes).map_err(|_| Error::RuntimeUnverified)?;
@@ -1344,6 +1394,194 @@ mod tests {
         }
         server.join().unwrap();
         assert!(!Path::new(expected["runtimeRoot"].as_str().unwrap()).exists());
+    }
+
+    // Real one-request HTTP/HMAC boundary. No live daemon, credentials, runtime
+    // files or service actions. Keep the listener alive to detect hidden retries.
+    fn global_exchange(
+        action: GlobalUpdateAction,
+        status: u16,
+        change: &str,
+        legacy: bool,
+    ) -> Result<Value, Error> {
+        use ring::hmac;
+        use sha2::{Digest, Sha256};
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::fd::AsRawFd;
+        let temp = crate::owned_tests::Temp::new();
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let location = Location {
+            home: temp.path().to_owned(),
+            port: listener.local_addr().unwrap().port(),
+            policy: Default::default(),
+        };
+        let owner = json!({"schema":1,"port":location.port,"boot":"a".repeat(64),
+            "secret":"b".repeat(64),"home":crate::transport::hex(&Sha256::digest(location.home.to_str().unwrap().as_bytes())),
+            "pid":42,"build":{"version":"1.2.3"},"runtimeRoot":temp.path().join("not-a-runtime")});
+        installer::write_new(
+            &location.home.join(".daemon-owner.json"),
+            &serde_json::to_vec(&owner).unwrap(),
+        )
+        .unwrap();
+        let operation = json!({"kind":"global-update-prepare","targetId":"global-update","operationId":"exact-original"});
+        let expected_operation = operation.clone();
+        let expected_owner = owner.clone();
+        let server_listener = listener.try_clone().unwrap();
+        let change = change.to_owned();
+        let server = std::thread::spawn(move || {
+            let mut ready = libc::pollfd {
+                fd: server_listener.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: valid live listener fd and one writable pollfd. A failed
+            // pre-dispatch assertion cannot leave this test waiting forever.
+            assert_eq!(unsafe { libc::poll(&mut ready, 1, 5_000) }, 1);
+            let (mut stream, _) = server_listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut first = String::new();
+            reader.read_line(&mut first).unwrap();
+            assert!(first.starts_with("POST /__pilot_runtime_update/v1 "));
+            let mut size = 0;
+            let mut proof = String::new();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line.trim().is_empty() {
+                    break;
+                }
+                if let Some((name, value)) = line.split_once(':') {
+                    if name.eq_ignore_ascii_case("content-length") {
+                        size = value.trim().parse::<usize>().unwrap();
+                    }
+                    if name.eq_ignore_ascii_case("x-pilot-update-proof") {
+                        proof = value.trim().to_owned();
+                    }
+                }
+            }
+            assert!((1..16_384).contains(&size));
+            let mut bytes = vec![0; size];
+            std::io::Read::read_exact(&mut reader, &mut bytes).unwrap();
+            let key = hmac::Key::new(hmac::HMAC_SHA256, &[0xbb; 32]);
+            let body = String::from_utf8(bytes).unwrap();
+            assert_eq!(
+                proof,
+                crate::transport::hex(
+                    hmac::sign(&key, format!("update/v1\n{body}").as_bytes()).as_ref()
+                )
+            );
+            let request: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(request["boot"], expected_owner["boot"]);
+            assert_eq!(
+                request["action"],
+                match action {
+                    GlobalUpdateAction::Prepare => "prepare",
+                    GlobalUpdateAction::Inspect => "inspect",
+                    GlobalUpdateAction::Verify => "verify",
+                }
+            );
+            assert_eq!(
+                request["receipt"],
+                if legacy {
+                    json!({"legacy":"exact"})
+                } else {
+                    json!({"globalUpdate":expected_operation})
+                }
+            );
+            if change == "drop" {
+                return;
+            }
+            let mut reply = expected_owner;
+            reply.as_object_mut().unwrap().remove("secret");
+            reply["nonce"] = request["nonce"].clone();
+            reply["receipt"] =
+                json!({"evidence":"r".repeat(if change == "oversize" { 270_000 } else { 20_000 })});
+            if matches!(
+                change.as_str(),
+                "boot" | "nonce" | "runtimeRoot" | "build" | "home" | "port"
+            ) {
+                reply[&change] = json!("different");
+            }
+            let body = serde_json::to_string(&reply).unwrap();
+            let mac = if change == "mac" {
+                "0".repeat(64)
+            } else {
+                crate::transport::hex(
+                    hmac::sign(&key, format!("update/v1\n{body}").as_bytes()).as_ref(),
+                )
+            };
+            let envelope = serde_json::to_string(&json!({"body":body,"mac":mac})).unwrap();
+            // Oversized replies may close while the server is still writing.
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{envelope}",
+                envelope.len()
+            );
+        });
+        let result = if legacy {
+            signed_update(&location, &owner, &json!({"legacy":"exact"}), "inspect")
+        } else {
+            global_update(&location, &operation, action)
+        };
+        server.join().unwrap();
+        listener.set_nonblocking(true).unwrap();
+        assert!(
+            matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock),
+            "no post-send retry"
+        );
+        result
+    }
+
+    #[test]
+    fn global_transport_preserves_exact_actions_and_larger_bounded_signed_evidence() {
+        for action in [
+            GlobalUpdateAction::Prepare,
+            GlobalUpdateAction::Inspect,
+            GlobalUpdateAction::Verify,
+        ] {
+            let receipt = global_exchange(action, 200, "valid", false).unwrap();
+            assert_eq!(receipt["evidence"].as_str().unwrap().len(), 20_000);
+        }
+        assert_eq!(
+            global_exchange(GlobalUpdateAction::Inspect, 200, "valid", true),
+            Err(Error::CommitUncertain),
+            "legacy response limit is unchanged"
+        );
+    }
+
+    #[test]
+    fn global_transport_post_send_failures_remain_unknown_without_retries() {
+        for change in [
+            "drop",
+            "boot",
+            "nonce",
+            "runtimeRoot",
+            "build",
+            "home",
+            "port",
+            "mac",
+            "oversize",
+        ] {
+            assert_eq!(
+                global_exchange(GlobalUpdateAction::Prepare, 200, change, false),
+                Err(Error::CommitUncertain),
+                "{change}"
+            );
+        }
+        for status in [401, 500] {
+            assert_eq!(
+                global_exchange(GlobalUpdateAction::Prepare, status, "valid", false),
+                Err(Error::CommitUncertain)
+            );
+        }
+        assert_eq!(
+            global_exchange(GlobalUpdateAction::Prepare, 409, "valid", false),
+            Err(Error::ActiveWork)
+        );
     }
 
     #[test]

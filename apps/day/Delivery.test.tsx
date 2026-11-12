@@ -50,6 +50,19 @@ async function openCsv(app: Awaited<ReturnType<typeof ready>>) {
 	await app.waitFor("id:your-check");
 }
 
+// NSH 0.5 rejects a covered press before dispatching any event. If a lower
+// control is behind the fixture's toolbar, take the user's scroll step, then
+// press it visibly. Never retry a dispatched action or suppress another error.
+async function pressCheck(app: Awaited<ReturnType<typeof ready>>, selector: string) {
+	try {
+		await app.press(selector);
+	} catch (error) {
+		if ((error as { code?: string }).code !== "ERR_NSH_TEST_COVERED") throw error;
+		await app.scroll("id:your-check", 2_000);
+		await app.press(selector);
+	}
+}
+
 test("To check lists delivered results; the page shows the report, outputs and four separate lines", async () => {
 	const app = await ready();
 	expect(app.shows("Explain CSV exports in the guide")).toBe(true);
@@ -65,7 +78,7 @@ test("To check lists delivered results; the page shows the report, outputs and f
 	expect(app.texts().includes("Not tracked.")).toBe(true);
 	expect(app.texts().includes("Not checked yet.")).toBe(true);
 	// Reminders and reading send nothing.
-	await app.press("id:reminder-report");
+	await pressCheck(app, "id:reminder-report");
 	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
 	await app.keyboard.press("escape");
 	await app.waitFor("id:to-check");
@@ -75,23 +88,23 @@ test("To check lists delivered results; the page shows the report, outputs and f
 test("Mark done asks first while the PR is open, then sends once; Reopen sends once", async () => {
 	const app = await ready();
 	await openCsv(app);
-	await app.press("id:mark-done");
+	await pressCheck(app, "id:mark-done");
 	await app.waitFor("id:done-confirm");
 	expect(
 		app.shows(
 			"PR #431 is not merged. Done means you accept the result now. Pilot won't merge it, and it won't count as released.",
 		),
 	).toBe(true);
-	await app.press("id:done-cancel");
+	await pressCheck(app, "id:done-cancel");
 	expect(app.shows("id:done-confirm")).toBe(false);
 	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
-	await app.press("id:mark-done");
-	await app.press("id:done-anyway");
+	await pressCheck(app, "id:mark-done");
+	await pressCheck(app, "id:done-anyway");
 	await app.waitFor("id:delivery-done");
 	expect(app.texts().includes("Done. You accepted this result.")).toBe(true);
 	expect(app.texts().includes("Not tracked.")).toBe(true);
 	expect(counts(app)).toBe("Sends: 1 · Checks: 0");
-	await app.press("id:delivery-reopen");
+	await pressCheck(app, "id:delivery-reopen");
 	await app.waitFor("id:mark-done");
 	expect(app.texts().includes("Open again. Not checked yet.")).toBe(true);
 	expect(counts(app)).toBe("Sends: 2 · Checks: 0");
@@ -100,7 +113,7 @@ test("Mark done asks first while the PR is open, then sends once; Reopen sends o
 test("a newer result closes a Done that waits for confirmation", async () => {
 	const app = await ready();
 	await openCsv(app);
-	await app.press("id:mark-done");
+	await pressCheck(app, "id:mark-done");
 	await app.waitFor("id:done-confirm");
 	await app.press("New result");
 	await app.waitFor("This result changed since you asked. Cancel and look again.");
@@ -111,7 +124,7 @@ test("a newer result closes a Done that waits for confirmation", async () => {
 test("Send back needs a note, sends its exact words once and keeps them until then", async () => {
 	const app = await ready();
 	await openCsv(app);
-	await app.press("id:send-back-open");
+	await pressCheck(app, "id:send-back-open");
 	await app.waitFor("id:send-back-note");
 	expect(app.enabled("id:send-back")).toBe(false);
 	const note = "  Large accounts still time out 👩🏽‍💻\nTry 50k rows.  ";
@@ -122,10 +135,10 @@ test("Send back needs a note, sends its exact words once and keeps them until th
 	await app.keyboard.press("escape");
 	await app.waitFor("id:to-check");
 	await app.press(CSV_ROW);
-	await app.press("id:send-back-open");
+	await pressCheck(app, "id:send-back-open");
 	expect(app.value("id:send-back-note")).toBe(note);
 	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
-	await app.press("id:send-back");
+	await pressCheck(app, "id:send-back");
 	await app.waitFor("id:delivery-sent-back");
 	expect(app.texts().includes("Sent back with your note.")).toBe(true);
 	expect(app.texts().includes("Has your note. No new result yet.")).toBe(true);
@@ -140,8 +153,8 @@ test("a lost answer stays not confirmed with Check only; Check reads once and no
 	const app = await ready();
 	await openCsv(app);
 	await app.press("Lose next answer");
-	await app.press("id:mark-done");
-	await app.press("id:done-anyway");
+	await pressCheck(app, "id:mark-done");
+	await pressCheck(app, "id:done-anyway");
 	await app.waitFor("id:delivery-unknown");
 	expect(app.texts().includes("Not confirmed. Check only.")).toBe(true);
 	expect(app.shows("id:mark-done")).toBe(false);
@@ -160,7 +173,7 @@ test("rapid presses while an answer is on its way send once", async () => {
 	await app.waitFor("id:your-check");
 	expect(app.texts().includes("None linked.")).toBe(true);
 	await app.press("Hold answers");
-	await app.press("id:mark-done");
+	await pressCheck(app, "id:mark-done");
 	await app.waitFor("role:button[Sending…]");
 	expect(app.enabled("id:send-back-open")).toBe(false);
 	await app.press("Release answer");
@@ -171,9 +184,9 @@ test("rapid presses while an answer is on its way send once", async () => {
 test("a save and reopen keeps the page and the unsent note, and sends nothing", async () => {
 	const app = await ready();
 	await openCsv(app);
-	await app.press("id:reminder-report");
+	await pressCheck(app, "id:reminder-report");
 	await app.waitFor("id:reminder-ticked-report");
-	await app.press("id:send-back-open");
+	await pressCheck(app, "id:send-back-open");
 	await app.type("id:send-back-note", "Keep exact words");
 	await app.press("Save and reopen");
 	await app.waitFor("id:send-back-note");
@@ -187,7 +200,7 @@ test("a save and reopen keeps the page and the unsent note, and sends nothing", 
 test("a newer result starts with no reminder ticked", async () => {
 	const app = await ready();
 	await openCsv(app);
-	await app.press("id:reminder-report");
+	await pressCheck(app, "id:reminder-report");
 	await app.waitFor("id:reminder-ticked-report");
 	await app.press("New result");
 	await app.waitFor("id:reminder-report");
@@ -363,8 +376,9 @@ test("a newer result or a failed read of the result hides the source at once", a
 test("a save and reopen keeps the note, drops a shown source and reads nothing again", async () => {
 	const app = await ready();
 	await openCsv(app);
-	await app.press("id:send-back-open");
+	await pressCheck(app, "id:send-back-open");
 	await app.type("id:send-back-note", "Keep exact words 💬");
+	await app.scroll("id:delivery", -2_000);
 	await app.press(`id:output-source-${HTML}`);
 	await app.waitFor("id:artifact-source-text");
 	await app.press("Save and reopen");

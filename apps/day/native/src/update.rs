@@ -69,7 +69,7 @@ pub enum UpdateKind {
     /// Registers Pilot's service, with the user's explicit consent.
     #[default]
     Register,
-    /// Updates this app only. The service and its agents keep running.
+    /// Updates this app only. All chats pause first; the service stays installed.
     App,
     /// Updates the service only. This app keeps running.
     Service,
@@ -521,7 +521,10 @@ fn labels(kind: UpdateKind) -> &'static [&'static str] {
         UpdateKind::App => &[
             "Check the update",
             "Save drafts and where you are",
+            "Pause all chats",
             "Update the app",
+            "Start it and check it",
+            "Resume only chats paused for this update",
             "Restore where you were",
         ],
         UpdateKind::Service => &[
@@ -553,8 +556,8 @@ fn step_of(kind: UpdateKind, stage: Stage) -> Option<usize> {
         (K::Register, Start) => 1,
         (_, Verify | Stop(Stopped::Signature)) => 0,
         (_, Save | Stop(Stopped::Save)) => 1,
-        (K::App, Replace) => 2,
-        (K::App, Restore) => 3,
+        (K::App, Resume) => 5,
+        (K::App, Restore) => 6,
         (_, Pause | Stop(Stopped::Jobs)) => 2,
         (_, Replace) => 3,
         (_, Start) => 4,
@@ -721,7 +724,7 @@ impl UpdateDesk {
 
     fn counts(&self, kind: UpdateKind) -> (Option<u32>, Option<u32>) {
         let count = |state| self.view.agents.iter().filter(|a| a.state == state).count() as u32;
-        let pauses = if matches!(kind, UpdateKind::Service | UpdateKind::Both) {
+        let pauses = if kind != UpdateKind::Register {
             count(AgentState::Working)
         } else {
             0
@@ -851,7 +854,7 @@ impl UpdateDesk {
             (UpdateScenario::Refused, _, 1) => vec![Verify, Save, Stop(Stopped::Save)],
             (UpdateScenario::Refused, _, _) => vec![Verify, Save, Pause, Stop(Stopped::Jobs)],
             (UpdateScenario::Trouble, _, _) => vec![Verify, Save, Pause, Replace, Lose],
-            (_, UpdateKind::App, _) => vec![Verify, Save, Replace, Restore],
+            (_, UpdateKind::App, _) => vec![Verify, Save, Pause, Replace, Start, Resume, Restore],
             (_, UpdateKind::Service, _) => vec![Verify, Save, Pause, Replace, Start, Resume],
             // The service resumes the agents it paused on its own; the new
             // window's acknowledgement only says its view was shown.
@@ -967,7 +970,11 @@ impl UpdateDesk {
             }
             Stage::Start => {
                 self.mark(at, UpdateStepState::Now);
-                self.view.service = self.version();
+                if kind == UpdateKind::App {
+                    self.view.app = self.version();
+                } else {
+                    self.view.service = self.version();
+                }
             }
             Stage::Restore => {
                 self.mark(at, UpdateStepState::Now);
@@ -1173,7 +1180,7 @@ impl UpdateDesk {
         self.all_done();
         let message = if kind == UpdateKind::App {
             format!(
-                "Updated to {}. Pilot checked that the new version is the one running. Agents kept working.",
+                "Updated to {}. Pilot checked the app version and resumed only chats paused for this update.",
                 self.view.app
             )
         } else {

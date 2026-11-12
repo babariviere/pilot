@@ -42,6 +42,15 @@ fn entry() -> PathBuf {
             std::fs::copy(&path, dir.join(&name)).unwrap();
         }
     }
+    // Shared chrome imports its packaged SVGs. Keep this isolated source copy
+    // complete rather than removing icons or granting filesystem capabilities.
+    std::fs::create_dir(dir.join("icons")).unwrap();
+    for file in std::fs::read_dir(app.join("icons")).unwrap() {
+        let path = file.unwrap().path();
+        if path.extension().is_some_and(|e| e == "svg") {
+            std::fs::copy(&path, dir.join("icons").join(path.file_name().unwrap())).unwrap();
+        }
+    }
     std::fs::write(
         dir.join("nsh.json"),
         json!({"name":"Pilot","id":"dev.pilot.day","theme":"theme.json","capabilities":{"host":METHODS}})
@@ -268,7 +277,7 @@ fn uncounted_agents_say_unknown_and_a_refused_confirmation_changes_nothing() {
     open_update(&mut app, "Update ready");
     app.press("id:update-prepare").unwrap();
     wait(&mut app, "Update from 1.0 to 2.0?");
-    assert!(app.shows("Pauses working agents at a safe point. Pilot cannot count them yet."));
+    assert!(app.shows("Pauses all chats. Pilot cannot count working agents yet."));
     assert!(app.shows("Agents you paused stay as you left them."));
     for zero in ["Pauses no agents", "no agents", "Agents keep working"] {
         assert!(!app.shows(zero), "an uncounted pause shows as {zero}");
@@ -404,7 +413,8 @@ fn a_flush_saves_where_the_user_is_exactly_and_answers_only_the_newest_request()
     app.type_text("id:question", "Weekends?").unwrap();
     let question = "Weekends? 👩🏽‍💻";
     app.type_text("id:question", " 👩🏽‍💻").unwrap();
-    app.scroll("role:button[New]", Points(400.0)).unwrap();
+    // The global New action is now outside the page's scroll owner.
+    app.scroll("id:question", Points(400.0)).unwrap();
 
     // Two requests in a row: the older one is replaced, never answered.
     root.flush(6);

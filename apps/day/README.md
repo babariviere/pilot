@@ -15,7 +15,8 @@ to prepare the real native app without installing or updating it.
 ## Run
 
 Prerequisites: macOS arm64, Command Line Tools, Rust 1.99.1, installed
-NSH 0.4.0 (`e626a8d`), and mise-managed `mbx` on `PATH`. Prepare the
+NSH 0.5.0 (`f4d68f7`), and mise-managed `mbx` on `PATH`. `NSH_DAY_CLI` can
+select a local official distribution without changing a global installation. Prepare the
 workspace dependencies before running checks. Cargo may download locked crates.
 
 From the repository root:

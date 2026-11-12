@@ -15,10 +15,10 @@ path = "src/lib.rs"
 [dependencies]
 # The TSX app's read model, rules and mock coordinator (apps/day/native), used as plain Rust.
 pilot-day-native = { path = "../../native" }
-# Unmodified upstream v0.4.0 from crates.io, the same release as the TSX app.
-nsh-core = "=0.4.0"
-nsh-base = "=0.4.0"
+# Unmodified upstream v0.5.0 from crates.io, the same release as the TSX app.
+nsh-core = "=0.5.0"
+nsh-base = "=0.5.0"
 
 [dev-dependencies]
-nsh-engine = { version = "=0.4.0", default-features = false }
-nsh-testing = { version = "=0.4.0", default-features = false }
+nsh-engine = { version = "=0.5.0", default-features = false }
+nsh-testing = { version = "=0.5.0", default-features = false }

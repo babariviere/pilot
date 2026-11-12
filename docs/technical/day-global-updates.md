@@ -37,13 +37,79 @@ not another installer or service manager.
   prove installation was not entered. Authorization is durable before thawing.
   Preexisting update/input/sleep/subscription holds, mission controls and later
   Stop still win. A lost release reply is original-operation lookup only.
+- During an admitted update, failed executor-free metadata (`failure` or
+  `inputError`) gets an operation-owned `updateRecovery` record. Recovery clears
+  stale working/initializing/preparing flags, keeps the clone recipe as data,
+  and preserves errors, queued intent, history, Stop, holds and old checkpoints.
+  A retained native hold binds this recovery before cold metadata loading.
+  Reconciliation is storage-only, never a provider call, workspace recreation,
+  model restart, canceled-job retry or repeat of the original update effect.
+- A historical failed checkpoint alone is work uncertainty, not a live process
+  census. Its exact record stays saved, but does not create a permanent process
+  veto after update-owned reconciliation. Live executors still require a fresh
+  checkpoint/exit, with prior uncertain ownership saved first. Current-operation
+  unproven shutdown, independent jobs/children and other resource blockers remain
+  blockers. State reconciliation never supplies the missing process proof.
 
-The daemon exposes prepare/lookup through its existing authenticated native
+The daemon exposes prepare/lookup/fresh verification through its authenticated native
 runtime-owner channel (`/__pilot_runtime_update/v1`, `receipt.globalUpdate`).
 There is no agent/session or TSX route and no new credential. The native verified
-release/install binding is deliberately not configured yet; `cancel`/`verify`
-cannot manufacture one. Legacy reservations cannot supersede a global hold.
-No current app entry invokes this new preparation.
+release binding is deliberately not configured yet. `verify` reads fresh
+resource evidence under the original hold; it does not pause, cancel, install
+or release anything. `cancel` cannot manufacture release authority. Legacy
+reservations cannot supersede a global hold. No current app entry invokes this
+new preparation automatically.
+
+## Official app adapter
+
+`apps/day/native/src/host/official_update.rs` uses the public unmodified 0.5.0
+`Config::check`, `Download`, `Installation::install` and NSH restart APIs. No
+local code swaps the app. Fresh legacy-helper app effects are disabled;
+historical capture/recovery readers stay.
+
+Its exact inputs come from the trusted native owner, not TSX or a path/JSON hint:
+
+- The running code-sealed NSH `.app`, compiled existing `Trust`, and its own
+  `Contents/Resources/nsh/assets/nsh-updater.json`. Its public key must equal
+  the compiled key, even for GitHub updates. The candidate cannot silently
+  change the key or update source.
+- Official signed NSH `latest.json` and detached signature. A signed
+  `pilot: { source, build }` extension pins the exact commit and numeric GUI
+  build in addition to NSH semver. The platform asset needs a hash and size,
+  limited here to 1 GiB.
+- The matching ZIP app archive. ZIP is the initial app distribution format so
+  existing limited, link-safe extraction can preflight it before the official
+  installer runs. Preflight checks native code policy, source stamps, GUI
+  build, semver and unchanged NSH source/key. A private checked copy protects
+  against replacing the incoming path after verification.
+- The original signed NSH manifest/signature and ZIP for the **actual running**
+  version. `VerifiedRollback` checks source/build/version, original config,
+  code seal and signature independently. Before any pause/install effect it
+  fsyncs the archive and signed inputs outside the `.app` and OS-temp preflight
+  storage, beside the existing native command journal. It never overwrites a
+  prior backup operation.
+- An opaque `ClosedWindow`, created only by the native `WindowOwner` after
+  exact attached-input/preedit capture, current-generation form save, seal,
+  host join and engine disposal. Stored JSON, a VM acknowledgement and a quit
+  callback cannot construct it. This is close evidence, not user update consent;
+  explicit target confirmation and operation binding still belong to the root.
+
+Only then can the adapter journal an immutable operation, enter global pause,
+obtain fresh boot/HMAC-bound resource evidence and enter the official installer.
+An additional native-only verifier must independently qualify process safety
+for that exact fresh observation. Empty blockers, a root/group exit or a pause
+ACK cannot implement it. An owner without that evidence must return unavailable.
+It saves `install-entered` before the swap and checks the installed target
+afterwards. All native work runs off AppKit. It never replaces a daemon.
+
+Restart consumes a fresh in-memory result once. A fresh pre-exit rollback uses
+the same official installer and independently verified old archive, checks the
+old app and requests its restart. Saved records cannot reconstruct these
+execution handles. Backups survive lost replies and process exit. Startup,
+cold recovery execution and selective global release still need the verified
+native binding below. Installed/restart-requested does **not** mean the successor
+started or chats resumed. The ordinary root does not yet select an official
+target or enter this adapter. No actual app was updated by these checks.
 
 ## Separate evidence and remaining work
 
@@ -56,16 +122,18 @@ evidence must not be relabeled as a broken-chat veto or silently cleared.
 
 The following native/distribution gates remain:
 
-1. Wire actual all-form capture, including preedit, through the existing fresh
-   flush generation, exact-source SavedWindow journal, seal and awaited close.
-   Finish capture, global pause/cancellation and close **before** NSH installation.
-2. Integrate the official tagged unmodified NSH app installer, with matching
-   CLI, core, platform, engine and testing versions and verified archive/crate
-   checksums. No global CLI replacement, cache patch or NSH fork.
-3. Retain an install-entered operation before the official swap. Reopen only
+1. Bind the existing explicit confirmation/root selection to the official
+   adapter and verified distribution inputs above. Keep actual all-form capture,
+   preedit, global pause/cancellation and close **before** installation.
+2. Finish native successor verification, fresh restored-view acknowledgement
+   and operation-bound selective release. Hello, GET, cached status and opening
+   an app never release work. No global CLI replacement, cache patch or NSH fork.
+3. Qualify interruption and cold rollback with actual signed distributions.
+   Install entry is durable before the official swap. Reopen only
    looks up that original operation; it never downloads/installs/resets/retargets
    from a retained hint. Verify actual successor versions and startup/capture
-   restoration. Qualify interruption and rollback separately from a rename.
+   restoration. A saved backup is recovery data, not authority to re-enter an
+   uncertain rollback/install. Qualify recovery separately from a rename.
 4. Supply verified GUI-bundled daemon executable/runtime identity and existing
    service/profile ownership through the daemon-handoff adapter. That adapter
    owns exact old-process/lease exit, one successor start, target verification
@@ -79,6 +147,11 @@ The following native/distribution gates remain:
    active/coordinator/queued/already-held/stopped work, jobs, broken peers, target
    versions, lost replies, durable cold reopen and selective resume. Unconfigured
    DEVELOPMENT inputs are not a signed distribution or production acceptance.
+7. Add the separately confirmed Force option. Normal capture is still mandatory
+   in this increment; no existing confirmation implies accepted state loss.
+   Force must bind the exact target, warn about unsaved UI and unfinished agent
+   work, durably record accepted loss and preserve durable history. It cannot
+   waive signature/trust, safe shutdown, permissions or Unknown/no-replay rules.
 
 ## Tagged NSH API verification
 
@@ -86,7 +159,9 @@ On 2026-11-12, the annotated `longbridge/nsh` release `v0.5.0` resolved to
 `f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1`. Its official macOS arm64 archive
 is `nsh-macos-arm64.tar.gz`, published SHA-256
 `e6722427b391b00cf7ec13137db9366e78d1e7a045f2933cf00b340365309d9d`.
-Current app dependencies and installed CLI remain 0.4.0 until checked migration.
+App dependencies, generated runner seed, engine/testing/platform and tooling
+now pin 0.5.0 together. The global CLI was not replaced. Checks used the actual
+verified official distribution in an OS-temporary directory.
 
 The tag's [updater flow][updater] uses `nsh-updater::Installation::install`, then
 NSH restart. It swaps **before** quit. The tag's quit cleanup cannot veto exit
@@ -102,7 +177,15 @@ forked credential-free IPC peers, real OS exit and durable operation records.
 It covers healthy work beside unresponsive/errored/incomplete peers, exact-byte
 capture-surrogate preservation, fences, lost replies, lookup-only reopen,
 native-verifier failure, actual ownership-save/exit failures and selective
-recovery. The surrogate is **not** a native IME/preedit test. Existing lifecycle,
-pause, reservation, mission-control, power and session tests remain relevant.
+recovery. The surrogate is **not** a native IME/preedit test. Official adapter
+unit tests exercise actual NSH signature/download rules, durable backup I/O,
+and real official install/rollback on harmless temporary **directories**, not
+code-signed `.app` payloads. Existing lifecycle, pause, reservation, mission-control,
+power and session tests remain relevant. Headless UI tests do not prove native
+appearance, input, IME or production update acceptance.
+
+NSH 0.5 headless presses now honor actual occlusion. Delivery tests explicitly
+scroll the page before pressing its lower controls, rather than pressing through
+the fixture's diagnostic toolbar. Production layout and assertions are unchanged.
 
 [updater]: https://github.com/longbridge/nsh/blob/f4d68f7f9f31eb7b3ecc8a4cbc31096d5c6238a1/docs/dev/updater.md

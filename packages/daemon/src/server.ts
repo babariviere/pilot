@@ -645,6 +645,7 @@ export function createDaemonServer(
 			const operation = value.globalUpdate as DurableOperation;
 			if (action === "inspect") return (await globalUpdate.lookup(operation)) ?? null;
 			if (action === "prepare") return globalUpdate.prepare(operation);
+			if (action === "verify") return globalUpdate.verify(operation);
 			throw new Conflict("Native verified global update release is not configured");
 		}
 		if (globalUpdate?.frozen) throw new Conflict("Global update owns admissions; inspect the original operation");
