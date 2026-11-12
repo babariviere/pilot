@@ -13,6 +13,7 @@
 include!("support/intake_fixture.rs");
 use nsh_core::prelude::*;
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 /// A copy of the app's sources whose `nsh.json` declares the bridge's exact
 /// method names, and nothing else, as a packaged connected window would.
@@ -236,6 +237,119 @@ fn delivered_task_checked_from_its_mission_sent_back_once_and_a_lost_answer_stay
         (stats["posts"].as_u64(), stats["lookups"].as_u64()),
         (Some(3), Some(1))
     );
+    close_window(app, bridge);
+    let _ = std::fs::remove_dir_all(entry.parent().unwrap());
+}
+
+/// A host whose browser opener only records the addresses it is handed.
+fn recording(f: &Fixture, opened: &Arc<Mutex<Vec<String>>>) -> NativeHost {
+    let source: Source = serde_json::from_value(f.info["source"].clone()).unwrap();
+    let opened = opened.clone();
+    let options = pilot_day_native::host::Options {
+        url_opener: Some(Arc::new(move |url| {
+            opened.lock().unwrap().push(url.into());
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    f.host_for_options(source, options)
+}
+
+#[test]
+fn a_press_opens_the_exact_pull_request_once_and_ticked_reminders_are_saved_with_the_window() {
+    let mut f = Fixture::with_daemon("day-delivery.ts");
+    let entry = entry();
+    let task = f.info["task"].clone();
+    let mission = task["missionId"].as_str().unwrap().to_owned();
+    let task_id = task["taskId"].as_str().unwrap().to_owned();
+    let key = format!(
+        "task/{}/{mission}/{task_id}",
+        task["projectId"].as_str().unwrap()
+    );
+    let opened = Arc::new(Mutex::new(Vec::new()));
+
+    // Without an opener the link is text only.
+    let bridge = f.bridge();
+    let mut app = open(&entry, &bridge);
+    wait(&mut app, &format!("id:mission-{mission}"));
+    app.press(&format!("id:mission-{mission}")).unwrap();
+    wait(&mut app, &format!("id:check-result-{task_id}"));
+    app.press(&format!("id:check-result-{task_id}")).unwrap();
+    wait(&mut app, "id:your-check");
+    wait(
+        &mut app,
+        "Pilot cannot open links in this window. Copy one; opening it records nothing.",
+    );
+    let page = f.call(&bridge, "day.delivery.read", task.clone())["value"]["snapshot"].clone();
+    let pr = page["pullRequests"][0].clone();
+    let button = format!("id:output-open-{}", pr["id"].as_str().unwrap());
+    assert!(!has(&app, &button));
+    close_window(app, bridge);
+
+    let bridge = Bridge::new(DayRoot::new(recording(&f, &opened)));
+    let mut app = open(&entry, &bridge);
+    wait(&mut app, &format!("id:mission-{mission}"));
+    app.press(&format!("id:mission-{mission}")).unwrap();
+    wait(&mut app, &format!("id:check-result-{task_id}"));
+    app.press(&format!("id:check-result-{task_id}")).unwrap();
+    wait(&mut app, &button);
+    let baseline = f.stats("stats");
+    app.press(&button).unwrap();
+    wait(
+        &mut app,
+        "Sent PR #1 to your browser. Nothing was recorded.",
+    );
+    assert_eq!(
+        *opened.lock().unwrap(),
+        vec![pr["pullRequest"]["url"].as_str().unwrap().to_owned()]
+    );
+    // Opening is never the user's check.
+    wait_text(&mut app, "Not checked yet.");
+    assert!(has(&app, "id:mark-done"));
+
+    // The link moved after the page read it: nothing opens, and the page reads it again.
+    f.stats("output-url:https://github.com/example/repo/pull/2");
+    app.press(&button).unwrap();
+    wait(
+        &mut app,
+        "This link changed since Pilot read the result. Nothing opened. Look at it again.",
+    );
+    wait_text(&mut app, "https://github.com/example/repo/pull/2");
+    assert_eq!(opened.lock().unwrap().len(), 1);
+
+    // A ticked reminder is saved with the window, exactly, and sends nothing.
+    app.press("id:reminder-report").unwrap();
+    wait(&mut app, "id:reminder-ticked-report");
+    flush(&mut app, &bridge);
+    close_window(app, bridge);
+    // Read the saved window, then join that host so it lets go of the journal
+    // before the next host opens it. A dropped host exits later on its own.
+    let host = f.host();
+    let saved = host.saved_window().unwrap();
+    assert_eq!(host.close().recv_blocking().unwrap(), Ok(()));
+    assert_eq!(
+        saved.view["reminders"],
+        json!([format!(
+            "{key}#{}\nreport",
+            page["deliveryId"].as_str().unwrap()
+        )])
+    );
+
+    // A cold reopen hands nothing to the browser again.
+    let bridge = Bridge::new(DayRoot::new(recording(&f, &opened)));
+    let mut app = open(&entry, &bridge);
+    wait(&mut app, &format!("id:mission-{mission}"));
+    app.wait(Duration::from_millis(300)).unwrap();
+    assert_eq!(
+        opened.lock().unwrap().len(),
+        1,
+        "navigation is never replayed"
+    );
+    let stats = f.stats("stats");
+    assert_eq!(stats["posts"], baseline["posts"]);
+    assert_eq!(stats["lookups"], baseline["lookups"]);
+    assert_eq!(stats["messages"], json!([]));
+    assert_eq!(stats["external"], 0);
     close_window(app, bridge);
     let _ = std::fs::remove_dir_all(entry.parent().unwrap());
 }

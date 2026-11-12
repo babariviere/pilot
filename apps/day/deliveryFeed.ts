@@ -13,6 +13,7 @@ import {
 	type DeliveredWork,
 	type DeliveryOperation,
 	type DeliveryReply,
+	openDeliveryOutput,
 	readDelivery,
 	readSavedDeliveries,
 	type VerificationSubject,
@@ -74,6 +75,10 @@ export type DeliveryView = {
 	saved: "reading" | "live" | "unavailable";
 	/** The project this window's results belong to, as the native root chose it. "" before a read. */
 	projectId: string;
+	/** Whether this window can show a result's web links in the browser, as the native root last said. */
+	webLinks: boolean;
+	/** Links on their way to the browser, as "<result key>#<resource id>". */
+	opening: string[];
 };
 
 /** What a command or a Check did, for the user. */
@@ -82,6 +87,12 @@ export type DeliveryResult = {
 	message: string;
 	operationId: string | null;
 };
+
+/** What one press on an output link did. Opening never counts as the user's check. */
+export type OpenResult = { status: "opened" | "refused" | "unknown"; message: string };
+
+/** A pull request linked to a result, as the page shows it. */
+export type OutputLink = DeliveredWork["pullRequests"][number];
 
 /** The results' source. The connected window has one; the mock window has none. */
 export interface DeliverySource {
@@ -98,6 +109,12 @@ export interface DeliverySource {
 	assess(shown: DeliveredWork, action: Assessment, note: string): Promise<DeliveryResult>;
 	/** Reads one unsettled command's saved receipt. Never sends the command again. */
 	check(operationId: string): Promise<DeliveryResult>;
+	/**
+	 * Shows one web link of exactly the result shown in the browser, once, for
+	 * one press. Native reads the result again first; a changed link opens
+	 * nothing. Nothing is saved, sent or retried, and it is never a check.
+	 */
+	open(shown: DeliveredWork, link: OutputLink): Promise<OpenResult>;
 	dispose(): void;
 }
 
@@ -156,6 +173,45 @@ export function refusedResult(refusal: Refusal): DeliveryResult {
 		default:
 			return r("rejected", "Pilot could not send this. Nothing was sent.");
 	}
+}
+
+/** What a refused open means. Only an attempt whose answer is lost may have opened. */
+export function refusedOpen(refusal: Refusal): OpenResult {
+	const r = (message: string): OpenResult => ({ status: "refused", message });
+	switch (refusal) {
+		case "lost":
+		case "unknown":
+			return {
+				status: "unknown",
+				message: "Pilot asked your browser to open it but did not hear back. It will not try again by itself.",
+			};
+		case "stale":
+			return r("This link changed since Pilot read the result. Nothing opened. Look at it again.");
+		case "busy":
+		case "closed":
+			return r("Pilot is closing. Nothing opened.");
+		case "offline":
+			return r("Pilot could not reach its service to check this link. Nothing opened.");
+		case "identity":
+			return r("The Pilot service changed. Open Pilot again. Nothing opened.");
+		case "invalid":
+			return r("Pilot only opens web links. Nothing opened.");
+		case "denied":
+		case "unavailable":
+			return r("Pilot cannot open links in this window. Nothing opened.");
+		default:
+			return r("Pilot could not open this link. Nothing opened.");
+	}
+}
+
+/** The web address a link opens: the pull request's own, else the linked one. */
+export function linkUrl(link: OutputLink): string {
+	return link.pullRequest?.url || link.url;
+}
+
+/** Whether a link is a plain web address Pilot may ask the browser to open. Native checks it again. */
+export function webLink(link: OutputLink): boolean {
+	return link.kind === "github.pr" && /^https?:\/\/[^\s/\\@]+(\/[^\s\\]*)?$/i.test(linkUrl(link));
 }
 
 function isSubject(x: unknown): x is VerificationSubject {
@@ -230,6 +286,8 @@ export class ConnectedDelivery implements DeliverySource {
 	#ops: DeliveryOperation[] = [];
 	#saved: DeliveryView["saved"] = "reading";
 	#project = "";
+	#webLinks = false;
+	#opening = new Set<string>();
 	#candidates: string[] = [];
 	#mine: string[] = [];
 	#sending = new Set<string>();
@@ -263,6 +321,8 @@ export class ConnectedDelivery implements DeliverySource {
 			sending: [...this.#sending],
 			saved: this.#saved,
 			projectId: this.#project,
+			webLinks: this.#webLinks,
+			opening: [...this.#opening],
 		};
 	}
 
@@ -283,6 +343,8 @@ export class ConnectedDelivery implements DeliverySource {
 	/** Applies an answer unless a newer call's answer was applied first. */
 	#apply(order: number, reply: DeliveryReply, read?: VerificationSubject) {
 		if (reply.ok) {
+			// Only a read or the saved commands say what this window can open.
+			if (reply.outputCapabilities) this.#webLinks = reply.outputCapabilities.web === true;
 			if (order > this.#opsApplied) {
 				this.#ops = opsOf(reply.operations) ?? this.#ops;
 				this.#opsApplied = order;
@@ -449,6 +511,26 @@ export class ConnectedDelivery implements DeliverySource {
 			};
 		}
 		return result;
+	}
+
+	async open(shown: DeliveredWork, link: OutputLink): Promise<OpenResult> {
+		const key = `${deliveryKey(shown.subject)}#${link.id}`;
+		// One press, one attempt: a press while one is on its way does nothing.
+		if (this.#opening.has(key)) return { status: "refused", message: "" };
+		const own = shown.pullRequests.find((r) => r.id === link.id);
+		if (!own || linkUrl(own) !== linkUrl(link) || !webLink(own)) return refusedOpen("invalid");
+		this.#opening.add(key);
+		this.#publish();
+		try {
+			const r = await openDeliveryOutput(this.#window, shown, own);
+			if (r.ok) return { status: "opened", message: "" };
+			// A changed link: read the result again so the page shows what is current.
+			if (r.refusal === "stale") void this.read(shown.subject);
+			return refusedOpen(r.refusal);
+		} finally {
+			this.#opening.delete(key);
+			this.#publish();
+		}
 	}
 
 	dispose(): void {

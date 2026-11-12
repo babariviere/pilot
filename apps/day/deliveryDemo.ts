@@ -12,8 +12,13 @@ import {
 	type DeliverySource,
 	type DeliveryView,
 	deliveryKey,
+	linkUrl,
+	type OpenResult,
+	type OutputLink,
+	refusedOpen,
 	UNKNOWN,
 	type VerificationSubject,
+	webLink,
 } from "./deliveryFeed";
 import { deliveryTitles } from "./deliveryView";
 
@@ -26,6 +31,8 @@ export type DeliveryScript = {
 	loseNext: boolean;
 	/** Hold every command's answer until `release`. */
 	hold: boolean;
+	/** Lose the next open's answer: the browser may or may not have shown it. */
+	loseOpen: boolean;
 };
 
 function result(subject: VerificationSubject, id: string, rest: Partial<DeliveredWork>): DeliveredWork {
@@ -101,9 +108,13 @@ export const DEMO_TITLES: Record<string, string> = {
 };
 
 export class ScriptedDelivery implements DeliverySource {
-	script: DeliveryScript = { loseNext: false, hold: false };
+	script: DeliveryScript = { loseNext: false, hold: false, loseOpen: false };
 	/** Sends, Checks and the exact note last sent. */
 	counts = signal({ sends: 0, checks: 0, note: "" });
+	/** Every web address handed to the browser, in order. Opening is never a send. */
+	opened = signal<string[]>([]);
+	/** Whether this window can show web links, as a native root with a browser opener says. */
+	webLinks = true;
 	works = new Map<string, DeliveredWork>();
 	#ops: DeliveryOperation[] = [];
 	#mine: string[] = [];
@@ -138,6 +149,8 @@ export class ScriptedDelivery implements DeliverySource {
 			sending: [...this.#sending],
 			saved: this.#read ? "live" : "reading",
 			projectId: PROJECT,
+			webLinks: this.webLinks,
+			opening: [],
 		};
 	}
 
@@ -164,6 +177,15 @@ export class ScriptedDelivery implements DeliverySource {
 		if (!w) return;
 		this.works.set(key, { ...w, deliveryId: id.repeat(64), verificationCurrent: false });
 		this.publish();
+	}
+
+	/** The agent's pull request moves to another address under the same result. */
+	moveLink(key: string, url: string) {
+		const w = this.works.get(key);
+		if (!w) return;
+		const [first, ...rest] = w.pullRequests;
+		if (!first?.pullRequest) return;
+		this.works.set(key, { ...w, pullRequests: [{ ...first, pullRequest: { ...first.pullRequest, url } }, ...rest] });
 	}
 
 	async read(subject: VerificationSubject): Promise<void> {
@@ -259,6 +281,24 @@ export class ScriptedDelivery implements DeliverySource {
 		this.#settle(deliveryKey(o.subject), o);
 		this.publish();
 		return { status: "accepted", message: "", operationId };
+	}
+
+	async open(shown: DeliveredWork, link: OutputLink): Promise<OpenResult> {
+		if (!this.webLinks) return refusedOpen("unavailable");
+		if (!webLink(link)) return refusedOpen("invalid");
+		// Like native: the exact result, owner and address, read again before anything opens.
+		const now = this.works.get(deliveryKey(shown.subject));
+		const current = now?.pullRequests.find((r) => r.id === link.id);
+		if (!now || now.deliveryId !== shown.deliveryId || !current || linkUrl(current) !== linkUrl(link)) {
+			this.publish();
+			return refusedOpen("stale");
+		}
+		this.opened.set([...this.opened(), linkUrl(link)]);
+		if (this.script.loseOpen) {
+			this.script.loseOpen = false;
+			return refusedOpen("lost");
+		}
+		return { status: "opened", message: "" };
 	}
 
 	dispose(): void {

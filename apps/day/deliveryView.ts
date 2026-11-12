@@ -5,7 +5,7 @@
 // again without sending anything (updateView.ts).
 import { signal } from "nsh";
 import type { DeliveredWork, DeliveryOp, VerificationSubject } from "./deliveryFeed";
-import { deliveryKey } from "./deliveryFeed";
+import { deliveryKey, subjectOf } from "./deliveryFeed";
 import { glide } from "./motion";
 
 /** The result open on its page, and the title Pilot knows for it. */
@@ -21,10 +21,57 @@ export const backNotes = signal<Record<string, string>>({});
 export const backOpen = signal<Record<string, boolean>>({});
 /** The Done the user asked to confirm: the exact result and revision it was asked on. */
 export const doneAsk = signal<{ key: string; deliveryId: string; revision: number } | null>(null);
-/** Reminders the user ticked, by result and delivery. They record and send nothing. */
+/**
+ * Reminders the user ticked, by "<result key>#<delivery>". They send nothing
+ * and are never a check. A close or an update saves them with the window.
+ */
 export const reminders = signal<Record<string, string[]>>({});
 /** The last message a command returned, by result. */
 export const deliveryMessages = signal<Record<string, string>>({});
+/** The last message a press on an output link returned, by result. */
+export const outputMessages = signal<Record<string, string>>({});
+
+/** The most results whose ticked reminders a saved window keeps: those ticked last. */
+export const SAVED_REMINDERS = 20;
+
+const TICK = /^(report|pr-[A-Za-z0-9_-]{1,128}|art-[A-Za-z0-9_-]{1,128})$/;
+const DELIVERY = /^[0-9a-f]{64}$/i;
+
+/** The key of one delivery's reminders. A newer delivery of the same result starts with none ticked. */
+export function reminderKey(resultKey: string, deliveryId: string): string {
+	return `${resultKey}#${deliveryId}`;
+}
+
+/** Sets one delivery's ticked reminders. It moves to the end, so a saved window keeps it first; none forgets it. */
+export function setTicks(key: string, ticks: string[]) {
+	reminders.update((all) => {
+		const next = { ...all };
+		delete next[key];
+		if (ticks.length > 0) next[key] = ticks;
+		return next;
+	});
+}
+
+/** Ticked reminders as a saved window keeps them: "<result key>#<delivery>\n<tick>\n<tick>". */
+export function savedReminders(): string[] {
+	return Object.entries(reminders())
+		.filter(([, ticks]) => ticks.length > 0)
+		.slice(-SAVED_REMINDERS)
+		.map(([key, ticks]) => [key, ...ticks].join("\n"));
+}
+
+/** Ticked reminders from a saved window. Entries that do not name an exact result and delivery are dropped. */
+export function remindersOf(saved: readonly string[]): Record<string, string[]> {
+	const out: Record<string, string[]> = {};
+	for (const entry of saved) {
+		const [key, ...ticks] = entry.split("\n");
+		const at = key.lastIndexOf("#");
+		if (at <= 0 || !subjectOf(key.slice(0, at)) || !DELIVERY.test(key.slice(at + 1))) continue;
+		const kept = [...new Set(ticks.filter((t) => TICK.test(t)))];
+		if (kept.length > 0) out[key] = kept;
+	}
+	return out;
+}
 
 /** Opens the page of `subject`, named `title` when Pilot knows it. */
 export function openDelivery(subject: VerificationSubject, title: string) {

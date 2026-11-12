@@ -1,13 +1,24 @@
 // One delivered result: the agent's report, its outputs, where it stands
 // and the user's own check. The page reads the exact canonical result;
 // only Mark done, Send back and Reopen send, each once, for exactly the
-// result and revision shown. Opening or copying a link, ticking a reminder
-// or reading the page records nothing. A command whose answer is lost stays
-// Unknown, with Check only, until its own receipt says how it ended.
+// result and revision shown. Opening a link, ticking a reminder or reading
+// the page records nothing and is never the user's check. A press on a web
+// link asks native to read the result again and hand exactly that address
+// to the browser, once; nothing retries it. Ticked reminders are kept with
+// the window only. A command whose answer is lost stays Unknown, with Check
+// only, until its own receipt says how it ended.
 import { keymap, Scroll, signal, Text, View } from "nsh";
 import { Checkbox, Input } from "nsh/base";
 import type { Day } from "./day";
-import type { Assessment, DeliveredWork, DeliveryMirror, DeliveryOp } from "./deliveryFeed";
+import {
+	type Assessment,
+	type DeliveredWork,
+	type DeliveryMirror,
+	type DeliveryOp,
+	linkUrl,
+	type OutputLink,
+	webLink,
+} from "./deliveryFeed";
 import {
 	agentLine,
 	backNotes,
@@ -17,21 +28,24 @@ import {
 	type DeliveryPlace,
 	deliveryMessages,
 	doneAsk,
+	outputMessages,
 	ownPullRequests,
 	prName,
 	productionLine,
 	prState,
 	pullRequestLine,
 	pullRequestOpen,
+	reminderKey,
 	reminders,
 	setNote,
+	setTicks,
 	titleOf,
 	unsettledLine,
 } from "./deliveryView";
 import { keepField, keepScroll } from "./kept";
 import { glide } from "./motion";
 import { TopBar } from "./TodayScreen";
-import { Action, Mark, SectionTitle } from "./ui";
+import { Action, Mark, RowLink, SectionTitle } from "./ui";
 import { route, setFor } from "./view";
 
 /** The most UTF-8 bytes a Send back note holds. */
@@ -110,10 +124,30 @@ function Report(props: { work: DeliveredWork }) {
 	);
 }
 
-/** What the agent linked and saved. Shown as text: opening one records nothing. */
-function Outputs(props: { work: DeliveredWork }) {
+/** A pull request's short name, such as "PR #12". */
+function shortName(r: OutputLink): string {
+	return prName(r).split(" · ")[0];
+}
+
+/**
+ * What the agent linked and saved. A web link opens in the browser on a
+ * press, when this window can open links; the rest are shown as text.
+ * Opening one records nothing.
+ */
+function Outputs(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: DeliveredWork }) {
 	const w = () => props.work;
+	const key = () => props.place.key;
 	const count = () => w().pullRequests.length + w().artifacts.length + (w().completion ? 1 : 0);
+	const web = () => props.mirror.view().webLinks;
+	const opening = (r: OutputLink) => props.mirror.view().opening.includes(`${key()}#${r.id}`);
+	const say = (m: string) => setFor(outputMessages, key(), m);
+	const open = (r: OutputLink) => {
+		say("");
+		void props.mirror.source.open(w(), r).then((result) => {
+			if (result.status === "opened") say(`Sent ${shortName(r)} to your browser. Nothing was recorded.`);
+			else if (result.message) say(result.message);
+		});
+	};
 	return (
 		<View testID="delivery-outputs" class="gap-1">
 			<View class="pb-1">
@@ -125,11 +159,26 @@ function Outputs(props: { work: DeliveredWork }) {
 			<Each of={w().pullRequests} key={(r) => r.id}>
 				{(r) => (
 					<View class="gap-0.5 border-t border-border py-2.5">
-						<View class="flex-row items-baseline gap-3">
-							<Text class="flex-1 text-sm text-foreground">{prName(r())}</Text>
-							<Text class="text-xs text-muted-foreground">{prState(r())}</Text>
-						</View>
-						<Text class="text-xs text-faint">{r().pullRequest?.url || r().url}</Text>
+						<If
+							when={web() && webLink(r())}
+							else={
+								<View class="flex-row items-baseline gap-3">
+									<Text class="flex-1 text-sm text-foreground">{prName(r())}</Text>
+									<Text class="text-xs text-muted-foreground">{prState(r())}</Text>
+								</View>
+							}
+						>
+							<RowLink
+								testID={`output-open-${r().id}`}
+								title={prName(r())}
+								accessibilityLabel={`Open ${shortName(r())} in your browser. Opening it records nothing.`}
+								onPress={() => open(r())}
+							>
+								<Text class="text-xs text-muted-foreground">{prState(r())}</Text>
+								<Text class="w-16 text-right text-xs text-faint">{opening(r()) ? "Opening…" : "Open ↗"}</Text>
+							</RowLink>
+						</If>
+						<Text class="text-xs text-faint">{linkUrl(r())}</Text>
 					</View>
 				)}
 			</Each>
@@ -149,10 +198,20 @@ function Outputs(props: { work: DeliveredWork }) {
 					<Text class="text-xs text-muted-foreground">Source, as the agent recorded it</Text>
 				</View>
 			</If>
-			<If when={count() > 0}>
-				<Text class="pt-1 text-xs text-faint">
-					Pilot cannot open links here. Copy one; opening it records nothing.
+			<If when={outputMessages()[key()]}>
+				<Text role="alert" testID="output-message" class="pt-1 text-sm text-muted-foreground">
+					{outputMessages()[key()] ?? ""}
 				</Text>
+			</If>
+			<If when={w().pullRequests.length > 0}>
+				<Text class="pt-1 text-xs text-faint">
+					{web()
+						? "Opening a link shows it in your browser. It records nothing; only Mark done is your check."
+						: "Pilot cannot open links in this window. Copy one; opening it records nothing."}
+				</Text>
+			</If>
+			<If when={w().artifacts.length > 0}>
+				<Text class="text-xs text-faint">Pilot cannot show artifacts here yet.</Text>
 			</If>
 		</View>
 	);
@@ -179,9 +238,9 @@ function Stands(props: { work: DeliveredWork; unsettled: DeliveryOp | undefined 
 	);
 }
 
-/** Reminders for the user's own look. Ticking one records and sends nothing. */
+/** Reminders for the user's own look. Ticking one sends nothing; the window keeps the ticks. */
 function Reminders(props: { place: DeliveryPlace; work: DeliveredWork }) {
-	const id = () => `${props.place.key}#${props.work.deliveryId ?? ""}`;
+	const id = () => reminderKey(props.place.key, props.work.deliveryId ?? "");
 	const items = () => {
 		const out = [{ id: "report", label: "Read the agent's report" }];
 		for (const r of ownPullRequests(props.work).slice(0, 3)) {
@@ -200,8 +259,7 @@ function Reminders(props: { place: DeliveryPlace; work: DeliveredWork }) {
 						testID={`reminder-${i().id}`}
 						checked={ticked().includes(i().id)}
 						onChange={() =>
-							setFor(
-								reminders,
+							setTicks(
 								id(),
 								ticked().includes(i().id) ? ticked().filter((x) => x !== i().id) : [...ticked(), i().id],
 							)
@@ -210,7 +268,7 @@ function Reminders(props: { place: DeliveryPlace; work: DeliveredWork }) {
 						indicatorClass="size-4 items-center justify-center rounded border border-input checked:border-primary checked:bg-primary"
 						indicator={
 							<If when={ticked().includes(i().id)}>
-								<View class="size-2 rounded-sm bg-primary-foreground" />
+								<View testID={`reminder-ticked-${i().id}`} class="size-2 rounded-sm bg-primary-foreground" />
 							</If>
 						}
 					>
@@ -360,7 +418,7 @@ function YourCheck(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: 
 			>
 				<View class="gap-3">
 					<Text class="text-xs text-faint">
-						Reminders only. Ticking them records nothing; you decide when it is done.
+						Reminders only. Ticks send nothing and stay with this window; you decide when it is done.
 					</Text>
 					<Reminders place={props.place} work={w()} />
 					<If when={open()}>
@@ -543,7 +601,7 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace }) {
 						{(w) => (
 							<View class="gap-10">
 								<Report work={w()} />
-								<Outputs work={w()} />
+								<Outputs mirror={mirror} place={props.place} work={w()} />
 								<Stands work={w()} unsettled={unsettled()} />
 								<YourCheck mirror={mirror} place={props.place} work={w()} title={title()} />
 							</View>

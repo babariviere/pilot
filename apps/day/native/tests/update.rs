@@ -34,6 +34,7 @@ fn view() -> SavedView {
         end: 7,
         delivery: "task/project/export/t1".into(),
         notes: vec!["task/project/export/t1\n  Exact note 👩🏽‍💻\n".into()],
+        reminders: vec![format!("task/project/export/t1#{}\nreport", "a".repeat(64))],
     }
 }
 

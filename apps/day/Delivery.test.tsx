@@ -20,6 +20,12 @@ function counts(app: { texts(): string[] }): string {
 	return app.texts().find((t) => t.startsWith("Sends:")) ?? "";
 }
 
+function opened(app: { texts(): string[] }): string {
+	return app.texts().find((t) => t.startsWith("Opened:")) ?? "";
+}
+
+const PR = "https://github.com/mock/pilot/pull/431";
+
 async function openCsv(app: Awaited<ReturnType<typeof ready>>) {
 	await app.press(CSV_ROW);
 	await app.waitFor("id:delivery");
@@ -147,11 +153,63 @@ test("rapid presses while an answer is on its way send once", async () => {
 test("a save and reopen keeps the page and the unsent note, and sends nothing", async () => {
 	const app = await ready();
 	await openCsv(app);
+	await app.press("id:reminder-report");
+	await app.waitFor("id:reminder-ticked-report");
 	await app.press("id:send-back-open");
 	await app.type("id:send-back-note", "Keep exact words");
 	await app.press("Save and reopen");
 	await app.waitFor("id:send-back-note");
 	expect(app.value("id:send-back-note")).toBe("Keep exact words");
 	expect(app.shows("id:delivery")).toBe(true);
+	// Ticked reminders come back with the window; they were never sent.
+	expect(app.shows("id:reminder-ticked-report")).toBe(true);
 	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+});
+
+test("a newer result starts with no reminder ticked", async () => {
+	const app = await ready();
+	await openCsv(app);
+	await app.press("id:reminder-report");
+	await app.waitFor("id:reminder-ticked-report");
+	await app.press("New result");
+	await app.waitFor("id:reminder-report");
+	expect(app.shows("id:reminder-ticked-report")).toBe(false);
+	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+});
+
+test("a press opens the exact pull request once, records nothing and never retries", async () => {
+	const app = await ready();
+	await openCsv(app);
+	expect(app.shows("Pilot cannot show artifacts here yet.")).toBe(true);
+	await app.press("id:output-open-pr-431");
+	await app.waitFor("Sent PR #431 to your browser. Nothing was recorded.");
+	expect(opened(app)).toBe(`Opened: [${PR}]`);
+	expect(app.texts().includes("Not checked yet.")).toBe(true);
+	expect(app.shows("id:mark-done")).toBe(true);
+	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+	// A lost answer may have opened it: said so, and not tried again.
+	await app.press("Lose next open");
+	await app.press("id:output-open-pr-431");
+	await app.waitFor("Pilot asked your browser to open it but did not hear back. It will not try again by itself.");
+	expect(opened(app)).toBe(`Opened: [${PR} ${PR}]`);
+	// The link moved since the page read it: nothing opens, and the page shows the new one.
+	await app.press("Move link");
+	await app.press("id:output-open-pr-431");
+	await app.waitFor("This link changed since Pilot read the result. Nothing opened. Look at it again.");
+	expect(app.texts().includes("https://github.com/mock/pilot/pull/432")).toBe(true);
+	expect(opened(app)).toBe(`Opened: [${PR} ${PR}]`);
+	await app.press("id:output-open-pr-431");
+	await app.waitFor("Sent PR #431 to your browser. Nothing was recorded.");
+	expect(opened(app)).toBe(`Opened: [${PR} ${PR} https://github.com/mock/pilot/pull/432]`);
+	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+});
+
+test("a window that cannot open links shows them as text", async () => {
+	const app = await ready();
+	await app.press("No browser");
+	await openCsv(app);
+	expect(app.shows("id:output-open-pr-431")).toBe(false);
+	expect(app.shows("Pilot cannot open links in this window. Copy one; opening it records nothing.")).toBe(true);
+	expect(app.texts().includes(PR)).toBe(true);
+	expect(opened(app)).toBe("Opened: []");
 });

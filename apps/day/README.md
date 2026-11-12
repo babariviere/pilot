@@ -96,8 +96,8 @@ installed executable. It must report `nsh 0.4.0 (e626a8d)`; another version or
 the unrelated `nuta/nsh` command shell is refused. Keep the whole installed
 distribution together, since the CLI finds runtime resources beside itself.
 The wrapper never builds `nsh-cli`, clones/switches source or installs tools.
-`NSH_DAY_SOURCE` is no longer used. Cargo runs offline; missing dependencies
-are a setup blocker, not permission to download or change shared caches.
+`NSH_DAY_SOURCE` is no longer used. Cargo may download locked crates; the
+NSH crates come from crates.io at exactly 0.4.0, with checksums in the locks.
 The CLI runs in `apps/day`; entry paths are relative to it.
 Fresh generated workspaces are seeded from `runner.Cargo.lock`, the release
 runner's real resolved lock. Existing workspace locks are never overwritten.
@@ -163,7 +163,7 @@ cd apps/day
 ./nsh.sh test Update.test.tsx    # updates and registration: save, pause, restore (help, ritual, question), selective resume, stale, lost answer, refusals, boundary (10 tests)
 ./nsh.sh test Attention.test.tsx # agent questions, unavailable help, drafts and links that report nothing (4 tests)
 ./nsh.sh test Intake.test.tsx    # New: Start, Later, Discard, Undo, stale, lost answer, rapid presses, focus (8 tests)
-./nsh.sh test Delivery.test.tsx  # To check and a result's page: Done, Send back, Reopen, stale, lost answer, kept notes (7 tests)
+./nsh.sh test Delivery.test.tsx  # To check and a result's page: Done, Send back, Reopen, stale, lost answer, kept notes and reminder checklist, opening links (10 tests)
 ./nsh.sh test Linear.test.tsx    # the read-only Linear page: scope, cycle, exact links, unshown count, trouble, Escape (9 tests)
 ./nsh.sh test Native.test.tsx --target macos  # native captures and input, in output/
 (cd native && ../scripts/cargo test --locked) # Rust rules through mbx too
@@ -473,10 +473,17 @@ their pinned revision, and other links. Merged is never shown as released
 
 A task that is Done or In review offers **Check the result**. It opens the
 result's page: the agent's report (its words, not Pilot's check), outputs
-(pull requests, artifacts, the recorded commit; links are text and opening one
-records nothing), and **Where this stands** as four separate lines: Agent,
+(pull requests, artifacts, the recorded commit), and **Where this stands** as
+four separate lines: Agent,
 Pull request, Production (always "Not tracked"; merged is never released) and
-Your check. Your check offers reminders that record nothing, **Mark done**
+Your check. A pull request's web link opens in the browser on a press when the
+window's native root has a browser opener (`day.delivery.open`): native reads
+the result again and hands over only that exact address, once. A changed link
+opens nothing; a lost answer says so and is never retried, also after a reopen.
+Opening records nothing and is never the user's check. Without an opener, and
+for artifacts and the commit, outputs stay text. Your check offers a reminder
+checklist (ticks send nothing and are saved with the window on close or update,
+per delivery; a newer delivery starts with none ticked), **Mark done**
 (it asks first while a pull request is not merged) and **Send back…** with a
 note. Each sends once through `day.delivery.done`, `day.delivery.sendBack`
 or `day.delivery.reopen` for exactly the result and revision shown. A lost

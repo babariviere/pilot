@@ -298,6 +298,11 @@ pub struct SavedView {
     /// Restoring one sends nothing.
     #[prop(default)]
     pub notes: Vec<String>,
+    /// Reminders ticked on delivered results, as
+    /// "<delivered result>#<delivery>\n<reminder>\n...". They send nothing
+    /// and are never the user's check.
+    #[prop(default)]
+    pub reminders: Vec<String>,
 }
 
 impl SavedView {
@@ -309,6 +314,7 @@ impl SavedView {
             .chain(&self.help)
             .chain(&self.see_all)
             .chain(&self.notes)
+            .chain(&self.reminders)
             .map(String::len)
             .sum::<usize>();
         self.goal.len()
@@ -326,7 +332,11 @@ impl SavedView {
 
     /// The entries in its lists, counted against [`VIEW_ENTRIES`].
     pub fn entries(&self) -> usize {
-        self.questions.len() + self.help.len() + self.see_all.len() + self.notes.len()
+        self.questions.len()
+            + self.help.len()
+            + self.see_all.len()
+            + self.notes.len()
+            + self.reminders.len()
     }
 
     /// Whether its offsets are plain, non-negative numbers.

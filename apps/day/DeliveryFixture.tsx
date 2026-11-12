@@ -39,8 +39,23 @@ mount(() => (
 			<View class="gap-1 px-6 py-3">
 				<Text testID="counts">{`Sends: ${source.counts().sends} · Checks: ${source.counts().checks}`}</Text>
 				<Text testID="last-note">{`Note sent: [${source.counts().note}]`}</Text>
+				<Text testID="opened">{`Opened: [${source.opened().join(" ")}]`}</Text>
 				<View class="flex-row flex-wrap gap-1">
 					<Action label="Lose next answer" onPress={() => (source.script.loseNext = true)} />
+					<Action label="Lose next open" onPress={() => (source.script.loseOpen = true)} />
+					<Action
+						label="Move link"
+						onPress={() =>
+							source.moveLink("task/mock-project/native/native-4", "https://github.com/mock/pilot/pull/432")
+						}
+					/>
+					<Action
+						label="No browser"
+						onPress={() => {
+							source.webLinks = false;
+							source.publish();
+						}}
+					/>
 					<Action label="Hold answers" onPress={() => (source.script.hold = true)} />
 					<Action label="Release answer" onPress={() => source.release()} />
 					<Action

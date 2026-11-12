@@ -188,8 +188,16 @@ daemon and a recording callback. It covers valid HTTP(S), stale/deleted/denied
 records (including changes on the second read), changed URLs with unchanged
 delivery IDs, unsafe schemes/paths, unavailable readers, flush, cold reopen and
 zero acceptance/provider effects. These tests never invoke the platform opener.
-The macOS binding is compile-checked only, not live-launch acceptance. Result-page
-button wiring remains a separate UI follow-up; the seam alone is not usable UI.
+The macOS binding is compile-checked only, not live-launch acceptance.
+
+The result page wires this to each qualifying pull request row. A row is a
+button only while the last `read`/`saved` reply says `web:true`; otherwise
+the link stays text. One press makes one call (a second press while it is on
+its way does nothing). A stale reply opens nothing and reads the result again;
+a lost or Unknown reply says the browser may have opened it and is never
+retried. Opening never ticks the reminder checklist, settles a command or counts as the
+user's check. `native/tests/delivery_today.rs` presses it through
+`Connected.tsx` with a recording opener.
 
 Each assessment/read reply keeps `operations` (the selected source's saved command summaries)
 and `outcome` separate from `snapshot`. An operation's `lookup` contains the exact
@@ -241,4 +249,7 @@ Gap: no route lists every delivered task or chat in a project, so a mission
 task's first delivery is reached from its mission page (Done or In review
 tasks offer Check the result). Unsent Send back notes and the open result are
 saved in the window's `SavedView` (`delivery`, `notes`), counted against its
-limits, and restored without sending.
+limits, and restored without sending. Reminder checklist ticks are saved the same way
+(`reminders`, as `<result>#<deliveryId>\n<tick>...`, at most 20 results). They
+are window state only: not a daemon record and not a check.
+A newer delivery of the same result starts with none ticked.

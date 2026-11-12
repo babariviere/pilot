@@ -19,7 +19,10 @@ import {
 	deliveryRoute,
 	deliveryTitles,
 	doneAsk,
+	outputMessages,
 	reminders,
+	remindersOf,
+	savedReminders,
 } from "./deliveryView";
 import { forgetPlaces, lastField, restoreField, restoreScroll, scrollOf, todayScrollTo } from "./kept";
 import { linearOpen, openIssue } from "./linearView";
@@ -170,6 +173,8 @@ export function captureView(today?: Today): SavedView {
 		notes: Object.entries(backNotes())
 			.filter(([, note]) => note !== "")
 			.map(([key, note]) => `${key}\n${note}`),
+		// Ticked reminders on delivered results. They send nothing and are never a check.
+		reminders: savedReminders(),
 	};
 }
 
@@ -266,6 +271,7 @@ export function startFresh() {
 	doneAsk.set(null);
 	reminders.set({});
 	deliveryMessages.set({});
+	outputMessages.set({});
 	// The Linear page has no saved place: a restored window shows Today, with its entry focused.
 	linearOpen.set(false);
 	openIssue.set(null);
@@ -327,6 +333,7 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today) {
 	}
 	backNotes.set(notes);
 	backOpen.set(Object.fromEntries(Object.keys(notes).map((key) => [key, true])));
+	reminders.set(remindersOf(view.reminders ?? []));
 	todayPlace.y = Math.max(0, view.todayY ?? 0);
 	todayPlace.row = view.todayRow || null;
 	const key = shownKey();
