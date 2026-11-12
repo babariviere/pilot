@@ -2023,7 +2023,11 @@ test("coordinator tools associate, explicitly upgrade and split Linear ticket wo
 test("mission drafts name the deliverables without repeating comment policy", () => {
 	const message = draftMessage("Plan");
 	assert.match(message, /short goal and draft the brief \(scope and requirements\)/);
-	assert.match(message, /record agreed choices with decide/);
+	assert.match(message, /record substantive agreed mission choices \(scope, behavior or tradeoffs\) with decide/);
+	assert.match(message, /keeping human-answer\/source references and explicit authority limits/);
+	assert.match(message, /decision text never grants tool\/runtime permission/);
+	assert.match(message, /keep routine directions\/status in task updates or log context, not decisions/);
+	assert.match(message, /appropriate lasting cross-mission preferences; discussion\/proposal is not agreement/);
 	assert.match(message, /create tasks with current status.*dependencies where order matters/);
 	assert.match(message, /Do not start implementing tasks/);
 	assert.doesNotMatch(message, /comments|resolve|reminders|decision ledger/);

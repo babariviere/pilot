@@ -1,5 +1,63 @@
 # Decision notice routing
 
+## What belongs in a decision
+
+The glossary's [Decision, Approval and Human action](../../GLOSSARY.md#agreement-and-human-involvement)
+remain distinct. The glossary agreement (D30/D31) defines a decision as a guiding choice;
+D38 distinguishes a concrete choice about how to proceed from an interview that clarifies
+intent. A submitted human answer can establish that choice. A suggested option, agent
+report, proposal or discussion does not establish human agreement.
+
+Record substantive agreed choices about **this mission's scope, behavior or tradeoffs**,
+with the human answer/source reference and its limits in the existing decision text.
+Do not turn every user utterance into a decision:
+
+| Example | Existing destination |
+| --- | --- |
+| Agreed native NSH rather than WebViews | Decision: mission scope/architecture choice |
+| Save all interview questions before showing the first | Decision when agreed: mission behavior |
+| Ship offline reading first and defer editing | Decision when agreed: material delivery tradeoff |
+| Explicitly allow checked task pushes, but not releases | Decision: new mission authority policy, with human source and limits; existing permission controls still apply |
+| Continue approved daily-driver work alongside Expedition discussion (D67 correction) | Task update or `log` context: routine coordination, not a new choice or grant |
+| Checks passed | Task/report: status, not user acceptance |
+| I prefer concise replies | Existing preference/memory mechanism only when lasting and appropriate; not a mission decision or permission |
+| Could we add editable coordinator instructions? | Discussion/proposal, not agreement or permission to implement storage/UI/injection |
+| Approve this one upload | Existing specific approval flow, not a new general mission policy |
+
+Keep useful routine directions in existing task/context records, without duplicate
+bookkeeping. Cross-mission memory is not a place for transient status or a substitute
+for explicit permission. A personal preference becomes a mission choice only if the
+user actually agrees to material mission behavior, not merely because it was mentioned.
+Do not discard explicit authority changes as routine coordination. Preserve their human
+source, scope and exclusions, while still requiring applicable tool/runtime authorization.
+
+This guidance does not modify old records, including D67. Historical cleanup needs
+user-approved proposals with history preserved. Reuse `propose` and user resolution;
+withdrawal keeps text, pins and history. `supersede` links an already-authorized
+replacement, not permission to silently reclassify or retire past guidance.
+
+## Canonical injection and permission seams
+
+| Seam | Current source and boundary |
+| --- | --- |
+| Mission conversion | `draftMessage` in [mission-service.ts](../../packages/daemon/src/mission-service.ts) asks the new coordinator to draft scope, substantive choices and tasks from existing conversation. It does not start implementation. |
+| Current prompt data | `MissionService.context` selects active `all` decisions, coordinator-audience decisions for the coordinator and decisions pinned to open owned tasks. It sends the complete decision state separately for live notices. `SessionManager.missionChanged` in [sessions.ts](../../packages/daemon/src/sessions.ts) publishes `mission.context` to an existing worker; [worker.ts](../../packages/kernel/src/worker.ts) calls `KernelSession.setMission`. |
+| Trusted guidance | `withPilotPolicy` in [policy.ts](../../packages/kernel/src/policy.ts) assembles the Pilot section plus `missionPrompt` from current host context. [mission-tools.ts](../../packages/kernel/src/mission-tools.ts) supplies the detailed decision examples and existing action schemas. There is no text classifier. |
+| Stable prompt and deltas | `KernelSession.setMission` in [session.ts](../../packages/kernel/src/session.ts) keeps selected decision prompt text stable for the same mission/role, except explicit retirement, and sends changes through `DecisionInboxDoc`. Startup/role changes take a fresh selection; live additions/edits use notices and explicit `decisions` reads. This is not a fresh full decision snapshot after every compaction. |
+| Compaction | [Coordinator memory](coordinator-memory.md) is a derived historical summary. Current prompt/notices/tools remain separate. Summaries and recalled quotes do not create current consent, agreement or permission. No new instruction snapshot/compaction protocol is added here. |
+| Mission writes | `MissionService.call` binds the actor to the calling session's membership and limits coordinator actions. `MissionStore.addDecision` uses `assertPlanner` and saves author/time/event attribution in [missions.ts](../../packages/daemon/src/missions.ts). Versioned planning restricts decision writes to coordinator/user; legacy planning retains its existing rules. Attribution records the writer, not proof of a human answer, so guidance asks for the source reference in text. |
+| Historical changes | Store edit/remove and `resolveProposal` are user-only. Coordinator `proposeDecision`/`proposeWithdrawal` do not themselves accept changes; `supersedeDecision` keeps original text/history/pins and requires a current coordinator/user. These controls are unchanged. |
+| Execution | `withPilotPolicy` calls `executionPermissionBlock` from [tool-policy.ts](../../packages/kernel/src/tool-policy.ts) before tools; `nativeToolPolicy` also checks actual nested native calls. These are backup policy gates, not arbitrary-shell isolation. Mission start admission rechecks current coordinator membership and mission holds via `assertStartActor`; other tool/runtime approval, Stop and admission controls remain authoritative. Writing a decision, task/context note or preference changes none of those permissions. |
+
+Gaps: semantic classification and human-source completeness are guidance, not validated
+by the decision schema/store. There is no separate editable coordinator-instructions
+record, general preference database or permission ledger introduced by this work.
+Conversation/task/log context is not a guaranteed independently refreshed instruction
+snapshot. Fresh start/compaction snapshots plus deltas and an editable instruction UI
+remain discussion, not implemented contracts. Audience/pin routing is not a complete
+semantic applicability or security boundary. See the [prompt review index](skill-prompt-review.md)
+for the other dynamic sources and its coverage limits.
+
 ## Audit and reused contracts
 
 `MissionService.context` already selected prompt guidance using audience `all`,
@@ -67,6 +125,12 @@ Pause, queue holds and current admission/permission checks are not released. Rec
 dedupe proves placement or deferral only, never that the worker applied the guidance.
 
 ## Verification
+
+Guidance-contract fixtures in `policy.test.ts`, `mission-tools.test.ts` and
+`mission-service.test.ts` check substantive choices, the D67 coordination pattern,
+status, preferences, unagreed proposals, specific approvals, provenance and unchanged
+history/permission boundaries. They verify delivered instructions, not that a model
+will always classify conversation correctly. No live provider classification was run.
 
 Focused tests cover routing, current owners/members, shared invariants, unassociated
 guidance, grouped deadlines, the live kernel timer, urgent bypass, replacement and

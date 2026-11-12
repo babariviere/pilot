@@ -1002,7 +1002,10 @@ test("member and coordinator tools guide a low-noise comment lifecycle and task-
 	for (const coordinator of [false, true]) {
 		const { description } = createMissionTool(async () => null, coordinator);
 		assert.match(description, /brief: read a revision, or replace the spec with markdown and expectedRevision/);
-		assert.match(description, /decide: record a new agreed choice/);
+		assert.match(
+			description,
+			/decide: record a substantive agreed mission choice about scope, behavior or tradeoffs/,
+		);
 		assert.match(description, /check for an existing discussion before posting/);
 		assert.match(
 			description,
@@ -1015,6 +1018,59 @@ test("member and coordinator tools guide a low-noise comment lifecycle and task-
 			description,
 			/Never comment status, progress, plans, evidence, publication receipts or acknowledgements/,
 		);
+	}
+});
+
+test("decision guidance routes substantive choices and routine utterances without a classifier", () => {
+	// These are guidance-contract fixtures, not predictions of model behavior.
+	const cases = [
+		["mission scope", 'Agreed "Use native NSH, not WebViews"', "decide (mission scope/behavior)"],
+		[
+			"mission behavior",
+			'"Save every interview question before showing the first"',
+			"decide (mission scope/behavior)",
+		],
+		["tradeoff", 'Agreed "Ship offline reading first; defer editing"', "decide (mission tradeoff)"],
+		["new authority policy", '"Allow checked task pushes, not releases"', "decide with human source and limits"],
+		// D67: continuing already-approved daily-driver work alongside Expedition discussion is coordination.
+		[
+			"D67 coordination",
+			'"Continue independent work while we discuss the prototype"',
+			"task/context update, not decide",
+		],
+		["status", '"The checks passed"', "task/report update, not decide"],
+		[
+			"personal preference",
+			'"I prefer concise replies"',
+			"existing preference/memory mechanism only when lasting and appropriate, not decide",
+		],
+		[
+			"unagreed storage design",
+			'"Could we add editable coordinator instructions?"',
+			"discussion/proposal, not decide or implementation permission",
+		],
+		[
+			"specific approval",
+			'"Approve this one upload"',
+			"existing approval flow, not a general mission decision or grant",
+		],
+	];
+	for (const coordinator of [false, true]) {
+		const { description } = createMissionTool(async () => null, coordinator);
+		for (const [name, example, destination] of cases) {
+			const line = description.split("\n").find((line) => line.includes(example!));
+			assert.ok(line?.includes(destination!), name);
+		}
+		assert.match(description, /Keep the human answer\/source reference and limits in text/);
+		assert.match(description, /a displayed recommendation or an agent report/);
+		assert.match(description, /Do not re-ask settled choices/);
+		assert.match(description, /decision text never grants tool\/runtime permission/);
+		assert.match(description, /Do not automatically delete, withdraw or bulk reclassify historical decisions/);
+		assert.match(description, /historic cleanup requires user-approved proposals and preserved history/);
+		if (coordinator) {
+			assert.match(description, /only user acceptance retires guidance/);
+			assert.match(description, /record an already-authorized replacement/);
+		}
 	}
 });
 

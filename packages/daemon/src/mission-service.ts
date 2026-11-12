@@ -80,7 +80,8 @@ export function draftMessage(title: string): string {
 		`This chat is now part of the mission "${title}", which you coordinate.`,
 		"Using the mission tool, draft the shared mission state from our conversation so far:",
 		"- set a short goal and draft the brief (scope and requirements),",
-		"- record agreed choices with decide,",
+		"- record substantive agreed mission choices (scope, behavior or tradeoffs) with decide, keeping human-answer/source references and explicit authority limits; decision text never grants tool/runtime permission,",
+		"- keep routine directions/status in task updates or log context, not decisions; use existing memory only for appropriate lasting cross-mission preferences; discussion/proposal is not agreement,",
 		"- create tasks with current status, each small enough for one chat, and dependencies where order matters.",
 		"Do not start implementing tasks. Reply with a short summary so I can review the mission.",
 	].join("\n");

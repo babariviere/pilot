@@ -284,8 +284,13 @@ test("every mission role separates specs, progress, decisions and actionable com
 		const prompt = missionPrompt({ ...mission, coordinator });
 		assert.match(
 			prompt,
-			/The brief is the spec; tasks track progress and blockers; decisions record agreed choices; comments hold actionable discussion/,
+			/The brief is the spec; tasks track progress and blockers; decisions record substantive agreed mission choices \(scope, behavior or tradeoffs\), not every user utterance/,
 		);
+		assert.match(prompt, /Routine directions, status and coordination belong in task\/context updates/);
+		assert.match(prompt, /durable cross-mission preferences use existing memory only when appropriate/);
+		assert.match(prompt, /Discussion\/proposal is not agreement/);
+		assert.match(prompt, /Keep human-answer provenance and explicit authority changes/);
+		assert.match(prompt, /a decision record never grants tool\/runtime permission/);
 		assert.match(
 			prompt,
 			/Comment only when you need someone's answer or action; progress, evidence and results go in the task/,
