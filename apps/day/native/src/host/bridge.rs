@@ -157,6 +157,7 @@ async fn run(
         call.command,
         Command::DeliveryRead(_)
             | Command::DeliverySaved
+            | Command::DeliveryOpen(_)
             | Command::DeliveryWrite(_)
             | Command::DeliveryCheck(_)
     ) {
@@ -215,6 +216,7 @@ async fn run(
     let work = match &call.command {
         Command::DeliveryRead(_)
         | Command::DeliverySaved
+        | Command::DeliveryOpen(_)
         | Command::DeliveryWrite(_)
         | Command::DeliveryCheck(_) => {
             unreachable!("handled delivery command")

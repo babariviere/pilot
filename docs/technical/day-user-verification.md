@@ -159,7 +159,39 @@ the sandbox; unlisted output metadata still passes through unchanged.
 * `day.delivery.check` takes `{operationId}` only. It looks up the saved immutable
   envelope, without a current delivery read, reset, new operation or resend.
 
-Each reply keeps `operations` (the selected source's saved command summaries)
+### Explicit web output navigation
+
+`day.delivery.open` takes `{subject,targetId,deliveryId,ownerSessionId,resourceId,url}`
+from one displayed PR resource. It reads the canonical delivery twice, rechecks
+the selected project, current permission and exact owner/resource/destination,
+then admits the synchronous native-only URL callback under the window close/flush
+gate. The delivery hash pins resource IDs, not URLs; the URL must match separately.
+Only a linked `github.pr` resource in that exact delivery qualifies. An arbitrary
+document URL, artifact ID, local path or callback cannot select a reader.
+
+Native `read` and `saved` replies include `outputCapabilities`. Web navigation is
+available only with a native owner callback; artifacts, documents and paths are
+explicitly unavailable. The macOS executable binds the existing callback slot to
+`NSWorkspace.openURL`, with the same web-only validation. The default/mock root
+does not bind an opener. HTTP(S) only, no credentials, backslashes or hidden
+controls; no shell/file helper, custom-scheme translation or runtime grants.
+
+The reply `{opened:true,url,outcome:null}` means the native callback accepted
+dispatch, not that the user visited, checked or accepted anything. It makes no
+daemon POST, provider call or assessment write. Navigation is not journaled,
+replayed, or retried after a lost answer, including after close/reopen. A callback
+failure is Unknown because launch may have been attempted. The TSX adapter
+`openDeliveryOutput` is one explicit call, not an automatic effect.
+
+`native/tests/delivery_open.rs` uses the released hidden public bridge, an isolated
+daemon and a recording callback. It covers valid HTTP(S), stale/deleted/denied
+records (including changes on the second read), changed URLs with unchanged
+delivery IDs, unsafe schemes/paths, unavailable readers, flush, cold reopen and
+zero acceptance/provider effects. These tests never invoke the platform opener.
+The macOS binding is compile-checked only, not live-launch acceptance. Result-page
+button wiring remains a separate UI follow-up; the seam alone is not usable UI.
+
+Each assessment/read reply keeps `operations` (the selected source's saved command summaries)
 and `outcome` separate from `snapshot`. An operation's `lookup` contains the exact
 outer/domain pair. Only matching terminal receipts settle its state. A canonical
 GET that already reports Done does not settle a locally Unknown operation.

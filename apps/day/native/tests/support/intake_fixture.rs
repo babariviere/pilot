@@ -82,7 +82,19 @@ impl Fixture {
         self.host_for(source)
     }
     fn host_for(&self, source: Source) -> NativeHost {
-        let host = NativeHost::open(source, self.info["ledger"].as_str().unwrap().into()).unwrap();
+        self.host_for_options(source, Default::default())
+    }
+    fn host_for_options(
+        &self,
+        source: Source,
+        options: pilot_day_native::host::Options,
+    ) -> NativeHost {
+        let host = NativeHost::open_with_options(
+            source,
+            self.info["ledger"].as_str().unwrap().into(),
+            options,
+        )
+        .unwrap();
         let events = host.changes();
         tokio::runtime::Builder::new_current_thread()
             .enable_all()

@@ -72,6 +72,9 @@ let posts = 0,
 	corruptLookup = false,
 	failSave = false,
 	race = false;
+let outputUrl: string | null = null,
+	outputRace = "",
+	outputReads = 0;
 const sockets = new Set<WebSocket>(),
 	wss = new WebSocketServer({ noServer: true });
 const proxy = createServer(async (req, res) => {
@@ -81,6 +84,15 @@ const proxy = createServer(async (req, res) => {
 		const bytes = Buffer.concat(chunks);
 		const writing = req.method === "POST" && req.url === "/api/operations";
 		const lookup = req.url === "/api/operations/receipt";
+		if (req.url?.endsWith("delivered-work") && outputRace && ++outputReads === 2) {
+			const mode = outputRace;
+			outputRace = "";
+			if (mode === "deny") denied = true;
+			else if (mode === "delete") f.store.removeResource(mission.id, pr.id);
+			else if (mode === "retarget") outputUrl = "https://github.com/example/repo/pull/2";
+			else f.store.updateTask(mission.id, task.id, { body: randomUUID() });
+			await f.store.durable();
+		}
 		if (denied && (writing || lookup || req.url?.endsWith("delivered-work"))) {
 			res.writeHead(403).end("{}");
 			return;
@@ -111,6 +123,11 @@ const proxy = createServer(async (req, res) => {
 			...(bytes.length ? { body: bytes } : {}),
 		});
 		const body = await reply.json();
+		if (req.url?.endsWith("delivered-work") && outputUrl !== null && body.pullRequests?.[0]) {
+			// Adversarial wire target with the same resource/delivery identity.
+			body.pullRequests[0].url = outputUrl;
+			body.pullRequests[0].pullRequest.url = outputUrl;
+		}
 		if (writing && failSave) {
 			failSave = false;
 			await chmod(ledger, 0o644);
@@ -175,6 +192,12 @@ for await (const line of createInterface({ input: process.stdin })) {
 	if (c.action === "allow") denied = false;
 	if (c.action === "race") race = true;
 	if (c.action === "hold-owner") heldOwner = true;
+	if (c.action.startsWith("output-url:")) outputUrl = c.action.slice(11);
+	if (c.action.startsWith("output-race:")) {
+		outputRace = c.action.slice(12);
+		outputReads = 0;
+	}
+	if (c.action === "delete-output") f.store.removeResource(mission.id, pr.id);
 	if (c.action === "new-delivery") f.store.updateTask(mission.id, task.id, { body: randomUUID() });
 	if (c.action === "new-outcome") outcomeAt++;
 	if (c.action.startsWith("malformed:")) malformed = c.action.slice(10);

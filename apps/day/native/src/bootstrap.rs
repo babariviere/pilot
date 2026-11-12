@@ -176,6 +176,7 @@ pub fn run(args: Vec<OsString>) -> Result<(), Error> {
         source,
         journal,
         Options {
+            url_opener: Some(std::sync::Arc::new(crate::host::navigation::macos)),
             updates: Some(updates),
             day: Some(crate::host::ritual::DaySource::system()),
             ..Default::default()

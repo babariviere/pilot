@@ -100,6 +100,66 @@ fn valid_note(action: &str, note: &str) -> bool {
     }
 }
 
+/// Navigation is not a verification operation and is never journaled or replayed.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct Open {
+    subject: Subject,
+    target_id: String,
+    delivery_id: String,
+    owner_session_id: Option<String>,
+    resource_id: String,
+    url: String,
+}
+impl Open {
+    pub(crate) fn validate(&self) -> Result<(), Error> {
+        self.subject.validate()?;
+        if !valid_id(&self.target_id)
+            || !digest(&self.delivery_id)
+            || !valid_id(&self.resource_id)
+            || self
+                .owner_session_id
+                .as_ref()
+                .is_some_and(|id| !valid_id(id))
+        {
+            return Err(Error::Invalid);
+        }
+        super::navigation::web(&self.url)?;
+        Ok(())
+    }
+    fn qualifies(&self, v: &Value) -> Result<(), Error> {
+        if v["subject"] != serde_json::to_value(&self.subject).map_err(|_| Error::Invalid)?
+            || v["targetId"] != self.target_id
+            || v["deliveryId"] != self.delivery_id
+            || v["ownerSessionId"] != json!(self.owner_session_id)
+        {
+            return Err(Error::Stale);
+        }
+        let rows = v["pullRequests"].as_array().ok_or(Error::Invalid)?;
+        let mut matching = rows.iter().filter(|r| r["id"] == self.resource_id);
+        let resource = matching.next().ok_or(Error::Stale)?;
+        if matching.next().is_some() || resource["kind"] != "github.pr" {
+            return Err(Error::Invalid);
+        }
+        // Match the exact displayed destination, not a label, guessed PR URL or
+        // delivery hash (which pins resource IDs but does not hash their URLs).
+        let target = resource["pullRequest"]["url"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .or_else(|| resource["url"].as_str())
+            .ok_or(Error::Invalid)?;
+        if target != self.url {
+            return Err(Error::Stale);
+        }
+        super::navigation::web(target)?;
+        Ok(())
+    }
+}
+
+fn output_capabilities(shared: &Shared) -> Value {
+    json!({"web":shared.url_opener.is_some(),"artifacts":false,"documents":false,"paths":false})
+}
+
 /// Native-only metadata, not a second verification or daemon payload field.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -283,7 +343,26 @@ pub(super) async fn handle(
             // delivery. The project is the root's own choice, echoed, never chosen.
             check()?;
             return Ok(json!({"snapshot":{"projectId":t.source.project_id},
-                "operations":operations(t,journal),"outcome":null}));
+                "operations":operations(t,journal),"outcome":null,
+                "outputCapabilities":output_capabilities(shared)}));
+        }
+        Command::DeliveryOpen(r) => {
+            r.validate()?;
+            let opener = shared.url_opener.as_ref().ok_or(Error::Unavailable)?;
+            let before = read(t, &r.subject).await?;
+            r.qualifies(&before)?;
+            // Recheck project, permissions and the exact canonical source after
+            // entered I/O. Neither a cached page nor a WS notice grants an open.
+            let current = read(t, &r.subject).await?;
+            r.qualifies(&current)?;
+            t.local()?;
+            let guard = gate.lock().expect("bridge gate poisoned");
+            shared.open()?;
+            command.admit(&guard)?;
+            // No await/queue between admission and dispatch. No generic path,
+            // callback supplied by TSX, provider, acceptance write or HTTP POST.
+            opener(&r.url).map_err(|_| Error::Unknown)?;
+            return Ok(json!({"opened":true,"url":r.url,"outcome":null}));
         }
         Command::DeliveryWrite(w) => {
             w.validate()?;
@@ -368,7 +447,10 @@ pub(super) async fn handle(
     if matches!(command, Command::DeliveryRead(_)) {
         let v = snapshot?;
         check()?;
-        Ok(json!({"snapshot":v,"operations":operations(t,journal),"outcome":outcome}))
+        Ok(
+            json!({"snapshot":v,"operations":operations(t,journal),"outcome":outcome,
+            "outputCapabilities":output_capabilities(shared)}),
+        )
     } else {
         Ok(
             json!({"snapshot":snapshot.ok().filter(|_|check().is_ok()),"operations":operations(t,journal),"outcome":outcome}),
@@ -402,6 +484,46 @@ fn settle(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_activation_pins_exact_subject_delivery_owner_resource_and_target() {
+        let subject = json!({"kind":"task","projectId":"p","missionId":"m","taskId":"t"});
+        let args = json!({"subject":subject,"targetId":"target","deliveryId":"d".repeat(64),
+            "ownerSessionId":"owner","resourceId":"r","url":"https://github.com/a/b/pull/1"});
+        let r: Open = serde_json::from_value(args.clone()).unwrap();
+        r.validate().unwrap();
+        let page = json!({"subject":subject,"targetId":"target","deliveryId":args["deliveryId"],
+            "ownerSessionId":"owner","pullRequests":[{"id":"r","kind":"github.pr","url":args["url"]}]});
+        assert_eq!(r.qualifies(&page), Ok(()));
+        for pointer in [
+            "/subject/projectId",
+            "/subject/taskId",
+            "/targetId",
+            "/deliveryId",
+            "/ownerSessionId",
+            "/pullRequests/0/id",
+            "/pullRequests/0/url",
+        ] {
+            let mut changed = page.clone();
+            *changed.pointer_mut(pointer).unwrap() = json!("changed");
+            assert_eq!(r.qualifies(&changed), Err(Error::Stale), "{pointer}");
+        }
+        for extra in [
+            json!({"path":"../../a"}),
+            json!({"artifactId":"a","revision":1}),
+            json!({"callback":"run"}),
+        ] {
+            let mut forged = args.clone();
+            forged
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            assert!(serde_json::from_value::<Open>(forged).is_err());
+        }
+        let mut changed = page;
+        changed["pullRequests"][0]["pullRequest"] = json!({"url":"https://example.com/other"});
+        assert_eq!(r.qualifies(&changed), Err(Error::Stale));
+    }
 
     fn pair() -> (Value, Value, Pin) {
         let p = json!({"purpose":"user-verification","subject":{"kind":"chat","projectId":"project","sessionId":"owner"},

@@ -5,6 +5,14 @@ import type { DeliveredWork, UserVerificationLookup, VerificationSubject } from 
 
 export type { DeliveredWork, VerificationSubject };
 
+/** Availability comes from the native owner, never from an output's URL. */
+export interface OutputCapabilities {
+	web: boolean;
+	artifacts: false;
+	documents: false;
+	paths: false;
+}
+
 /** Immutable native command summary. Unknown permits only Check of operationId. */
 export interface DeliveryOperation {
 	operationId: string;
@@ -22,7 +30,13 @@ export interface DeliveryOperation {
 
 /** Canonical evidence stays in snapshot. Operation acknowledgements stay separate. */
 export type DeliveryReply =
-	| { ok: true; snapshot: DeliveredWork | null; operations: DeliveryOperation[]; outcome: DeliveryOperation | null }
+	| {
+			ok: true;
+			snapshot: DeliveredWork | null;
+			operations: DeliveryOperation[];
+			outcome: DeliveryOperation | null;
+			outputCapabilities?: OutputCapabilities;
+	  }
 	| { ok: false; refusal: Refusal };
 
 async function invoke(window: string, name: string, args: unknown): Promise<DeliveryReply> {
@@ -33,6 +47,7 @@ async function invoke(window: string, name: string, args: unknown): Promise<Deli
 		snapshot: r.snapshot,
 		operations: r.value.operations as DeliveryOperation[],
 		outcome: (r.value.outcome ?? null) as DeliveryOperation | null,
+		outputCapabilities: r.value.outputCapabilities as OutputCapabilities | undefined,
 	};
 }
 
@@ -67,4 +82,27 @@ export function assessDelivery(
 /** Lookup only. No new envelope, delivery read, reset, retarget or resend. */
 export function checkDelivery(window: string, operationId: string): Promise<DeliveryReply> {
 	return invoke(window, "day.delivery.check", { operationId });
+}
+
+/** One user press on an exact displayed PR resource. Never retry after a lost
+ * answer. Native rechecks canonical scope and target before its URL-only callback.
+ * Opening is not acceptance; artifacts, documents and paths are unsupported. */
+export async function openDeliveryOutput(
+	window: string,
+	shown: DeliveredWork,
+	resource: DeliveredWork["pullRequests"][number],
+): Promise<{ ok: true; opened: true; url: string } | { ok: false; refusal: Refusal }> {
+	const url = resource.pullRequest?.url || resource.url;
+	const r = await call<null>(window, "day.delivery.open", {
+		subject: shown.subject,
+		targetId: shown.targetId,
+		deliveryId: shown.deliveryId,
+		ownerSessionId: shown.ownerSessionId,
+		resourceId: resource.id,
+		url,
+	});
+	if (!r.ok) return r;
+	return r.value.opened === true && r.value.url === url && r.value.outcome === null
+		? { ok: true, opened: true, url }
+		: { ok: false, refusal: "unknown" };
 }

@@ -11,6 +11,7 @@ mod inventory;
 mod journal;
 #[cfg(target_os = "macos")]
 mod native_clock;
+pub(crate) mod navigation;
 pub(crate) mod new_chat;
 pub(crate) mod plan_sources;
 mod planning;
@@ -669,7 +670,10 @@ impl NativeHost {
 }
 
 fn publish_planning(shared: &Shared, record: &planning::PlanningRecord) {
-    if matches!(record.operation["kind"].as_str(), Some("native-chat-create" | "user-verification")) {
+    if matches!(
+        record.operation["kind"].as_str(),
+        Some("native-chat-create" | "user-verification")
+    ) {
         return;
     }
     shared

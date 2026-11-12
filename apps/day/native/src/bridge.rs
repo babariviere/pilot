@@ -29,6 +29,7 @@ pub const METHODS: &[&str] = &[
     "day.intake.check",
     "day.delivery.read",
     "day.delivery.saved",
+    "day.delivery.open",
     "day.delivery.done",
     "day.delivery.sendBack",
     "day.delivery.reopen",
@@ -178,6 +179,7 @@ pub(crate) enum Command {
     IntakeCheck(String),
     DeliveryRead(crate::host::delivery::Subject),
     DeliverySaved,
+    DeliveryOpen(crate::host::delivery::Open),
     DeliveryWrite(crate::host::delivery::Write),
     DeliveryCheck(String),
     Today,
@@ -351,6 +353,11 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 return Err(Error::Invalid);
             }
             C::DeliverySaved
+        }
+        "day.delivery.open" => {
+            let r: crate::host::delivery::Open = exact(args)?;
+            r.validate()?;
+            C::DeliveryOpen(r)
         }
         "day.delivery.done" | "day.delivery.sendBack" | "day.delivery.reopen" => {
             let mut r: crate::host::delivery::Write = exact(args)?;
