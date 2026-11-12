@@ -33,7 +33,27 @@ test("Linux packaging uses installed pnpm and CI exposes it inside the build con
 	assert.match(script, /node-gyp\/bin\/node-gyp\.js" "\$stage\/tools\/bin\/node-gyp"/);
 	assert.match(workflow, /uses: pnpm\/action-setup@v4\s+with:\s+dest: \$\{\{ runner\.temp \}\}\/pnpm/);
 	assert.match(workflow, /-v "\$RUNNER_TEMP\/pnpm:\/pnpm:ro"/);
-	assert.match(workflow, /export PATH="\/pnpm\/node_modules\/\.bin:\$PATH"; exec bash \/source\/scripts\/linux\/bundle-runtime\.sh/);
+	assert.match(
+		workflow,
+		/export PATH="\/pnpm\/node_modules\/\.bin:\$PATH"; exec bash \/source\/scripts\/linux\/bundle-runtime\.sh/,
+	);
+});
+
+test("GUI release exposes installed pnpm to the immutable runtime builder", () => {
+	const workflow = readFileSync(new URL("../../.github/workflows/gui-package.yml", import.meta.url), "utf8");
+	const builder = readFileSync(
+		new URL("../../apps/desktop/scripts/linux_gui_package_runtime.py", import.meta.url),
+		"utf8",
+	);
+	assert.match(workflow, /uses: pnpm\/action-setup@v4\s+with:\s+dest: \$\{\{ runner\.temp \}\}\/pnpm/);
+	const step = workflow.split("- name: Build immutable Linux runtime input")[1].split("- name:")[0];
+	assert.match(step, /-v "\$RUNNER_TEMP\/pnpm:\/pnpm:ro"/);
+	assert.match(
+		step,
+		/export PATH="\/pnpm\/node_modules\/\.bin:\$PATH"; exec \/opt\/python\/cp313-cp313\/bin\/python3 \/source\/apps\/desktop\/scripts\/linux_gui_package_runtime\.py --repository \/source --source "\$RELEASE_SOURCE" --output \/output\/stage/,
+	);
+	// The producer must pass the container PATH to its isolated archived-source build.
+	assert.match(builder, /env = \{"PATH": os\.environ\.get\("PATH", "\/usr\/bin:\/bin"\)/);
 });
 
 test("signed manifests reject tampering, wrong keys, unsupported schema/platform/protocol and archive substitution", () => {
