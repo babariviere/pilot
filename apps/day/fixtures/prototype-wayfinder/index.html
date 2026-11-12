@@ -10,13 +10,16 @@ PROTOTYPE. Throw away. Not Pilot app code; the app stays native (NSH).
 Question: how should a mission's Wayfinder map be shown so you see at a glance what is settled,
 what is still unknown and what happens next, and can check where each answer came from?
 
-Two variants on one page, switched with ?variant=A|B and the bottom bar (or the arrow keys):
+Three variants on one page, switched with ?variant=A|B|C and the bottom bar (or the arrow keys):
   A  Map       a visual map: settled, open now, waiting, fog of war and the destination as columns,
                with lines for "waits for" and "became". Select a card to inspect it.
   B  Outline   a structured document: what happens next, unanswered questions by kind, settled
                choices with their sources, fog of war and build tasks. Open a row to inspect it.
+  C  Rounds    an optional, lighter map read top to bottom: one row per planning round, with what
+               it explored, what it produced and the next steps it set up. Lines join a next step
+               to the later round that took it up. Select an output to see its source and what changed.
 
-Both variants show the same mission ("Pilot on Linux desktops", from the Day mock planning world in
+All variants show the same mission ("Pilot on Linux desktops", from the Day mock planning world in
 apps/day/native/src/plan_world.rs) with the same records the native map reads: questions with their
 kind (interview, research, prototype) and state, fog of war, original sources, agreement and tasks.
 
@@ -246,6 +249,80 @@ details summary{cursor:pointer;color:var(--mfg);font-size:13.5px;margin-top:8px}
 .slices li{display:grid;grid-template-columns:14px minmax(0,1fr) auto;gap:8px;padding:8px 0;border-top:1px solid var(--border);font-size:14px;align-items:start}
 .slices li .ic{margin-top:3px}
 
+/* rounds (C): one row per planning round */
+.rintro{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center;font-size:13px;color:var(--mfg);margin-top:18px}
+.rwrap{position:relative;container-type:inline-size;min-width:0}
+.rlines{z-index:0}
+.rl{fill:none;stroke:var(--border2);stroke-width:1.4;marker-end:url(#r-a);transition:opacity .18s,stroke .18s}
+.tracing .rl{opacity:.12}
+.tracing .rl.rel{opacity:1;stroke:var(--primary);marker-end:url(#r-rel)}
+@media (prefers-reduced-motion:no-preference){
+	.rl.new{stroke-dasharray:1 1;stroke-dashoffset:1;animation:draw .7s .12s cubic-bezier(.3,.6,.2,1) forwards}
+	@keyframes draw{to{stroke-dashoffset:0}}
+	.rnd.rnew{animation:rowin .34s cubic-bezier(.2,.7,.2,1)}
+	@keyframes rowin{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+}
+.rhead,.rnd{display:grid;grid-template-columns:96px minmax(0,1fr) minmax(0,1.15fr) minmax(0,1fr);column-gap:18px}
+.rhead{position:sticky;top:48px;z-index:3;background:var(--bg);font-size:12.5px;color:var(--faint);padding:10px 0 7px;border-bottom:1px solid var(--border)}
+.rnd{position:relative;padding:18px 0}
+.rnd+.rnd{border-top:1px solid var(--border)}
+.rg{grid-row:1/3;position:relative;padding-left:24px;font-size:12px;color:var(--faint);line-height:1.45}
+.rg .rn{font-size:13px;font-weight:600;color:var(--fg)}
+.rg::before{content:"";position:absolute;left:8px;top:18px;bottom:-41px;width:0;border-left:1.5px solid var(--border2)}
+.rnd.now .rg::before{border-left-style:dashed}
+.rdest .rg::before{display:none}
+.rdot{position:absolute;left:3px;top:4px;width:12px;height:12px;border-radius:50%;background:var(--bg);border:1.5px solid var(--faint);z-index:1}
+.rnd.now .rdot{border-color:var(--progress);box-shadow:inset 0 0 0 2.5px var(--bg);background:var(--progress)}
+.rflag{position:absolute;left:2px;top:1px;color:var(--mfg)}
+.rtop{grid-column:2/4;grid-row:1;display:flex;align-items:center;gap:7px;margin-bottom:18px;min-width:0;color:var(--mfg)}
+.rtop .tt{font-size:14.5px;font-weight:500;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nowb{font-size:11.5px;font-weight:500;color:var(--progress);background:color-mix(in srgb,var(--progress) 13%,transparent);border-radius:5px;padding:1px 6px;flex:none}
+.rcol{grid-row:2;display:grid;gap:6px;align-content:start;min-width:0}
+.rcol::before{display:none;content:attr(data-l);font-size:12px;color:var(--faint)}
+.rnone{font-size:12.5px;color:var(--faint);padding:7px 0}
+.chip{position:relative;z-index:1;display:grid;grid-template-columns:16px minmax(0,1fr);gap:8px;align-items:start;width:100%;text-align:left;border:0;border-radius:9px;padding:7px 10px;background:var(--muted);cursor:pointer;font-size:13.5px;line-height:1.35;transition:opacity .18s,box-shadow .18s,background .18s}
+.chip:hover{box-shadow:inset 0 0 0 1px var(--border2)}
+.chip>.ic,.chip>.mk{margin-top:1.5px;width:15px;height:15px}
+.chip>.ic{color:var(--mfg)}
+.chip .ct{min-width:0}
+.chip .cl{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.chip .cm{display:block;font-size:12px;color:var(--faint);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip.out-settled{background:var(--bg);box-shadow:inset 0 0 0 1px var(--border)}
+.chip.out-settled:hover{box-shadow:inset 0 0 0 1px var(--border2)}
+.chip.out-fog{background:var(--bg);border:1px dashed var(--border2);padding:6px 9px}
+.chip.out-needs{background:var(--needs-soft)}
+.chip.past{background:var(--bg);color:var(--mfg)}
+.chip.past:hover{background:var(--hl)}
+.chip.sel{box-shadow:0 0 0 2px color-mix(in srgb,var(--primary) 60%,transparent)}
+.chip.hl{outline:2px solid color-mix(in srgb,var(--primary) 40%,transparent);outline-offset:2px}
+.tracing .chip{opacity:.34}
+.tracing .chip.rel,.tracing .chip.sel{opacity:1}
+.rdbody{grid-column:2/5;display:grid;gap:10px;justify-items:start}
+.rdbody .chip{max-width:560px}
+.rchips{display:flex;flex-wrap:wrap;gap:6px}
+.rchips .chip{width:auto;max-width:300px}
+.rsub{font-size:12.5px;color:var(--faint);margin-top:4px}
+.hrow{display:grid;grid-template-columns:64px minmax(0,1fr);gap:8px;font-size:13.5px;padding:3px 0}
+.mapgrid .insp{z-index:4}
+@container (max-width:760px){
+	.rhead,.rnd{grid-template-columns:repeat(3,minmax(0,1fr));column-gap:16px}
+	.rhead span:first-child{display:none}
+	.rg{grid-row:1;grid-column:1/4;display:flex;align-items:baseline;gap:10px;padding-left:20px;margin-bottom:8px}
+	.rg::before{display:none}
+	.rdot{top:3px;left:0}
+	.rflag{left:-1px;top:0}
+	.rtop{grid-row:2;grid-column:1/4}
+	.rcol{grid-row:3}
+	.rdbody{grid-column:1/4}
+}
+@container (max-width:480px){
+	.rhead,.rlines{display:none}
+	.rnd{grid-template-columns:minmax(0,1fr);row-gap:10px}
+	.rg,.rcol,.rtop{grid-row:auto}
+	.rg,.rtop,.rdbody{grid-column:auto;margin-bottom:0}
+	.rcol::before{display:block}
+}
+
 /* prototype chrome: deliberately not Pilot's look */
 .pbar{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:30;display:flex;align-items:center;gap:4px;background:var(--proto);color:var(--proto-fg);border-radius:999px;padding:5px;box-shadow:0 6px 24px rgba(0,0,0,.25);font-size:13px}
 .pbar button{border:0;background:none;color:inherit;cursor:pointer;border-radius:999px;padding:6px 10px;font-size:13px}
@@ -349,9 +426,69 @@ const Model = (() => {
 	const ex = (p) => Object.assign({ after: [], by: "", result: "", refs: [], fromFog: "", round: "", evidence: "", observations: [], unresolved: [], changed: [], lane: 0 }, p);
 	const withItem = (asks, item) => asks.map((q) => Object.assign({}, q, { item }));
 
+	/* Planning rounds: each time Pilot updates the map from something new, one row of history.
+	   explored: what the round looked at. out: what it produced, each with its source record and what it changed.
+	   next: the next steps it set up, frozen when the next round starts (the latest round's are live). */
+	const out = (n, i, o) => Object.assign({ k: "o" + n + "-" + i, about: "", ids: [], src: "", rev: 0, meta: "", changed: [] }, o);
+	const pass = (n, at, title, icon, explored, outs, next, rev) => ({ n, at, title, icon, explored, out: outs.map((o, i) => out(n, i, o)), next, rev });
+	const step = (ids, title, who, mk) => ({ ids, title, who, mk });
+	function history() {
+		return [
+			pass(1, "Nov 8", "You wrote the brief", "brief", ["src:brief-1"], [
+				{ kind: "question", about: "scope", label: "A port, not a new app", meta: "Interview question", src: "brief-1", changed: ["Added \u201cA port, not a new app\u201d for your first interview."] },
+				{ kind: "question", about: "wayland", label: "Wayland or X11", meta: "Interview question", src: "brief-1", changed: ["Added \u201cWayland or X11\u201d. Only you can choose it."] },
+				{ kind: "fog", about: "fog:credentials", label: "Where credentials live", meta: "Fog of war", src: "brief-1", changed: ["Marked \u201cWhere credentials live\u201d as fog: not clear enough to ask about yet."] },
+				{ kind: "fog", about: "fog:a11y", label: "Accessibility on Linux", meta: "Fog of war", src: "brief-1", changed: ["Marked \u201cAccessibility on Linux\u201d as fog. It waits until the desktops are chosen."] },
+			], [step(["scope", "wayland"], "Answer interview round 1", "You", "needs"), step(["fog:credentials"], "Explores \u201cWhere credentials live\u201d", "Pilot", "ready")], 1),
+			pass(2, "Nov 9", "Your interview round 1 answers", "round", ["scope", "wayland", "fog:credentials"], [
+				{ kind: "answer", about: "scope", label: "The same app, a first working version", meta: "Your answers \u00b7 interview round 1", src: "round-1", changed: ["Settled \u201cA port, not a new app\u201d.", "Anything beyond a first working version is left out for now."] },
+				{ kind: "decision", about: "wayland", label: "Decision 4: Wayland first", meta: "Revision 2", src: "d4", rev: 2, changed: ["Settled \u201cWayland or X11\u201d: Wayland only in the first version."] },
+				{ kind: "question", about: "keyring", label: "Keyring access", meta: "Research \u00b7 was fog", src: "brief-1", changed: ["Fog \u201cWhere credentials live\u201d became the precise question \u201cKeyring access\u201d. The fog is kept as history."] },
+				{ kind: "question", about: "desktops", label: "Which desktops count", meta: "Interview question", src: "brief-1", changed: ["Added \u201cWhich desktops count\u201d. Only you can choose it."] },
+				{ kind: "question", about: "packaging", label: "Packaging formats", meta: "Research question", src: "round-1", changed: ["Added \u201cPackaging formats\u201d: your demo needs a build you can install."] },
+				{ kind: "question", about: "tray", label: "Status without a tray", meta: "Research question", src: "d4", changed: ["Added \u201cStatus without a tray\u201d: some Wayland desktops hide tray icons."] },
+				{ kind: "fog", about: "fog:offline", label: "Installing without a network", meta: "Fog of war", src: "round-1", changed: ["Marked \u201cInstalling without a network\u201d as fog. It waits for the packaging formats."] },
+			], [step(["keyring"], "\u201cKeyring access\u201d is ready for research", "Pilot", "ready"), step(["desktops"], "Asks you about \u201cWhich desktops count\u201d", "Pilot", "ready"), step(["tray"], "\u201cStatus without a tray\u201d is ready for research", "Pilot", "ready"), step(["packaging"], "\u201cPackaging formats\u201d is ready for research", "Pilot", "ready")], 3),
+			pass(3, "Nov 10", "Research came back: Keyring access", "research", ["keyring", "desktops"], [
+				{ kind: "knowledge", about: "keyring", label: "Knowledge: Linux keyring access", meta: "Revision 3 \u00b7 not checked by Pilot", src: "k-keyring", changed: ["Settled \u201cKeyring access\u201d: the keyring holds the token, and Pilot never writes it to disk."] },
+				{ kind: "question", about: "updates", label: "How updates arrive", meta: "Interview question \u00b7 waits for Packaging formats", src: "brief-1", changed: ["Added \u201cHow updates arrive\u201d. It waits for \u201cPackaging formats\u201d."] },
+				{ kind: "question", about: "status-line", label: "A status line instead of a tray", meta: "Prototype", src: "brief-1", changed: ["Added a prototype, so you can react to a status line while research runs."] },
+				{ kind: "interview", about: "desktops", label: "Saved interview round 2", meta: "3 questions, all up front", changed: ["\u201cWhich desktops count\u201d asks you."] },
+			], null, 6),
+		];
+	}
+	function snapNext(s) {
+		return nextSteps(s).map((st) => step(st.ids || (st.id ? [st.id] : []), st.title, st.who, st.you ? "needs" : st.running ? "running" : st.later ? "waiting" : "ready"));
+	}
+	/* A new round starts when something new arrives. The previous round's next steps are kept as they were. */
+	function openPass(s, title, icon, explored) {
+		const last = s.passes[s.passes.length - 1];
+		if (last && !last.next) last.next = snapNext(s);
+		const n = s.passes.length + 1;
+		s.passes.push(pass(n, "Today " + clock(START + s.min), title, icon, explored, [], null, s.revision));
+	}
+	function addOut(s, o) {
+		const p = s.passes[s.passes.length - 1];
+		p.out.push(out(p.n, p.out.length, o));
+	}
+	function explore(s, id) {
+		const p = s.passes[s.passes.length - 1];
+		if (p.explored.indexOf(id) < 0) p.explored.push(id);
+	}
+	/* What settling one question changed on the map, in words. */
+	function effects(s0, s, id) {
+		const q = (t) => "\u201c" + t + "\u201d";
+		const out = [];
+		const a = get(s0, id), b = get(s, id);
+		if (b && b.state === "resolved" && a && a.state !== "resolved") out.push("Settled " + q(b.title) + ".");
+		for (const y of s.ex) { const x = get(s0, y.id); if (x && x.state === "waiting" && y.state === "ready" && x.after.indexOf(id) >= 0) out.push(q(y.title) + " no longer waits. It is ready."); }
+		for (const f of s.fog) { const x = fogOf(s0, f.id); if (x && x.active && x.after.indexOf(id) >= 0 && !f.after.length) out.push("Fog " + q(f.area) + " is ready to explore."); }
+		return out;
+	}
+
 	function initial() {
 		return {
-			min: 0, revision: 6, plan: null, tasks: [], log: [],
+			min: 0, revision: 6, plan: null, tasks: [], log: [], passes: history(),
 			ex: [
 				ex({ id: "scope", lane: 0, kind: "grilling", state: "resolved", title: "A port, not a new app", question: "Is Linux the same app on a new platform, or a separate app?", result: "Answered in interview round 1", round: "r1", refs: ["round-1"] }),
 				ex({ id: "wayland", lane: 1, kind: "grilling", state: "resolved", title: "Wayland or X11", question: "Must Pilot run on X11 too?", result: "Settled by Decision 4. It changed since.", refs: ["d4"], changed: ["Decision 4 changed after Pilot cited it."] }),
@@ -413,6 +550,11 @@ const Model = (() => {
 	}
 
 	function reduce(s0, a) {
+		const s = step1(s0, a);
+		if (s !== s0 && s.passes.length) s.passes[s.passes.length - 1].rev = s.revision;
+		return s;
+	}
+	function step1(s0, a) {
 		const s = structuredClone(s0);
 		const e = a.id ? get(s, a.id) : null;
 		switch (a.type) {
@@ -430,6 +572,7 @@ const Model = (() => {
 			case "pilot/absorb": {
 				const r = s.rounds.find((x) => x.id === a.round);
 				if (!r || r.state !== "submitted") return s0;
+				openPass(s, "Your interview round " + r.n + " answers", "round", r.items.slice());
 				r.state = "absorbed";
 				const src = "round-" + r.n;
 				s.sources[src] = { id: src, kind: "round", round: r.id };
@@ -441,6 +584,10 @@ const Model = (() => {
 					it.refs = it.refs.concat([src]);
 				}
 				unblock(s);
+				for (const id of r.items) {
+					const q = r.asks.find((x) => x.item === id);
+					addOut(s, { kind: "answer", about: id, src, label: answerWords(r, q), meta: "Your answer \u00b7 " + title(s, id), changed: effects(s0, s, id) });
+				}
 				s.revision++;
 				log(s, "Pilot", "Updated the map from your round " + r.n + " answers: " + titles(s, r.items) + " is settled");
 				return s;
@@ -453,6 +600,8 @@ const Model = (() => {
 				const r = { id: "r" + n, n, items: ready.map((x) => x.id), asks: [], state: "open", at: "", answers: {} };
 				for (const x of ready) { r.asks = r.asks.concat(withItem(ASKS[x.id], x.id)); x.state = "asking"; x.round = r.id; }
 				s.rounds.push(r);
+				for (const x of ready) explore(s, x.id);
+				addOut(s, { kind: "interview", about: r.items[0], ids: r.items.slice(), label: "Saved interview round " + n, meta: r.asks.length + " questions, all up front", changed: r.items.map((id) => "\u201c" + title(s, id) + "\u201d asks you.") });
 				s.revision++;
 				log(s, "Pilot", "Saved interview round " + n + " with " + r.asks.length + " questions, all up front");
 				return s;
@@ -470,10 +619,12 @@ const Model = (() => {
 			case "research/finish": {
 				if (!e || e.kind !== "research" || e.state !== "running" || !FINISH[e.id]) return s0;
 				const f = FINISH[e.id];
+				openPass(s, "Research came back: " + e.title, "research", [e.id]);
 				s.sources[f.source.id] = Object.assign({ at: "today" }, f.source);
 				e.state = "resolved"; e.by = ""; e.result = f.result;
 				e.refs = e.refs.filter((r) => r.indexOf("chat-") !== 0).concat([f.source.id]);
 				unblock(s);
+				addOut(s, { kind: "knowledge", about: e.id, src: f.source.id, label: "Knowledge: " + f.source.title, meta: "Revision " + f.source.rev + " \u00b7 not checked by Pilot", changed: effects(s0, s, e.id) });
 				s.revision++;
 				log(s, "Research chat", "Saved Knowledge: " + f.source.title + ". Pilot cites it on the map");
 				return s;
@@ -487,6 +638,7 @@ const Model = (() => {
 			}
 			case "prototype/finding": {
 				if (!e || e.kind !== "prototype" || e.state !== "running") return s0;
+				openPass(s, "Prototype finding: " + e.title, "prototype", [e.id]);
 				e.state = "resolved"; e.by = "";
 				e.evidence = "Finding: supported. It matches this map.";
 				e.observations = ["In two of three mock layouts the status stayed readable after the window lost focus.", "The third layout hid the status behind the sidebar."];
@@ -495,6 +647,8 @@ const Model = (() => {
 				s.sources["proto-status"] = { id: "proto-status", kind: "prototype", title: "Status line, three layouts", by: "Prototype chat", at: "today", body: ["Three throwaway layouts of the main window with a status line and no tray icon.", "Checked: is the status readable after the window loses focus?"] };
 				e.refs = ["proto-status"];
 				s.ex.push(ex(Object.assign({ state: "ready" }, NEW["status-choice"])));
+				addOut(s, { kind: "evidence", about: e.id, src: "proto-status", label: "Finding: supported, with one gap", meta: "Evidence, not acceptance", changed: ["Settled \u201c" + e.title + "\u201d as evidence: the status stayed readable in two of three layouts.", "Nothing was accepted or started."] });
+				addOut(s, { kind: "question", about: "status-choice", src: "proto-status", label: "Status line or notification", meta: "Interview question \u00b7 raised by the finding", changed: ["Added \u201cStatus line or notification\u201d. Only you can answer it."] });
 				s.revision++;
 				log(s, "Prototype chat", "Saved a finding. It left one question open for you");
 				return s;
@@ -504,6 +658,8 @@ const Model = (() => {
 				if (!f || !f.active || f.after.length || !f.graduates) return s0;
 				f.active = false; f.became = [f.graduates.id];
 				s.ex.push(ex(Object.assign({ state: "ready", fromFog: f.id, refs: f.refs.slice() }, f.graduates)));
+				explore(s, "fog:" + f.id);
+				addOut(s, { kind: "question", about: f.graduates.id, src: f.refs[0] || "", label: f.graduates.title, meta: KIND[f.graduates.kind].name + " \u00b7 was fog", changed: ["Fog \u201c" + f.area + "\u201d became the precise question \u201c" + f.graduates.title + "\u201d. The fog is kept as history."] });
 				s.revision++;
 				log(s, "Pilot", "Turned fog \u201c" + f.area + "\u201d into a precise question: " + f.graduates.title);
 				return s;
@@ -511,15 +667,20 @@ const Model = (() => {
 			case "record/recheck": {
 				const src = s.sources[a.id];
 				if (!src || src.kind !== "decision" || src.cited >= src.rev) return s0;
+				const citing = s.ex.filter((x) => x.refs.indexOf(a.id) >= 0);
+				openPass(s, "Decision " + src.number + " changed, Pilot rechecked it", "decision", citing.map((x) => x.id));
 				src.cited = src.rev;
 				for (const x of s.ex) if (x.refs.indexOf(a.id) >= 0) { x.changed = []; x.result = "Settled by Decision " + src.number + ", revision " + src.rev + ". Pilot rechecked it after the change: still settled."; }
+				for (const x of citing) addOut(s, { kind: "decision", about: x.id, src: a.id, rev: src.rev, label: "Decision " + src.number + ": still settled", meta: "Revision " + src.rev, changed: ["\u201c" + x.title + "\u201d stays settled. The map now cites revision " + src.rev + "."] });
 				s.revision++;
 				log(s, "Pilot", "Rechecked Decision " + src.number + " after it changed. The question stays settled");
 				return s;
 			}
 			case "plan/propose": {
 				if (s.plan || openRound(s) || !s.ex.every((x) => x.state === "resolved")) return s0;
+				openPass(s, "Nothing left to decide", "dest", ["dest"]);
 				s.plan = { state: "review", still: s.fog.filter((f) => f.active).map((f) => f.area) };
+				addOut(s, { kind: "plan", about: "dest", label: "Proposed plan", meta: SLICES.length + " build tasks \u00b7 waits for your review", changed: ["Pilot wrote a plan from the settled map. Approving it publishes tasks; it starts nothing."].concat(s.plan.still.length ? ["Fog \u201c" + s.plan.still.join("\u201d, \u201c") + "\u201d stays. It does not block the plan."] : []) });
 				log(s, "Pilot", "Proposed a plan from the settled map. It waits for your review");
 				return s;
 			}
@@ -527,6 +688,7 @@ const Model = (() => {
 				if (!s.plan || s.plan.state !== "review") return s0;
 				s.plan.state = "published";
 				s.tasks = SLICES.map((sl, i) => ({ id: String(12 + i), number: 12 + i, title: sl.title, owner: sl.owner, from: sl.from.filter((id) => get(s, id)), status: "To do, not started" }));
+				addOut(s, { kind: "tasks", about: "dest", ids: s.tasks.map((t) => "task:" + t.id), label: "Published " + s.tasks.length + " build tasks", meta: "You approved \u00b7 none started", changed: s.tasks.map((t) => "#" + t.number + " " + t.title + ": to do, not started.") });
 				s.revision++;
 				log(s, "You", "Approved the proposed plan");
 				log(s, "Pilot", "Published " + s.tasks.length + " build tasks. None started");
@@ -574,8 +736,8 @@ const Model = (() => {
 		const out = [];
 		const q = (t) => "\u201c" + t + "\u201d";
 		const r = openRound(s);
-		if (r && r.state === "open") out.push({ who: "You", you: true, act: "interview", id: r.items[0], title: "Answer " + r.asks.length + (r.asks.length === 1 ? " question" : " questions") + " about " + r.items.map((id) => q(title(s, id))).join(" and "), detail: "Interview round " + r.n + ". Pilot waits until you submit them all." });
-		if (r && r.state === "submitted") out.push({ who: "Pilot", id: r.items[0], title: "Reads your round " + r.n + " answers", detail: "Then it updates the map." });
+		if (r && r.state === "open") out.push({ who: "You", you: true, act: "interview", id: r.items[0], ids: r.items.slice(), title: "Answer " + r.asks.length + (r.asks.length === 1 ? " question" : " questions") + " about " + r.items.map((id) => q(title(s, id))).join(" and "), detail: "Interview round " + r.n + ". Pilot waits until you submit them all." });
+		if (r && r.state === "submitted") out.push({ who: "Pilot", id: r.items[0], ids: r.items.slice(), title: "Reads your round " + r.n + " answers", detail: "Then it updates the map." });
 		if (s.plan && s.plan.state === "review") out.push({ who: "You", you: true, act: "review", id: "dest", title: "Read the proposed plan", detail: "Approve it, or leave it for now. Approving publishes tasks; it starts nothing." });
 		for (const e of s.ex.filter((x) => x.state === "running")) out.push({ who: e.kind === "prototype" ? "Prototype chat" : "Research chat", running: true, id: e.id, title: "Working on " + q(e.title), detail: e.kind === "prototype" ? "Its finding is evidence, not acceptance." : "Its findings are saved as Knowledge." });
 		for (const e of s.ex.filter((x) => x.state === "ready" && x.kind === "research")) out.push({ who: "Pilot", id: e.id, title: q(e.title) + " is ready for research", detail: "It starts when the mission's automation and limits allow." });
@@ -594,9 +756,11 @@ const Model = (() => {
 		for (const e of s.ex) rows.push([e.title, KIND[e.kind].name + " \u00b7 " + stateWord(e) + (e.changed.length ? " \u00b7 source changed" : "")]);
 		for (const f of s.fog) rows.push([f.area, f.active ? "Fog \u00b7 " + (f.after.length ? "after " + titles(s, f.after) : "ready to explore") : "Explored \u00b7 became " + titles(s, f.became)]);
 		rows.push(["Build tasks", s.tasks.length ? s.tasks.length + " published, none started" : "None"]);
+		const lp = s.passes[s.passes.length - 1];
+		rows.push(["Planning rounds", s.passes.length + " \u00b7 latest: " + lp.title]);
 		return rows;
 	}
-	return { START, clock, DESTINATION, KIND, initial, reduce, can, play, get, fogOf, resolved, answered, openRound, title, titles, answerWords, stateWord, stageWord, mapSummary, sourceLabel, nextSteps, summary };
+	return { START, clock, DESTINATION, KIND, initial, reduce, can, play, get, fogOf, resolved, answered, openRound, title, titles, answerWords, stateWord, stageWord, mapSummary, sourceLabel, nextSteps, snapNext, summary };
 })();
 </script>
 <script>
@@ -607,6 +771,7 @@ const Model = (() => {
 const VARIANTS = {
 	A: { name: "Map", what: "A visual map. Columns run from settled, through open now and waiting, to fog of war and the destination. Lines show what waits for what, and what fog became. Select a card to inspect it." },
 	B: { name: "Outline", what: "A structured document. What happens next comes first, then unanswered questions by kind, settled choices with their sources, fog of war and build tasks. Open a row to inspect it." },
+	C: { name: "Rounds", what: "An optional, lighter map, read top to bottom. One row per planning round: what Pilot explored, what that produced and the next steps it set up. Lines join a next step to the later round that took it up. Select an output to see its source and what it changed." },
 };
 const params = new URLSearchParams(location.search);
 let state = Model.initial();
@@ -614,7 +779,7 @@ const ui = freshUi(VARIANTS[params.get("variant")] ? params.get("variant") : "A"
 
 function freshUi(variant) {
 	return { variant, route: parse(location.hash), stack: [location.hash || "#/map"], scroll: {}, hl: {}, kbd: false,
-		sel: null, open: {}, kind: null, modal: null, iv: { idx: 0, all: false }, ans: {}, drawer: false, dtab: "walk", wt: null, changed: [], toast: null, cx: 0 };
+		sel: null, selChip: null, seenPasses: null, seenLines: null, open: {}, kind: null, modal: null, iv: { idx: 0, all: false }, ans: {}, drawer: false, dtab: "walk", wt: null, changed: [], toast: null, cx: 0 };
 }
 
 /* ---------- helpers ---------- */
@@ -717,6 +882,7 @@ function srcChip(id) {
 /* ---------- the record: what a selected card (A) or opened row (B) shows ---------- */
 function recordBody(id) {
 	if (id === "dest") return destBody();
+	if (id.indexOf("out:") === 0) return outBody(id);
 	if (id.indexOf("fog:") === 0) return fogBody(fogOf(id.slice(4)));
 	if (id.indexOf("task:") === 0) return taskBody(taskOf(id.slice(5)));
 	const e = get(id);
@@ -746,6 +912,7 @@ function recordBody(id) {
 		h += '<div class="blk"><div class="k">Interview round ' + r.n + " \u00b7 your answers, as submitted" + (r.at ? " \u00b7 " + esc(r.at) : "") + '</div><div class="ans">' +
 			r.asks.filter((q) => q.item === e.id).map((q) => '<div><div class="p">' + esc(q.prompt) + "</div><div>" + esc(Model.answerWords(r, q)) + "</div></div>").join("") + "</div></div>";
 	}
+	if (ui.variant === "C") h += historyBlock(e.id);
 	if (e.refs.length) h += '<div class="blk"><div class="k">Sources</div>' + e.refs.map(srcChip).join("") + "</div>";
 	h += '<p class="what">' + icon(e.kind) + "<span><b>" + K[e.kind].name + ".</b> " + esc(K[e.kind].what) + "</span></p>";
 	return h + "</div>";
@@ -758,6 +925,7 @@ function fogBody(f) {
 		if (f.after.length) h += '<span class="k">After</span><span>' + pickLinks(f.after) + "</span>";
 	} else h += '<span class="k">Became</span><span>' + pickLinks(f.became) + "</span>";
 	h += "</div>";
+	if (ui.variant === "C") h += historyBlock("fog:" + f.id);
 	if (f.refs.length) h += '<div class="blk"><div class="k">Sources</div>' + f.refs.map(srcChip).join("") + "</div>";
 	h += '<p class="what">' + icon("fog") + "<span><b>Fog of war.</b> An area Pilot does not understand well enough to ask precise questions about yet. Fog is not a problem and blocks nothing. " + (f.active ? "When it is ready, Pilot turns it into precise questions." : "It is kept as history.") + "</span></p></div>";
 	return h;
@@ -776,6 +944,7 @@ function destBody() {
 }
 function recordTitle(id) {
 	if (id === "dest") return ["dest", "Destination", "Pilot on Linux desktops"];
+	if (id.indexOf("out:") === 0) { const r = passOut(id); return [outKindIcon(r.o), OUTKIND[r.o.kind][1] + " \u00b7 planning round " + r.p.n, r.o.label]; }
 	if (id.indexOf("fog:") === 0) { const f = fogOf(id.slice(4)); return ["fog", f.active ? "Fog of war" : "Fog of war, explored", f.area]; }
 	if (id.indexOf("task:") === 0) { const t = taskOf(id.slice(5)); return ["task", "Build task #" + t.number, t.title]; }
 	const e = get(id);
@@ -784,6 +953,7 @@ function recordTitle(id) {
 function exists(id) {
 	if (!id) return false;
 	if (id === "dest") return true;
+	if (id.indexOf("out:") === 0) return !!passOut(id);
 	if (id.indexOf("fog:") === 0) return !!fogOf(id.slice(4));
 	if (id.indexOf("task:") === 0) return !!taskOf(id.slice(5));
 	return !!get(id);
@@ -971,6 +1141,216 @@ function outlineView() {
 	return h + "</div>";
 }
 
+/* ---------- C: planning rounds, one row each ---------- */
+const OUTKIND = {
+	answer: ["round", "Your answer", "Only you answer interview questions. Pilot never answers for you."],
+	decision: ["decision", "Decision", "A decision you recorded. Pilot cites the revision it read, and rechecks when the decision changes."],
+	knowledge: ["knowledge", "Knowledge", K.research.what],
+	evidence: ["prototype", "Prototype finding", K.prototype.what],
+	question: [null, "New question", "A new question on the map. Adding a question answers nothing."],
+	fog: ["fog", "Fog of war", "An area not clear enough to ask precise questions about yet. Fog is not a problem and blocks nothing."],
+	interview: ["round", "Interview saved", "Saved with every question up front. Pilot waits until you submit all the answers."],
+	plan: ["dest", "Proposed plan", "A proposal for your review. Approving it publishes build tasks; it starts nothing."],
+	tasks: ["task", "Build tasks", "Implementation work from the plan you approved, apart from the map. None started."],
+};
+const outKindIcon = (o) => OUTKIND[o.kind][0] || (get(o.about) ? get(o.about).kind : "grilling");
+const outIds = (o) => [o.about].concat(o.ids || []).filter(Boolean);
+function passOut(id) {
+	const k = id.slice(4);
+	for (const p of state.passes) for (const o of p.out) if (o.k === k) return { p, o };
+	return null;
+}
+const livePass = () => state.passes[state.passes.length - 1];
+const stepsOf = (p) => (p === livePass() ? Model.snapNext(state) : p.next || []);
+function itemName(id) {
+	if (id === "dest") return "Destination";
+	if (id.indexOf("src:") === 0) return Model.sourceLabel(state, id.slice(4));
+	if (id.indexOf("task:") === 0) { const t = taskOf(id.slice(5)); return t ? "#" + t.number + " " + t.title : id; }
+	if (id.indexOf("fog:") === 0) { const f = fogOf(id.slice(4)); return f ? f.area : id; }
+	return Model.title(state, id);
+}
+function itemIcon(id) {
+	if (id === "dest") return icon("dest");
+	if (id.indexOf("src:") === 0) { const s = state.sources[id.slice(4)]; return icon(s ? s.kind : "brief"); }
+	if (id.indexOf("fog:") === 0) return icon("fog");
+	if (id.indexOf("task:") === 0) return icon("task");
+	const e = get(id);
+	return icon(e ? e.kind : "grilling");
+}
+/* Connections between rounds: each item a round explored comes from the latest earlier chip that pointed at it,
+   a next step if there was one, else the output that added it. */
+function threads() {
+	const P = state.passes, out = [];
+	P.forEach((p, i) => {
+		for (const id of p.explored) {
+			for (let j = i - 1; j >= 0; j--) {
+				const nx = (P[j].next || []).findIndex((st) => st.ids.indexOf(id) >= 0);
+				if (nx >= 0) { out.push({ id, from: "n" + P[j].n + "-" + nx, to: "x" + p.n + "-" + id, a: P[j].n, b: p.n }); break; }
+				const o = P[j].out.find((x) => outIds(x).indexOf(id) >= 0);
+				if (o) { out.push({ id, from: o.k, to: "x" + p.n + "-" + id, a: P[j].n, b: p.n }); break; }
+			}
+		}
+	});
+	return out;
+}
+function chip(key, node, ids, ic, label, meta, cls, act) {
+	return "<button " + attr({ class: "chip " + (cls || ""), "data-row": true, "data-chip": key, "data-flip": key, "data-node": node, "data-ids": ids.join(" "), "data-act": act ? act.act : "sel", "data-id": act ? null : node, "data-arg": act ? act.arg : null, tabindex: "-1" }) + ">" +
+		ic + '<span class="ct"><span class="cl">' + esc(label) + "</span>" + (meta ? '<span class="cm">' + meta + "</span>" : "") + "</span></button>";
+}
+function roundRow(p, links, isNew) {
+	const live = p === livePass();
+	const took = {}, came = {};
+	for (const l of links) { if (l.a === p.n) took[l.from] = took[l.from] || l.b; if (l.b === p.n) came[l.to] = l.a; }
+	const xs = p.explored.map((id) => {
+		const key = "x" + p.n + "-" + id;
+		if (id.indexOf("src:") === 0) return chip(key, id, [], itemIcon(id), itemName(id), "Where it started", "out-settled", { act: "source", arg: id.slice(4) });
+		return chip(key, id, [id], itemIcon(id), itemName(id), came[key] ? "\u2190 from round " + came[key] : "", "");
+	}).join("");
+	const os = p.out.map((o) => {
+		const src = o.src && state.sources[o.src];
+		let meta = esc(o.meta);
+		if (o.kind === "decision" && src && src.rev > o.rev) meta += src.cited >= src.rev ? " \u00b7 rechecked later" : ' \u00b7 <span class="needs-ink">changed since</span>';
+		const cls = { answer: "out-settled", decision: "out-settled", knowledge: "out-settled", evidence: "out-settled", fog: "out-fog", interview: "out-needs", plan: "out-needs" }[o.kind] || "";
+		return chip(o.k, "out:" + o.k, outIds(o), icon(outKindIcon(o)), o.label, meta, cls);
+	}).join("");
+	const ns = stepsOf(p).map((st, i) => {
+		const key = "n" + p.n + "-" + i;
+		const meta = live ? esc(st.who) : took[key] ? "\u2192 round " + took[key] + " took it up" : "Not taken up yet";
+		return chip(key, st.ids[0] || "", st.ids, mark(live ? st.mk : took[key] ? "done" : "waiting"), st.title, meta, live ? "" : "past");
+	}).join("");
+	return '<section class="rnd' + (live ? " now" : "") + (isNew ? " rnew" : "") + '" data-pass="' + p.n + '" aria-label="Planning round ' + p.n + '">' +
+		'<div class="rg"><span class="rdot" aria-hidden="true"></span><div class="rn">Round ' + p.n + "</div><div>" + esc(p.at) + '</div><div title="Map revision ' + p.rev + '">Revision ' + p.rev + "</div></div>" +
+		'<div class="rtop">' + icon(p.icon) + '<span class="tt" title="' + esc(p.title) + '">' + esc(p.title) + "</span>" + (live ? '<span class="nowb">Now</span>' : "") + "</div>" +
+		'<div class="rcol" data-l="Explored">' + (xs || '<div class="rnone">Nothing</div>') + "</div>" +
+		'<div class="rcol" data-l="Produced">' + (os || '<div class="rnone">Nothing yet</div>') + "</div>" +
+		'<div class="rcol" data-l="' + (live ? "Next" : "Next, as it was then") + '">' + (ns || '<div class="rnone">Nothing</div>') + "</div></section>";
+}
+function destRow() {
+	const still = state.fog.filter((f) => f.active);
+	const t = tasks();
+	return '<section class="rnd rdest" aria-label="Destination"><div class="rg"><span class="rflag">' + icon("dest") + '</span><div class="rn">Destination</div></div>' +
+		'<div class="rdbody">' + chip("dest", "dest", ["dest"], icon("dest"), Model.DESTINATION, esc(Model.stageWord(state)), "out-settled") +
+		(state.plan && state.plan.state === "review" ? btn("Read the plan", { act: "review" }, "primary sm") : "") +
+		(t.length ? '<div class="rsub">Build tasks \u00b7 none started</div><div class="rchips">' + t.map((x) => chip("t" + x.id, "task:" + x.id, ["task:" + x.id], icon("task"), "#" + x.number + " " + x.title, esc(x.owner), "")).join("") + "</div>" : "") +
+		(still.length ? '<div class="rsub">Still fog \u00b7 blocks nothing</div><div class="rchips">' + still.map((f) => chip("f" + f.id, "fog:" + f.id, ["fog:" + f.id], icon("fog"), f.area, f.after.length ? "After " + esc(Model.titles(state, f.after)) : "Ready to explore", "out-fog")).join("") + "</div>" : "") +
+		"</div></section>";
+}
+function roundsView() {
+	const links = threads();
+	const seen = ui.seenPasses;
+	const insp = ui.sel && exists(ui.sel) ? inspector(ui.sel) : "";
+	const lineKey = '<span class="lines" style="margin-left:0"><span><svg viewBox="0 0 30 8"><path d="M0 4h26" stroke="var(--border2)" stroke-width="1.4"/><path d="M24 1 30 4 24 7Z" fill="var(--border2)"/></svg>taken up in a later round</span></span>';
+	return '<div class="page wide">' + header() +
+		'<div class="rintro enter"><span>One row per planning round, oldest first. Each shows what Pilot explored, what that produced and the next steps it set up.</span>' + lineKey + "</div>" +
+		'<div class="mapgrid' + (insp ? " insp-on" : "") + '"><div class="rwrap" id="rounds"><svg class="edges rlines" id="rlines" aria-hidden="true"></svg>' +
+		'<div class="rhead" aria-hidden="true"><span></span><span>Explored</span><span>Produced</span><span>Next steps</span></div>' +
+		state.passes.map((p) => roundRow(p, links, seen != null && p.n > seen)).join("") + destRow() + "</div>" + insp + "</div>" +
+		'<p class="small faint" style="margin-top:10px">Select anything to see where it came from and what it changed. Hover to follow it across rounds. Older rows are kept as history; reading them answers, approves and starts nothing.</p></div>';
+}
+/* A path through the given points, with small rounded corners. */
+function roundPath(pts, rad) {
+	let d = "M" + pts[0][0] + " " + pts[0][1];
+	for (let i = 1; i < pts.length - 1; i++) {
+		const [px, py] = pts[i - 1], [x, y] = pts[i], [nx, ny] = pts[i + 1];
+		const r = Math.min(rad, Math.hypot(x - px, y - py) / 2, Math.hypot(nx - x, ny - y) / 2);
+		const ux = Math.sign(x - px), uy = Math.sign(y - py), vx = Math.sign(nx - x), vy = Math.sign(ny - y);
+		d += " L" + (x - ux * r) + " " + (y - uy * r) + " Q" + x + " " + y + " " + (x + vx * r) + " " + (y + vy * r);
+	}
+	const e = pts[pts.length - 1];
+	return d + " L" + e[0] + " " + e[1];
+}
+/* Lines are drawn from the laid-out chips and run only in the gaps between columns and rows, never behind a chip:
+   out of the chip's left side, down the gap, across above the later round's columns, then into the chip that took it up. */
+function drawLines() {
+	const wrap = document.getElementById("rounds"), svg = document.getElementById("rlines");
+	if (!wrap || !svg) return;
+	if (getComputedStyle(svg).display === "none") { svg.innerHTML = ""; return; }
+	const box = wrap.getBoundingClientRect();
+	svg.setAttribute("width", Math.ceil(box.width));
+	svg.setAttribute("height", Math.ceil(box.height));
+	const defs = "<defs>" + [["r-a", "var(--border2)"], ["r-rel", "var(--primary)"]].map(([id, c]) => '<marker id="' + id + '" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 8 4 0 8Z" fill="' + c + '"/></marker>').join("") + "</defs>";
+	const into = {}, outOf = {}, keys = [];
+	let paths = "";
+	for (const l of threads()) {
+		const a = wrap.querySelector('[data-chip="' + CSS.escape(l.from) + '"]'), b = wrap.querySelector('[data-chip="' + CSS.escape(l.to) + '"]');
+		if (!a || !b) continue;
+		const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect(), sc = a.parentElement.getBoundingClientRect(), tc = b.parentElement.getBoundingClientRect();
+		into[l.b] = (into[l.b] || 0) + 1;
+		const gi = Math.min(into[l.b] - 1, 3);
+		const sk = l.a + "|" + Math.round(sc.left);
+		outOf[sk] = (outOf[sk] || 0) + 1;
+		const si = Math.min(outOf[sk] - 1, 3);
+		const X = (v) => Math.round(v - box.left) + 0.5, Y = (v) => Math.round(v - box.top) + 0.5;
+		const sx = X(ra.left) - 1, sy = Y(ra.top + ra.height / 2);
+		const g1 = X(sc.left) - 6 - si * 4;
+		const gy = Y(tc.top) - 9 - gi * 4;
+		const g2 = X(tc.left) - 6 - gi * 4;
+		const ex = X(rb.left) - 2, ey = Y(rb.top + rb.height / 2);
+		const d = roundPath([[sx, sy], [g1, sy], [g1, gy], [g2, gy], [g2, ey], [ex, ey]], 5);
+		const key = l.from + ">" + l.to;
+		keys.push(key);
+		const fresh = ui.seenLines && ui.seenLines.indexOf(key) < 0;
+		paths += '<path class="rl' + (fresh ? " new" : "") + '"' + (fresh ? ' pathLength="1"' : "") + ' data-id="' + esc(l.id) + '" d="' + d + '"/>';
+	}
+	svg.innerHTML = defs + paths;
+	ui.seenLines = keys;
+}
+function selChipEl() {
+	const w = document.getElementById("rounds");
+	if (!w || !ui.sel) return null;
+	const all = [...w.querySelectorAll("[data-chip]")];
+	return (ui.selChip && all.find((el) => el.dataset.chip === ui.selChip)) || all.filter((el) => el.dataset.node === ui.sel).pop() || null;
+}
+function focusOf(id) {
+	if (!id) return null;
+	if (id.indexOf("out:") === 0) { const r = passOut(id); return r ? new Set(outIds(r.o)) : null; }
+	return new Set([id]);
+}
+/* Following one thing across rounds: every chip about it, and the lines between them. */
+function traceC(id) {
+	const w = document.getElementById("rounds");
+	if (!w) return;
+	const f = focusOf(id);
+	w.classList.toggle("tracing", !!f);
+	for (const el of w.querySelectorAll("[data-chip]")) el.classList.toggle("rel", !!f && (el.dataset.node === id || el.dataset.ids.split(" ").some((x) => f.has(x))));
+	for (const el of w.querySelectorAll(".rl")) el.classList.toggle("rel", !!f && f.has(el.dataset.id));
+}
+function markSel() {
+	const w = document.getElementById("rounds");
+	if (!w) return;
+	const pick = selChipEl();
+	for (const el of w.querySelectorAll("[data-chip]")) el.classList.toggle("sel", el === pick);
+}
+/* The output inspector: where it came from, what it changed, and where it was taken up later. */
+function outBody(id) {
+	const r = passOut(id);
+	if (!r) return "";
+	const { p, o } = r;
+	const src = o.src && state.sources[o.src];
+	let h = '<div class="rec"><div class="kv"><span class="k">Produced in</span><span>Planning round ' + p.n + " \u00b7 " + esc(p.at) + '<br><span class="faint">' + esc(p.title) + "</span></span>";
+	const about = outIds(o);
+	if (about.length) h += '<span class="k">About</span><span>' + about.map((x) => lnk(esc(itemName(x)), { act: "pick", id: x })).join(", ") + "</span>";
+	h += "</div>";
+	if (o.kind === "decision" && src && src.rev > o.rev) h += '<div class="banner">' + mark(src.cited >= src.rev ? "done" : "needs") + "<span>Decision " + src.number + " changed after this round read revision " + o.rev + ". " + (src.cited >= src.rev ? "A later round rechecked it: still settled." : "Pilot rechecks it. Nothing here needs you.") + "</span></div>";
+	if (o.changed.length) h += '<div class="blk"><div class="k">What changed</div><ul>' + o.changed.map((c) => "<li>" + esc(c) + "</li>").join("") + "</ul></div>";
+	h += '<div class="blk"><div class="k">Where it came from</div>' + (src ? srcChip(o.src) : '<p class="small faint" style="margin-top:4px">' + esc(o.kind === "interview" ? "Pilot saved it. Your answers become its record once you submit them." : o.kind === "tasks" ? "Your approval of the proposed plan, in this round." : "Pilot\u2019s own step, from the settled map.") + "</p>") + "</div>";
+	const later = state.passes.filter((q) => q.n > p.n && q.explored.some((x) => about.indexOf(x) >= 0));
+	h += '<div class="blk"><div class="k">Taken up later</div>' + (later.length ? later.map((q) => '<div class="hrow"><span class="faint">Round ' + q.n + "</span><span>" + esc(q.title) + "</span></div>").join("") : '<p class="small faint">Not yet.</p>') + "</div>";
+	h += '<p class="what">' + icon(outKindIcon(o)) + "<span><b>" + esc(OUTKIND[o.kind][1]) + ".</b> " + esc(OUTKIND[o.kind][2]) + "</span></p></div>";
+	return h;
+}
+/* For one question or fog area: every round that touched it. */
+function historyBlock(id) {
+	const rows = state.passes.map((p) => {
+		const bits = [];
+		if (p.explored.indexOf(id) >= 0) bits.push("explored");
+		for (const o of p.out) if (outIds(o).indexOf(id) >= 0) bits.push(lnk(esc(o.label), { act: "pick", id: "out:" + o.k }));
+		if (stepsOf(p).some((st) => st.ids.indexOf(id) >= 0)) bits.push(p === livePass() ? "next step now" : "next step");
+		return bits.length ? '<div class="hrow"><span class="faint">Round ' + p.n + "</span><span>" + bits.join(" \u00b7 ") + "</span></div>" : "";
+	}).join("");
+	return rows ? '<div class="blk"><div class="k">In planning rounds</div>' + rows + "</div>" : "";
+}
+
 /* ---------- source page: the original record ---------- */
 function citedBy(id) {
 	return ex().filter((e) => e.refs.indexOf(id) >= 0).map((e) => e.id).concat(state.fog.filter((f) => f.refs.indexOf(id) >= 0).map((f) => "fog:" + f.id));
@@ -1048,7 +1428,7 @@ function view() {
 	const r = ui.route;
 	if (r.name === "today") return todayView();
 	if (r.name === "source") return sourceView(r.id);
-	return ui.variant === "A" ? mapView() : outlineView();
+	return ui.variant === "A" ? mapView() : ui.variant === "B" ? outlineView() : roundsView();
 }
 
 /* ---------- modals: interview and plan review ---------- */
@@ -1129,7 +1509,7 @@ function drawerView() {
 			body += '<h2 style="margin-top:18px">' + esc(w.name) + "</h2><p>" + esc(w.desc) + '</p><div class="wt-steps">' +
 				w.steps.map((s, j) => '<button class="pbtn' + (j === ui.wt.step ? " next" : "") + '" data-act="wtStep" data-arg="' + j + '"' + (j !== ui.wt.step ? " disabled" : "") + ">" + (j < ui.wt.step ? "\u2713 " : j + 1 + ". ") + esc(s[0]) + "</button>").join("") + "</div>" +
 				(ui.wt.step >= w.steps.length ? '<p style="margin-top:10px">Walkthrough finished. Switch variant (\u2190 \u2192) and run it again to compare. <button class="pbtn" data-act="wtEnd">Close walkthrough</button></p>' : '<p class="small" style="margin-top:8px;color:var(--proto-faint)">Press the highlighted step. Pilot waits for each step during walkthroughs.</p>');
-		} else body += "<p>Each walkthrough resets the data, then steps through one case. The variant stays as you set it, so you can run the same case in A and B and compare.</p>";
+		} else body += "<p>Each walkthrough resets the data, then steps through one case. The variant stays as you set it, so you can run the same case in A, B and C and compare. The last one opens C.</p>";
 	} else if (ui.dtab === "play") {
 		const r = Model.openRound(state);
 		body = "<p>Simulate what Pilot and its agents do. Only actions that make sense now are enabled.</p><h3>Pilot and agents</h3><div class=\"grid\">" +
@@ -1139,12 +1519,15 @@ function drawerView() {
 		body = "<p>The whole map, as saved. Yellow means the last action changed it.</p><div class=\"st\">" + Model.summary(state).map(([k, v]) => '<span class="k">' + esc(k) + '</span><span class="v' + (ui.changed.indexOf(k) >= 0 ? " chg" : "") + '">' + esc(v) + "</span>").join("") + "</div>" +
 			'<h3>Log</h3><div class="log">' + (state.log.length ? state.log.slice(0, 16).map((l) => "<div>" + esc(l.at) + " \u00b7 " + esc(l.who) + ": " + esc(l.text) + "</div>").join("") : "<div>Nothing yet. Pilot\u2019s earlier work is already on the map.</div>") + "</div>";
 	} else if (ui.dtab === "compare") {
-		const rows = [["What is settled?", "Left column, quiet cards", "\u201cSettled\u201d, each with how it was settled"], ["What is still unknown?", "Open now, Waiting and Fog columns", "\u201cUnanswered\u201d grouped by kind, then \u201cFog of war\u201d"], ["What happens next?", "Open now column; follow the arrows", "Numbered list at the top, with who acts"], ["Where did an answer come from?", "Select a card; the side panel lists sources", "Open a row; sources show inside it"], ["How do things connect?", "Lines: waits for, fog became; hover traces a path", "Words: waits for, unblocks, was fog"], ["Build tasks", "Under the destination", "Their own section at the end"]];
-		body = "<p>Both variants show the same records. They differ in what you see first and how you follow connections.</p><table><tr><th>You want to know</th><th>A Map</th><th>B Outline</th></tr>" +
-			rows.map((r) => "<tr><td>" + esc(r[0]) + "</td>" + [1, 2].map((j) => "<td" + ((j === 1) === (ui.variant === "A") ? ' style="color:#fff"' : ' style="color:var(--proto-faint)"') + ">" + esc(r[j]) + "</td>").join("") + "</tr>").join("") + "</table><p style=\"margin-top:12px\">" + esc(VARIANTS[ui.variant].what) + "</p>";
+		const rows = [["What is settled?", "Left column, quiet cards", "\u201cSettled\u201d, each with how it was settled", "Answers, decisions and Knowledge, in the round that produced them"], ["What is still unknown?", "Open now, Waiting and Fog columns", "\u201cUnanswered\u201d grouped by kind, then \u201cFog of war\u201d", "The last round\u2019s next steps; fog at the destination"], ["What happens next?", "Open now column; follow the arrows", "Numbered list at the top, with who acts", "The last row\u2019s Next steps"], ["Where did an answer come from?", "Select a card; the side panel lists sources", "Open a row; sources show inside it", "Select an output: its source, and what it changed"], ["How do things connect?", "Lines: waits for, fog became; hover traces a path", "Words: waits for, unblocks, was fog", "Lines from a next step down to the round that took it up"], ["How did we get here?", "Not shown", "Not shown", "One row per planning round, kept as history"], ["Build tasks", "Under the destination", "Their own section at the end", "At the destination, after the last round"]];
+		const col = Object.keys(VARIANTS).indexOf(ui.variant) + 1;
+		body = "<p>All variants show the same records. They differ in what you see first and how you follow connections.</p><table><tr><th>You want to know</th><th>A Map</th><th>B Outline</th><th>C Rounds</th></tr>" +
+			rows.map((r) => "<tr><td>" + esc(r[0]) + "</td>" + [1, 2, 3].map((j) => "<td" + (j === col ? ' style="color:#fff"' : ' style="color:var(--proto-faint)"') + ">" + esc(r[j]) + "</td>").join("") + "</tr>").join("") + "</table><p style=\"margin-top:12px\">" + esc(VARIANTS[ui.variant].what) + "</p>" +
+			"<p>Feedback so far: B Outline is the practical one. C is a lighter, optional view you might open now and then to see how the plan got here. It is not needed for daily work.</p>";
 	} else {
 		body = "<p><b>Question.</b> How should a mission\u2019s Wayfinder map show what is settled, what is still unknown and what happens next, and let you check where each answer came from? A visual map, or a structured outline?</p>" +
 			"<p><b>Choosing a variant is feedback, not approval.</b> A mix is a good answer too. Nothing gets built from a pick without your separate design review and agreement.</p>" +
+			"<p><b>C Rounds is optional.</b> You said the outline is more practical and the map may not be used often. C tries a lighter map read top to bottom: each planning round adds one row with what it explored, what it produced and its next steps. It sits beside the outline; it does not replace it. A planning round is each time Pilot updates the map from something new (your answers, research, a prototype finding, a changed decision). Interview rounds are one kind of input to it.</p>" +
 			"<p><b>Not real.</b> Mock data in memory only, from the Day mock mission \u201cPilot on Linux desktops\u201d. Nothing is sent anywhere. Reload or Reset starts over. This is a throwaway design prototype, not how Pilot is built: the app stays native (NSH).</p>" +
 			"<p><b>Words.</b> Interview: questions only you answer. Research: an agent looks for evidence. Prototype: a throwaway experiment whose finding is evidence. Fog of war: areas not yet clear enough to ask about. Build task: implementation work from the approved plan.</p>" +
 			"<p><b>Keys.</b> \u2191 \u2193 move, Return opens, Esc closes or goes back, \u2190 \u2192 switch variant. In the interview: 1\u20139 pick an answer, 0 opens \u201cwhy\u201d, \u2190 \u2192 move between questions, \u2318Return submits.</p>" +
@@ -1187,6 +1570,13 @@ const WALKS = [
 		setup: routeClear,
 		steps: [pick("Look at the destination", "dest"), sim("Pilot proposes the plan", { type: "plan/propose" }), ["Read the proposed plan", () => openModal({ kind: "review" })],
 			["Approve and publish tasks", () => { ui.modal = null; dispatch({ type: "plan/approve" }); }], pick("Open a build task", "task:13"), pick("See the fog that is left", "fog:offline")] },
+	{ name: "How did we get here? (C)", variant: "C", desc: "Opens C Rounds. Read the history one row at a time, open an output to see its source and what it changed, then watch new rounds add rows as research and your answers arrive.",
+		steps: [pick("Open round 2\u2019s decision", "out:o2-1"), ["Open Decision 4, the original record", () => go("#/source/d4")], ["Back to the rounds", () => goBack()],
+			pick("Follow \u201cKeyring access\u201d across rounds", "keyring"),
+			sim("Research finishes: Status without a tray (new round)", { type: "research/finish", id: "tray" }), pick("Open what round 4 produced", "out:o4-0"),
+			["Answer interview round 2 with the recommended answers", () => { const r = openRoundNow(); dispatch({ type: "interview/submit", round: r.id, answers: REC(r) }); toast("Submitted. Pilot updates the map from your answers."); }],
+			sim("Pilot reads your answers (new round)", { type: "pilot/absorb", round: "r2" }), pick("See what your answers changed", "out:o5-0"),
+			sim("Pilot turns the fog into a question", { type: "fog/graduate", id: "a11y" }), pick("Follow that fog back to round 1", "fog:a11y")] },
 ];
 
 /* ---------- navigation ---------- */
@@ -1213,14 +1603,14 @@ function goBack() {
 function reveal(id) {
 	if (!exists(id)) return;
 	// Following a link opens just that record, so the outline does not fill up with open rows.
-	ui.sel = id; ui.open = {}; ui.open[id] = true; ui.kind = null;
+	ui.sel = id; ui.selChip = null; ui.open = {}; ui.open[id] = true; ui.kind = null;
 	if (ui.route.name !== "map") go("#/map"); else render();
 	scrollToSel();
 }
 function scrollToSel() {
 	requestAnimationFrame(() => {
 		if (ui.sel === "dest" && ui.variant === "B") { window.scrollTo({ top: 0, behavior: reduced() ? "auto" : "smooth" }); return; }
-		const el = document.querySelector('[data-node="' + CSS.escape(ui.sel || "") + '"]') || document.querySelector('.row[data-id="' + CSS.escape(ui.sel || "") + '"]');
+		const el = (ui.variant === "C" && selChipEl()) || document.querySelector('[data-node="' + CSS.escape(ui.sel || "") + '"]') || document.querySelector('.row[data-id="' + CSS.escape(ui.sel || "") + '"]');
 		if (el) el.scrollIntoView({ block: "nearest", inline: "nearest", behavior: reduced() ? "auto" : "smooth" });
 	});
 }
@@ -1251,6 +1641,9 @@ function dispatch(a) {
 	if (a.type === "interview/submit" && !walking()) after(1300, () => dispatch({ type: "pilot/absorb", round: a.round }));
 	if (ui.sel && !exists(ui.sel)) ui.sel = null;
 	render();
+	if (state.passes.length > prev.passes.length && ui.variant === "C" && ui.route.name === "map") {
+		requestAnimationFrame(() => { const row = $app.querySelector('.rnd[data-pass="' + state.passes.length + '"]'); if (row) row.scrollIntoView({ block: "nearest", behavior: reduced() ? "auto" : "smooth" }); });
+	}
 	return true;
 }
 function reset(setup) {
@@ -1275,7 +1668,9 @@ function render() {
 	if (same) for (const el of $app.querySelectorAll("[data-flip]")) rects[el.dataset.flip] = el.getBoundingClientRect();
 	const cw = document.getElementById("cwrap");
 	const cs = cw ? [cw.scrollLeft, cw.scrollTop] : null;
+	document.body.classList.toggle("drawer-on", ui.drawer);
 	$app.innerHTML = topbar() + view();
+	drawLines();
 	if (same) for (const e of $app.querySelectorAll(".enter")) e.classList.remove("enter");
 	lastKey = key;
 	const cw2 = document.getElementById("cwrap");
@@ -1297,8 +1692,8 @@ function render() {
 		if (moved && svg) svg.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 360, easing: "ease-in" });
 	}
 	ui.still = false;
+	if (document.getElementById("rounds")) ui.seenPasses = state.passes.length;
 	$bar.innerHTML = barView();
-	document.body.classList.toggle("drawer-on", ui.drawer);
 	$drawer.innerHTML = drawerView();
 	$modal.innerHTML = modalView();
 	const mk = ui.modal ? ui.modal.kind : "";
@@ -1312,6 +1707,8 @@ function render() {
 		if (el) { el.focus({ preventScroll: true }); if (sel && "setSelectionRange" in el) try { el.setSelectionRange(sel[0], sel[1]); } catch (err) {} }
 	}
 	trace(ui.sel);
+	markSel();
+	traceC(ui.sel);
 	paintHl();
 }
 function rows() { return [...$app.querySelectorAll("[data-row]")]; }
@@ -1329,7 +1726,13 @@ function act(el, ev) {
 	switch (a) {
 		case "go": go(arg); break;
 		case "back": goBack(); break;
-		case "sel": ui.sel = ui.sel === id ? null : id; ui.kind = null; if (ui.sel) ui.open[id] = true; render(); break;
+		case "sel": {
+			const ch = el.dataset && el.dataset.chip;
+			const same = ui.sel === id && (!ch || ui.selChip === ch || (!ui.selChip && selChipEl() === el));
+			ui.sel = same ? null : id; ui.selChip = same ? null : ch || null; ui.kind = null;
+			if (ui.sel) ui.open[id] = true;
+			render(); break;
+		}
 		case "toggle": ui.open[id] = !ui.open[id]; ui.sel = ui.open[id] ? id : null; render(); break;
 		case "pick": reveal(id); break;
 		case "kind": ui.kind = ui.kind === arg ? null : arg; ui.sel = null; render(); break;
@@ -1352,14 +1755,17 @@ function act(el, ev) {
 		case "dtab": ui.dtab = arg; render(); break;
 		case "reset": reset(); ui.wt = null; go("#/map"); render(); toast("Reset to the starting data."); break;
 		case "sim": dispatch(JSON.parse(arg)); break;
-		case "wtStart": { const w = WALKS[+arg]; reset(w.setup); ui.wt = { i: +arg, step: 0 }; ui.drawer = true; ui.dtab = "walk"; go("#/map"); render(); window.scrollTo(0, 0); break; }
+		case "wtStart": { const w = WALKS[+arg]; reset(w.setup); ui.wt = { i: +arg, step: 0 }; ui.drawer = true; ui.dtab = "walk"; if (w.variant && ui.variant !== w.variant) setVariant(w.variant); go("#/map"); render(); window.scrollTo(0, 0); break; }
 		case "wtStep": { const w = WALKS[ui.wt.i], s = w.steps[+arg]; ui.wt.step++; s[1](); render(); break; }
 		case "wtEnd": ui.wt = null; render(); break;
 	}
 }
 function switchVariant(dir) {
 	const keys = Object.keys(VARIANTS);
-	ui.variant = keys[(keys.indexOf(ui.variant) + dir + keys.length) % keys.length];
+	setVariant(keys[(keys.indexOf(ui.variant) + dir + keys.length) % keys.length]);
+}
+function setVariant(v) {
+	ui.variant = v;
 	if (ui.sel) ui.open[ui.sel] = true;
 	const p = new URLSearchParams(location.search); p.set("variant", ui.variant);
 	history.replaceState(null, "", location.pathname + "?" + p + location.hash);
@@ -1383,15 +1789,18 @@ document.addEventListener("input", (ev) => {
 });
 document.addEventListener("mousedown", () => { if (ui.kbd) { ui.kbd = false; paintHl(); } });
 document.addEventListener("mouseover", (ev) => {
+	if (ui.variant === "C" && ui.route.name === "map") { const c = ev.target.closest && ev.target.closest("#rounds [data-chip]"); if (c) traceC(c.dataset.node); return; }
 	if (ui.variant !== "A" || ui.route.name !== "map") return;
 	const n = ev.target.closest && ev.target.closest("#canvas [data-node]");
 	if (n) trace(n.dataset.node);
 });
 document.addEventListener("mouseout", (ev) => {
+	if (ui.variant === "C" && ui.route.name === "map") { const c = ev.target.closest && ev.target.closest("#rounds [data-chip]"); if (c && !(ev.relatedTarget && c.contains(ev.relatedTarget))) traceC(ui.sel); return; }
 	if (ui.variant !== "A" || ui.route.name !== "map") return;
 	const n = ev.target.closest && ev.target.closest("#canvas [data-node]");
 	if (n && !(ev.relatedTarget && n.contains(ev.relatedTarget))) trace(ui.sel);
 });
+window.addEventListener("resize", () => { if (ui.variant === "C" && ui.route.name === "map") { drawLines(); traceC(ui.sel); } });
 
 /* ---------- keyboard ---------- */
 function inText(e) { const t = e.target; return t && (t.tagName === "TEXTAREA" || (t.tagName === "INPUT" && t.type === "text") || t.isContentEditable); }
@@ -1426,7 +1835,7 @@ document.addEventListener("keydown", (e) => {
 		const k = hlKey(); const cur = ui.kbd && ui.hl[k] != null ? ui.hl[k] : -1;
 		ui.hl[k] = Math.max(0, Math.min(rs.length - 1, cur + (e.key === "ArrowDown" ? 1 : cur < 0 ? 0 : -1)));
 		ui.kbd = true; paintHl();
-		const r = rows()[ui.hl[k]]; if (r) { r.scrollIntoView({ block: "nearest", inline: "nearest" }); if (r.dataset.node && ui.variant === "A") trace(r.dataset.node); }
+		const r = rows()[ui.hl[k]]; if (r) { r.scrollIntoView({ block: "nearest", inline: "nearest" }); if (r.dataset.node && ui.variant === "A") trace(r.dataset.node); if (r.dataset.chip && ui.variant === "C") traceC(r.dataset.node); }
 		e.preventDefault(); return;
 	}
 	if (e.key === "Enter" && ui.kbd && (document.activeElement === document.body || !document.activeElement || document.activeElement.hasAttribute("data-row"))) {
