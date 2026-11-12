@@ -23,11 +23,16 @@ struct Fixture {
     dir: PathBuf,
 }
 impl Fixture {
+    #[allow(dead_code)] // Shared by integration targets that use different entry points.
     fn new() -> Self {
+        Self::with_daemon("day-intake.ts")
+    }
+    fn with_daemon(fixture: &str) -> Self {
         let mut child = Command::new("node")
             .arg(
                 PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../../packages/daemon/src/fixtures/day-intake.ts"),
+                    .join("../../../packages/daemon/src/fixtures")
+                    .join(fixture),
             )
             .env_remove("NODE_TEST_CONTEXT")
             .env_remove("PILOT_HOME")
@@ -104,6 +109,9 @@ impl Fixture {
 setTimeout(()=>{{ host.call({name},{{version:1,window:host.params.day.window,args:{args}}},{{timeout:0}}).then(r=>result.set('result:'+JSON.stringify(r)),e=>result.set('result:'+JSON.stringify({{error:String(e)}}))); }},0);"#,
             name = json!(name)
         );
+        self.eval(bridge, &source)
+    }
+    fn eval(&self, bridge: &Bridge, source: &str) -> Value {
         let path = self.dir.join("Call.tsx");
         std::fs::write(&path, source).unwrap();
         let bundle = restrict(compile_tsx(&path, &[]).unwrap()).unwrap();
@@ -122,6 +130,7 @@ setTimeout(()=>{{ host.call({name},{{version:1,window:host.params.day.window,arg
             .unwrap();
         serde_json::from_str(text.strip_prefix("result:").unwrap()).unwrap()
     }
+    #[allow(dead_code)] // Delivery tests use the same daemon/channel helper without intake reads.
     fn read(&self, bridge: &Bridge) -> Value {
         let result = self.call(bridge, "day.intake.read", json!({}));
         assert!(

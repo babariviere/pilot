@@ -13,6 +13,8 @@ pub(super) struct PlanningRecord {
     pub not_sent: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification_pin: Option<super::delivery::Pin>,
 }
 impl PlanningRecord {
     pub fn id(&self) -> &str {
@@ -46,6 +48,7 @@ impl PlanningRecord {
                         | "intake-triage"
                         | "intake-start"
                         | "native-chat-create"
+                        | "user-verification"
                 )
             )
             || o["payload"]
@@ -54,7 +57,11 @@ impl PlanningRecord {
         {
             return Err(Error::Storage);
         }
-        if let Some(r) = &self.receipt {
+        if o["kind"] == "user-verification" {
+            super::delivery::validate_record(self)?;
+        } else if self.verification_pin.is_some() {
+            return Err(Error::Storage);
+        } else if let Some(r) = &self.receipt {
             exact(r.clone(), o)?;
         }
         if o["kind"] == "planning-enroll" {
@@ -89,6 +96,27 @@ pub(super) fn record(
     digest: String,
     request: Value,
 ) -> Result<PlanningRecord, Error> {
+    record_pinned(source, mission, digest, request, None)
+}
+pub(super) fn verification_record(
+    source: &Source,
+    target: String,
+    digest: String,
+    request: Value,
+    pin: super::delivery::Pin,
+) -> Result<PlanningRecord, Error> {
+    if request["purpose"] != "user-verification" {
+        return Err(Error::Invalid);
+    }
+    record_pinned(source, target, digest, request, Some(pin))
+}
+fn record_pinned(
+    source: &Source,
+    mission: String,
+    digest: String,
+    request: Value,
+    verification_pin: Option<super::delivery::Pin>,
+) -> Result<PlanningRecord, Error> {
     if !valid_id(&mission)
         || digest.len() != 64
         || !digest.bytes().all(|b| b.is_ascii_hexdigit())
@@ -101,11 +129,18 @@ pub(super) fn record(
                     | "intake-triage"
                     | "intake-start"
                     | "native-chat-create"
+                    | "user-verification"
             )
         )
         || (!matches!(
             request["purpose"].as_str(),
-            Some("plan-start" | "intake-triage" | "intake-start" | "native-chat-create")
+            Some(
+                "plan-start"
+                    | "intake-triage"
+                    | "intake-start"
+                    | "native-chat-create"
+                    | "user-verification"
+            )
         ) && request["expected"]["fence"]["missionId"] != mission)
     {
         return Err(Error::Invalid);
@@ -118,6 +153,7 @@ pub(super) fn record(
         receipt: None,
         not_sent: false,
         setup_digest: None,
+        verification_pin,
         operation: json!({"schemaVersion":1,"operationId":id,"producerId":uuid::Uuid::new_v4().to_string(),"sequence":1,
             "origin":home(source,"local"),"destination":home(source,"daemon"),"kind":request["purpose"],
             "targetId":mission,"payloadHash":hash(&payload),"payload":payload,"bindingId":digest,"bindingGeneration":1}),
@@ -126,7 +162,9 @@ pub(super) fn record(
     Ok(r)
 }
 pub(super) fn exact(r: Value, op: &Value) -> Result<Value, Error> {
-    if r["operationId"] != op["operationId"]
+    // Verification needs both receipts and its native owner pin, never this generic path.
+    if op["kind"] == "user-verification"
+        || r["operationId"] != op["operationId"]
         || r["payloadHash"] != op["payloadHash"]
         || r["destination"] != op["destination"]
         || r["targetId"] != op["targetId"]
@@ -194,6 +232,7 @@ pub(super) fn enrollment_record(
         receipt: None,
         not_sent: false,
         setup_digest: Some(setup.into()),
+        verification_pin: None,
         operation: json!({"schemaVersion":1,"operationId":uuid::Uuid::new_v4().to_string(),
             "producerId":uuid::Uuid::new_v4().to_string(),"sequence":1,"origin":home(source,"local"),
             "destination":home(source,"daemon"),"kind":"planning-enroll","targetId":enrollment,

@@ -304,6 +304,7 @@ impl Journal {
                         && (prior.source != record.source
                             || prior.operation != record.operation
                             || prior.setup_digest != record.setup_digest
+                            || prior.verification_pin != record.verification_pin
                             || (prior.not_sent && !record.not_sent)
                             || (prior
                                 .receipt

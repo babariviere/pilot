@@ -246,6 +246,16 @@ impl Transport {
         operation: &Value,
         lookup: bool,
     ) -> Result<Value, Error> {
+        let v = self.raw_operation(operation, lookup).await?;
+        super::planning::exact(v, operation)
+    }
+
+    /// One immutable operation send or lookup. No retry, auth recovery or redirect.
+    pub(super) async fn raw_operation(
+        &self,
+        operation: &Value,
+        lookup: bool,
+    ) -> Result<Value, Error> {
         let token = self.local()?;
         let r = self
             .client
@@ -262,7 +272,7 @@ impl Transport {
             .map_err(|_| Error::Unknown)?;
         let v = body(r).await.map_err(|_| Error::Unknown)?;
         self.local().map_err(|_| Error::Unknown)?;
-        super::planning::exact(v, operation)
+        Ok(v)
     }
 
     pub async fn control(&self, id: &str) -> Result<c::Control, Error> {

@@ -26,6 +26,11 @@ pub const METHODS: &[&str] = &[
     "day.intake.triage",
     "day.intake.start",
     "day.intake.check",
+    "day.delivery.read",
+    "day.delivery.done",
+    "day.delivery.sendBack",
+    "day.delivery.reopen",
+    "day.delivery.check",
     "day.today.read",
     "day.mission.read",
     "day.mission.pause",
@@ -168,6 +173,9 @@ pub(crate) enum Command {
     IntakeRead,
     IntakeWrite(crate::host::intake::Intent),
     IntakeCheck(String),
+    DeliveryRead(crate::host::delivery::Subject),
+    DeliveryWrite(crate::host::delivery::Write),
+    DeliveryCheck(String),
     Today,
     Mission(String),
     Pause(crate::model::PauseIntent),
@@ -322,6 +330,32 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
                 return Err(Error::Invalid);
             }
             C::IntakeRead
+        }
+        "day.delivery.read" => {
+            let s: crate::host::delivery::Subject = exact(args)?;
+            s.validate()?;
+            C::DeliveryRead(s)
+        }
+        "day.delivery.done" | "day.delivery.sendBack" | "day.delivery.reopen" => {
+            let mut r: crate::host::delivery::Write = exact(args)?;
+            r.action = match name {
+                "day.delivery.done" => "done",
+                "day.delivery.sendBack" => "send_back",
+                _ => "reopen",
+            }
+            .into();
+            r.validate()?;
+            C::DeliveryWrite(r)
+        }
+        "day.delivery.check" => {
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields, rename_all = "camelCase")]
+            struct Lookup {
+                operation_id: String,
+            }
+            let r: Lookup = exact(args)?;
+            mission(&r.operation_id)?;
+            C::DeliveryCheck(r.operation_id)
         }
         "day.intake.triage" | "day.intake.start" => {
             let r: crate::host::intake::Intent = exact(args)?;
@@ -538,6 +572,7 @@ impl Command {
                     | Self::Today
                     | Self::Projects
                     | Self::IntakeRead
+                    | Self::DeliveryRead(_)
                     | Self::Mission(_)
                     | Self::Plan(_)
                     | Self::PlanSnapshot(_)

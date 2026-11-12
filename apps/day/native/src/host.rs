@@ -4,6 +4,7 @@
 pub mod attention;
 mod bridge;
 mod changes;
+pub(crate) mod delivery;
 mod enrollment;
 pub(crate) mod intake;
 mod inventory;
@@ -668,7 +669,7 @@ impl NativeHost {
 }
 
 fn publish_planning(shared: &Shared, record: &planning::PlanningRecord) {
-    if record.operation["kind"] == "native-chat-create" {
+    if matches!(record.operation["kind"].as_str(), Some("native-chat-create" | "user-verification")) {
         return;
     }
     shared

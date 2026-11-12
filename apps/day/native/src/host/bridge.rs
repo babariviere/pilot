@@ -150,6 +150,12 @@ async fn run(
     if call.command.is_ritual() {
         return ritual(t, journal, shared, day, epoch, call).await;
     }
+    if matches!(
+        call.command,
+        Command::DeliveryRead(_) | Command::DeliveryWrite(_) | Command::DeliveryCheck(_)
+    ) {
+        return super::delivery::handle(t, journal, shared, &call.command, &call.gate).await;
+    }
     if let Command::PlanSource(request) = &call.command {
         let snapshot = super::plan_sources::read(t, request).await?;
         shared.current(epoch)?;
@@ -201,6 +207,9 @@ async fn run(
     let mut value = Value::Null;
     let mut enrollment = None;
     let work = match &call.command {
+        Command::DeliveryRead(_) | Command::DeliveryWrite(_) | Command::DeliveryCheck(_) => {
+            unreachable!("handled delivery command")
+        }
         Command::Projects
         | Command::ChatSelect(_)
         | Command::ChatCreate(_)

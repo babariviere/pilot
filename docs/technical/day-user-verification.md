@@ -135,3 +135,50 @@ synthetic work and worker startup disabled. It exercises native capability
 checks, canonical output reads, both receipts, durable ordinary-message outbox
 admission and zero external calls. These are not visible native UI acceptance
 or evidence that a real user checked any result.
+
+## Day native bridge
+
+`apps/day/native/src/host/delivery.rs` runs on the existing serialized host
+worker and fsynced command journal. `apps/day/deliveryBridge.ts` exposes an
+NSH-safe wire view (`deliveryContract.ts`), not a second domain store or a new
+UI design. A daemon-side compile-time contract test checks its canonical
+identities, receipts and output fields. It imports no Node SDK type graph into
+the sandbox; unlisted output metadata still passes through unchanged.
+
+* `day.delivery.read` takes the exact `VerificationSubject`. Its `snapshot` is
+  canonical `DeliveredWork`, with outputs/evidence, observed PR state, production
+  `not_tracked` and user assessment kept separate. It starts/subscribes no model.
+* `day.delivery.done`, `day.delivery.sendBack` and `day.delivery.reopen` take
+  `{subject,targetId,deliveryId,expectedRevision,ownerSessionId,note}` from the
+  displayed result. The method fixes the action. Done/Reopen need an empty note;
+  Send back keeps the exact nonblank note, limited to 8,000 UTF-8 bytes.
+* `day.delivery.check` takes `{operationId}` only. It looks up the saved immutable
+  envelope, without a current delivery read, reset, new operation or resend.
+
+Each reply keeps `operations` (the selected source's saved command summaries)
+and `outcome` separate from `snapshot`. An operation's `lookup` contains the exact
+outer/domain pair. Only matching terminal receipts settle its state. A canonical
+GET that already reports Done does not settle a locally Unknown operation.
+Historical Check can confirm its original delivery, never a newer delivery.
+Checking a previously accepted receipt still uses that exact receipt endpoint
+to recheck current subject access; a failed lookup does not erase the kept ACK.
+
+Before send, native reads recheck the selected project and exact displayed pins.
+The daemon still owns CAS, permission/lifecycle and synchronous durable-message
+admission fences. The native record pins owner separately, so a Send back ACK
+must name that exact owner and operation in its admitted-message receipt. No
+owner restore, replacement worker or special continuation adapter is used.
+
+Records use the existing journal's capacity, private file and joined close.
+Cold open restores uncertainty without HTTP effects. Capture fences new
+assessments/Checks, then close drains admitted bridge work before releasing the
+journal. A receipt-save failure preserves the volatile pair but reports Unknown;
+only a later exact Check can settle it durably.
+
+`native/tests/delivery.rs` uses released NSH 0.4.0's real hidden public channel
+against `packages/daemon/src/fixtures/day-delivery.ts`, an isolated real daemon
+and SQLite with worker startup disabled. It covers task/standalone delivery,
+canonical outputs, CAS/currentness, unavailable owner, exact durable note
+admission, lost/malformed ACKs, cold reopen, no duplicates, native capture/close,
+receipt-save failure, capabilities and malformed requests. It is not visible
+native acceptance or permission to start a live integration.
