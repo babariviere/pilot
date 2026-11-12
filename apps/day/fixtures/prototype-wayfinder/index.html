@@ -424,6 +424,64 @@ details summary{cursor:pointer;color:var(--mfg);font-size:13.5px;margin-top:8px}
 @media (max-width:980px){.xpbelow{grid-template-columns:minmax(0,1fr)}}
 @media (max-width:900px){.xpncol{position:static;width:auto;margin-top:14px;pointer-events:auto}.xpnotes{max-height:none}.xphint{display:block}}
 
+/* expedition at big-mission scale (D with the big mock mission) */
+@property --inv{syntax:"<number>";inherits:true;initial-value:1}
+.bw-tabs{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-top:18px}
+.bw-tabs .grow{flex:1}
+.bw-tabs .lbl{font-size:12.5px;color:var(--faint);margin:0 4px 0 10px}
+.bview{position:relative;overflow:hidden;color:var(--ch-ink);font-size:13.5px;line-height:1.25}
+.bworld{position:absolute;left:0;top:0;width:2260px;height:1000px;transform-origin:0 0;will-change:transform}
+.bworld>svg{position:absolute;left:0;top:0;width:2260px;height:1000px;overflow:visible}
+.bworld .xtr,.bworld .xroute,.bworld .xroute-b,.bworld .xring,.bworld .xreg,.bworld .xdep,.bworld .xlane,.bworld .xgrat{vector-effect:non-scaling-stroke}
+.xreg{fill:none;stroke:var(--ch-ink);stroke-opacity:.3;stroke-width:1.2;stroke-dasharray:3 5}
+.xlane{fill:none;stroke:var(--ch-contour);stroke-width:1.2;stroke-dasharray:2 7}
+.xroute-b{fill:none;stroke:var(--ch-route);opacity:.3;stroke-linecap:round;stroke-linejoin:round}
+.xroute-b.all{opacity:.8}
+.xdep{fill:none;stroke:var(--ch-ink);stroke-width:2.2;stroke-dasharray:.5 6;stroke-linecap:round;opacity:.65;marker-end:url(#xp-ar)}
+.bw-m{position:absolute;width:0;height:0;transform:scale(var(--inv));transform-origin:0 0;z-index:2}
+.bw-in{position:absolute;left:-11px;top:-11px;display:flex;align-items:flex-start;gap:7px;width:max-content;max-width:200px;border:0;background:none;padding:0;color:inherit;text-align:left;cursor:pointer;--g:22px;transition:opacity .18s}
+.bw-in .xtx{padding-top:1px}
+.bw-in.done .xgw{background:var(--ch-land)}
+.bw-in.done .xt{font-weight:500}
+.bw-in.needs .xgw{background:var(--needs-soft);border-color:var(--needs);box-shadow:0 0 0 5px color-mix(in srgb,var(--needs) 22%,transparent)}
+.bw-in.run .xgw{border-color:var(--progress)}
+.bw-in.wait .xgw{border-style:dashed}
+.bw-in.wait .xt{font-weight:500;color:var(--ch-faint)}
+.bw-in:hover .xt{text-decoration:underline;text-underline-offset:2px}
+.bw-in.sel .xgw{outline:2px solid var(--primary);outline-offset:2px}
+.bw-in.sel .xt{color:var(--primary)}
+.bview .hl{outline:2px solid color-mix(in srgb,var(--primary) 45%,transparent);outline-offset:3px}
+.bview.ov .bw-in:not(.keep) .xtx,.bw-m.far .bw-in .xtx{display:none}
+.bw-m.far{opacity:.4}
+.bview.ov .xp-fog .fs,.bview.ov .xp-fog .fk,.bview.ov .bw-m.lifted,.bw-m.far .xp-fog{display:none}
+.bw-reg{position:absolute;left:0;top:0;display:grid;gap:2px;width:max-content;border:0;background:none;padding:2px 4px;border-radius:7px;color:inherit;text-align:left;cursor:pointer;text-shadow:0 0 3px var(--ch-paper),0 0 6px var(--ch-paper)}
+.bw-reg .rn{font:italic 500 19px/1.15 var(--ch-serif)}
+.bw-reg .rc{font-size:12px;color:var(--ch-faint)}
+.bw-reg .rc b{color:var(--needs-ink);font-weight:600}
+.bw-reg:hover .rn{text-decoration:underline;text-underline-offset:3px}
+.bw-cnt{position:absolute;left:0;top:0;transform:translate(-50%,-50%);font:italic 600 12.5px var(--ch-serif);color:var(--ch-route);background:var(--ch-paper);border-radius:6px;padding:0 5px;white-space:nowrap}
+.bw-cnt.dep{color:var(--ch-ink);font-weight:500}
+.bw-stub{position:absolute;left:0;top:0;transform:translate(-50%,-50%);width:max-content;max-width:250px;border:0;background:var(--ch-paper);padding:2px 7px;border-radius:7px;font-size:12px;color:var(--ch-faint);cursor:pointer;text-align:center}
+.bw-stub:hover{color:var(--ch-ink);text-decoration:underline}
+.bw-links{position:absolute;left:18px;top:27px;display:flex;flex-wrap:wrap;gap:4px;width:max-content;max-width:250px}
+.bw-link{border:1px solid color-mix(in srgb,var(--ch-ink) 25%,transparent);background:var(--ch-paper);border-radius:999px;padding:0 8px;font-size:11.5px;line-height:18px;color:var(--ch-faint);cursor:pointer;white-space:nowrap}
+.bw-link:hover{color:var(--ch-ink);border-color:var(--ch-ink)}
+.bview .xp-camp{--c:24px;font-size:12.5px}
+.bview .xp-dest{width:210px}
+.bview .xp-tk{--g:18px}
+.bview .xp-fog{width:max-content;max-width:190px}
+.bw-comp{position:absolute;left:14px;width:100px;z-index:3}
+.bw-comp svg{display:block}
+.bw-comp .cap{font:italic 12.5px/1.2 var(--ch-serif);color:var(--ch-faint);text-align:center;margin-top:2px;text-shadow:0 0 3px var(--ch-paper)}
+.bw-comp .xp-comp{left:50px;top:50px;width:96px;height:96px}
+.bw-out{position:absolute;right:12px;top:12px;z-index:3}
+.bworld.tracing .bw-in,.bworld.tracing .xp-fog,.bworld.tracing .xp-camp{opacity:.3}
+.bworld.tracing .rel{opacity:1}
+.bworld.tracing .xtr{opacity:.12}
+.bworld.tracing .xtr.rel{opacity:1;stroke:var(--primary)}
+.xroute.old{opacity:.3;stroke-width:1.8}
+.xp-camp.old{opacity:.6}
+
 /* prototype chrome: deliberately not Pilot's look */
 .pbar{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:30;display:flex;align-items:center;gap:4px;background:var(--proto);color:var(--proto-fg);border-radius:999px;padding:5px;box-shadow:0 6px 24px rgba(0,0,0,.25);font-size:13px}
 .pbar button{border:0;background:none;color:inherit;cursor:pointer;border-radius:999px;padding:6px 10px;font-size:13px}
@@ -695,11 +753,12 @@ const Model = (() => {
 			}
 			case "pilot/ask": {
 				if (openRound(s)) return s0;
-				const ready = s.ex.filter((x) => x.kind === "grilling" && x.state === "ready");
+				const bank = s.asks || ASKS;
+				const ready = s.ex.filter((x) => x.kind === "grilling" && x.state === "ready" && bank[x.id]);
 				if (!ready.length) return s0;
 				const n = s.rounds.length + 1;
 				const r = { id: "r" + n, n, items: ready.map((x) => x.id), asks: [], state: "open", at: "", answers: {} };
-				for (const x of ready) { r.asks = r.asks.concat(withItem(ASKS[x.id], x.id)); x.state = "asking"; x.round = r.id; }
+				for (const x of ready) { r.asks = r.asks.concat(withItem(bank[x.id], x.id)); x.state = "asking"; x.round = r.id; }
 				s.rounds.push(r);
 				for (const x of ready) explore(s, x.id);
 				addOut(s, { kind: "interview", about: r.items[0], ids: r.items.slice(), label: "Saved interview round " + n, meta: r.asks.length + " questions, all up front", changed: r.items.map((id) => "\u201c" + title(s, id) + "\u201d asks you.") });
@@ -718,8 +777,8 @@ const Model = (() => {
 				return s;
 			}
 			case "research/finish": {
-				if (!e || e.kind !== "research" || e.state !== "running" || !FINISH[e.id]) return s0;
-				const f = FINISH[e.id];
+				if (!e || e.kind !== "research" || e.state !== "running" || !(s.finish || FINISH)[e.id]) return s0;
+				const f = (s.finish || FINISH)[e.id];
 				openPass(s, "Research came back: " + e.title, "research", [e.id]);
 				s.sources[f.source.id] = Object.assign({ at: "today" }, f.source);
 				e.state = "resolved"; e.by = ""; e.result = f.result;
@@ -738,7 +797,7 @@ const Model = (() => {
 				return s;
 			}
 			case "prototype/finding": {
-				if (!e || e.kind !== "prototype" || e.state !== "running") return s0;
+				if (!e || e.kind !== "prototype" || e.state !== "running" || (s.findings && !s.findings[e.id])) return s0;
 				openPass(s, "Prototype finding: " + e.title, "prototype", [e.id]);
 				e.state = "resolved"; e.by = "";
 				e.evidence = "Finding: supported. It matches this map.";
@@ -781,14 +840,14 @@ const Model = (() => {
 				if (s.plan || openRound(s) || !s.ex.every((x) => x.state === "resolved")) return s0;
 				openPass(s, "Nothing left to decide", "dest", ["dest"]);
 				s.plan = { state: "review", still: s.fog.filter((f) => f.active).map((f) => f.area) };
-				addOut(s, { kind: "plan", about: "dest", label: "Proposed plan", meta: SLICES.length + " build tasks \u00b7 waits for your review", changed: ["Pilot wrote a plan from the settled map. Approving it publishes tasks; it starts nothing."].concat(s.plan.still.length ? ["Fog \u201c" + s.plan.still.join("\u201d, \u201c") + "\u201d stays. It does not block the plan."] : []) });
+				addOut(s, { kind: "plan", about: "dest", label: "Proposed plan", meta: (s.slices || SLICES).length + " build tasks \u00b7 waits for your review", changed: ["Pilot wrote a plan from the settled map. Approving it publishes tasks; it starts nothing."].concat(s.plan.still.length ? ["Fog \u201c" + s.plan.still.join("\u201d, \u201c") + "\u201d stays. It does not block the plan."] : []) });
 				log(s, "Pilot", "Proposed a plan from the settled map. It waits for your review");
 				return s;
 			}
 			case "plan/approve": {
 				if (!s.plan || s.plan.state !== "review") return s0;
 				s.plan.state = "published";
-				s.tasks = SLICES.map((sl, i) => ({ id: String(12 + i), number: 12 + i, title: sl.title, owner: sl.owner, from: sl.from.filter((id) => get(s, id)), status: "To do, not started" }));
+				s.tasks = (s.slices || SLICES).map((sl, i) => ({ id: String(12 + i), number: 12 + i, title: sl.title, owner: sl.owner, from: sl.from.filter((id) => get(s, id)), status: "To do, not started" }));
 				addOut(s, { kind: "tasks", about: "dest", ids: s.tasks.map((t) => "task:" + t.id), label: "Published " + s.tasks.length + " build tasks", meta: "You approved \u00b7 none started", changed: s.tasks.map((t) => "#" + t.number + " " + t.title + ": to do, not started.") });
 				s.revision++;
 				log(s, "You", "Approved the proposed plan");
@@ -881,7 +940,8 @@ const ui = freshUi(VARIANTS[params.get("variant")] ? params.get("variant") : "A"
 
 function freshUi(variant) {
 	return { variant, route: parse(location.hash), stack: [location.hash || "#/map"], scroll: {}, hl: {}, kbd: false,
-		sel: null, selChip: null, seenPasses: null, seenLines: null, open: {}, kind: null, modal: null, iv: { idx: 0, all: false }, ans: {}, drawer: false, dtab: "walk", wt: null, changed: [], toast: null, cx: 0, xp: null, fx: null };
+		sel: null, selChip: null, seenPasses: null, seenLines: null, open: {}, kind: null, modal: null, iv: { idx: 0, all: false }, ans: {}, drawer: false, dtab: "walk", wt: null, changed: [], toast: null, cx: 0, xp: null, fx: null,
+		mission: params.get("mission") === "big" ? "big" : "small", bz: null, rt: "recent", bigW: null, bigT: null, zoomFx: null, bigNA: null, bigNF: null };
 }
 
 /* ---------- helpers ---------- */
@@ -890,6 +950,9 @@ const attr = (o) => Object.entries(o).filter(([, v]) => v != null && v !== false
 const btn = (label, a, cls, extra) => "<button " + attr(Object.assign({ class: "btn " + (cls || ""), "data-act": a.act, "data-id": a.id, "data-arg": a.arg }, extra || {})) + ">" + label + "</button>";
 const lnk = (label, a) => "<button " + attr({ class: "link", "data-act": a.act, "data-id": a.id, "data-arg": a.arg }) + ">" + label + "</button>";
 const K = Model.KIND;
+/* The mission shown: the small Linux mission from the model, or the big mock mission (state.meta). */
+const MT = () => (state.meta ? state.meta.title : "Pilot on Linux desktops");
+const DEST = () => (state.meta ? state.meta.dest : Model.DESTINATION);
 const dots = '<span class="dots" aria-hidden="true">\u2026</span>';
 
 function mark(kind, label) {
@@ -986,6 +1049,7 @@ function recordBody(id) {
 	if (id === "dest") return destBody();
 	if (id === "home") return homeBody();
 	if (id.indexOf("camp:") === 0) return campBody(+id.slice(5));
+	if (id.indexOf("region:") === 0) return regionBody(id);
 	if (id.indexOf("out:") === 0) return outBody(id);
 	if (id.indexOf("fog:") === 0) return fogBody(fogOf(id.slice(4)));
 	if (id.indexOf("task:") === 0) return taskBody(taskOf(id.slice(5)));
@@ -1041,14 +1105,15 @@ function taskBody(t) {
 }
 function destBody() {
 	const still = state.fog.filter((f) => f.active);
-	return '<div class="rec"><p class="q">' + esc(Model.DESTINATION) + '</p><div class="kv"><span class="k">Plan</span><span>' + esc(Model.stageWord(state)) + "</span>" +
+	return '<div class="rec"><p class="q">' + esc(DEST()) + '</p><div class="kv"><span class="k">Plan</span><span>' + esc(Model.stageWord(state)) + "</span>" +
 		(still.length ? '<span class="k">Still fog</span><span>' + pickLinks(still.map((f) => "fog:" + f.id)) + "</span>" : "") + "</div>" +
 		(state.plan && state.plan.state === "review" ? '<section class="panel needs"><h3>A proposed plan waits for your review</h3><p class="meta">Approving publishes build tasks. It starts nothing.</p><div class="actions">' + btn("Read the plan", { act: "review" }, "primary") + "</div></section>" : "") +
 		'<p class="what">' + icon("dest") + "<span><b>Destination.</b> Where the mission should end up. The map is finished when nothing is left to decide. Finishing it never starts work.</span></p></div>";
 }
 function recordTitle(id) {
-	if (id === "dest") return ["dest", "Destination", "Pilot on Linux desktops"];
+	if (id === "dest") return ["dest", "Destination", MT()];
 	if (id === "home") return ["brief", "Home port", "Your brief"];
+	if (id.indexOf("region:") === 0) { const Rg = bigRegion(id.slice(7)); return ["dest", "Region", Rg ? Rg.name : id]; }
 	if (id.indexOf("camp:") === 0) { const p = state.passes.find((x) => "camp:" + x.n === id); return ["round", "Planning round " + p.n + ", a camp on the route", p.title]; }
 	if (id.indexOf("out:") === 0) { const r = passOut(id); return [outKindIcon(r.o), OUTKIND[r.o.kind][1] + " \u00b7 planning round " + r.p.n, r.o.label]; }
 	if (id.indexOf("fog:") === 0) { const f = fogOf(id.slice(4)); return ["fog", f.active ? "Fog of war" : "Fog of war, explored", f.area]; }
@@ -1060,6 +1125,7 @@ function exists(id) {
 	if (!id) return false;
 	if (id === "dest" || id === "home") return true;
 	if (id.indexOf("camp:") === 0) return state.passes.some((p) => "camp:" + p.n === id);
+	if (id.indexOf("region:") === 0) return !!bigRegion(id.slice(7));
 	if (id.indexOf("out:") === 0) return !!passOut(id);
 	if (id.indexOf("fog:") === 0) return !!fogOf(id.slice(4));
 	if (id.indexOf("task:") === 0) return !!taskOf(id.slice(5));
@@ -1069,8 +1135,8 @@ function exists(id) {
 /* ---------- shared header ---------- */
 function header() {
 	const changed = ex().filter((e) => e.changed.length).length;
-	return '<div class="head enter"><p class="date">Mission \u00b7 Wayfinder map</p><h1>Pilot on Linux desktops</h1>' +
-		'<p class="sub">Where it should end up: ' + esc(Model.DESTINATION) + "</p>" +
+	return '<div class="head enter"><p class="date">Mission \u00b7 Wayfinder map</p><h1>' + esc(MT()) + "</h1>" +
+		'<p class="sub">Where it should end up: ' + esc(DEST()) + "</p>" +
 		'<p class="meta" style="margin-top:8px">' + esc(Model.mapSummary(state)) + " \u00b7 " + esc(Model.stageWord(state)) + "</p>" +
 		'<p class="small faint" style="margin-top:4px">Map revision ' + state.revision + ", kept by the coordinator. The same records agents read.</p>" +
 		(changed ? '<div class="banner">' + mark("needs") + "<span>" + (changed === 1 ? "1 question cites a record that changed." : changed + " questions cite records that changed.") + " Pilot updates the map from it. Nothing here needs you.</span></div>" : "") + "</div>";
@@ -1138,7 +1204,7 @@ function nodeHtml(n) {
 function destHtml(L) {
 	const t = tasks();
 	return '<div class="dest" data-node="dest" data-flip="dest" style="left:' + L.destX + "px;top:" + HEAD + 'px">' +
-		'<div class="nk">' + icon("dest") + "Destination</div><div class=\"dt\">" + esc(Model.DESTINATION) + "</div>" +
+		'<div class="nk">' + icon("dest") + "Destination</div><div class=\"dt\">" + esc(DEST()) + "</div>" +
 		'<div class="stage">' + esc(Model.stageWord(state)) + "</div>" +
 		(state.plan && state.plan.state === "review" ? "<div>" + btn("Read the plan", { act: "review" }, "primary sm") + "</div>" : "") +
 		'<div class="tasks"><div class="nk">' + icon("task") + "Build tasks</div>" +
@@ -1336,7 +1402,7 @@ function destRow() {
 	const still = state.fog.filter((f) => f.active);
 	const t = tasks();
 	return '<section class="rnd rdest" aria-label="Destination"><div class="rg"><span class="rflag">' + icon("dest") + '</span><div class="rn">Destination</div></div>' +
-		'<div class="rdbody">' + chip("dest", "dest", ["dest"], icon("dest"), Model.DESTINATION, esc(Model.stageWord(state)), "out-settled") +
+		'<div class="rdbody">' + chip("dest", "dest", ["dest"], icon("dest"), DEST(), esc(Model.stageWord(state)), "out-settled") +
 		(state.plan && state.plan.state === "review" ? btn("Read the plan", { act: "review" }, "primary sm") : "") +
 		(t.length ? '<div class="rsub">Build tasks \u00b7 none started</div><div class="rchips">' + t.map((x) => chip("t" + x.id, "task:" + x.id, ["task:" + x.id], icon("task"), "#" + x.number + " " + x.title, esc(x.owner), "")).join("") + "</div>" : "") +
 		(still.length ? '<div class="rsub">Still fog \u00b7 blocks nothing</div><div class="rchips">' + still.map((f) => chip("f" + f.id, "fog:" + f.id, ["fog:" + f.id], icon("fog"), f.area, f.after.length ? "After " + esc(Model.titles(state, f.after)) : "Ready to explore", "out-fog")).join("") + "</div>" : "") +
@@ -1612,6 +1678,13 @@ function xpSerpent(x, y) {
 		'<ellipse cx="36" cy="5" rx="6.6" ry="4.6" fill="var(--ch-fog)" stroke="var(--ch-ink)" stroke-width="1.5"/><path d="M36.6 4.2q1.7 1.6 3.4 0" fill="none" stroke="var(--ch-ink)" stroke-width="1.2" stroke-linecap="round"/>' +
 		'<text class="xz" x="46" y="-3">z</text><text class="xz" x="53" y="-11" style="font-size:9px">z</text></g>';
 }
+function xpDefs() {
+	return '<defs><pattern id="xp-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><path d="M0 0V6" stroke="var(--ch-hatch)" stroke-width="1.3"/></pattern>' +
+		'<pattern id="xp-stip" width="10" height="10" patternUnits="userSpaceOnUse"><circle cx="2.5" cy="2.5" r=".95" fill="var(--ch-faint)" opacity=".45"/><circle cx="7.5" cy="7.5" r=".75" fill="var(--ch-faint)" opacity=".35"/></pattern>' +
+		'<filter id="xp-wob" x="-10%" y="-10%" width="120%" height="120%"><feTurbulence type="fractalNoise" baseFrequency="0.028" numOctaves="2" seed="4"/><feDisplacementMap in="SourceGraphic" scale="10" xChannelSelector="R" yChannelSelector="G"/></filter>' +
+		'<filter id="xp-wob2" x="-15%" y="-15%" width="130%" height="130%"><feTurbulence type="fractalNoise" baseFrequency="0.02" numOctaves="2" seed="11"/><feDisplacementMap in="SourceGraphic" scale="18" xChannelSelector="R" yChannelSelector="G"/></filter>' +
+		[["xp-ar", "var(--ch-ink)"], ["xp-ar-rel", "var(--primary)"]].map(([id, c]) => '<marker id="' + id + '" viewBox="0 0 10 10" refX="7" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto-start-reverse"><path d="M1.5 1.5 7.5 5 1.5 8.5" fill="none" stroke="' + c + '" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>').join("") + "</defs>";
+}
 function xpSvg(trails, camps, target, fx) {
 	const delay = (base, k) => (fx ? "animation-delay:" + (base - (fx.dt[k] || 0)) + "ms" : "");
 	const circles = (pts, pad) => pts.map(([x, y, r]) => '<circle cx="' + x + '" cy="' + y + '" r="' + r1(r + pad) + '"/>').join("");
@@ -1641,8 +1714,8 @@ function xpSvg(trails, camps, target, fx) {
 	for (let i = 0; i < Q.length - 1; i++) {
 		const p0 = Q[i - 1] || Q[i], p1 = Q[i], p2 = Q[i + 1], p3 = Q[i + 2] || Q[i + 1];
 		const c1 = [r1(p1[0] + (p2[0] - p0[0]) / 6), r1(p1[1] + (p2[1] - p0[1]) / 6)], c2 = [r1(p2[0] - (p3[0] - p1[0]) / 6), r1(p2[1] - (p3[1] - p1[1]) / 6)];
-		const fresh = !!fx && fx.camp === i + 2;
-		route += '<path class="xroute' + (fresh ? " fresh" : "") + '"' + (fresh ? ' style="' + delay(0, "camp") + '"' : "") + ' d="M' + p1.join(" ") + " C" + c1.join(" ") + " " + c2.join(" ") + " " + p2.join(" ") + '"/>';
+		const fresh = !!fx && fx.camp === i + 2, old = i < Q.length - 5;
+		route += '<path class="xroute' + (fresh ? " fresh" : "") + (old ? " old" : "") + '"' + (fresh ? ' style="' + delay(0, "camp") + '"' : "") + ' d="M' + p1.join(" ") + " C" + c1.join(" ") + " " + c2.join(" ") + " " + p2.join(" ") + '"/>';
 	}
 	let grat = "";
 	for (let x = 100; x < 1200; x += 100) grat += "M" + x + " 0V700";
@@ -1662,11 +1735,7 @@ function xpSvg(trails, camps, target, fx) {
 	const cart = '<g><rect x="22" y="20" width="324" height="106" rx="3" fill="var(--ch-paper)" stroke="var(--ch-ink)" stroke-opacity=".7"/><rect x="27.5" y="25.5" width="313" height="95" rx="2" fill="none" stroke="var(--ch-ink)" stroke-opacity=".3"/>' +
 		'<text class="ct1" x="184" y="60" text-anchor="middle">A chart of what is known</text><text class="ct2" x="184" y="84" text-anchor="middle">Surveyed by Pilot, map revision ' + state.revision + "</text>" +
 		'<text class="ct3" x="184" y="106" text-anchor="middle">Not to scale: trails mean \u201cwaits for\u201d.</text></g>';
-	const defs = '<defs><pattern id="xp-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><path d="M0 0V6" stroke="var(--ch-hatch)" stroke-width="1.3"/></pattern>' +
-		'<pattern id="xp-stip" width="10" height="10" patternUnits="userSpaceOnUse"><circle cx="2.5" cy="2.5" r=".95" fill="var(--ch-faint)" opacity=".45"/><circle cx="7.5" cy="7.5" r=".75" fill="var(--ch-faint)" opacity=".35"/></pattern>' +
-		'<filter id="xp-wob" x="-10%" y="-10%" width="120%" height="120%"><feTurbulence type="fractalNoise" baseFrequency="0.028" numOctaves="2" seed="4"/><feDisplacementMap in="SourceGraphic" scale="10" xChannelSelector="R" yChannelSelector="G"/></filter>' +
-		'<filter id="xp-wob2" x="-15%" y="-15%" width="130%" height="130%"><feTurbulence type="fractalNoise" baseFrequency="0.02" numOctaves="2" seed="11"/><feDisplacementMap in="SourceGraphic" scale="18" xChannelSelector="R" yChannelSelector="G"/></filter>' +
-		[["xp-ar", "var(--ch-ink)"], ["xp-ar-rel", "var(--primary)"]].map(([id, c]) => '<marker id="' + id + '" viewBox="0 0 10 10" refX="7" refY="5" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="11" orient="auto-start-reverse"><path d="M1.5 1.5 7.5 5 1.5 8.5" fill="none" stroke="' + c + '" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker>').join("") + "</defs>";
+	const defs = xpDefs();
 	return '<svg class="xpsvg" viewBox="0 0 1200 700" preserveAspectRatio="none" aria-hidden="true">' + defs + '<path class="xgrat" d="' + grat + '"/><rect x="8" y="8" width="1184" height="684" rx="8" fill="none" stroke="var(--ch-ink)" stroke-opacity=".3"/>' +
 		land + rings + '<g filter="url(#xp-wob2)">' + fog + "</g>" + serp + tr + route + mtn + cart + compass + "</svg>";
 }
@@ -1691,20 +1760,20 @@ function xpFogLabel(f) {
 	return "<button " + attr({ class: "xp-fog" + sel, "data-row": true, "data-node": id, "data-flip": id, "data-act": "sel", "data-id": id, tabindex: "-1", style: xpAt(z.c[0], z.c[1] - 6), "aria-label": "Fog of war: " + f.area + ". " + line }) +
 		'><span class="fk">Fog of war</span><span class="ft">' + esc(f.area) + '</span><span class="fs">' + esc(line) + "</span></button>";
 }
-function xpDest() {
+function xpDest(style) {
 	const t = tasks(), review = state.plan && state.plan.state === "review";
-	return '<div class="xp-dest" style="' + xpAt(XP.dest[0], XP.dest[1] + 30) + '">' +
-		"<button " + attr({ class: "xp-db" + (ui.sel === "dest" ? " sel" : ""), "data-row": true, "data-node": "dest", "data-flip": "dest", "data-act": "sel", "data-id": "dest", tabindex: "-1", "aria-label": "Destination: " + Model.DESTINATION + " " + Model.stageWord(state) }) +
-		'><span class="dk">Destination</span><span class="dd">' + esc(Model.DESTINATION) + '</span><span class="dg">' + esc(Model.stageWord(state)) + "</span></button>" +
+	return '<div class="xp-dest" style="' + (style || xpAt(XP.dest[0], XP.dest[1] + 30)) + '">' +
+		"<button " + attr({ class: "xp-db" + (ui.sel === "dest" ? " sel" : ""), "data-row": true, "data-node": "dest", "data-flip": "dest", "data-act": "sel", "data-id": "dest", tabindex: "-1", "aria-label": "Destination: " + DEST() + " " + Model.stageWord(state) }) +
+		'><span class="dk">Destination</span><span class="dd">' + esc(DEST()) + '</span><span class="dg">' + esc(Model.stageWord(state)) + "</span></button>" +
 		(review ? btn("Read the plan", { act: "review" }, "primary sm") : "") +
 		'<div class="xp-tasks"><span class="tk-h">Build tasks</span>' +
 		(t.length ? t.map((x) => "<button " + attr({ class: "xp-tk" + (ui.sel === "task:" + x.id ? " sel" : ""), "data-row": true, "data-node": "task:" + x.id, "data-act": "sel", "data-id": "task:" + x.id, tabindex: "-1" }) +
 			'><span class="xgw">' + xpGlyph("crate") + '</span><span style="min-width:0"><span class="tt">#' + x.number + " " + esc(x.title) + '</span><span class="ts">' + esc(x.status) + "</span></span></button>").join("")
 			: '<span class="dg">None yet. They come from the plan you approve, and start only when you start them.</span>') + "</div></div>";
 }
-function xpCamp(c, last, fx) {
+function xpCamp(c, last, fx, old) {
 	const p = c.p, id = "camp:" + p.n, fresh = !!fx && fx.camp === p.n;
-	return "<button " + attr({ class: "xp-camp" + (last ? " now" : "") + (c.x > 1040 ? " lft" : "") + (ui.sel === id ? " sel" : "") + (fresh ? " fresh" : ""), "data-row": true, "data-node": id, "data-act": "sel", "data-id": id, tabindex: "-1",
+	return "<button " + attr({ class: "xp-camp" + (last ? " now" : "") + (old ? " old" : "") + (c.x > 1040 ? " lft" : "") + (ui.sel === id ? " sel" : "") + (fresh ? " fresh" : ""), "data-row": true, "data-node": id, "data-act": "sel", "data-id": id, tabindex: "-1",
 		style: xpAt(c.x, c.y) + (fresh ? ";animation-delay:" + (250 - fx.dt.camp) + "ms" : ""), "aria-label": "Planning round " + p.n + ", " + p.at + ": " + p.title + (last ? ". Pilot is here." : "") }) +
 		">" + p.n + (last ? '<span class="here">Pilot is here</span>' : "") + "</button>";
 }
@@ -1713,10 +1782,9 @@ function xpCompassBtn(target) {
 	return "<button " + attr({ class: "xp-comp", "data-row": true, "data-act": "pick", "data-id": target ? target.id : "dest", tabindex: "-1", style: xpAt(XP_COMPASS[0], XP_COMPASS[1]), "aria-label": label, title: target ? "Points at what needs you" : "Nothing needs you" }) + "></button>";
 }
 /* Field notes: the same record the other variants show, pinned on the side of the chart away from the place. */
-function xpNotes(id) {
+function xpNotes(id, side) {
 	const [k, kl, t] = recordTitle(id);
-	const p = xpPos(id) || XP.dest;
-	return '<div class="xpncol ' + (p[0] > 640 ? "l" : "r") + '"><aside class="insp xpnotes enter" aria-label="Field notes">' +
+	return '<div class="xpncol ' + side + '"><aside class="insp xpnotes enter" aria-label="Field notes">' +
 		'<button class="x" data-act="sel" data-id="' + esc(id) + '" aria-label="Close (Esc)" title="Close (Esc)">\u00d7</button>' +
 		'<div class="kl">' + icon(k) + esc(kl) + "</div><h2>" + esc(t) + "</h2>" + recordBody(id) + "</aside></div>";
 }
@@ -1760,9 +1828,12 @@ function xpBelow() {
 		['<span class="xgw" style="border-style:dashed">' + xpGlyph("gate") + "</span>", "Waits for something else first."],
 		[sw('<path d="M2 11Q13 1 24 11" fill="none" stroke="var(--ch-ink)" stroke-width="2.2" stroke-dasharray=".5 5" stroke-linecap="round"/>'), "A trail: what waits for what. Dotted until the first is settled."],
 		['<span class="xgw" style="border-color:var(--ch-faint)">' + xpGlyph("fog") + "</span>", "Fog of war: not clear enough to ask about yet. It blocks nothing; the serpent is asleep."],
-		[sw('<path d="M1 10C8 2 16 12 25 4" fill="none" stroke="var(--ch-route)" stroke-width="2.2" stroke-dasharray="5 4" stroke-linecap="round"/>'), "Pilot\u2019s route. Each numbered camp is a planning round."],
+		[sw('<path d="M1 10C8 2 16 12 25 4" fill="none" stroke="var(--ch-route)" stroke-width="2.2" stroke-dasharray="5 4" stroke-linecap="round"/>'), "Pilot\u2019s route. Each numbered camp is a planning round; older legs fade."],
 		['<span class="xgw">' + xpGlyph("crate") + "</span>", "A build task, after you approve the plan. It starts only when you start it."],
 	];
+	if (state.meta) key.push([sw('<path d="M1 7H25" fill="none" stroke="var(--ch-route)" stroke-width="5" stroke-linecap="round" opacity=".35"/>'), "A wide lane: a leg Pilot sailed more than once (\u00d7N). Only the latest legs stay strong."],
+		['<span class="xp-camp" style="position:static;transform:none;--c:22px">3</span>', "A harbor: how many planning rounds Pilot spent in that region."],
+		[sw('<path d="M2 3V10H24V4" fill="none" stroke="var(--ch-ink)" stroke-width="2.2" stroke-dasharray=".5 5" stroke-linecap="round"/>'), "Between regions: how many questions wait for another region."]);
 	const keyHtml = '<section class="sec enter"><div class="sec-title"><span>Key to the chart</span></div><ul class="xkey">' + key.map(([g, t]) => "<li>" + g + "<span>" + esc(t) + "</span></li>").join("") + "</ul></section>";
 	return '<div class="xpbelow">' + next + log + keyHtml + "</div>";
 }
@@ -1772,18 +1843,19 @@ function expeditionView() {
 	lastEdges = trails;
 	const camps = xpCamps();
 	const target = xpTarget();
-	const notes = ui.sel && exists(ui.sel) ? xpNotes(ui.sel) : "";
+	const notes = ui.sel && exists(ui.sel) ? xpNotes(ui.sel, (xpPos(ui.sel) || XP.dest)[0] > 640 ? "l" : "r") : "";
 	const places = ex().filter((e) => XP[e.id]).sort((a, b) => XP[a.id][0] - XP[b.id][0]);
 	return '<div class="page wide">' + header() +
 		'<div class="xpwrap enter"><div class="xpframe" id="xpframe"><div class="xpchart" id="xpchart">' + xpSvg(trails, camps, target, fx) +
 		xpCompassBtn(target) + xpHome() + places.map(xpPlace).join("") + state.fog.map(xpFogLabel).join("") + xpDest() +
-		camps.map((c, i) => xpCamp(c, i === camps.length - 1, fx)).join("") + "</div></div>" + notes + "</div>" +
+		camps.map((c, i) => xpCamp(c, i === camps.length - 1, fx, i < camps.length - 5)).join("") + "</div></div>" + notes + "</div>" +
 		'<p class="xphint">Scroll the chart sideways. Everything on it is also listed below.</p>' +
 		'<p class="small faint" style="margin-top:10px">Select a place for its field notes: how it was settled, its sources and what it waits for. Hover to follow its trails. Reading the chart answers, approves and starts nothing.</p>' +
 		xpBelow() + "</div>";
 }
 /* Following one place: what it waits for and unblocks, and the camps that explored it. */
 function traceD(id) {
+	if (state.meta) return traceBig(id);
 	const c = document.getElementById("xpchart");
 	if (!c) return;
 	let set = null;
@@ -1800,6 +1872,527 @@ function traceD(id) {
 	c.classList.toggle("tracing", !!set);
 	for (const el of c.querySelectorAll("[data-node]")) el.classList.toggle("rel", !!set && set.has(el.dataset.node));
 	for (const el of c.querySelectorAll(".xtr")) el.classList.toggle("rel", !!set && set.has(el.dataset.from) && set.has(el.dataset.to));
+}
+
+/* ---------- D at big-mission scale: regions, zoom and a route through harbors ---------- */
+/* A big mock mission for one question: does the chart still read with about 40 questions and 20+ planning rounds?
+   Questions sit in regions. The overview shows regions; choosing one zooms in and shows its labels. Planning rounds
+   become stays per region, the route runs between fixed harbors along one channel, repeated legs share one wider
+   lane with a count, and only the most recent legs stay strong. Markers keep their screen size while the land zooms. */
+const BW_W = 2260, BW_H = 1000, BW_LANE = 500;
+const BIG = {
+	title: "Pilot for small teams",
+	dest: "A team of up to ten can share missions, review each other\u2019s work and pay once.",
+	regions: [["acc", "Accounts and sign-in", 0, 0], ["share", "Sharing and roles", 1, 0], ["bill", "Billing", 2, 0], ["sync", "Sync and storage", 0, 1], ["rev", "Team review", 1, 1], ["adm", "Admin and audit", 2, 1]],
+	q: [
+		["acc-sso", "acc", "g", "s", "Single sign-on", "Do teams need single sign-on in the first version?", [], ""],
+		["acc-invite", "acc", "g", "s", "How people join", "Do people join by invite link or by email?", [], ""],
+		["acc-names", "acc", "g", "s", "Display names", "Should Pilot show real names or handles?", [], "d2"],
+		["acc-2fa", "acc", "r", "s", "Two-factor support", "Which two-factor methods can the daemon check locally?", [], "k-2fa"],
+		["acc-guest", "acc", "g", "a", "Guest access", "Can someone outside the team view a mission?", [], ""],
+		["acc-device", "acc", "r", "u", "Two machines per person", "Can one person run Pilot on two machines at once?", [], ""],
+		["acc-leave", "acc", "g", "w", "When someone leaves", "What happens to a person\u2019s missions when they leave?", ["sh-transfer"], ""],
+		["sh-roles", "share", "g", "s", "Roles", "Which roles does a team need?", [], "d5"],
+		["sh-draft", "share", "g", "s", "Shared drafts", "Can two people edit one draft?", [], ""],
+		["sh-perm", "share", "r", "s", "Permission model", "Can today\u2019s chat permissions extend to teams?", [], "k-perm"],
+		["sh-mission", "share", "g", "a", "Who can start work", "Who may press Start on a shared mission?", [], ""],
+		["sh-link", "share", "r", "r", "Share by link", "Is a read-only link to a mission safe enough?", [], ""],
+		["sh-notify", "share", "p", "r", "Who gets told", "Does a team inbox or each person\u2019s Today work better?", [], ""],
+		["sh-transfer", "share", "g", "w", "Changing owner", "How does a mission change owner?", ["sh-mission"], ""],
+		["bi-plan", "bill", "g", "s", "Plans", "One team plan, or plans by team size?", [], ""],
+		["bi-seat", "bill", "g", "s", "Seat price", "Flat price or price per seat?", [], "d7"],
+		["bi-invoice", "bill", "r", "s", "Invoices", "What must an invoice show for EU teams?", [], "k-invoice"],
+		["bi-limit", "bill", "g", "a", "Limits per person", "Should each person have their own spending limit?", [], ""],
+		["bi-provider", "bill", "r", "u", "Payment provider", "Which payment provider handles seats and EU tax?", [], ""],
+		["bi-trial", "bill", "g", "w", "Trials", "How long is a team trial?", ["bi-limit"], ""],
+		["bi-refund", "bill", "r", "w", "Refunds", "Which refund cases does the provider handle for us?", ["bi-provider"], ""],
+		["bi-usage", "bill", "p", "w", "Seeing team spend", "Can people see team spending without a dashboard?", ["bi-limit"], ""],
+		["sy-where", "sync", "g", "s", "Where team data lives", "Local first, or hosted?", [], "d9"],
+		["sy-offline", "sync", "g", "s", "Working offline", "Must team members be able to work offline?", [], ""],
+		["sy-conflict", "sync", "r", "s", "Edit conflicts", "Can mission records merge without conflicts?", [], "k-merge"],
+		["sy-size", "sync", "r", "r", "Storage size", "How much storage does a team of ten use?", [], ""],
+		["sy-encrypt", "sync", "r", "u", "End-to-end encryption", "Can shared data be encrypted with keys that stay on each machine?", [], ""],
+		["sy-live", "sync", "p", "r", "Live updates", "How fast must a teammate\u2019s change appear?", [], ""],
+		["sy-backup", "sync", "g", "w", "Backups", "Who keeps backups?", ["sy-size"], ""],
+		["rv-who", "rev", "g", "s", "Who reviews first", "Does a teammate or an agent review first?", [], ""],
+		["rv-gate", "rev", "g", "s", "Review before merge", "Must review happen before merge?", [], ""],
+		["rv-budget", "rev", "r", "s", "Review cost", "What does a review cost per task?", [], "k-review"],
+		["rv-assign", "rev", "g", "r", "Assigning reviews", "How are reviews assigned?", [], ""],
+		["rv-inline", "rev", "p", "u", "Inline comments", "Do inline comments on changes help or distract?", [], ""],
+		["rv-standup", "rev", "g", "w", "Team standup", "Should the standup cover the whole team?", ["rv-assign"], ""],
+		["ad-owner", "adm", "g", "s", "Team owner", "Who owns the team?", [], ""],
+		["ad-audit", "adm", "r", "s", "Audit log", "What must the audit log keep?", [], "k-audit"],
+		["ad-retention", "adm", "g", "r", "Keeping finished work", "How long are finished missions kept?", [], ""],
+		["ad-region", "adm", "r", "r", "Data region", "Can team data stay in the EU?", ["sy-where"], ""],
+		["ad-export", "adm", "r", "w", "Full export", "What must a full team export include?", ["sy-size"], ""],
+		["ad-sso", "adm", "g", "w", "Sign-in rules", "Which sign-in rules can an admin enforce?", ["acc-guest"], ""],
+	],
+	decisions: [["d2", 2, "Show real names", ["Pilot shows each person\u2019s real name, with their handle on hover."], "Nov 2"],
+		["d5", 5, "Three roles", ["Teams have owners and members.", "Teams have owners, members and guests. Guests can only read."], "Nov 3, changed Nov 10"],
+		["d7", 7, "Price per seat", ["Teams pay for each active seat every month."], "Nov 4"],
+		["d9", 9, "Local first", ["Each machine keeps the full team data. A small relay only passes changes along."], "Nov 5"]],
+	knowledge: [["k-2fa", "Two-factor on the daemon", "Nov 3", "Mock finding. The daemon can check app codes and security keys without a server.", "Daemon sign-in notes (repository)"],
+		["k-perm", "Team permissions", "Nov 5", "Mock finding. Today\u2019s per-chat permissions extend to teams if each grant names a person.", "Permission model (repository)"],
+		["k-invoice", "EU invoices", "Nov 6", "Mock finding. EU invoices need both VAT numbers and a running invoice number.", "EU VAT guidance (web)"],
+		["k-merge", "Merging mission records", "Nov 7", "Mock finding. Append-only mission records merge without conflicts; drafts do not.", "Mission journal design (repository)"],
+		["k-review", "Review cost per task", "Nov 7", "Mock finding. A review costs about $1 per task with the current reviewer models.", "Usage samples (mock)"],
+		["k-audit", "Audit log contents", "Nov 8", "Mock finding. An audit log needs who, what, when and the approval it used.", "Audit practice notes (web)"]],
+	rounds: [[1, ["acc-sso", "acc-invite"], "Nov 2"], [2, ["sh-draft", "bi-plan"], "Nov 4"], [3, ["sy-offline", "rv-who", "rv-gate"], "Nov 6"], [4, ["ad-owner"], "Nov 8"], [5, ["acc-guest", "sh-mission", "bi-limit"], "", true]],
+	asks: {
+		"acc-sso": ["Does a team need single sign-on on the first day?", "Single sign-on is a lot of work. Invites cover small teams.", ["No. Invites first", "Yes, from the start"], 0, 0],
+		"acc-invite": ["How do people join a team?", "Links are quick to share; email checks who joins.", ["An invite link that expires", "An email invite only"], 0, 1],
+		"sh-draft": ["Can two people edit the same draft?", "Shared drafts need conflict handling.", ["No. One writer at a time", "Yes, both at once"], 0, 0],
+		"bi-plan": ["One team plan, or plans by team size?", "Fewer plans are easier to explain.", ["One team plan", "Small, medium and large"], 0, 0],
+		"sy-offline": ["Must people be able to work offline?", "Pilot already works offline for one person.", ["Yes, like today", "No, teams need a connection"], 0, 0],
+		"rv-who": ["Who reviews first: a teammate or an agent?", "Agents are fast; people catch intent.", ["An agent first, then a teammate", "A teammate only"], 0, 0],
+		"rv-gate": ["Must review happen before merge?", "A gate is safer but slower.", ["Yes, always", "Only for large changes"], 0, 1],
+		"ad-owner": ["Who owns the team?", "The owner pays and can remove people.", ["The person who created it", "Any admin"], 0, 0],
+		"acc-guest": ["Can someone outside the team view a mission?", "Guests help with clients and contractors.", ["Yes, read-only guests", "No guests for now"], 0],
+		"sh-mission": ["Who may press Start on a shared mission?", "Starting work spends the team\u2019s budget.", ["Owners and members", "Only the mission\u2019s owner"], 1],
+		"bi-limit": ["Should each person have a spending limit?", "Limits stop one person from using the whole budget.", ["Yes, set by the owner", "No, one limit for the team"], 0],
+		"rv-assign": ["How are reviews assigned?", "", ["Round-robin among members", "The author picks"], 0],
+		"ad-retention": ["How long are finished missions kept?", "", ["One year", "Until someone deletes them"], 0],
+		"acc-leave": ["What happens to a person\u2019s missions when they leave?", "", ["They move to the team owner", "They are archived"], 0],
+		"sh-transfer": ["How does a mission change owner?", "", ["The owner hands it over", "Any admin can move it"], 0],
+		"bi-trial": ["How long is a team trial?", "", ["14 days", "30 days"], 0],
+		"rv-standup": ["Should the standup cover the whole team?", "", ["Yes, a section per person", "No, each person\u2019s own work"], 1],
+		"ad-sso": ["Which sign-in rules can an admin enforce?", "", ["Require two-factor", "Require single sign-on"], 0],
+	},
+	later: ["rv-assign", "ad-retention", "acc-leave", "sh-transfer", "bi-trial", "rv-standup", "ad-sso"],
+	finish: [["acc-device", "Two machines per person", "Mock finding. One person can run two machines; each keeps its own daemon token.", "Daemon token handling (repository)"],
+		["bi-provider", "Payment providers for teams", "Mock finding. Two providers handle seats and EU tax; one also handles refunds.", "Provider documentation (web)"],
+		["sy-encrypt", "End-to-end encryption for teams", "Mock finding. Keys can stay on each machine; adding a person needs one member online.", "Key exchange notes (web)"],
+		["sh-link", "Read-only mission links", "Mock finding. A signed link that expires is safe for read-only views.", "Link signing notes (web)"],
+		["sy-size", "Team storage size", "Mock finding. A team of ten uses about 2 GB a year, mostly chat history.", "Usage samples (mock)"],
+		["ad-region", "Keeping data in the EU", "Mock finding. With local-first storage only the relay needs an EU region.", "Decision 9 (mission)"],
+		["sy-mobile", "Mobile access", "Mock finding. A phone can read missions through the relay without the desktop app.", "Relay protocol notes (repository)"]],
+	fog: [["fog-orgs", "acc", "Company sign-in rules", "Bigger companies may bring their own sign-in provider.", "Once guest access is settled.", ["acc-guest"], true],
+		["fog-custom", "share", "Custom roles", "Some teams may want roles beyond owner, member and guest.", "Once it is clear who can start work.", ["sh-mission"], true],
+		["fog-tax", "bill", "Tax outside the EU", "Sales tax rules differ by country.", "Once the payment provider is chosen.", ["bi-provider"], true],
+		["fog-money", "bill", "How teams pay", "Teams might pay per seat, per use or once a year.", "", [], false, ["bi-plan"]],
+		["fog-mobile", "sync", "Phones and tablets", "People may want to check missions away from their desk.", "Ready to explore.", [], true, [], { id: "sy-mobile", kind: "research", title: "Mobile access", question: "Can a phone read team missions without the desktop app?" }],
+		["fog-hosting", "sync", "Hosting", "Team data could live on each machine or on a server.", "", [], false, ["sy-where"]],
+		["fog-agentrev", "rev", "Agent-only review", "Some teams may want agents to review each other.", "Once review assignment is settled.", ["rv-assign"], true],
+		["fog-legal", "adm", "Legal holds", "Some companies must keep records during disputes.", "Once retention is settled.", ["ad-retention"], true]],
+	passes: [["Nov 1", "You wrote the brief", "brief", ["src:brief-1"]],
+		["Nov 2", "Your interview round 1 answers", "round", ["acc-sso", "acc-invite"]],
+		["Nov 2", "Decision 2: Show real names", "decision", ["acc-names"]],
+		["Nov 3", "Decision 5: Three roles", "decision", ["sh-roles"]],
+		["Nov 3", "Research came back: Two-factor support", "research", ["acc-2fa"]],
+		["Nov 4", "Your interview round 2 answers", "round", ["sh-draft", "bi-plan"]],
+		["Nov 4", "Decision 7: Price per seat", "decision", ["bi-seat"]],
+		["Nov 5", "Research came back: Permission model", "research", ["sh-perm"]],
+		["Nov 5", "Decision 9: Local first", "decision", ["sy-where", "fog:fog-hosting"]],
+		["Nov 6", "Research came back: Invoices", "research", ["bi-invoice"]],
+		["Nov 6", "Your interview round 3 answers", "round", ["sy-offline", "rv-who", "rv-gate"]],
+		["Nov 7", "Research came back: Edit conflicts", "research", ["sy-conflict"]],
+		["Nov 7", "Research came back: Review cost", "research", ["rv-budget"]],
+		["Nov 8", "Your interview round 4 answers", "round", ["ad-owner"]],
+		["Nov 8", "Research came back: Audit log", "research", ["ad-audit"]],
+		["Nov 9", "Research started: Two machines per person", "research", ["acc-device"]],
+		["Nov 9", "Research started: Payment provider", "research", ["bi-provider"]],
+		["Nov 10", "Decision 5 changed, Pilot rechecked it", "decision", ["sh-roles"]],
+		["Nov 10", "Research started: End-to-end encryption", "research", ["sy-encrypt"]],
+		["Nov 11", "Prototype started: Inline comments", "prototype", ["rv-inline"]],
+		["Nov 11", "Fog lifted: How teams pay", "fog", ["fog:fog-money", "bi-plan"]],
+		["Nov 12", "Saved interview round 5", "round", ["acc-guest", "sh-mission", "bi-limit"]]],
+	slices: [["Team sign-in with invites", "Backend (Sol)", ["acc-sso", "acc-invite", "acc-guest"]], ["Roles and shared missions", "Backend (Sol)", ["sh-roles", "sh-mission", "sh-perm"]],
+		["Seat billing with EU invoices", "Backend (Sol)", ["bi-plan", "bi-seat", "bi-invoice", "bi-provider"]], ["Team sync with offline work", "Backend (Sol)", ["sy-where", "sy-offline", "sy-conflict"]],
+		["Team review in Today", "UI (Opus)", ["rv-who", "rv-gate", "rv-assign"]], ["Admin page and audit log", "UI (Opus)", ["ad-owner", "ad-audit"]]],
+};
+const BP = {}, FPOS = {};
+const bwAt = (x, y) => "left:" + r1(x) + "px;top:" + r1(y) + "px";
+function bigRegion(id) { return state.meta ? state.meta.regions.find((r) => r.id === id) || null : null; }
+function bigSlots(R) {
+	const out = [];
+	for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) out.push([R.x + 44 + c * 168, R.y + 112 + r * 68]);
+	return out;
+}
+/* The big mock mission, in the same record shapes the model uses. Places get stable spots once, by state. */
+function bigInitial() {
+	const opt = (k, l, rec) => ({ k, l, rec: !!rec });
+	const ask = (id) => { const a = BIG.asks[id]; return { id: "q-" + id, prompt: a[0], why: a[1] || "", options: a[2].map((l, i) => opt("ab"[i], l, i === a[3])), item: id }; };
+	const regions = BIG.regions.map(([id, name, col, row]) => ({ id, name, row, x: 190 + col * 560, y: row ? 560 : 40, w: 520, h: 400 }));
+	const sources = { "brief-1": { id: "brief-1", kind: "brief", title: "Brief", rev: 1, by: "You", at: "Nov 1", body: ["Let a small team use Pilot together.", "Share missions, review each other\u2019s work and pay once.", "Each machine keeps its own keys."] } };
+	for (const d of BIG.decisions) { const revs = {}; d[3].forEach((t, i) => { revs[i + 1] = t; }); sources[d[0]] = { id: d[0], kind: "decision", number: d[1], title: d[2], rev: d[3].length, cited: d[3].length, by: "You", at: d[4], revs }; }
+	for (const k of BIG.knowledge) sources[k[0]] = { id: k[0], kind: "knowledge", title: k[1], rev: 1, check: "Not checked by Pilot", by: "Research chat", at: k[2], body: [k[3]], cites: [k[4]] };
+	const rounds = BIG.rounds.map(([n, items, at, open]) => {
+		const r = { id: "r" + n, n, items: items.slice(), asks: items.map(ask), state: open ? "open" : "absorbed", at: open ? "" : at, answers: {} };
+		if (!open) { for (const id of items) r.answers["q-" + id] = { choice: "ab"[BIG.asks[id][4]], text: "" }; sources["round-" + n] = { id: "round-" + n, kind: "round", round: r.id }; }
+		return r;
+	});
+	const roundOf = {};
+	for (const r of rounds) for (const id of r.items) roundOf[id] = r;
+	const ST = { s: "resolved", a: "asking", r: "ready", u: "running", w: "waiting" }, KD = { g: "grilling", r: "research", p: "prototype" };
+	const exs = BIG.q.map(([id, region, k, st, title, question, after, srcId], lane) => {
+		const e = { id, region, lane, kind: KD[k], state: ST[st], title, question, after: after.slice(), by: "", result: "", refs: [], fromFog: "", round: "", evidence: "", observations: [], unresolved: [], changed: [] };
+		const r = roundOf[id];
+		if (r) {
+			e.round = r.id;
+			if (r.state === "absorbed") { e.refs = ["round-" + r.n]; e.result = "Answered in interview round " + r.n + ": " + Model.answerWords(r, r.asks.find((q) => q.item === id)); }
+		} else if (srcId) {
+			const s = sources[srcId];
+			e.refs = [srcId];
+			e.result = s.kind === "decision" ? "Settled by Decision " + s.number + ", revision " + s.rev + "." : "Answered by Knowledge: " + s.title + ", revision 1. Not checked by Pilot.";
+		}
+		if (e.state === "running") {
+			const cid = "chat-" + id, proto = e.kind === "prototype";
+			sources[cid] = { id: cid, kind: "chat", title: (proto ? "Prototype chat: " : "Research chat: ") + title, by: proto ? "Prototype chat" : "Research chat", at: "started 2 h ago", body: ["Running. Nothing is saved yet."] };
+			e.refs = [cid];
+			e.by = (proto ? "A prototype chat" : "A research chat") + ", started 2 h ago";
+		}
+		return e;
+	});
+	exs.find((e) => e.id === "sy-where").fromFog = "fog-hosting";
+	exs.find((e) => e.id === "bi-plan").fromFog = "fog-money";
+	const fog = BIG.fog.map(([id, region, area, why, readyWhen, after, active, became, graduates], lane) => ({ id, region, lane, area, why, readyWhen: active ? readyWhen : "Ready: it became a precise question.", readyNow: "Ready to explore.",
+		after: after.slice(), refs: ["brief-1"], active, became: (became || []).slice(), graduates: graduates ? Object.assign({ region, lane: 40 + lane }, graduates) : undefined }));
+	const name = (id) => {
+		if (id.indexOf("src:") === 0) return "Your brief";
+		if (id.indexOf("fog:") === 0) { const f = fog.find((x) => x.id === id.slice(4)); return f ? f.area : id; }
+		const e = exs.find((x) => x.id === id);
+		return e ? e.title : id;
+	};
+	const passes = BIG.passes.map(([at, title, icon, explored], i) => {
+		const n = i + 1, outs = [];
+		const add = (o) => outs.push(Object.assign({ k: "o" + n + "-" + outs.length, about: "", ids: [], src: "", rev: 0, meta: "", changed: [] }, o));
+		for (const id of explored) {
+			if (id === "src:brief-1") {
+				for (const R of regions) { const ids = exs.filter((e) => e.region === R.id).map((e) => e.id); add({ kind: "question", about: ids[0], ids, src: "brief-1", label: "Questions about " + R.name.toLowerCase(), meta: ids.length + " questions", changed: ["Added " + ids.length + " questions in " + R.name + "."] }); }
+				continue;
+			}
+			if (id.indexOf("fog:") === 0) { const f = fog.find((x) => x.id === id.slice(4)); add({ kind: "fog", about: id, src: "brief-1", label: "Fog lifted: " + f.area, meta: "Became " + f.became.map(name).join(", "), changed: ["Fog \u201c" + f.area + "\u201d became a precise question. The fog is kept as history."] }); continue; }
+			const e = exs.find((x) => x.id === id);
+			if (e.state === "resolved") {
+				const s = sources[e.refs[0]];
+				add({ kind: s.kind === "round" ? "answer" : s.kind, about: id, src: e.refs[0], rev: s.rev || 0, label: s.kind === "round" ? e.title + ": " + e.result.split(": ").slice(1).join(": ") : s.kind === "decision" ? "Decision " + s.number + ": " + s.title : "Knowledge: " + s.title,
+					meta: s.kind === "round" ? "Your answer" : s.kind === "decision" ? "Revision " + s.rev : "Revision 1 \u00b7 not checked by Pilot", changed: ["Settled \u201c" + e.title + "\u201d."] });
+			} else if (e.state === "asking") {
+				if (!outs.some((o) => o.kind === "interview")) { const r = roundOf[id]; add({ kind: "interview", about: id, ids: r.items.slice(), label: "Saved interview round " + r.n, meta: r.items.length + " questions, all up front", changed: r.items.map((x) => "\u201c" + name(x) + "\u201d asks you.") }); }
+			} else add({ kind: "question", about: id, label: e.title, meta: e.kind === "prototype" ? "Prototype chat started" : "Research chat started", changed: ["Work started on \u201c" + e.title + "\u201d."] });
+		}
+		return { n, at, title, icon, explored: explored.slice(), out: outs, next: null, rev: n + 1 };
+	});
+	passes.forEach((p, i) => { if (i < passes.length - 1) p.next = passes[i + 1].explored.filter((x) => x.indexOf("src:") !== 0).map((x) => ({ ids: [x], title: "Explores \u201c" + name(x) + "\u201d", who: "Pilot", mk: "ready" })); });
+	const asks = {};
+	for (const id of BIG.later) asks[id] = [ask(id)];
+	const finish = {};
+	for (const [id, title, body, cite] of BIG.finish) finish[id] = { result: "Answered by Knowledge: " + title + ", revision 1. Not checked by Pilot.", source: { id: "k-" + id, kind: "knowledge", title, rev: 1, check: "Not checked by Pilot", by: "Research chat", body: [body], cites: [cite] } };
+	for (const k in BP) delete BP[k];
+	for (const k in FPOS) delete FPOS[k];
+	const rank = { resolved: 0, asking: 1, running: 2, ready: 3, waiting: 4 };
+	for (const R of regions) {
+		const slots = bigSlots(R);
+		exs.filter((e) => e.region === R.id).sort((a, b) => rank[a.state] - rank[b.state] || a.lane - b.lane).forEach((e, i) => { BP[e.id] = slots[i]; });
+		fog.filter((f) => f.region === R.id).forEach((f, i) => { FPOS[f.id] = i ? [R.x + 214, R.y + 338] : [R.x + 420, R.y + 330]; });
+	}
+	return { min: 0, revision: passes.length + 1, plan: null, tasks: [], log: [], passes, ex: exs, fog, rounds, sources, asks, finish, findings: {},
+		slices: BIG.slices.map(([title, owner, from]) => ({ title, owner, from })), meta: { title: BIG.title, dest: BIG.dest, regions } };
+}
+/* New questions (fog that became a question) take the next free spot in their region. Nothing else moves. */
+function bigPlace() {
+	const used = new Set(Object.values(BP).map((p) => p.join(",")));
+	for (const e of ex()) {
+		if (BP[e.id] || !e.region) continue;
+		const R = bigRegion(e.region);
+		const free = R && bigSlots(R).find((p) => !used.has(p.join(",")));
+		if (free) { BP[e.id] = free; used.add(free.join(",")); }
+	}
+}
+function regionOf(id) {
+	if (!id) return null;
+	if (id.indexOf("region:") === 0) return id.slice(7);
+	if (id.indexOf("fog:") === 0) { const f = fogOf(id.slice(4)); return f ? f.region || null : null; }
+	if (id.indexOf("camp:") === 0) { const p = state.passes.find((x) => "camp:" + x.n === id); return p ? passRegion(p) : null; }
+	if (id.indexOf("out:") === 0) { const r = passOut(id); return r ? regionOf(r.o.about) || passRegion(r.p) : null; }
+	const e = get(id);
+	return e ? e.region || null : null;
+}
+/* A planning round belongs to the region it explored most; the first one wins a tie. */
+function passRegion(p) {
+	const n = {};
+	let best = null;
+	for (const id of p.explored) {
+		const r = id.indexOf("src:") === 0 ? "home" : id === "dest" ? "dest" : regionOf(id);
+		if (!r) continue;
+		n[r] = (n[r] || 0) + 1;
+		if (!best || n[r] > n[best]) best = r;
+	}
+	return best || "home";
+}
+function bigHarbor(r) {
+	if (r === "home") return [70, BW_LANE];
+	if (r === "dest") return [2040, BW_LANE];
+	const R = bigRegion(r);
+	return R ? [R.x + R.w / 2, R.row ? R.y : R.y + R.h] : [70, BW_LANE];
+}
+function bigPos(id) {
+	if (!id) return null;
+	if (id === "home" || id.indexOf("src:") === 0) return [70, BW_LANE];
+	if (id === "dest" || id.indexOf("task:") === 0) return [2040, BW_LANE];
+	if (id.indexOf("region:") === 0) return bigHarbor(id.slice(7));
+	if (id.indexOf("fog:") === 0) return FPOS[id.slice(4)] || null;
+	if (id.indexOf("camp:") === 0) { const p = state.passes.find((x) => "camp:" + x.n === id); return p ? bigHarbor(passRegion(p)) : null; }
+	if (id.indexOf("out:") === 0) { const r = passOut(id); return r ? bigPos(r.o.about) || bigHarbor(passRegion(r.p)) : null; }
+	return BP[id] || null;
+}
+/* Overview fits the whole sheet; a region fills the view with room for labels. Narrow windows scroll sideways. */
+function bigFrame() {
+	const cw = ui.bigW || 1240, H = Math.round(Math.max(440, cw * 0.52));
+	const s0 = Math.min(cw / BW_W, H / BW_H);
+	const R = ui.bz && bigRegion(ui.bz);
+	if (!R) return { s: s0, tx: (cw - BW_W * s0) / 2, ty: (H - BW_H * s0) / 2, H, cw };
+	const s = Math.min(cw / (R.w + 140), H / (R.h + 90));
+	return { s, tx: cw / 2 - (R.x + R.w / 2) * s, ty: H / 2 - (R.y + R.h / 2) * s, H, cw };
+}
+const bigTf = (F) => "translate(" + r1(F.tx) + "px," + r1(F.ty) + "px) scale(" + F.s.toFixed(4) + ")";
+function bigTrails() {
+	const out = [];
+	for (const e of ex()) for (const a of e.after) { const A = bigPos(a), B = bigPos(e.id); if (A && B) out.push({ from: a, to: e.id, cls: Model.resolved(state, a) ? "open" : "wait", a: A, b: B, ra: regionOf(a), rb: e.region }); }
+	for (const f of state.fog) {
+		const z = FPOS[f.id];
+		if (!z) continue;
+		if (f.active) for (const a of f.after) { const A = bigPos(a); if (A) out.push({ from: a, to: "fog:" + f.id, cls: "fog", a: A, b: z, ra: regionOf(a), rb: f.region }); }
+		else for (const b of f.became) out.push({ from: "fog:" + f.id, to: b, hidden: true });
+	}
+	return out;
+}
+/* The fix for route spaghetti: one stay per run of rounds in a region, legs between fixed harbors along one channel,
+   one lane per pair of harbors (its width grows with each trip), and only the last legs drawn strong. */
+const BW_OFFS = [0, -8, 8, -16, 16];
+function bigLegPts(a, b, off) {
+	const A = bigHarbor(a), B = bigHarbor(b);
+	if (Math.abs(A[0] - B[0]) < 1) return [A, B];
+	return [A, [A[0], BW_LANE + off], [B[0], BW_LANE + off], B];
+}
+function bigRoute() {
+	const st = [];
+	for (const p of state.passes) { const r = passRegion(p), l = st[st.length - 1]; if (l && l.r === r) l.ns.push(p.n); else st.push({ r, ns: [p.n] }); }
+	const legs = [];
+	let prev = "home";
+	for (const s of st) { if (s.r !== prev) legs.push({ a: prev, b: s.r, n: s.ns[0] }); prev = s.r; }
+	const by = {}, bund = [];
+	for (const l of legs) {
+		const k = [l.a, l.b].sort().join("|");
+		if (!by[k]) { by[k] = { k, a: l.a, b: l.b, n: 0, off: BW_OFFS[bund.length % BW_OFFS.length] }; bund.push(by[k]); }
+		by[k].n++;
+		l.k = k;
+	}
+	for (const b of bund) b.pts = bigLegPts(b.a, b.b, b.off);
+	return { st, legs, bund, by };
+}
+const bigMid = (pts) => (pts.length === 4 ? [(pts[1][0] + pts[2][0]) / 2, pts[1][1]] : [(pts[0][0] + pts[1][0]) / 2, (pts[0][1] + pts[1][1]) / 2]);
+/* Between regions, the overview shows one arrow per pair of regions with a count, not one line per question. */
+function bigDeps(trails) {
+	const m = {}, out = [];
+	for (const t of trails) {
+		if (t.hidden || !t.ra || !t.rb || t.ra === t.rb) continue;
+		const k = t.ra + ">" + t.rb;
+		if (!m[k]) { m[k] = { a: t.ra, b: t.rb, n: 0 }; out.push(m[k]); }
+		m[k].n++;
+	}
+	const side = { top: 0, bottom: 0 };
+	for (const d of out) {
+		const A = bigRegion(d.a), B = bigRegion(d.b);
+		const k = A.row ? side.bottom++ : side.top++;
+		const sx = A.x + A.w / 2 + 110 + k * 14, sy = A.row ? A.y : A.y + A.h, ex_ = B.x + B.w / 2 - 110 - k * 14, ey = B.row ? B.y : B.y + B.h, ly = A.row ? 548 - k * 12 : 452 + k * 12;
+		d.pts = [[sx, sy], [sx, ly], [ex_, ly], [ex_, ey]];
+		const hx = state.meta.regions.map((r) => r.x + r.w / 2);
+		const lx = [0.5, 0.3, 0.7, 0.2, 0.8].map((f) => sx + (ex_ - sx) * f).find((x) => hx.every((h) => Math.abs(x - h) > 80));
+		d.mid = [lx == null ? (sx + ex_) / 2 : lx, ly];
+	}
+	return out;
+}
+/* Inside a zoomed region, a link to another region shows as a small chip on the place, so no line crosses the region.
+   Following the chip moves to the other region. */
+function bigLinks(trails, z) {
+	const out = {};
+	for (const t of trails) {
+		if (t.hidden || !t.ra || !t.rb || t.ra === t.rb || (t.ra !== z && t.rb !== z)) continue;
+		const mine = t.ra === z ? t.from : t.to, other = t.ra === z ? t.to : t.from, oreg = bigRegion(t.ra === z ? t.rb : t.ra);
+		(out[mine] = out[mine] || []).push({ other, label: (t.ra === z ? "needed in " : "from ") + oreg.name + " \u2197",
+			title: t.ra === z ? "\u201c" + itemName(other) + "\u201d in " + oreg.name + " waits for this" : "Waits for \u201c" + itemName(other) + "\u201d in " + oreg.name });
+	}
+	return out;
+}
+function bigSvg(trails, route, deps, fx) {
+	const delay = (base, k) => (fx ? "animation-delay:" + (base - (fx.dt[k] || 0)) + "ms" : "");
+	const circles = (pts, pad) => pts.map(([x, y, r]) => '<circle cx="' + x + '" cy="' + y + '" r="' + r1(r + pad) + '"/>').join("");
+	const isl = [{ id: "home", x: 70, y: BW_LANE, r: 44 }].concat(ex().filter((e) => e.state === "resolved" && BP[e.id]).map((e) => ({ id: e.id, x: BP[e.id][0], y: BP[e.id][1], r: 40 })));
+	for (const i of isl) i.pts = xpPuffs(i.id, i.x, i.y, i.r, 4);
+	const layer = (pad, paint) => '<g fill="' + paint + '">' + isl.map((i) => {
+		const g = !!fx && fx.grow.indexOf(i.id) >= 0;
+		return '<g class="isl' + (g ? " grow" : "") + '"' + (g ? ' style="' + delay(0, "grow") + '"' : "") + ">" + circles(i.pts, pad) + "</g>";
+	}).join("") + "</g>";
+	const land = '<g filter="url(#xp-wob)">' + layer(28, "var(--ch-contour)") + layer(26.6, "var(--ch-paper)") + layer(14, "var(--ch-contour)") + layer(12.6, "var(--ch-paper)") +
+		layer(2.2, "var(--ch-ink)") + layer(0, "var(--ch-land)") + layer(0, "url(#xp-hatch)") + "</g>";
+	let fog = "", rings = "", serp = "";
+	for (const f of state.fog) {
+		const z = FPOS[f.id];
+		if (!z) continue;
+		const lifting = !f.active && !!fx && fx.lift.indexOf(f.id) >= 0;
+		if (!f.active && ui.bz === f.region) rings += '<circle class="xring" cx="' + z[0] + '" cy="' + z[1] + '" r="40"/>';
+		if (!f.active && !lifting) continue;
+		const pts = xpPuffs("fog-" + f.id, z[0], z[1], 46, 7);
+		fog += '<g class="fogc' + (lifting ? " lift" : "") + '"' + (lifting ? ' style="' + delay(0, "lift") + '"' : "") + '><g fill="var(--ch-faint)" opacity=".55">' + circles(pts, 1.6) + '</g><g fill="var(--ch-fog)">' + circles(pts, 0) + '</g><g fill="url(#xp-stip)">' + circles(pts, 0) + "</g></g>";
+		if (f.active && !serp) serp = xpSerpent(z[0] - 28, z[1] + 26);
+	}
+	const regs = state.meta.regions.map((R) => '<rect class="xreg" x="' + R.x + '" y="' + R.y + '" width="' + R.w + '" height="' + R.h + '" rx="22"/>').join("");
+	const z = ui.bz;
+	const tr = trails.filter((t) => !t.hidden && t.ra === t.rb).map((t) => '<path class="xtr xtr-' + t.cls + '" data-from="' + esc(t.from) + '" data-to="' + esc(t.to) + '" d="' + xpCurve(t.a, t.b, 16, t.cls === "fog" ? 52 : 18, xpHash(t.from + ">" + t.to)) + '"/>').join("") +
+		deps.map((d) => '<path class="xdep" d="' + roundPath(d.pts, 8) + '"/>').join("");
+	const recent = route.legs.slice(ui.rt === "all" ? -1 : -3);
+	const lastLeg = route.legs[route.legs.length - 1];
+	const rt = route.bund.map((b) => '<path class="xroute-b' + (ui.rt === "all" ? " all" : "") + '" style="stroke-width:' + Math.min(8, 1.8 + (b.n - 1) * 1.6) + 'px" d="' + roundPath(b.pts, 10) + '"/>').join("") +
+		recent.map((l) => { const fresh = !!fx && fx.camp && l === lastLeg; return '<path class="xroute' + (fresh ? " fresh" : "") + '"' + (fresh ? ' style="' + delay(0, "camp") + '"' : "") + ' d="' + roundPath(route.by[l.k].pts, 10) + '"/>'; }).join("");
+	let grat = "";
+	for (let x = 100; x < BW_W; x += 100) grat += "M" + x + " 0V" + BW_H;
+	for (let y = 100; y < BW_H; y += 100) grat += "M0 " + y + "H" + BW_W;
+	const mtn = '<g transform="translate(2040 452)"><path d="M-52 10 -20 -32 -6 -15 12 -44 52 10Z" fill="var(--ch-paper)" stroke="var(--ch-ink)" stroke-width="1.5" stroke-linejoin="round"/>' +
+		'<path d="M16 -36 24 -18M21 -28 33 -6M27 -16 39 4M-17 -26 -12 -12M-14 -20 -6 -2" stroke="var(--ch-ink)" stroke-width="1" opacity=".5" fill="none"/>' +
+		'<path d="M12 -44V-70" stroke="var(--ch-ink)" stroke-width="1.6"/><path d="M12.6 -70h19l-5 6 5 6h-19Z" fill="var(--ch-route)"/></g>';
+	return '<svg viewBox="0 0 ' + BW_W + " " + BW_H + '" width="' + BW_W + '" height="' + BW_H + '" aria-hidden="true">' + xpDefs() + '<path class="xgrat" d="' + grat + '"/>' + regs +
+		'<path class="xlane" d="M70 ' + BW_LANE + "H2040" + '"/>' + land + rings + '<g filter="url(#xp-wob2)">' + fog + "</g>" + serp + tr + rt + mtn + "</svg>";
+}
+function bigMarker(e, links) {
+	const p = BP[e.id];
+	if (!p) return "";
+	const z = ui.bz, far = !!z && z !== e.region;
+	const sub = e.state === "resolved" ? (e.changed.length ? "Its source changed" : settledHow(e)) : exLine(e);
+	const cls = "bw-in" + (e.state === "resolved" ? " done" : "") + (e.state === "asking" ? " needs" : "") + (e.state === "running" ? " run" : "") + (e.state === "waiting" ? " wait" : "") + (ui.sel === e.id ? " sel" : "");
+	return '<div class="bw-m' + (far ? " far" : "") + '" style="' + bwAt(p[0], p[1]) + '"><button ' + attr({ class: cls, "data-row": far ? null : true, "data-node": e.id, "data-act": z === e.region ? "sel" : "pick", "data-id": e.id, tabindex: "-1",
+		title: z === e.region ? null : e.title + ". " + sub, "aria-label": K[e.kind].name + ": " + e.title + ". " + sub }) +
+		'><span class="xgw">' + xpGlyph(xpKind(e)) + '</span><span class="xtx"><span class="xt">' + esc(e.title) + '</span><span class="xs' + (e.state === "asking" || e.changed.length ? " tone-needs" : "") + '">' + esc(sub) + "</span></span></button>" +
+		(links && links[e.id] && z === e.region ? '<div class="bw-links">' + links[e.id].map((l) => "<button " + attr({ class: "bw-link", "data-row": true, "data-act": "pick", "data-id": l.other, tabindex: "-1", title: l.title, "aria-label": l.title }) + ">" + esc(l.label) + "</button>").join("") + "</div>" : "") + "</div>";
+}
+function bigFog(f) {
+	const z = FPOS[f.id];
+	if (!z) return "";
+	const id = "fog:" + f.id, far = !!ui.bz && ui.bz !== f.region, act = ui.bz === f.region ? "sel" : "pick", sel = ui.sel === id ? " sel" : "";
+	if (!f.active) return '<div class="bw-m lifted' + (far ? " far" : "") + '" style="' + bwAt(z[0], z[1] - 46) + '"><button ' + attr({ class: "xp-fog gone" + sel, "data-row": far ? null : true, "data-node": id, "data-act": act, "data-id": id, tabindex: "-1", "aria-label": "Fog lifted: " + f.area + ". It became " + Model.titles(state, f.became) }) +
+		'><span class="fk">Fog lifted: ' + esc(f.area) + "</span></button></div>";
+	const line = f.after.length ? "After " + Model.titles(state, f.after) : "Ready to explore";
+	return '<div class="bw-m' + (far ? " far" : "") + '" style="' + bwAt(z[0], z[1] - 4) + '"><button ' + attr({ class: "xp-fog" + sel, "data-row": far ? null : true, "data-node": id, "data-act": act, "data-id": id, tabindex: "-1", "aria-label": "Fog of war: " + f.area + ". " + line }) +
+		'><span class="fk">Fog of war</span><span class="ft">' + esc(f.area) + '</span><span class="fs">' + esc(line) + "</span></button></div>";
+}
+function bigCounts(rid) {
+	const qs = ex().filter((e) => e.region === rid);
+	const n = (sts) => qs.filter((e) => sts.indexOf(e.state) >= 0).length;
+	return { settled: n(["resolved"]), open: n(["ready", "running"]), waiting: n(["waiting"]), needs: n(["asking"]), fog: state.fog.filter((f) => f.region === rid && f.active).length };
+}
+function bigRegionLabel(R) {
+	const c = bigCounts(R.id);
+	const parts = [c.settled + " settled", c.open + " open", c.waiting ? c.waiting + " waiting" : "", c.fog ? c.fog + " in fog" : ""].filter(Boolean).join(" \u00b7 ");
+	const zoomed = ui.bz === R.id;
+	return '<div class="bw-m' + (ui.bz && !zoomed ? " far" : "") + '" style="' + bwAt(R.x + 14, R.y + 12) + '"><button ' + attr({ class: "bw-reg", "data-row": true, "data-act": zoomed ? "sel" : "bigZoom", "data-id": zoomed ? "region:" + R.id : null, "data-arg": zoomed ? null : R.id, tabindex: "-1",
+		"aria-label": R.name + ": " + parts + (c.needs ? ", " + c.needs + " need you" : "") + (zoomed ? ". Open its notes" : ". Zoom in") }) +
+		'><span class="rn">' + esc(R.name) + '</span><span class="rc">' + (c.needs ? "<b>" + c.needs + (c.needs === 1 ? " needs" : " need") + " you</b> \u00b7 " : "") + esc(parts) + "</span></button></div>";
+}
+/* One badge per harbor: how many planning rounds Pilot spent there. The current one says where Pilot is. */
+function bigHarbors(route, fx) {
+	const visits = {};
+	for (const s of route.st) (visits[s.r] = visits[s.r] || []).push(...s.ns);
+	const cur = route.st.length ? route.st[route.st.length - 1].r : "home";
+	const lastN = state.passes.length;
+	return Object.keys(visits).map((r) => {
+		const ns = visits[r], h = bigHarbor(r), here = r === cur;
+		const id = r === "home" || r === "dest" ? "camp:" + ns[ns.length - 1] : "region:" + r;
+		const pos = r === "home" ? [h[0], h[1] - 36] : r === "dest" ? [h[0] - 44, h[1]] : h;
+		const fresh = !!fx && !!fx.camp && here;
+		const far = !!ui.bz && r !== ui.bz && r !== "home" && r !== "dest";
+		return '<div class="bw-m' + (far ? " far" : "") + '" style="' + bwAt(pos[0], pos[1]) + '"><button ' + attr({ class: "xp-camp" + (here ? " now" : "") + (ui.sel === id ? " sel" : "") + (fresh ? " fresh" : ""), "data-row": true, "data-node": id, "data-act": "pick", "data-id": id, tabindex: "-1",
+			style: fresh ? "animation-delay:" + (250 - fx.dt.camp) + "ms" : null, title: "Planning rounds here: " + ns.join(", "), "aria-label": ns.length + (ns.length === 1 ? " planning round" : " planning rounds") + " here: " + ns.join(", ") + (here ? ". Pilot is here." : "") }) +
+			">" + ns.length + (here ? '<span class="here">Pilot is here, round ' + lastN + "</span>" : "") + "</button></div>";
+	}).join("");
+}
+function bigCompass(F, target) {
+	const T = bigPos(target ? target.id : "dest") || [2040, BW_LANE];
+	const cx = 64, cy = F.H - 86;
+	const to = Math.round((Math.atan2(T[1] * F.s + F.ty - cy, T[0] * F.s + F.tx - cx) * 180) / Math.PI);
+	if (ui.bigNA != null && ui.bigNA !== to && !reduced()) ui.bigNF = { from: ui.bigNA, to, t: performance.now() };
+	ui.bigNA = to;
+	const nf = ui.bigNF && ui.bigNF.to === to && performance.now() - ui.bigNF.t < 1000 ? ui.bigNF : null;
+	let from = nf ? nf.from : null;
+	if (from != null) { while (from - to > 180) from -= 360; while (to - from > 180) from += 360; }
+	const needle = '<g class="needle' + (from != null ? " swing" : "") + '" style="--to:' + to + "deg;transform:rotate(" + to + "deg)" + (from != null ? ";--from:" + from + "deg;animation-delay:" + -Math.round(performance.now() - nf.t) + "ms" : "") + '"><path d="M0 -4.6 36 0 0 4.6Z" fill="var(--ch-route)"/><path d="M0 -4.6 -36 0 0 4.6Z" fill="var(--ch-ink)"/></g>';
+	const label = target ? "Compass. It points at what needs you: " + target.title : "Compass. Nothing needs you, so it points ahead to the destination.";
+	return '<div class="bw-comp" style="top:' + (cy - 50) + 'px"><svg viewBox="-50 -50 100 100" width="100" height="100" aria-hidden="true"><circle r="46" fill="var(--ch-paper)" stroke="var(--ch-ink)" stroke-opacity=".55"/><circle r="39" fill="none" stroke="var(--ch-ink)" stroke-opacity=".35" stroke-dasharray="1 4" stroke-linecap="round"/>' +
+		'<path d="M0 -40 4.5 -4.5 40 0 4.5 4.5 0 40 -4.5 4.5 -40 0 -4.5 -4.5Z" fill="var(--ch-contour)" opacity=".7"/>' + needle + '<circle r="3.2" fill="var(--ch-paper)" stroke="var(--ch-ink)" stroke-width="1.2"/></svg>' +
+		'<div class="cap">' + (target ? "points at what needs you" : "nothing needs you") + "</div><button " + attr({ class: "xp-comp", "data-row": true, "data-act": "pick", "data-id": target ? target.id : "dest", tabindex: "-1", "aria-label": label, title: target ? "Points at what needs you" : "Nothing needs you" }) + "></button></div>";
+}
+function regionBody(id) {
+	const R = bigRegion(id.slice(7));
+	if (!R) return "";
+	const qs = ex().filter((e) => e.region === R.id);
+	const group = (sts) => qs.filter((e) => sts.indexOf(e.state) >= 0).map((e) => e.id);
+	const rows = [["Needs you", group(["asking"])], ["Open now", group(["ready", "running"])], ["Waiting", group(["waiting"])], ["Settled", group(["resolved"])], ["Fog of war", state.fog.filter((f) => f.region === R.id).map((f) => "fog:" + f.id)]].filter((r) => r[1].length);
+	let h = '<div class="rec"><div class="kv">' + rows.map(([k, ids]) => '<span class="k">' + k + "</span><span>" + pickLinks(ids) + "</span>").join("") + "</div>";
+	const here = state.passes.filter((p) => passRegion(p) === R.id);
+	h += '<div class="blk"><div class="k">Planning rounds here</div>' + (here.length ? here.map((p) => '<div class="hrow"><span class="faint">Round ' + p.n + "</span><span>" + lnk(esc(p.title), { act: "pick", id: "camp:" + p.n }) + ' <span class="faint small">' + esc(p.at) + "</span></span></div>").join("") : '<p class="small faint">None yet.</p>') + "</div>";
+	return h + '<p class="what">' + icon("dest") + "<span><b>Region.</b> Related questions kept together on the chart, so a big mission stays readable. A region is a way to find things. It is not a task and approves nothing. In this mock the regions are given; in Pilot the coordinator would keep them.</span></p></div>";
+}
+function bigView() {
+	const fx = xpFx();
+	bigPlace();
+	const F = bigFrame();
+	const trails = bigTrails();
+	lastEdges = trails;
+	const route = bigRoute();
+	const deps = ui.bz ? [] : bigDeps(trails);
+	const links = ui.bz ? bigLinks(trails, ui.bz) : {};
+	const target = xpTarget();
+	const R = state.meta.regions;
+	let side = "r";
+	if (ui.sel && exists(ui.sel)) { const p = bigPos(ui.sel); if (p && p[0] * F.s + F.tx > F.cw / 2) side = "l"; }
+	const notes = ui.sel && exists(ui.sel) ? xpNotes(ui.sel, side) : "";
+	const tab = (id, label, n) => '<button class="chipbtn' + ((ui.bz || "") === id ? " on" : "") + '" data-row data-act="bigZoom" data-arg="' + id + '" aria-pressed="' + ((ui.bz || "") === id) + '">' + esc(label) + (n ? '<span class="count">' + n + "</span>" : "") + "</button>";
+	const rbtn = (id, label) => '<button class="chipbtn' + (ui.rt === id ? " on" : "") + '" data-row data-act="route" data-arg="' + id + '" aria-pressed="' + (ui.rt === id) + '">' + label + "</button>";
+	const tabs = '<div class="bw-tabs enter" role="group" aria-label="Regions">' + tab("", "Whole chart", 0) + R.map((r) => tab(r.id, r.name, bigCounts(r.id).needs)).join("") +
+		'<span class="grow"></span><span class="lbl">Route</span>' + rbtn("recent", "Recent legs") + rbtn("all", "All legs") + "</div>";
+	const home = '<div class="bw-m" style="' + bwAt(70, BW_LANE) + '"><button ' + attr({ class: "bw-in done keep" + (ui.sel === "home" ? " sel" : ""), "data-row": true, "data-node": "home", "data-act": "sel", "data-id": "home", tabindex: "-1", "aria-label": "Home port: your brief" }) +
+		'><span class="xgw">' + xpGlyph("anchor") + '</span><span class="xtx"><span class="xt">Home port</span><span class="xs">Your brief, Nov 1</span></span></button></div>';
+	const dest = '<div class="bw-m" style="' + bwAt(2040, 520) + '">' + xpDest("left:0;top:0") + "</div>";
+	const counts = route.bund.filter((b) => b.n > 1).map((b) => { const m = bigMid(b.pts); return '<div class="bw-m" style="' + bwAt(m[0], m[1]) + '"><span class="bw-cnt" title="Pilot sailed this leg ' + b.n + ' times">\u00d7' + b.n + "</span></div>"; }).join("") +
+		deps.map((d) => '<div class="bw-m" style="' + bwAt(d.mid[0], d.mid[1]) + '"><span class="bw-cnt dep" title="Questions in ' + esc(bigRegion(d.b).name) + " that wait for " + esc(bigRegion(d.a).name) + '">' + d.n + " waiting</span></div>").join("");
+	return '<div class="page wide">' + header() + tabs +
+		'<div class="xpwrap enter"><div class="xpframe" id="xpframe"><div class="bview ' + (ui.bz ? "rz" : "ov") + '" id="bview" style="width:' + F.cw + "px;height:" + F.H + 'px">' +
+		'<div class="bworld" id="bworld" style="transform:' + bigTf(F) + ";--inv:" + (1 / F.s).toFixed(4) + '">' + bigSvg(trails, route, deps, fx) +
+		R.map(bigRegionLabel).join("") + ex().map((e) => bigMarker(e, links)).join("") + state.fog.map(bigFog).join("") + home + dest + counts + bigHarbors(route, fx) + "</div>" +
+		bigCompass(F, target) + (ui.bz ? '<div class="bw-out">' + btn("Whole chart", { act: "bigZoom", arg: "" }, "sm") + "</div>" : "") + "</div></div>" + notes + "</div>" +
+		'<p class="small faint" style="margin-top:10px">' + (ui.bz ? "Select a place for its field notes. A chip on a place links to another region; follow it to move there. Esc goes back to the whole chart." : "Choose a region to zoom in. Wide lanes are legs Pilot sailed more than once; only the latest legs stay strong. Reading the chart answers, approves and starts nothing.") + "</p>" +
+		xpBelow() + "</div>";
+}
+/* After drawing: measure the frame, and move between overview and region zoom smoothly (the move continues across re-renders). */
+function bigAfter() {
+	const v = document.getElementById("bview"), w = document.getElementById("bworld");
+	if (!v || !w) { ui.bigT = null; return; }
+	const cw = Math.max(1100, v.parentElement.clientWidth);
+	if (!ui.bigW || Math.abs(cw - ui.bigW) > 2) { ui.bigW = cw; ui.bigT = null; render(); return; }
+	const F = bigFrame(), now = { s: F.s, tx: F.tx, ty: F.ty }, prev = ui.bigT;
+	ui.bigT = now;
+	if (prev && !reduced() && (Math.abs(prev.s - now.s) > 1e-3 || Math.abs(prev.tx - now.tx) > 0.5 || Math.abs(prev.ty - now.ty) > 0.5)) ui.zoomFx = { from: prev, to: now, t: performance.now() };
+	const z = ui.zoomFx;
+	if (z && !reduced() && Math.abs(z.to.s - now.s) < 1e-3 && Math.abs(z.to.tx - now.tx) < 0.5 && Math.abs(z.to.ty - now.ty) < 0.5) {
+		const el = performance.now() - z.t;
+		if (el < 650) w.animate([{ transform: bigTf(z.from), "--inv": 1 / z.from.s }, { transform: bigTf(now), "--inv": 1 / now.s }], { duration: 650, delay: -el, easing: "cubic-bezier(.3,.7,.2,1)" });
+	}
+}
+function traceBig(id) {
+	const w = document.getElementById("bworld");
+	if (!w) return;
+	let set = null;
+	if (id && id.indexOf("camp:") === 0) { const p = state.passes.find((x) => "camp:" + x.n === id); if (p) set = new Set([id].concat(p.explored)); }
+	else if (id && id.indexOf("out:") === 0) { const r = passOut(id); if (r) set = new Set(outIds(r.o)); }
+	else if (id && id !== "dest" && id !== "home" && id.indexOf("region:") !== 0 && exists(id)) set = related(id);
+	w.classList.toggle("tracing", !!set);
+	for (const el of w.querySelectorAll("[data-node]")) el.classList.toggle("rel", !!set && set.has(el.dataset.node));
+	for (const el of w.querySelectorAll(".xtr")) el.classList.toggle("rel", !!set && set.has(el.dataset.from) && set.has(el.dataset.to));
+}
+function setMission(m) {
+	ui.mission = m;
+	const p = new URLSearchParams(location.search);
+	if (m === "big") p.set("mission", "big"); else p.delete("mission");
+	history.replaceState(null, "", location.pathname + "?" + p + location.hash);
 }
 
 /* ---------- source page: the original record ---------- */
@@ -1842,13 +2435,13 @@ function todayView() {
 	const needs = (r && r.state === "open" ? 1 : 0) + (review ? 1 : 0);
 	const WORDS = ["Nothing", "One", "Two"];
 	let h = '<main class="page"><p class="date">Wednesday, 11 November \u00b7 ' + Model.clock(Model.START + state.min) + "</p><h1>" + (needs ? WORDS[needs] + (needs === 1 ? " thing needs" : " things need") + " you." : "Nothing needs you. Pilot is on it.") + "</h1>" +
-		'<p class="sub">Pilot on Linux desktops is exploring: ' + esc(Model.mapSummary(state)) + ".</p>" +
+		'<p class="sub">' + esc(MT()) + ' is exploring: ' + esc(Model.mapSummary(state)) + ".</p>" +
 		'<p class="small faint" style="margin-top:6px">Only the parts of Today this prototype needs. The map is the subject.</p>';
 	let rows = "";
-	if (r && r.state === "open") rows += '<div class="row" data-row data-act="interview" role="button" tabindex="-1">' + mark("needs") + '<div class="t">' + esc(Model.titles(state, r.items)) + '</div><div class="s tone-needs">Needs you</div><div class="m"><span>Pilot on Linux desktops \u00b7 interview round ' + r.n + " \u00b7 " + r.asks.length + " questions</span></div></div>";
-	if (review) rows += '<div class="row" data-row data-act="review" role="button" tabindex="-1">' + mark("needs") + '<div class="t">Plan for Pilot on Linux desktops</div><div class="s tone-needs">Needs you</div><div class="m"><span>Read the proposed plan</span></div></div>';
+	if (r && r.state === "open") rows += '<div class="row" data-row data-act="interview" role="button" tabindex="-1">' + mark("needs") + '<div class="t">' + esc(Model.titles(state, r.items)) + '</div><div class="s tone-needs">Needs you</div><div class="m"><span>' + esc(MT()) + ' \u00b7 interview round ' + r.n + " \u00b7 " + r.asks.length + " questions</span></div></div>";
+	if (review) rows += '<div class="row" data-row data-act="review" role="button" tabindex="-1">' + mark("needs") + '<div class="t">Plan for ' + esc(MT()) + '</div><div class="s tone-needs">Needs you</div><div class="m"><span>Read the proposed plan</span></div></div>';
 	if (rows) h += '<section class="sec enter"><div class="sec-title"><span>Needs you</span><span>' + needs + "</span></div>" + rows + "</section>";
-	h += '<section class="sec enter"><div class="sec-title"><span>Moving</span><span>1</span></div><div class="row" data-row data-act="go" data-arg="#/map" role="button" tabindex="-1">' + mark("running") + '<div class="t">Pilot on Linux desktops</div><div class="s tone-quiet">Moving</div><div class="m"><span>' + esc(Model.stageWord(state)) + " \u00b7 map: " + esc(Model.mapSummary(state)) + "</span></div></div></section>";
+	h += '<section class="sec enter"><div class="sec-title"><span>Moving</span><span>1</span></div><div class="row" data-row data-act="go" data-arg="#/map" role="button" tabindex="-1">' + mark("running") + '<div class="t">' + esc(MT()) + '</div><div class="s tone-quiet">Moving</div><div class="m"><span>' + esc(Model.stageWord(state)) + " \u00b7 map: " + esc(Model.mapSummary(state)) + "</span></div></div></section>";
 	return h + "</main>";
 }
 
@@ -1862,8 +2455,8 @@ function parse(h) {
 function crumb() {
 	const r = ui.route;
 	if (r.name === "today") return "<b>Today</b>";
-	if (r.name === "map") return "<b>Pilot on Linux desktops</b>";
-	return "Pilot on Linux desktops \u203a <b>" + esc(state.sources[r.id] ? Model.sourceLabel(state, r.id) : "Record") + "</b>";
+	if (r.name === "map") return "<b>" + esc(MT()) + "</b>";
+	return esc(MT()) + " \u203a <b>" + esc(state.sources[r.id] ? Model.sourceLabel(state, r.id) : "Record") + "</b>";
 }
 function parentOf(r) { return r.name === "source" ? "#/map" : r.name === "map" ? "#/today" : null; }
 function topbar() {
@@ -1880,7 +2473,7 @@ function view() {
 	if (r.name === "today") return todayView();
 	if (r.name === "source") return sourceView(r.id);
 	if (ui.variant !== "D") ui.xp = null;
-	return ui.variant === "A" ? mapView() : ui.variant === "B" ? outlineView() : ui.variant === "C" ? roundsView() : expeditionView();
+	return ui.variant === "A" ? mapView() : ui.variant === "B" ? outlineView() : ui.variant === "C" ? roundsView() : state.meta ? bigView() : expeditionView();
 }
 
 /* ---------- modals: interview and plan review ---------- */
@@ -1922,8 +2515,8 @@ function interviewModal() {
 }
 function reviewModal() {
 	if (!state.plan || state.plan.state !== "review") return "";
-	const SL = [["Linux build with one portable package", "Backend (Sol)"], ["Status line and notifications on GNOME and KDE", "UI (Opus)"], ["Read the daemon token from the keyring", "Backend (Sol)"], ["Self-update for the portable package", "Backend (Sol)"]];
-	return '<div class="scrim" data-act="scrim"><div class="modal enter" role="dialog" aria-modal="true" aria-label="Plan review"><div class="date">Pilot on Linux desktops \u00b7 proposed plan</div><h2 style="margin-top:4px">Plan ready for your review</h2>' +
+	const SL = state.slices ? state.slices.map((x) => [x.title, x.owner]) : [["Linux build with one portable package", "Backend (Sol)"], ["Status line and notifications on GNOME and KDE", "UI (Opus)"], ["Read the daemon token from the keyring", "Backend (Sol)"], ["Self-update for the portable package", "Backend (Sol)"]];
+	return '<div class="scrim" data-act="scrim"><div class="modal enter" role="dialog" aria-modal="true" aria-label="Plan review"><div class="date">' + esc(MT()) + ' \u00b7 proposed plan</div><h2 style="margin-top:4px">Plan ready for your review</h2>' +
 		'<p class="sub small" style="margin-top:6px">Pilot wrote this from the settled map. Each settled question is cited in the full plan.</p>' +
 		'<div class="sec-title" style="margin-top:16px"><span>Build tasks it becomes</span></div><ul class="slices">' + SL.map(([t, o]) => "<li>" + icon("task") + "<span>" + esc(t) + '</span><span class="small faint">' + esc(o) + "</span></li>").join("") + "</ul>" +
 		(state.plan.still.length ? '<div class="sec-title" style="margin-top:16px"><span>Still unknown</span></div><p class="small">' + esc(state.plan.still.join(", ")) + ". Kept as fog; it does not block the plan.</p>" : "") +
@@ -1937,7 +2530,7 @@ function barView() {
 	return '<div class="pbar" role="toolbar" aria-label="Prototype controls"><span class="tag">Prototype \u00b7 mock</span>' +
 		'<button data-act="variant" data-arg="-1" aria-label="Previous variant (\u2190)" title="Previous variant (\u2190)">\u2190</button><span class="lbl">' + ui.variant + " \u00b7 " + esc(v.name) + " <small>(" + (keys.indexOf(ui.variant) + 1) + "/" + keys.length + ")</small></span>" +
 		'<button data-act="variant" data-arg="1" aria-label="Next variant (\u2192)" title="Next variant (\u2192)">\u2192</button><span class="sep"></span>' +
-		'<button data-act="drawer">' + (ui.drawer ? "Hide panel" : "Panel") + '</button><button data-act="reset" title="Back to the starting data">Reset</button></div>';
+		'<button data-act="drawer">' + (ui.drawer ? "Hide panel" : "Panel") + '</button><button data-act="reset" title="Back to the starting data">Reset</button><button data-act="mission" title="Switch between the small mission and a big mock mission">' + (ui.mission === "big" ? "Big mission" : "Small mission") + "</button></div>";
 }
 function simList() {
 	const out = [["Pilot rechecks Decision 4", { type: "record/recheck", id: "d4" }]];
@@ -1979,6 +2572,7 @@ function drawerView() {
 			["How do things connect?", "Lines: waits for, fog became; hover traces a path", "Words: waits for, unblocks, was fog", "Lines from a next step down to the round that took it up", "Trails, dotted until what they wait for is settled; hover follows them"],
 			["How did we get here?", "Not shown", "Not shown", "One row per planning round, kept as history", "Pilot\u2019s route: one camp per planning round, and the log"],
 			["Build tasks", "Under the destination", "Their own section at the end", "At the destination, after the last round", "At the destination, after you approve the plan"],
+			["A big mission (bottom bar: Big mission)", "Columns grow long and lines cross", "The same list, longer sections", "Many rows; long lines between them", "Regions with zoom; the route goes harbor to harbor, repeated legs share a lane"],
 		];
 		const keys = Object.keys(VARIANTS);
 		body = "<p>All variants show the same records. They differ in what you see first and how you follow connections. The one you are looking at is white.</p>" +
@@ -1990,6 +2584,7 @@ function drawerView() {
 			"<p><b>Choosing a variant is feedback, not approval.</b> A mix is a good answer too. Nothing gets built from a pick without your separate design review and agreement.</p>" +
 			"<p><b>C Rounds is optional.</b> You said the outline is more practical and the map may not be used often. C tries a lighter map read top to bottom: each planning round adds one row with what it explored, what it produced and its next steps. It sits beside the outline; it does not replace it. A planning round is each time Pilot updates the map from something new (your answers, research, a prototype finding, a changed decision). Interview rounds are one kind of input to it.</p>" +
 			"<p><b>D Expedition is a playful last experiment.</b> The same map drawn as an expedition chart. Settled answers are inked islands, open questions sit on blank ground beyond them, fog of war is drawn as fog, trails show what waits for what, and each planning round is a camp on Pilot\u2019s red route. The compass points at whatever needs you. Places keep their spot, so answers ink new ground and fog lifts in place. It is not a game: no points, no progress bar, nothing to collect, and nothing moves by itself. Select a place for field notes with the real sources.</p>" +
+			"<p><b>Big mission.</b> The bottom bar switches to a big mock mission, \u201cPilot for small teams\u201d: 41 questions in six regions and 22 planning rounds. It tests whether each variant still reads at that size. In D, questions sit in regions you can zoom into, planning rounds become stays per region, the route runs between harbors along one channel, repeated legs share one wider lane with a count, and only the latest legs stay strong. The regions are mock data; in Pilot the coordinator would keep them.</p>" +
 			"<p><b>Not real.</b> Mock data in memory only, from the Day mock mission \u201cPilot on Linux desktops\u201d. Nothing is sent anywhere. Reload or Reset starts over. This is a throwaway design prototype, not how Pilot is built: the app stays native (NSH).</p>" +
 			"<p><b>Words.</b> Interview: questions only you answer. Research: an agent looks for evidence. Prototype: a throwaway experiment whose finding is evidence. Fog of war: areas not yet clear enough to ask about. Build task: implementation work from the approved plan.</p>" +
 			"<p><b>Keys.</b> \u2191 \u2193 move, Return opens, Esc closes or goes back, \u2190 \u2192 switch variant. In the interview: 1\u20139 pick an answer, 0 opens \u201cwhy\u201d, \u2190 \u2192 move between questions, \u2318Return submits.</p>" +
@@ -2048,6 +2643,19 @@ const WALKS = [
 			sim("Pilot reads your answers (new camp)", { type: "pilot/absorb", round: "r2" }),
 			sim("Pilot turns the fog into a question", { type: "fog/graduate", id: "a11y" }),
 			["Follow the compass again", () => { const t = xpTarget(); reveal(t ? t.id : "dest"); }]] },
+	{ name: "A big mission (D)", variant: "D", mission: "big", desc: "Opens D with a big mock mission: 41 questions in six regions and 22 planning rounds. Start from the whole chart, zoom into a region, then see how the route stays readable: rounds become stays per region, repeated legs share one lane with a count, and only the latest legs stay strong.",
+		steps: [["Look at the whole chart", () => { ui.bz = null; ui.sel = null; render(); }],
+			["Follow the compass to what needs you", () => { const t = xpTarget(); reveal(t ? t.id : "dest"); }],
+			["Zoom into Billing", () => { ui.sel = null; ui.bz = "bill"; render(); }],
+			["Open Billing\u2019s planning rounds", () => reveal("region:bill")],
+			["Back to the whole chart", () => { ui.bz = null; ui.sel = null; render(); }],
+			["Show every leg of the route", () => { ui.rt = "all"; render(); }],
+			["Back to the latest legs", () => { ui.rt = "recent"; render(); }],
+			["Answer interview round 5 with the recommended answers", () => { const r = openRoundNow(); dispatch({ type: "interview/submit", round: r.id, answers: REC(r) }); toast("Submitted. Pilot updates the map from your answers."); }],
+			sim("Pilot reads your answers (new round)", { type: "pilot/absorb", round: "r5" }),
+			["Zoom into Sync and storage", () => { ui.sel = null; ui.bz = "sync"; render(); }],
+			sim("Pilot turns the fog into a question", { type: "fog/graduate", id: "fog-mobile" }),
+			["Back to the whole chart", () => { ui.bz = null; ui.sel = null; render(); }]] },
 ];
 
 /* ---------- navigation ---------- */
@@ -2075,11 +2683,14 @@ function reveal(id) {
 	if (!exists(id)) return;
 	// Following a link opens just that record, so the outline does not fill up with open rows.
 	ui.sel = id; ui.selChip = null; ui.open = {}; ui.open[id] = true; ui.kind = null;
+	if (state.meta) { const rg = regionOf(id); ui.bz = rg && bigRegion(rg) ? rg : null; }
 	if (ui.route.name !== "map") go("#/map"); else render();
 	scrollToSel();
 }
 function scrollToSel() {
 	requestAnimationFrame(() => {
+		const bv = ui.variant === "D" && document.getElementById("bview");
+		if (bv) { bv.scrollIntoView({ block: "nearest", behavior: reduced() ? "auto" : "smooth" }); return; }
 		if (ui.sel === "dest" && ui.variant === "B") { window.scrollTo({ top: 0, behavior: reduced() ? "auto" : "smooth" }); return; }
 		const el = (ui.variant === "C" && selChipEl()) || document.querySelector('[data-node="' + CSS.escape(ui.sel || "") + '"]') || document.querySelector('.row[data-id="' + CSS.escape(ui.sel || "") + '"]');
 		if (el) el.scrollIntoView({ block: "nearest", inline: "nearest", behavior: reduced() ? "auto" : "smooth" });
@@ -2119,9 +2730,9 @@ function dispatch(a) {
 }
 function reset(setup) {
 	timers.forEach(clearTimeout); timers = []; ui.still = true;
-	state = Model.initial();
+	state = ui.mission === "big" ? bigInitial() : Model.initial();
 	if (setup) state = setup(state);
-	const keep = { variant: ui.variant, drawer: ui.drawer, dtab: ui.dtab, stack: ui.stack, scroll: ui.scroll, route: ui.route };
+	const keep = { variant: ui.variant, drawer: ui.drawer, dtab: ui.dtab, stack: ui.stack, scroll: ui.scroll, route: ui.route, mission: ui.mission, bigW: ui.bigW };
 	Object.assign(ui, freshUi(ui.variant), keep);
 }
 
@@ -2146,7 +2757,7 @@ function render() {
 	lastKey = key;
 	const cw2 = document.getElementById("cwrap");
 	if (cw2 && cs && same) { cw2.scrollLeft = cs[0]; cw2.scrollTop = cs[1]; }
-	if (same && !reduced() && !ui.still) {
+	if (same && !reduced() && !ui.still && !document.getElementById("bview")) {
 		let moved = false;
 		for (const el of $app.querySelectorAll("[data-flip]")) {
 			const r0 = rects[el.dataset.flip];
@@ -2182,6 +2793,7 @@ function render() {
 	traceC(ui.sel);
 	traceD(ui.sel);
 	paintHl();
+	bigAfter();
 }
 function rows() { return [...$app.querySelectorAll("[data-row]")]; }
 function hlKey() { return location.hash + "|" + ui.variant; }
@@ -2225,9 +2837,12 @@ function act(el, ev) {
 		case "variant": switchVariant(+arg); break;
 		case "drawer": ui.drawer = !ui.drawer; render(); break;
 		case "dtab": ui.dtab = arg; render(); break;
+		case "bigZoom": ui.bz = arg || null; if (ui.sel && (!ui.bz || regionOf(ui.sel) !== ui.bz)) ui.sel = null; render(); break;
+		case "route": ui.rt = arg; render(); break;
+		case "mission": setMission(ui.mission === "big" ? "small" : "big"); reset(); ui.wt = null; go("#/map"); render(); toast(ui.mission === "big" ? "Showing the big mock mission." : "Showing the small mission."); break;
 		case "reset": reset(); ui.wt = null; go("#/map"); render(); toast("Reset to the starting data."); break;
 		case "sim": dispatch(JSON.parse(arg)); break;
-		case "wtStart": { const w = WALKS[+arg]; reset(w.setup); ui.wt = { i: +arg, step: 0 }; ui.drawer = true; ui.dtab = "walk"; if (w.variant && ui.variant !== w.variant) setVariant(w.variant); go("#/map"); render(); window.scrollTo(0, 0); break; }
+		case "wtStart": { const w = WALKS[+arg]; setMission(w.mission || "small"); reset(w.setup); ui.wt = { i: +arg, step: 0 }; ui.drawer = true; ui.dtab = "walk"; if (w.variant && ui.variant !== w.variant) setVariant(w.variant); go("#/map"); render(); window.scrollTo(0, 0); break; }
 		case "wtStep": { const w = WALKS[ui.wt.i], s = w.steps[+arg]; ui.wt.step++; s[1](); render(); break; }
 		case "wtEnd": ui.wt = null; render(); break;
 	}
@@ -2263,19 +2878,20 @@ document.addEventListener("input", (ev) => {
 document.addEventListener("mousedown", () => { if (ui.kbd) { ui.kbd = false; paintHl(); } });
 document.addEventListener("mouseover", (ev) => {
 	if (ui.variant === "C" && ui.route.name === "map") { const c = ev.target.closest && ev.target.closest("#rounds [data-chip]"); if (c) traceC(c.dataset.node); return; }
-	if (ui.variant === "D" && ui.route.name === "map") { const n = ev.target.closest && ev.target.closest("#xpchart [data-node]"); if (n) traceD(n.dataset.node); return; }
+	if (ui.variant === "D" && ui.route.name === "map") { const n = ev.target.closest && ev.target.closest("#xpchart [data-node], #bworld [data-node]"); if (n) traceD(n.dataset.node); return; }
 	if (ui.variant !== "A" || ui.route.name !== "map") return;
 	const n = ev.target.closest && ev.target.closest("#canvas [data-node]");
 	if (n) trace(n.dataset.node);
 });
 document.addEventListener("mouseout", (ev) => {
 	if (ui.variant === "C" && ui.route.name === "map") { const c = ev.target.closest && ev.target.closest("#rounds [data-chip]"); if (c && !(ev.relatedTarget && c.contains(ev.relatedTarget))) traceC(ui.sel); return; }
-	if (ui.variant === "D" && ui.route.name === "map") { const n = ev.target.closest && ev.target.closest("#xpchart [data-node]"); if (n && !(ev.relatedTarget && n.contains(ev.relatedTarget))) traceD(ui.sel); return; }
+	if (ui.variant === "D" && ui.route.name === "map") { const n = ev.target.closest && ev.target.closest("#xpchart [data-node], #bworld [data-node]"); if (n && !(ev.relatedTarget && n.contains(ev.relatedTarget))) traceD(ui.sel); return; }
 	if (ui.variant !== "A" || ui.route.name !== "map") return;
 	const n = ev.target.closest && ev.target.closest("#canvas [data-node]");
 	if (n && !(ev.relatedTarget && n.contains(ev.relatedTarget))) trace(ui.sel);
 });
-window.addEventListener("resize", () => { if (ui.variant === "C" && ui.route.name === "map") { drawLines(); traceC(ui.sel); } });
+window.addEventListener("resize", () => {
+	if (ui.variant === "D" && state.meta && ui.route.name === "map") bigAfter(); if (ui.variant === "C" && ui.route.name === "map") { drawLines(); traceC(ui.sel); } });
 
 /* ---------- keyboard ---------- */
 function inText(e) { const t = e.target; return t && (t.tagName === "TEXTAREA" || (t.tagName === "INPUT" && t.type === "text") || t.isContentEditable); }
@@ -2286,6 +2902,7 @@ document.addEventListener("keydown", (e) => {
 		if (ui.modal) { ui.modal = null; render(); e.preventDefault(); return; }
 		if (ui.kind) { ui.kind = null; render(); return; }
 		if (ui.sel && ui.route.name === "map") { ui.open[ui.sel] = false; ui.sel = null; render(); return; }
+		if (state.meta && ui.variant === "D" && ui.bz && ui.route.name === "map") { ui.bz = null; render(); return; }
 		goBack(); e.preventDefault(); return;
 	}
 	if (inText(e)) return;
@@ -2320,6 +2937,7 @@ document.addEventListener("keydown", (e) => {
 
 window.addEventListener("hashchange", onHash);
 if (!location.hash) history.replaceState(null, "", location.pathname + location.search + "#/map");
+if (ui.mission === "big") state = bigInitial();
 ui.route = parse(location.hash); ui.stack = [location.hash];
 render();
 

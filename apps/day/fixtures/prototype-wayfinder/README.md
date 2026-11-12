@@ -25,6 +25,24 @@ unknown and what happens next, and let you check where each answer came from?
   Pilot's red route. The compass points at what needs you. Places keep their spot, so answers
   ink new ground and fog lifts in place. Select a place for field notes with its real sources.
   No points, progress bar or perpetual motion; it moves only when something changes.
+- `?mission=big` (or **Small mission / Big mission** in the bottom bar) swaps in a big mock
+  mission, "Pilot for small teams": 41 questions in six regions and 22 planning rounds. Every
+  variant renders it, so you can see how each one holds up at that size. In D the chart
+  changes shape for it:
+  - **Regions with zoom.** The overview shows regions with their counts (needs you, settled,
+    open, waiting, fog) and places as plain markers. Choose a region (on the chart or in the
+    tabs above it) to zoom in and see labels. Markers keep their screen size while the land
+    zooms. Esc or "Whole chart" zooms out.
+  - **No route spaghetti.** Rounds in a row that explore the same region become one stay.
+    The route only runs between fixed harbors on each region's coast, along one channel
+    between the rows, so it never crosses places. Legs between the same two harbors share
+    one lane that gets wider with each trip (×N). Only the last three legs stay strong; "All
+    legs" shows the full history. A harbor badge says how many rounds Pilot spent there.
+  - **Links between regions.** The overview shows one counted arrow per pair of regions
+    ("2 waiting") instead of a line per question. Zoomed in, a link to another region is a
+    small chip on the place ("from Accounts and sign-in ↗") that moves you there.
+  - The small chart also fades legs older than the last five.
+  The regions are mock data. In Pilot the coordinator would need to keep them.
 - The bottom bar and the left/right arrow keys switch variants. The bottom bar's Panel holds
   walkthroughs, free play, the current state, a side-by-side comparison and About.
   Reset or reload starts over.
@@ -44,6 +62,8 @@ unknown and what happens next, and let you check where each answer came from?
    Follow the compass, open camp 2 and the Decision 4 record, then watch research and your
    answers ink new ground and lift the fog. Is it fun enough for an occasional look beside B,
    and do the field notes still tell you what is settled, unknown and next?
+   Then run "A big mission (D)": the same chart with 41 questions, regions, zoom and a
+   bundled route. Does it still read? Switch to B with the big mission for comparison.
 1. Open `?variant=C`, then the Panel, Walkthroughs, "How did we get here? (C)". Press each step.
    Open round 2's decision and its original record, follow "Keyring access" across rounds,
    then watch research and your answers add new rows. Compare with B: is C worth an
