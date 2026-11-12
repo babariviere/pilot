@@ -130,6 +130,15 @@ class GuiReleaseTests(unittest.TestCase):
         for name in ("macos-gui:", "linux-gui:", "gui-publish:"):
             self.assertIn(name, workflow)
         self.assertIn("needs: [target, gui-publish]", workflow)
+        # Explicit retries skip release-please. Packaging must still run after target succeeds.
+        for job in ("macos-gui", "linux-gui"):
+            section = workflow.split(f"  {job}:")[1].split("\n\n", 1)[0]
+            self.assertIn("if: ${{ !cancelled() && needs.target.result == 'success' }}", section)
+        for job, dependencies in (("gui-publish", ("target", "macos-gui", "linux-gui")),
+                                  ("publish", ("target", "gui-publish"))):
+            section = workflow.split(f"  {job}:")[1].split("\n\n", 1)[0]
+            condition = " && ".join(["!cancelled()", *(f"needs.{name}.result == 'success'" for name in dependencies)])
+            self.assertIn("if: ${{ " + condition + " }}", section)
         self.assertNotIn("macos-app:", workflow)
         self.assertNotIn("macos-publish:", workflow)
         self.assertIn("bundle_runtime", (root / "apps/desktop/scripts/gui_release.py").read_text())

@@ -80,6 +80,7 @@ jobs:
 
   macos-gui:
     needs: target
+    if: ${{ !cancelled() && needs.target.result == 'success' }}
     uses: ./.github/workflows/gui-package.yml
     with:
       ref: ${{ needs.target.outputs.sha }}
@@ -88,6 +89,7 @@ jobs:
 
   linux-gui:
     needs: target
+    if: ${{ !cancelled() && needs.target.result == 'success' }}
     uses: ./.github/workflows/gui-package.yml
     with:
       ref: ${{ needs.target.outputs.sha }}
@@ -98,6 +100,7 @@ jobs:
 
   gui-publish:
     needs: [target, macos-gui, linux-gui]
+    if: ${{ !cancelled() && needs.target.result == 'success' && needs.macos-gui.result == 'success' && needs.linux-gui.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
@@ -155,6 +158,7 @@ jobs:
 
   publish:
     needs: [target, gui-publish]
+    if: ${{ !cancelled() && needs.target.result == 'success' && needs.gui-publish.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     # Serialize stable publishing. Semantic-version ordering protects latest.
