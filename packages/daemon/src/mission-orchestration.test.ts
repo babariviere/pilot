@@ -104,7 +104,7 @@ test("unaccepted non-code delivery survives reopen and exact retries without com
 		assert.equal(reopened.completion(id, task.id), undefined);
 		assert.equal(reopened.task(id, task.id).status, "in_progress");
 		assert.equal(reopened.retiredMember("member"), false);
-		assert.throws(() => reopened.completeTask(id, task.id, "member", delivery), /commit/);
+		assert.throws(() => reopened.completeTask(id, task.id, "lead", delivery), /commit/);
 	} finally {
 		reopened.close();
 	}
@@ -135,7 +135,7 @@ test("commit-free closure authority follows the current coordinator", (t) => {
 	const { store, id } = setup();
 	t.after(() => store.close());
 	store.update(id, { coordinatorSessionId: "member" });
-	assert.throws(() => store.updateTask(id, "1", { status: "done" }, { sessionId: "lead" }), /Use complete/);
+	assert.throws(() => store.updateTask(id, "1", { status: "done" }, { sessionId: "lead" }), /[Cc]oordinator/);
 	assert.equal(store.resolveTask(id, "1").status, "in_progress");
 	assert.equal(store.updateTask(id, "1", { status: "done" }, { sessionId: "member" }).status, "done");
 });
@@ -146,31 +146,27 @@ test("completion is immutable, bounded, referenced once and retires admission du
 	const path = join(home, "missions.sqlite");
 	const { store, id } = setup(new MissionStore(path));
 	const task = store.resolveTask(id, "1");
-	assert.throws(() => store.updateTask(id, task.id, { status: "done" }, { sessionId: "member" }), /Use complete/);
+	assert.throws(() => store.updateTask(id, task.id, { status: "done" }, { sessionId: "member" }), /[Cc]oordinator/);
 	for (const invalid of [
 		{ ...record, checks: "x".repeat(2001) },
 		{ ...record, issues: "x".repeat(1001) },
 		{ ...record, commit: "short" },
 		{ ...record, extra: "unneeded" },
 	]) {
-		assert.throws(() => store.completeTask(id, task.id, "member", invalid));
+		assert.throws(() => store.completeTask(id, task.id, "lead", invalid));
 	}
 	assert.equal(store.resolveTask(id, "1").status, "in_progress");
 	const before = store.events(id).length;
-	assert.deepEqual(store.completeTask(id, "1", "member", record), record);
-	assert.deepEqual(store.completeTask(id, task.id, "member", record), record);
+	assert.deepEqual(store.completeTask(id, "1", "lead", record), record);
+	assert.deepEqual(store.completeTask(id, task.id, "lead", record), record);
 	assert.equal(store.events(id).length, before + 1);
 	assert.equal(store.retiredMember("member"), true);
-	assert.throws(() => store.completeTask(id, "1", "member", { ...record, checks: "Changed" }), /already has/);
+	assert.throws(() => store.completeTask(id, "1", "lead", { ...record, checks: "Changed" }), /already has/);
 	assert.throws(() => store.claimTask(id, "2", "member"), /retired/);
 	assert.throws(() => store.claimTasks(id, ["2"], "member"), /retired/);
 	assert.throws(() => store.updateTask(id, "2", { sessionId: "member" }), /retired/);
 	assert.throws(() => store.addTask(id, { title: "Another", sessionId: "member" }), /retired/);
-	const notice = store.prepareNotice(id, "lead", Date.now())!;
-	assert.ok(notice);
-	assert.equal(notice.event.kind, "mission_task_done");
-	assert.match(notice.content, /Task #1 done/);
-	assert.doesNotMatch(notice.content, /parser|aaaaaaa/);
+	assert.equal(store.prepareNotice(id, "lead", Date.now()), undefined, "coordinator actions never notify themselves");
 	store.recordMemberCompletion({
 		id: "member",
 		state: "idle",
@@ -248,7 +244,7 @@ test("ACK-only writes do not wake; blockers and needs-you bypass routine settlem
 		store.addComment(id, { text: "Thanks!" }, { sessionId: "member" });
 		store.addComment(id, { text: "Receipt", notification: "ack" }, { sessionId: "member" });
 		assert.deepEqual(store.noticeDeadlines(Date.now()), []);
-		store.updateTask(id, "1", { status: "blocked" }, { sessionId: "member" });
+		store.updateTask(id, "1", { status: "blocked" });
 		const blocked = store.prepareNotice(id, "lead", Date.now())!;
 		assert.ok(blocked, "blocked work wakes immediately even with another busy member");
 		store.acknowledgeNotice(blocked, Date.now());
@@ -259,91 +255,30 @@ test("ACK-only writes do not wake; blockers and needs-you bypass routine settlem
 	}
 });
 
-test("feedback claims have a durable two-task lifetime allowance, excluding starting assignments", async (t) => {
-	const home = await mkdtemp(join(tmpdir(), "pilot-feedback-claims-"));
+test("workers cannot claim or release canonical assignments across reopen", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-factual-workers-"));
 	t.after(() => rm(home, { recursive: true, force: true }));
 	const path = join(home, "missions.sqlite");
 	const { store, id } = setup(new MissionStore(path));
-	store.completeTask(id, "1", "member", record);
-	const first = store.addTask(id, { title: "User feedback" }, { sessionId: "member" });
-	store.claimTask(id, first.id, "member");
-	store.claimTask(id, first.id, "member"); // Idempotent, not a second claim.
-	store.completeTask(id, first.id, "member", record);
-	const second = store.addTask(id, { title: "More feedback" }, { sessionId: "member" });
-	store.claimTask(id, second.id, "member");
-	store.releaseTask(id, second.id, { sessionId: "member" });
-	store.claimTask(id, second.id, "member"); // Reclaiming the same task is free.
-	store.releaseTask(id, second.id);
-	store.removeTask(id, first.id);
-	store.removeTask(id, second.id);
-	const third = store.addTask(id, { title: "Third feedback" }, { sessionId: "member" });
-	const before = store.events(id).length;
-	assert.throws(() => store.claimTask(id, third.id, "member"), /two additional tasks/);
-	assert.equal(store.events(id).length, before);
-	assert.equal(store.task(id, third.id).sessionId, undefined);
-	const batch = store.claimTasks(id, [third.id, third.id], "member");
-	assert.equal(batch.claimed.length, 0);
-	assert.equal(batch.skipped.length, 1);
-	assert.match(batch.skipped[0]!.reason, /fresh chat/);
+	const worker = { sessionId: "member" };
+	for (const call of [
+		() => store.claimTask(id, "2", "member", worker),
+		() => store.claimTasks(id, ["2"], "member", worker),
+		() => store.releaseTask(id, "1", worker),
+		() => store.releaseTasks(id, ["1"], worker),
+	])
+		assert.throws(call, /[Cc]oordinator/);
 	await store.durable();
 	store.close();
-
 	const restored = new MissionStore(path);
 	try {
-		assert.throws(() => restored.claimTask(id, third.id, "member"), /two additional tasks/);
-		restored.continueSession("member", "continued");
-		assert.throws(() => restored.claimTask(id, third.id, "continued"), /two additional tasks/);
-		// Neither a user retirement override nor a mission move resets lifetime admission.
-		restored.updateTask(id, "2", { sessionId: "continued", overrideRetirement: true });
-		restored.releaseTask(id, "2");
-		assert.throws(() => restored.claimTask(id, third.id, "continued"), /two additional tasks/);
-		const other = restored.create({ projectId: "synthetic-project", title: "Another mission" });
-		restored.join("continued", other.id);
-		const task = restored.addTask(other.id, { title: "Feedback elsewhere" }, { sessionId: "continued" });
-		assert.throws(() => restored.claimTask(other.id, task.id, "continued"), /two additional tasks/);
-		restored.leave("continued");
-		restored.continueSession("continued", "detached-continuation");
-		restored.join("detached-continuation", other.id);
-		assert.throws(() => restored.claimTask(other.id, task.id, "detached-continuation"), /two additional tasks/);
+		assert.throws(() => restored.claimTask(id, "2", "member", worker), /[Cc]oordinator/);
+		restored.updateTask(id, "2", { sessionId: "member" }, { sessionId: "lead" });
+		assert.equal(restored.resolveTask(id, "2").sessionId, "member");
+		assert.equal(restored.releaseTask(id, "1", { sessionId: "lead" }).status, "todo");
 	} finally {
 		restored.close();
 	}
-});
-
-test("batch claims spend only available slots and leave coordinator assignments unrestricted", (t) => {
-	const { store, id } = setup();
-	t.after(() => store.close());
-	const tasks = Array.from({ length: 4 }, (_, i) =>
-		store.addTask(id, { title: `Follow-up ${i}` }, { sessionId: "member" }),
-	);
-	const batch = store.claimTasks(
-		id,
-		tasks.map((task) => task.id),
-		"member",
-	);
-	assert.deepEqual(
-		batch.claimed.map((task) => task.id),
-		tasks.slice(0, 2).map((task) => task.id),
-	);
-	assert.equal(batch.skipped.length, 2);
-	assert.ok(batch.skipped.every((item) => /two additional tasks/.test(item.reason)));
-	const lead = store.claimTasks(
-		id,
-		tasks.slice(2).map((task) => task.id),
-		"lead",
-	);
-	assert.equal(lead.claimed.length, 2);
-	const fresh = store.addTask(id, { title: "Starting assignment" });
-	store.join("fresh", id);
-	store.claimStartTasks(id, [fresh.id, "2"], "fresh");
-	const more = Array.from({ length: 3 }, (_, i) => store.addTask(id, { title: `Extra ${i}` }));
-	const extras = store.claimTasks(
-		id,
-		more.map((task) => task.id),
-		"fresh",
-	);
-	assert.equal(extras.claimed.length, 2);
-	assert.equal(extras.skipped.length, 1);
 });
 
 test("legacy assignments migrate without consuming follow-up allowance", async (t) => {
@@ -366,9 +301,9 @@ test("legacy assignments migrate without consuming follow-up allowance", async (
 			tasks.map((task) => task.id),
 			"member",
 		);
-		assert.equal(result.claimed.length, 2);
-		assert.equal(result.skipped.length, 1);
-		assert.match(result.skipped[0]!.reason, /two additional tasks/);
+		assert.equal(result.claimed.length, 3);
+		assert.equal(result.skipped.length, 0);
+		assert.equal(restored.resolveTask(id, "1").sessionId, "member");
 	} finally {
 		restored.close();
 	}

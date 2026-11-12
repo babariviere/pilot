@@ -58,7 +58,9 @@ f.store.linkArtifact(mission.id, {
 	kind: "visual",
 	revision: 1,
 });
-f.store.completeTask(mission.id, task.id, worker.id, {
+f.store.join("completion-lead", mission.id);
+f.store.update(mission.id, { coordinatorSessionId: "completion-lead" });
+f.store.completeTask(mission.id, task.id, "completion-lead", {
 	commit: "a".repeat(40),
 	checks: "Synthetic checks",
 	issues: "Not deployed",

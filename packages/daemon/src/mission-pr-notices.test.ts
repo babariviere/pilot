@@ -55,7 +55,8 @@ test("startup silently baselines historical terminal PRs and does not replay the
 		initial.store.addResource(id, { taskId: "1", url: old.url });
 		initial.store.updatePullRequest(old);
 	}
-	assert.equal(initial.store.resolveTask(id, "1").status, "done");
+	assert.equal(initial.store.resolveTask(id, "1").status, "in_progress");
+	initial.store.updateTask(id, "1", { status: "done" }, { sessionId: "lead" }); // Known canonical closure survives reopen.
 	initial.store.close();
 	let owned = [pr(1, "merged"), pr(2, "closed"), { ...pr(3, "merged"), mergedAt: undefined }];
 	const archived = { ...chat, archivedAt: 1_500, outcome: "done" as const, outcomeAt: 500 };
@@ -102,7 +103,7 @@ test("startup silently baselines historical terminal PRs and does not replay the
 	}
 });
 
-test("newly linked terminal PRs reconcile tasks but do not announce historical merges or closes", (t) => {
+test("newly linked terminal PRs keep task status and do not announce historical transitions", (t) => {
 	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
 	const { store, id, chat } = setup();
 	try {
@@ -119,7 +120,7 @@ test("newly linked terminal PRs reconcile tasks but do not announce historical m
 			store.addResource(id, { taskId: task.id, url: terminal.url });
 			store.updatePullRequest(terminal, [chat]);
 			store.updatePullRequest({ ...terminal, checkedAt: 3_000 }, [chat]);
-			assert.equal(store.task(id, task.id).status, state === "merged" ? "done" : "in_progress");
+			assert.equal(store.task(id, task.id).status, "in_progress");
 		}
 		assert.deepEqual(store.noticeDeadlines(Date.now()), []);
 		assert.equal(store.events(id).filter((event) => event.text.startsWith("PR #")).length, 0);
@@ -146,7 +147,8 @@ test("an open baseline survives restart and a later real merge queues exactly on
 		restarted.updatePullRequest({ ...merged, checkedAt: 3_000 }, [chat]);
 		const notice = restarted.prepareNotice(id, "lead", 32_000)!;
 		assert.equal(notice.content.match(/merged/g)?.length, 1);
-		assert.match(notice.content, /task #1 marked done/);
+		assert.match(notice.content, /task #1/);
+		assert.doesNotMatch(notice.content, /marked done/);
 		restarted.acknowledgeNotice(notice, 32_000);
 		restarted.updatePullRequest({ ...merged, checkedAt: 50_000 }, [chat]);
 		assert.deepEqual(restarted.noticeDeadlines(80_000), []);
@@ -155,7 +157,7 @@ test("an open baseline survives restart and a later real merge queues exactly on
 	}
 });
 
-test("task merge queues one PR-keyed event with done, newly ready dependents and open stacked PRs", (t) => {
+test("task merge queues PR evidence but leaves scope and dependencies for the coordinator", (t) => {
 	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
 	const { store, id, chat } = setup();
 	try {
@@ -176,11 +178,11 @@ test("task merge queues one PR-keyed event with done, newly ready dependents and
 		const merged = { ...open, state: "merged" as const, mergedAt: 1_001, checkedAt: 1_001 };
 		t.mock.timers.tick(1);
 		store.updatePullRequest(merged, [chat], () => [upper, draft, unrelated, otherRepo]);
-		assert.equal(store.task(id, first.id).status, "done");
+		assert.equal(store.task(id, first.id).status, "in_progress");
 		assert.equal(store.prepareNotice(id, "lead", Date.now()), undefined);
 		const notice = store.prepareNotice(id, "lead", Date.now() + 30_000)!;
-		assert.match(notice.content, /PR #1 Change 1 merged \(chat Implementation, task #1 marked done\)/);
-		assert.match(notice.content, /unblocks task #2 Ready/);
+		assert.match(notice.content, /PR #1 Change 1 merged \(chat Implementation, task #1\)/);
+		assert.doesNotMatch(notice.content, /marked done|unblocks task/);
 		assert.match(notice.content, /open stacked PRs: #2 Change 2, #3 Change 3/);
 		assert.doesNotMatch(notice.content, /Still blocked|Dropped|Change 4|Change 5/);
 		assert.equal(notice.content.split("\n").filter((line) => line.startsWith("- ")).length, 1);
@@ -274,7 +276,7 @@ test("closed-unmerged PRs wake once, remain stuck, and can later merge without r
 		store.addResource(id, { taskId: "1", url: pr().url });
 		store.updatePullRequest(pr(), [chat]);
 		store.updatePullRequest(pr(1, "closed"), [chat]);
-		assert.equal(store.resolveTask(id, "1").status, "in_review");
+		assert.equal(store.resolveTask(id, "1").status, "in_progress");
 		store.recordMemberCompletion({ ...chat, outcome: "done", outcomeAt: 1_001, pullRequest: pr(1, "closed") });
 		const notice = store.prepareNotice(id, "lead", 31_000)!;
 		assert.match(notice.content, /PR #1 closed without merging \(chat Implementation, task #1\)/);
@@ -284,7 +286,9 @@ test("closed-unmerged PRs wake once, remain stuck, and can later merge without r
 		assert.deepEqual(store.noticeDeadlines(31_000), []);
 		t.mock.timers.tick(1_000);
 		store.updatePullRequest(pr(1, "merged"), [chat]);
-		assert.match(store.prepareNotice(id, "lead", 32_000)!.content, /marked done/);
+		const mergedNotice = store.prepareNotice(id, "lead", 32_000)!;
+		assert.match(mergedNotice.content, /merged/);
+		assert.doesNotMatch(mergedNotice.content, /marked done/);
 	} finally {
 		store.close();
 	}

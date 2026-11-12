@@ -47,7 +47,6 @@ import type {
 	UpdateMissionRequest,
 } from "@pilot/protocol";
 import { ATTENTION_SCHEMA, AttentionStore } from "./attention-store.ts";
-import { USER_VERIFICATION_SCHEMA, UserVerificationStore } from "./user-verification-store.ts";
 import { CHANGE_LANDING_SCHEMA, ChangeLandingStore } from "./change-landing-store.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
@@ -119,6 +118,7 @@ import { KNOWLEDGE_SCHEMA, ProjectKnowledgeStore } from "./project-knowledge-sto
 import { RETAINED_PROJECTION_SCHEMA, RetainedReviewProjections } from "./retained-review-projections.ts";
 import { REVIEW_REQUEST_SCHEMA, ReviewRequestStore } from "./review-request-store.ts";
 import type { PullRequestBinding } from "./sessions.ts";
+import { USER_VERIFICATION_SCHEMA, UserVerificationStore } from "./user-verification-store.ts";
 import { WORKFLOW_CONFIRMATION_SCHEMA, WorkflowConfirmationStore } from "./workflow-confirmation-store.ts";
 
 /** Who changed mission state. Omitted sessionId means the user (or pilotd itself). */
@@ -738,7 +738,30 @@ export class MissionStore {
 		run: (sql, ...params) => this.run(sql, ...params),
 		transaction: (work) => this.transaction(work, true),
 		durable: () => this.durable(),
-		changed: (id) => this.changed(id, [], true, false, true),
+		changed: (id, report) => this.changed(id, [], !report, false, !report),
+		reportSaved: (report) => {
+			const task = this.task(report.missionId, report.write.taskId);
+			const note = `Task #${task.number}: worker report ${report.write.reportId}${report.write.delivery ? " (scoped delivery)" : ""}. Read current task scope, owner, dependencies and report before changing status; not user acceptance.`;
+			this.event(
+				report.missionId,
+				"update",
+				note,
+				{ sessionId: report.sessionId },
+				{
+					taskId: task.id,
+					wake: true,
+					urgent: !!report.write.delivery || report.write.movement === "not_moving",
+					settled: false,
+					noticeSummaries: [
+						{
+							key: report.write.delivery ? `report:${report.write.reportId}` : `task:${task.id}`,
+							text: note,
+							state: "reported",
+						},
+					],
+				},
+			);
+		},
 	});
 
 	/** Help and human actions share the replica, never approval/ask rows. */
@@ -1460,6 +1483,7 @@ export class MissionStore {
 		string,
 		{
 			sessionId?: string;
+			status: MissionTaskStatus;
 			assignment?: import("@pilot/protocol").MissionAssignment;
 			definitionRevision: number;
 			taskEvent: number;
@@ -1467,7 +1491,7 @@ export class MissionStore {
 	> {
 		return new Map(
 			this.all(
-				`SELECT t.id,t.session_id,t.assignment,COALESCE(d.revision,0) definition_revision,
+				`SELECT t.id,t.session_id,t.status,t.assignment,COALESCE(d.revision,0) definition_revision,
 			COALESCE((SELECT MAX(e.id) FROM events e WHERE e.mission_id=t.mission_id AND e.task_id=t.id AND e.kind='task'),0) task_event
 			FROM tasks t LEFT JOIN shared_task_definitions d ON d.id=t.id WHERE t.mission_id=?`,
 				missionId,
@@ -1475,6 +1499,7 @@ export class MissionStore {
 				str(row.id!),
 				{
 					...(row.session_id ? { sessionId: str(row.session_id) } : {}),
+					status: str(row.status!) as MissionTaskStatus,
 					...(row.assignment ? { assignment: JSON.parse(str(row.assignment)) } : {}),
 					definitionRevision: num(row.definition_revision!),
 					taskEvent: num(row.task_event!),
@@ -1887,6 +1912,16 @@ export class MissionStore {
 		const subject = key.slice(separator + 1);
 		if (kind === "chat") return [subject];
 		if (kind === "message") return [subject.split(":", 1)[0]!];
+		if (kind === "report") {
+			const report = this.controls.report(subject);
+			if (!report || report.missionId !== missionId) return [];
+			const owner = this.one(
+				"SELECT session_id FROM tasks WHERE mission_id=? AND id=?",
+				missionId,
+				report.write.taskId,
+			)?.session_id;
+			return [report.sessionId, ...(typeof owner === "string" ? [owner] : [])];
+		}
 		if (kind === "task") {
 			const row = this.one("SELECT session_id FROM tasks WHERE mission_id = ? AND id = ?", missionId, subject);
 			return typeof row?.session_id === "string" ? [row.session_id] : [];
@@ -2754,8 +2789,6 @@ export class MissionStore {
 			);
 			for (const [kind, note] of notes) this.event(id, kind, note, actor, { at: now });
 			this.run("UPDATE missions SET phase_gating = ? WHERE id = ?", next.phaseGating ? 1 : 0, id);
-			if (next.status === "active" && mission.status !== "active")
-				for (const task of this.tasks(id)) this.reconcileTaskPullRequests(id, task.id);
 		});
 		// Status and coordinator changes alter every member's context.
 		if (next.status === "done" && mission.status !== "done")
@@ -2833,32 +2866,26 @@ export class MissionStore {
 		if (!actor.sessionId) return; // Trusted daemon/user path.
 		this.assertMember(id, actor.sessionId);
 		if (mission.coordinatorSessionId !== actor.sessionId)
-			throw new Conflict(
-				"Coordinator-owned planning: propose changes with comment; report execution with status/log",
-			);
+			throw new Conflict("Coordinator-owned planning: propose changes with comment; report facts with report/log");
 	}
 
-	private assertTaskWriter(id: string, ref: string, write: MissionTaskWrite, actor: MissionActor): void {
+	private assertTaskCoordinator(id: string, actor: MissionActor): void {
+		const mission = this.require(id);
+		if (mission.planningVersion !== undefined && mission.planningVersion !== 1)
+			throw new Conflict("Unsupported mission planning version");
+		if (actor.sessionId === undefined) return; // Trusted daemon/user controls remain unchanged.
+		this.assertMember(id, actor.sessionId);
+		if (mission.coordinatorSessionId !== actor.sessionId)
+			throw new Conflict("Coordinator-owned task status and assignments; workers report facts with report/log");
+	}
+
+	private assertTaskWriter(id: string, _ref: string, write: MissionTaskWrite, actor: MissionActor): void {
+		if (write.status !== undefined || write.sessionId !== undefined) this.assertTaskCoordinator(id, actor);
 		const mission = this.require(id);
 		if (mission.planningVersion === undefined) return;
 		strictPlanningFields(write, TASK_WRITE_FIELDS);
 		if (mission.planningVersion !== 1) throw new Conflict("Unsupported mission planning version");
-		if (!actor.sessionId || mission.coordinatorSessionId === actor.sessionId) {
-			this.assertPlanner(id, actor);
-			return;
-		}
-		this.assertMember(id, actor.sessionId);
-		const task = this.resolveTask(id, ref);
-		if (
-			task.sessionId !== actor.sessionId ||
-			task.status === "done" ||
-			task.status === "dropped" ||
-			Object.keys(write).some((key) => key !== "status") ||
-			(write.status !== undefined && !["in_progress", "blocked", "in_review"].includes(write.status))
-		)
-			throw new Conflict(
-				"Coordinator-owned task definition; workers may only report their own execution status or propose changes with comment",
-			);
+		this.assertPlanner(id, actor);
 	}
 
 	private validateAssignment(id: string, write: MissionTaskWrite, current?: MissionTask) {
@@ -3430,6 +3457,7 @@ export class MissionStore {
 	}
 
 	private insertTask(id: string, write: MissionTaskWrite, actor: MissionActor): MissionTask {
+		if (write.status !== undefined || write.sessionId !== undefined) this.assertTaskCoordinator(id, actor);
 		if (actor.sessionId && write.order !== undefined && this.controls.orderPinned(id))
 			throw new Conflict("Task order is pinned by the user");
 		const assignment = this.validateAssignment(id, write);
@@ -3607,11 +3635,8 @@ export class MissionStore {
 	/** One immutable, task-owned handoff. Retries return it, never add another event. */
 	completeTask(id: string, ref: unknown, sessionId: string, value: unknown) {
 		this.insights.assertOrdinaryTask(this.resolveTask(id, ref).id);
-		if (this.require(id).planningVersion !== undefined)
-			throw new Conflict("Report evidence with log; coordinator/user marks done separately");
-		this.assertMember(id, sessionId);
+		this.assertTaskCoordinator(id, { sessionId });
 		const task = this.resolveTask(id, ref);
-		if (task.sessionId !== sessionId) throw new Conflict("Only the task owner can complete it");
 		if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("completion is required");
 		const input = value as Record<string, unknown>;
 		if (Object.keys(input).sort().join(",") !== "checks,commit,issues")
@@ -3652,9 +3677,15 @@ export class MissionStore {
 						],
 					},
 				);
-			if (this.require(id).coordinatorSessionId !== sessionId)
-				this.run("INSERT OR IGNORE INTO retired_members VALUES (?, ?, ?)", sessionId, id, Date.now());
-			this.changed(id, [sessionId]);
+			if (
+				task.sessionId &&
+				task.sessionId !== sessionId &&
+				!this.tasks(id).some(
+					(item) => item.sessionId === task.sessionId && item.status !== "done" && item.status !== "dropped",
+				)
+			)
+				this.run("INSERT OR IGNORE INTO retired_members VALUES (?, ?, ?)", task.sessionId, id, Date.now());
+			this.changed(id, task.sessionId ? [task.sessionId] : []);
 		});
 		this.knowledgeChanged(id);
 		return record;
@@ -4826,22 +4857,11 @@ export class MissionStore {
 			write.title === undefined ? before.title : text(write.title, "title", MAX_TITLE, { codePoints: true })!;
 		let owner = before.sessionId ?? null;
 		if (write.sessionId !== undefined) {
-			if (actor.sessionId && this.require(id).planningVersion === undefined)
-				throw new Error("Chats claim tasks with the claim action; only the user assigns them");
 			if (write.sessionId !== null) this.assertMember(id, write.sessionId);
 			owner = write.sessionId;
 			if (owner && owner !== before.sessionId && write.overrideRetirement !== true) this.assertFreshMember(owner);
 		}
 		const status = fields.status ?? before.status;
-		if (
-			status === "done" &&
-			before.status !== "done" &&
-			actor.sessionId &&
-			actor.sessionId !== this.require(id).coordinatorSessionId &&
-			this.require(id).planningVersion === undefined &&
-			!this.completion(id, before.id)
-		)
-			throw new Error("Use complete with commit, checks and issues to finish a task");
 		const now = Date.now();
 		this.transaction(() => {
 			if (assignment) {
@@ -5083,7 +5103,8 @@ export class MissionStore {
 	}
 
 	/** Atomic: a task owned by another chat is never taken over. */
-	claimTask(id: string, taskId: unknown, sessionId: string, actor: MissionActor = { sessionId }): MissionTask {
+	claimTask(id: string, taskId: unknown, sessionId: string, actor: MissionActor = USER): MissionTask {
+		this.assertTaskCoordinator(id, actor);
 		this.assertPlanner(id, actor);
 		this.assertMember(id, sessionId);
 		const task = this.transaction(() => {
@@ -5094,8 +5115,9 @@ export class MissionStore {
 		return task;
 	}
 
-	/** The user and current coordinator may release any claim; members only their own. */
+	/** Only the user and current coordinator may release claims. */
 	releaseTask(id: string, taskId: unknown, actor: MissionActor = USER): MissionTask {
+		this.assertTaskCoordinator(id, actor);
 		this.assertPlanner(id, actor);
 		const mission = this.require(id);
 		if (actor.sessionId) this.assertMember(id, actor.sessionId);
@@ -5133,6 +5155,7 @@ export class MissionStore {
 	}
 
 	releaseTasks(id: string, refs: string[], actor: MissionActor = USER) {
+		this.assertTaskCoordinator(id, actor);
 		this.assertPlanner(id, actor);
 		if (actor.sessionId) this.assertMember(id, actor.sessionId);
 		const affected = new Set<string>();
@@ -5174,7 +5197,8 @@ export class MissionStore {
 	}
 
 	/** Partial success for a batch, without exposing intermediate state to member contexts. */
-	claimTasks(id: string, refs: string[], sessionId: string, actor: MissionActor = { sessionId }) {
+	claimTasks(id: string, refs: string[], sessionId: string, actor: MissionActor = USER) {
+		this.assertTaskCoordinator(id, actor);
 		this.assertPlanner(id, actor);
 		this.assertMember(id, sessionId);
 		const result = this.transaction(() => {
@@ -5975,7 +5999,6 @@ export class MissionStore {
 			if (cached) {
 				this.run("UPDATE resources SET pull_request = ? WHERE id = ?", cached.pull_request!, resource.id);
 				resource.pullRequest = JSON.parse(str(cached.pull_request!)) as SessionPullRequest;
-				if (taskId) this.reconcileTaskPullRequests(id, taskId);
 			}
 		});
 		this.changed(id);
@@ -6092,7 +6115,6 @@ export class MissionStore {
 			this.event(id, "resource", `Unlinked ${resource.title ?? resource.externalId ?? resource.url}`, actor, {
 				taskId: resource.taskId,
 			});
-			if (resource.taskId && resource.kind !== "linear.issue") this.reconcileTaskPullRequests(id, resource.taskId);
 		});
 		this.changed(id);
 	}
@@ -6292,9 +6314,6 @@ export class MissionStore {
 				if (sessionId !== operation.sessionId) record(sessionId, false, this.missionOf(sessionId));
 			}
 			record(operation.sessionId, operation.bound, targetMissionId, operation.bound ? operation.taskId : undefined);
-			for (const [taskId, missionId] of tasks) {
-				if (this.reconcileTaskPullRequests(missionId, taskId, operation.actor)) affected.add(missionId);
-			}
 			this.run(
 				"INSERT INTO pull_request_binding_operations (id, applied_at) VALUES (?, ?)",
 				operation.id,
@@ -6334,12 +6353,6 @@ export class MissionStore {
 					id,
 					pr.url,
 				);
-				for (const task of this.all(
-					"SELECT DISTINCT task_id FROM resources WHERE mission_id = ? AND url = ? COLLATE NOCASE AND task_id IS NOT NULL",
-					id,
-					pr.url,
-				))
-					this.reconcileTaskPullRequests(id, str(task.task_id!));
 			}
 			for (const member of members) {
 				const id = this.missionOf(member.id);
@@ -6347,57 +6360,6 @@ export class MissionStore {
 			}
 		});
 		for (const id of affected) this.changed(id);
-	}
-
-	private reconcileTaskPullRequests(id: string, taskId: string, handoffActor?: MissionActor): boolean {
-		// PR observations are evidence, not coordinator acceptance in the opted-in contract.
-		if (this.require(id).planningVersion !== undefined) return false;
-		if (!handoffActor && this.require(id).status !== "active") return false;
-		const task = this.rawTask(this.task(id, taskId));
-		if (
-			task.status === "done" ||
-			task.status === "dropped" ||
-			task.status === "delegated" ||
-			(!handoffActor && this.one("SELECT pr_sync_disabled FROM tasks WHERE id = ?", taskId)?.pr_sync_disabled)
-		)
-			return false;
-		const prs = this.all(
-			"SELECT * FROM resources WHERE mission_id = ? AND task_id = ? AND kind = 'github.pr' AND relationship = 'ownership'",
-			id,
-			taskId,
-		).map((row) => resourceFrom(row).pullRequest);
-		const open = prs.some((pr) => pr?.state === "open" || pr?.state === "draft");
-		// Unknown links block completion. Closed-unmerged links contribute nothing.
-		const done =
-			prs.length > 0 &&
-			prs.every((pr) => pr && pr.state !== "open" && pr.state !== "draft") &&
-			prs.some((pr) => pr?.state === "merged");
-		const status = done
-			? "done"
-			: open
-				? "in_review"
-				: handoffActor && prs.every((pr) => pr?.state === "closed") && task.status === "in_review"
-					? task.sessionId
-						? "in_progress"
-						: "todo"
-					: undefined;
-		if (!status || task.status === status) return false;
-		const now = Date.now();
-		this.run(
-			"UPDATE tasks SET status = ?, updated_at = ?, completed_at = ? WHERE id = ?",
-			status,
-			now,
-			done ? now : null,
-			taskId,
-		);
-		this.event(
-			id,
-			"task",
-			`Task #${task.number} ${statusLabel(status)} after linked pull request ${done ? "merge" : open ? "opened" : "unbound"}: ${task.title}`,
-			handoffActor ?? {},
-			{ taskId, at: now },
-		);
-		return true;
 	}
 
 	linkArtifact(

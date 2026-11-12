@@ -234,7 +234,7 @@ test("resource migration preserves existing task PR ownership and reference role
 		missions = new MissionStore(file);
 		assert.equal(missions.detail(id).resources.find((r) => r.id === related.id)?.relationship, "reference");
 		missions.updatePullRequest(pr(1, "open"));
-		assert.equal(missions.resolveTask(id, "1").status, "in_review");
+		assert.equal(missions.resolveTask(id, "1").status, "todo");
 	} finally {
 		missions.close();
 		rmSync(dir, { recursive: true, force: true });
@@ -264,7 +264,7 @@ test("reference PRs neither drive nor block task completion and survive ownershi
 			actor: {},
 		};
 		assert.deepEqual(missions.applyPullRequestBinding(operation), { changed: true, taskLinkRemoved: false });
-		assert.equal(missions.task(id, a.id).status, "in_review");
+		assert.equal(missions.task(id, a.id).status, "in_progress");
 		assert.deepEqual(
 			missions.applyPullRequestBinding({
 				...operation,
@@ -286,7 +286,7 @@ test("reference PRs neither drive nor block task completion and survive ownershi
 		missions.addResource(id, { url: pr(2, "open").url, taskId: a.id });
 		missions.addResource(id, { url: pr(3, "open").url, taskId: a.id, relationship: "reference" });
 		missions.updatePullRequest(pr(2, "merged"));
-		assert.equal(missions.task(id, a.id).status, "done", "unknown reference PR does not block completion");
+		assert.equal(missions.task(id, a.id).status, "in_progress", "PR references never complete broader scope");
 		assert.throws(() => missions.addResource(id, { url, relationship: "ownership" }), /require a task/);
 		assert.throws(
 			() => missions.addResource(id, { url: "https://example.com", taskId: a.id, relationship: "ownership" }),
@@ -646,7 +646,7 @@ test("explicit PR handoff moves links across missions, carries cached state and 
 			assert.equal(missions.detail(source.id).resources.length, 0);
 			assert.equal(missions.detail(target.id).resources[0]?.taskId, b.id);
 			assert.equal(missions.task(source.id, a.id).status, "in_progress");
-			assert.equal(missions.task(target.id, b.id).status, "in_review");
+			assert.equal(missions.task(target.id, b.id).status, "in_progress");
 		});
 		const operation = {
 			id: "move",
@@ -713,7 +713,7 @@ test("same-mission binding replaces unfinished links but preserves done tasks an
 		});
 		assert.equal(missions.task(id, a.id).status, "in_progress");
 		assert.equal(missions.task(id, b.id).status, "todo");
-		assert.equal(missions.task(id, target.id).status, "in_review");
+		assert.equal(missions.task(id, target.id).status, "todo");
 		assert.deepEqual(missions.task(id, done.id), done);
 		assert.deepEqual(
 			missions.detail(id).resources.find((link) => link.id === doneLink?.id),
@@ -722,7 +722,8 @@ test("same-mission binding replaces unfinished links but preserves done tasks an
 		assert.ok(missions.detail(id).resources.some((link) => link.id === missionLink.id));
 		assert.deepEqual(missions.detail(unrelated.id), unrelatedBefore);
 		missions.updatePullRequest(pr(1, "merged"));
-		assert.equal(missions.task(id, target.id).status, "done", "handoffs do not disable future PR sync");
+		assert.equal(missions.task(id, target.id).status, "todo", "PR facts never complete scope");
+		missions.updateTask(id, target.id, { status: "done" });
 		assert.deepEqual(missions.task(id, done.id), done);
 		const completed = missions.task(id, target.id);
 		const links = missions.detail(id).resources;
@@ -741,8 +742,8 @@ test("same-mission binding replaces unfinished links but preserves done tasks an
 	}
 });
 
-test("explicit unbinding recomputes remaining PRs and bypasses ambiguity and manual PR sync opt-outs", () => {
-	for (const [states, expected] of [
+test("explicit unbinding preserves canonical status across remaining PR states", () => {
+	for (const [states, _expected] of [
 		[["open", "merged"], "in_review"],
 		[["merged", "closed"], "done"],
 		[["merged", undefined], "in_review"],
@@ -773,7 +774,7 @@ test("explicit unbinding recomputes remaining PRs and bypasses ambiguity and man
 				previousSessionIds: [],
 				actor: {},
 			});
-			assert.equal(missions.task(id, task.id).status, expected, JSON.stringify(states));
+			assert.equal(missions.task(id, task.id).status, "in_review", JSON.stringify(states));
 			assert.equal(missions.detail(id).resources.length, states.length);
 			const before = missions.task(id, task.id);
 			missions.updatePullRequest(pr(2, "merged"));
@@ -1020,7 +1021,7 @@ test("task links cache stack changes and clear membership without duplicating ac
 	}
 });
 
-test("linked PRs enter review and finish only with a merge and no open or unknown links", () => {
+test("linked PR observations never change canonical status or complete tasks", () => {
 	const missions = store();
 	try {
 		const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }] });
@@ -1028,23 +1029,21 @@ test("linked PRs enter review and finish only with a merge and no open or unknow
 		for (const number of [1, 2, 3]) missions.addResource(id, { taskId: task.id, url: pr(number, "open").url });
 		missions.addResource(id, { taskId: task.id, url: "https://linear.app/a/issue/ENG-1" });
 		missions.updatePullRequest(pr(1, "open"));
-		assert.equal(missions.task(id, task.id).status, "in_review");
+		assert.equal(missions.task(id, task.id).status, "todo");
 		const events = missions.detail(id).events.length;
 		missions.updatePullRequest(pr(1, "open"));
 		assert.equal(missions.detail(id).events.length, events, "repeated polling is idempotent");
 		missions.updatePullRequest(pr(1, "merged"));
-		assert.equal(missions.task(id, task.id).status, "in_review", "unknown links prevent done");
+		assert.equal(missions.task(id, task.id).status, "todo", "unknown links prevent done");
 		missions.updatePullRequest(pr(2, "closed"));
 		missions.updatePullRequest(pr(3, "draft"));
-		assert.equal(missions.task(id, task.id).status, "in_review", "drafts count as open");
+		assert.equal(missions.task(id, task.id).status, "todo", "drafts count as open");
 		missions.updatePullRequest(pr(3, "merged"));
-		assert.equal(missions.task(id, task.id).status, "done");
+		assert.equal(missions.task(id, task.id).status, "todo");
+		assert.equal(missions.task(id, task.id).completedAt, undefined);
+		missions.updateTask(id, task.id, { status: "done" });
 		assert.ok(missions.task(id, task.id).completedAt);
-		assert.ok(
-			missions
-				.detail(id)
-				.events.some((event) => event.taskId === task.id && /after linked pull request merge/.test(event.text)),
-		);
+		assert.ok(missions.detail(id).events.every((event) => !/after linked pull request merge/.test(event.text)));
 		missions.updatePullRequest(pr(3, "open"));
 		assert.equal(missions.task(id, task.id).status, "done", "a new or reopened PR never reopens a closed task");
 	} finally {
@@ -1052,7 +1051,7 @@ test("linked PRs enter review and finish only with a merge and no open or unknow
 	}
 });
 
-test("closed-unmerged and mission-level links do not finish tasks; removing the last open link does", () => {
+test("closed, mission-level and removed PR links never close task scope", () => {
 	const missions = store();
 	try {
 		const { id } = missions.create({
@@ -1071,9 +1070,9 @@ test("closed-unmerged and mission-level links do not finish tasks; removing the 
 		const open = missions.addResource(id, { url: pr(3, "open").url, taskId: task.id });
 		missions.updatePullRequest(pr(3, "open"));
 		missions.addResource(id, { url: pr(1, "merged").url, taskId: task.id });
-		assert.equal(missions.task(id, task.id).status, "in_review");
+		assert.equal(missions.task(id, task.id).status, "todo");
 		missions.removeResource(id, open.id);
-		assert.equal(missions.task(id, task.id).status, "done");
+		assert.equal(missions.task(id, task.id).status, "todo");
 		missions.addResource(id, { url: pr(3, "open").url, taskId: "2" });
 		missions.updatePullRequest(pr(3, "open"));
 		assert.equal(missions.resolveTask(id, "2").status, "dropped");
@@ -1132,7 +1131,7 @@ test("older databases gain link and PR tracking columns without losing resources
 		assert.equal(missions.detail(id).resources[0]!.taskId, undefined);
 		missions.addResource(id, { taskId: "1", url: pr(1, "open").url });
 		missions.updatePullRequest(pr(1, "merged"));
-		assert.equal(missions.resolveTask(id, "1").status, "done");
+		assert.equal(missions.resolveTask(id, "1").status, "todo");
 		missions.updateTask(id, "1", { status: "todo" });
 		missions.addResource(id, { url: "https://linear.app/team/issue/ENG-1", linearRole: "managed" });
 		const linear = missions.addResource(id, {
@@ -1319,10 +1318,7 @@ test("task updates validate fields, dependencies and assignment", () => {
 	assert.throws(() => missions.updateTask(id, a!.id, { status: "nope" as never }), /status must be/);
 	assert.throws(() => missions.updateTask(id, a!.id, { sessionId: "s9" }), /not in this mission/);
 	missions.join("s1", id);
-	assert.throws(
-		() => missions.updateTask(id, a!.id, { sessionId: "s1" }, { sessionId: "s1" }),
-		/only the user assigns/,
-	);
+	assert.throws(() => missions.updateTask(id, a!.id, { sessionId: "s1" }, { sessionId: "s1" }), /[Cc]oordinator/);
 	assert.equal(missions.updateTask(id, a!.id, { sessionId: "s1" }).sessionId, "s1");
 	assert.equal(missions.updateTask(id, a!.id, { sessionId: null }).sessionId, undefined);
 	missions.removeTask(id, a!.id);
@@ -1548,9 +1544,9 @@ test("release resets active claims, preserves review/closed states and notifies 
 		missions.claimTask(id, i + 1, "owner", {});
 		missions.updateTask(id, String(i + 1), { status });
 	}
-	assert.throws(() => missions.releaseTask(id, "1", { sessionId: "other" }), /only the coordinator/);
+	assert.throws(() => missions.releaseTask(id, "1", { sessionId: "other" }), /[Cc]oordinator/);
 	assert.throws(() => missions.releaseTasks(id, ["1"], { sessionId: "outsider" }), /not in this mission/);
-	assert.equal(missions.releaseTasks(id, ["1", "99"], { sessionId: "other" }).skipped.length, 2);
+	assert.throws(() => missions.releaseTasks(id, ["1", "99"], { sessionId: "other" }), /[Cc]oordinator/);
 	const events = missions.events(id).length;
 	let changes = 0;
 	const refreshed: string[] = [];
@@ -1574,11 +1570,11 @@ test("release resets active claims, preserves review/closed states and notifies 
 			.slice(0, 6)
 			.every((event) => event.sessionId === "lead" && event.text.includes("owner")),
 	);
-	missions.releaseTask(id, "1", { sessionId: "owner" });
+	missions.releaseTask(id, "1", { sessionId: "lead" });
 	assert.equal(missions.events(id).length, events + 6);
 });
 
-test("members release their own claims and app assignment clearing resets blocked work", (t) => {
+test("workers cannot release claims; app assignment clearing resets blocked work", (t) => {
 	const missions = store();
 	t.after(() => missions.close());
 	const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }, { title: "B" }] });
@@ -1586,7 +1582,8 @@ test("members release their own claims and app assignment clearing resets blocke
 	missions.claimTask(id, "1", "owner");
 	missions.claimTask(id, "2", "owner");
 	missions.updateTask(id, "2", { status: "blocked" });
-	assert.equal(missions.releaseTask(id, "1", { sessionId: "owner" }).status, "todo");
+	assert.throws(() => missions.releaseTask(id, "1", { sessionId: "owner" }), /[Cc]oordinator/);
+	assert.equal(missions.releaseTask(id, "1").status, "todo");
 	const released = missions.updateTask(id, "2", { sessionId: null });
 	assert.equal(released.status, "todo");
 	assert.equal(released.sessionId, undefined);
@@ -1607,11 +1604,11 @@ test("release rolls back storage failures and keeps task references", (t) => {
 		if (ref === "2") throw new Error("Storage failed");
 		return resolve(id, ref);
 	});
-	assert.throws(() => missions.releaseTasks(id, ["1", "2"], { sessionId: "owner" }), /Storage failed/);
+	assert.throws(() => missions.releaseTasks(id, ["1", "2"]), /Storage failed/);
 	assert.deepEqual(missions.detail(id), before);
 	assert.equal(changes, 0);
 	mock.mock.restore();
-	missions.releaseTasks(id, ["1", "2"], { sessionId: "owner" });
+	missions.releaseTasks(id, ["1", "2"]);
 	assert.deepEqual(missions.detail(id).resources, before.resources);
 });
 

@@ -74,8 +74,8 @@ test("startup recovers PRs and phases before one final notification per mission"
 	store.onChange((id) => {
 		notifications.push(id);
 		// Context subscribers see the complete recovery, never a partial member/phase snapshot.
-		assert.ok(store.tasks(id).every((task) => task.status === "done"));
-		assert.ok(store.phases(id).every((phase) => phase.completedAt !== undefined));
+		assert.ok(store.tasks(id).every((task) => task.status === "in_progress"));
+		assert.ok(store.phases(id).every((phase) => phase.completedAt === undefined));
 	});
 	try {
 		delivery.start();
@@ -543,7 +543,11 @@ test("only settlements, newly blocked tasks and relevant comments create durable
 		store.recordMemberCompletion({ ...completion("done", 1), id: "outsider" });
 		assert.deepEqual(store.noticeDeadlines(Date.now()), []);
 		store.updateTask(id, "1", { status: "in_progress" });
-		store.updateTask(id, "1", { status: "blocked", body: "Need API access" }, { sessionId: "member" });
+		assert.throws(
+			() => store.updateTask(id, "1", { status: "blocked", body: "Need API access" }, { sessionId: "member" }),
+			/[Cc]oordinator/,
+		);
+		store.updateTask(id, "1", { status: "blocked", body: "Need API access" });
 		store.updateTask(id, "1", { body: "Still blocked" }, { sessionId: "member" });
 		store.addComment(id, { text: "please review", targetSessionId: "lead" }, { sessionId: "member" });
 		store.addComment(id, { text: "general question" });

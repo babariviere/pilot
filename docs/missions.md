@@ -114,8 +114,12 @@ stays unavailable until Local has a reviewer configuration.
 ## Finish or archive
 
 Coordinators can mark tasks done or dropped without an associated commit, preserving
-their history. This records task closure, not PR review or merge approval. Worker
-code delivery still requires a commit and checks through `complete`.
+their history. This records task closure, not PR review or merge approval.
+Workers report scoped delivery facts with `report`, including a commit, checks and open issues.
+Reports keep their assignment identity and notify the coordinator durably. They never change task
+status or mean that you accepted the work. Only you or the coordinator can change canonical status.
+The coordinator can use `complete` for a worker-owned task after checking its current scope,
+ownership, dependencies and evidence. A merged PR is evidence, not automatic task closure.
 
 **Mark done** is available when all remaining tasks are done, excluding dropped tasks,
 and at least one task is done. It does not merge PRs or finish tasks for you.

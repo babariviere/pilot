@@ -119,21 +119,21 @@ test("planning v1 rejects worker planning writes without changing state", (t) =>
 	assert.deepEqual(store.detail(id), before);
 });
 
-test("planning v1 permits own execution reports and proposals, not another worker's status", (t) => {
+test("planning v1 keeps execution facts separate from coordinator status", (t) => {
 	const { store, id, task, worker, lead } = fixture(t, 1);
 	const original = task.assignment;
 	for (const status of ["in_progress", "blocked", "in_review"] as const)
-		assert.equal(store.updateTask(id, task.id, { status }, worker).status, status);
+		assert.throws(() => store.updateTask(id, task.id, { status }, worker), /Coordinator-owned/);
 	store.log(id, { text: "Verified denial; one unknown remains" }, worker);
 	store.addComment(id, { text: "Propose one additional criterion; please approve" }, worker);
 	assert.throws(
 		() => store.updateTask(id, task.id, { status: "blocked" }, { sessionId: "other" }),
-		/workers may only/,
+		/Coordinator-owned/,
 	);
 	assert.deepEqual(store.task(id, task.id).assignment, original);
 	assert.equal(store.detail(id).comments[0]?.authorSessionId, "worker");
 	store.updateTask(id, task.id, { status: "done" }, lead);
-	assert.throws(() => store.updateTask(id, task.id, { status: "in_progress" }, worker), /workers may only/);
+	assert.throws(() => store.updateTask(id, task.id, { status: "in_progress" }, worker), /Coordinator-owned/);
 	assert.equal(store.retiredMember("worker"), false, "no automatic retirement in this foundation");
 });
 
@@ -235,7 +235,7 @@ test("assignment writes are strict; missing opt-in and unknown versions never ad
 test("PR observations remain evidence, not opted-in coordinator completion", (t) => {
 	const { store, id, task, worker, lead } = fixture(t, 1);
 	const url = "https://github.com/octo/repo/pull/1";
-	store.updateTask(id, task.id, { status: "in_progress" }, worker);
+	store.updateTask(id, task.id, { status: "in_progress" }, lead);
 	store.addResource(id, { url, taskId: task.id }, worker);
 	store.updatePullRequest({ number: 1, state: "merged", url, title: "Work", checkedAt: Date.now() });
 	assert.equal(store.task(id, task.id).status, "in_progress");
@@ -244,13 +244,13 @@ test("PR observations remain evidence, not opted-in coordinator completion", (t)
 	assert.equal(store.task(id, task.id).status, "done");
 });
 
-test("legacy workers retain existing planning and completion; additive fields survive durable reopen", async (t) => {
+test("legacy definitions remain versioned; coordinator completion and additive fields survive reopen", async (t) => {
 	const legacy = fixture(t);
 	legacy.store.writeBrief(legacy.id, "Legacy worker brief", 0, legacy.worker);
 	legacy.store.addDecision(legacy.id, "Legacy worker decision", legacy.worker);
 	legacy.store.addTask(legacy.id, { title: "Legacy follow-up" }, legacy.worker);
 	legacy.store.updateTask(legacy.id, legacy.task.id, { body: "Legacy worker definition" }, legacy.worker);
-	legacy.store.completeTask(legacy.id, legacy.task.id, "worker", {
+	legacy.store.completeTask(legacy.id, legacy.task.id, "lead", {
 		commit: "a".repeat(40),
 		checks: "Legacy checks",
 		issues: "",

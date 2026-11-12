@@ -58,9 +58,11 @@ test("versioned report schema reads owner context and forwards exact report byte
 		summary: "Exact\ntext 🦉",
 		nextStep: "Verify",
 		evidence: ["test output"],
+		delivery: { commit: "a".repeat(40), checks: "Focused tests", issues: "Partial slice" },
 	};
 	const requests: Record<string, JsonValue>[] = [
 		{ action: "report", taskId: "task" },
+		{ action: "report", reportId: "report" },
 		{ action: "report", report },
 	];
 	for (const args of requests) {
@@ -69,6 +71,7 @@ test("versioned report schema reads owner context and forwards exact report byte
 	}
 	assert.deepEqual(calls, [
 		["report", { taskId: "task" }],
+		["report", { reportId: "report" }],
 		["report", { report }],
 	]);
 	assert.throws(() =>
@@ -129,7 +132,7 @@ test("coordinator planning schema exposes only strict versioned assignment write
 		assert.throws(() => validate({ ...args, assignment }));
 	const member = createMissionTool(async () => ({}));
 	assert.ok(!("assignment" in (member.parameters as { properties: object }).properties));
-	assert.match(tool.description, /in_review is for PR review, not generic submission/);
+	assert.match(tool.description, /Workers report facts/);
 });
 
 test("coordinator planning recipes cover actionable gaps without unconditional tasks or authority", () => {
@@ -861,8 +864,11 @@ test("targeted task and activity selectors are declared and forwarded for every 
 	}
 });
 
-test("the mission tool declares and forwards batch task claims for members and coordinators", async () => {
-	for (const coordinator of [false, true]) {
+test("the mission tool declares and forwards batch task claims only for coordinators", async () => {
+	const member = createMissionTool(async () => null);
+	const memberActions = (member.parameters as { properties: { action: { enum: string[] } } }).properties.action.enum;
+	for (const action of ["claim", "release", "complete"]) assert.ok(!memberActions.includes(action));
+	for (const coordinator of [true]) {
 		const calls: unknown[] = [];
 		const data = { claimed: [{ number: 1 }], skipped: [{ ref: "2", reason: "already claimed" }] };
 		const tool = createMissionTool(async (action, args) => {
@@ -995,7 +1001,7 @@ test("ordinary member declarations omit privileged actions and their guidance", 
 	assert.doesNotMatch(JSON.stringify(tool.parameters), /claim, start|comment or send|Opening instructions/);
 	assert.doesNotMatch(tool.description, /owns the PR head|One owner per PR|transfers ownership|stop its tracking/);
 	assert.doesNotMatch(JSON.stringify(tool.parameters), /bindPr|unbindPr/);
-	assert.match(tool.description, /- claim:/);
+	assert.match(tool.description, /claim \(coordinator only\)/);
 	assert.ok(schema.properties.action.enum.includes("get"));
 });
 
@@ -1256,7 +1262,7 @@ catch (error) { text({error: error.message}); }
 				output,
 			);
 			if (coordinator) assert.ok(output.includes('"member":"member"'), output);
-			assert.match(output, /Claim conflict/);
+			assert.match(output, coordinator ? /Claim conflict/ : /Validation failed/);
 			assert.doesNotMatch(output, /unexpected success/);
 			assert.deepEqual(calls, [
 				["get", {}],
@@ -1265,7 +1271,7 @@ catch (error) { text({error: error.message}); }
 				["tasks", {}],
 				["task", { id: "t1", status: "in_progress" }],
 				...(coordinator ? [["status", {}]] : []),
-				["claim", { id: "t1" }],
+				...(coordinator ? [["claim", { id: "t1" }]] : []),
 			]);
 			assert.equal(f.faux.state.callCount, 0, "scripts do not invoke the native model loop");
 		});
@@ -1475,14 +1481,22 @@ for (const ask of [false, true]) {
 		});
 	}
 }
-test("members and coordinators declare and forward release selectors", async () => {
-	for (const coordinator of [false, true]) {
+test("only coordinators declare and forward release selectors", async () => {
+	const member = createMissionTool(async () => {
+		throw new Error("Must not reach IPC");
+	});
+	for (const action of ["release", "claim", "complete"])
+		await assert.rejects(
+			member.execute("call", { action, id: "1" } as never, undefined, undefined, {} as never),
+			/coordinator/,
+		);
+	for (const coordinator of [true]) {
 		const calls: unknown[] = [];
 		const tool = createMissionTool(async (action, args) => {
 			calls.push([action, args]);
 			return { released: [], skipped: [] };
 		}, coordinator);
-		assert.match(tool.description, /- release:/);
+		assert.match(tool.description, /- release \(coordinator only\)/);
 		for (const args of [{ id: "1-3" }, { ids: ["#1", 2, "task-id"] }]) {
 			await tool.execute("call", { action: "release", ...args } as never, undefined, undefined, {} as never);
 			assert.deepEqual(calls.at(-1), ["release", args]);

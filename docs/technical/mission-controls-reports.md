@@ -18,7 +18,7 @@ The existing mission task store, dashboard projections, event cursors and SQLite
 Reports keep exact text and attribution. Their tokens bind project, mission, task, current owner, assignment,
 definition revision, task-event cursor, coordinator, context and controls. Writes recheck after the durable
 barrier and use predecessor CAS. Exact retries return the historical receipt, never create another report.
-They do not update task status, acceptance or delivery evidence. Evidence strings are reported references,
+They do not update task status, acceptance or verified delivery evidence. Evidence strings are reported references,
 not host-verified proof. Movement always has `agent_report` provenance. Activity alone is not progress.
 
 Reads distinguish current, stale and unavailable. Source/owner/assignment changes make reports stale;
@@ -27,6 +27,35 @@ display expiry, not a guarantee that earlier assessments remain true. Unknown ve
 The full read batches source fences, avoiding per-report task/phase/context queries. An isolated in-memory
 400-member/400-report fixture measured 170.6 ms before batching, then 3.5–4.1 ms across five reads after.
 This is daemon projection evidence, not a native UI or live streaming benchmark.
+
+## Worker facts and coordinator status
+
+Workers use `report` for current-assignment progress, blockers, checks and scoped delivery facts. Optional
+`delivery: {commit, checks, issues}` keeps the exact worker claim alongside its source token and report ID.
+The daemon validates shape, not whether the commit exists, landed or satisfies the whole task. A delivered
+increment does not close broader work, retire a worker or establish user acceptance. `log` keeps extra
+context and `comment` asks for action. Neither changes status. This ownership applies to legacy missions
+as well as planning v1; old completion records and evidence remain readable.
+
+Only the coordinator or user changes canonical task status or claims/releases assignments. PR discovery,
+polling and binding keep evidence/ownership links without automatically entering review or completing tasks.
+The coordinator reads the current task,
+owner, definition/assignment, dependencies and saved reports before a transition. It rejects stale claims,
+keeps unfinished scope open and uses `complete` to save a code completion, or `task` for other status changes.
+`complete` no longer requires the coordinator to own the worker's task. It does not bind PR ownership or
+merge, deploy or release work. User verification remains a separate explicit action. There is no independent
+reviewer or acknowledgment ceremony. User task controls keep their existing authority.
+
+A report and its task-scoped notice event commit in the same SQLite transaction. The existing mission
+notice dispatcher delivers it to the current coordinator using its frozen `mission-notice:<event>` input
+identity and durable outbox. Reports do not create a second queue or directly start a coordinator/worker.
+Delivery and blockers request prompt reconciliation; ordinary progress uses existing notice batching.
+Each scoped delivery keeps its own notice group, so later progress cannot hide it.
+Report notices use update events, so saving a report does not invalidate its own task-source token.
+Exact report retries, including concurrent calls and reopen after a lost ACK, return the stored receipt
+without adding an event or another notice. A changed request with the same ID fails. A new stale-source
+report fails; a historical retry remains only a receipt, never fresh authority. Notice placement is not
+proof of coordinator processing, task completion or acceptance.
 
 ## Explicit mission control
 

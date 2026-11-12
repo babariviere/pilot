@@ -164,19 +164,12 @@ export function missionPrompt(
 			: `- ${mission.coordinator === "other" ? "Another chat coordinates this mission" : "The user coordinates this mission"}. Work on your tasks, and ${mission.planningVersion === undefined ? "add tasks for follow-up work you find" : "propose follow-up work with comment"} instead of widening your scope.`,
 		...(mission.planningVersion !== undefined
 			? [
-					"- Coordinator-owned planning: read your task's assignment/version/revision before work. Only the coordinator/user edits definitions, brief, decisions, pins, dependencies and assignments. Report actual execution status and log evidence or blockers; use in_review only for PR review, not no-PR submission; propose planning changes with comment. Do not claim/release or use complete. Coordinator/user marks done separately, not as review/merge approval.",
-				]
-			: mission.sharedContext
-				? []
-				: [
-						'- Claim tasks before working on them and keep their status current: in_progress while working, blocked with the reason in the task body, in_review once a pull request is open, done when finished, dropped when no longer needed. For several requested tasks, claim them together (ids such as ["1-5"]), then work through them one at a time in dependency order; report skipped claims and unfinished dependencies instead of working past them.',
-					]),
-		"- The brief is the spec; tasks track progress and blockers; decisions record substantive agreed mission choices (scope, behavior or tradeoffs), not every user utterance. Routine directions, status and coordination belong in task/context updates; durable cross-mission preferences use existing memory only when appropriate. Discussion/proposal is not agreement. Keep human-answer provenance and explicit authority changes; a decision record never grants tool/runtime permission. Comments hold actionable discussion. Comment only when you need someone's answer or action; progress, evidence and results go in the task, not comments.",
-		...(mission.planningVersion === undefined
-			? [
-					"- Save delivery once with mission complete (landed commit, checks with brief rationale, open issues). No hash inventories, receipt files, duplicate handoffs or ACK-only replies. Start new chats for new features; delivered members may self-claim their own feedback follow-ups, within two additional tasks per chat lifetime (starting assignments excluded; completion/release never resets it). Ask the coordinator for a fresh chat after that.",
+					"- Coordinator-owned planning: read your task's assignment/version/revision before work. Only the coordinator/user edits definitions, brief, decisions, pins, dependencies and assignments. Propose planning changes with comment.",
 				]
 			: []),
+		"- Workers report facts for their current assignment with mission report: progress, blockers, checks and scoped delivery evidence. Read its source token first; reuse exact reportId and bytes after a lost ACK. Reports do not change task status, complete broader scope or establish user acceptance. Work one at a time in dependency order; report unfinished dependencies, never work past them. Do not claim/release tasks or use complete as a worker. Coordinator/user marks done separately after reconciling current scope, owner, reports and dependencies; no extra reviewer or ACK ceremony.",
+		"- The brief is the spec; tasks track progress and blockers; decisions record substantive agreed mission choices (scope, behavior or tradeoffs), not every user utterance. Routine directions, status and coordination belong in task/context updates; durable cross-mission preferences use existing memory only when appropriate. Discussion/proposal is not agreement. Keep human-answer provenance and explicit authority changes; a decision record never grants tool/runtime permission. Comments hold actionable discussion. Comment only when you need someone's answer or action; progress, evidence and results go in the task, not comments.",
+		"- Save scoped delivery once in report.delivery (landed commit, checks and open issues), not complete or task status. Keep extra context in log. No hash inventories, duplicate handoffs or ACK-only replies. Ask the coordinator for follow-up assignments instead of self-claiming.",
 		'- Read extra decisions with `mission({action: "decisions"})`; changes arrive as notices. Post a handoff with log before stopping with unfinished work.',
 		...(mission.coordinator === "self"
 			? [

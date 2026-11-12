@@ -26,13 +26,13 @@ import { operations } from "./event-loop-watchdog.ts";
 import type { CodePullRequestObservation } from "./github-delivery.ts";
 import { githubRepository } from "./github-url.ts";
 import { observeCodeContributions, observeCodeIntegration } from "./mission-code-delivery.ts";
-import { evaluateContributionAllocation } from "./mission-contribution-allocation.ts";
-import { MissionControls } from "./mission-controls.ts";
 import {
 	type ContinuationPolicySource,
 	type MissionContinuation,
 	MissionContinuations,
 } from "./mission-continuation.ts";
+import { evaluateContributionAllocation } from "./mission-contribution-allocation.ts";
+import { MissionControls } from "./mission-controls.ts";
 import {
 	type DeliveryObservation,
 	type DeliveryReference,
@@ -1755,12 +1755,7 @@ export class MissionService {
 			this.assertStartActor(missionId, actorSessionId);
 			if (this.store.membership(holder.id)?.role !== role || (role === "explorer" && holder.mode !== "ask"))
 				throw new Conflict("Existing task holder has a different role/profile; start a fresh task/chat instead");
-			this.store.claimTask(
-				missionId,
-				tasks[0]!.id,
-				holder.id,
-				mission.planningVersion === undefined ? { sessionId: holder.id } : {},
-			);
+			this.store.claimTask(missionId, tasks[0]!.id, holder.id, actorSessionId ? { sessionId: actorSessionId } : {});
 			this.store.recordTaskStart(
 				missionId,
 				tasks[0]!.id,
@@ -1879,6 +1874,9 @@ export class MissionService {
 		const mission = this.store.require(missionId);
 		if (
 			([
+				"complete",
+				"claim",
+				"release",
 				"propose",
 				"supersede",
 				"delete",
@@ -1943,7 +1941,20 @@ export class MissionService {
 				return { map: (await reader.view(missionId)).map };
 			}
 			case "report": {
-				if (args.report !== undefined) return this.reports.write(missionId, sessionId, args.report);
+				const authorize = () => {
+					this.assertSameProject(sessionId, missionId);
+					if (this.store.missionOf(sessionId) !== missionId) throw new Conflict("Report membership changed");
+				};
+				authorize();
+				if (args.report !== undefined) return this.reports.write(missionId, sessionId, args.report, authorize);
+				await this.store.durable();
+				authorize();
+				if (args.reportId !== undefined) {
+					if (typeof args.reportId !== "string") throw new Error("reportId must be a string");
+					const report = this.store.controls.report(args.reportId);
+					if (!report || report.missionId !== missionId) throw new NotFound("Unknown report");
+					return { report, historical: true };
+				}
 				const task = this.store.resolveTask(missionId, args.taskId ?? args.id);
 				return this.reports.source(missionId, sessionId, task.id);
 			}
@@ -2509,6 +2520,7 @@ export class MissionService {
 				};
 			}
 			case "complete":
+				this.assertSameProject(sessionId, missionId);
 				return this.store.completeTask(missionId, args.id, sessionId, args.completion);
 			case "task": {
 				const write = {
@@ -2554,8 +2566,8 @@ export class MissionService {
 						? this.store.releaseTasks(missionId, refs, actor)
 						: this.store.releaseTask(missionId, refs[0], actor);
 				return batch
-					? this.store.claimTasks(missionId, refs, sessionId)
-					: this.store.claimTask(missionId, refs[0], sessionId);
+					? this.store.claimTasks(missionId, refs, sessionId, actor)
+					: this.store.claimTask(missionId, refs[0], sessionId, actor);
 			}
 			case "propose":
 				this.assertSameProject(sessionId, missionId);
@@ -2657,6 +2669,7 @@ export class MissionService {
 			body: task.body ?? "",
 			completion: this.store.completion(missionId, task.id) ?? null,
 			report: this.reports.viewTaskNow(missionId, task.id) ?? null,
+			recentReports: this.store.controls.taskReports(missionId, task.id),
 			dependsOn: view.dependencies(task),
 			dependents: detail.tasks.filter((item) => item.dependsOn?.includes(task.id)).map((item) => item.number),
 			assignee: task.sessionId

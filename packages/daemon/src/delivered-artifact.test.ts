@@ -48,7 +48,13 @@ async function fixture(t: TestContext) {
 		kind: "visual",
 		revision: 1,
 	});
-	f.store.completeTask(mission.id, task.id, worker.id, { commit: "a".repeat(40), checks: "Synthetic", issues: "" });
+	f.store.join("completion-lead", mission.id);
+	f.store.update(mission.id, { coordinatorSessionId: "completion-lead" });
+	f.store.completeTask(mission.id, task.id, "completion-lead", {
+		commit: "a".repeat(40),
+		checks: "Synthetic",
+		issues: "",
+	});
 	const path = `/api/projects/${f.project.id}/missions/${mission.id}/tasks/${task.id}/delivered-work`;
 	const headers = { "x-pilot-github-capability": f.capability };
 	const page = (await (await fetch(f.root + path, { headers })).json()) as DeliveredWork;

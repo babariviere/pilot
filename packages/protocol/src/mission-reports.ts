@@ -1,4 +1,4 @@
-import type { ProjectDashboard } from "./index.ts";
+import type { MissionCodeCompletion, ProjectDashboard } from "./index.ts";
 import type { MissionControl } from "./mission-controls.ts";
 
 /** Source token is issued by the host, never inferred from text or activity. */
@@ -12,6 +12,8 @@ export interface MissionReportWrite {
 	summary: string;
 	nextStep: string;
 	evidence: string[];
+	/** Scoped worker delivery claim, not canonical completion or user acceptance. */
+	delivery?: MissionCodeCompletion;
 }
 
 export interface MissionReport {

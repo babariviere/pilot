@@ -640,10 +640,12 @@ test("legacy completion and #18 evidence remain separate, with unavailable gates
 	assert.equal(f.store.nonCodeDelivery(f.id, f.task.id), undefined);
 	const legacy = f.store.create({ projectId: "p", title: "Legacy" });
 	f.store.join("old", legacy.id);
+	f.store.join("legacy-lead", legacy.id);
+	f.store.update(legacy.id, { coordinatorSessionId: "legacy-lead" });
 	const task = f.store.addTask(legacy.id, { title: "Legacy", sessionId: "old" });
 	await assert.rejects(f.store.recordReviewResult(legacy.id, task.id, "old", f.request, f.host), /planningVersion/);
 	const receipt = { commit: "a".repeat(40), checks: "Claimed", issues: "" };
-	assert.deepEqual(f.store.completeTask(legacy.id, task.id, "old", receipt), receipt);
+	assert.deepEqual(f.store.completeTask(legacy.id, task.id, "legacy-lead", receipt), receipt);
 	assert.equal(f.store.reviewHistory(legacy.id, task.id).length, 0);
 });
 

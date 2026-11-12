@@ -1,8 +1,8 @@
 import type { SQLInputValue } from "node:sqlite";
 import type { MissionControl, MissionControlOperation, MissionReport } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
-import { canonicalJSON } from "./operation-journal.ts";
 import type { MissionContinuation } from "./mission-continuation.ts";
+import { canonicalJSON } from "./operation-journal.ts";
 
 export const MISSION_CONTROL_SCHEMA = `
 CREATE TABLE IF NOT EXISTS mission_controls (mission_id TEXT PRIMARY KEY REFERENCES missions(id) ON DELETE CASCADE, record TEXT NOT NULL);
@@ -24,7 +24,8 @@ interface Port {
 	run(sql: string, ...params: SQLInputValue[]): void;
 	transaction<T>(work: () => T): T;
 	durable(): Promise<void>;
-	changed(id: string): void;
+	changed(id: string, report?: boolean): void;
+	reportSaved(report: MissionReport): void;
 }
 
 /** Shares canonical mission SQLite, transactions and the off-thread durable writer. */
@@ -125,6 +126,16 @@ export class MissionControlStore {
 		);
 		return row ? JSON.parse(String(row.record)) : undefined;
 	}
+	/** Limited task history; older notices retain exact report IDs for lookup. */
+	taskReports(missionId: string, taskId: string): MissionReport[] {
+		return this.port
+			.all(
+				"SELECT record FROM mission_reports WHERE mission_id=? AND task_id=? ORDER BY rowid DESC LIMIT 16",
+				missionId,
+				taskId,
+			)
+			.map((row) => JSON.parse(String(row.record)));
+	}
 	insertReport(report: MissionReport): void {
 		this.port.transaction(() => {
 			if (Number(this.port.one("SELECT COUNT(*) n FROM mission_reports")!.n) >= 16384)
@@ -136,8 +147,9 @@ export class MissionControlStore {
 				report.write.taskId,
 				canonicalJSON(report),
 			);
+			this.port.reportSaved(report);
 		});
-		this.port.changed(report.missionId);
+		this.port.changed(report.missionId, true);
 	}
 	continuation(id: string): MissionContinuation | undefined {
 		const row = this.port.one("SELECT record FROM mission_continuations WHERE operation_id=?", id);

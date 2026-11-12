@@ -311,7 +311,7 @@ test("coordinator reuses one task, records host origin, and never launches or re
 			.freshness.pending!.reasons.some((reason) => reason.includes("Documentation source revised")),
 	);
 	f.store.claimTask(mission.id, task.id, "worker");
-	f.store.completeTask(mission.id, task.id, "worker", { commit: "a".repeat(40), checks: "checked", issues: "" });
+	f.store.completeTask(mission.id, task.id, "lead", { commit: "a".repeat(40), checks: "checked", issues: "" });
 	assert.ok(
 		f.service
 			.detail("p1", a)

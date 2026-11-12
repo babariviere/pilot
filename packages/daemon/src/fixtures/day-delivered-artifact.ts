@@ -66,8 +66,18 @@ f.store.linkArtifact(mission.id, {
 	kind: "html",
 	revision: 2,
 });
-f.store.completeTask(mission.id, task.id, worker.id, { commit: "a".repeat(40), checks: "Synthetic", issues: "" });
-f.store.completeTask(mission.id, second.id, worker.id, { commit: "b".repeat(40), checks: "Synthetic", issues: "" });
+f.store.join("completion-lead", mission.id);
+f.store.update(mission.id, { coordinatorSessionId: "completion-lead" });
+f.store.completeTask(mission.id, task.id, "completion-lead", {
+	commit: "a".repeat(40),
+	checks: "Synthetic",
+	issues: "",
+});
+f.store.completeTask(mission.id, second.id, "completion-lead", {
+	commit: "b".repeat(40),
+	checks: "Synthetic",
+	issues: "",
+});
 await f.store.durable();
 const artifactReads: { path: string; query: Record<string, string> }[] = [];
 let deliveryReads = 0;

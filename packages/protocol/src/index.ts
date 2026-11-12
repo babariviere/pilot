@@ -19,8 +19,6 @@ export type {
 	ToolEventCall,
 } from "./agent-events.ts";
 export type * from "./automations.ts";
-export type * from "./native-attention.ts";
-export type * from "./planning-inventory.ts";
 export type * from "./chat-settings.ts";
 export type * from "./critical-review.ts";
 export type * from "./databases.ts";
@@ -38,8 +36,10 @@ export type * from "./mcp-setup.ts";
 export type * from "./mission-controls.ts";
 export type * from "./mission-reports.ts";
 export type * from "./model-scope.ts";
+export type * from "./native-attention.ts";
 export type * from "./native-review.ts";
 export type * from "./pi-reload.ts";
+export type * from "./planning-inventory.ts";
 export type * from "./refresh-health.ts";
 export type * from "./review-requests.ts";
 
@@ -1210,7 +1210,7 @@ export interface MissionTaskWrite {
 	dependsOn?: string[];
 	/** Decisions pinned to this task, sent in full to its chat. */
 	decisionIds?: string[];
-	/** User assignment: a member chat ID, or null to release. Agents claim through the mission tool instead. */
+	/** Coordinator/user assignment: a member chat ID, or null to release. Workers only report facts. */
 	sessionId?: string | null;
 	/**
 	 * Preferred model for new chats, validated against the task-start scope and price cap; null clears it.

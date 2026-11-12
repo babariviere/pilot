@@ -73,7 +73,9 @@ test("native delivered-work read exposes canonical outputs, explicit verificatio
 		limitations: "No production proof",
 	};
 	f.store.saveNonCodeDelivery(mission.id, task.id, worker.id, nonCode, new Map([["fake-artifact", worker.id]]));
-	f.store.completeTask(mission.id, task.id, worker.id, {
+	f.store.join("completion-lead", mission.id);
+	f.store.update(mission.id, { coordinatorSessionId: "completion-lead" });
+	f.store.completeTask(mission.id, task.id, "completion-lead", {
 		commit: "a".repeat(40),
 		checks: "Synthetic checks",
 		issues: "Not deployed",

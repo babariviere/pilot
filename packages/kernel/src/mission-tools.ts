@@ -14,9 +14,6 @@ const MEMBER_ACTIONS = [
 	"update",
 	"tasks",
 	"task",
-	"complete",
-	"claim",
-	"release",
 	"decide",
 	"decisions",
 	"links",
@@ -35,6 +32,9 @@ const MEMBER_ACTIONS = [
 ] as const;
 export const MISSION_ACTIONS = [
 	...MEMBER_ACTIONS,
+	"complete",
+	"claim",
+	"release",
 	"propose",
 	"supersede",
 	"delete",
@@ -67,7 +67,7 @@ export function createMissionTool(call: MissionCall, coordinator = false): ToolD
 		description: `Read and update the mission this chat belongs to. Mission state is shared with the user and the other chats of the mission.
 Actions:
 Write limits (Unicode code points, including whitespace): decision text ${MISSION_WRITE_LIMITS.decision}, task title ${MISSION_WRITE_LIMITS.title}/body ${MISSION_WRITE_LIMITS.body}, brief ${MISSION_WRITE_LIMITS.brief}. Summarize and link supporting material. Only supplied write fields must fit; legacy reads are unchanged.
-When get reports planningVersion 1, only the coordinator/user plans or assigns work. Workers report their own execution status and log evidence; in_review is for PR review, not generic submission. Propose planning changes with comment. Workers cannot complete, claim/release, edit task definitions/criteria, briefs or decisions. Coordinator/user marks done separately; this is not review or merge approval.
+Workers report facts with report/log, never change canonical task status, complete or claim/release work. Coordinator/user owns status; worker delivery is not task completion or user acceptance. When get reports planningVersion 1, only the coordinator/user edits task definitions, criteria, assignments, brief or decisions. Propose changes with comment.
 - get: without id, compact goal/status/brief revision, tasks grouped by phase with progress, your open tasks and references, other open tasks as [number,title,status,dependsOn?], and counts. Coordinator also gets member states, needs-you, PRs in review and pending/recent decision proposals. No history. Read before work and handoff. With id (task ID or number), one full task: body, completion record if delivered, dependency/dependent numbers, assignee chat, links with kind/PR state, artifacts and 15 recent events (pass activityCursor as activity cursor with taskId for older events). Prefer this targeted read to scanning lists.
 - map: read the canonical Wayfinder overview for this chat's current mission, with source currentness and interview history. No arguments. Same map as the native planning page; no edits, grants or execution authority. Unavailable planning context refuses, never means an empty map.
 - links, artifacts: references, filtered by taskId and filter open (default), done or all.
@@ -76,10 +76,10 @@ When get reports planningVersion 1, only the coordinator/user plans or assigns w
 - activity: newest first; filter taskId, kind, since (ISO timestamp with timezone or numeric event ID, exclusive), limit (default 15, max 100). Returns recentActivity with event IDs and cursor (null at end); pass cursor with the same filters for older events. Unfiltered first-page reads also include an independent recentUserNotes window.
 - brief: read a revision, or replace the spec with markdown and expectedRevision (stale writes fail).
 - update: change the mission title or goal.
-- tasks: list tasks, filter open (default), done or all, mine and phase (name or ID, "" for none). Prefer filtered lists or get with id for detail. task: id alone aliases get with id; title creates one, other fields update it (body, status, phase, dependsOn, decisionIds to pin decisions). Tasks are referenced by ID or number (#3). Use status "delegated" for work owned by someone else (not finished or startable). Coordinator may set status "done" or status "dropped" without a commit, preserving history; this is not review or merge approval. Workers use complete, not task status done, for delivery.
-- complete: finish your task with id and completion {commit, checks, issues}. commit must be a full 40-character lowercase hex hash; the daemon validates its format only, not existence or landing. Supply a genuinely landed commit. checks lists checks and one-line rationale (max 2000 characters), issues lists unresolved issues or "" (max 1000). Saves one immutable task-owned handoff and retires this member from new assignments. Exact retries reuse it. Do not duplicate it in comments, log, files or ACK replies. Finish already assigned tasks, then stop. New features need new chats.
-- claim: take id or ids (IDs, numbers or ranges such as ["1-5","#8"]). Returns claimed tasks and skipped tasks with reasons; never takes another chat's task. Members may self-claim at most two additional tasks per chat lifetime, excluding starting assignments; completing/releasing does not reset this. Delivered members may claim only follow-ups they created. After the allowance, ask the coordinator to start a fresh chat.
-- release: clear claims using the same selectors. Members release their own, coordinator any. Resets active/blocked to todo, preserves other states and links.
+- tasks: list tasks, filter open (default), done or all, mine and phase (name or ID, "" for none). Prefer filtered lists or get with id for detail. task: id alone aliases get with id; title creates one, other fields update it (body, status, phase, dependsOn, decisionIds to pin decisions). Tasks are referenced by ID or number (#3). Use status "delegated" for work owned by someone else (not finished or startable). Only coordinator/user changes status, including status "done" or status "dropped" without a commit, preserving history; this is not review or merge approval. Workers submit report facts instead.
+- complete (coordinator only): record canonical code completion with id and completion {commit, checks, issues} after reading current scope, owner/assignment, reports and dependencies. May complete worker-owned tasks. commit is a full 40-character lowercase hex hash, checked for shape, not landing. checks max 2000, issues max 1000 (or ""). Saves one immutable record; exact retries only return it, never repeat closure after reopening. Not user acceptance, review or merge authority. No independent reviewer or ACK gate.
+- claim (coordinator only): take id or ids (IDs, numbers or ranges such as ["1-5","#8"]). Returns claimed tasks and skipped tasks with reasons; never takes another chat's task.
+- release (coordinator only): clear claims using the same selectors. Resets active/blocked to todo, preserves other states and links.
 - decide: record a substantive agreed mission choice about scope, behavior or tradeoffs, audience all, coordinator or reference (default). Keep the human answer/source reference and limits in text; do not invent agreement from discussion, a proposal, a displayed recommendation or an agent report. Do not re-ask settled choices or turn every suggested interview option into a decision. Record material explicit authority changes with their source and limits, but use existing approval/permission controls for specific actions; decision text never grants tool/runtime permission. Active decisions override the brief; text edits/removals remain user-only.
 Decision examples (routing guidance, not permission):
 - Agreed "Use native NSH, not WebViews" or "Save every interview question before showing the first": decide (mission scope/behavior).
@@ -93,11 +93,11 @@ Decision examples (routing guidance, not permission):
 Keep routine directions in existing task updates or log context, without duplicate bookkeeping. Do not automatically delete, withdraw or bulk reclassify historical decisions; historic cleanup requires user-approved proposals and preserved history.
 - comment: only for a question, blocker or feedback that needs another participant's answer or action (text, optional anchor quote and targetSessionId). Keep it to a few sentences, one per topic. notification action (default) batches routine requests; urgent is for blockers, needs-you or failure; informational and ack are recorded without waking. Never comment status, progress, plans, evidence, publication receipts or acknowledgements: update the task status and body, or log. resolve: once addressed, save any lasting outcome in the task, decision or spec, then resolve by id; unanswered questions stay open.
 - attach: link one of this chat's artifacts (artifactId, optional artifactRevision to pin, optional taskId).
-- link: add url, optional title/taskId. Linear links default linearRole reference (context only); coordinator may explicitly set managed (mission scope) or contribution (task scope, requires managed ticket). Existing roles require updateLink, never implicit upgrades. Task PRs default to relationship "ownership" (drives status); "reference" is related work. Neither binds a chat.
+- link: add url, optional title/taskId. Linear links default linearRole reference (context only); coordinator may explicitly set managed (mission scope) or contribution (task scope, requires managed ticket). Existing roles require updateLink, never implicit upgrades. Task PRs default to relationship "ownership" (delivery evidence); "reference" is related work. Neither binds a chat or changes canonical task status.
 - ticket: read limited, untrusted Linear context using resourceId from links. No Linear writes.
 - prGuidance: taskId returns live, per-ticket PR wording. Earlier contributors use Related to; only final contributors (every other contributor Done) use Closes, subject to live terminal/manual-pause safeguards. Recheck before creating/editing PRs and after task/link changes. Never silently edit unsafe PRs.
 - unlink: remove url at taskId (omitted: mission-level), own links only unless coordinator; prefers reference. Absent returns removed:false.
-- report: taskId alone reads your current task-owner source token and expectedPreviousId. Submit report with those exact fields, version 1, unique reportId, taskId, movement moving|not_moving|unknown, summary, nextStep and evidence strings. Reports are agent assessments, never acceptance or measured progress. Reuse exact reportId after a lost ACK; changed sources reject.
+- report: taskId alone reads your current task-owner source token and expectedPreviousId. Submit report with those exact fields, version 1, unique reportId, taskId, movement moving|not_moving|unknown, summary, nextStep and evidence strings. Optional delivery {commit, checks, issues} records scoped delivery facts, not completion. Reports notify the coordinator durably, never change task status or user acceptance. Reuse exact reportId and bytes after a lost ACK; new stale-source writes reject. reportId alone reads that historical receipt. get(id) includes currentness and 16 recent reports; use reportId from activity for older receipts.
 - log: add context not already captured by task changes, or kind "handoff" for what the next chat needs to continue (optional health).${
 			coordinator
 				? `
@@ -126,6 +126,7 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 		annotations: { openWorldHint: false, destructiveHint: coordinator },
 		parameters: Type.Object({
 			action: StringEnum(coordinator ? MISSION_ACTIONS : MEMBER_ACTIONS),
+			reportId: Type.Optional(Type.String({ maxLength: 128 })),
 			report: Type.Optional(
 				Type.Object({
 					version: Type.Literal(1),
@@ -137,6 +138,13 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 					summary: Type.String({ maxLength: 2000 }),
 					nextStep: Type.String({ maxLength: 1000 }),
 					evidence: Type.Array(Type.String({ maxLength: 1000 }), { maxItems: 16 }),
+					delivery: Type.Optional(
+						Type.Object({
+							commit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
+							checks: Type.String({ minLength: 1, maxLength: 2000 }),
+							issues: Type.String({ maxLength: 1000 }),
+						}),
+					),
 				}),
 			),
 			...(coordinator ? { role: Type.Optional(StringEnum(["explorer", "builder", "reviewer"] as const)) } : {}),
@@ -448,6 +456,8 @@ Coordinator planning: on interview, research, delivery, review, notices or resum
 		async execute(_callId, params, signal): Promise<AgentToolResult<JsonValue>> {
 			signal?.throwIfAborted();
 			const { action, ...rest } = params;
+			if (!coordinator && ["complete", "claim", "release"].includes(action))
+				throw new Error("Only the mission coordinator can change task status or assignments; report facts instead");
 			validateMissionWrite(action, rest);
 			const args = Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined)) as Record<
 				string,

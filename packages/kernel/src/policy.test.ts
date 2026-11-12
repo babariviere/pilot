@@ -73,12 +73,12 @@ test("coordinator-owned planning prompt separates truthful reports from planning
 	const prompt = missionPrompt({ ...mission, planningVersion: 1, coordinator: "other" });
 	assert.match(prompt, /propose follow-up work with comment/);
 	assert.match(prompt, /Only the coordinator\/user edits/);
-	assert.match(prompt, /use in_review only for PR review, not no-PR submission/);
+	assert.match(prompt, /Workers report facts/);
 	assert.match(prompt, /Coordinator\/user marks done separately/);
 	assert.doesNotMatch(prompt, /Claim tasks before|Save delivery once with mission complete/);
 	const legacy = missionPrompt(mission);
-	assert.match(legacy, /Claim tasks before/);
-	assert.match(legacy, /Save delivery once with mission complete/);
+	assert.doesNotMatch(legacy, /Claim tasks before|Save delivery once with mission complete/);
+	assert.match(legacy, /Workers report facts/);
 });
 
 test("Build delivery is allowed through shell, jobs and nested tools while read-only and merge gates remain", async () => {
@@ -247,22 +247,18 @@ test("coordinator actions are named only for the coordinator and detailed in the
 			),
 			coordinator === "self",
 		);
-		assert.match(prompt, /dropped when no longer needed/);
+		assert.match(prompt, /Coordinator\/user marks done separately/);
 		// Per-action recipes live in the mission tool description, which is only loaded when the tool is used.
 		assert.doesNotMatch(prompt, /mission\(\{action: "(?:delete|group|start|send|status)"/);
 	}
 });
 
-test("multi-task guidance claims requested tasks, orders work, maintains statuses and separates PRs", () => {
+test("multi-task guidance reports scoped facts and separates task status from PRs", () => {
 	for (const coordinator of ["self", "other", "user"] as const) {
 		const prompt = missionPrompt({ ...mission, coordinator, tasks: [] });
-		assert.match(prompt, /claim them together \(ids such as \["1-5"\]\)/);
 		assert.match(prompt, /one at a time in dependency order/);
-		assert.match(prompt, /report skipped claims and unfinished dependencies instead of working past them/);
-		assert.match(
-			prompt,
-			/in_progress while working, blocked with the reason in the task body, in_review once a pull request is open/,
-		);
+		assert.match(prompt, /Workers report facts/);
+		assert.doesNotMatch(prompt, /keep their status current|Save delivery once with mission complete/);
 		if (coordinator === "self") {
 			assert.match(prompt, /Delegate all code changes to member chats/);
 			assert.doesNotMatch(prompt, /Open one pull request per task|gh pr create|base your own bookmark/);

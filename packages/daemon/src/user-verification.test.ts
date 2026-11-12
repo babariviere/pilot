@@ -11,8 +11,8 @@ import type {
 	UserVerificationIntent,
 	VerificationSubject,
 } from "@pilot/protocol";
-import { MissionStore } from "./missions.ts";
 import { MissionControls } from "./mission-controls.ts";
+import { MissionStore } from "./missions.ts";
 import { OperationJournal, payloadHash } from "./operation-journal.ts";
 import { ProjectStore } from "./projects.ts";
 import { UserVerifications } from "./user-verification.ts";
@@ -55,6 +55,8 @@ async function fixture(t: TestContext) {
 	let journal = new OperationJournal(join(home, "operations"), host);
 	const mission = store.create({ projectId: project.id, title: "Isolated fake work" });
 	store.join("worker", mission.id);
+	store.join("completion-lead", mission.id);
+	store.update(mission.id, { coordinatorSessionId: "completion-lead" });
 	const task = store.addTask(mission.id, { title: "Delivered result", sessionId: "worker" });
 	let chat: SessionSummary = {
 		id: "worker",
@@ -87,7 +89,11 @@ async function fixture(t: TestContext) {
 	let service = new UserVerifications({ store, journal, projects, sessions });
 	const subject: VerificationSubject = { kind: "task", projectId: project.id, missionId: mission.id, taskId: task.id };
 	const deliver = () =>
-		store.completeTask(mission.id, task.id, "worker", { commit: "a".repeat(40), checks: "Fake checks", issues: "" });
+		store.completeTask(mission.id, task.id, "completion-lead", {
+			commit: "a".repeat(40),
+			checks: "Fake checks",
+			issues: "",
+		});
 	const run = (op: DurableOperation) => journal.execute(op, (o, entry) => service.admit(o, entry.firstEntry));
 	const reopenStorage = async () => {
 		await store.durable();
@@ -389,7 +395,7 @@ test("task mission hold is enforced from canonical membership even without a sum
 		operationId: randomUUID(),
 		home: host,
 		projectId: f.project.id,
-		coordinatorSessionId: null,
+		coordinatorSessionId: f.store.require(f.mission.id).coordinatorSessionId ?? null,
 		expectedRevision: 0,
 		action: "pause",
 	});

@@ -428,13 +428,15 @@ test("legacy missions remain inspectable but cannot adopt revision-bound evidenc
 	const f = fixture(t),
 		legacy = f.store.create({ projectId: "p", title: "Legacy" });
 	f.store.join("worker", legacy.id);
+	f.store.join("legacy-lead", legacy.id);
+	f.store.update(legacy.id, { coordinatorSessionId: "legacy-lead" });
 	const task = f.store.addTask(legacy.id, { title: "Legacy", sessionId: "worker" });
 	await assert.rejects(
 		f.store.submitDeliveryEvidence(legacy.id, task.id, "worker", f.request, f.resolve),
 		/planningVersion 1/,
 	);
 	const receipt = { commit: "a".repeat(40), checks: "Claimed green", issues: "" };
-	assert.deepEqual(f.store.completeTask(legacy.id, task.id, "worker", receipt), receipt);
+	assert.deepEqual(f.store.completeTask(legacy.id, task.id, "legacy-lead", receipt), receipt);
 	assert.equal(f.store.deliveryEvidence(legacy.id, task.id).length, 0);
 });
 
