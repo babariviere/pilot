@@ -44,6 +44,18 @@ contracts only; the current desktop app has not gained those controls yet.
 Coordinators can answer ordinary member questions within the approved mission scope.
 Replies are attributed to the coordinator. Database-access approvals remain yours.
 
+When you authorize continued work, the coordinator can queue an exact next slice with
+`start` and a stable `operationId`. It waits durably for dependencies and a free worker
+slot, including reviewers (maximum two). A worker finish wakes reconciliation without
+waiting for every other worker. The coordinator checks fresh task scope, ownership and
+reports before closing work; a finished turn or published increment does not close a task.
+`get` shows queued starts and waiting reasons. Stop, Pause, changed scope/authority and
+user-pinned order still apply. Unknown starts use exact lookup, never another start.
+Unrequested tasks are not execution grants. This does not enable Autopilot or grant spend.
+Dispatch stays blocked unless the host has a qualified current dispatch/model/budget
+policy source. This source is not yet bound in production. Queuing is not permission
+to bypass that missing gate. See [the queue API](technical/mission-continuation.md).
+
 Decision updates follow the current task's decision pins. Decisions marked for everyone
 remain mission-wide rules. Unassociated guidance goes to the coordinator for routing,
 not every worker. Routine additions are grouped for up to 30 seconds; changed guidance

@@ -369,6 +369,7 @@ async function resumeRuntime(): Promise<void> {
 		}
 
 		missionService.notices.start();
+		missionService.continuations.start();
 		missionService.compaction.start();
 		schedules.start();
 		backgroundInitialized = true;
@@ -432,6 +433,7 @@ const server = createDaemonServer(
 			subscriptions.runtime,
 			schedules.runtime,
 			missionService.notices.runtime,
+			missionService.continuations.runtime,
 			missionService.compaction.runtime,
 			knowledge.maintenance.runtime,
 			mcpStatus.runtime,
@@ -484,6 +486,7 @@ async function stop(): Promise<void> {
 				.catch(() => console.warn("pilotd: retained refresh evidence could not be drained"));
 			await memory.stop();
 			await missionService.notices.stop();
+			await missionService.continuations.stop();
 			await missionService.compaction.stop();
 			await githubImport.close();
 			await Promise.all([setup.close(), githubSetup.close(), terminals.shutdown(), sessions.shutdown()]);

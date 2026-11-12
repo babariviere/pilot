@@ -307,9 +307,11 @@ test("coordinators reference member chats with the links returned by mission too
 	assert.match(prompt, /Links open the chat inside Pilot/);
 });
 
-test("the coordinator prompt allows chat starts only on request", () => {
+test("the coordinator prompt continues existing authorization without enabling Autopilot", () => {
 	const prompt = missionPrompt({ ...mission, coordinator: "self" });
-	assert.match(prompt, /Start chats only when the user asks/);
+	assert.match(prompt, /Start chats only within current user authorization/);
+	assert.match(prompt, /ongoing authorization does not need another routine prompt/);
+	assert.match(prompt, /reconcile status separately from claims\/acceptance/);
 	assert.match(prompt, /Autopilot is not enabled/);
 	for (const coordinator of ["other", "user"] as const)
 		assert.doesNotMatch(missionPrompt({ ...mission, coordinator }), /Start chats/);
@@ -327,7 +329,8 @@ test("proactive planning guidance is coordinator-only, in legacy and versioned m
 			assert.match(prompt, /Check existing coverage first; update matching tasks instead of duplicating them/);
 			assert.match(prompt, /Keep questions and proposals distinct from approved scope/);
 			assert.match(prompt, /Planning grants no worker starts, provider spend or restricted activation/);
-			assert.match(prompt, /Start chats only when the user asks; Autopilot is not enabled/);
+			assert.match(prompt, /Start chats only within current user authorization/);
+			assert.match(prompt, /Autopilot is not enabled/);
 		}
 	}
 });

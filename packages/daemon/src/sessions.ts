@@ -242,12 +242,15 @@ export interface PullRequestBinding {
 /** Internal mission start selection, passed separately from untrusted request fields. */
 export interface MissionSpawnAdmission {
 	role?: import("@pilot/protocol").MissionWorkerRole;
+	/** Existing durable intent being admitted, never caller-supplied request authority. */
+	continuationOperationId?: string;
 	/** Set only by mission tool dispatch from the caller's IPC identity, never request arguments. */
 	actorSessionId?: string;
 }
 
 /** Mission state lives in its own store. Sessions read membership and forward tool calls through this bridge. */
 export interface SessionMissionBridge {
+	continuationInputAllowed?(sessionId: string, operationId: string): boolean;
 	/** Current durable mission controls for upgrade recovery; null means no current membership.
 	 * Mission Pause owns this state and all mission-wide work. Install before enabling those controls.
 	 * Missing/throwing providers cannot recover a checkpoint that already pins a mission fence.
@@ -490,6 +493,10 @@ interface SessionMeta extends OutcomeMeta {
 	/** Stable create reservation. Never reuse this session ID for another operation. */
 	createOperationId?: string;
 	createMissionId?: string;
+	/** Exact continuation admission marker. Preparing records cannot start during cold recovery. */
+	missionContinuationStart?: { operationId: string; admitted: boolean; inputAccepted?: boolean };
+	/** A factual Stop hold, independent of a later/cooperative worker outcome. Only user input clears it. */
+	missionUserStopGeneration?: number;
 	/** Host-only creation admission. Never synthesized on load, role change or continuation. */
 	retainedScope?: JjProjectScope;
 	/** Host-only initial managed mission creation marker. Never inferred on load or join. */
@@ -7834,6 +7841,7 @@ ${run.excerpt}`,
 		targetId: string,
 		operationId: string,
 		guard?: () => void,
+		mission?: { taskIds: string[]; admission: MissionSpawnAdmission },
 	): Promise<SessionSummary> {
 		guard?.();
 		this.insightsBacklog?.replacements.assertNotRetired(targetId);
@@ -7868,15 +7876,17 @@ ${run.excerpt}`,
 				return await this.spawnAdmitted(
 					request,
 					false,
-					undefined,
+					mission?.taskIds,
 					{ targetId, operationId },
-					undefined,
+					mission?.admission,
 					undefined,
 					undefined,
 					false,
 					undefined,
 					undefined,
 					guard,
+					undefined,
+					mission ? guard : undefined,
 				);
 			return this.repairProject.withBinding(request.diagnosticRepair.binding, async () => {
 				this.assertDiagnosticRepairAdmission(request);
@@ -7921,6 +7931,14 @@ ${run.excerpt}`,
 	}
 
 	private recoverCreateMembership(meta: SessionMeta): void {
+		if (meta.missionContinuationStart) {
+			if (
+				!meta.missionContinuationStart.admitted ||
+				this.missions?.membership(meta.id)?.missionId !== meta.createMissionId
+			)
+				throw new Conflict("Continuation start is uncertain; lookup only, never repair or replay");
+			return;
+		}
 		if (meta.role === "insights") {
 			this.assertInsightsCurrent(meta);
 			return;
@@ -7931,6 +7949,75 @@ ${run.excerpt}`,
 		if (membership?.missionId === meta.createMissionId) return;
 		if (membership) throw new Conflict("Create membership changed");
 		this.missions.joinSpawn(meta.id, meta.createMissionId);
+	}
+
+	assertMissionTaskHolds(missionId: string, taskIds: readonly string[]): void {
+		const wanted = new Set(taskIds);
+		for (const meta of this.metas.values()) {
+			if (this.missions?.membership(meta.id)?.missionId !== missionId || !meta.taskIds?.some((id) => wanted.has(id)))
+				continue;
+			if (
+				meta.cancelled ||
+				meta.missionUserStopGeneration !== undefined ||
+				meta.recoveryStopped ||
+				meta.outcome === "stopped" ||
+				meta.inputsPaused ||
+				meta.archivedAt !== undefined ||
+				meta.lifecycleCheckpoint
+			)
+				throw new Conflict(
+					"Task has a stopped, paused or archived chat; user holds are not continuation authority",
+				);
+		}
+	}
+	/** Captures current dispatch policy, not a provider-spend grant. Stop changes inputGeneration. */
+	missionDispatchFence(id: string): string {
+		const meta = this.require(id);
+		if (
+			this.closing ||
+			this.updateGate.frozen ||
+			this.sleepPause ||
+			meta.archivedAt !== undefined ||
+			meta.continuedTo ||
+			meta.delegationFenced ||
+			meta.missionUserStopGeneration !== undefined ||
+			meta.cancelled ||
+			meta.recoveryStopped ||
+			meta.inputsPaused ||
+			meta.updatePaused ||
+			meta.sleepPaused ||
+			this.internetOnline === false ||
+			meta.lifecycleCheckpoint ||
+			this.subscriptionPaused(id) ||
+			meta.outcome === "stopped"
+		)
+			throw new Conflict("Coordinator dispatch is held or unavailable");
+		return canonicalJSON({
+			projectId: meta.projectId,
+			generation: meta.inputGeneration ?? 0,
+			controlRevision: meta.inputControlRevision ?? 0,
+			project: meta.projectId
+				? {
+						model: this.projects.require(meta.projectId).model,
+						workflowGeneration: this.projects.require(meta.projectId).workflowGeneration,
+					}
+				: null,
+			permission: meta.executionPermission ?? null,
+			model: meta.model,
+			thinking: meta.thinking,
+		});
+	}
+	/** Missing saved metadata is Unknown, not permission to create or repair membership. */
+	async lookupMissionStart(id: string, operationId: string): Promise<boolean> {
+		const meta = this.metas.get(id);
+		if (!meta || meta.createOperationId !== operationId) return false;
+		const saved = JSON.parse(await readFile(join(this.dir(id), "meta.json"), "utf8")) as SessionMeta;
+		return (
+			saved.createOperationId === operationId &&
+			saved.id === id &&
+			saved.missionContinuationStart?.operationId === operationId &&
+			saved.missionContinuationStart.admitted
+		);
 	}
 
 	/** Maintenance-owned freeze has no implicit timeout. The caller owns release/recovery. */
@@ -7988,6 +8075,13 @@ ${run.excerpt}`,
 
 	private missionWorkHeld(id: string): boolean {
 		try {
+			const continuation = this.metas.get(id)?.missionContinuationStart;
+			if (
+				continuation &&
+				!continuation.inputAccepted &&
+				(!continuation.admitted || !this.missions?.continuationInputAllowed?.(id, continuation.operationId))
+			)
+				return true;
 			const permit = this.missionResuming.get(id);
 			if (!permit && this.missions?.missionAdmissionHeld)
 				return this.missions.missionAdmissionHeld(this.missionWorkOwner(id));
@@ -9133,6 +9227,7 @@ ${run.excerpt}`,
 		planning?: import("@pilot/kernel").PlanningWorkerBinding,
 		planningGuard?: () => void,
 		publishedStart?: { permission?: ExecutionPermission },
+		dispatchGuard?: () => void,
 	): Promise<SessionSummary> {
 		if (admission) this.insightsBacklog?.replacements.assertNotRetired(admission.targetId);
 		if (deferInsightsInput && ((!insightsGrant && !ownerExecution) || request.role !== "insights"))
@@ -9337,7 +9432,17 @@ ${run.excerpt}`,
 			cwd = join(this.dir(id), "workspace");
 		}
 		const meta: SessionMeta = {
+			...(missionAdmission?.continuationOperationId
+				? { missionContinuationStart: { operationId: missionAdmission.continuationOperationId, admitted: false } }
+				: {}),
 			...(publishedStart?.permission ? { executionPermission: structuredClone(publishedStart.permission) } : {}),
+			...(missionAdmission?.actorSessionId && this.require(missionAdmission.actorSessionId).executionPermission
+				? {
+						executionPermission: structuredClone(
+							this.require(missionAdmission.actorSessionId).executionPermission,
+						),
+					}
+				: {}),
 			...(planning ? { planning: structuredClone(planning) } : {}),
 			...(flowAdmission
 				? { flowRootId: flowAdmission.rootId, ...(flowAdmission.flow ? { flow: flowAdmission.flow } : {}) }
@@ -9413,6 +9518,12 @@ ${run.excerpt}`,
 				await this.save(meta, undefined, undefined, true);
 				this.assertInsightsCurrent(meta);
 			}
+			if (meta.missionContinuationStart) {
+				dispatchGuard?.();
+				meta.missionContinuationStart.admitted = true;
+				await this.save(meta, undefined, undefined, true, dispatchGuard);
+				dispatchGuard?.();
+			}
 		} catch (error) {
 			// Admission may lose a coordinator/task claim or race a closed mission.
 			if (insightsGrant) {
@@ -9449,6 +9560,7 @@ ${run.excerpt}`,
 		}
 		const summary = this.summary(meta);
 		this.emit(meta);
+		dispatchGuard?.();
 		if (!deferInsightsInput && !planning && !publishedStart) void this.start(id, true);
 		return summary;
 	}
@@ -9536,6 +9648,7 @@ ${run.excerpt}`,
 		const worker = this.workers.get(id);
 		return (
 			!!meta &&
+			meta.missionUserStopGeneration === undefined &&
 			!meta.planning &&
 			!this.isRetainedHistory(meta) &&
 			!meta.continuedTo &&
@@ -9871,10 +9984,16 @@ ${run.excerpt}`,
 					}
 				}
 			}
+			if (meta.missionUserStopGeneration !== undefined && (report || inputOrigin(requestId)))
+				throw new CommandRejected(
+					"Mission chat was stopped by the user. Send new user input to continue.",
+					"stopped",
+				);
 			if (meta.recoveryStopped && (report || inputOrigin(requestId)))
 				throw new CommandRejected("Chat recovery is stopped. Send a new message to continue.", "stopped");
 			admissionGuard?.();
 			if (inputGeneration === undefined || inputGeneration === (meta.inputGeneration ?? 0)) {
+				if (!report && !inputOrigin(requestId)) delete meta.missionUserStopGeneration;
 				delete meta.cancelled;
 				delete meta.recoveryStopped;
 				if (
@@ -10100,6 +10219,7 @@ ${run.excerpt}`,
 		const id = meta.id;
 		this.missions?.missionStopped?.(id);
 		meta.inputGeneration = (meta.inputGeneration ?? 0) + 1;
+		if (this.missions?.membership(id)) meta.missionUserStopGeneration = meta.inputGeneration;
 		if (meta.lifecycleCheckpoint) {
 			meta.lifecycleCheckpoint.phase = "stopped";
 			delete meta.lifecycleCheckpoint.stopAcknowledged;
@@ -12798,6 +12918,13 @@ ${run.excerpt}`,
 					: { delivery: packet.delivery },
 			);
 		}
+		if (
+			packet.type === "accepted" &&
+			this.workers.get(meta.id) === worker &&
+			meta.missionContinuationStart?.operationId === packet.requestId &&
+			(packet.delivery === "delivered" || packet.delivery === "queued")
+		)
+			meta.missionContinuationStart.inputAccepted = true;
 		// Parking already detached this worker. Cleanup errors and late packets belong
 		// to its shutdown, not the session's completed work or a replacement worker.
 		if (this.parked.has(worker)) return;
@@ -15021,6 +15148,7 @@ ${run.excerpt}`,
 			if (meta.lifecycleCheckpoint) persisted.lifecycleCheckpoint = structuredClone(meta.lifecycleCheckpoint);
 			else delete persisted.lifecycleCheckpoint;
 			persisted.inputGeneration = meta.inputGeneration;
+			persisted.missionUserStopGeneration = meta.missionUserStopGeneration;
 			// Preserve the immutable execution ceiling across queued lifecycle snapshots.
 			persisted.executionPermission = meta.executionPermission;
 			// Captured lifecycle snapshots must never resurrect an earlier enabled grant.

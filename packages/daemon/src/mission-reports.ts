@@ -93,6 +93,24 @@ export class MissionReports {
 			...new Map(this.store.controls.reports(missionId).map((report) => [report.write.taskId, report])).values(),
 		];
 	}
+	/** One task's current report for coordinator reconciliation, not acceptance. */
+	viewTaskNow(missionId: string, taskId: string, now = Date.now()): MissionReportView | undefined {
+		const report = this.store.controls.latestReport(missionId, taskId);
+		if (!report) return undefined;
+		let currentness: MissionReportView["currentness"] = "stale";
+		try {
+			if (
+				report.version === 1 &&
+				report.write.version === 1 &&
+				now < report.validUntil &&
+				this.source(missionId, report.sessionId, taskId).source === report.write.source
+			)
+				currentness = "current";
+		} catch {
+			/* A stale owner/assignment never becomes current through lookup. */
+		}
+		return { report, currentness, provenance: "agent_report" };
+	}
 	async views(missionId: string, now = Date.now()): Promise<MissionReportView[]> {
 		await this.store.durable();
 		return this.viewsNow(missionId, now);

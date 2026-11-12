@@ -433,6 +433,9 @@ test("a run containing only already completed tasks carries no new activity", ()
 	const { store, id } = setup();
 	try {
 		store.updateTask(id, "1", { status: "done" });
+		const closure = store.prepareNotice(id, "lead", Date.now());
+		assert.ok(closure, "canonical completion can clear prerequisites");
+		store.acknowledgeNotice(closure, Date.now());
 		store.recordMemberRun({ ...completion("done", 1), state: "working" });
 		const before = store.events(id);
 		store.recordMemberCompletion(completion("done", Date.now() + 1));
@@ -835,7 +838,7 @@ test("the timer delivers promptly when members are idle and shutdown drains admi
 	}
 });
 
-test("one working or starting member holds notices; the last settlement makes them immediately eligible", async (t) => {
+test("one finished worker wakes reconciliation while another works; lead work still holds delivery", async (t) => {
 	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
 	const { store, id } = setup();
 	store.join("second", id);
@@ -877,26 +880,27 @@ test("one working or starting member holds notices; the last settlement makes th
 		change("member", "idle", "done");
 		t.mock.timers.tick(120_000);
 		await delivery.flush();
-		assert.equal(notices.length, 0);
+		assert.equal(notices.length, 1, "a free slot must not wait for the other worker");
+		assert.match(notices[0]!, /#1 Pagination: chat finished/);
 		change("second", "idle", "done");
 		assert.equal(store.noticeDeadlines(Date.now())[0]!.at, Date.now());
 		change("second", "working");
 		t.mock.timers.tick(2_000);
 		await delivery.flush();
-		assert.equal(notices.length, 0, "an immediate resume cancels settlement");
+		assert.equal(notices.length, 2, "another finish remains reconciliation evidence, not task completion");
 		change("second", "idle", "done");
 		change("lead", "working");
 		await delivery.flush();
-		assert.equal(notices.length, 0, "lead must also be idle");
+		assert.equal(notices.length, 2, "lead must also be idle");
 		change("lead", "idle");
 		await delivery.flush();
-		assert.equal(notices.length, 1);
+		assert.equal(notices.length, 2);
 		assert.match(notices[0]!, /#1 Pagination: chat finished/);
-		assert.match(notices[0]!, /#2 Second: chat finished/);
+		assert.match(notices[1]!, /#2 Second: chat finished/);
 		assert.doesNotMatch(notices[0]!, /chat failed/);
-		assert.equal(notices[0]!.split("\n").filter((line) => line.startsWith("- ")).length, 2);
+		assert.equal(notices[0]!.split("\n").filter((line) => line.startsWith("- ")).length, 1);
 		await delivery.flush();
-		assert.equal(notices.length, 1);
+		assert.equal(notices.length, 2);
 	} finally {
 		await delivery.stop();
 		store.close();

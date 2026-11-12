@@ -194,7 +194,7 @@ test("task merge queues one PR-keyed event with done, newly ready dependents and
 	}
 });
 
-test("chat-only merge after a finished chat is observed without changing its outcome version and stays grouped", async (t) => {
+test("chat-only merge after a finished chat stays grouped and wakes while another worker remains active", async (t) => {
 	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
 	const { store, id, chat } = setup();
 	store.join("second", id);
@@ -229,8 +229,8 @@ test("chat-only merge after a finished chat is observed without changing its out
 		store.addComment(id, { text: "Also review the next step" });
 		t.mock.timers.tick(60_000);
 		await delivery.flush();
-		assert.equal(delivered.length, 0);
-		assert.equal(store.pendingNotice(id), undefined, "no early inbox item is frozen");
+		assert.equal(delivered.length, 1, "finished work requires fresh reconciliation before the other worker settles");
+		assert.equal(store.pendingNotice(id), undefined, "the delivered batch is acknowledged");
 		const idle = {
 			...chats.get("second")!,
 			state: "idle" as const,
@@ -248,7 +248,7 @@ test("chat-only merge after a finished chat is observed without changing its out
 		observe(idle);
 		t.mock.timers.tick(30_000);
 		await delivery.flush();
-		assert.equal(delivered.length, 0, "an idle member with a background job still holds PR notices");
+		assert.equal(delivered.length, 1, "job changes do not duplicate the delivered batch");
 		const finished = { ...idle, runningJobs: [] };
 		chats.set("second", finished);
 		observe(finished);

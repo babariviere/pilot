@@ -158,7 +158,8 @@ test("coordinator planning recipes cover actionable gaps without unconditional t
 		description,
 		/Task creation\/updates grant no worker starts, provider spend, approval or restricted activation/,
 	);
-	assert.match(description, /Start only when asked/);
+	assert.match(description, /Start only within current user authorization/);
+	assert.match(description, /stable operationId to queue one authorized slice durably/);
 	assert.doesNotMatch(createMissionTool(async () => null).description, /Coordinator planning:/);
 });
 

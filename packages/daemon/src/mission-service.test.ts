@@ -3623,8 +3623,24 @@ async function fixture(
 		thinking: thinking ?? "medium",
 	}));
 	const service = new MissionService(store, sessions, projects, deliverySnapshots, reviewProducerObserver);
+	service.setContinuationPolicySource({
+		current: (record) => ({
+			version: 1,
+			state: "allowed",
+			dispatch: { authorizationId: "faux-dispatch", revision: 1 },
+			model: {
+				sourceId: "faux-model",
+				revision: "1",
+				model: record.request.model ?? "test/model",
+				thinking: record.request.thinking ?? "medium",
+			},
+			budget: { authorityId: "faux-budget", revision: 1 },
+		}),
+		onChange: () => () => {},
+	});
 	await sessions.load();
 	t.after(async () => {
+		await service.continuations.stop();
 		await service.notices.stop();
 		await sessions.shutdown();
 		await Promise.allSettled(sessions["saving"].values());
@@ -6917,8 +6933,199 @@ test("coordinator start reuses Start chat with task IDs or numbers and validates
 	}
 	assert.equal(f.sessions.list().length, 2);
 	f.store.update(mission.id, { status: "active" });
+	await f.sessions.restore(coordinator.id);
 	const second = (await f.service.call(coordinator.id, "start", { id: taskId })) as SessionSummary;
 	assert.equal(f.store.resolveTask(mission.id, "2").sessionId, second.id);
+});
+
+test("worker event wakes idle coordinator, fresh status reconciliation releases one authorized durable start", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Continue",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "First" }, { title: "Second" }, { title: "Next authorized slice" }, { title: "Unrequested" }],
+	});
+	const first = await f.service.startTask(mission.id, "1");
+	const second = await f.service.startTask(mission.id, "2");
+	await until(() => f.workers.get(first.id) && f.workers.get(second.id));
+	await until(
+		() =>
+			!f.sessions["starting"].has(first.id) &&
+			!f.sessions["starting"].has(second.id) &&
+			f.sessions.canSendNotice(lead.id),
+	);
+	f.workers.get(second.id)!.onPacket({ type: "working", working: true });
+	f.service.notices.start();
+	f.service.continuations.start();
+	const queued = (await f.service.call(lead.id, "start", {
+		id: "3",
+		operationId: "next-slice",
+		model: "test/model",
+	})) as { targetId: string };
+	await f.service.continuations.flush();
+	assert.equal(f.sessions.get(queued.targetId), undefined);
+	assert.match(f.store.controls.continuation("next-slice")!.reason, /worker slot/);
+	await assert.rejects(f.service.call(lead.id, "start", { id: "4" }), /worker slot/);
+	f.workers
+		.get(first.id)!
+		.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt: Date.now() } });
+	await f.service.notices.flush(Date.now() + 60_000);
+	const notice = f.workers
+		.get(lead.id)!
+		.requests.find((r) => r.type === "input" && r.requestId.startsWith("mission-notice:"));
+	assert.ok(notice, "another working member cannot suppress coordinator reconciliation");
+	assert.equal(f.store.resolveTask(mission.id, "1").status, "in_progress", "a partial delivery is not completion");
+	assert.equal(f.sessions.get(queued.targetId), undefined);
+	// Scripted fake coordinator reads current scope/owner, then reconciles canonical status separately.
+	const detail = (await f.service.call(lead.id, "get", { id: "1" })) as {
+		id: string;
+		assignee: { id: string };
+		definitionRevision: number;
+	};
+	assert.equal(detail.assignee.id, first.id);
+	assert.ok(detail.definitionRevision > 0);
+	f.store.addComment(
+		mission.id,
+		{ text: "Separate assistance remains unresolved", notification: "informational" },
+		{ sessionId: first.id },
+	);
+	const originalWorkerRequests = f.workers.get(first.id)!.requests.length;
+	await f.service.call(lead.id, "task", { id: detail.id, status: "done" });
+	await assert.rejects(f.service.call(lead.id, "archiveWorker", { targetSessionId: first.id }), /assistance/);
+	const admitted = await until(() => f.store.controls.continuation("next-slice")?.state === "started");
+	assert.equal(admitted, true);
+	const worker = await until(() => f.workers.get(queued.targetId));
+	const input = await until(() => worker.requests.find((r) => r.type === "input"));
+	assert.equal(input.requestId, "next-slice");
+	assert.equal(await f.sessions.lookupMissionStart(queued.targetId, "next-slice"), true);
+	assert.equal(f.store.resolveTask(mission.id, "3").sessionId, queued.targetId);
+	assert.equal(f.store.resolveTask(mission.id, "4").sessionId, undefined);
+	assert.equal(
+		f.workers.get(first.id)!.requests.length,
+		originalWorkerRequests,
+		"continuation needs neither worker ACK nor assistance dismissal",
+	);
+	const count = f.sessions.list().length;
+	await f.service.call(lead.id, "start", { id: "3", operationId: "next-slice", model: "test/model" });
+	await f.service.notices.flush(Date.now() + 120_000);
+	await f.service.continuations.flush();
+	assert.equal(f.sessions.list().length, count, "duplicate notification/ACK cannot create another worker");
+});
+
+test("queued start rechecks Stop after model preparation without a worker or replay", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Race",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "One" }],
+	});
+	const selection = f.sessions.selectTaskModel.bind(f.sessions);
+	t.mock.method(f.sessions, "selectTaskModel", async (...args: Parameters<typeof selection>) => {
+		const chosen = await selection(...args);
+		await f.sessions.stop(lead.id);
+		return chosen;
+	});
+	const queued = (await f.service.call(lead.id, "start", { id: "1", operationId: "stop-race" })) as {
+		targetId: string;
+	};
+	f.service.continuations.start();
+	await f.service.continuations.flush();
+	assert.equal(f.store.controls.continuation("stop-race")!.state, "unknown");
+	assert.equal(f.workers.has(queued.targetId), false);
+	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, undefined);
+	await f.service.continuations.flush();
+	assert.equal(f.workers.has(queued.targetId), false);
+});
+
+test("a released user-stopped task cannot be revived by a fresh coordinator start identity", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Held",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "Keep stopped" }],
+	});
+	const member = await f.service.startTask(mission.id, "1");
+	await until(() => f.workers.get(member.id) && !f.sessions["starting"].has(member.id));
+	await f.sessions.stop(member.id);
+	f.store.releaseTask(mission.id, "1");
+	await f.store.durable();
+	const queued = (await f.service.call(lead.id, "start", { id: "1", operationId: "not-a-stop-override" })) as {
+		targetId: string;
+	};
+	f.service.continuations.start();
+	await f.service.continuations.flush();
+	assert.equal(f.store.controls.continuation("not-a-stop-override")!.state, "waiting");
+	assert.match(f.store.controls.continuation("not-a-stop-override")!.reason, /user holds/);
+	assert.equal(f.workers.has(queued.targetId), false);
+	await assert.rejects(f.service.call(lead.id, "start", { id: "1" }), /user holds|queued or uncertain/);
+});
+
+test("cold reopen never repairs or starts an interrupted pre-admission continuation", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Recovery",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "One" }],
+	});
+	const queued = (await f.service.call(lead.id, "start", { id: "1", operationId: "cold-start" })) as {
+		targetId: string;
+	};
+	f.service.continuations.start();
+	await until(() => f.store.controls.continuation("cold-start")?.state === "started");
+	await until(() => f.workers.get(queued.targetId) && !f.sessions["starting"].has(queued.targetId));
+	await f.service.continuations.stop();
+	const meta = f.sessions["require"](queued.targetId);
+	meta.missionContinuationStart!.admitted = false;
+	meta.pending = [{ type: "input", requestId: "cold-start", content: "Do not replay", mode: "followUp" }];
+	await f.sessions["save"](meta, undefined, undefined, true);
+	assert.equal(await f.sessions.lookupMissionStart(queued.targetId, "cold-start"), false);
+	await f.sessions.shutdown();
+	const newStarts: string[] = [];
+	const reopened = new SessionManager(
+		join(f.home, "data"),
+		f.projects,
+		undefined,
+		{
+			...f.sessions["factories"],
+			worker: (spec, onPacket) => {
+				newStarts.push(spec.sessionId);
+				return new FakeWorker(spec, onPacket);
+			},
+		},
+		{
+			runner: async () => {
+				throw new Error("No GitHub in fixture");
+			},
+		},
+	);
+	t.mock.method(reopened as unknown as { refreshMainViews(): Promise<void> }, "refreshMainViews", async () => {});
+	const service = new MissionService(f.store, reopened, f.projects);
+	try {
+		await reopened.load();
+		assert.match(reopened["require"](queued.targetId).failure!, /uncertain; lookup only/);
+		assert.equal(newStarts.includes(queued.targetId), false);
+		assert.equal(
+			f.store.resolveTask(mission.id, "1").sessionId,
+			queued.targetId,
+			"recovery does not repair or reassign ownership",
+		);
+	} finally {
+		await service.continuations.stop();
+		await service.notices.stop();
+		await reopened.shutdown();
+	}
 });
 
 test("coordinator answers expose pending questions and use member-scoped attributed delivery", async (t) => {

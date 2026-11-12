@@ -2,12 +2,20 @@ import type { SQLInputValue } from "node:sqlite";
 import type { MissionControl, MissionControlOperation, MissionReport } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import { canonicalJSON } from "./operation-journal.ts";
+import type { MissionContinuation } from "./mission-continuation.ts";
 
 export const MISSION_CONTROL_SCHEMA = `
 CREATE TABLE IF NOT EXISTS mission_controls (mission_id TEXT PRIMARY KEY REFERENCES missions(id) ON DELETE CASCADE, record TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS mission_control_operations (operation_id TEXT PRIMARY KEY, record TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS mission_reports (report_id TEXT PRIMARY KEY, mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE, task_id TEXT NOT NULL, record TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS mission_report_scope ON mission_reports(mission_id,task_id);
+CREATE TABLE IF NOT EXISTS mission_continuations (operation_id TEXT PRIMARY KEY, mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE, record TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS mission_continuation_state ON mission_continuations(json_extract(record,'$.state'),mission_id);
+CREATE TABLE IF NOT EXISTS mission_order_pins (mission_id TEXT PRIMARY KEY REFERENCES missions(id) ON DELETE CASCADE);
+INSERT OR IGNORE INTO mission_order_pins
+SELECT DISTINCT e.mission_id FROM events e JOIN tasks t ON t.id=e.task_id AND t.mission_id=e.mission_id
+WHERE e.kind='task' AND e.session_id IS NULL
+AND substr(e.text,1,length('Task #' || t.number || ' reordered: '))='Task #' || t.number || ' reordered: ';
 `;
 
 interface Port {
@@ -130,5 +138,46 @@ export class MissionControlStore {
 			);
 		});
 		this.port.changed(report.missionId);
+	}
+	continuation(id: string): MissionContinuation | undefined {
+		const row = this.port.one("SELECT record FROM mission_continuations WHERE operation_id=?", id);
+		return row ? JSON.parse(String(row.record)) : undefined;
+	}
+	unsettledContinuationCount(): number {
+		return Number(
+			this.port.one(
+				"SELECT COUNT(*) n FROM mission_continuations WHERE json_extract(record,'$.state') IN ('waiting','entered','unknown')",
+			)!.n,
+		);
+	}
+	orderPinned(missionId: string): boolean {
+		return !!this.port.one("SELECT mission_id FROM mission_order_pins WHERE mission_id=?", missionId);
+	}
+	pinOrder(missionId: string): void {
+		this.port.run("INSERT OR IGNORE INTO mission_order_pins VALUES(?)", missionId);
+	}
+	continuations(missionId?: string, unsettledOnly = false): MissionContinuation[] {
+		return this.port
+			.all(
+				`SELECT record FROM mission_continuations WHERE 1=1 ${missionId ? "AND mission_id=?" : ""}
+				${unsettledOnly ? "AND json_extract(record,'$.state') IN ('waiting','entered','unknown')" : ""} ORDER BY rowid`,
+				...(missionId ? [missionId] : []),
+			)
+			.map((row) => JSON.parse(String(row.record)));
+	}
+	/** Exact start intents and waiting reasons, never task status or execution grants. */
+	saveContinuation(record: MissionContinuation): void {
+		const previous = this.continuation(record.operationId);
+		if (canonicalJSON(previous) === canonicalJSON(record)) return;
+		this.port.transaction(() => {
+			if (!previous && Number(this.port.one("SELECT COUNT(*) n FROM mission_continuations")!.n) >= 4096)
+				throw new Conflict("Continuation receipt storage is full");
+			this.port.run(
+				"INSERT INTO mission_continuations VALUES(?,?,?) ON CONFLICT(operation_id) DO UPDATE SET record=excluded.record",
+				record.operationId,
+				record.missionId,
+				canonicalJSON(record),
+			);
+		});
 	}
 }

@@ -29,6 +29,11 @@ import { observeCodeContributions, observeCodeIntegration } from "./mission-code
 import { evaluateContributionAllocation } from "./mission-contribution-allocation.ts";
 import { MissionControls } from "./mission-controls.ts";
 import {
+	type ContinuationPolicySource,
+	type MissionContinuation,
+	MissionContinuations,
+} from "./mission-continuation.ts";
+import {
 	type DeliveryObservation,
 	type DeliveryReference,
 	deliveryDigest,
@@ -186,6 +191,10 @@ function taskModelChoice(
 }
 
 export class MissionService {
+	/** Host-only integration. Missing qualified policy remains blocked, never a permissive legacy fallback. */
+	setContinuationPolicySource(source: ContinuationPolicySource): void {
+		this.continuations.setPolicySource(source);
+	}
 	private linearClosingGuard: LinearClosingGuard = unavailableClosingGuard;
 	setLinearClosingGuard(guard: LinearClosingGuard): void {
 		this.linearClosingGuard = guard;
@@ -208,6 +217,7 @@ export class MissionService {
 	}
 	readonly notices: MissionNotices;
 	readonly controls: MissionControls;
+	readonly continuations: MissionContinuations;
 	readonly reports: MissionReports;
 	readonly compaction: CoordinatorCompaction;
 	private readonly store: MissionStore;
@@ -244,8 +254,47 @@ export class MissionService {
 		this.notices = new MissionNotices(store, sessions);
 		this.compaction = new CoordinatorCompaction(store, sessions);
 		this.controls = new MissionControls(store, sessions);
+		this.continuations = new MissionContinuations(store, {
+			fence: (id) => {
+				const missionId = store.missionOf(id);
+				if (!missionId) throw new Conflict("Coordinator membership is unavailable");
+				this.assertSameProject(id, missionId);
+				return sessions.missionDispatchFence(id);
+			},
+			assertTaskHolds: (id, tasks) => sessions.assertMissionTaskHolds(id, tasks),
+			occupied: (id, excludeId) => this.occupiedWorkers(id, excludeId),
+			start: async (record, guard) => {
+				await this.startTasks(
+					record.missionId,
+					record.taskIds,
+					record.request,
+					"coordinator",
+					record.coordinatorId,
+					{ record, guard },
+				);
+			},
+			lookup: (record) => sessions.lookupMissionStart(record.targetId, record.operationId),
+		});
+		const continuationActivity = new Map<string, string>();
+		sessions.onChange((session) => {
+			if (!session.missionId && !sessions.missionWorkMission(session.id)) return;
+			const key = JSON.stringify([
+				session.state,
+				session.working,
+				session.outcomeAt,
+				session.inputGeneration,
+				session.archivedAt,
+				session.sleepPaused,
+				session.offlinePaused,
+				session.runningJobs?.map((job) => [job.id, job.state]),
+			]);
+			if (continuationActivity.get(session.id) === key) return;
+			continuationActivity.set(session.id, key);
+			this.continuations.schedule();
+		});
 		this.reports = new MissionReports(store);
 		sessions.setMissionBridge({
+			continuationInputAllowed: (sessionId, operationId) => this.continuations.inputAllowed(sessionId, operationId),
 			upgradeResumeFence: (sessionId) => {
 				if (this.sharing?.membership(sessionId)) throw new Conflict("Remote mission controls are unavailable");
 				return this.controls.fence(sessionId);
@@ -300,7 +349,12 @@ export class MissionService {
 				if (coordinator && mission.coordinatorSessionId)
 					throw new Conflict("The mission already has a coordinator");
 				this.assertSameProject(sessionId, missionId);
-				this.assertStartActor(missionId, admission?.actorSessionId);
+				this.assertStartActor(missionId, admission?.actorSessionId, false, admission?.continuationOperationId);
+				if (admission?.actorSessionId && taskId)
+					this.sessions.assertMissionTaskHolds(
+						missionId,
+						(typeof taskId === "string" ? [taskId] : taskId).map((ref) => store.resolveTask(missionId, ref).id),
+					);
 				if (admission?.role === "explorer" && this.session(sessionId).mode !== "ask")
 					throw new Conflict("Explorer admission requires an Ask session");
 				store.join(
@@ -1476,12 +1530,29 @@ export class MissionService {
 		request: StartMissionTaskRequest = {},
 		by: TaskStarter = "user",
 		actorSessionId?: string,
+		continuation?: { record: MissionContinuation; guard: () => void },
 	): Promise<SessionSummary> {
 		if (request.overridePhaseGating !== undefined && typeof request.overridePhaseGating !== "boolean")
 			throw new Error("overridePhaseGating must be a boolean");
 		if (by !== "user" && request.overridePhaseGating) throw new Conflict("Only the user can override phase gating");
-		if (by === "coordinator") this.assertStartActor(missionId, actorSessionId, true);
+		if (by === "coordinator")
+			this.assertStartActor(missionId, actorSessionId, true, continuation?.record.operationId);
 		const tasks = this.store.prepareTaskStart(missionId, refs, this.taskStarts, request.overridePhaseGating);
+		if (by === "coordinator")
+			this.sessions.assertMissionTaskHolds(
+				missionId,
+				tasks.map((task) => task.id),
+			);
+		if (
+			this.store.controls
+				.continuations(missionId, true)
+				.some(
+					(r) =>
+						r.operationId !== continuation?.record.operationId &&
+						r.taskIds.some((id) => tasks.some((task) => task.id === id)),
+				)
+		)
+			throw new Conflict("Task has a queued or uncertain start; reconcile its original operation first");
 		const keys = tasks.map((task) => `${missionId}:${task.id}`);
 		for (const key of keys) this.taskStarts.add(key);
 		if (request.overridePhaseGating) for (const key of keys) this.phaseOverrides.add(key);
@@ -1492,6 +1563,7 @@ export class MissionService {
 				request,
 				by,
 				actorSessionId,
+				continuation,
 			);
 		} finally {
 			for (const key of keys) this.taskStarts.delete(key);
@@ -1568,6 +1640,7 @@ export class MissionService {
 		request: StartMissionTaskRequest,
 		by: TaskStarter,
 		actorSessionId?: string,
+		continuation?: { record: MissionContinuation; guard: () => void },
 	): Promise<SessionSummary> {
 		const mission = this.store.require(missionId);
 		if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
@@ -1575,6 +1648,12 @@ export class MissionService {
 		if (role === "explorer" && request.mode !== undefined && request.mode !== "ask")
 			throw new Conflict("Explorer admission requires Ask mode");
 		const mode = role === "explorer" ? "ask" : request.mode;
+		if (
+			actorSessionId &&
+			JSON.parse(this.sessions.missionDispatchFence(actorSessionId)).permission?.level === "investigate" &&
+			mode !== "ask"
+		)
+			throw new Conflict("Investigate permission cannot start implementation work");
 		let tasks = this.store.prepareTaskStart(missionId, taskIds, undefined, request.overridePhaseGating);
 		if (request.message !== undefined && typeof request.message !== "string")
 			throw new Error("message must be a string");
@@ -1596,6 +1675,12 @@ export class MissionService {
 					`Preferred model of task #${choice.preferredBy.number}: ${error instanceof Error ? error.message : error}`,
 				);
 			});
+		if (
+			continuation?.record.policySource &&
+			(selection.model !== continuation.record.policySource.model.model ||
+				selection.thinking !== continuation.record.policySource.model.thinking)
+		)
+			throw new Conflict("Selected model differs from the current qualified dispatch policy");
 		// Recheck claims after model/settings I/O.
 		tasks = this.store.prepareTaskStart(missionId, taskIds, undefined, request.overridePhaseGating);
 		for (const key of ["artifacts", "links"] as const)
@@ -1659,11 +1744,12 @@ export class MissionService {
 				!detail.artifacts.some((ref) => ref.artifactId === item.artifactId && ref.sessionId === item.sessionId)
 			)
 				throw new Conflict("That artifact's chat is no longer in this mission");
-		this.assertStartActor(missionId, actorSessionId);
+		this.assertStartActor(missionId, actorSessionId, false, continuation?.record.operationId);
+		continuation?.guard();
 		this.store.attachTaskReferences(missionId, taskIds, artifacts, links);
 		// A released task keeps its chat. Continuing there preserves the work it already did and avoids
 		// a second chat with the same title and the same opening message.
-		const holders = tasks.length === 1 ? this.sessions.taskHolders(missionId, [tasks[0]!.id]) : [];
+		const holders = !continuation && tasks.length === 1 ? this.sessions.taskHolders(missionId, [tasks[0]!.id]) : [];
 		if (holders.length === 1) {
 			const holder = holders[0]!;
 			this.assertStartActor(missionId, actorSessionId);
@@ -1688,26 +1774,43 @@ export class MissionService {
 			);
 			return holder;
 		}
-		const session = await this.sessions.spawn(
-			{
-				projectId: mission.projectId,
-				missionId,
-				message,
-				title: tasks[0]!.title,
-				...selection,
-				...(mode ? { mode } : {}),
-				...(request.baseBranch ? { baseBranch: request.baseBranch } : {}),
-			},
-			false,
-			tasks.map((task) => task.id),
-			{ role, ...(actorSessionId ? { actorSessionId } : {}) },
-		);
+		const spawnRequest = {
+			projectId: mission.projectId,
+			missionId,
+			message,
+			title: tasks[0]!.title,
+			...selection,
+			...(mode ? { mode } : {}),
+			...(request.baseBranch ? { baseBranch: request.baseBranch } : {}),
+		};
+		const session = continuation
+			? await this.sessions.spawnDurable(
+					spawnRequest,
+					continuation.record.targetId,
+					continuation.record.operationId,
+					continuation.guard,
+					{
+						taskIds: tasks.map((task) => task.id),
+						admission: { role, actorSessionId, continuationOperationId: continuation.record.operationId },
+					},
+				)
+			: await this.sessions.spawn(
+					spawnRequest,
+					false,
+					tasks.map((task) => task.id),
+					{ role, ...(actorSessionId ? { actorSessionId } : {}) },
+				);
 		for (const task of tasks) this.store.recordTaskStart(missionId, task.id, selection.model, selection.thinking);
 		return this.session(session.id);
 	}
 
 	/** Repeat at final synchronous spawn admission: a former coordinator cannot borrow an earlier check. */
-	private assertStartActor(missionId: string, sessionId?: string, required = false): void {
+	private assertStartActor(
+		missionId: string,
+		sessionId?: string,
+		required = false,
+		continuationOperationId?: string,
+	): void {
 		this.controls.assertOpen(missionId);
 		if (!sessionId && !required) return; // Trusted user path, not a tool-supplied identity.
 		if (
@@ -1716,6 +1819,37 @@ export class MissionService {
 			this.store.require(missionId).coordinatorSessionId !== sessionId
 		)
 			throw new Conflict("Only the current mission coordinator can start workers");
+		this.assertSameProject(sessionId, missionId);
+		this.sessions.missionDispatchFence(sessionId);
+		const uncertain = this.store.controls
+			.continuations(missionId, true)
+			.filter(
+				(r) => r.operationId !== continuationOperationId && (r.state === "entered" || r.state === "unknown"),
+			).length;
+		if (this.occupiedWorkers(missionId) + uncertain >= 2)
+			throw new Conflict("Waiting for a worker slot (2 occupied, reviewers included)");
+	}
+
+	private occupiedWorkers(missionId: string, excludeId?: string): number {
+		const coordinator = this.store.require(missionId).coordinatorSessionId;
+		const tasks = this.store.tasks(missionId);
+		return (
+			[...new Set([...this.store.members(missionId), ...this.sessions.missionWorkSessions(missionId)])].filter(
+				(id) => {
+					if (id === coordinator || id === excludeId) return false;
+					const chat = this.sessions.get(id);
+					return (
+						!!chat &&
+						chat.archivedAt === undefined &&
+						(chat.working ||
+							chat.state === "working" ||
+							chat.state === "starting" ||
+							chat.runningJobs?.length ||
+							tasks.some((task) => task.sessionId === id && isOpen(task) && !this.store.retiredMember(id)))
+					);
+				},
+			).length + (this.sharing?.remoteOccupied(missionId) ? 2 : 0)
+		);
 	}
 
 	async linkArtifact(missionId: string, write: MissionArtifactLinkWrite, actor: MissionActor = {}) {
@@ -1961,6 +2095,31 @@ export class MissionService {
 				if (args.ids !== undefined && !Array.isArray(args.ids)) throw new Error("start requires an ids array");
 				if (args.ids === undefined && (typeof args.id !== "string" || !args.id.trim()))
 					throw new Error("start requires the task id or number, or ids");
+				if (args.operationId !== undefined) {
+					if (typeof args.operationId !== "string") throw new Error("operationId must be a string");
+					const queued = await this.continuations.enqueue(
+						missionId,
+						sessionId,
+						args.operationId,
+						args.ids === undefined ? [args.id as string] : parseTaskRefs(args.ids, "start"),
+						{
+							...(args.role !== undefined ? { role: args.role as StartMissionTaskRequest["role"] } : {}),
+							...(args.message !== undefined ? { message: args.message as string } : {}),
+							...(args.model !== undefined ? { model: args.model as string } : {}),
+							...(args.thinking !== undefined ? { thinking: args.thinking as string } : {}),
+							...(args.artifacts !== undefined
+								? { artifacts: args.artifacts as StartMissionTaskRequest["artifacts"] }
+								: {}),
+							...(args.links !== undefined ? { links: args.links as StartMissionTaskRequest["links"] } : {}),
+						},
+					);
+					return {
+						operationId: queued.operationId,
+						targetId: queued.targetId,
+						state: queued.state,
+						reason: queued.reason,
+					};
+				}
 				const start =
 					args.ids === undefined
 						? (request: StartMissionTaskRequest) =>
@@ -2163,6 +2322,23 @@ export class MissionService {
 					},
 					...(mission.coordinatorSessionId === sessionId
 						? {
+								continuation: {
+									occupiedWorkers: this.occupiedWorkers(missionId),
+									uncertainStarts: this.store.controls
+										.continuations(missionId, true)
+										.filter((r) => r.state === "entered" || r.state === "unknown").length,
+									maxWorkers: 2,
+									orderPinned: this.store.controls.orderPinned(missionId),
+									starts: this.store.controls
+										.continuations(missionId, true)
+										.map(({ operationId, taskIds, targetId, state, reason }) => ({
+											operationId,
+											taskIds,
+											targetId,
+											state,
+											reason,
+										})),
+								},
 								decisionProposals: detail.decisionProposals,
 								members: this.sessions
 									.list({ missionId, archived: "all" })
@@ -2480,6 +2656,7 @@ export class MissionService {
 			definitionRevision: this.store.sharedDefinitionRevision(task.id),
 			body: task.body ?? "",
 			completion: this.store.completion(missionId, task.id) ?? null,
+			report: this.reports.viewTaskNow(missionId, task.id) ?? null,
 			dependsOn: view.dependencies(task),
 			dependents: detail.tasks.filter((item) => item.dependsOn?.includes(task.id)).map((item) => item.number),
 			assignee: task.sessionId

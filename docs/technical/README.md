@@ -56,6 +56,7 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Proposed worker escalation and human handoff contract](mission-escalation-handoff.md)
 - [Mission grouping and contextual decisions](mission-grouping-context.md)
 - [Decision notice routing and durable batches](mission-decision-routing.md)
+- [Authorized work continuation and current-policy source](mission-continuation.md)
 - [Mission Pause/Resume and versioned agent reports](mission-controls-reports.md)
 - [Proposed mission interview and approval contract](mission-interview-approval.md)
 - [Day interview and agreement backend (host-only)](day-mission-agreements.md)

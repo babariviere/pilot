@@ -2195,7 +2195,7 @@ export class MissionStore {
 				{
 					wake: true,
 					urgent: session.outcome === "question" || session.outcome === "failed" || session.outcome === "done",
-					settled: session.outcome === "done",
+					settled: false,
 					noticeSummaries: tasks.length
 						? tasks.map((task) => ({
 								key: `task:${task.id}`,
@@ -3430,6 +3430,8 @@ export class MissionStore {
 	}
 
 	private insertTask(id: string, write: MissionTaskWrite, actor: MissionActor): MissionTask {
+		if (actor.sessionId && write.order !== undefined && this.controls.orderPinned(id))
+			throw new Conflict("Task order is pinned by the user");
 		const assignment = this.validateAssignment(id, write);
 		// Task authoring uses Unicode code points, matching the agent schema and write boundary.
 		const title = text(write.title, "title", MAX_TITLE, { codePoints: true })!;
@@ -4902,7 +4904,7 @@ export class MissionStore {
 				this.event(id, "task", `Task #${before.number} ${statusLabel(status)}: ${title}`, actor, {
 					taskId: before.id,
 					at: now,
-					wake: status === "blocked" || (status === "done" && !!this.completion(id, before.id)),
+					wake: status === "blocked" || status === "done" || (before.status === "blocked" && status === "todo"),
 					urgent: status === "blocked" || status === "done",
 					settled: false,
 					noticeText: `Task #${before.number} ${status}. Read the task for details.`,
@@ -4920,8 +4922,12 @@ export class MissionStore {
 				});
 			else if (title !== before.title)
 				this.event(id, "task", `Task #${before.number} renamed: ${title}`, actor, { taskId: before.id, at: now });
-			if (fields.order !== undefined && fields.order !== before.order)
+			if (fields.order !== undefined && fields.order !== before.order) {
+				if (actor.sessionId && this.controls.orderPinned(id))
+					throw new Conflict("Task order is pinned by the user");
+				if (!actor.sessionId) this.controls.pinOrder(id);
 				this.event(id, "task", `Task #${before.number} reordered: ${title}`, actor, { taskId: before.id, at: now });
+			}
 			if (fields.milestone !== undefined && fields.milestone !== (before.milestone ?? ""))
 				this.event(
 					id,

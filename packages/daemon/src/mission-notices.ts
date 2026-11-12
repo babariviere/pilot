@@ -31,6 +31,7 @@ export class MissionNotices {
 					!store.passiveLifecycle(missionId) &&
 					chat &&
 					chat.archivedAt === undefined &&
+					chat.outcome !== "stopped" &&
 					chat.state !== "working" &&
 					chat.state !== "starting"
 				);
@@ -154,6 +155,12 @@ export class MissionNotices {
 
 	/** Recheck member activity at IPC admission, including after asynchronous persistence. */
 	allowed(sessionId: string, requestId: string): boolean {
+		try {
+			this.sessions.missionDispatchFence?.(sessionId);
+		} catch {
+			return false;
+		}
+		if (this.sessions.get(sessionId)?.outcome === "stopped") return false;
 		if (!this.store.noticeAllowed(sessionId, requestId)) return false;
 		const missionId = this.store.missionOf(sessionId)!;
 		if (this.store.controls.current(missionId).held) return false;
@@ -174,6 +181,7 @@ export class MissionNotices {
 		const id = mission.coordinatorSessionId;
 		if (this.store.controls.current(missionId).held) return;
 		if (mission.status !== "active" || this.store.passiveLifecycle(missionId) || !id) return;
+		if (this.sessions.get(id)?.outcome === "stopped") return;
 		// prepareNotice returns a frozen retry; canSendNotice allows that same pending ID only.
 		const retry = this.store.pendingNotice(missionId);
 		if (!this.sessions.canSendNotice(id, retry?.requestId)) return;
