@@ -164,6 +164,27 @@ native binding below. Installed/restart-requested does **not** mean the successo
 started or chats resumed. The ordinary root does not yet select an official
 target or enter this adapter. No actual app was updated by these checks.
 
+### Native successor observation
+
+The ordinary native root now recognizes official NSH successor records through
+the existing serialized host startup, without reconstructing a legacy helper
+transaction. `host/official_startup.rs` checks the current signed candidate's
+exact source/build/version and full image identity against the native service
+handoff. It also checks the original operation, payload digest, receipt, target,
+runtime location and selected profile. A same-build image with different bytes,
+an incomplete install or a rollback record cannot pass as that successor.
+
+Normal mode offers the exact saved view only when its capture digest and latest
+durable window still match. A newer close capture wins. The existing fresh
+display acknowledgement then wakes the native application owner, which checks
+the signed image again and durably records a startup **observation**. Cold
+reopen never repeats that observation. The update stays Unknown: this is not
+a global release receipt, service-start capability or permission to resume work.
+Force can report an observed signed target, but provides no saved view, fake
+display acknowledgement or startup/resume grant. Signature failure leaves the
+retained operation lookup-only. Ordinary startup without an official record
+does not gain full-distribution prerequisites.
+
 ## Separate evidence and remaining work
 
 The preparation receipt includes resource blockers separately. **Accepted pause
@@ -178,8 +199,10 @@ The following native/distribution gates remain:
 1. Bind the existing explicit confirmation/root selection to the official
    adapter and verified distribution inputs above. Keep actual all-form capture,
    preedit, global pause/cancellation and close **before** installation.
-2. Finish native successor verification, fresh restored-view acknowledgement
-   and operation-bound selective release. Hello, GET, cached status and opening
+2. Qualify native successor observation with actual signed distributions and
+   finish operation-bound selective release. The normal native verification and
+   fresh restored-view observation path above is connected; it does not release
+   anything. Hello, GET, cached status and opening
    an app never release work. No global CLI replacement, cache patch or NSH fork.
 3. Qualify interruption and cold rollback with actual signed distributions.
    Install entry is durable before the official swap. Reopen only
@@ -206,6 +229,26 @@ The following native/distribution gates remain:
    advertise or enter Force. Normal capture stays mandatory for normal updates.
    No ordinary confirmation, save failure or retained loss record grants Force
    or waives signature/trust, shutdown, permissions or Unknown/no-replay rules.
+
+### Native process-safety limit
+
+The isolated macOS regression forks a disposable child which calls `setsid`,
+closes the parent's output pipe and remains responsive on an owned control
+socket after the parent has been reaped and its process group is empty. That
+is a counterexample to using parent exit, pipe EOF or group cleanup as complete
+descendant proof. The fixture is credential-free, bounded and unrelated to live
+chats. A released daemon lease adds root ownership evidence, not missing child
+custody.
+
+No simple native process snapshot can rule out children that already escaped
+and reparented before the snapshot. The current native root therefore still
+cannot enable automatic replacement for such work. The smallest practical
+proposal is to keep that case unavailable and require explicit manual recovery
+after OS restart, with a fresh signed update confirmation and no canceled-work
+replay. This is a proposal, not implemented reboot/install authority or a claim
+that it satisfies seamless-update acceptance. A general uninterrupted-work
+guarantee needs stronger process custody; no VM, privileged helper or new realm
+has been added to obtain it.
 
 ## Tagged NSH API verification
 

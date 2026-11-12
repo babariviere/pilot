@@ -149,6 +149,16 @@ struct Inspection {
 
 impl Selection {
     fn restores(&self, record: &Record) -> bool {
+        self.restores_with(record, &pilot_desktop_updater::installer::NativePlatform)
+    }
+    fn restores_with(
+        &self,
+        record: &Record,
+        platform: &impl pilot_desktop_updater::installer::Platform,
+    ) -> bool {
+        if super::official_startup::official(record) {
+            return super::official_startup::verify_with(self, record, platform).is_ok();
+        }
         if self.pin() == record.root {
             return true;
         }
@@ -180,7 +190,7 @@ impl Selection {
         ExitGuard::external_startup(transaction, &self.installed, &self.trust)
             .is_ok_and(|c| c.is_some())
     }
-    fn matches(&self, source: &Source) -> bool {
+    pub(super) fn matches(&self, source: &Source) -> bool {
         self.connection.location().home == source.profile
             && self.connection.location().port == source.port
             && self.connection.daemon() == source.home.daemon_id
@@ -356,7 +366,7 @@ impl Record {
         }
         Ok(Some(loss))
     }
-    fn capture_matches(&self, capture: &super::window::SavedWindow) -> bool {
+    pub(super) fn capture_matches(&self, capture: &super::window::SavedWindow) -> bool {
         self.source == capture.source
             && self.window == capture.window
             && self.view == capture.view
@@ -456,10 +466,12 @@ impl State {
                     && r.restored
                     && ["entered", "prepared", "unknown", "startup"].contains(&r.state.as_str())
             })
-            && self
-                .selection
-                .as_ref()
-                .is_some_and(|s| s.restore_transaction.is_some())
+            && self.selection.as_ref().is_some_and(|s| {
+                s.restore_transaction.is_some()
+                    || self.latest.as_ref().is_some_and(|r| {
+                        super::official_startup::official(r) && r.state != "startup"
+                    })
+            })
     }
     pub fn new(selection: Option<Selection>) -> Self {
         Self {
@@ -481,6 +493,19 @@ impl State {
         }
     }
     pub async fn restore(&mut self, journal: &Journal, source: &Source) {
+        self.restore_with(
+            journal,
+            source,
+            pilot_desktop_updater::installer::NativePlatform,
+        )
+        .await;
+    }
+    pub(super) async fn restore_with(
+        &mut self,
+        journal: &Journal,
+        source: &Source,
+        platform: impl pilot_desktop_updater::installer::Platform + Send + 'static,
+    ) {
         self.retained_loss = journal
             .losses
             .values()
@@ -495,9 +520,19 @@ impl State {
         self.cold_restore = self.latest.is_some();
         if let Some((selection, record)) = self.selection.clone().zip(self.latest.clone()) {
             self.restore_verified =
-                tokio::task::spawn_blocking(move || selection.restores(&record))
+                tokio::task::spawn_blocking(move || selection.restores_with(&record, &platform))
                     .await
                     .unwrap_or(false);
+        }
+        if let Some(record) = &self.latest
+            && super::official_startup::official(record)
+        {
+            self.restore_verified &= super::official_startup::capture_matches(
+                record,
+                super::window::SavedWindow::key(source)
+                    .ok()
+                    .and_then(|key| journal.windows.get(&key)),
+            );
         }
         self.project();
     }
@@ -530,7 +565,12 @@ impl State {
                 kind: kind(&r.kind),
                 version: r.target.clone(),
                 phase,
-                message: if r.update_version == 2 && !r.message.starts_with("Force") {
+                message: if r.update_version == 2
+                    && self.restore_verified
+                    && super::official_startup::official(r)
+                {
+                    "The signed Force target was observed at startup. Unsaved UI and interrupted work were not restored. Service release and agent resume remain unconfirmed. Check only.".into()
+                } else if r.update_version == 2 && !r.message.starts_with("Force") {
                     format!(
                         "Force accepted possible loss of unsaved UI state and unfinished work. Durable history was not discarded. {}",
                         r.message
@@ -555,7 +595,8 @@ impl State {
                     || self
                         .selection
                         .as_ref()
-                        .is_some_and(|s| s.restore_transaction.is_some()))
+                        .is_some_and(|s| s.restore_transaction.is_some())
+                    || super::official_startup::official(r))
             {
                 self.view.restore =
                     nsh_core::element::from_json(&r.view)
@@ -571,6 +612,33 @@ impl State {
     }
     pub fn snapshot(&self) -> ServiceView {
         self.view.clone()
+    }
+    pub(super) fn displayed(
+        &mut self,
+        journal: &mut Journal,
+        source: &Source,
+        id: &str,
+    ) -> Result<(), Error> {
+        if !self.cold_restore {
+            return Err(Error::Stale);
+        }
+        let mut record = self
+            .latest
+            .clone()
+            .filter(|r| r.id == id && !self.restore_displayed && r.update_version == 1)
+            .ok_or(Error::Stale)?;
+        if !self.restore_verified || self.selection.as_ref().is_none_or(|s| !s.matches(source)) {
+            return Err(Error::Identity);
+        }
+        if !record.restored {
+            record.restored = true;
+            record.revision += 1;
+            journal.save_update(record.clone())?;
+        }
+        self.latest = Some(record);
+        self.restore_displayed = true;
+        self.changed();
+        Ok(())
     }
     fn unsettled(&self) -> bool {
         self.retained_loss.is_some()
@@ -1058,35 +1126,12 @@ pub(super) async fn handle(
             ))
         }
         Command::Restored(intent) => {
-            if !state.cold_restore {
-                return Err(Error::Stale);
-            }
-            let mut record = state
-                .latest
-                .clone()
-                .filter(|r| r.id == intent.id && !state.restore_displayed)
-                .ok_or(Error::Stale)?;
             // A restore ACK is display-only, NEVER permission to resume, launch,
             // register, COMMIT, or replay an interrupted operation.
-            if !state.restore_verified
-                || state
-                    .selection
-                    .as_ref()
-                    .is_none_or(|s| !s.matches(&t.source))
-            {
-                return Err(Error::Identity);
-            }
-            if !record.restored {
-                record.restored = true;
-                record.revision += 1;
-                journal.save_update(record.clone())?;
-            }
-            state.latest = Some(record);
-            state.restore_displayed = true;
+            state.displayed(journal, &t.source, &intent.id)?;
             shared
                 .startup_ready
                 .store(state.startup_ready(), Ordering::SeqCst);
-            state.changed();
             Ok(outcome(
                 OutcomeStatus::Accepted,
                 state.view.revision,
@@ -1097,8 +1142,10 @@ pub(super) async fn handle(
             if state.startup_attempted || !state.restore_verified {
                 return Err(Error::Stale);
             }
+            if !state.startup_ready() {
+                return Err(Error::Busy);
+            }
             let selection = state.selection.clone().ok_or(Error::Unavailable)?;
-            let transaction = selection.restore_transaction.clone().ok_or(Error::Stale)?;
             let mut record = state
                 .latest
                 .clone()
@@ -1109,6 +1156,26 @@ pub(super) async fn handle(
             }
             state.startup_attempted = true;
             shared.startup_ready.store(false, Ordering::SeqCst);
+            if super::official_startup::official(&record) {
+                // Official NSH restarts with the original native selection.
+                // No legacy helper transaction or service capability is rebuilt.
+                let retained = record.clone();
+                tokio::task::spawn_blocking(move || {
+                    super::official_startup::verify(&selection, &retained)
+                })
+                .await
+                .map_err(|_| Error::Unknown)??;
+                shared.open()?;
+                record = super::official_startup::observe(journal, record)?;
+                state.latest = Some(record);
+                state.changed();
+                return Ok(outcome(
+                    OutcomeStatus::Accepted,
+                    state.view.revision,
+                    "Native startup observed. No service release or execution was resumed.",
+                ));
+            }
+            let transaction = selection.restore_transaction.clone().ok_or(Error::Stale)?;
             let source = t.source.clone();
             let auth = authority_for(&source, UpdateKind::App)?;
             let previously_entered = record.state == "startup";

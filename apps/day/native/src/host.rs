@@ -14,6 +14,7 @@ mod journal;
 mod native_clock;
 pub(crate) mod navigation;
 pub(crate) mod new_chat;
+mod official_startup;
 #[cfg(all(target_os = "macos", feature = "macos-host"))]
 pub mod official_update;
 pub(crate) mod plan_sources;
