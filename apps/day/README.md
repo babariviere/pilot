@@ -135,7 +135,8 @@ Day uses the existing `gpui-fixture-mbx-v1` cache and CPU2/4GiB scheduler pool.
 An explicit `MBX_CACHE_DIR` remains explicit. Mise owns the mbx version;
 the repo does not pin or install it. Target adoption/views and automatic collection
 are off, so Day does not move targets or delete other worktrees' caches. Remote
-cache access and Blaze are off. Scheduler admission is an estimate, not an OS
+cache access is off. Blaze follows mbx's global configuration; `MBX_BLAZE` overrides it.
+Scheduler admission is an estimate, not an OS
 CPU/RSS limit. Private targets still need free disk; caching is not a speedup
 promise. Do not share a writable target with another running build.
 
