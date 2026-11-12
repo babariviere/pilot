@@ -152,7 +152,10 @@ async fn run(
     }
     if matches!(
         call.command,
-        Command::DeliveryRead(_) | Command::DeliveryWrite(_) | Command::DeliveryCheck(_)
+        Command::DeliveryRead(_)
+            | Command::DeliverySaved
+            | Command::DeliveryWrite(_)
+            | Command::DeliveryCheck(_)
     ) {
         return super::delivery::handle(t, journal, shared, &call.command, &call.gate).await;
     }
@@ -207,7 +210,10 @@ async fn run(
     let mut value = Value::Null;
     let mut enrollment = None;
     let work = match &call.command {
-        Command::DeliveryRead(_) | Command::DeliveryWrite(_) | Command::DeliveryCheck(_) => {
+        Command::DeliveryRead(_)
+        | Command::DeliverySaved
+        | Command::DeliveryWrite(_)
+        | Command::DeliveryCheck(_) => {
             unreachable!("handled delivery command")
         }
         Command::Projects

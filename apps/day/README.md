@@ -163,6 +163,7 @@ cd apps/day
 ./nsh.sh test Update.test.tsx    # updates and registration: save, pause, restore (help, ritual, question), selective resume, stale, lost answer, refusals, boundary (10 tests)
 ./nsh.sh test Attention.test.tsx # agent questions, unavailable help, drafts and links that report nothing (4 tests)
 ./nsh.sh test Intake.test.tsx    # New: Start, Later, Discard, Undo, stale, lost answer, rapid presses, focus (8 tests)
+./nsh.sh test Delivery.test.tsx  # To check and a result's page: Done, Send back, Reopen, stale, lost answer, kept notes (7 tests)
 ./nsh.sh test Native.test.tsx --target macos  # native captures and input, in output/
 (cd native && ../scripts/cargo test --locked) # Rust rules through mbx too
 ```
@@ -453,6 +454,30 @@ A mission's task also lists what its agents linked to it, from the mission
 record: pull requests with the last GitHub state Pilot saw, artifacts with
 their pinned revision, and other links. Merged is never shown as released
 (Pilot has no release signal), and a linked output is not the user's check.
+
+A task that is Done or In review offers **Check the result**. It opens the
+result's page: the agent's report (its words, not Pilot's check), outputs
+(pull requests, artifacts, the recorded commit; links are text and opening one
+records nothing), and **Where this stands** as four separate lines: Agent,
+Pull request, Production (always "Not tracked"; merged is never released) and
+Your check. Your check offers reminders that record nothing, **Mark done**
+(it asks first while a pull request is not merged) and **Send back…** with a
+note. Each sends once through `day.delivery.done`, `day.delivery.sendBack`
+or `day.delivery.reopen` for exactly the result and revision shown. A lost
+answer stays "not confirmed" with Check only (`day.delivery.check`), also
+after a reopen. An unsent note is kept exactly while the window is open and is
+saved with the window on close or update; it is never sent on restore.
+
+Today's **To check** lists results that wait for the user's check, from
+saved records only: results the user checked before (`day.delivery.saved`
+reads the native journal, no service call) and requests started as standalone
+chats, then each one's canonical read, at most 20. A result reopened or
+delivered again after a Send back joins it; Done and Sent back leave it. A
+mission task's first delivery is reached from its mission for now; a complete
+list of delivered work needs a daemon list that does not exist yet. The mock
+window shows demo results (`deliveryDemo.ts`). `Delivery.test.tsx` plays
+the controls (`DeliveryFixture.tsx`); `native/tests/delivery_today.rs` runs
+`Connected.tsx` against the isolated daemon.
 
 Missions come only from agent reports. A current report that says moving puts
 a mission under Moving; one that says not moving, or a Pause, under Not

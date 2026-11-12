@@ -182,6 +182,8 @@ impl Root {
                     && n != "day.update.check"
                     && n != "day.update.restored"
                     && n != "day.flush.ack"
+                    // Passive: the native journal's saved checks, no service call.
+                    && n != "day.delivery.saved"
             })
             .collect()
     }

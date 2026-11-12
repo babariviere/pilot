@@ -6,7 +6,8 @@
 import { computed, keymap, Scroll, signal, Text, View } from "nsh";
 import type { MissionPage, MissionRow, PlanPage, PlanRow, ReportLine, TaskLine } from "pilot-day/native";
 import type { Day } from "./day";
-import { keepScroll } from "./kept";
+import { openDelivery } from "./deliveryView";
+import { keepScroll, restoreScroll, scrollOf } from "./kept";
 import { glide } from "./motion";
 import { mapSummary, stageMark, stageWord } from "./PlanScreen";
 import type { Plans } from "./planning";
@@ -150,7 +151,22 @@ function Pause(props: { day: Day; page: MissionPage }) {
 	);
 }
 
-function Task(props: { task: TaskLine }) {
+/**
+ * One task. A task its agent finished or put in review offers its result
+ * to check; opening that page reads it and records nothing.
+ */
+function Task(props: { day: Day; page: MissionPage; task: TaskLine }) {
+	const project = () => props.day.delivery?.view().projectId ?? "";
+	const checkable = () => !!project() && (props.task.status === "done" || props.task.status === "inReview");
+	const check = () => {
+		const missionId = props.page.row.id;
+		// Coming back keeps this page where it was.
+		restoreScroll(`mission/${missionId}`, scrollOf(`mission/${missionId}`));
+		openDelivery(
+			{ kind: "task", projectId: project(), missionId, taskId: props.task.id },
+			`#${props.task.number} ${props.task.title}`,
+		);
+	};
 	return (
 		<View class="gap-1 border-t border-border py-3">
 			<View class="flex-row items-baseline gap-3">
@@ -178,6 +194,16 @@ function Task(props: { task: TaskLine }) {
 					<If when={props.task.outputs.some((o) => o.merged)}>
 						<Text class="text-xs text-faint">Merged is not released. Pilot does not track releases.</Text>
 					</If>
+				</View>
+			</If>
+			<If when={checkable()}>
+				<View class="flex-row pl-8">
+					<Action
+						testID={`check-result-${props.task.id}`}
+						label="Check the result"
+						accessibilityLabel={`Check the result of #${props.task.number} ${props.task.title}. Opening it records nothing.`}
+						onPress={check}
+					/>
 				</View>
 			</If>
 		</View>
@@ -278,7 +304,7 @@ function Body(props: { day: Day; plans?: Plans; page: MissionPage }) {
 					<Text class="text-sm text-muted-foreground">The task list is not available here yet.</Text>
 				</If>
 				<Each of={props.page.tasks} key={(t) => t.id}>
-					{(t) => <Task task={t()} />}
+					{(t) => <Task day={props.day} page={props.page} task={t()} />}
 				</Each>
 			</View>
 
@@ -321,6 +347,8 @@ export function MissionScreen(props: { day: Day; plans?: Plans; missionId: strin
 		if (confirming()) confirming.set(null);
 		else closeMission();
 	});
+	// Which project this window's results belong to, for Check the result. Passive.
+	if (props.day.delivery && !props.day.delivery.view().projectId) void props.day.delivery.source.readSaved();
 	const scroll = keepScroll(`mission/${props.missionId}`);
 	return (
 		<Scroll

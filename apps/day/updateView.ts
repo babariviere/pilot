@@ -11,6 +11,16 @@ import type { Changes } from "./changeFeed";
 import { changeMessages, changesRoute, changeTabs, detailsOpen, listMessage } from "./changesView";
 import { saveActionDraft, saveDecisionDraft } from "./commands";
 import type { Day } from "./day";
+import { subjectOf } from "./deliveryFeed";
+import {
+	backNotes,
+	backOpen,
+	deliveryMessages,
+	deliveryRoute,
+	deliveryTitles,
+	doneAsk,
+	reminders,
+} from "./deliveryView";
 import { forgetPlaces, lastField, restoreField, restoreScroll, scrollOf, todayScrollTo } from "./kept";
 import { flushAll } from "./planCommands";
 import type { Plans } from "./planning";
@@ -91,6 +101,8 @@ function place(): { place: PlaceKind; id: string } {
 /** The key of the screen shown under the update page, for its scroll and fields. */
 export function shownKey(): string {
 	if (ritualRoute()) return "ritual";
+	const delivery = deliveryRoute();
+	if (delivery) return `delivery/${delivery.key}`;
 	const at = place();
 	return at.id ? `${at.place}/${at.id}` : at.place;
 }
@@ -152,6 +164,11 @@ export function captureView(today?: Today): SavedView {
 		input: field?.key ?? "",
 		start: field?.start ?? 0,
 		end: field?.end ?? 0,
+		delivery: deliveryRoute()?.key ?? "",
+		// Unsent Send back notes, exactly as typed. Restoring one sends nothing.
+		notes: Object.entries(backNotes())
+			.filter(([, note]) => note !== "")
+			.map(([key, note]) => `${key}\n${note}`),
 	};
 }
 
@@ -241,6 +258,13 @@ export function startFresh() {
 	listMessage.set("");
 	ritualRoute.set(null);
 	startStep.set(0);
+	deliveryRoute.set(null);
+	deliveryTitles.set({});
+	backNotes.set({});
+	backOpen.set({});
+	doneAsk.set(null);
+	reminders.set({});
+	deliveryMessages.set({});
 	todayPlace.y = 0;
 	todayPlace.row = null;
 	forgetPlaces();
@@ -289,6 +313,16 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today) {
 	const ritual = view.date && today && view.date === today.date ? ritualOf(view.ritual ?? "") : null;
 	ritualRoute.set(ritual);
 	startStep.set(ritual?.kind === "start" ? Math.min(view.step ?? 0, 2) : 0);
+	// A delivered result's page comes back as a read; its notes as unsent words.
+	const delivery = view.delivery ? subjectOf(view.delivery) : null;
+	deliveryRoute.set(delivery ? { key: view.delivery ?? "", subject: delivery, title: "" } : null);
+	const notes: Record<string, string> = {};
+	for (const entry of view.notes ?? []) {
+		const at = entry.indexOf("\n");
+		if (at > 0 && subjectOf(entry.slice(0, at))) notes[entry.slice(0, at)] = entry.slice(at + 1);
+	}
+	backNotes.set(notes);
+	backOpen.set(Object.fromEntries(Object.keys(notes).map((key) => [key, true])));
 	todayPlace.y = Math.max(0, view.todayY ?? 0);
 	todayPlace.row = view.todayRow || null;
 	const key = shownKey();

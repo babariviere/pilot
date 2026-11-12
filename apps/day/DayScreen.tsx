@@ -6,7 +6,9 @@ import { effect, lifecycle, untracked } from "nsh";
 import { ChangesScreen } from "./ChangesScreen";
 import type { Changes } from "./changeFeed";
 import { changesRoute } from "./changesView";
+import { DeliveryScreen } from "./DeliveryScreen";
 import type { Day } from "./day";
+import { type DeliveryPlace, deliveryRoute } from "./deliveryView";
 import { MissionScreen } from "./MissionScreen";
 import { Arrive } from "./motion";
 import { NewScreen } from "./NewScreen";
@@ -65,7 +67,13 @@ export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; u
 	let was = untracked(lifecycle);
 	effect(() => {
 		const now = lifecycle();
-		if (now === "active" && was !== "active") untracked(() => void rituals.refresh());
+		if (now === "active" && was !== "active") {
+			untracked(() => {
+				void rituals.refresh();
+				// Results waiting for a check, looked at again. Passive.
+				void props.day.delivery?.source.readSaved();
+			});
+		}
 		was = now;
 	});
 	return (
@@ -88,6 +96,23 @@ export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; u
 }
 
 function Screens(props: { day: Day; rituals: Rituals; plans?: Plans; changes?: Changes }) {
+	return (
+		<If
+			when={props.day.delivery && deliveryRoute()}
+			else={<Places day={props.day} rituals={props.rituals} plans={props.plans} changes={props.changes} />}
+		>
+			<Each of={deliveryRoute() ? [deliveryRoute() as DeliveryPlace] : []} key={(p) => p.key}>
+				{(p) => (
+					<Arrive class="flex-1">
+						<DeliveryScreen day={props.day} place={p()} />
+					</Arrive>
+				)}
+			</Each>
+		</If>
+	);
+}
+
+function Places(props: { day: Day; rituals: Rituals; plans?: Plans; changes?: Changes }) {
 	return (
 		<If
 			when={props.changes && changesRoute()}

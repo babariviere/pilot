@@ -3,7 +3,7 @@
 // updates of the screens. Picks and unsent words also go to Rust as drafts
 // (commands.ts), which saves them for the exact revision shown; after a
 // restart the screen starts from those drafts.
-import { type Signal, signal, type ViewRef } from "nsh";
+import { effect, type Signal, signal, type ViewRef } from "nsh";
 import type { Decision, HumanAction, Today } from "pilot-day/native";
 import { glide } from "./motion";
 
@@ -74,6 +74,29 @@ export const controlMessages = signal<Record<string, string>>({});
  * keeping them changes nothing on screen.
  */
 export const todayPlace: { y: number; row: string | null } = { y: 0, row: null };
+
+/**
+ * A Today row that opens another screen. Pressing it keeps its place, and
+ * when Today comes back the row takes the keyboard focus again. Returns the
+ * row's anchor and what its press does.
+ */
+export function placeRow(testID: string, open: () => void) {
+	const node = signal<ViewRef | null>(null);
+	effect(() => {
+		const n = node();
+		if (n && todayPlace.row === testID) {
+			todayPlace.row = null;
+			n.focus();
+		}
+	});
+	return {
+		anchor: (n: ViewRef) => node.set(n),
+		press: () => {
+			todayPlace.row = testID;
+			open();
+		},
+	};
+}
 
 /** Opens the overview of mission `id`. */
 export function openMission(id: string) {

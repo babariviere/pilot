@@ -41,6 +41,11 @@ export function readDelivery(window: string, subject: VerificationSubject): Prom
 	return invoke(window, "day.delivery.read", subject);
 }
 
+/** The saved command summaries only. No service read, Check or effect. */
+export function readSavedDeliveries(window: string): Promise<DeliveryReply> {
+	return invoke(window, "day.delivery.saved", {});
+}
+
 /** Explicit user assessment of precisely this displayed delivery and revision. */
 export function assessDelivery(
 	window: string,

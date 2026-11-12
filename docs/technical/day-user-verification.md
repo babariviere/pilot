@@ -1,6 +1,6 @@
 # Explicit user verification of delivered work
 
-Backend/native-host contract only. Native Today controls are separate work.
+Backend/native-host contract, and how Day's Today uses it (last section).
 Verification records an explicit user's assessment. It is not coordinator task
 status, agent completion, review judgement, workflow `accept-outcome` delegation,
 PR merge, release detection, or permission to execute more work.
@@ -148,6 +148,10 @@ the sandbox; unlisted output metadata still passes through unchanged.
 * `day.delivery.read` takes the exact `VerificationSubject`. Its `snapshot` is
   canonical `DeliveredWork`, with outputs/evidence, observed PR state, production
   `not_tracked` and user assessment kept separate. It starts/subscribes no model.
+* `day.delivery.saved` takes `{}` and returns the selected source's saved
+  command summaries, with `snapshot: {projectId}` naming the root's own project
+  (TSX builds a task subject from it, never chooses one). It makes no HTTP call,
+  Check or effect.
 * `day.delivery.done`, `day.delivery.sendBack` and `day.delivery.reopen` take
   `{subject,targetId,deliveryId,expectedRevision,ownerSessionId,note}` from the
   displayed result. The method fixes the action. Done/Reopen need an empty note;
@@ -182,3 +186,27 @@ canonical outputs, CAS/currentness, unavailable owner, exact durable note
 admission, lost/malformed ACKs, cold reopen, no duplicates, native capture/close,
 receipt-save failure, capabilities and malformed requests. It is not visible
 native acceptance or permission to start a live integration.
+
+## Day Today and the result page
+
+`deliveryFeed.ts` mirrors these calls for the screens. Each read or command
+has a call order per result; an older answer never replaces a newer read.
+`DeliveryScreen.tsx` shows one result: the agent's account, outputs, and four
+separate lines (Agent, Pull request, Production `not_tracked`, Your check).
+Mark done (confirmed first while a pull request is not merged), Send back and
+Reopen send exactly the displayed `DeliveredWork` pins. A confirmation pinned
+to an older delivery or revision cannot be sent. A lost or uncertain answer is
+Unknown and Check-only; a GET that already reports Done does not settle it.
+
+`ToCheck.tsx` builds Today's To check from saved records only: subjects named
+by `day.delivery.saved` (Unknown first, then sent back or reopened, then Done)
+and standalone chats from accepted intake Starts (`sessionId` in the intake
+summaries), at most 20, each read passively. It reads again when Today shows
+or the window becomes active, not on every change notice. Its rows are results
+with a canonical delivery that is not currently Done or Sent back.
+
+Gap: no route lists every delivered task or chat in a project, so a mission
+task's first delivery is reached from its mission page (Done or In review
+tasks offer Check the result). Unsent Send back notes and the open result are
+saved in the window's `SavedView` (`delivery`, `notes`), counted against its
+limits, and restored without sending.

@@ -32,6 +32,8 @@ fn view() -> SavedView {
         input: "answer:export-1/what".into(),
         start: 3,
         end: 7,
+        delivery: "task/project/export/t1".into(),
+        notes: vec!["task/project/export/t1\n  Exact note 👩🏽‍💻\n".into()],
     }
 }
 
@@ -187,6 +189,11 @@ fn an_oversized_view_is_refused_whole_before_anything_pauses() {
     let mut desk = UpdateDesk::new(UpdateScenario::Available);
     let mut big = view();
     big.help = vec!["x".repeat(VIEW_LIMIT / 2), "y".repeat(VIEW_LIMIT / 2)];
+    assert_eq!(start(&mut desk, big), Err(OutcomeStatus::Rejected));
+    // Unsent Send back notes count too; they are never cut to fit.
+    let mut desk = UpdateDesk::new(UpdateScenario::Available);
+    let mut big = view();
+    big.notes = vec![format!("task/p/m/a\n{}", "x".repeat(VIEW_LIMIT))];
     assert_eq!(start(&mut desk, big), Err(OutcomeStatus::Rejected));
     let mut desk = UpdateDesk::new(UpdateScenario::Available);
     let mut odd = view();

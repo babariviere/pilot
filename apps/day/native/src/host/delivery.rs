@@ -278,6 +278,13 @@ pub(super) async fn handle(
     let mut outcome = Value::Null;
     let subject = match command {
         Command::DeliveryRead(s) => Some(s.clone()),
+        Command::DeliverySaved => {
+            // The journal's saved commands only: no HTTP, Check, or read of any
+            // delivery. The project is the root's own choice, echoed, never chosen.
+            check()?;
+            return Ok(json!({"snapshot":{"projectId":t.source.project_id},
+                "operations":operations(t,journal),"outcome":null}));
+        }
         Command::DeliveryWrite(w) => {
             w.validate()?;
             if w.subject.project() != t.source.project_id {

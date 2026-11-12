@@ -83,12 +83,14 @@ function view(): IntakeView {
 			availability: readOnce ? "unavailable" : "reading",
 			reason: readOnce ? "Pilot could not reach its service." : "",
 			contextDigest: "",
+			projectId: "",
 			intake: { watched: false, sources: [], requests: [], trouble: [], more: "" },
 			fresh: [],
 			later: [],
 			discarded: [],
 			unsettled: ops.filter((o) => o.delivery === "unknown" || o.delivery === "checking"),
 			settled: [],
+			started: [],
 			sending: [],
 		};
 	}
@@ -97,6 +99,7 @@ function view(): IntakeView {
 		availability: "live",
 		reason: "",
 		contextDigest: context,
+		projectId: "project",
 		intake: {
 			watched: true,
 			sources: ["Slack", "Linear"],
@@ -109,6 +112,7 @@ function view(): IntakeView {
 		discarded: rows("discarded"),
 		unsettled: ops.filter((o) => o.delivery === "unknown" || o.delivery === "checking"),
 		settled: settled.map((id) => ops.find((o) => o.operationId === id) as IntakeOp),
+		started: [],
 		sending: [...sending],
 	};
 }
@@ -190,7 +194,7 @@ const source: IntakeSource = {
 			(item) => {
 				item.triage = i.state;
 			},
-			{ kind: "triage", asked: i.state, missionId: null },
+			{ kind: "triage", asked: i.state, missionId: null, sessionId: null },
 		);
 	},
 	start(i: StartIntent) {
@@ -201,7 +205,7 @@ const source: IntakeSource = {
 			(item) => {
 				item.claimed = true;
 			},
-			{ kind: "start", asked: null, missionId: i.missionId },
+			{ kind: "start", asked: null, missionId: i.missionId, sessionId: null },
 		);
 	},
 	async check(operationId: string) {

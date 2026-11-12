@@ -2,7 +2,7 @@
 // comes next. Read-only over the Rust read model, except through intents.
 // Movement comes only from agents' reports; a mission without a current
 // report is shown as such, never as not moving.
-import { effect, type JSX, keymap, Scroll, type ScrollRef, signal, Text, View, type ViewRef } from "nsh";
+import { effect, type JSX, keymap, Scroll, type ScrollRef, signal, Text, View } from "nsh";
 import type { Decision, MissionRow } from "pilot-day/native";
 import { ActionCard } from "./ActionCard";
 import type { Changes } from "./changeFeed";
@@ -18,10 +18,22 @@ import { stageMark, stageWord } from "./PlanScreen";
 import type { Plans } from "./planning";
 import { openNew, openPlan } from "./planView";
 import type { Rituals } from "./ritualFeed";
-import { Action, EvidenceChip, InlineAction, Mark, RowLink, SectionTitle, Track } from "./ui";
+import { ToCheck } from "./ToCheck";
 import { updateLabel } from "./UpdateScreen";
+import { Action, EvidenceChip, InlineAction, Mark, RowLink, SectionTitle, Track } from "./ui";
 import { showUpdate, updateEntry, updateOpen } from "./updateView";
-import { dataSource, focused, focusFront, front, type Item, move, openMission, queue, todayPlace } from "./view";
+import {
+	dataSource,
+	focused,
+	focusFront,
+	front,
+	type Item,
+	move,
+	openMission,
+	placeRow,
+	queue,
+	todayPlace,
+} from "./view";
 import { freshnessLine, provenance, rowLine, stateMark, stateTone, stateWord } from "./words";
 
 function actionFor(decision: Decision | undefined): string {
@@ -49,29 +61,6 @@ function headline(day: Day): string {
 function total(row: MissionRow): number {
 	const p = row.progress;
 	return p.done + p.review + p.active + p.blocked + p.todo;
-}
-
-/**
- * A row that opens another screen. Pressing it keeps its place, and when
- * Today comes back the row takes the keyboard focus again. Returns the
- * row's anchor and what its press does.
- */
-function placeRow(testID: string, open: () => void) {
-	const node = signal<ViewRef | null>(null);
-	effect(() => {
-		const n = node();
-		if (n && todayPlace.row === testID) {
-			todayPlace.row = null;
-			n.focus();
-		}
-	});
-	return {
-		anchor: (n: ViewRef) => node.set(n),
-		press: () => {
-			todayPlace.row = testID;
-			open();
-		},
-	};
 }
 
 /** A mission's state: its mark and words. */
@@ -611,6 +600,7 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans; 
 
 						<Incoming day={props.day} />
 						<NeedsYou day={props.day} />
+						<ToCheck day={props.day} />
 						<If when={plans}>
 							<Planning plans={plans as Plans} />
 						</If>

@@ -290,6 +290,14 @@ pub struct SavedView {
     /// Its selection end, in UTF-16 units (equal to `start` for a caret).
     #[prop(default)]
     pub end: u32,
+    /// The delivered result on screen, as "task/<project>/<mission>/<task>"
+    /// or "chat/<project>/<session>". Empty for none. Showing it again only reads.
+    #[prop(default)]
+    pub delivery: String,
+    /// Unsent Send back notes, exactly as typed, as "<delivered result>\n<note>".
+    /// Restoring one sends nothing.
+    #[prop(default)]
+    pub notes: Vec<String>,
 }
 
 impl SavedView {
@@ -300,6 +308,7 @@ impl SavedView {
             .iter()
             .chain(&self.help)
             .chain(&self.see_all)
+            .chain(&self.notes)
             .map(String::len)
             .sum::<usize>();
         self.goal.len()
@@ -311,12 +320,13 @@ impl SavedView {
             + self.tab.len()
             + self.today_row.len()
             + self.input.len()
+            + self.delivery.len()
             + lists
     }
 
     /// The entries in its lists, counted against [`VIEW_ENTRIES`].
     pub fn entries(&self) -> usize {
-        self.questions.len() + self.help.len() + self.see_all.len()
+        self.questions.len() + self.help.len() + self.see_all.len() + self.notes.len()
     }
 
     /// Whether its offsets are plain, non-negative numbers.

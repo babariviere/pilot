@@ -9,6 +9,8 @@ import { ConnectedPlans, ConnectedRituals, ConnectedToday, call, type Refusal, w
 import { ConnectedChats, mirrorChats } from "./chatFeed";
 import { connectedUpdates } from "./connectedUpdates";
 import { type Day, mirrorDay } from "./day";
+import { ConnectedDelivery, deliveryKey, mirrorDelivery, type VerificationSubject } from "./deliveryFeed";
+import { deliveryTitles } from "./deliveryView";
 import { ConnectedIntake, mirrorIntake } from "./intakeFeed";
 import { flushAll } from "./planCommands";
 import { mirrorPlanning, type Plans } from "./planning";
@@ -169,6 +171,30 @@ async function connect() {
 	const intakeFeed = new ConnectedIntake(window);
 	await intakeFeed.read();
 	if (!current()) return;
+	const intake = mirrorIntake(intakeFeed);
+	// Requests started as standalone chats: their results join To check once
+	// the chat says it is done. Their titles name them there.
+	const started = (): VerificationSubject[] => {
+		const v = intake.view();
+		if (!v.projectId) return [];
+		const subjects: VerificationSubject[] = [];
+		const titles: Record<string, string> = {};
+		for (const op of v.started) {
+			if (!op.sessionId) continue;
+			const subject: VerificationSubject = { kind: "chat", projectId: v.projectId, sessionId: op.sessionId };
+			subjects.push(subject);
+			if (op.title) titles[deliveryKey(subject)] = op.title;
+		}
+		if (Object.keys(titles).length > 0) deliveryTitles.update((all) => ({ ...titles, ...all }));
+		return subjects;
+	};
+	const deliveryFeed = new ConnectedDelivery(window, started);
+	let starts = intake.view().started.length;
+	intakeFeed.onChange((next) => {
+		if (next.started.length === starts) return;
+		starts = next.started.length;
+		void deliveryFeed.readSaved();
+	});
 	// Invalidations read only the root's cached Today. When its request
 	// preview changed, the request pages are read once more; nothing is sent.
 	let requests = JSON.stringify(first.snapshot.intake);
@@ -178,7 +204,7 @@ async function connect() {
 		requests = now;
 		void intakeFeed.read();
 	});
-	const day = mirrorDay(today, mirrorIntake(intakeFeed));
+	const day = mirrorDay(today, intake, mirrorDelivery(deliveryFeed));
 	// New's projects are read when New opens; reading sends nothing.
 	const plans = mirrorPlanning(planFeed, mirrorChats(new ConnectedChats(window)));
 	const rituals = mirrorRituals(ritualFeed, rootRecap);

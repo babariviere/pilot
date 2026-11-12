@@ -82,7 +82,7 @@ fn summaries(t: &Transport, journal: &Journal) -> Vec<Value> {
                 .unwrap_or(Value::Null);
             // `asked` is a triage's requested state; `missionId` a Start's chosen mission.
             json!({"operationId":r.id(), "itemId":r.mission(), "revision":p["revision"],
-            "asked":p["state"], "missionId":p["missionId"],
+            "asked":p["state"], "missionId":p["missionId"], "sessionId":p["sessionId"],
             "kind":r.operation["kind"], "state":if r.not_sent {"not-sent"} else {
                 r.receipt.as_ref().and_then(|r| r["state"].as_str()).unwrap_or("unknown")},
             "receipt":r.receipt})

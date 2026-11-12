@@ -3,6 +3,7 @@
 // transport, and nsh.json denies network, sockets, files and processes.
 import { type Signal, signal } from "nsh";
 import { type Scenario, type Today, TodayFeed } from "pilot-day/native";
+import type { DeliveryMirror } from "./deliveryFeed";
 import type { DayFeed } from "./feeds";
 import type { IntakeMirror } from "./intakeFeed";
 import { glide } from "./motion";
@@ -18,6 +19,11 @@ export type Day = {
 	 * connected window has them; the mock window shows Today's example rows.
 	 */
 	intake?: IntakeMirror;
+	/**
+	 * Delivered results and the user's Done, Send back and Reopen. Only the
+	 * connected window has them; the mock window shows no To check.
+	 */
+	delivery?: DeliveryMirror;
 	/** Stops listening and frees the feed. */
 	close: () => void;
 };
@@ -28,7 +34,7 @@ export function openDay(scenario?: Scenario): Day {
 }
 
 /** Mirrors `feed`'s read model, mock or connected. Closing stops listening and frees the feeds. */
-export function mirrorDay(feed: DayFeed, intake?: IntakeMirror): Day {
+export function mirrorDay(feed: DayFeed, intake?: IntakeMirror, delivery?: DeliveryMirror): Day {
 	const today = signal(feed.snapshot());
 	const stop = feed.onChange((next) => {
 		// Items that arrive or leave, and missions that change group, glide to
@@ -40,10 +46,12 @@ export function mirrorDay(feed: DayFeed, intake?: IntakeMirror): Day {
 		feed,
 		today,
 		intake,
+		delivery,
 		close: () => {
 			stop();
 			feed.dispose();
 			intake?.close();
+			delivery?.close();
 		},
 	};
 }

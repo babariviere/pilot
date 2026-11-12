@@ -24,6 +24,8 @@ export type IntakeOp = {
 	asked: Triage | null;
 	/** The mission a Start chose. Null for standalone work. */
 	missionId: string | null;
+	/** The chat a Start names. Null for a triage. */
+	sessionId: string | null;
 	/** Unknown until a receipt says otherwise; checking while Check reads it. */
 	delivery: "unknown" | "checking" | "accepted" | "rejected";
 	/** The request's title when Pilot read it, else empty. */
@@ -40,6 +42,8 @@ export type IntakeView = {
 	reason: string;
 	/** The project configuration the rows were read under. Every write names it. */
 	contextDigest: string;
+	/** The project the rows belong to, or "" before a read. */
+	projectId: string;
 	/** Sources, their trouble and unshown rows, from Rust's projection of the newest read. */
 	intake: Intake;
 	fresh: IntakeRow[];
@@ -49,6 +53,8 @@ export type IntakeView = {
 	unsettled: IntakeOp[];
 	/** Writes settled while this window was open, oldest first. */
 	settled: IntakeOp[];
+	/** Confirmed Starts of standalone work, from every saved write: the chats they created. */
+	started: IntakeOp[];
 	/** Requests with a write on its way. */
 	sending: string[];
 };
@@ -82,6 +88,7 @@ const NO_INTAKE: Intake = { watched: false, sources: [], requests: [], trouble: 
 type RawItem = { id?: unknown; revision?: unknown; title?: unknown };
 type Snapshot = {
 	version: 1;
+	projectId?: string;
 	contextDigest: string;
 	sources: { items?: RawItem[] }[];
 	intake: Intake;
@@ -95,6 +102,7 @@ type Summary = {
 	kind: "intake-triage" | "intake-start";
 	asked?: Triage | null;
 	missionId?: string | null;
+	sessionId?: string | null;
 	state: string;
 	receipt?: { state?: string; reason?: string } | null;
 };
@@ -218,6 +226,7 @@ export class ConnectedIntake implements IntakeSource {
 			kind: o.kind === "intake-start" ? "start" : "triage",
 			asked: o.asked ?? null,
 			missionId: o.missionId ?? null,
+			sessionId: typeof o.sessionId === "string" ? o.sessionId : null,
 			delivery:
 				o.state === "accepted" || o.state === "rejected"
 					? o.state
@@ -242,12 +251,16 @@ export class ConnectedIntake implements IntakeSource {
 			availability: s ? "live" : this.#refusal ? "unavailable" : "reading",
 			reason,
 			contextDigest: s?.contextDigest ?? "",
+			projectId: typeof s?.projectId === "string" ? s.projectId : "",
 			intake: s?.intake ?? NO_INTAKE,
 			fresh: rows(s?.intake),
 			later: rows(s?.later),
 			discarded: rows(s?.discarded),
 			unsettled,
 			settled,
+			started: sent
+				.filter((o) => o.kind === "intake-start" && o.state === "accepted" && !o.missionId && o.sessionId)
+				.map(op),
 			sending: [...this.#sending],
 		};
 	}
