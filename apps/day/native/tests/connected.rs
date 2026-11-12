@@ -288,13 +288,28 @@ fn new_mission_questions_saved_progress_one_submit_and_the_way_back() {
     .unwrap();
     app.wait_until("save settles", WAIT, |s| !s.shows("Saving…"))
         .unwrap();
+    let question = answered(&app);
+    let generation = bridge.request_flush().unwrap();
+    bridge.native_capture_finished(generation).unwrap();
+    let deadline = std::time::Instant::now() + WAIT;
+    while !bridge.flush_ready(generation) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "interview capture timed out"
+        );
+        app.wait(Duration::from_millis(50)).unwrap();
+    }
     close(app, bridge);
 
-    // Reopened: Today lists the saved mission in Planning, waiting for the
-    // user, and its row opens the same saved interview. Nothing was resent.
+    // Ordinary startup opens the exact saved interview/question directly.
+    // The answer comes from its own store, never from a repeated save/submit.
     let posts = f.cmd("stats", false)["posts"].clone();
     let (_, bridge) = f.bridge();
     let mut app = open(&entry, &bridge);
+    wait(&mut app, "id:interview");
+    assert_eq!(answered(&app), question);
+    assert_eq!(f.cmd("stats", false)["posts"], posts);
+    app.press("role:button[Back to Today]").unwrap();
     wait(&mut app, &format!("id:plan-{mission}"));
     assert!(
         !has(&app, "id:planning-off"),
@@ -324,7 +339,11 @@ fn new_mission_questions_saved_progress_one_submit_and_the_way_back() {
         "reopening sends nothing"
     );
 
-    // Every question by key, then the answers page and the one Submit.
+    // The saved place is the first, already-answered question. Move forward
+    // explicitly; picking its same suggestion again would clear that answer.
+    app.press_key("enter").unwrap();
+    wait(&mut app, "Question 2 of 2 · 1 answered");
+    // Every remaining question by key, then the answers page and the one Submit.
     for _ in 0..40 {
         if app.shows("Check your answers") {
             break;
@@ -710,6 +729,7 @@ impl FakeRoot {
             serde_json::to_value(Desk::new(Scenario::Quiet).today()).unwrap(),
         );
         root.reply("day.plan.prepare", Value::Null);
+        root.reply("day.window.read", Value::Null);
         root.reply("day.plan.inventorySnapshot", not_current());
         root
     }

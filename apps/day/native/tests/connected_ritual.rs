@@ -493,6 +493,7 @@ impl FakeRoot {
         root.reply("day.today.read", today.clone());
         root.reply("day.attention.read", today);
         root.reply("day.plan.prepare", Value::Null);
+        root.reply("day.window.read", Value::Null);
         root
     }
     fn answer(&self, name: &str, data: &Value) -> Value {

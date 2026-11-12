@@ -223,6 +223,24 @@ fn a_close_saves_the_linear_page_its_project_and_open_issue_and_sends_nothing() 
             issue["id"].as_str().unwrap()
         ))
     );
+    // A plain cold reopen, without an updater selection or acknowledgement,
+    // opens the same saved issue. A new capture must keep that navigation.
+    let bridge = f.bridge();
+    let mut app = open(&entry, &bridge);
+    wait(&mut app, "id:linear");
+    wait(
+        &mut app,
+        "Linked to a mission that is not on Today. A chat is linked to it too.",
+    );
+    flush(&mut app, &bridge);
+    drop(app);
+    close(bridge);
+    let host = f.host();
+    assert_eq!(
+        host.saved_window().unwrap().view["linear"],
+        saved.view["linear"]
+    );
+    assert_eq!(host.close().recv_blocking().unwrap(), Ok(()));
     let stats = f.stats("stats");
     assert_eq!(
         stats["linearReads"], 1,
@@ -232,5 +250,50 @@ fn a_close_saves_the_linear_page_its_project_and_open_issue_and_sends_nothing() 
     assert_eq!(stats["lookups"], 0);
     assert_eq!(stats["external"], 0);
     assert_eq!(stats["sessions"], 0);
+    let _ = std::fs::remove_dir_all(entry.parent().unwrap());
+}
+
+#[test]
+fn ordinary_close_reopens_exact_unsent_new_chat_words_and_never_starts() {
+    let mut f = Fixture::new();
+    let entry = entry();
+    let bridge = f.bridge();
+    let mut app = open(&entry, &bridge);
+    wait(&mut app, "role:button[New]");
+    app.press("role:button[New]").unwrap();
+    wait(&mut app, "id:goal");
+    let exact = "  Unsent 👩🏽‍💻 e\u{301} 日本語\n  ";
+    app.type_text("id:goal", exact).unwrap();
+    // Wait for the passive project selection so its exact choice is captured.
+    wait(&mut app, "id:new-project");
+    app.wait_until("project selected", WAIT, |s| !s.shows("Reading projects…"))
+        .unwrap();
+    flush(&mut app, &bridge);
+    drop(app);
+    close(bridge);
+    let host = f.host();
+    let saved = host.saved_window().unwrap();
+    assert_eq!(saved.view["goal"], exact);
+    assert_eq!(host.close().recv_blocking().unwrap(), Ok(()));
+    let posts = f.stats("stats")["posts"].clone();
+    let bridge = f.bridge();
+    let mut app = open(&entry, &bridge);
+    wait(&mut app, "id:goal");
+    assert_eq!(app.screen().input_text("id:goal"), Ok(Some(exact)));
+    assert!(
+        !has(&app, "id:confirm-start"),
+        "reopen grants no Start confirmation"
+    );
+    flush(&mut app, &bridge);
+    drop(app);
+    close(bridge);
+    let host = f.host();
+    assert_eq!(host.saved_window().unwrap().view["goal"], exact);
+    assert_eq!(host.close().recv_blocking().unwrap(), Ok(()));
+    let stats = f.stats("stats");
+    assert_eq!(stats["posts"], posts);
+    assert_eq!(stats["sessions"], 0);
+    assert_eq!(stats["lookups"], 0);
+    assert_eq!(stats["external"], 0);
     let _ = std::fs::remove_dir_all(entry.parent().unwrap());
 }

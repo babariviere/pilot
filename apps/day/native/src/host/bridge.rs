@@ -135,6 +135,22 @@ async fn run(
     call.command
         .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
     shared.open()?;
+    if matches!(call.command, Command::WindowRead) {
+        // One passive capture from this exact source, not an update receipt or
+        // authority to replay anything. Recheck the selected home/project first.
+        let saved = call.host.saved_window();
+        if let Some(saved) = &saved {
+            if saved.source != t.source {
+                return Err(Error::Identity);
+            }
+            saved.validate()?;
+            t.gate(false).await?;
+        }
+        shared.open()?;
+        call.command
+            .admit(&call.gate.lock().expect("bridge gate poisoned"))?;
+        return Ok(json!({"snapshot":saved.map(|s| s.view),"outcome":null}));
+    }
     if matches!(
         call.command,
         Command::Projects | Command::ChatSelect(_) | Command::ChatCreate(_) | Command::ChatCheck(_)
@@ -242,6 +258,7 @@ async fn run(
             unreachable!("handled intake command")
         }
         Command::Today | Command::PlanSnapshot(_) | Command::PlanningInventorySnapshot => None,
+        Command::WindowRead => unreachable!("handled saved window read"),
         Command::PlanSource(_) => unreachable!("handled passive source read"),
         Command::Mission(id) => Some(Work::Detail(id.clone())),
         Command::Pause(r) => Some(Work::Control {

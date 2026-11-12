@@ -104,6 +104,7 @@ intent types, not daemon request envelopes:
 | `day.chat.create` | `{choice:ChatChoice,message}` | null; exact creation outcome and operation ID |
 | `day.chat.check` | `{operationId}` | null; exact receipt lookup, never creation |
 | `day.today.read` | `{}` | `Today` |
+| `day.window.read` | `{}` | exact-source `SavedView` or null when no capture exists; no update ACK |
 | `day.mission.read` | `MissionRef` | `MissionPage` or null |
 | `day.mission.pause` | `PauseIntent` | null; inspect outcome, then read |
 | `day.mission.resume` | `ResumeIntent` | null; inspect outcome, then read |
@@ -179,6 +180,22 @@ ritual and never mark Today's service read failed. A root opened without a
 native clock answers `unavailable`.
 
 ## Lifecycle seam, not update acceptance
+
+Ordinary cold startup reads `day.window.read` once before admitting screens or
+answering a queued close barrier. It reuses the journal's latest `SavedWindow`,
+keyed by the full native source (profile, home, port, project ID and path).
+Native checks the current home and project before returning saved content.
+Missing state returns null; an unreadable capture prevents opening forms, so a
+later close cannot overwrite recoverable drafts with an empty view. Invalid
+journals still refuse to open. There is no alternate store or fallback source.
+
+`restoreView` restores the same page, selected Linear issue, offsets, selection
+and unsent text as update recovery. Each page uses its existing scoped passive
+read and unavailable state. Saved answers remain in their canonical draft store.
+No restored text is sent and no work starts. A verified updater successor keeps
+its separate display acknowledgement; ordinary reopening never calls it or
+treats a historical update receipt as current startup authority. A capture is
+saved-form evidence, not proof that a close or update completed.
 
 `request_flush()` fences new effects and sends `day.flush` with the exact
 window and generation while the engine is alive. The native lifecycle owner

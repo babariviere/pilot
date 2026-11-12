@@ -138,6 +138,102 @@ fn two_project_creation_saved_draft_lost_ack_and_exact_cold_lookup_never_retarge
 }
 
 #[test]
+fn saved_window_read_is_exact_source_passive_and_refuses_changed_scope() {
+    let mut f = Fixture::new();
+    let b = f.bridge();
+    assert!(f.call(&b, "day.window.read", json!({}))["value"]["snapshot"].is_null());
+    assert_eq!(
+        f.call(&b, "day.window.read", json!({"projectId":"forged"}))["error"],
+        "invalid"
+    );
+    let list = projects(&f, &b);
+    let p = list
+        .iter()
+        .find(|p| p["projectId"] == f.info["source"]["project_id"])
+        .unwrap();
+    let choice = select(&f, &b, p, "ask");
+    capture(&f, &b, &choice);
+    close(b);
+    let b = f.bridge();
+    let read = f.call(&b, "day.window.read", json!({}));
+    assert_eq!(read["value"]["snapshot"]["chat"], choice, "{read}");
+    assert_eq!(
+        read["value"]["snapshot"]["goal"],
+        "  Exact words 👩🏽‍💻\nkept  "
+    );
+    // Revoke the exact native capability, not just the fixture's intake route.
+    use std::os::unix::fs::PermissionsExt;
+    let capability =
+        PathBuf::from(f.info["source"]["profile"].as_str().unwrap()).join("github-app-capability");
+    std::fs::set_permissions(&capability, std::fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(
+        f.call(&b, "day.window.read", json!({}))["error"],
+        "identity"
+    );
+    std::fs::set_permissions(&capability, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert_eq!(f.call(&b, "day.window.read", json!({})), read);
+    // An interrupted next capture (no form ACK) must not erase the prior one.
+    b.begin_capture().unwrap();
+    assert_eq!(
+        f.call(&b, "day.window.read", json!({})),
+        read,
+        "startup read is allowed while close waits for forms"
+    );
+    close(b);
+    let b = f.bridge();
+    assert_eq!(f.call(&b, "day.window.read", json!({})), read);
+    close(b);
+    let original: Source = serde_json::from_value(f.info["source"].clone()).unwrap();
+    for field in ["project", "profile", "home", "path"] {
+        let mut other = original.clone();
+        match field {
+            "project" => other.project_id = "different-project".into(),
+            "profile" => other.profile = f.dir.join("different-profile"),
+            "home" => other.home.lineage_id = "different-lineage".into(),
+            _ => other.project_path = "/different/path".into(),
+        }
+        let host = NativeHost::open(other, f.info["ledger"].as_str().unwrap().into()).unwrap();
+        let b = Bridge::new(DayRoot::new(host));
+        assert!(
+            f.call(&b, "day.window.read", json!({}))["value"]["snapshot"].is_null(),
+            "{field}"
+        );
+        close(b);
+    }
+    let b = f.bridge();
+    let generation = b.request_flush().unwrap();
+    let mut invalid = read["value"]["snapshot"].clone();
+    invalid["y"] = json!(-1);
+    assert_eq!(
+        f.call(
+            &b,
+            "day.flush.ack",
+            json!({"generation":generation,"view":invalid})
+        )["error"],
+        "invalid"
+    );
+    close(b);
+    let b = f.bridge();
+    assert_eq!(
+        f.call(&b, "day.window.read", json!({})),
+        read,
+        "invalid capture never overwrites the draft"
+    );
+    f.stats("delete-selected");
+    let missing = f.call(&b, "day.window.read", json!({}));
+    assert!(
+        missing["error"].is_string(),
+        "deleted project cannot return saved content: {missing}"
+    );
+    close(b);
+    let stats = f.stats("stats");
+    assert_eq!(stats["posts"], 0);
+    assert_eq!(stats["sessions"], 0);
+    assert_eq!(stats["lookups"], 0);
+    assert_eq!(stats["external"], 0);
+}
+
+#[test]
 fn absent_nsh_host_capability_denies_creation_before_native_dispatch() {
     let mut f = Fixture::new();
     let b = f.bridge();

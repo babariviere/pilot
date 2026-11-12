@@ -136,6 +136,7 @@ impl Root {
         root.reply("day.attention.read", today.clone());
         root.reply("day.attention.draft", today);
         root.reply("day.plan.prepare", Value::Null);
+        root.reply("day.window.read", Value::Null);
         root
     }
     fn reply(&self, name: &str, snapshot: Value) {
@@ -585,38 +586,126 @@ fn saved_linear(project: &str) -> Value {
 #[test]
 fn a_cold_restore_shows_the_linear_page_on_its_project_and_only_reads() {
     let entry = entry();
-    for (read_project, shows) in [
-        ("proj-a", "id:linear-detail-ln-1"),
-        // The root reads another project now: nothing of it shows in the page's place.
-        ("proj-b", "id:linear-other-project"),
-    ] {
-        let root = Root::new(Scenario::Quiet);
-        let mut cold = ran(UpdateKind::App, UpdatePhase::Unknown, "Not confirmed.");
-        cold.restore = Some(Restore {
-            id: "op-1".into(),
-            view: SavedView {
-                today_row: "linear-open".into(),
-                y: 40.0,
-                linear: "proj-a/ln-1".into(),
-                ..SavedView::default()
-            },
-        });
-        root.service("day.update.read", &cold);
-        root.reply("day.linear.read", saved_linear(read_project));
-        let mut app = open_on(&entry, root.channel.clone());
-        wait(&mut app, "id:linear");
-        wait(&mut app, shows);
-        if read_project == "proj-b" {
-            assert!(!has(&app, "id:linear-issue-ln-1"));
+    for ordinary in [false, true] {
+        for (read_project, shows) in [
+            ("proj-a", "id:linear-detail-ln-1"),
+            // The root reads another project now: nothing of it shows in the page's place.
+            ("proj-b", "id:linear-other-project"),
+        ] {
+            let root = Root::new(Scenario::Quiet);
+            let mut cold = ran(UpdateKind::App, UpdatePhase::Unknown, "Not confirmed.");
+            cold.restore = Some(Restore {
+                id: "op-1".into(),
+                view: SavedView {
+                    today_row: "linear-open".into(),
+                    y: 40.0,
+                    linear: "proj-a/ln-1".into(),
+                    ..SavedView::default()
+                },
+            });
+            root.service("day.update.read", &cold);
+            if ordinary {
+                root.reply(
+                    "day.window.read",
+                    serde_json::to_value(&cold.restore.as_ref().unwrap().view).unwrap(),
+                );
+                // Historical update state is not startup authority. Only the
+                // current verified successor path may provide an update restore.
+                cold.restore = None;
+                root.service("day.update.read", &cold);
+            }
+            root.reply("day.linear.read", saved_linear(read_project));
+            let mut app = open_on(&entry, root.channel.clone());
+            wait(&mut app, "id:linear");
+            wait(&mut app, shows);
+            if read_project == "proj-b" {
+                assert!(!has(&app, "id:linear-issue-ln-1"));
+            }
+            if !ordinary {
+                until(&mut app, &root, "the acknowledgement", |r| {
+                    r.count("day.update.restored") == 1
+                });
+            }
+            app.wait(Duration::from_millis(300)).unwrap();
+            // Showing the page again read the saved copy once; it sent and triaged nothing.
+            assert_eq!(root.args("day.linear.read"), vec![json!({})]);
+            assert!(root.effects().is_empty(), "{:?}", root.effects());
+            assert_eq!(root.count("day.update.restored"), usize::from(!ordinary));
+            assert_eq!(root.count("day.window.read"), usize::from(ordinary));
+            drop(app);
         }
-        until(&mut app, &root, "the acknowledgement", |r| {
-            r.count("day.update.restored") == 1
-        });
-        app.wait(Duration::from_millis(300)).unwrap();
-        // Showing the page again read the saved copy once; it sent and triaged nothing.
-        assert_eq!(root.args("day.linear.read"), vec![json!({})]);
+    }
+    let _ = std::fs::remove_dir_all(entry.parent().unwrap());
+}
+
+#[test]
+fn an_interrupted_ordinary_restore_never_captures_empty_or_replays_update_ack() {
+    let entry = entry();
+    let root = Root::new(Scenario::Quiet);
+    root.service(
+        "day.update.read",
+        &ran(UpdateKind::App, UpdatePhase::Stopped, "Stopped."),
+    );
+    let held: Arc<Mutex<Option<HostCall>>> = Arc::default();
+    let pending = held.clone();
+    root.channel.handle("day.window.read", move |call| {
+        *pending.lock().unwrap() = Some(call);
+    });
+    let mut app = open_on(&entry, root.channel.clone());
+    let deadline = std::time::Instant::now() + WAIT;
+    while held.lock().unwrap().is_none() {
+        assert!(std::time::Instant::now() < deadline);
+        app.wait(Duration::from_millis(50)).unwrap();
+    }
+    root.flush(11);
+    app.wait(Duration::from_millis(100)).unwrap();
+    assert_eq!(root.count("day.flush.ack"), 0);
+    let view = SavedView {
+        place: PlaceKind::New,
+        goal: "  Exact 👩🏽‍💻 日本語\n  ".into(),
+        input: "goal".into(),
+        start: 2,
+        end: 5,
+        y: 64.0,
+        today_y: 32.0,
+        ..SavedView::default()
+    };
+    held.lock()
+        .unwrap()
+        .take()
+        .unwrap()
+        .resolve(answer(serde_json::to_value(&view).unwrap()));
+    wait(&mut app, "id:goal");
+    until(&mut app, &root, "ordinary saved view", |r| {
+        r.count("day.flush.ack") == 1
+    });
+    let ack = &root.args("day.flush.ack")[0]["view"];
+    for key in ["place", "goal", "input", "start", "end"] {
+        assert_eq!(ack[key], serde_json::to_value(&view).unwrap()[key], "{key}");
+    }
+    for key in ["y", "todayY"] {
+        assert_eq!(
+            ack[key].as_f64(),
+            serde_json::to_value(&view).unwrap()[key].as_f64(),
+            "{key}"
+        );
+    }
+    assert_eq!(root.count("day.update.restored"), 0);
+    assert!(root.effects().is_empty(), "{:?}", root.effects());
+    drop(app);
+    // No saved content was returned: keep the unopened window and refuse the
+    // queued close, not a fresh page that could overwrite recoverable words.
+    for error in ["storage", "identity", "lost", "stale", "unavailable"] {
+        let root = Root::new(Scenario::Quiet);
+        root.refuse("day.window.read", error);
+        let mut app = open_on(&entry, root.channel.clone());
+        wait(&mut app, "id:not-connected");
+        root.flush(12);
+        app.wait(Duration::from_millis(100)).unwrap();
+        assert_eq!(root.count("day.flush.ack"), 0, "{error}");
+        assert_eq!(root.count("day.update.restored"), 0, "{error}");
+        assert!(!has(&app, "role:button[New]"));
         assert!(root.effects().is_empty(), "{:?}", root.effects());
-        drop(app);
     }
     let _ = std::fs::remove_dir_all(entry.parent().unwrap());
 }

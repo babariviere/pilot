@@ -59,6 +59,7 @@ pub const METHODS: &[&str] = &[
     "day.attention.check",
     "day.attention.draft",
     "day.flush.ack",
+    "day.window.read",
     "day.update.read",
     "day.update.prepare",
     "day.update.confirm",
@@ -227,6 +228,7 @@ pub(crate) enum Command {
     },
     Draft(crate::model::DraftIntent),
     Flush(u32, u64, Option<crate::update::SavedView>),
+    WindowRead,
     UpdateRead,
     UpdatePrepare(crate::update::PrepareIntent),
     UpdateConfirm(crate::update::ConfirmIntent),
@@ -429,6 +431,7 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             }
         }
         "day.today.read"
+        | "day.window.read"
         | "day.plan.prepare"
         | "day.attention.read"
         | "day.plan.checkNew"
@@ -442,6 +445,7 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             }
             match name {
                 "day.today.read" => C::Today,
+                "day.window.read" => C::WindowRead,
                 "day.plan.prepare" => C::Prepare,
                 "day.plan.checkNew" => C::CheckNew,
                 "day.plan.inventory" => C::PlanningInventory,
@@ -600,6 +604,7 @@ impl Command {
                 Self::Save { .. }
                     | Self::Draft(_)
                     | Self::Today
+                    | Self::WindowRead
                     | Self::Projects
                     | Self::IntakeRead
                     | Self::LinearRead
@@ -972,14 +977,18 @@ mod tests {
 
     #[test]
     fn inventory_snapshot_obeys_the_passive_read_close_fence() {
-        let command = Command::PlanningInventorySnapshot;
-        let mut gate = Gate {
-            flushing: true,
-            ..Gate::default()
-        };
-        assert_eq!(command.admit(&gate), Ok(()));
-        gate.closed = true;
-        assert_eq!(command.admit(&gate), Err(Error::Closed));
+        for command in [Command::PlanningInventorySnapshot, Command::WindowRead] {
+            let mut gate = Gate {
+                flushing: true,
+                ..Gate::default()
+            };
+            assert_eq!(command.admit(&gate), Ok(()));
+            gate.sealed = true;
+            assert_eq!(command.admit(&gate), Err(Error::Closed));
+            gate.sealed = false;
+            gate.closed = true;
+            assert_eq!(command.admit(&gate), Err(Error::Closed));
+        }
     }
 
     #[test]

@@ -4,7 +4,7 @@
 // Kept in its own module, like session.ts, so edits to the screens never
 // reopen the feeds.
 import { host, signal } from "nsh";
-import type { RitualSnapshot, Setup, Today } from "pilot-day/native";
+import type { RitualSnapshot, SavedView, Setup, Today } from "pilot-day/native";
 import { ConnectedPlans, ConnectedRituals, ConnectedToday, call, type Refusal, windowId } from "./bridge";
 import { ConnectedChats, mirrorChats } from "./chatFeed";
 import { connectedUpdates } from "./connectedUpdates";
@@ -18,7 +18,7 @@ import { mirrorPlanning, type Plans } from "./planning";
 import { answerDrafts, answerPicks } from "./planView";
 import { mirrorRituals, type Rituals, rootRecap } from "./ritualFeed";
 import type { Update } from "./updateFeed";
-import { captureView, saveForms } from "./updateView";
+import { captureView, restoreView, saveForms } from "./updateView";
 
 /** Whether this window has its feeds yet, and which. */
 export type Connection =
@@ -212,6 +212,19 @@ async function connect() {
 	const rituals = mirrorRituals(ritualFeed, rootRecap);
 	const update = await connectedUpdates(window);
 	if (!current()) return;
+	// An actual updater successor uses its verified restore/ACK path. Ordinary
+	// startup uses only this source's close capture, never a historical update ACK.
+	if (!update?.service().restore) {
+		const saved = await call<SavedView | null>(window, "day.window.read", {});
+		if (!current()) return;
+		if (!saved.ok) {
+			// Do not admit forms or a close capture that could overwrite a draft
+			// whose saved window we could not read. Recovery is a fresh open.
+			connection.set({ state: "none", reason: unreadable(saved.refusal), canRead: false });
+			return;
+		}
+		if (saved.snapshot) restoreView(saved.snapshot, undefined, day.today(), !!day.linear);
+	}
 	connection.set({ state: "open", day, plans, rituals, update });
 	flushPending();
 	// Changes received while opening are not lost: read the cached views once
