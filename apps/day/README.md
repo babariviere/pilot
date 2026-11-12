@@ -143,9 +143,8 @@ promise. Do not share a writable target with another running build.
 Rust defaults to Day's 1.99.1 pin for app compilation; explicit
 `RUSTUP_TOOLCHAIN` and real `CARGO` selections are kept. App `CARGO_TARGET_DIR`,
 profile variables and command arguments are kept. The installed CLI is not
-compiled. To reduce initial disk use, set
-`CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0` for the command. No global Cargo
-config is changed. Non-macOS builds and cross targets are not qualified here.
+compiled. No global Cargo config is changed. Non-macOS builds and cross targets
+are not qualified here.
 
 ```sh
 cd apps/day
