@@ -20,11 +20,19 @@ command shell published as crates.io `nsh` 0.4.2.
 - Release `Cargo.lock` SHA-256:
   `3e613f0b6940be5d83676f48771b461b122e0732f652ce4de20b4978b2015d34`.
 
-Day's manifests use the peeled Git commit for all NSH crates, including its
-optional Rust fixture, declarations and testing. The installed CLI must match
-that same release. Exact registry versions would be another supported source,
-but are not mixed into this Git graph. `nsh-core` and `nsh-cli` publish 0.4.0;
-neither publishes 0.4.2 at this audit. Never substitute the crate named `nsh`.
+Day's manifests use exact crates.io versions (`=0.4.0`) for all NSH crates,
+including its optional Rust fixture, declarations and testing. They used the
+peeled Git commit until 2026-11-12. Blaze, mbx's source loader, failed on six
+crates from one Git repository ("asked for git repository ... again"), and
+registry sources avoid that path. Each 0.4.0 archive was checked on
+2026-11-12: its `.cargo_vcs_info.json` names commit
+`e626a8dd8f8d8b277b9507cfd5ac74d0e67020f3` and its SHA-256 equals the
+checksum in both Day locks (nsh-base, -bundler, -core, -dev, -engine, -js,
+-macros, -package, -platform-macos, -testing). The installed CLI must match
+that same release. Sources are not mixed: no NSH crate comes from Git.
+The fixture lock is seeded from the native lock, so shared crates keep the
+same versions. 0.5.0 exists on crates.io but is not qualified.
+Never substitute the crate named `nsh`.
 
 ## Source/API audit
 
@@ -37,7 +45,7 @@ These are source observations, not compiled or native acceptance claims.
 | Typed feeds, exact intent props, callbacks/disposal | `nsh-core/src/element/{class,callback,system,prop}.rs`, `nsh-macros` | Present: classes, `JsObject`, exact props, `Callback::post`, `Stop`. Boundary tests still required. |
 | Planning/attention inputs and choices | `nsh-base/src/lib.rs`, core input/keymap modules | Present: Input, Button, Toggle, Radio/RadioGroup and keymaps. Keyboard/IME acceptance remains separate. |
 | Declarations and headless TSX tests | `nsh-core` declarations feature; `nsh-testing/src/lib.rs` | Present: declaration registry, `compile_tsx`, headless driver. Generate declarations with the release, never reuse main's as release evidence. |
-| One runtime source in generated hosts | `nsh-cli/src/rust_app.rs`, `Nsh::of`, `write_workspace_manifest` | Git source resolved through Cargo; generated hosts and app share that checkout. Mismatched versions/sources fail. The real generated runner lock is kept as `apps/day/runner.Cargo.lock` and seeds fresh workspaces. |
+| One runtime source in generated hosts | `nsh-cli/src/rust_app.rs`, `Nsh::of`, `write_workspace_manifest` | Source resolved through Cargo (Git until 2026-11-12, now crates.io); generated hosts and app share that source. Mismatched versions/sources fail. The real generated runner lock is kept as `apps/day/runner.Cargo.lock` and seeds fresh workspaces. |
 | mbx compiler adapter | `nsh-cli/src/{check,rust_app}.rs` | Supported `CARGO` hook covers native check, metadata and generated runners. The installed CLI itself is never compiled. |
 | Entrance/layout motion | `nsh-core/src/js/animation.rs`, `nsh-js` bindings | Present: `createMotion`, motion keyframes, `LayoutAnimation.configureNext`, `reduceMotion`. Restrained Day motion still needs interruption/performance and native visual checks. |
 | Deferred Changes reader | `nsh-base/src/diff/{mod,view}.rs` | DiffView patch, soft wrap and part classes exist. Preserve Changes/Insights work; this migration does not expand it. |

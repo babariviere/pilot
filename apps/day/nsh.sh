@@ -26,7 +26,6 @@ if [[ "$version" != 'nsh 0.4.0 (e626a8d)' ]]; then
 	exit 1
 fi
 export CARGO="$here/scripts/cargo"
-export CARGO_NET_OFFLINE=true
 if [[ "${1:-}" = check ]]; then
 	# NSH otherwise downloads its own TypeScript compiler. Do not permit a
 	# command-line override to bypass this workspace compiler selection.

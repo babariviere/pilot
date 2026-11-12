@@ -79,6 +79,14 @@ class RecipeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exact unmodified"):
             day.release_lock(lock)
         text = (bundle.ROOT / "apps/day/native/Cargo.lock").read_text()
+        checksum = day.NSH_CHECKSUMS["nsh-core"]
+        lock.write_text(text.replace(checksum, "0" * 64))
+        with self.assertRaisesRegex(ValueError, "exact unmodified"):
+            day.release_lock(lock)
+        git = "git+https://github.com/longbridge/nsh?rev=" + bundle.NSH_RELEASE["source"]
+        lock.write_text(f'[[package]]\nname="nsh-core"\nversion="0.4.0"\nsource="{git}"\n')
+        with self.assertRaisesRegex(ValueError, "exact unmodified"):
+            day.release_lock(lock)
         lock.write_text(text + '\n[[package]]\nname="gpui"\nversion="1.0.0"\n')
         with self.assertRaisesRegex(ValueError, "GPUI"):
             day.release_lock(lock)

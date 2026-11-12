@@ -72,11 +72,12 @@ test("Cargo keeps ordinary crates enabled and pauses only documented baselines",
 	const rules = config.packageRules.filter(
 		(rule: { matchManagers?: string[] }) => rule.matchManagers?.includes("cargo") && "enabled" in rule,
 	);
-	assert.equal(rules.length, 3);
+	assert.equal(rules.length, 4);
 	assert.deepEqual(rules[0].matchPackageNames, ["gpui-*"]);
 	assert.deepEqual(rules[1].matchPackageNames, ["zip"]);
 	assert.deepEqual(rules[1].matchFileNames, ["apps/desktop/updater/Cargo.toml"]);
 	assert.deepEqual(rules[2].matchFileNames, ["experiments/nsh-chat/**"]);
+	assert.deepEqual(rules[3].matchPackageNames, ["nsh-*"], "NSH crates must match the installed CLI release");
 	for (const rule of rules) {
 		assert.equal(rule.enabled, false);
 		assert.ok(rule.description);

@@ -17,6 +17,21 @@ TARGET = "aarch64-apple-darwin"
 CLI_VERSION = "nsh 0.4.0 (e626a8d)"
 CLI_SHA256 = "cc9676f7d8f763e6903e1b4b1d8f4f21376689e16381a6fe77e68861da106416"
 TRUST_FIELDS = ("public_key", "repository", "application_id", "build", "code_requirement")
+REGISTRY = "registry+https://github.com/rust-lang/crates.io-index"
+# crates.io 0.4.0 archive SHA-256s. Each archive's .cargo_vcs_info.json names
+# the peeled release commit bundle.NSH_RELEASE["source"].
+NSH_CHECKSUMS = {
+    "nsh-base": "5298bbdc8874c2b5a1e6b99588cb120253d905d82628aed42ba799fecc5859bc",
+    "nsh-bundler": "da1cbeaddd09fe6a30a46c4caa957708ed7d2dae24e1c92f248800986dca3972",
+    "nsh-core": "171f17b402bedb0cead975d3abcefbf0e7963583fbdbf1dbcb03ef73ba11191d",
+    "nsh-dev": "838f6e989c192376e931b32e58a132352cee34aece15fc63421d477948ca9d36",
+    "nsh-engine": "a22f5b30bd9501790a6e487d07593e626117ce9b063fbf8ebdc7f44d1bd829c4",
+    "nsh-js": "79e175909211c71b49591e2c56d255802d7a8a61ea7a948f46c265c5e6fad291",
+    "nsh-macros": "08e449212388f9e8352235b45c1b07a9acc192e86a375e19643a6c0849d56580",
+    "nsh-package": "ad1562533ba286bad9a13f8790bc6a4c9ca6acc3977151bc513b5f6940909c11",
+    "nsh-platform-macos": "6e6f8b7c6e28d04c50c89c0d14482f66890d54edfed46418e2a7ba8c6d6786d6",
+    "nsh-testing": "aa9f8c137cbd4bb5ef50d25c9ce38c88e470713c0b1f2fce6a0283b44a6a457e",
+}
 
 
 def execute(args, *, cwd, env):
@@ -79,8 +94,8 @@ def host_methods(day):
 def release_lock(path):
     packages = tomllib.loads(path.read_text())["package"]
     nsh = [item for item in packages if item["name"].startswith("nsh-")]
-    expected = "git+https://github.com/longbridge/nsh?rev=" + bundle.NSH_RELEASE["source"] + "#" + bundle.NSH_RELEASE["source"]
-    if not nsh or any(item["version"] != "0.4.0" or item.get("source") != expected for item in nsh):
+    if not nsh or any(item["version"] != "0.4.0" or item.get("source") != REGISTRY
+                      or item.get("checksum") != NSH_CHECKSUMS.get(item["name"]) for item in nsh):
         raise ValueError("Day lock must use only the exact unmodified NSH release")
     if any(item["name"].startswith("gpui") for item in packages):
         raise ValueError("Day input closure must not depend on GPUI")

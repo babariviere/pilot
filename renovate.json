@@ -57,6 +57,12 @@
 			"enabled": false
 		},
 		{
+			"description": "Day's NSH crates must match the installed, qualified NSH CLI release; upgrade them together by hand",
+			"matchManagers": ["cargo"],
+			"matchPackageNames": ["nsh-*"],
+			"enabled": false
+		},
+		{
 			"description": "Track upstream embedding profiles with pnpm Git digest updates",
 			"matchManagers": ["npm"],
 			"matchPackageNames": ["babariviere/pi-extensions"],
