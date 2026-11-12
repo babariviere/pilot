@@ -256,6 +256,7 @@ fn NativeFeedProbe() -> impl IntoElement {
         let revision = feed.with(|f| f.snapshot().revision);
         feed.with_mut(|f| {
             f.prepare(PrepareIntent {
+                mode: None,
                 kind: UpdateKind::App,
                 revision,
             })

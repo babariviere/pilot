@@ -94,6 +94,8 @@ export interface LifecycleCheckpoint {
 	hostExited?: true;
 	/** No cooperative checkpoint. Keep effects Unknown and never auto-resume this run. */
 	interrupted?: true;
+	/** Exact native Force consent. Preserved as history, never automatic resume authority. */
+	acceptedLoss?: import("./global-update-preparation.ts").AcceptedUpdateLoss;
 	census?: { jobs: number; hasChildren: boolean };
 	/** Set only after final child inventory, clear independent census, close ACK and worker exit. */
 	quiescent?: true;

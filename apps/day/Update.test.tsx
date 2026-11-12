@@ -36,6 +36,40 @@ test("Today offers the update page only when the service needs the user", async 
 	expect(app.shows("role:button[Update ready]")).toBe(true);
 });
 
+test("Force warns for the exact update, can cancel, and records loss without claiming restoration", async () => {
+	const app = await open("./Update.tsx", desktop);
+	await app.press("role:button[Update ready]");
+	await app.press("id:update-force-prepare");
+	await app.waitFor("Force update from 0.9.2 to 0.9.3?");
+	expect(app.shows("Unsaved UI state and unfinished agent work may be lost.")).toBe(true);
+	expect(app.shows("Saves your drafts and where you are first.")).toBe(false);
+	await app.press("role:button[Cancel]");
+	expect(app.shows("Paused for the update")).toBe(false);
+	await app.press("id:update-prepare");
+	await app.waitFor("Update from 0.9.2 to 0.9.3?");
+	expect(app.shows("Saves your drafts and where you are first.")).toBe(true);
+	await app.press("role:button[Cancel]");
+	await app.press("id:update-force-prepare");
+	await app.press("role:button[Force update and accept loss]");
+	await app.waitFor("Updated to 0.9.3");
+	expect(app.shows("Record accepted state loss")).toBe(true);
+	expect(app.shows("Save drafts and where you are")).toBe(false);
+	expect(app.shows("Restore where you were")).toBe(false);
+	expect(app.shows("Resumed")).toBe(false);
+	expect(app.shows("Left as you paused it")).toBe(true);
+});
+
+test("Force never bypasses job exit or signature failures", async () => {
+	for (const entry of ["./UpdateRefused.tsx", "./UpdateUnverified.tsx"]) {
+		const app = await open(entry, desktop);
+		await app.press("id:update-force-prepare");
+		await app.press("role:button[Force update and accept loss]");
+		await app.waitFor("Not updated");
+		expect(app.shows("Updated to 0.9.3")).toBe(false);
+		expect(app.shows("This app 0.9.2 · Service 0.9.2")).toBe(true);
+	}
+});
+
 test("an update saves every form, pauses only working agents, restores the window and resumes only them", async () => {
 	const app = await open("./Update.tsx", desktop);
 	await app.keyboard.press("mod+n");

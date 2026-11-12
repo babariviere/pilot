@@ -44,6 +44,7 @@ fn start(desk: &mut UpdateDesk, view: SavedView) -> Result<Vec<Stage>, OutcomeSt
     let shown = desk.view().clone();
     let kind = shown.offer.as_ref().map(|o| o.kind).unwrap_or_default();
     let prepared = desk.prepare(&PrepareIntent {
+        mode: None,
         kind,
         revision: shown.revision,
     });
@@ -69,6 +70,87 @@ fn play(desk: &mut UpdateDesk, stages: Vec<Stage>) -> OutcomeStatus {
         }
     }
     panic!("the run did not end");
+}
+
+fn force(desk: &mut UpdateDesk) -> Result<Vec<Stage>, OutcomeStatus> {
+    let prepared = desk.prepare(&PrepareIntent {
+        kind: desk.view().offer.as_ref().unwrap().kind,
+        revision: desk.view().revision,
+        mode: Some(pilot_day_native::update::UpdateMode::Force),
+    });
+    assert_eq!(prepared.status, OutcomeStatus::Accepted);
+    desk.begin_force(&UpdateRef {
+        id: prepared.confirmation.unwrap().id,
+    })
+    .map_err(|o| o.status)
+}
+
+#[test]
+fn force_is_separate_from_normal_and_never_claims_saved_state_or_replayed_work() {
+    let mut desk = UpdateDesk::new(UpdateScenario::Available);
+    let p = desk.prepare(&PrepareIntent {
+        kind: UpdateKind::Both,
+        revision: desk.view().revision,
+        mode: None,
+    });
+    assert_eq!(
+        desk.begin_force(&UpdateRef {
+            id: p.confirmation.unwrap().id
+        })
+        .unwrap_err()
+        .status,
+        OutcomeStatus::Stale
+    );
+    assert!(desk.view().run.is_none());
+    let stages = force(&mut desk).unwrap();
+    assert!(!stages.contains(&Stage::Save));
+    assert!(!stages.contains(&Stage::Restore));
+    assert_eq!(play(&mut desk, stages), OutcomeStatus::Accepted);
+    let run = desk.view().run.as_ref().unwrap();
+    assert_eq!(run.phase, UpdatePhase::Done);
+    assert!(run.message.contains("accepted loss"));
+    assert!(desk.view().restore.is_none());
+    assert_eq!(desk.view().agents[0].state, AgentState::Unknown);
+    assert_eq!(desk.view().agents[2].state, AgentState::Held);
+    assert!(
+        desk.begin_force(&UpdateRef {
+            id: desk.view().operation.clone()
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn force_cannot_waive_signatures_or_unproven_process_exit() {
+    for scenario in [UpdateScenario::Unverified, UpdateScenario::Refused] {
+        let mut desk = UpdateDesk::new(scenario);
+        let stages = force(&mut desk).unwrap();
+        assert_eq!(play(&mut desk, stages), OutcomeStatus::Rejected);
+        assert_eq!(desk.view().service, "0.9.2");
+        assert!(desk.view().restore.is_none());
+    }
+}
+
+#[test]
+fn force_changed_target_and_lost_answer_remain_exact_and_lookup_only() {
+    let mut desk = UpdateDesk::new(UpdateScenario::Trouble);
+    assert_eq!(force(&mut desk), Err(OutcomeStatus::Stale));
+    let stages = force(&mut desk).unwrap();
+    assert_eq!(play(&mut desk, stages), OutcomeStatus::Unknown);
+    assert_eq!(desk.view().run.as_ref().unwrap().version, "0.9.4");
+    assert_eq!(
+        desk.prepare(&PrepareIntent {
+            kind: UpdateKind::Service,
+            revision: desk.view().revision,
+            mode: None
+        })
+        .status,
+        OutcomeStatus::Rejected
+    );
+    let lost = desk.begin_check();
+    desk.settle_check(lost);
+    assert_eq!(desk.view().agents[0].state, AgentState::Unknown);
+    assert_eq!(desk.view().run.as_ref().unwrap().phase, UpdatePhase::Done);
 }
 
 fn states(desk: &UpdateDesk) -> Vec<AgentState> {
@@ -154,11 +236,16 @@ fn a_confirmation_is_used_once_and_names_what_was_shown() {
         (UpdateKind::Both, revision + 7),
         (UpdateKind::Service, revision),
     ] {
-        let prepared = desk.prepare(&PrepareIntent { kind, revision });
+        let prepared = desk.prepare(&PrepareIntent {
+            kind,
+            revision,
+            mode: None,
+        });
         assert_eq!(prepared.status, OutcomeStatus::Stale);
         assert!(prepared.confirmation.is_none());
     }
     let prepared = desk.prepare(&PrepareIntent {
+        mode: None,
         kind: UpdateKind::Both,
         revision,
     });
@@ -250,6 +337,7 @@ fn a_lost_answer_stays_unknown_and_blocks_a_new_attempt_until_checked() {
     assert!(!desk.view().blocked.is_empty());
     let revision = desk.view().revision;
     let again = desk.prepare(&PrepareIntent {
+        mode: None,
         kind: UpdateKind::Service,
         revision,
     });
@@ -291,6 +379,7 @@ fn refusals_stop_before_replacement_and_put_paused_agents_back() {
     assert!(desk.view().restore.is_none());
     let revision = desk.view().revision;
     let again = desk.prepare(&PrepareIntent {
+        mode: None,
         kind: UpdateKind::Service,
         revision,
     });
@@ -329,6 +418,7 @@ fn registration_is_explicit_and_an_uncertain_one_is_only_looked_up() {
     assert_eq!(absent.view().state, ServiceState::Unknown);
     let revision = absent.view().revision;
     let again = absent.prepare(&PrepareIntent {
+        mode: None,
         kind: UpdateKind::Register,
         revision,
     });
@@ -352,6 +442,7 @@ fn offline_holds_updates_and_newer_takes_an_app_only_update() {
     let mut offline = UpdateDesk::new(UpdateScenario::Offline);
     let revision = offline.view().revision;
     let prepared = offline.prepare(&PrepareIntent {
+        mode: None,
         kind: UpdateKind::Service,
         revision,
     });

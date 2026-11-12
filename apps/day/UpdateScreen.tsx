@@ -12,6 +12,7 @@ import type {
 	Confirmation,
 	ServiceView,
 	UpdateKind,
+	UpdateMode,
 	UpdateRun,
 	UpdateStepState,
 } from "pilot-day/native";
@@ -163,6 +164,13 @@ function confirmLines(c: Confirmation): string[] {
 			"macOS may ask you to allow it in Login Items.",
 		];
 	}
+	if (c.mode === "force")
+		return [
+			"Unsaved UI state and unfinished agent work may be lost.",
+			"Pilot keeps durable history. Interrupted or uncertain work will not be replayed.",
+			"All chats pause first. Signature checks and safe process shutdown are still required.",
+			"This permission applies only to this update. Cancel changes nothing.",
+		];
 	const lines = ["Saves your drafts and where you are first."];
 	const pauses = c.pauses;
 	const keeps = c.keeps;
@@ -193,12 +201,12 @@ function say(message: string) {
  */
 const refusedOffer = signal("");
 
-function offerKey(service: ServiceView): string {
-	return service.offer ? `${service.revision}/${service.offer.kind}` : "";
+function offerKey(service: ServiceView, mode?: UpdateMode): string {
+	return service.offer ? `${service.revision}/${service.offer.kind}/${mode ?? "normal"}` : "";
 }
 
 /** Asks Rust for a one-use confirmation of the offer shown. It starts nothing. */
-async function prepare(update: Update) {
+async function prepare(update: Update, mode?: UpdateMode) {
 	const service = update.service();
 	const offer = service.offer;
 	if (!offer || updateBusy()) return;
@@ -206,22 +214,27 @@ async function prepare(update: Update) {
 	say("");
 	glide();
 	try {
-		const prepared = await update.feed.prepare({ kind: offer.kind, revision: service.revision });
+		const prepared = await update.feed.prepare({ kind: offer.kind, revision: service.revision, mode });
 		if (prepared.status === "accepted") return;
 		say(prepared.message);
-		if (prepared.status === "rejected") refusedOffer.set(offerKey(service));
+		if (prepared.status === "rejected") refusedOffer.set(offerKey(service, mode));
 	} finally {
 		updateBusy.set(false);
 	}
 }
 
 /** Drops the confirmation shown. Nothing was started. */
-function cancel(update: Update) {
+async function cancel(update: Update) {
 	const pending = update.service().pending;
 	if (!pending || updateBusy()) return;
+	updateBusy.set(true);
 	glide();
-	void update.feed.cancel({ id: pending.id });
-	say("");
+	try {
+		const outcome = await update.feed.cancel({ id: pending.id });
+		say(outcome.status === "accepted" ? "" : outcome.message);
+	} finally {
+		updateBusy.set(false);
+	}
 }
 
 /**
@@ -235,6 +248,11 @@ async function confirm(update: Update, day: Day, plans?: Plans) {
 	updateBusy.set(true);
 	say("");
 	try {
+		if (pending.mode === "force") {
+			const outcome = await update.feed.forceConfirm({ id: pending.id });
+			if (outcome.status !== "accepted" && outcome.message !== update.service().run?.message) say(outcome.message);
+			return;
+		}
 		if (pending.kind !== "register") {
 			const forms = await saveForms(day, plans);
 			if (!forms.saved) {
@@ -322,7 +340,7 @@ function Offer(props: { update: Update }) {
 					{service().blocked}
 				</Text>
 			</If>
-			<View class="flex-row">
+			<View class="flex-row gap-2">
 				<Action
 					primary
 					testID="update-prepare"
@@ -330,6 +348,14 @@ function Offer(props: { update: Update }) {
 					disabled={!!service().blocked || updateBusy() || refused()}
 					onPress={() => void prepare(props.update)}
 				/>
+				<If when={service().forceAvailable && offer()?.kind !== "register"}>
+					<Action
+						testID="update-force-prepare"
+						label="Force update…"
+						disabled={!!service().blocked || updateBusy() || refusedOffer() === offerKey(service(), "force")}
+						onPress={() => void prepare(props.update, "force")}
+					/>
+				</If>
 			</View>
 		</View>
 	);
@@ -341,8 +367,8 @@ function Confirm(props: { update: Update; day: Day; plans?: Plans; pending: Conf
 		c().kind === "register"
 			? "Register Pilot's service?"
 			: c().from
-				? `Update from ${c().from} to ${c().to}?`
-				: `Update to ${c().to}?`;
+				? `${c().mode === "force" ? "Force update" : "Update"} from ${c().from} to ${c().to}?`
+				: `${c().mode === "force" ? "Force update" : "Update"} to ${c().to}?`;
 	return (
 		<Arrive class="gap-3 rounded-xl bg-muted px-4 py-4">
 			<Text role="header" class="text-base font-medium text-foreground">
@@ -357,11 +383,17 @@ function Confirm(props: { update: Update; day: Day; plans?: Plans; pending: Conf
 				<Action
 					primary
 					testID="update-confirm"
-					label={c().kind === "register" ? "Register" : "Update"}
+					label={
+						c().kind === "register"
+							? "Register"
+							: c().mode === "force"
+								? "Force update and accept loss"
+								: "Update"
+					}
 					disabled={updateBusy()}
 					onPress={() => void confirm(props.update, props.day, props.plans)}
 				/>
-				<Action label="Cancel" disabled={updateBusy()} onPress={() => cancel(props.update)} />
+				<Action label="Cancel" disabled={updateBusy()} onPress={() => void cancel(props.update)} />
 			</View>
 		</Arrive>
 	);
@@ -439,7 +471,7 @@ export function UpdateScreen(props: { update: Update; day: Day; plans?: Plans })
 		return !r || r.phase === "done" || r.phase === "stopped";
 	};
 	keymap.bind("escape", () => {
-		if (service().pending) cancel(props.update);
+		if (service().pending) void cancel(props.update);
 		else closeUpdate();
 	});
 	return (

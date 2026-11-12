@@ -736,3 +736,208 @@ for (const damage of ["truncated", "identity"]) {
 		assert.deepEqual(await preparation.prepare(op), receipt, "no recovery effect replay after storage failure");
 	});
 }
+
+function forceOperation(): DurableOperation {
+	const op = operation();
+	op.payload = canonicalJSON({
+		app: pinned.app,
+		acceptedLoss: {
+			schema: 1,
+			operationId: op.operationId,
+			confirmation: randomUUID(),
+			unsavedUI: true,
+			unfinishedWork: true,
+		},
+	});
+	op.payloadHash = payloadHash(op.payload);
+	return op;
+}
+
+test("Force records exact loss before interruption, keeps safety blockers and never resumes canceled work", async (t) => {
+	const f = await fixture(t);
+	const op = forceOperation();
+	const checkpoint = f.sessions.checkpointLifecycle.bind(f.sessions);
+	t.mock.method(
+		f.sessions,
+		"checkpointLifecycle",
+		async (...args: Parameters<SessionManager["checkpointLifecycle"]>) => {
+			assert.equal((await f.journal.lookup(op))?.state, "pending");
+			assert.deepEqual((await f.journal.lookup(op))?.result, {
+				target: JSON.parse(op.payload),
+				phase: "loss-accepted",
+			});
+			return checkpoint(...args);
+		},
+	);
+	const result = await f.preparation.prepare(op);
+	assert.equal(result.state, "accepted");
+	const manifest = f.sessions.lifecycleManifest(op.operationId);
+	for (const { checkpoint } of manifest) {
+		assert.deepEqual(checkpoint.acceptedLoss, JSON.parse(op.payload).acceptedLoss);
+		assert.equal(checkpoint.interrupted, true);
+	}
+	assert.equal(manifest[0]!.checkpoint.phase, "stopped");
+	assert.equal(manifest[0]!.checkpoint.quiescent, true);
+	assert.ok((await f.preparation.verify(op)).blockers.some((b) => b.kind === "unknown-process"));
+	assert.equal(
+		await readFile(join(f.home, "saved-native-capture"), "utf8"),
+		draft,
+		"durable bytes are never discarded",
+	);
+	const reopened = new GlobalUpdatePreparation(
+		new OperationJournal(join(f.home, "operations"), host),
+		f.resources,
+		f.sessions,
+	);
+	await reopened.load();
+	assert.deepEqual(await reopened.prepare(op), result);
+	const changed = structuredClone(op);
+	changed.payload = canonicalJSON({ ...JSON.parse(op.payload), app: { ...pinned.app, build: "1000.2" } });
+	changed.payloadHash = payloadHash(changed.payload);
+	await assert.rejects(reopened.prepare(changed), /different immutable bytes/);
+	await assert.rejects(reopened.prepare(forceOperation()), /Original global update/);
+	await reopened.release(
+		operation("global-update-release", { prepareId: op.operationId, prepareHash: op.payloadHash }),
+		op,
+		async () => {},
+	);
+	await f.settle();
+	assert.equal(f.starts(), 4, "even acknowledged unfinished work is never automatically replayed after Force");
+});
+
+test("Force consent cannot move to another operation or masquerade as a saved capture", async (t) => {
+	const f = await fixture(t);
+	const original = forceOperation();
+	for (const payload of [
+		{ ...JSON.parse(original.payload), captureHash: pinned.captureHash },
+		{
+			...JSON.parse(original.payload),
+			acceptedLoss: { ...JSON.parse(original.payload).acceptedLoss, unfinishedWork: false },
+		},
+		JSON.parse(original.payload),
+	])
+		await assert.rejects(f.preparation.prepare(operation("global-update-prepare", payload)), /Invalid global update/);
+	assert.equal(
+		f.children.every((c) => c.exitCode === null),
+		true,
+		"invalid consent never interrupts work",
+	);
+});
+
+test("Force provenance survives a cold session owner and never replays canceled work on release", async (t) => {
+	const f = await fixture(t);
+	const op = forceOperation();
+	const receipt = await f.preparation.prepare(op);
+	assert.equal(receipt.state, "accepted");
+	const before = await Promise.all(
+		f.chats.map((chat) => readFile(join(f.home, "sessions", chat.id, "meta.json"), "utf8")),
+	);
+	await f.sessions.shutdown();
+	let starts = 0;
+	const cold = new SessionManager(f.home, new ProjectStore(f.home), undefined, {
+		title: async () => undefined,
+		worker: () => {
+			starts++;
+			throw new Error("Force-canceled work must not replay on cold release");
+		},
+	});
+	f.managers.push(cold);
+	const reopened = new GlobalUpdatePreparation(
+		new OperationJournal(join(f.home, "operations"), host),
+		new RuntimeResources([cold]),
+		cold,
+	);
+	await reopened.load();
+	await cold.load(true);
+	assert.deepEqual(await reopened.prepare(op), receipt);
+	await reopened.release(
+		operation("global-update-release", { prepareId: op.operationId, prepareHash: op.payloadHash }),
+		op,
+		async () => {},
+	);
+	assert.equal(starts, 0);
+	for (const [index, chat] of f.chats.entries()) {
+		const meta = JSON.parse(await readFile(join(f.home, "sessions", chat.id, "meta.json"), "utf8"));
+		assert.deepEqual(
+			meta.lifecycleCheckpoint.acceptedLoss,
+			JSON.parse(before[index]!).lifecycleCheckpoint.acceptedLoss,
+		);
+		assert.deepEqual(
+			meta.pending,
+			JSON.parse(before[index]!).pending,
+			"durable intent is kept as history, not resent",
+		);
+	}
+	assert.equal(await readFile(join(f.home, "saved-native-capture"), "utf8"), draft);
+});
+
+test("Force cannot waive durable ownership or actual process-exit failure", async (t) => {
+	const f = await fixture(t);
+	const worker = (f.sessions as unknown as { workers: Map<string, Worker> }).workers.get(f.chats[0]!.id)!;
+	const mocked = t.mock.method(worker, "close", async () => {
+		throw new Error("Force still requires safe shutdown");
+	});
+	try {
+		const op = forceOperation();
+		const result = await f.preparation.prepare(op);
+		assert.equal(result.state, "pending");
+		assert.match(JSON.stringify(result.result), /safe shutdown/);
+		assert.equal(f.children[0]!.exitCode, null);
+		assert.deepEqual(await f.preparation.prepare(op), result);
+	} finally {
+		mocked.mock.restore();
+	}
+});
+
+test("Force never disables a later explicit Stop's abort-only recovery", async (t) => {
+	const f = await fixture(t);
+	const op = forceOperation();
+	await f.preparation.prepare(op);
+	await f.preparation.release(
+		operation("global-update-release", { prepareId: op.operationId, prepareHash: op.payloadHash }),
+		op,
+		async () => {},
+	);
+	assert.equal(f.starts(), 4, "release never replays Force-canceled work");
+	await f.sessions.stop(f.chats[0]!.id);
+	await f.settle();
+	assert.equal(f.sessions.get(f.chats[0]!.id)?.working, false);
+	assert.equal(f.sessions.get(f.chats[0]!.id)?.outcome, undefined, "Stop cannot resurrect an old result");
+});
+
+for (const damage of ["truncated", "identity"]) {
+	test(`Force update cannot waive ${damage} retained storage`, async (t) => {
+		const f = await fixture(t);
+		await f.sessions.shutdown();
+		const path = join(f.home, "sessions", f.chats[0]!.id, "meta.json");
+		const original = await readFile(path, "utf8");
+		const damaged = damage === "truncated" ? '{"id":' : JSON.stringify({ ...JSON.parse(original), id: randomUUID() });
+		await writeFile(path, damaged);
+		let starts = 0;
+		const cold = new SessionManager(f.home, new ProjectStore(f.home), undefined, {
+			title: async () => undefined,
+			worker: () => {
+				starts++;
+				throw new Error("damaged storage must not open a model");
+			},
+		});
+		f.managers.push(cold);
+		const resources = new RuntimeResources([cold]);
+		const hold = resources.freezeAdmissions();
+		t.after(hold);
+		const preparation = new GlobalUpdatePreparation(
+			new OperationJournal(join(f.home, "operations"), host),
+			resources,
+			cold,
+		);
+		await preparation.load();
+		await cold.load(true);
+		const op = forceOperation();
+		const receipt = await preparation.prepare(op);
+		assert.equal(receipt.state, "pending", "actual unreadable/identity damage is not stale bookkeeping");
+		assert.match(JSON.stringify(receipt.result), /readable retained chat state/);
+		assert.equal(await readFile(path, "utf8"), damaged, "no history deletion or live database repair");
+		assert.equal(starts, 0);
+		assert.deepEqual(await preparation.prepare(op), receipt, "no recovery effect replay after storage failure");
+	});
+}

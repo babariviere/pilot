@@ -2676,7 +2676,7 @@ export class SessionManager {
 	/** Event-driven wake-up after Settings, project definitions and host admission change. */
 	resumeFlows(): void {
 		for (const meta of this.metas.values())
-			if (meta.flow) {
+			if (meta.flow && !meta.lifecycleCheckpoint?.acceptedLoss) {
 				const current = this.metas.get(meta.flow.progress.sessionId);
 				if (current) {
 					this.observeRunFinished(current, this.summary(current));
@@ -2711,6 +2711,7 @@ export class SessionManager {
 	}
 
 	private startFlowAdvance(meta: SessionMeta): void {
+		if (meta.lifecycleCheckpoint?.acceptedLoss) return;
 		const root = this.flowRoot(meta);
 		if (!root?.flow || !flowActive(root.flow) || this.closing || this.flowFaults.has(root.id)) return;
 		if (this.flowTasks.has(root.id)) {
@@ -2955,7 +2956,7 @@ export class SessionManager {
 	}
 
 	private runFinishedPaused(meta: SessionMeta): boolean {
-		if (this.heldUpdateRecovery(meta)) return true;
+		if (this.heldUpdateRecovery(meta) || meta.lifecycleCheckpoint?.acceptedLoss) return true;
 		const subscription = this.subscriptionPause(meta);
 		return !!(
 			this.missionWorkHeld(meta.id) ||
@@ -3058,6 +3059,7 @@ export class SessionManager {
 	}
 
 	private startPostRun(meta: SessionMeta): void {
+		if (meta.lifecycleCheckpoint?.acceptedLoss) return;
 		if (this.missionWorkHeld(meta.id)) return;
 		const event = meta.automation?.boundary?.finished;
 		if (
@@ -3413,6 +3415,7 @@ export class SessionManager {
 
 	private startWorkspaceSetup(meta: SessionMeta, ready = Promise.resolve()): Promise<void> {
 		if (this.missionWorkHeld(meta.id)) return Promise.resolve();
+		if (meta.lifecycleCheckpoint?.acceptedLoss) return Promise.resolve();
 		if (this.heldUpdateRecovery(meta)) return Promise.resolve();
 		const active = this.workspaceSetups.get(meta.id);
 		if (active) return active.done;
@@ -3948,6 +3951,7 @@ ${run.excerpt}`,
 				void this.start(meta.id, true);
 		for (const meta of this.metas.values()) {
 			if (this.heldUpdateRecovery(meta)) continue;
+			if (meta.lifecycleCheckpoint?.acceptedLoss) continue;
 			void this.startWorkspaceSetup(meta);
 			this.startPostRun(meta);
 		}
@@ -8156,9 +8160,12 @@ ${run.excerpt}`,
 		operationId: string,
 		purpose: "app-update" | "daemon-upgrade" | "daemon-stop" | "daemon-restart",
 		replacement?: LifecycleRuntime,
+		acceptedLoss?: import("./global-update-preparation.ts").AcceptedUpdateLoss,
 	): Promise<void> {
 		if (purpose === "app-update" && !this.sessionInventoryQualified)
 			return Promise.reject(new ServiceUnavailable("Update recovery requires readable retained chat state"));
+		if (acceptedLoss && (purpose !== "app-update" || acceptedLoss.operationId !== operationId))
+			return Promise.reject(new Conflict("Force consent does not own this update"));
 		if (this.closing) return Promise.reject(new Conflict("Lifecycle preparation cannot enter during shutdown"));
 		// Stop/restart retains this runtime. Legacy callers cannot silently authorize
 		// recovery under an unspecified new runtime after the original boot exits.
@@ -8168,6 +8175,7 @@ ${run.excerpt}`,
 			operationId,
 			purpose,
 			replacement: replacement ?? null,
+			acceptedLoss: acceptedLoss ?? null,
 		});
 		if (this.lifecycleCheckpoint && this.lifecycleCheckpointOwner !== owner)
 			return Promise.reject(new Conflict("Another lifecycle operation owns the checkpoint"));
@@ -8176,6 +8184,8 @@ ${run.excerpt}`,
 			operationId,
 			purpose,
 			replacement ? structuredClone(replacement) : undefined,
+			undefined,
+			acceptedLoss ? structuredClone(acceptedLoss) : undefined,
 		).finally(() => {
 			this.lifecycleCheckpoint = undefined;
 			this.lifecycleCheckpointOwner = undefined;
@@ -8311,6 +8321,7 @@ ${run.excerpt}`,
 		purpose: "app-update" | "daemon-upgrade" | "daemon-stop" | "daemon-restart" | "mission-pause",
 		replacement?: LifecycleRuntime,
 		selected?: Set<string>,
+		acceptedLoss?: import("./global-update-preparation.ts").AcceptedUpdateLoss,
 	): Promise<void> {
 		if (!selected) {
 			if (!this.updateGate.frozen) throw new Error("Lifecycle checkpoint requires frozen admissions");
@@ -8388,6 +8399,7 @@ ${run.excerpt}`,
 					schema: 1,
 					operationId,
 					purpose,
+					...(acceptedLoss ? { acceptedLoss: structuredClone(acceptedLoss), interrupted: true as const } : {}),
 					incarnation: `${this.lifecycleRuntime?.boot ?? this.lifecycleIncarnation}:${this.workerGenerations.get(id) ?? 0}`,
 					...(this.lifecycleRuntime ? { originBoot: this.lifecycleRuntime.boot } : {}),
 					...(this.lifecycleRuntime?.host ? { host: structuredClone(this.lifecycleRuntime.host) } : {}),
@@ -8479,7 +8491,7 @@ ${run.excerpt}`,
 							checkpoint.interrupted = true;
 						if (acknowledged && closing.censusClear && exited) checkpoint.quiescent = true;
 						if (checkpoint.phase !== "stopped")
-							checkpoint.phase = checkpoint.quiescent ? "checkpointed" : "unknown";
+							checkpoint.phase = checkpoint.quiescent ? (acceptedLoss ? "stopped" : "checkpointed") : "unknown";
 						try {
 							await this.save(meta, undefined, undefined, true);
 						} catch (error) {
@@ -8840,6 +8852,7 @@ ${run.excerpt}`,
 		if (this.sleepPause) return;
 		for (const meta of this.metas.values()) {
 			if (this.heldUpdateRecovery(meta)) continue;
+			if (meta.lifecycleCheckpoint?.acceptedLoss) continue;
 			void this.startWorkspaceSetup(meta);
 			this.observeRunFinished(meta, this.summary(meta));
 			this.startPostRun(meta);
@@ -8882,6 +8895,7 @@ ${run.excerpt}`,
 		// Parked Stop persists an abort. Reopening after release delivers that abort with
 		// stopOnOpen, never resumes the previously interrupted model or children first.
 		if (checkpoint.phase === "stopped") return meta.pending?.[0]?.type === "abort";
+		if (checkpoint.acceptedLoss) return false;
 		// A global app preparation owns only the pauses it introduced. An idle
 		// kernel may already have a tool/update hold even without a current user
 		// input hold. Never clear it just because the app update ended.

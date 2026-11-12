@@ -20,6 +20,7 @@ pub(crate) mod plan_sources;
 mod planning;
 pub mod ritual;
 mod transport;
+pub mod update_loss;
 pub mod updates;
 
 use crate::{
@@ -177,6 +178,7 @@ impl Shared {
 }
 
 enum Work {
+    AcceptUpdateLoss(update_loss::Record),
     UpdateStartup,
     UpdateCommit {
         id: String,
@@ -222,6 +224,8 @@ struct Request {
 #[derive(Clone)]
 pub struct NativeHost(Arc<Handle>);
 struct Handle {
+    source: Source,
+    ledger: PathBuf,
     shared: Arc<Shared>,
     requests: Sender<Request>,
     worker: Mutex<Worker>,
@@ -240,6 +244,15 @@ impl Drop for Handle {
 }
 
 impl NativeHost {
+    pub(crate) fn loss_binding(&self, source: &Source, ledger: &std::path::Path) -> bool {
+        self.0.source == *source && self.0.ledger == ledger
+    }
+    fn accept_update_loss(
+        &self,
+        record: update_loss::Record,
+    ) -> Receiver<Result<IntentOutcome, Error>> {
+        self.request(Work::AcceptUpdateLoss(record))
+    }
     /// Passive exact-source capture, including New's unsent text. Reading it
     /// restores, acknowledges, replays and resumes nothing.
     pub fn saved_window(&self) -> Option<window::SavedWindow> {
@@ -392,6 +405,8 @@ impl NativeHost {
             attention_wanted: AtomicBool::new(false),
         });
         let (requests, rx) = async_channel::bounded(16);
+        let owner_source = source.clone();
+        let owner_ledger = ledger.clone();
         let state = shared.clone();
         let worker = std::thread::Builder::new()
             .name("day-host".into())
@@ -413,6 +428,8 @@ impl NativeHost {
             })
             .map_err(|_| Error::Unavailable)?;
         Ok(Self(Arc::new(Handle {
+            source: owner_source,
+            ledger: owner_ledger,
             shared,
             requests,
             worker: Mutex::new(Worker {
@@ -1059,6 +1076,12 @@ async fn handle(
         shared.current(epoch)?;
     }
     match work {
+        Work::AcceptUpdateLoss(record) => {
+            if record.source != t.source {
+                return Err(Error::Identity);
+            }
+            update_loss::save(journal, record)?;
+        }
         Work::Bridge(_) => return Err(Error::Invalid),
         Work::UpdateCommit { .. } | Work::UpdateStartup => return Err(Error::Invalid),
         Work::Ritual(_) => return Err(Error::Invalid),

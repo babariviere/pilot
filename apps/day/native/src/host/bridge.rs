@@ -194,6 +194,14 @@ async fn run(
         return Ok(json!({"snapshot":snapshot,"outcome":null}));
     }
     use super::updates::Command as U;
+    if let Command::UpdateForceConfirm(request) = &call.command {
+        if !super::valid_id(&request.id) {
+            return Err(Error::Invalid);
+        }
+        // This legacy selector cannot produce a native accepted-loss close.
+        // Refuse before capture, pause, cancellation or journal mutation.
+        return Err(Error::Unavailable);
+    }
     let update = match &call.command {
         Command::UpdateRead => Some(U::Read),
         Command::UpdatePrepare(r) => Some(U::Prepare(r.clone(), call.window.clone())),
@@ -416,6 +424,7 @@ async fn run(
         Command::UpdateRead
         | Command::UpdatePrepare(_)
         | Command::UpdateConfirm(_)
+        | Command::UpdateForceConfirm(_)
         | Command::UpdateCancel(_)
         | Command::UpdateCheck
         | Command::UpdateRestored(_) => unreachable!("handled update command"),

@@ -60,6 +60,50 @@ export async function connectedUpdates(window: string): Promise<Update | null> {
 			? (result.outcome ?? { status: "accepted", revision: service().revision, message: "" })
 			: // No retry, refresh mutation, manufactured success or inferred receipt.
 				refusalOutcome(result.refusal, service().revision);
+	const confirm = async (id: string, intent: ConfirmIntent | UpdateRef, force: boolean): Promise<IntentOutcome> => {
+		const current = service();
+		const pending = current.pending;
+		if (awaiting || consumed.has(id) || pending?.id !== id || (pending.mode === "force") !== force) {
+			return {
+				status: "stale",
+				revision: current.revision,
+				message: "This confirmation is no longer available. Check only.",
+			};
+		}
+		consumed.add(id);
+		awaiting = id;
+		publish({
+			...current,
+			operation: id,
+			pending: null,
+			run: {
+				kind: pending.kind,
+				version: pending.to,
+				phase: "unknown",
+				steps: [],
+				message: force
+					? "Waiting for the native accepted-loss record and result."
+					: "Waiting for the native save barrier and result.",
+				next: "Check only; nothing will be resent.",
+			},
+		});
+		const result = await send(force ? "day.update.forceConfirm" : "day.update.confirm", intent);
+		if (!result.ok && !UNCERTAIN.has(result.refusal) && awaiting === id) {
+			// Refused before anything was entered: the screen shows what it
+			// showed, without the used confirmation. It is never sent again.
+			awaiting = null;
+			publish({ ...current, pending: null });
+			if (result.refusal === "capacity") {
+				return {
+					status: "rejected",
+					revision: current.revision,
+					message:
+						"Where you are is too large to save, so nothing was paused or updated. Your drafts stay as they are.",
+				};
+			}
+		}
+		return outcomeOf(result);
+	};
 	return {
 		service,
 		feed: {
@@ -77,50 +121,15 @@ export async function connectedUpdates(window: string): Promise<Update | null> {
 				return { status: outcome.status, message: outcome.message, confirmation: result.snapshot.pending ?? null };
 			},
 			async cancel(intent: UpdateRef): Promise<IntentOutcome> {
+				// Cancellation revokes this local confirmation synchronously, even
+				// when its native acknowledgement is lost or arrives late.
+				consumed.add(intent.id);
+				const current = service();
+				if (current.pending?.id === intent.id) publish({ ...current, pending: null });
 				return outcomeOf(await send("day.update.cancel", intent));
 			},
-			confirm: async (intent: ConfirmIntent) => {
-				const current = service();
-				const pending = current.pending;
-				if (awaiting || consumed.has(intent.confirmation) || pending?.id !== intent.confirmation) {
-					return {
-						status: "stale",
-						revision: current.revision,
-						message: "This confirmation is no longer available. Check only.",
-					};
-				}
-				consumed.add(intent.confirmation);
-				awaiting = intent.confirmation;
-				publish({
-					...current,
-					operation: intent.confirmation,
-					pending: null,
-					run: {
-						kind: pending.kind,
-						version: pending.to,
-						phase: "unknown",
-						steps: [],
-						message: "Waiting for the native save barrier and result.",
-						next: "Check only; nothing will be resent.",
-					},
-				});
-				const result = await send("day.update.confirm", intent);
-				if (!result.ok && !UNCERTAIN.has(result.refusal) && awaiting === intent.confirmation) {
-					// Refused before anything was entered: the screen shows what it
-					// showed, without the used confirmation. It is never sent again.
-					awaiting = null;
-					publish({ ...current, pending: null });
-					if (result.refusal === "capacity") {
-						return {
-							status: "rejected",
-							revision: current.revision,
-							message:
-								"Where you are is too large to save, so nothing was paused or updated. Your drafts stay as they are.",
-						};
-					}
-				}
-				return outcomeOf(result);
-			},
+			confirm: (intent: ConfirmIntent) => confirm(intent.confirmation, intent, false),
+			forceConfirm: (intent: UpdateRef) => confirm(intent.id, intent, true),
 			check: async () => outcomeOf(await send("day.update.check", {})),
 			restored: async (intent: UpdateRef) => outcomeOf(await send("day.update.restored", intent)),
 		},

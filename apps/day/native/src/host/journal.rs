@@ -44,6 +44,7 @@ pub(super) struct Cache {
 }
 
 pub(super) struct Journal {
+    pub losses: BTreeMap<String, super::update_loss::Record>,
     pub windows: BTreeMap<String, super::window::SavedWindow>,
     pub updates: BTreeMap<String, super::updates::Record>,
     pub rituals: BTreeMap<String, super::ritual::Record>,
@@ -63,6 +64,7 @@ pub(super) struct Journal {
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 enum Entry {
+    Loss(Box<super::update_loss::Record>),
     Window(Box<super::window::SavedWindow>),
     Update(Box<super::updates::Record>),
     Ritual(Box<super::ritual::Record>),
@@ -160,10 +162,25 @@ impl Journal {
         let mut changes: BTreeMap<String, super::changes::Record> = BTreeMap::new();
         let mut rituals: BTreeMap<String, super::ritual::Record> = BTreeMap::new();
         let mut updates: BTreeMap<String, super::updates::Record> = BTreeMap::new();
+        let mut losses: BTreeMap<String, super::update_loss::Record> = BTreeMap::new();
         let mut windows: BTreeMap<String, super::window::SavedWindow> = BTreeMap::new();
         for line in body.split(|b| *b == b'\n').filter(|line| !line.is_empty()) {
             let entry: Entry = serde_json::from_slice(line).map_err(|_| Error::Storage)?;
             let record = match entry {
+                Entry::Loss(record) => {
+                    record.validate()?;
+                    if losses
+                        .get(&record.operation)
+                        .map_or(record.closed, |prior| !record.follows(prior))
+                    {
+                        return Err(Error::Storage);
+                    }
+                    losses.insert(record.operation.clone(), *record);
+                    if losses.len() > 256 {
+                        return Err(Error::Storage);
+                    }
+                    continue;
+                }
                 Entry::Window(record) => {
                     record.validate()?;
                     let key = super::window::SavedWindow::key(&record.source)?;
@@ -178,6 +195,11 @@ impl Journal {
                 }
                 Entry::Update(record) => {
                     record.validate()?;
+                    if let Some(loss) = record.loss()?
+                        && losses.get(&loss.operation) != Some(&loss)
+                    {
+                        return Err(Error::Storage);
+                    }
                     if updates
                         .get(&record.id)
                         .map_or(record.state != "capture", |old| !record.follows(old))
@@ -373,6 +395,7 @@ impl Journal {
         }
         if windows.len()
             + updates.len()
+            + losses.len()
             + rituals.len()
             + changes.len()
             + records.len()
@@ -386,6 +409,7 @@ impl Journal {
         file.sync_all().map_err(|_| Error::Storage)?;
         sync_parent(&path)?;
         Ok(Self {
+            losses,
             windows,
             file,
             path,
@@ -488,7 +512,8 @@ impl Journal {
     }
 
     fn count(&self) -> usize {
-        self.windows.len()
+        self.losses.len()
+            + self.windows.len()
             + self.updates.len()
             + self.rituals.len()
             + self.changes.len()
@@ -496,6 +521,25 @@ impl Journal {
             + self.planning.len()
             + self.attention.len()
             + self.attention_drafts.len()
+    }
+
+    pub fn save_loss(&mut self, record: super::update_loss::Record) -> Result<(), Error> {
+        record.validate()?;
+        if self
+            .losses
+            .get(&record.operation)
+            .map_or(record.closed, |prior| !record.follows(prior))
+        {
+            return Err(Error::Stale);
+        }
+        if !self.losses.contains_key(&record.operation)
+            && (self.losses.len() >= 256 || self.count() >= MAX_OPERATIONS)
+        {
+            return Err(Error::Capacity);
+        }
+        self.append(&record)?;
+        self.losses.insert(record.operation.clone(), record);
+        Ok(())
     }
 
     pub fn save_window(&mut self, record: super::window::SavedWindow) -> Result<(), Error> {
@@ -520,6 +564,11 @@ impl Journal {
 
     pub fn save_update(&mut self, record: super::updates::Record) -> Result<(), Error> {
         record.validate()?;
+        if let Some(loss) = record.loss()?
+            && self.losses.get(&loss.operation) != Some(&loss)
+        {
+            return Err(Error::Storage);
+        }
         if self
             .updates
             .get(&record.id)

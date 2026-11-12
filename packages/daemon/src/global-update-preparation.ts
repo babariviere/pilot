@@ -10,21 +10,46 @@ export const GLOBAL_UPDATE_TARGET = "global-update";
 const PREPARE = "global-update-prepare";
 const RELEASE = "global-update-release";
 
+export interface AcceptedUpdateLoss {
+	schema: 1;
+	operationId: string;
+	confirmation: string;
+	unsavedUI: true;
+	unfinishedWork: true;
+}
+
 export interface GlobalUpdateTarget {
 	/** Digest of the exact durably saved native window/capture. Not a save receipt itself. */
-	captureHash: string;
+	captureHash?: string;
+	/** Native-only explicit consent, instead of a fabricated save receipt. */
+	acceptedLoss?: AcceptedUpdateLoss;
 	app: { source: string; build: string };
 	/** Supplied only by the verified GUI-bundled runtime owner, never a TSX path. */
 	replacement?: LifecycleRuntime;
 }
 
-function target(value: unknown): GlobalUpdateTarget {
+function target(value: unknown, operationId: string): GlobalUpdateTarget {
 	const v = value as GlobalUpdateTarget;
+	const loss = v?.acceptedLoss;
+	const stateKey = loss === undefined ? "captureHash" : "acceptedLoss";
+	const validState =
+		loss === undefined
+			? typeof v?.captureHash === "string" && /^[a-f0-9]{64}$/.test(v.captureHash)
+			: !!loss &&
+				Object.keys(loss).sort().join() === "confirmation,operationId,schema,unfinishedWork,unsavedUI" &&
+				loss.schema === 1 &&
+				loss.operationId === operationId &&
+				typeof loss.confirmation === "string" &&
+				/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(loss.confirmation) &&
+				loss.unsavedUI === true &&
+				loss.unfinishedWork === true;
 	if (
 		!v ||
-		!["app,captureHash", "app,captureHash,replacement"].includes(Object.keys(v).sort().join()) ||
-		typeof v.captureHash !== "string" ||
-		!/^[a-f0-9]{64}$/.test(v.captureHash) ||
+		![
+			["app", stateKey],
+			["app", stateKey, "replacement"],
+		].some((keys) => keys.sort().join() === Object.keys(v).sort().join()) ||
+		!validState ||
 		!v.app ||
 		Object.keys(v.app).sort().join() !== "build,source" ||
 		typeof v.app.source !== "string" ||
@@ -39,7 +64,7 @@ function target(value: unknown): GlobalUpdateTarget {
 }
 
 /** One preparation per immutable operation. Unknown is lookup-only, including on reopen.
- * The native caller must save/seal its exact state before entry, and independently verify
+ * The native caller must save/seal state or durably confirm exact loss before entry, and independently verify
  * signatures/versions and process safety before installing. A pause receipt grants none
  * of that authority. All resource contributors (including schedules) must be supplied.
  */
@@ -98,7 +123,7 @@ export class GlobalUpdatePreparation {
 	async prepare(operation: DurableOperation): Promise<OperationReceipt> {
 		const op = structuredClone(operation);
 		this.assertOperation(op, PREPARE);
-		const pinned = target(JSON.parse(op.payload));
+		const pinned = target(JSON.parse(op.payload), op.operationId);
 		const previous = await this.journal.lookup(op);
 		if (previous) return previous; // Never re-enter a retained pending operation.
 		// Recheck after journal I/O. Another preparation/release may have won.
@@ -111,7 +136,15 @@ export class GlobalUpdatePreparation {
 			return await this.journal.execute(op, async (_op, { firstEntry }) => {
 				if (!firstEntry) throw new Conflict("Original global update requires lookup");
 				try {
-					await this.sessions.checkpointLifecycle(op.operationId, "app-update", pinned.replacement);
+					// Loss acceptance must be durable before the first interruption. A
+					// pending/unknown operation is still lookup-only, never new consent.
+					if (pinned.acceptedLoss) await this.journal.checkpoint(op, { target: pinned, phase: "loss-accepted" });
+					await this.sessions.checkpointLifecycle(
+						op.operationId,
+						"app-update",
+						pinned.replacement,
+						pinned.acceptedLoss,
+					);
 				} catch (error) {
 					await this.journal.checkpoint(op, {
 						target: pinned,
@@ -208,7 +241,7 @@ export class GlobalUpdatePreparation {
 		const releases = await this.journal.targetReceipts(RELEASE, GLOBAL_UPDATE_TARGET);
 		if (releases.some((r) => r.state === "pending"))
 			throw new Conflict("Unknown release is original-operation lookup-only");
-		const pinned = target(JSON.parse(prepared.payload));
+		const pinned = target(JSON.parse(prepared.payload), prepared.operationId);
 		this.assertOperation(op, RELEASE);
 		this.pending = true;
 		try {

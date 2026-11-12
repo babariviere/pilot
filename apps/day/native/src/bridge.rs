@@ -63,6 +63,7 @@ pub const METHODS: &[&str] = &[
     "day.update.read",
     "day.update.prepare",
     "day.update.confirm",
+    "day.update.forceConfirm",
     "day.update.cancel",
     "day.update.check",
     "day.update.restored",
@@ -232,6 +233,7 @@ pub(crate) enum Command {
     UpdateRead,
     UpdatePrepare(crate::update::PrepareIntent),
     UpdateConfirm(crate::update::ConfirmIntent),
+    UpdateForceConfirm(crate::update::UpdateRef),
     UpdateCancel(crate::update::UpdateRef),
     UpdateCheck,
     UpdateRestored(crate::update::UpdateRef),
@@ -415,6 +417,11 @@ fn command(name: &str, args: Value) -> Result<Command, Error> {
             }
         }
         "day.update.prepare" => C::UpdatePrepare(decode(&args)?),
+        "day.update.forceConfirm" => {
+            let r: crate::update::UpdateRef = decode(&args)?;
+            id(&r.id)?;
+            C::UpdateForceConfirm(r)
+        }
         "day.update.confirm" => {
             let r: crate::update::ConfirmIntent = decode(&args)?;
             id(&r.confirmation)?;
@@ -907,6 +914,22 @@ impl Bridge {
                     .as_u128()
             && gate.generation == receipt.generation
             && gate.save_sequence == receipt.save_sequence
+    }
+
+    /// Separate native accepted-loss seal. Never creates a normal FlushReceipt,
+    /// native capture or form-save ACK. All entered host work must still join.
+    pub(crate) fn seal_loss(&self, loss: &crate::host::update_loss::Accepted) -> Result<(), Error> {
+        if loss.window() != self.window
+            || !self.root.host().loss_binding(loss.source(), loss.journal())
+        {
+            return Err(Error::Identity);
+        }
+        let mut gate = self.gate.lock().expect("bridge gate poisoned");
+        if gate.closed || gate.sealed {
+            return Err(Error::Closed);
+        }
+        gate.sealed = true;
+        Ok(())
     }
 
     /// Native-only entry after the attached editor owner rechecked and sealed

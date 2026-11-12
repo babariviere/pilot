@@ -254,6 +254,81 @@ fn open_update(app: &mut Headless, label: &str) {
 }
 
 #[test]
+fn force_is_explicit_exact_and_check_only_after_a_lost_reply() {
+    let entry = entry();
+    let root = Root::new(Scenario::Quiet);
+    let mut offer = offering(UpdateKind::App);
+    offer.force_available = Some(true);
+    root.service("day.update.read", &offer);
+    let mut pending = offer.clone();
+    pending.pending = Some(Confirmation {
+        id: "force-one".into(),
+        mode: Some(pilot_day_native::update::UpdateMode::Force),
+        kind: UpdateKind::App,
+        from: "1.0".into(),
+        to: "2.0".into(),
+        pauses: None,
+        keeps: None,
+        restarts: true,
+    });
+    root.service("day.update.prepare", &pending);
+    root.refuse("day.update.forceConfirm", "lost");
+    let mut app = open_on(&entry, root.channel.clone());
+    open_update(&mut app, "Update ready");
+    app.press("id:update-force-prepare").unwrap();
+    wait(&mut app, "Force update from 1.0 to 2.0?");
+    assert!(app.shows("Unsaved UI state and unfinished agent work may be lost."));
+    assert!(!app.shows("Saves your drafts and where you are first."));
+    app.press("role:button[Force update and accept loss]")
+        .unwrap();
+    wait(&mut app, "Update not confirmed");
+    assert_eq!(
+        root.args("day.update.prepare"),
+        vec![json!({"kind":"app","revision":4,"mode":"force"})]
+    );
+    assert_eq!(
+        root.args("day.update.forceConfirm"),
+        vec![json!({"id":"force-one"})]
+    );
+    assert_eq!(root.count("day.update.confirm"), 0);
+    assert_eq!(
+        root.count("day.flush.ack"),
+        0,
+        "loss is not a fabricated save receipt"
+    );
+    assert!(!has(&app, "id:update-force-prepare"));
+    let mut unknown = ran(
+        UpdateKind::App,
+        UpdatePhase::Unknown,
+        "Force loss is accepted. Installation is not confirmed.",
+    );
+    unknown.operation = "force-one".into();
+    root.service("day.update.check", &unknown);
+    app.press("id:update-check").unwrap();
+    wait(
+        &mut app,
+        "Force loss is accepted. Installation is not confirmed.",
+    );
+    assert_eq!(root.count("day.update.forceConfirm"), 1);
+    assert_eq!(root.count("day.update.prepare"), 1);
+    drop(app);
+    let _ = std::fs::remove_dir_all(entry.parent().unwrap());
+}
+
+#[test]
+fn unqualified_native_roots_never_offer_force() {
+    let entry = entry();
+    let root = Root::new(Scenario::Quiet);
+    root.service("day.update.read", &offering(UpdateKind::App));
+    let mut app = open_on(&entry, root.channel.clone());
+    open_update(&mut app, "Update ready");
+    assert!(!has(&app, "id:update-force-prepare"));
+    assert_eq!(root.count("day.update.forceConfirm"), 0);
+    drop(app);
+    let _ = std::fs::remove_dir_all(entry.parent().unwrap());
+}
+
+#[test]
 fn uncounted_agents_say_unknown_and_a_refused_confirmation_changes_nothing() {
     let entry = entry();
     let root = Root::new(Scenario::Quiet);
@@ -262,6 +337,7 @@ fn uncounted_agents_say_unknown_and_a_refused_confirmation_changes_nothing() {
     let mut pending = offer.clone();
     pending.revision = 5;
     pending.pending = Some(Confirmation {
+        mode: None,
         id: "confirm-1".into(),
         kind: UpdateKind::Service,
         from: "1.0".into(),

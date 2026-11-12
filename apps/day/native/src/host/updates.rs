@@ -301,7 +301,7 @@ impl Selection {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Record {
     pub order: u64,
@@ -322,6 +322,40 @@ pub(super) struct Record {
     pub manifest: Option<Value>,
 }
 impl Record {
+    /// Separate versioned loss disposition. It is never a SavedWindow/flush ACK.
+    pub(super) fn loss(&self) -> Result<Option<super::update_loss::Record>, Error> {
+        if self.update_version != 2 {
+            return Ok(None);
+        }
+        let loss: super::update_loss::Record =
+            serde_json::from_value(self.root["loss"].clone()).map_err(|_| Error::Storage)?;
+        loss.validate()?;
+        let payload: Value = serde_json::from_str(
+            self.root["preparation"]["payload"]
+                .as_str()
+                .ok_or(Error::Storage)?,
+        )
+        .map_err(|_| Error::Storage)?;
+        if !loss.closed
+            || loss.operation != self.id
+            || loss.source != self.source
+            || loss.window != self.window
+            || self.kind != "app"
+            || self.target != loss.target["build"].as_str().ok_or(Error::Storage)?
+            || payload["acceptedLoss"] != loss.payload()
+            || payload.get("captureHash").is_some()
+            || self.root["officialNsh"] != loss.target
+            || self.root["preparation"]["operationId"] != loss.operation
+            || payload["app"]
+                != json!({"source":loss.target["source"],"build":loss.target["build"]})
+            || !self.view.is_null()
+            || self.flush.is_some()
+            || self.restored
+        {
+            return Err(Error::Storage);
+        }
+        Ok(Some(loss))
+    }
     fn capture_matches(&self, capture: &super::window::SavedWindow) -> bool {
         self.source == capture.source
             && self.window == capture.window
@@ -330,7 +364,7 @@ impl Record {
     }
     pub fn validate(&self) -> Result<(), Error> {
         if self.order == 0
-            || self.update_version != 1
+            || ![1, 2].contains(&self.update_version)
             || !super::valid_id(&self.id)
             || self.window.is_empty()
             || self.auth.len() != 64
@@ -342,13 +376,15 @@ impl Record {
             .contains(&self.state.as_str())
             || self.root.as_object().is_none()
             || self.message.len() > 1024
-            || (self.state != "capture" && self.flush.is_none())
+            || (self.update_version == 1 && self.state != "capture" && self.flush.is_none())
         {
             return Err(Error::Storage);
         }
-        let saved: SavedView =
-            nsh_core::element::from_json(&self.view).map_err(|_| Error::Storage)?;
-        validate_view(&saved)?;
+        if self.loss()?.is_none() {
+            let saved: SavedView =
+                nsh_core::element::from_json(&self.view).map_err(|_| Error::Storage)?;
+            validate_view(&saved)?;
+        }
         Ok(())
     }
     pub fn follows(&self, old: &Self) -> bool {
@@ -361,7 +397,7 @@ impl Record {
         if old.state == "entered" {
             fixed.manifest.clone_from(&old.manifest);
         }
-        if old.state == "capture" && self.state == "capture" {
+        if old.update_version == 1 && old.state == "capture" && self.state == "capture" {
             fixed.view.clone_from(&old.view);
         }
         fixed == *old
@@ -404,6 +440,7 @@ pub(super) struct State {
     view: ServiceView,
     pending: Option<(Confirmation, Value, String, String)>,
     latest: Option<Record>,
+    retained_loss: Option<super::update_loss::Record>,
     authority: Option<(String, String)>,
     cold_restore: bool,
     restore_verified: bool,
@@ -429,6 +466,7 @@ impl State {
             selection,
             pending: None,
             latest: None,
+            retained_loss: None,
             authority: None,
             cold_restore: false,
             restore_verified: false,
@@ -443,6 +481,11 @@ impl State {
         }
     }
     pub async fn restore(&mut self, journal: &Journal, source: &Source) {
+        self.retained_loss = journal
+            .losses
+            .values()
+            .find(|r| r.source == *source && !journal.updates.contains_key(&r.operation))
+            .cloned();
         self.latest = journal
             .updates
             .values()
@@ -460,10 +503,26 @@ impl State {
     }
     fn project(&mut self) {
         self.view.pending = self.pending.as_ref().map(|p| p.0.clone());
+        if let Some(loss) = &self.retained_loss {
+            self.view.operation = loss.operation.clone();
+            self.view.pending = None;
+            self.view.restore = None;
+            self.view.blocked =
+                "The original Force update requires lookup. Nothing will be resent.".into();
+            self.view.run = Some(UpdateRun { kind: UpdateKind::App,
+                version: loss.target["build"].as_str().unwrap_or_default().into(), phase: UpdatePhase::Unknown,
+                message: if loss.closed {
+                    "The window closed under your accepted-loss confirmation. Install and interrupted-work outcomes are not confirmed. Durable history was kept."
+                } else {
+                    "Force consent was saved. Pilot cannot confirm whether unsaved UI state was discarded or the update began."
+                }.into(), next: "Check the original operation only. Do not replay uncertain work.".into(), steps: vec![] });
+            return;
+        }
         if let Some(r) = &self.latest {
             self.view.operation = r.id.clone();
             let phase = match r.state.as_str() {
                 "done" => UpdatePhase::Done,
+                "stopped" if r.update_version == 2 => UpdatePhase::Unknown,
                 "stopped" => UpdatePhase::Stopped,
                 _ => UpdatePhase::Unknown,
             };
@@ -471,7 +530,14 @@ impl State {
                 kind: kind(&r.kind),
                 version: r.target.clone(),
                 phase,
-                message: r.message.clone(),
+                message: if r.update_version == 2 && !r.message.starts_with("Force") {
+                    format!(
+                        "Force accepted possible loss of unsaved UI state and unfinished work. Durable history was not discarded. {}",
+                        r.message
+                    )
+                } else {
+                    r.message.clone()
+                },
                 next: if phase == UpdatePhase::Unknown {
                     "Check only. This operation will not be sent again.".into()
                 } else {
@@ -507,9 +573,14 @@ impl State {
         self.view.clone()
     }
     fn unsettled(&self) -> bool {
-        self.latest
-            .as_ref()
-            .is_some_and(|r| !["done", "stopped"].contains(&r.state.as_str()))
+        self.retained_loss.is_some()
+            || self.latest.as_ref().is_some_and(|r| {
+                if r.update_version == 2 {
+                    r.state != "done"
+                } else {
+                    !["done", "stopped"].contains(&r.state.as_str())
+                }
+            })
     }
     pub fn save_capture(
         &mut self,
@@ -738,6 +809,11 @@ pub(super) async fn handle(
             Ok(outcome(OutcomeStatus::Accepted, state.view.revision, ""))
         }
         Command::Prepare(intent, window) => {
+            // Legacy staged-helper selections have no accepted-loss close
+            // capability. Never turn Force into an ordinary captured update.
+            if intent.mode == Some(UpdateMode::Force) {
+                return Err(Error::Unavailable);
+            }
             if intent.revision != state.view.revision {
                 return Err(Error::Stale);
             }
@@ -761,6 +837,7 @@ pub(super) async fn handle(
             let auth = authority(t, intent.kind)?;
             let confirmation = Confirmation {
                 id: uuid::Uuid::new_v4().to_string(),
+                mode: intent.mode,
                 kind: intent.kind,
                 from: state.view.service.clone(),
                 to: selection

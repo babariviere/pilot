@@ -206,6 +206,24 @@ impl UpdateFeed {
         }
     }
 
+    /// Confirms the exact warned Force update once, without a fabricated saved view.
+    /// Native roots that cannot enforce accepted loss refuse before any effect.
+    pub async fn force_confirm(this: Instance<Self>, intent: UpdateRef) -> IntentOutcome {
+        if let Some(window) = this.with(|f| f.native_window.clone()) {
+            return Self::native_result(window, crate::bridge::Command::UpdateForceConfirm(intent))
+                .await;
+        }
+        let begun = this.with_mut(|feed| {
+            let begun = feed.desk.begin_force(&intent);
+            feed.publish();
+            begun
+        });
+        match begun {
+            Ok(stages) => Self::play(&this, stages).await,
+            Err(outcome) => outcome,
+        }
+    }
+
     /// Reads what happened to a run whose answer was lost, or reads the
     /// service again. Lookup only: it never registers, updates or resumes.
     pub async fn check(this: Instance<Self>) -> IntentOutcome {

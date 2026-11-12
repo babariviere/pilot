@@ -20,7 +20,7 @@ export type Update = {
 	 * Sends intents. Never written to from TSX state. The connected root
 	 * answers `prepare` and `cancel` asynchronously; the mock at once.
 	 */
-	feed: Pick<UpdateFeed, "snapshot" | "onChange" | "confirm" | "check" | "restored"> & {
+	feed: Pick<UpdateFeed, "snapshot" | "onChange" | "confirm" | "forceConfirm" | "check" | "restored"> & {
 		prepare(intent: PrepareIntent): Prepared | Promise<Prepared>;
 		cancel(intent: UpdateRef): IntentOutcome | Promise<IntentOutcome>;
 	};

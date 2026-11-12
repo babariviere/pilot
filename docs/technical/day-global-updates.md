@@ -15,7 +15,7 @@ not another installer or service manager.
   retained operation and before session/queued-work recovery. It never re-enters
   a retained operation. An unfinished operation keeps its fence across reopen.
 - A native-owned immutable operation pins the exact app source/build, a digest
-  of the already-durable native capture, and an optional verified replacement
+  of the already-durable native capture in normal mode, and an optional verified replacement
   runtime identity. A digest alone is not proof of capture or signature checking.
 - The fence covers all supplied contributors, including sessions, queued work,
   schedules and automation. No coordinator exception exists. Dormant/stopped
@@ -59,6 +59,38 @@ not another installer or service manager.
   Unreadable/truncated storage and failed writes remain real failures. Force
   cannot waive them or authorize manual repair/deletion of durable history.
 
+### Explicit Force consent
+
+Normal remains the default. The established update card offers **Force update…**
+only when its native root reports that it can enforce accepted-loss close. It
+prepares a separate one-use confirmation naming the exact version. Confirmation
+warns about both unsaved UI state and unfinished agent work. Cancel starts
+nothing. A failed normal save never selects or confirms Force automatically.
+
+Force uses `forceConfirm`, not `confirm` with an empty saved view. Native
+`update_loss::Offer` is constructed only from verified official app inputs. Its
+consumption writes the exact operation, confirmation, source, window and target
+to the existing fsynced host journal before granting an opaque `Accepted` handle.
+The current verified native app rechecks the complete target and journal before
+that write. The same version with different signed archive bytes is stale too.
+Raw JSON and retained records cannot reconstruct this handle. A separate native
+close capability still seals admissions, joins entered host work, and disposes
+the exact engine before installer entry. It claims no normal form/capture ACK.
+Reopen distinguishes accepted consent from confirmed window close. Neither is
+proof of install, safe daemon shutdown or successor startup.
+
+The global preparation payload uses **either** `captureHash` (normal) **or**
+`acceptedLoss` (Force), never both. Accepted loss names the original preparation
+operation and one-use native confirmation, with both loss scopes explicitly true.
+The immutable payload also pins the exact signed app target and optional verified
+runtime. Loss acceptance is checkpointed before session interruption. Canceled
+unfinished executors retain loss provenance and cannot automatically resume,
+advance flows or rerun setup/post-run work. Already durable history/queued intent
+is not erased. Broken peers still get host-owned close. Unproven process exit,
+signature/trust failure, storage failure, holds and permission gates remain real
+failures. Check/reopen reads only the original operation. It cannot replay,
+retarget, reset or silently replace the accepted loss.
+
 The daemon exposes prepare/lookup/fresh verification through its authenticated native
 runtime-owner channel (`/__pilot_runtime_update/v1`, `receipt.globalUpdate`).
 There is no agent/session or TSX route and no new credential. The native verified
@@ -101,6 +133,11 @@ Its exact inputs come from the trusted native owner, not TSX or a path/JSON hint
   host join and engine disposal. Stored JSON, a VM acknowledgement and a quit
   callback cannot construct it. This is close evidence, not user update consent;
   explicit target confirmation and operation binding still belong to the root.
+- Force instead requires an opaque `ForcedClosedWindow`. Its exact target loss
+  acceptance is already durable, and its native host has joined before engine
+  disposal. It carries no saved view or normal flush receipt. The same verified
+  app/runtime, rollback, fresh resource observation and independent process
+  verifier guard both modes through one installer path.
 
 Only then can the adapter journal an immutable operation, enter global pause,
 obtain fresh boot/HMAC-bound resource evidence and enter the official installer.
@@ -163,11 +200,12 @@ The following native/distribution gates remain:
    active/coordinator/queued/already-held/stopped work, jobs, broken peers, target
    versions, lost replies, durable cold reopen and selective resume. Unconfigured
    DEVELOPMENT inputs are not a signed distribution or production acceptance.
-7. Add the separately confirmed Force option. Normal capture is still mandatory
-   in this increment; no existing confirmation implies accepted state loss.
-   Force must bind the exact target, warn about unsaved UI and unfinished agent
-   work, durably record accepted loss and preserve durable history. It cannot
-   waive signature/trust, safe shutdown, permissions or Unknown/no-replay rules.
+7. Qualify Force's native root selection, accepted-loss close and cold startup
+   using actual signed inputs. The separate confirmation/journal/installer
+   capabilities are implemented; the current unqualified legacy root does not
+   advertise or enter Force. Normal capture stays mandatory for normal updates.
+   No ordinary confirmation, save failure or retained loss record grants Force
+   or waives signature/trust, shutdown, permissions or Unknown/no-replay rules.
 
 ## Tagged NSH API verification
 

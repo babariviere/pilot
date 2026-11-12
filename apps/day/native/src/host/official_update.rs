@@ -1,7 +1,7 @@
 //! Official tagged NSH app installation after exact native capture and close.
 //! No exit hook, app-swap implementation, service manager or VM export lives here.
 use super::{Error, journal::Journal, updates::Record, window::SavedWindow};
-use crate::macos_host::ClosedWindow;
+use crate::macos_host::{ClosedWindow, ForcedClosedWindow};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use nsh_updater::{Available, Config, Download, install::Installation};
 use pilot_desktop_updater::{
@@ -25,6 +25,21 @@ use std::{
 };
 
 const MAX_ARCHIVE: u64 = 1024 * 1024 * 1024;
+
+enum ClosedUpdate {
+    Preserved(ClosedWindow, String),
+    Forced(super::update_loss::Accepted),
+}
+
+struct InstallState {
+    source: super::Source,
+    window: String,
+    operation_id: String,
+    view: Value,
+    flush: Option<(u32, u64)>,
+    capture: Option<SavedWindow>,
+    loss: Option<super::update_loss::Record>,
+}
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -467,6 +482,48 @@ impl VerifiedApp {
         })
     }
 
+    /// Prepare a separate loss confirmation from this exact verified signed target.
+    /// Acceptance rechecks the current verified target before any loss is recorded.
+    pub fn force_offer(
+        &self,
+        source: super::Source,
+        window: String,
+    ) -> Result<super::update_loss::Offer, Error> {
+        super::update_loss::Offer::verified(
+            self.journal.clone(),
+            source,
+            window,
+            self.target.clone(),
+            self.trust.current_build.clone(),
+        )
+    }
+
+    /// Accept only this current verified app's exact confirmation and journal.
+    /// A stale target fails before granting any state-loss or close capability.
+    pub async fn accept_force(
+        &self,
+        offer: super::update_loss::Offer,
+        id: &str,
+        host: &super::NativeHost,
+    ) -> Result<super::update_loss::Accepted, Error> {
+        offer.accept(id, host, &self.target, &self.journal).await
+    }
+
+    /// Consume exact accepted loss, joined host close and disposed engine. All
+    /// signature, runtime, rollback and independent process checks stay mandatory.
+    pub fn install_force(
+        self,
+        closed: ForcedClosedWindow,
+        rollback: VerifiedRollback,
+        verify_processes: impl FnOnce(&Value) -> Result<(), Error>,
+    ) -> Result<InstalledApp, Error> {
+        self.install_closed(
+            ClosedUpdate::Forced(closed.into_accepted()),
+            rollback,
+            verify_processes,
+        )
+    }
+
     /// Consumes exact native capture+seal+join+disposal before the first global
     /// pause or install entry. Never call from an NSH quit callback.
     /// The native owner must supply independently qualified process safety for
@@ -480,6 +537,19 @@ impl VerifiedApp {
         operation_id: String,
         verify_processes: impl FnOnce(&Value) -> Result<(), Error>,
     ) -> Result<InstalledApp, Error> {
+        self.install_closed(
+            ClosedUpdate::Preserved(closed, operation_id),
+            rollback,
+            verify_processes,
+        )
+    }
+
+    fn install_closed(
+        self,
+        closed: ClosedUpdate,
+        rollback: VerifiedRollback,
+        verify_processes: impl FnOnce(&Value) -> Result<(), Error>,
+    ) -> Result<InstalledApp, Error> {
         if nsh_platform_macos::objc2::MainThreadMarker::new().is_some() {
             return Err(Error::Invalid);
         }
@@ -490,17 +560,62 @@ impl VerifiedApp {
         {
             return Err(Error::Identity);
         }
-        let capture = closed.capture();
-        capture.validate()?;
+        let state = match closed {
+            ClosedUpdate::Preserved(closed, operation_id) => {
+                let capture = closed.capture().clone();
+                capture.validate()?;
+                InstallState {
+                    source: capture.source.clone(),
+                    window: capture.window.clone(),
+                    operation_id,
+                    view: capture.view.clone(),
+                    flush: Some((capture.generation, capture.save_sequence)),
+                    capture: Some(capture),
+                    loss: None,
+                }
+            }
+            ClosedUpdate::Forced(mut accepted) => {
+                if accepted.journal() != self.journal || accepted.record().target != self.target {
+                    return Err(Error::Identity);
+                }
+                // Only ForcedClosedWindow reaches here: joined host and engine
+                // disposal happened before this off-AppKit history write.
+                accepted.closed()?;
+                let loss = accepted.record().clone();
+                InstallState {
+                    source: loss.source.clone(),
+                    window: loss.window.clone(),
+                    operation_id: loss.operation.clone(),
+                    view: Value::Null,
+                    flush: None,
+                    capture: None,
+                    loss: Some(loss),
+                }
+            }
+        };
+        let operation_id = state.operation_id.clone();
         if !super::valid_id(&operation_id) || uuid::Uuid::parse_str(&operation_id).is_err() {
             return Err(Error::Invalid);
         }
         let mut journal = Journal::open(self.journal.clone())?;
-        let key = SavedWindow::key(&capture.source)?;
-        if journal.windows.get(&key) != Some(capture)
-            || journal.updates.contains_key(&operation_id)
+        if let Some(capture) = &state.capture
+            && journal.windows.get(&SavedWindow::key(&capture.source)?) != Some(capture)
+        {
+            return Err(Error::Identity);
+        }
+        if let Some(loss) = &state.loss
+            && journal.losses.get(&loss.operation) != Some(loss)
+        {
+            return Err(Error::Identity);
+        }
+        if journal.updates.contains_key(&operation_id)
             || journal.updates.values().any(|r| {
-                r.source == capture.source && !["done", "stopped"].contains(&r.state.as_str())
+                r.source == state.source
+                    && (if r.update_version == 2 {
+                        r.state != "done"
+                    } else {
+                        !["done", "stopped"].contains(&r.state.as_str())
+                    })
             })
         {
             return Err(Error::Unknown);
@@ -508,34 +623,49 @@ impl VerifiedApp {
         // Keep the signed old archive outside the app and OS-temp preflight.
         // NSH removes the old .app after swap; this survives startup failure.
         let backup = rollback.persist(&self.journal, &operation_id)?;
-        let payload =
-            json!({"captureHash":hash(&serde_json::to_vec(capture).map_err(|_| Error::Storage)?),
-            "app":{"source":self.manifest.source,"build":self.manifest.build},
-            "replacement":self.runtime.replacement()})
-            .to_string();
-        let destination = json!({"hostId":"daemon","daemonId":capture.source.home.daemon_id,"lineageId":capture.source.home.lineage_id});
+        let mut payload = json!({"app":{"source":self.manifest.source,"build":self.manifest.build},
+            "replacement":self.runtime.replacement()});
+        if let Some(loss) = &state.loss {
+            payload["acceptedLoss"] = loss.payload();
+        } else {
+            payload["captureHash"] = hash(
+                &serde_json::to_vec(state.capture.as_ref().ok_or(Error::Identity)?)
+                    .map_err(|_| Error::Storage)?,
+            )
+            .into();
+        }
+        let payload = payload.to_string();
+        let destination = json!({"hostId":"daemon","daemonId":state.source.home.daemon_id,"lineageId":state.source.home.lineage_id});
         let operation = json!({"schemaVersion":1,"operationId":operation_id,"producerId":operation_id,"sequence":1,
             "origin":destination,"destination":destination,"targetId":"global-update","kind":"global-update-prepare",
             "payloadHash":hash(payload.as_bytes()),"payload":payload});
-        let root = json!({"officialNsh":self.target,"preparation":operation,
+        let mut root = json!({"officialNsh":self.target,"preparation":operation,
             "rollback":{"archive":backup,"sha256":rollback.manifest.archive_sha256,"size":rollback.manifest.archive_size,
                 "source":rollback.manifest.source,"build":rollback.manifest.build,"version":rollback.manifest.short_version,
                 "key":self.trust.public_key.to_vec(),"requirement":self.trust.code_requirement}});
+        if let Some(loss) = &state.loss {
+            root["loss"] = serde_json::to_value(loss).map_err(|_| Error::Storage)?;
+        }
         let mut record = Record {
             order: journal.updates.values().map(|r| r.order).max().unwrap_or(0) + 1,
-            update_version: 1,
+            update_version: if state.loss.is_some() { 2 } else { 1 },
             id: operation_id,
-            source: capture.source.clone(),
+            source: state.source.clone(),
             root: root.clone(),
-            window: capture.window.clone(),
+            window: state.window,
             kind: "app".into(),
             target: self.manifest.build.clone(),
-            view: capture.view.clone(),
+            view: state.view,
             auth: hash(&serde_json::to_vec(&root).map_err(|_| Error::Storage)?),
             revision: 1,
             state: "capture".into(),
-            flush: Some((capture.generation, capture.save_sequence)),
-            message: "Exact native capture and close saved before global preparation.".into(),
+            flush: state.flush,
+            message: if state.loss.is_some() {
+                "Force loss accepted and window closed. Global preparation is not yet acknowledged."
+            } else {
+                "Exact native capture and close saved before global preparation."
+            }
+            .into(),
             restored: false,
             manifest: Some(json!({"phase":"pause-entered"})),
         };
@@ -545,14 +675,14 @@ impl VerifiedApp {
         record.manifest = Some(json!({"phase":"pause-entered"}));
         journal.save_update(record.clone())?;
         let location = Location {
-            home: capture.source.profile.clone(),
-            port: capture.source.port,
+            home: state.source.profile.clone(),
+            port: state.source.port,
             policy: Default::default(),
         };
         let connection = Connection::new(
             location.clone(),
-            capture.source.home.daemon_id.clone(),
-            capture.source.home.lineage_id.clone(),
+            state.source.home.daemon_id.clone(),
+            state.source.home.lineage_id.clone(),
         );
         let cancel = AtomicBool::new(false);
         let mut service = None;
