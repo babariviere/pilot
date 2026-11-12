@@ -98,6 +98,7 @@ export async function nativeIntakeFixture() {
 	await once(server, "listening");
 	const root = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 	return {
+		server,
 		home,
 		project,
 		other,

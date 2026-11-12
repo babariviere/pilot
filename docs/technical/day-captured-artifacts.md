@@ -107,3 +107,21 @@ disabled. They cover exact older revisions, stale delivery/source pins,
 membership, ABA, missing/oversized/redacted/corrupt bytes and legacy kinds.
 Native tests use the released hidden host channel. No test opens a window,
 invokes historical code or reads a live source.
+
+`native/tests/delivery_today.rs` also compiles the actual `Connected.tsx`
+entry and drives `ConnectedDelivery.inspect` through the released hidden
+channel. Its saved-revision fixture (`day-delivered-artifact.ts`) counts
+artifact GETs and their exact query pins. The connected checks cover one
+acquisition per press, plain saved text, local Show all with unchanged stored
+bytes, stale access, and a cold reopen that keeps the unsent New goal, Send
+back note and navigation without rereading source or changing verification.
+The fixture uses real isolated daemon storage with workers disabled.
+
+For deterministic denial and late-answer ordering, that same test target
+first acquires inert envelopes through the real native handler, then scripts
+only `day.delivery.artifact` replies at the released channel. Those cases
+qualify the actual connected adapter and screen, not daemon denial or HTTP
+timing. The native bridge/access tests remain separate. Every window closes
+its engine before awaiting its native owner; saved-window/journal reads use
+a fresh channel after that close. These are headless behavior checks, not
+visual, live-service or full daily-driver acceptance.

@@ -41,8 +41,46 @@ f.store.linkArtifact(mission.id, {
 	kind: "html",
 	revision: 1,
 });
+// A second saved source crosses the reader's display limit, not its byte limit.
+const longId = randomUUID();
+const longDirectory = join(f.home, "sessions", worker.id, "artifacts", longId);
+const longSource = `${"// saved line 👩🏽‍💻\n".repeat(401)}throw Error('never evaluate saved source');  \n`;
+const longBytes = JSON.stringify({ ...artifact, id: longId, title: "Long saved source", source: longSource });
+await mkdir(longDirectory, { recursive: true });
+await writeFile(join(longDirectory, "1.json"), longBytes);
+await writeFile(join(longDirectory, "latest.json"), JSON.stringify({ ...artifact, id: longId, source: "", html: "" }));
+f.store.linkArtifact(mission.id, {
+	taskId: task.id,
+	sessionId: worker.id,
+	artifactId: longId,
+	title: "Long saved source",
+	kind: "html",
+	revision: 1,
+});
+const second = f.store.addTask(mission.id, { title: "Another saved output", sessionId: worker.id });
+f.store.linkArtifact(mission.id, {
+	taskId: second.id,
+	sessionId: worker.id,
+	artifactId,
+	title: "Revision two",
+	kind: "html",
+	revision: 2,
+});
 f.store.completeTask(mission.id, task.id, worker.id, { commit: "a".repeat(40), checks: "Synthetic", issues: "" });
+f.store.completeTask(mission.id, second.id, worker.id, { commit: "b".repeat(40), checks: "Synthetic", issues: "" });
 await f.store.durable();
+const artifactReads: { path: string; query: Record<string, string> }[] = [];
+let deliveryReads = 0;
+let posts = 0;
+f.server.on("request", (request) => {
+	const url = new URL(request.url ?? "/", f.root);
+	// Operation admission only; native startup also has passive POST barriers.
+	if (request.method === "POST" && url.pathname === "/api/operations") posts++;
+	if (url.pathname.endsWith("/delivered-work")) deliveryReads++;
+	if (url.pathname.endsWith("/delivered-work/artifact")) {
+		artifactReads.push({ path: url.pathname, query: Object.fromEntries(url.searchParams) });
+	}
+});
 console.log(
 	JSON.stringify({
 		source: {
@@ -54,6 +92,11 @@ console.log(
 		},
 		ledger: join(f.home, "commands.jsonl"),
 		task: { kind: "task", projectId: f.project.id, missionId: mission.id, taskId: task.id },
+		second: { kind: "task", projectId: f.project.id, missionId: mission.id, taskId: second.id },
+		artifactId,
+		longId,
+		longSource,
+		longBytes,
 	}),
 );
 for await (const line of createInterface({ input: process.stdin })) {
@@ -70,6 +113,10 @@ for await (const line of createInterface({ input: process.stdin })) {
 	console.log(
 		JSON.stringify({
 			...f.stats(),
+			artifactReads,
+			deliveryReads,
+			posts,
+			longBytes: await readFile(join(longDirectory, "1.json"), "utf8"),
 			messages: meta.pending.filter((p: { content: string }) => p.content !== "Synthetic work only"),
 			verification: f.store.userVerifications.current("not-an-operation"),
 		}),

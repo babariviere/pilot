@@ -6,9 +6,15 @@ fn fixture() -> Fixture {
 fn selection(f: &Fixture, b: &Bridge) -> Value {
     let r = f.call(b, "day.delivery.read", f.info["task"].clone());
     let p = &r["value"]["snapshot"];
+    let link = p["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["artifactId"] == f.info["artifactId"])
+        .unwrap();
     json!({"subject":p["subject"],"targetId":p["targetId"],"deliveryId":p["deliveryId"],
-        "ownerSessionId":p["ownerSessionId"],"sourceSessionId":p["artifacts"][0]["sessionId"],
-        "artifactId":p["artifacts"][0]["artifactId"],"revision":p["artifacts"][0]["revision"]})
+        "ownerSessionId":p["ownerSessionId"],"sourceSessionId":link["sessionId"],
+        "artifactId":link["artifactId"],"revision":link["revision"]})
 }
 
 #[test]

@@ -12,6 +12,7 @@
 #![allow(dead_code)]
 include!("support/intake_fixture.rs");
 use nsh_core::prelude::*;
+use nsh_engine::HostCall;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -174,16 +175,21 @@ fn delivered_task_checked_from_its_mission_sent_back_once_and_a_lost_answer_stay
     assert_eq!(saved.view["notes"], json!([format!("{key}\n{NOTE}")]));
     assert_eq!(posts(&mut f), 2, "saving the window sends nothing");
 
-    // A cold reopen: the reopened result waits in To check.
+    // A cold reopen restores the result and its unsent note first.
     let bridge = Bridge::new(DayRoot::new(host));
     let mut app = open(&entry, &bridge);
+    wait(&mut app, "id:send-back-note");
+    assert_eq!(app.screen().input_text("id:send-back-note"), Ok(Some(NOTE)));
+    // Explicitly return to Today to find the reopened result in To check.
+    app.press("role:button[Back to Today]").unwrap();
+    wait(&mut app, &format!("id:check-result-{task_id}"));
+    app.press("role:button[Back to Today]").unwrap();
     wait(&mut app, "id:to-check");
     wait(&mut app, &row);
     app.press(&row).unwrap();
     wait(&mut app, "id:your-check");
-    app.press("id:send-back-open").unwrap();
     wait(&mut app, "id:send-back-note");
-    app.type_text("id:send-back-note", NOTE).unwrap();
+    assert_eq!(app.screen().input_text("id:send-back-note"), Ok(Some(NOTE)));
     // Its answer is lost: saved, sent once, then only checked.
     f.stats("lost");
     app.press("id:send-back").unwrap();
@@ -194,6 +200,9 @@ fn delivered_task_checked_from_its_mission_sent_back_once_and_a_lost_answer_stay
     assert_eq!(stats["posts"], 3);
     assert_eq!(stats["messages"].as_array().unwrap().len(), 1);
     assert_eq!(stats["messages"][0]["content"], NOTE);
+    app.press("role:button[Back to Today]").unwrap();
+    wait(&mut app, "id:to-check");
+    flush(&mut app, &bridge);
     close_window(app, bridge);
 
     // Another cold reopen still says so on Today and offers Check only.
@@ -338,6 +347,10 @@ fn a_press_opens_the_exact_pull_request_once_and_ticked_reminders_are_saved_with
     // A cold reopen hands nothing to the browser again.
     let bridge = Bridge::new(DayRoot::new(recording(&f, &opened)));
     let mut app = open(&entry, &bridge);
+    wait(&mut app, "id:your-check");
+    app.press("role:button[Back to Today]").unwrap();
+    wait(&mut app, &format!("id:check-result-{task_id}"));
+    app.press("role:button[Back to Today]").unwrap();
     wait(&mut app, &format!("id:mission-{mission}"));
     app.wait(Duration::from_millis(300)).unwrap();
     assert_eq!(
@@ -351,5 +364,314 @@ fn a_press_opens_the_exact_pull_request_once_and_ticked_reminders_are_saved_with
     assert_eq!(stats["messages"], json!([]));
     assert_eq!(stats["external"], 0);
     close_window(app, bridge);
+    let _ = std::fs::remove_dir_all(entry.parent().unwrap());
+}
+
+/// Uses the real connected entry and native artifact handler, not DeliveryDemo.
+fn result(app: &mut Headless, subject: &Value) {
+    let mission = subject["missionId"].as_str().unwrap();
+    let task = subject["taskId"].as_str().unwrap();
+    let row = format!("id:check-result-{task}");
+    if !has(app, &row) {
+        wait(app, &format!("id:mission-{mission}"));
+        app.press(&format!("id:mission-{mission}")).unwrap();
+    }
+    wait(app, &row);
+    app.press(&row).unwrap();
+    wait(app, "id:your-check");
+}
+
+fn inspect_button(id: &Value) -> String {
+    format!("id:output-source-{}", id.as_str().unwrap())
+}
+
+fn no_source(app: &Headless) {
+    assert!(
+        !has(app, "id:artifact-source-text"),
+        "{:?}",
+        app.screen().texts()
+    );
+}
+
+#[test]
+fn connected_inspect_cold_open_keeps_drafts_and_navigation_but_not_source() {
+    let mut f = Fixture::with_daemon("day-delivered-artifact.ts");
+    let entry = entry();
+    let task = f.info["task"].clone();
+    let button = inspect_button(&f.info["artifactId"]);
+    let long = inspect_button(&f.info["longId"]);
+    let source = f.info["longSource"].as_str().unwrap().to_owned();
+    let bridge = f.bridge();
+    let mut app = open(&entry, &bridge);
+    wait(&mut app, "role:button[New]");
+    app.press("role:button[New]").unwrap();
+    wait(&mut app, "id:goal");
+    app.type_text("id:goal", NOTE).unwrap();
+    app.press("role:button[Back to Today]").unwrap();
+    result(&mut app, &task);
+    no_source(&app);
+    assert_eq!(f.stats("stats")["artifactReads"], json!([]));
+
+    app.press(&button).unwrap();
+    wait_text(&mut app, "<script>throw Error('never execute')</script>");
+    wait_text(&mut app, "Source · HTML · revision 1");
+    assert!(!has(&app, "historical prepared document must stay private"));
+    assert!(!has(&app, "newer"), "never falls back to revision 2");
+    let stats = f.stats("stats");
+    let reads = stats["artifactReads"].as_array().unwrap();
+    assert_eq!(reads.len(), 1, "one press, one native acquisition");
+    assert_eq!(
+        reads[0]["path"],
+        format!(
+            "/api/projects/{}/missions/{}/tasks/{}/delivered-work/artifact",
+            task["projectId"].as_str().unwrap(),
+            task["missionId"].as_str().unwrap(),
+            task["taskId"].as_str().unwrap()
+        )
+    );
+    let query = &reads[0]["query"];
+    assert_eq!(query.as_object().unwrap().len(), 6, "no extra selector");
+    assert_eq!(query["revision"], "1");
+    assert_eq!(query["artifactId"], f.info["artifactId"]);
+    // Native/daemon reject any mismatch in subject, target, delivery, owner or source.
+    assert_eq!(query["ownerSessionId"], query["sourceSessionId"]);
+    assert_eq!(query["targetId"].as_str().unwrap().len(), 64);
+    assert_eq!(query["deliveryId"].as_str().unwrap().len(), 64);
+    wait_text(&mut app, "Not checked yet.");
+    assert!(has(&app, "id:mark-done"));
+
+    app.press(&long).unwrap();
+    wait(&mut app, "id:artifact-source-all");
+    assert!(!app.screen().texts().contains(&source.as_str()));
+    assert!(!has(&app, "<script>throw Error('never execute')</script>"));
+    app.press("id:artifact-source-all").unwrap();
+    wait_text(&mut app, &source);
+    assert!(!has(&app, "id:artifact-source-all"));
+    let stats = f.stats("stats");
+    assert_eq!(
+        stats["artifactReads"].as_array().unwrap().len(),
+        2,
+        "Show all is local"
+    );
+    assert_eq!(
+        stats["longBytes"], f.info["longBytes"],
+        "display never changes saved bytes"
+    );
+    assert_eq!(stats["posts"], 0);
+    assert_eq!(stats["external"], 0);
+    assert_eq!(stats["messages"], json!([]));
+
+    app.press("id:send-back-open").unwrap();
+    app.type_text("id:send-back-note", NOTE).unwrap();
+    flush(&mut app, &bridge);
+    close_window(app, bridge);
+    let host = f.host();
+    let saved = host.saved_window().unwrap();
+    let key = format!(
+        "task/{}/{}/{}",
+        task["projectId"].as_str().unwrap(),
+        task["missionId"].as_str().unwrap(),
+        task["taskId"].as_str().unwrap()
+    );
+    assert_eq!(saved.view["delivery"], key);
+    assert_eq!(saved.view["place"], "mission");
+    assert_eq!(saved.view["id"], task["missionId"]);
+    assert_eq!(saved.view["goal"], NOTE);
+    assert_eq!(saved.view["notes"], json!([format!("{key}\n{NOTE}")]));
+    assert!(
+        !serde_json::to_string(&saved.view)
+            .unwrap()
+            .contains("never evaluate saved source")
+    );
+    // Read canonical verification on a fresh channel, never steal the window's flush ACK.
+    let bridge = Bridge::new(DayRoot::new(host));
+    let page = f.call(&bridge, "day.delivery.read", task.clone());
+    let work = &page["value"]["snapshot"];
+    assert_eq!(query["targetId"], work["targetId"]);
+    assert_eq!(query["deliveryId"], work["deliveryId"]);
+    assert_eq!(query["ownerSessionId"], work["ownerSessionId"]);
+    let link = work["artifacts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["artifactId"] == f.info["artifactId"])
+        .unwrap();
+    assert_eq!(query["sourceSessionId"], link["sessionId"]);
+    assert!(page["value"]["snapshot"]["verification"].is_null());
+    assert_eq!(
+        f.call(&bridge, "day.delivery.saved", json!({}))["value"]["operations"],
+        json!([])
+    );
+    close(bridge);
+
+    let bridge = f.bridge();
+    let mut app = open(&entry, &bridge);
+    wait(&mut app, "id:send-back-note");
+    assert_eq!(app.screen().input_text("id:send-back-note"), Ok(Some(NOTE)));
+    no_source(&app);
+    assert!(!has(&app, "id:artifact-source"));
+    flush(&mut app, &bridge);
+    assert_eq!(
+        f.stats("stats")["artifactReads"].as_array().unwrap().len(),
+        2,
+        "cold open never reads source"
+    );
+    // The mission's detail is not read until the overlay closes.
+    app.press("role:button[Back to Today]").unwrap();
+    wait(
+        &mut app,
+        &format!("id:check-result-{}", task["taskId"].as_str().unwrap()),
+    );
+    app.press("role:button[Back to Today]").unwrap();
+    app.press("role:button[New]").unwrap();
+    wait(&mut app, "id:goal");
+    assert_eq!(app.screen().input_text("id:goal"), Ok(Some(NOTE)));
+    assert_eq!(f.stats("stats")["posts"], 0);
+    close_window(app, bridge);
+    let _ = std::fs::remove_dir_all(entry.parent().unwrap());
+}
+
+#[test]
+fn connected_native_stale_source_refusal_drops_the_earlier_text_and_refreshes_the_result() {
+    for action in ["stale", "leave"] {
+        let mut f = Fixture::with_daemon("day-delivered-artifact.ts");
+        let entry = entry();
+        let bridge = f.bridge();
+        let mut app = open(&entry, &bridge);
+        result(&mut app, &f.info["task"]);
+        app.press(&inspect_button(&f.info["longId"])).unwrap();
+        wait(&mut app, "id:artifact-source-text");
+        let before = f.stats(action)["deliveryReads"].as_u64().unwrap();
+        app.press(&inspect_button(&f.info["artifactId"])).unwrap();
+        // A stale reply refreshes the canonical result; that newer read can
+        // drop the whole source panel, including the transient refusal.
+        gone(&mut app, "Reading the saved source…");
+        flush(&mut app, &bridge);
+        no_source(&app);
+        let stats = f.stats("stats");
+        // Preflight refuses before source acquisition; ConnectedDelivery.inspect refreshes on stale.
+        assert!(
+            stats["deliveryReads"].as_u64().unwrap() >= before + 2,
+            "{action}: {stats}"
+        );
+        assert_eq!(stats["artifactReads"].as_array().unwrap().len(), 1);
+        assert_eq!(stats["posts"], 0);
+        close_window(app, bridge);
+        let _ = std::fs::remove_dir_all(entry.parent().unwrap());
+    }
+}
+
+#[test]
+fn connected_denied_and_late_channel_replies_never_restore_an_earlier_results_source() {
+    let mut f = Fixture::with_daemon("day-delivered-artifact.ts");
+    let entry = entry();
+    let bridge = f.bridge();
+    // Acquire the actual inert envelopes on the real native path first. Only
+    // denial and response timing below are scripted at the released channel.
+    let mut answers = Vec::new();
+    for (subject, artifact) in [
+        (f.info["task"].clone(), f.info["artifactId"].clone()),
+        (f.info["task"].clone(), f.info["longId"].clone()),
+        (f.info["second"].clone(), f.info["artifactId"].clone()),
+    ] {
+        let page = f.call(&bridge, "day.delivery.read", subject)["value"]["snapshot"].clone();
+        let link = page["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["artifactId"] == artifact)
+            .unwrap();
+        let args = json!({"subject":page["subject"],"targetId":page["targetId"],"deliveryId":page["deliveryId"],
+            "ownerSessionId":page["ownerSessionId"],"sourceSessionId":link["sessionId"],"artifactId":link["artifactId"],"revision":link["revision"]});
+        let reply = f.call(&bridge, "day.delivery.artifact", args.clone());
+        assert!(reply["value"]["snapshot"].is_object(), "{reply}");
+        answers.push((args, reply));
+    }
+    let calls: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let held: Arc<Mutex<Option<(HostCall, Value)>>> = Arc::default();
+    let mode = Arc::new(Mutex::new("answer"));
+    {
+        let (calls, held, mode) = (calls.clone(), held.clone(), mode.clone());
+        bridge
+            .channel()
+            .handle("day.delivery.artifact", move |call: HostCall| {
+                let args = call.data()["args"].clone();
+                calls.lock().unwrap().push(args.clone());
+                let reply = answers
+                    .iter()
+                    .find(|(pin, _)| *pin == args)
+                    .expect("exact displayed pin")
+                    .1
+                    .clone();
+                match *mode.lock().unwrap() {
+                    "denied" => call.reject("synthetic denied"),
+                    "hold" => {
+                        assert!(held.lock().unwrap().replace((call, reply)).is_none());
+                    }
+                    _ => call.resolve(reply),
+                }
+            });
+    }
+    let mut app = open(&entry, &bridge);
+    result(&mut app, &f.info["task"]);
+    app.press(&inspect_button(&f.info["longId"])).unwrap();
+    wait(&mut app, "id:artifact-source-text");
+    *mode.lock().unwrap() = "denied";
+    app.press(&inspect_button(&f.info["artifactId"])).unwrap();
+    wait_text(&mut app, "Pilot cannot show saved sources in this window.");
+    no_source(&app);
+
+    // Show the other pin again. Pressing the refused pin itself would only
+    // hide its panel, not issue another read.
+    *mode.lock().unwrap() = "answer";
+    app.press(&inspect_button(&f.info["longId"])).unwrap();
+    wait(&mut app, "id:artifact-source-text");
+    *mode.lock().unwrap() = "hold";
+    app.press(&inspect_button(&f.info["artifactId"])).unwrap();
+    wait_text(&mut app, "Reading the saved source…");
+    no_source(&app);
+    assert!(
+        !app.screen()
+            .enabled(&inspect_button(&f.info["artifactId"]))
+            .unwrap()
+    );
+    app.press("role:button[Back to Synthetic captured output]")
+        .unwrap();
+    result(&mut app, &f.info["second"]);
+    no_source(&app);
+    *mode.lock().unwrap() = "answer";
+    app.press(&inspect_button(&f.info["artifactId"])).unwrap();
+    wait_text(&mut app, "newer");
+    wait_text(&mut app, "Source · HTML · revision 2");
+    let (call, reply) = held
+        .lock()
+        .unwrap()
+        .take()
+        .expect("first result still in flight");
+    call.resolve(reply);
+    flush(&mut app, &bridge);
+    wait_text(&mut app, "newer");
+    assert!(!has(&app, "<script>throw Error('never execute')</script>"));
+    assert_eq!(
+        calls.lock().unwrap().len(),
+        5,
+        "each explicit Inspect calls once"
+    );
+    wait_text(&mut app, "Not checked yet.");
+    let stats = f.stats("stats");
+    assert_eq!(stats["posts"], 0);
+    assert_eq!(stats["external"], 0);
+    assert_eq!(stats["messages"], json!([]));
+    close_window(app, bridge);
+    let bridge = f.bridge();
+    for subject in [&f.info["task"], &f.info["second"]] {
+        let page = f.call(&bridge, "day.delivery.read", subject.clone());
+        assert!(page["value"]["snapshot"]["verification"].is_null());
+    }
+    assert_eq!(
+        f.call(&bridge, "day.delivery.saved", json!({}))["value"]["operations"],
+        json!([])
+    );
+    close(bridge);
     let _ = std::fs::remove_dir_all(entry.parent().unwrap());
 }
