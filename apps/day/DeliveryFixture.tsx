@@ -3,7 +3,8 @@
 // the connected rules (deliveryDemo.ts): a command names the exact result
 // and revision shown and is sent once; a lost answer stays Unknown until
 // Check reads it; Check never sends again; a save and reopen keeps unsent
-// notes and sends nothing.
+// notes and sends nothing. Inspect source reads one exact pin's saved
+// source once and shows it as plain text; nothing runs it.
 import { mount, Scroll, Text, View } from "nsh";
 import { DeliveryScreen } from "./DeliveryScreen";
 import { openDay } from "./day";
@@ -40,6 +41,7 @@ mount(() => (
 				<Text testID="counts">{`Sends: ${source.counts().sends} · Checks: ${source.counts().checks}`}</Text>
 				<Text testID="last-note">{`Note sent: [${source.counts().note}]`}</Text>
 				<Text testID="opened">{`Opened: [${source.opened().join(" ")}]`}</Text>
+				<Text testID="reads">{`Source reads: [${source.reads().join(" ")}]`}</Text>
 				<View class="flex-row flex-wrap gap-1">
 					<Action label="Lose next answer" onPress={() => (source.script.loseNext = true)} />
 					<Action label="Lose next open" onPress={() => (source.script.loseOpen = true)} />
@@ -58,6 +60,35 @@ mount(() => (
 					/>
 					<Action label="Hold answers" onPress={() => (source.script.hold = true)} />
 					<Action label="Release answer" onPress={() => source.release()} />
+					<Action label="Hold reads" onPress={() => (source.script.holdReads = true)} />
+					<Action label="Release reads" onPress={() => source.releaseReads()} />
+					<Action label="Leave mission" onPress={() => (source.script.refuseReads = "stale")} />
+					<Action label="Close channel" onPress={() => (source.script.refuseReads = "closed")} />
+					<Action
+						label="Unsaved copies"
+						onPress={() => {
+							source.unavailable = {
+								"3f0d6c2a-6b1e-4f7a-9d1c-2a5e8b7c4d10": "missing",
+								"9a4e1f7b-2c3d-4e5f-8a6b-7c8d9e0f1a2b": "oversize",
+							};
+						}}
+					/>
+					<Action
+						label="Held back"
+						onPress={() => {
+							source.unavailable = {
+								"3f0d6c2a-6b1e-4f7a-9d1c-2a5e8b7c4d10": "redacted",
+								"9a4e1f7b-2c3d-4e5f-8a6b-7c8d9e0f1a2b": "invalid",
+							};
+						}}
+					/>
+					<Action
+						label="Lose service"
+						onPress={() => {
+							source.unreadable.add("task/mock-project/native/native-4");
+							source.publish();
+						}}
+					/>
 					<Action
 						label="New result"
 						onPress={() => source.deliverAgain("task/mock-project/native/native-4", "4")}

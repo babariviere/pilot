@@ -3,7 +3,7 @@
 The native read seam inspects existing numbered artifact revisions linked to a
 task's current canonical delivered result. It is not the agent-authored NSH
 artifact runtime, a rendered preview, user acceptance, or new artifact storage.
-There is no UI in this backend change.
+The result page uses it for **Inspect source** (see [Result page](#result-page)).
 
 ## Acquisition and access
 
@@ -73,10 +73,34 @@ The selected native project/home and close/flush gates still apply. It does not
 invoke the URL opener, filesystem reveal, shell, renderer or any HTTP POST.
 The read is never journaled, automatically retried or replayed on cold open.
 
-`apps/day/deliveryArtifact.ts` provides a Node-free typed call adapter for a
-future viewer. The existing output capabilities stay false for artifacts:
-this source-text seam alone is not a usable preview/UI capability. UI work
-remains separate, using the established output-page design.
+`apps/day/deliveryArtifact.ts` provides the Node-free typed call adapter. It
+checks that a reply names exactly the pin it asked for, the linked kind and
+`rendering: "unsupported"`, and otherwise treats it as `invalid`. The existing
+output capabilities stay false for artifacts: source text is not a rendered
+artifact capability, and the agent-authored artifact runtime stays separate.
+
+## Result page
+
+Each artifact output on the delivered-result page shows its title, kind and
+pinned revision. A task result's pinned link has **Inspect source**; an unpinned
+link or a standalone chat's link has none, and nothing looks up a latest
+revision. One press makes one `day.delivery.artifact` read of exactly that
+pin. Opening the page, a restored window and a hot update read nothing.
+
+The page shows one source at a time, labelled Source with kind and revision.
+Text shows as plain monospaced text; the first 400 lines or 40,000 characters
+show until the user presses Show all, and the page says how much shows. An
+image shows its title and kind only. `missing`, `oversize`, `redacted`,
+`unsupported` and `invalid` each have their own sentence; none shows a part of
+another revision instead. A refused read shows why and no source.
+
+Each press clears the shown source before it awaits, and a generation number
+drops any answer that is not the newest press's. A newer delivery, a changed
+pin or kind, a failed result read, Hide source, Escape, leaving the page,
+`startFresh` and `restoreView` drop the text at once. The shown source lives in
+`deliveryView.ts` only; SavedView never keeps it. A stale refusal reads the
+result again, like an output link's. Reading never opens, runs or draws
+anything, sends nothing and is never the user's check.
 
 Focused tests use isolated saved revisions and synthetic sessions, with workers
 disabled. They cover exact older revisions, stale delivery/source pins,

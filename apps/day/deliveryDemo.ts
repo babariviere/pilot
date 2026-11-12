@@ -4,17 +4,23 @@
 // it sends a command once for exactly the result and revision shown, keeps a
 // lost answer Unknown until Check reads it, and refuses another meanwhile.
 import { signal } from "nsh";
+import type { Refusal } from "./bridge";
+import { artifactSelection } from "./deliveryArtifact";
 import {
+	type ArtifactLink,
 	type Assessment,
+	type CapturedArtifact,
 	type DeliveredWork,
 	type DeliveryOperation,
 	type DeliveryResult,
 	type DeliverySource,
 	type DeliveryView,
 	deliveryKey,
+	type InspectResult,
 	linkUrl,
 	type OpenResult,
 	type OutputLink,
+	refusedInspect,
 	refusedOpen,
 	UNKNOWN,
 	type VerificationSubject,
@@ -33,7 +39,31 @@ export type DeliveryScript = {
 	hold: boolean;
 	/** Lose the next open's answer: the browser may or may not have shown it. */
 	loseOpen: boolean;
+	/** Hold every source read's answer until `releaseReads`. */
+	holdReads: boolean;
+	/** Refuse every source read like native would, such as "stale" after the artifact's chat left the mission. */
+	refuseReads: Refusal | null;
 };
+
+/** Saved artifact sources the demo results link, by artifact. Plain text: nothing runs them. */
+export const DEMO_SOURCES: Record<string, string> = {
+	"3f0d6c2a-6b1e-4f7a-9d1c-2a5e8b7c4d10": [
+		"<!doctype html>",
+		'<script>document.title = "never run";</script>',
+		"<p>Older messages load while a reply streams.</p>",
+	].join("\n"),
+	"9a4e1f7b-2c3d-4e5f-8a6b-7c8d9e0f1a2b": '({ ui }) => ui.text("50 older messages load in 140 ms")',
+};
+
+/** UTF-8 bytes of `text`. */
+function bytesOf(text: string): number {
+	let n = 0;
+	for (const ch of text) {
+		const c = ch.codePointAt(0) ?? 0;
+		n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
+	}
+	return n;
+}
 
 function result(subject: VerificationSubject, id: string, rest: Partial<DeliveredWork>): DeliveredWork {
 	return {
@@ -77,11 +107,34 @@ export function demoResults(): DeliveredWork[] {
 			pullRequests: [pr(431, "Load older messages while streaming", "open")],
 			artifacts: [
 				{
-					artifactId: "history-capture",
+					artifactId: "3f0d6c2a-6b1e-4f7a-9d1c-2a5e8b7c4d10",
+					sessionId: "w-history",
+					title: "Scroll check page",
+					kind: "html",
+					revision: 3,
+					linkedAt: 1,
+				},
+				{
+					artifactId: "9a4e1f7b-2c3d-4e5f-8a6b-7c8d9e0f1a2b",
+					sessionId: "w-history",
+					title: "Load timing",
+					kind: "visual",
+					revision: 2,
+					linkedAt: 1,
+				},
+				{
+					artifactId: "5b2c8d1e-0f3a-4b6c-9d7e-1a2b3c4d5e6f",
 					sessionId: "w-history",
 					title: "History capture",
 					kind: "image",
 					revision: 1,
+					linkedAt: 1,
+				},
+				{
+					artifactId: "c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f",
+					sessionId: "w-history",
+					title: "Notes draft",
+					kind: "visual",
 					linkedAt: 1,
 				},
 			],
@@ -108,13 +161,20 @@ export const DEMO_TITLES: Record<string, string> = {
 };
 
 export class ScriptedDelivery implements DeliverySource {
-	script: DeliveryScript = { loseNext: false, hold: false, loseOpen: false };
+	script: DeliveryScript = { loseNext: false, hold: false, loseOpen: false, holdReads: false, refuseReads: null };
 	/** Sends, Checks and the exact note last sent. */
 	counts = signal({ sends: 0, checks: 0, note: "" });
 	/** Every web address handed to the browser, in order. Opening is never a send. */
 	opened = signal<string[]>([]);
 	/** Whether this window can show web links, as a native root with a browser opener says. */
 	webLinks = true;
+	/** Every source read, in order, as "<artifact>@<revision>". Reading is never a send. */
+	reads = signal<string[]>([]);
+	/** Why a saved copy is not shown, by artifact, as the service would say. */
+	unavailable: Record<string, "missing" | "oversize" | "redacted" | "unsupported" | "invalid"> = {};
+	/** Results whose last read failed: the page keeps the earlier read and says so. */
+	unreadable = new Set<string>();
+	#heldReads: Array<() => void> = [];
 	works = new Map<string, DeliveredWork>();
 	#ops: DeliveryOperation[] = [];
 	#mine: string[] = [];
@@ -136,7 +196,15 @@ export class ScriptedDelivery implements DeliverySource {
 				? Object.fromEntries(
 						[...this.works].map(([key, w]) => [
 							key,
-							{ key, subject: w.subject, snapshot: w, availability: "live" as const, reason: "" },
+							{
+								key,
+								subject: w.subject,
+								snapshot: w,
+								availability: "live" as const,
+								reason: this.unreadable.has(key)
+									? "Pilot could not reach its service. What shows is from Pilot's last read."
+									: "",
+							},
 						]),
 					)
 				: {},
@@ -169,6 +237,14 @@ export class ScriptedDelivery implements DeliverySource {
 		this.script.hold = false;
 		this.#release?.();
 		this.#release = null;
+	}
+
+	/** Releases held source reads, the newest first, so older answers arrive late. */
+	releaseReads() {
+		this.script.holdReads = false;
+		const held = this.#heldReads.reverse();
+		this.#heldReads = [];
+		for (const r of held) r();
 	}
 
 	/** The agent delivers again: a new result for `key`, not checked yet. */
@@ -299,6 +375,38 @@ export class ScriptedDelivery implements DeliverySource {
 			return refusedOpen("lost");
 		}
 		return { status: "opened", message: "" };
+	}
+
+	async inspect(shown: DeliveredWork, link: ArtifactLink): Promise<InspectResult> {
+		const pin = artifactSelection(shown, link);
+		if (!pin) return refusedInspect("unavailable");
+		this.reads.set([...this.reads(), `${link.artifactId}@${link.revision}`]);
+		if (this.script.holdReads)
+			await new Promise<void>((r) => {
+				this.#heldReads.push(r);
+			});
+		if (this.script.refuseReads) return refusedInspect(this.script.refuseReads);
+		// Like native: the exact result and pin, checked again after the read.
+		const now = this.works.get(deliveryKey(shown.subject));
+		const current = now?.artifacts.find((a) => a.artifactId === link.artifactId && a.sessionId === link.sessionId);
+		if (!now || now.deliveryId !== shown.deliveryId || current?.revision !== link.revision) {
+			return refusedInspect("stale");
+		}
+		const source = DEMO_SOURCES[link.artifactId];
+		const reason = this.unavailable[link.artifactId] ?? (link.kind === "image" ? "unsupported" : undefined);
+		return {
+			status: "shown",
+			artifact: {
+				version: 1,
+				reference: pin,
+				metadata: { title: link.title, kind: link.kind as CapturedArtifact["metadata"]["kind"] },
+				rendering: "unsupported",
+				content:
+					reason || source === undefined
+						? { state: "unavailable", reason: reason ?? "missing" }
+						: { state: "text", source, containerSha256: "0".repeat(64), containerBytes: bytesOf(source) + 96 },
+			},
+		};
 	}
 
 	dispose(): void {

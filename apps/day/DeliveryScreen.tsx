@@ -7,10 +7,15 @@
 // to the browser, once; nothing retries it. Ticked reminders are kept with
 // the window only. A command whose answer is lost stays Unknown, with Check
 // only, until its own receipt says how it ended.
-import { keymap, Scroll, signal, Text, View } from "nsh";
+// An artifact's pinned revision shows its saved source as plain text on a
+// press of Inspect source, read once. It is never run, drawn or opened, a
+// newer result or a lost read hides it, and looking records nothing.
+import { effect, keymap, Scroll, signal, Text, View, type ViewRef } from "nsh";
 import { Checkbox, Input } from "nsh/base";
 import type { Day } from "./day";
+import { artifactSelection } from "./deliveryArtifact";
 import {
+	type ArtifactLink,
 	type Assessment,
 	type DeliveredWork,
 	type DeliveryMirror,
@@ -21,6 +26,7 @@ import {
 } from "./deliveryFeed";
 import {
 	agentLine,
+	artifactLine,
 	backNotes,
 	backOpen,
 	checkLine,
@@ -28,6 +34,14 @@ import {
 	type DeliveryPlace,
 	deliveryMessages,
 	doneAsk,
+	excerpt,
+	hideInspection,
+	type Inspection,
+	inspectArtifact,
+	inspection,
+	inspectionCurrent,
+	inspects,
+	kindName,
 	outputMessages,
 	ownPullRequests,
 	prName,
@@ -39,7 +53,9 @@ import {
 	reminders,
 	setNote,
 	setTicks,
+	sizeOf,
 	titleOf,
+	unavailableLine,
 	unsettledLine,
 } from "./deliveryView";
 import { keepField, keepScroll } from "./kept";
@@ -130,11 +146,133 @@ function shortName(r: OutputLink): string {
 }
 
 /**
- * What the agent linked and saved. A web link opens in the browser on a
- * press, when this window can open links; the rest are shown as text.
- * Opening one records nothing.
+ * One inspected saved source: its title, kind and revision, then the saved
+ * text exactly as stored, or why it is not shown. Plain text only.
  */
-function Outputs(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: DeliveredWork }) {
+function SourcePanel(props: { inspection: Inspection }) {
+	const all = signal(false);
+	const i = () => props.inspection;
+	const saved = () => i().artifact;
+	const text = () => {
+		const c = saved()?.content;
+		return c?.state === "text" ? excerpt(c.source, all()) : null;
+	};
+	const bytes = () => {
+		const c = saved()?.content;
+		return c?.state === "text" ? c.containerBytes : 0;
+	};
+	const unavailable = () => {
+		const c = saved()?.content;
+		return c?.state === "unavailable" ? unavailableLine(i().kind, c.reason) : "";
+	};
+	return (
+		<View testID="artifact-source" selectable class="gap-2 rounded-xl bg-muted px-4 py-3">
+			<Text class="text-xs text-faint">{`Source · ${kindName(i().kind)} · revision ${i().pin.revision}`}</Text>
+			<If when={saved()}>
+				<Text role="header" class="text-sm font-medium text-foreground">
+					{saved()?.metadata.title || i().title || "Artifact"}
+				</Text>
+			</If>
+			<If when={i().state === "reading"}>
+				<Text class="text-sm text-muted-foreground">Reading the saved source…</Text>
+			</If>
+			<If when={i().state === "refused"}>
+				<Text role="alert" testID="artifact-source-refused" class="text-sm text-muted-foreground">
+					{i().message}
+				</Text>
+			</If>
+			<If when={text()}>
+				<Text testID="artifact-source-text" class="font-mono text-xs leading-relaxed text-foreground">
+					{text()?.text ?? ""}
+				</Text>
+				<If when={text()?.note}>
+					<View class="flex-row items-center gap-3">
+						<Text class="flex-1 text-xs text-faint">{text()?.note ?? ""}</Text>
+						<Action label="Show all" testID="artifact-source-all" onPress={() => all.set(true)} />
+					</View>
+				</If>
+				<Text class="text-xs text-faint">{`Saved copy, ${sizeOf(bytes())}.`}</Text>
+			</If>
+			<If when={unavailable()}>
+				<Text testID="artifact-source-unavailable" class="text-sm text-muted-foreground">
+					{unavailable()}
+				</Text>
+			</If>
+			<Text class="text-xs text-faint">
+				Plain text from this saved revision. Pilot does not run or draw it, and looking records nothing.
+			</Text>
+		</View>
+	);
+}
+
+/** One artifact the agent linked: its title, kind and pinned revision, and Inspect source when it has a pin. */
+function ArtifactOutput(props: {
+	mirror: DeliveryMirror;
+	place: DeliveryPlace;
+	work: DeliveredWork;
+	link: ArtifactLink;
+	fresh: boolean;
+	anchors: Map<string, ViewRef>;
+}) {
+	const key = () => props.place.key;
+	const pinned = () => !!artifactSelection(props.work, props.link);
+	const mine = () => {
+		const i = inspection();
+		return props.fresh && inspects(i, key(), props.work, props.link) ? i : null;
+	};
+	const reading = () => mine()?.state === "reading";
+	const name = () => props.link.title || "the artifact";
+	return (
+		<View class="gap-2 border-t border-border py-2.5">
+			<View class="flex-row items-center gap-3">
+				<Text class="flex-1 text-sm text-foreground">{props.link.title || "Artifact"}</Text>
+				<Text class="text-xs text-muted-foreground">{artifactLine(props.link)}</Text>
+				<If
+					when={pinned()}
+					else={
+						<Text class="text-xs text-faint">
+							{props.work.subject.kind === "task" ? "No pinned revision" : "No source here"}
+						</Text>
+					}
+				>
+					<Action
+						label={reading() ? "Reading…" : mine() ? "Hide source" : "Inspect source"}
+						testID={`output-source-${props.link.artifactId}`}
+						accessibilityLabel={
+							mine()
+								? `Hide the source of ${name()}.`
+								: `Show the saved source of ${name()}, revision ${props.link.revision}, as plain text. Looking records nothing.`
+						}
+						disabled={reading() || !props.fresh}
+						anchor={(node) => props.anchors.set(props.link.artifactId, node)}
+						onPress={() => {
+							if (mine()) {
+								glide();
+								hideInspection();
+							} else void inspectArtifact(props.mirror.source, key(), props.work, props.link);
+						}}
+					/>
+				</If>
+			</View>
+			<If when={mine()}>
+				<SourcePanel inspection={mine() as Inspection} />
+			</If>
+		</View>
+	);
+}
+
+/**
+ * What the agent linked and saved. A web link opens in the browser on a
+ * press, when this window can open links. An artifact's pinned revision
+ * shows its saved source as plain text on a press. Neither records anything.
+ */
+function Outputs(props: {
+	mirror: DeliveryMirror;
+	place: DeliveryPlace;
+	work: DeliveredWork;
+	fresh: boolean;
+	anchors: Map<string, ViewRef>;
+}) {
 	const w = () => props.work;
 	const key = () => props.place.key;
 	const count = () => w().pullRequests.length + w().artifacts.length + (w().completion ? 1 : 0);
@@ -184,12 +322,14 @@ function Outputs(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: De
 			</Each>
 			<Each of={w().artifacts} key={(a) => `${a.sessionId}/${a.artifactId}`}>
 				{(a) => (
-					<View class="flex-row items-baseline gap-3 border-t border-border py-2.5">
-						<Text class="flex-1 text-sm text-foreground">{a().title || "Artifact"}</Text>
-						<Text class="text-xs text-muted-foreground">
-							{a().revision ? `Artifact, revision ${a().revision}` : "Artifact, latest revision"}
-						</Text>
-					</View>
+					<ArtifactOutput
+						mirror={props.mirror}
+						place={props.place}
+						work={w()}
+						link={a()}
+						fresh={props.fresh}
+						anchors={props.anchors}
+					/>
 				)}
 			</Each>
 			<If when={w().completion}>
@@ -211,7 +351,10 @@ function Outputs(props: { mirror: DeliveryMirror; place: DeliveryPlace; work: De
 				</Text>
 			</If>
 			<If when={w().artifacts.length > 0}>
-				<Text class="text-xs text-faint">Pilot cannot show artifacts here yet.</Text>
+				<Text class="text-xs text-faint">
+					Inspect source shows the saved text of a pinned revision. Pilot does not run or draw artifacts, and
+					looking records nothing.
+				</Text>
 			</If>
 		</View>
 	);
@@ -247,7 +390,7 @@ function Reminders(props: { place: DeliveryPlace; work: DeliveredWork }) {
 			out.push({ id: `pr-${r.id}`, label: `Looked at ${prName(r).split(" · ")[0]}` });
 		}
 		const art = props.work.artifacts[0];
-		if (art) out.push({ id: `art-${art.artifactId}`, label: `Opened ${art.title || "the artifact"}` });
+		if (art) out.push({ id: `art-${art.artifactId}`, label: `Looked at ${art.title || "the artifact"}` });
 		return out;
 	};
 	const ticked = () => reminders()[id()] ?? [];
@@ -547,7 +690,18 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace }) {
 	const title = () => props.place.title || titleOf(key, props.place.subject, missionTitle());
 	const origin = () =>
 		props.place.subject.kind === "task" ? `A task in ${missionTitle() ?? "a mission"}` : "A standalone chat";
-	// Escape works from the note too: the note closes first and keeps its words.
+	const fresh = () => !!work() && !entry()?.reason;
+	// A shown source is only for the exact pin of the result as last read.
+	// A newer result, a changed pin or a failed read drops its text at once.
+	effect(() => {
+		const i = inspection();
+		if (!i || i.key !== key) return;
+		const w = work();
+		if (!w || !fresh() || !inspectionCurrent(i, key, w)) hideInspection();
+	});
+	const anchors = new Map<string, ViewRef>();
+	// Escape works from the note too: the note closes first and keeps its words,
+	// then a shown source, then the page.
 	keymap.bind(
 		"escape",
 		() => {
@@ -555,6 +709,11 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace }) {
 			else if (backOpen()[key]) {
 				glide();
 				setFor(backOpen, key, false);
+			} else if (inspection()?.key === key) {
+				const id = inspection()?.pin.artifactId ?? "";
+				glide();
+				hideInspection();
+				anchors.get(id)?.focus();
 			} else closeDelivery();
 		},
 		{ when: "always" },
@@ -601,7 +760,7 @@ export function DeliveryScreen(props: { day: Day; place: DeliveryPlace }) {
 						{(w) => (
 							<View class="gap-10">
 								<Report work={w()} />
-								<Outputs mirror={mirror} place={props.place} work={w()} />
+								<Outputs mirror={mirror} place={props.place} work={w()} fresh={fresh()} anchors={anchors} />
 								<Stands work={w()} unsettled={unsettled()} />
 								<YourCheck mirror={mirror} place={props.place} work={w()} title={title()} />
 							</View>

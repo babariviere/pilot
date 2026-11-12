@@ -4,7 +4,15 @@
 // saves them in the window's SavedView, and a restored window shows them
 // again without sending anything (updateView.ts).
 import { signal } from "nsh";
-import type { DeliveredWork, DeliveryOp, VerificationSubject } from "./deliveryFeed";
+import { type ArtifactSelection, artifactSelection, samePin } from "./deliveryArtifact";
+import type {
+	ArtifactLink,
+	CapturedArtifact,
+	DeliveredWork,
+	DeliveryOp,
+	DeliverySource,
+	VerificationSubject,
+} from "./deliveryFeed";
 import { deliveryKey, subjectOf } from "./deliveryFeed";
 import { glide } from "./motion";
 
@@ -30,6 +38,161 @@ export const reminders = signal<Record<string, string[]>>({});
 export const deliveryMessages = signal<Record<string, string>>({});
 /** The last message a press on an output link returned, by result. */
 export const outputMessages = signal<Record<string, string>>({});
+
+/**
+ * The saved source the user asked to see: one exact artifact pin on one
+ * result's page. Inert text only. It lives with the page: closing the page,
+ * a newer result, a lost read or an update drops it, and a saved window
+ * never keeps it, so nothing reads it again by itself.
+ */
+export type Inspection = {
+	key: string;
+	pin: ArtifactSelection;
+	kind: string;
+	title: string;
+	generation: number;
+	state: "reading" | "shown" | "refused";
+	artifact: CapturedArtifact | null;
+	message: string;
+};
+
+export const inspection = signal<Inspection | null>(null);
+let inspections = 0;
+
+/** The pin `link` names on `work`, when it is still exactly the one `i` read. */
+export function inspectionCurrent(i: Inspection, key: string, work: DeliveredWork): boolean {
+	if (i.key !== key) return false;
+	const link = work.artifacts.find((a) => a.artifactId === i.pin.artifactId && a.sessionId === i.pin.sourceSessionId);
+	const pin = link ? artifactSelection(work, link) : null;
+	return !!link && !!pin && link.kind === i.kind && samePin(pin, i.pin);
+}
+
+/** Whether `i` is about `link` on `work`. */
+export function inspects(i: Inspection | null, key: string, work: DeliveredWork, link: ArtifactLink): boolean {
+	return (
+		!!i &&
+		i.pin.artifactId === link.artifactId &&
+		i.pin.sourceSessionId === link.sessionId &&
+		i.pin.revision === link.revision &&
+		inspectionCurrent(i, key, work)
+	);
+}
+
+/**
+ * Reads the saved source of `link` on the result shown, for one press.
+ * What showed before goes first, before the read starts; only the newest
+ * press's answer shows. A press while the same pin is reading does nothing.
+ */
+export async function inspectArtifact(source: DeliverySource, key: string, shown: DeliveredWork, link: ArtifactLink) {
+	const pin = artifactSelection(shown, link);
+	if (!pin) return;
+	const now = inspection();
+	if (now && now.state === "reading" && now.key === key && samePin(now.pin, pin)) return;
+	const generation = ++inspections;
+	const reading: Inspection = {
+		key,
+		pin,
+		kind: link.kind,
+		title: link.title,
+		generation,
+		state: "reading",
+		artifact: null,
+		message: "",
+	};
+	glide();
+	inspection.set(reading);
+	const r = await source.inspect(shown, link);
+	if (inspection()?.generation !== generation) return;
+	inspection.set(
+		r.status === "shown"
+			? { ...reading, state: "shown", artifact: r.artifact }
+			: { ...reading, state: "refused", message: r.message },
+	);
+}
+
+/** Hides the source and drops its text. An answer still on its way is not shown. */
+export function hideInspection() {
+	inspections++;
+	if (inspection()) inspection.set(null);
+}
+
+/** An artifact kind in a word or two. */
+export function kindName(kind: string): string {
+	switch (kind) {
+		case "html":
+			return "HTML";
+		case "react":
+			return "React";
+		case "swiftui":
+			return "SwiftUI";
+		case "image":
+			return "Image";
+		case "shader":
+			return "Shader";
+		case "visual":
+			return "Visual";
+		default:
+			return "Artifact";
+	}
+}
+
+/** An artifact output's kind and pinned revision: "HTML, revision 3". */
+export function artifactLine(link: ArtifactLink): string {
+	return link.revision
+		? `${kindName(link.kind)}, revision ${link.revision}`
+		: `${kindName(link.kind)}, latest revision`;
+}
+
+/** Why a saved source is not shown, in one sentence. Never a part of it instead. */
+export function unavailableLine(kind: string, reason: string): string {
+	switch (reason) {
+		case "missing":
+			return "Pilot has no saved copy of this revision.";
+		case "oversize":
+			return "This revision's saved copy is too large to show here. Pilot does not show part of it instead.";
+		case "redacted":
+			return "Pilot held this source back because it may contain a secret.";
+		case "invalid":
+			return "This revision's saved copy is damaged, so Pilot does not show it.";
+		default:
+			return kind === "image"
+				? "Pilot shows only an image's title and kind here. It does not draw images."
+				: "Pilot cannot show this kind of source here.";
+	}
+}
+
+/** The most lines and characters a source shows before the user asks for all of it. */
+export const SOURCE_LINES = 400;
+export const SOURCE_CHARS = 40_000;
+
+function count(n: number): string {
+	return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
+/** The start of a long source, and a note that says how much shows. All of it when `all`. */
+export function excerpt(source: string, all: boolean): { text: string; note: string } {
+	if (all) return { text: source, note: "" };
+	const lines = source.split("\n");
+	let text = lines.length > SOURCE_LINES ? lines.slice(0, SOURCE_LINES).join("\n") : source;
+	if (text.length > SOURCE_CHARS) {
+		let end = SOURCE_CHARS;
+		const c = text.charCodeAt(end - 1);
+		if (c >= 0xd800 && c <= 0xdbff) end--;
+		text = text.slice(0, end);
+		return { text, note: `Showing the first ${count(end)} of ${count(source.length)} characters.` };
+	}
+	if (lines.length > SOURCE_LINES) {
+		return { text, note: `Showing the first ${count(SOURCE_LINES)} of ${count(lines.length)} lines.` };
+	}
+	return { text: source, note: "" };
+}
+
+/** A saved copy's size: "820 bytes", "12.4 KB". */
+export function sizeOf(bytes: number): string {
+	if (bytes < 1024) return `${bytes} bytes`;
+	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+	return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
 
 /** The most results whose ticked reminders a saved window keeps: those ticked last. */
 export const SAVED_REMINDERS = 20;
@@ -78,6 +241,7 @@ export function openDelivery(subject: VerificationSubject, title: string) {
 	const key = deliveryKey(subject);
 	if (title) deliveryTitles.update((all) => ({ ...all, [key]: title }));
 	doneAsk.set(null);
+	hideInspection();
 	glide();
 	deliveryRoute.set({ key, subject, title: title || deliveryTitles()[key] || "" });
 }
@@ -85,6 +249,7 @@ export function openDelivery(subject: VerificationSubject, title: string) {
 /** Back to the screen under the page. Unsent notes stay. */
 export function closeDelivery() {
 	doneAsk.set(null);
+	hideInspection();
 	deliveryRoute.set(null);
 }
 

@@ -28,7 +28,8 @@ takes place. Chat windows and live mission work are not connected in this previe
 New's project list shows two invented demo projects; starting a chat there only
 counts a demo chat.
 Today's To check shows three demo results. Mark done, Send back and Reopen
-change only the demo; nothing reaches an agent.
+change only the demo; nothing reaches an agent. Inspect source shows a demo
+artifact's saved text; nothing runs or draws it.
 New's "Your Linear issues" opens a read-only page of demo Linear issues and a
 demo cycle. It reads nothing from Linear.
 

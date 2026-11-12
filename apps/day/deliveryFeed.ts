@@ -7,6 +7,7 @@
 // settles a command: only the command's own matching receipts do.
 import { type Signal, signal } from "nsh";
 import type { Refusal } from "./bridge";
+import { type ArtifactLink, artifactSelection, type CapturedArtifact, readDeliveryArtifact } from "./deliveryArtifact";
 import {
 	assessDelivery,
 	checkDelivery,
@@ -20,7 +21,7 @@ import {
 } from "./deliveryBridge";
 import { glide } from "./motion";
 
-export type { DeliveredWork, DeliveryOperation, VerificationSubject };
+export type { ArtifactLink, CapturedArtifact, DeliveredWork, DeliveryOperation, VerificationSubject };
 
 /** What the user says about a delivered result. */
 export type Assessment = "done" | "send_back" | "reopen";
@@ -91,6 +92,12 @@ export type DeliveryResult = {
 /** What one press on an output link did. Opening never counts as the user's check. */
 export type OpenResult = { status: "opened" | "refused" | "unknown"; message: string };
 
+/**
+ * What one press on Inspect source read: the saved source as inert text, or
+ * why nothing is shown. Reading never counts as the user's check.
+ */
+export type InspectResult = { status: "shown"; artifact: CapturedArtifact } | { status: "refused"; message: string };
+
 /** A pull request linked to a result, as the page shows it. */
 export type OutputLink = DeliveredWork["pullRequests"][number];
 
@@ -115,6 +122,13 @@ export interface DeliverySource {
 	 * nothing. Nothing is saved, sent or retried, and it is never a check.
 	 */
 	open(shown: DeliveredWork, link: OutputLink): Promise<OpenResult>;
+	/**
+	 * Reads the saved source of one exactly pinned artifact revision of the
+	 * result shown, once, for one press. Native checks the result, the pin and
+	 * the artifact's place in the mission again. Nothing is run, drawn, opened,
+	 * saved or retried, there is no latest revision, and it is never a check.
+	 */
+	inspect(shown: DeliveredWork, link: ArtifactLink): Promise<InspectResult>;
 	dispose(): void;
 }
 
@@ -201,6 +215,34 @@ export function refusedOpen(refusal: Refusal): OpenResult {
 			return r("Pilot cannot open links in this window. Nothing opened.");
 		default:
 			return r("Pilot could not open this link. Nothing opened.");
+	}
+}
+
+/** What a refused source read means. A read changes nothing, so no answer is Unknown. */
+export function refusedInspect(refusal: Refusal): InspectResult {
+	const r = (message: string): InspectResult => ({ status: "refused", message });
+	switch (refusal) {
+		case "stale":
+			return r(
+				"This result or its artifact changed since Pilot read it, or the artifact is no longer part of this mission. Nothing is shown.",
+			);
+		case "busy":
+		case "closed":
+			return r("Pilot is closing. Nothing is shown.");
+		case "offline":
+			return r("Pilot could not reach its service. Nothing is shown.");
+		case "identity":
+			return r("The Pilot service changed. Open Pilot again. Nothing is shown.");
+		case "invalid":
+			return r("Pilot's service answered in a way this app does not understand. Nothing is shown.");
+		case "lost":
+		case "unknown":
+			return r("Pilot did not hear back. Nothing is shown, and nothing changed.");
+		case "denied":
+		case "unavailable":
+			return r("Pilot cannot show saved sources in this window.");
+		default:
+			return r("Pilot could not read this source. Nothing is shown.");
 	}
 }
 
@@ -531,6 +573,19 @@ export class ConnectedDelivery implements DeliverySource {
 			this.#opening.delete(key);
 			this.#publish();
 		}
+	}
+
+	async inspect(shown: DeliveredWork, link: ArtifactLink): Promise<InspectResult> {
+		// Only a pin the shown result itself names, never a latest revision.
+		const own = shown.artifacts.find(
+			(a) => a.artifactId === link.artifactId && a.sessionId === link.sessionId && a.revision === link.revision,
+		);
+		if (!own || own.kind !== link.kind || !artifactSelection(shown, own)) return refusedInspect("unavailable");
+		const r = await readDeliveryArtifact(this.#window, shown, own);
+		if (r.ok) return { status: "shown", artifact: r.snapshot };
+		// A changed result or pin: read the result again so the page shows what is current.
+		if (r.refusal === "stale") void this.read(shown.subject);
+		return refusedInspect(r.refusal);
 	}
 
 	dispose(): void {

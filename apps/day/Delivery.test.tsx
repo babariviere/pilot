@@ -2,6 +2,8 @@
 // scripted source with the connected rules (DeliveryFixture.tsx). No
 // daemon, provider or storage.
 import { expect, open, test } from "nsh/test";
+import { type ArtifactSelection, capturedOf } from "./deliveryArtifact";
+import { excerpt, SOURCE_CHARS, SOURCE_LINES } from "./deliveryView";
 
 const desktop = { platform: "macos", width: 1100, height: 1200 } as const;
 const CSV = "#4 History slice";
@@ -18,6 +20,22 @@ async function ready() {
 
 function counts(app: { texts(): string[] }): string {
 	return app.texts().find((t) => t.startsWith("Sends:")) ?? "";
+}
+
+function reads(app: { texts(): string[] }): string {
+	return app.texts().find((t) => t.startsWith("Source reads:")) ?? "";
+}
+
+const HTML = "3f0d6c2a-6b1e-4f7a-9d1c-2a5e8b7c4d10";
+const VISUAL = "9a4e1f7b-2c3d-4e5f-8a6b-7c8d9e0f1a2b";
+const IMAGE = "5b2c8d1e-0f3a-4b6c-9d7e-1a2b3c4d5e6f";
+const UNPINNED = "c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f";
+const HTML_SOURCE =
+	'<!doctype html>\n<script>document.title = "never run";</script>\n<p>Older messages load while a reply streams.</p>';
+const VISUAL_SOURCE = '({ ui }) => ui.text("50 older messages load in 140 ms")';
+
+function showsSource(app: { texts(): string[] }, source: string): boolean {
+	return app.texts().includes(source);
 }
 
 function opened(app: { texts(): string[] }): string {
@@ -180,7 +198,11 @@ test("a newer result starts with no reminder ticked", async () => {
 test("a press opens the exact pull request once, records nothing and never retries", async () => {
 	const app = await ready();
 	await openCsv(app);
-	expect(app.shows("Pilot cannot show artifacts here yet.")).toBe(true);
+	expect(
+		app.shows(
+			"Inspect source shows the saved text of a pinned revision. Pilot does not run or draw artifacts, and looking records nothing.",
+		),
+	).toBe(true);
 	await app.press("id:output-open-pr-431");
 	await app.waitFor("Sent PR #431 to your browser. Nothing was recorded.");
 	expect(opened(app)).toBe(`Opened: [${PR}]`);
@@ -212,4 +234,191 @@ test("a window that cannot open links shows them as text", async () => {
 	expect(app.shows("Pilot cannot open links in this window. Copy one; opening it records nothing.")).toBe(true);
 	expect(app.texts().includes(PR)).toBe(true);
 	expect(opened(app)).toBe("Opened: []");
+});
+
+test("Inspect source reads one exact pin once, as plain text that never runs, and records nothing", async () => {
+	const app = await ready();
+	await openCsv(app);
+	expect(app.texts().includes("HTML, revision 3")).toBe(true);
+	expect(app.texts().includes("Visual, latest revision")).toBe(true);
+	// Opening the page reads no source; a link without a pin has no Inspect source.
+	expect(reads(app)).toBe("Source reads: []");
+	expect(app.shows(`id:output-source-${UNPINNED}`)).toBe(false);
+	expect(app.texts().includes("No pinned revision")).toBe(true);
+	await app.press(`id:output-source-${HTML}`);
+	await app.waitFor("id:artifact-source-text");
+	expect(showsSource(app, HTML_SOURCE)).toBe(true);
+	expect(app.texts().includes("Source · HTML · revision 3")).toBe(true);
+	expect(app.texts().includes("Scroll check page")).toBe(true);
+	expect(app.texts().includes("Saved copy, 208 bytes.")).toBe(true);
+	expect(app.shows("Preview")).toBe(false);
+	expect(reads(app)).toBe(`Source reads: [${HTML}@3]`);
+	// Looking is not the user's check.
+	expect(app.texts().includes("Not checked yet.")).toBe(true);
+	expect(app.shows("id:mark-done")).toBe(true);
+	// An image shows its title and kind only; the HTML text goes.
+	await app.press(`id:output-source-${IMAGE}`);
+	await app.waitFor("Pilot shows only an image's title and kind here. It does not draw images.");
+	expect(app.texts().includes("Source · Image · revision 1")).toBe(true);
+	expect(showsSource(app, HTML_SOURCE)).toBe(false);
+	await app.press(`id:output-source-${IMAGE}`);
+	expect(app.shows("id:artifact-source")).toBe(false);
+	// Escape hides a shown source first, then leaves the page.
+	await app.press(`id:output-source-${VISUAL}`);
+	await app.waitFor("id:artifact-source-text");
+	expect(showsSource(app, VISUAL_SOURCE)).toBe(true);
+	await app.keyboard.press("escape");
+	expect(app.shows("id:artifact-source")).toBe(false);
+	expect(app.shows("id:delivery")).toBe(true);
+	await app.keyboard.press("escape");
+	await app.waitFor("id:to-check");
+	// Reopening shows no source and reads none again.
+	await openCsv(app);
+	expect(app.shows("id:artifact-source")).toBe(false);
+	expect(reads(app)).toBe(`Source reads: [${HTML}@3 ${IMAGE}@1 ${VISUAL}@2]`);
+	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+});
+
+test("a read on its way hides the earlier source, and only the newest press's answer shows", async () => {
+	const app = await ready();
+	await openCsv(app);
+	await app.press(`id:output-source-${VISUAL}`);
+	await app.waitFor("id:artifact-source-text");
+	await app.press("Hold reads");
+	await app.press(`id:output-source-${HTML}`);
+	await app.waitFor("Reading the saved source…");
+	expect(showsSource(app, VISUAL_SOURCE)).toBe(false);
+	// One press, one read: the same pin cannot be pressed again while it reads.
+	expect(app.enabled(`id:output-source-${HTML}`)).toBe(false);
+	await app.press(`id:output-source-${IMAGE}`);
+	// The image's answer comes first; the HTML answer arrives late and is dropped.
+	await app.press("Release reads");
+	await app.waitFor("Pilot shows only an image's title and kind here. It does not draw images.");
+	expect(showsSource(app, HTML_SOURCE)).toBe(false);
+	expect(app.texts().includes("Source · Image · revision 1")).toBe(true);
+	expect(reads(app)).toBe(`Source reads: [${VISUAL}@2 ${HTML}@3 ${IMAGE}@1]`);
+	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+});
+
+test("missing, oversize, held back and damaged copies say why, never another revision", async () => {
+	const app = await ready();
+	await app.press("Unsaved copies");
+	await openCsv(app);
+	await app.press(`id:output-source-${HTML}`);
+	await app.waitFor("Pilot has no saved copy of this revision.");
+	expect(showsSource(app, HTML_SOURCE)).toBe(false);
+	await app.press(`id:output-source-${VISUAL}`);
+	await app.waitFor("This revision's saved copy is too large to show here. Pilot does not show part of it instead.");
+	await app.press("Held back");
+	await app.press(`id:output-source-${HTML}`);
+	await app.waitFor("Pilot held this source back because it may contain a secret.");
+	await app.press(`id:output-source-${VISUAL}`);
+	await app.waitFor("This revision's saved copy is damaged, so Pilot does not show it.");
+	expect(showsSource(app, VISUAL_SOURCE)).toBe(false);
+});
+
+test("a refused read shows no earlier source", async () => {
+	const app = await ready();
+	await openCsv(app);
+	await app.press(`id:output-source-${HTML}`);
+	await app.waitFor("id:artifact-source-text");
+	// The artifact's chat leaves the mission. Hide, then ask again: native refuses,
+	// and the earlier text does not come back.
+	await app.press("Leave mission");
+	await app.press(`id:output-source-${HTML}`);
+	expect(app.shows("id:artifact-source")).toBe(false);
+	await app.press(`id:output-source-${HTML}`);
+	await app.waitFor(
+		"This result or its artifact changed since Pilot read it, or the artifact is no longer part of this mission. Nothing is shown.",
+	);
+	expect(showsSource(app, HTML_SOURCE)).toBe(false);
+	await app.press("Close channel");
+	await app.press(`id:output-source-${VISUAL}`);
+	await app.waitFor("Pilot is closing. Nothing is shown.");
+	expect(showsSource(app, VISUAL_SOURCE)).toBe(false);
+	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+});
+
+test("a newer result or a failed read of the result hides the source at once", async () => {
+	const app = await ready();
+	await openCsv(app);
+	await app.press(`id:output-source-${HTML}`);
+	await app.waitFor("id:artifact-source-text");
+	await app.press("New result");
+	await app.waitFor("id:mark-done");
+	expect(app.shows("id:artifact-source")).toBe(false);
+	expect(showsSource(app, HTML_SOURCE)).toBe(false);
+	// The newer result's own pin reads again only on a press.
+	expect(reads(app)).toBe(`Source reads: [${HTML}@3]`);
+	await app.press(`id:output-source-${HTML}`);
+	await app.waitFor("id:artifact-source-text");
+	await app.press("Lose service");
+	await app.waitFor("id:delivery-off");
+	expect(app.shows("id:artifact-source")).toBe(false);
+	expect(showsSource(app, HTML_SOURCE)).toBe(false);
+	expect(app.enabled(`id:output-source-${HTML}`)).toBe(false);
+	expect(reads(app)).toBe(`Source reads: [${HTML}@3 ${HTML}@3]`);
+});
+
+test("a save and reopen keeps the note, drops a shown source and reads nothing again", async () => {
+	const app = await ready();
+	await openCsv(app);
+	await app.press("id:send-back-open");
+	await app.type("id:send-back-note", "Keep exact words 💬");
+	await app.press(`id:output-source-${HTML}`);
+	await app.waitFor("id:artifact-source-text");
+	await app.press("Save and reopen");
+	await app.waitFor("id:send-back-note");
+	expect(app.value("id:send-back-note")).toBe("Keep exact words 💬");
+	expect(app.shows("id:artifact-source")).toBe(false);
+	expect(showsSource(app, HTML_SOURCE)).toBe(false);
+	expect(reads(app)).toBe(`Source reads: [${HTML}@3]`);
+	expect(counts(app)).toBe("Sends: 0 · Checks: 0");
+});
+
+test("only the exact inert answer for the pin asked is shown", () => {
+	const asked: ArtifactSelection = {
+		subject: { kind: "task", projectId: "p", missionId: "m", taskId: "t" },
+		targetId: "a".repeat(64),
+		deliveryId: "b".repeat(64),
+		ownerSessionId: null,
+		sourceSessionId: "s",
+		artifactId: HTML,
+		revision: 3,
+	};
+	const reply = {
+		version: 1,
+		reference: asked,
+		metadata: { title: "T", kind: "html" },
+		rendering: "unsupported",
+		content: { state: "text", source: "<p>x</p>", containerSha256: "c".repeat(64), containerBytes: 9 },
+		html: "<p>prepared</p>",
+	};
+	const shown = capturedOf(reply, asked, "html");
+	expect(shown?.content).toEqual(reply.content);
+	// Unlisted fields never pass through.
+	expect(JSON.stringify(shown).includes("prepared")).toBe(false);
+	expect(capturedOf({ ...reply, reference: { ...asked, revision: 2 } }, asked, "html")).toBe(null);
+	expect(capturedOf({ ...reply, reference: { ...asked, ownerSessionId: "o" } }, asked, "html")).toBe(null);
+	expect(capturedOf({ ...reply, rendering: "html" }, asked, "html")).toBe(null);
+	expect(capturedOf(reply, asked, "visual")).toBe(null);
+	expect(capturedOf({ ...reply, metadata: { title: "T", kind: "image" } }, asked, "image")).toBe(null);
+	expect(capturedOf({ ...reply, content: { state: "unavailable", reason: "latest" } }, asked, "html")).toBe(null);
+	expect(
+		capturedOf({ ...reply, content: { state: "unavailable", reason: "oversize" } }, asked, "html")?.content,
+	).toEqual({ state: "unavailable", reason: "oversize" });
+});
+
+test("a long source shows its start with a note until Show all", () => {
+	const lines = Array.from({ length: SOURCE_LINES + 10 }, (_, i) => `line ${i}`).join("\n");
+	const part = excerpt(lines, false);
+	expect(part.text.split("\n").length).toBe(SOURCE_LINES);
+	expect(part.note).toBe(`Showing the first ${SOURCE_LINES} of ${SOURCE_LINES + 10} lines.`);
+	expect(excerpt(lines, true)).toEqual({ text: lines, note: "" });
+	const wide = `${"x".repeat(SOURCE_CHARS - 1)}😀tail`;
+	const cut = excerpt(wide, false);
+	// Never half a character.
+	expect(cut.text).toBe("x".repeat(SOURCE_CHARS - 1));
+	expect(cut.note).toBe("Showing the first 39,999 of 40,005 characters.");
+	expect(excerpt("short", false)).toEqual({ text: "short", note: "" });
 });

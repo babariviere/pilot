@@ -19,6 +19,7 @@ import {
 	deliveryRoute,
 	deliveryTitles,
 	doneAsk,
+	hideInspection,
 	outputMessages,
 	reminders,
 	remindersOf,
@@ -275,6 +276,8 @@ export function startFresh() {
 	reminders.set({});
 	deliveryMessages.set({});
 	outputMessages.set({});
+	// A shown source is never saved or read again by a restored window.
+	hideInspection();
 	linearOpen.set(false);
 	openIssue.set(null);
 	linearProject.set(null);
@@ -331,6 +334,7 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	startStep.set(ritual?.kind === "start" ? Math.min(view.step ?? 0, 2) : 0);
 	// A delivered result's page comes back as a read; its notes as unsent words.
 	const delivery = view.delivery ? subjectOf(view.delivery) : null;
+	hideInspection();
 	deliveryRoute.set(delivery ? { key: view.delivery ?? "", subject: delivery, title: "" } : null);
 	const notes: Record<string, string> = {};
 	for (const entry of view.notes ?? []) {
