@@ -220,6 +220,12 @@ impl NativeHost {
                         .epoch
                         .load(std::sync::atomic::Ordering::SeqCst)
                 )
+                && read["readError"].is_null()
+                && self
+                    .0
+                    .shared
+                    .connected
+                    .load(std::sync::atomic::Ordering::SeqCst)
                 && self.0.shared.open().is_ok()
         );
         Some(read)
@@ -316,6 +322,28 @@ impl Transport {
 }
 
 pub(super) async fn read(t: &Transport, shared: &Shared, epoch: u64) -> Result<Value, Error> {
+    let result = read_current(t, shared, epoch).await;
+    if let Err(error) = result {
+        let mut read = shared.attention.lock().expect("attention read poisoned");
+        if matches!(
+            error,
+            Error::Identity | Error::Invalid | Error::Capacity | Error::Closed
+        ) {
+            *read = None;
+        } else if let Some(value) = read.as_mut() {
+            value["readError"] = json!(if error == Error::Stale {
+                "Reading changes. Showing the earlier attention read."
+            } else {
+                "Attention read failed. Showing the earlier read, not a current list."
+            });
+        }
+        drop(read);
+        shared.change(|_| ());
+    }
+    result
+}
+
+async fn read_current(t: &Transport, shared: &Shared, epoch: u64) -> Result<Value, Error> {
     t.gate(false).await?;
     if t.get("/api/hello").await?["capabilities"]["nativeAttention"] != 1 {
         return Err(Error::Unavailable);

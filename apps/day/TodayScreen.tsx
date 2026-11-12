@@ -33,6 +33,9 @@ const WORDS = ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eig
 /** The headline: the coordinators' summary, until the user starts answering. */
 function headline(day: Day): string {
 	const today = day.today();
+	if (today.attention.state !== "live" && (today.headline.startsWith("Nothing needs you") || today.notes.length > 0)) {
+		return "Your last read.";
+	}
 	const left = today.decisions.length + today.actions.length;
 	if (today.notes.length === 0) return today.headline;
 	if (left === 0) return "That was everything. Pilot is back on it.";
@@ -133,7 +136,7 @@ function NeedsYou(props: { day: Day }) {
 		if (a.state === "live" || (a.state === f.state && a.reason === f.reason)) return "";
 		return a.reason;
 	};
-	const readable = () => attention().state !== "unreadable" && attention().state !== "unavailable";
+	const readable = () => attention().state === "live";
 	// A focus request with no card to take it lapses, so a later arrival
 	// never takes the focus on its own.
 	effect(() => {
@@ -142,12 +145,11 @@ function NeedsYou(props: { day: Day }) {
 	return (
 		<View class="gap-4">
 			<SectionTitle title="Needs you" count={items().length} />
-			<If when={attentionNote()}>
-				<View testID="attention-note" class="flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">
-					<Mark kind="unknown" />
-					<Text class="flex-1 text-sm text-foreground">{attentionNote()}</Text>
-				</View>
-			</If>
+			<View testID="attention-note" class="flex-row items-center gap-2.5 py-1">
+				<Text class="flex-1 text-xs text-muted-foreground">
+					{attentionNote() || (readable() ? "Attention read is up to date." : "Attention read is not current.")}
+				</Text>
+			</View>
 			<Each of={props.day.today().notes} key={(note) => note}>
 				{(note) => (
 					<View class="flex-row items-center gap-2.5 rounded-xl bg-ok-soft px-4 py-3">
@@ -163,7 +165,7 @@ function NeedsYou(props: { day: Day }) {
 						when={readable()}
 						else={
 							<Text class="text-base text-foreground">
-								Pilot could not read what needs you. Nothing here is guessed.
+								What needs you is not current. Pilot must read it again.
 							</Text>
 						}
 					>
@@ -309,16 +311,19 @@ function Missions(props: { day: Day }) {
 	);
 }
 
-/** A quiet line when the read shown is not live. */
+/** One stable status location. Ordinary invalidation is not a failure block. */
 export function FreshnessNote(props: { day: Day }) {
 	const freshness = () => props.day.today().freshness;
 	return (
-		<If when={freshnessLine(freshness())}>
-			<View testID="freshness" class="flex-row items-center gap-2.5 rounded-xl bg-muted px-4 py-3">
-				<Mark kind="unknown" />
-				<Text class="flex-1 text-sm text-foreground">{freshnessLine(freshness())}</Text>
-			</View>
-		</If>
+		<View testID="freshness" class="flex-row items-center gap-2.5 py-1">
+			<Text class="flex-1 text-xs text-muted-foreground">
+				{freshness().state === "live"
+					? "Mission read is up to date."
+					: freshness().state === "stale" && freshness().reason === "Read changed. Refresh before acting."
+						? "Reading mission changes. Showing the earlier read."
+						: freshnessLine(freshness()) || freshness().reason}
+			</Text>
+		</View>
 	);
 }
 
@@ -344,6 +349,7 @@ function Unreadable(props: { day: Day }) {
 function Planning(props: { plans: Plans }) {
 	const planning = () => props.plans.planning();
 	const off = () => planning().availability === "unavailable";
+	const stale = () => planning().availability === "stale";
 	const rows = () => {
 		if (off()) return [];
 		const all = planning().plans;
@@ -366,10 +372,14 @@ function Planning(props: { plans: Plans }) {
 		}
 	};
 	return (
-		<If when={off() || rows().length > 0}>
+		<If when={planning().availability !== "mock" || rows().length > 0}>
 			<View testID="planning" class="gap-1">
 				<View class="pb-1">
-					<SectionTitle title="Planning" count={rows().length} />
+					<SectionTitle title="Planning" count={rows().length}>
+						<Text testID="planning-status" class="text-xs text-faint">
+							{stale() ? "Earlier read" : off() ? "Unavailable" : "Up to date"}
+						</Text>
+					</SectionTitle>
 				</View>
 				<If when={off()}>
 					<View testID="planning-off" class="gap-1.5 rounded-xl bg-muted px-4 py-3">
@@ -391,6 +401,15 @@ function Planning(props: { plans: Plans }) {
 							</View>
 						</If>
 					</View>
+				</If>
+				<If when={!off()}>
+					<Text testID="planning-note" class="text-xs text-muted-foreground">
+						{stale()
+							? planning().reason
+							: rows().length === 0
+								? "No missions in planning."
+								: "Planning read is up to date."}
+					</Text>
 				</If>
 				<Each of={rows()} key={(p) => p.missionId}>
 					{(p) => {
@@ -541,7 +560,9 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 						<ComingUp day={props.day} />
 
 						<Text class="border-t border-border pt-5 text-xs text-faint">
-							That is everything for now. Pilot will tell you if something needs you.
+							{today().attention.state === "live"
+								? "That is everything for now. Pilot will tell you if something needs you."
+								: "What needs you is not current. Read again before acting."}
 						</Text>
 					</View>
 				</If>

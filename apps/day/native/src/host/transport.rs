@@ -88,6 +88,12 @@ impl Transport {
             .send()
             .await
             .map_err(|_| Error::Offline)?;
+        if matches!(r.status().as_u16(), 401 | 403)
+            || (r.status().as_u16() == 404
+                && path == format!("/api/projects/{}", self.source.project_id))
+        {
+            return Err(Error::Identity);
+        }
         let value = body(r).await?;
         self.local()?;
         Ok(value)
@@ -346,6 +352,9 @@ pub(super) fn exact(
 }
 
 pub(super) async fn body(r: reqwest::Response) -> Result<Value, Error> {
+    if matches!(r.status().as_u16(), 401 | 403) {
+        return Err(Error::Identity);
+    }
     if r.status().as_u16() != 200 {
         return Err(Error::Unavailable);
     }
@@ -353,6 +362,11 @@ pub(super) async fn body(r: reqwest::Response) -> Result<Value, Error> {
 }
 
 async fn inventory_body(r: reqwest::Response, project_id: &str) -> Result<Value, Error> {
+    // Conflict can mean a revoked owner/membership fence. It is not a
+    // transport outage and must discard the prior inventory, not retain it.
+    if r.status().as_u16() == 409 {
+        return Err(Error::Invalid);
+    }
     if r.status().as_u16() != 503 {
         return body(r).await;
     }

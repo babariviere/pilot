@@ -116,7 +116,7 @@ struct Shared {
     detail: Mutex<Option<String>>,
     planning: Mutex<std::collections::BTreeMap<String, (u64, serde_json::Value)>>,
     planning_mission: Mutex<Option<String>>,
-    planning_inventory: Mutex<Option<(u64, serde_json::Value)>>,
+    planning_inventory: Mutex<Option<(u64, serde_json::Value, Option<Error>)>>,
     planning_inventory_wanted: AtomicBool,
     planning_operations: Mutex<std::collections::BTreeMap<String, serde_json::Value>>,
     enrollment: Mutex<Option<enrollment::Selection>>,
@@ -770,6 +770,18 @@ async fn qualify_planning(
 }
 
 fn fail(shared: &Shared, error: Error) {
+    // Failed authoritative reads age all projections, not just missions.
+    // A notice race has already advanced this fence.
+    if error != Error::Stale {
+        shared.epoch.fetch_add(1, Ordering::SeqCst);
+    }
+    if error == Error::Identity {
+        *shared.attention.lock().expect("attention read poisoned") = None;
+        *shared
+            .planning_inventory
+            .lock()
+            .expect("planning inventory poisoned") = None;
+    }
     if let Some(s) = shared
         .enrollment
         .lock()
@@ -785,7 +797,11 @@ fn fail(shared: &Shared, error: Error) {
                 Error::Stale => FreshnessState::Stale,
                 _ => FreshnessState::Unavailable,
             },
-            "Daemon read is unavailable. Saved operations are never resent.",
+            if error == Error::Stale {
+                "Read changed. Refresh before acting."
+            } else {
+                "Daemon read is unavailable. Saved operations are never resent."
+            },
         )
     });
 }

@@ -155,6 +155,7 @@ export class ConnectedToday implements DayFeed {
 	#listeners = new Map<number, (today: Today) => void>();
 	#next = 0;
 	#reading: Promise<void> | null = null;
+	#readVersion = 0;
 	#again = false;
 
 	constructor(window: string, first: Today) {
@@ -195,6 +196,16 @@ export class ConnectedToday implements DayFeed {
 
 	/** Reads Today again after an invalidation. Bursts collapse into one more read. */
 	refresh(): Promise<void> {
+		this.#readVersion += 1;
+		// A notice withdraws freshness immediately, even while the serialized
+		// root is still reading. Kept cards/drafts are display, not authority.
+		if (this.#today.freshness?.state === "live" || this.#today.attention?.state === "live") {
+			const age = (read: Today["freshness"]) =>
+				read.state === "live"
+					? { ...read, state: "stale" as const, reason: "Read changed. Refresh before acting." }
+					: read;
+			this.#take({ ...this.#today, freshness: age(this.#today.freshness), attention: age(this.#today.attention) });
+		}
 		if (this.#reading) {
 			this.#again = true;
 			return this.#reading;
@@ -202,8 +213,18 @@ export class ConnectedToday implements DayFeed {
 		this.#reading = (async () => {
 			do {
 				this.#again = false;
+				const version = this.#readVersion;
 				const r = await call<Today>(this.#window, "day.today.read", {});
+				if (version !== this.#readVersion) continue;
 				if (r.ok) this.#take(r.snapshot);
+				else {
+					const reason = "Pilot could not read this window again. Showing the earlier read.";
+					this.#take({
+						...this.#today,
+						freshness: { ...this.#today.freshness, state: "stale", reason },
+						attention: { ...this.#today.attention, state: "stale", reason },
+					});
+				}
 			} while (this.#again);
 		})().finally(() => {
 			this.#reading = null;
@@ -453,11 +474,13 @@ export class ConnectedRituals implements RitualSource {
 const OLDER = "This is an older read. Pilot checks again before it saves anything.";
 
 /**
- * The missions in planning as the root last read them. Only a complete,
- * current read has rows; a refusal shows none of them, never an empty list.
+ * The missions in planning as the root last read them. Complete earlier
+ * rows can be stale display data; an unavailable read is never an empty list.
  * `at` orders it among this window's reads.
  */
-type Inventory = { state: "live"; rows: PlanRow[]; at: number } | { state: "off"; refusal: Refusal };
+type Inventory =
+	| { state: "live" | "stale"; rows: PlanRow[]; at: number; reason: string }
+	| { state: "off"; refusal: Refusal };
 
 /** Why the missions in planning are not shown, in one calm sentence. */
 export function inventoryReason(refusal: Refusal): string {
@@ -480,7 +503,7 @@ export function inventoryReason(refusal: Refusal): string {
 
 /** A complete inventory read: every row names its current interview. Anything else is refused. */
 function inventoryRows(planning: Planning | null | undefined): PlanRow[] | null {
-	if (!planning || typeof planning !== "object" || planning.availability !== "live") return null;
+	if (!planning || typeof planning !== "object" || !["live", "stale"].includes(planning.availability)) return null;
 	if (!Array.isArray(planning.plans)) return null;
 	return planning.plans.every((p) => p && typeof p.missionId === "string" && p.identity) ? planning.plans : null;
 }
@@ -499,6 +522,7 @@ export class ConnectedPlans implements PlanningFeed {
 	#older = new Set<string>();
 	#inventory: Inventory = { state: "off", refusal: "unavailable" };
 	#inventoryReading: Promise<void> | null = null;
+	#inventoryVersion = 0;
 	#refreshing: Promise<void> | null = null;
 	#refreshVersion = 0;
 	#again = false;
@@ -519,8 +543,8 @@ export class ConnectedPlans implements PlanningFeed {
 		const inventory = this.#inventory;
 		return {
 			revision: this.#revision,
-			availability: inventory.state === "live" ? "live" : "unavailable",
-			reason: inventory.state === "live" ? "" : inventoryReason(inventory.refusal),
+			availability: inventory.state === "off" ? "unavailable" : inventory.state,
+			reason: inventory.state === "off" ? inventoryReason(inventory.refusal) : inventory.reason,
 			setup: setup ?? NO_SETUP,
 			canCreate: setup !== null && !this.#newUnknown,
 			createReason: this.#newUnknown
@@ -531,7 +555,7 @@ export class ConnectedPlans implements PlanningFeed {
 			canStart: false,
 			// Standalone chats start through New's project choice (chatFeed.ts), not this feed.
 			startReason: "",
-			plans: inventory.state === "live" ? inventory.rows : [],
+			plans: inventory.state === "off" ? [] : inventory.rows,
 			started: [],
 		};
 	}
@@ -564,9 +588,15 @@ export class ConnectedPlans implements PlanningFeed {
 	/** Keeps a complete read; a refusal drops every row. A cached read that is not current keeps the earlier reason. */
 	#takeInventory(r: Reply<Planning>) {
 		const rows = r.ok ? inventoryRows(r.snapshot) : null;
-		if (rows) this.#inventory = { state: "live", rows, at: ++this.#reads };
+		if (rows && r.ok)
+			this.#inventory = {
+				state: r.snapshot.availability === "stale" ? "stale" : "live",
+				rows,
+				at: ++this.#reads,
+				reason: r.snapshot.reason ?? "",
+			};
 		else if (!r.ok) this.#inventory = { state: "off", refusal: r.refusal };
-		else if (this.#inventory.state === "live") this.#inventory = { state: "off", refusal: "unavailable" };
+		else if (this.#inventory.state !== "off") this.#inventory = { state: "off", refusal: "unavailable" };
 		this.#publish();
 	}
 
@@ -576,8 +606,14 @@ export class ConnectedPlans implements PlanningFeed {
 	 */
 	readInventory(): Promise<void> {
 		if (this.#inventoryReading) return this.#inventoryReading;
+		const version = ++this.#inventoryVersion;
 		this.#inventoryReading = (async () => {
-			this.#takeInventory(await call<Planning>(this.#window, "day.plan.inventory", {}));
+			const reply = await call<Planning>(this.#window, "day.plan.inventory", {});
+			if (version === this.#inventoryVersion || (!reply.ok && this.#inventory.state === "off")) {
+				// A read's own notice can deliver its unavailable cache first.
+				// Keep the exact refusal, but never replace newer valid rows.
+				this.#takeInventory(reply);
+			}
 		})().finally(() => {
 			this.#inventoryReading = null;
 		});
@@ -587,7 +623,7 @@ export class ConnectedPlans implements PlanningFeed {
 	/** Whether reading the list again could help. Not after the service changed or while Pilot closes. */
 	canReadInventory(): boolean {
 		const inventory = this.#inventory;
-		return inventory.state === "live" || !["identity", "closed", "busy"].includes(inventory.refusal);
+		return inventory.state !== "off" || !["identity", "closed", "busy"].includes(inventory.refusal);
 	}
 
 	/**
@@ -697,6 +733,7 @@ export class ConnectedPlans implements PlanningFeed {
 		// The notice already invalidated the shown read. Do not leave answer
 		// controls live while cached snapshot calls wait behind a native read.
 		this.#refreshVersion += 1;
+		this.#inventoryVersion += 1;
 		for (const missionId of this.#pages.keys()) this.#older.add(missionId);
 		this.#publish();
 		if (this.#refreshing) {

@@ -434,12 +434,13 @@ fn freshness(read: Option<&Value>, local: &Local) -> Freshness {
             },
         },
         Some(r) if r["current"] == true => Freshness::default(),
-        Some(_) => Freshness {
+        Some(r) => Freshness {
             state: FreshnessState::Stale,
             age: String::new(),
-            reason:
-                "What needs you may have changed. Pilot reads it again before it sends anything."
-                    .into(),
+            reason: r["readError"]
+                .as_str()
+                .unwrap_or("Reading changes. Showing the earlier attention read.")
+                .into(),
         },
     }
 }

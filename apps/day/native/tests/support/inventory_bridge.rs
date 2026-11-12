@@ -178,9 +178,9 @@ fn inventory_capacity_requires_the_exact_typed_status_project_version_and_limit(
             json!({"error":"Native planning unavailable"}),
             "unavailable",
         ),
-        (401, capacity.clone(), "unavailable"),
-        (403, capacity.clone(), "unavailable"),
-        (409, capacity.clone(), "unavailable"),
+        (401, capacity.clone(), "identity"),
+        (403, capacity.clone(), "identity"),
+        (409, capacity.clone(), "invalid"),
     ];
     for (key, value) in [
         ("version", json!(2)),
@@ -293,14 +293,60 @@ fn inventory_snapshot_never_blesses_refused_overflow_or_disconnected_reads() {
         .unwrap()
         .shutdown(Shutdown::Both)
         .unwrap();
-    fixture.wait(|read| read.availability == PlanAvailability::Unavailable);
+    fixture.wait(|read| read.availability == PlanAvailability::Stale);
     let result = fixture.snapshot();
-    assert_eq!(result["value"]["snapshot"]["availability"], "unavailable");
+    assert_eq!(result["value"]["snapshot"]["availability"], "stale");
     assert_eq!(
-        result["value"]["snapshot"]["plans"],
-        json!([]),
-        "stale rows are never presented as current"
+        result["value"]["snapshot"]["plans"][0]["title"], "Restored",
+        "disconnect keeps the last complete read, explicitly not current"
     );
     assert_eq!(fixture.f.bridge.close().recv_blocking().unwrap(), Ok(()));
     assert_eq!(fixture.f.run("try { await call('day.plan.inventorySnapshot'); return 'unexpected'; } catch(e) { return e.code; }", Fixture::caps()),json!("ERR_NSH_HOST_ERROR"));
+}
+
+#[test]
+fn complete_rows_survive_sustained_503_and_recover_but_authority_loss_clears_them() {
+    let fixture = InventoryFixture::new();
+    for _ in 0..3 {
+        {
+            let mut state = fixture.state.lock().unwrap();
+            state.inventory_status = 503;
+            state.inventory = json!({"error":"Temporary read failure"});
+        }
+        let result = fixture.f.run(
+            "return [await call('day.plan.inventory'),await call('day.plan.inventorySnapshot')];",
+            Fixture::caps(),
+        );
+        assert_eq!(result[0]["error"], "unavailable");
+        assert_eq!(result[1]["value"]["snapshot"]["availability"], "stale");
+        assert_eq!(
+            result[1]["value"]["snapshot"]["plans"][0]["title"],
+            "First interview"
+        );
+        assert_eq!(result[1]["value"]["snapshot"]["canStart"], false);
+    }
+    {
+        let mut state = fixture.state.lock().unwrap();
+        state.inventory_status = 200;
+        state.inventory = inventory("Recovered");
+    }
+    let recovered = fixture
+        .f
+        .run("return await call('day.plan.inventory');", Fixture::caps());
+    assert_eq!(recovered["value"]["snapshot"]["availability"], "live");
+    assert_eq!(
+        recovered["value"]["snapshot"]["plans"][0]["title"],
+        "Recovered"
+    );
+    fixture.state.lock().unwrap().inventory_status = 403;
+    let denied = fixture.f.run(
+        "return [await call('day.plan.inventory'),await call('day.plan.inventorySnapshot')];",
+        Fixture::caps(),
+    );
+    assert_eq!(denied[0]["error"], "identity");
+    assert_eq!(
+        denied[1]["value"]["snapshot"]["availability"],
+        "unavailable"
+    );
+    assert_eq!(denied[1]["value"]["snapshot"]["plans"], json!([]));
 }

@@ -3,6 +3,9 @@
 Short guides for the desktop app. Start with [installation and setup](getting-started.md).
 
 For the upcoming interface, [launch the separate local development preview](development-preview.md).
+Connected Day keeps earlier reads marked as older while it refreshes. An
+unavailable attention read never means that nothing needs you. Read again only
+reads; it does not resend an answer or start work.
 
 | Feature                                         | Guide                                         |
 | ----------------------------------------------- | --------------------------------------------- |

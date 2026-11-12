@@ -26,21 +26,47 @@ impl NativeHost {
             .planning_inventory
             .lock()
             .expect("planning inventory poisoned");
-        let rows = read.as_ref().and_then(|(epoch, value)| {
-            (self.0.shared.current(*epoch).is_ok()
-                && self.0.shared.connected.load(Ordering::SeqCst))
-            .then(|| plan_host::inventory_rows(value).ok())
-            .flatten()
+        let rows = read
+            .as_ref()
+            .and_then(|(_, value, _)| plan_host::inventory_rows(value).ok())
+            .filter(|_| self.0.shared.open().is_ok());
+        let live = read.as_ref().is_some_and(|(epoch, _, error)| {
+            error.is_none()
+                && self.0.shared.current(*epoch).is_ok()
+                && self.0.shared.connected.load(Ordering::SeqCst)
         });
+        let failed = matches!(
+            self.0
+                .shared
+                .desk
+                .lock()
+                .expect("native Desk poisoned")
+                .today()
+                .freshness
+                .state,
+            crate::model::FreshnessState::Offline | crate::model::FreshnessState::Unavailable
+        );
         let setup = self.planning_setup();
         Planning {
-            availability: if rows.is_some() {
+            availability: if live {
                 PlanAvailability::Live
+            } else if rows.is_some() && self.0.shared.open().is_ok() {
+                PlanAvailability::Stale
             } else {
                 PlanAvailability::Unavailable
             },
-            reason: if rows.is_some() {
+            reason: if live {
                 String::new()
+            } else if rows.is_some() {
+                if failed
+                    || read
+                        .as_ref()
+                        .is_some_and(|(_, _, error)| error.is_some_and(|e| e != Error::Stale))
+                {
+                    "Planning read failed. Showing the earlier complete read; read again.".into()
+                } else {
+                    "Reading changes. Showing the earlier complete planning read.".into()
+                }
             } else {
                 "Planning missions could not be read. Read again; nothing was started.".into()
             },
@@ -80,10 +106,18 @@ pub(super) async fn read(t: &Transport, shared: &Shared, epoch: u64) -> Result<(
         .expect("planning inventory poisoned");
     match result {
         Ok(value) => {
-            *snapshot = Some((epoch, value));
+            *snapshot = Some((epoch, value, None));
         }
         Err(error) => {
-            *snapshot = None;
+            // A notice/transport race does not erase a complete read. Authority
+            // loss, invalid data and overflow do: never keep rows after denial.
+            if matches!(error, Error::Stale | Error::Offline | Error::Unavailable) {
+                if let Some((_, _, failed)) = snapshot.as_mut() {
+                    *failed = Some(error);
+                }
+            } else {
+                *snapshot = None;
+            }
             drop(snapshot);
             shared.change(|_| ());
             return Err(error);

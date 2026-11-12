@@ -231,7 +231,7 @@ fn real_service_503_and_auth_403_remain_unavailable_through_the_released_bridge(
         let result = bridge_inventory(&f, &bridge);
         assert_eq!(
             result[0],
-            json!({"version":1,"error":"unavailable"}),
+            json!({"version":1,"error":if native {"identity"} else {"unavailable"}}),
             "native={native}"
         );
         assert_eq!(

@@ -54,12 +54,24 @@ const sockets = new Set<WebSocket>();
 let forwardEvents = true;
 let holdEvents = false;
 const retainedEvents: Array<{ client: WebSocket; body: string }> = [];
+let readOutage = false,
+	readDenied = false,
+	holdDay = false;
+let dayRelease: (() => void) | undefined, dayEntered: (() => void) | undefined;
+let effects = 0;
 const wss = new WebSocketServer({ noServer: true });
 const proxy = createServer(async (req, res) => {
 	try {
 		const chunks: Buffer[] = [];
 		for await (const chunk of req) chunks.push(chunk);
 		const bytes = Buffer.concat(chunks);
+		const attentionRead = req.url === "/api/native-attention" && JSON.parse(bytes.toString() || "{}").kind === "read";
+		if (req.method !== "GET" && !attentionRead) effects++;
+		const read = req.url?.endsWith("/day") || req.url?.endsWith("/planning-inventory") || attentionRead;
+		if (read && (readOutage || readDenied)) {
+			res.writeHead(readDenied ? 403 : 503).end();
+			return;
+		}
 		const writing = req.url === "/api/operations" && req.method === "POST";
 		const profile = req.url?.endsWith("/planning-profile");
 		if (profile) {
@@ -119,6 +131,14 @@ const proxy = createServer(async (req, res) => {
 			...(bytes.length ? { body: bytes } : {}),
 		});
 		const body = await response.json();
+		if (holdDay && req.url?.endsWith("/day")) {
+			holdDay = false;
+			await new Promise<void>((resolve) => {
+				dayRelease = resolve;
+				dayEntered?.();
+			});
+			dayRelease = undefined;
+		}
 		if (writing && body.state === "accepted" && enrollment?.operationId === body.operationId)
 			missionId = body.result.missionId;
 		if (wrongProject && req.url === `/api/projects/${f.project.id}`) body.path = `${body.path}/different`;
@@ -182,6 +202,16 @@ console.log(
 try {
 	for await (const line of createInterface({ input: process.stdin })) {
 		const command = JSON.parse(line);
+		if (command.action === "read-outage") readOutage = command.value;
+		if (command.action === "read-denied") readDenied = command.value;
+		if (command.action === "hold-day") holdDay = command.value;
+		if (command.action === "day-entered" && !dayRelease)
+			await new Promise<void>((resolve) => {
+				dayEntered = resolve;
+			});
+		if (command.action === "release-day") dayRelease?.();
+		if (command.action === "notice")
+			for (const client of wss.clients) client.send(JSON.stringify({ type: "mission-catalog.changed" }));
 		if (command.action === "lost") lost = command.value;
 		if (command.action === "quiet") forwardEvents = !command.value;
 		if (command.action === "hold-events") {
@@ -251,6 +281,7 @@ try {
 		console.log(
 			JSON.stringify({
 				posts,
+				effects,
 				lookups,
 				profiles,
 				held: !!release,
@@ -266,6 +297,7 @@ try {
 		);
 	}
 } finally {
+	dayRelease?.();
 	release?.();
 	for (const socket of sockets) socket.close();
 	for (const client of wss.clients) client.close();

@@ -49,6 +49,9 @@ protocol, storage or shape failure), and live. Legacy unreadable remains support
 Cached reads are pinned to the entire Source and never restore execution authority.
 The cache is private, byte-limited and replaced atomically after file sync.
 
+See [Connected Today read refresh](day-read-refresh.md) for notice-race handling,
+stale display data, stable status regions and the deterministic regression loop.
+
 ## Controls and recovery
 
 One native worker serializes commands. Each new explicit intent binds the shown

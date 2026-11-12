@@ -46,6 +46,9 @@ pub enum PlanAvailability {
     Mock,
     /// Connected to the selected daemon.
     Live,
+    /// An earlier complete read, kept while changes or a failed read are checked.
+    /// Display only. Never authority to submit or start work.
+    Stale,
     /// Not connected or not supported. Nothing can be sent.
     Unavailable,
 }

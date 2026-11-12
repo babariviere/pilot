@@ -42,6 +42,8 @@ use std::{
 
 #[path = "support/connection_recovery.rs"]
 mod connection_recovery;
+#[path = "support/today_refresh.rs"]
+mod today_refresh;
 
 const WAIT: Duration = Duration::from_secs(60);
 
@@ -58,6 +60,13 @@ fn entry() -> PathBuf {
             && !name.ends_with(".test.tsx")
         {
             std::fs::copy(&path, dir.join(&name)).unwrap();
+        }
+    }
+    std::fs::create_dir(dir.join("icons")).unwrap();
+    for icon in std::fs::read_dir(app.join("icons")).unwrap() {
+        let icon = icon.unwrap().path();
+        if icon.extension().is_some_and(|ext| ext == "svg") {
+            std::fs::copy(&icon, dir.join("icons").join(icon.file_name().unwrap())).unwrap();
         }
     }
     std::fs::write(
@@ -292,8 +301,12 @@ fn new_mission_questions_saved_progress_one_submit_and_the_way_back() {
     f.cmd("quiet", true);
     f.cmd("generate", true);
     f.cmd("held", false);
-    wait(&mut app, "role:button[Read again]");
-    app.press("role:button[Read again]").unwrap();
+    wait(
+        &mut app,
+        "label:Read this mission's planning again. This sends nothing.",
+    );
+    app.press("label:Read this mission's planning again. This sends nothing.")
+        .unwrap();
     wait(&mut app, "id:interview");
     assert!(!app.screen().enabled("id:submit").unwrap_or(false));
 
@@ -326,7 +339,7 @@ fn new_mission_questions_saved_progress_one_submit_and_the_way_back() {
     wait(&mut app, "id:interview");
     assert_eq!(answered(&app), question);
     assert_eq!(f.cmd("stats", false)["posts"], posts);
-    app.press("role:button[Back to Today]").unwrap();
+    app.press("label:Pilot. Go to Today").unwrap();
     wait(&mut app, &format!("id:plan-{mission}"));
     assert!(
         !has(&app, "id:planning-off"),
@@ -339,7 +352,7 @@ fn new_mission_questions_saved_progress_one_submit_and_the_way_back() {
         s.texts().iter().any(|t| t.contains("· 1 answered"))
     })
     .unwrap();
-    app.press("role:button[Back to Today]").unwrap();
+    app.press("label:Pilot. Go to Today").unwrap();
     // The overview leads to the same planning too.
     wait(&mut app, &format!("id:mission-{mission}"));
     app.press(&format!("id:mission-{mission}")).unwrap();
@@ -395,10 +408,10 @@ fn new_mission_questions_saved_progress_one_submit_and_the_way_back() {
     );
 
     // The overview is one step away, and Today one more.
-    wait(&mut app, "id:open-overview");
-    app.press("id:open-overview").unwrap();
+    wait(&mut app, "label:Back to Mission overview");
+    app.press("label:Back to Mission overview").unwrap();
     wait(&mut app, "id:mission-plan");
-    app.press("role:button[Back to Today]").unwrap();
+    app.press("label:Pilot. Go to Today").unwrap();
     wait(&mut app, &format!("id:mission-{mission}"));
     close(app, bridge);
     f.cmd("close", false);
@@ -420,7 +433,7 @@ fn core_journey_from_new_to_agreement_start_and_report_survives_reopen() {
     wait(&mut app, "id:goal");
     app.type_text("id:goal", "Check the importer without live effects")
         .unwrap();
-    app.press("role:button[Back to Today]").unwrap();
+    app.press("label:Pilot. Go to Today").unwrap();
     app.press("role:button[New]").unwrap();
     assert_eq!(
         app.screen().input_text("id:goal"),
@@ -443,8 +456,12 @@ fn core_journey_from_new_to_agreement_start_and_report_survives_reopen() {
     f.cmd("generate", true);
     let held = f.cmd("held", false);
     assert!(held["heldEvents"].as_u64().unwrap() > 0);
-    wait(&mut app, "role:button[Read again]");
-    app.press("role:button[Read again]").unwrap();
+    wait(
+        &mut app,
+        "label:Read this mission's planning again. This sends nothing.",
+    );
+    app.press("label:Read this mission's planning again. This sends nothing.")
+        .unwrap();
     wait(&mut app, "Question 1 of 2 · 0 answered");
     app.wait_until("held round read", WAIT, |s| {
         s.enabled("id:choice-outcome-yes").unwrap_or(false)
@@ -484,7 +501,7 @@ fn core_journey_from_new_to_agreement_start_and_report_survives_reopen() {
         "One fresh explicit answer, never a write retry"
     );
     app.press("id:see-all").unwrap();
-    app.press("role:button[Back to Today]").unwrap();
+    app.press("label:Pilot. Go to Today").unwrap();
     close(app, bridge);
 
     // A cold native window reads saved progress, and admits no new work.
@@ -559,7 +576,7 @@ fn core_journey_from_new_to_agreement_start_and_report_survives_reopen() {
     let after = f.cmd("stats", false);
     assert_eq!(after["posts"], before["posts"], "Check never resends Start");
     assert_eq!(after["workers"], 2);
-    app.press("id:open-overview").unwrap();
+    app.press("label:Back to Mission overview").unwrap();
     wait(&mut app, "Offline background worker reported");
     wait(&mut app, "role:button[Pause mission]");
     app.press("role:button[Pause mission]").unwrap();
@@ -603,7 +620,7 @@ fn a_lost_new_creation_is_checked_after_reopen_and_never_adopts_the_previous_mis
     f.cmd("held", false);
     wait(&mut app, "id:interview");
     let first = f.cmd("stats", false)["mission"].clone();
-    app.press("role:button[Back to Today]").unwrap();
+    app.press("label:Pilot. Go to Today").unwrap();
     app.press("role:button[New]").unwrap();
     app.type_text("id:goal", "A different exact goal").unwrap();
     app.wait_until("next setup", WAIT, |s| {
@@ -861,7 +878,11 @@ fn planning_inventory_is_read_once_and_never_shown_as_empty_when_it_is_not() {
     root.reply("day.plan.inventory", inventory(vec![]));
     let mut app = open_on(&entry, root.channel.clone());
     wait(&mut app, "role:button[New]");
-    assert!(!has(&app, "id:planning"), "an empty list shows no section");
+    assert!(
+        has(&app, "id:planning"),
+        "a connected empty list keeps its status location"
+    );
+    assert!(app.shows("No missions in planning."));
     assert!(!has(&app, "id:planning-off"));
     assert_eq!(
         root.count("day.plan.inventory"),
@@ -1060,11 +1081,14 @@ fn a_planning_row_opens_its_exact_interview_and_a_page_older_than_the_list_says_
     assert!(!app.shows(OLDER));
 
     // A failed reopen is stale even without any invalidation or newer row.
-    app.press("role:button[Back to Today]").unwrap();
+    app.press("label:Pilot. Go to Today").unwrap();
     root.refuse("day.plan.read", "unavailable");
     app.press("id:plan-export").unwrap();
     wait(&mut app, OLDER);
-    wait(&mut app, "role:button[Read again]");
+    wait(
+        &mut app,
+        "label:Read this mission's planning again. This sends nothing.",
+    );
     assert!(has(&app, "id:choice-what-messages"));
     assert!(
         !app.screen()
@@ -1072,7 +1096,8 @@ fn a_planning_row_opens_its_exact_interview_and_a_page_older_than_the_list_says_
             .unwrap_or(false)
     );
     root.reply("day.plan.read", page.clone());
-    app.press("role:button[Read again]").unwrap();
+    app.press("label:Read this mission's planning again. This sends nothing.")
+        .unwrap();
     app.wait_until("fresh read without navigating away", WAIT, |s| {
         !s.shows(OLDER)
     })
@@ -1080,7 +1105,7 @@ fn a_planning_row_opens_its_exact_interview_and_a_page_older_than_the_list_says_
 
     // Back on Today, the list names a newer revision and the page cannot be
     // read again: the page shown is older, and says so.
-    app.press("role:button[Back to Today]").unwrap();
+    app.press("label:Pilot. Go to Today").unwrap();
     wait(&mut app, "id:plan-export");
     let newer = PlanIdentity {
         interview_revision: identity.interview_revision + 1,
@@ -1102,7 +1127,7 @@ fn a_planning_row_opens_its_exact_interview_and_a_page_older_than_the_list_says_
     let mut current = page.clone();
     current["interview"]["revision"] = json!(newer.interview_revision);
     root.reply("day.plan.read", current);
-    app.press("role:button[Back to Today]").unwrap();
+    app.press("label:Pilot. Go to Today").unwrap();
     wait(&mut app, "id:plan-export");
     app.press("id:plan-export").unwrap();
     wait(&mut app, "id:interview");
@@ -1218,7 +1243,7 @@ fn an_unknown_start_without_a_new_page_stays_check_only_after_navigation() {
     app.press("role:button[Start work]").unwrap();
     app.press("role:button[Start task]").unwrap();
     wait(&mut app, "role:button[Check Start]");
-    app.press("role:button[Back to Today]").unwrap();
+    app.press("label:Pilot. Go to Today").unwrap();
     app.press("id:plan-export").unwrap();
     wait(&mut app, "role:button[Check Start]");
     assert!(!has(&app, "role:button[Start work]"));
@@ -1269,7 +1294,7 @@ fn an_answer_saves_to_its_own_mission_after_another_is_opened_and_the_flush_wait
         .unwrap();
 
     // The user opens another mission from Today.
-    app.press("role:button[Back to Today]").unwrap();
+    app.press("label:Pilot. Go to Today").unwrap();
     wait(&mut app, "id:plan-other");
     app.press("id:plan-other").unwrap();
     wait(&mut app, "id:interview");

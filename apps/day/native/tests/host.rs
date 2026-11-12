@@ -39,7 +39,11 @@ impl Fixture {
                 let Ok(line) = line else {
                     break;
                 };
-                if let Ok(value) = serde_json::from_str::<Value>(&line) && tx.send(value).is_err() { break; }
+                if let Ok(value) = serde_json::from_str::<Value>(&line)
+                    && tx.send(value).is_err()
+                {
+                    break;
+                }
             }
         });
         let info = output
@@ -128,6 +132,28 @@ fn ready(host: &NativeHost) -> Today {
         t.freshness.state == FreshnessState::Live
             && t.moving.len() + t.not_moving.len() + t.unreported.len() == 1
     })
+}
+
+#[test]
+fn background_refresh_does_not_turn_notice_invalidation_into_read_failure() {
+    let mut f = Fixture::new();
+    let host = f.open();
+    ready(&host);
+    // The real WS notice arrives while the authoritative HTTP read is
+    // in flight. This is ordinary background activity, not an outage.
+    for _ in 0..5 {
+        f.cmd("dayRace", true);
+        let _ = reply(host.refresh());
+        let during = host.snapshot();
+        assert!(
+            !during.freshness.reason.contains("unavailable"),
+            "automatic refresh showed a failure block: {:?}",
+            during.freshness
+        );
+        ready(&host);
+    }
+    assert_eq!(f.cmd("stats", true)["posts"], 0);
+    reply(host.close()).unwrap();
 }
 
 #[test]
