@@ -21,34 +21,37 @@ unknown and what happens next, and let you check where each answer came from?
   new; interview rounds are one kind of input to it.
 - `?variant=D` **Expedition** (a playful last experiment): the same records drawn as an expedition
   chart. Settled answers are inked islands, open questions sit on blank ground, fog of war is
-  drawn as fog, trails show what waits for what, and each planning round is a numbered camp on
-  Pilot's red route. The compass points at what needs you. Places keep their spot, so answers
-  ink new ground and fog lifts in place. Select a place for field notes with its real sources.
-  No points, progress bar or perpetual motion; it moves only when something changes.
-- `?mission=big` (or **Small mission / Big mission** in the bottom bar) swaps in a big mock
-  mission, "Pilot for small teams": 41 questions in six regions and 22 planning rounds. Every
-  variant renders it, so you can see how each one holds up at that size. In D the chart
-  changes shape for it:
-  - **Regions with zoom.** The overview shows regions with their counts (needs you, settled,
-    open, waiting, fog) and places as plain markers. Choose a region (on the chart or in the
-    tabs above it) to zoom in and see labels. Markers keep their screen size while the land
-    zooms. Esc or "Whole chart" zooms out.
+  drawn as fog, trails show what waits for what, and Pilot's red route runs between the harbors
+  where it spent its planning rounds. The compass points at what needs you. Places keep their
+  spot, so answers ink new ground and fog lifts in place. Select a place for field notes with
+  its real sources. No points, progress bar or perpetual motion; it moves only when something
+  changes. Every mission uses the same chart, described below. The small mission is one region
+  ("Linux desktops"), without region tabs, and its labels show from the start.
   - **Look around freely.** Drag the chart or scroll (trackpad or mouse wheel; Shift for
     sideways) to move it. Pinch, ⌘/Ctrl-scroll, the − + buttons or the − and + keys zoom.
-    Labels and the chips between regions appear once you are close enough. At the edge of
-    the chart a scroll goes on to the page. A drag never selects the place it started on.
+    Markers keep their screen size while the land zooms; labels show once you are close
+    enough. At the edge of the chart a scroll goes on to the page. A drag never selects the
+    place it started on; a plain click on a labelled place selects it and keeps your view.
+    Esc closes field notes, then goes back to the whole chart.
   - **No route spaghetti.** Rounds in a row that explore the same region become one stay.
-    The route only runs along one channel between the rows, with a short pier to each
-    region's harbor, so it never crosses places. There are no parallel lanes: a stretch
-    Pilot sailed more often is drawn thicker. Only the last three legs stay strong; "All
-    legs" shows the full history. Each harbor says how many rounds Pilot spent there.
+    The route only runs along one channel, with a short pier to each region's harbor, so it
+    never crosses places. There are no parallel lanes: a stretch Pilot sailed more often is
+    drawn thicker. Only the last three legs stay strong. Each harbor says how many rounds
+    Pilot spent there.
+  - **The compass follows you.** While you drag or zoom, the needle keeps pointing at what
+    needs you.
+- `?mission=big` (or **Small mission / Big mission** in the bottom bar) swaps in a big mock
+  mission, "Pilot for small teams": 41 questions in six regions and 22 planning rounds. Every
+  variant renders it, so you can see how each one holds up at that size. In D the same chart
+  gets six regions:
+  - **Regions with zoom.** The overview shows regions with their counts (needs you, settled,
+    open, waiting, fog) and places as plain markers. Choose a region (on the chart or in the
+    tabs above it) to zoom in and see labels. Esc or "Whole chart" zooms out. "All legs" in
+    the tabs shows the route's full history.
   - **Links between regions.** The overview shows one counted arrow per pair of regions
     ("2 waiting") instead of a line per question. The arrows arc over the land and stay
     out of the channel. Zoomed in, a link to another region is a small chip on the place
     ("from Accounts and sign-in ↗") that moves you there.
-  - **The compass follows you.** While you drag or zoom, the needle keeps pointing at what
-    needs you.
-  - The small chart also fades legs older than the last five.
   The regions are mock data. In Pilot the coordinator would need to keep them.
 - The bottom bar and the left/right arrow keys switch variants. The bottom bar's Panel holds
   walkthroughs, free play, the current state, a side-by-side comparison and About.
