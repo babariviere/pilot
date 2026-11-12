@@ -123,6 +123,8 @@ mod macos;
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
 pub use macos::control;
 #[cfg(all(target_os = "macos", feature = "native-macos"))]
+pub use macos::bundled_service;
+#[cfg(all(target_os = "macos", feature = "native-macos"))]
 pub use macos::{
     UpgradeReport, migrate_stopped, needed, upgrade, upgrade_coordinated,
     upgrade_coordinated_report, upgrade_startup,

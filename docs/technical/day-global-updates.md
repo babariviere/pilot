@@ -100,11 +100,19 @@ An additional native-only verifier must independently qualify process safety
 for that exact fresh observation. Empty blockers, a root/group exit or a pause
 ACK cannot implement it. An owner without that evidence must return unavailable.
 It saves `install-entered` before the swap and checks the installed target
-afterwards. All native work runs off AppKit. It never replaces a daemon.
+afterwards. All native work runs off AppKit. The
+[app-relative handoff](day-bundled-service.md) now consumes the verified bundled
+runtime and original preparation: it stops the existing selected service before
+the swap, then starts and verifies that app's exact runtime once. This is not
+capsule publication or a second daemon. The native process-safety verifier is
+still mandatory; root PID/lease exit is not descendant proof.
 
 Restart consumes a fresh in-memory result once. A fresh pre-exit rollback uses
 the same official installer and independently verified old archive, checks the
-old app and requests its restart. Saved records cannot reconstruct these
+old app and requests its restart. A confirmed bundled-daemon completion is also
+consumed once for rollback: stop that exact successor, restore the signed app,
+and start the exact original runtime. An uncertain start cannot supply that
+capability. Saved records cannot reconstruct these
 execution handles. Backups survive lost replies and process exit. Startup,
 cold recovery execution and selective global release still need the verified
 native binding below. Installed/restart-requested does **not** mean the successor

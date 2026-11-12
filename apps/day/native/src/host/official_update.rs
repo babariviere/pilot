@@ -5,8 +5,10 @@ use crate::macos_host::ClosedWindow;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use nsh_updater::{Available, Config, Download, install::Installation};
 use pilot_desktop_updater::{
+    app_update::Connection,
     archive,
     coordination::{self, GlobalUpdateAction, Location},
+    daemon_upgrade::bundled_service::{self, Completed, Runtime},
     installer::{NativePlatform, Platform},
     manifest::{Build, Manifest, Trust},
     transport::Cancellation,
@@ -19,6 +21,7 @@ use std::{
     io::{Read, Write},
     os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
+    sync::atomic::AtomicBool,
 };
 
 const MAX_ARCHIVE: u64 = 1024 * 1024 * 1024;
@@ -158,6 +161,7 @@ pub struct VerifiedApp {
     journal: PathBuf,
     archive: PathBuf,
     target: Value,
+    runtime: Runtime,
     _scratch: Scratch,
 }
 
@@ -174,6 +178,7 @@ pub struct VerifiedRollback {
     config: Vec<u8>,
     signed: Vec<u8>,
     signature: Vec<u8>,
+    runtime: Runtime,
     _scratch: Scratch,
 }
 impl VerifiedRollback {
@@ -281,6 +286,7 @@ impl VerifiedRollback {
         {
             return Err(Error::Identity);
         }
+        let runtime = Runtime::installed(&installed, trust).map_err(|_| Error::Identity)?;
         Ok(Self {
             installed,
             key: trust.public_key,
@@ -291,52 +297,69 @@ impl VerifiedRollback {
             config: config_bytes,
             signed: manifest.to_vec(),
             signature: signature.to_vec(),
+            runtime,
             _scratch: scratch,
         })
     }
 
     fn persist(&self, journal: &Path, operation: &str) -> Result<PathBuf, Error> {
-        let parent = journal.parent().ok_or(Error::Invalid)?;
-        let root = parent.join("official-app-backups");
-        match fs::DirBuilder::new().mode(0o700).create(&root) {
-            Ok(()) => (),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
-            Err(_) => return Err(Error::Storage),
-        }
-        let meta = fs::symlink_metadata(&root).map_err(|_| Error::Storage)?;
-        // SAFETY: geteuid has no preconditions.
-        let uid = unsafe { libc::geteuid() };
-        if !meta.is_dir() || meta.mode() & 0o077 != 0 || meta.uid() != uid {
-            return Err(Error::Identity);
-        }
-        let directory = root.join(operation);
-        fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&directory)
-            .map_err(|_| Error::Unknown)?;
-        let archive = directory.join("rollback.zip");
-        copy_download(&self.archive, &archive, &self.available)?;
-        for (name, bytes) in [
-            ("latest.json", &self.signed),
-            ("latest.json.sig", &self.signature),
-            ("nsh-updater.json", &self.config),
-        ] {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(directory.join(name))
-                .map_err(|_| Error::Storage)?;
-            file.write_all(bytes).map_err(|_| Error::Storage)?;
-            file.sync_all().map_err(|_| Error::Storage)?;
-        }
-        for path in [directory.as_path(), root.as_path(), parent] {
-            std::fs::File::open(path)
-                .and_then(|f| f.sync_all())
-                .map_err(|_| Error::Storage)?;
-        }
-        Ok(archive)
+        persist_backup(
+            journal,
+            operation,
+            &self.archive,
+            &self.available,
+            [
+                ("latest.json", &self.signed),
+                ("latest.json.sig", &self.signature),
+                ("nsh-updater.json", &self.config),
+            ],
+        )
     }
+}
+
+fn persist_backup(
+    journal: &Path,
+    operation: &str,
+    source: &Path,
+    available: &Available,
+    files: [(&str, &[u8]); 3],
+) -> Result<PathBuf, Error> {
+    let parent = journal.parent().ok_or(Error::Invalid)?;
+    let root = parent.join("official-app-backups");
+    match fs::DirBuilder::new().mode(0o700).create(&root) {
+        Ok(()) => (),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
+        Err(_) => return Err(Error::Storage),
+    }
+    let meta = fs::symlink_metadata(&root).map_err(|_| Error::Storage)?;
+    // SAFETY: geteuid has no preconditions.
+    let uid = unsafe { libc::geteuid() };
+    if !meta.is_dir() || meta.mode() & 0o077 != 0 || meta.uid() != uid {
+        return Err(Error::Identity);
+    }
+    let directory = root.join(operation);
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&directory)
+        .map_err(|_| Error::Unknown)?;
+    let archive = directory.join("rollback.zip");
+    copy_download(source, &archive, available)?;
+    for (name, bytes) in files {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(directory.join(name))
+            .map_err(|_| Error::Storage)?;
+        file.write_all(bytes).map_err(|_| Error::Storage)?;
+        file.sync_all().map_err(|_| Error::Storage)?;
+    }
+    for path in [directory.as_path(), root.as_path(), parent] {
+        std::fs::File::open(path)
+            .and_then(|f| f.sync_all())
+            .map_err(|_| Error::Storage)?;
+    }
+    Ok(archive)
 }
 
 impl VerifiedApp {
@@ -429,6 +452,8 @@ impl VerifiedApp {
         }
         let target = json!({"source":pilot.source,"build":pilot.build,"version":available.version,
             "sha256":available.sha256,"size":available.size,"configHash":hash(&config_bytes)});
+        let runtime = Runtime::verify(&bundle, &installed, &trust, &pilot.source, &pilot.build)
+            .map_err(|_| Error::Identity)?;
         Ok(Self {
             installation,
             installed,
@@ -437,6 +462,7 @@ impl VerifiedApp {
             journal,
             archive: copied,
             target,
+            runtime,
             _scratch: scratch,
         })
     }
@@ -484,7 +510,8 @@ impl VerifiedApp {
         let backup = rollback.persist(&self.journal, &operation_id)?;
         let payload =
             json!({"captureHash":hash(&serde_json::to_vec(capture).map_err(|_| Error::Storage)?),
-            "app":{"source":self.manifest.source,"build":self.manifest.build}})
+            "app":{"source":self.manifest.source,"build":self.manifest.build},
+            "replacement":self.runtime.replacement()})
             .to_string();
         let destination = json!({"hostId":"daemon","daemonId":capture.source.home.daemon_id,"lineageId":capture.source.home.lineage_id});
         let operation = json!({"schemaVersion":1,"operationId":operation_id,"producerId":operation_id,"sequence":1,
@@ -522,6 +549,13 @@ impl VerifiedApp {
             port: capture.source.port,
             policy: Default::default(),
         };
+        let connection = Connection::new(
+            location.clone(),
+            capture.source.home.daemon_id.clone(),
+            capture.source.home.lineage_id.clone(),
+        );
+        let cancel = AtomicBool::new(false);
+        let mut service = None;
         let entered = (|| {
             let receipt =
                 coordination::global_update(&location, &operation, GlobalUpdateAction::Prepare)
@@ -539,6 +573,11 @@ impl VerifiedApp {
                 return Err(Error::Busy);
             }
             verify_processes(&fresh)?;
+            // The official installer must never replace a GUI bundle while
+            // its own daemon is still executing from that bundle. The native
+            // module owns exact service identity, durable stop and lease exit.
+            let stopped = bundled_service::stop(&connection, &self.runtime, &operation, &cancel)
+                .map_err(|_| Error::Unknown)?;
             record.manifest = Some(json!({"phase":"install-entered","receipt":receipt}));
             record.revision += 1;
             journal.save_update(record.clone())?;
@@ -551,7 +590,10 @@ impl VerifiedApp {
             NativePlatform
                 .verify_candidate(&self.installed, &self.trust, &self.manifest)
                 .map_err(|_| Error::Unknown)?;
-            record.manifest = Some(json!({"phase":"installed","receipt":receipt}));
+            let completed = stopped.start().map_err(|_| Error::Unknown)?;
+            record.manifest =
+                Some(json!({"phase":"installed","receipt":receipt,"service":completed.evidence()}));
+            service = Some(completed);
             record.revision += 1;
             record.message =
                 "App installed and verified. Startup and selective release are not acknowledged."
@@ -572,6 +614,8 @@ impl VerifiedApp {
             backup,
             rollback,
             inputs: self,
+            connection,
+            service: service.ok_or(Error::Unknown)?,
         })
     }
 }
@@ -601,6 +645,8 @@ pub struct InstalledApp {
     backup: PathBuf,
     rollback: VerifiedRollback,
     inputs: VerifiedApp,
+    connection: Connection,
+    service: Completed,
 }
 impl InstalledApp {
     /// Schedules the official NSH restart after this process exits. The native
@@ -623,24 +669,50 @@ impl InstalledApp {
     /// Fresh, one-use rollback before this native owner exits, using the same
     /// official installer and verified old archive. Cold recovery is lookup-only,
     /// not authority to reconstruct this handle or replay an uncertain step.
-    pub fn rollback_and_restart(mut self) -> Result<(), Error> {
+    pub fn rollback_and_restart(
+        mut self,
+        verify_processes: impl FnOnce(&Value) -> Result<(), Error>,
+    ) -> Result<(), Error> {
         if nsh_platform_macos::objc2::MainThreadMarker::new().is_some() {
             return Err(Error::Invalid);
         }
         self.record.manifest.as_mut().ok_or(Error::Unknown)?["phase"] = "rollback-entered".into();
         self.record.revision += 1;
         self.journal.save_update(self.record.clone())?;
-        self.inputs
-            .installation
-            .install(&self.backup)
-            .map_err(|_| Error::Unknown)?;
-        NativePlatform
-            .verify_candidate(
-                &self.inputs.installed,
-                &self.inputs.trust,
-                &self.rollback.manifest,
+        let operation = &self.record.root["preparation"];
+        let fresh = coordination::global_update(
+            self.connection.location(),
+            operation,
+            GlobalUpdateAction::Verify,
+        )
+        .map_err(|_| Error::Unknown)?;
+        verify_processes(&fresh)?;
+        let cancel = AtomicBool::new(false);
+        let completed = self
+            .service
+            .rollback(
+                &self.connection,
+                &self.inputs.runtime,
+                &self.rollback.runtime,
+                operation,
+                &cancel,
+                || {
+                    self.inputs
+                        .installation
+                        .install(&self.backup)
+                        .map_err(|_| pilot_desktop_updater::daemon_upgrade::Failure::Unknown)?;
+                    NativePlatform
+                        .verify_candidate(
+                            &self.inputs.installed,
+                            &self.inputs.trust,
+                            &self.rollback.manifest,
+                        )
+                        .map_err(|_| pilot_desktop_updater::daemon_upgrade::Failure::Unknown)
+                },
             )
             .map_err(|_| Error::Unknown)?;
+        self.record.manifest.as_mut().ok_or(Error::Unknown)?["service"] =
+            completed.evidence().clone();
         self.record.manifest.as_mut().ok_or(Error::Unknown)?["phase"] =
             "rollback-restart-entered".into();
         self.record.revision += 1;
@@ -789,8 +861,8 @@ mod tests {
 
     #[test]
     fn rollback_archive_and_signed_inputs_survive_preflight_drop_without_overwrite() {
-        // Exercises durable backup I/O only. Production can construct this
-        // capability solely through the code-sealed/signed prepare method.
+        // Exercises the durable backup I/O seam without manufacturing a signed
+        // Runtime or an executable install capability from fixture JSON.
         let source = Scratch::new().unwrap();
         let bytes = b"original signed archive";
         let archive = source.0.join("old.zip");
@@ -798,41 +870,20 @@ mod tests {
         let mut available = Available::default();
         available.sha256 = Some(hash(bytes));
         available.size = Some(bytes.len() as u64);
-        let old = Manifest {
-            schema: 1,
-            source: Some("a".repeat(40)),
-            application_id: "com.example.next".into(),
-            channel: "desktop-stable".into(),
-            platform: "macos".into(),
-            architecture: "aarch64".into(),
-            build: "1.0".into(),
-            short_version: "1.0.0".into(),
-            bundle_name: "Pilot Next.app".into(),
-            archive_name: "old.zip".into(),
-            archive_asset_id: 0,
-            archive_size: bytes.len() as u64,
-            archive_sha256: hash(bytes),
-        };
-        let rollback = VerifiedRollback {
-            installed: source.0.join("not-live.app"),
-            key: [19; 32],
-            requirement: "fixture".into(),
-            manifest: old,
-            available,
-            archive,
-            config: b"config".to_vec(),
-            signed: b"manifest".to_vec(),
-            signature: b"signature".to_vec(),
-            _scratch: source,
-        };
+        let files = [
+            ("latest.json", b"manifest".as_slice()),
+            ("latest.json.sig", b"signature".as_slice()),
+            ("nsh-updater.json", b"config".as_slice()),
+        ];
         let durable = Scratch::new().unwrap();
         let op = uuid::Uuid::new_v4().to_string();
-        let saved = rollback.persist(&durable.0.join("journal"), &op).unwrap();
+        let saved =
+            persist_backup(&durable.0.join("journal"), &op, &archive, &available, files).unwrap();
         assert!(
-            rollback.persist(&durable.0.join("journal"), &op).is_err(),
+            persist_backup(&durable.0.join("journal"), &op, &archive, &available, files).is_err(),
             "never overwrite/replay a retained backup intent"
         );
-        drop(rollback);
+        drop(source);
         assert_eq!(fs::read(&saved).unwrap(), bytes);
         for (name, expected) in [
             ("latest.json", b"manifest".as_slice()),
