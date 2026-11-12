@@ -23,6 +23,19 @@ const good = {
 	archive: { name: "Pilot-linux-x64.tar.gz", size: 1, sha256: "a".repeat(64) },
 };
 
+test("Linux packaging uses installed pnpm and CI exposes it inside the build container", () => {
+	const script = readFileSync(new URL("./bundle-runtime.sh", import.meta.url), "utf8");
+	const workflow = readFileSync(new URL("../../.github/workflows/linux-package.yml", import.meta.url), "utf8");
+	assert.doesNotMatch(script, /\bnpm\s+(?:install|ci)\b/);
+	assert.match(script, /command -v pnpm/);
+	assert.match(script, /; pnpm install --prod --frozen-lockfile --config.node-linker=hoisted/);
+	assert.match(script, /mkdir -p "\$stage\/tools\/bin"/);
+	assert.match(script, /node-gyp\/bin\/node-gyp\.js" "\$stage\/tools\/bin\/node-gyp"/);
+	assert.match(workflow, /uses: pnpm\/action-setup@v4\s+with:\s+dest: \$\{\{ runner\.temp \}\}\/pnpm/);
+	assert.match(workflow, /-v "\$RUNNER_TEMP\/pnpm:\/pnpm:ro"/);
+	assert.match(workflow, /export PATH="\/pnpm\/node_modules\/\.bin:\$PATH"; exec bash \/source\/scripts\/linux\/bundle-runtime\.sh/);
+});
+
 test("signed manifests reject tampering, wrong keys, unsupported schema/platform/protocol and archive substitution", () => {
 	const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 	const data = Buffer.from(JSON.stringify(good));

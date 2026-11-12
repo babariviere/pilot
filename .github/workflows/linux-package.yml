@@ -25,6 +25,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24.21.0
+      - uses: pnpm/action-setup@v4
+        with:
+          dest: ${{ runner.temp }}/pnpm
       - name: Verify packaging contracts
         run: |
           for script in scripts/linux/*.sh; do bash -n "$script"; done
@@ -41,9 +44,10 @@ jobs:
           commit="$(git rev-parse HEAD)"
           mkdir -p "$RUNNER_TEMP/linux-package"
           docker run --rm -v "$PWD:/source:ro" -v "$RUNNER_TEMP/linux-package:/output" \
+            -v "$RUNNER_TEMP/pnpm:/pnpm:ro" \
             -e PILOT_RELEASE_COMMIT="$commit" \
             quay.io/pypa/manylinux_2_28_x86_64@sha256:4131ddd7acb9c6c966af02fe7e71edc51e078c2d41f475966697676430bfa2ae \
-            bash /source/scripts/linux/bundle-runtime.sh /output
+            bash -c 'export PATH="/pnpm/node_modules/.bin:$PATH"; exec bash /source/scripts/linux/bundle-runtime.sh /output'
       - name: Validate relocated production package on host libraries
         run: |
           mkdir -p "$RUNNER_TEMP/linux-relocated"

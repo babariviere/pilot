@@ -30,18 +30,16 @@ rm "$stage/runtime/jj-licenses/jj"
 cp "$repo/package.json" "$repo/pnpm-lock.yaml" "$repo/pnpm-workspace.yaml" "$stage/runtime/"
 cp -R "$repo/patches" "$stage/runtime/patches"
 (cd "$repo"; tar --exclude=node_modules --exclude='*.test.ts' -cf - packages) | (cd "$stage/runtime"; tar -xf -)
-# Private build tool, not a global install. Native addons compile against the shipped Node headers.
-manager="$(node -p "require('$repo/package.json').packageManager")"
-[[ "$manager" =~ ^pnpm@[0-9]+\.[0-9]+\.[0-9]+$ ]]
-npm install --prefix "$stage/tools" --ignore-scripts --no-audit --no-fund "$manager"
-# pnpm's standalone distribution does not supply node-gyp. Reuse the one in the checksum-pinned
-# Node/npm archive, only in this private CI build-tools directory.
-ln -s "$node_root/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js" "$stage/tools/node_modules/.bin/node-gyp"
-export PATH="$stage/tools/node_modules/.bin:$PATH"
+# Use the installed pnpm. Native addons compile against the shipped Node headers.
+command -v pnpm >/dev/null || { echo 'Install pnpm before packaging' >&2; exit 1; }
+# Reuse node-gyp from the checksum-pinned Node archive in a private build-tools directory.
+mkdir -p "$stage/tools/bin"
+ln -s "$node_root/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js" "$stage/tools/bin/node-gyp"
+export PATH="$stage/tools/bin:$PATH"
 export npm_config_nodedir="$node_root"
 export npm_config_build_from_source=true
 export LDFLAGS="-static-libstdc++ -static-libgcc"
-(cd "$stage/runtime"; "$stage/tools/node_modules/.bin/pnpm" install --prod --frozen-lockfile --config.node-linker=hoisted)
+(cd "$stage/runtime"; pnpm install --prod --frozen-lockfile --config.node-linker=hoisted)
 rm -rf "$stage/runtime/node_modules/.pnpm" "$stage/runtime/node_modules/.modules.yaml" "$stage/runtime/node_modules/.pnpm-workspace-state-v1.json"
 (cd "$stage/runtime"; node packages/daemon/scripts/build-usage-worker.mjs build packages/daemon/src)
 cp "$repo/scripts/linux/"{service.mjs,check-runtime.mjs} "$stage/runtime/"

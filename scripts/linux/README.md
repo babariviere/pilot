@@ -12,6 +12,8 @@ build against bundled Node headers in a pinned older-libc toolchain. CI audits e
 architecture, GLIBC/GLIBCXX requirements and library resolution, then runs the extracted tree's
 `check-runtime.mjs` with its bundled Node. The separate Linux headless/isolation lane remains.
 Packaging no longer provisions a disposable SSH service or exercises a remote updater.
+Packaging uses the installed pnpm. CI mounts its pnpm installation into the build container;
+the packaging script does not bootstrap a package manager with npm.
 
 Release assets remain independently signed: `runtime-manifest.json` binds the exact version,
 tag, commit, archive size/SHA256, protocol range and measured ABI requirements;
