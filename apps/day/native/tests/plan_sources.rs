@@ -56,13 +56,20 @@ impl Fixture {
         let dir = std::env::temp_dir().join(format!("day-sources-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&dir).unwrap();
         let app = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-        for file in std::fs::read_dir(app).unwrap() {
+        for file in std::fs::read_dir(&app).unwrap() {
             let path = file.unwrap().path();
             let name = path.file_name().unwrap().to_str().unwrap();
             if (name.ends_with(".ts") || name.ends_with(".tsx") || name == "theme.json")
                 && !name.ends_with(".test.tsx")
             {
                 std::fs::copy(&path, dir.join(name)).unwrap();
+            }
+        }
+        std::fs::create_dir(dir.join("icons")).unwrap();
+        for icon in std::fs::read_dir(app.join("icons")).unwrap() {
+            let icon = icon.unwrap().path();
+            if icon.extension().is_some_and(|extension| extension == "svg") {
+                std::fs::copy(&icon, dir.join("icons").join(icon.file_name().unwrap())).unwrap();
             }
         }
         std::fs::write(dir.join("nsh.json"),json!({"name":"Pilot","id":"test.day.sources","theme":"theme.json","capabilities":{"host":METHODS}}).to_string()).unwrap();
