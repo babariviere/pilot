@@ -21,7 +21,7 @@ The builder extracts Git objects into a fresh private directory, then:
    There is no renamed stock runner.
 3. Builds the required existing `pilot-visual-worker` in an isolated
    workspace, using its unchanged sources/dependency versions and the
-   desktop lock as a seed. Adding `[workspace]` isolates it from GPUI;
+   Day's `apps/day/visual-worker.Cargo.lock` as a seed. Adding `[workspace]` isolates it from GPUI;
    Cargo prunes the seed offline, and every resolved package version/source/
    checksum must be present in that seed. Builds then use `--locked`.
    The resulting manifest and lock digests are recorded. The pinned QuickJS-NG

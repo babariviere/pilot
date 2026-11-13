@@ -286,7 +286,7 @@ class RecipeTests(unittest.TestCase):
         if not connected_only:
             visual.mkdir(parents=True)
             shutil.copyfile(bundle.ROOT / "apps/desktop/visual-worker/Cargo.toml", visual / "Cargo.toml")
-            shutil.copyfile(bundle.ROOT / "apps/desktop/Cargo.lock", desktop / "Cargo.lock")
+            shutil.copyfile(bundle.ROOT / "apps/day/visual-worker.Cargo.lock", app / "visual-worker.Cargo.lock")
             (desktop / "updater").mkdir()
             shutil.copyfile(bundle.ROOT / "apps/desktop/updater/Cargo.lock", desktop / "updater/Cargo.lock")
             archive.write_bytes(b"fixture archive only")

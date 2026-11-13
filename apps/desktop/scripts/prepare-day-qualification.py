@@ -24,10 +24,11 @@ def main():
                         ignore=shutil.ignore_patterns("target", "Cargo.lock"))
         with (visual / "Cargo.toml").open("a") as stream:
             stream.write("\n[workspace]\n")
-        shutil.copyfile(root / "apps/desktop/Cargo.lock", visual / "Cargo.lock")
+        seed = root / "apps/day/visual-worker.Cargo.lock"
+        shutil.copyfile(seed, visual / "Cargo.lock")
         subprocess.run([cargo, "metadata", "--format-version=1", "--manifest-path", visual / "Cargo.toml"],
                        cwd=root, check=True, stdout=subprocess.DEVNULL, timeout=600)
-        day.visual_lock(root / "apps/desktop/Cargo.lock", visual / "Cargo.lock")
+        day.visual_lock(seed, visual / "Cargo.lock")
         subprocess.run([cargo, "fetch", "--locked", "--target", day.TARGET,
                         "--manifest-path", visual / "Cargo.toml"], cwd=root, check=True, timeout=600)
     subprocess.run(["python3", root / "apps/desktop/scripts/prepare-visual-worker.py"],

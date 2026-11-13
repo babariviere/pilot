@@ -275,7 +275,8 @@ def compile_snapshot(checkout, work, output, expected, tools, inherited, product
         visual = checkout / "apps/desktop/visual-worker"
         with (visual / "Cargo.toml").open("a") as stream:
             stream.write("\n[workspace]\n")
-        shutil.copyfile(visual.parent / "Cargo.lock", visual / "Cargo.lock")
+        visual_seed = day / "visual-worker.Cargo.lock"
+        shutil.copyfile(visual_seed, visual / "Cargo.lock")
         # Verify/extract the pinned archive; never download on a cache miss.
         archive = Path(inherited.get("PILOT_DAY_QUICKJS_ARCHIVE", ""))
         if not archive.is_file():
@@ -294,7 +295,7 @@ def compile_snapshot(checkout, work, output, expected, tools, inherited, product
         metadata = execute([day / "scripts/cargo", "metadata", "--offline", "--format-version=1",
                             "--manifest-path", visual / "Cargo.toml"], cwd=checkout, env=env)
         (inputs / "visual-metadata.json").write_text(metadata)
-        visual_lock(visual.parent / "Cargo.lock", visual / "Cargo.lock")
+        visual_lock(visual_seed, visual / "Cargo.lock")
     binaries, compiled = [], {}
     for name, manifest, features in manifests:
         path = build_artifact(checkout, manifest, name, features, env, profile, inputs / (name + ".cargo.jsonl"))
