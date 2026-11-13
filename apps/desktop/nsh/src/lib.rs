@@ -2,10 +2,8 @@
 #[cfg(feature = "native-probes")]
 pub mod fixture;
 mod history;
-#[path = "../../../../experiments/nsh-pilot/src/icons.rs"]
 mod icons;
 mod images;
-#[path = "../../../../experiments/nsh-pilot/src/theme.rs"]
 mod theme;
 mod transcript;
 

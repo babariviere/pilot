@@ -38,7 +38,7 @@ them. A source file, completed task or successful prototype is not NSH parity.
 
 ### Upstream reference, not a permanent “latest” claim
 
-- Starting reference: [experiments/nsh-pilot](../../experiments/nsh-pilot/README.md)
+- Starting reference: [experiments/nsh-pilot](https://github.com/babariviere/pilot/tree/632281f47cadecf29e87d590114ab3cecda12daa/experiments/nsh-pilot)
   at the audited production parent. NSH **0.4.0**, exact revision
   `3e302abf0cbba712896fc938ca48360fc08c14bb`; all four runtime dependencies and
   `nsh-testing` share that pin. No patches or source-cache edits.
@@ -101,10 +101,10 @@ keep destination/guard semantics and replace UI handles.
 
 ## Framework behavior versus Pilot integration
 
-The prototype's [lib.rs](../../experiments/nsh-pilot/src/lib.rs),
-[model.rs](../../experiments/nsh-pilot/src/model.rs),
-[native.rs](../../experiments/nsh-pilot/src/native.rs) and
-[tests.rs](../../experiments/nsh-pilot/src/tests.rs) separate these responsibilities:
+The prototype's [lib.rs](https://github.com/babariviere/pilot/blob/632281f47cadecf29e87d590114ab3cecda12daa/experiments/nsh-pilot/src/lib.rs),
+[model.rs](https://github.com/babariviere/pilot/blob/632281f47cadecf29e87d590114ab3cecda12daa/experiments/nsh-pilot/src/model.rs),
+[native.rs](https://github.com/babariviere/pilot/blob/632281f47cadecf29e87d590114ab3cecda12daa/experiments/nsh-pilot/src/native.rs) and
+[tests.rs](https://github.com/babariviere/pilot/blob/632281f47cadecf29e87d590114ab3cecda12daa/experiments/nsh-pilot/src/tests.rs) separate these responsibilities:
 
 | NSH provides | Pilot must integrate and verify |
 | --- | --- |
@@ -384,7 +384,7 @@ store and all processes. Do not discover the user's Local profile in fixtures.
 | `S/interaction_*tests.rs`, `delivery_store_tests.rs`, `reader_identity_tests.rs`, `local_*tests.rs`, `history_latest_tests.rs`, `archive_reader_tests.rs` | Production state/transport/durable identity and recovery regressions. | Reuse pure tests after source seam changes. Add UI tests for stale selection/generation/lost ACK; do not settle Unknown from a rendered echo. |
 | `tests/application_quit.rs`, `S/application_quit_probe.rs`, `S/lost_ack_probe.rs`, `S/history_paged_probe.rs`, `S/reader_restore_probe.rs` | Existing GPUI/native scenarios: actual app close/Quit, store reopen, exact draft/Unknown, paged reconnect and reading restoration. | Port assertions/host barriers, not GPUI handles. Require actual NSH process exit and immediate Store reopen, plus external termination veto/success cases. |
 | `S/markdown_fidelity_tests.rs`, `S/markdown_nested_corpus.rs`, `S/markdown_nested_probe.rs`, tool/source tests and artifact native probes | Literal source/copy, nested code/list/quote, selection/recycle, supported visual chart/canvas/control/image behavior. | NSH parser/render behavior needs its own results. Keep exact source and compare Copy, not just screenshots. |
-| `experiments/nsh-pilot/src/tests.rs` and `native.rs` | Same Rust NSH root under headless tests and real hidden AppKit interactions/captures with synthetic content. | Reuse native insertion/click/capture mechanics; add real adapters, durable restart/close and failure cases. They do not qualify hardware IME, active menus or representative-history performance. |
+| Historical `experiments/nsh-pilot/src/tests.rs` and `native.rs` (linked above) | Same Rust NSH root under headless tests and real hidden AppKit interactions/captures with synthetic content. | Reuse native insertion/click/capture mechanics; add real adapters, durable restart/close and failure cases. They do not qualify hardware IME, active menus or representative-history performance. |
 | `apps/desktop/scripts/check-scoped.py`, `ci.sh`, `test_ci.py`; updater fixture and lifecycle/package scripts | Scoped tests/lint/build, native target census, isolated updater/package scenarios. | Add NSH checks alongside retained GPUI checks. Keep harness=false targets registered; no fabricated full-suite success. Respect bounded shared mbx/build resources. |
 
 Per slice: smallest relevant pure/adapter tests, matching format/lint/locked

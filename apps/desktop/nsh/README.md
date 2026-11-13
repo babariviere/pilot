@@ -16,7 +16,7 @@ through each event's window root, plus an optional standalone restart command.
 Other changes concern packaging, Android, Linux, Windows and gallery audio.
 Pilot does not adopt these new features. Historical experiments keep their pins.
 
-The layout and tokens start from `experiments/nsh-pilot` at `39a4913c`, not the
+The layout and tokens start from the [nsh-pilot prototype](https://github.com/babariviere/pilot/tree/632281f47cadecf29e87d590114ab3cecda12daa/experiments/nsh-pilot), not the
 older patched `nsh-chat` study. NSH owns native input, undo, text selection,
 Markdown, scrolling and rendering. Pilot owns canonical locations and actions.
 The slice uses upstream Rust `Input` (native multiline composer/search),
