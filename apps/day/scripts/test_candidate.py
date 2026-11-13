@@ -143,9 +143,19 @@ class CandidateTests(unittest.TestCase):
                 candidate.configuration(self.config | changes)
 
     def test_output_is_fresh_temporary_and_never_an_install_path(self):
-        for path in (Path("relative"), self.inputs, Path("/Applications/Pilot Next.app")):
+        for path in (Path("relative"), self.inputs):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 candidate.temporary_output(path)
+        # Model an install directory outside the OS temporary root without
+        # depending on /Applications existing on this host (or touching it).
+        temporary = self.root / "temporary"
+        temporary.mkdir(mode=0o700)
+        applications = self.root / "Applications"
+        applications.mkdir()
+        with patch.object(candidate.tempfile, "gettempdir", return_value=str(temporary)):
+            with self.assertRaisesRegex(ValueError, "private OS temporary directory"):
+                candidate.temporary_output(applications / "Pilot Next.app")
+            self.assertEqual(candidate.temporary_output(temporary / "fresh"), temporary / "fresh")
         self.assertEqual(candidate.temporary_output(self.root / "fresh"), self.root / "fresh")
         public = self.root / "public"
         public.mkdir(mode=0o755)

@@ -4,9 +4,6 @@ import json
 import os
 from pathlib import Path
 import plistlib
-import shutil
-import subprocess
-import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -14,7 +11,6 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location("preview", Path(__file__).with_name("preview.py"))
 preview = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(preview)
-REAL_RUN = preview.run
 
 DENIED = dict(network=dict(hosts=[], http=[]),
               process=dict(execute=[], exit=False, env=[]), fs=dict(read=[], write=[]),
@@ -125,23 +121,18 @@ class PreviewInstall(unittest.TestCase):
         with self.assertRaises(ValueError):
             preview.activate(self.home)
 
-    @unittest.skipUnless(Path("/bin/sleep").exists(), "needs a local non-GUI process")
-    def test_real_process_inventory_detects_a_versioned_executable(self):
-        binary = self.home / "versions" / "process-probe"
-        shutil.copyfile("/bin/sleep", binary)
-        binary.chmod(0o755)
-        if sys.platform == "darwin":
-            subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none", str(binary)],
-                           check=True, capture_output=True)
-        process = subprocess.Popen([str(binary), "30"])
-        try:
-            with patch.object(preview, "run", REAL_RUN):
-                self.assertTrue(preview.running(self.home))
-        finally:
-            process.terminate()
-            process.wait(timeout=5)
-        with patch.object(preview, "run", REAL_RUN):
-            self.assertFalse(preview.running(self.home))
+    def test_process_inventory_detects_exact_version_directory_not_prefixes(self):
+        binary = preview.executable(self.home / "versions" / self.first / preview.APP)
+        foreign = self.home / "versions-foreign" / "PilotPreview"
+        for commands, expected in ((f"/usr/bin/other\n  {binary}\n", True),
+                                   (f"{foreign}\n/usr/bin/other\n\n", False),
+                                   ("", False)):
+            with self.subTest(commands=commands):
+                self.fake_run.reset_mock()
+                self.fake_run.return_value.stdout = commands
+                self.assertEqual(preview.running(self.home), expected)
+                self.fake_run.assert_called_once_with(["/bin/ps", "-axo", "comm="],
+                                                      capture_output=True, text=True)
 
 
 if __name__ == "__main__":

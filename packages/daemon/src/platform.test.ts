@@ -53,7 +53,13 @@ test("Linux only probes its Rust power helper, never Mac toolchains or unrestric
 	assert.equal(installed.systemSleepEvents, false);
 });
 
-test("Darwin capabilities reflect installed helpers and compiler, not just an OS name", async () => {
+test("Darwin capabilities reflect installed helpers and compiler, not just an OS name", async (t) => {
+	const previous = process.env.PILOT_SYSTEM_EVENTS_HELPER_APP;
+	process.env.PILOT_SYSTEM_EVENTS_HELPER_APP = "/fixture/Helpers/PilotSystemEvents.app";
+	t.after(() => {
+		if (previous === undefined) delete process.env.PILOT_SYSTEM_EVENTS_HELPER_APP;
+		else process.env.PILOT_SYSTEM_EVENTS_HELPER_APP = previous;
+	});
 	const absent = await detectPlatformCapabilities(
 		"darwin",
 		async () => false,
@@ -63,7 +69,15 @@ test("Darwin capabilities reflect installed helpers and compiler, not just an OS
 	assert.equal(absent.swiftUIArtifacts, false);
 	const installed = await detectPlatformCapabilities(
 		"darwin",
-		async () => true,
+		async (path) => {
+			assert.ok(
+				path.endsWith("/PilotPower") ||
+					path === "/fixture/Helpers/PilotSystemEvents.app/Contents/MacOS/PilotSystemEvents" ||
+					path === "/usr/bin/sandbox-exec",
+				path,
+			);
+			return true;
+		},
 		async () => false,
 	);
 	assert.equal(installed.powerManagement, true);
@@ -93,7 +107,15 @@ test("hello is a bounded no-store read with origin protection and no account/pat
 	const projects = new ProjectStore(home);
 	const sessions = new SessionManager(home, projects);
 	const terminals = new TerminalManager();
-	const hello = await daemonHello(home, await detectPlatformCapabilities("linux"));
+	const hello = await daemonHello(
+		home,
+		await detectPlatformCapabilities(
+			"linux",
+			async () => false,
+			undefined,
+			async () => ({ available: false }),
+		),
+	);
 	const server = createDaemonServer(
 		{ home, host: "127.0.0.1", port: 0 },
 		sessions,
@@ -121,7 +143,14 @@ test("hello is a bounded no-store read with origin protection and no account/pat
 	assert.equal(response.headers.get("cache-control"), "no-store");
 	assert.deepEqual(await response.json(), {
 		...hello,
-		capabilities: { ...hello.capabilities, passiveFailedModel: true, guardedQueue: true, sessionPathCandidates: 1 },
+		capabilities: {
+			...hello.capabilities,
+			questionReplies: 1,
+			durableInputGeneration: 1,
+			passiveFailedModel: true,
+			guardedQueue: true,
+			sessionPathCandidates: 1,
+		},
 	});
 	assert.ok(!JSON.stringify(hello).includes(home));
 	assert.equal(hello.protocolVersion, 1);

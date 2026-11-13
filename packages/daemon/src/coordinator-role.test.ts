@@ -157,10 +157,10 @@ test("promotion unbinds PRs, shares main, retains scratch, and demotion restores
 	assert.equal(meta.cwd, path, "live kernels keep a stable source directory");
 	assert.equal(await readFile(join(path, "file.txt"), "utf8"), "new main\n");
 	await manager.archive(id);
-	assert.equal(existsSync(scratch), false);
+	assert.equal(await readFile(join(scratch, "notes.txt"), "utf8"), "keep across turns", "archive keeps scratch");
 	await manager.restore(id);
 	await manager.refreshCoordinatorWorkspace(id);
-	assert.ok(existsSync(scratch));
+	assert.equal(await readFile(join(scratch, "notes.txt"), "utf8"), "keep across turns", "restore keeps exact notes");
 	specs = [];
 	busy = true;
 	coordinator = false;
@@ -257,7 +257,7 @@ test("Git-only direct chats gain a read-only source view and an isolated workspa
 	assert.notEqual(meta.cwd, source);
 	assert.equal(await readFile(join(meta.cwd, "file.txt"), "utf8"), "base\n");
 	const scratch = manager["require"](id).coordinatorView!.scratch;
-	await writeFile(join(scratch, "note"), "keep until archive, even after demotion");
+	await writeFile(join(scratch, "note"), "keep through archive, even after demotion");
 	coordinator = false;
 	manager.missionChanged(id);
 	await manager.refreshCoordinatorWorkspace(id);
@@ -267,7 +267,7 @@ test("Git-only direct chats gain a read-only source view and an isolated workspa
 	assert.equal(existsSync(join(source, "new.txt")), false);
 	assert.ok(existsSync(scratch));
 	await manager.archive(id);
-	assert.equal(existsSync(scratch), false);
+	assert.equal(await readFile(join(scratch, "note"), "utf8"), "keep through archive, even after demotion");
 });
 
 test("every cold worker-open entry point preserves the coordinator source role and private cwd", async (t) => {
