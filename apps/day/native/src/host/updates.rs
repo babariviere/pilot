@@ -806,6 +806,7 @@ pub(super) async fn handle(
         revision,
         message: message.into(),
     };
+    let checking = matches!(command, Command::Check);
     match command {
         Command::Read | Command::Check => {
             if state.unsettled() {
@@ -833,7 +834,18 @@ pub(super) async fn handle(
                     state.changed();
                     return Ok(outcome(OutcomeStatus::Accepted, state.view.revision, ""));
                 }
-                if let Some(root) = &selection.official {
+                if let Some(mut root) = selection.official.clone() {
+                    // Only an explicit Check runs the signed input preflight, on
+                    // a blocking thread, never AppKit. Read reports saved status.
+                    if checking {
+                        let trust = selection.trust.clone();
+                        root = tokio::task::spawn_blocking(move || root.checked(trust))
+                            .await
+                            .map_err(|_| Error::Unknown)?;
+                        if let Some(current) = state.selection.as_mut() {
+                            current.official = Some(root.clone());
+                        }
+                    }
                     state.view.offer = None;
                     state.view.force_available = Some(false);
                     state.view.blocked = root.blocked().into();

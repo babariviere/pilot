@@ -164,23 +164,12 @@ pub fn run(args: Vec<OsString>) -> Result<(), Error> {
                 planning_model,
                 official_inputs,
             } = *selected;
-            // Distribution inputs are optional update preflight, not ordinary
-            // read-only startup prerequisites. Verification failure disables
-            // updates without losing the window or its original recovery record.
-            let official = if let Some(directory) = official_inputs {
-                let input_trust = trust.clone();
-                let input_journal = journal.clone();
-                let result = before_appkit(move || {
-                    crate::host::official_update::inspect_inputs(
-                        &directory,
-                        input_trust,
-                        input_journal,
-                    )
-                });
-                OfficialRoot::inspected(result)
-            } else {
-                OfficialRoot::default()
-            };
+            // Distribution inputs are optional update inputs, not startup
+            // prerequisites. Startup only records them; an explicit Check
+            // verifies them later on the host worker, never here.
+            let official = official_inputs.map_or_else(OfficialRoot::default, |directory| {
+                OfficialRoot::selected(directory, journal.clone())
+            });
             let connection = pilot_desktop_updater::app_update::Connection::new(
                 pilot_desktop_updater::coordination::Location {
                     home: source.profile.clone(),

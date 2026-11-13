@@ -8,6 +8,7 @@ use pilot_day_native::{
     contract::Home,
     host::{
         NativeHost, Options, Source,
+        official_root::OfficialRoot,
         updates::{AppTarget, Selection},
     },
     root::DayRoot,
@@ -264,6 +265,53 @@ fn official_root_refuses_normal_and_force_before_capture_or_loss_and_ignores_leg
     assert!(f.bridge.pending_update().is_none());
     assert_eq!(std::fs::metadata(f.path.join("journal")).unwrap().len(), 0);
     assert!(!f.source.profile.join(".daemon-upgrade.json").exists());
+}
+
+#[cfg(all(target_os = "macos", feature = "macos-host"))]
+#[test]
+fn official_root_inputs_are_verified_only_by_an_explicit_check() {
+    let mut f = Fixture::new(false);
+    let inputs = f.path.join("official-inputs");
+    f.selection.official = Some(OfficialRoot::selected(
+        inputs.clone(),
+        f.path.join("journal"),
+    ));
+    f.reopen();
+    let read = f.run("return await call('day.update.read');");
+    let snapshot = &read["value"]["snapshot"];
+    assert!(snapshot["offer"].is_null());
+    assert_eq!(snapshot["forceAvailable"], false);
+    let blocked = snapshot["blocked"].as_str().unwrap();
+    assert!(blocked.contains("not checked yet"), "{blocked}");
+    assert!(
+        !blocked.contains("service"),
+        "not a daemon failure: {blocked}"
+    );
+    let checked = f.run("return await call('day.update.check');");
+    let snapshot = &checked["value"]["snapshot"];
+    assert!(snapshot["offer"].is_null());
+    assert_eq!(snapshot["forceAvailable"], false);
+    assert!(
+        snapshot["blocked"]
+            .as_str()
+            .unwrap()
+            .contains("could not be verified")
+    );
+    let read = f.run("return await call('day.update.read');");
+    assert!(
+        read["value"]["snapshot"]["blocked"]
+            .as_str()
+            .unwrap()
+            .contains("could not be verified"),
+        "Read keeps the last Check without repeating it"
+    );
+    for mode in ["normal", "force"] {
+        let result = f.run(&format!("const r=await call('day.update.read'); return await call('day.update.prepare',{{kind:'app',mode:'{mode}',revision:r.value.snapshot.revision}});"));
+        assert_eq!(result["error"], "unavailable", "{mode}");
+    }
+    assert!(f.bridge.pending_update().is_none());
+    assert_eq!(std::fs::metadata(f.path.join("journal")).unwrap().len(), 0);
+    assert!(!inputs.exists());
 }
 
 #[test]
