@@ -1,5 +1,4 @@
-import { mount } from "nsh";
-import { DayScreen } from "./DayScreen";
-import { changes, day, plans, update } from "./session";
-
-mount(() => <DayScreen day={day} plans={plans} changes={changes} update={update} />);
+// The app's default entry: Pilot on the service this window's native root
+// chose. Without a root (`nsh run`), it says it is not connected and shows
+// no examples. Mock scenarios are test fixtures (MockApp.tsx and others).
+import "./Connected";

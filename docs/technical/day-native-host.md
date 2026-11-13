@@ -2,7 +2,7 @@
 
 `apps/day/native/src/host.rs` is the trusted Today transport. It reads the real
 daemon and uses its existing native capability for mission Pause and Resume.
-The default `apps/day/nsh.sh run` entry still uses mock data. Nothing discovers, starts,
+The default `apps/day/nsh.sh run` entry has no native root, so it says it is not connected. Nothing discovers, starts,
 registers, updates or restarts the user's daemon. No live controls were exercised.
 
 ## Native boundary

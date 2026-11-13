@@ -20,7 +20,7 @@ async function confirm(app: App, question: string, lines: string[] = []) {
 }
 
 test("Today offers the update page only when the service needs the user", async () => {
-	const quiet = await open("./App.tsx", desktop);
+	const quiet = await open("./MockApp.tsx", desktop);
 	await quiet.waitFor("Needs you");
 	expect(quiet.shows("id:update-open")).toBe(false);
 

@@ -3,12 +3,13 @@
 Pilot Day is the upcoming Pilot desktop app, built with Native Shell (NSH)
 TSX and a Rust core in `native/`.
 
-The default app uses **mock data**. It connects to no daemon, account or user
-data, and does not replace the shipping GPUI app. `Connected.tsx`
-uses the production native host through a separately verified distribution.
-Its [connected launch requirements](../../docs/technical/day-package-inputs.md#connected-launch)
+The default entry (`App.tsx`) runs `Connected.tsx`. It shows only what the
+window's native root reads from an existing Pilot service, never examples, and it
+does not replace the shipping GPUI app. The root comes from the production native
+host in a separately verified distribution. Its
+[connected launch requirements](../../docs/technical/day-package-inputs.md#connected-launch)
 include explicit native selection and a compatible existing daemon. Build inputs
-or a demo Preview are not a connected daily-driver candidate.
+are not a connected daily-driver candidate.
 Use the [connected candidate recipe](../../docs/technical/day-connected-candidate.md)
 to prepare the real native app without installing or updating it.
 
@@ -27,15 +28,16 @@ From the repository root:
 apps/day/nsh.sh run
 ```
 
-For a separate demo installation, see [Local Pilot Preview](../../docs/development-preview.md).
+`nsh run` gives the window no native root, so it says Pilot is not connected
+and shows nothing else.
 
-To explore another mock scenario, pass its entry file:
+Mock worlds are test fixtures for the headless tests: `MockApp.tsx`, the other
+scenario and `*Fixture.tsx` entries, `mockFeeds.tsx`, `mockSession.ts` and
+`*Demo.ts`. Every record in them is invented, and their header says Mock data.
+To look at one, pass its entry file:
 
 ```sh
-apps/day/nsh.sh run Trouble.tsx
-apps/day/nsh.sh run Interview.tsx
-apps/day/nsh.sh run Changes.tsx
-apps/day/nsh.sh run Update.tsx
+apps/day/nsh.sh run MockApp.tsx
 ```
 
 ## Check

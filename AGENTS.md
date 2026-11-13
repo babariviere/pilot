@@ -11,8 +11,8 @@ Pilot runs background [pi](https://github.com/earendil-works/pi) agents on durab
 - `packages/daemon`: `pilotd`. HTTP + WebSocket API, session registry and worker supervision.
 - `apps/desktop`: current GPUI desktop app. Keep it usable until Day acceptance and authorized cutover.
 - `apps/macos`: shared native helpers, C visual engine, assets and runtime/release scripts, not a GUI app.
-- `apps/day`: Pilot Day, the upcoming Native Shell TSX desktop app (mock data, not the default yet). Run it with
-  `pnpm day run`; [apps/day/README.md](apps/day/README.md) has the checks. `apps/day/fixtures` is optional evidence.
+- `apps/day`: Pilot Day, the upcoming Native Shell TSX desktop app (not the default yet). Its mock worlds are test
+  fixtures only. [apps/day/README.md](apps/day/README.md) has how to run and check it. `apps/day/fixtures` is optional evidence.
 
 Docs to use when the task touches them:
 

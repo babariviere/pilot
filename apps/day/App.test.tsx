@@ -12,7 +12,7 @@ const PAUSE = "id:pause >> role:button[Pause]";
 const RUNNING = "role:button[Pause mission]";
 
 test("Today shows decisions first, then moving and waiting missions", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.waitFor("Three short things need you.");
 	for (const text of [
 		"How should finished work reach you?",
@@ -30,7 +30,7 @@ test("Today shows decisions first, then moving and waiting missions", async () =
 });
 
 test("deciding sends the recommended option and moves the mission", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press(DECIDE);
 	await app.waitFor("Quieter notifications has your answer: One summary at 18:00.");
 	await app.waitFor("Two things left.");
@@ -39,14 +39,14 @@ test("deciding sends the recommended option and moves the mission", async () => 
 });
 
 test("a picked option is the one sent", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press("Only failures and questions");
 	await app.press(DECIDE);
 	await app.waitFor("Quieter notifications has your answer: Only failures and questions.");
 });
 
 test("later moves a decision back without answering it", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press("role:button[Later]");
 	await app.waitFor("role:button[Confirm]");
 	expect(app.shows("Up next: How should finished work reach you?")).toBe(true);
@@ -54,7 +54,7 @@ test("later moves a decision back without answering it", async () => {
 });
 
 test("help: simpler words, more context, and a question answered in the card", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press("Say it simpler");
 	await app.waitFor("Pilot sends too many notifications. Choose when it should tell you about finished work.");
 	await app.press("More context");
@@ -70,7 +70,7 @@ test("help: simpler words, more context, and a question answered in the card", a
 });
 
 test("keys bring the next item forward and the focus lands on its choice", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.waitFor("1 of 3");
 	await app.keyboard.press("j");
 	await app.waitFor("2 of 3");
@@ -87,7 +87,7 @@ test("keys bring the next item forward and the focus lands on its choice", async
 });
 
 test("keys pick an option and open help, and help sends nothing", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.waitFor("1 of 3");
 	await app.keyboard.press("3");
 	await app.keyboard.press("s");
@@ -112,7 +112,7 @@ test("keys pick an option and open help, and help sends nothing", async () => {
 });
 
 test("letters type into a question, Escape leaves it and its draft stays", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.waitFor("1 of 3");
 	await app.keyboard.press("q");
 	await app.keyboard.press("j");
@@ -236,7 +236,7 @@ test("the update workload reaches the screen", async () => {
 });
 
 test("a mission without a current report is not counted as not moving", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.waitFor("No current report  1");
 	expect(app.shows("Not moving  2")).toBe(true);
 	expect(app.shows("No report yet")).toBe(true);
@@ -245,7 +245,7 @@ test("a mission without a current report is not counted as not moving", async ()
 });
 
 test("a mission opens with its report, tasks and working chats, and Escape goes back", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:mission-search");
 	await app.waitFor("Show search results in under 200 ms for large workspaces.");
 	for (const text of [
@@ -270,7 +270,7 @@ test("a mission opens with its report, tasks and working chats, and Escape goes 
 });
 
 test("a mission's overview leads to its interview and plan, which says when there is none", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:mission-search");
 	await app.waitFor("id:mission-plan");
 	expect(app.shows("Interview and plan")).toBe(true);
@@ -283,19 +283,21 @@ test("a mission's overview leads to its interview and plan, which says when ther
 	await app.waitFor("Three short things need you.");
 });
 
-test("the connected entry without a service says so and shows no mock data", async () => {
-	const app = await open("./Connected.tsx", desktop);
-	await app.waitFor("id:not-connected");
-	expect(app.shows("This window was not opened for a Pilot service, so it shows nothing rather than examples.")).toBe(
-		true,
-	);
-	for (const text of ["Mock data", "Needs you", "Three short things need you."]) {
-		expect(app.shows(text)).toBe(false);
+test("the default and connected entries without a service say so and show no mock data", async () => {
+	for (const entry of ["./App.tsx", "./Connected.tsx"]) {
+		const app = await open(entry, desktop);
+		await app.waitFor("id:not-connected");
+		expect(
+			app.shows("This window was not opened for a Pilot service, so it shows nothing rather than examples."),
+		).toBe(true);
+		for (const text of ["Mock data", "Needs you", "Three short things need you."]) {
+			expect(app.shows(text)).toBe(false);
+		}
 	}
 });
 
 test("pause asks first, stays Pausing until its receipt, and resume brings it back", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:mission-search");
 	await app.press("role:button[Pause mission]");
 	await app.waitFor("Pause all work in Faster search?");
@@ -440,7 +442,7 @@ test("the screen's sandbox refuses network, sockets, files and processes", async
 });
 
 test("New lists requests nobody started, newest first, and counts what it does not show", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.waitFor("id:incoming");
 	for (const text of [
 		"From Slack and Linear",
@@ -458,7 +460,7 @@ test("New lists requests nobody started, newest first, and counts what it does n
 });
 
 test("a request opens in place, says where it came from and sends nothing", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.waitFor("id:incoming");
 	expect(app.shows("id:request-detail-sl-northwind")).toBe(false);
 	await app.press("id:request-sl-northwind");
@@ -493,7 +495,7 @@ test("without a request source Today shows no New section", async () => {
 });
 
 test("a mission's tasks show what their agents linked, and merged is not released", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press("id:mission-native");
 	await app.waitFor("id:outputs-native-4");
 	for (const text of [

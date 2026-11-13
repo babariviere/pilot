@@ -1,9 +1,8 @@
 // Headless source-reading fixture. Invented records, never daemon data.
 import { mount, signal, Text, View } from "nsh";
-import { DayScreen } from "./DayScreen";
 import { openDay } from "./day";
 import type { MapSourceRead, MapSourceRequest } from "./mapSourceContract";
-import { openPlanning } from "./planning";
+import { MockDayScreen, openPlanning } from "./mockFeeds";
 import { Action } from "./ui";
 
 const day = openDay("quiet");
@@ -58,6 +57,6 @@ mount(() => (
 			<Action label="Wrong source reply" onPress={() => mismatched.set(true)} />
 			<Text>{`Source reads: ${reads()}`}</Text>
 		</View>
-		<DayScreen day={day} plans={plans} />
+		<MockDayScreen day={day} plans={plans} />
 	</View>
 ));

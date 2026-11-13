@@ -1,7 +1,7 @@
 // Synthetic passive attention only. No daemon, filesystem or retry authority.
 import { mount, Text, View } from "nsh";
-import { DayScreen } from "./DayScreen";
 import { openDay } from "./day";
+import { MockDayScreen } from "./mockFeeds";
 import { Action } from "./ui";
 
 const day = openDay();
@@ -23,7 +23,7 @@ day.today.update((t) => ({
 
 mount(() => (
 	<View class="flex-1 bg-background">
-		<DayScreen day={day} />
+		<MockDayScreen day={day} />
 		<View class="flex-row border-t border-border px-6 py-2">
 			<Action
 				label="Stale read"

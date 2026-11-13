@@ -25,7 +25,7 @@ const byTitle =
 		f.snapshot()[group].filter((r) => r.title === title)[at].snapshotId;
 
 test("Today opens Changes, grouped by review request", async () => {
-	const app = await open("./App.tsx", desktop);
+	const app = await open("./MockApp.tsx", desktop);
 	await app.press("role:button[Changes, 2 to review]");
 	await app.waitFor("To review");
 	for (const text of [

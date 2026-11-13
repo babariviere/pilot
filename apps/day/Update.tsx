@@ -3,9 +3,9 @@
 // user is, pauses only the working agents, restarts and restores the
 // window, then resumes only those agents. Mock data: nothing real updates.
 import { mount } from "nsh";
-import { DayScreen } from "./DayScreen";
-import { changes, day, plans } from "./session";
+import { MockDayScreen } from "./mockFeeds";
+import { changes, day, plans } from "./mockSession";
 import { openUpdate } from "./updateFeed";
 
 const update = openUpdate("available");
-mount(() => <DayScreen day={day} plans={plans} changes={changes} update={update} />);
+mount(() => <MockDayScreen day={day} plans={plans} changes={changes} update={update} />);

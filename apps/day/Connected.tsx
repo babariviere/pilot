@@ -1,7 +1,7 @@
 // The connected entry: Day on the Pilot service this window's native root
 // chose, never mock data. Without a root (`nsh run Connected.tsx`), it says
-// it is not connected and shows nothing else. The default entry (App.tsx)
-// stays on mock data.
+// it is not connected and shows nothing else. App.tsx, the default entry,
+// runs this one.
 import { mount, Text, View } from "nsh";
 import { type Connection, connection, readAgain } from "./connection";
 import { DayScreen } from "./DayScreen";

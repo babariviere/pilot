@@ -2,8 +2,8 @@
 // push, a paused mission with an old report, and Pauses whose answer is lost
 // (Release notes) or that do not finish everywhere (Native desktop app).
 import { mount } from "nsh";
-import { DayScreen } from "./DayScreen";
 import { openDay } from "./day";
+import { MockDayScreen } from "./mockFeeds";
 
 const day = openDay("trouble");
-mount(() => <DayScreen day={day} />);
+mount(() => <MockDayScreen day={day} />);

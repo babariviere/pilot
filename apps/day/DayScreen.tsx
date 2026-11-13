@@ -21,7 +21,7 @@ import type { Plans } from "./planning";
 import { planRoute } from "./planView";
 import { settingsOpen } from "./preferencesView";
 import { RitualScreen } from "./RitualScreen";
-import { mockRituals, type Rituals } from "./ritualFeed";
+import type { Rituals } from "./ritualFeed";
 import { ritualEntry, ritualRoute } from "./ritualView";
 import { SettingsScreen } from "./SettingsScreen";
 import { ThreadScreen } from "./ThreadScreen";
@@ -62,13 +62,12 @@ function Planning(props: { day: Day; plans: Plans }) {
 
 /**
  * Today, or the mission, planning, Changes, ritual or update page the user
- * opened. Without `rituals` (the mock entries), ritual progress is an
- * in-memory mock that saves nothing anywhere.
+ * opened. Every feed comes from the caller; this screen invents no data.
  */
-export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; update?: Update; rituals?: Rituals }) {
+export function DayScreen(props: { day: Day; plans?: Plans; changes?: Changes; update?: Update; rituals: Rituals }) {
 	updateEntry.set(props.update ?? null);
 	if (props.update) bindRestore(props.update, props.changes, props.day);
-	const rituals = props.rituals ?? mockRituals(props.day);
+	const rituals = props.rituals;
 	ritualEntry.set(rituals);
 	// Coming back to the window reads the saved progress again, with a fresh
 	// clock sample, so a new day or time zone shows. It writes nothing.

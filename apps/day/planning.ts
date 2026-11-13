@@ -3,10 +3,9 @@
 // it has no transport, and nsh.json denies network, sockets, files and
 // processes.
 import { type Signal, signal } from "nsh";
-import { PlanFeed, type Planning, type PlanScenario } from "pilot-day/native";
+import type { Planning } from "pilot-day/native";
 import { changesRoute } from "./changesView";
-import { DEMO_PROJECTS, ScriptedChats } from "./chatDemo";
-import { type ChatMirror, mirrorChats } from "./chatFeed";
+import type { ChatMirror } from "./chatFeed";
 import type { PlanningFeed } from "./feeds";
 import { glide } from "./motion";
 import { planRoute } from "./planView";
@@ -24,19 +23,6 @@ export type Plans = {
 	/** Stops listening and frees the feed. */
 	close: () => void;
 };
-
-/**
- * Opens a mock planning feed from `scenario` and mirrors its read model.
- * Its New offers invented demo projects; a demo chat is only a counter.
- */
-export function openPlanning(scenario?: PlanScenario): Plans {
-	const feed = new PlanFeed(scenario);
-	const off = () => {
-		const now = feed.snapshot();
-		return now.canStart ? "" : now.startReason || "Starting a chat is not available here.";
-	};
-	return mirrorPlanning(feed, mirrorChats(new ScriptedChats(DEMO_PROJECTS, DEMO_PROJECTS[0].projectId, off)));
-}
 
 /** Mirrors `feed`'s planning read, mock or connected. Closing stops listening and frees the feed. */
 export function mirrorPlanning(feed: PlanningFeed, chats: ChatMirror): Plans {

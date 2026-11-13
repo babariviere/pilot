@@ -5,8 +5,8 @@
 // no read has, "Coordinator replies" writes its answer, and "Save and reopen"
 // keeps the window as a close or an update saves it and shows it again fresh.
 import { mount, signal, Text, View } from "nsh";
-import { DayScreen } from "./DayScreen";
 import { openDay } from "./day";
+import { MockDayScreen } from "./mockFeeds";
 import { ScriptedThreads, type ThreadsDemoNext } from "./threadDemo";
 import { mirrorThreads } from "./threadFeed";
 import { openThread } from "./threadView";
@@ -51,6 +51,6 @@ mount(() => (
 			/>
 			<Text testID="kept">{`Kept: [${kept()}]`}</Text>
 		</View>
-		<DayScreen day={day} />
+		<MockDayScreen day={day} />
 	</View>
 ));

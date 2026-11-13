@@ -1,7 +1,7 @@
 // The connected window's feeds: adapters over the exact JSON calls the
 // window's native root registered (bridge.ts). Screen code cannot choose a
 // service; without a root this window says so and never shows mock data.
-// Kept in its own module, like session.ts, so edits to the screens never
+// Kept in its own module, like mockSession.ts, so edits to the screens never
 // reopen the feeds.
 import { host, signal } from "nsh";
 import type { RitualSnapshot, SavedView, Setup, Today } from "pilot-day/native";

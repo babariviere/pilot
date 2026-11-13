@@ -4,8 +4,8 @@
 // an update saves it and shows it again in a fresh window state, and
 // "Draft elsewhere" leaves unsaved preferences for another project.
 import { mount, signal, Text, View } from "nsh";
-import { DayScreen } from "./DayScreen";
 import { openDay } from "./day";
+import { MockDayScreen } from "./mockFeeds";
 import { type PreferencesDemoNext, ScriptedPreferences } from "./preferencesDemo";
 import { mirrorPreferences } from "./preferencesFeed";
 import { preferencesDraft } from "./preferencesView";
@@ -52,6 +52,6 @@ mount(() => (
 			/>
 			<Text testID="kept">{`Kept: [${kept()}]`}</Text>
 		</View>
-		<DayScreen day={day} />
+		<MockDayScreen day={day} />
 	</View>
 ));

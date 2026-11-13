@@ -11,8 +11,8 @@ After publication, **Start work** asks you to confirm one ready task and its mod
 admits one background worker under existing project permissions and limits. Other tasks do not start
 automatically. If the acknowledgement is lost, use **Check Start**, not another Start. Admission is not
 progress or acceptance. Read the agent's report in the mission overview. This connected path is
-qualified with an isolated daemon and faux workers, not enabled against your live profile. The installed
-[development Preview](development-preview.md) remains demo-only. The current app is unchanged.
+qualified with an isolated daemon and faux workers, not enabled against your live profile. The current app
+is unchanged.
 
 Direct chat creation, automatic continuation after human actions and budget increases are not supported
 by this connected path. Unavailable controls do not grant permission or start work.
