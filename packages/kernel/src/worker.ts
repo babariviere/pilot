@@ -473,6 +473,7 @@ export function runKernelWorker(): void {
 			command.type === "planning.guard.result" ||
 			command.type === "model.configuration.result" ||
 			command.type === "mission.result" ||
+			command.type === "publication.source.result" ||
 			command.type === "memory.result" ||
 			command.type === "knowledge.result" ||
 			command.type === "insights.backlog.result" ||
@@ -594,6 +595,12 @@ export function runKernelWorker(): void {
 						callDaemon<void>((callId) => ({ type: "subscription.limit", callId, limit })),
 					onArtifactsChanged: () => notify({ type: "artifacts.changed" }),
 					onPullRequestCreated: (url) => notify({ type: "pullRequest.created", url }),
+					publicationSource: (bookmark) =>
+						callDaemon(
+							(callId) => ({ type: "publication.source", callId, bookmark }),
+							AbortSignal.timeout(15_000),
+							false,
+						),
 					onPullRequestAttempted: () => notify({ type: "pullRequest.attempted" }),
 					onRefsChanged: () => notify({ type: "refs.changed" }),
 					onGitHubAction: (action) => notify({ type: "github.action", action }),

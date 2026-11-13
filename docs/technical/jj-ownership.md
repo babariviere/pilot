@@ -24,6 +24,9 @@ There is no inferred transfer, including chat continuation or reassignment.
 
 The factory records the exact initial change/commit and creation operation before worker admission.
 That trusted creation fact is different from discovering a change in the current working copy.
+New creation proofs also save `baselineCommitId`, the factory's resolved starting base. Existing
+proofs are not upgraded or backfilled. Their missing baseline remains unknown. Creation-only v2
+project/chat enrollment uses the same proof without claiming mission/task membership.
 
 ## Discovery and reconciliation
 
@@ -76,3 +79,45 @@ at that operation. They are not a freshness guarantee, a claim about who authore
 revision, or proof of landing/checks/review. First-observed revision metadata is retained without
 duplicating unchanged commits. Files, trees, patches and blobs are not retained, and jj GC may make
 their content unavailable. Immutable review preservation is a separate facility.
+
+## Inspecting change evolution and publication
+
+`GET /api/sessions/:chat/review/:snapshot/evolution` (and the existing mission/worker Review route)
+uses the retained comparison's exact owned change, current project access and durable binding.
+It runs targeted `jj evolog` at one pinned operation, returning at most 20 commit/parent identities
+plus `more`. Related squash predecessors are not adopted as owned changes. Missing/GC'd objects,
+changed custody, repository replacement or concurrent operation changes refuse the read. It does
+not snapshot, enroll, run the ownership observer or scan the repository's full history.
+For absent squashed/abandoned changes it starts from at most two already saved revision identities,
+or the creation commit when none were observed. `seed` states this limit; absence is not complete
+post-creation history. The store limits these reads to two concurrent requests and joins them on close.
+One `jj op log --limit 1` supplies the pinned repository operation and its parents only. It is
+explicitly repository-wide evidence, not proof that this chat performed that operation. No shell
+source, operation descriptions, author/host names, paths or credentials enter this projection.
+
+Push and PR creation stages extend the existing `GitHubActionsDoc` and chat/mission audit feed,
+not a second activity store. A durable `command-dispatch` attempt precedes execution. The result
+record names that exact `attemptId` and records `confirmed` or `unknown`. A crash before the result
+leaves the attempt unresolved. Reopening replays saved observations, never the push/PR mutation.
+Native nested calls are observed at dispatch/result time, not inferred from codemode source.
+Confirmation requires a simple authoritative successful command result; PR creation additionally
+requires its one exact returned PR URL. Compound shell results, exceptions and missing replies do
+not establish success. Failed pushes still count as attempts for the existing follow-up budget,
+not as confirmed publication.
+
+A simple `jj git push --bookmark <literal>` can attach a pre-dispatch local selection: repository,
+operation, explicitly owned tip change/commit, original creation commit and optional baseline.
+The supervised daemon resolves the bound workspace and checks custody. Other refspecs, implicit
+heads, foreign/legacy changes and repository overrides stay unlinked/Unknown. This selection is
+not proof of the remote revision: a bookmark can move after the read. Neither evolog nor op log
+confirms a push, PR creation, checks, merge, deployment or user acceptance. Exact remote head/base,
+canonical PR identity and checks continue to use the existing on-demand GitHub delivery reader
+described in [delivery evidence](delivery-evidence.md#passive-code-observations). A later matching
+remote record proves its observed state, not that an unresolved original mutation succeeded.
+
+The smallest Day UI follow-up is a collapsed **Agent work** disclosure in existing task/result
+detail, linked from the coordinator thread. Reuse retained comparison history and the current audit
+feed. Show local change/revisions, separate attempt/result observations, exact PR and revision-bound
+checks with their provenance. Fetch evolution only when opened. Keep report, implementation,
+merge, production and user verification separate. This backend change does not add or redesign a
+Day screen; the disclosure's visual design remains a bounded Opus follow-up.

@@ -88,6 +88,19 @@ test("failure and unknown status never claim success", () => {
 	assert.match(actionText(action), /attempted:.*failed, exit 1/);
 	assert.match(actionText({ ...action, exitCode: null }), /attempted:.*unknown/);
 	assert.doesNotMatch(actionText({ ...action, exitCode: 0 }), /attempted|failed|unknown/);
+	assert.match(
+		actionText({
+			...action,
+			exitCode: 0,
+			publication: {
+				attemptId: "original",
+				stage: "unknown",
+				evidence: "command-result",
+				local: { status: "unknown" },
+			},
+		}),
+		/attempted:.*unknown/,
+	);
 });
 test("only a confirmed PR creation records its exact URL", async () => {
 	const run = async (command: string, exitCode: number, output: string) => {
@@ -105,7 +118,7 @@ test("only a confirmed PR creation records its exact URL", async () => {
 		// biome-ignore lint/suspicious/noExplicitAny: minimal synthetic extension and call context.
 		const [wrapped] = audit.prepare({ tools: [tool] } as any).tools as any[];
 		await wrapped.execute({ command }, { callId: "call-1" }, {});
-		return recorded;
+		return recorded.filter((action) => action.publication?.evidence !== "command-dispatch");
 	};
 	const url = "https://github.com/acme/app/pull/42";
 	const [opened] = await run("gh pr create --title 'Inline events'", 0, `${url}\n`);
@@ -139,4 +152,106 @@ test("session audit is bounded, deduplicated and independent of conversation for
 	} finally {
 		await session.close(context);
 	}
+});
+
+test("publication attempts commit before dispatch; command results never promote missing PR proof", async () => {
+	for (const command of ["jj git push --bookmark feat/a", "gh pr create --head feat/a"]) {
+		const recorded: GitHubAction[] = [];
+		const local = {
+			status: "owned" as const,
+			repositoryId: "a".repeat(64),
+			operationId: "b".repeat(128),
+			revisions: [{ changeId: "k".repeat(32), commitId: "c".repeat(40), startCommitId: "d".repeat(40) }],
+		};
+		const audit = githubActions(
+			async (action) => {
+				recorded.push(action);
+			},
+			async () => local,
+		);
+		let executed = 0;
+		const tool = {
+			name: "bash",
+			execute: async () => {
+				assert.equal(recorded.length, 1);
+				assert.equal(recorded[0]?.publication?.stage, "attempted");
+				executed++;
+				return { content: [], details: { __piNativeAdapter: { structuredContent: { exit_code: 0, output: "" } } } };
+			},
+		};
+		const wrapped = audit.prepare({ tools: [tool] } as never).tools![0]!;
+		await wrapped.execute({ command }, { callId: "publish" } as never, {} as never);
+		assert.equal(executed, 1);
+		assert.equal(recorded.length, 2);
+		assert.equal(recorded[1]?.publication?.attemptId, recorded[0]?.id);
+		assert.equal(recorded[1]?.publication?.stage, command.startsWith("jj") ? "confirmed" : "unknown");
+		assert.deepEqual(recorded[1]?.publication?.local, command.startsWith("jj") ? local : { status: "unknown" });
+	}
+});
+
+test("lost mutation replies remain Unknown and audit failure prevents dispatch", async () => {
+	const records: GitHubAction[] = [];
+	let calls = 0;
+	const tool = {
+		name: "bash",
+		execute: async () => {
+			calls++;
+			throw new Error("lost reply");
+		},
+	};
+	const audit = githubActions(async (action) => {
+		records.push(action);
+	});
+	const wrapped = audit.prepare({ tools: [tool] } as never).tools![0]!;
+	await assert.rejects(
+		wrapped.execute({ command: "jj git push --bookmark feat/a" }, { callId: "lost" } as never, {} as never),
+		/lost reply/,
+	);
+	assert.equal(calls, 1);
+	assert.deepEqual(
+		records.map((a) => a.publication?.stage),
+		["attempted", "unknown"],
+	);
+	const blocked = githubActions(async () => {
+		throw new Error("storage unavailable");
+	});
+	await assert.rejects(
+		blocked
+			.prepare({ tools: [tool] } as never)
+			.tools![0]!.execute({ command: "gh pr create" }, { callId: "blocked" } as never, {} as never),
+		/storage unavailable/,
+	);
+	assert.equal(calls, 1);
+});
+
+test("nested dispatch survives a missing result without inspecting codemode source", async () => {
+	const records: GitHubAction[] = [];
+	const audit = githubActions(async (action) => {
+		records.push(action);
+	});
+	const handlers = new Map<string, (event: unknown) => Promise<unknown>>();
+	audit.native({
+		on: (event: string, handler: (event: unknown) => Promise<unknown>) => handlers.set(event, handler),
+	} as never);
+	const tool = {
+		name: "codemode",
+		execute: async () => {
+			await handlers.get("tool_call")!({
+				toolCallId: "outer/1",
+				toolName: "bash",
+				input: { command: "gh pr create" },
+			});
+			throw new Error("worker lost before result");
+		},
+	};
+	await assert.rejects(
+		audit
+			.prepare({ tools: [tool] } as never)
+			.tools![0]!.execute({ code: "irrelevant source" }, { callId: "outer" } as never, {} as never),
+		/worker lost/,
+	);
+	assert.equal(records.length, 1);
+	assert.equal(records[0]?.publication?.stage, "attempted");
+	assert.equal(records[0]?.toolCallId, "outer");
+	assert.equal(records[0]?.id, "outer/1:0:attempt");
 });

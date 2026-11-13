@@ -2614,6 +2614,7 @@ export function createDaemonServer(
 					return json(res, 200, await reader.list(Number(after)));
 				}
 				if (!section) return json(res, 200, await reader.get(snapshotId));
+				if (section === "evolution") return json(res, 200, await reader.evolution(snapshotId));
 				if (chatRoute && section === "call-changes") {
 					const query: RetainedCallQuery = {};
 					for (const [key, value] of url.searchParams) {

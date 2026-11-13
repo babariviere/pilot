@@ -2,8 +2,11 @@ import { createHash } from "node:crypto";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { Worker } from "node:worker_threads";
-import type { NativeReviewCaptureStatus } from "@pilot/protocol";
+import type { NativeReviewCaptureStatus, PublicationSource } from "@pilot/protocol";
 import {
+	bindingRecord,
+	changeIdPattern,
+	commitIdPattern,
 	identifier,
 	type JjCreation,
 	type JjDeliveryFailure,
@@ -53,6 +56,7 @@ export class JjOwnershipStore {
 	private serial = 0;
 	private readonly pending = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
 	private readonly observing = new Map<string, Promise<void>>();
+	private readonly reading = new Set<Promise<unknown>>();
 	private readonly file: string;
 	private readonly runner: Runner;
 	private readonly custody = new Map<string, { generation: number; writes: number; observations: number }>();
@@ -219,6 +223,167 @@ export class JjOwnershipStore {
 		const id = await this.jj(cwd, "@", ["op", "log", "--no-graph", "--limit", "1", "-T", "self.id()"]);
 		identifier(id, operationIdPattern);
 		return id;
+	}
+
+	private async readWorkspace(binding: JjOwnershipBinding) {
+		bindingRecord(binding);
+		const saved = await this.binding(binding.repositoryId, binding.workspace);
+		if (JSON.stringify(saved?.binding) !== JSON.stringify(binding)) throw new Error("Ownership binding changed");
+		if (
+			(await realpath(binding.path)) !== binding.path ||
+			(await jjRepositoryIdentity(binding.repositoryPath)) !== binding.repositoryId
+		)
+			throw new Error("Ownership workspace instance mismatch");
+		const linked = (await readFile(join(binding.path, ".jj/repo"), "utf8")).trim();
+		if (
+			(await realpath(resolve(binding.path, ".jj", linked))) !==
+			(await realpath(join(binding.repositoryPath, ".jj/repo")))
+		)
+			throw new Error("Ownership repository binding mismatch");
+		const roots = await this.jj(binding.path, "@", [
+			"workspace",
+			"list",
+			"-T",
+			'name ++ "\\t" ++ root.absolute() ++ "\\n"',
+		]);
+		if (!roots.split("\n").includes(`${binding.workspace}\t${binding.path}`))
+			throw new Error("Ownership workspace binding mismatch");
+	}
+
+	/** Exact selected bookmark tips. Membership in a workspace or authorship never mints ownership. */
+	publicationSource(binding: JjOwnershipBinding, bookmark?: string): Promise<PublicationSource> {
+		return this.readOnly(() => this.readPublicationSource(binding, bookmark));
+	}
+	private readOnly<T>(read: () => Promise<T>): Promise<T> {
+		if (this.closed || this.closing || this.reading.size >= 2)
+			return Promise.reject(new Error("Ownership read unavailable or busy"));
+		const work = read().finally(() => this.reading.delete(work));
+		this.reading.add(work);
+		return work;
+	}
+	private async readPublicationSource(binding: JjOwnershipBinding, bookmark?: string): Promise<PublicationSource> {
+		if (!bookmark || !/^[a-zA-Z0-9][\w./-]{0,119}$/.test(bookmark)) return { status: "unknown" };
+		const fence = this.readFence(binding.repositoryId);
+		await this.readWorkspace(binding);
+		const operationId = await this.head(binding.path);
+		const output = await this.jj(binding.path, operationId, [
+			"log",
+			"--no-graph",
+			"--limit",
+			"3",
+			"-r",
+			`bookmarks(exact:${JSON.stringify(bookmark)})`,
+			"-T",
+			'change_id ++ "\\t" ++ commit_id ++ "\\n"',
+		]);
+		const revisions: Extract<PublicationSource, { status: "owned" }>["revisions"] = [];
+		for (const line of output ? output.split("\n") : []) {
+			const [changeId, commitId, extra] = line.split("\t");
+			identifier(changeId, changeIdPattern);
+			identifier(commitId, commitIdPattern);
+			if (extra !== undefined) throw new Error("Malformed publication revision");
+			const record = await this.get(binding.repositoryId, changeId);
+			if (
+				record.ownership.status !== "owned" ||
+				JSON.stringify(record.ownership.binding) !== JSON.stringify(binding)
+			)
+				return { status: "unknown" };
+			const creation = record.ownership.creation;
+			revisions.push({
+				changeId,
+				commitId,
+				startCommitId: creation.commitId,
+				...(creation.baselineCommitId ? { baselineCommitId: creation.baselineCommitId } : {}),
+			});
+		}
+		fence();
+		if (operationId !== (await this.head(binding.path))) throw new Error("Publication source changed during read");
+		fence();
+		return revisions.length === 1
+			? { status: "owned", repositoryId: binding.repositoryId, operationId, revisions }
+			: { status: "unknown" };
+	}
+
+	/** Targeted, passive history. Related squash predecessors never become new ownership claims. */
+	evolution(binding: JjOwnershipBinding, changeId: string) {
+		return this.readOnly(() => this.readEvolution(binding, changeId));
+	}
+	private async readEvolution(binding: JjOwnershipBinding, changeId: string) {
+		identifier(changeId, changeIdPattern);
+		const fence = this.readFence(binding.repositoryId);
+		const record = await this.get(binding.repositoryId, changeId);
+		if (record.ownership.status !== "owned" || JSON.stringify(record.ownership.binding) !== JSON.stringify(binding))
+			throw new Error("Unknown change ownership");
+		await this.readWorkspace(binding);
+		const operationId = await this.head(binding.path);
+		const current = await this.jj(binding.path, operationId, [
+			"log",
+			"--no-graph",
+			"--limit",
+			"3",
+			"-r",
+			`change_id(${changeId})`,
+			"-T",
+			'commit_id ++ "\\n"',
+		]);
+		// A squashed/abandoned change has no current tip. Reuse already saved observations,
+		// never discover a replacement by author, workspace, description or a global revset.
+		const retained = current
+			? []
+			: await this.rpc<string[]>("evolutionSeeds", { repositoryId: binding.repositoryId, changeId });
+		const tips = current ? current.split("\n") : retained.length ? retained : [record.ownership.creation.commitId];
+		if (tips.length > 2) throw new Error("Divergent change history unavailable");
+		for (const tip of tips) identifier(tip, commitIdPattern);
+		const output = await this.jj(binding.path, operationId, [
+			"evolog",
+			"--no-graph",
+			"--limit",
+			"21",
+			"-r",
+			tips.join(" | "),
+			"-T",
+			'commit.change_id() ++ "\\t" ++ commit.commit_id() ++ "\\t" ++ commit.parents().map(|p| p.commit_id()).join(",") ++ "\\n"',
+		]);
+		const revisions = (output ? output.split("\n") : []).map((line) => {
+			const [id, commitId, parents, extra] = line.split("\t");
+			if (parents === undefined || extra !== undefined) throw new Error("Malformed evolution history");
+			const revision = { changeId: id, commitId, parents: parents ? parents.split(",") : [] };
+			revisionRecord(revision);
+			return { ...revision, ownedChange: id === changeId };
+		});
+		// Only the pinned repository operation. No user/host/command text or sibling history scan.
+		const operation = await this.jj(binding.path, operationId, [
+			"op",
+			"log",
+			"--no-graph",
+			"--limit",
+			"1",
+			"-T",
+			'self.id() ++ "\\t" ++ self.parents().map(|p| p.id()).join(",")',
+		]);
+		const [id, parents, extra] = operation.split("\t");
+		if (id !== operationId || parents === undefined || extra !== undefined)
+			throw new Error("Malformed operation evidence");
+		const operationParents = parents ? parents.split(",") : [];
+		for (const parent of operationParents) identifier(parent, operationIdPattern);
+		fence();
+		if (operationId !== (await this.head(binding.path))) throw new Error("Evolution source changed during read");
+		fence();
+		return {
+			repositoryId: binding.repositoryId,
+			changeId,
+			creation: record.ownership.creation,
+			startOperation: binding.startOperation,
+			revisions: revisions.slice(0, 20),
+			more: revisions.length > 20,
+			current: current ? ("present" as const) : ("absent" as const),
+			seed: current
+				? ("current" as const)
+				: retained.length
+					? ("retained-observation" as const)
+					: ("creation-only" as const),
+			operation: { id: operationId, parents: operationParents, scope: "repository-not-chat" as const },
+		};
 	}
 
 	observe(repositoryId: string, workspace: string, cwd: string): Promise<void> {
@@ -441,7 +606,7 @@ export class JjOwnershipStore {
 		this.closing = true;
 		this.abort.abort();
 		this.drain = (async () => {
-			await Promise.allSettled(this.observing.values());
+			await Promise.allSettled([...this.observing.values(), ...this.reading]);
 			try {
 				if (this.worker && !this.fault) await this.rpc("close", {});
 			} finally {

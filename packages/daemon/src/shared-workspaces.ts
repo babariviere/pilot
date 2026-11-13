@@ -897,6 +897,7 @@ export class SharedWorkspaceStore {
 			const creation = scope
 				? {
 						...(await this.ids(destination, creationOperation)),
+						baselineCommitId: base.commitId,
 						operationId: creationOperation!,
 						kind: "workspace-created" as const,
 					}

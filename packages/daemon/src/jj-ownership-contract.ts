@@ -47,6 +47,8 @@ export type JjDeliveryFailure = (typeof deliveryFailureKinds)[number];
 export interface JjCreation {
 	changeId: string;
 	commitId: string;
+	/** Captured by new host workspace creation only. Legacy absence stays unknown. */
+	baselineCommitId?: string;
 	operationId: string;
 	kind: "workspace-created" | "workspace-operation";
 }
@@ -128,7 +130,9 @@ export function bindingRecord(value: unknown): asserts value is JjOwnershipBindi
 }
 
 export function creationRecord(value: unknown): asserts value is JjCreation {
-	exact(value, ["changeId", "commitId", "operationId", "kind"]);
+	const baseline = !!value && typeof value === "object" && "baselineCommitId" in value;
+	exact(value, ["changeId", "commitId", "operationId", "kind", ...(baseline ? ["baselineCommitId"] : [])]);
+	if (baseline) identifier(value.baselineCommitId, commitIdPattern);
 	identifier(value.changeId, changeIdPattern);
 	identifier(value.commitId, commitIdPattern);
 	identifier(value.operationId, operationIdPattern);

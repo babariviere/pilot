@@ -190,6 +190,7 @@ export interface KernelSessionHooks {
 	onArtifactsChanged?(): void;
 	/** Created by an agent tool, committed before notification; replayed on open. */
 	onPullRequestCreated?(url: string): void;
+	publicationSource?(bookmark?: string): Promise<import("@pilot/protocol").PublicationSource>;
 	/** A gh PR creation ran but its URL could not be confirmed. Hint only; not replayed. */
 	onPullRequestAttempted?(): void;
 	/** A tool call may have changed branches or bookmarks. Hint only; may repeat. */
@@ -618,7 +619,7 @@ export class KernelSession {
 							return appendGitHubAction(state, action);
 						}, context);
 						if (added) hooks.onGitHubAction?.(action);
-					})
+					}, hooks.publicationSource)
 				: undefined;
 			const active = await activeConversation(owned.storage, context);
 			const [pinned, ghStack] = await Promise.all([

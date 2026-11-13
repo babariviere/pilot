@@ -287,6 +287,12 @@ export type KernelCommand =
 	| { type: "mission.context"; context?: MissionContext }
 	| { type: "mission.result"; callId: string; result?: JsonValue; error?: string }
 	| {
+			type: "publication.source.result";
+			callId: string;
+			result?: import("@pilot/protocol").PublicationSource;
+			error?: string;
+	  }
+	| {
 			type: "source.scope.result";
 			callId: string;
 			result?: import("./coordinator-sources.ts").CoordinatorSources;
@@ -463,6 +469,8 @@ export type KernelPacket =
 	| { type: "artifact.reference.get"; callId: string; id: string; revision?: number }
 	/** The kernel is awaiting its first prompt preparation. No model or tools are running. */
 	| { type: "workspace.prepare"; callId: string }
+	/** Passive exact-bookmark custody read, no caller-supplied repository or ownership. */
+	| { type: "publication.source"; callId: string; bookmark?: string }
 	| { type: "accepted"; requestId: string; delivery?: "delivered" | "queued" | "not_started"; reason?: string }
 	/** `withdrawn` holds the user's own queued messages, in delivery order, which Stop restores to the composer. */
 	| { type: "aborted"; requestId: string; withdrawn?: { requestId?: string; content: string }[] }

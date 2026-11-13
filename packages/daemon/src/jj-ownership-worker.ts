@@ -302,6 +302,22 @@ function dispatch(method: string, input: unknown): unknown {
 		exact(input, ["repositoryId", "changeId"]);
 		return get(input.repositoryId, input.changeId);
 	}
+	if (method === "evolutionSeeds") {
+		exact(input, ["repositoryId", "changeId"]);
+		const record = get(input.repositoryId, input.changeId);
+		if (record.ownership.status !== "owned") throw new Error("Unknown evolution custody");
+		return db
+			.prepare(
+				"SELECT revision FROM revisions WHERE repository=? AND change_id=? ORDER BY observed_at DESC, commit_id LIMIT 2",
+			)
+			.all(record.repositoryId, record.changeId)
+			.map((row) => {
+				const revision: unknown = JSON.parse(String(row.revision));
+				revisionRecord(revision);
+				if (revision.changeId !== record.changeId) throw new Error("Corrupt evolution identity");
+				return revision.commitId;
+			});
+	}
 	if (method === "list") {
 		exact(input, ["repositoryId", "workspace", "after", "limit"]);
 		identifier(input.repositoryId, repositoryIdPattern);

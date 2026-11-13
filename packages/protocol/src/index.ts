@@ -250,6 +250,15 @@ export interface SnapshotPrefixEvent {
 }
 
 /** Sanitized execution audit. Null means no authoritative command exit was exposed. */
+export type PublicationSource =
+	| { status: "unknown" }
+	| {
+			status: "owned";
+			repositoryId: string;
+			operationId: string;
+			/** Exact selected bookmark tips only, not the complete contribution. */
+			revisions: { changeId: string; commitId: string; startCommitId: string; baselineCommitId?: string }[];
+	  };
 export type GitHubAction = {
 	id: string;
 	/** Optional only for audits recorded by older kernels. */
@@ -270,6 +279,14 @@ export type GitHubAction = {
 	target?: string;
 	at: number;
 	exitCode: number | null;
+	/** Separate dispatch/result observations. Missing result stays Unknown; never replay a mutation. */
+	publication?: {
+		attemptId: string;
+		stage: "attempted" | "confirmed" | "unknown";
+		evidence: "command-dispatch" | "command-result";
+		/** Pre-dispatch local selection, not proof that this revision reached a remote. */
+		local: PublicationSource;
+	};
 };
 /** User-facing automatic event. The full agent-facing message remains on the entry. */
 export interface ChatEventSummary {

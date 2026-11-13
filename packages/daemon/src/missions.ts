@@ -6651,13 +6651,13 @@ export class MissionStore {
 			)
 		)
 			return;
-		const status =
-			action.exitCode === 0
-				? ""
-				: action.exitCode === null
-					? " (exit status unknown)"
-					: ` (failed, exit ${action.exitCode})`;
-		const description = action.exitCode === 0 ? action.description : `attempted: ${action.description}`;
+		const confirmed = action.publication ? action.publication.stage === "confirmed" : action.exitCode === 0;
+		const status = confirmed
+			? ""
+			: action.exitCode === null || action.exitCode === 0
+				? " (exit status unknown)"
+				: ` (failed, exit ${action.exitCode})`;
+		const description = confirmed ? action.description : `attempted: ${action.description}`;
 		this.transaction(() => {
 			const event = this.event(
 				id,

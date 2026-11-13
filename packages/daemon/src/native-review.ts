@@ -16,7 +16,7 @@ export class NativeReviewReader {
 	private readonly snapshots: Pick<ReviewSnapshotStore, "get" | "list" | "diff" | "read"> &
 		Partial<Pick<ReviewSnapshotStore, "identity" | "validateRange" | "projectRange" | "verifyDiff" | "comparison">>;
 	private readonly ledger: Pick<JjOwnershipStore, "get"> &
-		Partial<Pick<JjOwnershipStore, "deliveryStatus" | "list" | "binding" | "head">>;
+		Partial<Pick<JjOwnershipStore, "deliveryStatus" | "list" | "binding" | "head" | "evolution">>;
 	private readonly admit: () => Promise<JjOwnershipBinding>;
 	private readonly syncScope?: () => string;
 	constructor(
@@ -25,7 +25,7 @@ export class NativeReviewReader {
 				Pick<ReviewSnapshotStore, "identity" | "validateRange" | "projectRange" | "verifyDiff" | "comparison">
 			>,
 		ledger: Pick<JjOwnershipStore, "get"> &
-			Partial<Pick<JjOwnershipStore, "deliveryStatus" | "list" | "binding" | "head">>,
+			Partial<Pick<JjOwnershipStore, "deliveryStatus" | "list" | "binding" | "head" | "evolution">>,
 		admit: () => Promise<JjOwnershipBinding>,
 		syncScope?: () => string,
 	) {
@@ -158,6 +158,14 @@ export class NativeReviewReader {
 			changes: m.changes,
 			diff: m.diff,
 		};
+	}
+	/** On-demand jj history for this exact retained comparison's owned change. */
+	async evolution(snapshotId: string) {
+		const { binding, snapshot } = await this.snapshot(snapshotId);
+		if (!this.ledger.evolution) throw new Error("Change evolution unavailable");
+		const history = await this.ledger.evolution(binding, snapshot.manifest.request.changeId);
+		await this.check(binding);
+		return { snapshotId, ...history };
 	}
 	/** Exact indexed comparison, with the same custody checks as source reads. */
 	async comparison(snapshotId: string) {

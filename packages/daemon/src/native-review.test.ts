@@ -101,6 +101,20 @@ function passiveFixture() {
 	};
 	const calls: string[] = [];
 	const ledger = {
+		evolution: async (_binding: typeof b, changeId: string) => {
+			calls.push(`evolution:${changeId}`);
+			return {
+				repositoryId: b.repositoryId,
+				changeId,
+				creation: owner.creation,
+				startOperation: b.startOperation,
+				revisions: [],
+				more: false,
+				current: "present" as const,
+				seed: "current" as const,
+				operation: { id: b.startOperation, parents: [], scope: "repository-not-chat" as const },
+			};
+		},
 		get: async () => structuredClone(row),
 		binding: async () => {
 			calls.push("binding");
@@ -130,6 +144,16 @@ function passiveFixture() {
 	);
 	return { reader, ledger, checkpoint, retained, row, calls, b };
 }
+
+test("exact retained evolution uses current custody and never infers legacy ownership", async () => {
+	const f = passiveFixture();
+	const history = await f.reader.evolution(f.retained.snapshotId);
+	assert.equal(history.changeId, f.row.changeId);
+	assert.deepEqual(f.calls, [`evolution:${f.row.changeId}`]);
+	f.row.ownership = { status: "unknown", reason: "unproven" };
+	await assert.rejects(f.reader.evolution(f.retained.snapshotId), /custody|Cross-scope/);
+	assert.equal(f.calls.length, 1);
+});
 
 test("host contribution reads census the exact passive operation, never observe or capture", async () => {
 	const f = passiveFixture(),

@@ -32,11 +32,26 @@ test("GitHub mission activity attributes the execution-time chat, survives reope
 		store.recordGitHubAction("chat", { ...action, id: "unknown", exitCode: null }, "Build settings");
 		assert.match(store.events(mission.id)[0]!.text, /attempted:.*unknown/);
 		assert.match(store.events(mission.id)[1]!.text, /attempted:.*failed/);
+		store.recordGitHubAction(
+			"chat",
+			{
+				...action,
+				id: "unconfirmed-pr",
+				publication: {
+					attemptId: "original",
+					stage: "unknown",
+					evidence: "command-result",
+					local: { status: "unknown" },
+				},
+			},
+			"Build settings",
+		);
+		assert.match(store.events(mission.id)[0]!.text, /attempted:.*unknown/);
 		store.recordGitHubAction("chat", { ...action, id: "outside", missionId: undefined }, "Build settings");
 		store.close();
 		store = new MissionStore(file);
 		store.recordGitHubAction("chat", action, "Renamed chat");
-		assert.equal(store.events(mission.id).filter((e) => e.kind === "github").length, 3);
+		assert.equal(store.events(mission.id).filter((e) => e.kind === "github").length, 4);
 		for (let i = 0; i < 1005; i++)
 			store.recordGitHubAction("other", { ...action, id: String(i), at: 100 + i }, "Other chat");
 		store.recordGitHubAction("chat", action, "Replay of evicted action");

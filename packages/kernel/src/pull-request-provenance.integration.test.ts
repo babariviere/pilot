@@ -76,7 +76,10 @@ test("GitHub audit records direct and discarded nested results, cold reads and r
 	await f.run(session, "implicit-ready", "bash", { command: "gh pr ready --id 14" });
 	await f.run(session, "implicit-create", "bash", { command: "gh pr create --id 15 --title 'Quiet chat events'" });
 	assert.deepEqual(
-		observed.slice(-2).map((action) => action.target),
+		observed
+			.filter((action) => action.publication?.evidence !== "command-dispatch")
+			.slice(-2)
+			.map((action) => action.target),
 		["PR #14", "PR #15"],
 	);
 	assert.equal(observed.at(-1)?.prNumber, 15);
@@ -84,7 +87,7 @@ test("GitHub audit records direct and discarded nested results, cold reads and r
 	await session.unwatch("audit");
 	const frames = updates.filter((event) => event.type === "github_actions_update");
 	assert.equal(frames[0]?.type === "github_actions_update" && frames[0].actions.length, 0);
-	assert.equal(frames.at(-1)?.type === "github_actions_update" && frames.at(-1)!.actions.length, 6);
+	assert.equal(frames.at(-1)?.type === "github_actions_update" && frames.at(-1)!.actions.length, 7);
 	const state = await session.harness.snapshot(GitHubActionsDoc, context);
 	assert.deepEqual(
 		state?.actions.map((a) => a.id),
@@ -93,7 +96,7 @@ test("GitHub audit records direct and discarded nested results, cold reads and r
 	await session.close();
 	const cold = await readSessionSnapshot(join(f.root, "durable"), f.root, false);
 	const audit = cold.events.find((event) => event.type === "github_actions_update");
-	assert.equal(audit?.type === "github_actions_update" && audit.actions.length, 6);
+	assert.equal(audit?.type === "github_actions_update" && audit.actions.length, 7);
 	const replay: GitHubAction[] = [];
 	session = await f.open({ onGitHubAction: (action) => replay.push(action) });
 	assert.deepEqual(replay, observed);

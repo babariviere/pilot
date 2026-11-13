@@ -2213,13 +2213,14 @@ test("Insights forged IPC cannot call broad capabilities or deliver stale eviden
 		"diagnostics.proposal",
 		"artifact.reference.get",
 		"source.scope",
+		"publication.source",
 	])
 		sessions["onPacket"](meta, worker, {
 			type,
 			callId: type,
 			request: { action: "spawn" },
 		} as unknown as KernelPacket);
-	assert.equal(worker.sent.filter((p) => "error" in p && p.error === "Insights denies this capability").length, 12);
+	assert.equal(worker.sent.filter((p) => "error" in p && p.error === "Insights denies this capability").length, 13);
 	assert.equal(f.broadCalls(), 0);
 	const count = f.workers.length;
 	for (const type of [

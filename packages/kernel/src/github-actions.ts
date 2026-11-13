@@ -1,7 +1,7 @@
 /** Execution-time attribution. Never retain shell source, output, headers or bodies. */
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { defineDoc, type Extension } from "@earendil-works/pi-durable";
-import type { GitHubAction } from "@pilot/protocol";
+import type { GitHubAction, PublicationSource } from "@pilot/protocol";
 import { commandArguments } from "./policy.ts";
 import { createdPullRequest } from "./pull-request-provenance.ts";
 
@@ -248,21 +248,57 @@ export function githubCommandSummaries(
 	return { summaries, single: parts.length === 1 && !/[;&|\n`$()<>]/.test(source.trim()) };
 }
 export function actionText(action: GitHubAction): string {
-	const outcome =
-		action.exitCode === 0
-			? ""
-			: action.exitCode === null
-				? " (exit status unknown)"
-				: ` (failed, exit ${action.exitCode})`;
-	const description = action.exitCode === 0 ? action.description : `attempted: ${action.description}`;
+	const confirmed = action.publication ? action.publication.stage === "confirmed" : action.exitCode === 0;
+	const outcome = confirmed
+		? ""
+		: action.exitCode === null || action.exitCode === 0
+			? " (exit status unknown)"
+			: ` (failed, exit ${action.exitCode})`;
+	const description = confirmed ? action.description : `attempted: ${action.description}`;
 	return `${description}${outcome} · ${action.summary} · ${new Date(action.at).toISOString()}`;
 }
 type Result = { isError?: boolean; structuredContent?: unknown; content?: readonly { type: string; text?: string }[] };
-export function githubActions(record: (action: GitHubAction) => Promise<void>): {
+export function githubActions(
+	record: (action: GitHubAction) => Promise<void>,
+	source: (bookmark?: string) => Promise<PublicationSource> = async () => ({ status: "unknown" }),
+): {
 	native: ExtensionFactory;
 	prepare(extension: Extension): Extension;
 } {
 	const active = new Map<string, { error?: unknown }>();
+	const publications = new Map<string, NonNullable<GitHubAction["publication"]>>();
+	const begin = async (id: string, toolCallId: string, name: string, args: Record<string, unknown>) => {
+		const { summaries, single } = githubCommandSummaries(name, args);
+		for (const [index, summary] of summaries.entries()) {
+			if (summary.kind !== "push" && summary.kind !== "pr_opened") continue;
+			const key = `${id}:${index}`;
+			// Only an exact jj bookmark command in this workspace can select a local tip.
+			// git refspecs, gh --repo/host overrides and shell cwd changes need exact remote reconciliation.
+			const command = args.command;
+			const local =
+				single &&
+				typeof command === "string" &&
+				/^jj git push --bookmark [a-zA-Z0-9][\w./-]{0,119}$/.test(command.trim())
+					? await source(summary.branch).catch((): PublicationSource => ({ status: "unknown" }))
+					: { status: "unknown" as const };
+			const publication: NonNullable<GitHubAction["publication"]> = {
+				attemptId: `${key}:attempt`,
+				stage: "attempted",
+				evidence: "command-dispatch",
+				local,
+			};
+			// Commit before execution. A crash/lost result leaves this attempt Unknown, never replayable.
+			await record({
+				id: publication.attemptId,
+				toolCallId,
+				...summary,
+				at: Date.now(),
+				exitCode: null,
+				publication,
+			});
+			publications.set(key, publication);
+		}
+	};
 	const observe = async (
 		id: string,
 		toolCallId: string,
@@ -272,7 +308,8 @@ export function githubActions(record: (action: GitHubAction) => Promise<void>): 
 	) => {
 		const { summaries, single } = githubCommandSummaries(name, args);
 		const code = (result.structuredContent as { exit_code?: unknown } | undefined)?.exit_code;
-		const exitCode = single && typeof code === "number" && Number.isSafeInteger(code) ? code : null;
+		const exitCode =
+			!result.isError && single && typeof code === "number" && Number.isSafeInteger(code) ? code : null;
 		for (const [index, initial] of summaries.entries()) {
 			let summary = initial;
 			if (single && exitCode === 0 && initial.summary === "gh pr create") {
@@ -310,17 +347,42 @@ export function githubActions(record: (action: GitHubAction) => Promise<void>): 
 						description: initial.description.replace("a PR", `PR #${numbers[0]}`),
 					};
 			}
+			const key = `${id}:${index}`;
+			const attempted = publications.get(key);
 			await record({
 				id: `${id}:${index}`,
 				toolCallId,
 				...summary,
 				at: Date.now(),
 				exitCode,
+				...(attempted
+					? {
+							publication: {
+								...attempted,
+								evidence: "command-result" as const,
+								stage:
+									exitCode === 0 && (summary.kind === "push" || summary.url)
+										? ("confirmed" as const)
+										: ("unknown" as const),
+							},
+						}
+					: {}),
 			});
+			publications.delete(key);
 		}
 	};
 	return {
 		native: (pi) => {
+			pi.on("tool_call", async (event) => {
+				const match = [...active].find(([id]) => event.toolCallId.startsWith(`${id}/`));
+				if (!match) return;
+				try {
+					await begin(event.toolCallId, match[0], event.toolName, event.input as Record<string, unknown>);
+				} catch (error) {
+					match[1].error = error;
+					return { block: true, reason: "Could not save publication attempt" };
+				}
+			});
 			pi.on("tool_result", async (event) => {
 				if (!event.parentToolCallId) return;
 				const match = [...active].find(([id]) => event.toolCallId.startsWith(`${id}/`));
@@ -349,12 +411,15 @@ export function githubActions(record: (action: GitHubAction) => Promise<void>): 
 					active.set(api.callId, root);
 					let result: Awaited<ReturnType<typeof tool.execute>>;
 					try {
+						await begin(api.callId, api.callId, tool.name, args as Record<string, unknown>);
 						result = await tool.execute(args, api, context);
 					} catch (error) {
 						await observe(api.callId, api.callId, tool.name, args as Record<string, unknown>, { isError: true });
 						throw error;
 					} finally {
 						active.delete(api.callId);
+						// A nested call may never emit a result. Its durable attempt remains Unknown.
+						for (const key of publications.keys()) if (key.startsWith(`${api.callId}/`)) publications.delete(key);
 					}
 					if (root.error !== undefined) throw root.error;
 					const details = result.details as { __piNativeAdapter?: { structuredContent?: unknown } } | undefined;

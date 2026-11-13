@@ -16,6 +16,89 @@ const commit = (cwd: string, rev = "@") =>
 const head = (cwd: string) =>
 	jj(cwd, "--at-op=@", "--ignore-working-copy", "op", "log", "--no-graph", "--limit", "1", "-T", "self.id()");
 
+test("targeted owned evolution and publication selection stay passive across reopen and rewrite", async () => {
+	const f = fixture();
+	let reopened: SharedWorkspaceStore | undefined;
+	try {
+		const w = await f.store.create(f.source, f.path(), undefined, undefined, scope);
+		const repositoryId = await jjRepositoryIdentity(w.shared!.repository);
+		const binding = (await f.store.ownership.binding(repositoryId, w.shared!.name))!.binding;
+		const owned = change(w.path),
+			initial = commit(w.path);
+		jj(w.path, "bookmark", "create", "feat/a", "-r", owned);
+		const selected = await f.store.ownership.publicationSource(binding, "feat/a");
+		assert.equal(selected.status, "owned");
+		if (selected.status !== "owned") assert.fail();
+		assert.deepEqual(selected.revisions, [
+			{ changeId: owned, commitId: initial, startCommitId: initial, baselineCommitId: w.base },
+		]);
+		jj(w.path, "describe", "-r", owned, "-m", "rewritten");
+		const rewritten = commit(w.path);
+		// A shared repository operation by a different workspace is supporting evidence only.
+		const peer = await f.store.create(f.source, f.path("peer"));
+		jj(peer.path, "describe", "-m", "unrelated");
+		const before = head(w.path);
+		const history = await f.store.ownership.evolution(binding, owned);
+		assert.equal(history.operation.id, before);
+		assert.equal(history.operation.scope, "repository-not-chat");
+		assert.ok(history.revisions.some((r) => r.commitId === initial && r.ownedChange));
+		assert.ok(history.revisions.some((r) => r.commitId === rewritten && r.ownedChange));
+		assert.equal(history.creation.baselineCommitId, w.base);
+		assert.equal(head(w.path), before, "read must not snapshot or create an operation");
+		assert.doesNotMatch(JSON.stringify(history), /repositoryPath|"workspace"|unrelated/);
+		await assert.rejects(f.store.ownership.evolution(binding, change(peer.path)), /ownership/);
+		assert.deepEqual(await f.store.ownership.publicationSource(binding), { status: "unknown" });
+		jj(w.path, "bookmark", "create", "borrowed", "-r", w.base);
+		assert.deepEqual(await f.store.ownership.publicationSource(binding, "borrowed"), { status: "unknown" });
+		await f.store.close();
+		reopened = new SharedWorkspaceStore(join(f.root, "home"));
+		const after = await reopened.ownership.evolution(binding, owned);
+		assert.deepEqual(after.creation, history.creation);
+		assert.deepEqual(after.revisions, history.revisions);
+	} finally {
+		await reopened?.close();
+		await f.store.close();
+		f.close();
+	}
+});
+
+test("targeted evolution keeps squashed ownership and follows rebase without adopting predecessors", async () => {
+	const f = fixture();
+	try {
+		const w = await f.store.create(f.source, f.path(), undefined, undefined, scope);
+		const repositoryId = await jjRepositoryIdentity(w.shared!.repository);
+		const binding = (await f.store.ownership.binding(repositoryId, w.shared!.name))!.binding;
+		const first = change(w.path);
+		writeFileSync(join(w.path, "a.txt"), "first\n");
+		jj(w.path, "commit", "-m", "first");
+		const second = change(w.path),
+			firstRevision = commit(w.path, first);
+		writeFileSync(join(w.path, "b.txt"), "second\n");
+		jj(w.path, "describe", "-m", "second");
+		await f.store.observeOwnership(w.path, w.shared!);
+		jj(w.path, "squash", "--from", first, "--into", second, "-m", "combined");
+		await f.store.observeOwnership(w.path, w.shared!);
+		const gone = await f.store.ownership.evolution(binding, first);
+		assert.equal(gone.current, "absent");
+		assert.equal(gone.seed, "retained-observation");
+		assert.ok(gone.revisions.some((r) => r.commitId === firstRevision));
+		const beforeRebase = commit(w.path, second);
+		const peer = await f.store.create(f.source, f.path("peer"));
+		jj(peer.path, "describe", "-m", "independent base");
+		const borrowed = change(peer.path);
+		jj(w.path, "rebase", "-r", second, "-d", borrowed);
+		const before = head(w.path);
+		const evolved = await f.store.ownership.evolution(binding, second);
+		assert.ok(evolved.revisions.some((r) => r.commitId === beforeRebase));
+		assert.ok(evolved.revisions.some((r) => r.commitId === commit(w.path, second)));
+		assert.equal(head(w.path), before);
+		assert.equal((await f.store.ownership.get(repositoryId, borrowed)).ownership.status, "unknown");
+	} finally {
+		await f.store.close();
+		f.close();
+	}
+});
+
 test("new opt-in workspace records exact scope, discovers multiple stacked changes and survives reopen", async () => {
 	const f = fixture();
 	let reopened: SharedWorkspaceStore | undefined;

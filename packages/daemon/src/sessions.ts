@@ -12843,6 +12843,7 @@ ${run.excerpt}`,
 				"diagnostics.proposal": "diagnostics.proposal.result",
 				"artifact.reference.get": "artifact.reference.result",
 				"source.scope": "source.scope.result",
+				"publication.source": "publication.source.result",
 			} as const;
 			const resultType = denied[packet.type as keyof typeof denied];
 			if (resultType && "callId" in packet) {
@@ -13618,12 +13619,58 @@ ${run.excerpt}`,
 				// Startup replays the stored audit; only a newer push moves the high-water mark.
 				const action = packet.action;
 				const push = action.kind === "push" || (action.kind === undefined && /\bpush$/.test(action.summary));
-				if (push && Number.isFinite(action.at) && action.at > (meta.agentPushedAt ?? -1)) {
+				if (
+					push &&
+					action.publication?.evidence !== "command-dispatch" &&
+					Number.isFinite(action.at) &&
+					action.at > (meta.agentPushedAt ?? -1)
+				) {
 					meta.agentPushedAt = action.at;
 					void this.save(meta);
 					this.emit(meta, worker);
 				}
 			}
+			return;
+		}
+		if (packet.type === "publication.source") {
+			const authorize = () => {
+				if (
+					this.workers.get(meta.id) !== worker ||
+					meta.mode !== "build" ||
+					!meta.projectId ||
+					this.isMissionCoordinator(meta.id)
+				)
+					throw new Error("Publication custody unavailable");
+			};
+			void (async () => {
+				try {
+					authorize();
+					const binding = await this.retainedWorkerBinding(
+						meta.id,
+						this.missions?.membership(meta.id)?.missionId,
+						meta.projectId!,
+						authorize,
+						!!meta.retainedScope,
+					);
+					const result = await this.sharedWorkspaces.ownership.publicationSource(binding, packet.bookmark);
+					const current = await this.retainedWorkerBinding(
+						meta.id,
+						this.missions?.membership(meta.id)?.missionId,
+						meta.projectId!,
+						authorize,
+						!!meta.retainedScope,
+					);
+					if (JSON.stringify(binding) !== JSON.stringify(current)) throw new Error("Publication custody changed");
+					worker.send({ type: "publication.source.result", callId: packet.callId, result });
+				} catch {
+					if (this.workers.get(meta.id) === worker)
+						worker.send({
+							type: "publication.source.result",
+							callId: packet.callId,
+							result: { status: "unknown" },
+						});
+				}
+			})();
 			return;
 		}
 		if (packet.type === "mcp.used") {
