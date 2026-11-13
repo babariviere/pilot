@@ -87,6 +87,38 @@ test("a held coordinator or a changed mission refuses honestly and keeps the wor
 	expect(counts(app)).toBe("Writes: 0 · Sends: 0 · Checks: 0");
 });
 
+test("a thread missing from the last read shows why the next read failed, with Read again, and keeps that read", async () => {
+	const app = await mission();
+	await app.press("Open a gone thread");
+	await app.waitFor("id:thread-absent");
+	// The read worked: the thread is just not in it.
+	expect(app.shows("This thread is not in the latest read. Your words for it stay.")).toBe(true);
+	expect(app.shows("id:thread-absent-failed")).toBe(false);
+	await app.press("Unreadable");
+	await app.press("id:threads-read");
+	await app.waitFor("id:thread-absent-failed");
+	expect(
+		app.shows(
+			"Pilot could not reach its service. This thread is not in Pilot's last read, so Pilot cannot show it now. Your words for it stay.",
+		),
+	).toBe(true);
+	expect(app.shows("This thread is not in the latest read. Your words for it stay.")).toBe(false);
+	await app.press("Denied");
+	await app.press("id:threads-read");
+	await app.waitFor(
+		"This Pilot service cannot show mission threads yet. This thread is not in Pilot's last read, so Pilot cannot show it now. Your words for it stay.",
+	);
+	expect(app.shows("id:threads-read")).toBe(true);
+	// The mission still shows its whole earlier read, marked as such.
+	await app.press("id:back");
+	await app.waitFor("id:mission-threads");
+	expect(app.shows("Which file types are in scope?")).toBe(true);
+	expect(app.shows("This Pilot service cannot show mission threads yet. What shows is from Pilot's last read.")).toBe(
+		true,
+	);
+	expect(counts(app)).toBe("Writes: 0 · Sends: 0 · Checks: 0");
+});
+
 test("a stale or refused send changes nothing and keeps the words", async () => {
 	const app = await thread();
 	await app.type("id:thread-reply", "Keep me");

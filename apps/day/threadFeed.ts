@@ -68,6 +68,8 @@ export type MissionThreads = {
 	availability: "idle" | "reading" | "live" | "unavailable";
 	/** Why nothing is shown, or why what shows is from an earlier read. */
 	reason: string;
+	/** Why the latest read failed, in one sentence, or "" when it worked. An earlier read may still show. */
+	failed: string;
 	snapshot: ThreadsSnapshot | null;
 	ops: ThreadOp[];
 	/** A write is on its way. */
@@ -176,6 +178,8 @@ export function threadsReason(refusal: Refusal): string {
 			return "This Pilot service cannot show mission threads yet.";
 		case "invalid":
 			return "Pilot's service answered in a way this app does not understand.";
+		case "lost":
+			return "Pilot asked its service for this mission's threads and heard nothing back.";
 		default:
 			return "Pilot could not read this mission's threads.";
 	}
@@ -380,7 +384,7 @@ export function outcomeOf(x: unknown, write?: ThreadWrite): WriteResult {
 	}
 }
 
-const EMPTY: MissionThreads = { availability: "idle", reason: "", snapshot: null, ops: [], writing: false };
+const EMPTY: MissionThreads = { availability: "idle", reason: "", failed: "", snapshot: null, ops: [], writing: false };
 
 /** The connected window's threads: its native root's own project. */
 export class ConnectedThreads implements ThreadsSource {
@@ -414,14 +418,12 @@ export class ConnectedThreads implements ThreadsSource {
 	state(): ThreadsState {
 		const missions: Record<string, MissionThreads> = {};
 		for (const [id, m] of this.#missions) {
-			const reason = m.refusal
-				? m.snapshot
-					? `${threadsReason(m.refusal)} What shows is from Pilot's last read.`
-					: threadsReason(m.refusal)
-				: "";
+			const failed = m.refusal ? threadsReason(m.refusal) : "";
+			const reason = failed && m.snapshot ? `${failed} What shows is from Pilot's last read.` : failed;
 			missions[id] = {
 				availability: m.snapshot ? "live" : m.refusal ? "unavailable" : m.asked ? "reading" : "idle",
 				reason,
+				failed,
 				snapshot: m.snapshot,
 				ops: m.ops.map((o): ThreadOp => (this.#checking.has(o.operationId) ? { ...o, state: "checking" } : o)),
 				writing: this.#writing.has(id),

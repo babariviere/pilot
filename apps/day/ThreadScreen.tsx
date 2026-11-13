@@ -632,6 +632,7 @@ function Composer(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 		);
 		if (r?.status === "accepted") void props.mirror.source.history(props.missionId, props.topic.id);
 	};
+	// Not while an input method composes here: see the Escape binding in ThreadScreen.
 	keymap.bind(
 		"mod+enter",
 		() => {
@@ -707,6 +708,47 @@ function Composer(props: { mirror: ThreadsMirror; missionId: string; topic: Topi
 	);
 }
 
+/**
+ * The thread on screen is not in what shows. Says which: still reading,
+ * not in the latest read, or the read failed (and then why). A failed read
+ * keeps the earlier one; it is never shown as the thread being gone.
+ */
+function Absent(props: { mirror: ThreadsMirror; missionId: string; m: MissionThreads }) {
+	const failed = () => props.m.availability === "unavailable" || (props.m.snapshot !== null && props.m.failed !== "");
+	const words = () => {
+		if (props.m.availability === "unavailable") return `${props.m.reason} Your words for this thread stay.`;
+		if (!props.m.snapshot) return "Reading this thread…";
+		if (props.m.failed)
+			return `${props.m.failed} This thread is not in Pilot's last read, so Pilot cannot show it now. Your words for it stay.`;
+		return "This thread is not in the latest read. Your words for it stay.";
+	};
+	return (
+		<View testID="thread-absent" class="gap-3">
+			<If when={failed()} else={<Text class="text-base text-muted-foreground">{words()}</Text>}>
+				<View class="flex-row items-start gap-2.5">
+					<View class="pt-2">
+						<Mark kind="unknown" />
+					</View>
+					<Text testID="thread-absent-failed" role="alert" class="flex-1 text-base text-foreground">
+						{words()}
+					</Text>
+				</View>
+			</If>
+			<If when={props.m.availability === "unavailable" || props.m.snapshot}>
+				<View class="flex-row">
+					<Action
+						label="Read again"
+						icon="refresh"
+						testID="threads-read"
+						accessibilityLabel="Read this mission's threads again. This sends nothing."
+						onPress={() => void props.mirror.source.read(props.missionId)}
+					/>
+				</View>
+			</If>
+		</View>
+	);
+}
+
 /** A thread's page over its mission. Opening it only reads. */
 export function ThreadScreen(props: { day: Day; missionId: string; topicId: string }) {
 	const mirror = props.day.threads as ThreadsMirror;
@@ -717,6 +759,11 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 	const key = () => draftKey(props.missionId, props.topicId);
 	// Escape closes an open link list first, then goes back to the mission.
 	// It works from the reply box too; the draft stays.
+	// While an input method composes in the reply box or a title (marked
+	// text), NSH 0.5's macOS key monitor gives every key to the input
+	// method and fires no binding, `when: "always"` included: Escape then
+	// cancels the composition and stays on the page. Headless tests cannot
+	// compose, so only a native check with a real input method shows it.
 	keymap.bind(
 		"escape",
 		() => {
@@ -753,31 +800,7 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 			}}
 		>
 			<View testID="thread" class="w-full max-w-2xl self-center gap-8 px-6 pb-24 pt-10">
-				<If
-					when={topic()}
-					else={
-						<View class="gap-3">
-							<Text class="text-base text-muted-foreground">
-								{m().availability === "unavailable"
-									? `${m().reason} Your words for this thread stay.`
-									: m().snapshot
-										? "This thread is not in the latest read. Your words for it stay."
-										: "Reading this thread…"}
-							</Text>
-							<If when={m().availability === "unavailable" || m().snapshot}>
-								<View class="flex-row">
-									<Action
-										label="Read again"
-										icon="refresh"
-										testID="threads-read"
-										accessibilityLabel="Read this mission's threads again. This sends nothing."
-										onPress={() => void mirror.source.read(props.missionId)}
-									/>
-								</View>
-							</If>
-						</View>
-					}
-				>
+				<If when={topic()} else={<Absent mirror={mirror} missionId={props.missionId} m={m()} />}>
 					<Each of={topic() ? [topic() as Topic] : []} key={(t) => t.id}>
 						{(t) => (
 							<View class="gap-8">

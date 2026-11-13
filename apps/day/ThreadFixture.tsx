@@ -1,13 +1,15 @@
 // Headless fixture only. No daemon, worker, provider or storage. Mission
 // threads over scripted topics (threadDemo.ts): `Next …` picks what the next
 // write does, "Hold" makes the coordinator unable to take a message,
-// "Coordinator replies" writes its answer, and "Save and reopen" keeps the
-// window as a close or an update saves it and shows it again fresh.
+// "Unreadable" and "Denied" make reads fail, "Open a gone thread" opens one
+// no read has, "Coordinator replies" writes its answer, and "Save and reopen"
+// keeps the window as a close or an update saves it and shows it again fresh.
 import { mount, signal, Text, View } from "nsh";
 import { DayScreen } from "./DayScreen";
 import { openDay } from "./day";
 import { ScriptedThreads, type ThreadsDemoNext } from "./threadDemo";
 import { mirrorThreads } from "./threadFeed";
+import { openThread } from "./threadView";
 import { Action } from "./ui";
 import { captureView, restoreView, startFresh } from "./updateView";
 
@@ -28,6 +30,14 @@ mount(() => (
 			</Each>
 			<Action label="Hold" onPress={() => threads.held.set(true)} />
 			<Action label="Unreadable" onPress={() => threads.unreadable.set(true)} />
+			<Action
+				label="Denied"
+				onPress={() => {
+					threads.refusal.set("denied");
+					threads.unreadable.set(true);
+				}}
+			/>
+			<Action label="Open a gone thread" onPress={() => openThread("search", "search-gone")} />
 			<Action label="Changed elsewhere" onPress={() => threads.changeElsewhere("search")} />
 			<Action label="Coordinator replies" onPress={() => threads.reply("search", "PDFs can wait. I noted it.")} />
 			<Action

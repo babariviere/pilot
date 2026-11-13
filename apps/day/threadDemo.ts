@@ -5,6 +5,7 @@
 // its own: a sent message is not an answer. `writes`, `sends` and `checks`
 // count calls, to prove nothing is resent.
 import { signal } from "nsh";
+import type { Refusal } from "./bridge";
 import {
 	acceptedWords,
 	type HistoryEntry,
@@ -101,6 +102,8 @@ export class ScriptedThreads implements ThreadsSource {
 	readonly next = signal<ThreadsDemoNext>("accept");
 	readonly held = signal(false);
 	readonly unreadable = signal(false);
+	/** Why an unreadable read fails. */
+	readonly refusal = signal<Refusal>("offline");
 	readonly writes = signal(0);
 	readonly sends = signal(0);
 	readonly checks = signal(0);
@@ -146,13 +149,11 @@ export class ScriptedThreads implements ThreadsSource {
 		const missions: Record<string, MissionThreads> = {};
 		for (const [id, m] of this.#missions) {
 			const refused = this.#refused.has(id);
+			const failed = refused ? threadsReason(this.refusal()) : "";
 			missions[id] = {
 				availability: m.shown ? "live" : refused ? "unavailable" : "reading",
-				reason: refused
-					? m.shown
-						? `${threadsReason("offline")} What shows is from Pilot's last read.`
-						: threadsReason("offline")
-					: "",
+				reason: failed && m.shown ? `${failed} What shows is from Pilot's last read.` : failed,
+				failed,
 				snapshot: m.shown ? this.#snapshot(id, m) : null,
 				ops: m.ops.map((o) => ({ ...o })),
 				writing: m.writing,
