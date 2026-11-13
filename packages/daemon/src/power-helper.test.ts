@@ -5,11 +5,10 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { developmentPowerHelperPath, packagedPowerHelperPath } from "./power-helper.ts";
 
-test("development power resolution prefers standalone Rust and retains Swift fallback", async () => {
+test("development power resolution uses standalone Rust on both platforms", async () => {
 	const root = await mkdtemp(join(tmpdir(), "power-helper-path-"));
 	try {
-		const legacy = join(root, "apps/macos/build/Pilot.app/Contents/Helpers/PilotPower");
-		assert.equal(developmentPowerHelperPath(root, "darwin"), legacy);
+		assert.equal(developmentPowerHelperPath(root, "darwin"), join(root, "apps/power/target/release/PilotPower"));
 		assert.equal(developmentPowerHelperPath(root, "linux"), join(root, "apps/power/target/release/PilotPower"));
 		for (const profile of ["debug", "release"]) {
 			const binary = join(root, "apps/power/target", profile, "PilotPower");

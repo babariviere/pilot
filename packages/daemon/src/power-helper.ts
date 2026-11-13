@@ -80,14 +80,13 @@ export function packagedPowerHelperPath(source: string, platform: string): strin
 		return resolve(source, "../../..", "bin/PilotPower");
 }
 
-/** Prefer the standalone helper; keep the Swift development build during coexistence. */
-export function developmentPowerHelperPath(root: string, platform: string = process.platform): string {
+/** Development uses the standalone Rust helper, independent of either GUI. */
+export function developmentPowerHelperPath(root: string, _platform: string = process.platform): string {
 	for (const profile of ["release", "debug"]) {
 		const binary = resolve(root, "apps/power/target", profile, "PilotPower");
 		if (existsSync(binary)) return binary;
 	}
-	if (platform !== "darwin") return resolve(root, "apps/power/target/release/PilotPower");
-	return resolve(root, "apps/macos/build/Pilot.app/Contents/Helpers/PilotPower");
+	return resolve(root, "apps/power/target/release/PilotPower");
 }
 
 export const openPowerHelper: PowerHelperFactory = async (sample, failed) => {

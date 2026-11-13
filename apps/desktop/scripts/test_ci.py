@@ -419,6 +419,8 @@ printf '{"synthetic":true}\n' > target/ci-linux-gui-fixture.json
                      "apps/power/src/main.rs", "apps/power/Cargo.lock",
                      "apps/macos/Sources/PilotSystemEvents/main.swift",
                      "apps/macos/Sources/PilotPowerSupport/SleepOverride.swift",
+                     "apps/macos/Resources/LegacyApp/HomeSky.png",
+                     "apps/macos/Resources/LegacyApp/HomeSkyNight.png",
                      "apps/desktop/fixtures/reply.md", "apps/desktop/visual-worker/build.rs",
                      "apps/macos/Sources/PilotVisualEngine/include/pilot_visual_engine.h",
                      "packages/artifacts/src/visual/runtime.js", "packages/protocol/fixtures/visual/conformance.json",

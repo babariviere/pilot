@@ -44,6 +44,7 @@ def is_input(path):
         return False
     roots = ('apps/desktop/', 'apps/power/', 'apps/macos/Sources/PilotSystemEvents/',
              'apps/macos/Sources/PilotPowerSupport/', 'apps/macos/Sources/PilotVisualEngine/',
+             'apps/macos/Resources/LegacyApp/',
              'packages/artifacts/src/visual/', 'packages/protocol/fixtures/visual/', '.cargo/')
     workflows = {'.github/workflows/tests.yaml', '.github/workflows/pr.yaml',
                  '.github/workflows/main.yaml', '.github/workflows/desktop-rust.yml'}

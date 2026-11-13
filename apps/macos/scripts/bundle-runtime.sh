@@ -23,7 +23,7 @@ cp "$node_root/bin/node" "$stage/runtime/node/bin/node"
 cp "$node_root/LICENSE" "$stage/runtime/node/LICENSE"
 runtime_source=""
 if [ "$(/usr/bin/git -C "$repo" rev-parse --show-toplevel 2>/dev/null || true)" = "$repo" ]; then
-	# A Swift bundle needs the same boot-bound build/root proof as Next. Stamp only
+	# Bundles need the same boot-bound build/root proof. Stamp only
 	# committed inputs, not a dirty checkout relabeled with HEAD's identity.
 	runtime_source="$(/usr/bin/git -C "$repo" rev-parse HEAD)"
 	/usr/bin/git -C "$repo" archive "$runtime_source" package.json pnpm-lock.yaml pnpm-workspace.yaml patches packages \

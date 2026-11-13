@@ -11,8 +11,6 @@ Refresh deliberately after reviewing producer changes, never by hand-editing the
 PILOT_REFRESH_MISSION_FIXTURE=1 node --test --test-force-exit scripts/test-native-mission-producer.test.ts
 ```
 
-`LogicalMissionCatalogTests.swift` consumes these same payloads and tests compatibility with only
-the additive logical-list/total fields removed. Cases cover aliased home labels, distinct homes,
-archived canonical precedence, complete/incomplete and tied sequences, the provenance cap,
-task-only/provisional evidence, self-replicas without a definition and clipped identity totals.
-The JSON is outside SwiftPM test source directories so it is not an unhandled target resource.
+The former `LogicalMissionCatalogTests.swift` consumer is removed with the Swift GUI.
+The producer test still checks the saved payload. Keep this backend fixture, the
+workspace-terminal harness and the loopback WebSocket fixture independently of the old app.

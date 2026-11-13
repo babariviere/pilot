@@ -9,8 +9,8 @@ Pilot runs background [pi](https://github.com/earendil-works/pi) agents on durab
 - `packages/kernel`: one worker process per session. Owns the Harness, its SQLite storage and the
   native Pi SDK kernel that loads the user's pi packages and extensions.
 - `packages/daemon`: `pilotd`. HTTP + WebSocket API, session registry and worker supervision.
-- `apps/macos`: SwiftUI app (SwiftPM, Command Line Tools only). `PilotCore` mirrors `packages/protocol`;
-  change both together.
+- `apps/desktop`: current GPUI desktop app. Keep it usable until Day acceptance and authorized cutover.
+- `apps/macos`: shared native helpers, C visual engine, assets and runtime/release scripts, not a GUI app.
 - `apps/day`: Pilot Day, the upcoming Native Shell TSX desktop app (mock data, not the default yet). Run it with
   `pnpm day run`; [apps/day/README.md](apps/day/README.md) has the checks. `apps/day/fixtures` is optional evidence.
 
@@ -32,11 +32,8 @@ Docs to use when the task touches them:
 - The Harness owns history and the model loop. The native SDK session never runs its own loop.
 - Native tools are replay-unsafe: a crash during a tool yields an interrupted result.
 - Keep the daemon bound to loopback until authentication exists.
-- Swift state: use `@State` with plain values for view-local UI state (hover, expansion, form fields, busy
-  flags). Keep `@StateObject` for models that own work, subscriptions or a lifetime, and for holders a parent
-  shares with children, because `@State` re-evaluates its initial value on every view init.
-- Build Swift through `apps/macos/scripts/{build,test,bundle}.sh`. With Command Line Tools only, the macOS 27
-  SDK's `@State` macro has no plugin, so `scripts/swift-env.sh` falls back to an older installed SDK.
+- Shared Swift helpers build through `apps/desktop/scripts/build-native-helpers.sh`; the obsolete Swift GUI
+  is removed. `apps/macos/Package.swift` now covers helpers only. Preserve shared consumers in `apps/macos`.
 - Show user-visible UI changes with a native visual artifact built from mock data (the `pilot-artifacts` skill has
   the details). It is a mockup, not the real views: say so, and say when no visual check was possible.
 
@@ -67,9 +64,8 @@ Docs to use when the task touches them:
   contracts above take precedence.
 - Keep screens calm and focused: one primary action, progressive disclosure for the rest, and existing
   layouts, terminology and hierarchy. DESIGN.md explains the intent.
-- `apps/macos/Sources/Pilot/Theme.swift` and the shared components are the design system. Reuse their tokens
-  and components, add missing ones centrally with a note on their intended use, and evolve them incrementally
-  rather than adding one-off styles or a parallel system.
+- Reuse each native app's shared tokens and components. Add missing tokens centrally with a note on their
+  intended use rather than adding one-off styles or a parallel system.
 
 ## Formatting and checks
 
@@ -88,8 +84,8 @@ Docs to use when the task touches them:
   quick feedback; `pnpm test` remains the complete gate, including integration and stress groups.
 - Local checks use temporary directories and faux model providers, not real accounts. Run the ones that cover
   your change, fix failures it causes, and rerun them without asking: `pnpm typecheck`, `pnpm test` (two
-  test files at a time; `PILOT_TEST_CONCURRENCY=4 pnpm test` when the machine has headroom), and for Swift
-  changes `apps/macos/scripts/test.sh` and `apps/macos/scripts/build.sh`.
+  test files at a time; `PILOT_TEST_CONCURRENCY=4 pnpm test` when the machine has headroom). Use the desktop
+  and Day verification wrappers documented in their READMEs for native changes.
 
 ## Repository safety
 

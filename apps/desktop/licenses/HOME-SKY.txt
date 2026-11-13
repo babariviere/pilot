@@ -1,4 +1,4 @@
-Home sky scenes (embedded by src/home_sky.rs from apps/macos/Sources/Pilot/Resources)
+Home sky scenes (embedded by src/home_sky.rs from apps/macos/Resources/LegacyApp)
 
 HomeSky.png
 White Clouds and Blue Sky, Willfried Wende

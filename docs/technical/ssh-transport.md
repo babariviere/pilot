@@ -1,5 +1,9 @@
 # Managed SSH transport
 
+Historical reference for the removed Swift GUI transport. The cited Swift files
+and verification commands no longer exist. Current GPUI/Day transport ownership
+and checks live in their app documentation; this document grants no setup authority.
+
 `apps/macos/Sources/PilotCore/SSHTunnel.swift` is transport infrastructure, not remote setup or host
 routing. It does not change the local daemon connection or expose a remote feature in the UI.
 

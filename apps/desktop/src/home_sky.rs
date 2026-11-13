@@ -3,12 +3,12 @@
 //! to the band, their lightness ordered-dithered in hard square cells, and the
 //! band's foot dissolves cell by cell into the page. Pixels are produced off the
 //! UI thread once per size/appearance and painted 1:1 in device pixels.
-//! Images: Pexels License, see apps/macos/Sources/Pilot/Resources/HomeScenes-CREDITS.txt.
+//! Images: Pexels License, see apps/macos/Resources/LegacyApp/HomeScenes-CREDITS.txt.
 use gpui_kit::{App, Corners, IntoElement, RenderImage, Styled, Task, Window, canvas, px};
 use std::{cell::RefCell, rc::Rc, sync::Arc, sync::OnceLock};
 
-const DAY: &[u8] = include_bytes!("../../macos/Sources/Pilot/Resources/HomeSky.png");
-const NIGHT: &[u8] = include_bytes!("../../macos/Sources/Pilot/Resources/HomeSkyNight.png");
+const DAY: &[u8] = include_bytes!("../../macos/Resources/LegacyApp/HomeSky.png");
+const NIGHT: &[u8] = include_bytes!("../../macos/Resources/LegacyApp/HomeSkyNight.png");
 /// Band height in points; Home's title sits in its dissolving foot.
 pub(crate) const HEIGHT: f32 = 220.;
 const CELL: f32 = 2.5;

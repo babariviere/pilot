@@ -1,5 +1,9 @@
 # Initial Linux runtime setup over SSH
 
+Historical Swift GUI setup reference. The Swift client and its tests are removed;
+the backend contracts and stored setup records remain. Use current native app
+documentation for supported setup paths, not the former Swift verification commands.
+
 > Historical transport/design reference. Remote devboxes are retired in the app and production daemon.
 > See [retained data and boundaries](devboxes.md). The workflows below are not enabled product features.
 

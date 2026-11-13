@@ -4,17 +4,20 @@ import { access } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ServiceUnavailable } from "./errors.ts";
 import type { SystemEventsHelperFactory } from "./system-events-detection.ts";
 import { parseSystemPowerState } from "./system-power.ts";
 
 export function systemEventsHelperPath(): string {
 	const source = dirname(fileURLToPath(import.meta.url));
-	return (
-		process.env.PILOT_SYSTEM_EVENTS_HELPER_APP ??
-		(source.includes("/Contents/Resources/runtime/")
-			? resolve(source.split("/Contents/Resources/runtime/")[0], "Contents/Helpers/PilotSystemEvents.app")
-			: resolve(source, "../../../apps/macos/build/Pilot.app/Contents/Helpers/PilotSystemEvents.app"))
-	);
+	const app = process.env.PILOT_SYSTEM_EVENTS_HELPER_APP ?? packagedSystemEventsHelperPath(source);
+	if (!app) throw new ServiceUnavailable("Set PILOT_SYSTEM_EVENTS_HELPER_APP to a built SystemEvents helper app");
+	return app;
+}
+
+export function packagedSystemEventsHelperPath(source: string): string | undefined {
+	if (source.includes("/Contents/Resources/runtime/"))
+		return resolve(source.split("/Contents/Resources/runtime/")[0], "Contents/Helpers/PilotSystemEvents.app");
 }
 
 /** LaunchServices gives the helper an independent application lifetime from pilotd. */

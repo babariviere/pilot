@@ -609,7 +609,7 @@ test("coordinator command policy blocks writes with global flags and nested call
 		"cmake --build build",
 		"pytest tests",
 		"xcodebuild test",
-		"apps/macos/scripts/test.sh",
+		"fixture/scripts/test.sh",
 	];
 	for (const command of mutations) {
 		assert.ok(coordinatorMutation(command), command);

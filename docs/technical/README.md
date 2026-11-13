@@ -132,7 +132,6 @@ out of user guides. Link to an existing contract rather than duplicating it.
 - [Telemetry starter queries](telemetry-starter-queries.md)
 - [Telemetry and diagnostics verification](telemetry-verification.md)
 - [Node telemetry foundation](node-telemetry.md)
-- [Swift telemetry foundation](swift-telemetry.md)
 - [Feature-adoption catalog](feature-adoption.md)
 
 ## Performance and experiments

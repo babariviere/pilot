@@ -77,44 +77,16 @@ server routes. Normal daemon startup supplies their stores and app capability se
 refuses because production required-check and fresh-agent-review producers are absent, not because
 of a feature flag. This test does not invent passing prerequisites or enable those producers.
 
-### Swift linting
-
-Run `apps/macos/scripts/lint.sh` for the same strict SwiftLint gate used by macOS CI.
-It checks first-party sources, tests and `Package.swift`, excluding vendored code and build output.
-`apps/macos/.swiftlint.yml` opts into a small set of correctness rules, not formatting, naming or
-file-size limits. There is no baseline hiding existing violations; every finding fails the gate.
-
-The wrapper uses SwiftLint 0.65.1. It reuses an installed matching version, or downloads the official
-portable binary into a temporary directory and verifies its pinned SHA-256 before extracting it.
-Set `SWIFTLINT_BIN` to an absolute path to reuse a local binary; a version mismatch fails rather than
-changing the rules.
-The check needs no Swift build or package resolution.
-Formatting (`swift format`) and unused-code analysis (Periphery) remain separate, optional tools.
-
 ### Heavy verification
 
-On CI, the Swift output guard captures one live stack if an already-started test runner emits no
-output for 60 seconds. Compilation silence does not arm it. Discovery is scoped to that wrapper's
-descendants, with a five-second process-list deadline and at most two two-second samples (each with
-a ten-second command deadline). This is diagnostic only: it does not cancel a test, extend CI's
-deadline, suppress an assertion or change the output guard's result. Sampling failures are nonfatal.
-The log contains a bounded excerpt; full traces are uploaded as `swift-test-stalls` for three days.
-Local wrappers do not enable sampling. Native Swift tests remain CI-only when working under that
-verification constraint; the sampler's clock/process/output tests use Python mocks.
-The shell passes its owner PID explicitly, and `ps -ww` preserves long Xcode executable paths. If
-no supported runner is found, the log includes at most 32 owned descendant command basenames, never
-arguments or unrelated processes, so a missing runner match is diagnosable instead of silently empty.
+Iterate with affected test files. Run relevant full suites once before publishing,
+not after each edit. Use background jobs for long checks. Coordinate native
+compilation so independent workspaces do not compete for the compiler lane.
 
-Iterate with affected test files. Run the relevant full suites once before publishing, not after each
-edit. Use background jobs for long checks. Builds and suites run directly, without a machine-wide queue,
-so checks from several checkouts can run in parallel.
-
-Use `apps/macos/scripts/{build,test,bundle}.sh` rather than raw `swift build` / `swift test`.
-Per-command limits (`PILOT_SWIFT_JOBS`, `PILOT_TEST_CONCURRENCY`) bound each run.
-
-Every first-party Swift target treats compiler warnings as errors in all configurations, including
-tests and helper executables. This policy is set in `apps/macos/Package.swift`, so local builds and CI
-enforce the same gate without promoting warnings from third-party packages to errors.
+The obsolete Swift GUI and its lint/test/cache tooling are removed. A dependency-free
+helper-only SwiftPM package, shared SystemEvents sources and Rust sleep-parity inputs remain;
+see [shared macOS support](../../apps/macos/README.md). Use the GPUI and Day
+verification wrappers for native changes, not the removed Swift GUI suite.
 
 ### Local measurements
 
@@ -608,104 +580,3 @@ adapters and parsers through them. The versioned JSON format is:
 
 Keep small inline fakes for dynamic scenarios and error injection. Cassettes complement those tests;
 they do not replace real daemon HTTP/WebSocket tests or certify compatibility with a live provider.
-
-## Swift checks and CI caches
-
-Scoped-model sync fixtures run together in a separate process, away from unrelated AppKit run loops.
-Their bounded waits and fault assertions are unchanged. The two native model selector/Save interactions each
-run alone. Every scheduler fixture and native interaction must start, so stale filters cannot drop coverage.
-
-Continue using `apps/macos/scripts/test.sh` and `apps/macos/scripts/build.sh`, which select the supported
-SDK and test macro plugin. After a successful build, `apps/macos/scripts/test.sh --skip-build --filter
-<name>` is appropriate for repeating an affected test without rebuilding.
-
-On CI, `run-swift-tests.py` supervises each SwiftPM invocation with a ten-minute build/startup
-budget and a separate three-minute budget starting at each native test runner's start marker.
-Output activity does not extend that deadline. On timeout it prints bounded stack samples of its
-own native runners, terminates the private session's process groups (including helper groups), and
-fails with status 124. Cancellation also cleans up those groups.
-The outer step deadline remains a last resort for the entire chain. This diagnoses/bounds hangs;
-it does not make a hung test pass or replace its existing assertions and deadlines.
-
-The output guard's earlier, diagnostic-only silence sample remains separate from that hard deadline:
-60 seconds without output after a native runner starts can capture a bounded stack without terminating
-anything. Output resets this silence timer, not the watchdog's three-minute deadline. The shared
-`check_output` parser supports in-process verification with sampling disabled by default; CLI sampling
-always closes its helper thread, including if the output stream fails. Both guards retain failure and
-required-start checks. The watchdog's timeout sampling and cleanup remain unchanged.
-
-The packaging tests verify the full missing-start/failure matrix through the production output
-parser in-process. A complete shell-wrapper run still checks every partition's filter, required-start
-arguments and build reuse, with representative early/middle/late failures checking shell propagation.
-Do not replay all preceding successful shell partitions for every parser permutation.
-
-Mounted button checks must not require backing `NSButton`s or populated accessibility children: SwiftUI
-can render the same control without either in a headless test process. `ControlGeometry` (and the existing
-repair-action anchors) provides only the control's bounds and inherited enabled state. Put the anchor inside
-the control's `.disabled` modifier. `NativeTestSupport.NativeInput` sends chronological mouse events through
-the real window at those bounds; it never calls a copied action or bypasses disabled handling. Keep action,
-duplicate-request and enabled-state assertions. The support target is not part of the app's dependencies.
-Input awaits a main-run-loop rendering turn before dispatch (hit-region publication) and after it (deferred
-SwiftUI actions), rather than assuming that an anchor's creation means the button is already interactive.
-Both mounted-test binaries link the shared async-main run-loop workaround. AppKit can stop that loop while
-tests are still pending; the workaround restarts it until Swift Testing exits with the actual test result.
-The wrapper runs each pointer fixture alone, with a required-start guard: AppKit mouse tracking pumps nested
-run loops, where another fixture ordering or closing a window can consume or redirect the synthetic input.
-
-Pin the appearance for pixel thresholds that describe one palette. For Core Animation indicators, sample
-the real presentation-layer opacity/transforms rather than `cacheDisplay`, which redraws the unchanged model
-layer. A fixture window can supply explicit visibility so locked/headless desktops still exercise animation
-and occlusion shutdown without changing production visibility policy.
-
-A full native test run executes the WebKit content-measurement matrix in a separate test process after
-the other tests, reusing the same build. This prevents unrelated MainActor/AppKit
-fixtures from consuming its one-minute budget. All clipping, resize, visible-overflow and Mermaid assertions
-remain enabled. The output guard requires that the isolated test actually starts, so a stale filter cannot
-silently drop coverage. Explicit `--filter`, `--skip` and listing requests remain a single scoped invocation.
-
-The timed Stop-routing tests also run in a separate process. This keeps unrelated UI fixtures' nested
-MainActor run loops from consuming their two-minute deadlines. Every selected Stop function must start;
-their assertions and time limits are unchanged.
-
-SwiftPM drivers can combine test targets in one runner or launch separate target binaries (as observed
-on CI and locally respectively). The wrapper therefore excludes `PilotUITests` from the broad scheduler/core pass and runs its
-remaining tests explicitly in a later UI-only process. The long native visual-text reflow/shrink matrix
-runs alone, retaining its one-minute deadline. Required-start guards cover both the matrix and the UI batch;
-the UI batch excludes all earlier isolated fixtures so each function runs once. Unknown-target Stop rejection
-joins the other Stop fixtures, not the native layout batch.
-
-The repair-footer fixtures and mounted settings save bar each run in a separate process. Visual event
-ordering/coalescing, mission reconnect navigation and repository branch-cache scheduling fixtures run
-together away from those native layout/run loops. Their deadlines, cache TTLs and assertions are unchanged;
-the output guard requires every selected function to start, and explicit filters still use one invocation.
-The Local usage HTTP consumer fixture joins this scheduler partition. Its one-minute deadline, pinned-host
-checks and no-devbox-fanout assertions remain unchanged; it is excluded from the broad native UI batch.
-
-The CI-only keyboard journeys run last, one journey per process. Each activates `NSApp`'s process-global key
-window and pumps nested main run loops; separate processes prevent the tests from interleaving at those yields
-and stealing focus from each other. A runner without a key window records known focus issues, but still executes
-the journey. On CI both journeys must start.
-
-CI runs native Node, packaging and Swift tests in one `macos` job, because the free plan runs only a few
-macOS jobs at once. PRs skip the Swift steps when they change nothing under `apps/macos/`, `pr.yaml`,
-`tests.yaml` or `package.json`. PRs that run Swift package the debug binaries from
-the test build (`BUNDLE_PREBUILT=1 CONFIGURATION=debug bundle.sh`) and smoke-test that app, instead of
-compiling an optimized build. Only `release.yaml` builds the optimized app, so release-only compiler problems
-surface when a release is built.
-
-The `macos` test job and the release app build cache pinned dependency
-repositories/downloaded artifacts and the patched Ghostty vendor sources. Keys include OS, architecture,
-Swift and SDK versions, package pins/manifests, and vendor/patch scripts. Dependency resolution still runs
-and verifies binary artifacts. No signing material or user data are cached.
-
-On main, the `macos` job also saves its debug test build (`apps/macos/.build`, about 430 MB) after the Swift
-tests run, even if some fail, because the build stays valid for the next incremental one. PRs don't save
-(the repository's cache limit is 10 GB); they restore main's latest build. The exact cache key includes
-the package manifest/pins, SDK selection and timestamp scheme, not test selection/watchdog scripts.
-A fallback accepts only the same OS, architecture, compiler and SDK; SwiftPM replans manifest and
-compiler-flag changes and rebuilds changed inputs. A fresh checkout stamps every file with the current
-time, which would make Swift recompile everything, so CI first runs `scripts/stable-mtimes.py`: each file
-under `apps/macos` gets an old timestamp derived from its contents, and only files whose contents changed
-recompile. Main always builds from scratch before saving, and releases never use cached
-build products, so a stale incremental build can at worst let a PR pass that main then catches.
-Local APFS sharing in `share-artifacts.sh` remains separate from this download cache.

@@ -2,8 +2,9 @@
 
 Pilot's app should be calm and beautiful. It runs agents in the background so the user does not have to watch
 them. The interface reports what matters, stays out of the way, and is a pleasure to look at.
-[AGENTS.md](AGENTS.md) holds the working rules, `apps/macos/Sources/Pilot/Theme.swift` the shared tokens. This
-file records the intent behind them.
+[AGENTS.md](AGENTS.md) holds the working rules. The current GPUI design system is indexed in
+`apps/desktop/docs/design-system.md`; Day uses its native shared tokens. This file records the intent.
+Swift-specific sections below are historical design context. The obsolete Swift GUI is removed.
 
 ## Calm
 
@@ -235,8 +236,7 @@ sections whenever an agent changes state are hard to find again. The Swift sideb
   toolbar, inline, empty state, structural disclosure) and outlined unless its documented state fills it.
   Use symbols, not emoji or Unicode stand-ins. Add a missing concept there instead of
   picking a symbol per screen; service and Git marks use `PilotMark`.
-- Chrome text uses `.pilot` type roles and shapes use `Theme.Radius`; `apps/macos/scripts/check-font-roles.py`
-  (run by the Swift test step) rejects new fixed font sizes and SwiftUI text styles.
+- Chrome text and shapes use each app's shared type and radius tokens, not one-off fixed styles.
 - A row's selection is its only fill. Actions inside rows use `rowIconButtonStyle` (no background) and whole-row
   buttons `rowButtonStyle`, neither of which draws a focus outline; `QuietIconButtonStyle` is for standalone
   toolbar and composer buttons.

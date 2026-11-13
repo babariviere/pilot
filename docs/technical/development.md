@@ -1,24 +1,22 @@
 # Development reference
 
-The source/build instructions below include the legacy Swift app. For the current Rust desktop,
-start with [desktop development](../../apps/desktop/README.md) and its scoped check scripts.
+For the current GPUI app, start with [desktop development](../../apps/desktop/README.md).
+For the next Native Shell app, use [Day development](../../apps/day/README.md).
+The obsolete Swift GUI is removed; [shared macOS support](../../apps/macos/README.md) remains.
 
 
 ### Build from source
 
-Use **Node 24+**, the pnpm version pinned in `package.json`, and **Swift 6.2+** on macOS. Xcode Command Line
-Tools are sufficient with a compatible SDK. On SDKs where SwiftUI's `@State` requires an Xcode-only macro
-plugin, the build scripts select an older installed SDK; install full Xcode if none is available.
+Use **Node 24+** and the pnpm version pinned in `package.json`. Follow each native app's
+README for its toolchain, build and isolated launch instructions.
 
 ```sh
 git clone https://github.com/babariviere/pilot.git
 cd pilot
 pnpm install
-pnpm app:macos
-open apps/macos/build/Pilot.app
 ```
 
-The development app uses the checkout and local Node runtime. To run only the daemon in the foreground:
+To run only the daemon in the foreground:
 
 ```sh
 pnpm dev:daemon
@@ -54,17 +52,14 @@ pnpm fmt:check
 pnpm typecheck
 pnpm test:fast                    # quick unit and offline feedback
 pnpm test                         # full gate, including integration and stress tests
-apps/macos/scripts/lint.sh        # pinned SwiftLint correctness checks, no build needed
-apps/macos/scripts/test.sh        # Swift tests
-apps/macos/scripts/build.sh       # native app build
 ```
 
 CI runs portable Node tests and typechecking on Linux, with a smaller macOS lane for native behavior
 and packaging, on PRs (`pr.yaml`) and after merging (`main.yaml`). Tests never block a release:
-`release.yaml` runs Release Please on every main push and, for a new stable draft, builds the macOS ZIP
-and the macOS/Linux Rust GUI packages from the release tag, then signs and publishes those same artifacts.
+`release.yaml` runs Release Please on every main push and, for a new stable draft, builds macOS and
+Linux GPUI packages from the release tag, then signs and publishes those same artifacts.
 Rust GUI signing/trust and native full-payload qualification are explicit publication prerequisites;
-future releases no longer publish a standalone headless Linux runtime. Swift distribution is preserved.
+future releases no longer publish a standalone headless Linux runtime. Swift GUI distribution is removed.
 See [Rust GUI releases](../../apps/desktop/docs/releases.md) for the required configuration and remaining gates.
 
 See the [reliability roadmap](reliability/roadmap.md) for current risks and verification plans.
@@ -94,7 +89,7 @@ Renovate runs through the [Renovate GitHub App](https://github.com/apps/renovate
 ### Architecture
 
 ```text
-Pilot.app (SwiftUI + libghostty)
+Pilot Next.app (GPUI), or Pilot Day (Native Shell)
     │ HTTP / WebSocket on loopback
     ▼
 pilotd (per-user launchd agent)
@@ -107,14 +102,16 @@ Kernel worker
 
 | Path | Responsibility |
 | --- | --- |
-| [`apps/macos`](../../apps/macos) | Native app, terminal, artifact viewer and `PilotCore` protocol mirror |
+| [`apps/desktop`](../../apps/desktop) | Current GPUI app, visual worker and shared lifecycle services |
+| [`apps/day`](../../apps/day) | Next Native Shell app and typed native host |
+| [`apps/macos`](../../apps/macos) | Shared helpers, C visual engine, assets and runtime/release scripts |
 | [`packages/daemon`](../../packages/daemon) | HTTP/WebSocket API, sessions, workspaces and worker supervision |
 | [`packages/kernel`](../../packages/kernel) | Durable agent worker and native pi SDK integration |
 | [`packages/protocol`](../../packages/protocol) | Shared client/daemon types |
 | [`packages/artifacts`](../../packages/artifacts) | Artifact storage, preview rendering and bundled libraries |
 
 The Harness owns history and the model loop. The native SDK supplies tools and extensions, not a second
-model loop. Keep protocol changes in sync with `apps/macos/Sources/PilotCore`.
+model loop. Keep native client decoders in sync with the shared protocol.
 
 The daemon owns shared model discovery for its host and agent directory. Concurrent worker startups
 reuse one catalog pass, and later reads revalidate model definitions, cached catalogs, credentials and
@@ -253,8 +250,6 @@ correlation, retention and resource budgets for local diagnostics and opt-in Ope
 product analytics are disabled by default, and no telemetry backend is selected by the repository.
 [Node telemetry](node-telemetry.md) documents the daemon/kernel OpenTelemetry helper, bounded OTLP behavior and
 local in-flight hooks that keep useful progress separate from liveness heartbeats.
-[Swift telemetry](swift-telemetry.md) documents the native trace module, strict propagation, bounded background
-export, sleep handling and packaged dependency notices.
 [Feature-adoption catalog](feature-adoption.md) defines the closed, content-free eligibility, exposure, attempt
 and outcome events and the limits on funnel and repeat-use interpretation.
 The [local OTLP Collector example](../../examples/otel-collector/README.md) and

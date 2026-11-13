@@ -108,5 +108,5 @@ node --import tsx --test packages/kernel/src/usage.integration.test.ts packages/
 pnpm typecheck
 ```
 
-Swift tests, app bundling, Linux runtime packaging and the complete Node lanes run in GitHub CI. No local Swift
-build or installed-app result is accepted as exact-head evidence.
+Native app bundling, shared runtime packaging and the complete Node lanes run in GitHub CI.
+The obsolete Swift GUI tests and build tooling are removed. Installed-app results are not exact-head evidence.
