@@ -19,6 +19,7 @@ import type { Plans } from "./planning";
 import { openPlan } from "./planView";
 import { MissionThreadsSection } from "./ThreadScreen";
 import { FreshnessNote, MissionStatus } from "./TodayScreen";
+import { naming } from "./threadView";
 import { Action, EvidenceChip, Mark, RowLink, SectionTitle, Track } from "./ui";
 import { closeMission, confirming, controlMessages, focused, focusFront, setFor, todayPlace } from "./view";
 import { controlLine, memberWord, provenance, rowLine, taskWord } from "./words";
@@ -502,10 +503,20 @@ export function MissionScreen(props: { day: Day; plans?: Plans; missionId: strin
 		reading.set(false);
 		readNote.set(outcome.status === "accepted" ? "" : outcome.message);
 	});
-	keymap.bind("escape", () => {
-		if (confirming()) confirming.set(null);
-		else closeMission();
-	});
+	// Escape puts away what is open first: a confirmation, then the new
+	// thread's title (its words stay, as Cancel keeps them), then the page.
+	// It works from the title field too.
+	keymap.bind(
+		"escape",
+		() => {
+			if (confirming()) confirming.set(null);
+			else if (props.day.threads && naming()[props.missionId]) {
+				glide();
+				naming.update((all) => ({ ...all, [props.missionId]: false }));
+			} else closeMission();
+		},
+		{ when: "always" },
+	);
 	// Which project this window's results belong to, for Check the result. Passive.
 	if (props.day.delivery && !props.day.delivery.view().projectId) void props.day.delivery.source.readSaved();
 	const scroll = keepScroll(`mission/${props.missionId}`);

@@ -713,9 +713,20 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 	const m = () => mirror.mission(props.missionId);
 	void mirror.source.read(props.missionId);
 	void mirror.source.history(props.missionId, props.topicId);
-	keymap.bind("escape", closeThread);
 	const topic = (): Topic | null => m().snapshot?.topics.find((t) => t.id === props.topicId) ?? null;
 	const key = () => draftKey(props.missionId, props.topicId);
+	// Escape closes an open link list first, then goes back to the mission.
+	// It works from the reply box too; the draft stays.
+	keymap.bind(
+		"escape",
+		() => {
+			if (linkOpen()[key()]) {
+				glide();
+				linkOpen.update((all) => ({ ...all, [key()]: false }));
+			} else closeThread();
+		},
+		{ when: "always" },
+	);
 	const title = () => props.day.feed.mission(props.missionId)?.row.title ?? "";
 	const canWrite = () => m().availability === "live" && !m().writing && !m().ops.some(unsettled);
 	const place = `thread/${props.missionId}/${props.topicId}`;
@@ -753,12 +764,13 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 										? "This thread is not in the latest read. Your words for it stay."
 										: "Reading this thread…"}
 							</Text>
-							<If when={m().availability === "unavailable"}>
+							<If when={m().availability === "unavailable" || m().snapshot}>
 								<View class="flex-row">
 									<Action
 										label="Read again"
 										icon="refresh"
 										testID="threads-read"
+										accessibilityLabel="Read this mission's threads again. This sends nothing."
 										onPress={() => void mirror.source.read(props.missionId)}
 									/>
 								</View>
@@ -800,6 +812,16 @@ export function ThreadScreen(props: { day: Day; missionId: string; topicId: stri
 										/>
 									</View>
 								</View>
+								<If when={m().reason}>
+									<View testID="thread-stale" class="flex-row items-start gap-2.5">
+										<View class="pt-1.5">
+											<Mark kind="unknown" />
+										</View>
+										<Text role="alert" class="flex-1 text-sm text-muted-foreground">
+											{m().reason}
+										</Text>
+									</View>
+								</If>
 								<If when={t().disposition !== "open"}>
 									<View testID="thread-closed" class="gap-2 rounded-xl bg-muted px-4 py-3">
 										<Text class="text-sm text-foreground">

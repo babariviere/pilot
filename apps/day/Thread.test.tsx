@@ -157,3 +157,49 @@ test("unreadable threads are not shown as none", async () => {
 	expect(app.shows("id:threads-empty")).toBe(false);
 	expect(app.texts().some((t) => t.includes("this is not the same as having none"))).toBe(true);
 });
+
+test("Escape closes an open link list before leaving the thread, and keeps the words", async () => {
+	const app = await thread();
+	await app.type("id:thread-reply", "Keep me");
+	await app.press("id:thread-link-open");
+	await app.waitFor("id:thread-link-t-2");
+	await app.keyboard.press("escape");
+	await app.waitUntil(() => !app.shows("id:thread-link-t-2"));
+	expect(app.shows("id:thread-reply")).toBe(true);
+	await app.keyboard.press("escape");
+	await app.waitFor("id:mission-threads");
+	await app.press("id:thread-search-scope");
+	await app.waitFor("id:thread-reply");
+	expect(app.value("id:thread-reply")).toBe("Keep me");
+	expect(counts(app)).toBe("Writes: 0 · Sends: 0 · Checks: 0");
+});
+
+test("Escape puts a new thread's title away before leaving the mission; the title stays", async () => {
+	const app = await mission();
+	await app.press("id:thread-new");
+	await app.type("id:thread-title", "Do we keep PDF support?");
+	await app.keyboard.press("escape");
+	await app.waitFor("id:thread-new");
+	expect(app.shows("id:mission-threads")).toBe(true);
+	await app.press("id:thread-new");
+	await app.waitFor("id:thread-title");
+	expect(app.value("id:thread-title")).toBe("Do we keep PDF support?");
+	await app.keyboard.press("escape");
+	await app.waitFor("id:thread-new");
+	await app.keyboard.press("escape");
+	await app.waitUntil(() => !app.shows("id:mission-threads"));
+	expect(counts(app)).toBe("Writes: 0 · Sends: 0 · Checks: 0");
+});
+
+test("a thread read that fails after an earlier one says what shows is from the last read", async () => {
+	const app = await thread();
+	await app.type("id:thread-reply", "Keep me");
+	expect(app.shows("id:thread-stale")).toBe(false);
+	await app.press("Unreadable");
+	await app.press("id:threads-read-again");
+	await app.waitFor("id:thread-stale");
+	expect(app.shows("Pilot could not reach its service. What shows is from Pilot's last read.")).toBe(true);
+	expect(app.shows("Do we need PDFs in the first version?")).toBe(true);
+	expect(app.value("id:thread-reply")).toBe("Keep me");
+	expect(counts(app)).toBe("Writes: 0 · Sends: 0 · Checks: 0");
+});
