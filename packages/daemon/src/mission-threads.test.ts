@@ -1,22 +1,24 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { type TestContext, test } from "node:test";
+import { type ConversationId, type EntryId, MemoryStorage } from "@earendil-works/pi-durable";
 import type { PlanningInput } from "@pilot/kernel";
 import type { EntryRecord } from "@pilot/protocol";
-import type { MissionThreadWrite } from "../../protocol/src/mission-thread.ts";
+import type { MissionThreadReference, MissionThreadWrite } from "../../protocol/src/mission-thread.ts";
 import { MissionThreads } from "./mission-threads.ts";
 import { nativePlanningFixture } from "./native-mission-planning.fixture.ts";
 import { payloadHash } from "./operation-journal.ts";
 import { publishedPlanningFixture } from "./published-planning.fixture.ts";
 
+type ThreadInput = {
+	[P in MissionThreadWrite["purpose"]]: Omit<Extract<MissionThreadWrite, { purpose: P }>, "source" | "topicId">;
+}[MissionThreadWrite["purpose"]];
+
 async function fixture(t: TestContext, native = false) {
 	const f = await publishedPlanningFixture(t, { native });
 	const threads = new MissionThreads({ ...f, workers: f.workers });
 	const topicId = randomUUID();
-	const request = async (
-		write: Omit<MissionThreadWrite, "source" | "topicId"> & Record<string, unknown>,
-		id = topicId,
-	) => {
+	const request = async (write: ThreadInput, id = topicId) => {
 		const view = await threads.read(f.project.id, f.missionId);
 		return f.operation(f.missionId, { ...write, topicId: id, source: view.source }, view.source);
 	};
@@ -39,22 +41,23 @@ test("topics keep exact identity, attribution, references and reversible disposi
 		brief: f.store.brief(f.missionId),
 		controls: f.store.controls.current(f.missionId),
 	};
+	const storage = new MemoryStorage();
 	const entry: EntryRecord = {
-		id: 7,
-		conversationId: 1,
+		id: await storage.mintId<EntryId>(),
+		conversationId: await storage.mintId<ConversationId>(),
 		kind: "original-evidence",
 		model: [{ role: "user", content: "Exact old question", timestamp: 1 }],
 	};
 	const history = t.mock.method(f.sessions, "history", async () => ({ entries: [entry], more: false }));
 	const task = f.store.tasks(f.missionId)[0]!;
 	for (const reference of [
-		{ kind: "history", sessionId: f.owner, entryId: 7 },
+		{ kind: "history", sessionId: f.owner, entryId: Number(entry.id) },
 		{ kind: "task", id: task.id },
 		{ kind: "decision", id: decision.id },
-	]) {
+	] satisfies MissionThreadReference[]) {
 		assert.equal((await f.execute(await f.request({ purpose: "thread-reference", reference }))).state, "accepted");
 	}
-	for (const disposition of ["later", "discarded", "open"]) {
+	for (const disposition of ["later", "discarded", "open"] as const) {
 		const op = await f.request({ purpose: "thread-disposition", disposition });
 		assert.equal((await f.execute(op)).state, "accepted");
 		assert.equal((await f.execute(op)).state, "accepted");
@@ -62,7 +65,7 @@ test("topics keep exact identity, attribution, references and reversible disposi
 		assert.equal(current.disposition, disposition);
 		assert.equal(current.references.length, 3);
 	}
-	const read = await f.threads.history(f.project.id, f.missionId, f.topicId, 8, 1);
+	const read = await f.threads.history(f.project.id, f.missionId, f.topicId, Number(entry.id) + 1, 1);
 	assert.equal(read.scope, "coordinator-history");
 	assert.equal(read.sessionId, f.owner);
 	assert.deepEqual(read.history.entries, [entry]);
@@ -82,6 +85,29 @@ test("topics keep exact identity, attribution, references and reversible disposi
 	assert.equal(f.store.threads.get(f.missionId, f.topicId).references.length, 3);
 	assert.equal(f.inputs.length, 0);
 	assert.equal(f.store.planningWorkers.get(f.missionId)?.start, undefined);
+});
+
+test("decision references require canonical IDs in the current mission", async (t) => {
+	const f = await fixture(t);
+	const decision = f.store.addDecision(f.missionId, "Keep history");
+	const other = await f.createPlanning("Other mission");
+	const foreign = f.store.addDecision(other, "Other scope");
+	for (const id of [randomUUID(), foreign.id, `D${decision.number}`]) {
+		const receipt = await f.execute(
+			await f.request({ purpose: "thread-reference", reference: { kind: "decision", id } }),
+		);
+		assert.equal(receipt.state, "rejected");
+		assert.equal(f.store.threads.get(f.missionId, f.topicId).references.length, 0);
+	}
+	assert.equal(
+		(
+			await f.execute(
+				await f.request({ purpose: "thread-reference", reference: { kind: "decision", id: decision.id } }),
+			)
+		).state,
+		"accepted",
+	);
+	assert.equal(f.inputs.length, 0);
 });
 
 test("discussion uses exact saved input and distinct qualified purpose, never Build or Start", async (t) => {

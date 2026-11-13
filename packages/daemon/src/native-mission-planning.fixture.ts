@@ -60,7 +60,11 @@ export async function nativePlanningFixture(options: { native?: boolean } = {}) 
 	const interviews = () =>
 		new MissionInterviews({ store, journal, confirmations: confirmations(), authorize: () => "fixture" });
 	const plans = () => new MissionPlans({ store, journal, authorize: () => {} });
-	const operation = (targetId: string, request: { purpose: string }, bindingId?: string): DurableOperation => {
+	const operation = <T extends { purpose: string }>(
+		targetId: string,
+		request: T,
+		bindingId?: string,
+	): DurableOperation => {
 		const payload = JSON.stringify(request);
 		return {
 			schemaVersion: 1,
@@ -210,7 +214,7 @@ export async function nativePlanningFixture(options: { native?: boolean } = {}) 
 			} as { purpose: string });
 			assertAccepted(await journal.execute(op, (op, entry) => interviews().admit(op, entry.firstEntry)));
 		},
-		async plan(request: { purpose: string }, targetId = missionId) {
+		async plan<T extends { purpose: string }>(request: T, targetId = missionId) {
 			const op = operation(targetId, request);
 			const r = await journal.execute(op, (op, entry) => plans().admit(op, entry.firstEntry));
 			if (r.state !== "accepted") throw new Error(JSON.stringify(r));

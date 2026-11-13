@@ -26,11 +26,11 @@ const mission: MissionContext = {
 test("project record context reloads canonical revisions and states the source boundaries", async () => {
 	let revision = 1;
 	let unavailable = false;
-	const extension = withPilotPolicy({}, {}, undefined, undefined, undefined, async () => {
+	const extension = withPilotPolicy({ name: "test" }, {}, undefined, undefined, undefined, async () => {
 		if (unavailable) throw new Error("Context unavailable");
 		return { preferences: { projectId: "p", revision } };
 	});
-	const render = () => extension.sections![0]!.render(undefined as never, BACKGROUND_CONTEXT);
+	const render = async () => extension.sections![0]!.render(undefined as never, BACKGROUND_CONTEXT);
 	const first = await render();
 	assert.match(first!, /"revision":1/);
 	assert.match(first!, /mission records hold live agreement/);
@@ -303,7 +303,9 @@ test("every mission role separates specs, progress, decisions and actionable com
 			/The brief is the spec; tasks track progress and blockers; decisions record substantive agreed mission choices \(scope, behavior or tradeoffs\), not every user utterance/,
 		);
 		assert.match(prompt, /Routine directions, status and coordination belong in task\/context updates/);
-		assert.match(prompt, /durable cross-mission preferences use existing memory only when appropriate/);
+		assert.match(prompt, /Record small explicit project choices with project_preferences/);
+		assert.match(prompt, /sourced understanding in Knowledge/);
+		assert.match(prompt, /not duplicate mission state or a second wiki in legacy memory/);
 		assert.match(prompt, /Discussion\/proposal is not agreement/);
 		assert.match(prompt, /Keep human-answer provenance and explicit authority changes/);
 		assert.match(prompt, /a decision record never grants tool\/runtime permission/);

@@ -131,8 +131,11 @@ export class MissionThreads {
 		if (reference.kind === "task" || reference.kind === "decision") {
 			interviewExact(reference, ["kind", "id"]);
 			interviewId(reference.id);
-			const record = reference.kind === "task" ? store.task(id, reference.id) : store.decision(id, reference.id);
-			if (record.id !== reference.id) throw new Conflict("Canonical mission reference ID required");
+			const record =
+				reference.kind === "task"
+					? store.task(id, reference.id)
+					: store.detail(id, false).decisions.find((decision) => decision.id === reference.id);
+			if (record?.id !== reference.id) throw new Conflict("Canonical mission reference ID required");
 		} else if (reference.kind === "history") {
 			interviewExact(reference, ["kind", "sessionId", "entryId"]);
 			if (
