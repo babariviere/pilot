@@ -537,6 +537,129 @@ fn connected_inspect_cold_open_keeps_drafts_and_navigation_but_not_source() {
 }
 
 #[test]
+fn connected_preview_click_reads_the_exact_pin_and_revocation_refuses_the_next_preview() {
+    let mut f = Fixture::with_daemon("day-delivered-artifact.ts");
+    let fixture = f.stats("nsh");
+    let id = fixture["nshId"].as_str().expect("saved NSH fixture");
+    let entry = entry();
+    let bridge = f.bridge();
+    // Availability only: Headless records the native component's props. The
+    // separate artifact_preview target exercises that actual AppKit factory.
+    let mut params = bridge.channel().params();
+    params.get_mut("day").unwrap()["artifactPreview"] = json!(true);
+    bridge.channel().set_params(params);
+    let mut app = open(&entry, &bridge);
+    result(&mut app, &f.info["task"]);
+    let preview_button = format!("id:output-preview-{id}");
+    wait(&mut app, &preview_button);
+    assert!(
+        !has(
+            &app,
+            &format!(
+                "id:output-preview-{}",
+                f.info["artifactId"].as_str().unwrap()
+            )
+        ),
+        "HTML has no preview action"
+    );
+
+    #[derive(Default)]
+    struct Observed {
+        node: Option<nsh_core::NodeId>,
+        snapshots: Vec<Value>,
+    }
+    let observed = Arc::new(Mutex::new(Observed::default()));
+    let observer = observed.clone();
+    app.observe(move |_, batch| {
+        let mut observed = observer.lock().unwrap();
+        for item in &batch.items {
+            match item {
+                nsh_core::MountItem::Component { id, name }
+                    if &**name == "pilot/artifact-preview" =>
+                {
+                    observed.node = Some(*id)
+                }
+                nsh_core::MountItem::ComponentProps { id, props } if Some(*id) == observed.node => {
+                    for (name, value) in props {
+                        if &**name == "snapshot"
+                            && let Some(value) = value
+                        {
+                            observed.snapshots.push(value.clone());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+    app.press(&preview_button).unwrap();
+    app.wait_until("exact saved bytes reach native preview", WAIT, |_| {
+        !observed.lock().unwrap().snapshots.is_empty()
+    })
+    .unwrap();
+    {
+        let observed = observed.lock().unwrap();
+        assert_eq!(observed.snapshots.len(), 1);
+        let snapshot = &observed.snapshots[0];
+        assert_eq!(snapshot["reference"]["artifactId"], id);
+        assert_eq!(
+            snapshot["reference"]["revision"], 1,
+            "never follows latest revision2"
+        );
+        assert_eq!(snapshot["content"]["source"], fixture["nshSource"]);
+        assert_eq!(snapshot["metadata"]["kind"], "nsh");
+    }
+    let stats = f.stats("stats");
+    assert_eq!(stats["artifactReads"].as_array().unwrap().len(), 1);
+    assert_eq!(stats["artifactReads"][0]["query"]["revision"], "1");
+    assert_eq!(stats["posts"], 0);
+    assert_eq!(stats["external"], 0);
+    assert_eq!(stats["messages"], json!([]));
+
+    app.press_key("escape").unwrap();
+    app.wait_until("Escape dismisses preview", WAIT, |screen| {
+        !screen.matches("id:artifact-preview").unwrap()
+    })
+    .unwrap();
+    assert!(
+        has(&app, "id:your-check"),
+        "Escape closes preview, not result"
+    );
+    app.press(&preview_button).unwrap();
+    app.wait_until("explicit reopen rereads the same pin", WAIT, |_| {
+        observed.lock().unwrap().snapshots.len() == 2
+    })
+    .unwrap();
+    app.press(&format!("id:output-source-{id}")).unwrap();
+    wait_text(&mut app, fixture["nshSource"].as_str().unwrap());
+    app.wait_until("source switch disposes preview", WAIT, |screen| {
+        !screen.matches("id:artifact-preview").unwrap()
+    })
+    .unwrap();
+    app.press(&preview_button).unwrap();
+    app.wait_until("source switch recreates preview", WAIT, |_| {
+        observed.lock().unwrap().snapshots.len() == 3
+    })
+    .unwrap();
+    // An open preview is a copy already read, like shown source text. After
+    // the owner leaves, the next press is refused before any bytes reach it.
+    app.press(&preview_button).unwrap();
+    gone(&mut app, "id:artifact-preview");
+    f.stats("leave");
+    app.press(&preview_button).unwrap();
+    gone(&mut app, "Opening the saved preview…");
+    flush(&mut app, &bridge);
+    assert_eq!(observed.lock().unwrap().snapshots.len(), 3);
+    let stats = f.stats("stats");
+    // Three previews and one source read, none after leaving.
+    assert_eq!(stats["artifactReads"].as_array().unwrap().len(), 4);
+    assert_eq!(stats["posts"], 0);
+    assert_eq!(stats["messages"], json!([]));
+    close_window(app, bridge);
+    let _ = std::fs::remove_dir_all(entry.parent().unwrap());
+}
+
+#[test]
 fn connected_native_stale_source_refusal_drops_the_earlier_text_and_refreshes_the_result() {
     for action in ["stale", "leave"] {
         let mut f = Fixture::with_daemon("day-delivered-artifact.ts");

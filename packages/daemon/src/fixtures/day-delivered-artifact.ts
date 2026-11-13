@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { ArtifactStore } from "@pilot/artifacts";
 import { nativeIntakeFixture } from "../native-intake.fixture.ts";
 
 const f = await nativeIntakeFixture();
@@ -109,9 +110,42 @@ console.log(
 		longBytes,
 	}),
 );
+let nshId: string | undefined;
+const nshSource = "import {Text} from 'nsh'; export default () => <Text>Saved preview, revision one</Text>;";
 for await (const line of createInterface({ input: process.stdin })) {
 	const { action } = JSON.parse(line);
 	if (action === "quit") break;
+	if (action === "nsh" && !nshId) {
+		const artifacts = new ArtifactStore(join(f.home, "sessions", worker.id), {
+			sessionId: worker.id,
+			projectId: f.project.id,
+		});
+		const saved = await artifacts.create({
+			title: "Saved NSH preview",
+			kind: "nsh",
+			entry: "Preview.tsx",
+			source: nshSource,
+		});
+		nshId = saved.id;
+		await artifacts.update(
+			saved.id,
+			{
+				title: "Newer NSH preview",
+				kind: "nsh",
+				entry: "Preview.tsx",
+				source: "export default () => 'NEWER REVISION MUST NOT OPEN';",
+			},
+			1,
+		);
+		f.store.linkArtifact(mission.id, {
+			taskId: task.id,
+			sessionId: worker.id,
+			artifactId: saved.id,
+			title: saved.title,
+			kind: "nsh",
+			revision: 1,
+		});
+	}
 	if (action === "missing") await rename(join(directory, "1.json"), join(directory, "saved.json"));
 	if (action === "oversize") await writeFile(join(directory, "1.json"), " ".repeat(1024 * 1024 + 1));
 	if (action === "redacted")
@@ -126,6 +160,8 @@ for await (const line of createInterface({ input: process.stdin })) {
 			artifactReads,
 			deliveryReads,
 			posts,
+			nshId,
+			nshSource,
 			longBytes: await readFile(join(longDirectory, "1.json"), "utf8"),
 			messages: meta.pending.filter((p: { content: string }) => p.content !== "Synthetic work only"),
 			verification: f.store.userVerifications.current("not-an-operation"),
