@@ -17,6 +17,7 @@ import { flushAll } from "./planCommands";
 import { mirrorPlanning, type Plans } from "./planning";
 import { answerDrafts, answerPicks } from "./planView";
 import { mirrorRituals, type Rituals, rootRecap } from "./ritualFeed";
+import { ConnectedScope, mirrorScope } from "./todayScope";
 import type { Update } from "./updateFeed";
 import { captureView, restoreView, saveForms } from "./updateView";
 
@@ -206,7 +207,13 @@ async function connect() {
 		void intakeFeed.read();
 	});
 	// The saved Linear issues are read only when the Linear page opens.
-	const day = mirrorDay(today, intake, mirrorDelivery(deliveryFeed), mirrorLinear(new ConnectedLinear(window)));
+	const day = mirrorDay(
+		today,
+		intake,
+		mirrorDelivery(deliveryFeed),
+		mirrorLinear(new ConnectedLinear(window)),
+		mirrorScope(new ConnectedScope(window)),
+	);
 	// New's projects are read when New opens; reading sends nothing.
 	const plans = mirrorPlanning(planFeed, mirrorChats(new ConnectedChats(window)));
 	const rituals = mirrorRituals(ritualFeed, rootRecap);

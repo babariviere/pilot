@@ -88,6 +88,19 @@ The native host does not yet have a complete delivery or Coming up inventory.
 No live integrations, source polling, provider calls or credential exposure are
 added. The UI owns the saved per-window scope and rejects late replies too.
 
+On screen (`ScopeRows.tsx`, `todayScope.ts`), one control at the top of Today picks
+All projects (the default) or one project. `SavedView.todayProject` keeps it per
+window (empty for All projects); restoring it only reads. The window's own project
+keeps its actionable sections. Other projects' New requests, Needs you, Planning,
+Missions and Done rows show under their project's name, read only, with no links
+or actions. Results to check and Coming up from other projects are not shown, and
+Today says so. A single project shows `outsideNeedsYou` as a count, "nothing",
+or "could not count" when it is unknown. While another project shows, the
+window's unsent words on its own items are counted as kept and Today's keys act
+on nothing. Without the read, or when the window's own project is not known,
+Today says it shows this window's project only. `Scope.test.tsx` covers this on
+a scripted read (`scopeDemo.ts`).
+
 ## Controls and recovery
 
 One native worker serializes commands. Each new explicit intent binds the shown

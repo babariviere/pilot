@@ -8,6 +8,7 @@ import type { DayFeed } from "./feeds";
 import type { IntakeMirror } from "./intakeFeed";
 import type { LinearMirror } from "./linearFeed";
 import { glide } from "./motion";
+import type { ScopeMirror } from "./todayScope";
 
 /** Today's read model as Rust last published it, and the feed to change it. */
 export type Day = {
@@ -30,6 +31,11 @@ export type Day = {
 	 * read-only Linear page. Only the connected window has them.
 	 */
 	linear?: LinearMirror;
+	/**
+	 * Today's cross-project read for the window's project scope. Without it,
+	 * Today shows only the window's own project and offers no scope.
+	 */
+	scope?: ScopeMirror;
 	/** Stops listening and frees the feed. */
 	close: () => void;
 };
@@ -40,7 +46,13 @@ export function openDay(scenario?: Scenario): Day {
 }
 
 /** Mirrors `feed`'s read model, mock or connected. Closing stops listening and frees the feeds. */
-export function mirrorDay(feed: DayFeed, intake?: IntakeMirror, delivery?: DeliveryMirror, linear?: LinearMirror): Day {
+export function mirrorDay(
+	feed: DayFeed,
+	intake?: IntakeMirror,
+	delivery?: DeliveryMirror,
+	linear?: LinearMirror,
+	scope?: ScopeMirror,
+): Day {
 	const today = signal(feed.snapshot());
 	const stop = feed.onChange((next) => {
 		// Items that arrive or leave, and missions that change group, glide to
@@ -54,6 +66,7 @@ export function mirrorDay(feed: DayFeed, intake?: IntakeMirror, delivery?: Deliv
 		intake,
 		delivery,
 		linear,
+		scope,
 		close: () => {
 			stop();
 			feed.dispose();

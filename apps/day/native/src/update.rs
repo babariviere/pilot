@@ -326,6 +326,11 @@ pub struct SavedView {
     /// again only reads, and shows nothing for another project.
     #[prop(default)]
     pub linear: String,
+    /// The project Today shows, by project ID, or empty for All projects.
+    /// The window's own choice: showing it again only reads, and moves no
+    /// draft or chat.
+    #[prop(default)]
+    pub today_project: String,
 }
 
 impl SavedView {
@@ -351,6 +356,7 @@ impl SavedView {
             + self.input.len()
             + self.delivery.len()
             + self.linear.len()
+            + self.today_project.len()
             + lists
     }
 

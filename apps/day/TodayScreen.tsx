@@ -17,6 +17,24 @@ import { Problems } from "./Problems";
 import type { Plans } from "./planning";
 import { openPlan } from "./planView";
 import type { Rituals } from "./ritualFeed";
+import {
+	bindScopeReads,
+	OtherDone,
+	OtherMissions,
+	OtherNeeds,
+	OtherNew,
+	OtherNotShown,
+	OtherPlanning,
+	otherMissionsCount,
+	otherNeedsCount,
+	otherNewShown,
+	ProjectLabel,
+	ScopeControl,
+	ScopeNote,
+	scopedHeadline,
+	type TodayScope,
+	todayScope,
+} from "./ScopeRows";
 import { ToCheck } from "./ToCheck";
 import { Action, EvidenceChip, InlineAction, Mark, RowLink, SectionTitle, Track } from "./ui";
 import { focused, focusFront, front, type Item, move, openMission, placeRow, queue, todayPlace } from "./view";
@@ -125,7 +143,7 @@ function itemTitle(item: Item): string {
 }
 
 /** What waits for the user: one card in front, the rest as "Up next". */
-function NeedsYou(props: { day: Day }) {
+function NeedsYou(props: { day: Day; ctx: TodayScope }) {
 	const items = () => queue(props.day.today());
 	const first = () => front(props.day.today());
 	const rest = () => items().filter((item) => item.id !== first()?.id);
@@ -147,7 +165,10 @@ function NeedsYou(props: { day: Day }) {
 	});
 	return (
 		<View class="gap-4">
-			<SectionTitle title="Needs you" count={items().length} />
+			<SectionTitle title="Needs you" count={items().length + otherNeedsCount(props.ctx)} />
+			<If when={props.ctx.tagged()}>
+				<ProjectLabel name={props.ctx.name(props.ctx.own() ?? "")} own />
+			</If>
 			<View testID="attention-note" class="flex-row items-center gap-2.5 py-1">
 				<Text class="flex-1 text-xs text-muted-foreground">
 					{attentionNote() || (readable() ? "Attention read is up to date." : "Attention read is not current.")}
@@ -228,6 +249,7 @@ function NeedsYou(props: { day: Day }) {
 					</Each>
 				</View>
 			</If>
+			<OtherNeeds ctx={props.ctx} />
 		</View>
 	);
 }
@@ -238,8 +260,10 @@ function NeedsYou(props: { day: Day }) {
  * off and Command-Return takes its one next action. Letters and digits never
  * fire while a text field has the focus; help keys never pick or send. New
  * (Command-N) belongs to the header, which every screen shares.
+ * While Today shows only another project, the keys do nothing: this
+ * window's own items are not on screen.
  */
-function bindTriage(day: Day) {
+function bindTriage(day: Day, shown: () => boolean) {
 	const decision = (): Decision | undefined => {
 		const item = front(day.today());
 		return item?.kind === "decision" ? item.decision : undefined;
@@ -279,15 +303,24 @@ function bindTriage(day: Day) {
 			}
 		};
 	}
-	keymap.bind(keys);
+	const guarded: Record<string, () => void> = {};
+	for (const [key, run] of Object.entries(keys)) {
+		guarded[key] = () => {
+			if (shown()) run();
+		};
+	}
+	keymap.bind(guarded);
 }
 
-function Missions(props: { day: Day }) {
+function Missions(props: { day: Day; ctx: TodayScope }) {
 	const today = () => props.day.today();
 	const count = () => today().moving.length + today().notMoving.length + today().unreported.length;
 	return (
 		<View class="gap-3">
-			<SectionTitle title="Missions" count={count()} />
+			<SectionTitle title="Missions" count={count() + otherMissionsCount(props.ctx)} />
+			<If when={props.ctx.tagged()}>
+				<ProjectLabel name={props.ctx.name(props.ctx.own() ?? "")} own />
+			</If>
 			<If when={count() === 0}>
 				<Text class="text-sm text-muted-foreground">No active missions.</Text>
 			</If>
@@ -310,6 +343,7 @@ function Missions(props: { day: Day }) {
 					first={today().moving.length + today().notMoving.length === 0}
 				/>
 			</If>
+			<OtherMissions ctx={props.ctx} />
 		</View>
 	);
 }
@@ -349,7 +383,7 @@ function Unreadable(props: { day: Day }) {
  * list is read and empty; a list that could not be read says so and shows
  * no rows, so it never looks like having none. Read again only reads.
  */
-function Planning(props: { plans: Plans }) {
+function Planning(props: { plans: Plans; ctx: TodayScope }) {
 	const planning = () => props.plans.planning();
 	const off = () => planning().availability === "unavailable";
 	const stale = () => planning().availability === "stale";
@@ -439,12 +473,13 @@ function Planning(props: { plans: Plans }) {
 						);
 					}}
 				</Each>
+				<OtherPlanning ctx={props.ctx} />
 			</View>
 		</If>
 	);
 }
 
-function DoneSince(props: { day: Day }) {
+function DoneSince(props: { day: Day; ctx: TodayScope }) {
 	const today = () => props.day.today();
 	return (
 		<View class="gap-1">
@@ -454,6 +489,9 @@ function DoneSince(props: { day: Day }) {
 				</Text>
 				<Text class="text-sm text-faint">{today().lastLooked}</Text>
 			</View>
+			<If when={props.ctx.tagged() && today().done.length > 0}>
+				<ProjectLabel name={props.ctx.name(props.ctx.own() ?? "")} own />
+			</If>
 			<Each of={today().done} key={(e) => e.id}>
 				{(e) => (
 					<View class="flex-row gap-3 py-2.5">
@@ -486,6 +524,7 @@ function DoneSince(props: { day: Day }) {
 			<If when={today().finished.length > 0}>
 				<Text class="pt-2 text-xs text-muted-foreground">{`Finished: ${today().finished.join(", ")}`}</Text>
 			</If>
+			<OtherDone ctx={props.ctx} />
 		</View>
 	);
 }
@@ -513,11 +552,51 @@ function ComingUp(props: { day: Day }) {
 	);
 }
 
+/** Today while it shows only another project: its rows, read only here. */
+function OtherProject(props: { ctx: TodayScope }) {
+	return (
+		<If when={props.ctx.others().length > 0}>
+			<View class="gap-12">
+				<If when={otherNewShown(props.ctx)}>
+					<View class="gap-1">
+						<SectionTitle title="New" />
+						<OtherNew ctx={props.ctx} />
+					</View>
+				</If>
+				<View class="gap-4">
+					<SectionTitle title="Needs you" count={otherNeedsCount(props.ctx)} />
+					<OtherNeeds ctx={props.ctx} />
+				</View>
+				<OtherNotShown ctx={props.ctx} />
+				<If when={props.ctx.others().some((p) => (p.planning?.plans.length ?? 0) > 0 || p.errors.planning)}>
+					<View class="gap-1">
+						<SectionTitle title="Planning" />
+						<OtherPlanning ctx={props.ctx} />
+					</View>
+				</If>
+				<View class="gap-3">
+					<SectionTitle title="Missions" count={otherMissionsCount(props.ctx)} />
+					<OtherMissions ctx={props.ctx} />
+				</View>
+				<View class="gap-1">
+					<Text role="header" class="text-sm font-semibold text-muted-foreground">
+						Done since you looked
+					</Text>
+					<OtherDone ctx={props.ctx} />
+				</View>
+			</View>
+		</If>
+	);
+}
+
 /** The whole Today screen for `props.day`. */
 export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }) {
 	const today = () => props.day.today();
-	bindTriage(props.day);
 	const plans = props.plans;
+	// The window's project scope: All projects unless the user chose one. Reading only.
+	const ctx = todayScope(props.day, plans);
+	bindScopeReads(props.day, ctx);
+	bindTriage(props.day, ctx.showsOwn);
 	// A restored offset for a Today already on screen: scrolled to once, without animation.
 	const scroller = signal<ScrollRef | null>(null);
 	effect(() => {
@@ -541,39 +620,62 @@ export function TodayScreen(props: { day: Day; rituals: Rituals; plans?: Plans }
 				<If when={today().freshness.state !== "unreadable"} else={<Unreadable day={props.day} />}>
 					<View class="gap-12">
 						<View class="gap-3">
-							<DayLine day={props.day} rituals={props.rituals} />
+							<View class="flex-row items-start gap-3">
+								<View class="flex-1">
+									<DayLine day={props.day} rituals={props.rituals} />
+								</View>
+								<ScopeControl ctx={ctx} />
+							</View>
 							<Text role="header" class="text-3xl font-semibold leading-tight tracking-tight text-foreground">
-								{headline(props.day)}
+								{ctx.showsOwn() ? headline(props.day) : scopedHeadline(ctx)}
 							</Text>
-							<Text class="text-base leading-relaxed text-muted-foreground">{today().summary}</Text>
-							<If when={today().leftOff && today().decisions.length === 0}>
-								<Text class="text-xs text-primary">{today().leftOff ?? ""}</Text>
+							<If when={ctx.showsOwn()}>
+								<Text class="text-base leading-relaxed text-muted-foreground">{today().summary}</Text>
+								<If when={today().leftOff && today().decisions.length === 0}>
+									<Text class="text-xs text-primary">{today().leftOff ?? ""}</Text>
+								</If>
 							</If>
-							<FreshnessNote day={props.day} />
+							<ScopeNote day={props.day} ctx={ctx} />
+							<If when={ctx.showsOwn()}>
+								<FreshnessNote day={props.day} />
+							</If>
 						</View>
 
-						<Incoming day={props.day} />
-						<NeedsYou day={props.day} />
-						<Problems
-							rows={today().problems}
-							known={today().problemsKnown}
-							earlier={today().freshness.state !== "live"}
-						/>
-						<ToCheck day={props.day} />
-						<If when={plans}>
-							<Planning plans={plans as Plans} />
-						</If>
-						<Missions day={props.day} />
-						<DoneSince day={props.day} />
-						<ComingUp day={props.day} />
+						<If when={ctx.showsOwn()} else={<OtherProject ctx={ctx} />}>
+							<View class="gap-12">
+								<Incoming day={props.day} />
+								<If when={otherNewShown(ctx)}>
+									<View testID="scope-new" class="gap-1">
+										<SectionTitle title="New in other projects" />
+										<OtherNew ctx={ctx} />
+									</View>
+								</If>
+								<NeedsYou day={props.day} ctx={ctx} />
+								<Problems
+									rows={today().problems}
+									known={today().problemsKnown}
+									earlier={today().freshness.state !== "live"}
+								/>
+								<ToCheck day={props.day} />
+								<If when={ctx.tagged()}>
+									<OtherNotShown ctx={ctx} />
+								</If>
+								<If when={plans}>
+									<Planning plans={plans as Plans} ctx={ctx} />
+								</If>
+								<Missions day={props.day} ctx={ctx} />
+								<DoneSince day={props.day} ctx={ctx} />
+								<ComingUp day={props.day} />
 
-						<Text class="border-t border-border pt-5 text-xs text-faint">
-							{today().attention.state !== "live" || !today().problemsKnown
-								? "What needs you is not current. Read again before acting."
-								: today().problems.length > 0
-									? "Unresolved work is shown above. Nothing is retried here."
-									: "That is everything for now. Pilot will tell you if something needs you."}
-						</Text>
+								<Text class="border-t border-border pt-5 text-xs text-faint">
+									{today().attention.state !== "live" || !today().problemsKnown
+										? "What needs you is not current. Read again before acting."
+										: today().problems.length > 0
+											? "Unresolved work is shown above. Nothing is retried here."
+											: "That is everything for now. Pilot will tell you if something needs you."}
+								</Text>
+							</View>
+						</If>
 					</View>
 				</If>
 			</View>

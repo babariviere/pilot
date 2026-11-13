@@ -53,6 +53,7 @@ import {
 	writing,
 } from "./planView";
 import { type RitualRoute, ritualRoute, startStep } from "./ritualView";
+import { todayProject } from "./todayScope";
 import type { Update } from "./updateFeed";
 import {
 	asking,
@@ -181,6 +182,8 @@ export function captureView(today?: Today): SavedView {
 		reminders: savedReminders(),
 		// The Linear page, its project and open issue. Showing it again only reads.
 		linear: savedLinear(),
+		// The project Today shows, or "" for All projects. Showing it again only reads.
+		todayProject: todayProject() === "all" ? "" : todayProject(),
 	};
 }
 
@@ -284,6 +287,7 @@ export function startFresh() {
 	openIssue.set(null);
 	linearProject.set(null);
 	focusIssue.set(null);
+	todayProject.set("all");
 	todayPlace.y = 0;
 	todayPlace.row = null;
 	forgetPlaces();
@@ -357,6 +361,8 @@ export function restoreView(view: SavedView, changes?: Changes, today?: Today, l
 	linearProject.set(null);
 	focusIssue.set(null);
 	if (linear && view.linear) restoreLinear(view.linear);
+	// Today's project scope comes back as a read; a view saved before it existed shows All projects.
+	todayProject.set(view.todayProject || "all");
 	todayPlace.y = Math.max(0, view.todayY ?? 0);
 	todayPlace.row = view.todayRow || null;
 	const key = shownKey();
