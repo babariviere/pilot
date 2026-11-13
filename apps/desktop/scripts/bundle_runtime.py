@@ -475,7 +475,7 @@ def verify(output, *, protocol=1, unsigned_day=False):
         raise ValueError("Runtime manifest/build identity mismatch")
 
 
-def snapshot_build(expected_source, output, native=False):
+def snapshot_build(expected_source, output, native=False, *, gui="gpui"):
     source(expected_source)
     if sys.platform != "darwin" or run("/usr/bin/uname", "-m") != "arm64":
         raise ValueError("Runtime/helper staging requires native arm64 macOS")
@@ -493,14 +493,18 @@ def snapshot_build(expected_source, output, native=False):
             tar.extractall(checkout, filter="data")
         if native:
             checkout = checkout.resolve(strict=True)
-            tools = ROOT / "apps/desktop/.tools"
-            if not (tools / "rustup").is_dir():
-                raise ValueError("Bootstrap the pinned build-host Rust tools first")
-            snapshot_tools = checkout / "apps/desktop/.tools"
-            (snapshot_tools / "bin").mkdir(parents=True)
-            (snapshot_tools / "rustup").symlink_to((tools / "rustup").resolve(strict=True), target_is_directory=True)
+            if gui != "day":
+                tools = ROOT / "apps/desktop/.tools"
+                if not (tools / "rustup").is_dir():
+                    raise ValueError("Bootstrap the pinned build-host Rust tools first")
+                snapshot_tools = checkout / "apps/desktop/.tools"
+                (snapshot_tools / "bin").mkdir(parents=True)
+                (snapshot_tools / "rustup").symlink_to((tools / "rustup").resolve(strict=True), target_is_directory=True)
             bin_path = checkout / "apps/desktop/target/native-helpers"
-            subprocess.run(["/bin/bash", str(checkout / "apps/desktop/scripts/build-native-helpers.sh"), str(bin_path)], env=subprocess_env(), check=True, timeout=1200)
+            command = ["/bin/bash", str(checkout / "apps/desktop/scripts/build-native-helpers.sh"), str(bin_path)]
+            if gui == "day":
+                command.append("--day")
+            subprocess.run(command, env=subprocess_env(), check=True, timeout=1200)
             bin_path = bin_path.resolve(strict=True)
             if not bin_path.is_relative_to(checkout) or not bin_path.is_dir():
                 raise ValueError("Native helper bin path escapes the source snapshot or is not a directory")
@@ -601,7 +605,7 @@ def main():
         command = commands.add_parser(name)
         command.add_argument("--source", required=True)
         command.add_argument("--output", type=Path, required=True)
-        if name == "rust":
+        if name in ("rust", "native"):
             command.add_argument("--gui", choices=("gpui", "day"), default="gpui")
     bundle = commands.add_parser("bundle")
     for name in ("runtime", "executables", "native", "output"):
@@ -621,7 +625,7 @@ def main():
     if args.action == "rust":
         snapshot_rust(args.source, args.output.absolute(), gui=args.gui)
     elif args.action in ("runtime", "native"):
-        snapshot_build(args.source, args.output.absolute(), args.action == "native")
+        snapshot_build(args.source, args.output.absolute(), args.action == "native", gui=getattr(args, "gui", "gpui"))
     elif args.action == "bundle":
         config = None
         if args.production:

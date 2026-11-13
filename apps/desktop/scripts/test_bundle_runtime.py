@@ -304,7 +304,7 @@ class CapsuleIdentityTests(unittest.TestCase):
 
 
 class NativeSnapshotTests(unittest.TestCase):
-    def snapshot(self, root, fault=None):
+    def snapshot(self, root, fault=None, *, gui="gpui"):
         staged = root / "staged"
         source = "a" * 40
         host = root / "host"
@@ -321,9 +321,9 @@ class NativeSnapshotTests(unittest.TestCase):
             script, bin_path = Path(args[1]), Path(args[2])
             checkout = script.parents[3]
             self.assertEqual(args, ["/bin/bash", str(checkout / "apps/desktop/scripts/build-native-helpers.sh"),
-                                    str(checkout / "apps/desktop/target/native-helpers")])
+                                    str(checkout / "apps/desktop/target/native-helpers")] + (["--day"] if gui == "day" else []))
             self.assertNotEqual(checkout, host)
-            self.assertTrue((checkout / "apps/desktop/.tools/rustup").is_symlink())
+            self.assertEqual((checkout / "apps/desktop/.tools/rustup").is_symlink(), gui != "day")
             self.assertFalse((checkout / "apps/desktop/.tools/bin/mbx").exists())
             if fault == "escaped-directory":
                 bin_path.parent.mkdir(parents=True)
@@ -359,7 +359,7 @@ class NativeSnapshotTests(unittest.TestCase):
              patch.object(bundle.sys, "platform", "darwin"), \
              patch.object(bundle, "run", side_effect=query), \
              patch.object(bundle.subprocess, "run", side_effect=command):
-            bundle.snapshot_build(source, staged, native=True)
+            bundle.snapshot_build(source, staged, native=True, gui=gui)
         return staged
 
     def test_helper_only_build_and_source_matched_receipts(self):
@@ -374,6 +374,11 @@ class NativeSnapshotTests(unittest.TestCase):
                 self.assertEqual(entry["sha256"], bundle.digest(helper))
                 self.assertEqual(entry["bytes"], helper.stat().st_size)
                 self.assertEqual(helper.stat().st_mode & 0o777, 0o755)
+
+    def test_day_uses_global_tools_without_legacy_rustup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            staged = self.snapshot(Path(temporary), gui="day")
+            self.assertEqual(bundle.read_json(staged / "manifest.json")["source"], "a" * 40)
 
     def test_invalid_paths_and_missing_helpers_fail_before_staging(self):
         for fault in ("escaped-directory", "missing-PilotPower", "missing-PilotSystemEvents",

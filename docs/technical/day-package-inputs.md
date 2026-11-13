@@ -144,7 +144,7 @@ export PILOT_NEXT_UPDATER_REPOSITORY=babariviere/pilot
 export PILOT_NEXT_UPDATER_BUILD="$BUILD"
 work=$(mktemp -d "${TMPDIR:-/tmp}/day-full.XXXXXX")
 python3 apps/desktop/scripts/bundle_runtime.py runtime --source "$SOURCE" --output "$work/runtime"
-python3 apps/desktop/scripts/bundle_runtime.py native --source "$SOURCE" --output "$work/native"
+python3 apps/desktop/scripts/bundle_runtime.py native --gui day --source "$SOURCE" --output "$work/native"
 python3 apps/desktop/scripts/day_build_inputs.py --production --source "$SOURCE" --output "$work/inputs"
 mkdir "$work/app"
 python3 apps/desktop/scripts/bundle_runtime.py bundle --production \
